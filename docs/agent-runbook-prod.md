@@ -61,7 +61,8 @@ backend). Key facts an agent must know before touching them:
   a **region drop-in** overriding the unit's default region (us-east-1 there —
   check with `systemctl show launchpad-backend -p Environment`). Hardening:
   `NoNewPrivileges`, **`PrivateTmp=true`** (consequences in §5),
-  `ProtectSystem=full`.
+  `ProtectSystem=full`. Optional `EnvironmentFile=-/etc/launchpad-models.env`
+  for platform model settings (see "Platform model settings" below).
 - Frontend unit: `npm run preview -- --host 127.0.0.1 --port 5173 --strictPort`
   over `frontend/dist` — **a rebuild is required for any frontend change**.
 - Both bind loopback; CloudFront (or any fronting proxy) terminates TLS.
@@ -102,6 +103,32 @@ The return URL is baked into each as_user agent at deploy time (runtime env
 `LAUNCHPAD_OAUTH_RETURN_URL` + the workload-identity allow-list), so after
 setting or changing it, **re-publish every agent that has an as_user tool**.
 The frontend unit needs nothing.
+
+### Platform model settings (accounts without OpenAI / Anthropic access)
+
+The models the platform itself calls (judge, intents, actor, architect, …) are
+`LAUNCHPAD_*` settings ([setup.md → Choosing models](setup.md#choosing-models--切换模型)).
+The preferred switch is the console's Models page (admin → Configuration →
+Models): it applies at once, no restart, and wins over env. For a host-side
+default, `scripts/switch_models.py` writes `/etc/launchpad-models.env`; on a
+self-hosted box make sure the backend unit loads it (the leading `-` keeps the
+unit starting while the file is absent):
+
+```bash
+systemctl cat launchpad-backend | grep -q launchpad-models.env || {
+  sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
+  printf '[Service]\nEnvironmentFile=-/etc/launchpad-models.env\n' \
+    | sudo tee /etc/systemd/system/launchpad-backend.service.d/models.conf
+  sudo systemctl daemon-reload
+}
+cd /home/ubuntu/workspace/agentcore_launchpad/backend
+/home/ubuntu/.local/bin/uv run python ../scripts/switch_models.py --region us-east-1 --dry-run
+sudo /home/ubuntu/.local/bin/uv run --no-sync python ../scripts/switch_models.py --region us-east-1 --restart
+sudo journalctl -u launchpad-backend --since "2 min ago" -q   # as after every restart
+```
+
+The workshop templates already carry `EnvironmentFile=-/etc/launchpad-models.env`
+in their backend unit. A changed judge model changes evaluation scores.
 
 ### Update recipe (verified sequence)
 

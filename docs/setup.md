@@ -629,6 +629,197 @@ The first script refuses to run against a `prod`-tier workspace and restores the
 release policy it changed. Both are excluded from `make verify` (they need real AWS
 credentials and a bootstrapped workspace).
 
+## Choosing models / 切换模型
+
+Besides the models of the agents you build, the platform calls models of its own:
+it names intents, writes suggested questions, judges evaluations, plays the
+simulated user, proposes agents, fixes Studio code. The built-in defaults assume
+the account can invoke OpenAI and Anthropic models on Bedrock. Some accounts
+cannot; every one of these models is a setting you can switch, on the console or
+on the host.
+
+| Env var (`launchpad.yaml` key = the lower-case name without `LAUNCHPAD_`) | Default | Where it is used |
+|---|---|---|
+| `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID` | `global.zai.glm-5.3` | Default model of a new agent: the Create Agent wizard pre-selects it, and a spec submitted without `model_id` gets it. |
+| `LAUNCHPAD_PLATFORM_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Intent clustering and naming (Observe → intent view) and the try-chat suggested questions. When the call fails, the intent view falls back to mechanical grouping and the panel to generic questions. |
+| `LAUNCHPAD_JUDGE_MODEL_ID` | `global.openai.gpt-6-sol` | Default LLM-as-judge model of custom and derived AgentCore evaluators (the judge-model field of a new evaluator). |
+| `LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | Judge retried when AgentCore's evaluator validation refuses the chosen one. `""` = no fallback; the refusal surfaces. |
+| `LAUNCHPAD_ASSISTANT_MODEL_ID` | `global.openai.gpt-6-sol` | Default model of the agents the architect assistant proposes (managed Harness). |
+| `LAUNCHPAD_ARCHITECT_MODEL_ID` | `global.openai.gpt-6-astra` | Model of the system architect agent when it is installed. `reasoning_effort` is preset only for an OpenAI model, the only family that takes it. |
+| `LAUNCHPAD_ACTOR_MODEL_ID` | `global.openai.gpt-6-luna` | Simulated-user (actor) model the console pre-selects for persona scenarios. It must accept Converse forced tool choice. |
+| `LAUNCHPAD_STUDIO_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Model of a Strands Studio canvas node that names none. |
+| `LAUNCHPAD_PROMPT_OPT_DEFAULT_MODEL_ID` | `global.anthropic.claude-opus-5` | Reflection model of the experiment RECOMMEND stage when a request names none (see [Prompt optimization](#prompt-optimization)). |
+| `LAUNCHPAD_PROMPT_OPT_MODELS` | the four ids in [Prompt optimization](#prompt-optimization) | The reflection models the console offers, as a JSON list (`'["global.zai.glm-5.3","deepseek.v3.2"]'`). Env / `launchpad.yaml` only; the Models page does not edit the list. |
+| `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Default of the Claude Agent SDK (container) method. **Claude only.** |
+| `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5` | Studio AI Fix, which runs on the Claude Agent SDK (see [Code generation](#code-generation-ai-fix)). **Claude only.** |
+| `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `us.openai.gpt-6-sol` | Skill Lab judge. An OpenAI id runs on the host `codex` CLI, a Claude id on the host `claude` CLI. **OpenAI or Claude only.** |
+| `LAUNCHPAD_SKILL_LAB_TARGET_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Skill Lab `claude_code_exec` target. **Claude only.** |
+| `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6-sol` | Skill Lab `codex_exec` target. **OpenAI only.** |
+
+A setting is a default for what is created next. Existing agents keep their
+`model_id`, an installed architect keeps its model, and an existing evaluator
+keeps the judge it was created with (the script below can move those).
+
+### The Models page
+
+An administrator switches them on the console: **admin → Configuration → Models**
+(V3; 配置 → 模型设置 in Chinese). One row per setting shows the current model and
+where it comes from (`default`, `config` = `launchpad.yaml`, `env`, `console`).
+
+1. Pick a model from the select, which lists the text models the account's
+   Region offers (inference profiles and on-demand foundation models). Offered
+   is not the same as entitled, so:
+2. **Test** makes a real, tiny Converse call with that model. For the two judge
+   rows it also runs the AgentCore Evaluations acceptance probe: it creates a
+   throwaway `zz_probe_…` evaluator with that judge and deletes it again. For the
+   actor row it checks forced tool choice; for the other rows whose agents call
+   tools (agent default, assistant, architect, Studio fallback) it adds a
+   `tool_use` check.
+3. **Save** stores the choice in the ledger (table `platform_settings`) and
+   applies it to the running backend at once; no restart.
+4. **Reset** removes the console choice; the row falls back to env,
+   `launchpad.yaml` or the default.
+
+Claude-only and OpenAI-only rows refuse a model of another family
+(`models.wrong_family`). The APIs behind the page: `GET /api/models/defaults`
+(any member: the effective values the console pre-selects),
+`GET /api/models/settings`, `PUT` / `DELETE /api/models/settings/{field}`
+(administrator), `GET /api/model-catalog` (member), `POST /api/model-probe`
+(administrator).
+
+### The script: scripts/switch_models.py
+
+For a host the console cannot reach yet, or to set everything in one go,
+`scripts/switch_models.py` probes the account (the same real Converse calls; an
+AgentCore `CreateEvaluator` test for judge models; forced tool choice for the
+actor), takes the first working candidate per setting (the current value, then
+the default, then `--prefer` ids, then curated alternatives) and writes the
+`LAUNCHPAD_*` lines to `/etc/launchpad-models.env` (mode 0600). Settings that
+are Claude-only or OpenAI-only get only candidates of that family; when none
+works they are reported `UNAVAILABLE` and left out of the file.
+
+```bash
+cd <repo>/backend
+# probe and print; changes nothing
+uv run python ../scripts/switch_models.py --region us-east-1 --dry-run
+# write /etc/launchpad-models.env and restart the backend (needs root for /etc)
+sudo "$(command -v uv)" run --no-sync python ../scripts/switch_models.py \
+  --region us-east-1 --prefer global.zai.glm-5.3 --restart
+```
+
+- `--prefer a,b` tries those ids right after each setting's default (when they
+  fit its family). `--roles judge,actor` limits the run; `--json` adds a
+  machine-readable result.
+- `--restart` runs `systemctl restart launchpad-backend` after writing. Without
+  it, restart the backend yourself: an env file is read only at start.
+- The script lists the evaluators the console created whose judge model no
+  longer works. `--update-evaluators` moves them to the chosen judge.
+- Settings saved on the Models page win over the file; the script reports them
+  and never changes them. Reset them on the page for the file value to apply.
+- `--env-file <path>` writes elsewhere, for example when you run it from a
+  laptop with credentials for the target account.
+- `--no-sync` keeps a root run from re-syncing the backend venv the service
+  user owns. Exit code 0 = every switchable setting resolved, 2 = some setting
+  (or evaluator update) found no working model, 1 = usage, credential or write
+  error.
+
+Measured in us-east-1 on 2026-10-12: AgentCore Evaluations accepts
+`global.zai.glm-5.3` as a judge model (and GPT-6 Sol, Claude Sonnet 5.5, Kimi
+K3, DeepSeek R1). With OpenAI and Anthropic simulated unavailable, the script
+chose `global.zai.glm-5.3` for the platform, judge, assistant, architect,
+actor, Studio fallback and prompt-optimization defaults,
+`deepseek.v3.2` as judge fallback, the reflection list
+`global.zai.glm-5.3`, `deepseek.v3.2`, `global.moonshotai.kimi-k3`,
+`moonshotai.kimi-k2.5`, and reported Claude Agent SDK, codegen and the three Skill Lab
+settings `UNAVAILABLE`.
+
+### Tested alternatives: DeepSeek and Kimi
+
+Besides GLM-5.3, the DeepSeek and Kimi models on Bedrock are candidates for the
+platform's settings. Live probe matrix, account 784675006790, 2026-10-12 (all
+probe evaluators deleted afterwards):
+
+| Model | us-east-1 Converse (latency) | us-west-2 Converse (latency) | Tool use (auto / forced any / stream) | Reasoning blocks | AgentCore judge | Eligible settings |
+|---|---|---|---|---|---|---|
+| `us.deepseek.r1-v1:0` | ok 2.1 s | ok 1.7 s | refused ("This model doesn't support tool use") | yes | accepted | platform, judge, judge fallback, prompt optimization |
+| `deepseek.v3.2` | ok 0.6 s | ok 0.7 s | ok / ok / ok | no | accepted | all not limited to one family |
+| `deepseek.v3-v1:0` (DeepSeek V3.1) | not offered | ok 0.6 s | ok / ok / ok | no | accepted (us-west-2) | all (us-west-2 only) |
+| `global.moonshotai.kimi-k3` | ok 2.0 s | ok 2.3 s | ok / ok / ok | yes | accepted | all |
+| `us.moonshotai.kimi-k3` | ok 2.8 s | ok 2.1 s | ok / ok / ok | yes | accepted | all |
+| `moonshotai.kimi-k2.5` | ok 0.6 s | ok 0.8 s | ok / ok / ok | no | accepted | all |
+| `moonshot.kimi-k2-thinking` | ok 1.2 s | ok 0.9 s | ok / ok / ok | yes | accepted | all |
+| `global.zai.glm-5.3` | ok 0.8 s | ok 0.8 s | ok / ok / ok | yes | accepted | all |
+
+"All" means every setting not limited to Claude or OpenAI. Reasoning blocks do no
+harm: the platform reads only the text blocks of a response, so reasoning
+content is ignored.
+
+**A model without tool use is refused for tool settings.** The agent default,
+assistant, architect, actor and Studio fallback settings drive agents that call
+tools, so the backend refuses a model that does not support tool use (such as
+DeepSeek R1) for them with `models.no_tool_use`. On the Models page, **Test** on
+those rows adds a `tool_use` check (the actor row checks forced tool choice
+instead).
+
+**Pricing** (per 1M input / output tokens, Standard on-demand, US East (N.
+Virginia), 2026-10-12, now in the backend price table `model_prices`): from the
+[Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/), cross-checked
+with the AWS Price List API: DeepSeek V3.2 $0.62 / $1.85, Kimi K2.5 $0.60 /
+$3.00, Kimi K2 Thinking $0.60 / $2.50. Not on the page, so from the Price List
+API: DeepSeek V3.1 $0.58 / $1.68 (us-west-2), DeepSeek R1 $1.35 / $5.40, Kimi K3
+global $3.00 / $15.00 (cache read $0.30, cache write $3.75), Kimi K3 US profile
+$3.30 / $16.50 ($0.33 / $4.125). GPT-6 Sol is in neither source; it is priced
+from its [model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html)
+(short context ≤ 272K): global profile $2.00 / $10.00 (cache read $0.20, cache
+write $2.50), US profile and Mantle in-Region $2.20 / $11.00 ($0.22 / $2.75), so
+the default judge is no longer reported as unpriced.
+
+### Setting them by hand
+
+Put the lines in `/etc/launchpad-models.env` (root-owned, mode 0600) and make
+sure the backend unit loads that file. The leading `-` lets the unit start when
+the file is absent:
+
+```bash
+sudo install -m 0600 /dev/null /etc/launchpad-models.env   # only if it does not exist yet
+sudo tee -a /etc/launchpad-models.env >/dev/null <<'ENV'
+LAUNCHPAD_JUDGE_MODEL_ID=global.zai.glm-5.3
+LAUNCHPAD_PLATFORM_MODEL_ID=global.zai.glm-5.3
+ENV
+systemctl cat launchpad-backend | grep -q launchpad-models.env || {
+  sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
+  printf '[Service]\nEnvironmentFile=-/etc/launchpad-models.env\n' \
+    | sudo tee /etc/systemd/system/launchpad-backend.service.d/models.conf
+  sudo systemctl daemon-reload
+}
+sudo systemctl restart launchpad-backend
+```
+
+Or set the same keys, lower-case, in `config/launchpad.yaml`
+(`judge_model_id: global.zai.glm-5.3`, `prompt_opt_models:` as a YAML list) and
+restart. `make bootstrap` merges into that file, so they survive a re-bootstrap.
+
+**Precedence:** Models page (console) > environment (including the env file) >
+`config/launchpad.yaml` > built-in default.
+
+### What cannot be switched to another family
+
+Some features are bound to one model family by the SDK or CLI they run on. In
+an account without Anthropic access they stay unavailable whatever you set: the
+**Claude Agent SDK** deploy method, **Studio AI Fix** (codegen), and the Skill
+Lab `claude_code_exec` target and claude-CLI judge path. Without OpenAI access
+the Skill Lab `codex_exec` target and codex judge path are unavailable. The
+Skill Lab judge needs one of the two families.
+
+### Changing the judge changes the scores
+
+An LLM-as-judge score is that model's opinion. After you switch the judge,
+scores, pass rates and gate verdicts on judged criteria are not comparable with
+runs scored by the previous judge, and a calibration (judge–human κ) recorded
+for the old judge does not carry over: compare runs only within one judge, and
+run a new labelling task before relying on the judge to block. Metric and code
+criteria (token counts, latency, assertions) are unaffected.
+
 ## Hosted deployment / 托管部署
 
 > This section describes how to keep the sample running on a long-lived host for a
@@ -662,6 +853,8 @@ Environment=LAUNCHPAD_RUN_MODE=prod
 Environment=LAUNCHPAD_AUTH_USERNAME=admin
 Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
 Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
+# optional model settings, see "Choosing models"; "-" = may be absent
+EnvironmentFile=-/etc/launchpad-models.env
 ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=on-failure
 ```

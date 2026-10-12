@@ -13,11 +13,24 @@ entry below was observed during implementation — none is speculative.
   GA (the `agent-registry` namespace since 2026-08-06, see
   [registry-ga-migration.md](registry-ga-migration.md)) and needs no preview
   enablement.
-- **Default model is `global.anthropic.claude-sonnet-5`** (`DEFAULT_MODEL_ID`).
-  New agents default to this inference profile; Sonnet 4.6
-  (`global.anthropic.claude-sonnet-4-6`) stays selectable, and existing agents
-  keep their own `model_id`. Override per agent with `model_id` in the
-  AgentSpec.
+- **Default model of a new agent is `global.zai.glm-5.3`**
+  (`agent_default_model_id`, env `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID`). New agents
+  default to this inference profile; other models stay selectable, and existing
+  agents keep their own `model_id`. Override per agent with `model_id` in the
+  AgentSpec, or change the default as in
+  [setup.md → Choosing models](setup.md#choosing-models--切换模型).
+- **OpenAI / Anthropic models not available in this account.** The platform's
+  own model calls default to OpenAI and Anthropic models (judge
+  `global.openai.gpt-6-sol`, intents and suggested questions
+  `global.anthropic.claude-sonnet-5`, actor, architect, assistant, …), so such
+  an account sees evaluator creation refused, a degraded intent view or
+  `AccessDeniedException` on those features. An administrator switches them on
+  **admin → Configuration → Models** (pick, **Test**, **Save**; applies at
+  once), or on the host `scripts/switch_models.py` probes the account and
+  writes working substitutes to `/etc/launchpad-models.env`
+  ([setup.md → Choosing models](setup.md#choosing-models--切换模型)). Claude
+  Agent SDK, Studio AI Fix and the Skill Lab claude / codex paths cannot move
+  to another family. A new judge changes evaluation scores.
 - **`config/launchpad.yaml` is gitignored.** It holds account ids and demo
   credentials, so it is never committed. If it is missing (fresh clone, or you
   deleted it), rerun `make bootstrap` — it is idempotent and rewrites the file

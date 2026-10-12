@@ -513,6 +513,115 @@ uv run python scripts/e2e_agent_dlc_browser.py --ui http://localhost:5173 --lang
 第一个脚本会拒绝在 `prod` 级工作区运行，并把它改过的放行策略还原。两者都不在 `make verify` 之内
 （需要真实 AWS 凭证和已引导的工作区）。
 
+## 切换模型
+
+除了你构建的 Agent 自己的模型，平台本身也调用模型：给意图起名、生成建议问题、评估打分、扮演模拟用户、提议 Agent、修复 Studio 代码。内置默认值假定账号能在 Bedrock 上调用 OpenAI 与 Anthropic 模型。有的账号不能；这些模型每一个都是可以切换的配置项，既可以在控制台改，也可以在主机上改。
+
+| 环境变量（`launchpad.yaml` 的键 = 去掉 `LAUNCHPAD_` 后的小写名） | 默认值 | 用在哪里 |
+|---|---|---|
+| `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID` | `global.zai.glm-5.3` | 新建 Agent 的默认模型：新建智能体向导预选它，提交时没有 `model_id` 的 spec 也用它。 |
+| `LAUNCHPAD_PLATFORM_MODEL_ID` | `global.anthropic.claude-sonnet-5` | 意图归类与命名（可观测 → 意图视图）以及试聊面板的建议问题。调用失败时，意图视图退回机械归类，面板退回通用问题。 |
+| `LAUNCHPAD_JUDGE_MODEL_ID` | `global.openai.gpt-6-sol` | 自定义与派生 AgentCore 评估器的默认 LLM 评审模型（新建评估器时评审模型字段的默认值）。 |
+| `LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | AgentCore 的评估器校验拒绝所选评审模型时改用的模型。`""` 表示不回退，直接报出拒绝。 |
+| `LAUNCHPAD_ASSISTANT_MODEL_ID` | `global.openai.gpt-6-sol` | 架构助手提议的 Agent（托管 Harness）的默认模型。 |
+| `LAUNCHPAD_ARCHITECT_MODEL_ID` | `global.openai.gpt-6-astra` | 安装系统架构师 Agent 时使用的模型。只有 OpenAI 模型才预设 `reasoning_effort`，因为只有这一家接受它。 |
+| `LAUNCHPAD_ACTOR_MODEL_ID` | `global.openai.gpt-6-luna` | 人设场景里控制台预选的模拟用户（actor）模型。它必须支持 Converse 的强制工具选择。 |
+| `LAUNCHPAD_STUDIO_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Strands Studio 画布上没有指定模型的节点所用的模型。 |
+| `LAUNCHPAD_PROMPT_OPT_DEFAULT_MODEL_ID` | `global.anthropic.claude-opus-5` | 实验 RECOMMEND 阶段在请求未指定模型时使用的反思模型（见[提示词优化](#提示词优化)）。 |
+| `LAUNCHPAD_PROMPT_OPT_MODELS` | [提示词优化](#提示词优化)里的四个 id | 控制台提供的反思模型清单，JSON 数组（`'["global.zai.glm-5.3","deepseek.v3.2"]'`）。只能用环境变量或 `launchpad.yaml` 设置，模型设置页不编辑这份清单。 |
+| `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Claude Agent SDK（容器）方式的默认模型。**仅限 Claude。** |
+| `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5` | Studio 的 AI Fix，运行在 Claude Agent SDK 上（见[代码生成（AI Fix）](#代码生成ai-fix)）。**仅限 Claude。** |
+| `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `us.openai.gpt-6-sol` | Skill Lab 的评审。OpenAI id 走主机上的 `codex` CLI，Claude id 走主机上的 `claude` CLI。**仅限 OpenAI 或 Claude。** |
+| `LAUNCHPAD_SKILL_LAB_TARGET_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Skill Lab 的 `claude_code_exec` 目标。**仅限 Claude。** |
+| `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6-sol` | Skill Lab 的 `codex_exec` 目标。**仅限 OpenAI。** |
+
+这些配置项是“接下来新建的东西”的默认值。已有 Agent 保留各自的 `model_id`，已安装的架构师保留它的模型，已有评估器保留创建时的评审模型（下面的脚本可以把它们迁过去）。
+
+### 模型设置页
+
+管理员在控制台里切换：**admin → 配置 → 模型设置**（V3；英文界面为 Configuration → Models）。每个配置项一行，显示当前模型和它的来源（`default` 默认值、`config` 即 `launchpad.yaml`、`env` 环境变量、`console` 控制台）。
+
+1. 在下拉框里选一个模型。下拉框列出账号所在 Region 提供的文本模型（推理配置与按需基础模型）。“提供”不等于“有权调用”，所以：
+2. 点 **测试**，用这个模型做一次真实的、很小的 Converse 调用。两个评审模型行还会跑 AgentCore Evaluations 的接受探测：用这个评审模型建一个临时的 `zz_probe_…` 评估器，再把它删掉。模拟用户（actor）行会检查强制工具选择；其余驱动工具调用的行（新建 Agent 默认、架构助手、架构师、Studio 兜底）会多做一项 `tool_use` 检查。
+3. 点 **保存**，选择写入账本（`platform_settings` 表）并立即作用于正在运行的后端，无需重启。
+4. 点 **恢复默认**，删除控制台上的选择，这一行退回环境变量、`launchpad.yaml` 或默认值。
+
+仅限 Claude、仅限 OpenAI 的行会拒绝其他家族的模型（`models.wrong_family`）。页面背后的接口：`GET /api/models/defaults`（任何成员：控制台预选用的生效值）、`GET /api/models/settings`、`PUT` / `DELETE /api/models/settings/{field}`（管理员）、`GET /api/model-catalog`（成员）、`POST /api/model-probe`（管理员）。
+
+### 脚本：scripts/switch_models.py
+
+控制台还连不上的主机，或想一次设好全部配置项时，用 `scripts/switch_models.py`。它探测账号（同样是真实的 Converse 调用；评审模型另做一次 AgentCore `CreateEvaluator` 测试；actor 检查强制工具选择），每个配置项取第一个能用的候选（依次是当前值、默认值、`--prefer` 指定的 id、内置的备选），把 `LAUNCHPAD_*` 行写进 `/etc/launchpad-models.env`（权限 0600）。仅限 Claude 或仅限 OpenAI 的配置项只尝试该家族的候选；都不能用时报告为 `UNAVAILABLE`，不写进文件。
+
+```bash
+cd <repo>/backend
+# 只探测并打印，什么也不改
+uv run python ../scripts/switch_models.py --region us-east-1 --dry-run
+# 写入 /etc/launchpad-models.env 并重启后端（写 /etc 需要 root）
+sudo "$(command -v uv)" run --no-sync python ../scripts/switch_models.py \
+  --region us-east-1 --prefer global.zai.glm-5.3 --restart
+```
+
+- `--prefer a,b`：在每个配置项的默认值之后紧接着尝试这些 id（家族符合时）。`--roles judge,actor` 只处理部分配置项；`--json` 额外输出机器可读的结果。
+- `--restart`：写完后执行 `systemctl restart launchpad-backend`。不加它就要自己重启后端：环境变量文件只在启动时读取。
+- 脚本会列出控制台创建的、评审模型已经不能用的评估器；加 `--update-evaluators` 会把它们改为选出的评审模型。
+- 在模型设置页保存过的配置项优先于这个文件；脚本会报告它们，但从不修改。要让文件里的值生效，先在页面上点 **恢复默认**。
+- `--env-file <路径>` 写到别处，例如在笔记本上用目标账号的凭证运行时。
+- `--no-sync` 让 root 运行时不去重新同步服务用户拥有的后端 venv。退出码 0 表示每个可切换的配置项都选好了，2 表示有配置项（或评估器更新）找不到能用的模型，1 表示用法、凭证或写文件出错。
+
+2026-10-12 在 us-east-1 实测：AgentCore Evaluations 接受 `global.zai.glm-5.3` 作为评审模型（GPT-6 Sol、Claude Sonnet 5.5、Kimi K3、DeepSeek R1 也接受）。模拟 OpenAI 与 Anthropic 都不可用时，脚本给平台、评审、架构助手、架构师、actor、Studio 兜底和提示词优化默认值都选了 `global.zai.glm-5.3`，评审回退选了 `deepseek.v3.2`，反思清单为 `global.zai.glm-5.3`、`deepseek.v3.2`、`global.moonshotai.kimi-k3`、`moonshotai.kimi-k2.5`，并把 Claude Agent SDK、codegen 和三个 Skill Lab 配置项报告为 `UNAVAILABLE`。
+
+### 实测过的替代模型：DeepSeek 与 Kimi
+
+除了 GLM-5.3，Bedrock 上的 DeepSeek 与 Kimi 模型也可以作为平台配置项的候选。实测探测结果，账号 784675006790，2026-10-12（探测用的评估器事后已全部删除）：
+
+| 模型 | us-east-1 Converse（延迟） | us-west-2 Converse（延迟） | 工具调用（auto / 强制 any / 流式） | 推理块 | AgentCore 评审 | 可用于的配置项 |
+|---|---|---|---|---|---|---|
+| `us.deepseek.r1-v1:0` | 可用 2.1 秒 | 可用 1.7 秒 | 拒绝（“This model doesn't support tool use”） | 有 | 接受 | 平台、评审、评审回退、提示词优化 |
+| `deepseek.v3.2` | 可用 0.6 秒 | 可用 0.7 秒 | 可用 / 可用 / 可用 | 无 | 接受 | 所有不限家族的配置项 |
+| `deepseek.v3-v1:0`（DeepSeek V3.1） | 未提供 | 可用 0.6 秒 | 可用 / 可用 / 可用 | 无 | 接受（us-west-2） | 全部（仅 us-west-2） |
+| `global.moonshotai.kimi-k3` | 可用 2.0 秒 | 可用 2.3 秒 | 可用 / 可用 / 可用 | 有 | 接受 | 全部 |
+| `us.moonshotai.kimi-k3` | 可用 2.8 秒 | 可用 2.1 秒 | 可用 / 可用 / 可用 | 有 | 接受 | 全部 |
+| `moonshotai.kimi-k2.5` | 可用 0.6 秒 | 可用 0.8 秒 | 可用 / 可用 / 可用 | 无 | 接受 | 全部 |
+| `moonshot.kimi-k2-thinking` | 可用 1.2 秒 | 可用 0.9 秒 | 可用 / 可用 / 可用 | 有 | 接受 | 全部 |
+| `global.zai.glm-5.3` | 可用 0.8 秒 | 可用 0.8 秒 | 可用 / 可用 / 可用 | 有 | 接受 | 全部 |
+
+“全部”指所有不限定 Claude 或 OpenAI 的配置项。推理块没有影响：平台只读取响应里的文本块，推理内容会被忽略。
+
+**不支持工具调用的模型不能用于需要工具的配置项。** 新建 Agent 默认、架构助手、架构师、actor 和 Studio 兜底这几个配置项驱动的是会调用工具的 Agent，后端会以 `models.no_tool_use` 拒绝不支持工具调用的模型（例如 DeepSeek R1）。在模型设置页上，这几行的 **测试** 会多做一项 `tool_use` 检查（actor 那一行改为检查强制工具选择）。
+
+**价格**（每百万输入 / 输出 token，Standard 按需，美国东部（弗吉尼亚北部），2026-10-12，已写入后端价格表 `model_prices`）：取自 [Bedrock 价格页](https://aws.amazon.com/bedrock/pricing/)，并与 AWS Price List API 交叉核对：DeepSeek V3.2 $0.62 / $1.85，Kimi K2.5 $0.60 / $3.00，Kimi K2 Thinking $0.60 / $2.50。价格页上没有、取自 Price List API 的：DeepSeek V3.1 $0.58 / $1.68（us-west-2），DeepSeek R1 $1.35 / $5.40，Kimi K3 global $3.00 / $15.00（缓存读 $0.30、缓存写 $3.75），Kimi K3 US 推理配置 $3.30 / $16.50（$0.33 / $4.125）。GPT-6 Sol 两处都没有，按其[模型卡片](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html)定价（短上下文 ≤ 272K）：global 推理配置 $2.00 / $10.00（缓存读 $0.20、缓存写 $2.50），US 推理配置与 Mantle 区域内 $2.20 / $11.00（$0.22 / $2.75），因此默认评审不再显示为未定价。
+
+### 手动设置
+
+把配置行写进 `/etc/launchpad-models.env`（root 所有，权限 0600），并确认后端单元加载这个文件。开头的 `-` 让文件不存在时单元照常启动：
+
+```bash
+sudo install -m 0600 /dev/null /etc/launchpad-models.env   # 仅在文件还不存在时
+sudo tee -a /etc/launchpad-models.env >/dev/null <<'ENV'
+LAUNCHPAD_JUDGE_MODEL_ID=global.zai.glm-5.3
+LAUNCHPAD_PLATFORM_MODEL_ID=global.zai.glm-5.3
+ENV
+systemctl cat launchpad-backend | grep -q launchpad-models.env || {
+  sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
+  printf '[Service]\nEnvironmentFile=-/etc/launchpad-models.env\n' \
+    | sudo tee /etc/systemd/system/launchpad-backend.service.d/models.conf
+  sudo systemctl daemon-reload
+}
+sudo systemctl restart launchpad-backend
+```
+
+也可以把同样的键（小写）写进 `config/launchpad.yaml`（`judge_model_id: global.zai.glm-5.3`，`prompt_opt_models:` 写成 YAML 列表）后重启。`make bootstrap` 对这个文件做合并，重新引导后这些键仍然保留。
+
+**优先级：** 模型设置页（控制台）> 环境变量（含这个环境变量文件）> `config/launchpad.yaml` > 内置默认值。
+
+### 不能换成其他家族的功能
+
+有些功能被它运行所在的 SDK 或 CLI 绑定在某一个模型家族上。没有 Anthropic 权限的账号里，无论怎么设置，下面这些都不可用：**Claude Agent SDK** 部署方式、**Studio AI Fix**（codegen）、Skill Lab 的 `claude_code_exec` 目标和走 claude CLI 的评审。没有 OpenAI 权限时，Skill Lab 的 `codex_exec` 目标和走 codex 的评审不可用。Skill Lab 评审需要这两家之一。
+
+### 换评审模型会改变分数
+
+LLM 评审的分数是这个模型的判断。换了评审模型之后，评审类判据上的分数、通过率和放行判定与旧评审打出的结果不可比；为旧评审记录的校准（裁判—人 κ）也不能沿用：只在同一个评审模型内比较运行，在依赖评审拦截之前重新做一次标注任务。指标与代码类判据（token 数、延迟、断言）不受影响。
+
 ## 托管部署
 
 > 本节说明如何在一台长期运行的主机上运行本示例，用于 workshop 或共享的评估环境。它不是生产部署
@@ -541,6 +650,8 @@ Environment=LAUNCHPAD_RUN_MODE=prod
 Environment=LAUNCHPAD_AUTH_USERNAME=admin
 Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
 Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
+# 可选的模型配置，见“切换模型”；“-”表示文件可以不存在
+EnvironmentFile=-/etc/launchpad-models.env
 ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=on-failure
 ```
