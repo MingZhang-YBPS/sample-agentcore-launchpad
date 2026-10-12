@@ -1,3 +1,5 @@
+import { Cpu } from "lucide-react";
+
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
 
@@ -47,6 +49,12 @@ const RETARGET: Record<string, Pick<V2NavItem, "to" | "labelKey">> = {
   "/v2/agents": { to: "/v3/create", labelKey: "v3.nav.create" },
 };
 
+/** Pages only V3 has (no V2 twin), appended to their V2 group. */
+export const V3_ONLY: Record<string, V2NavItem[]> = {
+  // the platform's model roles (judge, actor, defaults…) — hub-global, admin-only
+  admin: [{ to: "/v3/models", labelKey: "v3.models.nav", icon: Cpu, admin: true }],
+};
+
 export interface V3ModuleGroup {
   key: string;
   labelKey: string;
@@ -62,7 +70,7 @@ export function hostedGroups(isAdmin: boolean): V3ModuleGroup[] {
   return V2_NAV.map((group) => ({
     key: group.key,
     labelKey: group.labelKey,
-    items: group.items
+    items: [...group.items, ...(V3_ONLY[group.key] ?? [])]
       .filter((item) => !REBUILT.has(item.to) && (!item.admin || isAdmin))
       .map((item) => {
         const [path, query] = item.to.split("?");

@@ -1,6 +1,5 @@
-import { modelsForActiveRegion } from "../../lib/regions";
 import { Plus, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -17,10 +16,14 @@ import {
 import {
   customUnavailableNote,
   evaluatorLabel,
+  defaultJudgeModel,
   type EvaluatorLevel,
-  JUDGE_MODEL_OPTIONS,
+  judgeModelOptions,
   LEVEL_PLACEHOLDERS,
 } from "../../lib/evaluators";
+import { useModelCatalog } from "../../lib/model-catalog";
+import { adoptModelDefault, useModelDefaultsArrival } from "../../lib/model-defaults";
+import { CUSTOM_MODEL_OPTION } from "../../lib/models";
 import { creatorLabel } from "../format";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
@@ -326,18 +329,19 @@ interface Draft {
   rating_scale: ScalePoint[];
 }
 
-const EMPTY: Draft = {
+// a function, not a constant: the judge is the configured default once loaded
+const emptyDraft = (): Draft => ({
   definition: "judge",
   name: "",
   description: "",
   level: "TRACE",
-  model_id: JUDGE_MODEL_OPTIONS[0],
+  model_id: defaultJudgeModel(),
   instructions: "",
   base_evaluator_id: "",
   lambda_arn: "",
   lambda_timeout_s: 60,
   rating_scale: DEFAULT_SCALE,
-};
+});
 
 function draftFrom(d: EvaluatorDetail): Draft {
   return {
@@ -345,7 +349,7 @@ function draftFrom(d: EvaluatorDetail): Draft {
     name: d.name ?? d.id,
     description: d.description ?? "",
     level: (d.level as EvaluatorLevel) ?? "TRACE",
-    model_id: d.model_id ?? JUDGE_MODEL_OPTIONS[0],
+    model_id: d.model_id ?? defaultJudgeModel(),
     instructions: d.instructions ?? "",
     base_evaluator_id: d.base_evaluator_id ?? "",
     lambda_arn: d.lambda_arn ?? "",
@@ -399,9 +403,23 @@ function EvaluatorEditor({ id }: { id: string | null }) {
     `evaluator-edit:${id ?? "new"}`,
   );
   const catalog = useLoad(() => api.v2Evaluators(), "evaluators");
-  const [draft, setDraft] = useState<Draft | null>(editing ? null : EMPTY);
+  const [draft, setDraft] = useState<Draft | null>(() => (editing ? null : emptyDraft()));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // A new evaluator seeds the judge before the configured defaults arrive; adopt the
+  // configured judge then, unless the user already picked one. An edited evaluator
+  // keeps its stored model.
+  const seededJudge = useRef(defaultJudgeModel());
+  const judgeTouched = useRef(false);
+  const [judgeCustom, setJudgeCustom] = useState(false);
+  useModelCatalog();
+  const modelDefaults = useModelDefaultsArrival((d) => {
+    if (editing) return;
+    setDraft((cur) => cur && {
+      ...cur,
+      model_id: adoptModelDefault(cur.model_id, seededJudge.current, d.judge_model_id, judgeTouched.current),
+    });
+  });
 
   // seed the edit form once the evaluator arrives
   if (editing && draft === null && detail.data) setDraft(draftFrom(detail.data));
@@ -524,15 +542,28 @@ function EvaluatorEditor({ id }: { id: string | null }) {
           {draft.definition !== "code" && (
             <Field label={t("v2.evaluators.model")} required hint={t("v2.evaluators.modelHint")}>
               <Select
-                value={draft.model_id}
-                // judge models are regional: offer only those that exist in this workspace's
-                // geography, but never drop a stored id the operator already chose
-                options={(modelsForActiveRegion(JUDGE_MODEL_OPTIONS).includes(draft.model_id)
-                  ? modelsForActiveRegion(JUDGE_MODEL_OPTIONS)
-                  : [draft.model_id, ...modelsForActiveRegion(JUDGE_MODEL_OPTIONS)]
-                ).map((m) => ({ value: m, label: m }))}
-                onChange={(v) => set({ model_id: v })}
+                // configured default + fallback + GLM first, then the static judges of
+                // this workspace's geography; a stored id is never dropped
+                value={judgeCustom ? CUSTOM_MODEL_OPTION : draft.model_id}
+                options={[
+                  ...judgeModelOptions(modelDefaults, draft.model_id).map((m) => ({ value: m, label: m })),
+                  { value: CUSTOM_MODEL_OPTION, label: t("models.picker.custom") },
+                ]}
+                onChange={(v) => {
+                  judgeTouched.current = true;
+                  setJudgeCustom(v === CUSTOM_MODEL_OPTION);
+                  if (v !== CUSTOM_MODEL_OPTION) set({ model_id: v });
+                }}
               />
+              {judgeCustom && (
+                <input
+                  className="v2-input mono"
+                  style={{ marginTop: 8 }}
+                  value={draft.model_id}
+                  placeholder={t("models.picker.customPlaceholder", { example: defaultJudgeModel(modelDefaults) })}
+                  onChange={(e) => set({ model_id: e.target.value.trim() })}
+                />
+              )}
             </Field>
           )}
           {draft.definition === "derived" && (

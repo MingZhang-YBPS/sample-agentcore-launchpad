@@ -23,7 +23,8 @@ import {
   type AssistantTurnRequest,
   type HarnessNativeTool,
 } from "./api";
-import { MODEL_CATALOG, type ModelSource } from "./models";
+import { currentModelDefaults } from "./model-defaults";
+import { defaultModelFor, type ModelSource } from "./models";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
 export const ASSISTANT_JOB_POLL_MS = 3000;
@@ -151,10 +152,17 @@ export type ProposalEditDraft = Pick<
   | "timeout_seconds"
 > & { native_tools: HarnessNativeTool[] };
 
+/** The model a proposal edit lands on for `source`: the assistant's configured default
+ *  on Bedrock, the first offered model on Mantle. */
+export function proposalDefaultModel(source: ModelSource): string {
+  return source === "bedrock" ? currentModelDefaults().assistant_model_id : defaultModelFor(source);
+}
+
 export function proposalDraftFrom(content: AssistantProposal["content"]): ProposalEditDraft {
   return {
     name: String(content.name ?? ""),
-    model_id: String(content.model_id ?? MODEL_CATALOG.bedrock[0].model_id),
+    // a proposal without a model means the assistant's configured default
+    model_id: String(content.model_id ?? currentModelDefaults().assistant_model_id),
     model_source: (content.model_source as ModelSource) ?? "bedrock",
     system_prompt: String(content.system_prompt ?? ""),
     tools: Array.isArray(content.tools) ? content.tools.map(String) : [],

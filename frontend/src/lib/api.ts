@@ -3678,6 +3678,99 @@ export interface UserPatchBody {
   workspaces?: string[];
 }
 
+/* ── platform model defaults ──────────────────────────────────────────── */
+
+/**
+ * `GET /api/models/defaults` — the server's configured model defaults (operator
+ * env overrides included), so a console never hard-codes which model is the
+ * default in an account that may lack OpenAI or Anthropic models. All strings;
+ * `judge_fallback_model_id` is `""` when the judge fallback is disabled.
+ */
+export interface ModelDefaults {
+  /** intents + suggestions (server-side only) */
+  platform_model_id: string;
+  /** default LLM-as-judge model of custom/derived evaluators */
+  judge_model_id: string;
+  judge_fallback_model_id: string;
+  /** default model of the agents the architect assistant proposes */
+  assistant_model_id: string;
+  /** system architect agent install default */
+  architect_model_id: string;
+  /** default simulated-user (actor) model of persona scenarios */
+  actor_model_id: string;
+  /** Strands Studio fallback for canvas nodes without a model */
+  studio_fallback_model_id: string;
+  /** Claude Agent SDK (container method) default */
+  claude_sdk_model_id: string;
+  /** backend `AgentSpec` DEFAULT_MODEL_ID — what a stored spec without `model_id` means */
+  agent_default_model_id: string;
+  codegen_model: string;
+  prompt_opt_default_model_id: string;
+  skill_lab_judge_model_id: string;
+  skill_lab_target_model_id: string;
+  skill_lab_codex_target_model_id: string;
+}
+
+/** One text-output, on-demand-invocable model or inference profile the active
+ *  workspace's account offers in its Region (`GET /api/model-catalog`). "Offered"
+ *  is not "entitled": a model may still be denied at invoke. */
+export interface ModelCatalogEntry {
+  model_id: string;
+  provider: string;
+  name: string;
+  kind: "inference_profile" | "foundation_model";
+  /** false = known not to accept tool use (`toolConfig`); null/absent = unknown */
+  tool_use?: boolean | null;
+}
+
+/** `models` is empty with `error` set when the listing failed — pickers then
+ *  fall back to their static lists. */
+export interface ModelCatalog {
+  region: string;
+  models: ModelCatalogEntry[];
+  error?: string;
+}
+
+/** Which configuration layer a model role's effective value comes from. */
+export type ModelSettingSource = "default" | "config" | "env" | "console";
+
+/** One model role of `GET /api/models/settings` (admin, hub-global). */
+export interface ModelSettingRole {
+  field: string;
+  env: string;
+  /** the effective value (console override > env > default) */
+  value: string;
+  default: string;
+  env_value: string | null;
+  console_value: string | null;
+  source: ModelSettingSource;
+  probe: "converse" | "judge" | "actor";
+  /** provider families the role's feature can drive (e.g. `["anthropic"]`); null = any */
+  families: string[] | null;
+  /** `""` is a valid value (judge fallback: disabled) */
+  allow_empty: boolean;
+  /** the role's feature runs tools: a model without tool use is not offered */
+  needs_tools?: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface ModelProbeCheck {
+  name: "converse" | "tool_choice" | "evaluator";
+  ok: boolean;
+  error: string | null;
+  latency_ms: number;
+}
+
+/** `POST /api/model-probe` — live checks of one model for one role in the
+ *  active workspace's account/Region. */
+export interface ModelProbeResult {
+  ok: boolean;
+  model_id: string;
+  region: string;
+  checks: ModelProbeCheck[];
+}
+
 /* ── skill lab (skill evaluation & optimization) ────────────────────────── */
 
 export interface SkillLabStatus {
@@ -4716,6 +4809,23 @@ export interface GuardrailInfo {
 
 export const api = {
   videoCatalog: () => request<VideoCatalog>("/api/videos"),
+  modelDefaults: () => request<ModelDefaults>("/api/models/defaults"),
+  /** the active (or the pinned) workspace's account/Region model catalog */
+  modelCatalog: (workspaceId?: string | null) =>
+    request<ModelCatalog>("/api/model-catalog", { headers: pinnedWorkspace(workspaceId) }),
+  modelSettings: () => request<{ roles: ModelSettingRole[] }>("/api/models/settings"),
+  updateModelSetting: (field: string, modelId: string) =>
+    request<ModelSettingRole>(`/api/models/settings/${encodeURIComponent(field)}`, {
+      method: "PUT",
+      body: JSON.stringify({ model_id: modelId }),
+    }),
+  resetModelSetting: (field: string) =>
+    request<ModelSettingRole>(`/api/models/settings/${encodeURIComponent(field)}`, { method: "DELETE" }),
+  probeModel: (field: string, modelId: string) =>
+    request<ModelProbeResult>("/api/model-probe", {
+      method: "POST",
+      body: JSON.stringify({ field, model_id: modelId }),
+    }),
   manageVideos: () => request<ManagedVideoCatalog>("/api/videos/manage"),
   getManagedVideo: (id: string) =>
     request<ManagedVideo>(`/api/videos/manage/${encodeURIComponent(id)}`),

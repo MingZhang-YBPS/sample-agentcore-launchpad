@@ -12,8 +12,9 @@ import {
   type JobInfo,
   type StageInfo,
 } from "../../../lib/api";
-import { isFishbone, type ProposalEditDraft } from "../../../lib/assistant";
-import { MODEL_CATALOG, type ModelSource } from "../../../lib/models";
+import { isFishbone, proposalDefaultModel, type ProposalEditDraft } from "../../../lib/assistant";
+import { useModelCatalog } from "../../../lib/model-catalog";
+import { modelOptionsFor, type ModelSource } from "../../../lib/models";
 import { fmtTime } from "../../format";
 import { Alert, Descriptions, Field, Select, Table, Tag } from "../../ui";
 import { AGENT_TONE, JOB_TONE, shortId, STAGE_TONE } from "./common";
@@ -267,7 +268,8 @@ export function ProposalEditor({
     set(key, has ? draft[key].filter((x) => x !== value) : [...draft[key], value]);
   };
   const bad = (k: string) => (errors[k] ? t("v2.assistant.fieldInvalid") : null);
-  const models = MODEL_CATALOG[draft.model_source];
+  useModelCatalog(); // the account catalog joins the suggestions once it lands
+  const models = modelOptionsFor(draft.model_source);
   const memoryModes: AssistantMemoryMode[] = ["disabled", "workspace"];
   const check = (on: boolean, disabled: boolean, label: string, onToggle: () => void, testId?: string, title?: string) => (
     <label key={label} className={`v2-check${disabled ? " disabled" : ""}`} title={title}>
@@ -292,7 +294,7 @@ export function ProposalEditor({
             ]}
             onChange={(v) => {
               const source = v as ModelSource;
-              onChange({ ...draft, model_source: source, model_id: MODEL_CATALOG[source][0].model_id });
+              onChange({ ...draft, model_source: source, model_id: proposalDefaultModel(source) });
             }}
           />
         </Field>

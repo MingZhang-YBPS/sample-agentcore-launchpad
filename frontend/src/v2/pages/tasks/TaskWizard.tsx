@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, dlcApi, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
-import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
+import { actorModelOptions, CLOUD_VALUE_PREFIX, defaultActorModel } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
+import { useModelCatalog } from "../../../lib/model-catalog";
+import { adoptModelDefault, STATIC_MODEL_DEFAULTS, useModelDefaultsArrival } from "../../../lib/model-defaults";
+import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
 import { CustomUnavailableNote } from "../../EvaluatorPicker";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -69,7 +72,8 @@ interface Draft {
   confirmCost: boolean;
 }
 
-const EMPTY: Draft = {
+// a function, not a constant: the actor is the configured default once loaded
+const emptyDraft = (): Draft => ({
   name: "",
   description: "",
   target: "agent",
@@ -84,14 +88,14 @@ const EMPTY: Draft = {
   logSessionIds: [],
   logHours: 168,
   dataset: "",
-  actorModelId: ACTOR_MODELS[0],
+  actorModelId: defaultActorModel(),
   sampling: 10,
   sessionTimeout: 15,
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
   insights: [...INSIGHT_TYPES],
   repeats: 1,
   confirmCost: false,
-};
+});
 
 /**
  * Prefill from `?from=run:<id>` / `?from=online:<id>` (copy), or from hand-off
@@ -106,7 +110,7 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
     const target = run.log_source
       ? { target: "cloudwatch" as const, serviceName: run.log_source.service_name, logGroups: run.log_source.log_group_names }
       : { agentId: run.agent_id };
-    const base: Draft = { ...EMPTY, name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", ...target, ...copied };
+    const base: Draft = { ...emptyDraft(), name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", ...target, ...copied };
     if (name.startsWith("window:")) return { ...base, source: "window", lookbackHours: parseInt(name.slice(7), 10) || 24 };
     if (name.startsWith("cloud:") && run.dataset_id) return { ...base, source: "dataset", dataset: `${CLOUD_VALUE_PREFIX}${run.dataset_id}` };
     if (run.dataset_id) return { ...base, source: "dataset", dataset: run.dataset_id };
@@ -116,7 +120,7 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
   if (from?.startsWith("online:")) {
     const cfg = await api.v2OnlineConfig(from.slice(7));
     return {
-      ...EMPTY,
+      ...emptyDraft(),
       name: `${cfg.description || cfg.name || cfg.config_id}${copySuffix}`.slice(0, 64),
       agentId: cfg.agent_id ?? "",
       strategy: "continuous",
@@ -125,7 +129,7 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
       evaluators: cfg.evaluators,
     };
   }
-  const seeded: Draft = { ...EMPTY, agentId: handoff.agent ?? "" };
+  const seeded: Draft = { ...emptyDraft(), agentId: handoff.agent ?? "" };
   if (handoff.evaluators.length) seeded.evaluators = handoff.evaluators;
   if (handoff.dataset) return { ...seeded, source: "dataset", dataset: handoff.dataset };
   return seeded;
@@ -161,8 +165,23 @@ export function TaskWizard() {
   const [evalLevel, setEvalLevel] = useState("");
   const [evalQ, setEvalQ] = useState("");
 
+  // The actor is seeded before the configured defaults may have arrived: adopt the
+  // configured actor (whichever comes last, seed or defaults) unless the user picked one.
+  const actorTouched = useRef(false);
+  const [actorCustom, setActorCustom] = useState(false);
+  useModelCatalog();
+  const adoptActor = (d: Draft, configured: string | undefined): Draft => ({
+    ...d,
+    actorModelId: adoptModelDefault(
+      d.actorModelId, STATIC_MODEL_DEFAULTS.actor_model_id, configured ?? "", actorTouched.current,
+    ),
+  });
+  const modelDefaults = useModelDefaultsArrival((d) => {
+    setDraft((cur) => cur && adoptActor(cur, d.actor_model_id));
+  });
   useEffect(() => {
-    if (seed.data && draft === null) setDraft(seed.data);
+    if (seed.data && draft === null) setDraft(adoptActor(seed.data, modelDefaults?.actor_model_id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- adoptActor reads refs/props only
   }, [seed.data, draft]);
 
   const activeAgents = useMemo(() => (agents.data?.agents ?? []).filter((a) => a.status === "active"), [agents.data]);
@@ -512,12 +531,29 @@ export function TaskWizard() {
                   <div style={{ marginTop: 16 }}>
                     <Field label={t("v2.tasks.actorModel")} required hint={t("v2.tasks.actorModelHint")}>
                       <Select
-                        value={draft.actorModelId}
-                        onChange={(v) => set({ actorModelId: v })}
+                        value={actorCustom ? CUSTOM_MODEL_OPTION : draft.actorModelId}
+                        onChange={(v) => {
+                          actorTouched.current = true;
+                          setActorCustom(v === CUSTOM_MODEL_OPTION);
+                          if (v !== CUSTOM_MODEL_OPTION) set({ actorModelId: v });
+                        }}
                         testId="v2-task-actor-model"
                         mono
-                        options={ACTOR_MODELS.map((m) => ({ value: m, label: m }))}
+                        options={[
+                          ...actorModelOptions(modelDefaults, draft.actorModelId).map((m) => ({ value: m, label: m })),
+                          { value: CUSTOM_MODEL_OPTION, label: t("models.picker.custom") },
+                        ]}
                       />
+                      {actorCustom && (
+                        <input
+                          className="v2-input mono"
+                          style={{ marginTop: 8 }}
+                          data-testid="v2-task-actor-model-custom"
+                          value={draft.actorModelId}
+                          placeholder={t("models.picker.customPlaceholder", { example: defaultActorModel(modelDefaults) })}
+                          onChange={(e) => set({ actorModelId: e.target.value.trim() })}
+                        />
+                      )}
                     </Field>
                   </div>
                 )}

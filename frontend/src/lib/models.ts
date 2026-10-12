@@ -8,6 +8,9 @@
  * sends `model_source` only, never `api_format`.
  */
 
+import type { ModelCatalogEntry } from "./api";
+import { activeCatalog, catalogLabel, modelFamily, supportsToolUse, toolCapableCatalog } from "./model-catalog";
+import { currentModelDefaults, peekModelDefaults, STATIC_MODEL_DEFAULTS } from "./model-defaults";
 import { getActiveRegion, modelAvailableInRegion } from "./regions";
 
 export type ModelSource = "mantle" | "bedrock";
@@ -71,6 +74,15 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       api_format: "converse_stream",
     },
     { model_id: "global.moonshotai.kimi-k3", label: "Kimi K3 (global)", api_format: "converse_stream" },
+    // Kimi / DeepSeek: live-probed 2026-10-12 (us-east-1 + us-west-2) for Converse,
+    // tool use (auto + forced), ConverseStream with a tool. DeepSeek V3.1 is
+    // us-west-2 only (`regions.ts`); DeepSeek R1 refuses toolConfig, so it is not
+    // offered for agents (only to judges and prompt optimisation).
+    { model_id: "us.moonshotai.kimi-k3", label: "Kimi K3 (US)", api_format: "converse_stream" },
+    { model_id: "moonshotai.kimi-k2.5", label: "Kimi K2.5", api_format: "converse_stream" },
+    { model_id: "moonshot.kimi-k2-thinking", label: "Kimi K2 Thinking", api_format: "converse_stream" },
+    { model_id: "deepseek.v3.2", label: "DeepSeek V3.2", api_format: "converse_stream" },
+    { model_id: "deepseek.v3-v1:0", label: "DeepSeek V3.1", api_format: "converse_stream" },
     // OpenAI GPT-5.6 Sol through the native Bedrock US cross-region inference
     // profile (Converse) — the system architect preset's default (backend
     // `system_agents/presets.py`), kept so its configure page stays on a listed id.
@@ -98,8 +110,15 @@ export function supportsReasoningEffort(modelId: string, source: ModelSource): b
 export const DEFAULT_MODEL_SOURCE: ModelSource = "bedrock";
 
 /** Mirrors backend `AgentSpec.model_id`'s default (`DEFAULT_MODEL_ID`) — what a
- *  stored spec without a `model_id` means. Not the form default above. */
-export const SPEC_DEFAULT_MODEL_ID = "global.zai.glm-5.3";
+ *  stored spec without a `model_id` means. Not the form default above. The static
+ *  value; `specDefaultModelId()` is the server's configured one once loaded. */
+export const SPEC_DEFAULT_MODEL_ID = STATIC_MODEL_DEFAULTS.agent_default_model_id;
+
+/** What a stored spec without a `model_id` means: the configured
+ *  `agent_default_model_id` (static {@link SPEC_DEFAULT_MODEL_ID} until loaded). */
+export function specDefaultModelId(): string {
+  return peekModelDefaults()?.agent_default_model_id ?? SPEC_DEFAULT_MODEL_ID;
+}
 
 /** The Claude Agent SDK can only drive Claude models, so it is pinned here. */
 export const CLAUDE_SDK_MODEL_SOURCE: ModelSource = "bedrock";
@@ -107,25 +126,66 @@ export const CLAUDE_SDK_MODEL_SOURCE: ModelSource = "bedrock";
 /** Sentinel `<option>` value revealing the free-text model-id input. */
 export const CUSTOM_MODEL_OPTION = "__custom__";
 
-/** The first model a dropdown offers for `source`; `claudeOnly` for the Claude
- *  Agent SDK, whose first offered entry is a Claude model rather than GLM-5.3. */
+/** The first model a dropdown offers for `source` — on Bedrock the server's configured
+ *  default (`agent_default_model_id`; `claude_sdk_model_id` for the Claude Agent SDK). */
 export function defaultModelFor(source: ModelSource, claudeOnly = false): string {
   return modelOptionsFor(source, claudeOnly)[0].model_id;
+}
+
+/**
+ * Bedrock rows in picker order: the configured default first, then the static
+ * catalog, then the account's model catalog (`GET /api/model-catalog`) — deduped,
+ * a known id keeping its curated label.
+ */
+export function mergeBedrockOptions(
+  configured: string,
+  staticOptions: readonly ModelOption[],
+  catalog: readonly ModelCatalogEntry[],
+): ModelOption[] {
+  const byId = new Map<string, ModelOption>();
+  for (const option of staticOptions) byId.set(option.model_id, option);
+  for (const entry of catalog) {
+    if (!byId.has(entry.model_id)) {
+      byId.set(entry.model_id, { model_id: entry.model_id, label: catalogLabel(entry), api_format: "converse_stream" });
+    }
+  }
+  const order = [configured, ...staticOptions.map((o) => o.model_id), ...catalog.map((e) => e.model_id)];
+  const out: ModelOption[] = [];
+  const seen = new Set<string>();
+  for (const id of order) {
+    const trimmed = id.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(byId.get(trimmed) ?? { model_id: trimmed, label: trimmed, api_format: "converse_stream" });
+  }
+  return out;
 }
 
 /**
  * The options a dropdown may offer for `source`. `claudeOnly` narrows them to
  * Claude ids for the Claude Agent SDK, which cannot drive anything else — the
  * catalog's GLM and GPT entries would otherwise be advertised as valid there.
+ * Bedrock also offers the configured default and the workspace account's catalog
+ * (components re-render on its arrival through `useModelCatalog()`).
  */
 export function modelOptionsFor(source: ModelSource, claudeOnly = false): ModelOption[] {
   // A geographic profile (`us.…`) only exists in its own geography, so a workspace
   // in another region is not offered it (custom entry stays possible).
-  const options = MODEL_CATALOG[source].filter((option) =>
+  let options = MODEL_CATALOG[source].filter((option) =>
     modelAvailableInRegion(option.model_id, getActiveRegion()),
   );
+  if (source === "bedrock") {
+    const defaults = currentModelDefaults();
+    options = mergeBedrockOptions(
+      claudeOnly ? defaults.claude_sdk_model_id : defaults.agent_default_model_id,
+      options,
+      toolCapableCatalog(activeCatalog()),
+    );
+    // agents run tools: a model known to refuse toolConfig is never offered
+    options = options.filter((option) => supportsToolUse(option.model_id));
+  }
   return claudeOnly
-    ? options.filter((option) => option.model_id.includes("anthropic.claude"))
+    ? options.filter((option) => modelFamily(option.model_id) === "anthropic")
     : options;
 }
 

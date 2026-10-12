@@ -11187,6 +11187,110 @@
       },
       "deployTarget": "Deploying to {{name}} · {{region}}.",
       "tableScroll": "Agent table. Scroll horizontally to see all columns."
+    },
+    "models": {
+      "nav": "Models",
+      "title": "Models",
+      "sub": "Every model the platform calls or pre-selects, where its value comes from, and a live test in this workspace's account and Region.",
+      "noteOverride": "A model saved here is a console override: it takes effect at once and wins over the environment (which the deploy script writes) and the config file. Reset returns to the environment or default value.",
+      "noteJudge": "Changing the evaluator judge changes evaluation scores: compare runs judged by the same model.",
+      "noteCatalog": "{{count}} models offered by this workspace's account and Region join the lists. Offered is not entitled: test before saving.",
+      "roles": "Model roles",
+      "col": {
+        "role": "Role",
+        "current": "Current",
+        "model": "Model"
+      },
+      "none": "(none)",
+      "buildDefault": "default",
+      "pick": "Model",
+      "test": "Test",
+      "save": "Save",
+      "reset": "Reset",
+      "resetHint": "Clear the console override (falls back to the environment or default)",
+      "saved": "{{role}} saved",
+      "resetDone": "{{role}} reset",
+      "probing": "Testing…",
+      "probeNone": "Nothing to test.",
+      "probeRegion": "Tested in {{region}}",
+      "checkOk": "OK ({{ms}} ms)",
+      "check": {
+        "converse": "Converse",
+        "tool_choice": "Forced tool choice",
+        "evaluator": "AgentCore evaluator"
+      },
+      "updated": "Set by {{who}} {{when}}",
+      "familyOnly": "Only {{families}} models",
+      "source": {
+        "default": "default",
+        "config": "config file",
+        "env": "environment",
+        "console": "console"
+      },
+      "role": {
+        "platform_model_id": {
+          "name": "Platform model",
+          "desc": "Intent classification and suggested questions (server-side)."
+        },
+        "judge_model_id": {
+          "name": "Evaluator judge",
+          "desc": "Default LLM-as-judge model of new custom and derived evaluators."
+        },
+        "judge_fallback_model_id": {
+          "name": "Judge fallback",
+          "desc": "Used when AgentCore refuses the judge model; empty disables the fallback."
+        },
+        "assistant_model_id": {
+          "name": "Architect assistant proposals",
+          "desc": "Default model of the agents the architect assistant proposes."
+        },
+        "architect_model_id": {
+          "name": "System architect agent",
+          "desc": "Install default of the system architect agent."
+        },
+        "agent_default_model_id": {
+          "name": "New agents",
+          "desc": "Pre-selected model of the Create Agent wizard and new Studio agent nodes."
+        },
+        "actor_model_id": {
+          "name": "Simulated user",
+          "desc": "Actor model of persona scenarios; it must accept forced tool choice."
+        },
+        "codegen_model": {
+          "name": "Studio AI fix",
+          "desc": "Model that repairs generated Strands Studio code (Claude only)."
+        },
+        "prompt_opt_default_model_id": {
+          "name": "Prompt optimisation",
+          "desc": "Default model of the prompt recommendation (optimisation) provider."
+        },
+        "studio_fallback_model_id": {
+          "name": "Studio fallback",
+          "desc": "Model of Strands Studio canvas nodes that carry no model."
+        },
+        "claude_sdk_model_id": {
+          "name": "Claude Agent SDK",
+          "desc": "Default model of container agents on the Claude Agent SDK (Claude only)."
+        },
+        "skill_lab_judge_model_id": {
+          "name": "Skill Lab judge",
+          "desc": "Judge of Skill Lab evaluation and training jobs."
+        },
+        "skill_lab_target_model_id": {
+          "name": "Skill Lab target (Claude Code)",
+          "desc": "Target model of Skill Lab jobs on the Claude Code CLI."
+        },
+        "skill_lab_codex_target_model_id": {
+          "name": "Skill Lab target (Codex)",
+          "desc": "Target model of Skill Lab jobs on the Codex CLI."
+        }
+      }
+    }
+  },
+  "models": {
+    "picker": {
+      "custom": "Custom model ID…",
+      "customPlaceholder": "Any Bedrock model or inference-profile ID, e.g. {{example}}"
     }
   }
 }

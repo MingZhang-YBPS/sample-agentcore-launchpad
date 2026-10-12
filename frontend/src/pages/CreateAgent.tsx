@@ -86,6 +86,8 @@ import type {
 } from "../lib/agent-spec";
 import ClassicIdentitySection from "../components/ClassicIdentitySection";
 import type { ModelSource, ReasoningEffort } from "../lib/models";
+import { useModelCatalog } from "../lib/model-catalog";
+import { adoptModelDefault, useModelDefaultsArrival } from "../lib/model-defaults";
 import { useWorkspace } from "../workspace/workspace-context";
 import { SystemPresetsPanel } from "./create/SystemPresetsPanel";
 import {
@@ -106,7 +108,7 @@ import {
   isCustomModelId,
   modelOptionsFor,
   REASONING_EFFORTS,
-  SPEC_DEFAULT_MODEL_ID,
+  specDefaultModelId,
   supportsReasoningEffort,
 } from "../lib/models";
 
@@ -931,6 +933,15 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   // when set, the wizard edits an existing agent and the launch button re-publishes it
   const [editing, setEditing] = useState<EditingTarget | null>(null);
   const [detailsMode, setDetailsMode] = useState(false);
+  // The model is seeded before the configured defaults may have loaded: adopt the
+  // configured default for the method then, unless the member already chose one or
+  // an agent is being edited. The account catalog joins the dropdown when it lands.
+  const seededModel = useRef(modelId);
+  useModelCatalog();
+  useModelDefaultsArrival(() => {
+    if (editing || customModel) return;
+    setModelId((cur) => adoptModelDefault(cur, seededModel.current, defaultModelForMethod(method, modelSource), false));
+  });
   // one submit at a time (both paths); the outcome of an accepted request is
   // consumed only while this component is still mounted
   const [submitting, setSubmitting] = useState(false);
@@ -1487,7 +1498,7 @@ const deployLock = !canDeploy
     setName(agent.name);
     // A spec stored before model_source existed is a Converse-API agent, never
     // Mantle; an id in neither catalog rides the "Custom model ID…" branch.
-    const storedModel = spec.model_id ?? SPEC_DEFAULT_MODEL_ID;
+    const storedModel = spec.model_id ?? specDefaultModelId();
     const storedSource = spec.model_source ?? "bedrock";
     setModelId(storedModel);
     setModelSource(storedSource);

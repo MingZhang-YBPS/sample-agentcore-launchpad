@@ -7,6 +7,7 @@ import { DiffPanes } from "../../../components/DiffPanes";
 import { api, errorMessage, type RecommendProviderInfo } from "../../../lib/api";
 import { evaluationRunPresentation, type EvaluationRunInfo } from "../../../lib/evaluation";
 import { evaluatorLabel, evaluatorPolarity } from "../../../lib/evaluators";
+import { useModelCatalog, withCatalogModels } from "../../../lib/model-catalog";
 import {
   type ExperimentInfo,
   fmtP,
@@ -32,6 +33,7 @@ const FAST_POLL_MS = 2500;
 
 export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: boolean }) {
   const { t } = useTranslation();
+  useModelCatalog(); // the account catalog joins the model choices once it lands
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
   const [exp, setExp] = useState<ExperimentInfo | null>(null);
@@ -283,7 +285,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               }}
               testId="v2-exp-rec-model"
               options={[
-                ...thirdParty.models.map((m) => ({
+                ...withCatalogModels(thirdParty.models).map((m) => ({
                   value: m.model_id === thirdParty.default_model_id ? "" : m.model_id,
                   label: `${m.label}${m.model_id === thirdParty.default_model_id ? ` · ${t("expPage.providerDefaultModel")}` : ""}`,
                 })),
@@ -294,7 +296,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               <input
                 className="v2-input mono"
                 style={{ marginTop: 8 }}
-                placeholder="global.anthropic.claude-sonnet-5"
+                placeholder={thirdParty.default_model_id ?? ""}
                 value={modelCustom}
                 onChange={(e) => {
                   setModelCustom(e.target.value);

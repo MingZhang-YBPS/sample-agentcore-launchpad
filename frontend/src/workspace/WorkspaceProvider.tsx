@@ -6,6 +6,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/auth-context";
 import { Panel, ViewHead } from "../components";
 import { AnnouncementFeed } from "../components/AnnouncementFeed";
+import { loadModelCatalog, setCatalogWorkspace } from "../lib/model-catalog";
+import { loadModelDefaults } from "../lib/model-defaults";
 import { setActiveRegion } from "../lib/regions";
 import { api, AUTH_UNAUTHORIZED_EVENT, type Workspace } from "../lib/api";
 import { storedWorkspaceId, storeWorkspaceId } from "../lib/workspace-header";
@@ -83,6 +85,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  // Prefetch the configured model defaults alongside the workspace list (both gate
+  // nothing): seeded model fields read them synchronously once cached.
+  useEffect(() => {
+    void loadModelDefaults();
+  }, []);
+
   useEffect(() => {
     // AuthGate swaps children for the login page on a 401, which unmounts this
     // provider — the listener is here so a stale list can never outlive the
@@ -97,8 +105,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [isAdmin, list.workspaces, selected],
   );
 
-  // Model pickers read this at render time; set before the children render.
+  // Model pickers read these at render time; set before the children render.
   setActiveRegion(current?.region);
+  setCatalogWorkspace(current?.id);
+
+  // The workspace's account/Region model catalog, for every model picker.
+  const currentId = current?.id ?? null;
+  useEffect(() => {
+    if (currentId) void loadModelCatalog(currentId);
+  }, [currentId]);
 
   useEffect(() => {
     // Keeps storage and state agreeing after the list changes under us (the

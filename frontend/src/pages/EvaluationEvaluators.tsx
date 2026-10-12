@@ -1,5 +1,4 @@
 import type { CSSProperties } from "react";
-import { modelsForActiveRegion } from "../lib/regions";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -31,10 +30,14 @@ import type {
 import {
   customUnavailableNote,
   evaluatorLabel,
+  defaultJudgeModel,
   type EvaluatorLevel,
-  JUDGE_MODEL_OPTIONS as MODEL_OPTIONS,
+  judgeModelOptions,
   LEVEL_PLACEHOLDERS,
 } from "../lib/evaluators";
+import { useModelCatalog } from "../lib/model-catalog";
+import { adoptModelDefault, useModelDefaultsArrival } from "../lib/model-defaults";
+import { CUSTOM_MODEL_OPTION } from "../lib/models";
 
 type Level = EvaluatorLevel;
 
@@ -86,7 +89,7 @@ const defaultScale = (): ScalePoint[] => [
 const emptyDraft = (): Draft => ({
   name: "",
   level: "TRACE",
-  model_id: MODEL_OPTIONS[0],
+  model_id: defaultJudgeModel(),
   description: "",
   instructions: "",
   rating_scale: defaultScale(),
@@ -97,7 +100,7 @@ const emptyDraft = (): Draft => ({
 const SAMPLE_DRAFT = (): Draft => ({
   name: "HRPolicyCompliance",
   level: "TRACE",
-  model_id: MODEL_OPTIONS[0],
+  model_id: defaultJudgeModel(),
   description: "Penalizes answers that reveal other employees' data or invent HR policy.",
   instructions:
     "You are evaluating an HR assistant's reply for policy compliance.\n" +
@@ -136,7 +139,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [unavailable, setUnavailable] = useState<EvaluatorsUnavailable | null>(null);
-  const [draft, setDraft] = useState<Draft>(emptyDraft());
+  const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [detail, setDetail] = useState<EvaluatorDetail | null>(null);
   const [detailError, setDetailError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -231,7 +234,23 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   // Detail + draft hydrate declaratively from the selected row; switching
   // rows must not leak the previous draft into the next form.
   const selectedId = selected?.id ?? null;
+  // The create form seeds the judge before the configured defaults arrive; adopt
+  // the configured judge then, unless the user already picked one. A selected
+  // evaluator keeps its stored model.
+  const seededJudge = useRef(defaultJudgeModel());
+  const judgeTouched = useRef(false);
+  const [judgeCustom, setJudgeCustom] = useState(false);
+  useModelCatalog();
+  const modelDefaults = useModelDefaultsArrival((d) => {
+    if (selectedId) return;
+    setDraft((cur) => ({
+      ...cur,
+      model_id: adoptModelDefault(cur.model_id, seededJudge.current, d.judge_model_id, judgeTouched.current),
+    }));
+  });
   useEffect(() => {
+    judgeTouched.current = false;
+    setJudgeCustom(false);
     setFormError(null);
     setDetail(null);
     setDetailError(false);
@@ -252,7 +271,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         setDraft({
           name: d.name ?? d.id,
           level: (LEVELS.includes(d.level as Level) ? d.level : "TRACE") as Level,
-          model_id: d.model_id ?? MODEL_OPTIONS[0],
+          model_id: d.model_id ?? defaultJudgeModel(),
           description: d.description ?? "",
           instructions: d.instructions ?? "",
           rating_scale: (d.rating_scale?.length ? d.rating_scale : defaultScale()).map((p) => ({
@@ -562,18 +581,32 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         <select
           className="input"
           aria-label={t("evalPage.evaluators.model")}
-          value={draft.model_id}
-          onChange={(e) => setDraft({ ...draft, model_id: e.target.value })}
+          value={judgeCustom ? CUSTOM_MODEL_OPTION : draft.model_id}
+          onChange={(e) => {
+            judgeTouched.current = true;
+            setJudgeCustom(e.target.value === CUSTOM_MODEL_OPTION);
+            if (e.target.value !== CUSTOM_MODEL_OPTION) setDraft({ ...draft, model_id: e.target.value });
+          }}
         >
-          {(modelsForActiveRegion(MODEL_OPTIONS).includes(draft.model_id)
-            ? modelsForActiveRegion(MODEL_OPTIONS)
-            : [draft.model_id, ...modelsForActiveRegion(MODEL_OPTIONS)]
-          ).map((m) => (
+          {judgeModelOptions(modelDefaults, draft.model_id).map((m) => (
             <option key={m} value={m} style={{ background: "var(--panel)" }}>
               {m}
             </option>
           ))}
+          <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
+            {t("models.picker.custom")}
+          </option>
         </select>
+        {judgeCustom && (
+          <input
+            className="input mono"
+            style={{ marginTop: 6 }}
+            aria-label={t("models.picker.custom")}
+            value={draft.model_id}
+            placeholder={t("models.picker.customPlaceholder", { example: defaultJudgeModel(modelDefaults) })}
+            onChange={(e) => setDraft({ ...draft, model_id: e.target.value.trim() })}
+          />
+        )}
       </div>
       )}
       <div className="field">

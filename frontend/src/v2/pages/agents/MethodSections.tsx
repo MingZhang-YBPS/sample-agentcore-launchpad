@@ -23,6 +23,7 @@ import {
   toolkitToolNames,
 } from "../../../lib/agent-spec";
 import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
+import { useModelCatalog } from "../../../lib/model-catalog";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
 import { HintLabel } from "../../Glossary";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
@@ -692,6 +693,7 @@ export function ByocModelsCard({
   const { t } = useTranslation();
   const [customOpen, setCustomOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  useModelCatalog(); // the account catalog joins the offered models once it lands
   const models = form.byocModels;
   const full = models.length >= BYOC_MODELS_MAX;
   const add = (id: string) => set((prev) => ({ byocModels: prev.byocModels.includes(id) ? prev.byocModels : [...prev.byocModels, id] }));

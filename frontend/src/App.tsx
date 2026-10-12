@@ -114,6 +114,7 @@ const V3Standards = lazy(() => import("./v3/pages/Standards").then((m) => ({ def
 const V3SkillLab = lazy(() => import("./v3/pages/SkillLab").then((m) => ({ default: m.V3SkillLab })));
 const V3Users = lazy(() => import("./v3/pages/Users").then((m) => ({ default: m.V3Users })));
 const V3Workspaces = lazy(() => import("./v3/pages/Workspaces").then((m) => ({ default: m.V3Workspaces })));
+const V3Models = lazy(() => import("./v3/pages/Models").then((m) => ({ default: m.V3Models })));
 const V3Identity = lazy(() => import("./v3/pages/Identity").then((m) => ({ default: m.V3Identity })));
 const V3Fleet = lazy(() => import("./v3/pages/Fleet").then((m) => ({ default: m.V3Fleet })));
 const V3Announcements = lazy(() => import("./v3/pages/Announcements").then((m) => ({ default: m.V3Announcements })));
@@ -363,6 +364,7 @@ export default function App() {
               <Route path="skill-lab" element={<V3SkillLab />} />
               <Route path="users" element={<V3Users />} />
               <Route path="workspaces" element={<V3Workspaces />} />
+              <Route path="models" element={<V3Models />} />
               <Route path="identity" element={<V3Identity />} />
               <Route path="fleet" element={<V3Fleet />} />
               <Route path="announcements" element={<V3Announcements />} />

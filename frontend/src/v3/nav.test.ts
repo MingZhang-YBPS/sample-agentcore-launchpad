@@ -21,6 +21,11 @@ describe("hostedGroups", () => {
     expect(items.find((i) => i.labelKey === "v3.nav.create")?.to).toBe("/v3/create");
   });
 
+  it("lists the V3-only Models page in the admin group, for administrators only", () => {
+    expect(hostedGroups(true).find((g) => g.key === "admin")?.items.map((i) => i.to)).toContain("/v3/models");
+    expect(hostedGroups(false).flatMap((g) => g.items.map((i) => i.to))).not.toContain("/v3/models");
+  });
+
   it("hides administrator pages from members", () => {
     const admin = V2_NAV.flatMap((g) => g.items).filter((i) => i.admin).map((i) => i.to);
     const member = hostedGroups(false).flatMap((g) => g.items.map((i) => i.to));

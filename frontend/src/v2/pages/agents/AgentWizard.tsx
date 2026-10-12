@@ -31,6 +31,8 @@ import {
   sourceOnMethodSwitch,
 } from "../../../lib/agent-spec";
 import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage, type SharedTemplateInfo } from "../../../lib/api";
+import { useModelCatalog } from "../../../lib/model-catalog";
+import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { defaultModelFor, isCustomModelId, type ModelSource } from "../../../lib/models";
 import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../../../pages/create/presetSettings";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -118,6 +120,17 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     byocUploading: false,
   });
   const [customSkills, setCustomSkills] = useState<WizardUi["customSkills"]>(initial.extras?.customSkills ?? []);
+  // A fresh form is seeded before the configured defaults may have loaded: adopt the
+  // configured default for the method then, unless the member already chose a model.
+  // The account catalog joins the model dropdowns when it lands.
+  useModelCatalog();
+  useModelDefaultsArrival(() => {
+    if (edit || ui.customModel) return;
+    setForm((cur) => ({
+      ...cur,
+      modelId: adoptModelDefault(cur.modelId, initial.form.modelId, defaultModelForMethod(cur.method, cur.modelSource), false),
+    }));
+  });
   const [touched, setTouched] = useState(false);
   // Harness quick setup: the default for a fresh create; a re-publish or a
   // gateway/skill prefill starts on the full form. The member can flip either way.

@@ -50,6 +50,7 @@ import {
   isFishbone,
   openAssistantTurn,
   proposalContentFromDraft,
+  proposalDefaultModel,
   proposalDraftFrom,
   proposalEditErrors,
   type ProposalEditDraft,
@@ -57,7 +58,8 @@ import {
   stripProposalBlock,
   toLiveMessages,
 } from "../lib/assistant";
-import { MODEL_CATALOG, type ModelSource } from "../lib/models";
+import { useModelCatalog } from "../lib/model-catalog";
+import { modelOptionsFor, type ModelSource } from "../lib/models";
 import { useWorkspace } from "../workspace/workspace-context";
 import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
 import { PreparationPanel } from "./assistant/PreparationPanel";
@@ -1848,7 +1850,8 @@ function ProposalEditor({
   };
   const bad = (k: string): CSSProperties | undefined =>
     errors[k] ? { borderColor: "var(--crit)" } : undefined;
-  const models = MODEL_CATALOG[draft.model_source];
+  useModelCatalog(); // the account catalog joins the suggestions once it lands
+  const models = modelOptionsFor(draft.model_source);
   const memoryModes: AssistantMemoryMode[] = ["disabled", "workspace"];
   return (
     <div data-testid="proposal-editor">
@@ -1880,7 +1883,7 @@ function ProposalEditor({
             onChange({
               ...draft,
               model_source: source,
-              model_id: MODEL_CATALOG[source][0].model_id,
+              model_id: proposalDefaultModel(source),
             });
           }}
         >

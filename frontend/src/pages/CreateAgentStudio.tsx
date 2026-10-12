@@ -22,8 +22,10 @@ import { FlowEditor } from "../studio/FlowEditor";
 import { NodePalette } from "../studio/NodePalette";
 import { PropertyPanel } from "../studio/PropertyPanel";
 import { generateStrandsAgentCode } from "../studio/lib/code-generator";
+import { catalogLabel, toolCapableCatalog, useModelCatalog } from "../lib/model-catalog";
+import { useModelDefaults } from "../lib/model-defaults";
 import type { FlowData } from "../studio/lib/debug-client";
-import { MANTLE_PROVIDER } from "../studio/lib/models";
+import { MANTLE_PROVIDER, setStudioModelContext } from "../studio/lib/models";
 import { SampleGallery } from "../studio/SampleGallery";
 import type { SampleFlow } from "../studio/lib/sample-flows";
 
@@ -112,9 +114,27 @@ export function CreateAgentStudio() {
   const selectedNode = selectedId ? (nodes.find((n) => n.id === selectedId) ?? null) : null;
 
   // Live code generation drives the drawer + the publish summary/guards.
+  // Nodes without a model fall back to the server-configured studio model, a new
+  // agent node starts on the configured agent default, and the model dropdown offers
+  // the account catalog (static values until they load). The generator, the canvas
+  // and the property panel read this module state, so it is set before they render.
+  const modelDefaults = useModelDefaults();
+  const modelCatalog = useModelCatalog();
+  const studioModels = useMemo(() => {
+    const ctx = {
+      fallbackModelId: modelDefaults?.studio_fallback_model_id ?? null,
+      newAgentModelId: modelDefaults?.agent_default_model_id ?? null,
+      // agent nodes run tools: a catalog model known to refuse toolConfig is left out
+      catalog: toolCapableCatalog(modelCatalog).map((entry) => ({ model_id: entry.model_id, model_name: catalogLabel(entry) })),
+    };
+    setStudioModelContext(ctx);
+    return ctx;
+  }, [modelDefaults, modelCatalog]);
   const genResult = useMemo(
     () => generateStrandsAgentCode(nodes, edges, graphMode),
-    [nodes, edges, graphMode],
+    // studioModels: the fallback model feeds the generated code
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nodes, edges, graphMode, studioModels],
   );
   const fullCode = genResult.imports.join("\n") + "\n\n" + genResult.code;
 

@@ -29,10 +29,18 @@ export function inferenceProfilePrefix(region: string): string | null {
 /** False only for a geographic profile id that does not belong to `region`. */
 export function modelAvailableInRegion(modelId: string, region: string | null | undefined): boolean {
   if (!region) return true; // region unknown (not loaded yet): do not hide anything
+  const only = REGION_ONLY_MODELS[modelId];
+  if (only) return only.includes(region);
   const head = modelId.split(".", 1)[0];
   if (!modelId.includes(".") || !GEO_PREFIXES.includes(head)) return true;
   return inferenceProfilePrefix(region) === head;
 }
+
+/** Bare foundation-model ids Bedrock serves in only some Regions (live-probed
+ *  2026-10-12): offered only there. */
+const REGION_ONLY_MODELS: Record<string, readonly string[]> = {
+  "deepseek.v3-v1:0": ["us-west-2"],
+};
 
 let activeRegion: string | null = null;
 

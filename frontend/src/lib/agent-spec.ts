@@ -20,7 +20,7 @@ import {
   CLAUDE_SDK_MODEL_SOURCE,
   DEFAULT_MODEL_SOURCE,
   defaultModelFor,
-  SPEC_DEFAULT_MODEL_ID,
+  specDefaultModelId,
 } from "./models";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
 import {
@@ -166,7 +166,8 @@ export const A2A_MODEL_SOURCE: ModelSource = "bedrock";
 
 export const sourceForMethod = (m: AgentMethod): ModelSource => MODEL_SOURCE_BY_METHOD[m];
 
-/** The model a form seeds for `method` on `source` — Claude-only for the Claude Agent SDK. */
+/** The model a form seeds for `method` on `source` — the configured default, Claude-only
+ *  (`claude_sdk_model_id`) for the Claude Agent SDK. */
 export const defaultModelForMethod = (method: AgentMethod, source: ModelSource = sourceForMethod(method)) =>
   defaultModelFor(source, method === "container");
 
@@ -609,7 +610,7 @@ export function formFromStoredSpec(
 ): { form: AgentForm; extras: StoredAgentExtras } {
   const spec = (raw ?? {}) as StoredAgentSpec;
   const base = emptyAgentForm(method);
-  const storedModel = spec.model_id ?? SPEC_DEFAULT_MODEL_ID;
+  const storedModel = spec.model_id ?? specDefaultModelId();
   const tools = spec.tools ?? [];
   const gatewayTools = tools.filter((x) => x.type === "gateway");
   const fs = spec.filesystem;

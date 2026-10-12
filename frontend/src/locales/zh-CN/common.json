@@ -11187,6 +11187,110 @@
       },
       "deployTarget": "部署目标：{{name}} · {{region}}。",
       "tableScroll": "智能体列表。左右滚动可查看所有列。"
+    },
+    "models": {
+      "nav": "模型设置",
+      "title": "模型设置",
+      "sub": "平台调用或预选的每个模型、取值来源，以及在当前工作空间账号和区域中的实时测试。",
+      "noteOverride": "在此保存的模型为控制台覆盖：立即生效，优先于环境变量（由部署脚本写入）和配置文件。恢复默认后回到环境变量或默认值。",
+      "noteJudge": "更换评估器评审模型会改变评估分数：请比较由同一模型评审的运行。",
+      "noteCatalog": "当前工作空间账号和区域提供的 {{count}} 个模型已并入列表。可用不等于已授权：保存前请先测试。",
+      "roles": "模型角色",
+      "col": {
+        "role": "角色",
+        "current": "当前值",
+        "model": "模型"
+      },
+      "none": "（无）",
+      "buildDefault": "默认",
+      "pick": "模型",
+      "test": "测试",
+      "save": "保存",
+      "reset": "恢复默认",
+      "resetHint": "清除控制台覆盖（回到环境变量或默认值）",
+      "saved": "已保存{{role}}",
+      "resetDone": "已恢复{{role}}",
+      "probing": "测试中…",
+      "probeNone": "无需测试。",
+      "probeRegion": "测试区域：{{region}}",
+      "checkOk": "通过（{{ms}} 毫秒）",
+      "check": {
+        "converse": "Converse 调用",
+        "tool_choice": "强制工具调用",
+        "evaluator": "AgentCore 评估器"
+      },
+      "updated": "由 {{who}} 设置于{{when}}",
+      "familyOnly": "仅限 {{families}} 模型",
+      "source": {
+        "default": "默认",
+        "config": "配置文件",
+        "env": "环境变量",
+        "console": "控制台"
+      },
+      "role": {
+        "platform_model_id": {
+          "name": "平台模型",
+          "desc": "意图分类和推荐问题（服务端）。"
+        },
+        "judge_model_id": {
+          "name": "评估器评审模型",
+          "desc": "新建自定义评估器和派生评估器的默认 LLM 评审模型。"
+        },
+        "judge_fallback_model_id": {
+          "name": "评审备用模型",
+          "desc": "AgentCore 拒绝评审模型时改用此模型；留空则不回退。"
+        },
+        "assistant_model_id": {
+          "name": "架构助手提案",
+          "desc": "架构助手所提议智能体的默认模型。"
+        },
+        "architect_model_id": {
+          "name": "系统架构师智能体",
+          "desc": "系统架构师智能体的安装默认模型。"
+        },
+        "agent_default_model_id": {
+          "name": "新建智能体",
+          "desc": "创建智能体向导和 Studio 新智能体节点预选的模型。"
+        },
+        "actor_model_id": {
+          "name": "模拟用户",
+          "desc": "人设场景中扮演用户的模型；必须支持强制工具调用。"
+        },
+        "codegen_model": {
+          "name": "Studio AI 修复",
+          "desc": "修复 Strands Studio 生成代码的模型（仅限 Claude）。"
+        },
+        "prompt_opt_default_model_id": {
+          "name": "提示词优化",
+          "desc": "提示词推荐（优化）的默认模型。"
+        },
+        "studio_fallback_model_id": {
+          "name": "Studio 回退模型",
+          "desc": "Strands Studio 画布中未指定模型的节点所用的模型。"
+        },
+        "claude_sdk_model_id": {
+          "name": "Claude Agent SDK",
+          "desc": "基于 Claude Agent SDK 的容器智能体默认模型（仅限 Claude）。"
+        },
+        "skill_lab_judge_model_id": {
+          "name": "Skill Lab 评审",
+          "desc": "Skill Lab 评估和训练任务的评审模型。"
+        },
+        "skill_lab_target_model_id": {
+          "name": "Skill Lab 目标（Claude Code）",
+          "desc": "在 Claude Code CLI 上运行的 Skill Lab 任务目标模型。"
+        },
+        "skill_lab_codex_target_model_id": {
+          "name": "Skill Lab 目标（Codex）",
+          "desc": "在 Codex CLI 上运行的 Skill Lab 任务目标模型。"
+        }
+      }
+    }
+  },
+  "models": {
+    "picker": {
+      "custom": "自定义模型 ID…",
+      "customPlaceholder": "任意 Bedrock 模型或推理配置文件 ID，例如 {{example}}"
     }
   }
 }
