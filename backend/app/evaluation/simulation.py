@@ -47,9 +47,10 @@ def run_simulated_scenario(
     ``harness.execution_timeout``) is re-raised as is — the caller's transient
     retry and its error codes see the real failure. A failure that never came
     from the agent call (the actor model, the executor) raises RuntimeError.
-    ``invoke_text(prompt, session_id) -> {text, session_id}`` overrides the
-    default SigV4 runtime call for HTTP runtimes — the JWT-inbound bearer path
-    rides through it (harness/A2A keep their own dispatch).
+    ``invoke_text(prompt, session_id) -> {text, session_id}``, when given, makes
+    every agent call — evaluation replays pass their own invoke, so persona turns
+    get the same per-session memory actor, JWT Bearer path and pinned endpoint as
+    replay turns. Without it the call dispatches on ``method`` / ``protocol``.
     """
     if not actor_model_id:
         raise RuntimeError(
@@ -67,7 +68,9 @@ def run_simulated_scenario(
 
     def _invoke(inp: AgentInvokerInput) -> AgentInvokerOutput:
         prompt = inp.payload if isinstance(inp.payload, str) else str(inp.payload)
-        if method == "harness":
+        if invoke_text is not None:
+            result = invoke_text(prompt, state["session_id"])
+        elif method == "harness":
             result = hc.invoke_harness_text(
                 data_client, agent_arn, prompt, session_id=state["session_id"]
             )
@@ -75,8 +78,6 @@ def run_simulated_scenario(
             result = rt.invoke_a2a_text(
                 data_client, agent_arn, prompt, session_id=state["session_id"]
             )
-        elif invoke_text is not None:
-            result = invoke_text(prompt, state["session_id"])
         else:
             result = rt.invoke_runtime_text(
                 data_client,

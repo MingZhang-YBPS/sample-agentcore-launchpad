@@ -829,6 +829,66 @@ def test_transcript_rederives_the_actor_of_a_run_that_did_not_record_it(monkeypa
     assert [t["text"] for t in result["turns"]] == ["third answer"]
 
 
+def test_transcript_reads_a_harness_replay_under_its_recorded_actor(monkeypatch):
+    """Harness replays now pass InvokeHarness their per-session actor; an older
+    harness run recorded "default" and is still read there."""
+    agent_id = _seed_agent()  # method="harness"
+    new_sid, old_sid = "1" * 64, "2" * 64
+    _eval_run(agent_id, [new_sid], attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": new_sid,
+         "actor_id": f"{agent_id}__eval-NEW-1"}])
+    _eval_run(agent_id, [old_sid], attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": old_sid, "actor_id": "default"}])
+    fake_events, _ = _events_for({f"{agent_id}__eval-NEW-1": ["new answer"],
+                                  "default": ["old answer"]})
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    new = obs.session_transcript(db, new_sid, ws_ctx())
+    old = obs.session_transcript(db, old_sid, ws_ctx())
+    db.close()
+    assert [t["text"] for t in new["turns"]] == ["new answer"]
+    assert [t["text"] for t in old["turns"]] == ["old answer"]
+    assert old["actor_id"] == "default"
+
+
+def _seed_a2a_agent(name="hr-assistant"):
+    db = SessionLocal()
+    agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=name, method="zip_runtime",
+                  status="active", resource_id="hr_a2a-X", spec={"protocol": "a2a"},
+                  arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/hr_a2a-X")
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+    return agent_id
+
+
+def test_transcript_reads_an_a2a_replay_under_the_templates_actor(monkeypatch):
+    """The A2A template writes each session under `<name>__a2a__<session>`. Runs from
+    before this recorded "default" for A2A sessions (where nothing was written): the
+    reader still derives the template's actor and finds the answer."""
+    agent_id = _seed_a2a_agent()
+    new_sid, old_sid = "3" * 64, "4" * 64
+    _eval_run(agent_id, [new_sid], attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": new_sid,
+         "actor_id": f"hr-assistant__a2a__{new_sid}"}])
+    _eval_run(agent_id, [old_sid], attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": old_sid, "actor_id": "default"}])
+    fake_events, probed = _events_for({
+        f"hr-assistant__a2a__{new_sid}": ["new a2a answer"],
+        f"hr-assistant__a2a__{old_sid}": ["old a2a answer"],
+    })
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    new = obs.session_transcript(db, new_sid, ws_ctx())
+    old = obs.session_transcript(db, old_sid, ws_ctx())
+    db.close()
+    assert [t["text"] for t in new["turns"]] == ["new a2a answer"]
+    assert [t["text"] for t in old["turns"]] == ["old a2a answer"]
+    assert old["actor_id"] == f"hr-assistant__a2a__{old_sid}"
+    assert probed[0] == f"hr-assistant__a2a__{new_sid}"
+
+
 # ── transcript: sessions in NO platform ledger (gateway traffic, /v1 callers) ─
 
 

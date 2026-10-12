@@ -1910,13 +1910,15 @@ def session_transcript(
         agent_id, actor_display = row.agent_id, row.actor_id
     else:
         # Eval-run sessions: each replayed session is invoked under its own
-        # agent-scoped actor (`eval_actor`); older runs, harness replays and A2A
-        # runtimes used the bare "default" one. `eval_session_actors` lists the
-        # candidates the writer may have used, likeliest first.
+        # agent-scoped actor (`eval_actor`); an A2A agent's template keys it on the
+        # session (`a2a_session_actor`); older runs used the bare "default" one.
+        # `eval_session_actors` lists the candidates the writer may have used,
+        # likeliest first.
         from app.evaluation.service import eval_session_actors
 
         agent = db.get(Agent, run.agent_id)
-        mem_actors = eval_session_actors(run, session_id)
+        protocol = ((agent.spec or {}) if agent else {}).get("protocol")
+        mem_actors = eval_session_actors(run, session_id, protocol=protocol)
         mem_actor = mem_actors[0]
         agent_id, actor_display = run.agent_id, mem_actor
     memory_error: Exception | None = None

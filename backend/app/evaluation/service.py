@@ -191,6 +191,15 @@ def resolve_telemetry(
     )
 
 
+def _run_agent_name(run_id: str) -> str:
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, run_id)
+        return run.agent_name if run else ""
+    finally:
+        db.close()
+
+
 def _update(run_id: str, **fields: Any) -> None:
     db = SessionLocal()
     try:
@@ -266,24 +275,47 @@ def eval_actor(agent_id: str | None, run_id: str, index: int) -> str:
     return scoped_actor(agent_id or "agent", f"eval-{run_id}-{index}")
 
 
-def eval_session_actors(run: EvalRun, session_id: str) -> list[str]:
+def a2a_session_actor(agent_name: str | None, session_id: str) -> str:
+    """The memory actor the platform A2A template writes a session under.
+
+    An A2A runtime is invoked with a bare JSON-RPC ``message/send`` that
+    InvokeAgentRuntime passes through unmodified, and Strands' ``A2AServer`` hands
+    its ``agent_factory`` nothing but the message's ``contextId`` — so no actor id
+    the caller sends can reach the session manager. The template therefore derives
+    the actor from the context (``{AGENT_NAME}__a2a__{context_id}``, see
+    ``templates/strands_a2a_agent/main.py.tmpl``), and the console sends the runtime
+    session id as the context id. A replay that opens a fresh session is thereby
+    already on its own actor, and the long-term namespaces (``/facts/{actorId}``
+    …) keep it from recalling another session's facts."""
+    return f"{agent_name or ''}__a2a__{session_id}"
+
+
+def eval_session_actors(
+    run: EvalRun, session_id: str, *, protocol: str | None = None
+) -> list[str]:
     """The memory actors a replayed session's transcript may sit under, likeliest first.
 
     The reader's half of ``eval_actor``: a run records the actor each session was
     invoked with (``attempts[].actor_id``). Runs from before that was recorded are
     re-derived the way the writer numbered them — the session's 1-based position in
     the replay plan, which is its position in ``attempts`` / ``session_ids`` unless a
-    simulated persona was skipped. The bare ``"default"`` actor comes last: runs
-    replayed before every session had its own actor, harness replays, and A2A
-    runtimes all still write there."""
+    simulated persona was skipped. An A2A agent's sessions sit under the actor its
+    template derives from the session (``a2a_session_actor``) — older runs recorded
+    ``"default"`` for them. The bare ``"default"`` actor comes last: runs replayed
+    before every session had its own actor (harness replays until 2026-10-13) still
+    sit there."""
     candidates: list[str] = []
+    a2a = a2a_session_actor(run.agent_name, session_id)
+    if protocol == "a2a":
+        candidates.append(a2a)
     for position, entry in enumerate(run.attempts or [], start=1):
         if isinstance(entry, dict) and entry.get("session_id") == session_id:
-            if entry.get("actor_id"):
+            if entry.get("actor_id") and entry["actor_id"] != "default":
                 candidates.append(str(entry["actor_id"]))
-            candidates.append(eval_actor(run.agent_id or None, run.id, position))
+            if protocol != "a2a":
+                candidates.append(eval_actor(run.agent_id or None, run.id, position))
             break
-    if session_id in (run.session_ids or []):
+    if session_id in (run.session_ids or []) and protocol != "a2a":
         position = (run.session_ids or []).index(session_id) + 1
         candidates.append(eval_actor(run.agent_id or None, run.id, position))
     candidates.append("default")
@@ -415,15 +447,23 @@ def execute_run(
             # each replay hermetic, as a golden item assumes.
             # ("passed" marks that an invoke path actually handed it to the runtime)
             actor: dict[str, str] = {"id": "default"}
+            a2a_agent_name = _run_agent_name(run_id) if protocol == "a2a" else ""
 
             def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
                 if method == "harness":  # InvokeHarness, not the runtime data plane
                     attempt["session_id"] = sid or hc.new_session_id()
+                    # InvokeHarness takes actorId; the harness's memory writes the
+                    # session (and extracts long-term records) under it
+                    actor["passed"] = actor["id"]
                     return hc.invoke_harness_text(
                         data, agent_arn, prompt, session_id=attempt["session_id"],
-                        **pinned,
+                        actor_id=actor["id"], **pinned,
                     )
                 if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
+                    # no actor can be passed (a2a_session_actor): the template keys
+                    # memory on the context id, i.e. this fresh session id
+                    sid = sid or hc.new_session_id()
+                    actor["passed"] = a2a_session_actor(a2a_agent_name, sid)
                     return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
                 if inbound_jwt:  # JWT authorizer: Bearer, never SigV4
                     from app.services import inbound_auth as inbound_auth_service
@@ -477,10 +517,9 @@ def execute_run(
                     try:
                         sid = None  # a replay starts the whole scenario in a fresh session
                         if simulation.is_simulated(scenario):
-                            sim_kwargs: dict[str, Any] = {}
-                            if inbound_jwt:
-                                # JWT runtimes: persona turns Bearer-invoke like replay turns
-                                sim_kwargs["invoke_text"] = invoke
+                            # persona turns invoke exactly like replay turns: the same
+                            # per-session actor, the JWT Bearer path, the pinned endpoint
+                            sim_kwargs: dict[str, Any] = {"invoke_text": invoke}
                             sid = simulation.run_simulated_scenario(
                                 data,
                                 agent_arn=agent_arn,
@@ -532,9 +571,9 @@ def execute_run(
                     "scenario_id": str(scenario.get("scenario_id") or "unknown"),
                     "attempt": attempt_no,
                     "session_id": sid,
-                    # the memory actor this session was invoked under (only the
-                    # paths that pass one set it; the rest use the runtime's
-                    # "default") — what the transcript reader looks under
+                    # the memory actor this session was written under — passed by
+                    # the runtime and Harness paths, derived by the A2A template —
+                    # what the transcript reader looks under
                     "actor_id": actor.get("passed") or "default",
                 })
                 _update(run_id, session_ids=list(session_ids),
