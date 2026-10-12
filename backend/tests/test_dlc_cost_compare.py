@@ -280,3 +280,28 @@ def test_two_numbers_when_the_standard_got_harder(db):
 def test_comparing_needs_two_runs(db):
     with pytest.raises(AppError):
         compare_svc.compare(db, WS, ["only-one"])
+
+
+def test_the_fix_ladder_route_compares_the_agents_runs(db, client):
+    """Live: GET /agents/{id}/ladder answered 500 on every call — it called the
+    `compare_runs` route function directly, so its `Depends(...)` defaults reached
+    the visibility check as objects ('Depends' object has no attribute 'filters')."""
+    agent = _agent(db)
+    cset = _set(db, agent.id, ["C1"])
+    v1 = _run(db, agent.id, cset, {("C1", "s1"): "fail"}, name="v1")
+    v2 = _run(db, agent.id, cset, {("C1", "s1"): "pass"}, name="v2")
+    response = client.get(f"/api/agents/{agent.id}/ladder")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["comparable"] is True
+    assert [r["run_id"] for r in body["runs"]] == [v1.id, v2.id]
+    assert [i["scenario_id"] for i in body["fixed"]] == ["s1"]
+
+
+def test_the_fix_ladder_with_one_run_is_not_comparable(db, client):
+    agent = _agent(db)
+    cset = _set(db, agent.id, ["C1"])
+    _run(db, agent.id, cset, {("C1", "s1"): "fail"}, name="v1")
+    response = client.get(f"/api/agents/{agent.id}/ladder")
+    assert response.status_code == 200, response.text
+    assert response.json()["comparable"] is False

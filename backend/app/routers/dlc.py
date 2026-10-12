@@ -1223,14 +1223,14 @@ def snapshot_run_criteria(
     return {"snapshotted": bool(out), "summary": (out or {}).get("criteria") or {}}
 
 
-@router.get("/eval/runs/compare")
-def compare_runs(
-    runs: str = Query(description="comma-separated run ids, oldest first"),
-    db: Session = Depends(get_db),
-    ws: WorkspaceScope = Depends(require_workspace),
-    viewer: Viewer = Depends(require_viewer),
+def _compare_runs(
+    db: Session, ws: WorkspaceScope, viewer: Viewer, ids: list[str],
 ) -> dict[str, Any]:
-    ids = [r.strip() for r in runs.split(",") if r.strip()]
+    """The before/after comparison of ``ids`` (oldest first) — shared by the compare
+    and fix-ladder routes. A plain function on purpose: a route calling another route
+    function hands it its `Depends(...)`/`Query(...)` defaults as objects."""
+    from app.models.ledger import SpecSnapshot
+
     specs: dict[str, dict] = {}
     for run_id in ids:
         run = db.get(EvalRun, run_id)
@@ -1240,8 +1240,6 @@ def compare_runs(
             or not visibility.sees(viewer, db, run.created_by)
         ):
             raise NotFoundError("run.not_found", f"run {run_id} not found")
-        from app.models.ledger import SpecSnapshot
-
         snapshot = db.scalars(
             select(SpecSnapshot).where(
                 SpecSnapshot.agent_id == run.agent_id,
@@ -1253,18 +1251,35 @@ def compare_runs(
     return compare_svc.compare(db, ws.id, ids, specs=specs)
 
 
+@router.get("/eval/runs/compare")
+def compare_runs(
+    runs: str = Query(description="comma-separated run ids, oldest first"),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    ids = [r.strip() for r in runs.split(",") if r.strip()]
+    return _compare_runs(db, ws, viewer, ids)
+
+
 @router.get("/agents/{agent_id}/ladder")
 def fix_ladder(
     agent_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _agent(db, ws, agent_id)
-    ids = compare_svc.ladder(db, ws.id, agent_id)
+    # the ladder is the viewer's view of the agent's runs: a run they may not see
+    # drops out of it rather than turning the whole ladder into run.not_found
+    ids = [
+        run_id for run_id in compare_svc.ladder(db, ws.id, agent_id)
+        if visibility.sees(viewer, db, db.get(EvalRun, run_id).created_by)
+    ]
     if len(ids) < 2:
         return {"runs": ids, "comparable": False,
                 "incomparable_reason": "fewer than two completed criteria runs"}
-    return compare_runs(runs=",".join(ids), db=db, ws=ws)
+    return _compare_runs(db, ws, viewer, ids)
 
 
 class EstimateIn(BaseModel):
