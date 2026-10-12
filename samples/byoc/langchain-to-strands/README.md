@@ -108,6 +108,7 @@ both ride Bedrock Converse.
 Against real Bedrock in `us-west-2` on 2026-10-08, both versions answered the
 `A-07` question with **¥980** after calling `refund_quote`, and the Strands
 version also priced a 23 kg Lite bag at **¥180** online / **¥260** at the
-airport via `baggage_allowance`; its stream carried one `tool` event per call. Pinned versions: `strands-agents==1.47.0`,
+airport via `baggage_allowance`; its stream carried one `tool` event per call. Verified versions: `strands-agents==1.47.0`,
 `bedrock-agentcore==1.17.0`, `langchain` 1.4.3 + `langchain-aws` 1.0 for the
-before state.
+before state. `requirements.txt` now pins `bedrock-agentcore==1.18.1` (the
+`install_packages()` fix, GHSA-j6g5-3hh3-pgw8), in step with the platform.
