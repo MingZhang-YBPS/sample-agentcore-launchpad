@@ -525,6 +525,56 @@ def test_cost_estimate_scales_with_repeats(engineer, owner):
     assert engineer.post("/api/eval/runs/estimate", json={"repeats": 99}).status_code == 422
 
 
+def test_the_release_card_prices_the_gate_evaluation_it_will_start(engineer, owner,
+                                                                   monkeypatch):
+    """Live: the 判据 → 放行门 candidate card asked for an estimate with no dataset and no
+    evaluators, so it always read "未定价 · 0 个会话 · 该模型没有价格数据" — even for a
+    GLM-5.3 agent, which is priced — and the Evaluate click never confirmed a cost the
+    gate itself then demanded confirmation for."""
+    from app.dlc import cost as cost_svc
+    from app.dlc import releases as release_svc
+
+    monkeypatch.setattr(release_svc, "point_endpoint", lambda *a, **k: {})
+    monkeypatch.setattr(release_svc, "endpoint_version", lambda *a, **k: "1")
+    monkeypatch.setattr("app.services.agentcore.client.control_client", lambda ctx: object())
+    agent_id, _ = _release_setup(engineer, owner)
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, agent_id)
+        agent.spec = {**(agent.spec or {}), "model_id": "global.zai.glm-5.3"}
+        db.commit()
+        # before a release is open there is no gate run to price; say so, not "unpriced"
+        idle = engineer.post("/api/eval/runs/estimate", json={
+            "agent_id": agent_id, "repeats": 1, "release": True}).json()
+        assert idle["sessions"] == 0 and idle["unpriced"] is False
+        assert idle["gate_unavailable"] == "release.nothing_pending"
+        release_svc.after_deploy(db, db.get(Agent, agent_id), note=None, actor="engineer")
+        db.commit()
+    finally:
+        db.close()
+    priced = []
+    real_estimate = cost_svc.estimate
+    monkeypatch.setattr(cost_svc, "estimate",
+                        lambda *a, **k: priced.append(k) or real_estimate(*a, **k))
+    card = engineer.post("/api/eval/runs/estimate", json={
+        "agent_id": agent_id, "repeats": 2, "release": True}).json()
+    # regression (2) + holdout (2) × 2 repeats, the agent's GLM-5.3 price
+    assert card["sessions"] == 8 and card["items"] == 4
+    assert card["unpriced"] is False and card["total_usd"] > 0
+    assert card["agent_basis"] in ("rough", "history_7d")
+    assert priced[-1]["evaluators"] == ["code-pii", "code-stock"]
+
+    # the gate enforces exactly what the card showed
+    submitted = []
+    monkeypatch.setattr("app.evaluation.service.submit_run",
+                        lambda **kw: submitted.append(kw) or _stub_run(kw))
+    assert engineer.post(f"/api/agents/{agent_id}/release/evaluate",
+                         json={"repeats": 2}).status_code == 202
+    gate = {k: v for k, v in priced[-1].items() if k != "db"}
+    card_call = {k: v for k, v in priced[0].items() if k != "db"}
+    assert gate["items"] == card_call["items"] and gate["repeats"] == card_call["repeats"]
+
+
 def test_watch_config_and_scorecard(engineer, admin, owner):
     agent_id = _agent()
     lineage = _create_set(engineer, agent_id)

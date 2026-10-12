@@ -1319,6 +1319,9 @@ class EstimateIn(BaseModel):
     items: int | None = Field(default=None, ge=0, le=1000)
     evaluators: list[str] = Field(default_factory=list, max_length=10)
     repeats: int = Field(default=1, ge=1, le=10)
+    # price the agent's open release's gate evaluation (both golden splits with the
+    # criteria's evaluators) — what `release/evaluate` will run and enforce
+    release: bool = False
 
 
 @router.post("/eval/runs/estimate")
@@ -1328,6 +1331,18 @@ def estimate_run(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     agent = _agent(db, ws, req.agent_id) if req.agent_id else None
+    gate_unavailable: str | None = None
+    if req.release and agent is not None:
+        record = release_svc.pending_for(db, ws.id, agent.id)
+        if record is not None:
+            try:
+                return release_svc.gate_estimate(
+                    db, record, agent, ws.context, repeats=req.repeats
+                )
+            except AppError as exc:  # no criteria / golden set yet: nothing to price
+                gate_unavailable = exc.code
+        else:
+            gate_unavailable = "release.nothing_pending"
     items: list[dict[str, Any]] = []
     if req.dataset_id:
         dataset = db.get(EvalDataset, req.dataset_id)
@@ -1342,10 +1357,13 @@ def estimate_run(
     if agent is not None:
         cset = criteria_svc.agent_set(db, ws.id, agent.id)
         rows = criteria_svc.criteria_of(db, cset.id) if cset else []
-    return cost_svc.estimate(
+    out = cost_svc.estimate(
         db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=items,
         evaluators=req.evaluators, repeats=req.repeats, criteria_rows=rows,
     )
+    if gate_unavailable:
+        out["gate_unavailable"] = gate_unavailable
+    return out
 
 
 # ── audit ──────────────────────────────────────────────────────────────────────

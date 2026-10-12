@@ -193,7 +193,8 @@ def estimate(
         "confirm_usd": confirm_usd,
         "over_limit": bool(max_usd is not None and total > max_usd),
         "max_usd": max_usd,
-        "unpriced": agent_usd is None,
+        # zero sessions cost nothing: "unpriced" means a model without a price
+        "unpriced": bool(items) and agent_usd is None,
     }
 
 

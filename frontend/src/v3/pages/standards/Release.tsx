@@ -265,7 +265,7 @@ export function Release({ agentId }: { agentId: string }) {
   // only ask for the report once runs exist: before that the server answers 409
   const gated = Boolean(pending && (pending.run_ids ?? []).length > 0);
   const gate = useLoad(() => (gated ? dlcApi.gate(agentId) : Promise.resolve(null)), `v3-std-gate:${agentId}:${pending?.id ?? "none"}:${gated}:${nonce}`);
-  const estimate = useLoad(() => dlcApi.estimate({ agent_id: agentId, repeats }), `v3-std-est:${agentId}:${repeats}`);
+  const estimate = useLoad(() => dlcApi.estimate({ agent_id: agentId, repeats, release: true }), `v3-std-est:${agentId}:${repeats}`);
   const report = gate.data?.report ?? null;
   const rows = report?.criteria ?? [];
   const evaluating = gate.data?.status === "evaluating";

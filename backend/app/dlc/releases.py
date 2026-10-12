@@ -258,6 +258,48 @@ def record_out(row: ReleaseRecord) -> dict[str, Any]:
 # ── gate evaluation ────────────────────────────────────────────────────────────
 
 
+def _gate_plan(
+    db: Session, record: ReleaseRecord, agent: Agent
+) -> tuple[list[Any], list[str], dict[str, Any]]:
+    """What a gate evaluation runs: the criteria rows, their evaluators and the golden
+    set's splits. Raises the AppError a release that cannot be evaluated answers."""
+    if not record.criteria_set_id:
+        raise AppError("release.no_criteria",
+                       "publish a criteria set for this agent before evaluating a release",
+                       status_code=409)
+    cset = db.get(criteria_svc.CriteriaSet, record.criteria_set_id)
+    rows = criteria_svc.criteria_of(db, record.criteria_set_id)
+    evaluators = sorted({
+        (r.executor or {}).get("evaluator_id") for r in rows
+        if (r.executor or {}).get("kind") == "evaluator" and (r.executor or {}).get("evaluator_id")
+    })
+    parent = golden_svc.for_criteria(db, agent.workspace_id, cset.lineage_id)
+    if parent is None:
+        raise AppError("release.no_golden",
+                       "create the golden set for these criteria before evaluating a release",
+                       status_code=409)
+    return rows, evaluators, golden_svc.splits_of(db, parent)
+
+
+def gate_estimate(
+    db: Session, record: ReleaseRecord, agent: Agent, workspace_ctx: Any, *, repeats: int = 1
+) -> dict[str, Any]:
+    """The cost of `start_evaluation` for this release: both gate splits × `repeats`,
+    priced with the criteria's evaluators — the same estimate the gate enforces."""
+    from app.dlc import cost as cost_svc
+
+    rows, evaluators, splits = _gate_plan(db, record, agent)
+    gate_items = [
+        item for name in ("regression", "holdout") if splits.get(name)
+        for item in golden_svc.active_items(splits[name])
+    ]
+    return cost_svc.estimate(
+        db, agent=agent, workspace=db.get(Workspace, record.workspace_id),
+        workspace_ctx=workspace_ctx, items=gate_items, evaluators=evaluators,
+        repeats=repeats, criteria_rows=rows,
+    )
+
+
 def start_evaluation(
     db: Session,
     record: ReleaseRecord,
@@ -277,39 +319,16 @@ def start_evaluation(
     """
     if record.decision not in ("pending", "invalid", "blocked"):
         raise AppError("release.not_open", "this release is already decided", status_code=409)
-    if not record.criteria_set_id:
-        raise AppError("release.no_criteria",
-                       "publish a criteria set for this agent before evaluating a release",
-                       status_code=409)
-    cset = db.get(criteria_svc.CriteriaSet, record.criteria_set_id)
-    rows = criteria_svc.criteria_of(db, record.criteria_set_id)
-    evaluators = sorted({
-        (r.executor or {}).get("evaluator_id") for r in rows
-        if (r.executor or {}).get("kind") == "evaluator" and (r.executor or {}).get("evaluator_id")
-    })
+    rows, evaluators, splits = _gate_plan(db, record, agent)
     from app.evaluation import agentcore_eval as ac
 
     if len(evaluators) > ac.MAX_BATCH_EVALUATORS:
         raise AppError("release.too_many_evaluators",
                        f"the criteria use {len(evaluators)} evaluators; a run applies at most "
                        f"{ac.MAX_BATCH_EVALUATORS}", status_code=422)
-    parent = golden_svc.for_criteria(db, agent.workspace_id, cset.lineage_id)
-    if parent is None:
-        raise AppError("release.no_golden",
-                       "create the golden set for these criteria before evaluating a release",
-                       status_code=409)
-    splits = golden_svc.splits_of(db, parent)
     from app.dlc import cost as cost_svc
 
-    gate_items = [
-        item for name in ("regression", "holdout") if splits.get(name)
-        for item in golden_svc.active_items(splits[name])
-    ]
-    estimate = cost_svc.estimate(
-        db, agent=agent, workspace=db.get(Workspace, record.workspace_id),
-        workspace_ctx=workspace_ctx, items=gate_items, evaluators=evaluators,
-        repeats=repeats, criteria_rows=rows,
-    )
+    estimate = gate_estimate(db, record, agent, workspace_ctx, repeats=repeats)
     cost_svc.assert_allowed(estimate, confirmed=confirm_cost, is_admin=is_admin)
     if submit is None:
         from app.evaluation import service as eval_service

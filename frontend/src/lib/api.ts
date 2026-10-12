@@ -7151,6 +7151,8 @@ export const dlcApi = {
     items?: number | null;
     evaluators?: string[];
     repeats?: number;
+    /** price the agent's open release's gate evaluation (both golden splits, the criteria's evaluators) */
+    release?: boolean;
   }) => request<CostEstimate>("/api/eval/runs/estimate", { method: "POST", body: JSON.stringify(body) }),
 
   /* the decision history, and one agent's five dimensions */

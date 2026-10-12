@@ -476,7 +476,7 @@ export function ReleaseGate({ agentId }: { agentId: string }) {
     `gate:${agentId}:${pending?.id ?? "none"}:${gated}:${nonce}`,
   );
   const estimate = useLoad(
-    () => dlcApi.estimate({ agent_id: agentId, repeats }),
+    () => dlcApi.estimate({ agent_id: agentId, repeats, release: true }),
     `estimate:${agentId}:${repeats}`,
   );
   const maySign = can("release.sign");

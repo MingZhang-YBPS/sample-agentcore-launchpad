@@ -127,7 +127,7 @@ export function V3Gate() {
   // what running the gate would cost; over the workspace limit it cannot run, and
   // the server decides whether the cost needs an explicit confirm
   const estimate = useLoad<CostEstimate | null>(
-    () => (agentId ? dlcApi.estimate({ agent_id: agentId, repeats: 1 }) : Promise.resolve(null)), `v3-gate-est:${agentId}`);
+    () => (agentId ? dlcApi.estimate({ agent_id: agentId, repeats: 1, release: true }) : Promise.resolve(null)), `v3-gate-est:${agentId}`);
   const release = useLoad<ReleaseState | null>(
     () => (agentId ? dlcApi.release(agentId) : Promise.resolve(null)), `v3-gate-rel:${agentId}:${nonce}`);
   const card = useLoad<Scorecard | null>(
