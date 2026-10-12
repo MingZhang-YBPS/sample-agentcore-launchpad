@@ -122,6 +122,7 @@ def init_db(bind=None) -> None:
     """
     bind = bind if bind is not None else engine
     from app.models import dlc as _dlc_models  # noqa: F401 — Agent-DLC tables
+    from app.models import platform_settings as _platform_settings  # noqa: F401
     from app.models import resource_mapping as _mapping_models  # noqa: F401
     from app.models import selfservice as _selfservice_models  # noqa: F401 — T35/T36
     from app.models import video as _video_models  # noqa: F401 — register tables before create_all

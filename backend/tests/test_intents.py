@@ -147,6 +147,21 @@ def test_the_real_converse_call_goes_through_the_client_funnel(monkeypatch):
     assert "Simplified Chinese" in fake.calls[0]["system"][0]["text"]
     # Claude 5 rejects `temperature` with a ValidationException
     assert "temperature" not in fake.calls[0]["inferenceConfig"]
+    assert fake.calls[0]["modelId"] == "global.anthropic.claude-sonnet-5"  # the default
+
+
+def test_the_platform_model_follows_settings(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "platform_model_id", "global.zai.glm-5.3")
+    fake = FakeConverse({"clusters": [{"label": "Leave", "members": [0]}], "unanswered": []})
+    ctx = _ctx(SimpleNamespace(), SimpleNamespace())
+    object.__setattr__(ctx, "client", lambda service, *a, **k: fake)
+    turn = intents.Turn("s", "a", 1, "How many days?", "12", False, False)
+    intents._model_groups(ctx, [turn], "en")
+    assert fake.calls[0]["modelId"] == "global.zai.glm-5.3"
+    # GLM (Converse) gets the same family-neutral request: maxTokens only
+    assert set(fake.calls[0]["inferenceConfig"]) == {"maxTokens"}
 
 
 def test_rule_answers_and_presets_are_not_unanswered(client, monkeypatch):

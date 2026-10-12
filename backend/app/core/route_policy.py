@@ -446,6 +446,16 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # ---- read-only consoles ----
     # the wizard's scenario-template gallery (T10): static data, no workspace
     ("GET", "/api/agent-templates"): MEMBER,
+    # the configured platform model defaults (model ids only) the console pre-selects
+    ("GET", "/api/models/defaults"): MEMBER,
+    # the admin Models page: platform-wide model choices (console > env > default)
+    ("GET", "/api/models/settings"): ADMIN,
+    ("PUT", "/api/models/settings/{field}"): ADMIN,
+    ("DELETE", "/api/models/settings/{field}"): ADMIN,
+    # what the active workspace's Region offers, and a real tiny invocation of one
+    # (the judge probe creates and deletes a throwaway evaluator — admin only)
+    ("GET", "/api/model-catalog"): MEMBER,
+    ("POST", "/api/model-probe"): ADMIN,
     # ---- release bundles, promotions, inbox (T20-T22) ----
     # Bundling freezes a publish and mints no AWS resource, so it rides the same
     # default-granted permission as asking for the release itself.
@@ -705,6 +715,8 @@ HUB_GLOBAL_PREFIXES = (
     # the wizard's scenario-template catalogue (T10) is static data — no account,
     # no region, nothing to scope
     "/api/agent-templates",
+    # configured model ids (routers/model_defaults.py) — settings, not account data
+    "/api/models",
     # the fleet view (T37) is the one read that deliberately spans every environment
     "/api/fleet",
     # the account-free share surface (T13): the token's row decides the workspace
@@ -738,6 +750,10 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/auth/register"),
         ("POST", "/api/auth/logout"),
         ("GET", "/api/agent-templates"),
+        ("GET", "/api/models/defaults"),
+        ("GET", "/api/models/settings"),
+        ("PUT", "/api/models/settings/{field}"),
+        ("DELETE", "/api/models/settings/{field}"),
         ("GET", "/api/fleet"),
         ("GET", "/share/{token}"),
         ("POST", "/share/{token}/chat"),

@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.errors import cleanup_error, is_not_found
 from app.core.regions import partition_for_region
 from app.models.ledger import Agent
@@ -213,12 +214,19 @@ def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
 # invoke. Provider strings and the node types that carry a model mirror
 # ``frontend/src/studio`` (``MANTLE_PROVIDER`` in lib/models.ts, the agent-node
 # filter in lib/graph-code-generator.ts); a node without a model id generates
-# the canvas fallback, ``STUDIO_FALLBACK_MODEL_ID``.
+# the canvas fallback, ``studio_fallback_model_id()``.
 STUDIO_MODEL_NODE_TYPES = frozenset({"agent", "orchestrator-agent", "swarm"})
 # The canvas's own fallback (``DEFAULT_MODEL_ID`` in frontend/src/studio/lib/
 # models.ts), which deliberately does not follow the platform default: changing
-# it would silently change every existing flow's model-less nodes.
-STUDIO_FALLBACK_MODEL_ID = "global.anthropic.claude-sonnet-5"
+# it would silently change every existing flow's model-less nodes. Configurable as
+# settings.studio_fallback_model_id (env LAUNCHPAD_STUDIO_FALLBACK_MODEL_ID) for
+# accounts without Claude; the console reads the same value from /api/models/defaults.
+
+
+def studio_fallback_model_id() -> str:
+    return get_settings().studio_fallback_model_id.strip()
+
+
 STUDIO_BEDROCK_PROVIDER = "AWS Bedrock"
 STUDIO_MANTLE_PROVIDER = "Amazon Bedrock (Mantle)"
 
@@ -234,7 +242,7 @@ def studio_node_models(spec: AgentSpec) -> list[tuple[str, str]]:
         data = node.get("data") if isinstance(node.get("data"), dict) else {}
         provider = data.get("modelProvider") or STUDIO_BEDROCK_PROVIDER
         model = data.get("modelId") or (
-            STUDIO_FALLBACK_MODEL_ID if provider == STUDIO_BEDROCK_PROVIDER else ""
+            studio_fallback_model_id() if provider == STUDIO_BEDROCK_PROVIDER else ""
         )
         models.append((str(provider), str(model)))
     return models

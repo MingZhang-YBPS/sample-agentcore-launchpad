@@ -54,6 +54,8 @@ from app.routers.issues import router as issues_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.memory import router as memory_router
 from app.routers.memory_resources import router as memory_resources_router
+from app.routers.model_defaults import router as model_defaults_router
+from app.routers.model_defaults import workspace_router as model_catalog_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
 from app.routers.promotions import router as promotions_router
@@ -148,6 +150,19 @@ def _warn_local_return_url(settings) -> bool:
     return True
 
 
+def _apply_model_overrides() -> None:
+    """Console model choices (admin Models page) win over env — load them onto the
+    cached Settings before any route reads a model id."""
+    from app.core.db import SessionLocal
+    from app.services import model_settings
+
+    db = SessionLocal()
+    try:
+        model_settings.apply_overrides(db)
+    finally:
+        db.close()
+
+
 def create_app(resume_jobs: bool = False) -> FastAPI:
     settings = get_settings()
     _assert_production_is_authenticated(settings)
@@ -186,9 +201,12 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     )
     register_error_handlers(app)
     init_db()
+    _apply_model_overrides()
     app.include_router(auth_router)
     app.include_router(overview_router)
     app.include_router(announcements_router)
+    app.include_router(model_defaults_router)  # platform model settings (Models page)
+    app.include_router(model_catalog_router)  # region model catalog + probe
     app.include_router(videos_router)
     app.include_router(agents_router)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources

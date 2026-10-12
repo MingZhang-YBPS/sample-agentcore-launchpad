@@ -11,12 +11,14 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
+from app.core.config import Settings, get_settings
 from app.schemas.agent import (
     AgentSpec,
     KnowledgeBaseRef,
     ModelSource,
     ReasoningEffort,
     ToolRef,
+    is_openai_model_id,
 )
 from app.services.skill_ingest import (
     SKILL_BUNDLE_MAX_BYTES,
@@ -39,6 +41,7 @@ SYSTEM_SKILLS_PREFIX = "system-skills"
 # workload-identity / token-vault statements it grants authenticated MCP refs.
 AWS_KNOWLEDGE_MCP_URL = "https://knowledge-mcp.global.api.aws"
 AWS_KNOWLEDGE_TOOL_NAME = "aws_knowledge"
+ARCHITECT_KEY = "aws-agent-solution-architect"
 
 
 @dataclass(frozen=True)
@@ -56,7 +59,8 @@ class SystemPreset:
     # Inference defaults for a NEW install. An administrator may change every member
     # of ``InstallOptions`` afterwards; these are the values ``InstallOptions()`` and
     # ``default_options`` resolve to, never a constraint on what is stored.
-    model_id: str = "global.openai.gpt-6-astra"
+    # built-in default (settings.architect_model_id); see default_options()
+    model_id: str = Settings.model_fields["architect_model_id"].default
     model_source: ModelSource = "bedrock"
     # Per model call (``bedrockModelConfig.maxTokens``): 64k output so a full design
     # proposal is never cut at the provider's 4096-token default. Not a spend cap.
@@ -67,12 +71,18 @@ class SystemPreset:
     skill_dir: str = ""  # directory name under SKILLS_ROOT
 
     def default_options(self) -> "InstallOptions":
-        """What a first install with an empty body gets."""
+        """What a first install with an empty body gets. The architect's model is
+        settings.architect_model_id (env LAUNCHPAD_ARCHITECT_MODEL_ID) so an account
+        without OpenAI access installs on a model it can invoke; ``reasoning_effort``
+        is OpenAI-only (AgentSpec refuses it elsewhere), so it is preset only then."""
+        model_id = self.model_id
+        if self.key == ARCHITECT_KEY:
+            model_id = get_settings().architect_model_id.strip() or self.model_id
         return InstallOptions(
-            model_id=self.model_id,
+            model_id=model_id,
             model_source=self.model_source,
             max_tokens=self.max_tokens,
-            reasoning_effort=self.reasoning_effort,
+            reasoning_effort=self.reasoning_effort if is_openai_model_id(model_id) else None,
         )
 
     def skill_path(self) -> Path:
@@ -142,7 +152,7 @@ Rules you always follow:
 """
 
 ARCHITECT = SystemPreset(
-    key="aws-agent-solution-architect",
+    key=ARCHITECT_KEY,
     name="aws-agent-solution-architect",
     label="AWS Agent Solution Architect",
     description=(

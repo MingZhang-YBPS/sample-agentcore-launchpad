@@ -135,9 +135,27 @@ def test_an_unpriced_judge_model_says_so(db, monkeypatch):
                                 "evaluator_kind": "judge"})]
     out = cost.estimate(db, agent=agent, workspace=None, workspace_ctx=SimpleNamespace(),
                         items=ITEMS[:3], evaluators=["custom-judge"], repeats=1,
-                        criteria_rows=rows)
+                        criteria_rows=rows, judge_model_id="global.example.unpriced-judge")
     assert out["judge_usd"] is None
     assert "price map" in out["judges"][0]["note"]
+
+
+def test_the_default_gpt6_sol_judge_is_priced(db, monkeypatch):
+    """GPT-6 Sol is in the default price map (model card, 2026-10-12), so the default
+    judge no longer shows up as "N judges not counted"."""
+    agent = _agent(db)
+    monkeypatch.setattr(cost, "_per_session_from_history", lambda *a, **k: (0.01, "history_7d"))
+    rows = [Criterion(set_id="s", key="J1", text="t", dimension="quality", tier="observe",
+                      level="trace", denominator="sessions",
+                      executor={"kind": "evaluator", "evaluator_id": "custom-judge",
+                                "evaluator_kind": "judge"})]
+    out = cost.estimate(db, agent=agent, workspace=None, workspace_ctx=SimpleNamespace(),
+                        items=ITEMS[:3], evaluators=["custom-judge"], repeats=1,
+                        criteria_rows=rows)
+    assert out["judge_usd"] is not None and out["judge_usd"] > 0, out
+    assert all("price map" not in (j.get("note") or "") for j in out["judges"])
+    assert cost._price_of("global.openai.gpt-6-sol")["input"] == 2.00
+    assert cost._price_of("us.openai.gpt-6-sol")["output"] == 11.00
 
 
 def test_code_evaluators_cost_nothing_to_judge(db, monkeypatch):

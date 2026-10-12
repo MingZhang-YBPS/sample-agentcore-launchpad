@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.config import Settings, get_settings
 from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned
@@ -15,11 +16,24 @@ from app.schemas.requirements import assert_all_pinned
 # GLM-5.3 through its global inference profile: offered in every region the
 # console targets (us-east-1, us-west-2, us-east-2, ca-central-1). Mirrors the
 # console's SPEC_DEFAULT_MODEL_ID (frontend/src/lib/models.ts).
-DEFAULT_MODEL_ID = "global.zai.glm-5.3"
+DEFAULT_MODEL_ID = Settings.model_fields["agent_default_model_id"].default  # built-in
+
+
+def agent_default_model_id() -> str:
+    """The model a new spec without one gets: settings.agent_default_model_id (env
+    LAUNCHPAD_AGENT_DEFAULT_MODEL_ID, or the admin Models page)."""
+    return get_settings().agent_default_model_id.strip() or DEFAULT_MODEL_ID
+
 # The Claude Agent SDK (method "container") can only drive Claude, so a container
 # spec that names no model gets this instead of the platform default. Mirrors the
-# console's claude-only default (defaultModelFor(source, claudeOnly)).
-CLAUDE_SDK_DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5"
+# console's claude-only default (defaultModelFor(source, claudeOnly)). Configurable
+# as settings.claude_sdk_model_id (env LAUNCHPAD_CLAUDE_SDK_MODEL_ID) — to another
+# Claude id only: the SDK cannot drive any other family.
+CLAUDE_SDK_DEFAULT_MODEL_ID = Settings.model_fields["claude_sdk_model_id"].default  # built-in
+
+
+def claude_sdk_default_model_id() -> str:
+    return get_settings().claude_sdk_model_id.strip() or CLAUDE_SDK_DEFAULT_MODEL_ID
 
 Method = Literal["harness", "zip_runtime", "container", "studio", "byoc"]
 
@@ -495,7 +509,7 @@ class AgentSpec(BaseModel):
     # back to ``name``).
     display_name: str | None = Field(default=None, min_length=1, max_length=64)
     method: Method
-    model_id: str = DEFAULT_MODEL_ID
+    model_id: str = Field(default_factory=agent_default_model_id)
     # Defaults to "bedrock" for BACKWARD COMPATIBILITY, not because it is the
     # preferred choice: agent specs are stored as JSON in the ledger and every
     # row written before this field existed is a Converse-API model. A "mantle"
@@ -592,7 +606,7 @@ class AgentSpec(BaseModel):
     def _claude_sdk_default_model(self) -> "AgentSpec":
         # only when the caller named no model: an explicit id is the caller's call
         if self.method == "container" and "model_id" not in self.model_fields_set:
-            self.model_id = CLAUDE_SDK_DEFAULT_MODEL_ID
+            self.model_id = claude_sdk_default_model_id()
         return self
 
     @model_validator(mode="after")

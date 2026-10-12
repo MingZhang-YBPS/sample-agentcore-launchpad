@@ -28,6 +28,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from app.core.config import Settings, get_settings
 from app.schemas.agent import (
     AgentSpec,
     KnowledgeBaseRef,
@@ -47,8 +48,16 @@ PATCH_MAX_OPERATIONS = 200
 # which the proposal editor already falls back to). Safe for every proposal: an
 # approval always creates a managed Harness (native Bedrock, Converse), never the
 # Claude-only Agent SDK method. Deliberately not ``AgentSpec``'s DEFAULT_MODEL_ID,
-# which is what a stored spec without a model_id means.
-PROPOSAL_DEFAULT_MODEL_ID = "global.openai.gpt-6-sol"
+# which is what a stored spec without a model_id means. Configurable as
+# settings.assistant_model_id (env LAUNCHPAD_ASSISTANT_MODEL_ID); the constant is the
+# built-in default only — read the live value through ``proposal_default_model_id()``.
+PROPOSAL_DEFAULT_MODEL_ID = Settings.model_fields["assistant_model_id"].default
+
+
+def proposal_default_model_id() -> str:
+    """The model a proposal without one gets (settings.assistant_model_id)."""
+    return get_settings().assistant_model_id.strip() or PROPOSAL_DEFAULT_MODEL_ID
+
 PROPOSAL_MAX_BYTES = 64_000
 _FENCE_RE = re.compile(
     r"```" + PROPOSAL_FENCE + r"[ \t]*\r?\n(.*?)\r?\n[ \t]*```", re.DOTALL
@@ -228,7 +237,7 @@ class ProposalContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: Literal[1] = 1
     name: str = Field(pattern=_NAME_RE)
-    model_id: str = Field(default=PROPOSAL_DEFAULT_MODEL_ID, pattern=_MODEL_ID_RE)
+    model_id: str = Field(default_factory=proposal_default_model_id, pattern=_MODEL_ID_RE)
     model_source: Literal["bedrock", "mantle"] = "bedrock"
     system_prompt: str = Field(min_length=1, max_length=20000)
     # Catalog keys (``gateway:<name>`` / ``mcp:<name>``), never URLs or ARNs.

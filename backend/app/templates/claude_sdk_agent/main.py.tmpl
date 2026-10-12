@@ -44,6 +44,21 @@ from openinference.instrumentation import using_session
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
+
+
+def _model_hint(result) -> str:
+    """The Claude Agent SDK drives Anthropic Claude only: when Bedrock refuses the
+    model, say so instead of leaving a bare provider error."""
+    text = str(result or "")
+    if any(k in text for k in ("AccessDenied", "access to the model", "not authorized",
+                               "model identifier is invalid", "ValidationException",
+                               "ResourceNotFound", "403", "404")):
+        return (f" — the Claude Agent SDK can only run Anthropic Claude models, and "
+                f"{MODEL_ID!r} could not be invoked in this account/Region. Enable "
+                "Claude model access in Amazon Bedrock, pick another Claude model id, "
+                "or create the agent with another method (Harness / Strands) to use a "
+                "non-Claude model.")
+    return ""
 SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 MAX_TURNS = __LAUNCHPAD_MAX_TURNS__
 ALLOWED_TOOLS: list[str] = __LAUNCHPAD_ALLOWED_TOOLS__
@@ -557,7 +572,7 @@ async def _query_events(
             partial_since_assistant = False
         elif isinstance(message, ResultMessage):
             if message.is_error:
-                raise RuntimeError(f"claude query failed: {message.result}")
+                raise RuntimeError(f"claude query failed: {message.result}{_model_hint(message.result)}")
             outcome.usage = {
                 **(message.usage or {}),
                 "duration_ms": message.duration_ms,

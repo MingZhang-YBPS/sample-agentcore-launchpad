@@ -174,6 +174,36 @@ class Settings(BaseSettings):
     # can be re-checked (POST /api/eval/runs/{id}/recheck).
     eval_batch_wait_s: int = Field(default=7200, ge=60, le=86400)
 
+    # Models the platform itself calls (not the models of the agents users build).
+    # Each is overridable as LAUNCHPAD_<FIELD> — scripts/switch_models.py probes the
+    # account and writes them to an EnvironmentFile for accounts that cannot invoke
+    # the defaults (e.g. no OpenAI / Anthropic access); an administrator can also
+    # override them on the console's Models page (ledger ``platform_settings``,
+    # applied in-process by app.services.model_settings), which wins over env.
+    # See docs/setup.md "Choosing models".
+    # Default model of a new agent (the Create Agent wizard pre-selects it; a spec
+    # submitted without a model_id gets it).
+    agent_default_model_id: str = "global.zai.glm-5.3"
+    # Intent clustering (Observe intent view) and the try-chat suggested questions.
+    platform_model_id: str = "global.anthropic.claude-sonnet-5"
+    # Default LLM-as-judge model of custom / derived AgentCore evaluators, and the
+    # model to retry on when AgentCore's evaluator validation refuses the judge
+    # (empty = no fallback; the refusal surfaces).
+    judge_model_id: str = "global.openai.gpt-6-sol"
+    judge_fallback_model_id: str = "global.anthropic.claude-sonnet-5-5"
+    # Default model of agents the architect assistant proposes (managed Harness).
+    assistant_model_id: str = "global.openai.gpt-6-sol"
+    # Default model of the system architect agent on a new install. reasoning_effort
+    # is preset only when this is an OpenAI model (the only family that takes it).
+    architect_model_id: str = "global.openai.gpt-6-astra"
+    # Default simulated-user (actor) model the console pre-selects for persona
+    # scenarios; it must accept Converse forced tool choice (any / tool).
+    actor_model_id: str = "global.openai.gpt-6-luna"
+    # Model of a Strands Studio canvas node that names none.
+    studio_fallback_model_id: str = "global.anthropic.claude-sonnet-5"
+    # Default of the Claude Agent SDK ("container") method — Claude models only.
+    claude_sdk_model_id: str = "global.anthropic.claude-sonnet-5"
+
     # 3rd-party recommendation providers for the experiment RECOMMEND stage
     # (app/optimization/providers). Model ids are Bedrock Converse
     # inference-profile ids invoked through the workspace client funnel; the list
@@ -313,6 +343,38 @@ class Settings(BaseSettings):
         "glm-5": {"input": 1.00, "output": 3.20},
         "glm-4.7": {"input": 0.60, "output": 2.20},
         "glm-4.7-flash": {"input": 0.07, "output": 0.40},
+        # OpenAI GPT-6 Sol (the default judge / assistant model), from the model card
+        # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
+        # (Standard tier, short context <= 272K input tokens, read 2026-10-12): Global
+        # CRIS $2.00 in / $10.00 out / $0.20 cache read / $2.50 cache write; US Geo
+        # CRIS and Mantle in-Region carry the 10% premium ($2.20 / $11.00 / $0.22 /
+        # $2.75). Long-context requests (> 272K) bill double input and 1.5x output and
+        # are not modelled. The bare Mantle id `openai.gpt-6-sol` matches the global
+        # key (a substring map cannot tell it from `global.`), so its estimate is 10%
+        # low. Not yet on the pricing page or in the Price List API (2026-10-12).
+        "gpt-6-sol": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+        "us.openai.gpt-6-sol": {
+            "input": 2.20, "output": 11.00, "cache_read": 0.22, "cache_write": 2.75,
+        },
+        # DeepSeek / Moonshot Kimi on Bedrock (Standard tier, on-demand, US East
+        # N. Virginia), read 2026-10-12 from https://aws.amazon.com/bedrock/pricing/
+        # and cross-checked with the AWS Price List API (service AmazonBedrock,
+        # us-east-1). Page and API agree for DeepSeek v3.2 and Kimi K2.5 / K2
+        # Thinking. The page lists no DeepSeek V3.1 (deepseek.v3-v1:0, us-west-2
+        # only), DeepSeek R1 or Kimi K3, so those numbers are the Price List API's
+        # (R1: USE1-DeepSeek-R1-*; V3.1: USW2-DeepSeek-V3.1-*; K3: the
+        # moonshotai.kimi-k3 *-global-standard / *-standard SKUs, the US profile
+        # carrying the 10% regional premium). Longest key wins, so the US Kimi K3
+        # profile gets its own entry over the global one.
+        "deepseek.v3.2": {"input": 0.62, "output": 1.85},
+        "deepseek.v3-v1": {"input": 0.58, "output": 1.68},
+        "deepseek.r1": {"input": 1.35, "output": 5.40},
+        "kimi-k2.5": {"input": 0.60, "output": 3.00},
+        "kimi-k2-thinking": {"input": 0.60, "output": 2.50},
+        "kimi-k3": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+        "us.moonshotai.kimi-k3": {
+            "input": 3.30, "output": 16.50, "cache_read": 0.33, "cache_write": 4.125,
+        },
     }
     model_prices_meta: dict[str, Any] = {}  # written by the price refresher
     model_prices_source_url: str = (

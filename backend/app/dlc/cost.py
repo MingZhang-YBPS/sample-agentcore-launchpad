@@ -198,9 +198,9 @@ def estimate(
 
 
 def _default_judge_model() -> str:
-    from app.evaluation.agentcore_eval import JUDGE_DEFAULT_MODEL_ID
+    from app.evaluation.agentcore_eval import judge_default_model_id
 
-    return JUDGE_DEFAULT_MODEL_ID
+    return judge_default_model_id()
 
 
 def assert_allowed(

@@ -43,10 +43,22 @@ def test_model_questions_are_used_and_capped():
     assert out["source"] == "model"
     assert out["questions"] == qs[:5]
     call = bedrock.calls[0]
-    assert call["inferenceConfig"]["maxTokens"] <= 300
+    # a cap with room for a reasoning model's thinking (GLM-5.3 used 294 for four)
+    assert 300 < call["inferenceConfig"]["maxTokens"] <= 2000
+    assert call["modelId"] == "global.anthropic.claude-sonnet-5"  # the default
     # Claude 5 rejects `temperature` with a ValidationException
     assert "temperature" not in call["inferenceConfig"]
     assert "HR policy" in call["messages"][0]["content"][0]["text"]
+
+
+def test_platform_model_follows_settings(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "platform_model_id", "global.zai.glm-5.3")
+    bedrock = FakeBedrock(json.dumps(["a one?", "b two?", "c three?"]))
+    suggestions.suggested_questions(Ctx(bedrock), "a9", SPEC)
+    assert bedrock.calls[0]["modelId"] == "global.zai.glm-5.3"
+    assert set(bedrock.calls[0]["inferenceConfig"]) == {"maxTokens"}
 
 
 def test_kb_documents_and_tools_ground_the_prompt(monkeypatch):

@@ -16,20 +16,24 @@ from typing import Any
 
 from botocore.config import Config
 
+from app.core.config import get_settings
 from app.services import knowledge
 from app.services.workspace import WorkspaceContext
 
-# The model answer suggestions runs on — a platform feature, so it does not follow the
-# agent default (AgentSpec.DEFAULT_MODEL_ID) and its prompts stay on the model they
-# were written for.
-PLATFORM_MODEL_ID = "global.anthropic.claude-sonnet-5"
+# The model this runs on is a platform feature, so it does not follow the agent
+# default (AgentSpec.DEFAULT_MODEL_ID): settings.platform_model_id (env
+# LAUNCHPAD_PLATFORM_MODEL_ID, default Claude Sonnet 5 — the model the prompts were
+# written for). Read per call so an operator's switch applies after a restart.
 
 logger = logging.getLogger("launchpad.suggestions")
 
 MAX_QUESTIONS = 5
 MIN_QUESTIONS = 3
 MAX_QUESTION_CHARS = 140
-MAX_OUTPUT_TOKENS = 300
+# A cap, not a target: reasoning models (GLM-5.3, Kimi K3, Claude 5) spend part of it
+# reasoning before the answer — GLM-5.3 used 294 tokens for four questions (live,
+# us-east-1 2026-10-12), so 300 would cut a switched platform model off mid-answer.
+MAX_OUTPUT_TOKENS = 1500
 CACHE_TTL_SECONDS = 600.0
 FALLBACK_TTL_SECONDS = 60.0  # do not hammer a failing model on every poll
 PROMPT_CHARS = 2000
@@ -135,11 +139,13 @@ def _generate(workspace: WorkspaceContext, spec: dict[str, Any], lang: str) -> l
         config=Config(read_timeout=20, retries={"max_attempts": 1, "mode": "standard"}),
     )
     resp = client.converse(
-        modelId=PLATFORM_MODEL_ID,
+        modelId=get_settings().platform_model_id,
         system=[{"text": system}],
         messages=[{"role": "user", "content": [{"text": "\n\n".join(parts)}]}],
-        # No temperature: Claude 5 rejects it ("`temperature` is deprecated for this
-        # model"), which silently replaced every suggestion with the static fallback.
+        # No temperature (or any other sampling knob): Claude 5 rejects it ("`temperature`
+        # is deprecated for this model"), which silently replaced every suggestion with
+        # the static fallback. maxTokens alone is accepted by every Converse model the
+        # platform model can be switched to (GLM, Kimi, Nova, DeepSeek, Qwen).
         inferenceConfig={"maxTokens": MAX_OUTPUT_TOKENS},
     )
     blocks = (resp.get("output") or {}).get("message", {}).get("content") or []

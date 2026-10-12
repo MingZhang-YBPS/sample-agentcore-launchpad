@@ -36,14 +36,15 @@ from typing import Any
 from botocore.config import Config
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.ledger import Agent, ChatFeedback, ChatMessage, ChatSession
 from app.services.answer_rules import normalize
 from app.services.workspace import WorkspaceContext
 
-# The model intent clustering runs on — a platform feature, so it does not follow the
-# agent default (AgentSpec.DEFAULT_MODEL_ID) and its prompts stay on the model they
-# were written for.
-PLATFORM_MODEL_ID = "global.anthropic.claude-sonnet-5"
+# The model this runs on is a platform feature, so it does not follow the agent
+# default (AgentSpec.DEFAULT_MODEL_ID): settings.platform_model_id (env
+# LAUNCHPAD_PLATFORM_MODEL_ID, default Claude Sonnet 5 — the model the prompts were
+# written for). Read per call so an operator's switch applies after a restart.
 
 logger = logging.getLogger("launchpad.intents")
 
@@ -242,11 +243,13 @@ def _model_groups(
         config=Config(read_timeout=90, retries={"max_attempts": 1, "mode": "standard"}),
     )
     resp = client.converse(
-        modelId=PLATFORM_MODEL_ID,
+        modelId=get_settings().platform_model_id,
         system=[{"text": system}],
         messages=[{"role": "user", "content": [{"text": _prompt_lines(turns)}]}],
-        # No temperature: Claude 5 rejects it ("`temperature` is deprecated for this
-        # model"), which silently pushed every view onto the mechanical fallback.
+        # No temperature (or any other sampling knob): Claude 5 rejects it ("`temperature`
+        # is deprecated for this model"), which silently pushed every view onto the
+        # mechanical fallback. maxTokens alone works on every Converse model the
+        # platform model can be switched to (GLM, Kimi, Nova, DeepSeek, Qwen).
         inferenceConfig={"maxTokens": MAX_OUTPUT_TOKENS},
     )
     blocks = (resp.get("output") or {}).get("message", {}).get("content") or []

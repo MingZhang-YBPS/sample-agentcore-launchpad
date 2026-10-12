@@ -17,6 +17,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.core.config import get_settings
+
 # StartBatchEvaluation accepts at most this many evaluators (and insights) per batch —
 # a service limit ("Maximum of 10 evaluators"), enforced before any replay so a run never
 # invokes the agent for every scenario only to be refused at the batch call.
@@ -27,9 +29,21 @@ MAX_BATCH_EVALUATORS = 10
 # GPT-6 rejects (it needs >= 16) — an explicit inferenceConfig.maxTokens does not change
 # that probe (measured 2026-09-29, us-east-1 + us-west-2). Until AWS lifts it, a judge
 # whose model fails exactly that probe is created on the fallback model instead and the
-# caller is told, so the default switches over by itself once the service accepts GPT-6.
-JUDGE_DEFAULT_MODEL_ID = "global.openai.gpt-6-sol"
-JUDGE_FALLBACK_MODEL_ID = "global.anthropic.claude-sonnet-5-5"
+# caller is told, so the default switches over by itself once the service accepts GPT-6
+# (re-measured 2026-10-12, us-east-1: GPT-6 Sol and GLM-5.3 are both accepted now).
+# Both ids are settings (judge_model_id / judge_fallback_model_id, env
+# LAUNCHPAD_JUDGE_MODEL_ID / LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID) so an account without
+# OpenAI or Anthropic access can switch them; an empty fallback disables the retry.
+
+
+def judge_default_model_id() -> str:
+    """The platform's default LLM-as-judge model (settings.judge_model_id)."""
+    return get_settings().judge_model_id.strip()
+
+
+def judge_fallback_model_id() -> str:
+    """The judge-model fallback (settings.judge_fallback_model_id); "" = none."""
+    return get_settings().judge_fallback_model_id.strip()
 
 
 def judge_model_probe_rejected(exc: BaseException) -> bool:
@@ -48,8 +62,10 @@ def judge_model_probe_rejected(exc: BaseException) -> bool:
 
 
 def judge_fallback_model(model_id: str) -> str | None:
-    """The model to retry on after ``judge_model_probe_rejected``, or None."""
-    return None if model_id == JUDGE_FALLBACK_MODEL_ID else JUDGE_FALLBACK_MODEL_ID
+    """The model to retry on after ``judge_model_probe_rejected``, or None (no
+    fallback configured, or ``model_id`` already is the fallback)."""
+    fallback = judge_fallback_model_id()
+    return None if not fallback or model_id == fallback else fallback
 
 
 def _with_judge_fallback(
