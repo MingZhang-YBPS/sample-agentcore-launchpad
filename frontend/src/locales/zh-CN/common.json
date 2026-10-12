@@ -11216,6 +11216,7 @@
       "checkOk": "通过（{{ms}} 毫秒）",
       "check": {
         "converse": "Converse 调用",
+        "tool_use": "工具调用",
         "tool_choice": "强制工具调用",
         "evaluator": "AgentCore 评估器"
       },

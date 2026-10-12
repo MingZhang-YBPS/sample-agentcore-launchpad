@@ -11216,6 +11216,7 @@
       "checkOk": "OK ({{ms}} ms)",
       "check": {
         "converse": "Converse",
+        "tool_use": "Tool use",
         "tool_choice": "Forced tool choice",
         "evaluator": "AgentCore evaluator"
       },
