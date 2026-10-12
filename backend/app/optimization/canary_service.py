@@ -1215,6 +1215,14 @@ def act_complete(
             raise RuntimeError("the agent behind this canary no longer exists")
         agent.spec = copy.deepcopy(row.artifacts["edited_spec"])
         agent.version = setup["v_candidate"]
+        # a canary win is a publish like any other: snapshot it, or the version history
+        # (and a later rollback to "the spec before this") would skip it
+        from app.services.snapshots import record_snapshot
+
+        snap = record_snapshot(
+            db, agent, created_by="canary", note=f"canary {canary_id[:8]} promoted"
+        )
+        snap.aws_version = str(setup["v_candidate"])
         db.commit()
     finally:
         db.close()

@@ -29,8 +29,10 @@ class AppError(Exception):
         message: str,
         detail: Any = None,
         status_code: int | None = None,
+        headers: dict[str, str] | None = None,
     ):
         super().__init__(message)
+        self.headers = headers
         self.code = code
         self.message = message
         self.detail = detail
@@ -50,6 +52,7 @@ async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status_code,
         content=envelope(exc.code, exc.message, exc.detail),
+        headers=getattr(exc, "headers", None),
     )
 
 
@@ -153,6 +156,8 @@ AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
 # names this deployment's role ARN, instance id and operation — fine for the
 # console operator, a leak across the API-key trust boundary.
 PUBLIC_API_PREFIX = "/v1"
+# the account-free share pages (T13) sit across the same boundary
+PUBLIC_SHARE_PREFIX = "/share"
 _PUBLIC_AWS_MESSAGES: dict[str, str] = {
     "aws.not_found": "AWS resource not found",
     "aws.validation": "AWS rejected the request as invalid",
@@ -271,7 +276,7 @@ async def client_error_handler(request: Request, exc: ClientError) -> JSONRespon
         code,
         aws_error_message(exc),
     )
-    if request.url.path.startswith(PUBLIC_API_PREFIX):
+    if request.url.path.startswith((PUBLIC_API_PREFIX, PUBLIC_SHARE_PREFIX)):
         return JSONResponse(
             status_code=status,
             content=envelope(

@@ -979,7 +979,8 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
         busy={busy}
         onConfirm={() => {
           setConfirm(null);
-          void onAction("promote");
+          // the confirm is the recorded override the backend requires for weak evidence
+          void onAction("promote", { allow_non_significant: true });
         }}
         onClose={() => setConfirm(null)}
       />

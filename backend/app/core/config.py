@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -301,6 +301,18 @@ class Settings(BaseSettings):
         # report Nova 2 Lite traffic with a null cost. Numbers are litellm's
         # bare amazon.nova-2-lite-v1:0 = the global-profile price.
         "nova-2-lite": {"input": 0.3, "output": 2.5},
+        # Z.AI GLM on Bedrock, from https://aws.amazon.com/bedrock/pricing/
+        # (Standard tier, read 2026-10-08). The longest matching key wins, so the
+        # US cross-region profile gets its own entry over the global one, and
+        # glm-4.7-flash over glm-4.7. GLM-5 / 4.7 / 4.7 Flash are the US in-region
+        # rates (N. Virginia, Ohio, Oregon); the page lists no cache rates for them.
+        "glm-5.3": {"input": 1.68, "output": 5.28, "cache_read": 0.312, "cache_write": 2.10},
+        "us.zai.glm-5.3": {
+            "input": 1.848, "output": 5.808, "cache_read": 0.3432, "cache_write": 2.31,
+        },
+        "glm-5": {"input": 1.00, "output": 3.20},
+        "glm-4.7": {"input": 0.60, "output": 2.20},
+        "glm-4.7-flash": {"input": 0.07, "output": 0.40},
     }
     model_prices_meta: dict[str, Any] = {}  # written by the price refresher
     model_prices_source_url: str = (
@@ -308,6 +320,18 @@ class Settings(BaseSettings):
         "model_prices_and_context_window.json"
     )
     model_prices_refresh_hours: int = 24  # 0 disables the periodic refresher
+
+    @model_validator(mode="after")
+    def _seed_model_prices(self) -> "Settings":
+        # launchpad.yaml carries its own model_prices map (the refresher persists
+        # it), which would hide every price added to the defaults after that file
+        # was written. Fill in the default entries it lacks; an entry it has —
+        # refreshed or edited by hand — still wins.
+        defaults = type(self).model_fields["model_prices"].default or {}
+        missing = {k: v for k, v in defaults.items() if k not in self.model_prices}
+        if missing:
+            self.model_prices = {**missing, **self.model_prices}
+        return self
 
     @classmethod
     def settings_customise_sources(

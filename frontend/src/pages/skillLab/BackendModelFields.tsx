@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { modelsForActiveRegion } from "../../lib/regions";
 import type { SkillLabJudgeMode, SkillLabStatus, SkillLabTargetBackend } from "../../lib/api";
 
 /** Upstream studio's fixed backend labels — the values are API contract. */
@@ -135,7 +136,7 @@ export function BackendModelFields({
             onChange={(e) => setJudgeModel(e.target.value)}
           />
           <datalist id="skill-lab-judge-models">
-            {JUDGE_MODEL_SUGGESTIONS.map((model) => (
+            {modelsForActiveRegion(JUDGE_MODEL_SUGGESTIONS).map((model) => (
               <option key={model} value={model} />
             ))}
           </datalist>

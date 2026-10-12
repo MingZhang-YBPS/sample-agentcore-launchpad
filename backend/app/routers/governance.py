@@ -27,6 +27,7 @@ from app.schemas.governance import (
 )
 from app.services import governance as governance_service
 from app.services import governance_evidence, mcp_client
+from app.services import guardrail as guardrail_service
 from app.services import traces as trace_service
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client, iam_client
@@ -708,3 +709,26 @@ def get_generation(
             for a in assets
         ],
     }
+
+
+# ── PII guardrail preset (roadmap T12) ──────────────────────────────────────────
+# The workspace-level resource an agent's `guardrail.enabled` opts into. Reading it
+# is a member's business (the wizard shows whether the preset exists); provisioning
+# it creates a real Bedrock resource, so it is the administrator's.
+
+
+@router.get("/governance/guardrail")
+def get_guardrail(scope: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
+    """Whether this workspace has the `launchpad-pii` guardrail, and its state."""
+    return guardrail_service.describe(scope.context)
+
+
+@router.post("/governance/guardrail", status_code=201)
+def provision_guardrail(
+    db: Session = Depends(get_db),
+    scope: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Create the preset (idempotent — an existing one is adopted by name)."""
+    guardrail_service.ensure_guardrail(scope.context, db=db)
+    db.commit()
+    return guardrail_service.describe(scope.context)

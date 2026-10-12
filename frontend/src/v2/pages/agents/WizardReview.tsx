@@ -13,6 +13,8 @@ import {
 import type { InboundAuth } from "../../../lib/api";
 import { inboundCapable, issuerMismatch, jwtSummary, wizardDeployedJwt } from "../../../lib/inbound-auth";
 import { Alert, Card, Descriptions } from "../../ui";
+import { InlineKbState } from "./InlineKb";
+import { type InlineKb, inlineKbBlock } from "./useInlineKb";
 import { ReachabilityWarning } from "./InboundAuthFields";
 import type { WizardCatalogs, WizardUi } from "./wizardKit";
 
@@ -22,6 +24,7 @@ export function WizardReview({
   cat,
   ui,
   shortTermOff = false,
+  inlineKb = null,
   workspaceDefault = null,
   cognitoIssuer = null,
 }: {
@@ -30,6 +33,8 @@ export function WizardReview({
   ui: WizardUi;
   /** re-publish of an agent deployed without short-term memory (kept off on save) */
   shortTermOff?: boolean;
+  /** the knowledge base created inside the wizard, when one is mounted */
+  inlineKb?: InlineKb | null;
   /** the workspace inbound default an unpinned agent inherits */
   workspaceDefault?: InboundAuth | null;
   /** the workspace pool's issuer — what platform invokes present */
@@ -44,7 +49,23 @@ export function WizardReview({
   const skillNames = form.skills.map(
     (p) => cat.skills.find((s) => s.path === p)?.name ?? ui.customSkills.find((c) => c.path === p)?.name ?? skillNameFromPath(p),
   );
-  const kbNames = form.selectedKbs.map((id) => resolveKb(id, cat.kbCatalog, []).name);
+  const kbValue: React.ReactNode = form.selectedKbs.length ? (
+    form.selectedKbs.map((id, i) => (
+      <span key={id} data-testid={id === inlineKb?.kb_id ? "v2-agent-review-inline-kb" : undefined}>
+        {i > 0 && ", "}
+        {id === inlineKb?.kb_id ? inlineKb.name : resolveKb(id, cat.kbCatalog, []).name}
+        {id === inlineKb?.kb_id && (
+          <>
+            {" "}
+            <InlineKbState inline={inlineKb} />
+          </>
+        )}
+      </span>
+    ))
+  ) : (
+    none
+  );
+  const kbBlock = inlineKbBlock(inlineKb, form.selectedKbs);
   const memory = {
     label: t("v2.agents.wizard.memoryOnly"),
     value: shortTermOff
@@ -108,7 +129,7 @@ export function WizardReview({
     ];
     const common = [
       { label: t("v2.agents.wizard.skills"), value: list(skillNames) },
-      { label: t("v2.agents.kbTitle"), value: list(kbNames) },
+      { label: t("v2.agents.kbTitle"), value: kbValue },
       memory,
     ];
     // harness / Strands: managed session storage is their only mount
@@ -207,6 +228,11 @@ export function WizardReview({
         </>
       )}
       <div className="v2-agents-foot">
+        {kbBlock === "waiting" && <Alert tone="warn">{t("v2.agents.wizard.inlineKb.waitActive")}</Alert>}
+        {kbBlock === "failed" && <Alert tone="error">{t("v2.agents.wizard.inlineKb.failedBlock")}</Alert>}
+        {inlineKb && kbBlock === null && form.selectedKbs.includes(inlineKb.kb_id) && (
+          <Alert>{t("v2.agents.wizard.inlineKb.note")}</Alert>
+        )}
         <Alert>{t("v2.agents.wizard.deployNote")}</Alert>
       </div>
     </Card>

@@ -1,9 +1,13 @@
 # AgentCore Launchpad
 
-AgentCore Launchpad 是一套基于 Amazon Bedrock AgentCore 的**企业 Agent Ops平台**。
-它是一套可以交付给客户的样板项目，不是一次性演示。平台直接调用 AgentCore API，
-在你的 AWS 账号中创建和管理真实资源，并用一个控制台串起 Agent 的**创建、部署、
-聊天和 HTTP 调用**。
+AgentCore Launchpad 是一套基于 Amazon Bedrock AgentCore 的 **Agent Ops 平台示例**。
+平台直接调用 AgentCore API，在你的 AWS 账号中创建和管理真实资源，并用一个控制台串起
+Agent 的**创建、部署、聊天和 HTTP 调用**。
+
+> **示例代码声明。** 本项目是示例代码，仅用于非生产用途。部署前请与你所在组织的安全和法务团队
+> 合作，满足组织的各项要求。它用于展示 AgentCore 各项服务如何组合使用，未经过面向生产使用的
+> 充分测试、安全加固与优化；基于它构建的任何内容，其安全、测试与加固均由你自行负责。运行本项目
+> 会创建计费的 AWS 资源——参见[成本说明](#成本说明)与[资源清理](docs/teardown.zh-CN.md)。
 
 - English: [README.md](README.md)
 
@@ -199,8 +203,8 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 修改 `LAUNCHPAD_AUTH_PASSWORD` 会使**所有**会话失效，因为 Cookie 签名密钥由该密码
 派生。公开 `/v1` 接口仍使用独立的 `X-Api-Key` 认证，不受控制台 Cookie 影响。
 
-实际部署所需的 systemd 单元、nginx origin-key 校验、CloudFront 配置与更新流程见
-[docs/setup.zh-CN.md](docs/setup.zh-CN.md#生产部署) 与
+长期运行的托管部署所需的 systemd 单元、nginx origin-key 校验、CloudFront 配置与更新流程见
+[docs/setup.zh-CN.md](docs/setup.zh-CN.md#托管部署) 与
 [docs/agent-runbook-prod.md](docs/agent-runbook-prod.md#3-shape-b--systemd-reference-the-us-east-1-box)。
 
 ### 停止服务
@@ -250,7 +254,7 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 通常不高，实际金额取决于各项能力的使用量：
 
 - **Runtime / Harness 调用**：每次调用都会产生模型 token 费用（默认模型为
-  `global.anthropic.claude-sonnet-5`，Sonnet 4.6 仍可按 Agent 选择），以及托管
+  `global.zai.glm-5.3`，Claude、GPT 及其他 GLM 模型仍可按 Agent 选择），以及托管
   runtime/session 的计算费用。
 - **容器构建（方式A）**：CodeBuild 按 ARM64 构建时长计费，每个 Agent 构建约 2 分钟。
   方式B（Harness）无需构建，方式C 使用更快的 zip 路径。
@@ -262,3 +266,13 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 
 **用完后请删除演示 Agent**（通过控制台或 `DELETE /api/agents/{id}`），再运行
 `scripts/teardown.py` 移除共享基础设施。见 [docs/teardown.zh-CN.md](docs/teardown.zh-CN.md)。
+
+## 安全
+
+如何报告安全问题，请参见 [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) 与
+[SECURITY](SECURITY.md)。欢迎贡献——请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与
+[行为准则](CODE_OF_CONDUCT.md)。
+
+## 许可证
+
+本项目基于 MIT-0 许可证发布，详见 [LICENSE](LICENSE) 文件。

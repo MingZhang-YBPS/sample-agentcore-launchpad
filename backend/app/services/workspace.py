@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.core.regions import partition_for_region
 from app.models.ledger import UserWorkspace, Workspace
 from app.services import aws_clients
 
@@ -37,6 +38,11 @@ class WorkspaceContext:
     # below set it from the row they read; the default only serves contexts built
     # by hand (tests, the hub bootstrap probe), which target the default row.
     id: str = DEFAULT_WORKSPACE_ID
+
+    @property
+    def partition(self) -> str:
+        """IAM partition (``aws`` / ``aws-cn`` / ``aws-us-gov`` ...) of this region."""
+        return partition_for_region(self.region)
 
     def client(self, service: str, cache_token: str | None = None, **cfg: Any) -> Any:
         return aws_clients.client(service, self, cache_token=cache_token, **cfg)

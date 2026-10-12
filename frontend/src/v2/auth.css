@@ -32,7 +32,7 @@
   border: 0; background: transparent; border-radius: 6px; height: 32px; font-size: 14px; color: var(--v2-ink-2);
   cursor: pointer; font-family: inherit;
 }
-.v2-auth-tabs button.on { background: #fff; color: var(--v2-primary); font-weight: 500; box-shadow: var(--v2-shadow); }
+.v2-auth-tabs button.on { background: var(--v2-card); color: var(--v2-primary); font-weight: 500; box-shadow: var(--v2-shadow); }
 .v2-auth-tabs button:hover:not(.on) { color: var(--v2-ink); }
 
 .v2-auth-fields { display: grid; gap: 16px; margin-top: 22px; }

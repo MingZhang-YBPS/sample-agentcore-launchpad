@@ -24,9 +24,11 @@ from __future__ import annotations
 from functools import cached_property
 from typing import Any
 
+from fastapi import Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ChatSession
 from app.services import creators, visibility
@@ -63,6 +65,32 @@ def agent_in(
     if not visibility.sees(viewer, db, agent.created_by):
         return None
     return agent
+
+
+def require_path_ids_visible(request: Request, db: Session = Depends(get_db)) -> None:
+    """Router-level dependency for console routers whose routes name an agent
+    (`{agent_id}`) or an eval run (`{run_id}`) in the path but load it with their own
+    workspace-only helper: under workspace isolation a hidden one answers the same 404
+    as a missing one (`agent.not_found` / `run.not_found`) before the handler runs. A
+    route without those ids (and any non-filtering viewer) is untouched, so it costs
+    nothing in a shared workspace."""
+    agent_id = request.path_params.get("agent_id")
+    run_id = request.path_params.get("run_id")
+    if not agent_id and not run_id:
+        return
+    viewer = Viewer.of_request(request)
+    if not viewer.filters:
+        return
+    if agent_id:
+        agent = db.get(Agent, agent_id)
+        if agent is not None and not visibility.sees(viewer, db, agent.created_by):
+            raise NotFoundError("agent.not_found", "agent not found")
+    if run_id:
+        from app.evaluation.models import EvalRun
+
+        run = db.get(EvalRun, run_id)
+        if run is not None and not visibility.sees(viewer, db, run.created_by):
+            raise NotFoundError("run.not_found", "run not found")
 
 
 def agent_visible(db: Session, viewer: Viewer, agent: Agent | None) -> bool:

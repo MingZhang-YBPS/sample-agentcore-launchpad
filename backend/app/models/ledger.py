@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     String,
@@ -58,6 +59,15 @@ class Workspace(Base):
     external_id: Mapped[str | None] = mapped_column(String(128), default=None)
     bootstrap_status: Mapped[str] = mapped_column(String(16), default="registered")
     # registered | bootstrapping | ready | failed
+    # dev | staging | prod (T05). Ledger-authoritative for every row, `default`
+    # included: the startup mirror never writes it. `prod` refuses member agent
+    # mutations (route_policy.PROD_PROTECTED); server_default keeps the raw-SQL
+    # seed of `default` (which does not name the column) on `dev`.
+    tier: Mapped[str] = mapped_column(String(16), default="dev", server_default="dev")
+    # T26: admin-configured release policy for promotions INTO this workspace (eval
+    # threshold, ENFORCE requirement, deploy window, freezes). Empty = tier defaults.
+    # Nullable: the raw-SQL seed of `default` does not name the column.
+    release_policy: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # Operator-owned workspace policy blob (vs `resources`, which bootstrap owns).
     # Keys: "inbound_auth_default" — the InboundAuth agents inherit when their
@@ -119,6 +129,12 @@ class Agent(Base):
     # payload — ``AgentSpec`` has no such field — and never editable through the
     # ordinary lifecycle routes, which refuse rows that carry it.
     system_key: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
+    # Which endpoint production traffic uses (docs/agent-dlc-design.md §6): "default"
+    # (the auto-rolling DEFAULT, the historical behaviour) or "live" (a named endpoint
+    # that only moves when a release is decided).
+    endpoint_mode: Mapped[str] = mapped_column(
+        String(16), default="default", server_default="default"
+    )
     # Inbound auth actually deployed onto the Runtime — the RESOLVED choice
     # (spec > workspace default > iam), snapshotted by the deploy stage so the
     # invoke path and the console never re-resolve against a default that may
@@ -318,6 +334,12 @@ class User(Base):
         DateTime(timezone=True), default=None
     )
     login_count: Mapped[int] = mapped_column(default=0)
+    # Stamped once, on the first successful login (TTFA's start clock). NULL for
+    # accounts that never logged in or that logged in before the column existed —
+    # TTFA falls back to `created_at` for those.
+    first_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -383,6 +405,8 @@ class ChatMessage(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    # T35: `rule:<rule id>` when a curated answer (not the model) produced this row
+    answered_by: Mapped[str | None] = mapped_column(String(48), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -396,15 +420,293 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # T16 scope + limits. NULL/empty `agent_ids` = every agent in the workspace (the
+    # behaviour of every key minted before scoping); NULL `expires_at` never expires;
+    # NULL `rate_per_minute` is unlimited.
+    agent_ids: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    rate_per_minute: Mapped[int | None] = mapped_column(default=None)
+    # Usage stamps, written by /v1 auth on every admitted call (`record_use`, T16):
+    # `use_count` is exact, `last_used_at` the latest admitted call.
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    use_count: Mapped[int] = mapped_column(default=0, server_default="0")
     # The minting console principal: `created_by` is its `users.id`, NULL for the
     # config admin / auth-disabled operator (no `users` row) and for keys minted
     # before this column existed. Not a FK — a deleted creator must leave the id
     # behind, since that dangling id is how the key knows its creator is gone.
-    # `created_by_name` is the display name at mint time (NULL only on legacy rows).
+    # `created_by_name` is the display name at mint time (NULL only on legacy rows;
+    # a key minted by the T16 line had its username in `created_by`, which the
+    # migration moves here — `db._migrate_api_key_lifecycle_columns`).
     created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
-    # Stamped by /v1 auth on success, at most once per `LAST_USED_RESOLUTION`.
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class ApiKeyUsage(Base):
+    """Admitted `/v1` calls per key per UTC day (T16) — the aggregable usage shape."""
+
+    __tablename__ = "api_key_usage"
+    __table_args__ = (UniqueConstraint("key_id", "day", name="uq_api_key_usage_key_day"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    key_id: Mapped[str] = mapped_column(String(32), index=True)
+    day: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD, UTC
+    count: Mapped[int] = mapped_column(default=0)
+
+
+class SpecSnapshot(Base):
+    """The full agent spec as of one publish (T18): one row per create/redeploy.
+
+    Rollback re-publishes a stored spec as a NEW snapshot; rows are never edited
+    except to fill `aws_version` once the deploy stage learns it.
+    """
+
+    __tablename__ = "spec_snapshots"
+    __table_args__ = (UniqueConstraint("agent_id", "seq", name="uq_spec_snapshots_agent_seq"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    seq: Mapped[int]
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    aws_version: Mapped[str | None] = mapped_column(String(16), default=None)
+    deployment_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ShareLink(Base):
+    """A signed, revocable, account-free way for an outsider to reach exactly one
+    thing (T13). The raw token is shown once at creation; only its sha256 is at
+    rest, exactly like `ApiKey`. The row — not any request header — decides which
+    workspace a visitor lands in."""
+
+    __tablename__ = "share_links"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    kind: Mapped[str] = mapped_column(String(16), default="chat")  # chat (extensible)
+    target_id: Mapped[str] = mapped_column(String(32), index=True)  # the agent id for `chat`
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
+    prefix: Mapped[str] = mapped_column(String(16), default="")  # display only, e.g. shr_ab12
+    label: Mapped[str] = mapped_column(String(64), default="")
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    use_count: Mapped[int] = mapped_column(default=0)
+    # Channel links (T30) only: `kind` is the platform (slack|feishu). `channel_config`
+    # is what the console may show back (e.g. Feishu domain); `channel_secrets` is what
+    # the adapter must be able to use (signing secret, bot token) and is NEVER
+    # serialized by any route - the API reports only which keys are set.
+    channel_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    channel_secrets: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ChatFeedback(Base):
+    """A thumbs verdict on one agent answer (T15), from the console or a share page.
+
+    A table rather than columns on `ChatMessage`: one message can be rated by
+    several actors, a verdict can change or be withdrawn, and it carries a comment
+    and an origin — none of which belong on the transcript row. One verdict per
+    (message, actor); re-voting updates it.
+    """
+
+    __tablename__ = "chat_feedback"
+    __table_args__ = (UniqueConstraint("message_id", "actor", name="uq_chat_feedback_actor"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(String(32), index=True)
+    session_id: Mapped[str] = mapped_column(String(80), index=True)
+    message_id: Mapped[int] = mapped_column(index=True)  # chat_messages.id (an agent answer)
+    verdict: Mapped[str] = mapped_column(String(8), index=True)  # up | down
+    comment: Mapped[str | None] = mapped_column(Text, default=None)
+    # T34: the answer a reviewer says it should have been (feeds a curated answer)
+    correction: Mapped[str | None] = mapped_column(Text, default=None)
+    actor: Mapped[str] = mapped_column(String(96))  # console username, or share:<link id>
+    source: Mapped[str] = mapped_column(String(16), default="console")  # console|share|review
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class SharedTemplate(Base):
+    """An agent published as a reusable starting point (roadmap T38).
+
+    Hub-global on purpose: the whole point is that *another* workspace can start from it, so
+    unlike every per-environment table this one is not workspace-scoped. The provenance
+    column is deliberately NOT named `workspace_id`: in this ledger that name *means* "scoped
+    to", and `test_workspaces` enforces exactly that — `source_workspace_id` records where it
+    came from, for attribution and for deciding who may unpublish it.
+
+    What the row carries is pruned by `services/marketplace.publishable_spec` — no
+    environment-specific ids and nothing secret-shaped; those become `requirements` telling
+    a consumer what to supply instead.
+    """
+
+    __tablename__ = "shared_templates"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    # the publishing environment, NOT a scope — reads are deliberately cross-workspace
+    source_workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    agent_id: Mapped[str] = mapped_column(String(32), index=True)
+    source_agent_name: Mapped[str] = mapped_column(String(64), default="")
+    title: Mapped[str] = mapped_column(String(80), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    method: Mapped[str] = mapped_column(String(24), default="harness")
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    requirements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    published_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    uses: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class AlertRule(Base):
+    """One threshold the platform watches, and what it last saw (roadmap T29).
+
+    Deliberately a *rule*, not a subscription: the value is computed from data the
+    platform already collects (spans for error rate and latency, online-evaluation
+    results for quality, the price map for spend), so a rule adds a threshold and a
+    destination rather than a new telemetry path.
+
+    `state` and `last_value` are the evaluation's own memory. They exist so a firing rule
+    notifies **once** on the transition rather than on every tick, and so the inbox can
+    show what is wrong without re-running a billed Logs Insights scan.
+    """
+
+    __tablename__ = "alert_rules"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    # error_rate | latency_p95_ms | online_quality | cost_mtd_usd
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    # "above" | "below" — quality fires when it drops, the others when they rise
+    comparison: Mapped[str] = mapped_column(String(8), default="above")
+    threshold: Mapped[float] = mapped_column(Float)
+    # the observability range key the value is measured over ("1h" … "30d")
+    window: Mapped[str] = mapped_column(String(8), default="24h")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    # Optional outbound destination. A generic JSON webhook, which is what a Slack or
+    # Feishu incoming hook already is — so one mechanism covers both without the platform
+    # holding channel credentials.
+    webhook_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    # ok | firing | unknown (unknown = the last evaluation could not read the value)
+    state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
+    last_value: Mapped[float | None] = mapped_column(default=None)
+    last_detail: Mapped[str | None] = mapped_column(Text, default=None)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_fired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class ReleaseBundle(Base):
+    """An immutable, verifiable record of exactly what was tested (T20).
+
+    The unit of promotion: a frozen copy of one `SpecSnapshot`, the artifact
+    coordinates that snapshot deployed (image digest / staged upload / requirements
+    lock), the evaluation evidence pinned to it, and the policy posture at the time —
+    reduced to one `digest`. Promotion deploys the bundle rather than re-generating
+    from the spec, which is what makes "build once, deploy many" checkable: the same
+    inputs always produce the same digest, and a digest mismatch means something other
+    than the tested thing is about to ship.
+
+    Rows are append-only. `workspace_id` is the environment the bundle was BUILT in
+    (the source); where it may go is the promotion's business.
+    """
+
+    __tablename__ = "release_bundles"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    # the snapshot this bundle froze; null only if the snapshot was purged
+    snapshot_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    snapshot_seq: Mapped[int | None] = mapped_column(default=None)
+    agent_name: Mapped[str] = mapped_column(String(64))
+    method: Mapped[str] = mapped_column(String(24))
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # {image_digest, image_uri, upload_id, requirements_sha, source_arn, aws_version}
+    artifact: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # {run_id, dataset, dataset_version, pass_rate, evaluators, finished_at} or {}
+    evaluation: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # {guardrail, gateways, policy_engine_mode, registry_record_id}
+    policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # sha256 over the canonical (spec, artifact, agent_name, method) — the identity
+    digest: Mapped[str] = mapped_column(String(64), index=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Promotion(Base):
+    """One request to release a bundle into another environment (T21).
+
+    The hand-off between the member who built an agent and the operator who runs it:
+    a request carries the change note and the rollback plan, an approval records who
+    accepted it and which gates passed at that moment, and execution (P3) attaches the
+    job. `workspace_id` is the SOURCE environment, so the row is scoped like every
+    other; `target_workspace_id` is where it is going.
+    """
+
+    __tablename__ = "promotions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("release_bundles.id"), index=True)
+    target_workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    # pending | approved | rejected | executing | succeeded | failed | rolled_back
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    requested_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    change_note: Mapped[str] = mapped_column(Text, default="")
+    rollback_note: Mapped[str] = mapped_column(Text, default="")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    review_note: Mapped[str | None] = mapped_column(Text, default=None)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # the gate results as evaluated at approval time — evidence, not a live read
+    gates: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    job_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    # T27 execution state. `stages` is the per-stage progress the console renders as one
+    # card each; `execution` holds the resumable scratch (target agent, inner deploy job,
+    # canary id, observation deadline) so a restarted worker continues instead of redoing.
+    stages: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    execution: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # the bundle the target ran before this release: what a rollback re-deploys
+    previous_bundle_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
 
 
 class IdentityProvider(Base):
@@ -628,6 +930,28 @@ def _prevent_policy_change_snapshot_mutation(_: Any, __: Any, target: PolicyChan
     ]
     if changed:
         raise ValueError(f"immutable policy audit fields changed: {', '.join(sorted(changed))}")
+
+
+class AuditEvent(Base):
+    """One journaled privileged action (T05): an administrator's break-glass agent
+    mutation on a `prod` workspace, or a workspace tier change.
+
+    Written at admission (before the handler runs), so a row records that the
+    action was attempted by that actor, not that it succeeded — the Job log /
+    Deployment row carries the outcome. Append-only by convention; nothing in the
+    app updates or deletes a row except a workspace purge.
+    """
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    actor: Mapped[str] = mapped_column(String(64))
+    # e.g. "POST /api/agents/{agent_id}/redeploy" or "workspace.tier_change"
+    action: Mapped[str] = mapped_column(String(160))
+    # the concrete path, or "dev->prod" for a tier change
+    target: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Job(Base):

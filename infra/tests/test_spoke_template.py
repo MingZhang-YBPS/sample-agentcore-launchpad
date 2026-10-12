@@ -154,21 +154,27 @@ def test_service_linked_roles_are_limited_to_an_allowlist(statements: list[dict[
     assert all(name.endswith(".amazonaws.com") for name in services)
 
 
-def test_the_role_cannot_push_images(statements: list[dict[str, Any]]):
+def test_the_role_pushes_images_only_through_the_artifact_copy_statement(
+    statements: list[dict[str, Any]],
+):
     """CodeBuild builds and pushes, under a role of its own that this stack lets
-    the hub create. The hub itself only reads back the digest and scan findings,
-    so an ECR write grant here would be an unexplained widening."""
-    ecr = [
-        action
-        for statement in statements
-        for action in statement["Action"]
-        if action.startswith("ecr:")
-    ]
-    assert set(ecr) == {
-        "ecr:CreateRepository",
-        "ecr:DescribeImageScanFindings",
-        "ecr:DescribeImages",
-        "ecr:DescribeRepositories",
+    the hub create. The hub itself only reads back the digest and scan findings —
+    except for a PROMOTED image (roadmap T24), which it copies by digest through
+    the ECR API. That grant lives in one named, single-repository statement so an
+    ECR write anywhere else is still an unexplained widening."""
+    by_sid = {s["Sid"]: s for s in statements}
+    writes = {"ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload", "ecr:PutImage",
+              "ecr:UploadLayerPart"}
+    for statement in statements:
+        pushed = writes & set(statement["Action"])
+        assert not pushed or statement["Sid"] == "EcrArtifactCopy", statement["Sid"]
+    copy = by_sid["EcrArtifactCopy"]
+    assert set(copy["Action"]) >= writes | {"ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"}
+    assert copy["Resource"] != "*" and copy["Resource"]["Fn::Sub"].endswith(
+        "repository/launchpad-agents"
+    )
+    assert "ecr:GetAuthorizationToken" not in {
+        a for s in statements for a in s["Action"]
     }
 
 
@@ -199,3 +205,68 @@ def test_the_hub_can_prove_which_account_it_landed_in(statements: list[dict[str,
 def test_the_role_arn_is_an_output(template: dict[str, Any]):
     """It is what the operator pastes back into the console."""
     assert template["Outputs"]["RoleArn"]["Value"] == {"Fn::GetAtt": ["WorkspaceRole", "Arn"]}
+
+
+def test_a_fresh_region_can_turn_on_transaction_search(statements: list[dict[str, Any]]):
+    """Found on real AWS: with only xray:UpdateTraceSegmentDestination the call is
+    refused in a region that never had Transaction Search, because the service also
+    exercises the indexing rule, the aws/spans log group and Application Signals on
+    the caller's behalf. Without these a new-region workspace has no aws/spans group
+    and every trace, observability view and evaluation there reads nothing."""
+    granted = {action for statement in statements for action in statement["Action"]}
+    required = {
+        "xray:GetTraceSegmentDestination", "xray:UpdateTraceSegmentDestination",
+        "xray:GetIndexingRules", "xray:UpdateIndexingRule",
+        "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutRetentionPolicy",
+        "logs:PutResourcePolicy", "logs:DescribeResourcePolicies",
+        "application-signals:StartDiscovery", "iam:GetRole",
+        "cloudtrail:CreateServiceLinkedChannel",
+    }
+    assert required <= granted, f"missing {sorted(required - granted)}"
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    # the log-group writes are the documented two groups, not every group
+    groups = by_sid["TransactionSearchLogGroups"]["Resource"]
+    assert len(groups) == 2 and all(
+        "aws/spans" in g["Fn::Sub"] or "application-signals/data" in g["Fn::Sub"] for g in groups)
+
+
+def test_a_fresh_region_can_run_its_first_batch_evaluation(statements: list[dict[str, Any]]):
+    """Found on real AWS: StartBatchEvaluation creates its results log group with the
+    caller's credentials, so a region that never ran one needs logs:CreateLogGroup on
+    the evaluations prefix — scoped to that prefix, not every group in the account."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    statement = by_sid["EvaluationResultLogGroups"]
+    assert {"logs:CreateLogGroup", "logs:CreateLogStream"} <= set(statement["Action"])
+    # and reads the per-session results back (run results route, Agent-DLC snapshot)
+    assert "logs:GetLogEvents" in statement["Action"]
+    (resource,) = statement["Resource"]
+    assert resource["Fn::Sub"].endswith(":log-group:/aws/bedrock-agentcore/evaluations/*")
+
+
+def test_the_knowledge_base_console_can_list(statements: list[dict[str, Any]]):
+    """Found on real AWS: the knowledge-base page answered 403 because the role
+    could manage a knowledge base but not list them. ListKnowledgeBases has no
+    resource type, so it sits with CreateKnowledgeBase on `*`; ListDataSources
+    takes the knowledge-base ARN and stays in the scoped statement."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    assert "bedrock:ListKnowledgeBases" in by_sid["BedrockCreateKnowledgeBase"]["Action"]
+    assert "bedrock:ListDataSources" in by_sid["BedrockKnowledgeBases"]["Action"]
+
+
+def test_the_hub_can_call_models_and_guardrails(statements: list[dict[str, Any]]):
+    """Found on real AWS: intent clustering, suggestions, prompt optimization and
+    the judge test-invoke on CreateEvaluator all failed with bedrock:InvokeModel
+    denied, and the PII guardrail preset could neither be created nor applied.
+    Invocation is scoped to models and this account's inference profiles; the
+    guardrail reads are scoped to this account's guardrails."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    infer = by_sid["BedrockModelInference"]
+    assert set(infer["Action"]) == {"bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"}
+    resources = [r["Fn::Sub"] for r in infer["Resource"]]
+    assert all(":foundation-model/" in r or ":${AWS::AccountId}:" in r for r in resources)
+    assert any(r.endswith(":inference-profile/*") for r in resources)
+    guard = by_sid["BedrockGuardrails"]
+    assert set(guard["Action"]) == {"bedrock:ApplyGuardrail", "bedrock:GetGuardrail"}
+    assert guard["Resource"]["Fn::Sub"].endswith(":${AWS::AccountId}:guardrail/*")
+    create = set(by_sid["BedrockGuardrailsCreate"]["Action"])
+    assert create == {"bedrock:CreateGuardrail", "bedrock:ListGuardrails"}

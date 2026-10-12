@@ -1,4 +1,4 @@
-import { Plus, RefreshCw, Square } from "lucide-react";
+import { Plus, RefreshCw, Share2, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -22,6 +22,8 @@ import {
   type ChatTraceInfo,
   type AuthRequiredEvent,
   errorMessage,
+  feedbackApi,
+  type FeedbackVerdict,
   localizedMessage,
 } from "../../lib/api";
 import {
@@ -39,6 +41,7 @@ import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
 import "./chat/chat.css";
 import { Composer } from "./chat/Composer";
+import { ShareLinksModal } from "./chat/ShareLinks";
 import { Inspector, type InspectorTab } from "./chat/Inspector";
 import { SessionRail } from "./chat/SessionRail";
 import { appendDelta } from "./chat/messages";
@@ -103,6 +106,7 @@ export function V2Chat() {
   const [trace, setTrace] = useState<ChatTraceInfo | null>(null);
   const [traceBusy, setTraceBusy] = useState(false);
   const [tab, setTab] = useState<InspectorTab>("trace");
+  const [sharing, setSharing] = useState(false);
 
   // Resolve the deep link once, when the agent list first answers.
   useEffect(() => {
@@ -166,7 +170,7 @@ export function V2Chat() {
           r.role === "user"
             ? { kind: "user", text: r.text, attachments: r.attachments }
             : r.role === "agent"
-              ? { kind: "agent", text: r.text }
+              ? { kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null, curated: !!r.answered_by }
               : r.role === "tool"
                 ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
                 : r.role === "auth"
@@ -256,6 +260,7 @@ export function V2Chat() {
       delete request.attachments;
       if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
       let agentOpen = false;
+      let curated = false; // T35: a `rule` event precedes a curated answer's text
       for await (const { event, data: payload } of sseEvents(res)) {
         if (event === "meta") {
           if (payload.session_id) {
@@ -270,6 +275,8 @@ export function V2Chat() {
               m.map((msg) => (msg === userMessage ? { ...msg, attachments: payload.attachments } : msg)),
             );
           }
+        } else if (event === "rule") {
+          curated = true;
         } else if (event === "tool") {
           setMessages((m) => [...m, { kind: "tool", text: payload.name ?? "tool", name: payload.name }]);
           agentOpen = false;
@@ -291,8 +298,21 @@ export function V2Chat() {
           setMessages((m) => [...m, { kind: "policy", text: policy.reason, name: policy.tool, policy }]);
         } else if (event === "delta") {
           const open = agentOpen;
-          setMessages((m) => appendDelta(m, payload.text ?? "", open));
+          setMessages((m) => appendDelta(m, payload.text ?? "", open, curated));
           agentOpen = true;
+        } else if (event === "saved") {
+          // the answer bubble just closed: attach its ledger id so it can be rated
+          const messageId = payload.message_id;
+          setMessages((m) => {
+            const next = [...m];
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].kind === "agent") {
+                if (next[i].id == null) next[i] = { ...next[i], id: messageId };
+                break;
+              }
+            }
+            return next;
+          });
         } else if (event === "error") {
           failed = true;
           const message = localizedMessage(payload.code ?? "", payload.message ?? t("chatPage.sendFailed"));
@@ -319,6 +339,22 @@ export function V2Chat() {
       setBusy(false);
       if (activeSessionId) void refreshMemory(activeSessionId);
       if (agentId) void loadSessions(agentId);
+    }
+  };
+
+  // Thumbs: optimistic, reverted (with the reason) when the backend refuses.
+  const rate = async (index: number, verdict: FeedbackVerdict | "none") => {
+    const target = messages[index];
+    if (!agentId || !sessionId || target?.kind !== "agent" || target.id == null) return;
+    const previous = target.verdict ?? null;
+    const apply = (value: FeedbackVerdict | null) =>
+      setMessages((m) => m.map((msg, i) => (i === index ? { ...msg, verdict: value } : msg)));
+    apply(verdict === "none" ? null : verdict);
+    try {
+      await feedbackApi.rate(agentId, { session_id: sessionId, message_id: target.id, verdict });
+    } catch (err) {
+      apply(previous);
+      toast("error", errorMessage(err));
     }
   };
 
@@ -448,7 +484,11 @@ export function V2Chat() {
                     ...(agents.length > 0 && agentId === ""
                       ? [{ value: "", label: t("chatPage.pickAgent"), disabled: true }]
                       : []),
-                    ...agents.map((a) => ({ value: a.id, label: a.name })),
+                    // T04: the human label first, the immutable slug alongside
+                    ...agents.map((a) => ({
+                      value: a.id,
+                      label: a.display_name ? `${a.display_name} (${a.name})` : a.name,
+                    })),
                   ]}
                   onChange={(v) => {
                     setAgentId(v);
@@ -554,6 +594,15 @@ export function V2Chat() {
                 )}
                 <Button
                   size="sm"
+                  disabled={!agent}
+                  onClick={() => setSharing(true)}
+                  testId="share-agent"
+                >
+                  <Share2 size={12} aria-hidden="true" />
+                  {t("shareLinks.button")}
+                </Button>
+                <Button
+                  size="sm"
                   disabled={currentEndReason !== undefined}
                   title={currentEndReason}
                   onClick={() => sessionId && setConfirmEnd(sessionId)}
@@ -575,6 +624,7 @@ export function V2Chat() {
               userLabel={userLabel}
               agentLabel={agent?.name ?? "Agent"}
               restoring={restoring}
+              onRate={(index, verdict) => void rate(index, verdict)}
               onRetry={(prompt) => void send(prompt)}
               retryDisabled={busy || restoring}
             />
@@ -590,7 +640,7 @@ export function V2Chat() {
               attachmentsEnabled={attachmentsEnabled}
               disabled={composerDisabled}
               sendDisabledReason={sendDisabledReason}
-              placeholder={agent ? t("chatPage.placeholder", { name: agent.name }) : t("chatPage.pickAgent")}
+              placeholder={agent ? t("chatPage.placeholder", { name: agent.display_name || agent.name }) : t("chatPage.pickAgent")}
             />
           </Card>
         </div>
@@ -611,6 +661,13 @@ export function V2Chat() {
           </Card>
         </div>
       </div>
+      {sharing && agent && (
+        <ShareLinksModal
+          agentId={agent.id}
+          agentName={agent.display_name || agent.name}
+          onClose={() => setSharing(false)}
+        />
+      )}
       <Confirm
         open={confirmEnd !== null}
         title={t("v2.chat.confirmEndTitle")}

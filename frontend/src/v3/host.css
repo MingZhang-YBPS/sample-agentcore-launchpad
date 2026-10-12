@@ -1,0 +1,197 @@
+/* Console V3 — hosting the V2 pages V3 has not redesigned.
+ *
+ * Those pages render inside the V3 shell (`<V3Shell hosted />`) in a
+ * `.v2.v3-host` wrapper, so the V2 page styles still apply; this file then
+ * re-points every `--v2-*` token at the V3 palette. V2's own stylesheet names
+ * its literal colours as tokens for exactly this reason (see the block under
+ * `--v2-mono` in v2/v2.css), so the re-point reaches all of it.
+ *
+ * Semantics follow V3: blue (`--v2-primary`, V2's accent) becomes V3's info
+ * blue — links, active tabs, focus, "blue" tags — while the one primary action
+ * of a page keeps V3's mint button. Green/orange/red stay ok/wait/act.
+ */
+
+.v3 .v2.v3-host {
+  --v2-primary: var(--v3-info);
+  --v2-primary-hover: #93bfff;
+  --v2-primary-active: #4d8cf0;
+  --v2-primary-soft: var(--v3-info-dim);
+  --v2-primary-line: rgba(110, 168, 255, 0.4);
+  --v2-bg: transparent;
+  --v2-card: var(--v3-ink-2);
+  --v2-fill: var(--v3-ink-1);
+  --v2-fill-2: var(--v3-ink-3);
+  --v2-line: var(--v3-line);
+  --v2-line-2: #17233a;
+  --v2-ink: var(--v3-text);
+  --v2-ink-2: var(--v3-text-2);
+  --v2-ink-3: var(--v3-text-3);
+  --v2-ink-4: #46536c;
+  --v2-success: var(--v3-ok);
+  --v2-success-soft: var(--v3-ok-dim);
+  --v2-warning: var(--v3-wait);
+  --v2-warning-soft: var(--v3-wait-dim);
+  --v2-danger: var(--v3-act);
+  --v2-danger-soft: var(--v3-act-dim);
+  --v2-radius: var(--v3-r);
+  --v2-radius-sm: var(--v3-r-sm);
+  --v2-shadow: 0 1px 0 rgba(255, 255, 255, 0.025) inset, 0 20px 40px -24px rgba(0, 0, 0, 0.6);
+  --v2-font: var(--v3-body);
+  --v2-mono: var(--v3-mono);
+
+  --v2-on-primary: #04150e;
+  --v2-primary-disabled: rgba(62, 240, 180, 0.3);
+  --v2-danger-line: rgba(255, 92, 108, 0.45);
+  --v2-success-line: rgba(62, 240, 180, 0.3);
+  --v2-warning-line: rgba(255, 181, 71, 0.35);
+  --v2-success-ink: var(--v3-ok);
+  --v2-success-ink-2: var(--v3-ok);
+  --v2-warning-ink: var(--v3-wait);
+  --v2-warning-ink-2: var(--v3-wait);
+  --v2-danger-ink: var(--v3-act);
+  --v2-row-hover: rgba(110, 168, 255, 0.05);
+  --v2-purple: #b48cff;
+  --v2-purple-soft: rgba(180, 140, 255, 0.14);
+  --v2-cyan: #4fe3e3;
+  --v2-mask: rgba(3, 6, 12, 0.7);
+
+  /* the V2 root is a full-page flex shell; here it is just the page body */
+  display: block;
+  min-height: 0;
+  background: none;
+  color: var(--v3-text);
+  font-family: var(--v3-body);
+  color-scheme: dark;
+}
+
+/* ── surfaces: V3 panels, not V2 white cards ─────────────────────────────── */
+.v3 .v3-host .v2-card,
+.v3 .v3-host .v2-kpi,
+.v3 .v3-host .v2-flow-head {
+  position: relative;
+  background: linear-gradient(180deg, rgba(22, 35, 59, 0.66), rgba(16, 26, 45, 0.66));
+  border: 1px solid var(--v3-line);
+}
+.v3 .v3-host .v2-card::after,
+.v3 .v3-host .v2-kpi::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 18px;
+  width: 28px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--v3-line-2);
+}
+.v3 .v3-host .v2-sec-title {
+  font-family: var(--v3-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--v3-text-2);
+}
+.v3 .v3-host .v2-sec-title::before { display: none; }
+.v3 .v3-host .v2-sec-title .sub,
+.v3 .v3-host .v2-sec-title .end { letter-spacing: 0; text-transform: none; font-family: var(--v3-body); }
+
+/* ── page header: V3's display type ─────────────────────────────────────── */
+.v3 .v3-host .v2-page-head { margin-bottom: 20px; }
+.v3 .v3-host .v2-page-head h1,
+.v3 .v3-host .v2-flow-head h1 {
+  font-family: var(--v3-display);
+  font-variation-settings: "wdth" 118;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.v3 .v3-host .v2-page-head h1 { font-size: 26px; }
+
+/* ── numbers are instruments ────────────────────────────────────────────── */
+.v3 .v3-host .v2-kpi .l { font-family: var(--v3-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-host .v2-kpi .v { font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 32px; }
+.v3 .v3-host .v2-table th {
+  background: transparent;
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+  border-bottom: 1px solid var(--v3-line);
+}
+.v3 .v3-host .v2-table .num,
+.v3 .v3-host .v2-table td.right { font-family: var(--v3-mono); font-size: 13px; }
+
+/* ── controls ────────────────────────────────────────────────────────────── */
+.v3 .v3-host .v2-btn { border-radius: 8px; background: var(--v3-ink-3); border-color: var(--v3-line-2); }
+.v3 .v3-host .v2-btn:hover:not(:disabled) { color: var(--v3-text); border-color: var(--v3-text-3); background: #1b2a46; }
+.v3 .v3-host .v2-btn:disabled { background: var(--v3-ink-2); color: var(--v3-text-3); opacity: 0.6; }
+.v3 .v3-host .v2-btn.primary {
+  color: #04150e;
+  background: var(--v3-ok);
+  border-color: var(--v3-ok);
+  font-weight: 650;
+}
+.v3 .v3-host .v2-btn.primary:hover:not(:disabled) { color: #04150e; background: #6af6c8; border-color: #6af6c8; box-shadow: 0 0 24px rgba(62, 240, 180, 0.3); }
+.v3 .v3-host .v2-btn.primary:disabled { color: rgba(4, 21, 14, 0.7); background: var(--v2-primary-disabled); border-color: transparent; }
+.v3 .v3-host .v2-btn.danger { color: var(--v3-act); border-color: rgba(255, 92, 108, 0.4); background: var(--v3-act-dim); }
+.v3 .v3-host .v2-btn.soft { color: var(--v3-info); background: var(--v3-info-dim); border-color: transparent; }
+.v3 .v3-host .v2-input,
+.v3 .v3-host .v2-sel,
+.v3 .v3-host .v2-textarea,
+.v3 .v3-host .v2-filter { background: var(--v3-ink-0); border-color: var(--v3-line-2); border-radius: 8px; }
+.v3 .v3-host .v2-input:focus,
+.v3 .v3-host .v2-textarea:focus,
+.v3 .v3-host .v2-sel:focus-visible,
+.v3 .v3-host .v2-sel.open { border-color: var(--v3-ok); box-shadow: 0 0 0 3px var(--v3-ok-dim); }
+.v3 .v3-host select option { background: var(--v3-ink-2); color: var(--v3-text); }
+.v3 .v3-host .v2-tag { font-family: var(--v3-mono); font-size: 11px; font-weight: 500; border-radius: 5px; }
+.v3 .v3-host .v2-alert { border: 1px solid var(--v3-line); }
+.v3 .v3-host .v2-alert.info { border-color: rgba(110, 168, 255, 0.3); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.warn { border-color: rgba(255, 181, 71, 0.3); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.error { border-color: rgba(255, 92, 108, 0.32); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.success { border-color: rgba(62, 240, 180, 0.28); color: var(--v3-text); }
+.v3 .v3-host .v2-steps button.on { background: var(--v3-ink-3); }
+
+/* ── overlays: modals, drawers, menus and toasts are portalled or fixed, and
+     still inside .v3-host, so they pick the tokens up; give them depth ────── */
+.v3 .v3-host .v2-modal,
+.v3 .v3-host .v2-drawer,
+.v3 .v3-host .v2-toast { border: 1px solid var(--v3-line-2); box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8); }
+.v3 .v3-host .v2-mask { backdrop-filter: blur(3px); }
+
+/* the few page literals that are not tokens */
+.v3 .v3-host .v2-users-soon { color: var(--v3-wait) !important; }
+.v3 .v3-host .v2-skilllab-md .hljs-string { color: var(--v3-ok); }
+.v3 .v3-host .v2-chat-thumb.on.up { color: var(--v3-ok); }
+.v3 .v3-host .v2-chat-thumb.on.down { color: var(--v3-act); }
+
+/* ── classic module pages (`<V3Shell hosted="classic" />`) ───────────────────
+   The classic pages are styled entirely through theme/tokens.css. Re-point those
+   tokens to the V3 room while the V3 shell is mounted — on <body>, as V2 does,
+   so their portaled toasts and dialogs follow. The classic brand amber would
+   read as V3's "waiting" signal, so the brand becomes V3's mint. */
+body.v3-body {
+  --bg: #0b1220;
+  --panel: #101a2d;
+  --panel-2: #16233b;
+  --line: #1d2b45;
+  --line-2: #26385a;
+  --grid: #17233a;
+  --ink: #dbe4f3;
+  --ink-2: #9aa8c2;
+  --ink-3: #66748f;
+  --amber: #3ef0b4;
+  --amber-soft: rgba(62, 240, 180, 0.14);
+  --amber-rgb: 62, 240, 180;
+  --amber-hover: #6af6c8;
+  --amber-active: #2bd29b;
+  --on-amber: #04150e;
+  --good: #3ef0b4;
+  --warn: #ffb547;
+  --crit: #ff5c6c;
+  --crit-text: #ff7a87;
+  --field: #070c16;
+  --code-bg: #070c16;
+  --bg-rgb: 11, 18, 32;
+}
+.v3 .v3-classic { font-family: var(--v3-body); }

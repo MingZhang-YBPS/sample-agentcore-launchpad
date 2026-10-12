@@ -1,6 +1,6 @@
 """Pre-restart in-flight inventory: what a backend restart will do to background work.
 
-Every prod update restarts the backend, and nine startup hooks in `create_app`
+Every prod update restarts the backend, and ten startup hooks in `create_app`
 (plus two read-time reapers) give in-flight rows four different fates. This module
 reads the ledger once and names each in-flight row with the fate the restart gives
 it, so an operator can decide *before* `systemctl restart` whether to wait.
@@ -81,6 +81,11 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     "local_exec.reap_orphan_containers":
         "kills leftover studio exec containers + scratch dirs; transient, no ledger row",
     "start_auto_refresh": "starts the model-price refresh thread; restart-safe, no ledger row",
+    "start_dlc_scheduler": (
+        "starts the Agent-DLC tick thread (due watch runs, alert rules, expiry sweeps); "
+        "restart-safe — a task claimed by the stopped process is reclaimable after "
+        "ten minutes, and the eval runs it started are EVAL_RUN rows"
+    ),
 }
 
 # Subsystems that fail an interrupted row only when it is next read — a startup
@@ -101,13 +106,14 @@ def resumable_job_types() -> frozenset[str]:
     # Lazy, as in resume_pending_jobs: the uninstall worker's import chain reaches
     # the deployer pipeline.
     from app.assistant import purge as assistant_purge
-    from app.services import workspace_bootstrap
+    from app.services import promotion_exec, workspace_bootstrap
     from app.system_agents import uninstall as system_uninstall
 
     return frozenset({
         "deploy_agent",
         workspace_bootstrap.JOB_TYPE,
         system_uninstall.JOB_TYPE,
+        promotion_exec.JOB_TYPE,
         assistant_purge.JOB_TYPE,
     })
 

@@ -79,8 +79,6 @@ export const JUDGE_MODEL_OPTIONS = [
   "global.anthropic.claude-opus-4-8",
   "global.anthropic.claude-opus-4-6-v1",
   "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-  "global.amazon.nova-2-lite-v1:0",
-  "us.amazon.nova-pro-v1:0",
 ];
 
 export type EvaluatorLevel = "TOOL_CALL" | "TRACE" | "SESSION";

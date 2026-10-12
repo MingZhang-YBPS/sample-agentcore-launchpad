@@ -1,10 +1,11 @@
 ## What this is
 
-AgentCore Launchpad is a production-grade sample asset: one React console over one
+AgentCore Launchpad is a sample asset (sample code, for non-production usage): one React console over one
 FastAPI backend that wires the real Amazon Bedrock AgentCore services (Runtime,
 Harness, Memory, Gateway, Identity, Registry, Policy/Cedar, Evaluation, Observability)
 into a unified **create → deploy → invoke → observe** experience. Everything targets a
-real AWS account in `us-west-2`; there is no mock plane. Read
+real AWS account, in whatever AgentCore region each workspace names (the
+`default` workspace's comes from `config/launchpad.yaml`); there is no mock plane. Read
 [docs/architecture.md](docs/architecture.md) first — it is the authoritative,
 up-to-date map of how each console feature backs onto an AgentCore service and resource.
 
@@ -109,6 +110,12 @@ under `.trellis/spec/launchpad/`.
   workspace *manages* it (bootstrap memory or a `managed_memories` row —
   `services/memory_ownership.py`): the AWS account is not the workspace boundary.
 
+- **A gated agent serves production through a named `live` endpoint.** `UpdateAgentRuntime`
+  / `UpdateHarness` auto-roll DEFAULT, so an agent with `endpoint_mode="live"` is invoked
+  with `qualifier="live"` on every path (`services/invoke.production_endpoint`) and a
+  deploy lands on `candidate` until the Agent-DLC gate is signed (`app/dlc/releases.py`).
+  A new invoke path must go through `production_endpoint`, or it bypasses the gate. The
+  criteria / golden-set / calibration / gate model is mapped in `docs/architecture.md`.
 - **Console authorization is one default-deny table.** Every `/api` route must be
   classified (`ADMIN` / `MEMBER` / `PUBLIC` / `perm:<key>`) in
   `app/core/route_policy.py`; an unclassified route raises, and

@@ -29,26 +29,43 @@ from app.optimization.routers import router as experiments_router
 from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
+from app.routers.alerts import router as alerts_router
 from app.routers.announcements import router as announcements_router
+from app.routers.answer_rules import router as answer_rules_router
 from app.routers.apikeys import router as apikeys_router
 from app.routers.assistant import AssistantBodyCap
 from app.routers.assistant import router as assistant_router
 from app.routers.auth import OPEN_CONSOLE_REMEDY, auth_middleware
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import router as auth_router
+from app.routers.channels import console_router as channel_links_router
+from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
+from app.routers.dlc import router as dlc_router
+from app.routers.environments import router as environments_router
 from app.routers.execution import router as execution_router
+from app.routers.feedback import router as feedback_router
+from app.routers.fleet import router as fleet_router
 from app.routers.governance import router as governance_router
 from app.routers.identity import router as identity_router
+from app.routers.issues import router as issues_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.memory import router as memory_router
 from app.routers.memory_resources import router as memory_resources_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
+from app.routers.promotions import router as promotions_router
 from app.routers.public_api import router as public_router
 from app.routers.registry import router as registry_router
+from app.routers.release_export import router as release_export_router
+from app.routers.resource_mappings import router as resource_mappings_router
+from app.routers.review import console_router as review_links_router
+from app.routers.review import router as review_router
+from app.routers.share import console_router as share_links_router
+from app.routers.share import router as share_router
+from app.routers.share_annotate import router as share_annotate_router
 from app.routers.system_agents import router as system_agents_router
 from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
@@ -197,8 +214,26 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management
     app.include_router(workspaces_router)  # environments + the request-boundary grants
+    app.include_router(fleet_router)  # fleet overview, governance health, marketplace (T37-T39)
+    app.include_router(alerts_router)  # spend attribution + threshold alerts (T28/T29)
+    app.include_router(promotions_router)  # release bundles, promotions, inbox (T20-T22)
+    app.include_router(resource_mappings_router)  # logical resource mapping (T23)
+    app.include_router(release_export_router)  # GitOps bundle export (T31)
+    app.include_router(environments_router)  # environment compare + drift (T32)
     app.include_router(apikeys_router)
     app.include_router(public_router)
+    app.include_router(feedback_router)  # thumbs feedback (T15)
+    app.include_router(share_links_router)  # share-link CRUD (T14)
+    app.include_router(channel_links_router)  # channel-link creation (T30)
+    app.include_router(channels_router)  # IM webhooks; before /share/{token} routes (T30)
+    app.include_router(share_router)  # account-free /share surface (T13)
+    app.include_router(review_router)  # account-free SME review (T34) — before /share/{token}
+    app.include_router(review_links_router)  # review-link CRUD (T34)
+    app.include_router(answer_rules_router)  # curated answers (T35)
+    app.include_router(issues_router)  # intent view + issue box (T33/T36)
+    app.include_router(dlc_router)  # Agent-DLC: criteria, gates, calibration, watch
+    # account-free labelling for calibration — before /share/{token}, like review
+    app.include_router(share_annotate_router)
     if resume_jobs:
         clear_stale_turn_claims()  # only a live request of THIS process can hold one
         resumed = resume_pending_jobs()
@@ -244,6 +279,11 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
                 "reaped %d orphaned studio exec container(s)", reaped
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
+        # Agent-DLC: the one background tick — due watch re-evaluations, alert rules,
+        # calibration and waiver expiry (docs/agent-dlc-design.md §10)
+        from app.dlc.scheduler import start as start_dlc_scheduler
+
+        start_dlc_scheduler()
 
     app.add_api_route("/api/health", health, methods=["GET"])
 

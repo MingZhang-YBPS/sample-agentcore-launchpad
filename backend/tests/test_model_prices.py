@@ -274,3 +274,23 @@ def test_prices_endpoints(client, monkeypatch, tmp_path):
     res = client.post("/api/observability/prices/refresh")
     assert res.status_code == 200
     assert "sonnet-4-6" in res.json()["meta"]["updated"]
+
+
+def test_glm_prices_are_seeded_and_match_the_right_profile():
+    """GLM prices come from the Bedrock pricing page. A launchpad.yaml written
+    before they existed carries its own map without them; the defaults fill the
+    gap, and an entry the file does have still wins."""
+    from app.core import config
+    from app.services.observability import estimate_cost, match_price
+
+    # a map from launchpad.yaml (init kwargs rank above the file, same shape)
+    prices = config.Settings(model_prices={"sonnet-5": {"input": 9.0, "output": 9.0}}).model_prices
+
+    assert prices["sonnet-5"] == {"input": 9.0, "output": 9.0}  # the file's entry wins
+    assert match_price("global.zai.glm-5.3", prices)["input"] == 1.68
+    assert match_price("us.zai.glm-5.3", prices)["input"] == 1.848
+    assert match_price("zai.glm-5", prices)["output"] == 3.20
+    assert match_price("zai.glm-4.7", prices)["input"] == 0.60
+    assert match_price("zai.glm-4.7-flash", prices)["input"] == 0.07
+    # 1M in + 1M out on the global profile = $1.68 + $5.28
+    assert estimate_cost("global.zai.glm-5.3", 1e6, 1e6, prices=prices) == 6.96

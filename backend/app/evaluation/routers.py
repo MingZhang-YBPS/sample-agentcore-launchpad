@@ -1357,6 +1357,11 @@ class RunCreate(BaseModel):
     session_source: Literal["logs"] | None = None
     lookback_hours: int | None = Field(default=None, ge=1, le=336)  # time window
     insights: list[str] | None = None  # insight-type subset (insights mode)
+    # Agent-DLC pass^k (design §5.3): each dataset scenario is invoked `repeats` times in
+    # distinct sessions. Opt-in, and priced first — `confirm_cost` acknowledges the
+    # estimate when the workspace policy asks for confirmation.
+    repeats: int = Field(default=1, ge=1, le=10)
+    confirm_cost: bool = False
 
 
 def _run_out(run: EvalRun) -> dict[str, Any]:
@@ -1586,6 +1591,29 @@ def create_run(
     if req.mode == "insights":
         applied = req.insights or list(ac.INSIGHT_TYPES)
 
+    if req.repeats > 1 and not (agent is not None and dataset_scope):
+        raise AppError(
+            "run.repeats_scope",
+            "repeats replays dataset scenarios against an agent — it does not apply to "
+            "past sessions or a log source",
+            status_code=422,
+        )
+    dlc_lineage = _golden_lineage(db, ws, req.dataset_id) if req.dataset_id else {}
+    cost_estimate = None
+    if agent is not None and dataset_scope and req.mode == "evaluators":
+        from app.dlc import cost as cost_svc
+
+        cost_estimate = cost_svc.estimate(
+            db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=items,
+            evaluators=applied, repeats=req.repeats,
+        )
+        from app.routers.auth import require_identity
+
+        cost_svc.assert_allowed(
+            cost_estimate, confirmed=req.confirm_cost,
+            is_admin=require_identity(request).role == "admin",
+        )
+
     run = service.submit_run(
         agent=agent,
         workspace=ws.context,
@@ -1604,9 +1632,34 @@ def create_run(
         name=req.name,
         description=req.description,
         log_source=log_source,
+        repeats=req.repeats,
+        cost_estimate=cost_estimate,
+        agent_version=agent.version if agent is not None else None,
+        **dlc_lineage,
         creator=Creator.of_request(request),
     )
     return _run_out(run)
+
+
+def _golden_lineage(db: Session, ws: WorkspaceScope, dataset_id: str) -> dict[str, Any]:
+    """A run over a golden split is scored against that split's criteria (Agent-DLC).
+
+    Ties the run to the latest *published* version of the criteria lineage the golden
+    set serves, so its per-criterion results land in `criterion_results` and it can
+    rung the fix ladder. Any other dataset runs exactly as before.
+    """
+    from app.dlc import criteria as criteria_svc
+
+    dataset = db.get(EvalDataset, dataset_id)
+    if dataset is None or dataset.role != "golden" or not dataset.split:
+        return {}
+    if not dataset.criteria_set_id:
+        return {"split": dataset.split}
+    cset = criteria_svc.latest_published(db, ws.id, dataset.criteria_set_id)
+    if cset is None:
+        return {"split": dataset.split}
+    return {"split": dataset.split, "criteria_set_id": cset.id,
+            "criteria_set_version": cset.version}
 
 
 def _assert_log_groups_exist(ws: WorkspaceScope, groups: list[str]) -> None:

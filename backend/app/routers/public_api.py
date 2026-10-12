@@ -21,7 +21,8 @@ from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
-from app.schemas.attachments import AttachmentRequest
+from app.schemas.agent import display_name_of
+from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.services import agent_access, visibility
 from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
@@ -44,7 +45,8 @@ def require_api_key(
     filters on `key.workspace_id`.
 
     A key whose creator has been offboarded is refused (and disabled) here — see
-    `services.api_keys`. On success `last_used_at` is stamped, throttled.
+    `services.api_keys`. Then expiry and the per-key rate limit (T16); an admitted
+    call is counted (`use_count`, the per-day usage row) and stamps `last_used_at`.
     """
     if not x_api_key:
         raise AppError("auth.missing_api_key", "X-Api-Key header required", status_code=401)
@@ -64,24 +66,29 @@ def require_api_key(
         key.enabled = False
         db.commit()
         raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
-    if api_keys_service.touch_last_used(key):
-        db.commit()
+    if api_keys_service.is_expired(key):
+        raise AppError("auth.expired_api_key", "API key has expired", status_code=401)
+    api_keys_service.check_rate(key)
+    # Stamps `last_used_at` and `use_count` on every admitted call (T16), so the
+    # throttled `touch_last_used` stamp has nothing left to add here.
+    api_keys_service.record_use(db, key)
     return key
 
 
 class InvokeV1Request(AttachmentRequest):
-    session_id: str | None = None
+    session_id: str | None = SessionIdField
     actor_id: str = "api"
 
 
 def _active_agent(db: Session, key: ApiKey, agent_id: str) -> Agent:
     """The agent this key may invoke. One from another workspace — or one its
     creator cannot see under workspace isolation — reads exactly like a missing
-    one: the key's scope must not be probeable."""
+    one: the key's scope must not be probeable. So does one outside the key's own
+    `agent_ids` allow-list (T16)."""
     agent = agent_access.agent_in(
         db, key.workspace_id, agent_id, viewer=visibility.viewer_for_key(db, key)
     )
-    if agent is None:
+    if agent is None or not api_keys_service.allows_agent(key, agent_id):
         raise NotFoundError("agent.not_found", "agent not found")
     require_invoke_capability(agent)
     return agent
@@ -100,11 +107,12 @@ def v1_list_agents(
             agent_access.agent_clause(visibility.viewer_for_key(db, key)),
         )
         .all()
-        if invoke_capability(agent)["eligible"]
+        if invoke_capability(agent)["eligible"] and api_keys_service.allows_agent(key, agent.id)
     ]
     return {
         "agents": [
-            {"id": a.id, "name": a.name, "method": a.method, "version": a.version,
+            {"id": a.id, "name": a.name, "display_name": display_name_of(a.spec),
+             "method": a.method, "version": a.version,
              "attachment_capability": attachment_capability(a)}
             for a in agents
         ]
@@ -138,6 +146,8 @@ def v1_invoke(
         "text": result["text"],
         "session_id": result["session_id"],
         "latency_ms": int((time.monotonic() - started) * 1000),
+        # T35: "rule" when a curated answer replied without a model call
+        "answered_by": result.get("answered_by", "model"),
     }
     return body
 

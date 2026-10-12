@@ -1,14 +1,18 @@
 import { ArrowRight, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Link, useNavigate } from "react-router-dom";
 
-import { api } from "../../lib/api";
+import { useAuth } from "../../auth/auth-context";
+import { api, type TtfaInfo } from "../../lib/api";
 import { fmtTime } from "../format";
 import { useLoad } from "../hooks";
 import { sortTasks, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, type V2Task } from "../tasks";
 import { Button, Card, type Column, Kpi, LinkButton, PageHeader, Table, Tag } from "../ui";
 import { AnnouncementBoard } from "./home/AnnouncementBoard";
+import { FirstAgentHero } from "./home/FirstAgentHero";
+import { Inbox } from "./home/Inbox";
 import "./home/home.css";
 import { RecentAgents } from "./home/RecentAgents";
 import { ServiceHealth } from "./home/ServiceHealth";
@@ -19,6 +23,15 @@ async function loadTasks(): Promise<V2Task[]> {
   const runRows = runs.status === "fulfilled" ? runs.value.runs : [];
   const onlineRows = online.status === "fulfilled" ? online.value.configs.filter((c) => c.owner === "agent") : [];
   return sortTasks([...runRows.map(taskFromRun), ...onlineRows.map(taskFromOnline)]);
+}
+
+/** A TTFA span as minutes (< 1 h), hours (< 48 h) or days. */
+function fmtSpan(t: TFunction, seconds: number): string {
+  const minutes = seconds / 60;
+  if (minutes < 60) return t("v2.home.kpi.minutes", { n: Math.max(1, Math.round(minutes)) });
+  const hours = minutes / 60;
+  if (hours < 48) return t("v2.home.kpi.hours", { n: Math.round(hours * 10) / 10 });
+  return t("v2.home.kpi.days", { n: Math.round((hours / 24) * 10) / 10 });
 }
 
 /** Ticks every `ms` — put it in a `useLoad` key to poll. */
@@ -46,16 +59,24 @@ const LIFECYCLE = [
  * tiles), the create → deploy → invoke → observe → evaluate lifecycle, recent
  * deployments and evaluation tasks, and a right rail with the announcement board
  * and per-service health. Agents poll every 10 s, the overview every 30 s.
+ * A workspace with no agents swaps the KPI row for the first-run hero (assistant
+ * first); admins also see the workspace's median Time to First Agent.
  */
 export function V2Home() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const fast = useTick(10_000);
   const slow = useTick(30_000);
   const agents = useLoad(() => api.listAgents(), `home-agents:${fast}`);
   const overview = useLoad(() => api.getOverview(), `home-overview:${slow}`);
   const quality = useLoad(() => api.overviewOnlineQuality(), `home-quality:${slow}`);
   const tasks = useLoad(loadTasks, "home-tasks");
+  // admin-only ledger read; a member (or a 403/older backend) simply gets no tile
+  const ttfa = useLoad<TtfaInfo | null>(
+    () => (isAdmin ? api.overviewTtfa() : Promise.resolve(null)),
+    `home-ttfa:${isAdmin}:${slow}`,
+  );
 
   // useLoad keeps the last answer while a poll is in flight or failed
   const info = overview.data;
@@ -64,6 +85,8 @@ export function V2Home() {
   const active = list ? list.filter((a) => a.status === "active").length : null;
   const inFlight = list ? list.filter((a) => a.status === "deploying").length : 0;
   const assets = info?.registry_assets;
+  const firstRun = list !== null && list.length === 0;
+  const ttfaInfo = ttfa.data;
   const running = tasks.data?.filter((task) => task.status === "running").length ?? 0;
 
   const taskColumns: Column<V2Task>[] = [
@@ -95,50 +118,64 @@ export function V2Home() {
   return (
     <>
       <PageHeader title={t("v2.home.title")} desc={t("v2.home.desc")} />
-      <div className="v2-kpis">
-        <Kpi
-          label={t("v2.home.kpi.agents")}
-          value={active ?? "—"}
-          sub={inFlight ? t("v2.home.kpi.agentsInFlight", { count: inFlight }) : t("v2.home.kpi.agentsSub")}
-          testId="v2-kpi-agents"
-        />
-        <Kpi label={t("v2.home.kpi.sessions")} value={info ? info.active_sessions : "—"} sub={t("v2.home.kpi.last24h")} testId="v2-kpi-sessions" />
-        <Kpi
-          label={t("v2.home.kpi.assets")}
-          value={assets ? assets.total : "—"}
-          sub={assets ? t("overview.tiles.breakdown", { agents: assets.agents, tools: assets.tools, skills: assets.skills }) : undefined}
-          testId="v2-kpi-assets"
-        />
-        <Kpi
-          label={t("v2.home.kpi.passRate")}
-          value={info?.eval_pass_rate != null ? `${Math.round(info.eval_pass_rate * 100)}%` : "—"}
-          sub={info && info.eval_runs > 0 ? t("overview.tiles.runCount", { count: info.eval_runs }) : t("overview.tiles.noRuns")}
-          testId="v2-kpi-pass"
-        />
-        <Kpi
-          label={t("v2.home.kpi.quality")}
-          value={qual?.mean != null ? `${Math.round(qual.mean * 100)}%` : "—"}
-          tone={qualityTone}
-          sub={
-            qual == null
-              ? t("v2.home.kpi.last24h")
-              : qual.configs === 0 && qual.scores === 0
-                ? t("overview.tiles.onlineQualityNone")
-                : qual.scores === 0
-                  ? t("overview.tiles.onlineQualityPending")
-                  : t("overview.tiles.onlineQualityFoot", { sessions: qual.sessions, agents: qual.agents })
-          }
-          testId="v2-kpi-quality"
-        />
-      </div>
+      {firstRun ? (
+        <FirstAgentHero />
+      ) : (
+        <div className="v2-kpis">
+          <Kpi
+            label={t("v2.home.kpi.agents")}
+            value={active ?? "—"}
+            sub={inFlight ? t("v2.home.kpi.agentsInFlight", { count: inFlight }) : t("v2.home.kpi.agentsSub")}
+            testId="v2-kpi-agents"
+          />
+          <Kpi label={t("v2.home.kpi.sessions")} value={info ? info.active_sessions : "—"} sub={t("v2.home.kpi.last24h")} testId="v2-kpi-sessions" />
+          <Kpi
+            label={t("v2.home.kpi.assets")}
+            value={assets ? assets.total : "—"}
+            sub={assets ? t("overview.tiles.breakdown", { agents: assets.agents, tools: assets.tools, skills: assets.skills }) : undefined}
+            testId="v2-kpi-assets"
+          />
+          <Kpi
+            label={t("v2.home.kpi.passRate")}
+            value={info?.eval_pass_rate != null ? `${Math.round(info.eval_pass_rate * 100)}%` : "—"}
+            sub={info && info.eval_runs > 0 ? t("overview.tiles.runCount", { count: info.eval_runs }) : t("overview.tiles.noRuns")}
+            testId="v2-kpi-pass"
+          />
+          <Kpi
+            label={t("v2.home.kpi.quality")}
+            value={qual?.mean != null ? `${Math.round(qual.mean * 100)}%` : "—"}
+            tone={qualityTone}
+            sub={
+              qual == null
+                ? t("v2.home.kpi.last24h")
+                : qual.configs === 0 && qual.scores === 0
+                  ? t("overview.tiles.onlineQualityNone")
+                  : qual.scores === 0
+                    ? t("overview.tiles.onlineQualityPending")
+                    : t("overview.tiles.onlineQualityFoot", { sessions: qual.sessions, agents: qual.agents })
+            }
+            testId="v2-kpi-quality"
+          />
+          {ttfaInfo && (
+            <Kpi
+              label={t("v2.home.kpi.ttfa")}
+              value={ttfaInfo.median_seconds != null ? fmtSpan(t, ttfaInfo.median_seconds) : "—"}
+              sub={ttfaInfo.samples > 0 ? t("v2.home.kpi.ttfaSub", { count: ttfaInfo.samples }) : t("v2.home.kpi.ttfaNone")}
+              testId="v2-kpi-ttfa"
+            />
+          )}
+        </div>
+      )}
 
       <div className="v2-home-grid">
         <div className="v2-home-main">
+          <Inbox isAdmin={isAdmin} tick={slow} />
           <Card
             title={t("v2.home.flowTitle")}
             sub={t("v2.home.flowSub")}
             end={
-              <Button size="sm" kind="soft" onClick={() => navigate("/v2/assistant")}>
+              // the first-run hero already leads with the assistant; otherwise it is the primary CTA here
+              <Button size="sm" kind={firstRun ? "soft" : "primary"} onClick={() => navigate("/v2/assistant")}>
                 <Sparkles size={13} aria-hidden="true" />
                 {t("v2.home.assistant")}
               </Button>

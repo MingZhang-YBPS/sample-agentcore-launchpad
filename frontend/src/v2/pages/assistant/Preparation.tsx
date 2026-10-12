@@ -339,7 +339,7 @@ export function PreparationCard({
             <>
               <div className="v2-row" style={{ marginTop: 10 }}>
                 <Button size="sm" disabled={busy} onClick={() => void refresh()}>{t("assistantPreparation.refresh")}</Button>
-                <Link className="v2-btn sm" to="/registry?view=register&type=AGENT_SKILLS" target="_blank" rel="noopener noreferrer">
+                <Link className="v2-btn sm" to="/v2/registry?view=register&type=AGENT_SKILLS" target="_blank" rel="noopener noreferrer">
                   {t("assistantPreparation.createSkill")}
                 </Link>
               </div>
@@ -390,7 +390,7 @@ export function PreparationCard({
             <>
               <div className="v2-row">
                 <Button size="sm" disabled={busy} onClick={() => void refresh()}>{t("assistantPreparation.refresh")}</Button>
-                <Link className="v2-btn sm" to="/registry?view=register&type=MCP" target="_blank" rel="noopener noreferrer">
+                <Link className="v2-btn sm" to="/v2/registry?view=register&type=MCP" target="_blank" rel="noopener noreferrer">
                   {t("assistantPreparation.createTool")}
                 </Link>
               </div>
@@ -480,7 +480,7 @@ function KbReadiness({ kbId, name, workspaceId }: { kbId: string; name: string; 
     <div className="v2-row" style={{ fontSize: 13 }} data-testid={`v2-assistant-kb-readiness-${kbId}`}>
       <b>{name}</b>
       <Tag tone={tone}>{t(`assistantPreparation.${key}`)}</Tag>
-      <Link to={`/knowledge-bases?view=detail&kb=${encodeURIComponent(kbId)}`} target="_blank" rel="noopener noreferrer">
+      <Link to={`/v2/knowledge-bases?view=detail&id=${encodeURIComponent(kbId)}`} target="_blank" rel="noopener noreferrer">
         {t("assistantPreparation.openKb")}
       </Link>
     </div>

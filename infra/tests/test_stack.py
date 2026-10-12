@@ -30,6 +30,15 @@ def test_core_resources_present(template: Template):
     template.resource_count_is("AWS::Cognito::UserPool", 1)
 
 
+def test_office_facts_api_leaves_no_retained_cloudwatch_role(template: Template):
+    """teardown.py destroys launchpad-base; nothing it creates may outlive it.
+    The REST API's default CloudWatch role is RETAINed and sets the account-wide
+    API Gateway logging role, so it must not be created at all."""
+    template.resource_count_is("AWS::ApiGateway::Account", 0)
+    for res in template.find_resources("AWS::IAM::Role").values():
+        assert res.get("DeletionPolicy") != "Retain"
+
+
 def test_cognito_groups_and_users(template: Template):
     template.resource_count_is("AWS::Cognito::UserPoolGroup", 2)
     template.resource_count_is("AWS::Cognito::UserPoolUser", 2)

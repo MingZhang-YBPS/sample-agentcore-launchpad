@@ -42,6 +42,7 @@ export function Workspaces() {
   const selectedId = params.get("ws") ?? "";
 
   const [rows, setRows] = useState<Workspace[]>([]);
+  const [suggestedRegions, setSuggestedRegions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const seq = useRef(0);
@@ -54,6 +55,7 @@ export function Workspaces() {
       const result = await api.listWorkspaces();
       if (id !== seq.current) return; // ignore out-of-order responses
       setRows(result.workspaces);
+      setSuggestedRegions(result.suggested_regions ?? []);
       setError(null);
     } catch (err) {
       if (id !== seq.current) return;
@@ -96,6 +98,7 @@ export function Workspaces() {
       <CreateWorkspaceView
         hubAccountId={rows.find((row) => row.is_default)?.account_id ?? ""}
         takenRegions={rows.map((row) => row.region)}
+        suggestedRegions={suggestedRegions}
         onBack={backToList}
         onDone={async (created) => {
           await reload();

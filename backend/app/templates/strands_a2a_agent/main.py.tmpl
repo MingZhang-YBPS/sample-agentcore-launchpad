@@ -39,7 +39,7 @@ A2A_CARD_VERSION = __LAUNCHPAD_A2A_CARD_VERSION__  # shared with the registry re
 SKILLS_ENABLED = __LAUNCHPAD_SKILLS_ENABLED__
 SKILLS_ROOT = Path(__file__).parent / "skills"
 MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
-REGION = os.environ.get("AWS_REGION", "us-west-2")
+REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 _MEMORY_SESSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-_]*$")
 # Message batching: buffer messages locally and persist them in one batch call
 # per turn instead of one create_event round-trip per message. The A2AServer

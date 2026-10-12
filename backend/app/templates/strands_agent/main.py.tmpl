@@ -46,7 +46,10 @@ MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
 
 
 def _memory_client():
-    return boto3.client("bedrock-agentcore", region_name=os.environ.get("AWS_REGION", "us-west-2"))
+    return boto3.client(
+        "bedrock-agentcore",
+        region_name=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
+    )
 
 
 def recall_context(actor_id: str, query: str) -> str:
@@ -94,7 +97,7 @@ MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
 # "mantle" (Bedrock Mantle, OpenAI-compatible Responses API).
 MODEL_SOURCE = "__LAUNCHPAD_MODEL_SOURCE__"
 # Mantle models are hosted in their own region, independent of where this
-# runtime runs (AWS_REGION is us-west-2 here, where they are not offered).
+# runtime runs (AWS_REGION is the runtime's own region, where they may not be offered).
 MANTLE_REGION = os.environ.get("LAUNCHPAD_MANTLE_REGION", "us-east-1")
 DEFAULT_SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 SKILLS_ENABLED = __LAUNCHPAD_SKILLS_ENABLED__

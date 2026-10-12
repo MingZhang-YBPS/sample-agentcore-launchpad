@@ -53,6 +53,14 @@ MAX_ON_DEMAND_EVALUATORS = 5
 CACHE_TTL_SECONDS = 60.0
 QUERY_DEADLINE_SECONDS = 55
 NANOS_PER_MS = 1_000_000
+# A trace's entry span. AgentCore Runtime and Harness invocations never export a
+# parentless span: even `POST /invocations` carries the caller's parentSpanId
+# (measured on the test hub, 2026-10-10 — zero parentless spans over 7 days, one
+# `POST /invocations` per trace). Filtering on "no parent" alone therefore
+# counted no traces at all, so the dashboard read 0 traffic and the p95 alert
+# stayed unknown. Parentless spans still count, for OTel sources that do emit a
+# true root.
+ROOT_SPAN_FILTER = '(not ispresent(parentSpanId) or name = "POST /invocations")'
 
 # Anthropic-convention multipliers applied when a price entry has no explicit
 # cache_read / cache_write rate — advisory, like every cost figure here.
@@ -301,13 +309,81 @@ def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) 
 """
 
 
+def q_traces_for_sessions(session_ids: list[str]) -> str:
+    """Per-trace aggregates for an explicit set of sessions (an evaluation run's)."""
+    for session_id in session_ids:
+        _require(SESSION_ID_RE, session_id, "session id")
+    quoted = ", ".join(f'"{sid}"' for sid in session_ids)
+    return f"""
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano) and attributes.session.id in [{quoted}]
+| {_IS_LLM_FIELDS}
+| stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
+        sum(llm_cache_read) as cache_read, sum(llm_cache_write) as cache_write,
+        min(startTimeUnixNano) as start_ns, max(endTimeUnixNano) as end_ns,
+        latest(attributes.session.id) as session_id,
+        latest(telemetry_model) as model
+  by traceId
+| limit 10000
+"""
+
+
+SESSION_METRICS_BATCH = 50
+
+
+def session_metrics_bulk(
+    session_ids: list[str], workspace: WorkspaceContext, *, hours: int = 168
+) -> dict[str, dict[str, float | None]]:
+    """latency (mean trace duration, ms), tokens and estimated cost per session.
+
+    One Logs Insights query per 50 sessions — what the Agent-DLC metric criteria read
+    (performance: latency; cost: tokens and cost per session). A session with no spans
+    yet maps to an empty dict, which the criterion engine reports as a metric gap.
+    """
+    out: dict[str, dict[str, float | None]] = {sid: {} for sid in session_ids}
+    valid = [sid for sid in session_ids if SESSION_ID_RE.match(sid or "")]
+    logs = logs_client(workspace)
+    per_session: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(valid), SESSION_METRICS_BATCH):
+        batch = valid[start:start + SESSION_METRICS_BATCH]
+        rows = run_insights_queries(
+            {"traces": q_traces_for_sessions(batch)}, hours=hours, logs=logs
+        ).get("traces") or []
+        for row in rows:
+            sid = row.get("session_id")
+            if not sid:
+                continue
+            acc = per_session.setdefault(
+                sid, {"durations": [], "tokens": 0.0, "cost": 0.0, "priced": True}
+            )
+            start_ns, end_ns = _num(row, "start_ns"), _num(row, "end_ns")
+            if end_ns > start_ns:
+                acc["durations"].append((end_ns - start_ns) / NANOS_PER_MS)
+            tin, tout = _num(row, "tokens_in"), _num(row, "tokens_out")
+            acc["tokens"] += tin + tout
+            cost = estimate_cost(row.get("model") or None, tin, tout,
+                                 _num(row, "cache_read"), _num(row, "cache_write"))
+            if cost is None:
+                acc["priced"] = False
+            else:
+                acc["cost"] += cost
+    for sid, acc in per_session.items():
+        durations = acc["durations"]
+        out[sid] = {
+            "latency_ms": (sum(durations) / len(durations)) if durations else None,
+            "tokens": acc["tokens"],
+            "cost_usd": round(acc["cost"], 6) if acc["priced"] else None,
+        }
+    return out
+
+
 def q_root_spans(trace_ids: list[str] | None = None, limit: int = 3 * TRACE_LIMIT) -> str:
     # No session variant: root spans don't reliably carry session.id, so session
     # views join roots by traceId against the session-filtered aggregates —
     # `trace_ids` narrows the scan to those traces (an unfiltered roots query
     # over 7d is the slow half of a session view, and its newest-N cap can miss
     # an older session's roots entirely).
-    filters = ["ispresent(startTimeUnixNano)", "not ispresent(parentSpanId)"]
+    filters = ["ispresent(startTimeUnixNano)", ROOT_SPAN_FILTER]
     if trace_ids is not None:
         for trace_id in trace_ids:
             _require(TRACE_ID_RE, trace_id, "trace id")
@@ -344,7 +420,7 @@ def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
 def q_dashboard_series(range_key: str) -> str:
     return f"""
 {SPANS_SOURCE}
-| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
+| filter ispresent(startTimeUnixNano) and {ROOT_SPAN_FILTER}
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as traces, sum(is_error) as errors,
         pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
@@ -357,7 +433,7 @@ def q_dashboard_series(range_key: str) -> str:
 def q_dashboard_totals() -> str:
     return f"""
 {SPANS_SOURCE}
-| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
+| filter ispresent(startTimeUnixNano) and {ROOT_SPAN_FILTER}
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as traces, sum(is_error) as errors,
         pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
@@ -1462,7 +1538,10 @@ def _eval_content_log_group(agent: Agent, workspace: WorkspaceContext) -> str | 
     if not agent.resource_id:
         return None
     if agent.method in RUNTIME_LOG_METHODS:
-        return f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
+        from app.evaluation.service import telemetry_endpoint
+
+        return (f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-"
+                f"{telemetry_endpoint(agent)}")
     if agent.method != "harness":
         return None
     # Local import — the evaluation service sits above this module.

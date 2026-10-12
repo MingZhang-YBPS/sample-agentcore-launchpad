@@ -40,8 +40,10 @@ COOKIE_NAME = "launchpad_session"
 SESSION_TTL_SECONDS = 12 * 3600
 # v2 binds a registered account's session to its IMMUTABLE ``users.id`` (v1 carried
 # the username only, so a deleted-and-re-registered username kept an old cookie
-# valid for the NEW account). v1 cookies are refused: existing sessions re-login once.
-_COOKIE_VERSION = "2"
+# valid for the NEW account). v3 adds a stamp of the account's password hash, so an
+# admin password reset ends the sessions opened with the old password (v2 kept them
+# alive for up to SESSION_TTL_SECONDS). Older cookies are refused: re-login once.
+_COOKIE_VERSION = "3"
 
 _OPEN_API_PATHS = {
     "/api/auth/login",
@@ -51,6 +53,7 @@ _OPEN_API_PATHS = {
 }
 
 ROLE_ADMIN = "admin"
+ROLE_OPERATOR = "operator"
 ROLE_MEMBER = "member"
 
 # Member-grantable agent-management capabilities (route_policy `perm:` values).
@@ -59,10 +62,20 @@ ROLE_MEMBER = "member"
 AGENT_PERMISSIONS = users_service.AGENT_PERMISSIONS
 
 
-def granted_permissions(overrides: dict[str, bool] | None) -> frozenset[str]:
-    """The granted keys for a member row's `permissions` column value."""
+def granted_permissions(
+    overrides: dict[str, bool] | None, role: str = ROLE_MEMBER
+) -> frozenset[str]:
+    """The granted keys for a row's `permissions` column value, given its role.
+
+    T19: the defaults are per role (`users_service.default_permissions`) — an operator
+    holds the promotion keys but not `agents.deploy`, a member the reverse — and an
+    explicit override in the column wins either way.
+    """
+    defaults = users_service.default_permissions(role)
     return frozenset(
-        key for key in AGENT_PERMISSIONS if (overrides or {}).get(key) is not False
+        key
+        for key in AGENT_PERMISSIONS
+        if (overrides or {}).get(key, key in defaults)
     )
 
 
@@ -80,6 +93,12 @@ class Identity:
     @property
     def is_admin(self) -> bool:
         return self.role == ROLE_ADMIN
+
+    @property
+    def is_operator(self) -> bool:
+        """T19 — the release role. Distinct from admin: an operator approves and runs
+        releases but holds no user/workspace administration."""
+        return self.role == ROLE_OPERATOR
 
     def can(self, permission: str) -> bool:
         return self.is_admin or permission in self.permissions
@@ -126,9 +145,12 @@ def _signing_key(settings: Settings | None = None) -> bytes:
     return hashlib.sha256(material.encode("utf-8")).digest()
 
 
-def _encode_payload(subject: str, expiry: int, user_id: str | None = None) -> str:
-    # ``user_id`` is empty for the row-less config admin — its own stable principal.
-    raw = f"{_COOKIE_VERSION}:{subject}:{user_id or ''}:{expiry}".encode()
+def _encode_payload(
+    subject: str, expiry: int, user_id: str | None = None, stamp: str | None = None
+) -> str:
+    # ``user_id`` and ``stamp`` are empty for the row-less config admin — its own
+    # stable principal, whose password lives in settings (part of the signing key).
+    raw = f"{_COOKIE_VERSION}:{subject}:{user_id or ''}:{stamp or ''}:{expiry}".encode()
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
@@ -140,15 +162,20 @@ def _sign(payload: str, settings: Settings | None = None) -> str:
 
 
 def _issue(
-    subject: str, expiry: int, settings: Settings | None = None, user_id: str | None = None
+    subject: str,
+    expiry: int,
+    settings: Settings | None = None,
+    user_id: str | None = None,
+    stamp: str | None = None,
 ) -> str:
-    return _sign(_encode_payload(subject, expiry, user_id), settings)
+    return _sign(_encode_payload(subject, expiry, user_id, stamp), settings)
 
 
 def _decode(
     cookie: str | None, settings: Settings | None = None
-) -> tuple[str, str | None, int] | None:
-    """Return `(subject, user_id | None, expiry)` for an authentic, unexpired v2 cookie."""
+) -> tuple[str, str | None, str | None, int] | None:
+    """Return `(subject, user_id | None, stamp | None, expiry)` for an authentic,
+    unexpired v3 cookie."""
     if not cookie or "." not in cookie:
         return None
     payload = cookie.rpartition(".")[0]
@@ -160,12 +187,16 @@ def _decode(
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return None
     version, _, rest = raw.partition(":")
-    head, _, expiry_text = rest.rpartition(":")
-    subject, _, user_id = head.rpartition(":")
-    if version != _COOKIE_VERSION or not subject or not expiry_text.isdigit():
+    parts = rest.rsplit(":", 3)
+    if version != _COOKIE_VERSION or len(parts) != 4:
+        return None
+    subject, user_id, stamp, expiry_text = parts
+    if not subject or not expiry_text.isdigit():
         return None
     expiry = int(expiry_text)
-    return (subject, user_id or None, expiry) if expiry > time.time() else None
+    if expiry <= time.time():
+        return None
+    return subject, user_id or None, stamp or None, expiry
 
 
 def resolve_identity(
@@ -183,7 +214,7 @@ def resolve_identity(
     decoded = _decode(request.cookies.get(COOKIE_NAME), current)
     if decoded is None:
         return None
-    subject, user_id, _ = decoded
+    subject, user_id, stamp, _ = decoded
     if user_id is None and hmac.compare_digest(
         subject.encode("utf-8"), current.auth_username.encode("utf-8")
     ):
@@ -203,6 +234,11 @@ def resolve_identity(
             or user.username_key != users_service.normalize_username(subject).lower()
             or user.status != "active"
             or users_service.is_expired(user)
+            # a password change (admin reset) ends the sessions of the old password
+            or not hmac.compare_digest(
+                (stamp or "").encode("utf-8"),
+                users_service.credential_stamp(user.password_hash).encode("utf-8"),
+            )
         ):
             return None
         return Identity(
@@ -211,7 +247,7 @@ def resolve_identity(
             email=user.email,
             account_expires_at=users_service.as_utc(user.expires_at),
             user_id=user.id,
-            permissions=granted_permissions(user.permissions),
+            permissions=granted_permissions(user.permissions, user.role),
         )
     finally:
         if owned:
@@ -302,6 +338,17 @@ def require_identity(request: Request, settings: Settings | None = None) -> Iden
     if identity is None:
         raise AppError("auth.required", "Authentication required", status_code=401)
     return identity
+
+
+def current_identity(request: Request) -> Identity:
+    """`require_identity` as a FastAPI dependency.
+
+    `require_identity` takes an optional `settings` argument so tests can inject one.
+    FastAPI reads that annotation as a second **body** parameter, which silently embeds
+    a route's real body under a wrapper key (`{"req": {...}}`) — so a handler that wants
+    an identity alongside a request body must depend on this instead.
+    """
+    return require_identity(request)
 
 
 def require_admin(request: Request) -> Identity:
@@ -402,6 +449,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         req.password.encode("utf-8"),
         password.encode("utf-8"),
     )
+    stamp: str | None = None
     if username_ok and password_ok:
         identity = Identity(username=settings.auth_username, role=ROLE_ADMIN)
     elif username_ok:
@@ -414,13 +462,14 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         try:
             user = users_service.authenticate(db, req.username, req.password)
             users_service.record_login(db, user)
+            stamp = users_service.credential_stamp(user.password_hash)
             identity = Identity(
                 username=user.username,
                 role=user.role,
                 email=user.email,
                 account_expires_at=users_service.as_utc(user.expires_at),
                 user_id=user.id,
-                permissions=granted_permissions(user.permissions),
+                permissions=granted_permissions(user.permissions, user.role),
             )
         finally:
             db.close()
@@ -432,7 +481,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
     max_age = max(1, expiry - int(time.time()))
     response.set_cookie(
         COOKIE_NAME,
-        _issue(identity.username, expiry, settings, user_id=identity.user_id),
+        _issue(identity.username, expiry, settings, user_id=identity.user_id, stamp=stamp),
         max_age=max_age,
         httponly=True,
         secure=cookie_secure(settings),

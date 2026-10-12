@@ -1,3 +1,4 @@
+import { modelsForActiveRegion } from "../../lib/regions";
 import { Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -524,7 +525,12 @@ function EvaluatorEditor({ id }: { id: string | null }) {
             <Field label={t("v2.evaluators.model")} required hint={t("v2.evaluators.modelHint")}>
               <Select
                 value={draft.model_id}
-                options={(JUDGE_MODEL_OPTIONS.includes(draft.model_id) ? JUDGE_MODEL_OPTIONS : [draft.model_id, ...JUDGE_MODEL_OPTIONS]).map((m) => ({ value: m, label: m }))}
+                // judge models are regional: offer only those that exist in this workspace's
+                // geography, but never drop a stored id the operator already chose
+                options={(modelsForActiveRegion(JUDGE_MODEL_OPTIONS).includes(draft.model_id)
+                  ? modelsForActiveRegion(JUDGE_MODEL_OPTIONS)
+                  : [draft.model_id, ...modelsForActiveRegion(JUDGE_MODEL_OPTIONS)]
+                ).map((m) => ({ value: m, label: m }))}
                 onChange={(v) => set({ model_id: v })}
               />
             </Field>

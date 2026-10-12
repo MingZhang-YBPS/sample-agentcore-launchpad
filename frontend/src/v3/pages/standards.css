@@ -1,0 +1,102 @@
+/* V3 判据 (Agent-DLC) — charts and the few layouts the primitives do not cover.
+ * Scoped to .v3 .v3-std-*, colours from --v3-* only. */
+
+.v3 .v3-std-muted { color: var(--v3-text-3); font-size: 13px; }
+.v3 .v3-std-empty { margin: 0; padding: 18px 0; color: var(--v3-text-3); text-align: center; font-size: 13px; }
+.v3 .v3-std-subtitle { margin: 16px 0 8px; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-std-up { color: var(--v3-ok); font-family: var(--v3-mono); }
+.v3 .v3-std-down { color: var(--v3-act); font-family: var(--v3-mono); }
+
+/* attention list */
+.v3 .v3-std-att { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.v3 .v3-std-att li { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 8px; background: var(--v3-ink-1); border: 1px solid var(--v3-line); }
+.v3 .v3-std-att li > span:not(.v3-chip) { flex: 1; min-width: 0; }
+
+/* tier chip with its demotion */
+.v3 .v3-std-tier { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.v3 .v3-std-demoted { font-size: 11.5px; color: var(--v3-wait); }
+
+/* five dimensions */
+.v3 .v3-std-dims { display: grid; gap: 12px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .v3 .v3-std-dims { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.v3 .v3-std-dim { display: grid; gap: 6px; align-content: start; padding: 14px 16px; }
+.v3 .v3-std-dim .head { display: flex; gap: 6px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.v3 .v3-std-dim .name { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--v3-text-2); }
+.v3 .v3-std-dim .big { font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 28px; font-weight: 650; color: var(--v3-text); line-height: 1.1; }
+.v3 .v3-std-dim .big.short { color: var(--v3-act); }
+.v3 .v3-std-dim .sub { font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-std-dim .metric + .metric { margin-top: 6px; }
+.v3 .v3-std-dim .v3-std-empty { padding: 8px 0; text-align: left; }
+
+/* sparkline */
+.v3 .v3-std-spark { width: 96px; height: 22px; display: block; }
+.v3 .v3-std-spark polyline { stroke: var(--v3-info); }
+.v3 .v3-std-spark polyline.bad { stroke: var(--v3-act); }
+
+/* rate with its Wilson interval and the threshold */
+.v3 .v3-std-ci { display: grid; gap: 4px; min-width: 180px; }
+.v3 .v3-std-ci .track { position: relative; height: 8px; border-radius: 4px; background: var(--v3-ink-0); border: 1px solid var(--v3-line); }
+.v3 .v3-std-ci .band { position: absolute; top: 1px; bottom: 1px; border-radius: 3px; background: var(--v3-info-dim); }
+.v3 .v3-std-ci .thr { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--v3-text-2); }
+.v3 .v3-std-ci .dot { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--v3-info); }
+.v3 .v3-std-ci .dot.good { background: var(--v3-ok); }
+.v3 .v3-std-ci .dot.bad { background: var(--v3-act); }
+.v3 .v3-std-ci.undecided .band { background: var(--v3-wait-dim); }
+.v3 .v3-std-ci .legend { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-std-ci .legend b { font-family: var(--v3-mono); font-weight: 500; color: var(--v3-text); }
+
+/* baseline band */
+.v3 .v3-std-band { width: 100%; height: 160px; display: block; }
+.v3 .v3-std-band .axis { stroke: var(--v3-line-2); }
+.v3 .v3-std-band .grid { stroke: var(--v3-line); stroke-dasharray: 3 4; }
+.v3 .v3-std-band .baseline { stroke: var(--v3-text-3); }
+.v3 .v3-std-band .baseline.thin { stroke-dasharray: 4 4; }
+.v3 .v3-std-band .rate { stroke: var(--v3-ok); }
+.v3 .v3-std-band .pt { fill: var(--v3-ok); }
+.v3 .v3-std-axis { display: flex; justify-content: space-between; gap: 12px; font-family: var(--v3-mono); font-size: 11px; color: var(--v3-text-3); margin-top: 4px; }
+.v3 .v3-std-axis .warn { color: var(--v3-wait); font-family: var(--v3-body); }
+
+/* judge vs human */
+.v3 .v3-std-confusion { display: grid; gap: 10px; justify-items: start; }
+.v3 .v3-std-confusion table { border-collapse: separate; border-spacing: 4px; }
+.v3 .v3-std-confusion th { font-family: var(--v3-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--v3-text-3); padding: 4px 8px; text-align: left; }
+.v3 .v3-std-confusion td { width: 84px; height: 52px; text-align: center; border-radius: 8px; font-family: var(--v3-display); font-size: 22px; font-weight: 650; }
+.v3 .v3-std-confusion td.agree { background: var(--v3-ok-dim); color: var(--v3-ok); }
+.v3 .v3-std-confusion td.disagree { background: var(--v3-act-dim); color: var(--v3-act); }
+.v3 .v3-std-confusion .kappa { display: flex; gap: 8px; align-items: center; }
+
+/* coverage */
+.v3 .v3-std-coverage .cell { display: inline-grid; place-items: center; min-width: 30px; height: 22px; padding: 0 6px; border-radius: 5px; background: var(--v3-info-dim); color: var(--v3-text); font-family: var(--v3-mono); font-size: 12px; }
+
+/* the fix ladder */
+.v3 .v3-std-ladder { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.v3 .v3-std-ladder .rung { position: relative; display: flex; align-items: center; gap: 10px; height: 26px; border-radius: 6px; background: var(--v3-ink-0); border: 1px solid var(--v3-line); overflow: hidden; }
+.v3 .v3-std-ladder .bar { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, var(--v3-ok-dim), rgba(62, 240, 180, 0.32)); }
+.v3 .v3-std-ladder .val, .v3 .v3-std-ladder .delta { position: relative; font-family: var(--v3-mono); font-size: 12px; padding-left: 10px; }
+.v3 .v3-std-ladder .delta.up { color: var(--v3-ok); }
+.v3 .v3-std-ladder .delta.down { color: var(--v3-act); }
+.v3 .v3-std-ladder .meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 4px; font-size: 12px; color: var(--v3-text-3); }
+
+/* criteria editor rows */
+.v3 .v3-std-row { display: grid; gap: 10px; padding: 14px; border-radius: 10px; border: 1px solid var(--v3-line); background: var(--v3-ink-1); }
+.v3 .v3-std-row .grid4 { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .v3 .v3-std-row .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.v3 .v3-std-signlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.v3 .v3-std-signlist li { display: flex; gap: 10px; align-items: center; font-size: 13px; }
+
+/* golden splits */
+.v3 .v3-std-split { display: grid; gap: 10px; padding: 14px; border-radius: 10px; border: 1px solid var(--v3-line); background: var(--v3-ink-1); }
+.v3 .v3-std-split .meta { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 12px; color: var(--v3-text-3); }
+
+/* checkbox pickers */
+.v3 .v3-std-keys { display: flex; gap: 6px 14px; flex-wrap: wrap; text-transform: none; letter-spacing: 0; font-family: var(--v3-body); font-size: 13px; color: var(--v3-text); }
+.v3 .v3-std-keys label { display: inline-flex; gap: 6px; align-items: center; }
+
+/* pass / fail / inconclusive labelling */
+.v3 .v3-std-seg { display: inline-flex; border: 1px solid var(--v3-line-2); border-radius: 7px; overflow: hidden; }
+.v3 .v3-std-seg button { border: 0; background: none; color: var(--v3-text-2); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.v3 .v3-std-seg button + button { border-left: 1px solid var(--v3-line-2); }
+.v3 .v3-std-seg button:hover:not(:disabled) { background: var(--v3-ink-3); color: var(--v3-text); }
+.v3 .v3-std-seg button.on.pass { background: var(--v3-ok-dim); color: var(--v3-ok); }
+.v3 .v3-std-seg button.on.fail { background: var(--v3-act-dim); color: var(--v3-act); }
+.v3 .v3-std-seg button.on.inconclusive { background: var(--v3-wait-dim); color: var(--v3-wait); }

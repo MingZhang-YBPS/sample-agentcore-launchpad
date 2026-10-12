@@ -28,9 +28,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.errors import cleanup_error, is_not_found
+from app.core.regions import partition_for_region
 from app.models.ledger import Agent
 from app.schemas.agent import (
-    DEFAULT_MODEL_ID,
     INFERENCE_PROFILE_PREFIXES,
     AgentSpec,
     byoc_model_target,
@@ -71,6 +71,10 @@ class RoleContext:
     # system-preset KB path scopes to it; ordinary agents keep the family grant.
     oauth_provider_arn: str = ""
 
+    @property
+    def partition(self) -> str:
+        return partition_for_region(self.region)
+
 
 def role_context(workspace: WorkspaceContext) -> RoleContext:
     """Build a `RoleContext` from the workspace the agent is deployed into."""
@@ -81,7 +85,7 @@ def role_context(workspace: WorkspaceContext) -> RoleContext:
         region=workspace.region,
         artifacts_bucket=resources.get("artifacts_bucket", ""),
         ecr_repo_arn=(
-            f"arn:aws:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
+            f"arn:{workspace.partition}:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
         ),
         memory_id=resources.get("memory_id", ""),
         oauth_provider_arn=resources.get("oauth_provider_arn", ""),
@@ -195,12 +199,12 @@ def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
     if profile_prefix:
         bare = model_id[len(profile_prefix):]
         return [
-            f"arn:aws:bedrock:*::foundation-model/{bare}",
-            f"arn:aws:bedrock:{ctx.region}:{ctx.account_id}:inference-profile/{model_id}",
+            f"arn:{ctx.partition}:bedrock:*::foundation-model/{bare}",
+            f"arn:{ctx.partition}:bedrock:{ctx.region}:{ctx.account_id}:inference-profile/{model_id}",
         ]
     if re.match(r"^[a-z0-9-]+\.[A-Za-z0-9.:-]+$", model_id):
-        return [f"arn:aws:bedrock:*::foundation-model/{model_id}"]
-    return ["arn:aws:bedrock:*::foundation-model/*"]
+        return [f"arn:{ctx.partition}:bedrock:*::foundation-model/{model_id}"]
+    return [f"arn:{ctx.partition}:bedrock:*::foundation-model/*"]
 
 
 # Strands Studio canvas flows carry their models on the nodes, not in
@@ -209,8 +213,12 @@ def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
 # invoke. Provider strings and the node types that carry a model mirror
 # ``frontend/src/studio`` (``MANTLE_PROVIDER`` in lib/models.ts, the agent-node
 # filter in lib/graph-code-generator.ts); a node without a model id generates
-# the canvas fallback, which equals ``DEFAULT_MODEL_ID``.
+# the canvas fallback, ``STUDIO_FALLBACK_MODEL_ID``.
 STUDIO_MODEL_NODE_TYPES = frozenset({"agent", "orchestrator-agent", "swarm"})
+# The canvas's own fallback (``DEFAULT_MODEL_ID`` in frontend/src/studio/lib/
+# models.ts), which deliberately does not follow the platform default: changing
+# it would silently change every existing flow's model-less nodes.
+STUDIO_FALLBACK_MODEL_ID = "global.anthropic.claude-sonnet-5"
 STUDIO_BEDROCK_PROVIDER = "AWS Bedrock"
 STUDIO_MANTLE_PROVIDER = "Amazon Bedrock (Mantle)"
 
@@ -226,7 +234,7 @@ def studio_node_models(spec: AgentSpec) -> list[tuple[str, str]]:
         data = node.get("data") if isinstance(node.get("data"), dict) else {}
         provider = data.get("modelProvider") or STUDIO_BEDROCK_PROVIDER
         model = data.get("modelId") or (
-            DEFAULT_MODEL_ID if provider == STUDIO_BEDROCK_PROVIDER else ""
+            STUDIO_FALLBACK_MODEL_ID if provider == STUDIO_BEDROCK_PROVIDER else ""
         )
         models.append((str(provider), str(model)))
     return models
@@ -421,7 +429,7 @@ def _preset_kb_oauth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[
             "the workspace resource map has no oauth_provider_arn — the KB gateway's "
             "OAuth2 credential provider is required to scope the preset's grants"
         )
-    base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+    base = f"arn:{ctx.partition}:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
     harness_name = spec.name.replace("-", "_")  # deployer/harness.py harnessName
     return [
         {
@@ -446,7 +454,7 @@ def _preset_kb_oauth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[
             "Effect": "Allow",
             "Action": "secretsmanager:GetSecretValue",
             "Resource": (
-                f"arn:aws:secretsmanager:{ctx.region}:{ctx.account_id}:secret:"
+                f"arn:{ctx.partition}:secretsmanager:{ctx.region}:{ctx.account_id}:secret:"
                 f"bedrock-agentcore-identity!default/oauth2/{provider}-*"
             ),
         },
@@ -494,7 +502,7 @@ def policy_document(
             ],
             # Mantle models are hosted outside the stack region, so the region
             # segment stays wildcarded, and projects are not per-agent.
-            "Resource": [f"arn:aws:bedrock-mantle:*:{ctx.account_id}:project/*"],
+            "Resource": [f"arn:{ctx.partition}:bedrock-mantle:*:{ctx.account_id}:project/*"],
         })
         statements.append({
             # UNSCOPABLE: minting the short-lived bearer token has no resource.
@@ -525,7 +533,7 @@ def policy_document(
     if spec.memory.short_term or spec.memory.long_term:
         selected_memory = spec.memory.memory_id or ctx.memory_id
         memory_resource = (
-            f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}:memory/{selected_memory}"
+            f"arn:{ctx.partition}:bedrock-agentcore:{ctx.region}:{ctx.account_id}:memory/{selected_memory}"
             if selected_memory else "*"
         )
         statements.append({
@@ -569,7 +577,7 @@ def policy_document(
             "Effect": "Allow",
             "Action": ["secretsmanager:GetSecretValue"],
             "Resource": [
-                f"arn:aws:secretsmanager:{ctx.region}:{ctx.account_id}"
+                f"arn:{ctx.partition}:secretsmanager:{ctx.region}:{ctx.account_id}"
                 ":secret:bedrock-agentcore-identity!*"
             ],
         })
@@ -588,7 +596,7 @@ def policy_document(
             "Effect": "Allow",
             "Action": ["bedrock-agentcore:InvokeGateway"],
             "Resource": [
-                f"arn:aws:bedrock-agentcore:*:{ctx.account_id}:gateway/{gateway_id}"
+                f"arn:{ctx.partition}:bedrock-agentcore:*:{ctx.account_id}:gateway/{gateway_id}"
                 for gateway_id in gateway_ids
             ],
         })
@@ -656,7 +664,7 @@ def policy_document(
             repo_name = spec.byoc.image_uri.split(".amazonaws.com/", 1)[1]
             repo_name = repo_name.split("@", 1)[0].rsplit(":", 1)[0]
             repo_arn = (
-                f"arn:aws:ecr:{ctx.region}:{ctx.account_id}:repository/{repo_name}"
+                f"arn:{ctx.partition}:ecr:{ctx.region}:{ctx.account_id}:repository/{repo_name}"
             )
         else:
             repo_arn = ctx.ecr_repo_arn
@@ -682,14 +690,14 @@ def policy_document(
             "Effect": "Allow",
             "Action": ["s3:GetObject"],
             "Resource": [
-                f"arn:aws:s3:::{ctx.artifacts_bucket}/{prefix}*" for prefix in prefixes
+                f"arn:{ctx.partition}:s3:::{ctx.artifacts_bucket}/{prefix}*" for prefix in prefixes
             ],
         })
         statements.append({
             "Sid": "SkillBundleList",
             "Effect": "Allow",
             "Action": ["s3:ListBucket"],
-            "Resource": [f"arn:aws:s3:::{ctx.artifacts_bucket}"],
+            "Resource": [f"arn:{ctx.partition}:s3:::{ctx.artifacts_bucket}"],
             "Condition": {"StringLike": {"s3:prefix": [f"{p}*" for p in prefixes]}},
         })
 
@@ -702,7 +710,7 @@ def policy_document(
             "Effect": "Allow",
             "Action": ["bedrock:Retrieve", "bedrock:GetKnowledgeBase"],
             "Resource": [
-                f"arn:aws:bedrock:{ctx.region}:{ctx.account_id}:knowledge-base/{kb.kb_id}"
+                f"arn:{ctx.partition}:bedrock:{ctx.region}:{ctx.account_id}:knowledge-base/{kb.kb_id}"
                 for kb in spec.knowledge_bases
             ],
         })
@@ -737,7 +745,7 @@ def policy_document(
                 "bedrock-agentcore:GetConfigurationBundleVersion",
             ],
             "Resource": [
-                f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+                f"arn:{ctx.partition}:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
                 ":configuration-bundle/*"
             ],
         })
@@ -749,7 +757,7 @@ def policy_document(
             "Effect": "Allow",
             "Action": ["bedrock-agentcore:InvokeAgentRuntime"],
             "Resource": [
-                f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}:runtime/*"
+                f"arn:{ctx.partition}:bedrock-agentcore:{ctx.region}:{ctx.account_id}:runtime/*"
             ],
         })
 
@@ -767,9 +775,9 @@ def policy_document(
             "logs:DescribeLogStreams",
         ],
         "Resource": [
-            f"arn:aws:logs:{ctx.region}:{ctx.account_id}:log-group:"
+            f"arn:{ctx.partition}:logs:{ctx.region}:{ctx.account_id}:log-group:"
             "/aws/bedrock-agentcore/runtimes/*",
-            f"arn:aws:logs:{ctx.region}:{ctx.account_id}:log-group:"
+            f"arn:{ctx.partition}:logs:{ctx.region}:{ctx.account_id}:log-group:"
             "/aws/bedrock-agentcore/runtimes/*:log-stream:*",
         ],
     })

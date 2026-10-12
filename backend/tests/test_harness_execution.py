@@ -341,7 +341,9 @@ def sse_events(response):
             "event": lines[0].removeprefix("event: "),
             "data": json.loads(lines[1].removeprefix("data: ")),
         })
-    return events
+    # `saved` (console chat only) announces a persisted message id for thumbs
+    # feedback — bookkeeping, not part of the answer these tests assert on.
+    return [event for event in events if event["event"] != "saved"]
 
 
 @pytest.mark.parametrize("entrance", ["chat", "public-stream", "console-sync", "public-sync"])

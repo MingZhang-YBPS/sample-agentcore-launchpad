@@ -9,41 +9,73 @@ import {
   BYOC_PYTHON_VERSIONS,
   byoMountsAllowed,
   DEFAULT_SESSION_MOUNT,
+  DISPLAY_NAME_MAX,
   filesystemIssues,
   hasByoMounts,
   MAX_MOUNTS_PER_KIND,
   type MountRow,
   promptWithToolkit,
   pythonLabel,
+  randomAgentSlug,
+  slugFromDisplayName,
   TOOLKITS,
   toggle,
   toolkitToolNames,
 } from "../../../lib/agent-spec";
 import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
+import { HintLabel } from "../../Glossary";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
 
-/** The name field every method starts with. */
+/** Next slug while it still follows the display name: the ASCII-derived slug, or a
+ *  random `agent-xxxxxx` kept stable while the member keeps typing. */
+function followSlug(displayName: string, current: string): string {
+  const derived = slugFromDisplayName(displayName);
+  if (derived) return derived;
+  return /^agent-[a-z0-9]{6}$/.test(current) ? current : randomAgentSlug();
+}
+
+/** Display name (free text, any language) + the resource-name slug derived from it.
+ *  Editing the slug by hand stops the derivation; a re-publish locks the slug only. */
 export function NameField({ form, set, err, nameLocked }: Omit<SectionProps, "cat">) {
   const { t } = useTranslation();
+  const onDisplayName = (value: string) =>
+    set((prev) => ({
+      displayName: value,
+      ...(nameLocked || prev.nameEdited ? {} : { name: value.trim() ? followSlug(value, prev.name) : "" }),
+    }));
   return (
-    <Field
-      label={t("v2.agents.colName")}
-      required
-      hint={t(nameLocked ? "v2.agents.wizard.nameLocked" : "v2.agents.wizard.nameHint")}
-      error={err("name")}
-    >
-      <input
-        className="v2-input"
-        value={form.name}
-        disabled={nameLocked}
-        maxLength={48}
-        placeholder="hr-assistant-v3"
-        onChange={(e) => set({ name: e.target.value.toLowerCase() })}
-        data-testid="v2-agent-name"
-      />
-    </Field>
+    <>
+      <Field label={t("v2.agents.wizard.displayName")} hint={t("v2.agents.wizard.displayNameHint")}>
+        <input
+          className="v2-input"
+          value={form.displayName}
+          maxLength={DISPLAY_NAME_MAX}
+          placeholder={t("v2.agents.wizard.displayNamePlaceholder")}
+          onChange={(e) => onDisplayName(e.target.value)}
+          data-testid="v2-agent-display-name"
+        />
+      </Field>
+      <Field
+        label={
+          <HintLabel term="runtime">{t("v2.agents.wizard.resourceName")}</HintLabel>
+        }
+        required
+        hint={t(nameLocked ? "v2.agents.wizard.nameLocked" : "v2.agents.wizard.nameHint")}
+        error={err("name")}
+      >
+        <input
+          className="v2-input mono"
+          value={form.name}
+          disabled={nameLocked}
+          maxLength={48}
+          placeholder="hr-assistant-v3"
+          onChange={(e) => set({ name: e.target.value.toLowerCase(), nameEdited: true })}
+          data-testid="v2-agent-name"
+        />
+      </Field>
+    </>
   );
 }
 
@@ -85,7 +117,7 @@ function GatewayField({ form, set, cat, err }: SectionProps) {
     .map((name) => ({ key: name, label: name }));
   return (
     <Field
-      label={t("v2.agents.wizard.gateways")}
+      label={<HintLabel term="gateway">{t("v2.agents.wizard.gateways")}</HintLabel>}
       error={err("gateway")}
       hint={cat.gatewayTargets.length > 0 ? t("create.configure.gatewayWholeNote") : undefined}
     >
@@ -112,7 +144,7 @@ function GatewayField({ form, set, cat, err }: SectionProps) {
 function RemoteMcpField({ form, set, cat }: SectionProps) {
   const { t } = useTranslation();
   return (
-    <Field label={t("v2.agents.wizard.remoteMcp")}>
+    <Field label={<HintLabel term="mcp">{t("v2.agents.wizard.remoteMcp")}</HintLabel>}>
       <CheckList
         items={cat.remoteMcp}
         keyOf={(m) => m.name}
@@ -188,6 +220,7 @@ export function ProtocolCard({
             desc={t(`v2.agents.wizard.protocol.${p}Desc`)}
             on={form.protocol === p}
             onClick={() => form.protocol !== p && onProtocol(p)}
+            hint={p === "a2a" ? t("glossary.a2a") : undefined}
             testId={`v2-agent-protocol-${p}`}
           />
         ))}

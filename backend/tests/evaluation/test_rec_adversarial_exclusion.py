@@ -109,3 +109,24 @@ def test_the_golden_test_snapshot_carries_the_flag_only_when_set():
     assert golden_test_snapshot({"id": "G1", "input": "x", "adversarial": True})["adversarial"]
     assert "adversarial" not in golden_test_snapshot({"id": "G1", "input": "x",
                                                       "adversarial": False})
+
+
+def test_agent_dlc_adversarial_tier_is_left_out_too(client, monkeypatch):
+    # Golden-set items record their type in metadata.dlc.case_tier, not as an
+    # Assistant golden test; an adversarial tier must be excluded the same way.
+    spans = {sid: [_span(sid, "search")] for sid in SESSIONS}
+    _, data = _stub(monkeypatch, spans=spans)
+    data.start_recommendation.return_value = {"recommendationId": "rec-1"}
+    dlc_item = {"scenario_id": "ad-06", "turns": [{"input": "prompt ad-06"}],
+                "metadata": {"dlc": {"case_tier": "adversarial"}}}
+    ds = _dataset([_item("S1"), dlc_item, _item("S3")])
+    run_id = _run("", session_ids=SESSIONS, dataset_id=ds)
+
+    res = _start(client, run_id)
+
+    assert res.status_code == 201, res.text
+    traces = data.start_recommendation.call_args.kwargs["recommendationConfig"][
+        "systemPromptRecommendationConfig"]["agentTraces"]
+    assert traces == {"sessionSpans": spans["sess-0001"] + spans["sess-0003"]}
+    assert res.json()["recommendations"][0]["result"] == {
+        "excluded_sessions": [{"session_id": "sess-0002", "scenario_id": "ad-06"}]}

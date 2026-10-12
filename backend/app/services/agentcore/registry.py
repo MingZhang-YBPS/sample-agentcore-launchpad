@@ -8,6 +8,7 @@ Explicit-client style; payload builders are pure for unit testing.
 """
 
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -574,10 +575,34 @@ def list_discoverable_records(
     return records
 
 
+# `SubmitRegistryRecordForApproval` answers `ConflictException: Concurrent update
+# detected. Please retry.` when the service is still settling the record it was just
+# handed — observed failing a whole deploy at the `register` stage. It is retryable by
+# AWS's own wording, so retry it here rather than letting a transient conflict mark a
+# deployed agent failed.
+logger = logging.getLogger(__name__)
+
+SUBMIT_RETRY_DELAYS_S = (1.0, 3.0, 7.0)
+
+
 def submit_record(client: Any, registry_id: str, record_id: str) -> dict[str, Any]:
-    return client.submit_registry_record_for_approval(
-        registryId=registry_id, recordId=record_id
-    )
+    last: Exception | None = None
+    for delay in (*SUBMIT_RETRY_DELAYS_S, None):
+        try:
+            return client.submit_registry_record_for_approval(
+                registryId=registry_id, recordId=record_id
+            )
+        except Exception as exc:  # noqa: BLE001 - narrowed immediately below
+            retryable = (
+                type(exc).__name__ == "ConflictException"
+                and "concurrent" in str(exc).lower()
+            )
+            if not retryable or delay is None:
+                raise
+            last = exc
+            logger.info("registry submit %s: %s — retrying in %ss", record_id, exc, delay)
+            time.sleep(delay)
+    raise last  # unreachable: the last pass re-raises
 
 
 def set_record_status(

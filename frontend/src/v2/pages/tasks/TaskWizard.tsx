@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
+import { api, dlcApi, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
 import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { CustomUnavailableNote } from "../../EvaluatorPicker";
@@ -64,6 +64,9 @@ interface Draft {
   evaluators: string[];
   /** insight types, insights mode only */
   insights: string[];
+  /** pass^k: each dataset scenario runs this many times (1 = off) */
+  repeats: number;
+  confirmCost: boolean;
 }
 
 const EMPTY: Draft = {
@@ -86,6 +89,8 @@ const EMPTY: Draft = {
   sessionTimeout: 15,
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
   insights: [...INSIGHT_TYPES],
+  repeats: 1,
+  confirmCost: false,
 };
 
 /**
@@ -178,6 +183,18 @@ export function TaskWizard() {
     `cw-window:${cwReady}:${draft?.source}:${cwService}:${draft?.logGroups.join("|")}:${draft?.lookbackHours}`,
   );
 
+  // pass^k replays dataset scenarios against an agent; it has no meaning for past sessions.
+  // Computed before the early returns below, so the hook order never changes.
+  const repeatable =
+    !!draft && draft.target === "agent" && draft.source === "dataset" && draft.mode === "evaluators" &&
+    draft.strategy === "history" && !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
+  const estimate = useLoad(
+    () =>
+      repeatable && draft?.agentId
+        ? dlcApi.estimate({ agent_id: draft.agentId, dataset_id: draft.dataset, evaluators: draft.evaluators, repeats: draft.repeats })
+        : Promise.resolve(null),
+    `task-estimate:${repeatable}:${draft?.agentId}:${draft?.dataset}:${draft?.repeats}:${draft?.evaluators.join(",")}`,
+  );
   if (seed.error) return <Alert tone="error">{seed.error}</Alert>;
   if (!draft) return <Spin />;
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
@@ -258,6 +275,7 @@ export function TaskWizard() {
           description: draft.description || undefined,
           ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
           ...scope,
+          ...(repeatable ? { repeats: draft.repeats, confirm_cost: draft.confirmCost } : {}),
         });
         toast("success", t("v2.tasks.createdRun"));
         setParams({ view: "detail", kind: "run", id: run.id });
@@ -664,6 +682,44 @@ export function TaskWizard() {
             <Alert>{draft.source === "dataset" ? t("evalPage.newRun.insightsHint") : t("evalPage.newRun.insightsWindowHint")}</Alert>
             {fewSessions && <Alert tone="warn">{t("v2.tasks.insightsFewSessions", { min: MIN_INSIGHT_SESSIONS })}</Alert>}
           </div>
+        </Card>
+      )}
+
+      {step === 1 && repeatable && (
+        <Card title={t("v2.tasks.passK")} sub={t("v2.tasks.passKSub")} testId="v2-task-passk">
+          <div className="v2-form cols-2">
+            <Field label={t("v2.tasks.repeats")} hint={t("v2.tasks.repeatsHint")}>
+              <input
+                className="v2-input"
+                type="number"
+                min={1}
+                max={10}
+                value={draft.repeats}
+                onChange={(e) => set({ repeats: Math.max(1, Math.min(10, Number(e.target.value) || 1)), confirmCost: false })}
+              />
+            </Field>
+            <Field label={t("v2.dlc.cost.estimate")} hint={t("v2.dlc.cost.basisHint")}>
+              {estimate.loading ? (
+                <Spin />
+              ) : estimate.data ? (
+                <span>
+                  <b>{estimate.data.total_usd === null ? t("v2.dlc.cost.unknown") : `$${estimate.data.total_usd.toFixed(2)}`}</b>{" "}
+                  {t("v2.dlc.cost.sessions", { sessions: estimate.data.sessions, minutes: estimate.data.duration_minutes ?? 0 })}
+                  {estimate.data.unpriced && <Tag tone="orange">{t("v2.dlc.cost.unpriced")}</Tag>}
+                  {estimate.data.over_limit && <Tag tone="red">{t("v2.dlc.cost.overLimit")}</Tag>}
+                </span>
+              ) : (
+                "—"
+              )}
+            </Field>
+          </div>
+          {draft.repeats > 1 && <Alert tone="warn">{t("v2.dlc.release.passKCost", { k: draft.repeats })}</Alert>}
+          {estimate.data?.confirm_required && (
+            <label className="v2-check">
+              <input type="checkbox" checked={draft.confirmCost} onChange={(e) => set({ confirmCost: e.target.checked })} />{" "}
+              {t("v2.tasks.confirmCost", { usd: estimate.data.total_usd ?? "—" })}
+            </label>
+          )}
         </Card>
       )}
 

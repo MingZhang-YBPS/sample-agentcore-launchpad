@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/auth-context";
 import { Panel, ViewHead } from "../components";
 import { AnnouncementFeed } from "../components/AnnouncementFeed";
+import { setActiveRegion } from "../lib/regions";
 import { api, AUTH_UNAUTHORIZED_EVENT, type Workspace } from "../lib/api";
 import { storedWorkspaceId, storeWorkspaceId } from "../lib/workspace-header";
 import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
@@ -95,6 +96,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => resolveCurrent(list.workspaces, selected, isAdmin),
     [isAdmin, list.workspaces, selected],
   );
+
+  // Model pickers read this at render time; set before the children render.
+  setActiveRegion(current?.region);
 
   useEffect(() => {
     // Keeps storage and state agreeing after the list changes under us (the

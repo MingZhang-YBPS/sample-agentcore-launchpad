@@ -1545,3 +1545,13 @@ def test_evaluate_session_spans_wrapper_shape():
     assert out[0]["evaluatorId"] == "Builtin.Helpfulness"
     with pytest.raises(ValueError):
         ace.evaluate_session_spans(fake, evaluator_id="Builtin.Helpfulness", spans=[])
+
+
+def test_root_span_queries_accept_agentcore_invocation_roots():
+    # AgentCore exports no parentless span: `POST /invocations` carries the
+    # caller's parentSpanId, so a "no parent" filter alone matched nothing.
+    for query in (obs.q_root_spans(), obs.q_dashboard_series("24h"), obs.q_dashboard_totals()):
+        assert obs.ROOT_SPAN_FILTER in query
+        assert 'name = "POST /invocations"' in query
+        legacy_filter = "| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)\n"
+        assert legacy_filter not in query

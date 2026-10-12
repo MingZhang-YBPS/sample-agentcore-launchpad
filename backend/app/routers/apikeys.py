@@ -6,6 +6,7 @@ offboarded the key is disabled and cannot be re-enabled (`services.api_keys`).
 
 import hashlib
 import secrets
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -15,9 +16,10 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
-from app.models.ledger import ApiKey
+from app.models.ledger import Agent, ApiKey
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import agent_access
 from app.services import api_keys as api_keys_service
 from app.services.users import as_utc
 from app.services.visibility import Viewer, require_viewer
@@ -31,6 +33,25 @@ def hash_key(raw: str) -> str:
 
 class CreateKeyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+    # T16 — all optional; omitted = the legacy unrestricted key.
+    agent_ids: list[str] | None = Field(default=None, max_length=50)
+    expires_at: datetime | None = None
+    rate_per_minute: int | None = Field(default=None, ge=1, le=api_keys_service.MAX_RATE_PER_MINUTE)
+
+
+class UpdateKeyRequest(BaseModel):
+    """Only fields present in the body change; an explicit null clears the limit."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    agent_ids: list[str] | None = Field(default=None, max_length=50)
+    expires_at: datetime | None = None
+    rate_per_minute: int | None = Field(default=None, ge=1, le=api_keys_service.MAX_RATE_PER_MINUTE)
+
+
+def _iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return (value if value.tzinfo else value.replace(tzinfo=UTC)).isoformat()
 
 
 def _key_out(key: ApiKey, offboarded: str | None = None) -> dict[str, Any]:
@@ -44,10 +65,57 @@ def _key_out(key: ApiKey, offboarded: str | None = None) -> dict[str, Any]:
         # NULL on keys minted before creators were recorded — "unknown".
         "created_by": key.created_by,
         "created_by_name": key.created_by_name,
+        # empty list = every agent in the workspace
+        "agent_ids": list(key.agent_ids or []),
+        "expires_at": _iso(key.expires_at),
+        "expired": api_keys_service.is_expired(key),
+        "rate_per_minute": key.rate_per_minute,
         "last_used_at": last_used.isoformat() if last_used else None,
+        "use_count": key.use_count or 0,
         # why the creator may no longer hold this key, or null
         "creator_offboarded": offboarded,
     }
+
+
+def _clean_scope(
+    db: Session, ws: WorkspaceScope, agent_ids: list[str] | None, viewer: Viewer = Viewer.ALL
+) -> list[str] | None:
+    """De-duplicated scope, every id a live agent of this workspace that `viewer`
+    may see (else 422 — a hidden agent reads like an unknown one)."""
+    if not agent_ids:
+        return None
+    unique = list(dict.fromkeys(agent_ids))
+    live = {
+        a.id
+        for a in db.query(Agent)
+        .filter(
+            Agent.workspace_id == ws.id,
+            Agent.id.in_(unique),
+            Agent.status != "deleted",
+            agent_access.agent_clause(viewer),
+        )
+        .all()
+    }
+    unknown = [i for i in unique if i not in live]
+    if unknown:
+        raise AppError(
+            "apikey.unknown_agent",
+            "agent_ids must name existing agents of this workspace",
+            {"agent_ids": unknown},
+            status_code=422,
+        )
+    return unique
+
+
+def _clean_expiry(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    aware = value if value.tzinfo else value.replace(tzinfo=UTC)
+    if aware <= datetime.now(UTC):
+        raise AppError(
+            "apikey.expiry_in_past", "expires_at must be in the future", status_code=422
+        )
+    return aware
 
 
 def _own_clause(viewer: Viewer) -> Any:
@@ -101,6 +169,7 @@ def create_key(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     identity = require_identity(request)
     raw = f"lp_live_{secrets.token_hex(16)}"
@@ -113,6 +182,9 @@ def create_key(
         name=req.name,
         prefix=raw[:12] + "…",
         key_hash=hash_key(raw),
+        agent_ids=_clean_scope(db, ws, req.agent_ids, viewer),
+        expires_at=_clean_expiry(req.expires_at),
+        rate_per_minute=req.rate_per_minute,
         created_by=identity.user_id,
         created_by_name=identity.username,
     )
@@ -156,3 +228,43 @@ def enable_key(
     key.enabled = True
     db.commit()
     return _key_out(key)
+
+
+@router.patch("/apikeys/{key_id}")
+def update_key(
+    key_id: str,
+    req: UpdateKeyRequest,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    key = _key_in(db, ws, key_id, viewer)
+    sent = req.model_fields_set
+    if "name" in sent and req.name is not None:
+        key.name = req.name
+    if "agent_ids" in sent:
+        key.agent_ids = _clean_scope(db, ws, req.agent_ids, viewer)
+    if "expires_at" in sent:
+        key.expires_at = _clean_expiry(req.expires_at)
+    if "rate_per_minute" in sent:
+        key.rate_per_minute = req.rate_per_minute
+    db.commit()
+    return _key_out(key, api_keys_service.creator_offboarded(db, key))
+
+
+@router.get("/apikeys/{key_id}/usage")
+def key_usage(
+    key_id: str,
+    days: int = 14,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Admitted `/v1` calls per UTC day, oldest first (dense, zero-filled)."""
+    key = _key_in(db, ws, key_id, viewer)
+    return {
+        "key_id": key.id,
+        "total": key.use_count or 0,
+        "last_used_at": _iso(key.last_used_at),
+        "days": api_keys_service.usage_by_day(db, key.id, max(1, min(days, 90))),
+    }

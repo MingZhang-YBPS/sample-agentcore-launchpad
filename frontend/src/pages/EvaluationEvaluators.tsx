@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { modelsForActiveRegion } from "../lib/regions";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -564,9 +565,9 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           value={draft.model_id}
           onChange={(e) => setDraft({ ...draft, model_id: e.target.value })}
         >
-          {(MODEL_OPTIONS.includes(draft.model_id)
-            ? MODEL_OPTIONS
-            : [draft.model_id, ...MODEL_OPTIONS]
+          {(modelsForActiveRegion(MODEL_OPTIONS).includes(draft.model_id)
+            ? modelsForActiveRegion(MODEL_OPTIONS)
+            : [draft.model_id, ...modelsForActiveRegion(MODEL_OPTIONS)]
           ).map((m) => (
             <option key={m} value={m} style={{ background: "var(--panel)" }}>
               {m}

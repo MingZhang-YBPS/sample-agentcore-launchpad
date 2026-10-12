@@ -460,8 +460,15 @@ def adversarial_sessions(db: Session, run: EvalRun) -> list[dict[str, str]]:
         return []
     out: list[dict[str, str]] = []
     for scenario, session_id in zip(scenarios, sessions, strict=True):
-        assets = (scenario.get("metadata") or {}).get("launchpad_assets") or {}
-        if (assets.get("golden_test") or {}).get("adversarial") is True:
+        meta = scenario.get("metadata") or {}
+        assets = meta.get("launchpad_assets") or {}
+        # Two markings mean the same thing: an Assistant golden test flagged
+        # `adversarial`, and an Agent-DLC golden-set item whose `case_tier` is
+        # `adversarial` (dlc/golden.py). Checking only the first let every DLC
+        # red-team case through, so any run over a seeded golden set failed.
+        dlc_tier = (meta.get("dlc") or {}).get("case_tier")
+        golden_adversarial = (assets.get("golden_test") or {}).get("adversarial") is True
+        if golden_adversarial or dlc_tier == "adversarial":
             out.append({"session_id": str(session_id),
                         "scenario_id": str(scenario.get("scenario_id") or "")})
     return out

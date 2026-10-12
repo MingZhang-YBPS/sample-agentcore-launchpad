@@ -93,10 +93,19 @@ def _request(client, method, path, body):
     return client.request(method, path, json=body)
 
 
-def test_member_holds_every_agent_permission_by_default(sessions):
+def test_member_holds_every_build_permission_by_default(sessions):
+    """A member builds and may ask for a release; approving one is the operator's.
+
+    Amended by T19: the build/eval keys stay default-granted, but `promotion.approve`
+    is not — otherwise a member could approve their own release. The exact split lives
+    in `users_service.DEFAULT_BY_ROLE`.
+    """
     _, member, _ = sessions
     status = member.get("/api/auth/status").json()
-    assert status["permissions"] == sorted(users_service.AGENT_PERMISSIONS)
+    expected = users_service.default_permissions(users_service.ROLE_MEMBER)
+    assert status["permissions"] == sorted(expected)
+    assert "promotion.approve" not in status["permissions"]
+    assert "agents.deploy" in status["permissions"]
     for _, method, path, body, expected in PROBES:
         response = _request(member, method, path, body)
         assert response.status_code == expected, (method, path, response.text)
@@ -168,4 +177,7 @@ def test_permissions_patch_rejects_unknown_keys_and_non_booleans(sessions):
         assert response.status_code in (400, 422), response.text
     listed = admin.get("/api/users").json()["items"]
     row = next(item for item in listed if item["id"] == user_id)
-    assert row["permissions"] == dict.fromkeys(users_service.AGENT_PERMISSIONS, True)
+    assert row["permissions"] == {
+        key: key in users_service.default_permissions(users_service.ROLE_MEMBER)
+        for key in users_service.AGENT_PERMISSIONS
+    }

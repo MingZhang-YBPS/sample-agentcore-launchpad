@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 
+import { modelsForActiveRegion } from "../../../lib/regions";
 import type { SkillLabJudgeMode, SkillLabStatus, SkillLabTargetBackend } from "../../../lib/api";
 import {
   BACKEND_LABELS,
@@ -85,7 +86,7 @@ export function ModelFields({
               onChange={(e) => judge.setModel(e.target.value)}
             />
             <datalist id={`${testId}-judge-models`}>
-              {JUDGE_MODEL_SUGGESTIONS.map((model) => (
+              {modelsForActiveRegion(JUDGE_MODEL_SUGGESTIONS).map((model) => (
                 <option key={model} value={model} />
               ))}
             </datalist>

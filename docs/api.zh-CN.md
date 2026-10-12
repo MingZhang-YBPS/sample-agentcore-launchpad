@@ -670,6 +670,150 @@ Pipeline 的数据源也可以读取 **CloudWatch 日志组**（`source.type = "
 | `POST` | `/api/eval/runs/{run_id}/recommendations/{rec_id}/accept` | `agents.deploy`——**接受**一条 `COMPLETED` 的系统提示词建议，发布为新的 Harness 版本 → 202 `{agent, job_id, deployment_id, recommendation}`。请求体 `{system_prompt?}` 为审阅后要发布的文本；省略时使用已保存的 `edit`，否则使用原始建议（与原始建议有差异时记为 `accepted.edited`）。与 `POST /api/agents/{id}/redeploy` 使用相同的校验和 update 模式部署任务，重新发布该运行所属的平台 Harness（UpdateHarness → 新的不可变版本，`DEFAULT` 随之切换）。建议改写的是*线上*提示词，其中已含平台追加的 `## Knowledge bases` 段落，因此会先剔除该段。行上记录 `accepted {by, at, agent_id, previous_version, job_id, deployment_id}`（列表路由随之返回）；只能接受一次 → 409 `recommendation.already_accepted`；工具描述建议 → 400 `recommendation.accept_kind`；未完成或无文本 → 409 `recommendation.not_completed`；非 Harness Agent → 400 `recommendation.accept_not_harness` |
 | `GET` | `/api/eval/queue` | `{running, queued, locked, max_concurrency}`——取消的运行立即离开队列,计数只覆盖活跃运行 |
 
+## 控制台 Agent-DLC API —— 判据、黄金集、校准与放行门
+
+设计见 [agent-dlc-design.zh-CN.md](agent-dlc-design.zh-CN.md)，这里是接口面。方法论的主张是
+**放行由评估决定，不由会议拍板**，所以这组路由把四件事收归平台：标准（判据表）、证据（黄金集）、
+裁判能否代替人（校准），以及放行决定本身（挡在生产流量前的门）。
+
+其中三项权限**只授予具体的人，不按角色给**——`criteria.sign`、`golden.admit`、
+`judge.calibrate`——因为它们决定“什么叫好”。`criteria.manage`（成员/操作员）、
+`waiver.approve` 与 `release.sign`（操作员）沿用既有的职责分离。发布、签署、初次编制、准入、
+豁免审批与全部放行操作都在 `PROD_PROTECTED` 之列：在 prod 级工作区，成员无法触达。
+
+### 判据表
+
+判据集按 `lineage_id` 版本化。发布即冻结该版本，再编辑会开出下一版。已发布的**智能体**判据集
+必须由最后编辑人之外的人签署（作者会收到 `403 criteria.self_sign`，管理员可覆盖）。校验是强制的，
+不是建议：红线不能交给大模型裁判判定，成本与性能判据必须是指标，每个维度要么有判据、要么写明
+`n/a:<dimension>`，并且至少要有一条红线。裁判类判据的**实际档位**在校准记录判定为一致且未过期之前
+一律是 `observe`，这样判据表不会声称自己在拦人、而其实拦不住。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/criteria-sets?kind&agent_id` | `{sets: [...]}` —— 每个谱系一行，取最新版本 |
+| `POST` | `/api/criteria-sets` | `criteria.manage` —— `{kind: agent\|template, name, agent_id?, scenario?, template_lineage_id?, template_version?, from_evaluation_plan?}` → 201 返回完整载荷。模板的判据行是**复制**进来的；之后模板升级不会在智能体背后改动它 |
+| `GET` | `/api/criteria-sets/{lineage_id}?version` | `{set, criteria, summary, findings, calibration_policy, newer_template_version, versions}`。`summary` 含 `tiers`、`judge_share`、`run_cadence`、`declared_gates` / `effective_gates` 与 `compound_gate_rate`（所有门限同时达成的概率：八条 95% 的门限叠加只有 66%） |
+| `PUT` | `/api/criteria-sets/{lineage_id}` | `criteria.manage` —— 替换草稿的判据行。`422 criteria.invalid`，`detail.findings` 逐条给出 `{level, code, message, key}`；已发布版本返回 `409` |
+| `POST` | `/api/criteria-sets/{lineage_id}/versions` | `criteria.manage` —— 从已发布版本开出下一个草稿 → 201 |
+| `POST` | `/api/criteria-sets/{lineage_id}/publish` | `criteria.manage` —— 冻结该版本。只要还有 `error` 级发现就拒绝 |
+| `POST` | `/api/criteria-sets/{lineage_id}/sign` | `criteria.sign` —— 业务负责人签署 `{note}`。未签署的标准会让放行门判为 INVALID，所以这一步是承重的 |
+| `POST` | `/api/criteria-sets/{lineage_id}/adopt-template?template_version=` | `criteria.manage` —— 把更新的模板版本采纳进**新**的智能体版本 → 201。新版本未签署：尺子变了就要重新签 |
+| `DELETE` | `/api/criteria-sets/{lineage_id}` | `criteria.manage` —— 丢弃当前草稿 → `{discarded: <version>}` |
+| `GET` | `/api/criteria-sets/{lineage_id}/diff?a=&b=` | `{from, to, changes: [{key, change, fields, before, after}]}` |
+
+### 黄金集
+
+一个父数据集归拢三个切分数据集（`dev` / `regression` / `holdout`），每个切分各自同步成一个
+AWS Dataset，各有不可变版本。样本出处记录在 `metadata.dlc`（`case_tier`、`criteria_ids`、
+`origin`、`expected_source`、`retired`）。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/golden-sets` | `{golden_sets: [{id, name, criteria_lineage_id, splits}]}` |
+| `POST` | `/api/golden-sets` | `criteria.manage` —— `{name, criteria_lineage_id?, description?}` → 201。放行门是**通过**判据谱系找到黄金集的 |
+| `GET` | `/api/golden-sets/{dataset_id}` | 该集合加 `coverage`：判据 × 用例档位，样本少于三条的判据标 `thin`（它的通过率是噪声），另有 `unmapped_items`、`agent_observed_items` 以及每个来源的 `bias` 说明 |
+| `POST` | `/api/golden-sets/{id}/items` | `criteria.manage` —— 追加到 `dev` 或 `regression` → 201。不接受保留集（`409 golden.holdout_closed`） |
+| `POST` | `/api/golden-sets/{id}/seed` | `golden.admit` —— **唯一写入保留集的路径。** `{items: [{split?, scenario_id, turns, metadata}], shares?}` 会把未指定切分的样本按用例档位分层，使三个切分见到同样的构成，然后**封存**保留集：再调一次就是 `409 golden.holdout_sealed`。只有没人对着它调参，保留集才有意义 |
+| `POST` | `/api/golden-sets/{id}/move` | `criteria.manage` —— `{scenario_id, to: dev\|regression}`。样本既不会移入也不会移出保留集 |
+| `POST` | `/api/golden-sets/{id}/retire` | `criteria.manage` —— `{split, scenario_id, reason}`。退役样本离开放行门的分母，但仍会被重放，这样修好的问题不会悄悄回来 |
+
+### 标注与裁判校准
+
+标注是**盲的**：任务关闭前不会把裁判的判定给标注人看——先看到它，一致性这个数字就没有意义了。
+`decide` 在数据不支持时拒绝判为 `aligned`（κ 下限、最小样本量、且不低于人—人 κ 减 0.05），
+所以人只在数据允许的几种读法之间做选择。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/annotation-tasks?agent_id&status` | `{tasks: [...]}` |
+| `POST` | `/api/annotation-tasks` | `criteria.manage` —— `{criterion_key, annotators[2..10], adjudicator?, run_id?\|items?, purpose, agent_id?, criteria_lineage_id?, dataset_id?}` → 201。取自已完成评估运行的样本会带上该运行的裁判判定（关闭前隐藏）。该运行对此判据没有判定时返回 `422 annotation.no_items` |
+| `GET` | `/api/annotation-tasks/{id}` | 按**当前查看者**的权限返回：标注人只看到自己的标注；持 `judge.calibrate`（或管理员）看到全部 |
+| `POST` | `/api/annotation-tasks/{id}/labels` | `{item_ref, label, rationale?, answer?}` → 201。只有该任务的标注人可提交（`403 annotation.not_annotator`）；仲裁阶段只有仲裁人可提交 |
+| `POST` | `/api/annotation-tasks/{id}/adjudicate` | 进入仲裁——由仲裁人裁定有分歧的样本 |
+| `GET` | `/api/annotation-tasks/{id}/agreement` | `{n, pairs, human_human_kappa, judge_human_kappa, kappa_ci, band, confusion, disagreements, accuracy, policy, suggested_verdict}`。**先看人—人**：如果人都判不一致，这条判据写不下来，换裁判也救不了 |
+| `POST` | `/api/annotation-tasks/{id}/decide` | `judge.calibrate` —— `{verdict: aligned\|not_aligned, note}` → 校准记录。数据不支持 `aligned` 时返回 `409 calibration.not_supported` 并带上那几个数字；若判定人参与产生了该任务的标注——标注人、仲裁人，或发放过该任务标注链接的人（同一个人发出的两个链接只算一位标注人，不是两位）——返回 `403 calibration.own_labels`：标注就是证据，写证据的人不同时裁定它。此外 `aligned` 需要真实的人类上限：只有一个人标注的样本不计入，因此一个人无法自行认证裁判 |
+| `GET` | `/api/calibration/{criterion_key}?agent_id` | `{records, status, policy}`。记录在工作区 `calibration.period_days` 之后过期——此后该裁判重新只作观察 |
+
+**标注链接**让没有控制台账号的专家也能参与标注。链接**本身就是一个标注人**：生成时会把
+`link_<id>` 追加到任务的标注人列表，因此它的票以稳定身份计入 κ，而标签（收件人姓名）只用于展示。
+**prod 级工作区拒绝生成**（`409 annotation.links_not_allowed`，并说明替代做法）；在 dev 期间
+发出的链接，一旦工作区升为 prod 就不再可用。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/annotation-tasks/{id}/links` | `{links, allowed, reason}` —— prod 工作区下 `allowed: false` |
+| `POST` | `/api/annotation-tasks/{id}/links` | `judge.calibrate` —— `{label, expires_in_days?}` → 201，返回 `token` / `path` / `url`。令牌**只显示一次**，落盘只存其 sha256 |
+| `DELETE` | `/api/annotation-tasks/{id}/links/{link_id}` | `judge.calibrate` —— 撤销。它已经投出的标注保留：那是真实的票 |
+| `GET` | `/share/annotate/{token}` | **PUBLIC** —— 盲标队列：样本与**该标注人自己**的标注。绝不返回裁判判定、他人投票或一致性数字 |
+| `POST` | `/share/annotate/{token}/label` | **PUBLIC** —— `{item_ref, label, rationale?, answer?}` → 刷新后的队列 |
+
+任何不可用的链接（未知、格式错误、已撤销、已过期、任务已删、工作区升为 prod）统一返回
+`404 share.not_found`：外部人员不应能区分“被撤销的链接”和“从未存在的链接”。页面为
+`/r/annotate/<token>`。
+
+### 放行门
+
+`UpdateAgentRuntime` / `UpdateHarness` 会自动把 DEFAULT 端点滚到新版本，所以门控智能体通过
+**具名 `live` 端点**对外服务，所有调用路径都带 `qualifier="live"`。当工作区策略为
+`release_mode="gated"` 时，一次成功部署会把 `candidate` 指向新版本并开出一条放行记录——
+`live` 不动，于是候选版本可以在没有任何用户看到的前提下接受判定。签署会把 `live` 指过去；
+回滚再指回来。不删除任何资源。
+
+放行门按固定顺序判定：**红线**（有任何突破 → `BLOCKED`，永不豁免）→ **分母**（判定缺失，
+或无法判定占比超过 5% → `INVALID`）→ **各维度门限**（按整数百分比比较，未达 → `BLOCKED`，
+除非有生效中的豁免覆盖）→ **观察项**（只记录）。出处问题——判据版本未签署、运行用的是别的版本
+或别的端点、没有评估保留集——同样让结论为 `INVALID`。`INVALID` **不是**“不达标”：是证据判不了，
+该修的是证据，而不是去豁免。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/agents/{id}/release` | `{release_mode, state, criteria_set, pending, records, waivers}`。`state` 含 `endpoint_mode`、从 AWS 读回的 live/candidate 版本，以及 `gateable` 与 `gateable_reason` |
+| `POST` | `/api/agents/{id}/release/migrate` | `release.sign` —— 在当前版本上创建 `live` 并把生产流量切过去。生产服务什么版本是放行决定，所以构建这个智能体的工程师无权执行。`409 release.not_gateable` 会说明原因（A2A、系统预置、尚未部署） |
+| `POST` | `/api/agents/{id}/release/evaluate` | `eval.run` —— `{repeats?, confirm_cost?}` → 202。对 `candidate` 排入回归集**和**保留集两次运行，并先算钱：`409 run.cost_over_limit` / `run.cost_confirm_required` 带上预估，成本闸门在花掉第一个会话之前就拒绝 |
+| `GET` | `/api/agents/{id}/release/gate` | `{status: evaluating\|decided, report, record}`。报告为 `{verdict, criteria: [...], redline_violations, invalid, gate_failures, waived, provenance, order}`；每行带实测通过率与 Wilson 区间、`threshold_inside_ci`（样本判不了）、分母，以及相对上一次放行的 `trend` |
+| `POST` | `/api/agents/{id}/release/sign` | `release.sign` —— 放行候选版本：`live` 被重新指向，流量随之切换。只有 `PASS` 的报告可签（否则 `409`），且签署人不能是发起人（`403`） |
+| `POST` | `/api/agents/{id}/release/block` | `release.sign` —— 候选版本不进生产，原因记录在案 |
+| `POST` | `/api/agents/{id}/release/rollback` | `release.sign` —— 把 `live` 指回上一个版本 → 返回新状态。不删除任何东西 |
+| `GET` | `/api/release-records?agent_id=` · `/api/release-records/{id}` | 决策历史，每条记录带它的放行报告与出处 |
+
+**豁免**是明知未达门限仍放行。它需要理由、具名风险责任人、失效日期（≤ 30 天）和第二个人审批，
+红线直接拒绝（`409 waiver.redline`）。放行报告会统计某条判据被豁免过几次——超过一次就是标准本身
+的问题，不是例外。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/api/agents/{id}/waivers` | `criteria.manage` —— `{criterion_key, actual?, threshold?, reason, risk_owner, compensating_control?, expires_on}` → 201 |
+| `POST` | `/api/waivers/{id}/approve` · `/reject` | `waiver.approve` —— 审批人不能是发起人 |
+| `DELETE` | `/api/waivers/{id}` | `waiver.approve` —— 撤销生效中的豁免 |
+
+### 样本准入、漂移监测、运行与读回
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/admission?agent_id&status&refresh` | 候选队列，来自点赞点踩、专家纠正、问题箱与 Insights 聚类。`priority` 把被评估器判成**通过**的候选排在最前：它既是缺失的用例，也是一份校准样本 |
+| `GET` | `/api/admission/{id}` | 单个候选，附个人信息 `redaction` 预览与 `nearest` 已有黄金集样本（精确与归一化匹配），用于识别重复 |
+| `POST` | `/api/admission/{id}/admit` | `golden.admit` —— `{split, expected_response, expected_source, criteria_ids, case_tier}` → 201。期望答案必须由人撰写或确认（拒绝 `agent_observed`：智能体自己的输出不是标准），脱敏不能是 blocked，且永不写入保留集 |
+| `POST` | `/api/admission/{id}/reject` · `/duplicate` | `golden.admit` —— 拒绝必须写原因；原因**就是**记录 |
+| `GET` · `PUT` | `/api/agents/{id}/watch` | `eval.run` —— 排程重评 `{every, at_hour, tz, repeats, max_cost_usd, enabled}`，并返回 `series`、`alerts`、`drift` 与近期运行。模型可能在智能体底下换掉而一行代码都没改，所以标准要按排程重新施加 |
+| `POST` | `/api/agents/{id}/watch/run?split=` | `eval.run` → 202。预估超过成本上限的运行会被**跳过并上报**（`409 watch.over_cost_ceiling`），而不是先花掉 |
+| `GET` | `/api/eval/runs/{run_id}/criteria?criterion_key` | 一次运行的逐判据结果：`summary`（n、通过/不通过、通过率、Wilson 上下界、`missing`、`undetermined_rate`、`pass_k`，或指标的 `value` 与其规则）、`denominator` 口径、`endpoint_qualifier`，以及每个会话的判定与裁判给出的理由 |
+| `POST` | `/api/eval/runs/{run_id}/criteria/snapshot` | 重新读取一次已完成运行的结果流（读取抖动后的重试）→ 202 |
+| `GET` | `/api/eval/runs/compare?runs=a,b,c` | 2 个及以上运行的修复阶梯（最早在前）：逐判据 Δ 与两比例 p 值、`fixed` / `new_failures` / `still_failing`，以及每级的 `layers_changed`——同时改两层带来的收益归不到任何一层。判据版本不同的运行会返回 `comparable: false` 与 `two_numbers`（智能体变好了多少，标准变严了多少） |
+| `GET` | `/api/agents/{id}/ladder` | 同上，取该智能体最近若干次已完成的判据运行 |
+| `POST` | `/api/eval/runs/estimate` | `{agent_id?, dataset_id?, items?, evaluators, repeats}` → 样本数 × k ×（智能体每会话 + 裁判每样本），并说明估算依据（`history_7d` / `rough` / 未定价）、预计时长，以及工作区策略会要求确认还是直接拒绝 |
+| `GET` | `/api/agents/{id}/scorecard` | 按方法论固定顺序给出五个维度的标准与现状，附趋势序列、指标实测值、最近一次放行判定及其结果、生效中的豁免、`calibration_debt` 与黄金集覆盖 |
+| `GET` | `/api/audit?action&target&limit` | 管理员 —— 每个工作台都会展示的决策记录：谁签署了标准、谁准入了样本、谁批准了豁免、谁放行的 |
+
+`POST /api/eval/runs` 另外接受 `repeats`（1–10，即 **pass^k**）与 `confirm_cost`。`repeats`
+把每条数据集用例在不同会话中重复 k 次，这是衡量一致性的唯一办法——AgentCore 没有按用例重复的参数。
+它只适用于“对智能体回放数据集”这一种范围（否则 `422 run.repeats_scope`），成本乘以 k；
+而对黄金集切分的运行会自动按该切分已发布的判据打分，因此会落到修复阶梯上。
+
+本模块读取的放行策略字段由 `PUT /api/release-policies/{workspace_id}`（管理员）设置：
+`release_mode`（`direct` | `gated`）、`calibration`（`{period_days, kappa_floor}`）以及成本闸门
+`eval_cost_confirm_usd` / `eval_cost_max_usd`。该 PUT 会整体替换策略。
+
 ## 控制台在线评估 API / Console Online Evaluation API
 
 `/api/eval/online/*` 管理 AgentCore **在线评估配置**:按采样比例持续给真实会话打分。AWS 是唯一事实来源,

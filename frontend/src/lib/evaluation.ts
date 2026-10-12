@@ -439,7 +439,6 @@ export const ACTOR_MODELS = [
   "global.anthropic.claude-haiku-5-5",
   "global.anthropic.claude-sonnet-5",
   "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "global.amazon.nova-2-lite-v1:0",
 ];
 
 export const ACTIVE_RUN_STATUSES = new Set([

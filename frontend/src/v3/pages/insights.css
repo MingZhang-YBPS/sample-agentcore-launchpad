@@ -1,0 +1,114 @@
+/* V3 evaluation overview (评估总览) and intents (意图视图). */
+
+.v3 .v3-ins-note { margin: 0 0 12px; color: var(--v3-text-3); font-size: 13px; line-height: 1.55; }
+.v3 .v3-ins-sub { display: block; margin-top: 3px; color: var(--v3-text-3); font-size: 12px; }
+.v3 .v3-ins-clip {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  max-width: 380px; word-break: break-word; font-size: 13px;
+}
+.v3 .v3-ins-link { color: var(--v3-info); }
+.v3 .v3-ins-link:hover { text-decoration: underline; }
+
+/* filter bar: compact labelled selects */
+.v3 .v3-ins-filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.v3 .v3-ins-select { display: grid; gap: 4px; min-width: 130px; }
+.v3 .v3-ins-select > span {
+  font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3);
+}
+.v3 .v3-ins-select .v3-select { height: 32px; font-size: 13px; padding: 0 10px; }
+.v3 .v3-ins-search { position: relative; margin-left: auto; flex: 1 1 200px; max-width: 300px; }
+.v3 .v3-ins-search svg { position: absolute; left: 12px; top: 11px; color: var(--v3-text-3); }
+.v3 .v3-ins-search .v3-input { padding-left: 34px; height: 32px; font-size: 13px; }
+
+/* scores carry the signal colour */
+.v3 .v3-ins-score { font-family: var(--v3-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.v3 .v3-ins-score[data-s="ok"] { color: var(--v3-ok); }
+.v3 .v3-ins-score[data-s="wait"] { color: var(--v3-wait); }
+.v3 .v3-ins-score[data-s="act"] { color: var(--v3-act); }
+
+/* bars: per-evaluator means and cluster sizes */
+.v3 .v3-ins-bars { display: grid; gap: 4px; }
+.v3 .v3-ins-bar {
+  display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 1fr) 52px 150px; gap: 14px; align-items: center;
+  padding: 6px 0; font-size: 13px;
+}
+.v3 .v3-ins-bar + .v3-ins-bar { border-top: 1px solid rgba(29, 43, 69, 0.55); }
+.v3 .v3-ins-bar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3 .v3-ins-bar .v3-ins-score { text-align: right; }
+.v3 .v3-ins-bar .meta { color: var(--v3-text-3); font-size: 12px; text-align: right; }
+.v3 .v3-ins-bar .track, .v3 .v3-ins-cluster .track {
+  display: block; height: 6px; border-radius: 3px; background: var(--v3-ink-0); overflow: hidden;
+}
+.v3 .v3-ins-bar .track i, .v3 .v3-ins-cluster .track i { display: block; height: 100%; border-radius: 3px; background: var(--v3-line-2); }
+.v3 .v3-ins-bar .track i[data-s="ok"], .v3 .v3-ins-cluster .track i[data-s="ok"] { background: var(--v3-ok); }
+.v3 .v3-ins-bar .track i[data-s="wait"] { background: var(--v3-wait); }
+.v3 .v3-ins-bar .track i[data-s="act"], .v3 .v3-ins-cluster .track i[data-s="act"] { background: var(--v3-act); }
+.v3 .v3-ins-cluster .track i[data-s="info"] { background: var(--v3-info); }
+
+/* insight clusters */
+.v3 .v3-ins-istats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.v3 .v3-ins-clusters { display: grid; gap: 8px; }
+.v3 .v3-ins-cluster {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) 220px; gap: 14px; align-items: start; width: 100%;
+  padding: 12px 14px; border-radius: 9px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+  color: var(--v3-text); font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-ins-cluster:hover { border-color: var(--v3-line-2); background: var(--v3-ink-2); }
+.v3 .v3-ins-cluster .rank {
+  display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; font-family: var(--v3-mono); font-size: 12px;
+  background: var(--v3-ink-3); color: var(--v3-text-2);
+}
+.v3 .v3-ins-cluster .rank[data-s="act"] { background: var(--v3-act-dim); color: var(--v3-act); }
+.v3 .v3-ins-cluster .rank[data-s="info"] { background: var(--v3-info-dim); color: var(--v3-info); }
+.v3 .v3-ins-cluster .rank[data-s="ok"] { background: var(--v3-ok-dim); color: var(--v3-ok); }
+.v3 .v3-ins-cluster .body { display: grid; gap: 4px; min-width: 0; }
+.v3 .v3-ins-cluster .desc { color: var(--v3-text-2); font-size: 13px; line-height: 1.5; }
+.v3 .v3-ins-cluster .meter { display: grid; gap: 6px; padding-top: 6px; }
+.v3 .v3-ins-cluster .meta { color: var(--v3-text-3); font-size: 12px; }
+.v3 .v3-ins-rec { display: block; font-size: 12.5px; color: var(--v3-text-2); line-height: 1.5; }
+.v3 .v3-ins-dialog .lbl, .v3 .v3-ins-rec .lbl, .v3 .v3-ins-cause .lbl {
+  margin-right: 8px; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-text-3);
+}
+
+/* dialogs */
+.v3 .v3-ins-dialog { display: grid; gap: 12px; max-height: 64vh; overflow-y: auto; padding-right: 4px; color: var(--v3-text); }
+.v3 .v3-ins-desc { margin: 0; line-height: 1.6; color: var(--v3-text-2); }
+.v3 .v3-ins-subtitle {
+  margin-top: 6px; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3);
+}
+.v3 .v3-ins-card {
+  display: grid; gap: 6px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+  font-size: 13px; line-height: 1.55;
+}
+.v3 .v3-ins-cause { color: var(--v3-text-2); }
+.v3 .v3-ins-turn { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--v3-line); background: var(--v3-ink-1); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.v3 .v3-ins-turn.user { background: var(--v3-ink-3); }
+.v3 .v3-ins-turn .who { display: block; margin-bottom: 4px; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); }
+
+.v3 .v3-ins-thumb { display: inline-flex; gap: 5px; align-items: center; font-family: var(--v3-mono); font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-ins-thumb[data-s="ok"] { color: var(--v3-ok); }
+.v3 .v3-ins-thumb[data-s="act"] { color: var(--v3-act); }
+.v3 .v3-ins-pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; padding: 10px 16px; color: var(--v3-text-3); font-size: 12px; }
+
+/* intents: volume and thumbs-down rate per intent */
+.v3 .v3-ins-intent {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 90px 100px auto; gap: 16px; align-items: center;
+  padding: 11px 20px; border-top: 1px solid rgba(29, 43, 69, 0.55);
+}
+.v3 .v3-ins-intent .track { display: block; height: 6px; border-radius: 3px; background: var(--v3-ink-0); overflow: hidden; }
+.v3 .v3-ins-intent .track i { display: block; height: 100%; border-radius: 3px; background: var(--v3-info); }
+.v3 .v3-ins-intent .num { font-family: var(--v3-mono); font-size: 12.5px; text-align: right; color: var(--v3-text-2); }
+.v3 .v3-ins-intent .h { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); }
+
+@media (max-width: 1180px) {
+  .v3 .v3-ins-istats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .v3 .v3-ins-cluster { grid-template-columns: 30px minmax(0, 1fr); }
+  .v3 .v3-ins-cluster .meter { grid-column: 2; }
+}
+.v3 .v3-ins-worst { display: block; font-size: 18px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3 .v3-ins-nowrap .v3-filters { flex-wrap: nowrap; }
+.v3 .v3-ins-nowrap .v3-btn { white-space: nowrap; }
+
+/* Dialogs sit in an un-animated layer: as a direct child of .v3-reveal a modal mask
+   would keep the reveal rule's opacity: 0 (its own fade replaces the reveal animation). */
+.v3 .v3-reveal > .v3-ins-layer { animation: none; opacity: 1; }

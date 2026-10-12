@@ -131,7 +131,7 @@ mutations, evaluation datasets/evaluators/runs, AB experiments and canaries,
 Cedar policy writes, API keys, the Studio canvas, and the browser /
 code-interpreter demos. The authoritative list is the table in
 `backend/app/core/route_policy.py`; a route missing from it is refused rather
-than served. (Local code execution additionally stays disabled in production
+than served. (Local code execution additionally stays disabled in prod run mode
 for every role unless `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED` opts in.)
 
 A small set of capabilities remains **revocable per user** in the User
@@ -261,8 +261,8 @@ the unverified AWS assumptions.**
 | Variable | Effect |
 |---|---|
 | `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` | Serve an unauthenticated console on a reachable interface. Restores the pre-hardening behavior; use only on a trusted network. |
-| `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | Re-enable local code execution in production (see below). |
-| `LAUNCHPAD_STUDIO_EXEC_BACKEND=docker` | Run local-debug code in one-shot Docker containers instead of host subprocesses — also serves the endpoints in production (see below). |
+| `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | Re-enable local code execution in prod run mode (see below). |
+| `LAUNCHPAD_STUDIO_EXEC_BACKEND=docker` | Run local-debug code in one-shot Docker containers instead of host subprocesses — also serves the endpoints in prod run mode (see below). |
 | `LAUNCHPAD_AUTH_COOKIE_SECURE=false` | Drop `Secure` when TLS is not actually terminated in front of the console. |
 
 There is no switch that disables role authorization: a flag that turns
@@ -378,7 +378,7 @@ immutable, not trustworthy.
 
 The Studio local-debug endpoints (`/api/execute`, `/api/execute/stream`, and the
 `/api/conversations` multi-turn surface) run **caller-supplied Python on the
-server**. They are therefore **disabled in production mode**, and Studio local
+server**. They are therefore **disabled in prod run mode**, and Studio local
 debug plus AI Fix stop working there. Set
 `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` to accept the risk.
 
@@ -533,7 +533,7 @@ through the same workspace client funnel as everything else.
 | `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | Which of them leads that list and is used when a request names none. |
 | `prompt_opt_max_sessions` | `30` (3–100) | How many sessions of the pinned run a provider reads (worst-first plus a best-scoring contrast set). Fewer is cheaper and faster; more gives the reflection more evidence to generalise from. |
 | `prompt_opt_max_tokens` | `8192` (512–16000) | Output budget of the reflection call. A two-component reflection (prompt plus several tool descriptions) ran past 4096, and the provider doubles this once on its own when a response comes back truncated. |
-| `prompt_opt_read_timeout_s` | `900` | Read timeout of the reflection call. The call streams, so this bounds the gap between chunks rather than the total. botocore's 60 s default is far too low: in production a large model over 30 sessions ran past it and botocore silently re-sent the whole request five times before failing. |
+| `prompt_opt_read_timeout_s` | `900` | Read timeout of the reflection call. The call streams, so this bounds the gap between chunks rather than the total. botocore's 60 s default is far too low: in practice a large model over 30 sessions ran past it and botocore silently re-sent the whole request five times before failing. |
 
 ### Self-service accounts and User Management
 
@@ -563,7 +563,79 @@ password (shown once), and delete. Expiry and disabling are enforced on every re
 loses console access immediately — it does not have to wait for the session
 cookie to lapse.
 
-## Production deployment / 生产部署
+## Agent-DLC: turning the gate on / 打开放行门
+
+[docs/agent-dlc-design.md](agent-dlc-design.md) is the design; this is the order of
+operations. Nothing below happens by itself — a workspace keeps its existing
+behaviour (`release_mode: direct`, a deploy goes straight to production) until an
+administrator switches it on.
+
+以下步骤不会自动发生：在管理员打开之前，工作区保持原有行为
+（`release_mode: direct`，部署直接进生产）。
+
+1. **Switch the workspace to gated.** Standards → Release gate → *Release policy*
+   (administrator), or `PUT /api/release-policies/{workspace_id}` with
+   `{"release_mode": "gated"}`. The same card sets how long a judge calibration holds
+   (`calibration.period_days`, `kappa_floor`) and the evaluation spend guard
+   (`eval_cost_confirm_usd`, `eval_cost_max_usd`) — the guard **refuses** a run over
+   the ceiling, it does not merely warn.
+2. **Move each agent onto named endpoints.** Standards → Release gate → *Move to
+   live/candidate* (needs `release.sign`). Until then the agent has one endpoint that
+   AWS auto-rolls on every update, so there is nothing a gate could hold back. A2A
+   runtimes and system presets cannot be gated and say so.
+3. **Grant the three standard-owner permissions to people, not roles.** Users →
+   a member → `criteria.sign` (signs the standard), `golden.admit` (admits samples),
+   `judge.calibrate` (declares a judge aligned). They are deliberately absent from
+   every role default: these three decide what "good" means. `criteria.manage`,
+   `waiver.approve` and `release.sign` follow the ordinary member/operator split.
+4. **Write and sign the criteria table.** Standards → Criteria. At least one red
+   line, every dimension covered or marked `n/a:<dimension>`, cost/performance as
+   metrics, and no red line on an LLM judge — the editor refuses the rest. Publish
+   freezes the version; someone *other than the author* signs it. An unsigned
+   standard makes every gate report INVALID, which is the point.
+5. **Curate the golden set once.** Standards → Golden set → *Curate the splits*
+   (`golden.admit`). This is the only path that writes the holdout, and it seals it
+   afterwards. Items are stratified by case tier so all three splits see the same
+   mix of good / bad / ambiguous / adversarial cases.
+6. **Invoke each endpoint once before the first gate run.** Each AgentCore endpoint
+   logs to its own group, so a brand-new `candidate` has no telemetry until something
+   runs on it, and the gate would time out waiting for records that do not exist yet.
+   A single chat turn on the candidate is enough.
+7. **Then the loop runs itself.** A deploy lands on `candidate` and opens a release;
+   Standards → Release gate runs the regression *and* holdout splits against it,
+   reports a verdict with every rate's confidence interval, and a second person signs
+   it off — only then does `live` move. Rollback re-points `live`; nothing is deleted.
+
+**Judges only block once calibrated.** A judge criterion is shown and treated as
+`observe` until a labelling task records `aligned`. Standards → Calibration creates
+the task from a completed run (the judge's verdicts are hidden from annotators), and
+in a dev/staging workspace you can hand an outside expert an account-free link
+(`/r/annotate/<token>`). A **prod** workspace refuses those links — labelling there
+touches real customer transcripts, so invite the person as a member instead.
+
+**End-to-end check (real AWS, cleans up after itself):**
+
+```bash
+cd backend
+# the whole loop with three identities: deploy → migrate → criteria signed by
+# someone else → golden set sealed → gate → sign → rollback → calibration
+LAUNCHPAD_E2E_USERNAME=<admin> LAUNCHPAD_E2E_PASSWORD=<pw> \
+  uv run python scripts/e2e_agent_dlc.py --base http://localhost:8000
+# the nine console views in both languages, failing on console errors or 5xx
+uv run python scripts/e2e_agent_dlc_browser.py --ui http://localhost:5173 --lang zh-CN
+```
+
+The first script refuses to run against a `prod`-tier workspace and restores the
+release policy it changed. Both are excluded from `make verify` (they need real AWS
+credentials and a bootstrapped workspace).
+
+## Hosted deployment / 托管部署
+
+> This section describes how to keep the sample running on a long-lived host for a
+> workshop or a shared evaluation environment. It is not a production deployment
+> guide: the sample has not been hardened for production use, and anything you run
+> on it is your responsibility to secure, test and operate. Work with your security
+> and legal teams before exposing it to real users or real data.
 
 `./start.py --prod` is a local preview: it builds the frontend, serves the built
 bundle, drops backend auto-reload, and binds to `0.0.0.0`. For a host that stays

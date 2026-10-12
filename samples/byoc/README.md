@@ -1,6 +1,8 @@
 # BYOC samples — Bring Your Own Code
 
-Two minimal agents that satisfy the Launchpad BYOC runtime contract:
+Two minimal agents that satisfy the Launchpad BYOC runtime contract, plus a
+migration walkthrough (`langchain-to-strands/`: a tool-calling LangChain agent
+moved to Strands Agents and deployed as `code_zip`; see its README):
 
 - ARM64 (aarch64) · port **8080** · `POST /invocations` + `GET /ping`
 - invoke payload: `{"prompt": "...", "actor_id": "..."}`

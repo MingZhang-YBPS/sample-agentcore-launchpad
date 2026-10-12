@@ -16,6 +16,7 @@ The agent's resource kind decides which pair of list operations runs:
 * anything else (no resource yet, deleted, unknown method) → ``agent.no_resource``.
 """
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 
@@ -30,6 +31,14 @@ ResourceKind = Literal["runtime", "harness"]
 RUNTIME_METHODS = {"zip_runtime", "studio", "container", "byoc"}
 DEFAULT_ENDPOINT = "DEFAULT"
 CANARY_ENDPOINTS = ("stable", "treatment")
+# The names the canaries actually mint: runtime `stable<id6>` / `treat<id6>`
+# (optimization/canary_service.py) and harness `ctl<id6>` / `trt<id6>`
+# (optimization/canary_harness.py). The bare legacy names stay recognised.
+_CANARY_ENDPOINT_RE = re.compile(r"^(?:stable|treat|ctl|trt)[0-9a-f]{6}$")
+
+
+def is_canary_endpoint(name: str | None) -> bool:
+    return bool(name) and (name in CANARY_ENDPOINTS or bool(_CANARY_ENDPOINT_RE.match(name)))
 
 
 def _iso(value: Any) -> str | None:
@@ -182,5 +191,5 @@ def list_agent_versions(control: Any, agent: Agent) -> dict[str, Any]:
         "endpoints": endpoints,
         "latest_version": latest,
         "ledger_version": _text(agent.version),
-        "canary_endpoints": [e["name"] for e in endpoints if e["name"] in CANARY_ENDPOINTS],
+        "canary_endpoints": [e["name"] for e in endpoints if is_canary_endpoint(e["name"])],
     }

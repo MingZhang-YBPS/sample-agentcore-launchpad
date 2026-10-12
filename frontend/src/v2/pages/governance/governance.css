@@ -1,11 +1,11 @@
 /* V2 治理 (governance) — module styles, scoped under the V2 shell root. */
 .v2 .v2-governance-sections {
-  display: flex; align-items: center; gap: 16px; background: #fff; border-radius: var(--v2-radius);
+  display: flex; align-items: center; gap: 16px; background: var(--v2-card); border-radius: var(--v2-radius);
   padding: 8px 16px; margin-bottom: 16px; box-shadow: var(--v2-shadow); flex-wrap: wrap;
 }
 .v2 .v2-governance-sections > .mono { margin-left: auto; }
 .v2 .v2-governance-actions { margin-top: 14px; }
-.v2 .v2-governance-blockers { font-size: 12.5px; color: #b04800; }
+.v2 .v2-governance-blockers { font-size: 12.5px; color: var(--v2-warning-ink-2); }
 .v2 .v2-governance-err { color: var(--v2-danger) !important; }
 .v2 .v2-governance-break { overflow-wrap: anywhere; word-break: break-word; }
 .v2 .v2-governance-dotted { border-bottom: 1px dotted var(--v2-ink-4); cursor: help; }
@@ -20,7 +20,7 @@
   color: var(--v2-primary); font-family: var(--v2-mono); font-size: 12.5px;
 }
 .v2 .v2-governance-subrow > td { background: var(--v2-fill) !important; padding: 8px 16px 12px 36px; }
-.v2 .v2-governance-subrow .v2-table { background: #fff; border: 1px solid var(--v2-line); border-radius: var(--v2-radius); }
+.v2 .v2-governance-subrow .v2-table { background: var(--v2-card); border: 1px solid var(--v2-line); border-radius: var(--v2-radius); }
 .v2 .v2-governance-tag-x { border: 0; background: none; padding: 0; margin-left: 2px; cursor: pointer; color: inherit; display: inline-grid; }
 .v2 .v2-governance-claim { display: flex; align-items: center; gap: 8px; margin-top: 12px; max-width: 520px; }
 .v2 .v2-governance-claim > .mono { white-space: nowrap; }
@@ -36,7 +36,7 @@
 .v2 .v2-governance-editor-side { position: sticky; top: 72px; }
 .v2 .v2-governance-chip {
   display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 6px;
-  border: 1px solid var(--v2-line); background: #fff; cursor: pointer; font-size: 13px; color: var(--v2-ink);
+  border: 1px solid var(--v2-line); background: var(--v2-card); cursor: pointer; font-size: 13px; color: var(--v2-ink);
 }
 .v2 .v2-governance-chip small { color: var(--v2-ink-3); font-size: 11.5px; }
 .v2 .v2-governance-chip:hover { border-color: var(--v2-primary-hover); }
@@ -54,13 +54,13 @@
 
 /* tools: demos */
 .v2 .v2-governance-demos { display: grid; grid-template-columns: minmax(320px, 0.75fr) minmax(0, 1.25fr); gap: 16px; align-items: start; }
-.v2 .v2-governance-out { color: #008026; }
-.v2 .v2-governance-out.err { color: #cb2634; }
+.v2 .v2-governance-out { color: var(--v2-success-ink-2); }
+.v2 .v2-governance-out.err { color: var(--v2-danger-ink); }
 .v2 .v2-governance-readout {
   display: flex; justify-content: space-between; gap: 12px; margin: 14px 0 10px; font-size: 12px; color: var(--v2-ink-3);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.v2 .v2-governance-readout .ok { color: #008026; text-align: right; }
+.v2 .v2-governance-readout .ok { color: var(--v2-success-ink-2); text-align: right; }
 .v2 .v2-governance-live {
   position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--v2-radius);
   border: 1px solid var(--v2-line); background: var(--v2-fill);

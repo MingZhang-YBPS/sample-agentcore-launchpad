@@ -1,0 +1,53 @@
+/* Glossary hints (T03) — scoped under .v2 like the rest of the V2 theme. */
+.v2 .v2-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: var(--v2-ink-3);
+  cursor: help;
+  vertical-align: middle;
+  border-radius: 50%;
+}
+.v2 .v2-hint:hover,
+.v2 .v2-hint:focus-visible { color: var(--v2-primary); }
+.v2 .v2-term {
+  margin-left: 0;
+  color: inherit;
+  border-radius: 0;
+  border-bottom: 1px dotted var(--v2-ink-3);
+}
+.v2 .v2-hint-tip {
+  position: absolute;
+  z-index: 50;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: var(--v2-radius-sm);
+  background: #1d2129;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  box-shadow: var(--v2-shadow);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+.v2 .v2-hint:hover > .v2-hint-tip,
+.v2 .v2-hint:focus-visible > .v2-hint-tip,
+.v2 .v2-hint:focus > .v2-hint-tip,
+.v2 .v2-option.has-hint:hover > .v2-hint-tip,
+.v2 .v2-option.has-hint:focus-visible > .v2-hint-tip {
+  opacity: 1;
+  visibility: visible;
+}
+.v2 .v2-option.has-hint { position: relative; }
+.v2 .v2-option.has-hint > .v2-hint-tip { left: 16px; transform: none; }
+.v2 .v2-option .v2-option-hint { color: var(--v2-ink-3); display: inline-flex; }

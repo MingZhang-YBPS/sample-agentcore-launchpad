@@ -3,6 +3,8 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.services.agentcore import registry as reg
 
 RID = "launchpad-registry-x"
@@ -421,3 +423,44 @@ def test_discoverable_route_registry_unavailable_is_503(client, monkeypatch):
 
     assert response.status_code == 503
     assert response.json()["code"] == "registry.unavailable"
+
+
+def test_submitting_a_record_retries_the_services_own_concurrent_conflict(monkeypatch):
+    """`SubmitRegistryRecordForApproval` answers ConflictException "Concurrent update
+    detected. Please retry." while it settles — observed failing a whole deploy at the
+    register stage, which is why this retries instead of surfacing it."""
+    from app.services.agentcore import registry as reg
+
+    monkeypatch.setattr(reg.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    class _Client:
+        def submit_registry_record_for_approval(self, **kw):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise type("ConflictException", (Exception,), {})(
+                    "Concurrent update detected. Please retry."
+                )
+            return {"recordId": kw["recordId"], "status": "PENDING_APPROVAL"}
+
+    out = reg.submit_record(_Client(), "reg-1", "rec-1")
+    assert out["status"] == "PENDING_APPROVAL" and calls["n"] == 3
+
+
+def test_a_different_conflict_is_not_retried(monkeypatch):
+    """Only AWS's own "retry" wording is retried — a real state conflict must surface."""
+    from app.services.agentcore import registry as reg
+
+    monkeypatch.setattr(reg.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    class _Client:
+        def submit_registry_record_for_approval(self, **kw):
+            calls["n"] += 1
+            raise type("ConflictException", (Exception,), {})(
+                "Record is already PENDING_APPROVAL"
+            )
+
+    with pytest.raises(Exception, match="already PENDING_APPROVAL"):
+        reg.submit_record(_Client(), "reg-1", "rec-1")
+    assert calls["n"] == 1

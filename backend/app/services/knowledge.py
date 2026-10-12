@@ -848,6 +848,19 @@ def delete_kb(
     return {"deleted": True, "kb_id": kb_id}
 
 
+def sample_document_names(workspace: WorkspaceContext, kb_id: str, limit: int = 8) -> list[str]:
+    """A few document file names from the KB's first data source (best effort).
+
+    Feeds the suggested-questions prompt only, so it stays to one data source and
+    one page; any AWS failure is the caller's to swallow.
+    """
+    sources = _list_data_sources(agent_client(workspace), kb_id)
+    if not sources:
+        return []
+    page = list_documents(workspace, kb_id, sources[0]["dataSourceId"], page_size=limit)
+    return [d["name"] for d in page["documents"] if d.get("name") and d["name"] != "—"][:limit]
+
+
 def _record_creator(
     workspace: WorkspaceContext, kb_id: str, creator: creators.Creator | None
 ) -> None:

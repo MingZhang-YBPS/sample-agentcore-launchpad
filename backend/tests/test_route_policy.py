@@ -57,7 +57,9 @@ def _api_routes(app) -> set[tuple[str, str]]:
     pairs = set()
     for route in walk(app.routes):
         path = getattr(route, "path_format", None) or getattr(route, "path", "")
-        if not (path == "/api" or path.startswith("/api/")):
+        # `/share` is the account-free surface (T13): outside /api but classified
+        # in the same table, so it cannot ship unclassified either.
+        if not (path == "/api" or path.startswith(("/api/", "/share/"))):
             continue
         for method in getattr(route, "methods", None) or []:
             if method in {"HEAD", "OPTIONS"}:

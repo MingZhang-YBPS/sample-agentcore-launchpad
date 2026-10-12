@@ -32,8 +32,10 @@ export function RecentAgents({
       title: t("v2.home.agents.colAgent"),
       render: (agent) => (
         <>
-          <LinkButton onClick={() => open(agent)}>{agent.name}</LinkButton>
-          <span className="sub mono">ID: {agent.id.slice(0, 12)}</span>
+          <LinkButton onClick={() => open(agent)}>{agent.display_name || agent.name}</LinkButton>
+          <span className="sub mono">
+            {agent.display_name ? `${agent.name} · ` : ""}ID: {agent.id.slice(0, 12)}
+          </span>
         </>
       ),
     },

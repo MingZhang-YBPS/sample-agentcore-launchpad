@@ -38,11 +38,14 @@ from app.core.db import (
     get_db,
 )
 from app.core.errors import AppError, NotFoundError
+from app.core.regions import AGENTCORE_SUGGESTED_REGIONS
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
 from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
 from app.services import api_keys as api_keys_service
 from app.services import aws_clients, visibility, workspace_bootstrap
+from app.services import promotion as promotion_service
 from app.services import users as users_service
+from app.services.audit import record_audit_event
 from app.services.workspace import (
     WorkspaceContext,
     default_workspace_context,
@@ -70,6 +73,14 @@ _ROLE_ARN_MAX = 256  # the ledger column's width — reject rather than truncate
 # ASCII because `\w` would otherwise accept letters STS itself rejects.
 _EXTERNAL_ID = re.compile(r"^[\w+=,.@:/-]{2,128}$", re.ASCII)
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Environment tier (T05). `prod` is the only one that changes behavior today: member
+# agent mutations are refused there (route_policy.PROD_PROTECTED) and an admin's are
+# journaled. Moving a workspace into or out of `prod` needs `confirm_tier_change`.
+TIER_DEV = "dev"
+TIER_STAGING = "staging"
+TIER_PROD = "prod"
+WorkspaceTier = Literal["dev", "staging", "prod"]
 
 
 @dataclass(frozen=True)
@@ -104,6 +115,20 @@ def resolve_workspace(request: Request) -> WorkspaceScope:
         db.close()
     request.state.workspace = scope
     return scope
+
+
+def authorized_workspace(db: Session, identity: Identity, workspace_id: str) -> Workspace:
+    """A workspace named in a request BODY or path, held to the same grant rule as the
+    `X-Workspace` header: 404 when it does not exist, 403 when the caller is not granted.
+
+    The route policy authorizes only the request's own workspace. A route that also acts
+    on a second one — a promotion's target, a resolution preview — must call this for it,
+    or the grant boundary only covers half the request (security review finding: a member
+    granted one dev workspace could release into, and read agent specs from, any other).
+    """
+    row = _requested_row(db, workspace_id)
+    _authorize(db, identity, row)
+    return row
 
 
 def require_workspace(request: Request) -> WorkspaceScope:
@@ -218,10 +243,17 @@ class WorkspaceCreate(BaseModel):
     # both together for a cross-account one.
     role_arn: str | None = None
     external_id: str | None = None
+    # Chosen deliberately at registration, so no confirm flag is needed here.
+    tier: WorkspaceTier = TIER_DEV
 
 
 class WorkspacePatch(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    """Rename and/or re-tier; at least one of the two."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    tier: WorkspaceTier | None = None
+    # Required (true) when `tier` moves the workspace into or out of `prod`.
+    confirm_tier_change: bool = False
 
 
 def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
@@ -241,6 +273,7 @@ def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
         "region": row.region,
         "cross_account": row.role_arn is not None,
         "bootstrap_status": row.bootstrap_status,
+        "tier": row.tier or TIER_DEV,
         "is_default": row.id == DEFAULT_WORKSPACE_ID,
         "resource_visibility": visibility.mode(row),
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -340,6 +373,8 @@ def list_workspaces(request: Request, db: Session = Depends(get_db)) -> dict[str
     return {
         "workspaces": [_out(row, reveal_role=identity.is_admin) for row in rows],
         "all_workspaces": identity.is_admin,
+        # Suggestions for the registration form only; any region is accepted.
+        "suggested_regions": list(AGENTCORE_SUGGESTED_REGIONS),
     }
 
 
@@ -501,6 +536,7 @@ def create_workspace(
         role_arn=role_arn,
         external_id=external_id,
         bootstrap_status="registered",
+        tier=req.tier,
         resources={},
     )
     db.add(row)
@@ -524,12 +560,45 @@ def update_workspace(
     workspace_id: str,
     req: WorkspacePatch,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    identity: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Rename only: account/region are the workspace's identity, and its
-    resource map belongs to the bootstrap job."""
+    """Rename and/or re-tier: account/region are the workspace's identity, and its
+    resource map belongs to the bootstrap job.
+
+    A tier move into or out of `prod` flips whether members may mutate agents
+    there, so it must be explicit (`confirm_tier_change: true`, else 409
+    `workspace.tier_change_unconfirmed`). Every actual tier change — confirmed or
+    not needing confirmation — is journaled in `audit_events`. `default` is
+    re-tierable too: the startup mirror never writes the column.
+    """
+    if req.name is None and req.tier is None:
+        raise AppError(
+            "workspace.empty_patch",
+            "send at least one of name or tier",
+            status_code=400,
+        )
     row = _requested_row(db, workspace_id)
-    row.name = req.name.strip()
+    if req.name is not None:
+        row.name = req.name.strip()
+    current_tier = row.tier or TIER_DEV
+    if req.tier is not None and req.tier != current_tier:
+        crosses_prod = TIER_PROD in (current_tier, req.tier)
+        if crosses_prod and not req.confirm_tier_change:
+            raise AppError(
+                "workspace.tier_change_unconfirmed",
+                f"moving '{row.id}' from {current_tier} to {req.tier} changes who may "
+                "modify its agents — resend with confirm_tier_change: true",
+                {"workspace_id": row.id, "from": current_tier, "to": req.tier},
+                status_code=409,
+            )
+        row.tier = req.tier
+        record_audit_event(
+            workspace_id=row.id,
+            actor=identity.username,
+            action="workspace.tier_change",
+            target=f"{current_tier}->{req.tier}",
+            db=db,
+        )
     db.commit()
     return _out(row)
 
@@ -586,6 +655,8 @@ def delete_workspace(
         )
     # Grants go with it: a re-registered id would otherwise inherit them.
     db.query(UserWorkspace).filter(UserWorkspace.workspace_id == row.id).delete()
+    # ...and so do release requests aimed at it, which could never be acted on again
+    promotion_service.cancel_for_removed_target(db, row.id)
     db.delete(row)
     db.commit()
     return {"deleted": True, "workspace_id": workspace_id}
@@ -722,6 +793,7 @@ def purge_workspace(
             {"workspace_id": target, "reason": current or "gone", "bootstrap_status": current},
             status_code=409,
         )
+    promotion_service.cancel_for_removed_target(db, target)
     db.commit()
     return payload
 
@@ -772,6 +844,31 @@ def bootstrap_workspace(
         "bootstrap_status": row.bootstrap_status,
         "stages": workspace_bootstrap.job_stages(job),
     }
+
+
+@router.post("/{workspace_id}/observability/repair")
+def repair_workspace_observability(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    """Turn Transaction Search on for a ready workspace whose bootstrap could not.
+
+    Bootstrap's observability stage degrades instead of failing, so a workspace can
+    be READY with no `aws/spans` group — every trace, observability view and
+    evaluation there then reads nothing. This re-runs just that stage, idempotently.
+    """
+    row = _requested_row(db, workspace_id)
+    if row.bootstrap_status != READY:
+        raise AppError(
+            "workspace.not_ready",
+            "repair a workspace once its bootstrap has finished; until then the "
+            "bootstrap job itself runs this stage",
+            status_code=409,
+        )
+    out = workspace_bootstrap.repair_observability(workspace_context(row),
+                                                   workspace_id=row.id)
+    return {"workspace_id": row.id, **out}
 
 
 @router.get("/{workspace_id}/bootstrap")

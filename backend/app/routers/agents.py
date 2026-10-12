@@ -33,6 +33,7 @@ from app.schemas.agent import (
     InvokeRequest,
     InvokeResponse,
     RuntimeImportRequest,
+    display_name_of,
 )
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.services import (
@@ -40,12 +41,14 @@ from app.services import (
     agent_iam,
     agent_identity,
     agent_names,
+    agent_templates,
     byoc_uploads,
     creators,
     identity_providers,
     memory_ownership,
     oauth_sessions,
     registry_console,
+    snapshots,
 )
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agent_versions import list_agent_versions
@@ -64,6 +67,7 @@ from app.services.runtime_discovery import (
     scan_harnesses,
     scan_runtimes,
 )
+from app.services.suggestions import suggested_questions
 from app.services.visibility import Viewer, require_viewer
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.system_agents import service as system_agents
@@ -83,6 +87,8 @@ def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, 
     out = {
         "id": agent.id,
         "name": agent.name,
+        # Human label from the spec (T04); the console renders display_name || name.
+        "display_name": display_name_of(agent.spec),
         "method": agent.method,
         "status": agent.status,
         "arn": agent.arn,
@@ -261,6 +267,8 @@ def create_agent(
         status="deploying",
         spec=spec.model_dump(),
     )
+    # the creating account (ownership, display and TTFA); server-derived, never from
+    # the spec — `owner` stays the provenance label
     creators.stamp(agent, Creator.of_request(request))
     db.add(agent)
     db.flush()
@@ -297,6 +305,16 @@ def list_agents(
         )
         out.append(row)
     return {"agents": out}
+
+
+@router.get("/agent-templates")
+def list_agent_templates() -> dict[str, Any]:
+    """The scenario-template catalogue the wizard's gallery shows (T10).
+
+    Static data: no ledger, no AWS, and nothing workspace-specific — the wizard
+    applies a template client-side and still posts an ordinary ``AgentSpecInput``.
+    """
+    return {"templates": agent_templates.catalogue()}
 
 
 @router.get("/agents/discovery")
@@ -463,6 +481,23 @@ def get_agent(
     return out
 
 
+@router.get("/agents/{agent_id}/suggested-questions")
+def get_suggested_questions(
+    agent_id: str,
+    lang: str = "en",
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """3-5 starter questions for the try-chat panel; cached, never 500s on model failure."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    return suggested_questions(
+        ws.context, agent.id, agent.spec or {}, "zh-CN" if lang.startswith("zh") else "en"
+    )
+
+
 @router.get("/agents/{agent_id}/conversions")
 def list_agent_conversions(
     agent_id: str,
@@ -545,6 +580,7 @@ def get_agent_identity(
 def redeploy_agent(
     agent_id: str,
     spec: AgentSpec,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -564,17 +600,29 @@ def redeploy_agent(
     agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
-    return republish_agent(db, agent, spec, ws, viewer=viewer)
+    return republish_agent(
+        db, agent, spec, ws, actor=require_identity(request).username, viewer=viewer
+    )
 
 
 def republish_agent(
-    db: Session, agent: Agent, spec: AgentSpec, ws: WorkspaceScope,
-    *, viewer: Viewer = Viewer.ALL,
+    db: Session,
+    agent: Agent,
+    spec: AgentSpec,
+    ws: WorkspaceScope,
+    *,
+    actor: str | None = None,
+    note: str | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
-    """The redeploy guards + an update-mode deploy job for an edited spec — shared
-    by the redeploy route and accepting an AI recommendation (a new Harness version).
-    ``viewer`` only decides which *newly added* KB / memory pins the caller may use;
-    the caller has already checked the agent itself is visible."""
+    """The one in-place re-publish: every guard, then an "update"-mode deploy job.
+
+    Shared by the redeploy route, accepting an AI recommendation (a new Harness version)
+    and snapshot rollback (T18) — so a rollback is, by construction, an ordinary redeploy
+    that happens to carry an older spec. `actor` / `note` are recorded on the spec
+    snapshot the publish writes. ``viewer`` only decides which *newly added* KB /
+    memory pins the caller may use; the caller has already checked the agent itself
+    is visible."""
     _refuse_redeploy(agent)
     if spec.name != agent.name or spec.method != agent.method:
         raise AppError(
@@ -601,7 +649,7 @@ def republish_agent(
                 status_code=400,
             )
 
-    return _start_redeploy(db, ws, agent, spec, viewer=viewer)
+    return _start_redeploy(db, ws, agent, spec, actor=actor, note=note, viewer=viewer)
 
 
 def _redeployable(
@@ -634,8 +682,14 @@ def _refuse_redeploy(agent: Agent) -> None:
 
 
 def _start_redeploy(
-    db: Session, ws: WorkspaceScope, agent: Agent, spec: AgentSpec,
-    *, viewer: Viewer = Viewer.ALL,
+    db: Session,
+    ws: WorkspaceScope,
+    agent: Agent,
+    spec: AgentSpec,
+    *,
+    actor: str | None = None,
+    note: str | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     # only pins ADDED relative to the stored spec must be visible: an agent pinned
     # while the workspace was shared keeps re-publishing after a switch to isolated
@@ -654,9 +708,107 @@ def _start_redeploy(
     agent.error = None
     agent.updated_at = datetime.now(UTC)
     db.flush()
-    deployment, job = create_deployment(db, agent, mode="update")
+    deployment, job = create_deployment(
+        db, agent, mode="update", actor=actor, note=note
+    )
     start_deploy_async(job.id)
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
+
+
+@router.get("/agents/{agent_id}/snapshots")
+def list_agent_snapshots(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Ledger spec snapshots, newest first (no specs — fetch one for its body)."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    return {
+        "snapshots": [
+            snapshots.snapshot_out(snap, with_spec=False)
+            for snap in snapshots.list_snapshots(db, agent.id)
+        ]
+    }
+
+
+@router.get("/agents/{agent_id}/snapshots/diff")
+def diff_agent_snapshots(
+    agent_id: str,
+    from_seq: int,
+    to_seq: int,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Field-level, human-readable difference between two snapshots' specs."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    before = snapshots.get_snapshot(db, agent.id, from_seq)
+    after = snapshots.get_snapshot(db, agent.id, to_seq)
+    return {
+        "from": snapshots.snapshot_out(before, with_spec=False),
+        "to": snapshots.snapshot_out(after, with_spec=False),
+        "changes": snapshots.diff_specs(before.spec or {}, after.spec or {}),
+    }
+
+
+@router.get("/agents/{agent_id}/snapshots/{seq}")
+def get_agent_snapshot(
+    agent_id: str,
+    seq: int,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    return snapshots.snapshot_out(snapshots.get_snapshot(db, agent.id, seq), with_spec=True)
+
+
+@router.post("/agents/{agent_id}/snapshots/{seq}/rollback", status_code=202)
+def rollback_agent_snapshot(
+    agent_id: str,
+    seq: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Re-deploy a stored spec as a NEW publish (never an AWS-side version revert).
+
+    Goes through `_republish`, so the redeploy guards apply unchanged: system presets,
+    discovered runtimes, an in-flight deploy, and a converted agent's baked prompt and
+    model all refuse exactly as they do on redeploy. Prod workspaces refuse members
+    centrally (`PROD_PROTECTED`).
+    """
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None or agent.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    system_agents.refuse_system_mutation(agent, "rollback")
+    snap = snapshots.get_snapshot(db, agent.id, seq)
+    try:
+        spec = AgentSpec.model_validate(snap.spec or {})
+    except ValidationError as exc:
+        raise AppError(
+            "snapshot.spec_invalid",
+            "this snapshot's spec no longer validates against the current schema",
+            {"errors": len(exc.errors())},
+            status_code=409,
+        ) from exc
+    return republish_agent(
+        db,
+        agent,
+        spec,
+        ws,
+        actor=require_identity(request).username,
+        note=f"rollback to #{seq}",
+        viewer=viewer,
+    )
 
 
 class InboundAuthSwitch(BaseModel):
@@ -835,6 +987,7 @@ def invoke_agent(
         **extra,
     )
     return InvokeResponse(
+        answered_by=result.get("answered_by", "model"),
         text=result["text"],
         session_id=result["session_id"],
         latency_ms=int((time.monotonic() - started) * 1000),
@@ -868,7 +1021,18 @@ def delete_agent_row(db: Session, agent: Agent, workspace: WorkspaceContext) -> 
     conversation purge, so both delete an agent the same way."""
     # Before the AWS teardown: a refused delete must leave the harness untouched.
     system_agents.refuse_system_mutation(agent, "delete")
-    aws_resource_deleted = _delete_agent_resources(agent, workspace)
+    try:
+        aws_resource_deleted = _delete_agent_resources(agent, workspace)
+    except AppError as exc:
+        if exc.code != "agent.teardown_pending":
+            raise
+        # AWS is still letting go of the resource (a gated agent's endpoints can stay
+        # DELETING for minutes). The console row goes now; `dlc.scheduler
+        # .sweep_deleted_resources` retries the AWS delete until it succeeds, so the
+        # alternative — refusing the delete — would just leave the operator retrying
+        # by hand against an asynchronous AWS state machine.
+        logger.info("agent %s: AWS teardown deferred — %s", agent.id, exc.message)
+        aws_resource_deleted = False
     mark_agent_deleted(db, agent)
     return aws_resource_deleted
 

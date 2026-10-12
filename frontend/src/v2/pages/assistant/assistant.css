@@ -9,12 +9,12 @@
 
 /* creation progress: 4 required steps */
 .v2 .v2-assistant-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 12px; }
-.v2 .v2-assistant-steps .v2-stage { cursor: pointer; background: #fff; text-align: left; font: inherit; color: inherit; }
+.v2 .v2-assistant-steps .v2-stage { cursor: pointer; background: var(--v2-card); text-align: left; font: inherit; color: inherit; }
 .v2 .v2-assistant-steps .v2-stage:hover { border-color: var(--v2-primary-line); }
 .v2 .v2-assistant-steps .v2-stage.current { border-color: var(--v2-primary-line); box-shadow: 0 0 0 3px var(--v2-primary-soft); }
 .v2 .v2-assistant-steps .v2-stage.current .n { background: var(--v2-primary-soft); color: var(--v2-primary); }
 .v2 .v2-assistant-steps .v2-stage.done .n { background: var(--v2-success-soft); color: var(--v2-success); }
-.v2 .v2-assistant-steps .v2-stage.failed { border-color: #fbaca3; }
+.v2 .v2-assistant-steps .v2-stage.failed { border-color: var(--v2-danger-line); }
 .v2 .v2-assistant-steps .v2-stage.failed .n { background: var(--v2-danger-soft); color: var(--v2-danger); }
 .v2 .v2-assistant-later { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--v2-ink-3); }
 
@@ -43,7 +43,7 @@
 @keyframes v2-assistant-blink { 50% { opacity: 0; } }
 .v2 .v2-assistant-tool {
   display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 0 0 12px 74px; padding: 6px 10px;
-  border: 1px solid var(--v2-line); border-radius: 6px; font-size: 12.5px; background: #fff;
+  border: 1px solid var(--v2-line); border-radius: 6px; font-size: 12.5px; background: var(--v2-card);
 }
 .v2 .v2-assistant-tool .args { flex-basis: 100%; color: var(--v2-ink-3); font-family: var(--v2-mono); font-size: 12px; word-break: break-all; }
 .v2 .v2-assistant-composer { border-top: 1px solid var(--v2-line); margin-top: 12px; padding-top: 12px; }
@@ -63,7 +63,7 @@
 
 /* Agent-DLC fishbone (Fishbone.tsx): coverage tags + downloads, the diagram, collapsible detail */
 .v2 .v2-assistant-fb-bar { margin-bottom: 12px; }
-.v2 .v2-assistant-fb-canvas { border: 1px solid var(--v2-line); border-radius: var(--v2-radius); overflow-x: auto; background: #f7f8fa; }
+.v2 .v2-assistant-fb-canvas { border: 1px solid var(--v2-line); border-radius: var(--v2-radius); overflow-x: auto; background: var(--v2-fill); }
 .v2 .v2-assistant-fb-foot { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
 .v2 .v2-assistant-fb-foot .end { margin-left: auto; display: flex; gap: 8px; }
 .v2 .v2-assistant-fb-more { margin-top: 12px; border-top: 1px solid var(--v2-line-2); padding-top: 12px; }
@@ -79,7 +79,7 @@
 .v2 .v2-assistant-options { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .v2 .v2-assistant-option {
   display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--v2-line); border-radius: var(--v2-radius);
-  padding: 10px 12px; cursor: pointer; min-width: 0; background: #fff;
+  padding: 10px 12px; cursor: pointer; min-width: 0; background: var(--v2-card);
 }
 .v2 .v2-assistant-option.on { border-color: var(--v2-primary-line); background: var(--v2-primary-soft); }
 .v2 .v2-assistant-option.disabled { cursor: not-allowed; opacity: 0.72; }

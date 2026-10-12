@@ -1,0 +1,12 @@
+/* V3 fleet — environments, governance findings and the shared-template market */
+.v3 .v3-flt-tags { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.v3 .v3-flt-market { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.v3 .v3-flt-tpl {
+  display: grid; gap: 8px; align-content: start; padding: 14px 16px;
+  border-radius: 10px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+}
+.v3 .v3-flt-tpl .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.v3 .v3-flt-tpl .top b { font-size: 15px; margin-right: 4px; }
+.v3 .v3-flt-tpl p { margin: 0; color: var(--v3-text-2); font-size: 13px; line-height: 1.55; }
+.v3 .v3-flt-tpl .meta { color: var(--v3-text-3); font-size: 12px; }
+.v3 .v3-flt-tpl .actions { display: flex; gap: 8px; margin-top: 2px; }

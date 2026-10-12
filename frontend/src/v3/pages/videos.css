@@ -1,0 +1,59 @@
+/* V3 videos — library grid and the player with its series / chapters rail */
+.v3 .v3-vid-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.v3 .v3-vid-bar .sep { width: 1px; height: 20px; background: var(--v3-line); }
+.v3 .v3-vid-section { display: inline-flex; gap: 8px; align-items: center; color: var(--v3-text-3); font-size: 12px; }
+.v3 .v3-vid-section .v3-select { width: 200px; height: 32px; }
+.v3 .v3-vid-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); margin: 0; padding: 0; list-style: none; }
+.v3 .v3-vid-card {
+  display: grid; width: 100%; padding: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; overflow: hidden;
+  border-radius: var(--v3-r); border: 1px solid var(--v3-line); background: var(--v3-ink-2);
+  transition: border-color 0.15s, transform 0.15s var(--v3-ease);
+}
+.v3 .v3-vid-card:hover { border-color: var(--v3-line-2); transform: translateY(-1px); }
+.v3 .v3-vid-card .thumb { position: relative; aspect-ratio: 16 / 9; background: #000; display: block; }
+.v3 .v3-vid-card .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.88; }
+.v3 .v3-vid-card .play { position: absolute; inset: 0; margin: auto; color: #fff; opacity: 0; transition: opacity 0.15s; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5)); }
+.v3 .v3-vid-card:hover .play { opacity: 1; }
+.v3 .v3-vid-card .len { position: absolute; right: 8px; bottom: 8px; padding: 1px 6px; border-radius: 4px; background: rgba(0, 0, 0, 0.72); color: #fff; font-family: var(--v3-mono); font-size: 11.5px; }
+.v3 .v3-vid-card .text { display: grid; gap: 6px; padding: 12px 14px 14px; }
+.v3 .v3-vid-card .text small { color: var(--v3-text-2); font-size: 12.5px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.v3 .v3-vid-card .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.v3 .v3-vid-meta { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; color: var(--v3-text-3); font-size: 13px; }
+.v3 .v3-vid-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+@media (max-width: 1180px) { .v3 .v3-vid-layout { grid-template-columns: minmax(0, 1fr); } }
+.v3 .v3-vid-player { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+.v3 .v3-vid-details { display: grid; gap: 12px; padding: 16px 20px 18px; }
+.v3 .v3-vid-summary summary { cursor: pointer; color: var(--v3-text-2); font-size: 13px; }
+.v3 .v3-vid-summary p { margin: 8px 0 0; color: var(--v3-text-2); line-height: 1.6; white-space: pre-wrap; }
+.v3 .v3-vid-pages { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.v3 .v3-vid-pages button {
+  display: grid; gap: 4px; text-align: left; padding: 10px 12px; font: inherit; color: var(--v3-text); cursor: pointer;
+  border-radius: 8px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+}
+.v3 .v3-vid-pages button:hover { border-color: var(--v3-line-2); }
+.v3 .v3-vid-pages button.next { text-align: right; justify-items: end; }
+.v3 .v3-vid-pages button span { display: inline-flex; gap: 4px; align-items: center; color: var(--v3-text-3); font-size: 12px; }
+.v3 .v3-vid-pages button b { font-weight: 500; font-size: 13px; }
+
+.v3 .v3-vid-episodes, .v3 .v3-vid-chapters { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; max-height: 560px; overflow-y: auto; }
+.v3 .v3-vid-episodes button {
+  display: flex; gap: 10px; width: 100%; padding: 6px; text-align: left; font: inherit; color: var(--v3-text-2);
+  border-radius: 8px; border: 1px solid transparent; background: none; cursor: pointer;
+}
+.v3 .v3-vid-episodes button:hover { background: var(--v3-ink-3); color: var(--v3-text); }
+.v3 .v3-vid-episodes button.on { border-color: rgba(110, 168, 255, 0.4); background: var(--v3-info-dim); color: var(--v3-text); }
+.v3 .v3-vid-episodes .thumb { position: relative; flex: none; width: 96px; aspect-ratio: 16 / 9; border-radius: 5px; overflow: hidden; background: #000; display: grid; place-items: center; color: #fff; }
+.v3 .v3-vid-episodes .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.8; }
+.v3 .v3-vid-episodes .thumb svg { position: relative; }
+.v3 .v3-vid-episodes .text { display: grid; gap: 3px; min-width: 0; align-content: center; }
+.v3 .v3-vid-episodes .text b { font-weight: 500; font-size: 13px; }
+.v3 .v3-vid-episodes .text small { font-family: var(--v3-mono); font-size: 11px; color: var(--v3-text-3); }
+.v3 .v3-vid-help { margin: 0 0 8px; color: var(--v3-text-3); font-size: 12px; }
+.v3 .v3-vid-chapters button {
+  display: flex; gap: 12px; width: 100%; padding: 8px 10px; text-align: left; font: inherit; color: var(--v3-text-2);
+  border-radius: 7px; border: 0; background: none; cursor: pointer;
+}
+.v3 .v3-vid-chapters button:hover:not(:disabled) { background: var(--v3-ink-3); color: var(--v3-text); }
+.v3 .v3-vid-chapters button:disabled { cursor: not-allowed; opacity: 0.5; }
+.v3 .v3-vid-chapters .time { flex: none; font-family: var(--v3-mono); font-size: 12px; color: var(--v3-info); }

@@ -1,3 +1,4 @@
+import { getActiveRegion, modelAvailableInRegion } from '../lib/regions';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
@@ -252,7 +253,10 @@ export function PropertyPanel({
     }
   };
 
-  const bedrockModels = BEDROCK_MODELS;
+  // Geographic profiles of another region are hidden, but the node's current id stays.
+  const bedrockModels = BEDROCK_MODELS.filter(
+    (m) => m.model_id === (node.data as { modelId?: string }).modelId || modelAvailableInRegion(m.model_id, getActiveRegion()),
+  );
 
   // Seed provider-specific defaults when the provider dropdown changes so the
   // model field/codegen always has a coherent id (mirrors upstream :494-521).

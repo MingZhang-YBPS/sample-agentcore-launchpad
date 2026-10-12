@@ -125,11 +125,28 @@ def _start_with_retry(start: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     return start()
 
 
+def telemetry_endpoint(agent: Agent | None, qualifier: str | None = None) -> str:
+    """The endpoint whose telemetry a read should use.
+
+    Every AgentCore endpoint writes its own content-log group (``…-<endpoint>``) and
+    service name (``….<endpoint>``). A pinned run reads its own endpoint; otherwise
+    a gated agent's production traffic is on ``live`` (Agent-DLC §6), and everything
+    else on ``DEFAULT``. Reading DEFAULT for a gated agent would show the dashboards,
+    online evaluation and insights an endpoint no user is talking to.
+    """
+    if qualifier:
+        return qualifier
+    if agent is not None and getattr(agent, "endpoint_mode", None) == "live":
+        return "live"
+    return "DEFAULT"
+
+
 def _harness_telemetry(
-    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None
+    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None,
+    endpoint: str = "DEFAULT",
 ) -> tuple[str, str]:
     """Harness span identity: the harnessId is ``{harnessName}-{suffix}`` and the
-    managed backing runtime emits ``harness_{harnessName}.DEFAULT``. Its log
+    managed backing runtime emits ``harness_{harnessName}.<endpoint>``. Its log
     group carries the BACKING runtime's own id (≠ harnessId) — discover it by
     prefix; a re-created harness leaves stale groups behind, so newest wins."""
     base = agent.resource_id.rsplit("-", 1)[0]
@@ -137,7 +154,7 @@ def _harness_telemetry(
     logs = logs_client or workspace.client("logs")
     groups = [
         g for g in logs.describe_log_groups(logGroupNamePrefix=prefix).get("logGroups", [])
-        if g["logGroupName"].endswith("-DEFAULT")
+        if g["logGroupName"].endswith(f"-{endpoint}")
     ]
     if not groups:
         raise AppError(
@@ -147,13 +164,16 @@ def _harness_telemetry(
             status_code=400,
         )
     newest = max(groups, key=lambda g: g.get("creationTime", 0))
-    return f"harness_{base}.DEFAULT", newest["logGroupName"]
+    return f"harness_{base}.{endpoint}", newest["logGroupName"]
 
 
 def resolve_telemetry(
-    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None
+    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None,
+    *, qualifier: str | None = None,
 ) -> tuple[str, str]:
-    """(service_name, log_group) for a platform agent's spans + content logs."""
+    """(service_name, log_group) for a platform agent's spans + content logs, on the
+    endpoint `telemetry_endpoint` picks (production unless `qualifier` pins one)."""
+    endpoint = telemetry_endpoint(agent, qualifier)
     if agent.method not in EVAL_SUPPORTED_METHODS:
         raise AppError(
             "eval.method_unsupported",
@@ -163,11 +183,11 @@ def resolve_telemetry(
     if not agent.resource_id:
         raise AppError("eval.agent_not_deployed", "agent has no runtime", status_code=400)
     if agent.method == "harness":
-        return _harness_telemetry(agent, workspace, logs_client)
+        return _harness_telemetry(agent, workspace, logs_client, endpoint)
     detail = rt.get_runtime(control_client(workspace), agent.resource_id)
     runtime_name = detail["agentRuntimeName"]
-    return f"{runtime_name}.DEFAULT", (
-        f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
+    return f"{runtime_name}.{endpoint}", (
+        f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-{endpoint}"
     )
 
 
@@ -227,11 +247,23 @@ def _scenario_error(exc: BaseException) -> dict[str, str]:
 # raised by the InvokeHarness call itself, with a 4xx status (live 2026-10-08: "Runtime
 # health check failed or timed out" failed a whole 19-scenario run at one scenario)
 _TRANSIENT_CODES = frozenset({
-    "runtimeClientError", "RuntimeClientError", "internalServerException",
-    "InternalServerException",
+    # the stream event names are camelCase; a non-streaming call (InvokeHarness answering
+    # "Runtime initialization time exceeded" during a cold start) raises PascalCase
+    "runtimeClientError", "RuntimeClientError",
+    "internalServerException", "InternalServerException",
     "throttlingException", "ThrottlingException", "serviceUnavailableException",
     "ServiceUnavailableException",
 })
+
+
+def eval_actor(agent_id: str | None, run_id: str, index: int) -> str:
+    """The memory actor for the ``index``-th replayed session of a run.
+
+    Scoped to the agent like a console user (``memory.scoped_actor``), and unique per
+    session so no replay can recall what another one said."""
+    from app.services.memory import scoped_actor
+
+    return scoped_actor(agent_id or "agent", f"eval-{run_id}-{index}")
 
 
 def transient_invoke_error(exc: BaseException) -> bool:
@@ -296,6 +328,8 @@ def execute_run(
     online_config_arn: str | None = None,
     agent_id: str | None = None,
     inbound_jwt: bool = False,
+    repeats: int = 1,
+    qualifier: str | None = None,
 ) -> None:
     """Drive one evaluation run to completion (runs on a run-queue worker).
 
@@ -306,7 +340,11 @@ def execute_run(
     on-demand report over the sessions that config sampled, where the batch
     inherits the config's insights/evaluators (passing them is rejected).
     ``log_groups`` are the batch's input log groups (default: ``aws/spans`` plus
-    the agent's own ``log_group``)."""
+    the agent's own ``log_group``).
+
+    ``repeats`` (Agent-DLC pass^k) replays every scenario that many times, each in
+    a fresh session; every session's scenario and attempt number are recorded on the
+    run (``attempts``). ``qualifier`` pins the endpoint invoked (a release candidate)."""
     input_groups = list(log_groups or ["aws/spans", log_group])
     telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
     attempt: dict[str, str] = {}
@@ -342,11 +380,23 @@ def execute_run(
             metadata_entries: list[dict[str, Any]] = []
             watermark_sid: str | None = None
 
+            # only a pinned endpoint passes `qualifier`; the default path is unchanged
+            pinned: dict[str, Any] = {"qualifier": qualifier} if qualifier else {}
+
+            # Each replayed session gets its own memory actor. The runtime's default
+            # actor ("default") is shared by every evaluation of every agent, so with
+            # long-term memory on, facts extracted from one scenario ("轻享票, fare ¥680")
+            # were recalled in the next and a golden item that withholds the fare was
+            # answered with another scenario's number. A fresh actor per session keeps
+            # each replay hermetic, as a golden item assumes.
+            actor: dict[str, str] = {"id": "default"}
+
             def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
                 if method == "harness":  # InvokeHarness, not the runtime data plane
                     attempt["session_id"] = sid or hc.new_session_id()
                     return hc.invoke_harness_text(
                         data, agent_arn, prompt, session_id=attempt["session_id"],
+                        **pinned,
                     )
                 if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
                     return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
@@ -359,16 +409,21 @@ def execute_run(
                         inbound_auth_service.m2m_bearer_token(workspace),
                         prompt,
                         session_id=sid,
+                        actor_id=actor["id"],
+                        **pinned,
                     )
                 return rt.invoke_runtime_text(
                     data,
                     agent_arn,
                     prompt,
                     session_id=sid,
+                    actor_id=actor["id"],
                     runtime_user_id=runtime_user_id,
+                    **pinned,
                 )
 
             budget_stops: list[dict[str, str]] = []
+            attempts: list[dict[str, Any]] = []
             # A simulated persona that still fails after its retries is skipped,
             # not fatal: the LLM actor's conversation is not reproducible, and one
             # stalled model call (live 2026-10-10: a Harness GPT-6 call returned
@@ -376,10 +431,18 @@ def execute_run(
             # The run fails only when no scenario produced a session.
             scenario_failures: list[dict[str, str]] = []
             _update(run_id, status="invoking")
-            for scenario in scenarios:
+            plan = [
+                (scenario, attempt_no)
+                for scenario in scenarios
+                for attempt_no in range(1, max(1, int(repeats or 1)) + 1)
+            ]
+            for index, (scenario, attempt_no) in enumerate(plan, start=1):
                 _check_stop(run_id)
+                actor["id"] = eval_actor(agent_id, run_id, index)
                 attempt.clear()
                 attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
+                if attempt_no > 1:
+                    attempt["attempt"] = str(attempt_no)
                 sid: str | None = None
                 skipped = False
                 for retry in range(TRANSIENT_SCENARIO_RETRIES + 1):
@@ -437,8 +500,14 @@ def execute_run(
                 session_ids.append(sid)
                 watermark_sid = sid
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
+                attempts.append({
+                    "scenario_id": str(scenario.get("scenario_id") or "unknown"),
+                    "attempt": attempt_no,
+                    "session_id": sid,
+                })
                 _update(run_id, session_ids=list(session_ids),
-                        budget_stops=list(budget_stops) or None)
+                        budget_stops=list(budget_stops) or None,
+                        attempts=list(attempts))
             if not session_ids:
                 first = scenario_failures[0] if scenario_failures else {}
                 raise RuntimeError(
@@ -602,6 +671,11 @@ def _finish_from_result(
         )
         _update(run_id, status="completed", scores=scores, error=error,
                 session_failures=failures)
+        if workspace is not None:
+            # Agent-DLC: snapshot per-item criterion verdicts while the stream is fresh
+            from app.dlc.engine import finalize_run
+
+            finalize_run(run_id, workspace)
 
 
 def _session_failures(run_id: str, result: dict[str, Any], reader: Any) -> dict[str, Any] | None:
@@ -844,6 +918,14 @@ def resume_interrupted_runs() -> list[str]:
         db.close()
 
 
+def evaluator_set_hash(evaluators: list[str]) -> str:
+    """Lineage of the evaluator set a run applied (sorted ids; content changes are
+    caught by calibration records, which pin each evaluator's AWS `updatedAt`)."""
+    import hashlib
+
+    return hashlib.sha256("|".join(sorted(evaluators or [])).encode()).hexdigest()[:32]
+
+
 def submit_run(
     *,
     agent: Agent | None,
@@ -865,6 +947,14 @@ def submit_run(
     name: str | None = None,
     description: str | None = None,
     log_source: dict[str, Any] | None = None,
+    repeats: int = 1,
+    repeat_mode: str = "all",
+    qualifier: str | None = None,
+    criteria_set_id: str | None = None,
+    criteria_set_version: int | None = None,
+    split: str | None = None,
+    cost_estimate: dict[str, Any] | None = None,
+    agent_version: str | None = None,
     creator: creators.Creator | None = None,
 ) -> EvalRun:
     """Queue one run. The telemetry comes from the platform ``agent`` — or, with
@@ -885,7 +975,13 @@ def submit_run(
             from app.services import inbound_auth as inbound_auth_service
 
             inbound_auth_service.require_platform_reachable(agent, workspace, "m2m")
-        service_name, log_group = resolve_telemetry(agent, workspace)
+        # an unpinned replay of a gated agent exercises production (`live`), like
+        # every other invoke path; DEFAULT would silently be the newest candidate
+        if dataset_items and not qualifier:
+            from app.services.invoke import production_endpoint
+
+            qualifier = production_endpoint(agent).get("qualifier")
+        service_name, log_group = resolve_telemetry(agent, workspace, qualifier=qualifier)
         log_groups = ["aws/spans", log_group]
     # Window runs have no dataset; encode the scope in dataset_name so the
     # runs list can render "window · Nh" without a schema change.
@@ -909,6 +1005,15 @@ def submit_run(
             evaluators=evaluators,
             status="queued",
             session_ids=session_ids or [],
+            repeats=max(1, int(repeats or 1)),
+            repeat_mode=repeat_mode,
+            endpoint_qualifier=qualifier,
+            agent_version=agent_version or (agent.version if agent else None),
+            criteria_set_id=criteria_set_id,
+            criteria_set_version=criteria_set_version,
+            split=split,
+            cost_estimate=cost_estimate,
+            evaluator_set_hash=evaluator_set_hash(evaluators),
         )
         creators.stamp(run, creator)
         db.add(run)
@@ -955,6 +1060,8 @@ def submit_run(
             online_config_arn=online_config_arn,
             agent_id=agent_ledger_id,
             inbound_jwt=agent_inbound_jwt,
+            repeats=max(1, int(repeats or 1)),
+            qualifier=qualifier,
         ),
     )
     _update(run_id, queue_position=position)

@@ -50,11 +50,11 @@ body.v2-body {
 /* ---------- controls ---------- */
 .v2-classic .btn {
   font-family: var(--v2-font); font-size: 13px; letter-spacing: 0; border-radius: var(--v2-radius-sm);
-  padding: 6px 14px; background: #fff; border-color: var(--v2-line);
+  padding: 6px 14px; background: var(--v2-card); border-color: var(--v2-line);
 }
 .v2-classic .btn:hover:not(:disabled) { border-color: var(--v2-primary); color: var(--v2-primary); }
-.v2-classic .btn.primary { background: var(--v2-primary); border-color: var(--v2-primary); color: #fff; font-weight: 500; }
-.v2-classic .btn.primary:hover:not(:disabled) { background: var(--v2-primary-hover); color: #fff; }
+.v2-classic .btn.primary { background: var(--v2-primary); border-color: var(--v2-primary); color: var(--v2-on-primary); font-weight: 500; }
+.v2-classic .btn.primary:hover:not(:disabled) { background: var(--v2-primary-hover); color: var(--v2-on-primary); }
 .v2-classic .input,
 .v2-classic .search,
 .v2-classic select,

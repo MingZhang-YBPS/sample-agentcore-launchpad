@@ -45,6 +45,29 @@ export type AgentMethod = "harness" | "zip_runtime" | "container" | "byoc";
 /** Same rule as the backend's `AgentSpec.name`. */
 export const AGENT_NAME_RE = /^[a-z][a-z0-9-]{2,47}$/;
 
+/** Longest display name the backend accepts (`AgentSpec.display_name`). */
+export const DISPLAY_NAME_MAX = 64;
+
+/** `agent-` + 6 random [a-z0-9] — the slug for a display name with no usable ASCII. */
+export const randomAgentSlug = (): string => {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return `agent-${Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("")}`;
+};
+
+/**
+ * The resource-name slug derived from a display name: its ASCII letter/digit runs,
+ * lowercased and joined with `-`, trimmed to 48 chars. `null` when that cannot form a
+ * valid name (too short, no ASCII, leading digit) — the caller then falls back to
+ * `randomAgentSlug()`, keeping a stable random slug while the member types.
+ */
+export const slugFromDisplayName = (displayName: string): string | null => {
+  const runs = displayName.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const slug = runs.join("-").slice(0, 48).replace(/-+$/, "");
+  return AGENT_NAME_RE.test(slug) ? slug : null;
+};
+
 export const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
 
 /** A multi-select toggle: add `value` if absent, remove it if present. */
@@ -88,6 +111,15 @@ Be concise, professional, and friendly.`,
 ];
 
 export const TOOLKIT_PROMPTS = TOOLKITS.map((kit) => kit.prompt);
+
+/**
+ * T12: the PII-protection opt-in, omitted when off so an older spec and a
+ * deliberately-off one read back identically.
+ */
+export const guardrailSpec = (form: { guardrail: AgentForm["guardrail"] }) =>
+  form.guardrail === "off"
+    ? {}
+    : { guardrail: { enabled: true, mode: form.guardrail } };
 
 /** Tool names the selected toolkits contribute. Non-empty ⇒ they replace the
  *  template's own calculator/current_utc_time, matching what the backend emits. */
@@ -403,7 +435,13 @@ export const authToolRefs = (rows: AuthToolRow[]) =>
  *  method does not use are carried (a method switch keeps them) but never sent. */
 export interface AgentForm {
   method: AgentMethod;
+  /** Human label (any language, 1–64 chars); blank ⇒ not sent, the slug is shown. */
+  displayName: string;
+  /** The immutable slug — names every AWS resource the agent owns. */
   name: string;
+  /** UI-only: the member edited the slug by hand, so it no longer follows
+   *  `displayName` (never sent to the backend). */
+  nameEdited?: boolean;
   modelId: string;
   modelSource: ModelSource;
   agentSdk: AgentSdk;
@@ -425,6 +463,8 @@ export interface AgentForm {
   allowedTools: string[] | null;
   nativeTools: HarnessNativeTool[];
   longTerm: boolean;
+  /** T12 PII protection: off ⇒ the field is omitted from the spec entirely */
+  guardrail: "off" | "anonymize" | "block";
   /** "" ⇒ the workspace's shared default memory */
   memoryId: string;
   /** container: LAUNCHPAD_MCP_SERVERS JSON */
@@ -466,6 +506,7 @@ export interface AgentForm {
 /** The fresh form a new agent starts on (the classic wizard's `resetForm`). */
 export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   method,
+  displayName: "",
   name: "",
   modelId: defaultModelForMethod(method),
   modelSource: sourceForMethod(method),
@@ -483,6 +524,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   skills: [],
   allowedTools: null,
   nativeTools: method === "harness" ? [...DEFAULT_HARNESS_NATIVE_TOOLS] : [],
+  guardrail: "off",
   longTerm: true,
   memoryId: "",
   mcpServers: "",
@@ -511,6 +553,9 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
 
 /** Spec fields read back when an existing agent is loaded into the form. */
 export interface StoredAgentSpec {
+  display_name?: string | null;
+  /** T12 PII protection; absent on every spec written before it existed */
+  guardrail?: { enabled?: boolean; mode?: "anonymize" | "block" } | null;
   model_id?: string;
   model_source?: ModelSource;
   agent_sdk?: AgentSdk;
@@ -570,6 +615,7 @@ export function formFromStoredSpec(
   const fs = spec.filesystem;
   const form: AgentForm = {
     ...base,
+    displayName: spec.display_name ?? "",
     name,
     modelId: storedModel,
     modelSource: spec.model_source ?? "bedrock",
@@ -589,6 +635,7 @@ export function formFromStoredSpec(
     allowedTools: spec.allowed_tools ?? null,
     nativeTools: method === "harness" ? spec.native_tools ?? [] : [],
     longTerm: spec.memory?.long_term ?? true,
+    guardrail: spec.guardrail?.enabled ? (spec.guardrail.mode ?? "anonymize") : "off",
     memoryId: spec.memory?.memory_id ?? "",
     mcpServers: spec.env?.LAUNCHPAD_MCP_SERVERS ?? "",
     sessionFs: fs ? fs.session_storage != null : true,
@@ -714,6 +761,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
   const kind = form.byocKind;
   return {
     name: form.name,
+    ...displayNameField(form),
     method: "byoc",
     // the execution role scopes bedrock:InvokeModel to exactly the allowed-models
     // list; entry [0] is the primary the backend injects as env MODEL_ID (the whole
@@ -722,6 +770,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
     model_source: form.modelSource,
     // spec.system_prompt is optional for byoc; the field doubles as a description
     system_prompt: form.byocDescription,
+    ...guardrailSpec(form),
     memory: { short_term: true, long_term: false },
     ...(Object.keys(env).length ? { env } : {}),
     // byoc tools are outbound-auth declarations for the member's own code
@@ -755,6 +804,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
   });
   return {
     name: form.name,
+    ...displayNameField(form),
     method,
     model_id: form.modelId.trim(), // a pasted custom id may carry stray whitespace
     model_source: form.modelSource,
@@ -785,6 +835,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
             method === "zip_runtime" && protocol === "http"
             ? [...gatewayToolRefs(form, cat), ...authToolRefs(form.authTools)]
             : [],
+    ...guardrailSpec(form),
     memory: {
       short_term: true,
       long_term: form.longTerm,
@@ -847,6 +898,10 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
       : {}),
   } as AgentSpecInput;
 }
+
+/** `display_name` only when the member typed one (trimmed, like the backend). */
+const displayNameField = (form: AgentForm): { display_name?: string } =>
+  form.displayName.trim() ? { display_name: form.displayName.trim() } : {};
 
 /** The spec a create / re-publish posts for the form. */
 export const buildAgentSpec = (form: AgentForm, cat: AgentFormCatalogs): AgentSpecInput =>

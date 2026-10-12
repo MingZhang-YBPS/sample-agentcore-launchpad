@@ -151,9 +151,11 @@ def default_tool_turns(
     resource_id = getattr(agent_row, "resource_id", None)
     if not resource_id:
         return None
+    from app.evaluation.service import telemetry_endpoint
     from app.services import observability  # local — heavy module, avoids cycles
 
-    log_group = f"/aws/bedrock-agentcore/runtimes/{resource_id}-DEFAULT"
+    log_group = (f"/aws/bedrock-agentcore/runtimes/{resource_id}-"
+                 f"{telemetry_endpoint(agent_row)}")
 
     def _fn(session_id: str) -> list[dict[str, Any]]:
         return observability.eval_tool_turns_from_content_logs(

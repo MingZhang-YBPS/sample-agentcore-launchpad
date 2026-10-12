@@ -287,6 +287,38 @@ class TestAccountLifecycle:
         assert admin.delete(f"/api/users/{user_id}").status_code == 200
         assert client.get(MEMBER_PROBE).status_code == 401
 
+    def test_password_reset_ends_an_established_session(self, app, admin):
+        client = member_session(app)
+        other = TestClient(app)
+        assert other.post(
+            "/api/auth/login",
+            json={"username": MEMBER["username"], "password": MEMBER["password"]},
+        ).status_code == 200
+        assert client.get(MEMBER_PROBE).status_code == 200
+
+        reset = admin.patch(f"/api/users/{stored().id}", json={"password": None})
+        assert reset.status_code == 200
+        # both browsers that signed in with the old password are out
+        assert client.get(MEMBER_PROBE).status_code == 401
+        assert other.get(MEMBER_PROBE).status_code == 401
+        assert client.get("/api/auth/status").json()["authenticated"] is False
+
+        relogin = client.post(
+            "/api/auth/login",
+            json={"username": MEMBER["username"], "password": reset.json()["generated_password"]},
+        )
+        assert relogin.status_code == 200
+        assert client.get(MEMBER_PROBE).status_code == 200
+
+    def test_unrelated_admin_edits_keep_the_session(self, app, admin):
+        client = member_session(app)
+        user_id = stored().id
+        assert admin.patch(f"/api/users/{user_id}", json={"extend_days": 7}).status_code == 200
+        assert admin.patch(
+            f"/api/users/{user_id}", json={"permissions": {"agents.deploy": False}}
+        ).status_code == 200
+        assert client.get(MEMBER_PROBE).status_code == 200
+
     def test_wrong_password_reports_generic_credentials_error(self, anon):
         assert register(anon).status_code == 201
         response = anon.post(

@@ -1072,9 +1072,9 @@ Agent 自身的执行角色完成。但 Mantle 需要自己的 IAM 授权:`bedro
 Agent 会部署成功并进入 ACTIVE,但首次调用报 `401 access_denied`;该授权由 harness
 与 zip 共用,新增它需要执行一次 CDK 部署。该字段默认为 `bedrock`,以兼容
 此字段出现之前写入的 spec。控制台表单的各方式同样默认 `bedrock`,默认模型为
-GPT-6 Sol(`global.openai.gpt-6-sol`);harness 与 zip 仍可切换到 Mantle
+GLM-5.3（`global.zai.glm-5.3`，全球推理配置文件，控制台面向的各区域均可用），`AgentSpec` 的默认值也是它；harness 与 zip 仍可切换到 Mantle
 (`frontend/src/lib/agent-spec.ts` 中的 `MODEL_SOURCE_BY_METHOD`)。Claude Agent SDK
-方式则默认取清单中第一个 Claude 模型。控制台提供的模型清单位于
+方式则默认取清单中第一个 Claude 模型，后端也会为未指定模型的 container spec 使用 `global.anthropic.claude-sonnet-5`（`CLAUDE_SDK_DEFAULT_MODEL_ID`）。意图归类与回答建议使用各自的平台模型；Strands Studio 画布对未指定模型的节点保留 Claude 兜底（改动会改变已有流程），新拖入的节点默认 GLM-5.3。控制台提供的模型清单位于
 `frontend/src/lib/models.ts`,清单第一项即默认模型。
 
 **Harness(方式B)** —— 两种来源使用 `HarnessModelConfiguration` 联合类型中
@@ -1509,6 +1509,23 @@ DCV live-view chunk（它本来就是懒加载的，见 `pages/governance/ToolsV
 - **评估对象：平台 Agent 或 CloudWatch 遥测。** 任务可以直接基于 CloudWatch 遥测评估一个非平台 Agent（例如未托管在 AgentCore Runtime 上的 Agent，`v2/pages/tasks/LogSourceFields.tsx`）：操作员给出 span 的 `service.name` 与 1–10 个输入日志组——可从 `aws/spans` 中发现的服务里选择（`GET /api/eval/log-services`，同时预填 span 资源属性指向的内容日志组，并标出属于平台 Agent 的服务），也可搜索日志组（`GET /api/eval/log-groups`）。运行以 `log_source {service_name, log_group_names}` 代替 `agent_id`，与 `StartBatchEvaluation` 的 `cloudWatchLogs` 数据源一一对应。只支持被动范围：链路（时间窗口）或日志（这些日志组中该服务的会话，用 Logs Insights 从其 span 中发现——`GET /api/eval/log-sessions`——因为非 Runtime Agent 的内容日志不一定带 `session.id`）；Agent 轨迹、数据集回放与持续评估都需要平台 Agent。ledger 行的 `agent_id` 为 `""`，`agent_name` 为服务名称。
 - **结果在界面中展示，而非导出。** 任务详情与评估总览把评估记录（`GET /api/eval/runs/{id}/results`、`GET /api/eval/online/{id}/results`）读成统一的行模型（`v2/results.ts`）：状态、原始分数与**归一化**分数（0–1，惩罚型评估器经 `evaluatorPolarity` 取反）、标签、说明。归一化分数低于 0.7 即为 Bad Case。评估总览汇总（洞察类运行没有分数，不参与汇总）时间窗口内最近 12 个已完成的运行与全部持续任务，提供 KPI、按评估器拆分、筛选、CSV 导出，以及「Bad Case 回流数据集」（调用 `POST /api/eval/datasets/from-sessions`，见数据处理 API）。其中的**评估洞察**面板（`v2/InsightsPanel.tsx`）覆盖时间窗口内已完成的洞察类运行，直接使用运行行上已有的聚类（不额外读取）：先给出任务数、失败类别数、用户意图数与执行摘要数，再把失败类别、用户意图与执行摘要按名称跨任务合并、按会话数由多到少排列，并附最主要的改进建议；点击聚类打开抽屉，展示子类别、根因与改进建议、受影响会话以及来源任务链接。评估任务、Agent、数据来源与搜索筛选同样作用于该面板，评估器、状态与分数区间筛选只针对打分结果。
 
+## 控制台 V3（预览）
+
+一套可选启用的深色「指挥中心」控制台，位于 `/v3/*`（`frontend/src/v3/`），与 V2 并存而非替换。它通过与 V2 相同的 `api` / `dlcApi` 客户端、后端路由和权限检查读写——没有 V3 专属的后端接口。
+
+- **切换。** V2 顶栏有「试用 V3」（`data-testid="v2-switch-v3"`），V3 顶栏有「返回 V2」。选择以 `v3` 存在 `launchpad_ui_version`（`lib/ui-version.ts`）中，之后访问 `/` 会进入 `/v3`；打开任意 `/v3` 页面即视为选择 V3。
+- **原生页面。** 指挥中心（`/v3`：由部署失败、待签署的放行、被拦下的放行门汇总出的「需要你处理」队列，见 `v3/signals.ts`）、智能体（`/v3/agents`，`?id=` 为单个智能体：生命周期线、部署阶段、版本/端点、试一下）、对话（`/v3/chat`，同一条 `chat_stream` SSE 链路）、放行门（`/v3/gate`：四道门流水线、各判据的区间、签署 / 拦下 / 回滚 / 运行放行门）。
+- **已重做的模块（第一批：Agent 开发）。** `/v3/create` 是启动页：场景模板（`GET /api/agent-templates`）和空白开始填入一个托管 Harness 快速表单（名称、提示词、挂载的知识库），提交与 V2 向导相同的 `buildAgentSpec` 输出，然后进入该智能体页面，详情页在部署期间自动轮询；其他方式和非 Harness 场景交给完整的 V2 向导（`?method=` 或新增的 `?scenario=<key>` 预填）。`/v3/registry` 列出记录并置顶待审批队列（就地批准或驳回），每条记录有生命周期线以及 Agent 卡片、MCP 端点、技能来源；注册与编辑仍为承载页。`/v3/knowledge` 以卡片墙展示知识库，详情页有导入流程线、同步/移除/添加数据源、检索演练和文档列表——它承接了 V2 的创建后自动流程（自动首次同步、限时等待后台创建数据源、提供修复），因为在承载表单中创建的知识库会落到这里。`/v3/assistant` 按所处阶段（讨论中、待审阅方案、已批准）列出设计对话，支持共享和 CLEAR（先展示影响范围）；对话的工作视图仍为承载页。`v3TwinOf`（`v3/nav.ts`）把各模块 V2 的列表/详情 URL 映射到对应 V3 页面，侧栏和所有 V2 链接都会落到这里。
+- **已重做的模块（第二批：Agent 运行）。** `/v3/releases`（开发到运维的发布台：等待审阅的请求排在最前，其后是已批准未执行、进行中和历史；`?id=` 为单个发布的详情，审阅/执行/回滚都需先确认）、`/v3/environments`（智能体 × 环境矩阵，按需与 AWS 核对漂移）、`/v3/observability`（以需要关注的事项开头的仪表盘、会话与链路列表，以及原生的会话与链路视图——瀑布图加 Span 详情——沿用 V2 的 `?view=session|trace&id=`）、`/v3/memory`（概览、短期的参与者 → 会话 → 事件、长期记录与检索、资源；资源编辑器仍为承载页）、`/v3/governance`（Gateway 及其目标、Policy Engine 模式与近期拒绝记录、工具目录；Cedar 与限流编辑器仍为承载页）、`/v3/connections`（成员自己的 as_user 授权与撤销）、`/v3/costs`（按智能体和按人统计的花费、本月累计，以及 `?view=alerts` 的告警规则）和 `/v3/issues`（问题箱、标准答案与评审人，沿用 V2 的 `?view=` 标签）。每个页面都与对应 V2 页面的调用和权限检查一致；`v3TwinOf` 会把 V2 链接（包括已重做的视图）路由到这些页面。
+- **已重做的模块（第三、四批：评估、学习、管理）。** `/v3/insights`、`/v3/intents`、`/v3/data`（链路、数据集、流水线；链路与数据集视图）、`/v3/evaluators`（列表、详情与 LLM 评审/派生/代码评估器编辑器）、`/v3/tasks`（失败优先的运行列表、运行详情，以及与 V2 相同处理 pass^k 和 `confirm_cost` 的新建向导）、`/v3/online`（列表、详情、编辑器）、`/v3/experiments`（实验与灰度看板）、`/v3/standards`（Agent-DLC 全部九个视图；放行门本身链接到 `/v3/gate`）、`/v3/skill-lab`（首页与评估运行）、`/v3/users`、`/v3/workspaces`（列表，以及含初始化、级别、授权、清除的详情）、`/v3/identity`（管理员的连接页与 Gateway 目标）、`/v3/fleet`、`/v3/announcements`、`/v3/videos` 和 `/v3/video-management`。`v3TwinOf` 通过 `v3/nav.ts` 中的 `MODULES` 表映射这些页面，表中按 V2 路径列出 V3 页面已重做的 `view=`。对于状态机庞大、又没有数据可以验证重写的流程（实验/灰度的详情与启动、技能实验室的编辑器与向导、少数结果表与选择器），V3 页面把 V2 组件嵌入 `.v2.v3-host` 容器中使用，从而沿用 V2 自身的检查。仍完全承载的有：智能体向导及智能体详情/编辑/身份、注册中心的注册/编辑/消费者视图、新建知识库、架构助手的对话工作台、记忆资源与数据集/流水线编辑器、Cedar 策略与限流编辑器、Gateway 详情，以及注册工作区。
+- **新手引导（`v3/onboarding/`）。** 指挥中心上的「启动序列」：工作区就绪 → 首个智能体上线 → 第一次对话 → 第一次评估 → 设置放行门，每一步都根据实际存在的数据判断是否完成（`launchSteps`，有单元测试），而不是靠点击打勾；关闭后按工作区隐藏，全部完成后折叠为一行。首次进入时的「导览」依次高亮一个区域（⌘K、启动序列、需要你处理的队列、信号颜色、功能模块侧栏、帮助），可用键盘操作、可跳过，只自动出现一次（`launchpad_v3_tour_done`）。「术语解释」复用 V2 的 `glossary.*` 文案：行内 `Term` 提示、术语表对话框，以及 ⌘K 中每个术语一条入口。侧栏沿用 V2 的业务 / 专家模式（`lib/nav-mode.ts`），只是显示筛选，⌘K 和 URL 仍可到达每个页面。顶栏的「?」菜单可重新打开导览、启动序列和术语表。
+- **浮层。** `.v3-reveal` 子元素的动画使用 `fill-mode: backwards` 而非 `forwards`：填充状态的 transform 动画会让每个块成为 `position: fixed` 的包含块，把对话框困在面板里（填充的 opacity 也会覆盖浮层自身的淡入）。`Confirm` / `Dialog` 无论焦点在哪里都可按 Esc 关闭。
+- **其余页面在 V3 中承载，而不是跳回 V2。** 选择 V3 后，`/v2/*` 路由经由 `V2Frame`（`App.tsx`）在 `<V3Shell hosted="v2" />` 内渲染，classic 路由在 `<V3Shell hosted="classic" />` 内渲染——URL 和页面模块不变，外壳换成 V3。因此 V2 页面发出的任何链接都留在 V3 内；在承载页上点「返回 V2」只是用 V2 外壳重新渲染同一 URL。V3 已重做的两个 V2 页面会交给对应的 V3 页面（`/v2` → `/v3`，`/v2/chat` → `/v3/chat`；`/v2/chat?full=1` 保留完整的 V2 对话，V3 对话页在需要授权卡片时链接到它）。侧栏在「功能模块」下按 V2 自己的分组（可折叠）列出这些承载页，列表由 `v2/nav.ts` 派生（`v3/nav.ts` 的 `hostedGroups`，由 `v3/nav.test.ts` 保证完整）；⌘K 命令面板（也可按 `/`）可到达所有页面以及每个智能体的对话与放行门，在 zh-CN 下也能匹配英文名称和路由。
+- **承载主题。** V2 把用到的每个字面颜色都命名为 `--v2-*` token（见 `v2/v2.css` 中 `--v2-mono` 下方的一组；V2 显示完全不变），`v3/host.css` 在 `.v2.v3-host` 容器上把这些 token 重新指向 V3 调色板，并调整面板、标题和表格样式。classic 的 token（`theme/tokens.css`）在 `body.v3-body` 上重新指向，classic 的品牌琥珀色改为 V3 的薄荷绿，因为琥珀色在 V3 中表示「等待」。V2/classic 的弹窗是页面内的 `position: fixed`，所以承载时 `<main>` 不建立层叠上下文（`.v3-main.hosted`）。架构助手的鱼骨图 SVG 有意保留浅色字面调色板——它同时用作独立的 SVG 下载文件。
+- **样式。** V3 的 CSS 全部限定在 `.v3` 之下，所有自定义属性都以 `--v3-*` 为前缀，因为经典版 `theme/` 的 token 和类名（`--ink-2`、`.split`、`.caret`）是全局的，否则会冲突。信号统一使用 `ok` / `wait` / `act` / `info` / `off`。
+- **时间戳。** 账本时间戳是不带时区的 UTC；`lib/timestamps.ts` 的 `parseTimestamp` 按 UTC 解析（V2 的 `fmtTime` 也改用它），避免 `new Date()` 把它当作本地时间。
+- **检查。** `backend/scripts/e2e_v3_console_browser.py`（无头浏览器、基本只读；`--chat` 会发送一条消息）覆盖切换、所有 V3 页面和 ⌘K。
+
 ## 控制台认证与账户
 
 控制台有一个可选的本地账户网关,与 Gateway/Cedar 演示使用的 Cognito 用户以及
@@ -1928,6 +1945,22 @@ namespaces / search / 抽取任务返回 `memory.actor_not_found`，共享的 `d
 并且只对从未真正可用过的 workspace 允许执行:状态为 `registered` 或 `failed`、没有 Agent、
 且不是 `default`。一次失败的运行已经开通出来的东西会留在目标账号里——响应中的
 `resource_keys` 会说明那是哪些资源种类。
+
+## Agent-DLC —— 判据、黄金集、校准与放行门
+
+完整设计见 [agent-dlc-design.zh-CN.md](agent-dlc-design.zh-CN.md)，英文版本节列出了逐个模块的实现细节。要点：
+
+- **模块**：服务在 `app/dlc/`，统计函数在 `app/evaluation/stats.py`，模型在 `app/models/dlc.py`，路由在 `app/routers/dlc.py`（控制台）与 `app/routers/share_annotate.py`（公开）。控制台页面为 `/v2/eval/standards`，以 `?view=` 切换九个子页。
+- **判据表**：按 `lineage_id` 版本化，发布即冻结，须由编辑人以外的人签署（`criteria.sign`）。红线不能交给大模型裁判；成本与性能必须是指标；裁判类判据在校准通过前实际档位为“观察”。
+- **黄金集**：开发集 / 回归集 / 保留集三个切分。`POST /api/golden-sets/{id}/seed` 是唯一写入保留集的路径，写入后即封存。
+- **放行门**：按固定顺序判定——红线 → 分母 → 各维度门限 → 观察项。证据不足判为 INVALID（无法判定），而不是不达标。
+- **流量前置门控**：门控智能体通过具名 `live` 端点对外服务，新版本部署到 `candidate`；签署后才把 `live` 指过去，回滚即重新指回，不删除任何资源。切换到具名端点（`release/migrate`）需要 `release.sign`——生产服务哪个版本是放行决定，不是构建动作。
+- **遥测按端点区分**（真实 AWS e2e 发现）：每个 AgentCore 端点各写自己的内容日志组（`…-<endpoint>`）与 service name（`….<endpoint>`）。统一由 `evaluation.service.telemetry_endpoint(agent, qualifier)` 决定读哪个：钉住端点的运行读自己的，门控智能体读 `live`，其余读 `DEFAULT`。
+- **端点删除是异步的，而且 harness 端点很慢**：AgentCore 不允许删除仍带端点的 runtime / harness，删除端点只是把它置为 DELETING（实测可达数分钟）。四条删除路径都先调 `releases.delete_endpoints`，先发出两个删除再分别等待一个**短**上限（45 秒，够 runtime 端点用）。若 AWS 仍握着 harness，`delete_agent_resources` 抛 `agent.teardown_pending`，路由照常把台账行标记为已删除并返回 `aws_resource_deleted: false`，由 `dlc.scheduler.sweep_deleted_resources` 持续重试直到 AWS 放手——而不是让一个 HTTP 删除请求挂几分钟，或者让运维对着异步状态机手动重试。该 sweep 在删除前先调 `GetHarness`，因为 **AgentCore 对已经不存在的 harness 执行 `DeleteHarness` 返回的是 `AccessDenied`，而不是 `ResourceNotFound`**：从删除错误去推断“已经没了”，要么会永远重试一个早已消失的资源，要么会把真实的权限问题吞掉。完成标记是 `endpoint_mode` 回到 `default`，这样 `resource_id` 作为历史指针得以保留（其他已删除行同样保留它）。
+- **成本是强制的，不只是展示**：`POST /api/eval/runs` 与放行门的 `start_evaluation` 都会调 `cost.assert_allowed`，`eval_cost_max_usd` / `eval_cost_confirm_usd` 在花掉第一个会话之前就拒绝。
+- **校准与标注链接**：标注期间对标注人隐藏裁判判定；数据不支持时拒绝判定为“一致”。标注链接（`/r/annotate/<token>`）让无账号的专家参与标注，prod 级工作区拒绝生成。
+- **权限**：新增 `criteria.manage`、`criteria.sign`、`golden.admit`、`judge.calibrate`、`waiver.approve`、`release.sign` 六项，关键写操作均在 `PROD_PROTECTED` 之列——包括把样本**移出**门控（`move` / `retire` 会让它离开放行门的分母，这和新增样本一样是在改标准）以及校准 `decide`（`not_aligned` 会把正在拦人的裁判降级为观察）。
+- **安全审查发现并已在服务端修掉的三处一致性缺口**（规则本来就有，只是某条路径没照着做）：（1）`GET /api/annotation-tasks` 把 `privileged` 写死为 `True`，于是列表把详情接口刻意隐藏的裁判判定直接给了每个标注人——现在两处用同一套判断；（2）监测配置的 `dataset_id` 未经校验就落库，别的工作区封存的保留集可能被拿来跑在调用方自己控制的智能体上——写入与执行时都改为经 `golden.get_parent(db, ws.id, …)` 解析；（3）单个标注人的票曾被当成共识，且没有第二位标注人时会跳过人类上限项，于是一个人可以照着裁判标注再自行认证——现在一条样本需要两位标注人一致才计入，`aligned` 需要真实的 `human_human_kappa`，并且 `decide` 拒绝该任务的标注人。样本准入也改为自己计算个人信息脱敏（不再依赖“详情页被打开过”），并把脱敏状态记在样本上（工作区没有护栏时，覆盖视图给出 `unscreened_items`）。
 
 ## Skill Lab —— 技能评估与训练（SkillOpt 集成）
 

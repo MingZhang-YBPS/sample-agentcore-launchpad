@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
+import { useProdLock } from "../../workspace/useProdLock";
+import { useWorkspace } from "../../workspace/workspace-context";
 import { methodLabel } from "../../components/methodChipMeta";
 import {
   type AgentInfo,
@@ -20,6 +22,11 @@ import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { AgentWizard } from "./agents/AgentWizard";
+import { fmtElapsed, parseUtc, progressKey, runningStage } from "./agents/deployStatus";
+import { IntegrationCard } from "./agents/IntegrationCard";
+import { ReleaseCard } from "./agents/ReleaseCard";
+import { SnapshotsCard } from "./agents/SnapshotsCard";
+import { TryChat } from "./agents/TryChat";
 import { v2EditPath } from "./agents/classicUrl";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
@@ -105,7 +112,7 @@ function AgentEdit({ id }: { id: string }) {
   if (blocked)
     return (
       <>
-        <FlowHeader title={t("v2.agents.wizard.editTitle", { name: data.name })} onBack={back} />
+        <FlowHeader title={t("v2.agents.wizard.editTitle", { name: data.display_name || data.name })} onBack={back} />
         <Alert tone="warn">{blocked}</Alert>
       </>
     );
@@ -128,7 +135,11 @@ function useAgentPermissions() {
   const canDeploy = can("agents.deploy");
   const canDelete = can("agents.delete");
   const canConvert = can("agents.convert");
+  // prod (T05): the controls stay visible but disabled, `lockTitle` saying why
+  const { locked, title: lockTitle } = useProdLock();
   return {
+    locked,
+    lockTitle,
     canEdit: (a: AgentInfo) =>
       a.method !== "discovered_runtime" && canDeploy && a.status !== "deploying" && (!a.system || isAdmin),
     canDelete: (a: AgentInfo) => canDelete && !a.system,
@@ -150,7 +161,7 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
     try {
       if (pending.kind === "delete") {
         await api.deleteAgent(pending.agent.id);
-        toast("success", t("v2.agents.deleted", { name: pending.agent.name }));
+        toast("success", t("v2.agents.deleted", { name: pending.agent.display_name || pending.agent.name }));
         onDone("deleted", pending.agent);
       } else {
         const res = await api.convertAgent(pending.agent.id);
@@ -182,7 +193,7 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
           : external
             ? "v2.agents.removeBody"
             : "v2.agents.deleteBody",
-        { name: pending?.agent.name ?? "" },
+        { name: pending?.agent.display_name || pending?.agent.name || "" },
       )}
       confirmLabel={
         pending?.kind === "convert"
@@ -225,7 +236,7 @@ function AgentList() {
     return agents.filter((a) => {
       if (method && a.method !== method) return false;
       if (status && a.status !== status) return false;
-      return !needle || `${a.name} ${a.id}`.toLowerCase().includes(needle);
+      return !needle || `${a.display_name ?? ""} ${a.name} ${a.id}`.toLowerCase().includes(needle);
     });
   }, [agents, method, status, q]);
   const paged = usePaged(rows, 12);
@@ -249,7 +260,7 @@ function AgentList() {
         <>
           <span className="v2-row" style={{ flexWrap: "nowrap" }}>
             <LinkButton onClick={() => open(a)} testId={`v2-agent-${a.name}`}>
-              {a.name}
+              {a.display_name || a.name}
             </LinkButton>
             {a.system && (
               <Tag tone="blue" title={t("v2.agents.systemHint")}>
@@ -257,7 +268,7 @@ function AgentList() {
               </Tag>
             )}
           </span>
-          <span className="sub mono">{a.id}</span>
+          <span className="sub mono">{a.display_name ? `${a.name} · ${a.id}` : a.id}</span>
         </>
       ),
     },
@@ -285,19 +296,32 @@ function AgentList() {
       render: (a) => (
         <div className="v2-actions">
           {a.invoke_capability.eligible && (
-            <LinkButton onClick={() => navigate(`/chat?agent=${a.id}`)}>{t("v2.agents.chat")}</LinkButton>
+            <LinkButton onClick={() => navigate(`/v2/chat?agent=${a.id}`)}>{t("v2.agents.chat")}</LinkButton>
           )}
           <LinkButton onClick={() => open(a)}>{t("v2.common.view")}</LinkButton>
           {perms.canEdit(a) && (
-            <LinkButton onClick={() => navigate(editPath(a))} testId={`v2-agent-edit-${a.name}`}>
+            <LinkButton
+              onClick={() => navigate(editPath(a))}
+              disabled={perms.locked}
+              title={perms.lockTitle}
+              testId={`v2-agent-edit-${a.name}`}
+            >
               {t("v2.common.edit")}
             </LinkButton>
           )}
           {perms.canConvert(a) && (
-            <LinkButton onClick={() => actions.askConvert(a)}>{t("v2.agents.convert")}</LinkButton>
+            <LinkButton onClick={() => actions.askConvert(a)} disabled={perms.locked} title={perms.lockTitle}>
+              {t("v2.agents.convert")}
+            </LinkButton>
           )}
           {perms.canDelete(a) && (
-            <LinkButton danger onClick={() => actions.askDelete(a)} testId={`v2-agent-delete-${a.name}`}>
+            <LinkButton
+              danger
+              onClick={() => actions.askDelete(a)}
+              disabled={perms.locked}
+              title={perms.lockTitle}
+              testId={`v2-agent-delete-${a.name}`}
+            >
               {a.method === "discovered_runtime" ? t("v2.agents.remove") : t("v2.common.delete")}
             </LinkButton>
           )}
@@ -309,6 +333,11 @@ function AgentList() {
   return (
     <>
       <PageHeader title={t("v2.agents.title")} desc={t("v2.agents.desc")} />
+      {perms.locked && (
+        <Alert tone="warn">
+          <span data-testid="v2-agents-prod-locked">{perms.lockTitle}</span>
+        </Alert>
+      )}
       <div className="v2-kpis">
         <Kpi label={t("v2.agents.kpiTotal")} value={data ? agents.length : "—"} testId="v2-agents-kpi-total" />
         <Kpi label={t("v2.agents.kpiActive")} value={data ? count("active") : "—"} tone="good" />
@@ -321,14 +350,14 @@ function AgentList() {
           <Button
             kind="primary"
             onClick={() => setParams({ view: "new" })}
-            disabled={!can("agents.deploy")}
-            title={can("agents.deploy") ? undefined : t("v2.agents.noPermission")}
+            disabled={!can("agents.deploy") || perms.locked}
+            title={perms.lockTitle ?? (can("agents.deploy") ? undefined : t("v2.agents.noPermission"))}
             testId="v2-agent-new"
           >
             <Plus size={14} aria-hidden="true" />
             {t("v2.agents.new")}
           </Button>
-          <Button onClick={() => navigate("/agents/import")}>
+          <Button onClick={() => navigate("/agents/import")} disabled={perms.locked} title={perms.lockTitle}>
             <Download size={14} aria-hidden="true" />
             {t("v2.agents.import")}
           </Button>
@@ -369,35 +398,74 @@ function AgentList() {
 }
 
 // ─── detail ────────────────────────────────────────────────────────────────
-function DeployProgress({ deployment, job }: { deployment: DeploymentInfo; job: JobInfo | null }) {
+function DeployProgress({
+  deployment,
+  job,
+  method,
+}: {
+  deployment: DeploymentInfo;
+  job: JobInfo | null;
+  method: string;
+}) {
   const { t } = useTranslation();
+  const failed = deployment.status === "failed" || deployment.stages.some((s) => s.status === "failed");
+  const inFlight = !failed && deployment.status === "running";
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [inFlight]);
+  const started = parseUtc(deployment.started_at);
+  const ended = parseUtc(deployment.ended_at);
+  const elapsed = started != null ? fmtElapsed((inFlight ? now : (ended ?? now)) - started) : null;
   return (
     <Card
       title={t("v2.agents.deployTitle")}
       sub={deployment.job_id ? `job ${deployment.job_id.slice(0, 8)}` : undefined}
       testId="v2-agent-deploy"
     >
-      <div className="v2-stages">
-        {deployment.stages.map((s, i) => (
-          <div key={s.name} className={`v2-stage ${s.status}`}>
-            <span className="n">{s.status === "succeeded" || s.status === "skipped" ? "✓" : s.status === "failed" ? "✕" : i + 1}</span>
-            <div className="b">
-              <div className="t">
-                {t(`create.stages.${s.name}`, { defaultValue: s.name })}
-                <Tag tone={STAGE_TONE[s.status]}>{t(`v2.agents.stage.${s.status}`)}</Tag>
+      {inFlight && (
+        <p className="v2-deploy-line" data-testid="v2-agent-progress-line">
+          <span>{t(`v2.agents.progress.${progressKey(method, runningStage(deployment))}`)}</span>
+          {elapsed && <span className="elapsed">{t("v2.agents.progress.elapsed", { time: elapsed })}</span>}
+        </p>
+      )}
+      {!inFlight && !failed && elapsed && deployment.status === "succeeded" && (
+        <p className="v2-deploy-line">
+          <span>{t("v2.agents.progress.done", { time: elapsed })}</span>
+        </p>
+      )}
+      {failed && (
+        <Alert tone="error">
+          {t("v2.agents.progress.failed")}
+        </Alert>
+      )}
+      {/* technical detail is collapsed unless the deploy failed */}
+      <details className="v2-deploy-details" key={failed ? "failed" : "ok"} open={failed} data-testid="v2-agent-technical">
+        <summary>{t("v2.agents.progress.technical")}</summary>
+        <div className="v2-stages">
+          {deployment.stages.map((s, i) => (
+            <div key={s.name} className={`v2-stage ${s.status}`}>
+              <span className="n">{s.status === "succeeded" || s.status === "skipped" ? "✓" : s.status === "failed" ? "✕" : i + 1}</span>
+              <div className="b">
+                <div className="t">
+                  {t(`create.stages.${s.name}`, { defaultValue: s.name })}
+                  <Tag tone={STAGE_TONE[s.status]}>{t(`v2.agents.stage.${s.status}`)}</Tag>
+                </div>
+                <div className="d">{s.detail || "—"}</div>
               </div>
-              <div className="d">{s.detail || "—"}</div>
             </div>
-          </div>
-        ))}
-      </div>
-      {job?.error && <Alert tone="error">{job.error}</Alert>}
-      <h3 className="v2-sub-title">{t("v2.agents.logTitle")}</h3>
-      <pre className="v2-pre" data-testid="v2-agent-log">
-        {job?.events.length
-          ? job.events.map((e) => `${e.ts.slice(11, 19)}  ${e.stage.padEnd(9)} ${e.msg}`).join("\n")
-          : t("v2.agents.logEmpty")}
-      </pre>
+          ))}
+        </div>
+        {job?.error && <Alert tone="error">{job.error}</Alert>}
+        <h3 className="v2-sub-title">{t("v2.agents.logTitle")}</h3>
+        <pre className="v2-pre" data-testid="v2-agent-log">
+          {job?.events.length
+            ? job.events.map((e) => `${e.ts.slice(11, 19)}  ${e.stage.padEnd(9)} ${e.msg}`).join("\n")
+            : t("v2.agents.logEmpty")}
+        </pre>
+      </details>
     </Card>
   );
 }
@@ -465,6 +533,7 @@ interface ByocSummary {
 
 function AgentDetail({ id }: { id: string }) {
   const { t } = useTranslation();
+  const { current: workspace } = useWorkspace();
   const navigate = useNavigate();
   const [, setParams] = useSearchParams();
   const perms = useAgentPermissions();
@@ -529,7 +598,12 @@ function AgentDetail({ id }: { id: string }) {
       <FlowHeader
         title={
           <span className="v2-row">
-            {agent.name}
+            {agent.display_name || agent.name}
+            {agent.display_name && (
+              <span className="mono" style={{ color: "var(--v2-ink-3)", fontSize: 13, fontWeight: 400 }}>
+                {agent.name}
+              </span>
+            )}
             <Tag tone={STATUS_TONE[agent.status] ?? "gray"} dot>
               {t(`status.${agent.status}`, { defaultValue: agent.status })}
             </Tag>
@@ -540,24 +614,37 @@ function AgentDetail({ id }: { id: string }) {
           <>
             <Button onClick={() => setNonce((n) => n + 1)}>{t("v2.common.refresh")}</Button>
             {agent.invoke_capability.eligible && (
-              <Button onClick={() => navigate(`/chat?agent=${agent.id}`)}>{t("v2.agents.chat")}</Button>
+              <Button onClick={() => navigate(`/v2/chat?agent=${agent.id}`)}>{t("v2.agents.chat")}</Button>
             )}
-            <Button onClick={() => navigate("/observability")}>{t("v2.agents.observability")}</Button>
+            <Button onClick={() => navigate("/v2/observability")}>{t("v2.agents.observability")}</Button>
             {agent.method !== "discovered_runtime" && (
               <Button onClick={() => setParams({ view: "identity", id: agent.id })} testId="v2-agent-identity-open">
                 {t("v2.agents.identity.open")}
               </Button>
             )}
             {perms.canConvert(agent) && (
-              <Button onClick={() => actions.askConvert(agent)}>{t("v2.agents.convert")}</Button>
+              <Button onClick={() => actions.askConvert(agent)} disabled={perms.locked} title={perms.lockTitle}>
+                {t("v2.agents.convert")}
+              </Button>
             )}
             {perms.canDelete(agent) && (
-              <Button kind="danger" onClick={() => actions.askDelete(agent)}>
+              <Button
+                kind="danger"
+                onClick={() => actions.askDelete(agent)}
+                disabled={perms.locked}
+                title={perms.lockTitle}
+              >
                 {agent.method === "discovered_runtime" ? t("v2.agents.remove") : t("v2.common.delete")}
               </Button>
             )}
             {perms.canEdit(agent) && (
-              <Button kind="primary" onClick={() => navigate(editPath(agent))} testId="v2-agent-edit">
+              <Button
+                kind="primary"
+                onClick={() => navigate(editPath(agent))}
+                disabled={perms.locked}
+                title={perms.lockTitle}
+                testId="v2-agent-edit"
+              >
                 {t("v2.common.edit")}
               </Button>
             )}
@@ -573,7 +660,8 @@ function AgentDetail({ id }: { id: string }) {
       <Card title={t("v2.agents.basic")} testId="v2-agent-basic">
         <Descriptions
           items={[
-            { label: t("v2.agents.colName"), value: agent.name },
+            { label: t("v2.agents.wizard.displayName"), value: agent.display_name || "—" },
+            { label: t("v2.agents.wizard.resourceName"), value: <span className="mono">{agent.name}</span> },
             { label: "ID", value: <span className="mono">{agent.id}</span> },
             {
               label: t("v2.agents.colMethod"),
@@ -591,7 +679,7 @@ function AgentDetail({ id }: { id: string }) {
             {
               label: t("v2.agents.registryRecord"),
               value: agent.registry_record_id ? (
-                <Link to="/registry" className="mono">
+                <Link to="/v2/registry" className="mono">
                   {agent.registry_record_id}
                 </Link>
               ) : (
@@ -602,7 +690,8 @@ function AgentDetail({ id }: { id: string }) {
           ]}
         />
       </Card>
-      {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} />}
+      {agent.status === "active" && agent.invoke_capability?.eligible && <TryChat agentId={agent.id} />}
+      {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} method={agent.method} />}
       {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
         <InboundSwitchCard
           agentId={agent.id}
@@ -617,6 +706,23 @@ function AgentDetail({ id }: { id: string }) {
         />
       )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
+      {agent.method !== "discovered_runtime" && (
+        <SnapshotsCard
+          agentId={agent.id}
+          refreshKey={`${agent.status}:${agent.deployments?.length ?? 0}`}
+          canRollback={perms.canEdit(agent) && !perms.locked}
+          lockTitle={perms.locked ? perms.lockTitle : undefined}
+          onRolledBack={() => setNonce((n) => n + 1)}
+        />
+      )}
+      {agent.invoke_capability?.eligible && <IntegrationCard agentId={agent.id} />}
+      <ReleaseCard
+        agentId={agent.id}
+        agentTitle={agent.display_name || agent.name}
+        agentStatus={agent.status}
+        systemManaged={Boolean(agent.system)}
+        currentWorkspaceId={workspace?.id ?? null}
+      />
       {byoc && (
         <Card title={t("v2.agents.byocTitle")}>
           <Descriptions

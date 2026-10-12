@@ -24,6 +24,18 @@ from typing import Any
 SCAN_COMPLETE = "COMPLETE"
 SCAN_IN_PROGRESS = "IN_PROGRESS"
 SCAN_FAILED = "FAILED"
+# Statuses that mean "the scan has not finished yet" — keep polling.
+SCAN_PENDING = frozenset({SCAN_IN_PROGRESS, "PENDING"})
+# How long a just-pushed image may have no scan record at all. Scan-on-push
+# registers the scan a few seconds after the push, and until then
+# describe_image_scan_findings raises ScanNotFoundException.
+SCAN_NOT_FOUND_GRACE_S = 60
+
+
+def _is_scan_not_found(exc: Exception) -> bool:
+    """ECR's "no scan for this image (yet)" — botocore ClientError or modeled class."""
+    code = (getattr(exc, "response", None) or {}).get("Error", {}).get("Code")
+    return code == "ScanNotFoundException" or type(exc).__name__ == "ScanNotFoundException"
 
 
 class ScanUnavailable(RuntimeError):
@@ -64,14 +76,21 @@ def wait_for_scan(
     interval_s: int = 5,
     sleeper: Callable[[float], None] = time.sleep,
     on_status: Callable[[str], None] | None = None,
+    not_found_grace_s: int = SCAN_NOT_FOUND_GRACE_S,
 ) -> dict[str, int]:
     """Poll until the push scan finishes; return its severity counts.
 
     Raises `ScanTimeout` if it is still running at the deadline and
     `ScanUnavailable` if the scan failed or the findings cannot be read — never a
     silent empty result, which would read as "clean".
+
+    Right after a push ECR has no scan record yet (ScanNotFoundException); that is
+    polled as "not started" for up to `not_found_grace_s` — reading it as "scanning
+    unavailable" let freshly pushed images deploy unscanned. Past the grace the
+    scan is taken to be missing (scan-on-push off).
     """
-    deadline = time.monotonic() + timeout_s
+    started = time.monotonic()
+    deadline = started + timeout_s
     last_status = None
     while True:
         try:
@@ -79,6 +98,14 @@ def wait_for_scan(
                 repositoryName=repository, imageId={"imageDigest": digest}
             )
         except Exception as exc:  # noqa: BLE001 — any read failure means no gate
+            if _is_scan_not_found(exc) and time.monotonic() - started < min(
+                not_found_grace_s, timeout_s
+            ):
+                if last_status != "NOT_STARTED" and on_status is not None:
+                    on_status("NOT_STARTED")
+                last_status = "NOT_STARTED"
+                sleeper(interval_s)
+                continue
             raise ScanUnavailable(
                 f"could not read scan findings for {repository}@{digest}: {exc}"
             ) from exc
@@ -94,7 +121,7 @@ def wait_for_scan(
         if status == SCAN_FAILED:
             description = (response.get("imageScanStatus") or {}).get("description", "")
             raise ScanUnavailable(f"ECR scan failed for {repository}@{digest}: {description}")
-        if status != SCAN_IN_PROGRESS:
+        if status not in SCAN_PENDING:
             raise ScanUnavailable(
                 f"unexpected ECR scan status {status!r} for {repository}@{digest}"
             )

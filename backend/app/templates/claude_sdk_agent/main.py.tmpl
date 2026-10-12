@@ -219,7 +219,7 @@ def _memory_hook(memory: AgentCoreMemory, text_prompt: str | None = None):
 
 def _kb_runtime():
     return boto3.client(
-        "bedrock-agent-runtime", region_name=os.environ.get("AWS_REGION", "us-west-2")
+        "bedrock-agent-runtime", region_name=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
     )
 
 

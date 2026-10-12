@@ -497,6 +497,11 @@ def delete_agent_resources(
     ECR tag must never block deleting the agent."""
     if agent.resource_id:
         client = control_client(workspace)
+        # a gated agent serves through named endpoints; AgentCore refuses to delete a
+        # runtime that still has them (Agent-DLC §6)
+        from app.dlc.releases import delete_endpoints
+
+        delete_endpoints(agent, client)
         try:
             rt.delete_runtime(client, agent.resource_id)
         except client.exceptions.ResourceNotFoundException:

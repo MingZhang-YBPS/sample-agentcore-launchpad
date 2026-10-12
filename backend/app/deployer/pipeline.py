@@ -121,6 +121,8 @@ def create_deployment(
     skip_register: bool = False,
     payload_extra: dict[str, Any] | None = None,
     commit: bool = True,
+    actor: str | None = None,
+    note: str | None = None,
 ) -> tuple[Deployment, Job]:
     """Create the Deployment (stages pending) + Job rows for one deploy run.
 
@@ -132,7 +134,11 @@ def create_deployment(
     that must pin data to the job — the system-preset release — cannot be left
     with a runnable job and no pin by a crash between two commits). ``commit=False``
     leaves the rows flushed in the caller's transaction so the caller can link the
-    freshly minted ids onto its own rows and commit everything at once."""
+    freshly minted ids onto its own rows and commit everything at once.
+
+    Every call also writes a ledger spec snapshot (T18) in the same transaction —
+    ``actor`` names who published (default: the agent's owner) and ``note`` is a free
+    label such as "rollback to #2"."""
     # The workspace comes off the agent, not the request: a promotion or resumed
     # job must land in the same environment as the agent it deploys.
     deployment = Deployment(
@@ -150,12 +156,18 @@ def create_deployment(
             "deployment_id": deployment.id,
             "mode": mode,
             "skip_register": skip_register,
+            # who published and why — read back by the Agent-DLC release bookkeeping
+            "actor": actor,
+            "note": note,
             **(payload_extra or {}),
         },
     )
     db.add(job)
     db.flush()
     deployment.job_id = job.id
+    from app.services.snapshots import record_snapshot
+
+    record_snapshot(db, agent, deployment_id=deployment.id, created_by=actor, note=note)
     if commit:
         db.commit()
     else:
@@ -331,6 +343,15 @@ def _finish(
         deployment.status = "succeeded"
         agent.status = "active"
         agent.error = None
+        from app.services.snapshots import stamp_version
+
+        stamp_version(db, deployment_id, agent.version)
+        # gate before traffic: a migrated agent's `live` endpoint follows (direct) or a
+        # release record opens on `candidate` (gated) — never fails the deploy
+        from app.dlc.releases import after_deploy
+
+        payload = job.payload or {}
+        after_deploy(db, agent, note=payload.get("note"), actor=payload.get("actor"))
     else:
         job.status = "failed"
         job.error = error
@@ -389,6 +410,7 @@ def resume_pending_jobs() -> list[str]:
     # Lazy: the uninstall worker imports the agents router (teardown helper), which
     # imports the system-agents service, which imports this module.
     from app.assistant import purge as assistant_purge
+    from app.services import promotion_exec
     from app.system_agents import uninstall as system_uninstall
 
     starters: dict[str, Callable[[str], threading.Thread]] = {
@@ -397,6 +419,8 @@ def resume_pending_jobs() -> list[str]:
         # a crashed uninstall is still `running` in the ledger; the resume starter
         # is the only caller allowed to pick such a job up again
         system_uninstall.JOB_TYPE: system_uninstall.start_uninstall_resume,
+        # T27: a release interrupted mid-stage continues from the first unfinished one
+        promotion_exec.JOB_TYPE: promotion_exec.start_resume,
         # an architect-conversation CLEAR resumes from its verified checkpoints
         assistant_purge.JOB_TYPE: assistant_purge.start_purge_resume,
     }

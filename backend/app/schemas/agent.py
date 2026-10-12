@@ -4,15 +4,22 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.schemas.attachments import AttachmentRequest
+from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned
 
 # Latest Sonnet inference profile available in the target account (verified via
 # bedrock list-inference-profiles; there is no "sonnet-5" profile).
-DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5"
+# GLM-5.3 through its global inference profile: offered in every region the
+# console targets (us-east-1, us-west-2, us-east-2, ca-central-1). Mirrors the
+# console's SPEC_DEFAULT_MODEL_ID (frontend/src/lib/models.ts).
+DEFAULT_MODEL_ID = "global.zai.glm-5.3"
+# The Claude Agent SDK (method "container") can only drive Claude, so a container
+# spec that names no model gets this instead of the platform default. Mirrors the
+# console's claude-only default (defaultModelFor(source, claudeOnly)).
+CLAUDE_SDK_DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5"
 
 Method = Literal["harness", "zip_runtime", "container", "studio", "byoc"]
 
@@ -45,6 +52,15 @@ MAX_TOKENS_CEILING = 131072
 # call reasoned for 95 s and stopped at max_tokens before writing any answer). Other
 # families keep the service default — Bedrock rejects a value above a model's limit.
 DEFAULT_GPT_MAX_TOKENS = 65536
+
+
+def display_name_of(spec: dict[str, Any] | None) -> str | None:
+    """The stored spec's ``display_name`` (None when unset) — list/detail projection.
+
+    Read defensively: specs written before the field existed simply lack it.
+    """
+    value = (spec or {}).get("display_name")
+    return (value.strip() or None) if isinstance(value, str) else None
 
 
 def is_openai_model_id(model_id: str) -> bool:
@@ -206,6 +222,19 @@ class KnowledgeBaseRef(BaseModel):
     description: str = Field(default="", max_length=1000)
 
 
+class GuardrailConfig(BaseModel):
+    """PII protection applied by the platform on both ends of a turn (T12).
+
+    Off by default and independent of the creation method: the screen runs in the
+    platform's invoke chain (`services/guardrail.py`), not inside the agent, so it
+    covers a managed Harness and BYOC code alike. `anonymize` masks the entities and
+    carries on; `block` refuses the turn with `guardrail.blocked`.
+    """
+
+    enabled: bool = False
+    mode: Literal["anonymize", "block"] = "anonymize"
+
+
 class MemoryConfig(BaseModel):
     short_term: bool = True
     long_term: bool = False
@@ -321,7 +350,7 @@ ByocPythonVersion = Literal["PYTHON_3_10", "PYTHON_3_11", "PYTHON_3_12", "PYTHON
 # in the execution role's bedrock:InvokeModel statement, so the bound is an IAM
 # policy-size sanity cap, not a model catalogue.
 BYOC_ALLOWED_MODELS_MAX = 20
-INFERENCE_PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.")
+INFERENCE_PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.", "us-gov.")
 _BYOC_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]*$")
 _BYOC_MODEL_ARN_RE = re.compile(
     r"^arn:aws(?:-cn|-us-gov)?:bedrock:[a-z0-9-]+:(?P<account>\d{12})?:"
@@ -458,7 +487,13 @@ class ByocConfig(BaseModel):
 
 
 class AgentSpec(BaseModel):
+    # The immutable slug — it names every AWS resource the agent owns.
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,47}$")
+    # Human-facing label (any Unicode, e.g. Chinese). Stored in the JSON spec only —
+    # no ledger column and never sent to AWS — and, unlike ``name``, editable on
+    # redeploy. Whitespace is trimmed; blank reads back as None (display falls
+    # back to ``name``).
+    display_name: str | None = Field(default=None, min_length=1, max_length=64)
     method: Method
     model_id: str = DEFAULT_MODEL_ID
     # Defaults to "bedrock" for BACKWARD COMPATIBILITY, not because it is the
@@ -521,6 +556,7 @@ class AgentSpec(BaseModel):
     # Strands Studio canvas graph {nodes, edges, graphMode} — persisted for later edit/re-publish
     studio_flow: dict[str, Any] | None = None
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    guardrail: GuardrailConfig = Field(default_factory=GuardrailConfig)
     env: dict[str, str] = Field(default_factory=dict)
     max_iterations: int = Field(default=100, ge=1, le=100)
     timeout_seconds: int = Field(default=600, ge=10, le=3600)
@@ -553,6 +589,13 @@ class AgentSpec(BaseModel):
     inbound_auth: InboundAuth | None = None
 
     @model_validator(mode="after")
+    def _claude_sdk_default_model(self) -> "AgentSpec":
+        # only when the caller named no model: an explicit id is the caller's call
+        if self.method == "container" and "model_id" not in self.model_fields_set:
+            self.model_id = CLAUDE_SDK_DEFAULT_MODEL_ID
+        return self
+
+    @model_validator(mode="after")
     def _inbound_auth_supported(self) -> "AgentSpec":
         """An explicit JWT choice is refused where no Runtime authorizer exists.
 
@@ -576,6 +619,14 @@ class AgentSpec(BaseModel):
                 "runtimes — A2A peers invoke over SigV4"
             )
         return self
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _trim_display_name(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
 
     @model_validator(mode="after")
     def _byoc_constraints(self) -> "AgentSpec":
@@ -880,7 +931,7 @@ class AgentSpec(BaseModel):
 
 
 class InvokeRequest(AttachmentRequest):
-    session_id: str | None = None
+    session_id: str | None = SessionIdField
     actor_id: str = "default"
 
 
@@ -888,6 +939,10 @@ class InvokeResponse(BaseModel):
     text: str
     session_id: str
     latency_ms: int
+    # T35: "rule" when a curated answer short-circuited the model, "model" otherwise.
+    # Must be on the console response as well as `/v1` — one invoke chain, one contract —
+    # or a curated answer reads as the model's own.
+    answered_by: str = "model"
 
 
 def _clean_resource_ids(ids: list[str], label: str) -> list[str]:

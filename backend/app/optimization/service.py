@@ -439,6 +439,8 @@ def _agent_meta(exp: Experiment, workspace: WorkspaceContext) -> dict[str, Any]:
         "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
         "tools": discover_agent_tools(agent_row.spec or {}),
         "experiment_capability": experiment_capability(agent_row),
+        # where this agent's production traffic is logged (`live` once gated)
+        "telemetry_endpoint": _telemetry_endpoint(agent_row),
     }
     _update(exp.id, artifact={"agent_meta": meta})
     return meta
@@ -570,12 +572,14 @@ def stage_recommend(
     model_id: str | None = None,
 ) -> dict[str, Any]:
     data = data_client(workspace)
-    log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
+    # recommendations read past production traffic: a gated agent's is on `live`
+    endpoint = agent.get("telemetry_endpoint") or "DEFAULT"
+    log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-{endpoint}"
     log_group_arns = [
         ac.to_log_group_arn(log_group, workspace.region, workspace.account_id),
         ac.to_log_group_arn("aws/spans", workspace.region, workspace.account_id),
     ]
-    service_names = [f"{agent['runtime_name']}.DEFAULT"]
+    service_names = [f"{agent['runtime_name']}.{endpoint}"]
     current_prompt = agent["system_prompt"]
     out: dict[str, Any] = {}
 
@@ -1703,6 +1707,12 @@ def act_verdict(exp_id: str, progress: Progress) -> None:
             artifact={"verdict": {"metrics": metrics, **verdict}})
 
 
+def _telemetry_endpoint(agent_row: Any) -> str:
+    from app.evaluation.service import telemetry_endpoint
+
+    return telemetry_endpoint(agent_row)
+
+
 def start_experiment(
     agent_row: Any, workspace: WorkspaceContext, *, creator: creators.Creator | None = None
 ) -> Experiment:
@@ -1717,6 +1727,8 @@ def start_experiment(
         "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
         "tools": discover_agent_tools(agent_row.spec or {}),
         "experiment_capability": experiment_capability(agent_row),
+        # where this agent's production traffic is logged (`live` once gated)
+        "telemetry_endpoint": _telemetry_endpoint(agent_row),
     }
     db = SessionLocal()
     try:
@@ -1784,6 +1796,36 @@ def _refuse_system_agent(agent_id: str | None, action: str) -> None:
     from app.system_agents.service import refuse_system_agent_id
 
     refuse_system_agent_id(agent_id, action)
+
+
+def assert_experiment_promotable(exp: Experiment, *, allow_non_significant: bool) -> None:
+    """Promote redeploys the agent in place, so the verdict must back it (F6).
+
+    Mirrors the canary's `assert_verdict_allows`: control-wins and insufficient data
+    never promote; a treatment win that is not significant, or a tie, promotes only
+    with an explicit override the caller recorded.
+    """
+    verdict = exp.artifacts.get("verdict") or {}
+    label = str(verdict.get("verdict") or "")
+    if label == "control-wins":
+        raise AppError(
+            "experiment.verdict_blocked",
+            "the control arm won — promoting the treatment would ship a worse version",
+            status_code=409,
+        )
+    if not label or label.startswith("insufficient"):
+        raise AppError(
+            "experiment.verdict_blocked",
+            "the A/B test has not produced a usable verdict yet",
+            status_code=409,
+        )
+    strong = label == "treatment-wins" and verdict.get("significant") is True
+    if not strong and not allow_non_significant:
+        raise AppError(
+            "experiment.verdict_not_significant",
+            "the treatment did not win significantly — confirm the override to promote anyway",
+            status_code=409,
+        )
 
 
 def act_promote(exp_id: str, progress: Progress) -> dict[str, Any]:

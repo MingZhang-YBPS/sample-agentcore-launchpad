@@ -184,10 +184,9 @@ class TestHeaderResolution:
         assert blind.status_code == 403 and blind.json()["code"] == "workspace.forbidden"
         assert named.status_code == 403 and named.json()["code"] == "workspace.forbidden"
         # ...and the switcher has nothing to offer
-        assert member.get("/api/workspaces").json() == {
-            "workspaces": [],
-            "all_workspaces": False,
-        }
+        body = member.get("/api/workspaces").json()
+        body.pop("suggested_regions")  # form suggestions, not workspace data
+        assert body == {"workspaces": [], "all_workspaces": False}
 
     def test_a_member_is_not_told_which_role_reaches_a_workspace(self, gated_app):
         """The switcher needs to know a workspace is cross-account (it is a

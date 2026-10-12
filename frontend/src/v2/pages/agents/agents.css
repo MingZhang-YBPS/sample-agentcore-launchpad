@@ -53,3 +53,5 @@
   .v2 .v2-agents-row.a2a, .v2 .v2-agents-row.mount, .v2 .v2-agents-row.env,
   .v2 .v2-agents-row.auth-head, .v2 .v2-agents-row.auth-body { grid-template-columns: 1fr; }
 }
+.v2 .v2-agents-files { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.v2 .v2-agents-files li { display: flex; align-items: center; gap: 6px; }

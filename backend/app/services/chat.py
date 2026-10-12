@@ -14,8 +14,8 @@ from typing import Any
 from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, envelope
 from app.models.ledger import Agent
+from app.services import answer_rules, guardrail, policy_denials
 from app.services import inbound_auth as inbound_auth_service
-from app.services import policy_denials
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
@@ -59,7 +59,16 @@ def chat_stream(
     )
     # Imported harnesses stream through the same InvokeHarness path as 方式B.
     harness = agent.method == "harness" or is_discovered_harness(agent)
-    mode = "stream" if harness or agent.method in NATIVE_STREAM_METHODS else "buffered"
+    # T12: PII protection screens whole texts, and an entity can straddle two deltas,
+    # so a guardrail-enabled agent deliberately gives up token-by-token streaming:
+    # deltas are collected, the answer is screened once, and the masked text is
+    # emitted as one delta. Slower first paint is the price of not leaking PII.
+    screen = guardrail.guardrail_config(agent.spec)
+    mode = (
+        "buffered"
+        if screen
+        else ("stream" if harness or agent.method in NATIVE_STREAM_METHODS else "buffered")
+    )
     meta = {"session_id": session_id, "agent": agent.name, "mode": mode}
     if attachments:
         meta["attachments"] = attachments.metadata
@@ -75,10 +84,34 @@ def chat_stream(
         "data": meta,
     }
     started = time.monotonic()
+    buffered: list[str] = []
     try:
         refuse_assistant_session(agent, session_id)
+        had_attachments = bool(attachments)
+        if screen:
+            prompt = guardrail.screen(
+                attachments.prompt(prompt) if attachments else prompt,
+                source="INPUT",
+                mode=screen["mode"],
+                workspace=workspace,
+            ).text
+            attachments = None
+        # T35: a curated answer short-circuits the model call (see
+        # `services/answer_rules` for the matching and PII-screen ordering). The owner's
+        # text is emitted as-is, preceded by a `rule` event so every consumer can show
+        # that a rule, not the model, answered.
+        hit = None if had_attachments else answer_rules.match_for_agent(agent, prompt)
+        if hit is not None:
+            yield hit.event()
+            yield {"event": "delta", "data": {"text": hit.answer}}
+            yield {
+                "event": "done",
+                "data": {"latency_ms": int((time.monotonic() - started) * 1000),
+                         "answered_by": "rule"},
+            }
+            return
         if harness:
-            yield from _harness_events(
+            source = _harness_events(
                 agent,
                 attachments.prompt(prompt) if attachments else prompt,
                 session_id,
@@ -99,7 +132,7 @@ def chat_stream(
                 invoke_kwargs["bearer_token"] = bearer_token
             if not console_user:
                 invoke_kwargs["console_user"] = False
-            yield from invoke_agent_events(
+            source = invoke_agent_events(
                 agent,
                 prompt,
                 session_id=session_id,
@@ -107,12 +140,29 @@ def chat_stream(
                 workspace=workspace,
                 **invoke_kwargs,
             )
+        for event in source:
+            # while screening, text is withheld until the whole answer can be
+            # screened; tool and heartbeat events still flow so the UI stays alive
+            if screen and event.get("event") == "delta":
+                buffered.append(str(event["data"].get("text", "")))
+                continue
+            yield event
     except AppError as exc:
         yield {"event": "error", "data": envelope(exc.code, exc.message, exc.detail)}
         return
     except Exception as exc:
         yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
         return
+    if screen:
+        try:
+            masked = guardrail.screen(
+                "".join(buffered), source="OUTPUT", mode=screen["mode"], workspace=workspace
+            ).text
+        except AppError as exc:
+            yield {"event": "error", "data": envelope(exc.code, exc.message, exc.detail)}
+            return
+        if masked:
+            yield {"event": "delta", "data": {"text": masked}}
     yield {
         "event": "done",
         "data": {"latency_ms": int((time.monotonic() - started) * 1000)},
@@ -139,6 +189,9 @@ def _harness_events(
         params["runtimeUserId"] = runtime_user_id
     if gateway_access_token:
         params.update(harness_user_overrides(agent, workspace, gateway_access_token))
+    from app.services.invoke import production_endpoint
+
+    params.update(production_endpoint(agent))
     response = data_client(workspace).invoke_harness(
         **params,
     )

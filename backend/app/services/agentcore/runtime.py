@@ -425,6 +425,47 @@ def wait_endpoint_ready(
         sleeper(interval_s)
 
 
+def ensure_runtime_endpoint(
+    client: Any,
+    *,
+    runtime_id: str,
+    endpoint_name: str,
+    version: int | str,
+    timeout_s: int = 600,
+    sleeper: Any = time.sleep,
+) -> dict[str, Any]:
+    """Create — or re-point — a named endpoint at ``version`` and wait until it serves it.
+
+    Idempotent: a ConflictException (the endpoint exists) becomes an update when it
+    serves another version. Used by Agent-DLC's `live` / `candidate` endpoints.
+    """
+    try:
+        create_runtime_endpoint(
+            client, runtime_id=runtime_id, endpoint_name=endpoint_name, version=version
+        )
+    except Exception as exc:
+        if type(exc).__name__ != "ConflictException":
+            raise
+        current = get_runtime_endpoint(client, runtime_id=runtime_id, endpoint_name=endpoint_name)
+        if str(current.get("liveVersion") or "") != str(version):
+            update_runtime_endpoint(
+                client, runtime_id=runtime_id, endpoint_name=endpoint_name, version=version
+            )
+    deadline = time.monotonic() + timeout_s
+    while True:
+        detail = wait_endpoint_ready(
+            client, runtime_id=runtime_id, endpoint_name=endpoint_name,
+            timeout_s=timeout_s, sleeper=sleeper,
+        )
+        if str(detail.get("liveVersion") or "") == str(version):
+            return detail
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"endpoint {endpoint_name} on {runtime_id} did not reach version {version}"
+            )
+        sleeper(5)
+
+
 def flatten_sse_text(raw: str) -> str | None:
     """Join the text deltas of an SSE event stream, or None if raw isn't SSE.
 

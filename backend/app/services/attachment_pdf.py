@@ -42,8 +42,13 @@ def inspect_pdf(data: bytes, *, extract: bool) -> dict:
 
 
 def main() -> None:
-    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-    resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+    for which, value in ((resource.RLIMIT_AS, 512 * 1024 * 1024), (resource.RLIMIT_CPU, 5)):
+        try:
+            resource.setrlimit(which, (value, value))
+        except (ValueError, OSError):
+            # macOS rejects an RLIMIT_AS below its unlimited hard cap; the CPU
+            # ceiling and the parent's 8 s timeout still bound the child
+            pass
     try:
         data = sys.stdin.buffer.read(MAX_FILE_BYTES + 1)
         output = (

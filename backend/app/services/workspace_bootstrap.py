@@ -47,6 +47,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
+from app.core.regions import partition_for_region
 from app.models.ledger import Job, Workspace
 from app.services import aws_clients, gateway_bootstrap, policy_bootstrap, workspace_iam
 from app.services import bootstrap as hub_bootstrap
@@ -522,7 +523,8 @@ def _stage_validate_access(ctx: BootstrapContext) -> str:
 
 def _ecr_repo_arn(ctx: BootstrapContext) -> str:
     repo = ctx.resources.get("ecr_repo") or ECR_REPO_NAME
-    return f"arn:aws:ecr:{ctx.region}:{ctx.account_id}:repository/{repo}"
+    partition = partition_for_region(ctx.region)
+    return f"arn:{partition}:ecr:{ctx.region}:{ctx.account_id}:repository/{repo}"
 
 
 def _artifacts_bucket_name(ctx: BootstrapContext) -> str:
@@ -1080,6 +1082,22 @@ def _stage_observability(ctx: BootstrapContext) -> str:
     if not state.get("enabled"):
         return f"not active yet · {state.get('status') or 'unknown'}"
     return "transaction search active" + ("" if state.get("changed") else " (already)")
+
+
+def repair_observability(workspace: WorkspaceContext, *, workspace_id: str,
+                         log: Callable[[str], None] = lambda _msg: None) -> dict[str, Any]:
+    """Re-run only the observability stage on an already-ready workspace.
+
+    The stage degrades rather than fails (an environment that deploys and invokes is
+    worth having), so a workspace can reach READY with Transaction Search off — e.g.
+    when the role lacked a permission at bootstrap time. A full re-bootstrap is
+    refused on a ready workspace, so without this the only fix was by hand. Returns
+    the same detail string the stage records, plus whether it is active now.
+    """
+    ctx = BootstrapContext(workspace_id=workspace_id, job_id="repair-observability",
+                           workspace=workspace, log=log)
+    detail = _stage_observability(ctx)
+    return {"detail": detail, "active": detail.startswith("transaction search active")}
 
 
 # ── stage: finalize ────────────────────────────────────────────────────────

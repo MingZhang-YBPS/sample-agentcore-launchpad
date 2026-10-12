@@ -227,7 +227,7 @@ class LaunchpadBaseStack(Stack):
                 ],
                 # Mantle models are hosted outside the stack's region, so the
                 # region segment stays wildcarded (see LAUNCHPAD_MANTLE_REGION).
-                resources=[f"arn:aws:bedrock-mantle:*:{self.account}:project/*"],
+                resources=[f"arn:{self.partition}:bedrock-mantle:*:{self.account}:project/*"],
             )
         )
         exec_role.add_to_policy(
@@ -355,7 +355,7 @@ class LaunchpadBaseStack(Stack):
                 sid="ManagedKbRetrieval",
                 actions=["bedrock:Retrieve", "bedrock:GetKnowledgeBase"],
                 resources=[
-                    f"arn:aws:bedrock:{self.region}:{self.account}:knowledge-base/*"
+                    f"arn:{self.partition}:bedrock:{self.region}:{self.account}:knowledge-base/*"
                 ],
             )
         )
@@ -379,7 +379,7 @@ class LaunchpadBaseStack(Stack):
                 sid="IdentityVaultSecrets",
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
+                    f"arn:{self.partition}:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
                 ],
             )
         )
@@ -439,6 +439,11 @@ class LaunchpadBaseStack(Stack):
             handler=facts_lambda,
             proxy=False,
             deploy_options=apigw.StageOptions(stage_name="prod"),
+            # No execution logging, so no account-level API Gateway CloudWatch
+            # role: CDK creates that role with RemovalPolicy.RETAIN, and every
+            # deploy/destroy cycle would orphan one IAM role and leave the
+            # account's API Gateway settings pointing at it after teardown.
+            cloud_watch_role=False,
         )
         facts = facts_api.root.add_resource("facts")
         facts.add_method("GET", api_key_required=True)
@@ -491,7 +496,7 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:InvokeAgentRuntimeForUser",
                 ],
                 resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:runtime/*"
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:runtime/*"
                 ],
             )
         )
@@ -526,7 +531,7 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:GetConfigurationBundleVersion",
                 ],
                 resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}"
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}"
                     ":configuration-bundle/*"
                 ],
             )
@@ -544,8 +549,8 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:BatchAuthorizeActions",
                 ],
                 resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:policy-engine/*",
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:gateway/*",
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:policy-engine/*",
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:gateway/*",
                 ],
             )
         )
@@ -554,7 +559,7 @@ class LaunchpadBaseStack(Stack):
                 sid="IdentitySecrets",
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
+                    f"arn:{self.partition}:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
                 ],
             )
         )
@@ -565,7 +570,7 @@ class LaunchpadBaseStack(Stack):
                 sid="ManagedKbRetrieval",
                 actions=["bedrock:GetKnowledgeBase", "bedrock:Retrieve"],
                 resources=[
-                    f"arn:aws:bedrock:{self.region}:{self.account}:knowledge-base/*"
+                    f"arn:{self.partition}:bedrock:{self.region}:{self.account}:knowledge-base/*"
                 ],
             )
         )

@@ -1,7 +1,12 @@
-# Agent Runbook — Production-Mode Startup
+# Agent Runbook — Prod Run Mode Startup
 
 Audience: an AI agent (or operator) that must start, update, verify, or debug a
-Launchpad deployment running in **prod mode**. Two supported shapes: the
+Launchpad deployment running in **prod run mode**.
+
+> `prod` here is the name of a run mode (`LAUNCHPAD_RUN_MODE=prod`: mandatory login,
+> built frontend, no auto-reload), not a statement that the sample is production
+> ready. It is sample code for non-production usage; see the notice in the
+> [README](../README.md). Two supported shapes: the
 built-in launcher (§2) and a systemd deployment (§3 — the reference layout used
 by the real us-east-1 box). Paired doc: [agent-runbook-dev.md](agent-runbook-dev.md).
 

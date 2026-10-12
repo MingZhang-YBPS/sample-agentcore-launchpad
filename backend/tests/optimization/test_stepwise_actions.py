@@ -796,8 +796,11 @@ def test_legacy_promotion_projects_ready_without_mutating_row(client):
 
 
 def test_old_pipeline_row_still_promotes_and_rebundles(client, monkeypatch):
-    exp = _mk_exp(status="ready", stage="verdict",
-                  artifacts=_old_pipeline_artifacts())
+    artifacts = _old_pipeline_artifacts()
+    # promote now needs a verdict that backs it (F6); the row shape is what is under test
+    artifacts["verdict"] = {"metrics": [], "verdict": "treatment-wins", "n": 40,
+                            "significant": True}
+    exp = _mk_exp(status="ready", stage="verdict", artifacts=artifacts)
     _inline(monkeypatch)
     monkeypatch.setattr(
         svc, "act_promote",
@@ -1565,3 +1568,33 @@ def test_recommend_action_threads_a_valid_source(client, monkeypatch):
     assert res.status_code == 202
     assert captured["source"]["run_id"] == run_id
     assert captured["source"]["kind"] == "batch_evaluation"
+
+
+@pytest.mark.parametrize(
+    ("verdict", "override", "status", "code"),
+    [
+        ({"verdict": "control-wins", "significant": True}, True, 409,
+         "experiment.verdict_blocked"),
+        ({"verdict": "insufficient-n", "n": 4}, True, 409, "experiment.verdict_blocked"),
+        ({"verdict": "treatment-wins", "significant": False}, False, 409,
+         "experiment.verdict_not_significant"),
+        ({"verdict": "tie", "significant": False}, False, 409,
+         "experiment.verdict_not_significant"),
+        ({"verdict": "treatment-wins", "significant": False}, True, 202, None),
+        ({"verdict": "treatment-wins", "significant": True}, False, 202, None),
+    ],
+)
+def test_promote_requires_a_verdict_that_backs_it(client, monkeypatch, verdict, override,
+                                                  status, code):
+    """Promote redeploys the agent in place; a loss never ships, weak evidence needs an
+    explicit override (F6)."""
+    artifacts = _old_pipeline_artifacts()
+    artifacts["verdict"] = {"metrics": [], "n": 40, **verdict}
+    exp = _mk_exp(status="ready", stage="verdict", artifacts=artifacts)
+    _inline(monkeypatch)
+    monkeypatch.setattr(svc, "act_promote", lambda exp_id, progress: None)
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "promote", "allow_non_significant": override})
+    assert res.status_code == status, res.text
+    if code:
+        assert res.json()["code"] == code

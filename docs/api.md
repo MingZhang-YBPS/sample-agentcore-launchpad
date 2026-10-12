@@ -998,6 +998,174 @@ their display names.
 | `POST` | `/api/eval/runs/{run_id}/recommendations/{rec_id}/accept` | `agents.deploy` — **Accept** a `COMPLETED` system-prompt recommendation into a new Harness version → 202 `{agent, job_id, deployment_id, recommendation}`. Body `{system_prompt?}` — the reviewed text to publish; omitted = the saved `edit`, else the generated recommendation (`accepted.edited` records any difference from the generated text). Re-publishes the run's platform-deployed Harness through the same guards and update-mode deploy job as `POST /api/agents/{id}/redeploy` (UpdateHarness → a new immutable version; `DEFAULT` follows it). The platform-appended `## Knowledge bases` section is stripped from the recommended text first — the recommendation revised the *live* prompt, which already carries it. Records `accepted {by, at, agent_id, previous_version, job_id, deployment_id}` on the row (then exposed by the list route); accepted once → 409 `recommendation.already_accepted`; a tool-description recommendation → 400 `recommendation.accept_kind`; not completed / no text → 409 `recommendation.not_completed`; a non-Harness agent → 400 `recommendation.accept_not_harness` |
 | `GET` | `/api/eval/queue` | `{running, queued, locked, max_concurrency}` — cancelled runs leave the queue immediately, so the count covers active runs only |
 
+## Console Agent-DLC API — criteria, golden sets, calibration, the gate
+
+`docs/agent-dlc-design.md` is the design; this is the surface. The methodology's
+claim is that *a release is decided by evaluation, not by a meeting*, so these
+routes own four things: the standard (a criteria table), the evidence (a golden
+set), whether an LLM judge may stand in for a person (calibration), and the
+decision itself (a gate in front of production traffic).
+
+Three permissions here are granted to **named people, never by role** —
+`criteria.sign`, `golden.admit`, `judge.calibrate` — because they decide what
+"good" means. `criteria.manage` (member/operator), `waiver.approve` and
+`release.sign` (operator) follow the ordinary separation of duties. Publishing,
+signing, seeding, admitting, waiver approval and every release action are
+`PROD_PROTECTED`: in a prod-tier workspace a member cannot reach them.
+
+### Criteria tables
+
+A criteria set is versioned under a `lineage_id`. Publishing freezes a version;
+editing opens the next one. A published **agent** set must be signed by someone
+other than its last editor (`403 criteria.self_sign` for an author, which an
+administrator may override). Validation is enforced, not advisory: a red line
+cannot be decided by an LLM judge, cost and performance criteria must be metrics,
+every dimension needs a criterion or an explicit `n/a:<dimension>` note, and at
+least one red line is required. A judge criterion's **effective tier** is
+`observe` until a calibration record says it is aligned and unexpired, so the
+table never claims to gate on something that cannot gate.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/criteria-sets?kind&agent_id` | `{sets: [...]}` — one row per lineage, newest version |
+| `POST` | `/api/criteria-sets` | `criteria.manage` — `{kind: agent\|template, name, agent_id?, scenario?, template_lineage_id?, template_version?, from_evaluation_plan?}` → 201 the full payload. A template's rows are *copied* in; the template never changes under the agent afterwards |
+| `GET` | `/api/criteria-sets/{lineage_id}?version` | `{set, criteria, summary, findings, calibration_policy, newer_template_version, versions}`. `summary` carries `tiers`, `judge_share`, `run_cadence`, `declared_gates` / `effective_gates` and `compound_gate_rate` — every gate holding at once (eight 95% gates compound to 66%) |
+| `PUT` | `/api/criteria-sets/{lineage_id}` | `criteria.manage` — replace the draft's rows. `422 criteria.invalid` with `detail.findings` (each `{level, code, message, key}`); a published version → `409` |
+| `POST` | `/api/criteria-sets/{lineage_id}/versions` | `criteria.manage` — open the next draft from the published version → 201 |
+| `POST` | `/api/criteria-sets/{lineage_id}/publish` | `criteria.manage` — freeze this version. Refused while any `error` finding stands |
+| `POST` | `/api/criteria-sets/{lineage_id}/sign` | `criteria.sign` — the business owner's signature `{note}`. The gate reports an unsigned standard as INVALID, so this is load-bearing |
+| `POST` | `/api/criteria-sets/{lineage_id}/adopt-template?template_version=` | `criteria.manage` — copy a newer template version into a **new** agent version → 201. The new version is unsigned: a changed ruler needs a new signature |
+| `DELETE` | `/api/criteria-sets/{lineage_id}` | `criteria.manage` — discard the open draft → `{discarded: <version>}` |
+| `GET` | `/api/criteria-sets/{lineage_id}/diff?a=&b=` | `{from, to, changes: [{key, change, fields, before, after}]}` |
+
+### Golden sets
+
+A parent dataset groups three split datasets (`dev` / `regression` / `holdout`),
+each synced to its own AWS Dataset with its own immutable versions. Item
+provenance lives in `metadata.dlc` (`case_tier`, `criteria_ids`, `origin`,
+`expected_source`, `retired`).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/golden-sets` | `{golden_sets: [{id, name, criteria_lineage_id, splits}]}` |
+| `POST` | `/api/golden-sets` | `criteria.manage` — `{name, criteria_lineage_id?, description?}` → 201. The gate finds the golden set *through* its criteria lineage |
+| `GET` | `/api/golden-sets/{dataset_id}` | The set plus `coverage`: criteria × case tier, `thin` on any criterion with fewer than three items (its rate is noise), `unmapped_items`, `agent_observed_items` and a per-origin `bias` sentence |
+| `POST` | `/api/golden-sets/{id}/items` | `criteria.manage` — append to `dev` or `regression` → 201. The holdout is not accepted (`409 golden.holdout_closed`) |
+| `POST` | `/api/golden-sets/{id}/seed` | `golden.admit` — **the only path that writes the holdout.** `{items: [{split?, scenario_id, turns, metadata}], shares?}` stratifies un-split items by case tier so all three splits see the same mix, then **seals** the holdout: a second call is `409 golden.holdout_sealed`. A holdout only means anything if nobody tunes against it |
+| `POST` | `/api/golden-sets/{id}/move` | `criteria.manage` — `{scenario_id, to: dev\|regression}`. Items never move into or out of the holdout |
+| `POST` | `/api/golden-sets/{id}/retire` | `criteria.manage` — `{split, scenario_id, reason}`. A retired item leaves the gate's denominator but is still replayed, so a fixed bug cannot come back unnoticed |
+
+### Annotation and judge calibration
+
+Labelling is **blind**: the judge's verdict is withheld from annotators until the
+task closes, because seeing it first would make the agreement number meaningless.
+`decide` refuses `aligned` when the numbers do not support it — κ floor, a
+minimum n, and not worse than human–human κ − 0.05 — so a person chooses only
+between the readings the data allows.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/annotation-tasks?agent_id&status` | `{tasks: [...]}` |
+| `POST` | `/api/annotation-tasks` | `criteria.manage` — `{criterion_key, annotators[2..10], adjudicator?, run_id?\|items?, purpose, agent_id?, criteria_lineage_id?, dataset_id?}` → 201. Items taken from a completed run carry that run's judge verdicts (hidden until close). `422 annotation.no_items` when a run has no verdict for the criterion |
+| `GET` | `/api/annotation-tasks/{id}` | The task as *this viewer* may see it. An annotator sees only their own labels; `judge.calibrate` (or an admin) sees everything |
+| `POST` | `/api/annotation-tasks/{id}/labels` | `{item_ref, label, rationale?, answer?}` → 201. Only an annotator on the task (`403 annotation.not_annotator`); while adjudicating, only the adjudicator |
+| `POST` | `/api/annotation-tasks/{id}/adjudicate` | Move to adjudication — the adjudicator settles the disputed items |
+| `GET` | `/api/annotation-tasks/{id}/agreement` | `{n, pairs, human_human_kappa, judge_human_kappa, kappa_ci, band, confusion, disagreements, accuracy, policy, suggested_verdict}`. Human–human comes **first**: if people cannot agree, the criterion is unwritable and no judge can fix that |
+| `POST` | `/api/annotation-tasks/{id}/decide` | `judge.calibrate` — `{verdict: aligned\|not_aligned, note}` → the calibration record. `409 calibration.not_supported` with the numbers when `aligned` is not earned, and `403 calibration.own_labels` for anyone who produced the task's labels — an annotator, the adjudicator, or whoever issued one of its annotation links (two links minted by one person are one rater, not two): the labels are the evidence, so whoever wrote them does not also rule on them. `aligned` additionally needs a real human ceiling — items with only one rater contribute nothing, so a single person cannot certify a judge |
+| `GET` | `/api/calibration/{criterion_key}?agent_id` | `{records, status, policy}`. A record expires after the workspace's `calibration.period_days` — after that the judge is observed again |
+
+**Annotation links** let an expert label without a console account. A link *is* an
+annotator: minting one appends `link_<id>` to the task's annotators, so its votes
+count toward κ under a stable identity, and the label (the person's name) is for
+display. A **prod-tier workspace refuses to mint one** (`409
+annotation.links_not_allowed`, with the remedy named), and a link issued while the
+workspace was dev stops resolving once it is prod.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/annotation-tasks/{id}/links` | `{links, allowed, reason}` — `allowed: false` in a prod workspace |
+| `POST` | `/api/annotation-tasks/{id}/links` | `judge.calibrate` — `{label, expires_in_days?}` → 201 with `token` / `path` / `url`. The token is shown **once**; only its sha256 is stored |
+| `DELETE` | `/api/annotation-tasks/{id}/links/{link_id}` | `judge.calibrate` — revoke. The labels it already cast stay: they were real votes |
+| `GET` | `/share/annotate/{token}` | **PUBLIC** — the blind queue: the items and *this* annotator's own labels. Never the judge's verdict, another person's vote, or the agreement numbers |
+| `POST` | `/share/annotate/{token}/label` | **PUBLIC** — `{item_ref, label, rationale?, answer?}` → the refreshed queue |
+
+Every unusable link (unknown, malformed, revoked, expired, task gone, workspace
+promoted to prod) is the same `404 share.not_found`: an outsider must not be able
+to tell a revoked link from one that never existed. Page: `/r/annotate/<token>`.
+
+### The release gate
+
+`UpdateAgentRuntime` / `UpdateHarness` auto-roll the DEFAULT endpoint, so a gated
+agent serves production through a **named `live` endpoint** and every invoke path
+passes `qualifier="live"`. With the workspace policy `release_mode="gated"`, a
+successful deploy points `candidate` at the new version and opens a release
+record — `live` is untouched, so a candidate is gated without a single user
+seeing it. Signing re-points `live`; rollback re-points it back. Nothing is
+deleted.
+
+The gate is applied in a fixed order: **red lines** (any violation → `BLOCKED`,
+never waivable) → **denominator** (missing verdicts, or an undetermined share over
+5% → `INVALID`) → **per-dimension thresholds** at integer-percent precision (a
+miss → `BLOCKED` unless an active waiver covers it) → **observed** criteria
+(recorded only). Provenance issues — an unsigned criteria version, a run against
+another version or endpoint, no holdout evaluated — also make the verdict
+`INVALID`. `INVALID` is **not** a failure: the evidence cannot decide, and the fix
+is the evidence rather than a waiver.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/agents/{id}/release` | `{release_mode, state, criteria_set, pending, records, waivers}`. `state` carries `endpoint_mode`, the live/candidate versions read from AWS, and `gateable` + `gateable_reason` |
+| `POST` | `/api/agents/{id}/release/migrate` | `release.sign` — create `live` at the current version and move production onto it. What production serves is a release decision, so the engineer who builds the agent may not do it. `409 release.not_gateable` names why (A2A, a system preset, nothing deployed yet) |
+| `POST` | `/api/agents/{id}/release/evaluate` | `eval.run` — `{repeats?, confirm_cost?}` → 202. Queues the regression **and** holdout runs against `candidate`, priced first: `409 run.cost_over_limit` / `run.cost_confirm_required` carry the estimate, so the spend guard refuses before a session is spent |
+| `GET` | `/api/agents/{id}/release/gate` | `{status: evaluating\|decided, report, record}`. The report is `{verdict, criteria: [...], redline_violations, invalid, gate_failures, waived, provenance, order}`; each row carries its measured rate with a Wilson interval, `threshold_inside_ci` (the sample cannot decide), the denominator and `trend` against the previous release |
+| `POST` | `/api/agents/{id}/release/sign` | `release.sign` — release the candidate: `live` is re-pointed, so traffic moves. Only a `PASS` report (`409` otherwise), and never the requester (`403`) |
+| `POST` | `/api/agents/{id}/release/block` | `release.sign` — the candidate stays off production, with the reason on the record |
+| `POST` | `/api/agents/{id}/release/rollback` | `release.sign` — re-point `live` at the previous version → the new state. Nothing is deleted |
+| `GET` | `/api/release-records?agent_id=` · `/api/release-records/{id}` | The decision history, each record with its gate report and provenance |
+
+A **waiver** is a gate missed on purpose. It needs a reason, a named risk owner, an
+expiry (≤ 30 days) and a second person, and a red line is refused outright
+(`409 waiver.redline`). The gate report counts how often a criterion has been
+waived — more than once is a standard problem, not an exception.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/agents/{id}/waivers` | `criteria.manage` — `{criterion_key, actual?, threshold?, reason, risk_owner, compensating_control?, expires_on}` → 201 |
+| `POST` | `/api/waivers/{id}/approve` · `/reject` | `waiver.approve` — never the requester |
+| `DELETE` | `/api/waivers/{id}` | `waiver.approve` — revoke an active waiver |
+
+### Admission, watch, runs and read-backs
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/admission?agent_id&status&refresh` | The candidate queue from thumbs-down verdicts, SME corrections, the issue box and Insights clusters. `priority` ranks a candidate the evaluators scored as a **pass** first: it is both a missing case and a calibration sample |
+| `GET` | `/api/admission/{id}` | One candidate with its PII `redaction` preview and the `nearest` existing golden items (exact and normalized), to catch duplicates |
+| `POST` | `/api/admission/{id}/admit` | `golden.admit` — `{split, expected_response, expected_source, criteria_ids, case_tier}` → 201. The expected answer must be written or confirmed by a person (`agent_observed` is refused: an agent's own output is not a standard), the redaction must not have blocked, and the holdout is never written |
+| `POST` | `/api/admission/{id}/reject` · `/duplicate` | `golden.admit` — a rejection needs a reason; the reason *is* the record |
+| `GET` · `PUT` | `/api/agents/{id}/watch` | `eval.run` — the scheduled re-evaluation `{every, at_hour, tz, repeats, max_cost_usd, enabled}`, plus `series`, `alerts`, `drift` and the recent runs. A model can change under an agent without a line of code changing, so the standard is re-applied on a schedule |
+| `POST` | `/api/agents/{id}/watch/run?split=` | `eval.run` → 202. A run over the cost ceiling is **skipped and reported** (`409 watch.over_cost_ceiling`) rather than spent |
+| `GET` | `/api/eval/runs/{run_id}/criteria?criterion_key` | Per-criterion results of a run: `summary` (n, pass/fail, rate, Wilson bounds, `missing`, `undetermined_rate`, `pass_k`, or a metric `value` against its rule), the `denominator` accounting, `endpoint_qualifier`, and every per-session verdict with the judge's explanation |
+| `POST` | `/api/eval/runs/{run_id}/criteria/snapshot` | Re-read a completed run's results stream (a retry after a transient read) → 202 |
+| `GET` | `/api/eval/runs/compare?runs=a,b,c` | The fix ladder over 2+ runs, oldest first: per-criterion Δ with a two-proportion p-value, `fixed` / `new_failures` / `still_failing`, and `layers_changed` per rung — a gain across two simultaneous changes belongs to neither. Runs under different criteria versions are `comparable: false` and answered with `two_numbers` (did the agent improve, and how much harder is the standard) |
+| `GET` | `/api/agents/{id}/ladder` | The same, over this agent's newest completed criteria runs |
+| `POST` | `/api/eval/runs/estimate` | `{agent_id?, dataset_id?, items?, evaluators, repeats}` → items × k × (agent per-session + judge per-item) with its basis named (`history_7d` / `rough` / unpriced), the duration, and whether the workspace policy would ask for confirmation or refuse |
+| `GET` | `/api/agents/{id}/scorecard` | The five dimensions in the methodology's fixed order, standard vs current, with the trend series, the metric measurements, the last gate verdict and its decision, open waivers, `calibration_debt` and golden coverage |
+| `GET` | `/api/audit?action&target&limit` | Administrator — the decision history every workbench shows: who signed the standard, admitted a sample, approved a waiver, released |
+
+`POST /api/eval/runs` also accepts `repeats` (1–10, **pass^k**) and
+`confirm_cost`. `repeats` replays each dataset scenario k times in distinct
+sessions, which is how consistency is measured — AgentCore has no per-scenario
+repetition parameter. It applies to a dataset scope against an agent only
+(`422 run.repeats_scope`), multiplies the cost by k, and a run over a golden split
+is automatically scored against that split's published criteria so it lands on the
+fix ladder.
+
+The release policy keys this module reads are set with
+`PUT /api/release-policies/{workspace_id}` (administrator): `release_mode`
+(`direct` | `gated`), `calibration` (`{period_days, kappa_floor}`) and the spend
+guard `eval_cost_confirm_usd` / `eval_cost_max_usd`. The PUT replaces the policy
+wholesale.
+
 ## Console Online Evaluation API
 
 `/api/eval/online/*` manages AgentCore **online evaluation configs** — continuous,

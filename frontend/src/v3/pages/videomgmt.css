@@ -1,0 +1,6 @@
+/* V3 video management — catalogue list and the editor */
+.v3 .v3-vm-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.v3 .v3-vm-form { display: grid; gap: 14px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.v3 .v3-vm-form:disabled { opacity: 0.6; }
+.v3 .v3-vm-advanced summary { cursor: pointer; color: var(--v3-text-2); font-size: 13px; margin-bottom: 12px; }
+.v3 .v3-vm-preview { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; }

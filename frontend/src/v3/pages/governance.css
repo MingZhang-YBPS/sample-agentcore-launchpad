@@ -1,0 +1,20 @@
+/* V3 governance — page-local pieces; everything else is the shared V3 vocabulary */
+.v3 .v3-gov-sub { margin-top: 4px; font-size: 11.5px; color: var(--v3-text-3); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3 .v3-gov-muted { color: var(--v3-text-3); }
+.v3 .v3-gov-err { color: var(--v3-act); }
+.v3 .v3-gov-link { color: var(--v3-text); }
+.v3 .v3-gov-link:hover { color: var(--v3-info); }
+.v3 .v3-gov-clip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 520px; }
+.v3 .v3-gov-subtitle {
+  margin: 16px 0 8px;
+  font-family: var(--v3-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+}
+/* allow / deny split of a gateway's evidence: deny is the coral share */
+.v3 .v3-gov-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--v3-line); gap: 1px; }
+.v3 .v3-gov-bar i { display: block; min-width: 0; }
+.v3 .v3-gov-bar .allow { background: var(--v3-ok); opacity: 0.8; }
+.v3 .v3-gov-bar .deny { background: var(--v3-act); }

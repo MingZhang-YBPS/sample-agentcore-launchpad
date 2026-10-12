@@ -1269,3 +1269,55 @@ def test_pre_workspace_accounts_keep_their_access_after_the_upgrade(tmp_path):
 
     with engine.begin() as conn:
         assert conn.execute(sa.text("SELECT COUNT(*) FROM user_workspaces")).scalar_one() == 0
+
+
+class TestObservabilityRepair:
+    """A workspace can reach READY with Transaction Search off (the stage degrades on
+    AccessDenied rather than failing), and a ready workspace refuses a re-bootstrap —
+    found deploying a three-region hub. This route is the way back."""
+
+    def _ready(self, admin, status="ready"):
+        assert admin.post("/api/workspaces", json=NEW).status_code == 201
+        db = SessionLocal()
+        try:
+            db.get(Workspace, NEW["id"]).bootstrap_status = status
+            db.commit()
+        finally:
+            db.close()
+
+    def test_it_reruns_the_observability_stage_on_a_ready_workspace(self, admin, monkeypatch):
+        from app.services import workspace_bootstrap
+
+        self._ready(admin)
+        calls = []
+        monkeypatch.setattr(workspace_bootstrap, "_stage_observability",
+                            lambda ctx: calls.append(ctx.workspace_id)
+                            or "transaction search active")
+        res = admin.post(f"/api/workspaces/{NEW['id']}/observability/repair")
+        assert res.status_code == 200, res.text
+        assert res.json() == {"workspace_id": NEW["id"],
+                              "detail": "transaction search active", "active": True}
+        assert calls == [NEW["id"]]
+
+    def test_a_degraded_result_is_reported_not_hidden(self, admin, monkeypatch):
+        from app.services import workspace_bootstrap
+
+        self._ready(admin)
+        monkeypatch.setattr(workspace_bootstrap, "_stage_observability",
+                            lambda ctx: "unavailable · AccessDeniedException")
+        body = admin.post(f"/api/workspaces/{NEW['id']}/observability/repair").json()
+        assert body["active"] is False
+        assert "AccessDenied" in body["detail"]
+
+    def test_it_waits_for_the_bootstrap_to_finish(self, admin):
+        self._ready(admin, status="bootstrapping")
+        res = admin.post(f"/api/workspaces/{NEW['id']}/observability/repair")
+        assert res.status_code == 409 and res.json()["code"] == "workspace.not_ready"
+
+    def test_only_an_administrator_may_repair(self, admin, member_id, gated_app):
+        self._ready(admin)
+        admin.patch(f"/api/users/{member_id}", json={"workspaces": [NEW["id"]]})
+        with TestClient(gated_app, client=("127.0.0.1", 4321)) as member:
+            assert member.post("/api/auth/login", json=MEMBER_CREDS).status_code == 200
+            res = member.post(f"/api/workspaces/{NEW['id']}/observability/repair")
+            assert res.status_code == 403

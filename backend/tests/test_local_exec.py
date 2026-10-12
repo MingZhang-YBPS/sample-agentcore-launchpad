@@ -206,7 +206,8 @@ def test_the_resource_ceilings_are_actually_applied():
         preexec_fn=kwargs["preexec_fn"],
     )
     rlimit_as, rlimit_cpu = json.loads(out.stdout)
-    assert rlimit_as == [512 * 1024 * 1024, 512 * 1024 * 1024]
+    if sys.platform != "darwin":  # macOS does not enforce RLIMIT_AS; the hook skips it
+        assert rlimit_as == [512 * 1024 * 1024, 512 * 1024 * 1024]
     assert rlimit_cpu == [7, 7]
 
 

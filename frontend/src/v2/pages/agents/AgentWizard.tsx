@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
+import { useProdLock } from "../../../workspace/useProdLock";
 import {
   A2A_MODEL_SOURCE,
   A2A_SKILL_SEEDS,
@@ -29,12 +30,14 @@ import {
   sourceForMethod,
   sourceOnMethodSwitch,
 } from "../../../lib/agent-spec";
-import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage } from "../../../lib/api";
+import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage, type SharedTemplateInfo } from "../../../lib/api";
 import { defaultModelFor, isCustomModelId, type ModelSource } from "../../../lib/models";
 import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../../../pages/create/presetSettings";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, FlowHeader, OptionCard, Steps, Tag } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, OptionCard, Steps, Tag } from "../../ui";
 import "./agents.css";
+import { KnowledgeField } from "./InlineKb";
+import { inlineKbBlock, useInlineKb } from "./useInlineKb";
 import {
   BasicCard,
   ByocArtifactCard,
@@ -44,11 +47,14 @@ import {
   ContainerToolsCard,
   FilesystemCard,
   HarnessToolsCard,
+  NameField,
   ProtocolCard,
   SdkCard,
   StrandsToolsCard,
 } from "./MethodSections";
-import { MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
+import { TemplateGallery } from "./TemplateGallery";
+import { formFromSharedTemplate, formFromTemplate } from "./templateForms";
+import { GuardrailCard, MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
 import { IdentityCard } from "./IdentityCard";
 import { InboundCard } from "./InboundAuthFields";
 import { WizardReview } from "./WizardReview";
@@ -98,7 +104,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const [params, setParams] = useSearchParams();
   const toast = useV2Toast();
   const { can } = useAuth();
-  const canDeploy = can("agents.deploy");
+  const prodLock = useProdLock();
+  const canDeploy = can("agents.deploy") && !prodLock.locked;
   const [initial] = useState(() => (edit ? editDraft(edit) : initialDraft(params)));
   const [step, setStep] = useState(initial.step);
   const [form, setForm] = useState<AgentForm>(initial.form);
@@ -112,6 +119,11 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   });
   const [customSkills, setCustomSkills] = useState<WizardUi["customSkills"]>(initial.extras?.customSkills ?? []);
   const [touched, setTouched] = useState(false);
+  // Harness quick setup: the default for a fresh create; a re-publish or a
+  // gateway/skill prefill starts on the full form. The member can flip either way.
+  const [canQuick] = useState(() => !edit && !params.get("gateway") && !params.get("skill"));
+  const [fullForm, setFullForm] = useState(false);
+  const [advOpen, setAdvOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<{ text: string; rows: string[] } | null>(null);
   // the staged zip, kept so a Python-version change can re-run the requirements
@@ -136,9 +148,60 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       });
   }, [storedUploadId]);
 
+  // T38: `?template=<id>` arrives from the shared-template gallery. The entry is
+  // loaded once and applied as defaults; what the publisher's environment had to supply
+  // (knowledge bases, tools, skills, memory) is shown so the member supplies their own.
+  const sharedTemplateId = edit ? null : params.get("template");
+  const [templateNeeds, setTemplateNeeds] = useState<SharedTemplateInfo["requirements"]>([]);
+  useEffect(() => {
+    if (!sharedTemplateId) return;
+    let cancelled = false;
+    void api
+      .sharedTemplates()
+      .then(({ templates }) => {
+        const entry = templates.find((row) => row.id === sharedTemplateId);
+        if (cancelled || !entry) return;
+        setForm(formFromSharedTemplate(entry));
+        setTemplateNeeds(entry.requirements);
+        setStep(1);
+      })
+      .catch(() => {
+        /* the gallery is a convenience: the wizard still works from scratch */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sharedTemplateId]);
+
+  // `?scenario=<key>` picks a T10 scenario template from outside the wizard (the V3
+  // launch page hands over here for what its quick form does not cover). Applied
+  // once, exactly as a click in the gallery would; an unknown key leaves step 0.
+  const scenarioKey = edit ? null : params.get("scenario");
+  useEffect(() => {
+    if (!scenarioKey) return;
+    let cancelled = false;
+    void api
+      .agentTemplates()
+      .then(({ templates }) => {
+        const entry = templates.find((row) => row.key === scenarioKey);
+        if (cancelled || !entry) return;
+        setForm(formFromTemplate(entry));
+        setFullForm(true);
+        setStep(1);
+      })
+      .catch(() => {
+        /* the gallery is a convenience: the wizard still works from scratch */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scenarioKey]);
+
   const set: SectionProps["set"] = (patch) =>
     setForm((prev) => ({ ...prev, ...(typeof patch === "function" ? patch(prev) : patch) }));
   const method = form.method;
+  const kb = useInlineKb(set);
+  const quick = canQuick && method === "harness" && !fullForm;
 
   // Catalogs: a failed read leaves that section empty and never blocks the form.
   const attachables = useLoad(() => api.registryAttachables(), "attachables");
@@ -165,7 +228,11 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     gatewayTargets: cat.gatewayTargets,
     remoteMcp: cat.remoteMcp,
     storedGatewayConfig: initial.extras?.storedGatewayConfig ?? {},
-    kbInfo: (id) => resolveKb(id, cat.kbCatalog, initial.extras?.specKbs ?? []),
+    kbInfo: (id) =>
+      resolveKb(id, cat.kbCatalog, [
+        ...(initial.extras?.specKbs ?? []),
+        ...(kb.inline ? [{ kb_id: kb.inline.kb_id, name: kb.inline.name, description: "" }] : []),
+      ]),
   };
 
   // Switching source re-seeds the model (and the byoc allowed-models list) to that
@@ -225,6 +292,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     byocUploading: ui.byocUploading,
     connections,
   });
+  // a KB created here must exist (ACTIVE) to be mounted; its ingestion never blocks
+  const kbBlock = inlineKbBlock(kb.inline, form.selectedKbs);
   const problems = useMemo(() => {
     const out: Record<string, string> = {};
     if (!AGENT_NAME_RE.test(form.name)) out.name = t("v2.agents.wizard.errName");
@@ -263,6 +332,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     // specCatalogs is derived from cat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form, method, cat, connections, t]);
+  // after `problems`: reading it earlier hits the TDZ and crashes every render
+  const advancedProblem = ["model", "maxTokens", "maxIterations", "timeout", "gateway"].some((k) => problems[k]);
   const err = (key: string) => (touched ? problems[key] : undefined);
 
   const toReview = () => {
@@ -276,7 +347,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const firstStep = edit ? 1 : 0;
 
   const submit = async () => {
-    if (submitting || !valid) return;
+    if (submitting || !valid || kbBlock || kb.busy) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -284,7 +355,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       const res = edit
         ? await api.redeployAgent(edit.id, republishSpec(built, edit.spec))
         : await api.createAgent(built);
-      toast("success", t(edit ? "v2.agents.wizard.redeployStarted" : "v2.agents.wizard.started", { name: res.agent.name }));
+      toast("success", t(edit ? "v2.agents.wizard.redeployStarted" : "v2.agents.wizard.started", { name: res.agent.display_name || res.agent.name }));
       setParams({ view: "detail", id: res.agent.id });
     } catch (e) {
       if (!alive.current) return;
@@ -299,8 +370,14 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   // changing either on re-publish), so both are shown read-only
   const converted = Boolean((edit?.spec as { code_bundle?: unknown } | undefined)?.code_bundle);
   const section = { form, set, cat, err, nameLocked: Boolean(edit), promptLocked: converted };
-  const skillsKb = (kbNote: string) => (
-    <SkillsKbCard {...section} customSkills={customSkills} setCustomSkills={setCustomSkills} kbNote={kbNote} />
+  const kbField = (note: string) => <KnowledgeField form={form} set={set} cat={cat} kb={kb} note={note} />;
+  const skillsKb = (kbNote?: string) => (
+    <SkillsKbCard
+      {...section}
+      customSkills={customSkills}
+      setCustomSkills={setCustomSkills}
+      kbSlot={kbNote === undefined ? undefined : kbField(kbNote)}
+    />
   );
   const inboundCard = (
     <InboundCard
@@ -328,7 +405,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   return (
     <>
       <FlowHeader
-        title={edit ? t("v2.agents.wizard.editTitle", { name: edit.name }) : t("v2.agents.new")}
+        title={edit ? t("v2.agents.wizard.editTitle", { name: edit.display_name || edit.name }) : t("v2.agents.new")}
         onBack={() => setParams(edit ? { view: "detail", id: edit.id } : {})}
         steps={<Steps steps={stepLabels} current={step - firstStep} onSelect={(i) => select(i + firstStep)} />}
         end={
@@ -337,19 +414,26 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
               {t("v2.common.prev")}
             </Button>
             {step < 2 ? (
-              <Button kind="primary" disabled={!canDeploy || ui.byocUploading} onClick={next} testId="v2-agent-wizard-next">
+              <Button kind="primary" disabled={!canDeploy || ui.byocUploading || kb.busy} onClick={next} testId="v2-agent-wizard-next">
                 {t("v2.common.next")}
               </Button>
             ) : (
-              <Button kind="primary" disabled={submitting || !canDeploy || !valid} onClick={() => void submit()} testId="v2-agent-wizard-submit">
+              <Button kind="primary" disabled={submitting || !canDeploy || !valid || Boolean(kbBlock) || kb.busy} onClick={() => void submit()} testId="v2-agent-wizard-submit">
                 {t(edit ? "v2.agents.wizard.redeploy" : "v2.agents.wizard.submit")}
               </Button>
             )}
           </>
         }
       />
-      {!canDeploy && <Alert tone="warn">{t("v2.agents.noPermission")}</Alert>}
+      {!canDeploy && <Alert tone="warn">{prodLock.title ?? t("v2.agents.noPermission")}</Alert>}
       {edit && <Alert>{t("v2.agents.wizard.editNote")}</Alert>}
+      {step === 1 && templateNeeds.length > 0 && (
+        <Alert tone="warn">
+          {t("v2.agents.wizard.templateNeeds", {
+            items: templateNeeds.map((need) => need.label).join(", "),
+          })}
+        </Alert>
+      )}
       {converted && <Alert>{t("v2.agents.wizard.convertedNote")}</Alert>}
       {error && (
         <Alert tone="error">
@@ -367,6 +451,15 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
 
       {step === 0 && (
         <>
+          <TemplateGallery
+            onPick={(template) => {
+              // a template chooses the method and the defaults; the member still
+              // sees and can edit every field on the configure step
+              setForm(formFromTemplate(template));
+              setFullForm(false);
+              setStep(1);
+            }}
+          />
           <Card title={t("v2.agents.wizard.methodTitle")} sub={t("v2.agents.wizard.methodSubNative")}>
             <div className="v2-options">
               {METHODS.map((m) => (
@@ -376,6 +469,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
                   desc={t(`v2.agents.wizard.method.${m}Desc`)}
                   on={method === m}
                   onClick={() => pickMethod(m)}
+                  hint={t(m === "harness" ? "glossary.harness" : "glossary.runtime")}
                   badge={m === "harness" ? <Tag tone="blue">{t("v2.agents.wizard.recommended")}</Tag> : undefined}
                   testId={`v2-agent-method-${m}`}
                 />
@@ -402,14 +496,68 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
         </>
       )}
 
-      {step === 1 && method === "harness" && (
+      {step === 1 && method === "harness" && quick && (
         <>
+          <Card title={t("v2.agents.wizard.quick.title")} sub={t("v2.agents.wizard.quick.sub")} testId="v2-agent-quick">
+            <div className="v2-form">
+              <NameField {...section} />
+              <Field
+                label={t("v2.agents.wizard.quick.promptLabel")}
+                required
+                error={err("prompt")}
+                hint={t("v2.agents.wizard.quick.promptHint")}
+              >
+                <textarea
+                  className="v2-textarea"
+                  rows={5}
+                  maxLength={20000}
+                  value={form.systemPrompt}
+                  placeholder={t("v2.agents.wizard.promptPlaceholder")}
+                  onChange={(e) => set({ systemPrompt: e.target.value })}
+                  data-testid="v2-agent-prompt"
+                />
+              </Field>
+              {kbField(t("create.configure.kbNote"))}
+            </div>
+            <div className="v2-agents-foot">
+              <Button size="sm" onClick={() => setFullForm(true)} testId="v2-agent-quick-full">
+                {t("v2.agents.wizard.quick.switchFull")}
+              </Button>
+            </div>
+          </Card>
+          <Card title={t("v2.agents.wizard.quick.advanced")} sub={t("v2.agents.wizard.quick.advancedSub")}>
+            <Button size="sm" onClick={() => setAdvOpen((v) => !v)} testId="v2-agent-advanced-toggle">
+              {t(advOpen || (touched && advancedProblem) ? "v2.agents.wizard.quick.hideAdvanced" : "v2.agents.wizard.quick.showAdvanced")}
+            </Button>
+          </Card>
+          {(advOpen || (touched && advancedProblem)) && (
+            <>
+              {modelCard({ knobs: true })}
+              <HarnessToolsCard {...section} />
+              {skillsKb()}
+              <MemoryCard {...section} loop />
+              <GuardrailCard form={form} set={set} />
+            </>
+          )}
+        </>
+      )}
+
+      {step === 1 && method === "harness" && !quick && (
+        <>
+          {canQuick && (
+            <div className="v2-row">
+              <Button size="sm" onClick={() => setFullForm(false)} testId="v2-agent-quick-back">
+                {t("v2.agents.wizard.quick.switchQuick")}
+              </Button>
+            </div>
+          )}
           <BasicCard {...section} />
           {modelCard({ knobs: true })}
           <HarnessToolsCard {...section} />
           {skillsKb(t("create.configure.kbNote"))}
           <FilesystemCard form={form} set={set} touched={touched} />
           <MemoryCard {...section} loop />
+          <GuardrailCard form={form} set={set} />
         </>
       )}
 
@@ -485,6 +633,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           form={form}
           cat={cat}
           ui={{ ...ui, customSkills }}
+          inlineKb={kb.inline && form.selectedKbs.includes(kb.inline.kb_id) ? kb.inline : null}
           shortTermOff={(edit?.spec as { memory?: { short_term?: boolean } } | undefined)?.memory?.short_term === false}
           workspaceDefault={inboundDefault.data?.default ?? null}
           cognitoIssuer={inboundDefault.data?.cognito_issuer ?? null}

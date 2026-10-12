@@ -1,10 +1,17 @@
 # AgentCore Launchpad
 
-A production-grade **agent ops platform** built on Amazon Bedrock
-AgentCore. It is a customer-deliverable sample asset — not a throwaway demo —
-that wires the core AgentCore components to real APIs and real resources in
-your own AWS account, and gives users a single place to **create an agent,
-deploy it to AgentCore Runtime, and consume it** over chat or HTTP.
+A sample **agent ops platform** built on Amazon Bedrock AgentCore. It wires the
+core AgentCore components to real APIs and real resources in your own AWS
+account, and gives users a single place to **create an agent, deploy it to
+AgentCore Runtime, and consume it** over chat or HTTP.
+
+> **Sample code notice.** This is sample code, for non-production usage. Work with
+> your security and legal teams to meet your organizational requirements before
+> deployment. It is provided to show how the AgentCore services fit together; it
+> has not been thoroughly tested, secured or optimized for production use, and you
+> are responsible for the security, testing and hardening of anything you build on
+> it. Running it creates billable AWS resources — see [Cost notes](#cost-notes) and
+> [teardown](docs/teardown.md).
 
 - 中文版: [README.zh-CN.md](README.zh-CN.md)
 
@@ -48,6 +55,16 @@ infrastructure (CDK). It delivers:
   and an optimization loop that produces control/treatment **configuration
   bundles**, runs A/B and canary traffic through the gateway, and promotes the
   winner.
+- **Agent-DLC: the release is decided by evaluation.** A signed **criteria table**
+  (判据) across five dimensions in three tiers, a **golden set** whose holdout is
+  sealed after one curation, **judge calibration** that measures whether an LLM may
+  stand in for a person (Cohen's κ, blind labelling, account-free annotation links),
+  and a **gate in front of production traffic**: a gated agent serves through a named
+  `live` endpoint, a deploy lands on `candidate`, and only a signed-off PASS moves
+  `live`. INVALID ("the evidence cannot decide") is kept distinct from BLOCKED, every
+  rate is shown with its confidence interval, and waivers need an owner, an expiry and
+  a second person — never for a red line. See
+  [docs/agent-dlc-design.md](docs/agent-dlc-design.md).
 - **Workspaces (multi-account / multi-region).** One console manages several
   AWS environments: a **workspace** is one `(account, region)` pair with its
   own AgentCore resource set, provisioned by a resumable ten-stage bootstrap
@@ -221,9 +238,9 @@ session cookie, and rotating `LAUNCHPAD_AUTH_PASSWORD` invalidates **all**
 sessions (the cookie signing key derives from it). The public `/v1` surface keeps
 its own `X-Api-Key` auth and is never guarded by the console cookie.
 
-For a real deployment (systemd units, nginx origin-key gate, CloudFront, and the
-update procedure) see
-[docs/setup.md](docs/setup.md#production-deployment--生产部署) and
+For a longer-running hosted setup (systemd units, nginx origin-key gate,
+CloudFront, and the update procedure) see
+[docs/setup.md](docs/setup.md#hosted-deployment--托管部署) and
 [docs/agent-runbook-prod.md](docs/agent-runbook-prod.md#3-shape-b--systemd-reference-the-us-east-1-box).
 
 ### Stop the stack
@@ -246,7 +263,7 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 | `backend/` | FastAPI backend — deploy pipeline, invoke chain, evaluation & optimization, SQLite ledger |
 | `backend/app/routers/` | Console `/api` + public `/v1` endpoints |
 | `backend/app/deployer/` | Unified pipeline + per-method stages (harness, zip_runtime, container, studio, byoc) |
-| `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Observability, Evaluation, Skill Lab, Governance |
+| `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Observability, Evaluation, Standards (Agent-DLC), Skill Lab, Governance |
 | `infra/` | AWS CDK app — the `launchpad-base` shared stack |
 | `vendor/skillopt/` | Vendored SkillOpt subset (skill evaluation & training engine; pin + patches in `LAUNCHPAD_DEVIATIONS.md`) |
 | `start.py`, `stop.sh` | Background local-stack lifecycle, health checks, PID ownership and logs |
@@ -262,6 +279,7 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 | [docs/setup.md](docs/setup.md) | Environment setup, bootstrap, teardown ([中文](docs/setup.zh-CN.md)) |
 | [docs/architecture.md](docs/architecture.md) | Platform ↔ AgentCore mapping, pipeline, invoke chain ([中文](docs/architecture.zh-CN.md)) |
 | [docs/api.md](docs/api.md) | Public `/v1` API reference ([中文](docs/api.zh-CN.md)) |
+| [docs/agent-dlc-design.md](docs/agent-dlc-design.md) | **Agent-DLC** — criteria tables, golden sets, judge calibration, the release gate ([中文](docs/agent-dlc-design.zh-CN.md)); turning it on: [setup](docs/setup.md#agent-dlc-turning-the-gate-on--打开放行门) |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Verified gotchas and timings ([中文](docs/troubleshooting.zh-CN.md)) |
 | [docs/teardown.md](docs/teardown.md) | Demo resources vs shared infra cleanup ([中文](docs/teardown.zh-CN.md)) |
 | [docs/cross-account-workspaces.md](docs/cross-account-workspaces.md) | Managing a workspace in another AWS account: the spoke role template, StackSets, the trust boundary |
@@ -276,7 +294,7 @@ Launchpad cost. Costs are qualitative and small at demo scale, but scale with
 how much you exercise each layer:
 
 - **Runtime / Harness invocations** — every invoke bills model tokens (default
-  `global.anthropic.claude-sonnet-5`; Sonnet 4.6 stays selectable per agent)
+  `global.zai.glm-5.3`; Claude, GPT and the other GLM models stay selectable per agent)
   plus managed runtime/session compute.
 - **Container builds (方式A)** — CodeBuild ARM64 build minutes, roughly 2
   minutes per agent build; 方式B (harness) has no build, and 方式C rides the
@@ -291,3 +309,13 @@ how much you exercise each layer:
 **Delete demo agents after use** (console, or `DELETE /api/agents/{id}`), then
 run `scripts/teardown.py` to remove the shared infra. See
 [docs/teardown.md](docs/teardown.md).
+
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) and [SECURITY](SECURITY.md) for
+how to report a security issue. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+and the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.

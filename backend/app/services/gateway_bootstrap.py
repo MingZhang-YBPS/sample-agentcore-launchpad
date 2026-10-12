@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from app.core.config import REPO_ROOT
+from app.core.config import REPO_ROOT, get_settings
 
 GATEWAY_NAME = "launchpad-gw"
 HR_TARGET_NAME = "hr-database"
@@ -262,7 +262,7 @@ def run_gateway_bootstrap(
     environment, and `workspace_bootstrap` provisions exactly that.
     """
     resources = config.get("resources", {})
-    region = config.get("region", "us-west-2")
+    region = config.get("region") or get_settings().region
     api_key_id = resources.get("office_facts_api_key_id") or ""
     hr_lambda_arn = resources.get("hr_lambda_arn") or ""
     facts_api_url = resources.get("office_facts_api_url") or ""

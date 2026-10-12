@@ -158,6 +158,8 @@ interface EditingTarget {
 
 // Spec fields we read back when loading an existing agent into the wizard.
 interface StoredSpec {
+  /** T12 PII protection; absent on every spec written before it existed */
+  guardrail?: { enabled?: boolean; mode?: "anonymize" | "block" } | null;
   model_id?: string;
   model_source?: ModelSource;
   agent_sdk?: AgentSdk;
@@ -1210,6 +1212,13 @@ const deployLock = !canDeploy
   // The shared form model (lib/agent-spec.ts) builds the spec the V2 wizard posts too.
   const agentForm = (): AgentForm => ({
     method,
+    // the classic wizard has no display-name input: a re-publish keeps the stored one
+    displayName: (editing?.spec as { display_name?: string | null } | undefined)?.display_name ?? "",
+    // T12: the classic wizard has no PII toggle — a re-publish keeps what is stored
+    guardrail: (() => {
+      const stored = (editing?.spec as StoredSpec | undefined)?.guardrail;
+      return stored?.enabled ? (stored.mode ?? "anonymize") : "off";
+    })(),
     name,
     modelId,
     modelSource,

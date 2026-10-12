@@ -1967,10 +1967,15 @@ ACTIVE and then fails its first invoke with `401 access_denied`; the grant is
 shared by harness and zip, and adding it needs a CDK deploy.
 The field defaults to `bedrock` for backward compatibility with specs
 stored before it existed. The console form also starts every method on `bedrock`,
-with GPT-6 Sol (`global.openai.gpt-6-sol`) as the default model; Mantle stays
+with GLM-5.3 (`global.zai.glm-5.3`, a global inference profile offered in every region the
+console targets) as the default model, which `AgentSpec` also defaults to; Mantle stays
 selectable for harness and zip (`MODEL_SOURCE_BY_METHOD` in
 `frontend/src/lib/agent-spec.ts`). The Claude Agent SDK method defaults to the
-first Claude entry instead. The console's model catalog lives in
+first Claude entry instead, and the backend gives a container spec that names no model
+`global.anthropic.claude-sonnet-5` (`CLAUDE_SDK_DEFAULT_MODEL_ID`). Intent clustering and
+answer suggestions keep their own platform model, and the Strands Studio canvas keeps its
+Claude fallback for nodes without a model (changing it would change existing flows); new
+canvas nodes start on GLM-5.3. The console's model catalog lives in
 `frontend/src/lib/models.ts`, where the catalog's first entry is the default.
 
 **Harness (方式B)** — both sources ride the **same** `bedrockModelConfig` branch
@@ -2775,6 +2780,231 @@ through the same backend routes and permission checks as the classic pages.
   The task, agent, source and search filters narrow the panel too; the
   evaluator / outcome / score-band filters are score-only.
 
+### First-run home and Time to First Agent (roadmap T01/T02)
+
+- **TTFA metric.** `User.first_login_at` is stamped once by
+  `users.record_login` on a registered account's first successful login (an
+  account that logged in before the column existed keeps NULL; the built-in
+  admin has no row). `Agent.owner` is now the creating identity's username,
+  stamped server-side by `POST /api/agents` and `/convert` (the assistant
+  approval path already stamped the approver; presets stay `system`, discovery
+  imports `aws-discovery`; older rows keep the legacy `river` default).
+  `app/services/ttfa.py` computes, per account in the current workspace, the
+  span from `first_login_at` (fallback `created_at`) to the end of the earliest
+  **succeeded** `Deployment` of an agent it owns (owner matched
+  case-insensitively on `username_key`; deleted agents still count; clamped at
+  0). `GET /api/overview/ttfa` (**ADMIN** in `route_policy` — it lists per-user
+  activity; ledger only, no AWS call) returns `{median_seconds, samples,
+  users: [{username, ttfa_seconds|null, first_login_at, first_agent_at}]}`.
+  Pending accounts are excluded; admins, members granted the workspace, and any
+  owner of an agent in it are listed. The `/api/overview` contract is unchanged.
+- **Empty state.** When the agents list has loaded and is empty, 工作台 replaces
+  the KPI row with a "launch your first agent in 3 steps" hero
+  (`v2/pages/home/FirstAgentHero.tsx`): describe it in one sentence → the
+  architect assistant (primary), start from a template, configure it yourself.
+  The targets live in `FIRST_AGENT_PATHS` (`home/common.ts`); the template step
+  points at the wizard until the template gallery ships. Once agents exist the
+  KPI row returns and the lifecycle card's assistant button is a primary button.
+  Admins get a TTFA KPI tile (median + sample count); it is hidden for members
+  and whenever the endpoint fails (403, older backend).
+
+### Glossary hints and display names (roadmap T03/T04)
+
+- **Glossary.** `v2/Glossary.tsx` exports `HintIcon` (a focusable (i) whose
+  `role="tooltip"` bubble is referenced by `aria-describedby`, shown on hover and
+  keyboard focus), `Term` (dotted-underline inline term) and `HintLabel` (label +
+  icon, for `Field` labels). Sentences are i18n keys `glossary.<term>` with short
+  names under `glossary.name.<term>`; the term list is `GLOSSARY_TERMS`. The V2
+  sidebar takes an optional `hintKey` per `V2NavItem` (`v2/nav.ts`), rendered as
+  the entry's native `title` so the sidebar stays uncluttered. `OptionCard` takes an
+  optional `hint` string — a tooltip wired through `aria-describedby` on the card
+  button itself (no nested focusable). The V2 agent wizard uses them on the method
+  cards, the A2A protocol card, and the resource-name, gateway, remote MCP, skills,
+  knowledge-base and memory labels.
+- **Display names.** `AgentSpec.display_name` is optional (1–64 chars, any
+  Unicode, whitespace-trimmed; blank ⇒ `None`). It lives only inside the JSON
+  `spec` — no ledger column, never sent to AWS — while `name` keeps its
+  `^[a-z][a-z0-9-]{2,47}$` slug rule and stays immutable because it names every AWS
+  resource. Unlike `name`, `display_name` is editable (and clearable) on
+  `/redeploy`. `_agent_out` (list + detail) and the public `GET /v1/agents` surface
+  it top-level via `schemas.agent.display_name_of(spec)` (None for older specs).
+  The architect-assistant proposal path does not set it. The V2 wizard's first
+  field is the display name; the slug is auto-derived (`slugFromDisplayName`:
+  lowercase ASCII letter/digit runs joined by `-`; if that is not a valid slug,
+  a stable `agent-` + 6 random `[a-z0-9]`) and shown beneath as an editable
+  "Resource name" — a manual edit sets the UI-only `AgentForm.nameEdited` and stops
+  derivation. V2 agent list/detail, home recent agents and the chat picker show
+  `display_name || name` with the slug as secondary text; the classic wizard has no
+  input but carries a stored display name through a re-publish.
+
+### Wizard quick mode and inline knowledge base (roadmap T06/T07)
+
+- **Quick mode** (V2 `AgentWizard`, managed Harness only). A fresh create (no
+  `edit`, no `gateway=` / `skill=` prefill) opens the configure step on three
+  inputs: display name (slug derived beneath), "What should it do?" (the
+  `system_prompt`) and knowledge. Model, max tokens, reasoning effort, tools,
+  skills, memory, loop and timeout sit behind an "Advanced settings" toggle (it
+  opens by itself if one of those fields is invalid), and "Switch to the full
+  form" / "Switch to quick setup" flips between the two views over the same
+  `AgentForm` state. Quick mode is a pure view: the form keeps today's defaults,
+  so `buildAgentSpec` posts exactly the `AgentSpecInput` the full form would. The
+  Steps header (method, configure, review) is unchanged; a re-publish always opens
+  the full form.
+- **Inline KB.** The knowledge field (quick mode and full form, every method that
+  can mount KBs) lists ACTIVE managed KBs as before and adds "create a new
+  knowledge base": a name (default `<resource-name>-kb`, editable) plus files. On
+  "Create and mount" the wizard reuses the existing endpoints, no new route:
+  `POST /api/knowledge-bases` (upload source), `POST /{kb_id}/files`, and then
+  follows `GET /{kb_id}` every 5 s, starting the first ingestion with
+  `POST /{kb_id}/data-sources/{ds_id}/sync` once the data source is AVAILABLE (as
+  the KB detail page does). The KB id enters `knowledge_bases` only after create
+  and upload both succeeded; a create error stays on the configure step with no
+  mount, and an upload error keeps the created KB unmounted with a retry.
+- **Deploy gating.** Ingestion never blocks deploy; the review step shows the KB
+  name with its state (creating, preparing data source, ingesting, ready,
+  failed) and the note that the agent answers from it once ingestion finishes.
+  The KB itself must be ACTIVE before submit (the deploy creates its Retrieve
+  target), which takes about 2 to 3 minutes after creation; a FAILED KB blocks
+  submit. A KB created and then abandoned stays in the Knowledge Bases module.
+
+### Deploy progress, try-chat and suggested questions (roadmap T08/T09)
+
+The V2 agent detail view (`?view=detail&id=`) leads with one plain-language line
+derived from the running stage and the agent's method (`agents/deployStatus.ts`:
+harness "about 30 seconds", zip packaging "1 to 3 minutes", container build "2 to 4
+minutes") plus elapsed time from `Deployment.started_at`. The five-stage cards and
+job log sit behind a "Technical log" disclosure that is collapsed unless the deploy
+failed, in which case a plain-language failure alert shows and the log opens.
+Once the agent is `active` and invocable, an inline try-chat panel (`agents/TryChat.tsx`)
+streams through the same `chatApi.stream` + `sseEvents` transport as the Chat
+console (no second transport), keeps the last 8 messages and links to
+`/chat?agent=<id>`. Chatting is allowed in prod, so the panel ignores the prod lock.
+
+`GET /api/agents/{agent_id}/suggested-questions?lang=en|zh` (`MEMBER`) returns
+`{"questions": [3-5 strings], "source": "model"|"fallback"}` for the panel's chips.
+`services/suggestions.py` builds a tight prompt from the spec's `system_prompt`,
+mounted knowledge-base document names (`knowledge.sample_document_names`, first data
+source, one page) and tool names, then makes one non-streaming Bedrock Converse call
+(`maxTokens` 300) through the client funnel. Any failure, unparsable output or an
+empty spec yields generic localized questions, so the route never 500s (only an
+unknown agent id is 404). Results are cached in-process, keyed on agent, language and a
+spec fingerprint (prompt, KBs, tools): 10 minutes for model output, 60 seconds for a
+fallback so a failing model is not retried on every poll.
+
+## Console V3 (preview)
+
+An opt-in, dark "command center" console under `/v3/*` (`frontend/src/v3/`), built
+beside V2 rather than replacing it. It reads and writes through the same `api` /
+`dlcApi` clients, backend routes and permission checks as V2 — there is no V3-only
+backend surface.
+
+- **Switching.** V2's top bar has **Try V3** (`data-testid="v2-switch-v3"`); V3's has
+  **Back to V2**. The choice is stored as `v3` in `launchpad_ui_version`
+  (`lib/ui-version.ts`); `/` then lands on `/v3`. Opening any `/v3` page counts as
+  choosing V3.
+- **Native pages.** Command center (`/v3`: a ranked "needs you" queue built from
+  failed deploys, releases awaiting signature and gates that stopped —
+  `v3/signals.ts`), Agents (`/v3/agents`, `?id=` for one agent: lifecycle line,
+  deploy stages, versions/endpoints, try-it), Chat (`/v3/chat`, the same
+  `chat_stream` SSE chain), and Release gate (`/v3/gate`: the four-gate pipeline,
+  per-criterion intervals, sign / block / roll back / run the gate).
+- **Rebuilt modules (batch 1, Agent build).** `/v3/create` is the launch page: the
+  scenario templates (`GET /api/agent-templates`) and a blank start fill a quick
+  managed-Harness form (name, instructions, mounted knowledge bases) that posts the
+  same `buildAgentSpec` output as the V2 wizard and lands on the agent, whose detail
+  polls while it deploys; other methods and non-Harness scenarios hand over to the
+  full V2 wizard (`?method=` / the new `?scenario=<key>` prefill). `/v3/registry`
+  lists records with an approval queue (approve / reject in place), a lifecycle track
+  per record and the agent card / MCP endpoint / skill source; register and edit stay
+  hosted. `/v3/knowledge` is a shelf of knowledge bases and a detail with the
+  ingestion track, sync / remove / add source, the retrieve playground and documents —
+  it carries V2's create-flow automation (first sync on its own, the bounded wait for
+  the backend's data source, the repair offer), since a KB created in the hosted form
+  lands here. `/v3/assistant` lists design conversations by where they stand
+  (talking, proposal to review, approved) with share and CLEAR (footprint first); a
+  conversation's working view stays hosted. `v3TwinOf` (`v3/nav.ts`) maps each
+  module's V2 list/detail URL onto its V3 page, so the rail and every V2 link land
+  there.
+- **Rebuilt modules (batch 2, Agent run).** `/v3/releases` (the dev→ops release
+  desk: requests waiting on a reviewer first, then approved-not-executed, in flight
+  and history; a release's detail at `?id=` with review / execute / rollback behind
+  confirms), `/v3/environments` (an agent × environment matrix with drift against
+  AWS on demand), `/v3/observability` (a dashboard led by what needs attention,
+  sessions and traces, and native session and trace views — the waterfall with the
+  span inspector — at V2's `?view=session|trace&id=`), `/v3/memory` (overview,
+  short-term actor → session → events, long-term records and retrieval, resources;
+  a resource's editor stays hosted), `/v3/governance` (gateways with their targets,
+  Policy Engine mode and recent denials, and the tool catalog; the Cedar and
+  rate-limit editors stay hosted), `/v3/connections` (the member's as_user grants and
+  revoke), `/v3/costs` (spend by agent and by person, month to date, and alert rules
+  at `?view=alerts`) and `/v3/issues` (the issue box, answer rules and reviewers, at
+  V2's `?view=` tabs). Each mirrors its V2 page's calls and guards; `v3TwinOf` routes
+  V2 links to them, including the views they rebuilt.
+- **Rebuilt modules (batches 3-4, evaluation, learning, administration).**
+  `/v3/insights`, `/v3/intents`, `/v3/data` (traces, datasets, pipelines; trace and
+  dataset views), `/v3/evaluators` (list, detail and the judge / derived / code
+  editor), `/v3/tasks` (runs failed-first, a run's detail, and the new-run wizard
+  with the same pass^k and `confirm_cost` handling as V2), `/v3/online` (list, detail,
+  editor), `/v3/experiments` (experiment and canary boards), `/v3/standards` (all nine
+  Agent-DLC views; the gate itself links to `/v3/gate`), `/v3/skill-lab` (landing and
+  evaluation runs), `/v3/users`, `/v3/workspaces` (list and detail with bootstrap,
+  tier, grants, purge), `/v3/identity` (the admin Connections page and gateway
+  targets), `/v3/fleet`, `/v3/announcements`, `/v3/videos` and
+  `/v3/video-management`. `v3TwinOf` maps these from a table (`MODULES` in
+  `v3/nav.ts`) listing, per V2 path, which `view=`s the V3 page rebuilt.
+  Where a flow is a large state machine with no data to prove a rewrite against
+  (experiment / canary detail and start, Skill Lab editors and wizards, a few result
+  tables and pickers), the V3 page embeds the V2 component in a `.v2.v3-host`
+  wrapper instead, so its guards are V2's own. Still hosted outright: the agent
+  wizard and agent detail/edit/identity, registry register/edit/consumer view,
+  knowledge-base create, a conversation's assistant workspace, memory-resource and
+  dataset/pipeline editors, Cedar policy and rate-limit editors, gateway detail, and
+  workspace registration.
+- **Onboarding (`v3/onboarding/`).** A *launch sequence* on the command center —
+  workspace ready → first agent live → first conversation → first evaluation → a
+  gated release — where every step is read from what exists (`launchSteps`, unit
+  tested), never from a click; hidden per workspace once dismissed and folded to one
+  line when complete. A first-visit *tour* lights one area at a time (⌘K, the launch
+  sequence, the needs-you queue, the signal colours, the module rail, help),
+  keyboard-driven and skippable, shown once (`launchpad_v3_tour_done`). The
+  *glossary* reuses V2's `glossary.*` sentences: inline `Term` tooltips, a glossary
+  dialog, and a ⌘K entry per term. The rail honours V2's business / expert mode
+  (`lib/nav-mode.ts`) — a view filter only; ⌘K and URLs reach every page. The "?"
+  menu in the top bar reopens the tour, the launch sequence and the glossary.
+- **Overlays.** `.v3-reveal` children animate with `fill-mode: backwards`, never
+  `forwards`: a filled transform animation makes each block a containing block for
+  `position: fixed`, which trapped dialogs inside panels (and a filled opacity
+  overrode an overlay's own fade). `Confirm` / `Dialog` close on Esc from anywhere.
+- **Every other page is hosted, not handed off.** Once V3 is chosen, the `/v2/*`
+  routes render through `V2Frame` (`App.tsx`) inside `<V3Shell hosted="v2" />`, and
+  the classic routes through `<V3Shell hosted="classic" />` — same URLs, same page
+  modules, V3 chrome. So every link a V2 page makes stays inside V3, and "Back to
+  V2" on a hosted page just re-renders the same URL in the V2 shell. The two V2
+  pages V3 rebuilt hand over to their V3 page (`/v2` → `/v3`, `/v2/chat` →
+  `/v3/chat`; `/v2/chat?full=1` keeps the full V2 chat, which V3's chat links to for
+  consent cards). The rail lists the hosted pages under "Modules" in V2's own
+  collapsible groups, derived from `v2/nav.ts` (`v3/nav.ts` `hostedGroups`, held
+  complete by `v3/nav.test.ts`), and the ⌘K palette (also `/`) reaches all of them
+  plus every agent's chat and gate, matching English names and routes under zh-CN.
+- **Hosted theme.** V2 names every literal colour it uses as a `--v2-*` token (the
+  block under `--v2-mono` in `v2/v2.css`; V2 renders identically), and
+  `v3/host.css` re-points those tokens to the V3 palette on the `.v2.v3-host`
+  wrapper, plus panel/heading/table treatments. Classic tokens (`theme/tokens.css`)
+  are re-pointed on `body.v3-body`, the classic brand amber becoming V3's mint
+  since amber is V3's "waiting" signal. V2/classic modals are `position: fixed`
+  inside the page, so a hosted `<main>` drops its stacking context
+  (`.v3-main.hosted`). The assistant fishbone SVG keeps its literal light palette
+  on purpose — it doubles as a standalone SVG download.
+- **Styling.** All V3 CSS is scoped under `.v3` and every custom property is prefixed
+  `--v3-*`, because the classic `theme/` tokens and class names (`--ink-2`, `.split`,
+  `.caret`) are global and would otherwise collide. Signals use one vocabulary:
+  `ok` / `wait` / `act` / `info` / `off`.
+- **Timestamps.** Ledger timestamps are naive UTC; `lib/timestamps.ts`
+  `parseTimestamp` reads them as UTC (V2's `fmtTime` uses it too) instead of letting
+  `new Date()` treat them as local time.
+- **Check.** `backend/scripts/e2e_v3_console_browser.py` (headless, read-mostly; `--chat`
+  sends one message) walks the switch, every V3 page and ⌘K.
+
 ## Console authentication and accounts
 
 The platform console has an optional local account gate, independent from both
@@ -2850,7 +3080,7 @@ registry writes, knowledge bases, governance, evaluation datasets/evaluators,
 experiments, canaries, API keys, tools/demos and the studio local-exec scaffolding
 included. Invoking an agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`)
 was member-reachable from the start — it is the same capability Chat already gives
-every member. The studio local-exec routes remain safe in production through their
+every member. The studio local-exec routes remain safe in prod run mode through their
 own handler guard (refused outright in prod unless an operator opts in), which —
 not the route table — is the real boundary there.
 
@@ -3343,6 +3573,857 @@ grants and the row in one transaction, and is admissible only for a workspace
 that never became usable: `registered` or `failed`, agent-free, never `default`.
 Whatever a failed run had already provisioned stays in the target account — the
 response's `resource_keys` says which resource kinds that is.
+
+### Region support
+
+A workspace is one `(account, region)` pair and every AWS client is built from it, so
+nothing in the control plane assumes `us-west-2`. The region-dependent *names* live in
+one module, `backend/app/core/regions.py` (mirrored for the console in
+`frontend/src/lib/regions.ts`):
+
+- **Inference-profile prefix.** `inference_profile_prefix(region)`: `us-*` to `us`,
+  `eu-*` to `eu`, `ap-*` to `apac`, `us-gov-*` to `us-gov`; any other region returns
+  `None` and the id is left alone. `global.*` and bare ids work everywhere and are never
+  rewritten. `localize_model_id` re-prefixes only `anthropic.`/`amazon.` geographic ids
+  (never `openai.*`, so no id is invented). The console hides a geographic id (for
+  example `us.openai.gpt-5.6-sol`) from workspaces outside its geography; a custom
+  model id can always be typed.
+- **Partition.** `partition_for_region` / `WorkspaceContext.partition` feed the ARNs in
+  per-agent role policies, the harness role ARN, memory and ECR ARNs; the CDK stack uses
+  `self.partition`. The workspace-role builders in `services/workspace_iam.py` and some
+  assistant/evaluation ARNs still use the literal `aws` partition (AgentCore is only
+  used from commercial-partition regions today).
+- **Generated agents** read `AWS_REGION` (then `AWS_DEFAULT_REGION`) at runtime; the
+  only pinned region is Mantle's `LAUNCHPAD_MANTLE_REGION` (default `us-east-1`), which
+  is overridable because Mantle models are hosted independently of the runtime region.
+- **Registration form.** `GET /api/workspaces` returns `suggested_regions`
+  (`AGENTCORE_SUGGESTED_REGIONS`). It is a suggestion list only: keep it in step with
+  AWS's published AgentCore regions. The form accepts any typed region and the bootstrap
+  job's `validate-access` stage is the real availability check.
+- **Deliberate defaults.** `core/config.py` `region`, `infra/app.py` (`CDK_DEFAULT_REGION`),
+  and `LEGACY_REGION = "us-west-2"` (keeps pre-multi-region role names bare) are defaults
+  or naming compatibility, not bindings of a running workspace.
+
+### Scenario templates, role-based navigation, PII protection (roadmap T10–T12)
+
+**Scenario templates (T10).** `GET /api/agent-templates` (MEMBER, hub-global — the
+catalogue is static data with nothing to scope) serves
+`app/services/agent_templates.py`: a template is a named set of *wizard defaults*
+(method, system prompt, whether the scenario expects documents, demo toolkit, memory,
+the PII preset, sample questions), never a resource and never a new creation method.
+The V2 wizard's first step shows them as a gallery (`v2/pages/agents/TemplateGallery.tsx`);
+picking one fills the form and jumps to configure, where every field stays editable, so
+the wizard still posts an ordinary `AgentSpecInput` a member can see. Copy lives in
+i18n (`label_key` / `description_key`), not in the payload.
+`tests/test_agent_templates.py` builds an `AgentSpec` from every template, so a
+catalogue entry that could not deploy fails the suite rather than the member's first
+attempt.
+
+**Role-based navigation (T11).** The V2 sidebar has two modes (`lib/nav-mode.ts`,
+stored per browser like `ui-version`): `business` — the build → run essentials plus
+Learn, the default for a member — and `expert`, the full table and the default for an
+administrator. `navGroupsFor(mode, isAdmin)` in `v2/nav.ts` does the filtering and a
+quiet switch at the foot of the rail flips it. It is a **view filter, not
+authorization**: every route stays reachable by URL and `route_policy` is untouched.
+
+**PII protection (T12).** `AgentSpec.guardrail` (`{enabled, mode}`, off by default)
+opts an agent into screening by the **platform**, not by the agent: a managed Harness
+runs its model call inside AgentCore, so Launchpad cannot pass a `guardrailConfig`
+down — what it does own is the prompt it forwards and the answer it returns.
+`app/services/guardrail.py` keeps one Launchpad-owned Bedrock guardrail per workspace
+(`launchpad-pii`, created on first use, adopted by name if it already exists, ids
+remembered in the workspace `resources` map) covering contact and credential entities
+only — masking NAME or AGE would break ordinary HR questions. `invoke_agent_text`
+screens the prompt before dispatch (so a `block` refusal costs no model call) and the
+answer on the way out; `mode: "anonymize"` substitutes the masked text, `"block"`
+raises `guardrail.blocked` (422). Screening **fails open** on an AWS error: an
+unreachable guardrail must not take a working agent offline.
+
+In `chat_stream` an enabled agent deliberately switches to **buffered** mode — an
+entity can straddle two deltas, so deltas are collected, the whole answer is screened
+once, and the masked text is emitted as one delta while tool and heartbeat events keep
+flowing. Losing token-by-token streaming is the stated price of not leaking PII, and
+the wizard's card says so. `GET /api/governance/guardrail` (MEMBER) reports whether the
+preset exists; `POST` (ADMIN) provisions it, since that creates a real Bedrock resource.
+
+### Fleet overview, governance health, shared templates (roadmap T37–T39)
+
+**Fleet (T37).** `GET /api/fleet` (ADMIN, hub-global — the one read that deliberately spans
+environments) puts every workspace in one table: agents active/deploying/failed, failed
+jobs, pending releases, firing alerts. It is a **ledger read on purpose**: fanning Logs
+Insights across every account would be slow, billed per scan, and would blank the whole page
+when one spoke's role lapsed. The per-workspace telemetry stays one click away on that
+workspace's own pages. A workspace whose bootstrap is `registered`, `bootstrapping` or
+`failed` reports `readable: false` with **null** counts rather than zeros — a table whose
+quiet rows might mean "healthy" or might mean "unreachable" is worse than no table.
+
+**Governance health (T39).** `GET /api/governance/health` (MEMBER) computes findings for the
+selected workspace from ledger state — active agents without PII protection, agents never
+evaluated, firing alert rules, a workspace with no rules at all, and deployments stale past
+90 days — each with the console link that fixes it, then deducts a weighted score. The score
+is blunt by design: every point it removes is attributable to a listed finding, because a
+number nobody can act on is not governance. System presets are excluded (they are
+server-owned, so holding them against the workspace would be noise).
+
+**Shared templates (T38).** T10's scenario templates are platform-authored; `shared_templates`
+is the other half — a team publishes an agent that actually worked so another team can start
+from it. The table is **not** workspace-scoped, which is the point: scoping it would mean no
+other workspace could ever see it. `workspace_id` records provenance and decides who may
+withdraw it (the publisher, or an administrator).
+
+What an entry carries is pruned deliberately (`marketplace.publishable_spec`): the agent's
+*shape* (method, prompt, model, toolkit/native-tool selection, memory and guardrail posture,
+loop bounds) travels; environment-specific ids (knowledge bases, gateway targets, skills,
+memory resources) and anything secret-shaped (`env`, BYOC upload ids and image URIs) do not.
+The allow-list alone is not sufficient — `memory` is kept for its shape but nests
+`memory_id`, a resource id from the publishing account, so nested ids are pruned explicitly.
+What was stripped becomes **requirements**: readable labels ("HR policies", "hr-database")
+telling a consumer what to supply, rather than opaque identifiers from someone else's
+account. `POST .../use` returns those defaults and counts the use; it deliberately does not
+create an agent — the consumer still goes through the wizard and supplies their own
+resources.
+
+### Spend attribution and threshold alerts (roadmap T28/T29)
+
+**Spend (T28).** The Observability console already estimated cost per model and per
+session from the `model_prices` map; what it could not answer is *who spent it*.
+`app/services/costs.py` adds two dimensions over data the platform already has: **by
+agent**, from one Logs Insights query grouped by the runtime service name on each span,
+and **by person**, from per-session tokens joined to `ChatSession.actor_id`. Sessions the
+console never opened (direct `/v1` traffic, evaluation replays) land in an explicit
+unattributed bucket rather than being dropped — a total that looks like zero is worse than
+one that says "unattributed" — and a service name matching no ledger agent is still
+reported, because an imported or deleted agent spent real money. Every figure is labelled
+an estimate: a model missing from the price map contributes tokens but no dollars and is
+named in `unpriced_models`, so the number is never quietly short. `GET /api/costs` and
+`GET /api/costs/month-to-date` are **ADMIN** for the same reason the TTFA view is — the
+per-person breakdown names who spent what.
+
+**Alerts (T29).** `alert_rules` (workspace-scoped) is a threshold on a value the platform
+can already compute: `error_rate` and `latency_p95_ms` from the dashboard aggregates,
+`online_quality` from the online-evaluation mean, `cost_mtd_usd` from the price map. No
+new telemetry path. Four properties are deliberate:
+
+- **A direction that could never fire is refused.** Quality is bad when it *drops*, an
+  error rate when it *rises*, so `alert.comparison_never_fires` rejects the inverse
+  instead of accepting a rule that would sit silent forever. The create route defaults the
+  comparison, so the common case needs no thought.
+- **An unreadable value is `unknown`, never `ok`.** No traffic in the window, or a failed
+  query, records `unknown` with the reason — an alert that reports health it did not
+  measure is worse than no alert.
+- **A transition notifies, not a state.** `state` lives on the row, so a rule that stays
+  firing does not re-notify every pass. A failed webhook is recorded in `last_detail` and
+  never hides the breach.
+- **Delivery is one generic https JSON webhook** — a Slack or Feishu incoming hook already
+  is one, so a single mechanism covers both and the platform stores no channel
+  credentials. Plain `http` is refused: the alert text names the workspace and the breach.
+
+Evaluation is explicit (`POST /api/alerts/evaluate`, ADMIN) because each read is billed or
+cached; the console calls it with `notify=false` so opening the page can never page
+anyone. Firing rules also surface in the administrator inbox, read off the rows rather
+than re-querying, and the V2 page is `/v2/costs` with a `?view=alerts` tab.
+
+### The dev → ops hand-off: operator role, release bundles, promotions, inbox (roadmap T19–T22)
+
+`prod` refuses member agent mutations (T05), so the only honest way into production is a
+*promotion*. These four tasks build that path up to an approved release; executing one
+into the target environment is P3 (T23–T27).
+
+**The operator role (T19).** `User.role` gains `operator` next to `admin` and `member`,
+and permissions now have **per-role defaults** (`users_service.DEFAULT_BY_ROLE`) instead
+of "every key granted unless denied". A member holds the build keys plus
+`promotion.request`; an operator holds `promotion.approve` and `eval.run` but **not**
+`agents.deploy` / `agents.convert` — they release what others built rather than editing
+prompts or code; an administrator holds everything by role. Two consequences worth
+knowing: `_normalized_permissions` now persists an explicit **grant** as well as a denial
+(storing only denials silently discarded the one way to give a single member the approval
+right), and it measures overrides against the role *after* a same-request role change.
+
+**Release bundles (T20).** `release_bundles` freezes one publish — the spec from its
+`SpecSnapshot`, the artifact coordinates that publish actually used (image digest, staged
+upload, AWS version), the evaluation evidence pinned to it, the policy posture — and
+reduces them to a `digest` (sha256 over the canonical *name, method, spec, artifact*).
+The digest is the point: promotion ships the bundle, so "what goes live is what was
+tested" becomes checkable rather than asserted. Evidence blobs are deliberately **not**
+digested — re-running evaluation must not mint a new identity for identical code.
+Bundling is idempotent per digest, so pressing it twice does not fork the audit trail,
+and an agent published before snapshots existed still bundles from its live spec. Bundling
+is allowed in `prod` (one ledger row, no AWS call): refusing it would make a prod agent
+the one thing that can never be re-released from its own environment.
+
+**Promotions (T21).** `promotions` is one request to release a bundle into a target
+workspace, carrying a required change note and rollback plan. `POST /api/promotions`
+(`perm:promotion.request`), `POST /api/promotions/{id}/review`
+(`perm:promotion.approve`). Rules: a second person must approve —
+`promotion.self_approval` refuses the requester, administrators included, because the
+hand-off *is* the control; a reviewed request cannot be reviewed again; one bundle may
+have only one open request per target. The detail view diffs the bundle's spec against
+whatever agent of that name runs in the **target** today — the question an approver
+actually has — and records the gate results *at approval time* as evidence rather than a
+live read. Gates (evaluation pinned, artifact reusable, PII posture, target ready, target
+agent) are advisory here and become blocking with T26. Every decision is journaled in
+`audit_events`.
+
+**The inbox (T22).** `GET /api/inbox` (ADMIN) aggregates everything waiting on a human:
+pending registrations, accounts expiring within a week, workspaces not `ready` (including
+`registered` — a registration nobody finished cannot be used and holds its
+`(account, region)` slot), failed jobs in the selected workspace, promotions awaiting
+review, and active agents never evaluated. It mixes hub-global and workspace-scoped
+reads on purpose, because that is how an administrator works: one environment in focus,
+the tenancy always visible. Every item carries a `to` the console renders as a link —
+an inbox whose rows cannot be acted on is a wall of numbers. It surfaces as a card at the
+top of the V2 workbench, rendered only for an administrator and only when non-empty.
+
+**The target is a grant boundary too.** The route policy authorizes only the request's
+own workspace (`X-Workspace`), but a promotion names a *second* one. Every route that
+reads or acts on the target — request, detail, review, plan, execution log, execute,
+rollback, the mapping resolution preview, the release policy read — therefore also runs
+`workspaces.authorized_workspace(db, identity, target_id)`: 404 when it does not exist,
+403 `workspace.forbidden` when the caller holds no grant (admins reach every workspace by
+role). Authorization runs before any state is revealed. The detail view returns the
+request to anyone in the source workspace but withholds the target agent and the diff
+(`target_visible: false`) from a caller not granted on the target, and the diff never
+carries the *values* of `env`, `code`, `code_bundle` or `byoc` — only that they changed
+(`redacted: true`). This closes a security-review finding: previously a member granted
+one dev workspace could name any target and read the same-name agent's env, prompt and
+code back through the diff, and an operator granted only dev could approve and execute a
+release into prod. Any new route that takes a second workspace id must call
+`authorized_workspace` for it.
+
+One trap this exposed, worth remembering: `require_identity` takes an optional `settings`
+argument for tests, which FastAPI reads as a **second body parameter** and silently
+embeds a route's body under a wrapper key. A handler that wants an identity alongside a
+request body must depend on `auth.current_identity` instead.
+
+### Logical resource mapping, artifact copy, prod spoke template (roadmap T23–T25)
+
+Three pieces that let a promotion carry an agent into another account without carrying
+dev's identifiers or rebuilding its artifact.
+
+**Logical resource mapping (T23).** `resource_mappings` (workspace-scoped, unique on
+`workspace_id, kind, name`) maps a logical name — `kb:hr-policy` — to the real id in *that*
+workspace. Kinds: `kb`, `memory`, `gateway`, `mcp_record`, `skill` (an `s3://` prefix).
+`services/resource_mapping.py` finds the environment-specific ids in a spec
+(`knowledge_bases[].kb_id`, `memory.memory_id`, gateway `config.gateway_id`/`record_id`,
+`s3://` skills), names each one — a mapping in the *source* workspace that already owns the
+id, else a name derived from the spec, else the id — and `resolve_spec` returns a rewritten
+**copy** plus `resolved` and `unmapped` lists (path, logical name, dev id, reason), never
+mutating the bundle. A workspace's own shared gateway/memory resolve to the target's own
+without a hand-written row. `env` values and code inside a BYOC artifact are not scanned;
+the platform cannot tell an id from any other string there. `evaluate_gates` gains a
+`resource_mapping` check carrying the same lists, so the approver sees them in the
+existing `gates` payload. Routes act on the *selected* workspace: `GET
+/api/resource-mappings` (MEMBER), `PUT|DELETE /api/resource-mappings/{kind}/{name}`
+(`perm:promotion.approve` — deciding which prod resource a release binds to is the
+approver's call, not the builder's; journaled in `audit_events`), and `GET
+/api/release-bundles/{id}/resolution?target_workspace_id=` (MEMBER, read-only preview).
+The V2 workspace detail page has an editable table.
+
+**Artifact copy (T24).** `services/artifact_copy.copy_artifact(bundle, source, target)`
+deploys the *tested* artifact. Containers copy by digest through the ECR API: the manifest
+is read with `BatchGetImage` and hashed against the bundle digest, missing layers stream
+through the hub (`GetDownloadUrlForLayer` to `InitiateLayerUpload`/`UploadLayerPart`/
+`CompleteLayerUpload`, each layer hashed before completion), then `PutImage` with the
+expected `imageDigest`, and the target is asked for the digest again. Blob *mounting* is a
+registry-v2 feature with no ECR-API form and would need a policy on the dev repository for
+every prod account; ECR replication is registry-wide, push-triggered and asynchronous, so a
+promotion could not wait on one digest. Multi-arch indexes copy their children first. Zip/
+BYOC archives stream from the source artifacts bucket to the target's under the same
+`upload_id` (the workspace segment of the key changes, so the deployer finds it without a
+spec rewrite) and are checked against the SHA-256 recorded at upload. Both paths are
+idempotent (digest present, or object present with the same recorded sha256, means
+`already_present`; a partial run resumes at the missing layers), refuse on any mismatch with
+`promotion.artifact_digest_mismatch`, and build every client through `WorkspaceContext.client`.
+The result carries `target_artifact` (the target's `image_uri`/`upload_id`) for the executor
+to overlay on the bundle.
+
+**Prod spoke template (T25).** `infra/spoke/launchpad-workspace-role-prod.yaml` is the
+standard role minus the build path: no CodeBuild, no PassRole to CodeBuild, ECR
+receive-only on `launchpad-agents`, no `s3:DeleteObject`. Each removal is documented in the
+template header and pinned by `infra/tests/test_spoke_template_prod.py`; the standard
+template gained a single `EcrArtifactCopy` statement so a dev account can be a copy source.
+
+### Release gates and promotion execution (roadmap T26–T27)
+
+An approved promotion is now executable. `POST /api/promotions/{id}/execute` and `.../rollback`
+(`perm:promotion.approve`; operator/admin only, so a member never reaches the prod guard, and
+explicitly recorded in `PROD_UNPROTECTED_AGENT_ROUTES` because they act on the promotion's
+*target*, not the request's workspace) admit a **background job**
+(`jobs.type = promotion_execute`, `workspace_id` = the *target*, JSONL log) that
+`resume_pending_jobs` re-enters after a restart. `services/promotion_exec.py` owns it;
+`services/release_gates.py` owns the gates and the plan.
+
+**Blocking gates (T26).** `evaluate_gates` stays the approver's DB-only, advisory view — an
+approver may accept a flagged bundle and the record says so. Execution re-evaluates
+everything live (`release_gates.execution_gates`) and refuses with `409
+promotion.gate_failed.<gate>` (details list every failing gate) unless all blocking gates
+pass. Every gate blocks except `guardrail` and `target_agent`, so a gate added later
+(`resource_mapping` was) blocks by default; `artifact` is non-blocking for spec-built methods
+(harness, zip, studio) and blocking for container/BYOC. New gates: `eval_score` (the run
+pinned on the bundle is still completed and its mean score meets the threshold; the detail
+names the dataset and its version), `policy_enforce` (the target gateway's
+`policyEngineConfiguration.mode` is `ENFORCE` — one `GetGateway`; an unreadable gateway
+fails, it does not pass) and `deploy_window`. Policy lives on the **target** workspace
+(`workspaces.release_policy`, edited by an administrator through `PUT
+/api/release-policies/{workspace_id}`, journaled): `min_eval_score` (default 0.7), a weekly
+`window` (days, `HH:MM` start/end, IANA timezone), dated `freezes`, `require_policy_enforce`,
+`observe_seconds` and `smoke_prompts`. Unset keys fall back to the tier: `prod` requires
+ENFORCE and a 300 s observation window. A refusal by the window carries `next_allowed_at`,
+computed exactly from the window edges and freeze ends. A rollback is deliberately not gated:
+it is the way out of a bad release.
+
+**Plan preview.** `GET /api/promotions/{id}/plan` (read-only; the one live read is the Policy
+Engine mode) lists what execution would do in the target — agent create vs replace, IAM role
+(per-agent for BYOC, else the shared role), artifact copy, registry record, canary vs skip,
+mapping rewrites — plus the gates and `can_execute`.
+
+**Stages.** `resolve → copy → provision → deploy → smoke → canary → observe → complete`,
+persisted on `promotions.stages` (status, detail, timestamps) with resumable scratch on
+`promotions.execution`; the job log carries the same events.
+
+| Stage | What it does |
+|---|---|
+| resolve | `resource_mapping.resolve_spec` rewrites the frozen spec for the target; unmapped references, a method clash or a system preset stop the run |
+| copy | `artifact_copy.copy_artifact` (T24); skipped, saying why, when the bundle has no artifact |
+| provision | creates or re-stages the target agent row and queues an ordinary `deploy_agent` job (its own `provision` stage makes the IAM role) — or, on the canary path, publishes nothing |
+| deploy | runs/awaits that job (create, or an in-place update that keeps the prior spec in history). On the canary path it instead mints the candidate version and gateway, because the champion must survive to be compared |
+| smoke | three fixed prompts (policy-overridable) through the shared invoke chain; any empty answer or error fails the run |
+| canary | drives the existing runtime canary in-line (`optimization.canary_service.act_*`) through 90/10 → 50/50 → 1/99, one traffic round and verdict each; a blocking verdict fails the release, rolls the canary back **and then cleans it up** — rolling back alone left the experiment gateway, A/B test, online-evaluation config and candidate endpoint behind, which leaked billable resources and made the agent undeletable (`DeleteAgentRuntime` refuses while an endpoint exists). Cleanup never runs if the rollback itself failed, since that canary may still be routing traffic. The verdict is the judge's, not the script's: in the cross-region e2e a candidate that scored lower than the running version was blocked at 90/10, which is the property the canary exists for. Skipped with the reason logged when the target has no running agent or cannot host a canary (only `zip_runtime`/`studio` runtimes can) |
+| observe | holds at full traffic for `observe_seconds` (deadline persisted, so a restart does not restart the clock), then probes once more |
+| complete | promotes the candidate and cleans the canary up |
+
+Replay traffic uses the bundle's pinned evaluation dataset when it resolves to prompts,
+else the smoke prompts. Status is honest: `executing` → `succeeded` | `failed` with
+`error = "<stage>: <reason>"` and the failed stage in `stages`; a failed stage aborts a live
+canary so the candidate never keeps serving. A failed run may be executed again.
+
+**Rollback.** `previous_bundle_id` is recorded at execute time (the target's last
+`succeeded` promotion of the same agent). `rollback` runs the same stages on that bundle —
+canary and observe skipped — as a **new publish** through the ordinary deploy path, never an
+AWS-side version revert. No previous bundle answers `409 promotion.no_previous_bundle`. It
+ends `rolled_back`, or `failed` with `rollback failed at <stage>` (and may be retried).
+
+Limits worth knowing: the `container` method's pipeline always rebuilds its image from the
+spec, so its copy stage moves the artifact but the deploy still builds (logged); the canary
+verdict needs real evaluator samples, so a canary-eligible release takes as long as those
+take to arrive.
+
+### Workspace tier and prod protection (roadmap T05)
+
+Every workspace carries a `tier` — `dev` (default, and what existing rows migrate
+to), `staging` or `prod` — set at registration and changed through
+`PATCH /api/workspaces/{id}` (admin). The column is ledger-authoritative: the
+startup mirror of `default` never writes it. A move **into or out of** `prod`
+changes who may modify agents there, so it needs `confirm_tier_change: true`;
+without it the patch answers 409 `workspace.tier_change_unconfirmed`. Every actual
+tier change is journaled in `audit_events`.
+
+`prod` is the only tier with behavior today. `route_policy.PROD_PROTECTED` lists
+the agent-mutating routes (create/deploy, redeploy, delete, convert, discovery
+import, BYOC uploads, deploy-flow skill import, the architect assistant's skill
+preparation and proposal approval, the system-preset install/uninstall routes, and
+the optimization flows that change what a live agent serves: creating and driving a
+runtime canary, and an experiment's actions, whose promote redeploys the agent). On
+a `prod` workspace a member calling one of them gets 403
+`workspace.prod_protected` — changes must arrive through promotion — while an
+administrator passes as break-glass and the call is journaled in `audit_events`
+at admission (so a row records the attempt; the Job/Deployment row carries the
+outcome). Reads, chat/invoke, evaluation and observability stay open. The guard
+runs in `enforce_route_policy` right after the workspace resolves, so no handler
+can forget it; `tests/test_prod_protection.py` pins every `perm:agents.*` route to
+either `PROD_PROTECTED` or `PROD_UNPROTECTED_AGENT_ROUTES` (with a reason), and every
+non-read route under `/api/agents`, `/api/system-agents`, `/api/runtime-canaries` and
+`/api/experiments` to `PROD_PROTECTED` or a documented exemption, so a new lifecycle
+route cannot ship without a prod decision.
+
+`audit_events` is workspace-scoped (`WORKSPACE_SCOPED_TABLES`), so a workspace with
+journal rows cannot be detached — only purged. In the console the tier shows as a
+tag in the V2 top-bar workspace switcher (prod in the danger tone), is selectable
+on registration and editable on the workspace detail view, and `useProdLock()`
+disables the V2 agent create/edit/convert/delete/import controls for members on a
+prod workspace with the reason as the tooltip — the backend stays the boundary.
+
+### Scoped API keys, integration snippets, spec snapshots (roadmap T16–T18)
+
+**Scoped keys (T16).** `api_keys` gained `agent_ids` (JSON; NULL or empty means every
+agent in the workspace, exactly the pre-T16 behaviour), `expires_at`,
+`rate_per_minute`, `last_used_at`, `use_count` and `created_by`, all through the
+additive `_migrate_api_key_scope`. `require_api_key` now also answers an expired key
+`401 auth.expired_api_key` and an over-limit call `429 auth.rate_limited` with a
+`Retry-After` header (`AppError` gained an optional `headers`). An agent outside the
+key's `agent_ids` reads exactly like a missing one (`404 agent.not_found`, also
+absent from `GET /v1/agents`) so scope cannot be probed. The rate limit is a
+per-key sliding 60 s window held **in process** (`services/api_keys.py`): the
+backend is one process, a rejected call must not cost a ledger write, and a restart
+merely forgives one window. Usage is durable: `use_count`/`last_used_at` on the key
+plus one `api_key_usage` row per (key, UTC day), bumped by an atomic SQL increment
+and counting admitted calls only. Console routes: `POST /api/apikeys` accepts the new
+fields, `PATCH /api/apikeys/{id}` edits or clears them (only fields present in the
+body change), `GET /api/apikeys/{id}/usage` returns a dense per-day series. Scope ids
+must be live agents of the workspace (`422 apikey.unknown_agent`); an expiry in the
+past is refused (`422 apikey.expiry_in_past`).
+
+**Integration snippets (T17).** `frontend/src/lib/snippets.ts` builds curl, Python
+(httpx) and JavaScript (fetch) text for the sync `invoke` and the SSE `invoke-stream`
+calls from the agent id and `window.location.origin`, with a `YOUR_API_KEY`
+placeholder. It is client-side so no route needs classifying or keeping in step with
+`public_api.py`; the V2 agent detail shows it as the Integration card for agents that
+can be invoked.
+
+**Spec snapshots and rollback (T18).** `spec_snapshots` (workspace-scoped) stores the
+full spec per publish: `(agent_id, seq)` unique, `aws_version` (filled by `_finish`
+once the deploy stage knows it), `deployment_id`, `created_by`, `note`. The row is
+written inside `pipeline.create_deployment`, the one function every create,
+redeploy, rollback, promotion and preset release passes through, in the same
+transaction as the Deployment and Job rows. `GET /api/agents/{id}/snapshots`,
+`.../snapshots/{seq}` and `.../snapshots/diff?from_seq=&to_seq=` read the ledger only;
+the diff is server-side (`services/snapshots.diff_specs`): dotted field paths, a
+group (`prompt`, `model`, `tools`, `skills`, `knowledge_bases`, `memory`,
+`guardrail`, `other`), and `added`/`removed` members for lists.
+`POST .../snapshots/{seq}/rollback` validates the stored spec against the current
+`AgentSpec` (`409 snapshot.spec_invalid` if it no longer does) and hands it to the
+shared `_republish` that the redeploy route also uses, so every redeploy guard
+applies unchanged (system presets, discovered runtimes, in-flight deploy, immutable
+name/method, converted agents' baked prompt and model). It is an ordinary "update"
+deploy carrying an older spec, recorded as a new snapshot noted `rollback to #N`;
+nothing is reverted on AWS. The route is `perm:agents.deploy` and listed in
+`PROD_PROTECTED`, so members are refused on a prod workspace. In the V2 agent detail
+the Snapshots card lists them, diffs any two picked rows, and rolls back behind a
+confirm dialog.
+
+### Share links, external pages and thumbs feedback (roadmap T13–T15)
+
+**External page foundation (T13).** A `share_links` row is a signed, revocable,
+account-free way for an outsider to reach exactly one thing: `kind` (`chat` today;
+T30 channels and T34 SME review add kinds), `target_id` (the agent), `token_hash`,
+`label`, `created_by`, `enabled`, `expires_at`, `revoked_at`, `last_used_at`,
+`use_count`. Like an `ApiKey`, only the sha256 of the token is stored; the raw
+`shr_…` value (256 bits from `secrets.token_urlsafe`) is returned once at creation.
+The table is workspace-scoped (`WORKSPACE_SCOPED_TABLES`).
+
+The public surface is `GET /share/{token}`, `POST /share/{token}/chat` (SSE) and
+`POST /share/{token}/feedback`. It sits **outside `/api`**, so the console session
+middleware never applies, and it is classified `PUBLIC` + hub-global in
+`route_policy` (prefix `/share` in `HUB_GLOBAL_PREFIXES`, three entries in
+`WORKSPACE_EXEMPT`), so `enforce_route_policy` never resolves a workspace and the
+`X-Workspace` header is never read. `tests/test_route_policy.py` enumerates `/share`
+routes with `/api` ones, so an unclassified public route fails the suite.
+`services/share_links.resolve` maps token → row → workspace context server-side:
+
+- **Every unusable state is one 404** (`share.not_found`, identical body): unknown,
+  malformed, disabled, revoked, expired, agent deleted/inactive/not invocable, agent
+  in a different workspace than the row, workspace gone. A revoked link cannot be
+  told from one that never existed.
+- **Rate limiting** is a per-link token bucket (12-message burst, then one per 5 s;
+  `429 share.rate_limited` with `Retry-After`). It is in-process and per worker: the
+  backend runs as a single process, so the ceiling is exact; with several workers it
+  would multiply by the worker count and need a shared store.
+- **Bookkeeping**: `use_count` / `last_used_at` advance per chat turn.
+- **Outsiders see less**: tool names, runtime mode and raw exception text are
+  filtered from the stream (the full error is still recorded in the ledger), and the
+  share error handler uses the same generic AWS messages as `/v1`. System presets can
+  never be shared (409 `share.agent_not_shareable`).
+- **The invoke chain is not forked.** The route calls `chat_stream` and persists
+  through `services/chat_ledger.persist_events`, the same code the console chat now
+  uses. Each anonymous conversation gets its own Memory actor
+  (`share_<link>_<session digest>` → `scoped_actor`), distinct from every console
+  user and from other visitors of the same link, and a visitor can only continue or
+  rate sessions their link started (another link's or a console session id reads as
+  `share.session_not_found`).
+
+**Share links in the console (T14).** `GET|POST /api/agents/{id}/share-links` and
+`POST /api/share-links/{id}/revoke` are `MEMBER`, workspace-scoped, and deliberately
+absent from `PROD_PROTECTED` — handing out a chat link is not an agent mutation, so a
+prod workspace still allows it. Creation returns the token and URL once; the list
+never contains it. The V2 chat page's *Share* button opens the manager (label,
+expiry of 7/30/90 days or never, copy, revoke). The visitor page is `/s/<token>`: `main.tsx`
+renders `share/SharePage.tsx` on its own, before `AuthGate` and outside the V2 shell,
+so a visitor never sees a sign-in form or console navigation. It streams replies over
+`/share`, shows the agent's display name and offers thumbs with an optional comment.
+Access control is **link-level only** (label, expiry, revoke); a per-user or
+user-group ACL on a link is out of scope. Deployment note: the reverse proxy must
+route `/share/` to the backend beside `/api/` and `/v1/` (the Vite dev/preview proxy
+already does), and `/s/` is served by the SPA fallback. The token travels in the URL
+path, so it can appear in proxy access logs; treat those logs as sensitive or revoke.
+
+**Thumbs feedback → bad cases (T15).** `chat_feedback` is its own workspace-scoped
+table rather than columns on `chat_messages`: one answer can be rated by several
+actors, a verdict changes or is withdrawn (unique on message + actor, upserted), and it
+carries a comment and an origin (`console` or `share`), none of which belong on a
+transcript row. `chat_stream` persists each agent answer and now announces it with a
+`saved` SSE event (`message_id`); history replay returns message ids and the caller's
+verdict. `POST /api/chat/{agent_id}/feedback` (and the share equivalent) validates that
+the message is an agent answer of that agent, session and workspace. A thumbs-down lands
+where evaluation already looks: `GET /api/feedback?verdict=down` returns the items plus
+`down_session_ids` (distinct, newest first, capped at the 50 one `from-sessions` call
+accepts). The V2 Insights page shows a *User feedback* card whose *Bad cases → dataset*
+button feeds those ids to the existing `AddToDatasetModal`, i.e.
+`POST /api/eval/datasets/from-sessions` — no dataset-building logic is duplicated.
+
+### Channel publishing, GitOps export, environment comparison and drift (roadmap T30–T32)
+
+**Web embed (T30).** `/s/<token>?embed=1` renders the share page without its header or
+language switcher, edge-to-edge, for an `<iframe>`. It is a rendering mode only: the same
+link, expiry, revocation, rate limit and visitor-visible stream apply, and `GET
+/share/{token}?embed=1` echoes `embed` back. Creating a chat link now also returns
+`embed_url` and a copy-ready `embed_snippet` (`<iframe src=… style="width:100%;height:600px;border:0">`,
+attribute values HTML-escaped so a label cannot break out). The snippet contains the token,
+so like the token it appears only in the creation response, never in a list. The console's
+share manager shows it with a copy button. Nothing in the backend sends `X-Frame-Options`
+or `frame-ancestors`, so the page is frameable; if a reverse proxy adds them, exempt `/s/`.
+
+**IM inbound: Slack and Feishu (T30).** A channel is a `ShareLink` whose `kind` is the
+platform (`slack` | `feishu`) — not a parallel mechanism: same token hashing, expiry,
+revoke, `use_count`, rate limiter and opaque 404s. Two additive nullable columns carry the
+adapter's settings: `channel_config` (non-secret, e.g. Feishu domain) and `channel_secrets`.
+`POST /api/agents/{id}/channel-links` (MEMBER, not prod-protected, like share links) creates
+one; listing and revoking reuse `/api/agents/{id}/share-links` and `/api/share-links/{id}/revoke`.
+The platform calls one public webhook, `POST /share/channels/{platform}/{token}`, under the
+existing hub-global `/share` prefix (so the reverse-proxy rule already covers it): the link
+row names the workspace and agent, `X-Workspace` is never read. Order is the security
+posture — resolve the token (kind must equal the platform, else the usual 404) →
+authenticate the request → parse → de-duplicate → rate-limit → dispatch — so a forged
+request cannot spend a link's budget. The reply is posted from a background task because
+Slack and Feishu expect an acknowledgement in about 3 seconds; the turn goes through
+`invoke_agent_text` with a per-conversation runtime session (`ch-` + sha256 of link and
+Slack channel/thread or Feishu chat/root message; DMs are one running conversation) and a
+per-session memory actor, and is recorded as a `ChatSession` with its messages. A failed
+turn replies with a generic sentence, never exception text.
+
+*Verification schemes.* **Slack**: the app's signing secret — `X-Slack-Signature` is
+HMAC-SHA256 over `v0:<timestamp>:<raw body>`, compared in constant time, with a 5-minute
+timestamp window; it also signs the `url_verification` handshake, so the challenge is
+answered only for a signed request. Replay inside the window is closed by event-id
+de-duplication (in-process, bounded, per link — the same single-process assumption as the
+rate limiter). The legacy verification token is not supported (it authenticates nothing
+about the body). **Feishu**: the app's Verification Token (`header.token`, or `token` on
+the handshake), compared in constant time against a SHA-256 stored at creation. Feishu's
+request signature only exists together with payload encryption (Encrypt Key + AES), so it
+is not an independent option; an `encrypt` payload is refused with an actionable error
+(`channel.encrypted_unsupported`) instead of being guessed at. The token's weakness (a static
+bearer in the body) is offset by the 256-bit link token in the URL path. *Secrets.* The
+Slack signing secret, Slack bot token and Feishu app secret must be usable later (HMAC and
+reply calls), so they are stored in `channel_secrets`; the Feishu verification token is
+stored only as a hash. No route ever returns a secret: responses carry `channel.secrets_set`
+(key names only). The ledger is treated as the platform's trust boundary (it also holds
+workspace external IDs); envelope encryption with KMS is the open hardening step. Outbound
+replies go only to `slack.com`, `open.feishu.cn` and `open.larksuite.com` (fixed in code, so
+a stored value cannot become an SSRF target). Slack handles DMs and `app_mention`; bot
+messages, edits and non-text Feishu messages are ignored.
+
+*Microsoft Teams is out of scope.* Its inbound path is the Bot Framework: an Azure bot
+registration, JWT validation of every activity against Microsoft's rotating JWKS, and
+replies through a service URL that arrives in each activity. That is a tenant-level
+registration plus token-cache machinery, not a per-link secret in a URL, and it does not
+fit the stateless webhook model used here. It would be a fourth adapter behind the same
+contract (`services/channels/base.py`) if demand appears.
+
+**GitOps export and the `launchpad` CLI (T31).** `GET /api/release-bundles/{id}/export`
+(MEMBER, read-only) returns the bundle as `application/yaml`: `apiVersion`, `kind:
+ReleaseBundle`, `metadata` (agent name, `sha256:` digest), `spec` (method + agent spec),
+`artifact` (the coordinates the digest covers) and `evidence` (a *reference* to the pinned
+evaluation run: run id, dataset id/version — not the score blobs, which re-runs would
+churn). Keys are sorted, the dumper is fixed, nothing folds or wraps, and the body has no
+timestamp, row id or author, so a diff of the file is a diff of the release. Determinism is
+guaranteed for one bundle, and across bundle rows sharing a digest and the same evidence
+reference; evidence is deliberately outside the digest, so two rows of one release pinned to
+different evaluation runs differ only in the `evidence` block. The CLI is
+`backend/scripts/launchpad.py`, one stdlib-only file: a customer's pipeline needs `python3`
+and that file, not a virtualenv or `uv`, and it sits with the other operator scripts. It
+speaks the ordinary console HTTP API with a **session** (`LAUNCHPAD_USER`/`LAUNCHPAD_PASSWORD`
+to log in, or `LAUNCHPAD_SESSION` for an existing cookie value; API keys authorize only
+`/v1`). It pins the session cookie as a header because the cookie is `Secure` in prod mode
+and a cookie jar would never return it over plain `http://`.
+
+```
+export LAUNCHPAD_URL=https://launchpad.example.com LAUNCHPAD_USER=ci LAUNCHPAD_PASSWORD=…
+export LAUNCHPAD_WORKSPACE=dev          # the SOURCE workspace
+python3 launchpad.py bundle  --agent hr-assistant -o releases/hr-assistant.release.yaml
+python3 launchpad.py promote --agent hr-assistant --to prod \
+    --change-note "Raise refund limit" --rollback-note "Redeploy bundle sha256:ab12…"
+python3 launchpad.py compare --agent hr-assistant
+python3 launchpad.py drift            # exit 2 on drift, 3 when only unknown answers came back
+```
+
+`bundle` freezes the latest publish (idempotent per digest) and prints/writes the export;
+`promote` bundles and opens a promotion request — approval stays a second person's job.
+Exit codes: 0 ok, 1 refused/unreachable, 2 drift, 3 unknown. An IaC (CloudFormation/CDK)
+snippet export is not built.
+
+**Environment comparison and drift (T32).** Both routes are MEMBER and read-only; they are
+workspace-scoped (the selected workspace is the one drift is measured in and the one marked
+`current`). `GET /api/environments/compare?agent=<name>` lists, for every workspace the
+caller may see (administrators all, members their grants — the same filter as `GET
+/api/workspaces`), the agent's status, version, last deploy, `spec_digest` and image digest,
+ordered dev → staging → prod. The digest is `promotion.bundle_digest(name, method, spec,
+artifact={})` — the bundle's own helper, with the artifact left out because its coordinates
+(`source_arn`, AWS version) are environment-specific by nature and would make identical
+specs look different everywhere. The highest tier that runs the agent is the reference;
+other rows read `same`, `differs` or `absent`. Caveat: until logical resource mapping
+normalises environment-bound ids (gateway, knowledge base), a spec that legitimately points
+at different local resources reads as `differs`.
+`GET /api/environments/drift[?agent=]` reads each active Runtime/Harness-backed agent back
+through the `agentcore` wrappers (8 concurrent reads, 100-agent cap with a `truncated`
+flag) and compares the ledger's expectation. `drift` findings: `resource_missing`,
+`unhealthy` (status other than READY), `version_changed` (AWS version differs from the
+ledger's — someone updated it outside Launchpad). **Fail soft, never fail green**: an
+unreadable answer, an empty status, a resource mid-update, a missing recorded version, or a
+version difference while a runtime canary is running (which mints a newer version on
+purpose) is `unknown` with a `reason`; the workspace state is `drift` > `unknown` >
+`in_sync`, so a single unreadable agent can never let the whole workspace read green. The
+page is `/v2/environments` (nav entry in the Run group, matching video-taxonomy section),
+with `?view=compare|drift`. It is its own page rather than a tab of Releases because
+promotions are about *requests*, while this is the *current state* of an agent across
+environments plus a workspace-wide check; drift runs only on demand because it spends AWS
+calls.
+
+### Business self-service: intents, SME review, curated answers, issue box (roadmap T33–T36)
+
+The loop this phase closes for a non-technical owner is *find what the agent got wrong,
+let an expert judge it, fix it without a redeploy, verify the fix*. Each step reuses an
+existing primitive; the new code is the glue and the guard rails.
+
+**Intent view (T33).** `GET /api/intents` (MEMBER, `?agent_id&days&lang&refresh`) groups
+the last N days of ledger sessions by their first user turn. The existing
+`Builtin.Insight.UserIntent` insight could not be pointed at this: it is an asynchronous,
+billed AgentCore batch evaluation over CloudWatch spans (minutes of latency), not an
+interactive table over ledger sessions. So `services/intents.py` makes **one Bedrock
+Converse call** through the client funnel over at most 150 first turns and asks for at
+most 12 business-language clusters plus the sessions that were not actually answered. The
+result is cached in-process for ten minutes (sixty seconds when it is a fallback) keyed by
+workspace, agent, window, language and a fingerprint of the sessions and their votes.
+**Fallback:** if the call fails or returns nothing usable, identical questions (after
+`answer_rules.normalize`) that recur become clusters, everything else one "other"
+cluster, and `source` is `"fallback"` so the page says the grouping is mechanical. The
+quality signal per cluster is the thumbs-down rate over *rated* sessions (`null`, not
+0%, when nobody rated) plus the count of unanswered sessions; a per-cluster online-eval
+score is deliberately left out because it is a billed Logs Insights read per session.
+"Could not answer" is the union of the model's judgement and a deterministic check (no
+reply, an error turn, or a refusal phrase in English or Chinese), so the fallback still
+finds them. Each unanswered row can be sent to the issue box. The page is
+`/v2/eval/intents`.
+
+**SME review (T34).** A reviewer link is a `ShareLink` with `kind="review"`
+(`services/review_links.py`, `routers/review.py`): the same hashed-at-rest token, the same
+single 404 for every bad state (unknown, malformed, wrong kind, disabled, revoked, expired,
+agent gone or cross-workspace; a review token cannot open a chat and vice versa), and the
+row names the workspace. The public surface is `GET /share/review/{token}` (the queue: the
+newest 25 answers of the agent, ones this reviewer has not rated first, each with its
+question and whether it was curated) and `POST /share/review/{token}/rate`
+(`{message_id, verdict, comment, correction}`), both `PUBLIC` + hub-global under the
+existing `/share` prefix. The reviewer never holds a session id; the server derives it from
+the message and refuses any message of another agent or workspace. Its rate limit is its
+own bucket (60 burst, then one per second, per link): a reviewer works through a queue
+faster than a visitor chats. Because a reviewer sees real user questions, an agent with the
+PII guardrail on has the questions screened in `anonymize` mode before they leave the
+server (fail-open like T12). Ratings go through `feedback.record_feedback` into
+`chat_feedback` with `source="review"` and the new `correction` column, so the console
+thumbs, the share page and reviewers feed one store. The page is `/r/<token>`, rendered by
+`main.tsx` outside `AuthGate` and the V2 shell (`share/ReviewPage.tsx`); the reverse proxy
+must serve `/r/` from the SPA like `/s/`. Links are managed on the Issue box page
+(Reviewers tab) through `GET|POST /api/agents/{id}/review-links`; revoke reuses
+`POST /api/share-links/{id}/revoke`.
+
+**Curated answers (T35).** `answer_rules` holds an ordered list per agent
+(`position`, `match`, `pattern`, `answer`, `enabled`, `hit_count`, `last_hit_at`,
+`source_issue_id`); `answer_rule_sets` holds the per-agent master switch (no row = on).
+*Matching* is deliberately deterministic: `exact` (the whole question equals the pattern)
+or `contains` (whole words for Latin text, substring for CJK), both after Unicode NFKC,
+case-folding, punctuation stripping and whitespace collapse. There is no fuzzy or semantic
+match: a wrong canned answer to a similar-but-different question is worse than falling
+through to the model, so a rule fires only on wording its author can read and predict. A
+`contains` phrase under three characters (two for CJK) is refused. The first *enabled*
+rule in position order wins; rules are skipped for turns with attachments. Enforcement is in
+the invoke chain, in `invoke_agent_text` and `chat_stream` (the two places that dispatch):
+a hit returns/streams the owner's text with no model call, `chat_stream` emits a `rule`
+event before the delta, `persist_events` stores `chat_messages.answered_by = rule:<id>`,
+and the `saved` event, history replay, the `/v1/.../invoke` body (`answered_by`) and the
+Chat UI ("Curated answer" badge) all say so. **Order with the T12 PII screen:** the prompt
+is screened first, rules match against the *screened* text, and the curated answer is
+returned *without* output screening. A `block` agent therefore still refuses a PII-bearing
+prompt even when a rule could answer it, an `anonymize` agent matches on the masked text,
+and the owner-authored answer is not masked (it may intentionally contain a contact
+address). A rule answer makes no runtime call, so it emits no runtime span; the visible
+record is `answered_by`, the rule's hit counter and a log line. Rule writes are journaled in
+`audit_events` and are deliberately not in `PROD_PROTECTED` (fixing production without a
+redeploy is the point). `POST /api/agents/{id}/rules/test` dry-runs a question against the
+rules without bumping counters, which is how a fix is verified. The page is the *Curated
+answers* tab of `/v2/issues`.
+
+**Issue box (T36).** `issues` (one row per answer, unique on agent and message) is opened
+by a thumbs-down from any origin (a hook in `record_feedback`; `POST /api/issues/sync`
+backfills earlier votes), by an unanswered question from the intent view, or by hand. The
+owner opens the session transcript and picks a fix: a curated answer
+(`POST /api/agents/{id}/rules` with `issue_id`, which links it), documents (the existing
+Knowledge Bases page), or the evaluation dataset (the existing `AddToDatasetModal`, i.e.
+`POST /api/eval/datasets/from-sessions`). **The issue box performs none of these**;
+`POST /api/issues/{id}/fixes` only records that one happened, verifying a rule or dataset
+reference against the workspace's ledger, and a test asserts the module builds no dataset
+and imports no upload code. Creating a curated answer does not close the issue: marking it
+fixed or won't-fix (`POST /api/issues/{id}/resolve`) is the owner's explicit step, and a
+closed issue must be reopened before it changes again. Every transition is appended to
+`history` with who and when, and `GET /api/issues` reports counts and the **median time to
+close** (`created_at` to `resolved_at`) and the age of the oldest open issue; the median
+because one issue left for a quarter should not hide that most close in a day.
+
+Ledger: new workspace-scoped tables `answer_rules`, `answer_rule_sets`, `issues` (in
+`WORKSPACE_SCOPED_TABLES`), and additive columns `chat_feedback.correction` and
+`chat_messages.answered_by`. Known limits: a curated turn never reaches the runtime, so the
+agent's own session memory does not contain it; a `rule` event is not forwarded to share-page
+visitors; and rule matching runs on the whole prompt, so it is unsuited to multi-turn
+context.
+
+## Agent-DLC — criteria, golden sets, calibration and the release gate
+
+The design is [docs/agent-dlc-design.md](agent-dlc-design.md); this section is the map
+of what was built. The methodology's claim is *the release is decided by evaluation, not
+by a meeting*, so the platform owns four things it previously left to people: the
+standard (a criteria table), the evidence (a golden set), whether an LLM judge may stand
+in for a person (calibration), and the decision itself (a gate in front of traffic).
+
+**Modules.** `app/dlc/` holds the services — `criteria.py` (versions, templates,
+validation, sign-off, diff), `engine.py` (per-criterion verdicts from evaluation records,
+Wilson intervals, pass^k), `gate.py` (the four gates), `calibration.py` (blind labelling,
+Cohen's κ with bootstrap CI), `golden.py` (three splits), `releases.py` (named endpoints,
+sign/block/rollback, waivers), `cost.py`, `compare.py` (the fix ladder), `admission.py`,
+`watch.py` and `scheduler.py`. Pure statistics are in `app/evaluation/stats.py`. Models
+are `app/models/dlc.py` (11 workspace-scoped tables) plus additive columns on
+`eval_datasets`, `eval_runs` and `agents.endpoint_mode`. Routes are `app/routers/dlc.py`
+(console) and `app/routers/share_annotate.py` (public). The console is
+`/v2/eval/standards` with `?view=scorecard|criteria|golden|admission|calibration|release|watch|compare|audit`.
+
+**Criteria.** A criteria set is versioned under a `lineage_id`; publishing freezes a
+version, editing opens the next one, and a published agent set must be signed by someone
+other than its editor (`criteria.sign`). Validation is enforced, not advisory: a red line
+cannot be decided by an LLM judge; cost and performance criteria must be metrics; every
+dimension needs a criterion or an explicit `n/a:<dimension>` note; at least one red line.
+A judge criterion's *effective* tier is `observe` until a calibration record says it is
+aligned and unexpired — the editor, the gate and the scorecard all read the effective
+tier. Templates (`kind="template"`) are adopted explicitly into a new agent version; a
+newer template version is reported, never applied under the agent.
+
+**Golden sets.** A parent `EvalDataset` (`role="golden"`) groups three split datasets,
+each synced to its own AWS Dataset. Item provenance lives in `metadata.dlc` (case tier,
+criteria ids, origin, `expected_source`). `POST /api/golden-sets/{id}/seed`
+(`golden.admit`) is the **only** path that writes the holdout: it stratifies by case tier
+and then seals the holdout (`golden.holdout_sealed`). Item adds, moves and admission
+refuse the holdout. Coverage is criteria × case tier with `thin` (< 3 items) flagged.
+
+**Runs and pass^k.** AgentCore has no per-scenario repetition parameter, so
+`execute_run(repeats=k)` invokes each scenario k times in distinct sessions and records
+`attempts`; `GetBatchEvaluation` returns aggregates only, so `engine.finalize_run` reads
+per-session records from the evaluation output log stream and writes
+`criterion_results`. A run pinned to a release carries `endpoint_qualifier`, so the
+gate can prove which endpoint it invoked. Before a run, `POST /api/eval/runs/estimate`
+returns items × k × (agent per-session + judge per-item) with its basis named, and the
+workspace policy's `eval_cost_confirm_usd` / `eval_cost_max_usd` require confirmation or
+refuse.
+
+**The gate.** Applied in fixed order: red lines (any violation → BLOCKED, never
+waivable) → denominator (missing verdicts or > 5% undetermined → INVALID) →
+per-dimension thresholds at integer-percent precision (miss → BLOCKED unless an active
+waiver covers it) → observed criteria (recorded only). Provenance issues — an unsigned
+criteria version, a run against another version or endpoint, no holdout evaluated —
+also make the verdict INVALID. INVALID is not a failure: the evidence cannot decide.
+
+**Gate before traffic.** `UpdateAgentRuntime` / `UpdateHarness` auto-roll the DEFAULT
+endpoint, so a gated agent (`agents.endpoint_mode="live"`) serves production through a
+named `live` endpoint and every invoke path passes `qualifier="live"`
+(`services/invoke.production_endpoint`). A new invoke path must go through that helper
+or it bypasses the gate. With the workspace policy
+`release_mode="gated"`, `pipeline._finish` calls `releases.after_deploy`, which points
+`candidate` at the new version and opens a `ReleaseRecord`; `live` is untouched. Signing
+(`release.sign`, signer ≠ requester) re-points `live`; rollback re-points it to the
+previous version. Nothing is deleted. `POST /api/agents/{id}/release/migrate` moves an
+agent onto named endpoints, and carries `release.sign`: what production serves is a
+release decision, not a build step.
+
+**Two traps named by the real-AWS e2e** (`backend/scripts/e2e_agent_dlc.py`), both of
+which only appear once an agent actually has named endpoints:
+
+* *Telemetry is per endpoint.* Every AgentCore endpoint writes its own content-log
+  group (`…-<endpoint>`) and service name (`….<endpoint>`). Evaluation, observability,
+  online-eval matching and experiment recommendations all used to hardcode `DEFAULT`,
+  so a gate run against `candidate` timed out waiting for telemetry that was in
+  `…-candidate` — and, worse, a gated agent's production traffic (`…-live`) would have
+  vanished from the dashboards. `evaluation.service.telemetry_endpoint(agent,
+  qualifier)` is now the single rule: a pinned run reads its own endpoint, a gated
+  agent reads `live`, everything else `DEFAULT` (unchanged).
+* *Endpoint deletion is asynchronous, and a harness endpoint is slow.* AgentCore
+  refuses to delete a runtime or harness that still has endpoints, and
+  `DeleteHarnessEndpoint` only moves the endpoint to DELETING — observed at several
+  minutes. All four delete paths call `releases.delete_endpoints` first, which issues
+  both deletes (AWS removes them in parallel) and waits a **short** bound (45 s: enough
+  for a runtime endpoint). If AWS still holds the harness, `delete_agent_resources`
+  raises `agent.teardown_pending`, the route marks the ledger row deleted with
+  `aws_resource_deleted: false`, and `dlc.scheduler.sweep_deleted_resources` retries
+  until AWS lets go — rather than holding an HTTP delete open for minutes or leaving an
+  operator to retry by hand against an asynchronous state machine. The sweep asks
+  `GetHarness` before deleting, because **AgentCore answers `DeleteHarness` on an
+  already-gone harness with `AccessDenied`, not `ResourceNotFound`**: inferring "gone"
+  from the delete error would either retry a vanished resource forever or swallow a real
+  permission problem. Its done-marker is `endpoint_mode` returning to `default`, which
+  keeps `resource_id` as the historical pointer every deleted row retains. Waivers need a reason, a named risk owner, an expiry
+≤ 30 days and a second person (`waiver.approve`); the gate report counts how often a
+criterion has been waived.
+
+**Calibration and annotation links.** A labelling task hides the judge's verdict from
+annotators until it closes. `agreement` reports human–human κ, judge–human κ with a
+bootstrap CI, the confusion cells and the disagreements; `decide` refuses `aligned`
+when the numbers (κ floor, n ≥ minimum, not worse than human–human − 0.05) do not
+support it. A record expires after the workspace's `calibration.period_days`.
+Annotation links (`ShareLink.kind="annotate"`, page `/r/annotate/<token>`) let an expert
+label without an account: each link is appended to the task's annotators as
+`link_<id>`, the public route serves only the items and that annotator's own labels,
+and a **prod-tier workspace refuses to mint one** — a link issued while the workspace
+was dev stops resolving once it is prod.
+
+**Admission, watch, scheduler.** Admission candidates are collected from thumbs-down,
+SME corrections, the issue box and Insights clusters; a candidate the evaluators scored
+as a pass is ranked first. Admitting needs a human expected answer (`agent_observed` is
+refused), a redaction that did not block, and writes dev or regression only. A watch
+config re-runs the regression split daily/weekly with an optional cost ceiling; alerts
+are separated into count (page), score (against an 8-point rolling median, silent until
+the baseline exists) and distribution (TVD, naming the component that moved), and
+`quiet: true` is returned explicitly. `scheduler.py` runs on a daemon thread started
+next to `start_auto_refresh()`; each task is claimed through a conditional UPDATE on
+`scheduler_claims` so two processes never run the same tick.
+
+**Permissions.** Six keys join `AGENT_PERMISSIONS`: `criteria.manage` (member,
+operator), `criteria.sign`, `golden.admit`, `judge.calibrate` (granted to named people,
+never by role), `waiver.approve`, `release.sign` (operator). Every route is classified
+in `route_policy.py`; publish, sign, seed, item adds **and removals** (`move` / `retire`
+take a case out of the gate's denominator, which changes the standard just as adding one
+does), admit, calibration `decide` (a `not_aligned` verdict demotes a gating judge),
+waiver approval, migrate, evaluate and release sign/block/rollback are `PROD_PROTECTED`.
+Decisions are written to `audit_events` and read back at `GET /api/audit`.
+
+**Three things a security review found, all now enforced server-side.** They are listed
+because each was a *consistency* failure rather than a missing idea — the rule existed
+and one path did not apply it. (1) `GET /api/annotation-tasks` hardcoded
+`privileged=True`, so the list handed every annotator the judge's verdicts the detail
+route withholds; both now compute it the same way. (2) A watch config's `dataset_id`
+was stored unchecked, so another workspace's sealed holdout could be replayed against an
+agent the caller controls; it is resolved through `golden.get_parent(db, ws.id, …)` on
+write *and* on run. (3) A single annotator's vote counted as a consensus and the
+human-ceiling term was skipped when no second rater existed, so one person could label a
+run to match the judge and certify it; an item now needs two agreeing raters to
+contribute, `aligned` needs a real `human_human_kappa`, and `decide` refuses an
+annotator on the task. Admission also computes the PII screening itself instead of
+relying on the detail route having been opened, and records on the item how the text was
+screened (`unscreened_items` in coverage when the workspace has no guardrail).
+
+**Cost is enforced, not just displayed.** `dlc/cost.estimate` prices items × k ×
+(agent per-session + judge per-item) with its basis named, and `assert_allowed` is
+called on both entry points — `POST /api/eval/runs` and the release gate's
+`start_evaluation` — so `eval_cost_max_usd` / `eval_cost_confirm_usd` refuse before a
+session is spent. `PUT /api/release-policies/{workspace_id}` is where an administrator
+sets `release_mode`, `calibration` and those two ceilings.
+
+**Known limits.** pass^k multiplies cost by k and is opt-in with the estimate shown;
+load and stress testing are out of scope; A/B experiments remain gateway-only with two
+variants; ground-truth evaluators cannot run online, so watch runs replay golden splits
+rather than scoring live traffic against expected answers.
 
 ## Skill Lab — skill evaluation & training (SkillOpt integration)
 

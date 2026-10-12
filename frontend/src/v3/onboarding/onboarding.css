@@ -1,0 +1,122 @@
+/* Console V3 onboarding — the launch sequence, the tour and the glossary.
+   Same room as the rest of V3: ink and line, colour only as a signal. */
+
+/* ── launch sequence ─────────────────────────────────────────────────────── */
+.v3 .v3-launch {
+  position: relative;
+  padding: 16px 18px 18px;
+  border-radius: var(--v3-r);
+  border: 1px solid rgba(255, 181, 71, 0.28);
+  background: var(--v3-ink-2);
+}
+.v3 .v3-launch header { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.v3 .v3-launch-toggle { display: flex; align-items: center; gap: 8px; color: var(--v3-text); background: none; border: 0; font: inherit; font-weight: 600; padding: 4px 0; cursor: pointer; }
+.v3 .v3-launch-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.v3 .v3-launch-next { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.v3 .v3-launch-next > span { display: flex; align-items: center; gap: 8px; color: var(--v3-text-2); }
+.v3 .v3-launch ol[hidden] { display: none; }
+.v3 .v3-launch header .count { color: var(--v3-text-2); font-size: 12px; }
+.v3 .v3-launch header .meter { display: flex; gap: 4px; flex: 1; max-width: 220px; }
+.v3 .v3-launch header .meter i { flex: 1; height: 3px; border-radius: 2px; background: var(--v3-line-2); }
+.v3 .v3-launch header .meter i[data-on="true"] { background: var(--v3-ok); }
+.v3 .v3-launch header .v3-btn { margin-left: auto; }
+.v3 .v3-launch ol { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.v3 .v3-launch li {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 12px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--v3-line);
+  background: var(--v3-ink-1);
+  min-height: 132px;
+}
+.v3 .v3-launch li .top { display: flex; align-items: center; gap: 8px; }
+.v3 .v3-launch li .n { font-size: 11px; color: var(--v3-text-3); letter-spacing: 0.1em; }
+.v3 .v3-launch li .tick { color: var(--v3-ok); margin-left: auto; }
+.v3 .v3-launch li b { font-size: 13.5px; }
+.v3 .v3-launch li small { color: var(--v3-text-3); font-size: 12px; line-height: 1.5; }
+.v3 .v3-launch li .v3-btn { justify-self: start; margin-top: 4px; }
+.v3 .v3-launch li[data-state="done"] { opacity: 0.85; }
+.v3 .v3-launch li[data-state="done"] b { text-decoration: line-through; text-decoration-color: var(--v3-text-3); }
+.v3 .v3-launch li[data-state="next"] { border-color: rgba(255, 181, 71, 0.5); background: var(--v3-ink-2); box-shadow: 0 0 0 3px rgba(255, 181, 71, 0.07); }
+.v3 .v3-launch li[data-state="later"] b { color: var(--v3-text-2); }
+.v3 .v3-launch.done {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  border-color: rgba(62, 240, 180, 0.3); background: var(--v3-ok-dim); color: var(--v3-text);
+}
+.v3 .v3-launch.done .v3-btn { margin-left: auto; }
+@media (max-width: 1180px) { .v3 .v3-launch ol { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .v3 .v3-launch ol { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-launch header { gap: 8px; }
+  .v3 .v3-launch header .meter { max-width: 100px; }
+}
+
+/* ── tour ────────────────────────────────────────────────────────────────── */
+.v3 .v3-tour { position: fixed; inset: 0; z-index: 140; }
+.v3 .v3-tour-dim { position: fixed; inset: 0; background: rgba(3, 6, 12, 0.72); }
+.v3 .v3-tour-spot {
+  position: fixed;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(62, 240, 180, 0.65), 0 0 0 9999px rgba(3, 6, 12, 0.72), 0 0 40px rgba(62, 240, 180, 0.25);
+  transition: left 0.28s var(--v3-ease), top 0.28s var(--v3-ease), width 0.28s var(--v3-ease), height 0.28s var(--v3-ease);
+  pointer-events: none;
+}
+.v3 .v3-tour-card {
+  position: fixed;
+  padding: 16px 18px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--v3-line-2);
+  background: var(--v3-ink-2);
+  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.85);
+  animation: v3-rise 0.22s var(--v3-ease);
+}
+.v3 .v3-tour-card .head { display: flex; align-items: center; justify-content: space-between; color: var(--v3-ok); font-size: 11px; letter-spacing: 0.14em; }
+.v3 .v3-tour-card h3 { margin: 6px 0 6px; font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 17px; font-weight: 650; }
+.v3 .v3-tour-card p { margin: 0; color: var(--v3-text-2); line-height: 1.6; font-size: 13.5px; }
+.v3 .v3-tour-card .legend { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 12.5px; }
+.v3 .v3-tour-card .legend li { display: flex; align-items: center; gap: 8px; }
+.v3 .v3-tour-card .legend span { color: var(--v3-text-3); }
+.v3 .v3-tour-card .foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+@media (prefers-reduced-motion: reduce) { .v3 .v3-tour-spot, .v3 .v3-tour-card { transition: none; animation: none; } }
+
+/* ── glossary ────────────────────────────────────────────────────────────── */
+.v3 .v3-term { position: relative; display: inline; }
+.v3 .v3-term-word {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: help;
+  text-decoration: underline dotted var(--v3-text-3); text-underline-offset: 3px;
+}
+.v3 .v3-term-tip {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 30; width: 280px;
+  padding: 9px 11px; border-radius: 8px; border: 1px solid var(--v3-line-2);
+  background: var(--v3-ink-0); color: var(--v3-text-2); font-size: 12.5px; line-height: 1.5;
+  font-family: var(--v3-body); letter-spacing: 0; text-transform: none; font-weight: 400;
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.8);
+  opacity: 0; visibility: hidden; transform: translateY(-2px); transition: opacity 0.12s, transform 0.12s;
+  pointer-events: none;
+}
+.v3 .v3-term:hover .v3-term-tip, .v3 .v3-term-word:focus-visible + .v3-term-tip { opacity: 1; visibility: visible; transform: none; }
+.v3 .v3-glossary { display: grid; gap: 2px; margin: 0; max-height: 52vh; overflow: auto; }
+.v3 .v3-glossary > div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; padding: 9px 10px; border-radius: 8px; }
+.v3 .v3-glossary > div.on { background: var(--v3-ok-dim); }
+.v3 .v3-glossary dt { font-weight: 600; color: var(--v3-text); }
+.v3 .v3-glossary dd { margin: 0; color: var(--v3-text-2); line-height: 1.55; }
+
+/* ── help menu and rail mode ─────────────────────────────────────────────── */
+.v3 .v3-help { position: relative; }
+.v3 .v3-help-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 60; min-width: 230px; padding: 6px;
+  border-radius: 10px; border: 1px solid var(--v3-line-2); background: var(--v3-ink-2);
+  box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.8); display: grid; gap: 2px;
+}
+.v3 .v3-help-menu button, .v3 .v3-help-menu a {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; border: 0;
+  background: none; color: var(--v3-text-2); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.v3 .v3-help-menu button:hover, .v3 .v3-help-menu a:hover { background: var(--v3-ink-3); color: var(--v3-text); }
+.v3 .v3-rail-mode {
+  margin: 10px 4px 0; padding: 7px 10px; border-radius: 7px; border: 1px dashed var(--v3-line-2);
+  background: none; color: var(--v3-text-3); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.v3 .v3-rail-mode:hover { border-style: solid; color: var(--v3-text); }

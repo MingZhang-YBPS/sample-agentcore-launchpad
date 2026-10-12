@@ -1,5 +1,6 @@
 """Chat playground endpoints — SSE streaming over the shared invoke chain."""
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,18 +10,20 @@ from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
 from app.assistant.sessions import refuse_assistant_session
-from app.core.db import SessionLocal, get_db
+from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError, envelope, mapped_aws_error
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.schemas.attachments import AttachmentRequest
+from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.services import agent_access, memory_ownership, oauth_sessions, policy_identity
+from app.services import feedback as feedback_service
 from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
 from app.services.attachments import prepare_attachments
 from app.services.chat import chat_stream, sse_encode
+from app.services.chat_ledger import persist_events
 from app.services.invoke import stop_agent_session
 from app.services.runtime_discovery import require_invoke_capability
 from app.services.visibility import Viewer, require_viewer
@@ -30,7 +33,7 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 
 class ChatRequest(AttachmentRequest):
-    session_id: str | None = None
+    session_id: str | None = SessionIdField
     # "Invoke as me" for JWT-inbound agents (identity P3): True presents the
     # signed-in user's own Cognito JWT, False the workspace M2M token, None
     # (older clients) the user JWT when one can be minted, else M2M. Ignored
@@ -79,57 +82,6 @@ def _get_active_agent(
     return agent
 
 
-def _save_message(
-    workspace_id: str,
-    agent_id: str,
-    session_id: str,
-    role: str,
-    text: str,
-    name: str | None = None,
-    attachments: list[dict[str, Any]] | None = None,
-) -> None:
-    db = SessionLocal()
-    try:
-        db.add(ChatMessage(workspace_id=workspace_id, agent_id=agent_id,
-                           session_id=session_id,
-                           role=role, text=text[:100000], name=name, attachments=attachments))
-        db.commit()
-    finally:
-        db.close()
-
-
-def _track_session(
-    workspace_id: str, agent_id: str, session_id: str, actor_id: str,
-    runtime_version: str | None = None,
-) -> None:
-    db = SessionLocal()
-    try:
-        row = (
-            db.query(ChatSession)
-            .filter(
-                ChatSession.workspace_id == workspace_id,
-                ChatSession.agent_id == agent_id,
-                ChatSession.session_id == session_id,
-            )
-            .first()
-        )
-        if row is None:
-            row = ChatSession(workspace_id=workspace_id, agent_id=agent_id,
-                              session_id=session_id, actor_id=actor_id,
-                              runtime_version=runtime_version)
-            db.add(row)
-        elif row.ended_at:
-            row.runtime_version = runtime_version
-        row.turns = (row.turns or 0) + 1
-        row.last_at = datetime.now(UTC)
-        # A new turn under an ended id starts a fresh AgentCore session with the
-        # same id, so the row is live again — "ended" must not outlast that.
-        row.ended_at = None
-        db.commit()
-    finally:
-        db.close()
-
-
 def _chat_bearer_token(
     agent: Agent,
     as_user: bool | None,
@@ -161,6 +113,23 @@ def _chat_bearer_token(
             status_code=409,
         )
     return token
+
+
+def _console_events(events: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Rewrite an as_user refusal for the console: its fix is the "invoke as me"
+    toggle, not a user JWT. Runs before persistence, so the saved error matches."""
+    for event in events:
+        data = event["data"]
+        code = data.get("code")
+        if event["event"] == "error" and code == oauth_sessions.AS_USER_REQUIRES_USER_JWT:
+            detail = data.get("detail") or {}
+            refusal = oauth_sessions.as_user_requires_user_jwt(
+                provider=detail.get("provider", ""), tool=detail.get("tool", ""),
+                agent_id=detail.get("agent_id", ""), console=True,
+            )
+            data = envelope(refusal.code, refusal.message, refusal.detail)
+            event = {"event": "error", "data": data}
+        yield event
 
 
 @router.post("/chat/{agent_id}")
@@ -209,21 +178,6 @@ def chat(
     workspace = ws.context
 
     def generate():
-        # Thread items are persisted in event order (int-pk = replay order) so
-        # the playground can restore a session's history exactly as rendered.
-        session_id = req.session_id
-        answer_parts: list[str] = []
-        pending_asks: list[tuple[str, str | None]] = []
-
-        def close_bubble() -> None:
-            if answer_parts and session_id:
-                _save_message(workspace_id, agent.id, session_id, "agent",
-                              "".join(answer_parts))
-            answer_parts.clear()
-            for provider, tool in pending_asks:
-                _save_message(workspace_id, agent.id, session_id, "auth", provider, name=tool)
-            pending_asks.clear()
-
         stream_kwargs: dict[str, Any] = {}
         if prepared:
             stream_kwargs["attachments"] = prepared
@@ -233,65 +187,27 @@ def chat(
             stream_kwargs["gateway_access_token"] = gateway_access_token
         if bearer_token:
             stream_kwargs["bearer_token"] = bearer_token
-        for event in chat_stream(
+        events = _console_events(chat_stream(
             agent,
             req.prompt,
-            session_id=session_id,
+            session_id=req.session_id,
             actor_id=mem_actor,
             workspace=workspace,
             **stream_kwargs,
+        ))
+        # Thread items are persisted in event order (int-pk = replay order) so
+        # the playground can restore a session's history exactly as rendered.
+        for event in persist_events(
+            events,
+            workspace_id=workspace_id,
+            agent_id=agent.id,
+            prompt=req.prompt,
+            actor_id=actor_id,
+            session_id=req.session_id,
+            runtime_version=agent.version,
+            attachments=prepared.metadata if prepared else None,
         ):
-            kind, data = event["event"], event["data"]
-            if kind == "error" and data.get("code") == oauth_sessions.AS_USER_REQUIRES_USER_JWT:
-                # the console's fix is the "invoke as me" toggle, not a user JWT
-                detail = data.get("detail") or {}
-                refusal = oauth_sessions.as_user_requires_user_jwt(
-                    provider=detail.get("provider", ""), tool=detail.get("tool", ""),
-                    agent_id=detail.get("agent_id", ""), console=True,
-                )
-                data = envelope(refusal.code, refusal.message, refusal.detail)
-                event = {"event": kind, "data": data}
-            if kind == "meta":
-                session_id = data["session_id"]
-                _track_session(
-                    workspace_id, agent.id, session_id, actor_id, runtime_version=agent.version,
-                )
-                _save_message(
-                    workspace_id, agent.id, session_id, "user", req.prompt,
-                    attachments=prepared.metadata if prepared else None,
-                )
-            elif kind == "tool" and session_id:
-                close_bubble()  # a tool call splits the answer bubble live — mirror it
-                _save_message(workspace_id, agent.id, session_id, "tool", "",
-                              name=data.get("name"))
-            elif kind == "auth_required" and session_id:
-                # as_user consent ask: the Connection name and tool only — the
-                # authorization URL is single-use and is never persisted, so a
-                # restored card re-asks by retrying the previous user message.
-                # The card does not close an open answer bubble live, so it is
-                # saved after that bubble's text, not between its halves.
-                ask = (str(data.get("provider") or ""), data.get("tool"))
-                if answer_parts:
-                    pending_asks.append(ask)
-                else:
-                    _save_message(workspace_id, agent.id, session_id, "auth", ask[0],
-                                  name=ask[1])
-            elif kind == "policy_denied" and session_id:
-                # the tool event already closed the open bubble: the card follows
-                # its tool row; the reason carries the policy id for the restore
-                _save_message(workspace_id, agent.id, session_id, "policy",
-                              data.get("reason", ""), name=data.get("tool"))
-            elif kind == "delta":
-                answer_parts.append(data.get("text", ""))
-            elif kind == "error" and session_id:
-                close_bubble()  # keep the partial answer the user saw
-                _save_message(workspace_id, agent.id, session_id, "error",
-                              data.get("message", ""))
-            elif kind == "done" and session_id:
-                close_bubble()
             yield sse_encode(event)
-        if session_id:  # a stream that ended without done still keeps its asks
-            close_bubble()
 
     return StreamingResponse(
         generate(),
@@ -402,6 +318,7 @@ def stop_session(
 def session_history(
     agent_id: str,
     session_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -419,13 +336,21 @@ def session_history(
         .limit(500)
         .all()
     )
+    mine = feedback_service.verdicts_for(
+        db, ws.id,
+        require_identity(request).username if auth_enabled() else "river",
+        [r.id for r in rows if r.role == "agent"],
+    )
     return {
         "messages": [
             {
+                "id": r.id,
+                "verdict": mine.get(r.id),
                 "role": r.role,
                 "text": r.text,
                 "name": r.name,
                 "attachments": r.attachments or [],
+                "answered_by": r.answered_by,
                 "at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows

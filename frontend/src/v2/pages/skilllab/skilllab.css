@@ -19,7 +19,7 @@
 }
 .v2 .v2-skilllab-task {
   border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 12px 14px; margin-bottom: 12px;
-  background: #fff;
+  background: var(--v2-card);
 }
 .v2 .v2-skilllab-task.invalid { border-color: var(--v2-danger); }
 .v2 .v2-skilllab-task.excluded { opacity: 0.55; background: var(--v2-fill); }
@@ -72,8 +72,8 @@
 .v2 .v2-skilllab-md .blocked { text-decoration: line-through dotted; }
 .v2 .v2-skilllab-md .v2-link { padding: 0; text-decoration: underline; text-underline-offset: 2px; }
 .v2 .v2-skilllab-md .hljs-comment, .v2 .v2-skilllab-md .hljs-quote { color: var(--v2-ink-3); font-style: italic; }
-.v2 .v2-skilllab-md .hljs-keyword, .v2 .v2-skilllab-md .hljs-literal { color: #722ed1; }
+.v2 .v2-skilllab-md .hljs-keyword, .v2 .v2-skilllab-md .hljs-literal { color: var(--v2-purple); }
 .v2 .v2-skilllab-md .hljs-string { color: #00a870; }
-.v2 .v2-skilllab-md .hljs-number, .v2 .v2-skilllab-md .hljs-attr { color: #d25f00; }
+.v2 .v2-skilllab-md .hljs-number, .v2 .v2-skilllab-md .hljs-attr { color: var(--v2-warning-ink); }
 .v2 .v2-skilllab-md .hljs-title, .v2 .v2-skilllab-md .hljs-built_in { color: var(--v2-primary); }
 .v2 .v2-skilllab-review { max-height: 640px; overflow-y: auto; padding-right: 4px; }

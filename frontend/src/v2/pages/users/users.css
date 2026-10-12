@@ -27,7 +27,7 @@
 .v2 .v2-users-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .v2 .v2-users-chip {
   display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 6px;
-  border: 1px solid var(--v2-line); background: #fff; cursor: pointer; font-size: 13px; color: var(--v2-ink-2);
+  border: 1px solid var(--v2-line); background: var(--v2-card); cursor: pointer; font-size: 13px; color: var(--v2-ink-2);
 }
 .v2 .v2-users-chip small { color: var(--v2-ink-4, #999); font-size: 11.5px; }
 .v2 .v2-users-chip:hover:not(:disabled) { border-color: var(--v2-primary-hover); }

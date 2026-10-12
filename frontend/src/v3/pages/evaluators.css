@@ -1,0 +1,12 @@
+/* V3 evaluators — the three definition choices of the editor. */
+.v3 .v3-ev-defs { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.v3 .v3-ev-def {
+  display: grid; gap: 6px; align-content: start; text-align: left; padding: 14px 16px; min-height: 96px;
+  border-radius: 10px; border: 1px solid var(--v3-line); background: var(--v3-ink-1); color: var(--v3-text);
+  font: inherit; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-ev-def:hover:not(:disabled) { border-color: var(--v3-line-2); background: var(--v3-ink-2); }
+.v3 .v3-ev-def.on { border-color: rgba(62, 240, 180, 0.55); background: var(--v3-ok-dim); }
+.v3 .v3-ev-def:disabled { opacity: 0.4; cursor: not-allowed; }
+.v3 .v3-ev-def small { color: var(--v3-text-2); font-size: 12.5px; line-height: 1.5; }
+@media (max-width: 980px) { .v3 .v3-ev-defs { grid-template-columns: minmax(0, 1fr); } }

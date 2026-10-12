@@ -65,6 +65,10 @@ Consequences worth knowing before editing this table:
   `/api/registry/a2a-demo`): it is the same capability the Chat console gives
   every member, so gating it while Chat stays open would protect nothing.
 
+* The account-free `/share/*` routes (T13) sit outside `/api` — no console session,
+  no `X-Workspace` — and are classified here as `PUBLIC` + hub-global so the drift
+  test covers them; `enforce_route_policy` itself only runs for `/api`.
+
 There is deliberately **no** setting that disables this table. A flag that turns
 authorization off is the vulnerability; fixing a misclassification means editing
 the entry.
@@ -75,8 +79,9 @@ from typing import Any
 from fastapi import Request
 
 from app.core.errors import AppError
-from app.routers.auth import require_admin, require_permission
-from app.routers.workspaces import resolve_workspace
+from app.routers.auth import require_admin, require_identity, require_permission
+from app.routers.workspaces import TIER_PROD, resolve_workspace
+from app.services.audit import record_audit_event
 
 ADMIN = "admin"
 MEMBER = "member"
@@ -89,9 +94,22 @@ PERM_AGENT_IMPORT = "perm:agents.import"
 PERM_AGENT_DELETE = "perm:agents.delete"
 PERM_AGENT_CONVERT = "perm:agents.convert"
 PERM_EVAL_RUN = "perm:eval.run"
+# T19/T21 — the release surface. `request` is default-granted to members and operators
+# (asking for a release is not privileged); `approve` is granted to operators and admins
+# only, so nobody can wave their own change into production.
+PERM_PROMOTION_REQUEST = "perm:promotion.request"
+PERM_PROMOTION_APPROVE = "perm:promotion.approve"
 PERM_IDENTITY_MANAGE = "perm:identity.manage"
 PERM_IDENTITY_GRANT = "perm:identity.grant"
 PERM_MEMORY_MANAGE = "perm:memory.manage"
+# Agent-DLC: who may edit the ruler, sign it, admit samples, calibrate a judge, approve
+# a waiver and sign a release (docs/agent-dlc-design.md §8).
+PERM_CRITERIA_MANAGE = "perm:criteria.manage"
+PERM_CRITERIA_SIGN = "perm:criteria.sign"
+PERM_GOLDEN_ADMIT = "perm:golden.admit"
+PERM_JUDGE_CALIBRATE = "perm:judge.calibrate"
+PERM_WAIVER_APPROVE = "perm:waiver.approve"
+PERM_RELEASE_SIGN = "perm:release.sign"
 _PERM_PREFIX = "perm:"
 
 API_PREFIX = "/api"
@@ -116,12 +134,17 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/agents/uploads"): PERM_AGENT_DEPLOY,
     ("GET", "/api/agents/uploads/{upload_id}"): MEMBER,
     ("GET", "/api/agents/{agent_id}"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/suggested-questions"): MEMBER,  # cached Converse call
     ("GET", "/api/agents/{agent_id}/identity"): MEMBER,
     ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
     ("GET", "/api/agents/{agent_id}/conversions"): MEMBER,  # ledger read: runtime twins
     ("DELETE", "/api/agents/{agent_id}"): PERM_AGENT_DELETE,
     ("POST", "/api/agents/{agent_id}/convert"): PERM_AGENT_CONVERT,
     ("POST", "/api/agents/{agent_id}/redeploy"): PERM_AGENT_DEPLOY,
+    ("GET", "/api/agents/{agent_id}/snapshots"): MEMBER,  # ledger read (T18)
+    ("GET", "/api/agents/{agent_id}/snapshots/diff"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/snapshots/{seq}"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/snapshots/{seq}/rollback"): PERM_AGENT_DEPLOY,
     ("POST", "/api/agents/{agent_id}/inbound-auth"): PERM_AGENT_DEPLOY,
     ("POST", "/api/agents/{agent_id}/invoke"): MEMBER,  # parity with Chat
     ("GET", "/api/jobs/{job_id}"): MEMBER,
@@ -188,6 +211,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/apikeys"): MEMBER,
     ("POST", "/api/apikeys/{key_id}/disable"): MEMBER,
     ("POST", "/api/apikeys/{key_id}/enable"): MEMBER,
+    ("PATCH", "/api/apikeys/{key_id}"): MEMBER,  # scope / expiry / rate limit (T16)
+    ("GET", "/api/apikeys/{key_id}/usage"): MEMBER,
     # ---- chat: the member-facing invoke surface ----
     ("POST", "/api/chat/{agent_id}"): MEMBER,
     ("GET", "/api/chat/{agent_id}/history"): MEMBER,
@@ -287,6 +312,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): MEMBER,
     ("POST", "/api/knowledge-bases/{kb_id}/query"): MEMBER,  # retrieval playground
     # ---- governance ----
+    # the workspace's PII guardrail preset (T12): reading it is a member's business
+    # (the wizard shows whether it exists); creating the real Bedrock resource is not
+    ("GET", "/api/governance/guardrail"): MEMBER,
+    ("POST", "/api/governance/guardrail"): ADMIN,
     ("GET", "/api/governance/gateways"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}"): MEMBER,
     ("POST", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
@@ -415,8 +444,188 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/runtime-canaries/{canary_id}"): MEMBER,
     ("POST", "/api/runtime-canaries/{canary_id}/action"): MEMBER,
     # ---- read-only consoles ----
+    # the wizard's scenario-template gallery (T10): static data, no workspace
+    ("GET", "/api/agent-templates"): MEMBER,
+    # ---- release bundles, promotions, inbox (T20-T22) ----
+    # Bundling freezes a publish and mints no AWS resource, so it rides the same
+    # default-granted permission as asking for the release itself.
+    ("POST", "/api/agents/{agent_id}/release-bundles"): PERM_PROMOTION_REQUEST,
+    ("GET", "/api/agents/{agent_id}/release-bundles"): MEMBER,
+    ("GET", "/api/release-bundles/{bundle_id}"): MEMBER,
+    ("POST", "/api/promotions"): PERM_PROMOTION_REQUEST,
+    ("GET", "/api/promotions"): MEMBER,
+    ("GET", "/api/promotions/{promotion_id}"): MEMBER,
+    # the second pair of eyes: operators and admins, never the requester themselves
+    ("POST", "/api/promotions/{promotion_id}/review"): PERM_PROMOTION_APPROVE,
+    # T26/T27: the read-only plan preview and live progress are plain reads; running a
+    # release and undoing one are the operator's (same key as approving); their prod
+    # decision is in PROD_UNPROTECTED_AGENT_ROUTES, with the reason.
+    ("GET", "/api/promotions/{promotion_id}/plan"): MEMBER,
+    ("GET", "/api/promotions/{promotion_id}/execution"): MEMBER,
+    ("POST", "/api/promotions/{promotion_id}/execute"): PERM_PROMOTION_APPROVE,
+    ("POST", "/api/promotions/{promotion_id}/rollback"): PERM_PROMOTION_APPROVE,
+    # the release policy of a target workspace: readable by anyone who can see the plan,
+    # writable only by an administrator (it decides what may ship, and when)
+    ("GET", "/api/release-policies/{workspace_id}"): MEMBER,
+    ("PUT", "/api/release-policies/{workspace_id}"): ADMIN,
+    # the inbox reads pending accounts and workspaces as well as this workspace's work
+    ("GET", "/api/inbox"): ADMIN,
+    # ---- spend attribution and alerts (T28/T29) ----
+    # Spend is admin business: the per-person breakdown names who spent what, which is
+    # the same reason the TTFA view is admin-only.
+    ("GET", "/api/costs"): ADMIN,
+    ("GET", "/api/costs/month-to-date"): ADMIN,
+    # Rules are the workspace's operating posture — readable by any member (an operator
+    # needs to see what is watched), writable by an administrator only.
+    ("GET", "/api/alerts"): MEMBER,
+    ("POST", "/api/alerts"): ADMIN,
+    ("PATCH", "/api/alerts/{rule_id}"): ADMIN,
+    ("DELETE", "/api/alerts/{rule_id}"): ADMIN,
+    # Evaluation costs a billed read and can notify, so it is not a member action.
+    ("POST", "/api/alerts/evaluate"): ADMIN,
+    # ---- fleet, governance health, template marketplace (T37-T39) ----
+    # The fleet spans environments a member may not be granted, so it is admin-only and
+    # hub-global (it deliberately does not operate inside one workspace).
+    ("GET", "/api/fleet"): ADMIN,
+    ("GET", "/api/governance/health"): MEMBER,
+    # Reads are cross-workspace by design (that is what publishing is for); writing is
+    # scoped to the publishing workspace, which the handler enforces.
+    ("GET", "/api/marketplace/templates"): MEMBER,
+    ("POST", "/api/marketplace/templates"): MEMBER,
+    ("POST", "/api/marketplace/templates/{template_id}/use"): MEMBER,
+    ("DELETE", "/api/marketplace/templates/{template_id}"): MEMBER,
+    # ---- logical resource mapping (T23) ----
+    # Reads are plain member (a builder previews what a bundle resolves to). Writes decide
+    # which of the SELECTED (target) workspace's resources a promoted agent is wired to,
+    # so they are the approver's permission, not the builder's. Not in PROD_PROTECTED:
+    # mapping prod resources is exactly what an operator does there, and it mints no AWS
+    # resource; the write is journaled in audit_events by the handler.
+    ("GET", "/api/resource-mappings"): MEMBER,
+    ("PUT", "/api/resource-mappings/{kind}/{name}"): PERM_PROMOTION_APPROVE,
+    ("DELETE", "/api/resource-mappings/{kind}/{name}"): PERM_PROMOTION_APPROVE,
+    ("GET", "/api/release-bundles/{bundle_id}/resolution"): MEMBER,
+    # ---- GitOps export and environment comparison (T31/T32) ----
+    # All read-only. `compare` reads sibling workspaces' ledger rows, filtered to the
+    # caller's grants in the handler; `drift` reads AWS for the current workspace only.
+    ("GET", "/api/release-bundles/{bundle_id}/export"): MEMBER,
+    ("GET", "/api/environments/compare"): MEMBER,
+    ("GET", "/api/environments/drift"): MEMBER,
+    # ---- share links (T13/T14) and thumbs feedback (T15) ----
+    # Creating a link is not an agent mutation, so it is deliberately NOT in
+    # PROD_PROTECTED: a prod workspace may still hand out a chat link.
+    ("GET", "/api/agents/{agent_id}/share-links"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/share-links"): MEMBER,
+    ("POST", "/api/share-links/{link_id}/revoke"): MEMBER,
+    ("POST", "/api/chat/{agent_id}/feedback"): MEMBER,
+    ("GET", "/api/feedback"): MEMBER,
+    # The account-free surface (T13): outside `/api`, so no console session, and
+    # PUBLIC + hub-global so no workspace header is read either — the link's own
+    # row names the workspace. Each handler resolves the token first and answers
+    # 404 for every unusable state.
+    ("GET", "/share/{token}"): PUBLIC,
+    ("POST", "/share/{token}/chat"): PUBLIC,
+    ("POST", "/share/{token}/feedback"): PUBLIC,
+    # SME review (T34): the same account-free posture under `/share/review`
+    ("GET", "/share/review/{token}"): PUBLIC,
+    ("POST", "/share/review/{token}/rate"): PUBLIC,
+    # Agent-DLC annotation links (design §7.4): the same posture. The link row names
+    # the workspace, the task and the annotator; the judge's verdict and the agreement
+    # numbers are never served here.
+    ("GET", "/share/annotate/{token}"): PUBLIC,
+    ("POST", "/share/annotate/{token}/label"): PUBLIC,
+    ("GET", "/api/agents/{agent_id}/review-links"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/review-links"): MEMBER,
+    # ---- business self-service: intent view, curated answers, issue box (T33/T35/T36) ----
+    # Deliberately NOT in PROD_PROTECTED: the point of a curated answer is that a business
+    # owner fixes production without a redeploy. Rule writes are journaled in audit_events.
+    # ── Agent-DLC (docs/agent-dlc-design.md) ────────────────────────────────
+    # Reads are MEMBER: the standard and its evidence are the team's shared picture.
+    # Writes split by whose decision they are: editing the ruler is engineering
+    # (`criteria.manage`), signing it / admitting samples / declaring a judge
+    # calibrated / approving a waiver / signing a release are named people's.
+    ("GET", "/api/criteria-sets"): MEMBER,
+    ("POST", "/api/criteria-sets"): PERM_CRITERIA_MANAGE,
+    ("GET", "/api/criteria-sets/{lineage_id}"): MEMBER,
+    ("PUT", "/api/criteria-sets/{lineage_id}"): PERM_CRITERIA_MANAGE,
+    ("DELETE", "/api/criteria-sets/{lineage_id}"): PERM_CRITERIA_MANAGE,
+    ("POST", "/api/criteria-sets/{lineage_id}/versions"): PERM_CRITERIA_MANAGE,
+    ("POST", "/api/criteria-sets/{lineage_id}/publish"): PERM_CRITERIA_MANAGE,
+    ("POST", "/api/criteria-sets/{lineage_id}/sign"): PERM_CRITERIA_SIGN,
+    ("POST", "/api/criteria-sets/{lineage_id}/adopt-template"): PERM_CRITERIA_MANAGE,
+    ("GET", "/api/criteria-sets/{lineage_id}/diff"): MEMBER,
+    ("GET", "/api/golden-sets"): MEMBER,
+    ("POST", "/api/golden-sets"): PERM_CRITERIA_MANAGE,
+    ("GET", "/api/golden-sets/{dataset_id}"): MEMBER,
+    ("POST", "/api/golden-sets/{dataset_id}/items"): PERM_CRITERIA_MANAGE,
+    # seeding writes the holdout once: the same right that admits golden samples
+    ("POST", "/api/golden-sets/{dataset_id}/seed"): PERM_GOLDEN_ADMIT,
+    ("POST", "/api/golden-sets/{dataset_id}/move"): PERM_CRITERIA_MANAGE,
+    ("POST", "/api/golden-sets/{dataset_id}/retire"): PERM_CRITERIA_MANAGE,
+    ("GET", "/api/annotation-tasks"): MEMBER,
+    ("POST", "/api/annotation-tasks"): PERM_CRITERIA_MANAGE,
+    ("GET", "/api/annotation-tasks/{task_id}"): MEMBER,
+    # labelling is the annotator's own act; the service refuses a non-annotator
+    ("POST", "/api/annotation-tasks/{task_id}/labels"): MEMBER,
+    ("POST", "/api/annotation-tasks/{task_id}/adjudicate"): PERM_JUDGE_CALIBRATE,
+    ("GET", "/api/annotation-tasks/{task_id}/agreement"): MEMBER,
+    ("POST", "/api/annotation-tasks/{task_id}/decide"): PERM_JUDGE_CALIBRATE,
+    ("GET", "/api/calibration/{criterion_key}"): MEMBER,
+    ("GET", "/api/annotation-tasks/{task_id}/links"): MEMBER,
+    ("POST", "/api/annotation-tasks/{task_id}/links"): PERM_JUDGE_CALIBRATE,
+    ("DELETE", "/api/annotation-tasks/{task_id}/links/{link_id}"): PERM_JUDGE_CALIBRATE,
+    ("GET", "/api/agents/{agent_id}/release"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/release/migrate"): PERM_RELEASE_SIGN,
+    ("POST", "/api/agents/{agent_id}/release/evaluate"): PERM_EVAL_RUN,
+    ("GET", "/api/agents/{agent_id}/release/gate"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/release/sign"): PERM_RELEASE_SIGN,
+    ("POST", "/api/agents/{agent_id}/release/block"): PERM_RELEASE_SIGN,
+    ("POST", "/api/agents/{agent_id}/release/rollback"): PERM_RELEASE_SIGN,
+    ("GET", "/api/release-records"): MEMBER,
+    ("GET", "/api/release-records/{record_id}"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/waivers"): MEMBER,  # asking is not deciding
+    ("POST", "/api/waivers/{waiver_id}/approve"): PERM_WAIVER_APPROVE,
+    ("POST", "/api/waivers/{waiver_id}/reject"): PERM_WAIVER_APPROVE,
+    ("DELETE", "/api/waivers/{waiver_id}"): PERM_WAIVER_APPROVE,
+    ("GET", "/api/admission"): MEMBER,
+    ("GET", "/api/admission/{candidate_id}"): MEMBER,
+    ("POST", "/api/admission/{candidate_id}/admit"): PERM_GOLDEN_ADMIT,
+    ("POST", "/api/admission/{candidate_id}/reject"): PERM_GOLDEN_ADMIT,
+    ("POST", "/api/admission/{candidate_id}/duplicate"): PERM_GOLDEN_ADMIT,
+    ("GET", "/api/agents/{agent_id}/watch"): MEMBER,
+    ("PUT", "/api/agents/{agent_id}/watch"): PERM_CRITERIA_MANAGE,
+    ("POST", "/api/agents/{agent_id}/watch/run"): PERM_EVAL_RUN,
+    ("GET", "/api/eval/runs/{run_id}/criteria"): MEMBER,
+    ("POST", "/api/eval/runs/{run_id}/criteria/snapshot"): PERM_EVAL_RUN,
+    ("GET", "/api/eval/runs/compare"): MEMBER,
+    ("POST", "/api/eval/runs/estimate"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/ladder"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/scorecard"): MEMBER,
+    ("GET", "/api/audit"): ADMIN,
+    ("GET", "/api/intents"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/rules"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/rules"): MEMBER,
+    ("PATCH", "/api/agents/{agent_id}/rules/{rule_id}"): MEMBER,
+    ("DELETE", "/api/agents/{agent_id}/rules/{rule_id}"): MEMBER,
+    ("PUT", "/api/agents/{agent_id}/rules-order"): MEMBER,
+    ("PUT", "/api/agents/{agent_id}/rules-enabled"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/rules/test"): MEMBER,
+    ("GET", "/api/issues"): MEMBER,
+    ("POST", "/api/issues"): MEMBER,
+    ("POST", "/api/issues/sync"): MEMBER,
+    ("GET", "/api/issues/{issue_id}"): MEMBER,
+    ("POST", "/api/issues/{issue_id}/resolve"): MEMBER,
+    ("POST", "/api/issues/{issue_id}/reopen"): MEMBER,
+    ("POST", "/api/issues/{issue_id}/fixes"): MEMBER,
+    # ---- channel publishing (T30) ----
+    # Creating a channel link is like creating a share link: MEMBER, not prod-protected.
+    # The webhook is PUBLIC: Slack / Feishu call it, authenticated per request by the
+    # adapter (signing secret / verification token) on top of the link token in the path.
+    ("POST", "/api/agents/{agent_id}/channel-links"): MEMBER,
+    ("POST", "/share/channels/{platform}/{token}"): PUBLIC,
     ("GET", "/api/overview"): MEMBER,
     ("GET", "/api/overview/online-quality"): MEMBER,
+    # per-user onboarding activity (TTFA) — admin-only like the Users console
+    ("GET", "/api/overview/ttfa"): ADMIN,
     # ---- hub-global notices: members read published snapshots only ----
     ("GET", "/api/announcements"): MEMBER,
     ("GET", "/api/announcements/manage"): ADMIN,
@@ -479,6 +688,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("DELETE", "/api/workspaces/{workspace_id}"): ADMIN,
     ("POST", "/api/workspaces/{workspace_id}/purge"): ADMIN,
     ("POST", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
+    ("POST", "/api/workspaces/{workspace_id}/observability/repair"): ADMIN,
     ("GET", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
     ("GET", "/api/workspaces/{workspace_id}/grants"): ADMIN,
     # Bulk grant/revoke from the workspace's side (per-user replacement stays on
@@ -492,6 +702,13 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
 # Hub-global route prefixes: nothing under them operates inside a workspace.
 HUB_GLOBAL_PREFIXES = (
     "/api/auth", "/api/users", "/api/workspaces", "/api/announcements", "/api/videos",
+    # the wizard's scenario-template catalogue (T10) is static data — no account,
+    # no region, nothing to scope
+    "/api/agent-templates",
+    # the fleet view (T37) is the one read that deliberately spans every environment
+    "/api/fleet",
+    # the account-free share surface (T13): the token's row decides the workspace
+    "/share",
 )
 
 
@@ -520,6 +737,16 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/auth/login"),
         ("POST", "/api/auth/register"),
         ("POST", "/api/auth/logout"),
+        ("GET", "/api/agent-templates"),
+        ("GET", "/api/fleet"),
+        ("GET", "/share/{token}"),
+        ("POST", "/share/{token}/chat"),
+        ("POST", "/share/{token}/feedback"),
+        ("GET", "/share/review/{token}"),
+        ("POST", "/share/review/{token}/rate"),
+        ("GET", "/share/annotate/{token}"),
+        ("POST", "/share/annotate/{token}/label"),
+        ("POST", "/share/channels/{platform}/{token}"),
         ("GET", "/api/announcements"),
         ("GET", "/api/announcements/manage"),
         ("GET", "/api/announcements/{announcement_id}"),
@@ -554,6 +781,7 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         # Operates ON a workspace that is not usable yet; the target is the path
         # parameter, not the caller's X-Workspace header.
         ("POST", "/api/workspaces/{workspace_id}/bootstrap"),
+        ("POST", "/api/workspaces/{workspace_id}/observability/repair"),
         ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
         ("GET", "/api/workspaces/{workspace_id}/grants"),
         ("PUT", "/api/workspaces/{workspace_id}/grants"),
@@ -562,6 +790,133 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"),
     }
 )
+
+# ---- third dimension (T05): prod protection ----
+# The agent-mutating routes. On a workspace whose tier is `prod`, a member calling
+# one of these gets 403 `workspace.prod_protected` (changes must arrive through
+# promotion); an administrator is let through as break-glass and the call is
+# journaled in `audit_events`. Everything else — reads, chat/invoke, eval,
+# observability — stays open in prod. `tests/test_prod_protection.py` pins every
+# `perm:agents.*` route to either this set or `PROD_UNPROTECTED_AGENT_ROUTES`, so
+# a new lifecycle route cannot ship without a prod decision, and every non-read route
+# under the agent, canary and experiment namespaces to this set or a documented exemption.
+PROD_PROTECTED: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", "/api/agents"),  # create / deploy
+        ("POST", "/api/agents/discovery/import"),
+        ("POST", "/api/agents/uploads"),  # BYOC artifact staging
+        ("DELETE", "/api/agents/{agent_id}"),
+        ("POST", "/api/agents/{agent_id}/convert"),
+        ("POST", "/api/agents/{agent_id}/redeploy"),  # edit = redeploy
+        ("POST", "/api/agents/{agent_id}/inbound-auth"),  # re-publishes the runtime
+        # accepting an AI recommendation republishes the agent (a new Harness version)
+        # through the same republish path as redeploy, so prod treats it the same way
+        ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept"),
+        ("POST", "/api/agents/{agent_id}/snapshots/{seq}/rollback"),  # redeploy of an old spec
+        # optimization flows that change what a live agent serves: a runtime canary mints
+        # a candidate version from a member-supplied prompt / code and its setup already
+        # rolls DEFAULT to it; an experiment's accept + promote redeploys the agent in place
+        ("POST", "/api/runtime-canaries"),
+        ("POST", "/api/runtime-canaries/{canary_id}/action"),
+        ("POST", "/api/experiments/{exp_id}/action"),
+        # Agent-DLC: the standard, its samples and what production serves
+        ("POST", "/api/criteria-sets/{lineage_id}/publish"),
+        ("POST", "/api/criteria-sets/{lineage_id}/sign"),
+        ("POST", "/api/golden-sets/{dataset_id}/items"),
+        ("POST", "/api/golden-sets/{dataset_id}/seed"),
+        # taking a case OUT of the gate is as much a change to the standard as adding
+        # one: a retired item leaves the gate's denominator, and a move shifts it out
+        # of the replayed split
+        ("POST", "/api/golden-sets/{dataset_id}/move"),
+        ("POST", "/api/golden-sets/{dataset_id}/retire"),
+        # a `not_aligned` verdict demotes a gating judge criterion to `observe`
+        ("POST", "/api/annotation-tasks/{task_id}/decide"),
+        ("POST", "/api/admission/{candidate_id}/admit"),
+        ("POST", "/api/waivers/{waiver_id}/approve"),
+        ("POST", "/api/agents/{agent_id}/release/migrate"),
+        ("POST", "/api/agents/{agent_id}/release/sign"),
+        ("POST", "/api/agents/{agent_id}/release/rollback"),
+        ("PUT", "/api/agents/{agent_id}/watch"),
+        ("POST", "/api/agents/{agent_id}/release/block"),
+        ("POST", "/api/agent-skills/import"),  # deploy-flow skill upload to S3
+        # the architect assistant's two deploy-side writes
+        ("POST", "/api/assistant/architect/conversations/{conversation_id}/preparation/skills"),
+        ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/approve"),
+        # system presets: already admin-only, listed so a prod install is journaled
+        ("POST", "/api/system-agents/{preset_key}/install"),
+        ("POST", "/api/system-agents/{preset_key}/skill-registration"),
+        ("DELETE", "/api/system-agents/{preset_key}"),
+    }
+)
+# `perm:agents.*` routes deliberately left open in prod, each with its reason.
+PROD_UNPROTECTED_AGENT_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/registry/skills/inspect"): "preview only: parses a source, writes no S3/AWS",
+    # T27: these publish agents, but into the promotion's TARGET workspace, while this guard
+    # reads the tier of the REQUEST's workspace (the source). They are gated harder than the
+    # guard could gate them: `promotion.approve` is held by operators/admins only, never by
+    # a member, and a prod target is protected by the blocking gates (ENFORCE, window,
+    # evaluation) instead. Listing them here would refuse an operator working from a prod
+    # source and protect nothing about the prod target.
+    ("POST", "/api/promotions/{promotion_id}/execute"): "targets another workspace; operator-only",
+    ("POST", "/api/promotions/{promotion_id}/rollback"): "targets another workspace; operator-only",
+    # Agent-DLC: these three change no agent. Evaluating a candidate and a scheduled
+    # re-run only read the agent through its candidate endpoint (that is the point of
+    # gating), and asking for a waiver is a request a risk owner still has to approve.
+    ("POST", "/api/agents/{agent_id}/release/evaluate"): (
+        "evaluates the candidate endpoint; it changes nothing the agent serves"
+    ),
+    ("POST", "/api/agents/{agent_id}/watch/run"): (
+        "a read-only re-evaluation of the golden split"
+    ),
+    ("POST", "/api/agents/{agent_id}/waivers"): (
+        "requesting a waiver is not granting one — approval is prod-protected"
+    ),
+    # The architect assistant's evaluation assets (upstream 2026-10-08 moved them from
+    # ADMIN to `perm:agents.deploy`): they create / retry / review / clean up the eval
+    # datasets, evaluators and test Lambda of a conversation's plan. Evaluation stays
+    # open in prod; none of these changes what an agent serves.
+    ("POST",
+     "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize"): (
+        "creates evaluation assets for the plan; changes no agent"
+    ),
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
+     "{operation_id}/retry"): "retries an evaluation-asset operation; changes no agent",
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
+     "{operation_id}/lambda-revision-review"): (
+        "reviews an evaluation-asset Lambda conflict; ledger write + requeue only"
+    ),
+    ("DELETE", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
+     "operations/{operation_id}/assets"): "cleans up evaluation assets; changes no agent",
+}
+
+
+def is_prod_protected(method: str, path_format: str) -> bool:
+    lookup = "GET" if method == "HEAD" else method
+    return (lookup, path_format) in PROD_PROTECTED
+
+
+def _guard_prod(request: Request, scope: Any, method: str, path_format: str) -> None:
+    """Refuse a member's agent mutation on a `prod` workspace; journal an admin's."""
+    if (getattr(scope.row, "tier", None) or "dev") != TIER_PROD:
+        return
+    if not is_prod_protected(method, path_format):
+        return
+    identity = require_identity(request)
+    if not identity.is_admin:
+        raise AppError(
+            "workspace.prod_protected",
+            f"workspace '{scope.id}' is a prod workspace — agent changes must arrive "
+            "through promotion, not be made here directly",
+            {"workspace_id": scope.id, "tier": TIER_PROD},
+            status_code=403,
+        )
+    record_audit_event(
+        workspace_id=scope.id,
+        actor=identity.username,
+        action=f"{method} {path_format}",
+        target=request.url.path,
+    )
+
 
 # Routers whose classification was extrapolated from the signed-off principle
 # rather than reviewed route by route. Since the 2026-08-11 amendment they are
@@ -620,4 +975,5 @@ def enforce_route_policy(request: Request) -> None:
         # Resolved here rather than per handler: enforcement must not depend on a
         # router remembering to declare the dependency. Handlers read the result
         # back through `require_workspace`.
-        resolve_workspace(request)
+        scope = resolve_workspace(request)
+        _guard_prod(request, scope, request.method, path_format)

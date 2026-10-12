@@ -1,0 +1,10 @@
+/* V3 identity connections — template picker and panel captions */
+.v3 .v3-idn-sub { margin: -6px 20px 12px; color: var(--v3-text-3); font-size: 13px; }
+.v3 .v3-idn-templates { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); text-transform: none; letter-spacing: 0; }
+.v3 .v3-idn-template {
+  display: grid; gap: 6px; justify-items: start; padding: 10px 12px; border-radius: 9px;
+  border: 1px solid var(--v3-line); background: var(--v3-ink-1); color: var(--v3-text); font: inherit; cursor: pointer; text-align: left;
+}
+.v3 .v3-idn-template:hover { border-color: var(--v3-line-2); }
+.v3 .v3-idn-template.on { border-color: rgba(62, 240, 180, 0.55); background: var(--v3-ok-dim); }
+.v3 .v3-idn-template b { font-size: 13px; }

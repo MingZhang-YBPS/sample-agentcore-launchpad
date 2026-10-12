@@ -478,7 +478,7 @@ def _execution_role_arn(ctx: StageContext, agent: Agent) -> str:
     if not arn:
         if get_settings().per_agent_execution_roles:
             arn = (
-                f"arn:aws:iam::{ctx.workspace.account_id}:role/"
+                f"arn:{ctx.workspace.partition}:iam::{ctx.workspace.account_id}:role/"
                 f"{agent_iam.role_name_for(agent.name, agent.id)}"
             )
         else:
@@ -707,7 +707,12 @@ register_method("harness", STAGES)
 
 
 def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
-    """Remove the AWS-side harness + per-agent KB target for a ledger row (idempotent)."""
+    """Remove the AWS-side harness + per-agent KB target for a ledger row (idempotent).
+
+    Raises `AppError("agent.teardown_pending")` when AWS still holds the harness because
+    its endpoints are mid-deletion: the caller marks the ledger row deleted anyway and
+    `dlc.scheduler.sweep_deleted_resources` finishes the AWS side.
+    """
     client = control_client(workspace)
     resources = workspace.resources
     if resources.get("kb_gateway_id"):
@@ -722,7 +727,23 @@ def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
             )
     if not agent.resource_id:
         return
+    # a gated agent serves through named endpoints; AgentCore refuses to delete a
+    # resource that still has them (Agent-DLC §6)
+    from app.dlc.releases import delete_endpoints
+
+    delete_endpoints(agent, client)
     try:
         hc.delete_harness(client, agent.resource_id)
     except client.exceptions.ResourceNotFoundException:
         pass
+    except client.exceptions.ConflictException as exc:
+        # a harness endpoint can stay DELETING for minutes; do not hold the request
+        from app.core.errors import AppError
+
+        raise AppError(
+            "agent.teardown_pending",
+            "the harness endpoints are still being deleted on AWS; the agent is "
+            "removed from the console and the harness is deleted automatically once "
+            "AWS lets go",
+            {"resource_id": agent.resource_id},
+        ) from exc

@@ -220,6 +220,8 @@ class ActionRequest(BaseModel):
     # providers.PROVIDER_IDS (pinned by a test) so an unknown id is a 422.
     recommend_provider: Literal["agentcore", "gepa_lite"] | None = None
     recommend_model_id: str | None = Field(default=None, min_length=3, max_length=128)
+    # promote — ship a treatment whose win is not significant (or a tie); never a loss
+    allow_non_significant: bool = False
     accepted_prompt: str | None = None                        # accept
     accepted_tool_descriptions: dict[str, str] | None = None  # accept
     dataset_id: str | None = None                             # traffic
@@ -338,6 +340,11 @@ def experiment_action(
     elif req.action == "bundles":
         service.action_bundles(exp)
     elif req.action == "promote":
+        if not (exp.artifacts.get("promote") or exp.artifacts.get("promotion_attempt")):
+            # a retry of a promotion already admitted is not re-judged
+            service.assert_experiment_promotable(
+                exp, allow_non_significant=req.allow_non_significant
+            )
         service.run_action(
             exp.id,
             "promote",

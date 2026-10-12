@@ -8,6 +8,8 @@
  * sends `model_source` only, never `api_format`.
  */
 
+import { getActiveRegion, modelAvailableInRegion } from "./regions";
+
 export type ModelSource = "mantle" | "bedrock";
 
 export interface ModelOption {
@@ -40,12 +42,16 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       api_format: "responses",
     },
   ],
-  // Every id here is a cross-region inference profile on bedrock-runtime and rides
-  // `converse_stream` on the harness. GPT-6 Sol leads as the platform default: the
-  // harness's `responses`/`chat_completions` formats resolve Mantle, where GPT-6 is
-  // bare-id and us-west-2 only, while these global profiles answer Converse in
-  // every region (probed us-west-2 + us-east-1, 2026-09-26).
+  // Every id here rides `converse_stream` on the harness. GLM-5.3 leads as the
+  // platform default: its global inference profile answers in us-east-1,
+  // us-west-2, us-east-2 and ca-central-1 (probed 2026-10-08). The global GPT-6
+  // profiles follow — the harness's `responses`/`chat_completions` formats resolve
+  // Mantle, where GPT-6 is bare-id and us-west-2 only, while these global
+  // profiles answer Converse in every region (probed 2026-09-26).
   bedrock: [
+    { model_id: "global.zai.glm-5.3", label: "GLM-5.3 (global)", api_format: "converse_stream" },
+    { model_id: "zai.glm-5", label: "GLM-5", api_format: "converse_stream" },
+    { model_id: "zai.glm-4.7", label: "GLM-4.7", api_format: "converse_stream" },
     { model_id: "global.openai.gpt-6-sol", label: "GPT-6 Sol (global)", api_format: "converse_stream" },
     { model_id: "global.openai.gpt-6-astra", label: "GPT-6 Astra (global)", api_format: "converse_stream" },
     { model_id: "global.openai.gpt-6-luna", label: "GPT-6 Luna (global)", api_format: "converse_stream" },
@@ -65,11 +71,6 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       api_format: "converse_stream",
     },
     { model_id: "global.moonshotai.kimi-k3", label: "Kimi K3 (global)", api_format: "converse_stream" },
-    {
-      model_id: "global.amazon.nova-2-lite-v1:0",
-      label: "Nova 2 Lite (global)",
-      api_format: "converse_stream",
-    },
     // OpenAI GPT-5.6 Sol through the native Bedrock US cross-region inference
     // profile (Converse) — the system architect preset's default (backend
     // `system_agents/presets.py`), kept so its configure page stays on a listed id.
@@ -98,7 +99,7 @@ export const DEFAULT_MODEL_SOURCE: ModelSource = "bedrock";
 
 /** Mirrors backend `AgentSpec.model_id`'s default (`DEFAULT_MODEL_ID`) — what a
  *  stored spec without a `model_id` means. Not the form default above. */
-export const SPEC_DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5";
+export const SPEC_DEFAULT_MODEL_ID = "global.zai.glm-5.3";
 
 /** The Claude Agent SDK can only drive Claude models, so it is pinned here. */
 export const CLAUDE_SDK_MODEL_SOURCE: ModelSource = "bedrock";
@@ -107,7 +108,7 @@ export const CLAUDE_SDK_MODEL_SOURCE: ModelSource = "bedrock";
 export const CUSTOM_MODEL_OPTION = "__custom__";
 
 /** The first model a dropdown offers for `source`; `claudeOnly` for the Claude
- *  Agent SDK, whose first offered entry is a Claude model rather than GPT-6 Sol. */
+ *  Agent SDK, whose first offered entry is a Claude model rather than GLM-5.3. */
 export function defaultModelFor(source: ModelSource, claudeOnly = false): string {
   return modelOptionsFor(source, claudeOnly)[0].model_id;
 }
@@ -115,10 +116,14 @@ export function defaultModelFor(source: ModelSource, claudeOnly = false): string
 /**
  * The options a dropdown may offer for `source`. `claudeOnly` narrows them to
  * Claude ids for the Claude Agent SDK, which cannot drive anything else — the
- * catalog's Nova entry would otherwise be advertised as a valid choice there.
+ * catalog's GLM and GPT entries would otherwise be advertised as valid there.
  */
 export function modelOptionsFor(source: ModelSource, claudeOnly = false): ModelOption[] {
-  const options = MODEL_CATALOG[source];
+  // A geographic profile (`us.…`) only exists in its own geography, so a workspace
+  // in another region is not offered it (custom entry stays possible).
+  const options = MODEL_CATALOG[source].filter((option) =>
+    modelAvailableInRegion(option.model_id, getActiveRegion()),
+  );
   return claudeOnly
     ? options.filter((option) => option.model_id.includes("anthropic.claude"))
     : options;

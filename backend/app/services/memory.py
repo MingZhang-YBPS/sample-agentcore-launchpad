@@ -38,7 +38,7 @@ def spec_memory_id(agent_spec: dict | None) -> str | None:
 def memory_arn_for(workspace: WorkspaceContext, memory_id: str) -> str:
     """Memory id → ARN in this workspace's account/region (GetMemory-free)."""
     return (
-        f"arn:aws:bedrock-agentcore:{workspace.region}:"
+        f"arn:{workspace.partition}:bedrock-agentcore:{workspace.region}:"
         f"{workspace.account_id}:memory/{memory_id}"
     )
 

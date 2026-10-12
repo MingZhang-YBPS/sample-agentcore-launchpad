@@ -70,6 +70,8 @@ export interface DeploymentInfo {
 export interface AgentInfo {
   id: string;
   name: string;
+  /** Human label from `spec.display_name` (any language); null ⇒ show `name`. */
+  display_name?: string | null;
   method: "harness" | "zip_runtime" | "container" | "studio" | "byoc" | "discovered_runtime";
   status: "draft" | "deploying" | "active" | "failed" | "deleted";
   arn: string | null;
@@ -167,6 +169,10 @@ export interface ChatStreamPayload {
   code?: string;
   message?: string;
   attachments?: ChatAttachmentMetadata[];
+  /** `saved` event: the ledger id of the agent answer just persisted (thumbs target) */
+  message_id?: number;
+  /** `rule` event (T35): a curated answer replied instead of the model */
+  rule_id?: string;
   /** meta of a JWT-inbound agent's turn: who the Runtime authenticated */
   inbound?: { mode: "jwt"; caller: "user_jwt" | "m2m" };
   /** `auth_required` (as_user consent ask) — see AuthRequiredEvent */
@@ -184,10 +190,16 @@ export interface ChatStreamPayload {
 }
 
 export interface ChatHistoryMessage {
+  /** ledger id (feedback target); present for every replayed item */
+  id?: number;
+  /** the caller's current thumbs verdict on this answer */
+  verdict?: FeedbackVerdict | null;
   role: string;
   text: string;
   name: string | null;
   attachments?: ChatAttachmentMetadata[];
+  /** T35: `rule:<id>` when a curated answer, not the model, produced this reply */
+  answered_by?: string | null;
 }
 
 export interface SystemAgentIdentity {
@@ -489,6 +501,36 @@ export interface AgentVersionsInfo {
   ledger_version: string | null;
   /** names among `stable`/`treatment` still present — canary leftovers */
   canary_endpoints: string[];
+}
+
+/** One row of `GET /api/agents/{id}/snapshots` (T18); `spec` only on the single-fetch. */
+export interface SpecSnapshotInfo {
+  seq: number;
+  agent_id: string;
+  aws_version: string | null;
+  deployment_id: string | null;
+  created_by: string | null;
+  note: string | null;
+  created_at: string | null;
+  spec?: Record<string, unknown>;
+}
+
+export interface SpecChange {
+  /** dotted path, e.g. `memory.long_term` */
+  field: string;
+  group: "prompt" | "model" | "tools" | "skills" | "knowledge_bases" | "memory" | "guardrail" | "other";
+  kind: "added" | "removed" | "changed";
+  before: unknown;
+  after: unknown;
+  /** list fields only: members gained / lost */
+  added?: unknown[];
+  removed?: unknown[];
+}
+
+export interface SnapshotDiff {
+  from: SpecSnapshotInfo;
+  to: SpecSnapshotInfo;
+  changes: SpecChange[];
 }
 
 export interface RuntimeDiscoveryCandidate {
@@ -850,6 +892,8 @@ export interface ByocUploadInfo {
 
 export interface AgentSpecInput {
   name: string;
+  /** Optional human label, 1–64 chars, trimmed; editable on redeploy (unlike `name`). */
+  display_name?: string;
   method: string;
   model_id?: string;
   /** Hosting surface of model_id. Omitted ⇒ backend defaults to "bedrock". */
@@ -895,6 +939,8 @@ export interface AgentSpecInput {
   knowledge_bases?: { kb_id: string; name: string; description: string }[];
   /** `memory_id` pins one AgentCore Memory; omitted ⇒ the workspace's shared default */
   memory?: { short_term: boolean; long_term: boolean; memory_id?: string };
+  /** T12 PII protection; absent ⇒ off */
+  guardrail?: { enabled: boolean; mode?: "anonymize" | "block" };
   code?: string;
   requirements?: string[];
   env?: Record<string, string>;
@@ -2708,6 +2754,22 @@ export interface OverviewInfo {
   service_detail: Record<string, string>;
 }
 
+/** GET /api/overview/ttfa (admin-only) — Time to First Agent per registered account. */
+export interface TtfaUser {
+  username: string;
+  /** null until the account's first agent deployment succeeded */
+  ttfa_seconds: number | null;
+  /** null = logged in before the stamp existed (TTFA used created_at) or never */
+  first_login_at: string | null;
+  first_agent_at: string | null;
+}
+
+export interface TtfaInfo {
+  median_seconds: number | null;
+  samples: number;
+  users: TtfaUser[];
+}
+
 export type ConsoleRole = "admin" | "member";
 
 /* ── AgentCore Identity: Connections, bound Gateway targets, agent identity ── */
@@ -3005,9 +3067,21 @@ export type AgentPermission =
   | "agents.delete"
   | "agents.convert"
   | "eval.run"
+  // T19: the release surface. `request` is default-granted; `approve` is the
+  // operator's (or a member an administrator granted it explicitly).
+  | "promotion.request"
+  | "promotion.approve"
   | "identity.manage"
   | "identity.grant"
-  | "memory.manage";
+  | "memory.manage"
+  // Agent-DLC: `criteria.manage` edits the ruler; the rest decide what "good" means and
+  // are granted to named people (business owner, risk owner, signer), never by role.
+  | "criteria.manage"
+  | "criteria.sign"
+  | "golden.admit"
+  | "judge.calibrate"
+  | "waiver.approve"
+  | "release.sign";
 
 export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.deploy",
@@ -3015,10 +3089,35 @@ export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.delete",
   "agents.convert",
   "eval.run",
+  "promotion.request",
+  "promotion.approve",
   "identity.manage",
   "identity.grant",
   "memory.manage",
+  "criteria.manage",
+  "criteria.sign",
+  "golden.admit",
+  "judge.calibrate",
+  "waiver.approve",
+  "release.sign",
 ];
+
+/**
+ * The `permissions` body for flipping one chip. The backend treats the map as the
+ * account's whole permission set (an unsent key falls back to the role default),
+ * so a one-key map silently reverted every other override; sending the full
+ * effective map with this one key changed keeps them.
+ */
+export function togglePermission(
+  current: Partial<Record<AgentPermission, boolean>> | null | undefined,
+  key: AgentPermission,
+  granted: boolean,
+): Record<AgentPermission, boolean> {
+  const next = {} as Record<AgentPermission, boolean>;
+  for (const k of AGENT_PERMISSIONS) next[k] = current?.[k] !== false;
+  next[key] = granted;
+  return next;
+}
 
 export interface AuthStatus {
   auth_required: boolean;
@@ -3365,6 +3464,9 @@ export interface OnlineEvalRunReportAck {
 /* ── workspaces (the environment a request targets) ────────────────────── */
 
 export type WorkspaceBootstrapStatus = "registered" | "bootstrapping" | "ready" | "failed";
+/** T05: `prod` refuses member agent mutations (403 `workspace.prod_protected`). */
+export type WorkspaceTier = "dev" | "staging" | "prod";
+export const WORKSPACE_TIERS: WorkspaceTier[] = ["dev", "staging", "prod"];
 
 /**
  * Who sees a workspace's member-created resources. `shared` (the default):
@@ -3383,6 +3485,7 @@ export interface Workspace {
   /** the assumed role, for admins only — absent from a member's list */
   role_arn?: string | null;
   bootstrap_status: WorkspaceBootstrapStatus;
+  tier: WorkspaceTier;
   /** the hub's own environment: cannot be deleted or bootstrapped from here */
   is_default: boolean;
   /** absent on an older backend — read as `shared` */
@@ -3395,6 +3498,40 @@ export interface WorkspaceListResult {
   workspaces: Workspace[];
   /** true when the caller is an admin, i.e. the list is every workspace */
   all_workspaces: boolean;
+  /** AgentCore regions offered as suggestions in the registration form (backend
+   *  `core/regions.py`); never an allowlist — the form also takes a typed region. */
+  suggested_regions?: string[];
+}
+
+export type ResourceMappingKind = "kb" | "memory" | "gateway" | "mcp_record" | "skill";
+
+export interface ResourceMapping {
+  id: string;
+  workspace_id: string;
+  kind: ResourceMappingKind;
+  name: string;
+  key: string;
+  resource_id: string;
+  note: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface ResourceMappingList {
+  workspace_id: string;
+  kinds: ResourceMappingKind[];
+  mappings: ResourceMapping[];
+}
+
+/** One entry of the promotion gate `resource_mapping` (`unmapped` / `resolved`). */
+export interface MappingReference {
+  kind: ResourceMappingKind;
+  logical: string;
+  path: string;
+  source_id: string;
+  target_id?: string;
+  via?: string;
+  reason?: string;
 }
 
 export interface WorkspaceGrantUser {
@@ -3495,6 +3632,7 @@ export interface ConsoleUser {
   created_at: string;
   last_login_at: string | null;
   login_count: number;
+  first_login_at: string | null;
   created_by: string;
   /** effective agent-management permission map (admins: all true) */
   permissions: Record<AgentPermission, boolean>;
@@ -4241,6 +4379,10 @@ export interface V2RunCreate {
   session_source?: "logs";
   lookback_hours?: number;
   wait_seconds?: number;
+  /** pass^k: replay each dataset scenario k times (opt-in, priced first) */
+  repeats?: number;
+  /** acknowledges the estimate when the workspace policy asks for confirmation */
+  confirm_cost?: boolean;
   /** the Bedrock model that plays the user — required for a simulated-persona dataset */
   actor_model_id?: string;
 }
@@ -4293,6 +4435,283 @@ export interface V2LogGroup {
   created_at: string | null;
   retention_days: number | null;
   stored_bytes: number | null;
+}
+
+export interface AgentTemplateInfo {
+  key: string;
+  label_key: string;
+  description_key: string;
+  method: "harness" | "zip_runtime";
+  system_prompt: string;
+  knowledge: "required" | "suggested" | "none";
+  toolkits: string[];
+  memory_long_term: boolean;
+  guardrail: boolean;
+  sample_questions: string[];
+  tags: string[];
+}
+
+/** T20 — an immutable record of exactly what was tested. */
+export interface ReleaseBundleInfo {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  display_name?: string | null;
+  method: string;
+  snapshot_seq: number | null;
+  digest: string;
+  artifact: Record<string, unknown>;
+  evaluation: Record<string, unknown>;
+  policy: Record<string, unknown>;
+  workspace_id: string | null;
+  created_by: string | null;
+  note: string | null;
+  created_at: string | null;
+}
+
+export interface PromotionGate {
+  key: string;
+  ok: boolean;
+  detail: string;
+  /** T26 — set by the execution-time evaluation only */
+  blocking?: boolean;
+  next_allowed_at?: string | null;
+}
+
+/** T27 — one stage of an execution (or rollback). */
+export interface PromotionStage {
+  name: string;
+  status: "pending" | "running" | "succeeded" | "skipped" | "failed";
+  detail: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface PromotionPlanItem {
+  key: string;
+  action: string;
+  detail: string;
+}
+
+export interface PromotionPlan {
+  promotion_id: string;
+  target_workspace_id: string;
+  target_tier: string;
+  mode: "create" | "replace";
+  items: PromotionPlanItem[];
+  observe_seconds: number;
+  gates: {
+    checks: PromotionGate[];
+    blocking_failures: string[];
+    next_allowed_at: string | null;
+  };
+  can_execute: boolean;
+  blocked_by: string[];
+}
+
+export interface PromotionLogLine {
+  ts: string | null;
+  stage: string;
+  level: string;
+  msg: string;
+}
+
+export interface SpecDiffRow {
+  field: string;
+  before: string;
+  after: string;
+  kind: "added" | "removed" | "changed";
+  /** env / code / BYOC: the change is reported, the values are not */
+  redacted?: boolean;
+}
+
+/** T21 — one request to release a bundle into another environment. */
+export interface PromotionInfo {
+  id: string;
+  bundle_id: string;
+  bundle: ReleaseBundleInfo | null;
+  source_workspace_id: string | null;
+  target_workspace_id: string;
+  status:
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "cancelled"
+    | "executing"
+    | "succeeded"
+    | "failed"
+    | "rolled_back";
+  requested_by: string | null;
+  change_note: string;
+  rollback_note: string;
+  reviewed_by: string | null;
+  review_note: string | null;
+  reviewed_at: string | null;
+  gates: { checks?: PromotionGate[]; blocking_failures?: string[]; evaluated_at?: string };
+  job_id: string | null;
+  error: string | null;
+  /** T27 */
+  stages?: PromotionStage[];
+  previous_bundle_id?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  failed_stage?: string | null;
+  action?: "execute" | "rollback" | null;
+  created_at: string | null;
+  updated_at: string | null;
+  /** detail only */
+  target_agent?: { id: string; status: string; version: string | null } | null;
+  diff?: SpecDiffRow[];
+  /** false ⇒ the caller has no grant on the target, so target data is withheld */
+  target_visible?: boolean;
+}
+
+/** T37 — one workspace's row in the fleet table. */
+export interface FleetRow {
+  id: string;
+  name: string;
+  account_id: string;
+  region: string;
+  tier: string;
+  cross_account: boolean;
+  bootstrap_status: string;
+  /** false ⇒ the environment cannot serve anything; the counts are null, not zero */
+  readable: boolean;
+  agents_active: number | null;
+  agents_deploying: number | null;
+  agents_failed: number | null;
+  jobs_failed: number | null;
+  promotions_pending: number | null;
+  alerts_firing: number | null;
+}
+
+export interface FleetReport {
+  generated_at: string;
+  workspaces: FleetRow[];
+  totals: {
+    workspaces: number;
+    readable: number;
+    agents_active: number;
+    alerts_firing: number;
+    promotions_pending: number;
+    needs_attention: number;
+  };
+  source: string;
+}
+
+/** T39 — one governance finding, with the link that fixes it. */
+export interface GovernanceFinding {
+  key: string;
+  severity: "action" | "warn" | "info";
+  count: number;
+  to: string;
+  sample: string[];
+}
+
+export interface GovernanceHealth {
+  workspace_id: string;
+  generated_at: string;
+  score: number;
+  grade: "good" | "fair" | "poor";
+  findings: GovernanceFinding[];
+  agents_considered: number;
+}
+
+/** T38 — an agent published as a reusable starting point. */
+export interface SharedTemplateInfo {
+  id: string;
+  title: string;
+  summary: string;
+  method: string;
+  spec: Record<string, unknown>;
+  requirements: { kind: string; label: string; detail: string }[];
+  source_workspace_id: string;
+  source_agent_name: string;
+  published_by: string | null;
+  uses: number;
+  /** true ⇒ published by the current workspace, so it may be withdrawn here */
+  own: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** T28 — estimated spend for a window, attributed. */
+export interface CostRow {
+  service: string;
+  agent_id: string | null;
+  display_name: string | null;
+  known: boolean;
+  tokens: number;
+  llm_calls: number;
+  est_cost_usd: number | null;
+}
+
+export interface CostActorRow {
+  actor: string;
+  sessions: number;
+  tokens: number;
+  est_cost_usd: number;
+}
+
+export interface CostReport {
+  range: string;
+  hours: number;
+  generated_at: string;
+  total_est_cost_usd: number;
+  total_tokens: number;
+  by_agent: CostRow[];
+  by_actor: CostActorRow[];
+  unpriced_models: string[];
+  estimate: boolean;
+}
+
+/** T29 — one watched threshold and what it last saw. */
+export type AlertKind = "error_rate" | "latency_p95_ms" | "online_quality" | "cost_mtd_usd";
+
+export interface AlertRuleInfo {
+  id: string;
+  kind: AlertKind;
+  name: string;
+  comparison: "above" | "below";
+  threshold: number;
+  window: string;
+  enabled: boolean;
+  has_webhook: boolean;
+  state: "ok" | "firing" | "unknown";
+  last_value: number | null;
+  last_detail: string | null;
+  last_checked_at: string | null;
+  last_fired_at: string | null;
+  last_notified_at: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  skipped?: string;
+}
+
+/** T22 — one kind of work waiting on a human. */
+export interface InboxItem {
+  key: string;
+  severity: "action" | "warn" | "info";
+  count: number;
+  to: string;
+  sample: string[];
+}
+
+export interface InboxInfo {
+  workspace_id: string;
+  generated_at: string;
+  total: number;
+  items: InboxItem[];
+}
+
+export interface GuardrailInfo {
+  provisioned: boolean;
+  id?: string;
+  version?: string;
+  status?: string;
+  name?: string;
+  error?: string;
+  entities: string[];
 }
 
 export const api = {
@@ -4578,6 +4997,8 @@ export const api = {
     /** both together, or neither: a cross-account workspace */
     role_arn?: string;
     external_id?: string;
+    /** defaults to `dev` server-side */
+    tier?: WorkspaceTier;
   }) =>
     request<Workspace>("/api/workspaces", { method: "POST", body: JSON.stringify(body) }),
   /** Probe an AssumeRole before registering anything; writes nothing. */
@@ -4591,7 +5012,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  patchWorkspace: (id: string, body: { name: string }) =>
+  /** Rename and/or re-tier. Moving into or out of `prod` needs `confirm_tier_change`
+   *  (else 409 `workspace.tier_change_unconfirmed`). */
+  patchWorkspace: (
+    id: string,
+    body: { name?: string; tier?: WorkspaceTier; confirm_tier_change?: boolean },
+  ) =>
     request<Workspace>(`/api/workspaces/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
@@ -4674,6 +5100,26 @@ export const api = {
     request<WorkspaceBootstrapJob>(`/api/jobs/${jobId}`, {
       headers: { "X-Workspace": workspaceId },
     }),
+  /** T23: logical → real resource ids for one workspace (pinned, not the selection). */
+  listResourceMappings: (workspaceId: string) =>
+    request<ResourceMappingList>("/api/resource-mappings", {
+      headers: pinnedWorkspace(workspaceId),
+    }),
+  putResourceMapping: (
+    workspaceId: string,
+    kind: ResourceMappingKind,
+    name: string,
+    body: { resource_id: string; note?: string | null },
+  ) =>
+    request<ResourceMapping>(
+      `/api/resource-mappings/${kind}/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify(body), headers: pinnedWorkspace(workspaceId) },
+    ),
+  deleteResourceMapping: (workspaceId: string, kind: ResourceMappingKind, name: string) =>
+    request<{ deleted: boolean; key: string }>(`/api/resource-mappings/${kind}/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+      headers: pinnedWorkspace(workspaceId),
+    }),
   updateUser: (id: string, patch: UserPatchBody) =>
     request<ConsoleUser>(`/api/users/${id}`, {
       method: "PATCH",
@@ -4696,6 +5142,12 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  /** T10: the wizard's scenario-template gallery (static, hub-global). */
+  agentTemplates: () => request<{ templates: AgentTemplateInfo[] }>("/api/agent-templates"),
+  /** T12: the workspace's PII guardrail preset. */
+  guardrailPreset: () => request<GuardrailInfo>("/api/governance/guardrail"),
+  provisionGuardrail: () =>
+    request<GuardrailInfo>("/api/governance/guardrail", { method: "POST" }),
   /**
    * System presets. Every call takes the workspace the caller is DISPLAYING and
    * pins it as the request's `X-Workspace` header, so a read or save from this
@@ -4942,12 +5394,128 @@ export const api = {
     ),
   getOverview: () => request<OverviewInfo>("/api/overview"),
   overviewOnlineQuality: () => request<OnlineQuality>("/api/overview/online-quality"),
+  overviewTtfa: () => request<TtfaInfo>("/api/overview/ttfa"),
   /** `workspaceId` pins the read like the system-preset calls (the shared editor's
    * deploy poll for a preset must follow the workspace it saved into, not another
    * tab's later selection); omitted ⇒ the global stamp. */
   getAgent: (id: string, workspaceId?: string | null) =>
     request<AgentInfo>(`/api/agents/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
+  // T20/T21 — release bundles and promotions
+  createReleaseBundle: (id: string, body: { snapshot_seq?: number; note?: string } = {}) =>
+    request<ReleaseBundleInfo>(`/api/agents/${encodeURIComponent(id)}/release-bundles`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  agentReleaseBundles: (id: string) =>
+    request<{ bundles: ReleaseBundleInfo[] }>(
+      `/api/agents/${encodeURIComponent(id)}/release-bundles`,
+    ),
+  listPromotions: (params: { status?: string; target?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.status) query.set("status", params.status);
+    if (params.target) query.set("target", params.target);
+    const suffix = query.toString();
+    return request<{ promotions: PromotionInfo[] }>(`/api/promotions${suffix ? `?${suffix}` : ""}`);
+  },
+  getPromotion: (id: string) =>
+    request<PromotionInfo>(`/api/promotions/${encodeURIComponent(id)}`),
+  createPromotion: (body: {
+    bundle_id: string;
+    target_workspace_id: string;
+    change_note: string;
+    rollback_note: string;
+  }) => request<PromotionInfo>("/api/promotions", { method: "POST", body: JSON.stringify(body) }),
+  reviewPromotion: (id: string, body: { decision: "approve" | "reject"; note?: string }) =>
+    request<PromotionInfo>(`/api/promotions/${encodeURIComponent(id)}/review`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  // T26/T27 — plan preview, execution, rollback
+  promotionPlan: (id: string) =>
+    request<PromotionPlan>(`/api/promotions/${encodeURIComponent(id)}/plan`),
+  promotionExecution: (id: string) =>
+    request<{ promotion: PromotionInfo; log: PromotionLogLine[] }>(
+      `/api/promotions/${encodeURIComponent(id)}/execution`,
+    ),
+  executePromotion: (id: string) =>
+    request<{ promotion: PromotionInfo; job_id: string }>(
+      `/api/promotions/${encodeURIComponent(id)}/execute`,
+      { method: "POST" },
+    ),
+  rollbackPromotion: (id: string) =>
+    request<{ promotion: PromotionInfo; job_id: string }>(
+      `/api/promotions/${encodeURIComponent(id)}/rollback`,
+      { method: "POST" },
+    ),
+  // T22 — the administrator inbox
+  inbox: () => request<InboxInfo>("/api/inbox"),
+  // T37/T39 — fleet and governance health
+  fleet: () => request<FleetReport>("/api/fleet"),
+  governanceHealth: () => request<GovernanceHealth>("/api/governance/health"),
+  // T38 — the template marketplace
+  sharedTemplates: () =>
+    request<{ templates: SharedTemplateInfo[] }>("/api/marketplace/templates"),
+  publishTemplate: (body: { agent_id: string; title: string; summary?: string }) =>
+    request<SharedTemplateInfo>("/api/marketplace/templates", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  useSharedTemplate: (id: string) =>
+    request<SharedTemplateInfo>(`/api/marketplace/templates/${encodeURIComponent(id)}/use`, {
+      method: "POST",
+    }),
+  unpublishTemplate: (id: string) =>
+    request<{ deleted: string }>(`/api/marketplace/templates/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  // T28 — spend attribution
+  costs: (range: string, force = false) =>
+    request<CostReport>(`/api/costs?range=${encodeURIComponent(range)}${force ? "&force=true" : ""}`),
+  costsMonthToDate: () =>
+    request<{ workspace_id: string; est_cost_usd: number }>("/api/costs/month-to-date"),
+  // T29 — alert rules
+  alertRules: () =>
+    request<{ rules: AlertRuleInfo[]; firing: number; kinds: AlertKind[] }>("/api/alerts"),
+  createAlertRule: (body: {
+    kind: AlertKind;
+    name?: string;
+    threshold: number;
+    window?: string;
+    webhook_url?: string | null;
+  }) => request<AlertRuleInfo>("/api/alerts", { method: "POST", body: JSON.stringify(body) }),
+  updateAlertRule: (
+    id: string,
+    body: { name?: string; threshold?: number; window?: string; enabled?: boolean; webhook_url?: string | null },
+  ) =>
+    request<AlertRuleInfo>(`/api/alerts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteAlertRule: (id: string) =>
+    request<{ deleted: string }>(`/api/alerts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** `notify: false` re-reads without delivering — what a console refresh wants. */
+  evaluateAlerts: (notify = false) =>
+    request<{ rules: AlertRuleInfo[]; firing: number; unknown: number; evaluated_at: string }>(
+      `/api/alerts/evaluate?notify=${notify}`,
+      { method: "POST" },
+    ),
+  agentSnapshots: (id: string) =>
+    request<{ snapshots: SpecSnapshotInfo[] }>(`/api/agents/${encodeURIComponent(id)}/snapshots`),
+  snapshotDiff: (id: string, fromSeq: number, toSeq: number) =>
+    request<SnapshotDiff>(
+      `/api/agents/${encodeURIComponent(id)}/snapshots/diff?from_seq=${fromSeq}&to_seq=${toSeq}`,
+    ),
+  rollbackSnapshot: (id: string, seq: number) =>
+    request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
+      `/api/agents/${encodeURIComponent(id)}/snapshots/${seq}/rollback`,
+      { method: "POST" },
+    ),
+  /** `GET /api/agents/{id}/suggested-questions` — 3-5 starter questions (model or fallback). */
+  suggestedQuestions: (id: string, lang: string) =>
+    request<{ questions: string[]; source: "model" | "fallback" }>(
+      `/api/agents/${encodeURIComponent(id)}/suggested-questions?lang=${encodeURIComponent(lang)}`,
+    ),
   agentIdentity: (id: string) => request<AgentIdentityInfo>(`/api/agents/${id}/identity`),
   /** Switch inbound auth in place: pins `inbound_auth` on the stored spec
    * (`null` ⇒ inherit the workspace default) and re-publishes the same runtime. */
@@ -5696,11 +6264,30 @@ export interface ApiKeyInfo {
   created_by?: string | null;
   /** Display name at mint time; null only on legacy keys (creator unknown). */
   created_by_name?: string | null;
-  /** Last successful /v1 call, stamped at most once a minute. */
+  /** Last admitted /v1 call, stamped at most once a minute (`use_count` is exact). */
   last_used_at?: string | null;
   /** Why the creator may no longer hold this key (it cannot be re-enabled), or null. */
   creator_offboarded?: "deleted" | "disabled" | "expired" | "no_workspace_grant" | null;
   key?: string;
+  /** T16: empty = every agent in the workspace */
+  agent_ids?: string[];
+  expires_at?: string | null;
+  expired?: boolean;
+  rate_per_minute?: number | null;
+  use_count?: number;
+}
+
+export interface ApiKeyOptions {
+  agent_ids?: string[] | null;
+  expires_at?: string | null;
+  rate_per_minute?: number | null;
+}
+
+export interface ApiKeyUsage {
+  key_id: string;
+  total: number;
+  last_used_at: string | null;
+  days: { day: string; count: number }[];
 }
 
 export const chatApi = {
@@ -5715,8 +6302,15 @@ export const chatApi = {
   trace: (sessionId: string) =>
     request<ChatTraceInfo>(`/api/traces/${encodeURIComponent(sessionId)}`),
   apiKeys: () => request<{ keys: ApiKeyInfo[] }>("/api/apikeys"),
-  createApiKey: (name: string) =>
-    request<ApiKeyInfo>("/api/apikeys", { method: "POST", body: JSON.stringify({ name }) }),
+  createApiKey: (name: string, options: ApiKeyOptions = {}) =>
+    request<ApiKeyInfo>("/api/apikeys", { method: "POST", body: JSON.stringify({ name, ...options }) }),
+  updateApiKey: (id: string, patch: ApiKeyOptions & { name?: string }) =>
+    request<ApiKeyInfo>(`/api/apikeys/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  apiKeyUsage: (id: string, days = 14) =>
+    request<ApiKeyUsage>(`/api/apikeys/${encodeURIComponent(id)}/usage?days=${days}`),
   setApiKeyEnabled: (id: string, enabled: boolean) =>
     request<ApiKeyInfo>(`/api/apikeys/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`, {
       method: "POST",
@@ -5732,6 +6326,352 @@ export const chatApi = {
     if (!res.ok) throw new Error(await responseMessage(res));
     return res;
   },
+};
+
+// ---- share links (T13/T14) and thumbs feedback (T15) ----
+export type FeedbackVerdict = "up" | "down";
+
+export interface ShareLinkInfo {
+  id: string;
+  kind: string;
+  agent_id: string;
+  label: string;
+  prefix: string;
+  state: "active" | "revoked" | "disabled" | "expired";
+  created_by: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  use_count: number;
+  created_at: string | null;
+  /** T30: present on Slack / Feishu links. Names which secrets are set, never a value. */
+  channel?: { platform: ChannelPlatform; config: Record<string, string>; secrets_set: string[] };
+}
+
+export type ChannelPlatform = "slack" | "feishu";
+
+/** Creation answer: the raw `token` (and its URL) is shown exactly once. */
+export interface ShareLinkCreated extends ShareLinkInfo {
+  token: string;
+  path: string;
+  url: string;
+  /** T30: chat links only - the chromeless page URL and its copy-ready `<iframe>`. */
+  embed_url?: string;
+  embed_snippet?: string;
+}
+
+export interface FeedbackItem {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  session_id: string;
+  message_id: number;
+  verdict: FeedbackVerdict;
+  comment: string | null;
+  actor: string;
+  source: "console" | "share" | "review";
+  /** T34: the answer a reviewer says it should have been */
+  correction?: string | null;
+  question: string;
+  answer: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface FeedbackList {
+  counts: Record<FeedbackVerdict, number>;
+  items: FeedbackItem[];
+  /** distinct sessions with a thumbs-down, newest first — the input of
+   *  `POST /api/eval/datasets/from-sessions` */
+  down_session_ids: string[];
+}
+
+export const shareLinkApi = {
+  list: (agentId: string) =>
+    request<{ links: ShareLinkInfo[] }>(`/api/agents/${encodeURIComponent(agentId)}/share-links`),
+  create: (agentId: string, body: { label?: string; expires_in_days?: number | null }) =>
+    request<ShareLinkCreated>(`/api/agents/${encodeURIComponent(agentId)}/share-links`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revoke: (linkId: string) =>
+    request<ShareLinkInfo>(`/api/share-links/${encodeURIComponent(linkId)}/revoke`, {
+      method: "POST",
+    }),
+  /** T30: connect the agent to Slack / Feishu. Credentials go up once and never come back. */
+  createChannel: (
+    agentId: string,
+    body: {
+      platform: ChannelPlatform;
+      label?: string;
+      expires_in_days?: number | null;
+      credentials: Record<string, string>;
+    },
+  ) =>
+    request<ShareLinkCreated>(`/api/agents/${encodeURIComponent(agentId)}/channel-links`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+
+// ---- T32: environment comparison and drift ----
+
+export interface EnvironmentRow {
+  workspace: { id: string; name: string; tier: string; region: string; status: string };
+  current: boolean;
+  present: boolean;
+  vs_reference: "reference" | "same" | "differs" | "absent";
+  agent: {
+    id: string;
+    status: string;
+    method: string;
+    version: string | null;
+    spec_digest: string;
+    image_digest: string | null;
+    last_deploy: {
+      status: string;
+      started_at: string | null;
+      ended_at: string | null;
+      image_digest: string | null;
+    } | null;
+    updated_at: string | null;
+  } | null;
+}
+
+export interface EnvironmentComparison {
+  agent: string;
+  environments: EnvironmentRow[];
+  reference_workspace: string | null;
+  summary: { present: number; distinct_spec_digests: number; aligned: boolean };
+}
+
+export type DriftState = "in_sync" | "drift" | "unknown";
+
+export interface DriftAgent {
+  agent_id: string;
+  name: string;
+  method: string;
+  state: DriftState;
+  findings: { code: string; expected: string | null; observed: string | null }[];
+  reason: string | null;
+}
+
+export interface DriftReport {
+  workspace_id: string;
+  state: DriftState;
+  checked: number;
+  counts: Record<DriftState, number>;
+  truncated: boolean;
+  agents: DriftAgent[];
+}
+
+export const environmentApi = {
+  compare: (agent: string) =>
+    request<EnvironmentComparison>(
+      `/api/environments/compare?${new URLSearchParams({ agent }).toString()}`,
+    ),
+  drift: () => request<DriftReport>("/api/environments/drift"),
+};
+
+export const feedbackApi = {
+  /** `verdict: "none"` withdraws the caller's earlier verdict. */
+  rate: (
+    agentId: string,
+    body: { session_id: string; message_id: number; verdict: FeedbackVerdict | "none"; comment?: string },
+  ) =>
+    request<{ message_id: number; verdict: FeedbackVerdict | null }>(
+      `/api/chat/${encodeURIComponent(agentId)}/feedback`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  list: (params: { verdict?: FeedbackVerdict; agent_id?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value != null) q.set(key, String(value));
+    const qs = q.toString();
+    return request<FeedbackList>(`/api/feedback${qs ? `?${qs}` : ""}`);
+  },
+};
+
+// ---- business self-service: intents, review, curated answers, issue box (T33-T36) ----
+export interface IntentSession {
+  session_id: string;
+  agent_id: string;
+  message_id: number | null;
+  question: string;
+  answer: string;
+  status: "down" | "unanswered" | "up" | "ok";
+}
+
+export interface IntentCluster {
+  id: string;
+  label: string;
+  volume: number;
+  thumbs_down: number;
+  rated: number;
+  /** null when nobody rated a session of the cluster */
+  down_rate: number | null;
+  unanswered: number;
+  sessions: IntentSession[];
+}
+
+export interface IntentView {
+  /** `model` = one Bedrock grouping call; `fallback` = mechanical grouping */
+  source: "model" | "fallback";
+  sessions_considered: number;
+  clusters: IntentCluster[];
+  unanswered: (IntentSession & { cluster: string | null })[];
+  generated_at?: string;
+}
+
+export interface AnswerRuleInfo {
+  id: string;
+  agent_id: string;
+  position: number;
+  name: string;
+  match: "exact" | "contains";
+  pattern: string;
+  answer: string;
+  enabled: boolean;
+  created_by: string;
+  updated_by: string;
+  source_issue_id: string | null;
+  hit_count: number;
+  last_hit_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface AnswerRuleList {
+  agent_id: string;
+  enabled: boolean;
+  rules: AnswerRuleInfo[];
+  limit: number;
+}
+
+export interface AnswerRuleBody {
+  name?: string;
+  match: "exact" | "contains";
+  pattern: string;
+  answer: string;
+  enabled?: boolean;
+  issue_id?: string;
+}
+
+export type IssueStatus = "open" | "fixed" | "wont_fix";
+export type IssueFixAction = "rule" | "kb" | "dataset";
+
+export interface IssueInfo {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  kind: "thumbs_down" | "unanswered" | "review" | "manual";
+  status: IssueStatus;
+  session_id: string;
+  message_id: number | null;
+  question: string;
+  answer: string;
+  comment: string | null;
+  correction: string | null;
+  opened_by: string;
+  resolved_by: string | null;
+  resolution_note: string | null;
+  resolved_at: string | null;
+  hours_to_close: number | null;
+  fixes: { action: IssueFixAction; ref: string | null; by: string; at: string; note?: string }[];
+  history: { status: IssueStatus; by: string; at: string; note?: string }[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface IssueDetail extends IssueInfo {
+  transcript: { id: number; role: string; text: string; answered_by: string | null; flagged: boolean }[];
+}
+
+export interface IssueSummary {
+  open: number;
+  fixed: number;
+  wont_fix: number;
+  total: number;
+  median_hours_to_close: number | null;
+  oldest_open_hours: number | null;
+}
+
+export const intentApi = {
+  view: (params: { agent_id?: string; days: number; lang: string; refresh?: boolean }) => {
+    const q = new URLSearchParams({ days: String(params.days), lang: params.lang });
+    if (params.agent_id) q.set("agent_id", params.agent_id);
+    if (params.refresh) q.set("refresh", "true");
+    return request<IntentView>(`/api/intents?${q.toString()}`);
+  },
+};
+
+const rulesPath = (agentId: string, rest = "") => `/api/agents/${encodeURIComponent(agentId)}/rules${rest}`;
+
+export const ruleApi = {
+  list: (agentId: string) => request<AnswerRuleList>(rulesPath(agentId)),
+  create: (agentId: string, body: AnswerRuleBody) =>
+    request<AnswerRuleInfo>(rulesPath(agentId), { method: "POST", body: JSON.stringify(body) }),
+  update: (agentId: string, ruleId: string, body: Partial<AnswerRuleBody>) =>
+    request<AnswerRuleInfo>(rulesPath(agentId, `/${encodeURIComponent(ruleId)}`), {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  remove: (agentId: string, ruleId: string) =>
+    request<{ deleted: boolean }>(rulesPath(agentId, `/${encodeURIComponent(ruleId)}`), {
+      method: "DELETE",
+    }),
+  reorder: (agentId: string, ids: string[]) =>
+    request<AnswerRuleList>(`/api/agents/${encodeURIComponent(agentId)}/rules-order`, {
+      method: "PUT",
+      body: JSON.stringify({ ids }),
+    }),
+  setEnabled: (agentId: string, enabled: boolean) =>
+    request<AnswerRuleList>(`/api/agents/${encodeURIComponent(agentId)}/rules-enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  test: (agentId: string, question: string) =>
+    request<{ agent_enabled: boolean; matched: boolean; rule: AnswerRuleInfo | null }>(
+      rulesPath(agentId, "/test"),
+      { method: "POST", body: JSON.stringify({ question }) },
+    ),
+};
+
+export const issueApi = {
+  list: (params: { status?: IssueStatus; agent_id?: string } = {}) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value) q.set(key, value);
+    const qs = q.toString();
+    return request<{ items: IssueInfo[]; summary: IssueSummary }>(`/api/issues${qs ? `?${qs}` : ""}`);
+  },
+  sync: () => request<{ opened: number }>("/api/issues/sync", { method: "POST" }),
+  open: (body: { agent_id: string; session_id: string; message_id: number; kind?: "unanswered" | "manual" }) =>
+    request<IssueInfo>("/api/issues", { method: "POST", body: JSON.stringify(body) }),
+  get: (id: string) => request<IssueDetail>(`/api/issues/${encodeURIComponent(id)}`),
+  resolve: (id: string, status: "fixed" | "wont_fix", note?: string) =>
+    request<IssueInfo>(`/api/issues/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ status, note }),
+    }),
+  reopen: (id: string, note?: string) =>
+    request<IssueInfo>(`/api/issues/${encodeURIComponent(id)}/reopen`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  recordFix: (id: string, body: { action: IssueFixAction; ref?: string | null; note?: string }) =>
+    request<IssueInfo>(`/api/issues/${encodeURIComponent(id)}/fixes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+
+export const reviewLinkApi = {
+  list: (agentId: string) =>
+    request<{ links: ShareLinkInfo[] }>(`/api/agents/${encodeURIComponent(agentId)}/review-links`),
+  create: (agentId: string, body: { label?: string; expires_in_days?: number | null }) =>
+    request<ShareLinkCreated>(`/api/agents/${encodeURIComponent(agentId)}/review-links`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 // ---- V2 knowledge bases ----
@@ -5792,3 +6732,341 @@ export const v2KnowledgeApi = {
       body: JSON.stringify({ text, number_of_results: numberOfResults }),
     }),
 };
+
+// ---- Agent-DLC: criteria, golden sets, calibration, the gate, watch ----
+/* Wire types live in `./dlc`. One client object per the module convention; the
+ * gate and sign routes are prod-protected server-side, so a 409/403 here is the
+ * answer, not a bug to work around. */
+import type {
+  AdmissionCandidate,
+  AdmissionQueue,
+  Agreement,
+  AnnotationLink,
+  AnnotationTask,
+  AuditEntry,
+  CalibrationHistory,
+  CalibrationRecord,
+  CaseTier,
+  CostEstimate,
+  CriteriaDiff,
+  CriteriaSet,
+  CriteriaSetPayload,
+  CriterionInput,
+  GateResponse,
+  GoldenItem,
+  GoldenSet,
+  ReleaseRecord,
+  ReleaseState,
+  RunComparison,
+  RunCriteria,
+  Scorecard,
+  Waiver,
+  WatchView,
+  WritableSplit,
+} from "./dlc";
+
+const dlcSet = (lineageId: string, rest = ""): string =>
+  `/api/criteria-sets/${encodeURIComponent(lineageId)}${rest}`;
+const dlcGolden = (datasetId: string, rest = ""): string =>
+  `/api/golden-sets/${encodeURIComponent(datasetId)}${rest}`;
+const dlcTask = (taskId: string, rest = ""): string =>
+  `/api/annotation-tasks/${encodeURIComponent(taskId)}${rest}`;
+const dlcAgent = (agentId: string, rest = ""): string =>
+  `/api/agents/${encodeURIComponent(agentId)}${rest}`;
+
+export const dlcApi = {
+  /* criteria sets */
+  listSets: (params?: { kind?: "template" | "agent"; agentId?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.kind) qs.set("kind", params.kind);
+    if (params?.agentId) qs.set("agent_id", params.agentId);
+    const q = qs.toString();
+    return request<{ sets: CriteriaSet[] }>(`/api/criteria-sets${q ? `?${q}` : ""}`);
+  },
+  createSet: (body: {
+    kind?: "template" | "agent";
+    name: string;
+    agent_id?: string | null;
+    description?: string;
+    scenario?: string;
+    template_lineage_id?: string | null;
+    template_version?: number | null;
+    from_evaluation_plan?: string | null;
+  }) =>
+    request<CriteriaSetPayload>("/api/criteria-sets", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getSet: (lineageId: string, version?: number) =>
+    request<CriteriaSetPayload>(dlcSet(lineageId, version ? `?version=${version}` : "")),
+  saveSet: (
+    lineageId: string,
+    body: {
+      criteria: CriterionInput[];
+      removals?: { key: string; reason?: string }[] | null;
+      name?: string;
+      description?: string;
+      scenario?: string;
+    },
+  ) => request<CriteriaSetPayload>(dlcSet(lineageId), { method: "PUT", body: JSON.stringify(body) }),
+  newSetVersion: (lineageId: string) =>
+    request<CriteriaSetPayload>(dlcSet(lineageId, "/versions"), { method: "POST" }),
+  publishSet: (lineageId: string) =>
+    request<CriteriaSetPayload>(dlcSet(lineageId, "/publish"), { method: "POST" }),
+  /** The business owner's signature; the server refuses a self-signature. */
+  signSet: (lineageId: string, note: string) =>
+    request<CriteriaSetPayload>(dlcSet(lineageId, "/sign"), {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  adoptTemplate: (lineageId: string, templateVersion: number) =>
+    request<CriteriaSetPayload>(
+      dlcSet(lineageId, `/adopt-template?template_version=${templateVersion}`),
+      { method: "POST" },
+    ),
+  discardDraft: (lineageId: string) =>
+    request<{ discarded: number }>(dlcSet(lineageId), { method: "DELETE" }),
+  diffSet: (lineageId: string, a: number, b: number) =>
+    request<CriteriaDiff>(dlcSet(lineageId, `/diff?a=${a}&b=${b}`)),
+
+  /* golden sets */
+  listGolden: () => request<{ golden_sets: GoldenSet[] }>("/api/golden-sets"),
+  createGolden: (body: { name: string; criteria_lineage_id?: string | null; description?: string }) =>
+    request<GoldenSet>("/api/golden-sets", { method: "POST", body: JSON.stringify(body) }),
+  getGolden: (datasetId: string) => request<GoldenSet>(dlcGolden(datasetId)),
+  addGoldenItems: (datasetId: string, split: WritableSplit, items: GoldenItem[]) =>
+    request<{ added: number; golden_set: GoldenSet }>(dlcGolden(datasetId, "/items"), {
+      method: "POST",
+      body: JSON.stringify({ split, items }),
+    }),
+  /** Initial curation — the only path that writes the holdout, and it seals it. */
+  seedGolden: (datasetId: string, items: GoldenItem[], shares?: [number, number, number]) =>
+    request<{ counts: Record<string, number>; golden_set: GoldenSet }>(
+      dlcGolden(datasetId, "/seed"),
+      { method: "POST", body: JSON.stringify(shares ? { items, shares } : { items }) },
+    ),
+  moveGoldenItem: (datasetId: string, scenarioId: string, to: WritableSplit) =>
+    request<GoldenSet>(dlcGolden(datasetId, "/move"), {
+      method: "POST",
+      body: JSON.stringify({ scenario_id: scenarioId, to }),
+    }),
+  retireGoldenItem: (
+    datasetId: string,
+    body: { split: "dev" | "regression" | "holdout"; scenario_id: string; reason: string },
+  ) => request<GoldenSet>(dlcGolden(datasetId, "/retire"), { method: "POST", body: JSON.stringify(body) }),
+
+  /* annotation + calibration */
+  listTasks: (params?: { agentId?: string; status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.agentId) qs.set("agent_id", params.agentId);
+    if (params?.status) qs.set("status", params.status);
+    const q = qs.toString();
+    return request<{ tasks: AnnotationTask[] }>(`/api/annotation-tasks${q ? `?${q}` : ""}`);
+  },
+  createTask: (body: {
+    agent_id?: string | null;
+    criteria_lineage_id?: string | null;
+    criterion_key: string;
+    purpose?: "judge_calibration" | "golden_answer" | "admission";
+    annotators: string[];
+    adjudicator?: string | null;
+    run_id?: string | null;
+    dataset_id?: string | null;
+    items?: Record<string, unknown>[] | null;
+  }) => request<AnnotationTask>("/api/annotation-tasks", { method: "POST", body: JSON.stringify(body) }),
+  getTask: (taskId: string) => request<AnnotationTask>(dlcTask(taskId)),
+  label: (taskId: string, body: { item_ref: string; label?: string; answer?: string; rationale?: string }) =>
+    request<AnnotationTask>(dlcTask(taskId, "/labels"), { method: "POST", body: JSON.stringify(body) }),
+  adjudicate: (taskId: string) =>
+    request<AnnotationTask>(dlcTask(taskId, "/adjudicate"), { method: "POST" }),
+  agreement: (taskId: string) => request<Agreement>(dlcTask(taskId, "/agreement")),
+  /** `aligned` is refused when the numbers do not support it (`calibration.not_supported`). */
+  decideCalibration: (taskId: string, verdict: "aligned" | "not_aligned", note: string) =>
+    request<CalibrationRecord>(dlcTask(taskId, "/decide"), {
+      method: "POST",
+      body: JSON.stringify({ verdict, note }),
+    }),
+  /** Account-free annotation links. Refused in a prod workspace (`allowed: false`). */
+  annotationLinks: (taskId: string) =>
+    request<{ links: AnnotationLink[]; allowed: boolean; reason: string }>(dlcTask(taskId, "/links")),
+  createAnnotationLink: (taskId: string, body: { label: string; expires_in_days?: number | null }) =>
+    request<AnnotationLink & { token: string; path: string; url: string }>(dlcTask(taskId, "/links"), {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revokeAnnotationLink: (taskId: string, linkId: string) =>
+    request<AnnotationLink>(dlcTask(taskId, `/links/${encodeURIComponent(linkId)}`), {
+      method: "DELETE",
+    }),
+  calibrationHistory: (criterionKey: string, agentId?: string) =>
+    request<CalibrationHistory>(
+      `/api/calibration/${encodeURIComponent(criterionKey)}${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
+    ),
+
+  /* the release gate */
+  release: (agentId: string) => request<ReleaseState>(dlcAgent(agentId, "/release")),
+  /** Move the agent onto named `live` / `candidate` endpoints so a gate can hold. */
+  migrateRelease: (agentId: string) =>
+    request<ReleaseState>(dlcAgent(agentId, "/release/migrate"), { method: "POST" }),
+  evaluateRelease: (agentId: string, body: { repeats?: number; confirm_cost?: boolean }) =>
+    request<ReleaseState>(dlcAgent(agentId, "/release/evaluate"), {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gate: (agentId: string) => request<GateResponse>(dlcAgent(agentId, "/release/gate")),
+  signRelease: (agentId: string, note: string) =>
+    request<ReleaseState>(dlcAgent(agentId, "/release/sign"), {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  blockRelease: (agentId: string, note: string) =>
+    request<ReleaseState>(dlcAgent(agentId, "/release/block"), {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  rollback: (agentId: string, note: string) =>
+    request<ReleaseState & { rolled_back_to?: string | null }>(dlcAgent(agentId, "/release/rollback"), {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  releaseRecords: (agentId: string) =>
+    request<{ records: ReleaseRecord[] }>(
+      `/api/release-records?agent_id=${encodeURIComponent(agentId)}`,
+    ),
+  releaseRecord: (recordId: string) =>
+    request<ReleaseRecord>(`/api/release-records/${encodeURIComponent(recordId)}`),
+
+  /* waivers — never for a red line, always with an expiry and a second person */
+  requestWaiver: (
+    agentId: string,
+    body: {
+      criterion_key: string;
+      actual?: number | null;
+      threshold?: number | null;
+      reason: string;
+      risk_owner: string;
+      compensating_control?: string;
+      expires_on: string;
+    },
+  ) => request<Waiver>(dlcAgent(agentId, "/waivers"), { method: "POST", body: JSON.stringify(body) }),
+  approveWaiver: (waiverId: string, note: string) =>
+    request<Waiver>(`/api/waivers/${encodeURIComponent(waiverId)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  rejectWaiver: (waiverId: string, note: string) =>
+    request<Waiver>(`/api/waivers/${encodeURIComponent(waiverId)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  revokeWaiver: (waiverId: string) =>
+    request<Waiver>(`/api/waivers/${encodeURIComponent(waiverId)}`, { method: "DELETE" }),
+
+  /* admission */
+  admissionQueue: (params?: { agentId?: string; status?: string | null; refresh?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (params?.agentId) qs.set("agent_id", params.agentId);
+    if (params?.status !== undefined) qs.set("status", params.status ?? "");
+    if (params?.refresh) qs.set("refresh", "true");
+    const q = qs.toString();
+    return request<AdmissionQueue>(`/api/admission${q ? `?${q}` : ""}`);
+  },
+  candidate: (candidateId: string) =>
+    request<AdmissionCandidate>(`/api/admission/${encodeURIComponent(candidateId)}`),
+  admit: (
+    candidateId: string,
+    body: {
+      split?: WritableSplit;
+      dataset_id?: string | null;
+      expected_response: string;
+      expected_source?: "annotator" | "consensus" | "adjudicated";
+      criteria_ids?: string[];
+      case_tier?: CaseTier;
+      scenario_id?: string | null;
+    },
+  ) =>
+    request<{ item: GoldenItem; candidate: AdmissionCandidate }>(
+      `/api/admission/${encodeURIComponent(candidateId)}/admit`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  rejectCandidate: (candidateId: string, note: string) =>
+    request<AdmissionCandidate>(`/api/admission/${encodeURIComponent(candidateId)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  markDuplicate: (candidateId: string, duplicateOf: string) =>
+    request<AdmissionCandidate>(`/api/admission/${encodeURIComponent(candidateId)}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify({ duplicate_of: duplicateOf }),
+    }),
+
+  /* watch */
+  watch: (agentId: string) => request<WatchView>(dlcAgent(agentId, "/watch")),
+  putWatch: (
+    agentId: string,
+    body: {
+      criteria_lineage_id?: string | null;
+      dataset_id?: string | null;
+      every?: "daily" | "weekly";
+      at_hour?: number;
+      tz?: string;
+      repeats?: number;
+      max_cost_usd?: number | null;
+      enabled?: boolean;
+    },
+  ) => request<WatchView>(dlcAgent(agentId, "/watch"), { method: "PUT", body: JSON.stringify(body) }),
+  runWatch: (agentId: string, split: "regression" | "holdout" = "regression") =>
+    request<{ run_id: string; watch: WatchView["config"] }>(
+      dlcAgent(agentId, `/watch/run?split=${split}`),
+      { method: "POST" },
+    ),
+
+  /* run results, comparison, cost */
+  runCriteria: (runId: string, criterionKey?: string) =>
+    request<RunCriteria>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/criteria${criterionKey ? `?criterion_key=${encodeURIComponent(criterionKey)}` : ""}`,
+    ),
+  snapshotRun: (runId: string) =>
+    request<{ snapshotted: boolean; summary: RunCriteria["summary"] }>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/criteria/snapshot`,
+      { method: "POST" },
+    ),
+  compareRuns: (runIds: string[]) =>
+    request<RunComparison>(`/api/eval/runs/compare?runs=${encodeURIComponent(runIds.join(","))}`),
+  ladder: (agentId: string) => request<RunComparison>(dlcAgent(agentId, "/ladder")),
+  /** Shown before any run is started: pass^k multiplies this by `repeats`. */
+  estimate: (body: {
+    agent_id?: string | null;
+    dataset_id?: string | null;
+    items?: number | null;
+    evaluators?: string[];
+    repeats?: number;
+  }) => request<CostEstimate>("/api/eval/runs/estimate", { method: "POST", body: JSON.stringify(body) }),
+
+  /* the decision history, and one agent's five dimensions */
+  audit: (params?: { target?: string; action?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.target) qs.set("target", params.target);
+    if (params?.action) qs.set("action", params.action);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return request<{ events: AuditEntry[] }>(`/api/audit${q ? `?${q}` : ""}`);
+  },
+  scorecard: (agentId: string) => request<Scorecard>(dlcAgent(agentId, "/scorecard")),
+  /** The workspace's release policy (administrator). Unset keys use tier defaults. */
+  releasePolicy: (workspaceId: string) =>
+    request<ReleasePolicyView>(`/api/release-policies/${encodeURIComponent(workspaceId)}`),
+  /** Replaces the policy wholesale — send back every key you read, changed or not. */
+  putReleasePolicy: (workspaceId: string, policy: Record<string, unknown>) =>
+    request<ReleasePolicyView>(`/api/release-policies/${encodeURIComponent(workspaceId)}`, {
+      method: "PUT",
+      body: JSON.stringify(policy),
+    }),
+};
+
+export interface ReleasePolicyView {
+  workspace_id: string;
+  tier: string;
+  policy: Record<string, unknown>;
+  effective: Record<string, unknown>;
+}

@@ -1,0 +1,14 @@
+/* V3 announcements — list, editor and the reader's preview */
+.v3 .v3-ann-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.v3 .v3-ann-form { display: grid; gap: 16px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.v3 .v3-ann-form:disabled { opacity: 0.6; }
+.v3 .v3-ann-pager { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 16px; color: var(--v3-text-2); }
+.v3 .v3-ann-preview {
+  padding: 14px 16px; border-radius: 10px; border: 1px solid var(--v3-line);
+  background: var(--v3-ink-1); display: grid; gap: 8px;
+}
+.v3 .v3-ann-preview h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.v3 .v3-ann-preview p { margin: 0; white-space: pre-wrap; color: var(--v3-text-2); font-size: 13.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.v3 .v3-ann-preview .muted { color: var(--v3-text-3); }
+.v3 .v3-ann-preview a { display: inline-flex; gap: 6px; align-items: center; color: var(--v3-info); font-size: 13px; width: fit-content; }
+.v3 .v3-ann-preview .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

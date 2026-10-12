@@ -1,0 +1,23 @@
+/* V3 users — the account table, trend and grant chips */
+.v3 .v3-usr-stats { display: grid; gap: 16px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .v3 .v3-usr-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.v3 .v3-usr-muted { color: var(--v3-text-3); }
+.v3 .v3-usr-soon { color: var(--v3-wait); }
+.v3 .v3-usr-trend { display: flex; gap: 6px; align-items: flex-end; height: 120px; }
+.v3 .v3-usr-trend .col { flex: 1; display: grid; grid-template-rows: auto 1fr auto; height: 100%; gap: 4px; text-align: center; min-width: 0; }
+.v3 .v3-usr-trend .n { font-family: var(--v3-mono); font-size: 11px; color: var(--v3-text-2); min-height: 14px; }
+.v3 .v3-usr-trend .wrap { display: flex; align-items: flex-end; background: var(--v3-ink-0); border-radius: 3px; }
+.v3 .v3-usr-trend .bar { width: 100%; min-height: 2px; border-radius: 3px; background: linear-gradient(180deg, var(--v3-info), rgba(110, 168, 255, 0.35)); }
+.v3 .v3-usr-trend .d { font-family: var(--v3-mono); font-size: 10px; color: var(--v3-text-3); white-space: nowrap; }
+.v3 .v3-usr-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.v3 .v3-usr-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--v3-line-2); background: var(--v3-ink-1); color: var(--v3-text-2);
+  font: inherit; font-size: 13px; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-usr-chip:hover:not(:disabled) { border-color: var(--v3-text-3); color: var(--v3-text); }
+.v3 .v3-usr-chip.on { border-color: rgba(62, 240, 180, 0.45); background: var(--v3-ok-dim); color: var(--v3-text); }
+.v3 .v3-usr-chip.on svg { color: var(--v3-ok); }
+.v3 .v3-usr-chip small { color: var(--v3-text-3); font-size: 11px; }
+.v3 .v3-usr-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+.v3 .v3-usr-pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; padding: 12px 16px; color: var(--v3-text-2); }
