@@ -55,3 +55,133 @@ def test_items_carry_question_expected_and_the_agents_reply(monkeypatch):
         db.query(EvalDataset).filter(EvalDataset.name == "cal-items").delete()
         db.commit()
         db.close()
+
+
+def _conversation(text):
+    return [{"eventTimestamp": "2026-10-12T11:40:00", "payload": [
+        {"conversational": {"role": "USER", "content": {"text": "能退多少？"}}},
+        {"conversational": {"role": "ASSISTANT", "content": {"text": text}}},
+    ]}]
+
+
+def _seed(db, *, attempts, sessions):
+    ds = EvalDataset(workspace_id=WS, name="cal-items", kind="predefined", items=[
+        {"scenario_id": f"kg-{n}", "turns": [{"input": "能退多少？",
+                                               "expected_response": "退 ¥980"}]}
+        for n in range(1, len(sessions) + 1)
+    ])
+    db.add(ds)
+    db.flush()
+    run = EvalRun(workspace_id=WS, agent_id="agent-x", agent_name="a", status="completed",
+                  name="r", dataset_id=ds.id, session_ids=sessions,
+                  attempts=attempts(sessions))
+    db.add(run)
+    db.flush()
+    for n, sid in enumerate(sessions, start=1):
+        db.add(CriterionResult(workspace_id=WS, run_id=run.id, criterion_key="S2",
+                               scenario_id=f"kg-{n}", attempt=1, session_id=sid,
+                               evaluator_id="judge", level="trace", verdict="pass"))
+    db.commit()
+    return run
+
+
+def _cleanup(db):
+    from app.models.dlc import AnnotationTask
+
+    db.rollback()
+    db.query(CriterionResult).filter(CriterionResult.scenario_id.like("kg-%")).delete(
+        synchronize_session=False)
+    run_ids = [r.id for r in db.query(EvalRun).filter(EvalRun.agent_id == "agent-x")]
+    db.query(AnnotationTask).filter(AnnotationTask.run_id.in_(run_ids)).delete(
+        synchronize_session=False)
+    db.query(EvalRun).filter(EvalRun.agent_id == "agent-x").delete()
+    db.query(EvalDataset).filter(EvalDataset.name == "cal-items").delete()
+    db.commit()
+    db.close()
+
+
+def _memory(monkeypatch, by_actor):
+    from app.services import observability
+
+    def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
+        return _conversation(by_actor[(actor_id, session_id)]) \
+            if (actor_id, session_id) in by_actor else []
+
+    monkeypatch.setattr(observability.memory, "list_events", fake_events)
+
+
+def test_items_of_a_per_session_actor_run_carry_the_agents_answers(monkeypatch):
+    """Live: replays write memory under `<agent>__eval-<run>-<n>` while the reader
+    looked under "default", so every calibration item's agent answer was empty."""
+    from app.evaluation.service import eval_actor
+
+    db = SessionLocal()
+    try:
+        run = _seed(db, sessions=["s-1", "s-2"], attempts=lambda sessions: [
+            {"scenario_id": f"kg-{n}", "attempt": 1, "session_id": sid}
+            for n, sid in enumerate(sessions, start=1)
+        ])
+        _memory(monkeypatch, {
+            (eval_actor("agent-x", run.id, 1), "s-1"): "退 ¥980",
+            (eval_actor("agent-x", run.id, 2), "s-2"): "退 ¥120",
+        })
+        ws = SimpleNamespace(id=WS, context=SimpleNamespace(id=WS))
+        items = dlc_router._items_from_run(db, ws, run, "S2")
+        assert [i["answer"] for i in items] == ["退 ¥980", "退 ¥120"]
+    finally:
+        _cleanup(db)
+
+
+def test_items_of_an_old_default_actor_run_still_carry_answers(monkeypatch):
+    db = SessionLocal()
+    try:
+        run = _seed(db, sessions=["s-1"], attempts=lambda _sessions: None)
+        _memory(monkeypatch, {("default", "s-1"): "退 ¥980"})
+        ws = SimpleNamespace(id=WS, context=SimpleNamespace(id=WS))
+        [item] = dlc_router._items_from_run(db, ws, run, "S2")
+        assert item["answer"] == "退 ¥980"
+    finally:
+        _cleanup(db)
+
+
+def test_a_task_created_with_empty_answers_is_backfilled_once(monkeypatch, client):
+    """A task created before the fix froze "" for every answer; opening it reads the
+    replies again (once per item) — closed tasks included."""
+    from app.evaluation.service import eval_actor
+    from app.models.dlc import AnnotationTask
+
+    db = SessionLocal()
+    try:
+        run = _seed(db, sessions=["s-1", "s-2"], attempts=lambda sessions: [
+            {"scenario_id": f"kg-{n}", "attempt": 1, "session_id": sid}
+            for n, sid in enumerate(sessions, start=1)
+        ])
+        task = AnnotationTask(workspace_id=WS, agent_id="agent-x", criterion_key="S2",
+                              run_id=run.id, status="closed", annotators=["sme"], items=[
+                                  {"ref": "kg-1#1", "session_id": "s-1", "input": "q",
+                                   "answer": ""},
+                                  {"ref": "kg-2#1", "session_id": "s-2", "input": "q",
+                                   "answer": ""},
+                              ])
+        db.add(task)
+        db.commit()
+        reads: list[str] = []
+        _memory(monkeypatch, {(eval_actor("agent-x", run.id, 1), "s-1"): "退 ¥980"})
+        from app.services import observability
+
+        inner = observability.memory.list_events
+
+        def counted(ws, actor_id, session_id, **kwargs):
+            reads.append(session_id)
+            return inner(ws, actor_id, session_id, **kwargs)
+
+        monkeypatch.setattr(observability.memory, "list_events", counted)
+        body = client.get(f"/api/annotation-tasks/{task.id}").json()
+        assert [i["answer"] for i in body["items"]] == ["退 ¥980", ""]
+        first = len(reads)
+        assert first > 0
+        body = client.get(f"/api/annotation-tasks/{task.id}").json()
+        assert [i["answer"] for i in body["items"]] == ["退 ¥980", ""]
+        assert len(reads) == first  # nothing re-read on the second view
+    finally:
+        _cleanup(db)

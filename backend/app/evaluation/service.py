@@ -266,6 +266,30 @@ def eval_actor(agent_id: str | None, run_id: str, index: int) -> str:
     return scoped_actor(agent_id or "agent", f"eval-{run_id}-{index}")
 
 
+def eval_session_actors(run: EvalRun, session_id: str) -> list[str]:
+    """The memory actors a replayed session's transcript may sit under, likeliest first.
+
+    The reader's half of ``eval_actor``: a run records the actor each session was
+    invoked with (``attempts[].actor_id``). Runs from before that was recorded are
+    re-derived the way the writer numbered them — the session's 1-based position in
+    the replay plan, which is its position in ``attempts`` / ``session_ids`` unless a
+    simulated persona was skipped. The bare ``"default"`` actor comes last: runs
+    replayed before every session had its own actor, harness replays, and A2A
+    runtimes all still write there."""
+    candidates: list[str] = []
+    for position, entry in enumerate(run.attempts or [], start=1):
+        if isinstance(entry, dict) and entry.get("session_id") == session_id:
+            if entry.get("actor_id"):
+                candidates.append(str(entry["actor_id"]))
+            candidates.append(eval_actor(run.agent_id or None, run.id, position))
+            break
+    if session_id in (run.session_ids or []):
+        position = (run.session_ids or []).index(session_id) + 1
+        candidates.append(eval_actor(run.agent_id or None, run.id, position))
+    candidates.append("default")
+    return list(dict.fromkeys(candidates))
+
+
 def transient_invoke_error(exc: BaseException) -> bool:
     """An upstream failure worth replaying the scenario: a mid-stream
     ``runtimeClientError`` / ``internalServerException`` (botocore's
@@ -389,6 +413,7 @@ def execute_run(
             # were recalled in the next and a golden item that withholds the fare was
             # answered with another scenario's number. A fresh actor per session keeps
             # each replay hermetic, as a golden item assumes.
+            # ("passed" marks that an invoke path actually handed it to the runtime)
             actor: dict[str, str] = {"id": "default"}
 
             def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
@@ -403,6 +428,7 @@ def execute_run(
                 if inbound_jwt:  # JWT authorizer: Bearer, never SigV4
                     from app.services import inbound_auth as inbound_auth_service
 
+                    actor["passed"] = actor["id"]
                     return rt.invoke_runtime_text_bearer(
                         workspace.region,
                         agent_arn,
@@ -412,6 +438,7 @@ def execute_run(
                         actor_id=actor["id"],
                         **pinned,
                     )
+                actor["passed"] = actor["id"]
                 return rt.invoke_runtime_text(
                     data,
                     agent_arn,
@@ -439,6 +466,7 @@ def execute_run(
             for index, (scenario, attempt_no) in enumerate(plan, start=1):
                 _check_stop(run_id)
                 actor["id"] = eval_actor(agent_id, run_id, index)
+                actor.pop("passed", None)
                 attempt.clear()
                 attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
                 if attempt_no > 1:
@@ -504,6 +532,10 @@ def execute_run(
                     "scenario_id": str(scenario.get("scenario_id") or "unknown"),
                     "attempt": attempt_no,
                     "session_id": sid,
+                    # the memory actor this session was invoked under (only the
+                    # paths that pass one set it; the rest use the runtime's
+                    # "default") — what the transcript reader looks under
+                    "actor_id": actor.get("passed") or "default",
                 })
                 _update(run_id, session_ids=list(session_ids),
                         budget_stops=list(budget_stops) or None,

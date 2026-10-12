@@ -731,8 +731,9 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
 
 
 def test_transcript_falls_back_to_eval_run_session(monkeypatch):
-    """Eval-run sessions have no chat ledger row; the transcript comes from the
-    BARE "default" actor the eval invoker passed to the runtime."""
+    """Eval-run sessions have no chat ledger row. A run replayed before every session
+    got its own actor (no `attempts`) left the conversation under the BARE "default"
+    actor — still found there."""
     from app.evaluation.models import EvalRun
 
     agent_id = _seed_agent()
@@ -749,6 +750,8 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
 
     def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
         seen["actor"] = actor_id
+        if actor_id != "default":
+            return []
         envelope = json.dumps(
             {"message": {"role": "user", "content": [{"text": "PTO balance?"}]}}
         )
@@ -766,6 +769,64 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
     assert result["actor_id"] == "default" and seen["actor"] == "default"
     assert result["agent_name"] == "hr-assistant"
     assert [t["text"] for t in result["turns"]] == ["PTO balance?", "15 days"]
+
+
+def _eval_run(agent_id, session_ids, attempts=None):
+    from app.evaluation.models import EvalRun
+
+    db = SessionLocal()
+    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                  agent_name="hr-assistant", mode="evaluators", evaluators=[],
+                  status="completed", session_ids=session_ids, attempts=attempts)
+    db.add(run)
+    db.commit()
+    run_id = run.id
+    db.close()
+    return run_id
+
+
+def test_transcript_reads_a_replayed_session_under_its_recorded_actor(monkeypatch):
+    """Live: since each replayed session got its own memory actor
+    (`<agent>__eval-<run>-<n>`), the reader still looked under "default" and every
+    eval transcript — and every calibration item's agent answer — came back empty."""
+    agent_id = _seed_agent()
+    sids = ["a" * 64, "b" * 64]
+    run_id = _eval_run(agent_id, sids, attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": sids[0],
+         "actor_id": f"{agent_id}__eval-RUN-1"},
+        {"scenario_id": "s2", "attempt": 1, "session_id": sids[1],
+         "actor_id": f"{agent_id}__eval-RUN-2"},
+    ])
+    fake_events, probed = _events_for({f"{agent_id}__eval-RUN-2": ["second answer"]})
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    result = obs.session_transcript(db, sids[1], ws_ctx())
+    db.close()
+    assert result["run_id"] == run_id
+    assert result["actor_id"] == f"{agent_id}__eval-RUN-2"
+    assert [t["text"] for t in result["turns"]] == ["second answer"]
+    assert probed[0] == f"{agent_id}__eval-RUN-2"
+
+
+def test_transcript_rederives_the_actor_of_a_run_that_did_not_record_it(monkeypatch):
+    """Runs replayed after 2cfc398f but before attempts carried `actor_id`: the actor
+    is re-derived with the writer's own `eval_actor` from the session's position."""
+    from app.evaluation.service import eval_actor
+
+    agent_id = _seed_agent()
+    sids = ["c" * 64, "d" * 64, "f" * 64]
+    run_id = _eval_run(agent_id, sids, attempts=[
+        {"scenario_id": f"s{n}", "attempt": 1, "session_id": sid}
+        for n, sid in enumerate(sids, start=1)
+    ])
+    actor = eval_actor(agent_id, run_id, 3)
+    fake_events, _ = _events_for({actor: ["third answer"], "default": ["WRONG"]})
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    result = obs.session_transcript(db, sids[2], ws_ctx())
+    db.close()
+    assert result["actor_id"] == actor
+    assert [t["text"] for t in result["turns"]] == ["third answer"]
 
 
 # ── transcript: sessions in NO platform ledger (gateway traffic, /v1 callers) ─

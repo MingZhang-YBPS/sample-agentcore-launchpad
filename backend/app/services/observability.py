@@ -1909,12 +1909,15 @@ def session_transcript(
         mem_actor = memory.scoped_actor(row.agent_id, row.actor_id)
         agent_id, actor_display = row.agent_id, row.actor_id
     else:
-        # Eval-run sessions: replays pass the BARE "default" actor straight to
-        # the runtime — harness runtimes persist the conversation under it
-        # (runtime-backed agents write no memory events, so turns come back
-        # empty for them).
+        # Eval-run sessions: each replayed session is invoked under its own
+        # agent-scoped actor (`eval_actor`); older runs, harness replays and A2A
+        # runtimes used the bare "default" one. `eval_session_actors` lists the
+        # candidates the writer may have used, likeliest first.
+        from app.evaluation.service import eval_session_actors
+
         agent = db.get(Agent, run.agent_id)
-        mem_actor = "default"
+        mem_actors = eval_session_actors(run, session_id)
+        mem_actor = mem_actors[0]
         agent_id, actor_display = run.agent_id, mem_actor
     memory_error: Exception | None = None
     events: list[dict[str, Any]] = []
@@ -1930,9 +1933,16 @@ def session_transcript(
         memory_error, readable = exc, False
     if readable:
         try:
-            events = memory.list_events(
-                workspace, mem_actor, session_id, max_results=100, memory_id=mem_override
-            )
+            for candidate in [mem_actor] if row is not None else mem_actors:
+                events = memory.list_events(
+                    workspace, candidate, session_id, max_results=100,
+                    memory_id=mem_override,
+                )
+                if _turns_from_events(events):
+                    mem_actor = candidate
+                    if row is None:
+                        actor_display = candidate
+                    break
         except Exception as exc:
             memory_error = exc  # chat may fall back to its ledger; eval to content logs
     turns = _turns_from_events(events)
@@ -1965,9 +1975,9 @@ def session_transcript(
             )
             if turns:
                 origin = "logs"
-    # Long-term records only make sense for chat sessions — eval traffic all
-    # shares the bare "default" actor, so its namespaces aggregate across
-    # every agent's runs and say nothing about this session.
+    # Long-term records only make sense for chat sessions — an eval session's
+    # actor is either single-use or the shared bare "default" one, whose
+    # namespaces aggregate across every agent's runs.
     long_term = None
     if row is not None and readable:
         try:

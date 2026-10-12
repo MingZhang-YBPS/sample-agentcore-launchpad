@@ -54,3 +54,17 @@ def test_turns_of_one_scenario_share_its_actor_and_repeats_do_not(monkeypatch):
     first, second = {calls[0][2], calls[1][2]}, {calls[2][2], calls[3][2]}
     assert len(first) == 1 and len(second) == 1
     assert first != second
+
+
+def test_the_run_records_each_sessions_actor_for_the_transcript_reader(monkeypatch):
+    from app.evaluation.models import EvalRun
+    from app.evaluation.service import eval_session_actors
+
+    rid, calls = _run(monkeypatch, [{"prompt": "q1"}, {"prompt": "q2"}])
+    db = SessionLocal()
+    run = db.get(EvalRun, rid)
+    db.close()
+    assert [a["actor_id"] for a in run.attempts] == [actor for _, _, actor in calls]
+    for entry in run.attempts:
+        assert eval_session_actors(run, entry["session_id"])[0] == entry["actor_id"]
+        assert eval_session_actors(run, entry["session_id"])[-1] == "default"

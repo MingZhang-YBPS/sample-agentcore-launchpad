@@ -641,9 +641,38 @@ def get_annotation_task(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     task = cal_svc.get_task(db, ws.id, task_id)
+    _backfill_answers(db, ws, task)
     identity = require_identity(request)
     privileged = identity.role == ADMIN or "judge.calibrate" in identity.permissions
     return cal_svc.task_view(db, task, viewer=identity.username, privileged=privileged)
+
+
+def _backfill_answers(db: Session, ws: WorkspaceScope, task: Any) -> None:
+    """Fill in the agent's reply on items taken from a run before the reader could find it.
+
+    Tasks created while the transcript reader still looked under the bare "default"
+    actor froze an empty `answer` for every per-session-actor replay. The reply is a
+    fact about the session, not a label, so re-reading it is safe at any status; each
+    item is tried once (`answer_checked`) so a session with no transcript does not
+    cost a memory read on every view."""
+    if not task.run_id:
+        return
+    pending = [item for item in task.items or []
+               if item.get("session_id") and not item.get("answer")
+               and not item.get("answer_checked")]
+    if not pending:
+        return
+    run = db.get(EvalRun, task.run_id)
+    if run is None or run.workspace_id != ws.id:
+        return
+    items = []
+    for item in task.items or []:
+        if item in pending:
+            item = {**item, "answer": _agent_reply(db, ws, run, item["session_id"])[:4000],
+                    "answer_checked": True}
+        items.append(item)
+    task.items = items
+    db.commit()
 
 
 @router.post("/annotation-tasks/{task_id}/labels", status_code=201)
