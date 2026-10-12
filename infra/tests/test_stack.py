@@ -375,3 +375,21 @@ def test_gateway_role_can_resolve_a_routed_config_bundle(template: Template):
             }
         ),
     )
+
+
+def test_group_attachments_wait_for_their_group_and_user(template: Template):
+    """An attachment that runs before its group fails with "Group not found"."""
+    groups = template.find_resources("AWS::Cognito::UserPoolGroup")
+    users = template.find_resources("AWS::Cognito::UserPoolUser")
+    attachments = template.find_resources("AWS::Cognito::UserPoolUserToGroupAttachment")
+    assert attachments
+    for res in attachments.values():
+        props = res["Properties"]
+        deps = set(res.get("DependsOn", []))
+        [group_id] = [
+            k for k, g in groups.items() if g["Properties"]["GroupName"] == props["GroupName"]
+        ]
+        [user_id] = [
+            k for k, u in users.items() if u["Properties"]["Username"] == props["Username"]
+        ]
+        assert group_id in deps and user_id in deps

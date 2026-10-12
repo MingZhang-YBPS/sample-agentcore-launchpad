@@ -152,8 +152,12 @@ class LaunchpadBaseStack(Stack):
             access_token_validity=Duration.hours(1),
         )
 
+        # The attachment names its group by string, which CloudFormation does not
+        # read as a reference: without an explicit dependency it may run before
+        # the group exists and fail with "Group not found".
+        groups: dict[str, cognito.CfnUserPoolGroup] = {}
         for role_name in ("platform-admin", "hr-analyst"):
-            cognito.CfnUserPoolGroup(
+            groups[role_name] = cognito.CfnUserPoolGroup(
                 self,
                 f"Group-{role_name}",
                 user_pool_id=pool.user_pool_id,
@@ -185,6 +189,7 @@ class LaunchpadBaseStack(Stack):
                 username=spec["username"],
             )
             attachment.add_dependency(user)
+            attachment.add_dependency(groups[spec["group"]])
 
         # ---- IAM: execution role assumed by AgentCore Runtime workloads ----
         exec_role = iam.Role(
