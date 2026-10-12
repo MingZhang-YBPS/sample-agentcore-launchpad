@@ -1553,4 +1553,5 @@ def test_root_span_queries_accept_agentcore_invocation_roots():
     for query in (obs.q_root_spans(), obs.q_dashboard_series("24h"), obs.q_dashboard_totals()):
         assert obs.ROOT_SPAN_FILTER in query
         assert 'name = "POST /invocations"' in query
-        assert "| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)\n" not in query
+        legacy_filter = "| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)\n"
+        assert legacy_filter not in query

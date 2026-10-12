@@ -23,7 +23,6 @@ const open = (id: string) => `/v2/assistant?view=detail&id=${encodeURIComponent(
 function useClear(onCleared: () => void) {
   const { t } = useTranslation();
   const toast = useToast();
-  const { isAdmin } = useAuth();
   const [target, setTarget] = useState<{ id: string; title: string; fp: AssistantConversationFootprint | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const message = (err: unknown) => (err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err));
@@ -41,7 +40,7 @@ function useClear(onCleared: () => void) {
   };
   const fp = target?.fp ?? null;
   const cloud = fp ? fp.operations.filter((o) => o.status !== "cleaned") : [];
-  const blocked = fp ? fp.blockers.length > 0 || (fp.requires_admin && !isAdmin) : true;
+  const blocked = fp ? fp.blockers.length > 0 || !fp.can_clear : true;
   const run = async () => {
     if (!target || !fp || blocked) return;
     setBusy(true);
@@ -84,8 +83,8 @@ function useClear(onCleared: () => void) {
           {!fp.agents.length && !cloud.length && !fp.datasets.length && <div>{t("assistantPage.clear.onlyTranscript")}</div>}
           {fp.blockers.length > 0 ? (
             <Notice s="act">{t("assistantPage.clear.blockers", { list: fp.blockers.map((b) => b.reason).join("; ") })}</Notice>
-          ) : fp.requires_admin && !isAdmin ? (
-            <Notice s="wait">{t("assistantPage.clear.adminOnly")}</Notice>
+          ) : !fp.can_clear ? (
+            <Notice s="wait">{t("assistantPage.clear.noPermission")}</Notice>
           ) : (
             <Notice s="wait">{t(fp.agents.length || cloud.length ? "assistantPage.clear.irreversible" : "assistantPage.clear.irreversibleLocal")}</Notice>
           )}

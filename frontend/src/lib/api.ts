@@ -78,6 +78,12 @@ export interface AgentInfo {
   resource_id: string | null;
   version: string | null;
   owner: string;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system presets, discovered runtimes and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows, system presets and discovered runtimes. */
+  created_by_name?: string | null;
   error: string | null;
   spec: Record<string, unknown>;
   /** The A2A registry record the last deploy created/refreshed, when Registry was available. */
@@ -219,6 +225,12 @@ export interface ExperimentSummary {
   agent_name: string;
   status: string;
   stage: string;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export type SystemPresetStatus =
@@ -535,6 +547,9 @@ export interface RuntimeDiscoveryCandidate {
   managed_agent_id: string | null;
   managed_agent_name: string | null;
   managed_agent_method: AgentInfo["method"] | null;
+  /** Set when the owning agent is hidden by workspace isolation: the resource is
+   *  managed (not importable, `reason_code: "already-managed"`) but no owner is named. */
+  managed?: boolean;
   importable: boolean;
   reason_code: string | null;
   reason: string | null;
@@ -558,6 +573,9 @@ export interface HarnessDiscoveryCandidate {
   managed_agent_id: string | null;
   managed_agent_name: string | null;
   managed_agent_method: AgentInfo["method"] | null;
+  /** Set when the owning agent is hidden by workspace isolation: the resource is
+   *  managed (not importable, `reason_code: "already-managed"`) but no owner is named. */
+  managed?: boolean;
   importable: boolean;
   reason_code: string | null;
   reason: string | null;
@@ -588,6 +606,8 @@ export interface RuntimeImportResult {
 }
 
 export interface RuntimeCanaryMetric {
+  /** evaluator id, or its ARN (AWS A/B results) — the tail after `/` is the id */
+  evaluatorId?: string;
   label: string;
   polarity?: number;  // +1 = higher mean wins, -1 = lower mean wins
   control: { mean: number | null; sampleSize: number | null };
@@ -651,6 +671,11 @@ export interface RuntimeCanaryInfo {
     /** Harness canaries A/B two existing versions */
     harness?: { control_version: string; treatment_version: string; start_stage?: number };
     edited_spec?: Record<string, unknown>;
+    /** the evaluators BOTH arms are scored by (chosen at create); absent on rows
+     *  created before the choice existed — those use the default pair */
+    online_evaluators?: string[];
+    /** the one evaluator that decides the verdict; absent ⇒ the aggregate decides */
+    primary_evaluator?: string;
     // ``setup`` is persisted as a PARTIAL artifact (the block below) as soon as the
     // gateway + stable endpoint are up, so invoke keeps serving v_current during
     // provisioning. Everything after it only exists once the A/B test is live —
@@ -673,6 +698,9 @@ export interface RuntimeCanaryInfo {
       // zip behind v_candidate; cleanup deletes it unless it is still live
       candidate_s3_key?: string;
       treatment_endpoint?: string;
+      // copied from the top-level choice by setup (default pair on old rows)
+      online_evaluators?: string[];
+      primary_evaluator?: string;
       champion?: {
         target_name: string;
         target_id: string;
@@ -691,6 +719,9 @@ export interface RuntimeCanaryInfo {
         sent: number;
         failed: number;
         baseline_n: number;
+        /** the primary evaluator's own sample count before this stage's traffic
+         *  (runtime canaries with a primary); the verdict waits for it to grow */
+        primary_baseline_n?: number;
         dataset_id?: string;
         dataset_name?: string;
         completed_at?: string;
@@ -714,6 +745,13 @@ export interface RuntimeCanaryInfo {
         pairs_sent?: number;
         pairs_complete?: number;
         pairs?: CanaryPairRow[];
+        /** the evaluator that decided this verdict (absent ⇒ the aggregate decided) */
+        primary?: string;
+        /** the primary's polarity-oriented delta (positive favours the candidate) */
+        primary_delta?: number;
+        /** the configured evaluators, and those with no score on both arms */
+        evaluators?: string[];
+        unscored?: string[];
       };
     }[];
     complete?: {
@@ -735,6 +773,12 @@ export interface RuntimeCanaryInfo {
     };
     cleanup?: { category: string; status: string; detail?: string }[];
   };
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface JobEvent {
@@ -750,6 +794,8 @@ export interface JobInfo {
   status: "queued" | "running" | "succeeded" | "failed";
   error: string | null;
   events: JobEvent[];
+  /** job-type specific state (e.g. a conversation clear's step, blocker and result) */
+  payload?: Record<string, unknown> | null;
 }
 
 export interface ByoMountInput {
@@ -1283,6 +1329,9 @@ export interface AssistantConversationSummary {
   /** the caller owns it; false = another member's conversation an admin shared —
    *  every action but CLEAR is open */
   mine: boolean;
+  /** an administrator reading another member's UNSHARED conversation: every write
+   *  answers 404 until it is shared */
+  read_only: boolean;
   /** an admin opened it to every member of the workspace */
   shared: boolean;
   shared_by: string | null;
@@ -1350,17 +1399,70 @@ export interface AssistantConversationFootprint {
     cloud_resources: number;
   }[];
   datasets: { id: string; name: string; item_count: number; cloud: boolean }[];
-  blockers: { kind: "turn" | "operation" | "job"; id: string; reason: string }[];
-  /** cloud assets or an Agent are involved → only an administrator may clear */
-  requires_admin: boolean;
+  /** canaries on the conversation's Agents — stopped and removed before the Agent */
+  canaries: {
+    id: string;
+    name: string;
+    kind: "harness" | "runtime";
+    status: string;
+    agent_id: string;
+    running_action: string | null;
+    /** cleanup has not run, or ran and left resources behind */
+    pending: boolean;
+    resources: {
+      ab_test: boolean;
+      gateway: string | null;
+      endpoints: string[];
+      online_evaluations: number;
+    };
+  }[];
+  experiments: { id: string; name: string; agent_id: string; status: string; pending: boolean }[];
+  blockers: {
+    kind: "turn" | "preparation" | "operation" | "job" | "canary" | "experiment";
+    id: string;
+    reason: string;
+  }[];
+  /** permissions clearing needs: agents.deploy for cloud assets, agents.delete for an Agent */
+  required_permissions: string[];
+  /** the caller holds every required permission */
+  can_clear: boolean;
+  /** the newest clear attempt (a durable job), if any */
+  purge: AssistantPurgeJobState | null;
 }
 
+export interface AssistantPurgeBlocker {
+  code: string;
+  message: string;
+  detail: Record<string, unknown>;
+  status_code: number;
+}
+
+export interface AssistantPurgeJobState {
+  job_id: string;
+  status: JobInfo["status"];
+  error: string | null;
+  blocker: AssistantPurgeBlocker | null;
+  step: { key: string; state: string; detail: string } | null;
+  updated_at: string | null;
+}
+
+/**
+ * `DELETE …/conversations/{id}`: a transcript-only conversation is deleted inline
+ * (`deleted: true`); anything with cloud resources answers 202 with a durable clear
+ * job (`job_id`, `deleted: false`) — poll `GET /api/jobs/{job_id}` until it is terminal.
+ */
 export interface AssistantConversationPurgeResult {
-  deleted: true;
+  deleted: boolean;
   conversation_id: string;
+  job_id?: string;
+  status?: JobInfo["status"];
+  error?: string | null;
+  blocker?: AssistantPurgeBlocker | null;
   operations_cleaned: string[];
   datasets: { id: string; name: string }[];
   agents: { id: string; name: string; aws_resource_deleted: boolean }[];
+  canaries?: { id: string; name: string }[];
+  experiments?: { id: string; name: string }[];
 }
 
 export interface AssistantApproveResult {
@@ -2154,6 +2256,12 @@ export interface MemoryResourceRow {
    *  else in the account is detected, not managed: no detail/edit/delete, and no
    *  agent may pin it — an administrator can adopt it. */
   managed: boolean;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface MemoryResourceList {
@@ -2196,6 +2304,12 @@ export interface MemoryResourceDetail {
   namespace_keys: MemoryResourceNamespaceKey[];
   /** always true — the per-id routes answer 404 `memory.not_managed` otherwise */
   managed: boolean;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /** `PUT /api/memory/resources/{id}` — both optional, at least one required.
@@ -3057,6 +3171,28 @@ export interface EvaluatorRow {
   evaluator_type?: string | null;
   provider?: string | null;
   definition?: EvaluatorDefinition | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
+}
+
+/** Why the account's evaluators could not be listed (`code` is an `apiErrors.*` key;
+ *  `message` is a generic sentence, never the raw AWS text). */
+export interface EvaluatorsUnavailable {
+  code: string;
+  message: string;
+}
+
+/** `GET /api/eval/evaluators` — builtins first, then the account's custom and
+ *  third-party rows; `custom_unavailable` is present only when that listing failed
+ *  (the list then holds builtins only). */
+export interface EvaluatorCatalog {
+  evaluators: EvaluatorRow[];
+  builtin_count: number;
+  custom_unavailable?: EvaluatorsUnavailable;
 }
 
 export interface ScalePoint {
@@ -3084,6 +3220,12 @@ export interface EvaluatorDetail {
   status: string | null;
   evaluator_type?: string | null;
   provider?: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /** Exactly one definition per body (`instructions` | `base_evaluator_id` |
@@ -3182,6 +3324,12 @@ export interface OnlineEvalConfigRow {
   duplicate_enabled: boolean;
   created_at: string | null;
   updated_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /** `POST /api/eval/online`. Exactly one kind per mode: `evaluators` for scores,
@@ -3320,6 +3468,13 @@ export type WorkspaceBootstrapStatus = "registered" | "bootstrapping" | "ready" 
 export type WorkspaceTier = "dev" | "staging" | "prod";
 export const WORKSPACE_TIERS: WorkspaceTier[] = ["dev", "staging", "prod"];
 
+/**
+ * Who sees a workspace's member-created resources. `shared` (the default):
+ * everyone sees everything. `isolated`: a member sees only what they created,
+ * plus resources created by an admin or with no recorded creator; admins see all.
+ */
+export type ResourceVisibility = "shared" | "isolated";
+
 export interface Workspace {
   id: string;
   name: string;
@@ -3333,6 +3488,8 @@ export interface Workspace {
   tier: WorkspaceTier;
   /** the hub's own environment: cannot be deleted or bootstrapped from here */
   is_default: boolean;
+  /** absent on an older backend — read as `shared` */
+  resource_visibility?: ResourceVisibility;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -3570,6 +3727,12 @@ export interface SkillLabTasksetInfo {
   counts: Record<string, number>;
   created_at: string | null;
   updated_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /**
@@ -3700,6 +3863,12 @@ export interface SkillLabJobInfo {
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 /**
@@ -4068,6 +4237,12 @@ export interface V2Dataset {
   cloud: { dataset_id?: string; status?: string; draft_status?: string } | null;
   has_ground_truth: boolean;
   created_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface V2DatasetCreate {
@@ -4107,10 +4282,47 @@ export interface V2FromSessionsResult {
   skipped: V2SkippedSession[];
 }
 
+/** How a 运行日志 record becomes turns (`pipeline_logs.LogFormat`): fields are JSON
+ *  dot paths, `@logStream` makes one stream one session. */
+export interface V2LogFormat {
+  preset: "genai" | "message" | "exchange";
+  session_field?: string | null;
+  role_field?: string | null;
+  text_field?: string | null;
+  user_roles?: string[];
+  assistant_roles?: string[];
+  input_field?: string | null;
+  output_field?: string | null;
+}
+
+export interface V2PipelineSource {
+  /** absent on rows saved before log sources existed = "traces" */
+  type?: "traces" | "logs";
+  agent: string | null;
+  range: V2Range;
+  status: "all" | "ok" | "error";
+  max_sessions: number;
+  log_groups?: string[];
+  keyword?: string | null;
+  format?: V2LogFormat | null;
+}
+
 export interface V2PipelineConfig {
-  source: { agent: string | null; range: V2Range; status: "all" | "ok" | "error"; max_sessions: number };
-  processing: { first_turn_only: boolean; dedupe: boolean; min_input_chars: number };
+  source: V2PipelineSource;
+  processing: { first_turn_only: boolean; dedupe: boolean; min_input_chars: number; keep_replies?: boolean };
   output: { dataset_id?: string | null; dataset_name?: string | null };
+}
+
+/** `POST /api/eval/pipelines/preview-logs` — what a logs source extracts now. */
+export interface V2LogsPreview {
+  events: number;
+  truncated: boolean;
+  parsed: number;
+  failed: Record<string, number>;
+  sessions_found: number;
+  sessions: { session_id: string; stream: string; log_group: string; last: string | null; records: number; turns: { role: string; text: string }[] }[];
+  samples: { stream: string; timestamp: string | null; message: string }[];
+  paths: string[];
 }
 
 export interface V2PipelineRun {
@@ -4121,6 +4333,8 @@ export interface V2PipelineRun {
   skipped: V2SkippedSession[];
   dataset_id: string | null;
   error: string | null;
+  /** a logs source's parse stats */
+  log?: { events: number; parsed: number; failed: Record<string, number>; truncated: boolean };
 }
 
 export interface V2Pipeline {
@@ -4132,6 +4346,12 @@ export interface V2Pipeline {
   last_run: V2PipelineRun | null;
   created_at: string | null;
   updated_at: string | null;
+  /** `users.id` of the creating account (the ownership key); null for the config
+   *  admin / auth-disabled operator, system-created and legacy rows. */
+  created_by?: string | null;
+  /** Creator's username at creation time (display only); null when unknown —
+   *  legacy rows and resources created outside the console. */
+  created_by_name?: string | null;
 }
 
 export interface V2PipelineBody extends V2PipelineConfig {
@@ -4163,6 +4383,8 @@ export interface V2RunCreate {
   repeats?: number;
   /** acknowledges the estimate when the workspace policy asks for confirmation */
   confirm_cost?: boolean;
+  /** the Bedrock model that plays the user — required for a simulated-persona dataset */
+  actor_model_id?: string;
 }
 
 /** One stream of an agent's runtime log group (`GET /api/eval/agents/{id}/log-streams`). */
@@ -4715,11 +4937,19 @@ export const api = {
       `/api/eval/runs/${encodeURIComponent(runId)}/recommendations`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** `PUT …/recommendations/{recId}/edit` — save (or with null / the unchanged text,
+   *  drop) a manual revision of a completed, not yet accepted system-prompt
+   *  recommendation. Ledger-only; needs `eval.run`. */
+  editRunRecommendation: (runId: string, recId: string, systemPrompt: string | null) =>
+    request<{ recommendation: RunRecommendation }>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(recId)}/edit`,
+      { method: "PUT", body: JSON.stringify({ system_prompt: systemPrompt }) },
+    ),
   /** `POST …/recommendations/{recId}/accept` (202) — re-publishes the run's Harness
    *  with the recommended system prompt (a NEW Harness version, DEFAULT follows it).
    *  Needs `agents.deploy`; accepted once (409 afterwards). */
-  /** `systemPrompt` = the operator-reviewed text to publish (the recommendation as
-   *  generated when omitted). */
+  /** `systemPrompt` = the operator-reviewed text to publish (the saved revision, else
+   *  the recommendation as generated, when omitted). */
   acceptRunRecommendation: (runId: string, recId: string, systemPrompt?: string) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string; recommendation: RunRecommendation }>(
       `/api/eval/runs/${encodeURIComponent(runId)}/recommendations/${encodeURIComponent(recId)}/accept`,
@@ -4839,6 +5069,17 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  /** The workspace's member-visibility mode (admin only; hub-global route). */
+  getWorkspaceVisibility: (id: string) =>
+    request<{ resource_visibility: ResourceVisibility }>(
+      `/api/workspaces/${id}/settings/visibility`,
+    ),
+  /** Switch member visibility; takes effect on the next request, moves no data. */
+  putWorkspaceVisibility: (id: string, value: ResourceVisibility) =>
+    request<{ resource_visibility: ResourceVisibility }>(
+      `/api/workspaces/${id}/settings/visibility`,
+      { method: "PUT", body: JSON.stringify({ resource_visibility: value }) },
+    ),
   bootstrapWorkspace: (id: string) =>
     request<WorkspaceBootstrapAck>(`/api/workspaces/${id}/bootstrap`, { method: "POST" }),
   /** The latest bootstrap run, so a browser that did not start it can watch. */
@@ -5372,7 +5613,8 @@ export const api = {
     request<RuntimeCanaryInfo>(`/api/runtime-canaries/${id}`),
   /** Runtime agents send `candidate` (the edit to mint); a Harness sends
    *  `harness_versions` — control (an earlier version) vs treatment (the latest) —
-   *  and may open at 50/50 with `start_stage: 1` (skip 90/10). */
+   *  and may open at 50/50 with `start_stage: 1` (skip 90/10). Both kinds may choose
+   *  their evaluators and a primary evaluator that decides the verdict. */
   createRuntimeCanary: (input: {
     agent_id: string;
     candidate?: {
@@ -5383,6 +5625,10 @@ export const api = {
     harness_versions?: { control: string; treatment: string };
     start_stage?: 0 | 1;
     source_experiment_id?: string;
+    /** 1..10 ids scored on both arms; absent ⇒ the default pair */
+    online_evaluators?: string[];
+    /** must be one of `online_evaluators`; absent ⇒ the aggregate verdict */
+    primary_evaluator?: string;
   }) =>
     request<RuntimeCanaryInfo>("/api/runtime-canaries", {
       method: "POST",
@@ -5869,6 +6115,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
   v2Pipelines: () => request<{ pipelines: V2Pipeline[] }>("/api/eval/pipelines"),
+  v2PreviewPipelineLogs: (source: V2PipelineSource) =>
+    request<V2LogsPreview>("/api/eval/pipelines/preview-logs", { method: "POST", body: JSON.stringify({ source }) }),
   v2Pipeline: (id: string) =>
     request<V2Pipeline>(`/api/eval/pipelines/${encodeURIComponent(id)}`),
   v2CreatePipeline: (body: V2PipelineBody) =>
@@ -5884,8 +6132,7 @@ export const api = {
     }),
   v2RunPipeline: (id: string) =>
     request<V2Pipeline>(`/api/eval/pipelines/${encodeURIComponent(id)}/run`, { method: "POST" }),
-  v2Evaluators: () =>
-    request<{ evaluators: EvaluatorRow[]; builtin_count: number }>("/api/eval/evaluators"),
+  v2Evaluators: () => request<EvaluatorCatalog>("/api/eval/evaluators"),
   v2Evaluator: (id: string) =>
     request<EvaluatorDetail>(`/api/eval/evaluators/${encodeURIComponent(id)}`),
   v2CreateEvaluator: (body: EvaluatorCreateBody) =>
@@ -6013,15 +6260,21 @@ export interface ApiKeyInfo {
   prefix: string;
   enabled: boolean;
   created_at?: string | null;
+  /** `users.id` of the minting account; null for the config admin and legacy keys. */
+  created_by?: string | null;
+  /** Display name at mint time; null only on legacy keys (creator unknown). */
+  created_by_name?: string | null;
+  /** Last admitted /v1 call, stamped at most once a minute (`use_count` is exact). */
+  last_used_at?: string | null;
+  /** Why the creator may no longer hold this key (it cannot be re-enabled), or null. */
+  creator_offboarded?: "deleted" | "disabled" | "expired" | "no_workspace_grant" | null;
   key?: string;
   /** T16: empty = every agent in the workspace */
   agent_ids?: string[];
   expires_at?: string | null;
   expired?: boolean;
   rate_per_minute?: number | null;
-  last_used_at?: string | null;
   use_count?: number;
-  created_by?: string | null;
 }
 
 export interface ApiKeyOptions {

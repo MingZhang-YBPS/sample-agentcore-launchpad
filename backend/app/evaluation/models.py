@@ -45,6 +45,11 @@ class EvalDataset(Base):
     criteria_set_id: Mapped[str | None] = mapped_column(String(32), default=None)
     split_of: Mapped[str | None] = mapped_column(String(16), default=None)
     split: Mapped[str | None] = mapped_column(String(16), default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -81,6 +86,12 @@ class EvalRun(Base):
     # Dataset scenarios the agent ran out of budget on ({scenario_id, session_id, code,
     # stop_reason}): scored as they are instead of failing the run; NULL on older rows.
     budget_stops: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    # simulated persona scenarios skipped after their retries (the run went on)
+    scenario_failures: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    # Sessions a COMPLETED_WITH_ERRORS batch skipped ({total, failed, kind, sessions:
+    # [{session_id, index, kind, error_type, message}]}, see
+    # ``agentcore_eval.summarize_session_failures``); NULL on clean or older rows.
+    session_failures: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     # ── Agent-DLC lineage and accounting (docs/agent-dlc-design.md §4.3) ──
     criteria_set_id: Mapped[str | None] = mapped_column(String(32), default=None)
@@ -98,6 +109,11 @@ class EvalRun(Base):
     criteria_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     # one entry per invoked session: {scenario_id, attempt, session_id}
     attempts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -133,6 +149,10 @@ class EvalRecommendation(Base):
     # set once a system-prompt recommendation was accepted into a new Harness version:
     # {by, at, agent_id, job_id, deployment_id, previous_version}
     accepted: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # an operator's saved revision of the recommended system prompt, kept apart from
+    # ``result`` (which every GetRecommendation refresh rewrites): {prompt, by, at};
+    # accepting publishes it unless the dialog sends its own text
+    edit: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -159,6 +179,11 @@ class OnlineEvalConfig(Base):
     name: Mapped[str] = mapped_column(String(48))
     service_name: Mapped[str] = mapped_column(String(128))
     log_group: Mapped[str] = mapped_column(String(256))
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -180,6 +205,11 @@ class EvalPipeline(Base):
     status: Mapped[str] = mapped_column(String(16), default="idle")  # idle|running|succeeded|failed
     # {at, scanned, matched, added, skipped: [{session_id, reason}], dataset_id, error}
     last_run: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # The creating console principal (`app.services.creators`): `users.id` (NULL for
+    # the config admin / auth-disabled operator, system paths and legacy rows) and
+    # the username at creation, display only. Server-set, never from a payload.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

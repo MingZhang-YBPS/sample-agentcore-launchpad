@@ -409,6 +409,7 @@ def resume_pending_jobs() -> list[str]:
     """
     # Lazy: the uninstall worker imports the agents router (teardown helper), which
     # imports the system-agents service, which imports this module.
+    from app.assistant import purge as assistant_purge
     from app.services import promotion_exec
     from app.system_agents import uninstall as system_uninstall
 
@@ -420,6 +421,8 @@ def resume_pending_jobs() -> list[str]:
         system_uninstall.JOB_TYPE: system_uninstall.start_uninstall_resume,
         # T27: a release interrupted mid-stage continues from the first unfinished one
         promotion_exec.JOB_TYPE: promotion_exec.start_resume,
+        # an architect-conversation CLEAR resumes from its verified checkpoints
+        assistant_purge.JOB_TYPE: assistant_purge.start_purge_resume,
     }
     db = SessionLocal()
     try:

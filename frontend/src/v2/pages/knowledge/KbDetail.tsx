@@ -5,13 +5,14 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { api, ApiError, errorMessage, v2KnowledgeApi } from "../../../lib/api";
 import {
+  attachedAgentCount,
   type DataSource,
   jobRunning,
   KB_DESCRIPTION_MAX,
   kbInFlight,
   type KnowledgeBaseDetail,
 } from "../../../lib/knowledgeBases";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -463,6 +464,7 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
             { label: t("knowledge.cols.status"), value: <KbStatusTag status={kb.status} /> },
             { label: t("knowledge.cols.dataSources"), value: <span className="mono">{sources.length}</span> },
             { label: t("v2.common.createdAt"), value: fmtTime(kb.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(kb) },
             { label: t("knowledge.detail.overview.updated"), value: fmtTime(kb.updated_at) },
             { label: t("knowledge.detail.overview.arn"), value: kb.arn ? <span className="mono">{kb.arn}</span> : "—" },
             {
@@ -490,7 +492,7 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
         }
         testId="v2-kb-agents"
       >
-        {kb.attached_agents.length === 0 ? (
+        {attachedAgentCount(kb) === 0 ? (
           <span className="v2-muted">{t("knowledge.detail.agents.empty")}</span>
         ) : (
           <div className="v2-tags">
@@ -506,6 +508,13 @@ export function KbDetail({ id, onGone }: { id: string; onGone: (id: string) => v
                 </Tag>
               );
             })}
+            {attachedAgentCount(kb) > kb.attached_agents.length && (
+              <Tag tone="outline">
+                {t("v2.knowledge.attachedHidden", {
+                  n: attachedAgentCount(kb) - kb.attached_agents.length,
+                })}
+              </Tag>
+            )}
           </div>
         )}
         <p className="v2-muted v2-knowledge-hint">{t("v2.knowledge.attachHint")}</p>

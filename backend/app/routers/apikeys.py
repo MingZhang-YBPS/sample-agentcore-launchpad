@@ -1,4 +1,8 @@
-"""API key management — keys are stored as sha256 hashes, never plaintext."""
+"""API key management — keys are stored as sha256 hashes, never plaintext.
+
+A key records the console principal that minted it; once that account is
+offboarded the key is disabled and cannot be re-enabled (`services.api_keys`).
+"""
 
 import hashlib
 import secrets
@@ -7,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import false, true
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -14,7 +19,10 @@ from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ApiKey
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import api_keys as key_limits
+from app.services import agent_access
+from app.services import api_keys as api_keys_service
+from app.services.users import as_utc
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api", tags=["api-keys"])
 
@@ -28,7 +36,7 @@ class CreateKeyRequest(BaseModel):
     # T16 — all optional; omitted = the legacy unrestricted key.
     agent_ids: list[str] | None = Field(default=None, max_length=50)
     expires_at: datetime | None = None
-    rate_per_minute: int | None = Field(default=None, ge=1, le=key_limits.MAX_RATE_PER_MINUTE)
+    rate_per_minute: int | None = Field(default=None, ge=1, le=api_keys_service.MAX_RATE_PER_MINUTE)
 
 
 class UpdateKeyRequest(BaseModel):
@@ -37,7 +45,7 @@ class UpdateKeyRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=64)
     agent_ids: list[str] | None = Field(default=None, max_length=50)
     expires_at: datetime | None = None
-    rate_per_minute: int | None = Field(default=None, ge=1, le=key_limits.MAX_RATE_PER_MINUTE)
+    rate_per_minute: int | None = Field(default=None, ge=1, le=api_keys_service.MAX_RATE_PER_MINUTE)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -46,33 +54,46 @@ def _iso(value: datetime | None) -> str | None:
     return (value if value.tzinfo else value.replace(tzinfo=UTC)).isoformat()
 
 
-def _key_out(key: ApiKey) -> dict[str, Any]:
+def _key_out(key: ApiKey, offboarded: str | None = None) -> dict[str, Any]:
+    last_used = as_utc(key.last_used_at)
     return {
         "id": key.id,
         "name": key.name,
         "prefix": key.prefix,
         "enabled": key.enabled,
         "created_at": key.created_at.isoformat() if key.created_at else None,
+        # NULL on keys minted before creators were recorded — "unknown".
         "created_by": key.created_by,
+        "created_by_name": key.created_by_name,
         # empty list = every agent in the workspace
         "agent_ids": list(key.agent_ids or []),
         "expires_at": _iso(key.expires_at),
-        "expired": key_limits.is_expired(key),
+        "expired": api_keys_service.is_expired(key),
         "rate_per_minute": key.rate_per_minute,
-        "last_used_at": _iso(key.last_used_at),
+        "last_used_at": last_used.isoformat() if last_used else None,
         "use_count": key.use_count or 0,
+        # why the creator may no longer hold this key, or null
+        "creator_offboarded": offboarded,
     }
 
 
-def _clean_scope(db: Session, ws: WorkspaceScope, agent_ids: list[str] | None) -> list[str] | None:
-    """De-duplicated scope, every id a live agent of this workspace (else 422)."""
+def _clean_scope(
+    db: Session, ws: WorkspaceScope, agent_ids: list[str] | None, viewer: Viewer = Viewer.ALL
+) -> list[str] | None:
+    """De-duplicated scope, every id a live agent of this workspace that `viewer`
+    may see (else 422 — a hidden agent reads like an unknown one)."""
     if not agent_ids:
         return None
     unique = list(dict.fromkeys(agent_ids))
     live = {
         a.id
         for a in db.query(Agent)
-        .filter(Agent.workspace_id == ws.id, Agent.id.in_(unique), Agent.status != "deleted")
+        .filter(
+            Agent.workspace_id == ws.id,
+            Agent.id.in_(unique),
+            Agent.status != "deleted",
+            agent_access.agent_clause(viewer),
+        )
         .all()
     }
     unknown = [i for i in unique if i not in live]
@@ -97,9 +118,25 @@ def _clean_expiry(value: datetime | None) -> datetime | None:
     return aware
 
 
-def _key_in(db: Session, ws: WorkspaceScope, key_id: str) -> ApiKey:
+def _own_clause(viewer: Viewer) -> Any:
+    """Under workspace isolation a member manages only the keys they minted.
+
+    Stricter than the resource rule on purpose: a key is a credential, not a
+    shared resource, so a key with no recorded creator (config admin, legacy) or
+    an admin's key is not the member's to list or toggle. Admins and shared
+    workspaces see every key (`true()`)."""
+    if not viewer.filters:
+        return true()
+    return ApiKey.created_by == viewer.user_id if viewer.user_id else false()
+
+
+def _key_in(
+    db: Session, ws: WorkspaceScope, key_id: str, viewer: Viewer = Viewer.ALL
+) -> ApiKey:
     key = db.get(ApiKey, key_id)
     if key is None or key.workspace_id != ws.id:
+        raise NotFoundError("apikey.not_found", "api key not found")
+    if viewer.filters and (not viewer.user_id or key.created_by != viewer.user_id):
         raise NotFoundError("apikey.not_found", "api key not found")
     return key
 
@@ -108,14 +145,22 @@ def _key_in(db: Session, ws: WorkspaceScope, key_id: str) -> ApiKey:
 def list_keys(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     keys = (
         db.query(ApiKey)
-        .filter(ApiKey.workspace_id == ws.id)
+        .filter(ApiKey.workspace_id == ws.id, _own_clause(viewer))
         .order_by(ApiKey.created_at.desc())
         .all()
     )
-    return {"keys": [_key_out(k) for k in keys]}
+    # one predicate evaluation per creator (the list is a single workspace's)
+    reasons: dict[str | None, str | None] = {}
+    out = []
+    for key in keys:
+        if key.created_by not in reasons:
+            reasons[key.created_by] = api_keys_service.creator_offboarded(db, key)
+        out.append(_key_out(key, reasons[key.created_by]))
+    return {"keys": out}
 
 
 @router.post("/apikeys", status_code=201)
@@ -124,16 +169,24 @@ def create_key(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    identity = require_identity(request)
     raw = f"lp_live_{secrets.token_hex(16)}"
     # The key's workspace is what scopes it on /v1 — a key minted here reaches
-    # this environment's agents only.
+    # this environment's agents only. Its creator is what keeps it alive: the
+    # `users.id` when the principal has a row (the config admin and the
+    # auth-disabled operator do not, so their keys are never offboarded).
     key = ApiKey(
-        workspace_id=ws.id, name=req.name, prefix=raw[:12] + "…", key_hash=hash_key(raw),
-        agent_ids=_clean_scope(db, ws, req.agent_ids),
+        workspace_id=ws.id,
+        name=req.name,
+        prefix=raw[:12] + "…",
+        key_hash=hash_key(raw),
+        agent_ids=_clean_scope(db, ws, req.agent_ids, viewer),
         expires_at=_clean_expiry(req.expires_at),
         rate_per_minute=req.rate_per_minute,
-        created_by=require_identity(request).username,
+        created_by=identity.user_id,
+        created_by_name=identity.username,
     )
     db.add(key)
     db.commit()
@@ -146,11 +199,12 @@ def disable_key(
     key_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    key = _key_in(db, ws, key_id)
+    key = _key_in(db, ws, key_id, viewer)
     key.enabled = False
     db.commit()
-    return _key_out(key)
+    return _key_out(key, api_keys_service.creator_offboarded(db, key))
 
 
 @router.post("/apikeys/{key_id}/enable")
@@ -158,8 +212,19 @@ def enable_key(
     key_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    key = _key_in(db, ws, key_id)
+    key = _key_in(db, ws, key_id, viewer)
+    reason = api_keys_service.creator_offboarded(db, key)
+    if reason is not None:
+        # A member may toggle a key they can manage, but not revive one whose creator
+        # was offboarded — /v1 would refuse (and re-disable) it on first use.
+        raise AppError(
+            "apikey.creator_offboarded",
+            "this key's creator no longer has access to this workspace; mint a new key",
+            {"reason": reason},
+            status_code=409,
+        )
     key.enabled = True
     db.commit()
     return _key_out(key)
@@ -171,19 +236,20 @@ def update_key(
     req: UpdateKeyRequest,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    key = _key_in(db, ws, key_id)
+    key = _key_in(db, ws, key_id, viewer)
     sent = req.model_fields_set
     if "name" in sent and req.name is not None:
         key.name = req.name
     if "agent_ids" in sent:
-        key.agent_ids = _clean_scope(db, ws, req.agent_ids)
+        key.agent_ids = _clean_scope(db, ws, req.agent_ids, viewer)
     if "expires_at" in sent:
         key.expires_at = _clean_expiry(req.expires_at)
     if "rate_per_minute" in sent:
         key.rate_per_minute = req.rate_per_minute
     db.commit()
-    return _key_out(key)
+    return _key_out(key, api_keys_service.creator_offboarded(db, key))
 
 
 @router.get("/apikeys/{key_id}/usage")
@@ -192,12 +258,13 @@ def key_usage(
     days: int = 14,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Admitted `/v1` calls per UTC day, oldest first (dense, zero-filled)."""
-    key = _key_in(db, ws, key_id)
+    key = _key_in(db, ws, key_id, viewer)
     return {
         "key_id": key.id,
         "total": key.use_count or 0,
         "last_used_at": _iso(key.last_used_at),
-        "days": key_limits.usage_by_day(db, key.id, max(1, min(days, 90))),
+        "days": api_keys_service.usage_by_day(db, key.id, max(1, min(days, 90))),
     }

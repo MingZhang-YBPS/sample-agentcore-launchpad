@@ -38,12 +38,14 @@ def _user(username: str, *, first_login=None, created=T0, role="member", status=
         db.close()
 
 
-def _deploy(owner: str, ended: datetime, status="succeeded", workspace=DEFAULT_WORKSPACE_ID):
+def _deploy(owner: str, ended: datetime, status="succeeded", workspace=DEFAULT_WORKSPACE_ID,
+            *, created_by_name: str | None = None):
     db = SessionLocal()
     try:
         agent = Agent(
             workspace_id=workspace, name=f"a-{owner}-{ended.timestamp():.0f}-{status}",
             method="harness", status="active", spec={}, owner=owner,
+            created_by_name=created_by_name,
         )
         db.add(agent)
         db.flush()
@@ -120,6 +122,20 @@ def test_compute_ttfa_median_fallback_and_scoping():
     assert body["median_seconds"] == 900.0
 
 
+def test_compute_ttfa_prefers_the_recorded_creator_over_owner():
+    """A row stamped by `services.creators` is attributed by `created_by_name`; `owner`
+    (a provenance label such as "river") counts only for pre-creator rows."""
+    _user("erin", first_login=T0)
+    _deploy("river", T0 + timedelta(minutes=3), created_by_name="Erin")
+    db = SessionLocal()
+    try:
+        body = compute_ttfa(db, DEFAULT_WORKSPACE_ID)
+    finally:
+        db.close()
+    by_name = {u["username"]: u for u in body["users"]}
+    assert by_name["erin"]["ttfa_seconds"] == 180.0
+
+
 def test_ttfa_endpoint_is_admin_only(admin, app):  # noqa: F811
     member = member_session(app)
     assert member.get("/api/overview/ttfa").status_code == 403
@@ -130,7 +146,9 @@ def test_ttfa_endpoint_is_admin_only(admin, app):  # noqa: F811
     assert [u["username"] for u in body["users"]] == [MEMBER["username"]]
 
 
-def test_create_agent_stamps_owner(admin, monkeypatch):  # noqa: F811
+def test_create_agent_stamps_creator_name(admin, monkeypatch):  # noqa: F811
+    """TTFA attributes an agent by its creator's username (`created_by_name`, stamped
+    by `services.creators`); `owner` stays the provenance label."""
     import app.routers.agents as agents_mod
 
     monkeypatch.setattr(agents_mod, "start_deploy_async", lambda _job_id: None)
@@ -138,7 +156,8 @@ def test_create_agent_stamps_owner(admin, monkeypatch):  # noqa: F811
         "name": "ttfa-owner", "method": "harness", "system_prompt": "be brief",
     })
     assert res.status_code == 202, res.text
-    assert res.json()["agent"]["owner"] == ADMIN["username"]
+    assert res.json()["agent"]["created_by_name"] == ADMIN["username"]
+    assert res.json()["agent"]["owner"] == "river"
 
 
 def test_first_login_migration_is_additive(tmp_path):

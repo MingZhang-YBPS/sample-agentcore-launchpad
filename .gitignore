@@ -13,7 +13,10 @@
 /.darwin/
 /data/
 /design/
-/samples/
+/samples/*
+!/samples/store-demo/
+!/samples/hr-policy-demo/
+!/samples/research-demo/
 /docs/issues/
 .playwright-cli/
 # --- python ---
@@ -70,3 +73,6 @@ docs/.threatmodel/
 docs/threat-model-summary.md
 # Scanner exports (Bandit/SAST) name every finding with file:line.
 docs/*_findings.json
+# Local working material, not part of the public repo.
+docs/brd/
+.kiro/

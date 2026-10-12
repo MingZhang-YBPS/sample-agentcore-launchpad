@@ -9,7 +9,10 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
   the same workspace is open to every member for every action (``may_collaborate``
   — discussion, preparation, proposal review and approval, evaluation assets) under
   that action's usual permission, re-checked at each write; deleting it (and its
-  footprint preview) stays with the owner. Unsharing closes it again at once.
+  footprint preview) stays with the owner. Unsharing closes it again at once. An
+  administrator *reads* every conversation of the workspace (``may_view``: list,
+  detail, evaluation plan and operation status) but writes only where it
+  collaborates — an unshared one is read-only until the admin shares it.
 * **Discussion never writes AWS.** A turn makes exactly one data-plane call
   (``InvokeHarness`` on the preset) and ledger writes. No proposal, valid or not,
   creates anything until a separate approval.
@@ -67,7 +70,7 @@ from sqlalchemy.orm import Session, object_session
 
 from app.assistant import preparation, submission
 from app.assistant import proposal as proposal_contract
-from app.assistant.principal import collaborator_clause, may_collaborate, principal_of
+from app.assistant.principal import may_collaborate, may_view, principal_of, viewer_clause
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.deployer.pipeline import create_deployment
@@ -76,12 +79,14 @@ from app.models.assistant import AssistantConversation, AssistantMessage, Assist
 from app.models.ledger import Agent, Job, Workspace
 from app.routers.auth import Identity
 from app.schemas.agent import ToolRef
-from app.services import agent_names, knowledge, registry_console
+from app.services import agent_names, creators, knowledge, registry_console, visibility
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client, data_client
+from app.services.creators import Creator
 from app.services.kb_gateway import gateway_identity
 from app.services.memory import scoped_actor
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES
+from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext
 from app.system_agents import service as system_agents
 from app.system_agents.presets import ARCHITECT
@@ -201,15 +206,16 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   `launchpad-`, `harness-` or `system-`
 - `model_id` (string) and `model_source` (`"bedrock"` or `"mantle"`); default
   `{proposal_contract.PROPOSAL_DEFAULT_MODEL_ID}` / `"bedrock"`
-- `system_prompt`: the agent's FIRST-VERSION system prompt — deliberately lean
-  (hard cap 20000 chars): identity and audience, the goal, the
-  hard boundaries the golden tests enforce (what it must never do, when to escalate),
-  tone and language. Do NOT try to cover every case, enumerate scenario scripts or
-  paste the golden tests into it: the prompt is iterated afterwards through
+- `system_prompt`: the agent's FIRST-VERSION system prompt — deliberately lean and
+  minimal: at most 50 characters (a Chinese prompt ≤ 50 汉字 incl. punctuation, an
+  English one ≤ 50 words; the schema cap is 20000): one or two plain sentences saying
+  who the agent is and what it does for whom. Leave out red lines, escalation, tone,
+  output format, tool-usage instructions and scenarios — they belong in golden tests,
+  evaluators and `requirements_baseline`. The prompt is iterated afterwards through
   Launchpad's Evaluation → Optimization loop (evaluate against the dataset, take the
-  prompt recommendation, A/B it), so a short baseline that the evaluators can improve
-  is worth more than a long one nobody can attribute regressions to. Say this in the
-  reply when you hand over the proposal.
+  prompt recommendation, A/B it), and a minimal baseline makes each round's gain
+  visible. Write a longer v1 only when the user explicitly asks for one. Say this in
+  the reply when you hand over the proposal.
 - `tools`: list of catalog **tool keys** from the list below (may be empty)
 - `tool_functions`: optional object narrowing selected **Gateway** tools to some of
   their functions: `{{"gateway:<name>": ["<runtime callable name>", ...]}}`, names
@@ -316,8 +322,8 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   literals only. Before emitting the block, walk the skill's
   `references/proposal-self-check.md` — Launchpad runs the same checks and rejects the
   block on the first failure. It is an inert seed the member reviews; nothing is
-  created by this block or by the Agent approval — an administrator creates assets in
-  a separate step.
+  created by this block or by the Agent approval — the member creates assets in a
+  separate step.
 - optional `fishbone`: the customer's Agent-DLC five-dimension launch-barrier fishbone
   (see the skill's `references/fishbone-methodology.md`) — `{{"version": 1, "customer",
   "date": "YYYY-MM-DD", "use_case", "service_target": "internal|b2b|b2c", "coverage":
@@ -327,11 +333,14 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   (redacted), "confirmed": true, "selected": bool}}]}}, "parking_lot": [{{"original",
   "converted_to"?}}]}}`. The console renders it as the fishbone diagram in the
   proposal. Only barriers the customer stated (or accepted from your suggestion) AND
-  confirmed in this conversation may be `confirmed`; only confirmed barriers may be
-  `selected`; at most three selected per dimension; coverage `confirmed` needs a
-  confirmed barrier in that dimension. Ask about EVERY dimension before closing the
-  discovery — a dimension the customer did not raise gets its probes and then one or
-  two suggested barriers derived from this scenario to confirm, reword or strike.
+  confirmed in this conversation may be `confirmed`; a blanket acceptance of your
+  express close ("默认", "按你的建议", "都适用", or the option saying they apply)
+  accepts every suggestion in it, so those are `confirmed` and the member is emitted;
+  only confirmed barriers may be `selected`; at most three selected per dimension;
+  coverage `confirmed` needs a confirmed barrier in that dimension. Ask about EVERY
+  dimension before closing the discovery — a dimension the customer did not raise gets
+  its probes and then one or two suggested barriers derived from this scenario to
+  confirm, reword or strike.
   `explored_empty` only when the customer said nothing applies; `unresolved` (the
   customer stopped first) must carry the suggestion as a note with `"confirmed":
   false` — no dimension is left blank. ONE
@@ -390,7 +399,7 @@ Hard rules of this environment:
    Gateway/tool provisioning and
    natural-language Skill generation are unavailable. Evaluators and
    datasets are NOT created by this conversation either: the member later reviews a
-   separate evaluation-assets plan and an administrator may create them from it.
+   separate evaluation-assets plan and may create them from it.
 """
 
 
@@ -591,6 +600,43 @@ def verify_skill_copy(workspace: WorkspaceContext, copy_uri: str, pinned: dict[s
         raise RuntimeError(f"immutable skill copy {copy_uri} does not match the reviewed digest")
 
 
+def owner_viewer(db: Session, workspace_id: str, principal: str | None) -> Viewer:
+    """Whose eyes a conversation's catalog is read with: its OWNER's, so a
+    collaborator refreshing a shared conversation still gets the owner's view
+    (workspace isolation, `services/visibility.py`)."""
+    return visibility.viewer_for_principal(db, db.get(Workspace, workspace_id), principal)
+
+
+def restrict_catalog(
+    db: Session, workspace_id: str, viewer: Viewer, catalog: dict[str, Any]
+) -> dict[str, Any]:
+    """The catalog as ``viewer`` (the conversation owner) may see it: the KBs
+    workspace isolation hides are dropped. Custom evaluators are never in the
+    catalog. The deploy-job re-validation reads the unrestricted catalog."""
+    if not viewer.filters or not catalog.get("knowledge_bases"):
+        return catalog
+    from app.routers.knowledge import visible_kbs
+
+    return {**catalog,
+            "knowledge_bases": visible_kbs(db, workspace_id, viewer,
+                                           list(catalog["knowledge_bases"]))}
+
+
+def owner_catalog(db: Session | None, conversation: AssistantConversation) -> dict[str, Any]:
+    """The conversation's stored catalog snapshot as its owner may see it NOW.
+
+    The snapshot is taken at create / refresh; a workspace switched to isolated
+    afterwards must not keep showing (or prompting with) KBs the owner can no
+    longer see. Free unless the workspace is isolated and the owner a member."""
+    catalog = conversation.catalog or {}
+    if db is None or not catalog.get("knowledge_bases"):
+        return catalog
+    return restrict_catalog(
+        db, conversation.workspace_id,
+        owner_viewer(db, conversation.workspace_id, conversation.owner_principal), catalog,
+    )
+
+
 def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     """Existing, attachable resources of the workspace with their deployment identity.
 
@@ -599,6 +645,7 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     outbound-auth identity per gateway record, the S3 content digest per skill, and
     the workspace prerequisites (shared memory ARN, KB gateway + OAuth provider,
     execution role). A failing source degrades to an empty list plus a warning.
+    Unrestricted: callers acting for a conversation owner apply ``restrict_catalog``.
     """
     warnings: list[str] = []
     from app.assistant.tool_catalog import enrich_tool
@@ -814,9 +861,9 @@ def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, A
             "kb_gateway": bool(res.get("kb_gateway_id") and res.get("oauth_provider_arn")),
         },
         "is_admin": identity.is_admin,
-        # SE-047: only an administrator may materialize an evaluation plan (AWS
-        # evaluators + Lambda + IAM); members prepare/edit plans
-        "can_materialize_evaluation_assets": identity.is_admin,
+        # SE-047: materializing an evaluation plan (AWS evaluators + Lambda + IAM)
+        # needs the deploy permission; every member prepares/edits plans
+        "can_materialize_evaluation_assets": identity.can(PERMISSION_DEPLOY),
         "owner": identity.username,
         "principal": principal_of(identity),
     }
@@ -862,23 +909,55 @@ def accessible_conversation(
     db: Session, workspace_id: str, principal: str, conversation_id: str
 ) -> AssistantConversation:
     """The owner's conversation, or one an admin shared with the workspace — every
-    route but delete (and its footprint) resolves through this."""
+    route but delete (and its footprint) resolves through this. A conversation whose
+    CLEAR is queued or running refuses every write (409): a turn, approval or new asset
+    started now would race the teardown (``assistant.purge``)."""
     row = db.get(AssistantConversation, conversation_id)
     if row is None or row.workspace_id != workspace_id or not may_collaborate(row, principal):
+        raise NotFoundError("assistant.conversation_not_found", "conversation not found")
+    if row.purge_job_id:
+        job = db.get(Job, row.purge_job_id)
+        if job is not None and job.status in ("queued", "running"):
+            raise AppError(
+                "assistant.conversation_clearing",
+                "this conversation is being cleared — wait for the clear to finish",
+                {"job_id": job.id}, status_code=409,
+            )
+    return row
+
+
+def viewable_conversation(
+    db: Session, workspace_id: str, identity: Identity, conversation_id: str
+) -> AssistantConversation:
+    """``accessible_conversation`` widened for reads: an administrator also resolves
+    any other member's conversation of the workspace (read-only). Only the read
+    routes — detail, evaluation plan, operation status — and sharing use this."""
+    row = db.get(AssistantConversation, conversation_id)
+    if (
+        row is None
+        or row.workspace_id != workspace_id
+        or not may_view(row, principal_of(identity), is_admin=identity.is_admin)
+    ):
         raise NotFoundError("assistant.conversation_not_found", "conversation not found")
     return row
 
 
-def list_conversations(db: Session, workspace_id: str, principal: str) -> list[dict[str, Any]]:
-    """The caller's own conversations plus the ones shared with the workspace."""
+LIST_LIMIT = 50
+ADMIN_LIST_LIMIT = 200  # an administrator lists every member's conversations
+
+
+def list_conversations(db: Session, workspace_id: str, identity: Identity) -> list[dict[str, Any]]:
+    """The caller's own conversations plus the ones shared with the workspace; for an
+    administrator, every member's."""
+    principal = principal_of(identity)
     rows = (
         db.query(AssistantConversation)
         .filter(
             AssistantConversation.workspace_id == workspace_id,
-            collaborator_clause(principal),
+            viewer_clause(principal, is_admin=identity.is_admin),
         )
         .order_by(AssistantConversation.updated_at.desc())
-        .limit(50)
+        .limit(ADMIN_LIST_LIMIT if identity.is_admin else LIST_LIMIT)
         .all()
     )
     return [conversation_summary(db, r, viewer=principal) for r in rows]
@@ -887,14 +966,18 @@ def list_conversations(db: Session, workspace_id: str, principal: str) -> list[d
 def set_shared(
     db: Session, workspace_id: str, identity: Identity, conversation_id: str, shared: bool
 ) -> AssistantConversation:
-    """Admin-only publish/unpublish of a conversation to every workspace member. An
-    admin may share only what it can already reach (its own, or one already shared),
-    so sharing never becomes a way to discover another member's private one."""
-    if not identity.is_admin:
+    """Publish/unpublish a conversation to every workspace member — by its owner, or
+    by an administrator, who reads every conversation and so may share any of them
+    (sharing is how an admin turns a read-only one into a collaboration); a
+    collaborator on a shared one cannot toggle it."""
+    principal = principal_of(identity)
+    row = viewable_conversation(db, workspace_id, identity, conversation_id)
+    if not identity.is_admin and row.owner_principal != principal:
         raise AppError(
-            "auth.forbidden", "This action requires an administrator account", status_code=403
+            "assistant.share_forbidden",
+            "only the conversation's owner or an administrator can change its sharing",
+            status_code=403,
         )
-    row = accessible_conversation(db, workspace_id, principal_of(identity), conversation_id)
     if row.shared != shared:
         # Direct UPDATE: a share is not conversation activity, so it must not bump
         # ``updated_at`` (the history order) the way an ORM flush would.
@@ -917,7 +1000,10 @@ def create_conversation(
     db: Session, row: Workspace, workspace: WorkspaceContext, identity: Identity, title: str
 ) -> AssistantConversation:
     agent = _require_available(db, row)
-    catalog = fetch_catalog(workspace)
+    catalog = restrict_catalog(
+        db, row.id, visibility.viewer_for_principal(db, row, principal_of(identity)),
+        fetch_catalog(workspace),
+    )
     conversation = AssistantConversation(
         workspace_id=row.id,
         owner=identity.username,
@@ -937,7 +1023,10 @@ def refresh_catalog(
     preparation.require_idle(conversation)
     cid, principal = conversation.id, conversation.owner_principal
     expected = (conversation.preparation or {}).get("revision", 0)
-    catalog = preparation.live_catalog(workspace, list(conversation.preparation_sources or []))
+    catalog = restrict_catalog(
+        db, conversation.workspace_id, owner_viewer(db, conversation.workspace_id, principal),
+        preparation.live_catalog(workspace, list(conversation.preparation_sources or [])),
+    )
     _lock_conversation(db, cid)
     try:
         conversation = owned_conversation(db, workspace.id, principal, cid)
@@ -1003,6 +1092,8 @@ def conversation_summary(
         "title": row.title,
         "owner": row.owner,
         "mine": viewer is None or row.owner_principal == viewer,
+        # an administrator viewing another member's unshared conversation
+        "read_only": viewer is not None and not may_collaborate(row, viewer),
         "shared": bool(row.shared),
         "shared_by": row.shared_by,
         "shared_at": row.shared_at.isoformat() if row.shared_at else None,
@@ -1021,7 +1112,7 @@ def conversation_detail(
 ) -> dict[str, Any]:
     return {
         **conversation_summary(db, row, viewer),
-        "catalog": row.catalog or {},
+        "catalog": owner_catalog(db, row),
         "preparation": preparation.view(db, row),
         "messages": [
             {
@@ -1339,7 +1430,8 @@ def _base_of(conversation: AssistantConversation) -> AssistantProposal | None:
 
 
 def _preamble(conversation: AssistantConversation, *, inline: bool = False) -> str:
-    return (PROTOCOL_PREAMBLE + "\n" + catalog_section(conversation.catalog or {})
+    return (PROTOCOL_PREAMBLE + "\n"
+            + catalog_section(owner_catalog(object_session(conversation), conversation))
             + preparation.context(conversation)
             + (submit_tool_section() if inline else "")
             + current_proposal_section(_base_of(conversation), inline=inline))
@@ -2378,8 +2470,10 @@ def approve_proposal(
         return _outcome(db, current, started=False)
 
     try:
-        live_catalog = preparation.live_catalog(
-            workspace, list(conversation.preparation_sources or []),
+        live_catalog = restrict_catalog(
+            db, conversation.workspace_id,
+            owner_viewer(db, conversation.workspace_id, conversation.owner_principal),
+            preparation.live_catalog(workspace, list(conversation.preparation_sources or [])),
         )
     except Exception as exc:
         winner = winner_after_io()
@@ -2465,9 +2559,14 @@ def approve_proposal(
             spec=spec.model_dump(),
             owner=approver.username,
         )
+        # the approver (possibly a collaborator, not the conversation owner) created it
+        creators.stamp(agent, Creator.of(approver))
         db.add(agent)
         db.flush()
-        agent_names.claim_agent_name(db, fresh_row.id, spec.name, agent.id)  # 409 → rollback
+        agent_names.claim_agent_name(  # 409 → rollback; names the holder only if visible
+            db, fresh_row.id, spec.name, agent.id,
+            viewer=visibility.viewer_for_principal(db, fresh_row, principal_of(approver)),
+        )
         deployment, job = create_deployment(
             db, agent, commit=False,
             payload_extra={"assistant": {

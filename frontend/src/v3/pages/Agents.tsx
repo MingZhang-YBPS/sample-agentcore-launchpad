@@ -364,7 +364,7 @@ function AgentList() {
                   </td>
                   <td><Chip>{a.method}</Chip></td>
                   <td className="num">v{a.version ?? "—"}</td>
-                  <td className="mono" style={{ color: "var(--v3-text-2)" }}>{a.owner || "—"}</td>
+                  <td className="mono" style={{ color: "var(--v3-text-2)" }}>{a.created_by_name || a.owner || "—"}</td>
                   <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(a.updated_at)}</td>
                 </tr>
               ))}

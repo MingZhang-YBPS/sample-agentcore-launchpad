@@ -24,7 +24,7 @@ from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import display_name_of
 from app.schemas.attachments import SessionIdField
-from app.services import channels, share_links
+from app.services import agent_access, channels, share_links
 from app.services import feedback as feedback_service
 from app.services import memory as memory_service
 from app.services.agentcore.harness import new_session_id
@@ -34,7 +34,12 @@ from app.services.workspace import get_workspace_row, workspace_context
 
 # ── console (member) ────────────────────────────────────────────────────────
 
-console_router = APIRouter(prefix="/api", tags=["share-links"])
+console_router = APIRouter(
+    prefix="/api",
+    tags=["share-links"],
+    # workspace isolation: a hidden `{agent_id}` / `{run_id}` reads as missing
+    dependencies=[Depends(agent_access.require_path_ids_visible)],
+)
 
 SHARE_PAGE_PATH = "/s"
 

@@ -23,10 +23,11 @@ import { useWorkspace } from "../../../workspace/workspace-context";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, FlowHeader, Select, Spin, Tag } from "../../ui";
-import { ExternalTag, HubTag, StatusTag, TierTag } from "./tags";
+import { ExternalTag, HubTag, StatusTag, TierTag, VisibilityTag } from "./tags";
 import { GrantsCard } from "./GrantsCard";
 import { InboundDefaultCard } from "./InboundDefaultCard";
 import { MappingsCard } from "./MappingsCard";
+import { VisibilityCard } from "./VisibilityCard";
 
 const POLL_MS = 2000;
 
@@ -395,6 +396,10 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
                   ]
                 : []),
               { label: t("v2.workspaces.grantedMembers"), value: grantedTotal ?? "—" },
+              {
+                label: t("v2.workspaces.visibility.title"),
+                value: <VisibilityTag mode={row.resource_visibility ?? "shared"} />,
+              },
               { label: t("v2.workspaces.col.created"), value: fmtTime(row.created_at) },
               { label: t("v2.workspaces.updated"), value: fmtTime(row.updated_at) },
             ]}
@@ -460,6 +465,7 @@ export function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       )}
 
       <GrantsCard workspaceId={workspaceId} onTotal={setGrantedTotal} />
+      <VisibilityCard workspaceId={workspaceId} onSaved={() => void reload()} />
       {(row.is_default || row.bootstrap_status === "ready") && <InboundDefaultCard workspaceId={workspaceId} />}
 
       <MappingsCard workspaceId={workspaceId} />

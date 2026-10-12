@@ -21,7 +21,7 @@ import {
 } from "../../../lib/experiments";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
-import { fmtScore, fmtTime } from "../../format";
+import { creatorLabel, fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
 import { EXPERIMENT_TONE, stageLabel } from "./common";
@@ -582,6 +582,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               loading={evaluatorsLoad.loading}
               error={evaluatorsLoad.error}
               onRetry={evaluatorsLoad.reload}
+              customUnavailable={evaluatorsLoad.data?.custom_unavailable}
               selected={onlineEvaluators}
               onChange={setOnlineEvaluators}
               max={ONLINE_EVAL_MAX}
@@ -916,6 +917,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               ),
             },
             { label: t("v2.tasks.colCreated"), value: fmtTime(exp.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(exp) },
           ]}
         />
       </Card>

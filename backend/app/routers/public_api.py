@@ -23,7 +23,8 @@ from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
 from app.schemas.agent import display_name_of
 from app.schemas.attachments import AttachmentRequest, SessionIdField
-from app.services import api_keys as key_limits
+from app.services import agent_access, visibility
+from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import invoke_agent_text
@@ -42,6 +43,10 @@ def require_api_key(
     The hash lookup is deliberately global: it is the only way to learn which
     workspace the caller is in, since /v1 carries no header. Everything after it
     filters on `key.workspace_id`.
+
+    A key whose creator has been offboarded is refused (and disabled) here — see
+    `services.api_keys`. Then expiry and the per-key rate limit (T16); an admitted
+    call is counted (`use_count`, the per-day usage row) and stamps `last_used_at`.
     """
     if not x_api_key:
         raise AppError("auth.missing_api_key", "X-Api-Key header required", status_code=401)
@@ -53,10 +58,20 @@ def require_api_key(
         # could resolve an invoke target. Answered like any other unusable key:
         # /v1 never reports whether a workspace once existed.
         raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
-    if key_limits.is_expired(key):
+    if api_keys_service.creator_offboarded(db, key) is not None:
+        # The member who minted it is gone (deleted, disabled, expired, or no
+        # longer granted this workspace). Disabled for good in the same request
+        # — expiry has no write event, so this is where it lands — and answered
+        # like any other unusable key: /v1 never says why.
+        key.enabled = False
+        db.commit()
+        raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
+    if api_keys_service.is_expired(key):
         raise AppError("auth.expired_api_key", "API key has expired", status_code=401)
-    key_limits.check_rate(key)
-    key_limits.record_use(db, key)
+    api_keys_service.check_rate(key)
+    # Stamps `last_used_at` and `use_count` on every admitted call (T16), so the
+    # throttled `touch_last_used` stamp has nothing left to add here.
+    api_keys_service.record_use(db, key)
     return key
 
 
@@ -66,16 +81,14 @@ class InvokeV1Request(AttachmentRequest):
 
 
 def _active_agent(db: Session, key: ApiKey, agent_id: str) -> Agent:
-    """The agent this key may invoke. One from another workspace reads exactly
-    like a missing one — the key's scope must not be probeable. So does one outside
-    the key's own `agent_ids` allow-list (T16)."""
-    agent = db.get(Agent, agent_id)
-    if (
-        agent is None
-        or agent.status == "deleted"
-        or agent.workspace_id != key.workspace_id
-        or not key_limits.allows_agent(key, agent_id)
-    ):
+    """The agent this key may invoke. One from another workspace — or one its
+    creator cannot see under workspace isolation — reads exactly like a missing
+    one: the key's scope must not be probeable. So does one outside the key's own
+    `agent_ids` allow-list (T16)."""
+    agent = agent_access.agent_in(
+        db, key.workspace_id, agent_id, viewer=visibility.viewer_for_key(db, key)
+    )
+    if agent is None or not api_keys_service.allows_agent(key, agent_id):
         raise NotFoundError("agent.not_found", "agent not found")
     require_invoke_capability(agent)
     return agent
@@ -88,9 +101,13 @@ def v1_list_agents(
     agents = [
         agent
         for agent in db.query(Agent)
-        .filter(Agent.status == "active", Agent.workspace_id == key.workspace_id)
+        .filter(
+            Agent.status == "active",
+            Agent.workspace_id == key.workspace_id,
+            agent_access.agent_clause(visibility.viewer_for_key(db, key)),
+        )
         .all()
-        if invoke_capability(agent)["eligible"] and key_limits.allows_agent(key, agent.id)
+        if invoke_capability(agent)["eligible"] and api_keys_service.allows_agent(key, agent.id)
     ]
     return {
         "agents": [

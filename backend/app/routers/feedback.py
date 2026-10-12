@@ -17,9 +17,15 @@ from app.models.ledger import Agent
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import agent_access
 from app.services import feedback as feedback_service
 
-router = APIRouter(prefix="/api", tags=["feedback"])
+router = APIRouter(
+    prefix="/api",
+    tags=["feedback"],
+    # workspace isolation: a hidden `{agent_id}` / `{run_id}` reads as missing
+    dependencies=[Depends(agent_access.require_path_ids_visible)],
+)
 
 
 class FeedbackRequest(BaseModel):

@@ -26,12 +26,17 @@ from app.models.ledger import (
 )
 from app.routers.auth import Identity, current_identity
 from app.routers.workspaces import WorkspaceScope, authorized_workspace, require_workspace
+from app.services import agent_access, promotion_exec, release_gates
 from app.services import alerts as alert_service
 from app.services import promotion as promotion_service
-from app.services import promotion_exec, release_gates
 from app.services.audit import record_audit_event
 
-router = APIRouter(prefix="/api", tags=["promotions"])
+router = APIRouter(
+    prefix="/api",
+    tags=["promotions"],
+    # workspace isolation: a hidden `{agent_id}` / `{run_id}` reads as missing
+    dependencies=[Depends(agent_access.require_path_ids_visible)],
+)
 
 
 class BundleRequest(BaseModel):

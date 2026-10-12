@@ -107,14 +107,66 @@ The frontend unit needs nothing.
 
 ```bash
 cd /home/ubuntu/workspace/agentcore_launchpad
-cp -a data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M%S)   # ALWAYS first
+(cd backend && /home/ubuntu/.local/bin/uv run python scripts/ledger_backup.py); echo "backup exit=$?"   # ALWAYS first; stop unless 0
 git fetch origin main && git diff --name-only HEAD..origin/main        # scope the delta
 git merge --ff-only origin/main
 # only if the delta touched **/pyproject.toml or uv.lock:      cd backend && uv sync
 # only if the delta touched package*.json:                     cd frontend && npm ci
 # only if the delta touched frontend/:                         cd frontend && npm run build
+(cd backend && /home/ubuntu/.local/bin/uv run python scripts/inflight.py); echo "inflight exit=$?"
 sudo systemctl restart launchpad-backend   # + launchpad-frontend if rebuilt
 ```
+
+**The ledger backup (always the first step).** `scripts/ledger_backup.py` copies the
+live ledger with SQLite's online backup API, so a request committing during the copy
+cannot tear it the way `cp` of the running service's file can (the engine runs SQLite's
+default rollback journal). It writes `data/launchpad.db.bak-<UTC YYYYmmdd-HHMMSS>`, runs
+`PRAGMA integrity_check` on the copy, and prints its path, size and the `agents` / `jobs`
+/ `eval_runs` row counts — eyeball them against what the console shows. It opens the
+ledger read-only, makes no AWS call and needs no `sqlite3` CLI; like the probe below it
+reads `settings.database_url`, or name the file with `--db data/launchpad.db` (then it is
+stdlib-only and plain `python3 backend/scripts/ledger_backup.py --db data/launchpad.db`
+works without the venv). It prunes nothing by default. Retention is an optional, explicit
+operator step: `--keep N` deletes the oldest `launchpad.db.bak-<stamp>` copies beyond the
+newest N (the new one included) — preview it first with `--keep N --dry-run`, which takes
+the backup and only lists what would be deleted.
+Hand-named copies — `launchpad.db.bak-pre-pr191-*`, `launchpad.db.pre-registry-ga-*` —
+never match and are never pruned. Exit `0` = written and verified; `1` = no backup (bad
+path/URL, ledger locked past `--timeout`, disk error); `2` = the copy failed
+`integrity_check` — it is kept as `….corrupt`, nothing is pruned, and the update must
+stop until that is understood; `64` = bad usage. On a checkout that predates the script,
+run the fetched copy: `git fetch origin main && git show
+origin/main:backend/scripts/ledger_backup.py | python3 - --db data/launchpad.db`.
+
+**The in-flight probe (run right before every restart).** `scripts/inflight.py`
+lists every background item in the ledger and what the restart will do to it. It is
+read-only — no `create_app`/`init_db`, no row written, no AWS call — needs no
+`sqlite3` CLI, and tolerates a checkout that is ahead of the ledger schema (a table
+or column the restart has not migrated yet is reported as `note: skipped …`, not an
+error). Add `--json` for a machine-readable answer. It reads `settings.database_url`:
+if the systemd unit sets `LAUNCHPAD_DATABASE_URL`, pass the same value to the probe
+(an ad-hoc shell does not inherit the unit's environment). Branch on the exit code:
+
+| Exit | Meaning | Do |
+|---|---|---|
+| `0` | nothing in flight, or only `restart_safe` rows | restart |
+| `2` | only `resumes` / `reconciles` rows | restart is fine; expect the `resumed …` / `reconciling …` / `reconciled …` lines in the journal and watch the resumed jobs finish |
+| `3` | at least one `fails_interrupted`, `fails_on_read`, `cleared_retry` or `unhandled` row | wait and re-run the probe until it drops to `0`/`2`; restart anyway only knowingly, and tell the owners which rows to re-submit or retry |
+| `1` | the ledger could not be read (e.g. no file at the configured path) | fix the path; do not read "no output" as "nothing in flight" |
+| `64` | bad command-line usage | fix the invocation |
+
+Per outcome: `resumes` — a startup hook re-runs it from its checkpoint (deploy,
+workspace bootstrap, preset uninstall, architect CLEAR jobs; evaluation-asset
+operations). `reconciles` — settled from AWS, never replayed (eval runs whose batch
+already started; Policy changes). `fails_interrupted` — failed at startup (eval runs
+with no batch yet, Skill Lab jobs — a `train` job can be resumed on request — and
+open architect turns, whose streams die). `fails_on_read` — failed the next time the
+row is read, so the journal is silent about it (running data pipelines, provider
+recommendation jobs). `cleared_retry` — an experiment/canary `running_action` or an
+architect preparation claim is cleared and the user must retry. `restart_safe` — the
+work lives on AWS (AgentCore recommendation jobs, refreshed from GetRecommendation).
+`unhandled` — a queued/running `Job.type` with no resume starter: the restart strands
+it; report it as a bug.
 
 Run `env -u AWS_REGION -u AWS_DEFAULT_REGION -u LAUNCHPAD_REGION make verify`
 before restarting. The backend test bootstrap isolates both SQLite and YAML reads
@@ -134,6 +186,10 @@ or Docker execution settings, and never requires changing production configurati
   `run_mode=dev` while the service is prod. Confirm posture from
   `systemctl show launchpad-backend -p Environment` or the `auth.required`
   answer — never from an ad-hoc process.
+- Never back the ledger up with `cp` while `launchpad-backend` runs — a commit
+  landing mid-copy leaves a torn file that nothing checks. Use
+  `scripts/ledger_backup.py` (update recipe); `cp` is only safe with the service
+  stopped.
 - Infra changes need an explicit `cdk deploy` with the region pinned
   (`CDK_DEFAULT_REGION=...`); `make bootstrap` skips CDK on an existing stack
   and `infra/app.py` defaults to us-west-2 when unset.
@@ -231,8 +287,8 @@ box the same way as dev, with these prod-specific readings:
   that already host foreign Launchpad resources.
 - **A service restart resumes interrupted `bootstrap_workspace` jobs**
   (real AWS provisioning in the target account/region) in addition to deploy
-  jobs — check `GET /api/workspaces` for a workspace stuck in `bootstrapping`
-  before restarting, and expect the resumed job to continue after.
+  jobs — the in-flight probe (`scripts/inflight.py`, §3 update recipe) lists
+  them as `resumes`; expect the resumed job to continue after the restart.
 - **Startup refuses to boot on any NULL `workspace_id` ledger row** (the
   journal names the table). That indicates a write-path bug introduced by an
   update; roll back the update rather than hand-patching rows.

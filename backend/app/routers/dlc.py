@@ -30,9 +30,16 @@ from app.models.dlc import CriteriaSet, Waiver
 from app.models.ledger import Agent, AuditEvent
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import agent_access, visibility
 from app.services.agentcore.client import control_client
+from app.services.visibility import Viewer, require_viewer
 
-router = APIRouter(prefix="/api", tags=["agent-dlc"])
+router = APIRouter(
+    prefix="/api",
+    tags=["agent-dlc"],
+    # workspace isolation: a hidden `{agent_id}` / `{run_id}` reads as missing
+    dependencies=[Depends(agent_access.require_path_ids_visible)],
+)
 ADMIN = "admin"
 
 
@@ -1221,12 +1228,17 @@ def compare_runs(
     runs: str = Query(description="comma-separated run ids, oldest first"),
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     ids = [r.strip() for r in runs.split(",") if r.strip()]
     specs: dict[str, dict] = {}
     for run_id in ids:
         run = db.get(EvalRun, run_id)
-        if run is None or run.workspace_id != ws.id:
+        if (
+            run is None
+            or run.workspace_id != ws.id
+            or not visibility.sees(viewer, db, run.created_by)
+        ):
             raise NotFoundError("run.not_found", f"run {run_id} not found")
         from app.models.ledger import SpecSnapshot
 

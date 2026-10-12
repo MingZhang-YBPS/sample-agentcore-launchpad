@@ -41,7 +41,8 @@ from app.core.errors import AppError, NotFoundError
 from app.core.regions import AGENTCORE_SUGGESTED_REGIONS
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
 from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
-from app.services import aws_clients, workspace_bootstrap
+from app.services import api_keys as api_keys_service
+from app.services import aws_clients, visibility, workspace_bootstrap
 from app.services import promotion as promotion_service
 from app.services import users as users_service
 from app.services.audit import record_audit_event
@@ -160,9 +161,9 @@ def _requested_row(db: Session, workspace_id: str) -> Workspace:
 def _fallback_row(db: Session, identity: Identity) -> Workspace:
     """The workspace an omitted `X-Workspace` header means.
 
-    Kept unambiguous rather than convenient: curl and the vendored studio
-    sub-app send no header, so an admin lands on `default` and a member with a
-    single grant on that one; anything else has to say which.
+    Kept unambiguous rather than convenient: curl sends no header, so an admin
+    lands on `default` and a member with a single grant on that one; anything
+    else has to say which.
     """
     if identity.is_admin:
         return _requested_row(db, DEFAULT_WORKSPACE_ID)
@@ -274,6 +275,7 @@ def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
         "bootstrap_status": row.bootstrap_status,
         "tier": row.tier or TIER_DEV,
         "is_default": row.id == DEFAULT_WORKSPACE_ID,
+        "resource_visibility": visibility.mode(row),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -1101,6 +1103,10 @@ def replace_grants(
             )
             .delete(synchronize_session=False)
         )
+        # A revoked member's keys in THIS workspace stop working now; their keys
+        # elsewhere are untouched (the predicate is per key workspace).
+        for user_id in sorted(revoke):
+            api_keys_service.disable_offboarded_keys(db, user_id)
     db.commit()
     return {
         "workspace_id": row.id,
@@ -1110,3 +1116,39 @@ def replace_grants(
         "removed": int(removed),
         "granted_total": _granted_total(db, row.id),
     }
+
+
+# ── settings ───────────────────────────────────────────────────────────────
+
+
+class VisibilitySetting(BaseModel):
+    """Whether members see each other's resources (`services/visibility.py`)."""
+
+    resource_visibility: Literal["shared", "isolated"]
+
+
+def _visibility_out(row: Workspace) -> dict[str, Any]:
+    return {"resource_visibility": visibility.mode(row)}
+
+
+@router.get("/{workspace_id}/settings/visibility")
+def get_visibility(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    return _visibility_out(_requested_row(db, workspace_id))
+
+
+@router.put("/{workspace_id}/settings/visibility")
+def put_visibility(
+    workspace_id: str,
+    req: VisibilitySetting,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    """Switch shared ⇄ isolated. Changes no resource and applies to the next
+    request: the workspace row is re-read on every request."""
+    row = _requested_row(db, workspace_id)
+    visibility.set_mode(db, row, req.resource_visibility)
+    return _visibility_out(row)

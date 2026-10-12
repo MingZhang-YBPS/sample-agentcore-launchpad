@@ -15,6 +15,22 @@ curl -s -X POST localhost:8000/api/apikeys -H 'Content-Type: application/json' \
 
 密钥以 **哈希(sha256)** 存储——完整密钥仅在创建时展示一次。
 
+**密钥生命周期。** 每个密钥记录创建它的控制台账号(`created_by` = 其 `users.id`,另有
+`created_by_name`;在此之前创建的密钥两者均为 `null`,控制台显示为"未知")以及
+`last_used_at`(`/v1` 调用成功时写入，每分钟最多一次)。密钥只在其创建者仍有资格持有时有效：
+一旦该账号被 **删除、停用或过期**,或(成员账号)**失去** 密钥所属工作空间的 **授权**,
+该密钥返回 `401 auth.invalid_api_key`(与任何不可用密钥相同;`/v1` 从不说明原因)并被置为停用。
+管理员停用 / 删除账号以及移除授权会立即停用创建者的密钥;过期没有写入事件，因此在密钥下一次被使用时生效。
+密钥只会被停用、从不删除——仍列在 `GET /api/apikeys` 中(`created_by`、`created_by_name`、
+`last_used_at`、`creator_offboarded`:`deleted` | `disabled` | `expired` |
+`no_workspace_grant` | `null`)。在 `shared` 工作空间中任何成员都可停用 / 启用任意密钥；在 `isolated`
+可见性下，成员只能列出和启停自己创建的密钥（其他密钥 → `404 apikey.not_found`；管理员可管理全部）。对创建者已失效的
+密钥调用 `POST /api/apikeys/{id}/enable` 会被拒绝，返回 `409 apikey.creator_offboarded`
+(`detail.reason`)。由配置内置管理员或未开启鉴权时的本地操作者(没有 `users` 行)创建的密钥，
+以及旧密钥，永远不会被判定为创建者失效。密钥跟随其**创建者当前**的工作空间可见性：在 `isolated` 下，
+成员创建的密钥只能列出和调用该成员能看到的 Agent（其他 Agent → `404 agent.not_found`），每次调用时重新判定；
+由管理员、配置内置管理员创建的密钥以及记录创建者之前的旧密钥不受限制。过期时间、权限范围与 Agent 白名单尚未实现。
+
 ## 同步调用 / Sync invoke
 
 ```bash
@@ -74,7 +90,7 @@ with requests.post(
 ```
 
 错误使用平台统一信封 `{code, message, detail}`——例如
-`auth.missing_api_key`(401)、`agent.not_active`(409)、`agent.not_found`(404)。
+`auth.missing_api_key`(401)、`auth.invalid_api_key`(401——未知、已停用或创建者已失效的密钥)、`agent.not_active`(409)、`agent.not_found`(404)。
 
 平台没有映射成自有服务错误码(`kb.not_found`、`memory.unavailable` 等)的 AWS 侧失败,
 同样以信封返回,而不是裸的 `500 Internal Server Error` 或 botocore 的
@@ -154,10 +170,10 @@ principal——其他成员、管理员、或同名重新注册的账号——�
 | 方法 | 路径 | 角色 | 结果 |
 |---|---|---|---|
 | `GET` | `/api/assistant/architect` | 成员 | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], capabilities{shared_memory, kb_gateway}, is_admin, owner, principal}`——`available` ⇔ 预置为 `active`；`capabilities` 说明提案可绑定哪些前置资源（此处绝不创建）；仅读台账 |
-| `GET` | `/api/assistant/architect/conversations` | 成员 | `{conversations[{id, title, owner, mine, shared, shared_by, shared_at, turns, turn_in_progress, status, proposal_status, proposal_revision, created_at, updated_at}]}`——调用者自己的会话，加上管理员在本 Workspace 共享的会话（`mine: false`），最新在前（≤ 50）；`owner` 为创建人的显示用户名；详情中每条 `messages[]` 带 `author`（`user` 消息的发送人） |
+| `GET` | `/api/assistant/architect/conversations` | 成员 | `{conversations[{id, title, owner, mine, read_only, shared, shared_by, shared_at, turns, turn_in_progress, status, proposal_status, proposal_revision, created_at, updated_at}]}`——调用者自己的会话，加上所有者或管理员在本 Workspace 共享的会话（`mine: false`），最新在前（≤ 50）；**管理员**列出本 Workspace 所有成员的会话（≤ 200），其他成员未共享的会话带 `read_only: true`；`owner` 为创建人的显示用户名；详情中每条 `messages[]` 带 `author`（`user` 消息的发送人） |
 | `POST` | `/api/assistant/architect/conversations` | 成员 | 请求体 `{title?}` → `201` 会话详情（见下）；快照 Workspace **目录**（Registry attachables、每条 Gateway 记录的实时 Gateway ARN + 出站认证身份、每个技能的 S3 内容摘要、ACTIVE 托管知识库、Workspace 前置资源——唯一的 AWS 读取）；预置未运行时 `409 assistant.unavailable`（`detail.preset_status`） |
-| `GET` | `/api/assistant/architect/conversations/{id}` | 成员（所有者；共享期间所有成员） | `{…摘要, catalog{fetched_at, tools[{key, kind, name, description, attachable, reason, gateway_arn?, auth_type?, outbound_auth?, url?, record_id}], skills[{key, name, description, path, record_id, content_digest, object_count}], knowledge_bases[{kb_id, name, description}], warnings[], resources{memory_arn, kb_gateway_id, kb_gateway_arn, oauth_provider_arn, execution_role_arn}, target{workspace_id, account_id, region}}, messages[{id, turn, role: user|assistant|tool|error, text, name, at}], proposals[…]}` |
-| `PUT` | `/api/assistant/architect/conversations/{id}/sharing` | 管理员 | 请求体 `{shared: bool}` → 摘要。向本 Workspace 所有成员开放（或收回）该会话，记录 `shared_by` / `shared_at`；不改变 `updated_at`。只能共享管理员本身可访问的会话（自己的，或已共享的），其他成员的私有会话返回 404。共享期间，下列会话路由（发消息、目录、资源准备、提案编辑/驳回/批准、评估计划与评估资产）对所有成员开放，各自原有的权限要求不变（在每次写入内复查，取消共享立即生效）；仅 `footprint` 与 `DELETE`（清除）限所有者（协作者得到 404） |
+| `GET` | `/api/assistant/architect/conversations/{id}` | 成员（所有者；共享期间所有成员）；管理员（任意会话，未共享时 `read_only`） | `{…摘要, catalog{fetched_at, tools[{key, kind, name, description, attachable, reason, gateway_arn?, auth_type?, outbound_auth?, url?, record_id}], skills[{key, name, description, path, record_id, content_digest, object_count}], knowledge_bases[{kb_id, name, description}], warnings[], resources{memory_arn, kb_gateway_id, kb_gateway_arn, oauth_provider_arn, execution_role_arn}, target{workspace_id, account_id, region}}, messages[{id, turn, role: user|assistant|tool|error, text, name, at}], proposals[…]}` |
+| `PUT` | `/api/assistant/architect/conversations/{id}/sharing` | 成员（所有者）或管理员 | 请求体 `{shared: bool}` → 摘要。向本 Workspace 所有成员开放（或收回）该会话，记录 `shared_by` / `shared_at`；不改变 `updated_at`。只能共享调用者本身可访问的会话（自己的，或已共享的；管理员可访问所有会话，因此可共享任意会话——只读会话由此转为协作），非管理员访问其他成员的私有会话返回 404；对已共享会话，既非所有者也非管理员的协作者返回 403 `assistant.share_forbidden`。共享期间，下列会话路由（发消息、目录、资源准备、提案编辑/驳回/批准、评估计划与评估资产）对所有成员开放，各自原有的权限要求不变（在每次写入内复查，取消共享立即生效）；仅 `footprint` 与 `DELETE`（清除）限所有者（协作者得到 404）。管理员对未共享会话的读取（`GET` 详情、`evaluation-plan`、`evaluation-plan/operations/{id}`）不会放宽任何写入：共享之前，所有写入路由对其返回 404 |
 | `POST` | `/api/assistant/architect/conversations/{id}/catalog` | 成员 | 重新读取目录 → `{catalog}` |
 | `POST` | `/api/assistant/architect/conversations/{id}/turns` | 成员 | 请求体 `{prompt}`（≤ 100k 字符 / 300k 字节，且须与前言一起放入请求预算）→ SSE `meta{conversation_id, turn, session_id, agent, omitted_turns} → (tool|delta)* → proposal? → done` 或 `error{code?, message}`（保留在记录中；客户端关闭流时留下部分回答 + 一条 `interrupted` 错误行，且无提案）。对预置发起一次携带有界重放记录（按轮次配对，≤ 12 轮 / 含前言 160k 字符）的 `InvokeHarness`；`launchpad-proposal` 块（≤ 64 000 字节）成为新修订（`draft` 或 `invalid`）；**无其他写入**。流打开前：`409 assistant.unavailable`、`409 assistant.turn_in_progress`（`detail.active_turn`——每会话单轮在途）、`409 assistant.conversation_full`（200 轮）、`413 assistant.prompt_too_large` |
 | `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | 成员 | 请求体 `{content}`（提案白名单；未知外层成员 → 422）→ `{proposal}`——一个**新**修订（`source: member`，唯一单调编号），绝非就地修改；无效内容按 `invalid` 保存并附 `validation_errors`，从不被更正；序列化超过 64 000 字节返回 `413 assistant.proposal_too_large`（不存储任何内容；规范化后的存储内容按同一上限复查）；达到 50 个修订返回 `409 assistant.conversation_full`。所有助手写请求同时在入口受限：实际接收超过 512 000 字节返回 `413 assistant.request_too_large` |
@@ -197,13 +213,13 @@ Agent 上助手轮次的 `session_id` 返回 `404 chat.session_not_found`。
 | `GET` | `/api/assistant/architect/conversations/{id}/evaluation-plan` | member | `{plans[…], operations[…], disclosure}` |
 | `POST` | `…/evaluation-plan/prepare` | member | `{revision}` → `201 {plan, …}` 平台草稿（旧版黄金测试的场景带 `review_required`，草稿在全部确认或阻止前为 `invalid`）；无副作用 |
 | `PUT` | `…/evaluation-plan` | member | `{content}` → 新修订（`draft` 或带 `validation_errors` 的 `invalid`）；超过 160 000 字节 → `413` |
-| `POST` | `…/evaluation-plan/materialize` | admin | `{plan_revision, plan_hash, acknowledge_disclosure: true}` → `202 {operation, started: true}`（原子声明：仍为 draft、同哈希、最新版本；启动 worker）或 `200 … started: false`（重复 / 并发请求，同一操作）。`422 assistant.disclosure_required`、`409 assistant.evaluation_plan_stale`（版本 / 哈希不符或期间被编辑 / 取代 / 声明）、`409 assistant.evaluation_plan_not_approvable`、`409 assistant.evaluation_plan_invalid`、`409 assistant.workspace_not_ready`、`409 assistant.execution_role_untrusted`（请求授权但执行角色无平台标签）；调用者与 Workspace 身份在声明事务内重新解析并钉在操作上 |
+| `POST` | `…/evaluation-plan/materialize` | `perm:agents.deploy`（所有者） | `{plan_revision, plan_hash, acknowledge_disclosure: true}` → `202 {operation, started: true}`（原子声明：仍为 draft、同哈希、最新版本；启动 worker）或 `200 … started: false`（重复 / 并发请求，同一操作）。`422 assistant.disclosure_required`、`409 assistant.evaluation_plan_stale`（版本 / 哈希不符或期间被编辑 / 取代 / 声明）、`409 assistant.evaluation_plan_not_approvable`、`409 assistant.evaluation_plan_invalid`、`409 assistant.workspace_not_ready`、`409 assistant.execution_role_untrusted`（请求授权但执行角色无平台标签）；调用者与 Workspace 身份在声明事务内重新解析并钉在操作上 |
 | `GET` | `…/evaluation-plan/operations/{operation_id}` | member | `{operation}`——仅账本，不调用 AWS |
-| `POST` | `…/operations/{operation_id}/retry` | admin | 恢复持久化意图（同令牌 / 同请求）；5 次后 `409 assistant.evaluation_assets_exhausted` |
-| `POST` | `…/operations/{operation_id}/lambda-revision-review` | admin | body `{plan_hash, expected_created_revision_id, expected_current_revision_id, cloudtrail_event_id, reason}`（`extra="forbid"`，reason 非空）→ `{operation, review, started}` —— **SE-049 经审阅的单一冲突恢复**：`CreateFunction` 返回的 RevisionId 在函数仍处于 `Pending` → `Active` 初始化期间发生变化，worker 拒绝发布（`resources[lambda_function].review.kind = initial_revision_changed`）。服务端自行读取指定的 CloudTrail 事件（按 `EventId` 调用 `LookupEvents`，从不信任客户端 JSON），要求**恰好一条**来自 `lambda.amazonaws.com`、位于钉住账号/区域的成功 `CreateFunction20150331` 记录，其请求字段等于记录的请求，响应带有记录的 FunctionArn、期望的初始 RevisionId、审阅过的 CodeSha256、`state = Pending` / `stateReasonCode = Creating` 与 `lastModified`；随后当前 `$LATEST` 必须等于该响应加上**仅有**的生命周期变化 —— `Active` / `LastUpdateStatus Successful`、恰为 `expected_current_revision_id`、同一 `LastModified`、所有已批准字段与全部可选安全相关成员（环境变量、层、VPC、KMS、文件系统、死信、签名、架构、追踪、日志、临时存储、SnapStart、镜像配置、运行时版本）一致 —— 且 `$LATEST` 是唯一版本、无别名、无资源策略、无预留并发，角色 / 日志组仍保持记录的身份。成功时在资源上追加**只增不改**的审阅条目（`reviews[]`：审阅人、原因、事件 ID / 时间 / 请求 ID、核验字段、新旧快照、精确的计划绑定；原始 CreateFunction 证据永不覆盖），基线 `revision_id` / `settled_revision_id` 移到审阅值，Lambda 冲突及其被阻塞的依赖（`lambda_permission`、`role_grant`、代码评估器）重新排队，由普通 worker 继续 —— 其 `PublishVersion` 仍带两项前置条件，之后的变更在那里失败。**本路由不做任何云端写入。**完全相同的重复请求幂等（`started: false`，返回已记录的审阅，不再读 CloudTrail）；审阅后的不同请求为 `409 assistant.lambda_revision_review_stale`。拒绝（不记录、不写入）：`422 assistant.lambda_revision_review_reason_required`、`409 assistant.evaluation_plan_stale`（哈希）、`409 assistant.lambda_revision_review_not_applicable`（操作非 partial/failed、函数不是仅因发布前 RevisionId 漂移而阻塞的自有已接受创建 —— 丢失的创建、已发布版本、发布意图或已重钉基线 —— 或存在其他无关的未决结果）、`409 assistant.lambda_revision_review_stale`（初始 RevisionId / 变化不匹配、已有不同审阅）、`409 assistant.lambda_revision_review_unverified`（`detail.fields` 列出差异成员；也包括 0 / 2+ / 畸形事件、未终止的事件历史、`InProgress` / `Failed` 更新状态、多余版本 / 别名 / 策略 / 并发、角色或日志组身份变化）、`409 assistant.evaluation_assets_running`、`409 assistant.evaluation_assets_exhausted`、`409 assistant.evaluation_assets_stopped`。四方比较沿已安装的 Lambda 模型无损进行：**记录的请求** ↔ 事件 `requestParameters`（逐成员；多出的环境变量等成员不属已批准）、**不可变的接受响应**（`create_response`，若存在）↔ 事件 `responseElements`、该响应 ↔ **当前 `$LATEST`**（所有非生命周期成员的存在、缺失与相等一并比较 —— 多出的 `DurableConfig` / `TenancyConfig` / `CapacityProviderConfig` / `MasterArn` 或平台未知的成员都是差异），且响应的每个成员必须由请求固定或属于文档记载的服务默认值（`PackageType Zip`、`x86_64`、`PassThrough` 追踪、512 MB 临时存储、SnapStart 关闭、写入 `/aws/lambda/<name>` 的文本日志、本区域运行时版本 ARN）。仅结构成员名做大小写归一；数据映射的键 / 值（环境变量、标签）与空字符串都是内容；存在性以显式的"缺失"哨兵比较（成员以 `null` 或错误类型出现即为差异，绝不等同于缺失），各方在比较前都按已安装的 Lambda 模型做类型校验（畸形值被拒绝而非归一），唯一的"缺失即为空"等价仅限文档记载信封的良构空形态（`environment: {}` / `{"Variables": {}}`、`Layers` / `FileSystemConfigs` `[]`、全空且类型正确的 `VpcConfig`），`CodeSize` 保留在接受响应中并在响应、事件与当前函数之间比较。依赖与记录快照重新比对（RoleId / ARN / 信任策略 / 内联策略 / 标签；日志组 creationTime / ARN / 保留期 / 标签），资源策略只有 `NotFound` 才证明不存在 —— 空文档或不可读文档均被拒绝。审阅的条件 UPDATE 把审阅所依赖的每个值都绑定为同一语句的谓词 —— 操作的状态 / 租约令牌 / 尝试次数 / 计划 id / 计划修订 / 计划哈希 / 所有者 / 审批人 / 精确的 pinned JSON / 精确的意图 JSON，已批准的计划行（id / 修订 / 状态 / 哈希列**以及**经校验内容的精确 JSON，其规范哈希已核对），对话所有者（== 操作记录的所有者 == 调用者），Workspace 账号 / 区域 / 角色 / 外部 id **以及**其精确的 `resources` JSON（含执行角色），审批人**与**审阅人的活跃未过期管理员行 ——并在主机锁内从数据库重新解析调用者，因此另一会话在该语句之前提交的任何变更都使其成为空操作（`409 assistant.evaluation_assets_stopped`）。核验状态作为 `reviewed_baseline` 持久化在资源上，恢复的 worker 在首次变更前立即重新校验（完整配置 + 标签、依赖、`$LATEST` 为唯一版本、无别名、策略不存在、无预留并发）—— 外部发布的同代码版本、他人的别名 / 策略 / 并发或任何配置漂移都是 `conflict`，永不采纳或覆盖，且不可再次审阅。与审阅无关地，普通 worker 在首次 `PublishVersion` 被拒后不会采纳同摘要版本（只有自身派发丢失响应的情况才对账），也永不覆盖不是自己设置的预留并发。限制：CloudTrail 是供人工审阅的正向证据，不能证明没有其他写入（事件历史最终一致，只列出已记录的内容）；控制台需要 Workspace 角色具备 `cloudtrail:LookupEvents`；外部管理员的检查→写入窗口仍为一次调用宽 |
-| `DELETE` | `…/operations/{operation_id}/assets` | admin | 按依赖顺序仅删除身份仍匹配的自有云端资产，每次生效后持久化；本地 Dataset 保留；worker 活跃时 `409 assistant.evaluation_assets_running`，批准者或 Workspace 身份变化时 `409 assistant.evaluation_assets_stopped` |
-| `GET` | `…/conversations/{conversation_id}/footprint` | 成员（所有者） | 「清除」将移除的内容：`{agents[], operations[], datasets[], blockers[], requires_admin, turns, proposals}`；仅读账本 |
-| `DELETE` | `…/conversations/{conversation_id}` | 成员（所有者）；`requires_admin` 时须为管理员 | 删除会话及其创建的全部内容，按依赖顺序：先对每次可清理的评估资产操作执行带围栏的清理 → 删除这些操作创建的本地 Dataset（手动同步到 AWS 的副本保留）→ 删除每个由批准部署的 Agent（与 `DELETE /api/agents/{id}` 相同的拆除）→ 删除账本行（操作、计划、提案、消息、会话）。有轮次 / 操作 / 部署任务在进行时 `409 assistant.conversation_busy`（不删除任何内容）；某次操作清理后仍有自有资源时 `409 assistant.conversation_assets_remain`（保留会话以便复核）；涉及云端资产或 Agent 的成员请求 `403 assistant.conversation_purge_admin` |
+| `POST` | `…/operations/{operation_id}/retry` | `perm:agents.deploy`（所有者） | 恢复持久化意图（同令牌 / 同请求）；5 次后 `409 assistant.evaluation_assets_exhausted` |
+| `POST` | `…/operations/{operation_id}/lambda-revision-review` | `perm:agents.deploy`（所有者） | body `{plan_hash, expected_created_revision_id, expected_current_revision_id, cloudtrail_event_id, reason}`（`extra="forbid"`，reason 非空）→ `{operation, review, started}` —— **SE-049 经审阅的单一冲突恢复**：`CreateFunction` 返回的 RevisionId 在函数仍处于 `Pending` → `Active` 初始化期间发生变化，worker 拒绝发布（`resources[lambda_function].review.kind = initial_revision_changed`）。服务端自行读取指定的 CloudTrail 事件（按 `EventId` 调用 `LookupEvents`，从不信任客户端 JSON），要求**恰好一条**来自 `lambda.amazonaws.com`、位于钉住账号/区域的成功 `CreateFunction20150331` 记录，其请求字段等于记录的请求，响应带有记录的 FunctionArn、期望的初始 RevisionId、审阅过的 CodeSha256、`state = Pending` / `stateReasonCode = Creating` 与 `lastModified`；随后当前 `$LATEST` 必须等于该响应加上**仅有**的生命周期变化 —— `Active` / `LastUpdateStatus Successful`、恰为 `expected_current_revision_id`、同一 `LastModified`、所有已批准字段与全部可选安全相关成员（环境变量、层、VPC、KMS、文件系统、死信、签名、架构、追踪、日志、临时存储、SnapStart、镜像配置、运行时版本）一致 —— 且 `$LATEST` 是唯一版本、无别名、无资源策略、无预留并发，角色 / 日志组仍保持记录的身份。成功时在资源上追加**只增不改**的审阅条目（`reviews[]`：审阅人、原因、事件 ID / 时间 / 请求 ID、核验字段、新旧快照、精确的计划绑定；原始 CreateFunction 证据永不覆盖），基线 `revision_id` / `settled_revision_id` 移到审阅值，Lambda 冲突及其被阻塞的依赖（`lambda_permission`、`role_grant`、代码评估器）重新排队，由普通 worker 继续 —— 其 `PublishVersion` 仍带两项前置条件，之后的变更在那里失败。**本路由不做任何云端写入。**完全相同的重复请求幂等（`started: false`，返回已记录的审阅，不再读 CloudTrail）；审阅后的不同请求为 `409 assistant.lambda_revision_review_stale`。拒绝（不记录、不写入）：`422 assistant.lambda_revision_review_reason_required`、`409 assistant.evaluation_plan_stale`（哈希）、`409 assistant.lambda_revision_review_not_applicable`（操作非 partial/failed、函数不是仅因发布前 RevisionId 漂移而阻塞的自有已接受创建 —— 丢失的创建、已发布版本、发布意图或已重钉基线 —— 或存在其他无关的未决结果）、`409 assistant.lambda_revision_review_stale`（初始 RevisionId / 变化不匹配、已有不同审阅）、`409 assistant.lambda_revision_review_unverified`（`detail.fields` 列出差异成员；也包括 0 / 2+ / 畸形事件、未终止的事件历史、`InProgress` / `Failed` 更新状态、多余版本 / 别名 / 策略 / 并发、角色或日志组身份变化）、`409 assistant.evaluation_assets_running`、`409 assistant.evaluation_assets_exhausted`、`409 assistant.evaluation_assets_stopped`。四方比较沿已安装的 Lambda 模型无损进行：**记录的请求** ↔ 事件 `requestParameters`（逐成员；多出的环境变量等成员不属已批准）、**不可变的接受响应**（`create_response`，若存在）↔ 事件 `responseElements`、该响应 ↔ **当前 `$LATEST`**（所有非生命周期成员的存在、缺失与相等一并比较 —— 多出的 `DurableConfig` / `TenancyConfig` / `CapacityProviderConfig` / `MasterArn` 或平台未知的成员都是差异），且响应的每个成员必须由请求固定或属于文档记载的服务默认值（`PackageType Zip`、`x86_64`、`PassThrough` 追踪、512 MB 临时存储、SnapStart 关闭、写入 `/aws/lambda/<name>` 的文本日志、本区域运行时版本 ARN）。仅结构成员名做大小写归一；数据映射的键 / 值（环境变量、标签）与空字符串都是内容；存在性以显式的"缺失"哨兵比较（成员以 `null` 或错误类型出现即为差异，绝不等同于缺失），各方在比较前都按已安装的 Lambda 模型做类型校验（畸形值被拒绝而非归一），唯一的"缺失即为空"等价仅限文档记载信封的良构空形态（`environment: {}` / `{"Variables": {}}`、`Layers` / `FileSystemConfigs` `[]`、全空且类型正确的 `VpcConfig`），`CodeSize` 保留在接受响应中并在响应、事件与当前函数之间比较。依赖与记录快照重新比对（RoleId / ARN / 信任策略 / 内联策略 / 标签；日志组 creationTime / ARN / 保留期 / 标签），资源策略只有 `NotFound` 才证明不存在 —— 空文档或不可读文档均被拒绝。审阅的条件 UPDATE 把审阅所依赖的每个值都绑定为同一语句的谓词 —— 操作的状态 / 租约令牌 / 尝试次数 / 计划 id / 计划修订 / 计划哈希 / 所有者 / 审批人 / 精确的 pinned JSON / 精确的意图 JSON，已批准的计划行（id / 修订 / 状态 / 哈希列**以及**经校验内容的精确 JSON，其规范哈希已核对），对话所有者（== 操作记录的所有者 == 调用者），Workspace 账号 / 区域 / 角色 / 外部 id **以及**其精确的 `resources` JSON（含执行角色），审批人**与**审阅人的活跃未过期管理员行 ——并在主机锁内从数据库重新解析调用者，因此另一会话在该语句之前提交的任何变更都使其成为空操作（`409 assistant.evaluation_assets_stopped`）。核验状态作为 `reviewed_baseline` 持久化在资源上，恢复的 worker 在首次变更前立即重新校验（完整配置 + 标签、依赖、`$LATEST` 为唯一版本、无别名、策略不存在、无预留并发）—— 外部发布的同代码版本、他人的别名 / 策略 / 并发或任何配置漂移都是 `conflict`，永不采纳或覆盖，且不可再次审阅。与审阅无关地，普通 worker 在首次 `PublishVersion` 被拒后不会采纳同摘要版本（只有自身派发丢失响应的情况才对账），也永不覆盖不是自己设置的预留并发。限制：CloudTrail 是供人工审阅的正向证据，不能证明没有其他写入（事件历史最终一致，只列出已记录的内容）；控制台需要 Workspace 角色具备 `cloudtrail:LookupEvents`；外部管理员的检查→写入窗口仍为一次调用宽 |
+| `DELETE` | `…/operations/{operation_id}/assets` | `perm:agents.deploy`（所有者） | 按依赖顺序仅删除身份仍匹配的自有云端资产，每次生效后持久化；本地 Dataset 保留；worker 活跃时 `409 assistant.evaluation_assets_running`，批准者或 Workspace 身份变化时 `409 assistant.evaluation_assets_stopped` |
+| `GET` | `…/conversations/{conversation_id}/footprint` | 成员（所有者） | 「清除」将移除的内容：`{agents[], canaries[], experiments[], operations[], datasets[], blockers[], required_permissions[], can_clear, purge, turns, proposals}`（`canaries` / `experiments` 为在本会话 Agent 上运行的金丝雀与实验，`pending` 表示清理尚未执行或有残留；`blockers[].kind` 可为 `turn` / `preparation` / `operation` / `job` / `canary` / `experiment`；`purge` 为最近一次清除任务；涉及云端资产时 `required_permissions` 含 `agents.deploy`，涉及 Agent 时含 `agents.delete`；`can_clear` 表示调用者全部具备）；仅读账本 |
+| `DELETE` | `…/conversations/{conversation_id}` | 成员（所有者），并须具备 `required_permissions` 中的每项权限 | 只有对话记录的会话直接删除（`200 {deleted: true, …}`）；其余情况为持久化清除任务：`202 {deleted: false, job_id, status, …}`，通过 `GET /api/jobs/{job_id}` 轮询（`payload.step`、`payload.result`，失败时 `payload.blocker`）。按依赖顺序，每步经 AWS 回读确认后才进行下一步：Agent 上的金丝雀（停止并 `act_cleanup`，等待 A/B 测试、在线评估、网关与两个命名端点均不存在）→ 实验 → 对每次可清理的评估资产操作执行带围栏的清理 → 本地 Dataset（手动同步到 AWS 的副本保留）→ 每个 Agent（删除资源、等待不存在、其执行角色、其自身的 A2A Registry 记录、账本）→ 金丝雀候选包 → 账本行。删除任何内容之前的拒绝：`409 assistant.conversation_busy`（轮次、导入、操作、部署任务或金丝雀 / 实验动作在进行）、`403 auth.permission_required`。任务进行时重复 DELETE 返回同一任务；期间会话写入返回 `409 assistant.conversation_clearing`，其 Agent 的金丝雀 / 实验 / 重新发布 / 转换 / 删除路由返回 `409 assistant.agent_clearing`。无法完成的任务以 `failed` 结束，`payload.blocker.code` 为 `assistant.purge_canary_incomplete`、`purge_experiment_incomplete`、`conversation_assets_remain`、`purge_still_deleting`、`purge_delete_failed`、`purge_agent_dependency`、`purge_agent_conflict`、`purge_agent_busy`、`purge_role_remains`、`purge_dependency_busy`、`purge_unowned`、`purge_step_failed` 之一（或拒绝本身的代码）；会话保留，下一次 DELETE 从已确认的检查点继续 |
 
 操作为 `{id, plan_id, plan_revision, plan_hash, proposal_revision, approved_by, account_id, region,
 pinned{…}, status: queued|running|succeeded|partial|failed|cleaning|cleaned, attempts, max_attempts,
@@ -214,7 +230,7 @@ result, cleanup?, link?}], running}`。`POST /api/eval/runs` 对缺少参考的�
 lacks expected_response`）；所选自定义评估器读取失败时返回 `422 run.evaluator_unverifiable`（需求未知不等于已验证，
 不会启动任何下游步骤），不存在时返回 `422 run.evaluator_not_found`；在线评估拒绝此类评估器。普通 `DELETE /api/eval/evaluators/{id}` 对操作拥有
 的评估器返回 `409 evaluator.managed_by_operation`。`GET /api/assistant/architect` 新增
-`can_materialize_evaluation_assets`（= 管理员）。
+`can_materialize_evaluation_assets`（= 调用者具备 `agents.deploy`）。
 
 ## 控制台 Registry API——实时名片 / Console Registry API: live agent card
 
@@ -340,12 +356,87 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 与 `status = "DELETED"` 报告该引用；策略变更返回 `409 governance.policy_engine_deleted`；`POST .../engine`
 把该引用视为未挂接：创建一个新的 Engine，以所选模式挂接，并把被替换的 ARN 记录在 operation 上。
 
+## 控制台资源创建者 / Console resource creators
+
+每个用户管理资源的列表与详情响应都带两个可为空的字段，记录是谁通过控制台创建了它：
+
+```json
+{"created_by": "3f2a…", "created_by_name": "ada"}
+```
+
+`created_by` 是创建者的 `users.id`——配置 admin 与关闭认证时的本地操作员没有 `users` 行，记为 NULL；
+`created_by_name` 是创建时的用户名，仅用于展示。早于该字段的旧行、在控制台之外创建的资源，以及没有人类主体的
+路径（Skill Lab 示例任务集、bootstrap 记忆、实验/灰度持有的在线评估配置、内置与第三方评估器）两者均为 NULL。
+它们总由服务端写入：请求体里的 `created_by` / `created_by_name` 会被忽略。
+
+| 资源 | 带这两个字段的路由 |
+|---|---|
+| 知识库 | `GET` / `POST /api/knowledge-bases`、`GET` / `PATCH /api/knowledge-bases/{kb_id}` |
+| 记忆资源 | `GET` / `POST /api/memory/resources`、`GET` / `PUT /{memory_id}`、`POST /{memory_id}/adopt`——被纳管的记忆带纳管者的名字，`created_by` 为 null |
+| 数据集 | `GET` / `POST /api/eval/datasets`（以及 `upload`、`from-sessions`、`PUT`）——pipeline 运行新建的数据集记录发起运行的人；架构助手物化的数据集记录计划审批人 |
+| 数据处理 pipeline | `GET` / `POST /api/eval/pipelines`、`GET` / `PUT /{id}`、`POST /{id}/run` |
+| 评估运行 | `GET` / `POST /api/eval/runs`、`GET /api/eval/runs/{id}`；在线报告行（`GET /api/eval/online/{id}/reports`） |
+| 在线评估配置 | `GET` / `POST /api/eval/online`、`GET /api/eval/online/{config_id}` |
+| Agent | `GET` / `POST /api/agents`、`GET /api/agents/{id}`、`POST /{id}/convert`（孪生 Agent 由转换者创建）、转换列表、`/api/system-agents` 行、架构助手审批响应（审批人）；发现导入的运行时与预设为 `null`——`owner` 仍只是来源标签 |
+| 评估器 | `GET /api/eval/evaluators`、`GET /{id}`、`POST`（创建响应）——架构助手物化的评估器记录计划审批人 |
+| 实验 / 灰度 | `GET` / `POST /api/experiments`、`GET /{id}`；`GET` / `POST /api/runtime-canaries`、`GET /{id}` |
+| Skill Lab | 任务与任务集的列表 / 详情 / 创建、`POST /jobs/{id}/import-taskset`（由导入者创建该任务集） |
+
+## Workspace 资源可见性 / Workspace resource visibility
+
+管理员按 workspace 决定成员能否看到彼此的资源：
+
+| 方法 | 路径 | 角色 | 请求体 / 响应 |
+|---|---|---|---|
+| `GET` | `/api/workspaces/{workspace_id}/settings/visibility` | admin | `{"resource_visibility": "shared" \| "isolated"}`——从未设置时为 `shared` |
+| `PUT` | `/api/workspaces/{workspace_id}/settings/visibility` | admin | 请求体与响应均为 `{"resource_visibility": "shared" \| "isolated"}`；其他取值 → `422 validation.invalid_request`；成员 → `403 auth.forbidden`；未知 workspace → `404 workspace.not_found` |
+
+两者都作用于路径参数（而非 `X-Workspace`），并且对 bootstrap 尚未完成的 workspace 同样可用。
+`GET /api/workspaces` 与管理员 workspace 路由返回的每个 workspace 行都带 `resource_visibility`。
+切换在下一次请求生效，不改动任何数据。
+
+在 `isolated` 下，**成员**能看到上表所列种类的一个资源，当且仅当它的 `created_by` 是该成员自己的
+`users.id`、为 `null`（创建者未知——旧行、示例、配置 admin、在控制台之外创建的资源），或是一个
+**当前**角色为 `admin` 的账号的 `users.id`。管理员看到一切。内置 / 第三方评估器与 bootstrap 记忆
+始终可见；云端数据集跟随与之关联的本地数据集（任一可见即可见；没有本地行的为共享），实验 / 灰度持有的
+在线评估配置（`exp_<id8>_…` / `can_<id8>_…`）跟随其实验或灰度。
+
+被隐藏的资源在所有地方都不存在，返回与不存在的 id 相同的结果：
+
+| 界面 | 被隐藏时的表现 |
+|---|---|
+| 列表与选择器 | 不出现——在分页之前过滤，因此 `GET /api/eval/runs` 的 `total` 以及 20 行的实验 / 灰度列表只统计可见行；`GET /api/memory/resources` 会完全去掉被隐藏的托管记忆（不会作为"已发现"列出） |
+| 按 id 的路由 | 该种类的 not-found：`kb.not_found`、`memory.not_managed`、`dataset.not_found`（本地与云端）、`pipeline.not_found`、`run.not_found`、`online_eval.not_found`（含 `/results`；被隐藏的报告运行 → `online_eval.report_not_found`）、`aws.not_found`（自定义评估器的 `GET`/`PUT`/`DELETE`）、`experiment.not_found`、`canary.not_found`、`skill_lab.job_not_found`、`skill_lab.taskset_not_found` |
+| 创建时的引用 | 与不存在的 id 相同：在被隐藏的数据集上发起运行 → `404 dataset.not_found`，使用被隐藏的评估器 → `422 run.evaluator_not_found`；在线评估配置 / 实验 `gateway` / 灰度中的被隐藏评估器 → `400 {online_eval,experiment,canary}.evaluator_unsupported`；立即评分（`POST /api/observability/sessions/{id}/evaluate`）→ `404 aws.not_found`；pipeline 输出 / from-sessions / 实验或灰度 `traffic` 的数据集 → `404 dataset.not_found`；实验的 `recommend_source_run_id` → `404 experiment.recommend_source_not_found`；灰度的 `source_experiment_id` → `400 canary.source_experiment_invalid`；Skill Lab 任务的任务集 → `404 skill_lab.taskset_not_found` |
+| 聚合 | `GET /api/overview` 的 `eval_pass_rate` / `eval_runs` 与 `GET /api/overview/online-quality` 只覆盖可见的运行 / 配置（质量卡片按查看者缓存） |
+| 架构助手目录 | 只列出会话所有者能看到的知识库 |
+
+内部引用不受影响：引用了隐藏资源的可见资源（管理员的实验回放某成员的数据集、pipeline 追加到其配置的
+数据集）继续工作。
+
+**Agent** 在其 `created_by` 上遵循同一条规则（发现导入的运行时与系统预设的创建者未知，因此共享）：
+
+| 界面 | 被隐藏的 Agent 的表现 |
+|---|---|
+| 列表与选择器 | 不出现在 `GET /api/agents`（所有控制台选择器）、转换孪生列表，以及（成员创建的密钥调用的）`GET /v1/agents` 中 |
+| 按 id 的路由 | `/api/agents/{id}`（以及 `conversions`、`versions`、`identity`、`redeploy`、`inbound-auth`、`convert`、`invoke`、`DELETE`）、`/api/chat/{id}/*` 与 `/v1/agents/{id}/invoke[-stream]` → `404 agent.not_found`；`POST /api/eval/runs`、`POST /api/eval/online`、`GET /api/eval/agents/{id}/log-streams`、`GET /api/experiments/readiness`、`POST /api/experiments` → `400 agent.not_active`；`POST /api/runtime-canaries` → `400 canary.agent_not_active`；`404 registry.a2a_demo_agent`；`live-agent-card` → `404 registry.record_not_deployed`；它的部署作业 → `404 job.not_found` |
+| 跨模块变更 | 对可见运行所属的隐藏 Agent 接受推荐，以及除 `verdict` / `cleanup` 之外的每个实验 / 灰度动作 → `404 agent.not_found`；这类运行的 `recommendation-inputs` 读作 `source: "manual"`（不透露隐藏 Agent 的提示词 / 工具） |
+| Agent spec 固定项 | 创建 / 转换：固定的每个知识库 / 记忆都必须可见（`404 kb.not_found`、`422 agent.memory_not_managed`）；重新发布 / inbound-auth 只检查相对已存 spec **新增**的固定项 |
+| 注册表 | 它的 A2A 记录从 `GET /api/registry/records`、`/search`、`/discoverable` 中去掉；对其 `GET` / `PUT` / `DELETE` / `action` / `reimport` → `404 aws.not_found` |
+| 可观测性 | 它的 trace / 会话从列表中去掉；trace / 会话详情、`transcript` 与 `evaluate` → `404 observability.{trace,session}_not_found`；`/dashboard` 仍是 workspace 合计 |
+| 记忆控制台 | 它的 actor（`<agent>__<human>`）从 `/api/memory/actors` 与抽取任务中去掉；以该 actor 或其命名空间为键的 `sessions` / `events` / `namespaces` / `records` / `records/search` → `404 memory.actor_not_found`；共享的 `default` actor 会去掉账本归给它的会话 |
+| 派生名称 | 从知识库 `attached_agents`（`attached_agent_count` 保留真实数量）与 `kb.has_attached_agents` 409、记忆资源 `agents` 与 `memory.in_use` 409、Connections `referenced_by`（含 `identity.connection_referenced` 409）、在线评估 `matched_agent` 中去掉；发现结果 `managed_agent_id` / `managed_agent_name` 与导入结果 `already_managed` 读作 `null`，并带 `managed: true` |
+| 聚合 | `GET /api/overview` 的 `active_sessions` 与 A2A `registry_assets.agents` 只统计可见的 Agent |
+| 名称唯一性 | 仍在整个 workspace 内生效；占用者被隐藏时，`409 agent.name_exists` 的 `detail.agent_id` 为 `null` |
+
+知识库强制删除仍会从每个挂载它的 Agent 上移除该知识库。
+
 ## 控制台知识库 API / Console Knowledge Bases API
 
 `/api/knowledge-bases/*` 支撑知识库控制台（控制台 04），底层是 Bedrock 的*托管*知识库
 ——控制面走 `bedrock-agent`，检索走 `bedrock-agent-runtime`。只有
 `type == "MANAGED"` 的知识库可寻址：同一账号内的 VECTOR 知识库会返回
-`kb.not_found`。本地不存任何状态，因此每条路由都是一次实时 AWS 调用。详见
+`kb.not_found`。本地只存控制台所建知识库的创建者（见下文「资源创建者」），其余都是一次实时 AWS 调用。详见
 [architecture.zh-CN.md](architecture.zh-CN.md)「托管知识库」一节。
 
 | 方法 | 路径 | 结果 |
@@ -527,12 +618,15 @@ AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Ru
 
 控制台 V2 的数据中心把已观测的会话（Agent 轨迹）转换为本地评估数据集。下面两类路由共用同一个提取器（`app/evaluation/pipelines.py`）：通过可观测服务读取会话对话（与 `/api/observability/sessions` 相同的私有会话可见性规则），把每条用户输入与其后的 Agent 回复配对，每个会话写入一个 **predefined** 场景（`scenario_id = trace-<session>`、`turns[{input, expected_response}]`、`metadata.source = "trace"`）；目标为 **legacy** 数据集时写入首轮的 `{prompt, expected}`。模拟用户数据集会被拒绝（400 `dataset.kind_unsupported`）。合并时跳过已存在的 scenario id、可选跳过相同的首轮输入（`dedupe`），并遵守 200 条上限；这里不调用任何模型。
 
+Pipeline 的数据源也可以读取 **CloudWatch 日志组**（`source.type = "logs"`，`app/evaluation/pipeline_logs.py`）：一次 Logs Insights 查询取时间窗口内最新的记录（至多 10,000 条；`keyword` 可按关键字缩小范围，不区分大小写），再由内嵌在 Pipeline 中的格式转换规则把每条记录转换为按会话分组的 `{role, text}` 轮次——`genai`（OTel GenAI 内容记录，如 `otel-rt-logs`，在服务端预先过滤，读取方式与会话对话相同）、`message`（一条记录是一条消息：`session_field` + `role_field` + `text_field`，角色按 `user_roles` / `assistant_roles` 映射）或 `exchange`（一条记录是一问一答：`input_field` + 可选的 `output_field`；不设 `session_field` 时每条记录各成一个场景，id 为稳定的哈希值）。字段只支持 JSON 点路径（不支持正则）；`session_field` 设为 `@logStream` 表示一个日志流就是一个会话；记录中 JSON 之前的文本前缀会被跳过。转换后的轮次进入与轨迹相同的提取器：`scenario_id = log-<session>`、`metadata{source: "logs", session_id, log_group}`。`processing.keep_replies: false`（两种数据源均可用）只保存输入。
+
 | 方法 | 路径 | 行为 |
 |---|---|---|
 | `POST` | `/api/eval/datasets/from-sessions` | `{session_ids[1..50], range, dataset_id 与 name 二选一, description?, first_turn_only?, dedupe?}` → 201 `{dataset, added, skipped[{session_id, reason}]}`。原因：`not_found`、`no_transcript`、`no_exchange`，以及（`session_id` 为空时）`duplicate` / `dataset_full`。新建数据集却没有可用内容 → 422 `dataset.nothing_extracted`，`detail.skipped` 给出原因 |
-| `GET` · `POST` | `/api/eval/pipelines` | 列出 / 创建保存的处理任务：`{name, description, source{agent, range, status: all\|ok\|error, max_sessions ≤ 50}, processing{first_turn_only, dedupe, min_input_chars}, output{dataset_id 与 dataset_name 二选一}}`（输出数据集不存在或为模拟用户 → 404 / 400） |
+| `GET` · `POST` | `/api/eval/pipelines` | 列出 / 创建保存的处理任务：`{name, description, source{type: traces\|logs, range, max_sessions ≤ 50, agent, status: all\|ok\|error（traces）, log_groups[1..10], keyword?, format{preset: genai\|message\|exchange, session_field, role_field, text_field, user_roles, assistant_roles, input_field, output_field}（logs）}, processing{first_turn_only, dedupe, min_input_chars, keep_replies}, output{dataset_id 与 dataset_name 二选一}}`（输出数据集不存在或为模拟用户 → 404 / 400；没有 `type` 的数据源视为 `traces`） |
+| `POST` | `/api/eval/pipelines/preview-logs` | `{source}`（日志数据源）→ 用与运行相同的转换器展示当前会读取和提取的内容：`{events, truncated, parsed, failed{not_json\|not_genai\|no_session\|no_text\|other_role: n}, sessions_found, sessions[≤8 {session_id, stream, log_group, last, records, turns}], samples[≤5 条原始记录 {stream, timestamp, message}], paths[≤60 个记录中出现的字段点路径]}`；轨迹数据源 → 422 `pipeline.not_logs` |
 | `GET` · `PUT` · `DELETE` | `/api/eval/pipelines/{pipeline_id}` | 读取 / 整体替换（运行中 → 409 `pipeline.running`）/ 删除——输出数据集保留 |
-| `POST` | `/api/eval/pipelines/{pipeline_id}/run` | 同步、有界的运行：列出时间窗口内的会话，按 Agent / 状态过滤，读取最新的至多 `max_sessions` 个，提取并合并。结果写入该行的 `last_run{at, scanned, matched, added, skipped, dataset_id, error}`，`status` 为 `succeeded` / `failed`；`dataset_name` 输出在首次运行时创建，之后该 Pipeline 指向其 id |
+| `POST` | `/api/eval/pipelines/{pipeline_id}/run` | 返回 `202` 与状态为 `running` 的行（已在运行 → 409 `pipeline.running`），有界的运行在后台进行：列出时间窗口内的会话，按 Agent / 状态过滤，读取最新的至多 `max_sessions` 个，提取并合并（日志数据源：查询、转换，取最新的 `max_sessions` 个会话）。结果写入该行的 `last_run{at, scanned, matched, added, skipped, dataset_id, error}`（日志数据源另有 `log{events, parsed, failed, truncated}`），`status` 为 `succeeded` / `failed`（服务重启中断的运行读回为 `failed`）；`dataset_name` 输出在首次运行时创建，之后该 Pipeline 指向其 id |
 | `GET` | `/api/eval/log-services?hours=1..336&log_group=…` | 在 `aws/spans`（以及所给的 `log_group`——span 发往 Agent 自身日志组的情形）的 span 中出现过的服务名称，一次 Logs Insights 查询 → `{services[{service_name, spans, sessions, last_seen, log_group_names, agent}], log_groups, hours}`。`log_group_names` 是建议的批量评估输入：`aws/spans` 加 span 资源属性（`aws.log.group.names`）指向的内容日志组；`agent` 为拥有该服务的平台 Agent，没有则为 `null`；`scopes` 为其 span 的插桩 scope，`evaluable` 表示 AgentCore Evaluation 是否会把其中任一 scope 作为 Agent span 读取（受支持框架的 scope，或通用前缀 `opentelemetry.instrumentation.*` / `openinference.instrumentation.*`，但不含 botocore、starlette 等传输层插桩；`null` 表示未知）——只有自定义 scope 的服务每个会话都会以「No evaluable agent spans found」失败 |
 | `GET` | `/api/eval/log-groups?q=` | 名称包含 `q` 的日志组（不区分大小写的 `logGroupNamePattern`），最多 150 个 → `{log_groups[{name, created_at, retention_days, stored_bytes}], truncated}` |
 | `GET` | `/api/eval/log-sessions?service_name=&log_group=…&hours=&q=` | `log_source` 任务的「日志」数据源：所给日志组（1–10 个）中 `service_name` 的会话，从其 span 中发现（span 是同时带有 `service.name` 与 `session.id` 的记录），按最近活动倒序，最多 500 个；行结构与 `/agents/{id}/log-streams` 相同（`stream` 为会话最近一条记录所在的日志组 · 日志流，另有 `traces`）。`q` 保留任意记录（span 或内容日志）包含该关键字的会话（不区分大小写的正则匹配，附命中数与摘录）。其他主体的私有助手会话不会列出 |
@@ -546,7 +640,7 @@ AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Ru
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/eval/evaluators` | `{evaluators[], builtin_count}`——先是本地内置目录（`source: builtin`，轨迹匹配器标 `requires_ground_truth`），再是账户 `ListEvaluators` 的行（`source: third_party \| custom`、`evaluator_type`、`provider`、`status`）。自定义行带 `definition: judge \| derived \| code`（由 `evaluatorType` 推导——列表不含配置） |
+| `GET` | `/api/eval/evaluators` | `{evaluators[], builtin_count}`——先是本地内置目录（`source: builtin`，轨迹匹配器标 `requires_ground_truth`），再是账户 `ListEvaluators` 的行（`source: third_party \| custom`、`evaluator_type`、`provider`、`status`）。自定义行带 `definition: judge \| derived \| code`（由 `evaluatorType` 推导——列表不含配置）。账号列举失败时仍返回 200，仅含内置评估器，并附 `custom_unavailable: {code, message}`（`aws.*`、`workspace.assume_role_failed` 或 `evaluators.list_failed`；通用消息，绝不回显 AWS 文本）；成功时无此键 |
 | `POST` | `/api/eval/evaluators` | 创建 → 201 `{evaluator_id, arn}`。公共字段：`name`（`^[a-zA-Z][a-zA-Z0-9_]{0,47}$`）、`description`。**评审**：`instructions`（10–4000 字符，至少一个 `{placeholder}`，否则 422 `evaluator.missing_placeholder`）、`rating_scale[≥2]`（默认 pass/fail）、`model_id`、`level`（TOOL_CALL \| TRACE \| SESSION，默认 TRACE）。**派生**：`base_evaluator_id`（`Builtin.*` \| `ThirdParty.*`；不存在 → 400 `evaluator.base_not_found`）、`model_id`；级别取自基础评估器。**代码评估器**：`lambda_arn`（`arn:aws[-partition]:lambda:<region>:<account>:function:<name>[:qualifier]`）、`lambda_timeout_s` 1–300（默认 60）、`level`；Lambda 必须与 workspace 同区域，否则 422 `evaluator.lambda_region_mismatch`（`detail: {lambda_region, workspace_region}`）。派生或代码载荷携带 `rating_scale` → 400 `evaluator.rating_scale_not_allowed`。任何定义在 `CreateEvaluator` 上都必须带 `level` |
 | `GET` | `/api/eval/evaluators/{evaluator_id}` | `{id, name, level, description, definition, instructions, rating_scale, model_id, base_evaluator_id, lambda_arn, lambda_timeout_s, evaluator_type, provider, status}`——其他定义的字段为空/null（代码评估器的 `instructions: ""`、`rating_scale: []`、`model_id: null`） |
 | `PUT` | `/api/eval/evaluators/{evaluator_id}` | 全量配置替换（`UpdateEvaluator` 接收完整配置，因此每个字段都要回传），载荷与创建相同但不含 `name` → 返回刷新后的详情。载荷必须与评估器**当前**定义一致：用评审/派生载荷更新代码评估器，或用代码载荷更新评审/派生评估器 → 400 `evaluator.definition_mismatch`（`detail: {current, payload}`）——评估器绝不会被转换。托管 id → 400 `evaluator.builtin_immutable` |
@@ -563,16 +657,17 @@ AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Ru
 | Method | Path | 用途 |
 |---|---|---|
 | `GET` | `/api/eval/runs?limit&offset&mode&agent_id` | 最新在前的分页 `{runs, total, limit, offset}` |
-| `GET` | `/api/eval/runs/{run_id}` | 单个运行(分数 / insight 树 / `batch_eval_id` / `error` / `stop_requested`)。 |
+| `GET` | `/api/eval/runs/{run_id}` | 单个运行(分数 / insight 树 / `batch_eval_id` / `scenario_failures`——重试后仍失败而被跳过的模拟用户场景，其余场景照常运行，`[{scenario_id, retries, code, error}]`（所有场景都失败时运行才失败）/ `session_failures`——批次以 COMPLETED_WITH_ERRORS 结束时为 `{total, failed, kind, sessions: [{session_id, index, kind, error_type, message}]}`，`kind` 取 `telemetry_incomplete`（只有缺失或不完整 span 的错误：追踪数据没有完整到达 CloudWatch，重新评估也无法恢复）、`evaluator_error`、`mixed` 或 `unknown`，`index` 为从 1 开始的场景序号；无错误的运行或早于该字段的行为 null，首次读取其结果时补齐 / `error` / `stop_requested`)。 |
 | `GET` | `/api/eval/runs/{run_id}/results` | **终态评估器运行的逐会话评审记录** —— `{available, sessions: [{session_id, results: [{evaluator_id, level, score, label, explanation, error_type, error_message}]}], count, truncated}`。账本行只保存每个评估器的平均分;每个分数背后评审模型给出的理由只存在于批次自己的结果日志流中(`GetBatchEvaluation.outputConfig.cloudWatchConfig`,与在线评估视图读取的 `gen_ai.evaluation.result` 记录同族),该路由按需读取、绝不持久化。会话顺序与运行的 `session_ids` 一致。无可读内容时返回 `available=false` + `reason`(`insights_run` \| `no_batch` \| `run_active` \| `stream_missing` \| `unreadable` + `detail`)而非错误。不存在 → 404 `run.not_found` |
 | `POST` | `/api/eval/runs` | 启动运行(范围四选一:`dataset_id` \| `cloud_dataset_id` \| `session_ids` \| `lookback_hours`)→ 201。`session_source: "logs"`（仅用于展示，只能搭配 `session_ids` 范围，否则 422 `run.session_source_scope`）把范围记为 `dataset_name` `logs:<n>`，与 `window:<N>h` 相同。**评估对象**：`agent_id` 与 `log_source {service_name, log_group_names[1..10]}` 二选一（否则 422 `run.target_required`）。`log_source` 运行评估已在 CloudWatch 中、背后没有平台 Agent 的遥测（例如未托管在 AgentCore Runtime 上的 Agent）：批量评估的 `cloudWatchLogs` 数据源即 `serviceNames: [service_name]` 加所给的 `logGroupNames`，只支持被动范围（`session_ids` / `lookback_hours`；数据集范围 → 422 `run.log_source_scope`），且每个日志组必须存在（422 `run.log_group_missing`，`detail.missing`）。运行行回显 `log_source`，`agent_id` 为 `""`，`agent_name` 为服务名称。`cloud_dataset_id` 范围可附带 `dataset_version`(已发布版本号,如 `"2"`,绝不是 `DRAFT`;省略即草稿):版本必须存在于 `ListDatasetVersions`(否则 422 `run.dataset_version_unknown`,不创建运行行),`GetDataset` / `ListDatasetExamples` 读取该快照。`dataset_version` 搭配其他范围 → 422 `run.dataset_version_scope`。每个运行行都回显 `dataset_version`(草稿、本地、session 与时间窗口运行为 `null`)。|
 | `POST` | `/api/eval/runs/{run_id}/stop` | **停止活跃运行** → 202 返回该运行。批次已在 AWS 上存在(`batch_eval_id` 非空)时调用 `StopBatchEvaluation`:批次经 `STOPPING → STOPPED`,已评判的会话保留结果,轮询器把运行记为 `stopped`,附带这些部分分数 / insight 树以及 `error = "stopped by operator"`。仍在 `queued` 的运行在本地取消(worker 出队时跳过,不调用 AWS),立即返回 `stopped`。正在回放数据集或等待遥测(尚无批次)的运行在提示词之间停止,绝不会调用 `StartBatchEvaluation`。终态运行(`completed` / `failed` / `stopped`)→ 409 `run.not_active`;不存在 → 404 `run.not_found`。刻意不暴露 `DeleteBatchEvaluation`——账本保留的部分结果 AWS 会丢弃 |
-| `POST` | `/api/eval/runs/{run_id}/recheck` | `eval.run`——**重新从 AWS 读取失败运行的批次** → 202 返回该运行。仅适用于已启动批次（`batch_eval_id` 非空）的 `failed` 运行：调用一次 `GetBatchEvaluation`；批次已终态时按轮询器的方式落定该行（例如带分数的 `completed`，或带批次自身原因的 `failed`），仍在运行时该行回到 `evaluating` 并重新开始轮询。只读——不会重新运行，也不产生费用。其他运行 → 409 `run.not_recheckable`；不存在 → 404 `run.not_found`。每次批次等待都受 `eval_batch_wait_s` 限制（默认 7200 秒，每 30 秒轮询一次）；超时的运行以「batch evaluation still <STATUS> after the N-minute wait」失败，可在 V2 任务详情中重新检查 |
+| `POST` | `/api/eval/runs/{run_id}/recheck` | `eval.run`——**重新从 AWS 读取失败运行的批次** → 202 返回该运行。适用于已启动批次（`batch_eval_id` 非空）的 `failed` 运行，以及尚无 `session_failures` 的部分失败 `completed` 评估器运行（重新落定时补齐）：调用一次 `GetBatchEvaluation`；批次已终态时按轮询器的方式落定该行（例如带分数的 `completed`，或带批次自身原因的 `failed`），仍在运行时该行回到 `evaluating` 并重新开始轮询。只读——不会重新运行，也不产生费用。其他运行 → 409 `run.not_recheckable`；不存在 → 404 `run.not_found`。每次批次等待都受 `eval_batch_wait_s` 限制（默认 7200 秒，每 30 秒轮询一次）；超时的运行以「batch evaluation still <STATUS> after the N-minute wait」失败，可在 V2 任务详情中重新检查 |
 | `DELETE` | `/api/eval/runs/{run_id}` | `eval.run`——**移除没有产出结果的运行**（`failed` / `stopped`）的账本行 → `{deleted, run_id, status, aws_batch_left_in_place}`。只删账本行：已到达 AWS 的批量评估保持不动（AWS 仍是事实来源，该行只是控制台的指针，响应里会指明）。`completed` 运行是评估历史，活跃运行须先停止 → 409 `run.not_deletable`；不存在 → 404 `run.not_found`。评估页运行表和助手 NEXT STEPS 历史在这类行上显示 ✕ |
 | `GET` | `/api/eval/runs/{run_id}/recommendation-inputs` | **基于该运行的优化建议将改写的内容** → `{source, system_prompt, tools: [{name, description, origin}], notes, evaluators, default_evaluator, eligible, reason_code}`。`source: "harness"` = 实时读取 Managed Harness（`GetHarness`：系统提示词、每个 `inline_function` 的描述，以及每个 `agentcore_gateway` 的 target 工具 schema，命名为 `<target>___<tool>`，均按 Harness `allowedTools` 过滤）；`"spec"` = Launchpad Agent 配置（提示词 + 可发现的工具）；`"manual"` = 无可读内容（无提示词的 BYOC、CloudWatch 来源的运行、已删除的 Agent），控制台要求用户填写两项输入。`notes` 列出无法读取的内容（`remote_mcp_runtime_only`、`gateway_unreadable`，以及运行比其 Harness 存在更久或 GetHarness 被拒绝时的 `harness_unreadable`——此时输入回退到配置 / 手动输入，而不是报错）。`evaluators` = 所有可作为优化目标的评估器，形如 `[{id, name, level, group: run|builtin|third_party|custom, recommended}]`：该运行自身的评估器在前，其后是开发者指南推荐的两个目标（`Builtin.GoalSuccessRate` / `Builtin.Helpfulness`，`recommended: true`），再是 AWS 内置、第三方托管评估器和本账号 ACTIVE 的自定义评估器（每个自定义评审都用 `GetEvaluator` 读取配置）。`excluded_evaluators` = `[{id, reason}]`，列出不能作为目标的评估器：`lower_is_better`（惩罚型分数）、`ground_truth`（轨迹匹配器、读取 `{expected_response}` 等占位符的评审、读取参考答案的托管代码评估器）、`categorical`（非数值评分）、`unavailable`（该运行用过但已不存在）。`POST` 使用相同规则（422 `recommendation.evaluator_<reason>`）。没有会话 id 的运行（时间窗口运行）`tools_eligible` 为 false |
 | `GET` | `/api/eval/runs/{run_id}/recommendations` | 从该运行启动的优化建议，最新在前 → `{recommendations: [{id, kind, recommendation_id, status, input_source, system_prompt, evaluator, tools, skipped_tools, result, error, …}]}`。每次读取时对未终态的行调用一次 `GetRecommendation` 刷新（无后台轮询）；结束但没有产出文本的任务显示为 `FAILED` 并附 AWS 自身的错误。工具任务若因部分工具未出现在 trace 中被拒绝，会剔除这些工具后**重试一次**（`skipped_tools`） |
 | `POST` | `/api/eval/runs/{run_id}/recommendations` | `eval.run`——**启动优化建议** `{kinds: ["system_prompt" \| "tool_descriptions"], input_source, system_prompt?, evaluator?, tools?: [{name, description}]}` → 201 `{recommendations}`。每种类型一次 `StartRecommendation`，范围均为该运行的会话：系统提示词任务将 `agentTraces.batchEvaluation` 固定为该运行的批次；工具描述任务不接受该来源（实测 `ValidationException`），因此内联传入相同会话的 span（`sessionSpans`，用按需评估的查询读取，最多 20 000 个 span），名称从未出现在其中的工具会预先剔除（`skipped_tools`）。仅限带批次的 `completed` 运行，否则 409 `recommendation.run_not_completed` / `run_no_batch`；无会话 id 的运行上的工具任务 → 409 `run_no_sessions`，遥测已过期 → 409 `no_spans`，没有被调用过的工具 → 422 `tools_not_traced`；提示词为空 / 无工具 / 工具缺描述 → 422。所有拒绝都发生在第一次 Start 之前，不会出现一种类型已启动、另一种未启动的情况；分类评分的自定义评审 → 422 `recommendation.evaluator_categorical`。结果供查看和复制；只有下面的接受路由会应用建议 |
-| `POST` | `/api/eval/runs/{run_id}/recommendations/{rec_id}/accept` | `agents.deploy`——**接受**一条 `COMPLETED` 的系统提示词建议，发布为新的 Harness 版本 → 202 `{agent, job_id, deployment_id, recommendation}`。与 `POST /api/agents/{id}/redeploy` 使用相同的校验和 update 模式部署任务，重新发布该运行所属的平台 Harness（UpdateHarness → 新的不可变版本，`DEFAULT` 随之切换）。建议改写的是*线上*提示词，其中已含平台追加的 `## Knowledge bases` 段落，因此会先剔除该段。行上记录 `accepted {by, at, agent_id, previous_version, job_id, deployment_id}`（列表路由随之返回）；只能接受一次 → 409 `recommendation.already_accepted`；工具描述建议 → 400 `recommendation.accept_kind`；未完成或无文本 → 409 `recommendation.not_completed`；非 Harness Agent → 400 `recommendation.accept_not_harness` |
+| `PUT` | `/api/eval/runs/{run_id}/recommendations/{rec_id}/edit` | `eval.run`——保存对一条 `COMPLETED`、尚未接受的系统提示词建议的人工修改。请求体 `{system_prompt}`；传 `null`、空白或与原始建议相同的文本即撤销修改。修改存为 `edit {prompt, by, at}`，与 `result` 分开（GetRecommendation 刷新会重写 `result`），列表路由随之返回；控制台的差异对比、复制和接受随后都使用修改版。只写账本，不发布任何内容。已接受 → 409 `recommendation.already_accepted`；工具描述建议 → 400 `recommendation.edit_kind`；未完成 → 409 `recommendation.not_completed` |
+| `POST` | `/api/eval/runs/{run_id}/recommendations/{rec_id}/accept` | `agents.deploy`——**接受**一条 `COMPLETED` 的系统提示词建议，发布为新的 Harness 版本 → 202 `{agent, job_id, deployment_id, recommendation}`。请求体 `{system_prompt?}` 为审阅后要发布的文本；省略时使用已保存的 `edit`，否则使用原始建议（与原始建议有差异时记为 `accepted.edited`）。与 `POST /api/agents/{id}/redeploy` 使用相同的校验和 update 模式部署任务，重新发布该运行所属的平台 Harness（UpdateHarness → 新的不可变版本，`DEFAULT` 随之切换）。建议改写的是*线上*提示词，其中已含平台追加的 `## Knowledge bases` 段落，因此会先剔除该段。行上记录 `accepted {by, at, agent_id, previous_version, job_id, deployment_id}`（列表路由随之返回）；只能接受一次 → 409 `recommendation.already_accepted`；工具描述建议 → 400 `recommendation.accept_kind`；未完成或无文本 → 409 `recommendation.not_completed`；非 Harness Agent → 400 `recommendation.accept_not_harness` |
 | `GET` | `/api/eval/queue` | `{running, queued, locked, max_concurrency}`——取消的运行立即离开队列,计数只覆盖活跃运行 |
 
 ## 控制台 Agent-DLC API —— 判据、黄金集、校准与放行门

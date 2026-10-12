@@ -430,6 +430,7 @@
         "inspection-failed": "无法读取资源详情。",
         "external-authorizer": "使用外部自定义 JWT，无法对话。",
         "harness-managed": "这是托管 Harness 的底层 Runtime，请使用对应的 Harness Agent。",
+        "already-managed": "已由 Launchpad 中的某个 Agent 管理。",
         "harness-not-ready": "Harness 尚未就绪，无法导入或对话。",
         "runtime-not-ready": "Runtime 尚未就绪，无法对话。",
         "unknown": "无法判断该能力。"
@@ -2237,6 +2238,7 @@
     "skill_lab.attachment_path_conflict": "某个生成的任务既声明了附件，又在同一路径内联定义了文件。",
     "skill_lab.snapshot_exists": "该作业已有不可变输入快照。",
     "agent.name_exists": "同名 Agent 已存在",
+    "apikey.creator_offboarded": "无法重新启用此密钥：创建它的账号已被删除、停用、过期，或已失去此工作空间的访问权限。请新建密钥。",
     "agent.method_not_available": "该创建方式将在后续阶段开放",
     "agent.not_active": "Agent 尚未处于运行状态",
     "agent.invoke_not_supported": "该 Runtime 当前不可调用",
@@ -2418,7 +2420,8 @@
     "share.not_found": "此链接无效，可能已过期或被撤销。",
     "share.session_not_found": "该对话已不可用，请开始新的对话。",
     "share.rate_limited": "短时间内消息过多，请稍候再试。",
-    "share.unavailable": "助手暂时无法回答，请稍后重试。"
+    "share.unavailable": "助手暂时无法回答，请稍后重试。",
+    "evaluators.list_failed": "无法列出该账号的评估器。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -4464,13 +4467,22 @@
       "datasetCloud": "其中有 Dataset 曾被手动同步到 AWS；该 AWS Dataset 会保留（如不需要，请在 评估 → Datasets 中删除）。",
       "onlyTranscript": "该会话没有创建 Agent、云端资产或 Dataset。",
       "blockers": "暂时无法清除：{{list}}。请等待其完成（或停止）后重试。",
-      "adminOnly": "该会话创建了云端资产或 Agent；只有管理员才能连同这些资产一起清除。",
+      "noPermission": "该会话创建了云端资产或 Agent；连同这些资产一起清除需要 agents.deploy 权限（云端资产）和 agents.delete 权限（Agent）。",
       "irreversible": "此操作会删除真实的 AWS 资源且无法撤销。已记录的评估运行仍会保留在评估页列表中。",
       "irreversibleLocal": "此操作无法撤销；不会改动任何 AWS 资源。",
       "confirm": "清除会话与资产",
       "working": "清除中……",
       "blocked": "该会话仍有任务在进行 — 未删除任何内容。",
-      "doneToast": "已清除“{{title}}” — 移除了 {{agents}} 个 Agent、{{operations}} 次资产操作、{{datasets}} 个 Dataset。"
+      "doneToast": "已清除“{{title}}” — 移除了 {{agents}} 个 Agent、{{operations}} 次资产操作、{{datasets}} 个 Dataset。",
+      "canaries": "这些 Agent 上的金丝雀会先被停止并移除（A/B 测试、在线评估、专属网关及其目标与追踪投递、命名端点），确认 AWS 上已不存在后才删除 Agent：{{list}}。",
+      "experiments": "这些 Agent 上的实验会被清理（A/B 测试、在线评估、配置包、网关目标）：{{list}}。",
+      "historyKept": "金丝雀与实验记录仍作为历史保留在各自列表中。",
+      "inProgress": "该会话的清除任务正在进行（{{step}}）。确认后可查看进度。",
+      "lastFailed": "上一次清除已停止：{{reason}} 再次清除会从已确认完成的步骤继续。",
+      "progress": "清除中 — {{step}}",
+      "starting": "正在开始",
+      "failedToast": "清除已停止，会话已保留：{{reason}}",
+      "background": "清除会在后台继续 — 再次打开“清除”即可查看进度。"
     },
     "noConversation": "先新建一个会话，再把 Workshop 产出粘贴到下方。",
     "emptyThread": "粘贴 Workshop 产出 — 助手会确认需求基线，只追问缺失且影响架构的问题",
@@ -4593,7 +4605,7 @@
   "assistantEval": {
     "title": "评估资产",
     "sub": "已评审的计划 · 独立于 Agent 批准",
-    "scopeNote": "在管理员据此创建资产之前，该计划仅对你可见。创建资产会注册一个本地 Dataset、若干 AgentCore 评估器，以及为每个代码评估器分别创建一个带独立角色的 Lambda。它不会部署 Agent、不会运行评估、不会把 Dataset 同步到 AWS、不会启用在线评估，也不会调用模型。这里的每个评估器都是 AgentCore 评估器；AgentCore 无法打分的黄金测试会连同原因一起被阻止，并保留为手动任务。",
+    "scopeNote": "在据此创建资产之前，该计划仅对你可见。创建资产会注册一个本地 Dataset、若干 AgentCore 评估器，以及为每个代码评估器分别创建一个带独立角色的 Lambda。它不会部署 Agent、不会运行评估、不会把 Dataset 同步到 AWS、不会启用在线评估，也不会调用模型。这里的每个评估器都是 AgentCore 评估器；AgentCore 无法打分的黄金测试会连同原因一起被阻止，并保留为手动任务。",
     "sourceRevision": "来源提案版本",
     "prepare": "准备计划",
     "prepareAgain": "重新准备（新版本）",
@@ -4665,7 +4677,7 @@
       "declined": "已拒绝"
     },
     "create": "创建资产",
-    "adminOnly": "只有拥有该对话的管理员才能创建资产。你仍可以准备和编辑计划。",
+    "noPermission": "创建资产需要 agents.deploy 权限。你仍可以准备和编辑计划。",
     "fixErrors": "请先修正校验错误。",
     "unresolvedHint": "有 {{n}} 条建议未解决——它们会如实显示为未解决，不会被实现。",
     "confirmTitle": "创建计划版本 {{n}} 的资产？",
@@ -4781,7 +4793,8 @@
       "oneAtATime": "该 Agent 在此 Dataset 上仍有一次运行未结束——请等它完成（或在评估页停止），再启动新的运行。",
       "tooManyEvaluators": "已就绪 {{n}} 个评估器，但一次批量评估最多应用 {{max}} 个——请打开「新建运行」取消勾选重叠的评估器（其余参数完全相同）。",
       "remove": "从历史中移除这条失败的运行",
-      "removedToast": "已移除运行 {{id}}"
+      "removedToast": "已移除运行 {{id}}",
+      "meanScoreCoverage": "{{n}} 个评估器归一化均分 {{mean}}（基于 {{scored}}/{{total}} 个会话）"
     },
     "iterate": {
       "title": "查看分数与追踪，然后迭代",
@@ -4832,15 +4845,22 @@
     "note": "本面板以指引为主，只有两个例外：“一键启动评估”会提交一次真实的运行（与“新建运行”相同的请求），“转换为 RUNTIME”会部署一个新的 Runtime Agent——两者都需要你确认。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。",
     "recommend": {
       "title": "生成 AI 推荐的优化建议",
-      "body": "AI 推荐读取所选运行（默认最新一次无错误完成的运行；可以是这个 Agent 在任意数据集上的运行）的追踪，给出改写后的系统提示词（以及工具描述）：默认由 AgentCore Recommendations 围绕你选择的评估器生成，也可改用 GEPA-lite。先查看差异；接受时可以再修改，Launchpad 用最终的提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
+      "body": "AI 推荐读取所选运行（默认最新一次可用的运行：无错误完成，或只因追踪数据不完整漏评了不到一半的会话；可以是这个 Agent 在任意数据集上的运行）的追踪，给出改写后的系统提示词（以及工具描述）：默认由 AgentCore Recommendations 围绕你选择的评估器生成，也可改用 GEPA-lite。先查看差异；接受时可以再修改，Launchpad 用最终的提示词重新发布 Harness，AWS 会生成一个新的 Harness 版本（DEFAULT 随之切换）。",
       "source": "追踪来源",
       "version": "Harness 当前为 v{{v}}",
       "publishing": "正在发布“{{name}}”的新 Harness 版本……部署完成后，第 4 步会列出该版本。",
-      "waiting": "第 2 步有一次运行无错误完成后可用——它的追踪用于生成建议。",
+      "waiting": "第 2 步有一次可用的运行后开放——它的追踪用于生成建议。",
       "newest": "最新",
       "historyTitle": "其他运行生成的优化建议（{{n}}）",
       "historyAccepted": "已接受 · 在 v{{v}} 之上发布",
-      "historyOpen": "在此查看"
+      "historyOpen": "在此查看",
+      "sourceCoverage": "{{scored}}/{{total}} 会话",
+      "blocked": {
+        "evaluator_error": "已有运行部分失败，且包含评估器错误（不只是追踪数据缺失），不能作为建议来源。请查看错误后再启动一次运行。",
+        "low_coverage": "已有运行部分失败，评分的会话不到一半，不能作为建议来源。请再启动一次运行。",
+        "legacy": "已有运行部分失败，且早于失败明细的记录。在第 2 步点击「读取失败明细」；如果只是追踪数据缺失，该运行就能作为建议来源。",
+        "unknown": "已有运行部分失败，AWS 没有给出未评分会话的原因，不能作为建议来源。请再启动一次运行。"
+      }
     },
     "canary": {
       "title": "金丝雀实验",
@@ -5222,6 +5242,7 @@
       "confirm": "确定",
       "create": "创建",
       "createdAt": "创建时间",
+      "creator": "创建者",
       "delete": "删除",
       "detail": "查看详情",
       "done": "完成",
@@ -5872,6 +5893,7 @@
       },
       "origin": {
         "trace": "轨迹导入",
+        "logs": "运行日志",
         "manual": "人工标注"
       },
       "items": "{{count}} 条",
@@ -5881,7 +5903,6 @@
       "new": "创建数据集",
       "search": "搜索数据集名称 / 描述",
       "empty": "暂无数据集，可新建或从轨迹导入",
-      "simulatedHint": "模拟用户数据集请在经典版中编辑",
       "deleteTitle": "删除数据集",
       "deleteBody": "确定删除数据集「{{name}}」？删除后不可恢复。",
       "deleted": "数据集已删除",
@@ -5900,8 +5921,8 @@
       "created": "数据集已创建",
       "editTitle": "编辑数据集",
       "newTitle": "创建数据集",
-      "kindHint": "新建数据集采用场景格式，创建后类型不可更改。",
-      "recordsSub": "输入必填；预期输出即部分评估器所需的标准答案。",
+      "kindHint": "创建后类型不可更改。",
+      "recordsSub": "每个场景至少一轮输入；参考回答、断言和期望工具轨迹是部分评估器所需的标准答案（均选填）。",
       "addRow": "添加记录",
       "inputPlaceholder": "用户输入",
       "expectedPlaceholder": "预期输出（选填）",
@@ -5913,7 +5934,57 @@
       "copyHint": "原样复制所选记录的全部内容：每一轮输入与参考回答、断言和期望工具轨迹；原数据集不变。",
       "copyConfirm": "创建数据集",
       "copyDescription": "从“{{name}}”复制的 {{count}} 条记录。",
-      "copied": "已创建数据集“{{name}}”（{{count}} 条）。"
+      "copied": "已创建数据集“{{name}}”（{{count}} 条）。",
+      "mode": "创建方式",
+      "modeForm": "表单编辑",
+      "modeImport": "JSON 导入",
+      "modeImportHint": "数据集类型按导入的记录自动判定。",
+      "kindDesc": {
+        "predefined": "预设的多轮对话：每轮的用户输入与参考回答，可附断言和期望工具轨迹。",
+        "simulated": "由 LLM 扮演设定了背景与目标的用户，与 Agent 自由对话；断言即标准答案。"
+      },
+      "prefill": "填充样例",
+      "recordsSubSim": "每个模拟用户需要背景、目标和首条消息；断言是模拟场景唯一的标准答案。",
+      "recordsSubImport": "粘贴 {\"scenarios\": [...]}、JSON 数组，或每行一个 {\"prompt\", \"expected\"} 的 JSONL。",
+      "scenarioId": "场景 ID",
+      "addScenario": "添加场景",
+      "addPersona": "添加模拟用户",
+      "removeScenario": "删除场景",
+      "addTurn": "添加轮次",
+      "removeTurn": "删除此轮",
+      "assertions": "断言",
+      "assertionsHint": "Agent 行为应满足的陈述（选填）。",
+      "addAssertion": "添加断言",
+      "removeAssertion": "删除断言",
+      "trajectory": "期望工具轨迹",
+      "trajectoryHint": "按调用顺序填写工具名，以逗号分隔（选填）。",
+      "editJson": "编辑 JSON",
+      "backToForm": "返回表单",
+      "jsonLabel": "场景 JSON",
+      "jsonHint": "整条记录按原样保存，由服务端校验。",
+      "jsonInvalid": "场景 {{index}} 的 JSON 无效：{{error}}",
+      "jsonOnly": "该场景含表单无法呈现的字段（{{reason}}），只能以 JSON 编辑，否则保存时会丢失这些字段。",
+      "extraKeys": "保留字段：{{keys}}",
+      "simDescription": "场景描述",
+      "simContext": "用户背景",
+      "simContextHint": "模拟用户了解的情况、已经尝试过的操作。",
+      "simGoal": "用户目标",
+      "simGoalHint": "目标达成即结束对话。",
+      "simInput": "首条消息",
+      "simInputHint": "模拟用户发出的第一句话。",
+      "simTraits": "用户特征",
+      "simTraitsHint": "键 / 值，例如 expertise = non-technical（选填）。",
+      "simTraitKey": "特征名",
+      "simTraitValue": "特征值",
+      "addTrait": "添加特征",
+      "removeTrait": "删除特征",
+      "simMaxTurns": "轮次上限",
+      "simMaxTurnsHint": "默认 10。",
+      "simAssertionsHint": "该场景的标准答案（选填）。",
+      "simHint": "运行评估时由 LLM 扮演每个用户（在发起评估时选择其模型）；目标达成或到达轮次上限即停止。",
+      "simMixed": "该模拟用户数据集含无 actor_profile 的记录（来自导入），表单无法呈现。请修正 JSON 后重新导入为新数据集，不要在此编辑。",
+      "importLabel": "导入内容",
+      "importPreview": "已解析 {{count}} 条记录"
     },
     "pipelines": {
       "colName": "任务名称 / 描述",
@@ -5936,6 +6007,7 @@
         "failed": "失败"
       },
       "newDataset": "新建数据集：{{name}}",
+      "datasetGone": "数据集已删除",
       "manual": "手动执行",
       "never": "尚未运行",
       "lastAdded": "新增 {{count}} 条",
@@ -5947,7 +6019,7 @@
       "new": "创建 Pipeline",
       "search": "搜索 Pipeline 名称 / 描述",
       "empty": "暂无数据处理任务",
-      "intro": "Pipeline 读取已观测的会话，提取问答对，经过滤、去重后写入数据集，需手动触发运行。",
+      "intro": "Pipeline 读取已观测的会话或 CloudWatch 日志，提取问答对，经过滤、去重后写入数据集，需手动触发运行。",
       "deleteTitle": "删除 Pipeline",
       "deleteBody": "确定删除 Pipeline「{{name}}」？其输出的数据集会保留。",
       "deleted": "Pipeline 已删除",
@@ -5960,12 +6032,13 @@
       "editTitle": "编辑数据处理任务",
       "newTitle": "创建数据处理任务",
       "saveRun": "保存并运行",
+      "started": "已开始运行，完成后列表会自动刷新",
       "lastFailed": "上次运行失败：{{error}}",
       "sourceTitle": "数据源",
       "srcTraces": "Agent 轨迹",
       "srcTracesDesc": "通过 OpenTelemetry 观测到的会话",
       "srcLogs": "运行日志",
-      "srcLogsDesc": "自定义日志格式需先完成格式转换",
+      "srcLogsDesc": "读取 CloudWatch 日志组中的记录，按格式转换规则还原为对话",
       "agentHint": "仅读取该 Agent 的会话",
       "sessionStatus": "会话状态",
       "maxSessions": "单次最多会话数",
@@ -5994,7 +6067,70 @@
       "description": "描述",
       "outputTarget": "输出数据集",
       "newDatasetName": "新数据集名称",
-      "newDatasetHint": "首次运行时创建，之后的运行追加写入"
+      "newDatasetHint": "首次运行时创建，之后的运行追加写入",
+      "keepReplies": "把 Agent 的回复保存为预期输出",
+      "inputsOnlyNote": "只保存用户输入，数据集不带参考答案。",
+      "logs": {
+        "groups": "日志组",
+        "groupsHint": "1–10 个，可按名称搜索；平台 Agent 的运行日志组以 /aws/bedrock-agentcore/runtimes/<Agent 名称> 开头。",
+        "keyword": "关键字",
+        "keywordHint": "只读取包含该关键字的记录（不区分大小写，选填）。",
+        "stepFormat": "格式转换",
+        "formatTitle": "格式转换规则",
+        "formatSub": "说明每条日志记录如何还原为对话轮次。字段使用 JSON 点路径，例如 payload.messages.0.text。",
+        "preset": {
+          "genai": "GenAI 内容日志",
+          "message": "每条记录是一条消息",
+          "exchange": "每条记录是一问一答"
+        },
+        "presetDesc": {
+          "genai": "OTel GenAI 内容记录（如 AgentCore Runtime 的 otel-rt-logs），无需映射字段。",
+          "message": "每条记录是一条用户或 Agent 消息，例如 {\"conversation_id\", \"role\", \"content\"}。",
+          "exchange": "每条记录包含一个问题及其回答，例如 {\"request_id\", \"query\", \"answer\"}。"
+        },
+        "sessionField": "会话字段",
+        "sessionHint": "取值相同的记录组成一段对话；填 @logStream 表示一个日志流就是一个会话。",
+        "sessionGenaiHint": "选填，默认为 attributes.session.id。",
+        "sessionExchangeHint": "选填；留空则每条记录各成一个场景。",
+        "roleField": "角色字段",
+        "roleHint": "其取值按下方列表映射为用户 / Agent。",
+        "textField": "文本字段",
+        "textHint": "字符串，或由 {text} 组成的列表。",
+        "userRoles": "用户角色取值",
+        "assistantRoles": "Agent 角色取值",
+        "rolesHint": "逗号分隔，不区分大小写；其他角色的记录会被跳过。",
+        "inputField": "输入字段",
+        "inputHint": "用户的问题。",
+        "outputField": "输出字段",
+        "outputHint": "Agent 的回答（选填）。",
+        "previewTitle": "转换预览",
+        "previewStats": "读取 {{events}} 条记录 · 转换 {{parsed}} 条 · {{sessions}} 个会话",
+        "refresh": "刷新预览",
+        "truncated": "只读取了最新的 10,000 条记录，请缩小时间范围或填写关键字。",
+        "nothingParsed": "没有提取到会话，请对照下方的原始记录检查字段路径。",
+        "noEvents": "这些日志组在该时间范围内没有记录。",
+        "raw": "原始记录（最新）",
+        "converted": "转换结果",
+        "records": "{{count}} 条记录",
+        "user": "用户",
+        "assistant": "Agent",
+        "noTurns": "没有对话轮次",
+        "reason": {
+          "not_json": "非 JSON",
+          "not_genai": "非 GenAI 记录",
+          "no_session": "缺少会话",
+          "no_text": "缺少文本",
+          "other_role": "其他角色"
+        },
+        "node1": "读取日志并转换格式",
+        "lastRunStats": "上次运行读取 {{events}} 条记录，转换 {{parsed}} 条。",
+        "errGroups": "请至少添加一个日志组",
+        "errPath": "字段路径只能包含字母、数字、_ $ -，以点分隔（或填 @logStream）",
+        "errSession": "请填写会话字段",
+        "errRole": "请填写角色字段",
+        "errText": "请填写文本字段",
+        "errInput": "请填写输入字段"
+      }
     },
     "tasks": {
       "title": "评估任务",
@@ -6147,7 +6283,7 @@
         "target": "评估对象",
         "targetAgent": "平台 Agent",
         "targetAgentDesc": "在本控制台管理的 Agent",
-        "targetCw": "CloudWatch 遥测（无需 Agent）",
+        "targetCw": "遥测日志（无需 Agent）",
         "targetCwDesc": "Agent 的 span 与日志已在 CloudWatch 中，例如未托管在 AgentCore Runtime 上的 Agent",
         "title": "遥测数据源",
         "sub": "span 中的服务名称，以及批量评估读取的日志组",
@@ -6187,7 +6323,9 @@
       "passKSub": "默认关闭。同一条用例跑 k 次可以回答智能体是否稳定——同时成本会变成 k 倍。",
       "repeats": "重复次数（k）",
       "repeatsHint": "1 表示每条用例只跑一次。",
-      "confirmCost": "我接受预估成本 ${{usd}}"
+      "confirmCost": "我接受预估成本 ${{usd}}",
+      "actorModel": "扮演用户的模型",
+      "actorModelHint": "模拟用户数据集：由该 Bedrock 模型扮演每位用户与 Agent 对话，直到达成目标或达到轮次上限。"
     },
     "taskStatus": {
       "queued": "排队中",
@@ -6232,7 +6370,8 @@
       },
       "insightsTitle": "洞察结果",
       "insightsWait": "任务完成后展示洞察聚类。",
-      "insightsEmpty": "该任务未产出洞察聚类。"
+      "insightsEmpty": "该任务未产出洞察聚类。",
+      "scenarioFailures": "{{count}} 个模拟用户场景重试后仍失败，已跳过（不计分），其余场景照常评估：{{list}}"
     },
     "outcome": {
       "passed": "通过",
@@ -6266,6 +6405,8 @@
       "default": "默认",
       "loose": "宽松",
       "empty": "暂无评估结果",
+      "emptyFiltered": "没有符合筛选条件的结果",
+      "filteredCount": "{{count}} / 共 {{total}} 项",
       "detailTitle": "评估详情",
       "openTrace": "查看轨迹",
       "addBadCase": "加入数据集",
@@ -6388,7 +6529,8 @@
         "skill_content": "该技能的内容",
         "available_skills": "Agent 可用的技能",
         "user_message": "用户消息"
-      }
+      },
+      "customUnavailable": "自定义评估器加载失败：{{msg}}。列表仅显示内置评估器。"
     },
     "online": {
       "title": "在线评估",
@@ -7236,7 +7378,8 @@
     },
     "picker": {
       "picked": "已选 {{count}} / {{max}}",
-      "colNote": "说明"
+      "colNote": "说明",
+      "customUnavailable": "自定义评估器加载失败（{{msg}}），仅列出内置评估器。"
     },
     "canary": {
       "status": {
@@ -7287,6 +7430,23 @@
         "perQuestion": "逐题明细（{{n}}）",
         "question": "题目",
         "prompt": "问题"
+      },
+      "eval": {
+        "title": "评估器",
+        "hint": "两个版本都用这些评估器打分（最多 {{max}} 个）。在线评估读取的是实时 trace，所以依赖标准答案的评估器不可用；自定义评审需使用数值评分。",
+        "primary": "主判定评估器",
+        "primaryHint": "判定的胜负、显著性和样本量只看这个评估器；其余评估器仅作参考。",
+        "summary": "评估器：{{evaluators}} · 主判定：{{primary}}",
+        "sep": "、",
+        "primaryTag": "主判定",
+        "unscoredTag": "未评分",
+        "unscored": "以下评估器未在两个版本上都给出评分：{{evaluators}}",
+        "decidedBy": "由主判定评估器 {{primary}} 判定",
+        "aggregate": "由全部评估器的综合结果判定",
+        "defaultPair": "{{evaluators}}（默认）",
+        "change": "修改评估器",
+        "confirm": "两个版本都由 {{evaluators}} 打分；判定由 {{primary}} 决定。",
+        "none": "请至少选择一个评估器"
       }
     },
     "chat": {
@@ -7345,6 +7505,17 @@
       "noKeys": "暂无 API 密钥",
       "keyEnabled": "已启用",
       "keyDisabled": "已停用",
+      "keyCreator": "创建者：{{name}}",
+      "keyCreatorUnknown": "未知",
+      "keyLastUsed": "最近使用 {{time}}",
+      "keyNeverUsed": "从未使用",
+      "keyCreatorOffboarded": "创建者账号已失效",
+      "keyOffboardedReason": {
+        "deleted": "创建此密钥的账号已被删除，密钥保持停用。请新建密钥。",
+        "disabled": "创建此密钥的账号已被停用，密钥保持停用。请新建密钥。",
+        "expired": "创建此密钥的账号已过期，密钥保持停用。请新建密钥。",
+        "no_workspace_grant": "创建此密钥的账号已失去此工作空间的访问权限，密钥保持停用。请新建密钥。"
+      },
       "enable": "启用",
       "disable": "停用",
       "auth": {
@@ -7414,6 +7585,7 @@
       "docsLoaded": "已加载 {{count}}{{more}} 个文档",
       "attachCta": "去创建 Agent",
       "attachHint": "挂载在创建 Agent 向导中完成：ACTIVE 状态的知识库可挂载到 Harness Agent。",
+      "attachedHidden": "另有 {{n}} 个你无权查看的 Agent",
       "comingSoonLabel": "即将支持："
     },
     "memory": {
@@ -8103,6 +8275,9 @@
       "colTurns": "轮次",
       "colUpdated": "最近活动",
       "collaborating": "该会话由管理员共享，创建人 {{owner}}。你可以继续讨论、准备资源、审阅提案，并运行评估和实验；只有创建人可以清除此会话。",
+      "readOnly": "只读",
+      "readOnlyTip": "其他成员的会话，你以管理员身份可见。共享后即可协作。",
+      "readOnlyNotice": "只读查看：{{owner}} 创建的会话，你以管理员身份可见，此处无法做任何修改。共享后即可与 {{owner}} 一起讨论、准备资源、审阅提案或运行评估。",
       "continue": "继续",
       "discussion": "需求讨论",
       "evalAfterProposal": "评估资产基于提案修订生成，助手给出提案后即可在此准备。",
@@ -8120,6 +8295,7 @@
       "scope": "范围",
       "scopeMine": "我的",
       "scopeShared": "共享给我的",
+      "scopeReadOnly": "其他成员的（只读）",
       "search": "搜索会话标题／ID",
       "share": "共享",
       "shared": "已共享",
@@ -8419,6 +8595,17 @@
           "mcp_record": "MCP 注册记录",
           "skill": "技能（S3 前缀）"
         }
+      },
+      "visibility": {
+        "title": "成员可见性",
+        "sub": "决定成员在此工作空间创建的资源对谁可见。保存不会移动任何数据，从每位成员的下一次请求起生效。",
+        "label": "可见性",
+        "current": "当前模式：",
+        "shared": "共享",
+        "isolated": "隔离",
+        "sharedHint": "共享：每位成员都能看到此工作空间的全部资源（默认）。",
+        "isolatedHint": "隔离：成员只能看到自己创建的资源，以及管理员创建或创建者未知的资源；管理员始终可见全部。适用于知识库、记忆、评估数据集、数据处理、评估任务、在线评估与自定义评估器、A/B 实验、金丝雀发布、Skill Lab 和 Agent：成员无法与他人的 Agent 对话、调用（包括通过自己的 /v1 API 密钥）或查看其可观测性与记忆详情，且只能管理自己创建的 API 密钥。",
+        "saved": "成员可见性已保存，从下一次请求起生效。"
       }
     },
     "announcements": {
@@ -8539,6 +8726,21 @@
         "editedNote": "已修改：发布后会记录为“人工修改后接受”。",
         "resetEdit": "恢复为 AI 建议原文",
         "acceptedEdited": "发布前经过人工修改。"
+      },
+      "edit": {
+        "button": "编辑",
+        "title": "编辑推荐的提示词",
+        "hint": "修改会保存在这条优化建议上，不会发布任何内容。之后的差异对比、复制和采纳都使用修改后的版本；原始建议会保留，可随时恢复。",
+        "label": "推荐的系统提示词（你的修改）",
+        "save": "保存修改",
+        "saving": "保存中…",
+        "savedToast": "修改已保存，尚未发布。",
+        "restore": "恢复原始建议",
+        "restoredToast": "已恢复为原始建议。",
+        "tag": "已手动修改",
+        "by": "{{by}} 于 {{at}} 修改",
+        "afterLabel": "推荐（已修改）",
+        "noPermission": "你的账号缺少 eval.run 权限，无法编辑优化建议。"
       },
       "toolDiff": "工具描述",
       "modelRequired": "请输入自定义模型 ID。",
@@ -9101,6 +9303,21 @@
       "uses": "已被使用 {{count}} 次",
       "publishedBy": "{{who}}（{{where}}）· {{when}}",
       "needs": "你需要自行提供：{{items}}"
+    },
+    "runCoverage": {
+      "tagTelemetry": "已完成 · {{scored}}/{{total}} 会话",
+      "telemetry_incomplete": "{{failed}} 个会话的追踪数据不完整，未参与评分。",
+      "evaluator_error": "{{failed}} 个会话在评估器调用时出错，未参与评分；分数基于其余 {{scored}} 个会话。请查看错误后重新运行。",
+      "mixed": "{{failed}} 个会话未参与评分：一部分因追踪数据不完整，一部分因评估器出错；分数基于其余 {{scored}} 个会话。",
+      "unknown": "{{failed}} 个会话未参与评分，AWS 没有给出具体原因；分数基于其余 {{scored}} 个会话。",
+      "legacy": "{{failed}}/{{total}} 个会话未参与评分。这次运行早于失败明细的记录，点击「读取失败明细」可从 AWS 补齐原因。",
+      "scenarios": "未评分的场景：{{list}}",
+      "scenarioSep": "、",
+      "rawError": "AWS 原始错误",
+      "readDetail": "读取失败明细",
+      "readDetailHint": "从 AWS 重新读取这次批量评估的结果，补齐未评分会话的原因。只读，不重新运行，也不产生费用。",
+      "readDetailDone": "已读取失败明细",
+      "notComparable": "各次运行未评分的场景不同，均分不能直接对比。"
     }
   },
   "identity": {

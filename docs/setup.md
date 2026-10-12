@@ -139,9 +139,17 @@ Management console: the agent lifecycle (deploy, import, delete, convert) and
 starting evaluation/insights runs. Members hold them by default; revoking them
 shuts off deploys and billable eval jobs for that account.
 
-Note the console has no per-user data partitioning: every member sees and can
-mutate the same shared resources, so hand member accounts only to people you
-would let operate the environment.
+Note the console has no per-user data partitioning by default: in a `shared`
+workspace every member sees and can mutate the same shared resources, so hand
+member accounts only to people you would let operate the environment. An admin
+can switch a workspace to `isolated` (Workspaces → detail → **Member visibility** card), after
+which each member sees only the agents (with their observability traces, memory
+actors and A2A registry records), knowledge bases, managed memories, evaluation
+assets, experiments, canaries and Skill Lab jobs/task sets they created, plus
+admin-created and creator-unknown ones (discovered runtimes and system presets are
+creator-unknown, so they stay shared). A member also lists and toggles only their own
+`/v1` API keys, and a member-minted key reaches only the agents that member can see.
+MCP / skill registry records and gateways stay shared in both modes.
 
 ### System-managed presets / 系统托管预置
 
@@ -686,7 +694,7 @@ over plain HTTP the browser would drop the session cookie.
 **3. Update an existing host.**
 
 ```bash
-cp data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M)
+(cd backend && uv run python scripts/ledger_backup.py)   # online + verified; never cp a live ledger
 git merge --ff-only origin/main
 cd backend && uv sync && cd ..
 cd frontend && npm run build && cd ..          # required: preview serves dist/

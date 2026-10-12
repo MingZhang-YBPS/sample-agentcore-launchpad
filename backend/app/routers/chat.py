@@ -17,15 +17,16 @@ from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.attachments import AttachmentRequest, SessionIdField
+from app.services import agent_access, memory_ownership, oauth_sessions, policy_identity
 from app.services import feedback as feedback_service
 from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
-from app.services import memory_ownership, oauth_sessions, policy_identity
 from app.services.attachments import prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.chat_ledger import persist_events
 from app.services.invoke import stop_agent_session
 from app.services.runtime_discovery import require_invoke_capability
+from app.services.visibility import Viewer, require_viewer
 from app.templates import gateway_support
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -61,17 +62,22 @@ def _session_actor(
     return existing[0] if existing and existing[0] else requested_actor
 
 
-def _agent_in(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
-    """The agent, or 404 — including when it belongs to another workspace, which
-    the caller must not be able to tell apart from a missing one."""
-    agent = db.get(Agent, agent_id)
-    if agent is None or agent.workspace_id != ws.id:
+def _agent_in(
+    db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
+) -> Agent:
+    """The agent, or 404 — including when it belongs to another workspace or is
+    hidden by workspace isolation, which the caller must not be able to tell apart
+    from a missing one."""
+    agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer, include_deleted=True)
+    if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     return agent
 
 
-def _get_active_agent(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
-    agent = _agent_in(db, ws, agent_id)
+def _get_active_agent(
+    db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
+) -> Agent:
+    agent = _agent_in(db, ws, agent_id, viewer)
     require_invoke_capability(agent)
     return agent
 
@@ -133,8 +139,9 @@ def chat(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> StreamingResponse:
-    agent = _get_active_agent(db, ws, agent_id)
+    agent = _get_active_agent(db, ws, agent_id, viewer)
     # An assistant-owned session of the preset is private to the assistant page.
     refuse_assistant_session(agent, req.session_id)
     prepared = prepare_attachments(
@@ -214,8 +221,9 @@ def list_sessions(
     agent_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _agent_in(db, ws, agent_id)
+    _agent_in(db, ws, agent_id, viewer)
     # Only sessions with a replayable transcript: rows that predate the
     # ChatMessage ledger have nothing to open (clicking them showed an empty
     # thread with an id-only preview), so they are filtered out here.
@@ -270,6 +278,7 @@ def stop_session(
     session_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """End the live AgentCore Runtime session behind a conversation.
 
@@ -279,7 +288,7 @@ def stop_session(
     the AWS side is a success with `already_ended: true`. Harness agents have no
     session-stop operation → 409 `chat.session_stop_unsupported`.
     """
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     row = (
         db.query(ChatSession)
         .filter(
@@ -312,9 +321,10 @@ def session_history(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Replay a session's thread exactly as it was rendered (int pk = order)."""
-    _agent_in(db, ws, agent_id)
+    _agent_in(db, ws, agent_id, viewer)
     rows = (
         db.query(ChatMessage)
         .filter(
@@ -355,8 +365,9 @@ def session_memory(
     request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    agent = _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id, viewer)
     # an agent that pins its own memory writes there — read it back, but only
     # from a memory this workspace manages (issue #55)
     pinned = memory_ownership.readable_spec_memory_id(db, ws.context, agent.spec)

@@ -92,13 +92,15 @@ interface ToolRow {
  * undefined it follows the run's agent: any Managed Harness run qualifies.
  */
 export function RunRecommendations({
-  run, acceptable: acceptableProp, onAccepted, embedded = false,
+  run, acceptable: acceptableProp, onAccepted, embedded = false, readOnly = false,
 }: {
   run: EvaluationRunInfo;
   acceptable?: boolean;
   onAccepted?: (accepted: AcceptedRecommendation) => void;
   /** render without the outer Card (inside another panel) */
   embedded?: boolean;
+  /** show the recommendations only: no new job, no edit, no accept */
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
@@ -392,26 +394,28 @@ export function RunRecommendations({
     </div>
   );
 
-  const newButton = seed.eligible && !formOpen ? (
+  const newButton = seed.eligible && !formOpen && !readOnly ? (
     <Button size="sm" disabled={!mayRun} onClick={() => setOpen(true)} testId="v2-rec-new">
       {t("v2.rec.new")}
     </Button>
   ) : undefined;
   const body = (
     <div className="v2-form">
-      {!seed.eligible ? <Alert>{t(`v2.rec.reason.${seed.reason_code ?? "run_not_completed"}`)}</Alert> : formOpen && form}
+      {!seed.eligible ? <Alert>{t(`v2.rec.reason.${seed.reason_code ?? "run_not_completed"}`)}</Alert> : formOpen && !readOnly && form}
       {list.error && <Alert tone="error">{list.error}</Alert>}
       {[...shown.current, ...(showEarlier ? shown.earlier : [])].map((rec) => (
         <RecommendationResult
           key={rec.id}
           rec={rec}
           runId={run.id}
-          acceptable={acceptable}
+          acceptable={acceptable && !readOnly}
+          readOnly={readOnly}
           showToolNote={acceptable}
           onAccepted={(accepted) => {
             setTick((n) => n + 1);
             onAccepted?.(accepted);
           }}
+          onEdited={() => setTick((n) => n + 1)}
         />
       ))}
       {shown.earlier.length > 0 && (
@@ -439,13 +443,15 @@ export function RunRecommendations({
 }
 
 function RecommendationResult({
-  rec, runId, acceptable, showToolNote, onAccepted,
+  rec, runId, acceptable, readOnly, showToolNote, onAccepted, onEdited,
 }: {
   rec: RunRecommendation;
   runId: string;
   acceptable: boolean;
+  readOnly: boolean;
   showToolNote: boolean;
   onAccepted: (accepted: AcceptedRecommendation) => void;
+  onEdited: () => void;
 }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
@@ -453,9 +459,29 @@ function RecommendationResult({
   // the review dialog: the recommended prompt, editable before it is published
   const [review, setReview] = useState<string | null>(null);
   const [accepting, setAccepting] = useState(false);
+  // the edit dialog: a saved revision of the recommendation, published by nothing
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const done = rec.status === "COMPLETED";
   const mayAccept = can("agents.deploy");
+  const mayEdit = can("eval.run");
   const recommended = rec.result.recommended_prompt ?? "";
+  // what the card shows, copies and accepts: the saved revision, else the generated text
+  const effective = rec.edit?.prompt ?? recommended;
+  const editable = !readOnly && done && rec.kind === "system_prompt" && !!recommended && !rec.accepted;
+  const saveEdit = async (text: string | null) => {
+    setSaving(true);
+    try {
+      await api.editRunRecommendation(runId, rec.id, text);
+      toast("success", t(text === null ? "v2.rec.edit.restoredToast" : "v2.rec.edit.savedToast"));
+      setDraft(null);
+      onEdited();
+    } catch (err) {
+      toast("error", errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
   const accept = async (reviewed: string) => {
     setAccepting(true);
     try {
@@ -493,19 +519,30 @@ function RecommendationResult({
       end={
         done && rec.kind === "system_prompt" && rec.result.recommended_prompt ? (
           <span className="v2-row">
+            {editable && (
+              <Button
+                size="sm"
+                disabled={!mayEdit || saving}
+                title={mayEdit ? undefined : t("v2.rec.edit.noPermission")}
+                onClick={() => setDraft(effective)}
+                testId="v2-rec-edit"
+              >
+                {t("v2.rec.edit.button")}
+              </Button>
+            )}
             {acceptable && !rec.accepted && (
               <Button
                 size="sm"
                 kind="primary"
                 disabled={!mayAccept || accepting}
                 title={mayAccept ? undefined : t("v2.rec.accept.noPermission")}
-                onClick={() => setReview(recommended)}
+                onClick={() => setReview(effective)}
                 testId="v2-rec-accept"
               >
                 {accepting ? t("v2.rec.accept.accepting") : t("v2.rec.accept.button")}
               </Button>
             )}
-            <Button size="sm" onClick={() => copy(rec.result.recommended_prompt ?? "")}>
+            <Button size="sm" onClick={() => copy(effective)}>
               {t("v2.rec.copy")}
             </Button>
           </span>
@@ -531,6 +568,17 @@ function RecommendationResult({
             {rec.accepted.edited ? ` ${t("v2.rec.accept.acceptedEdited")}` : ""}
           </Alert>
         )}
+        {rec.edit && (
+          <div className="v2-row" data-testid="v2-rec-edited">
+            <Tag tone="orange">{t("v2.rec.edit.tag")}</Tag>
+            <span className="v2-muted">{t("v2.rec.edit.by", { by: rec.edit.by, at: fmtTime(rec.edit.at) })}</span>
+            {editable && mayEdit && (
+              <Button size="sm" disabled={saving} onClick={() => void saveEdit(null)} testId="v2-rec-edit-restore">
+                {t("v2.rec.edit.restore")}
+              </Button>
+            )}
+          </div>
+        )}
         {showToolNote && done && rec.kind === "tool_descriptions" && (
           <Alert>{t("v2.rec.accept.toolsNotApplied")}</Alert>
         )}
@@ -555,9 +603,9 @@ function RecommendationResult({
           <Field label={t("v2.experiments.promptDiff")} hint={rec.result.explanation} full>
             <DiffPanes
               before={rec.system_prompt ?? ""}
-              after={rec.result.recommended_prompt ?? ""}
+              after={effective}
               beforeLabel={t("expPage.currentLabel")}
-              afterLabel={t("expPage.recommendedLabel")}
+              afterLabel={rec.edit ? t("v2.rec.edit.afterLabel") : t("expPage.recommendedLabel")}
             />
           </Field>
         )}
@@ -623,6 +671,43 @@ function RecommendationResult({
           )}
           {review !== null && review.trim() !== recommended.trim() && (
             <Button size="sm" onClick={() => setReview(recommended)}>{t("v2.rec.accept.resetEdit")}</Button>
+          )}
+        </div>
+      </Modal>
+      <Modal
+        open={draft !== null}
+        wide
+        title={t("v2.rec.edit.title")}
+        onClose={() => setDraft(null)}
+        testId="v2-rec-edit-dialog"
+        footer={
+          <>
+            <Button onClick={() => setDraft(null)}>{t("v2.common.cancel")}</Button>
+            <Button
+              kind="primary"
+              disabled={!draft?.trim() || saving || draft.trim() === effective.trim()}
+              onClick={() => void saveEdit(draft ?? "")}
+              testId="v2-rec-edit-save"
+            >
+              {saving ? t("v2.rec.edit.saving") : t("v2.rec.edit.save")}
+            </Button>
+          </>
+        }
+      >
+        <div className="v2-form">
+          <Alert>{t("v2.rec.edit.hint")}</Alert>
+          <Field label={t("v2.rec.edit.label")} full>
+            <textarea
+              className="v2-textarea code"
+              rows={18}
+              value={draft ?? ""}
+              maxLength={20000}
+              onChange={(e) => setDraft(e.target.value)}
+              data-testid="v2-rec-edit-prompt"
+            />
+          </Field>
+          {draft !== null && draft.trim() !== recommended.trim() && (
+            <Button size="sm" onClick={() => setDraft(recommended)}>{t("v2.rec.accept.resetEdit")}</Button>
           )}
         </div>
       </Modal>

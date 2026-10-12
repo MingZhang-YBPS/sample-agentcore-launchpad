@@ -1,10 +1,10 @@
-import { Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type V2Dataset } from "../../../lib/api";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -27,9 +27,11 @@ import {
 
 type Item = Record<string, unknown>;
 
-/** "trace" when the items came from observed trajectories, else "manual". */
-function datasetOrigin(ds: V2Dataset): "trace" | "manual" {
-  return ds.items.some((i) => (i.metadata as { source?: string } | undefined)?.source === "trace") ? "trace" : "manual";
+/** "trace" / "logs" when the items came from observed trajectories / runtime
+ *  logs (a 数据处理 pipeline or 加入数据集), else "manual". */
+function datasetOrigin(ds: V2Dataset): "trace" | "logs" | "manual" {
+  const sources = new Set(ds.items.map((i) => (i.metadata as { source?: string } | undefined)?.source));
+  return sources.has("trace") ? "trace" : sources.has("logs") ? "logs" : "manual";
 }
 
 interface Row {
@@ -58,29 +60,6 @@ function toRows(ds: V2Dataset | null): Row[] {
     }
     return { input: String(item.prompt ?? ""), expected: String(item.expected ?? ""), extraTurns: 0, original: item };
   });
-}
-
-function fromRows(rows: Row[], kind: string): Item[] {
-  return rows
-    .filter((r) => r.input.trim())
-    .map((r, i) => {
-      if (kind === "legacy") {
-        const item: Item = { ...(r.original ?? {}), prompt: r.input };
-        if (r.expected.trim()) item.expected = r.expected;
-        else delete item.expected;
-        return item;
-      }
-      const original = r.original ?? {};
-      const prevTurns = (Array.isArray(original.turns) ? original.turns : []) as Item[];
-      const first: Item = { ...(prevTurns[0] ?? {}), input: r.input };
-      if (r.expected.trim()) first.expected_response = r.expected;
-      else delete first.expected_response;
-      return {
-        ...original,
-        scenario_id: String(original.scenario_id ?? `case-${Date.now().toString(36)}-${i + 1}`),
-        turns: [first, ...prevTurns.slice(1)],
-      };
-    });
 }
 
 // ─── list ──────────────────────────────────────────────────────────────────
@@ -155,7 +134,17 @@ export function DatasetsTab() {
           <span className="v2-muted">{t("v2.datasets.cloudLocal")}</span>
         ),
     },
-    { key: "created", title: t("v2.common.createdAt"), className: "nowrap", render: (ds) => fmtTime(ds.created_at) },
+    {
+      key: "created",
+      title: t("v2.common.createdAt"),
+      className: "nowrap",
+      render: (ds) => (
+        <>
+          {fmtTime(ds.created_at)}
+          <span className="sub" title={t("v2.common.creator")}>{creatorLabel(ds)}</span>
+        </>
+      ),
+    },
     {
       key: "ops",
       title: t("v2.common.actions"),
@@ -163,7 +152,7 @@ export function DatasetsTab() {
       render: (ds) => (
         <div className="v2-actions">
           <LinkButton onClick={() => setParams({ tab: "datasets", view: "dataset", id: ds.id })}>{t("v2.common.view")}</LinkButton>
-          <LinkButton disabled={ds.kind === "simulated"} title={ds.kind === "simulated" ? t("v2.datasets.simulatedHint") : undefined} onClick={() => setParams({ tab: "datasets", view: "dataset-edit", id: ds.id })}>
+          <LinkButton onClick={() => setParams({ tab: "datasets", view: "dataset-edit", id: ds.id })}>
             {t("v2.common.edit")}
           </LinkButton>
           <LinkButton danger onClick={() => setDeleting(ds)}>
@@ -193,7 +182,7 @@ export function DatasetsTab() {
           value={origin}
           allLabel={t("v2.common.all")}
           onChange={setOrigin}
-          options={["trace", "manual"].map((o) => ({ value: o, label: t(`v2.datasets.origin.${o}`) }))}
+          options={["trace", "logs", "manual"].map((o) => ({ value: o, label: t(`v2.datasets.origin.${o}`) }))}
         />
         <Button onClick={reload}>{t("v2.common.refresh")}</Button>
         <div className="end">
@@ -274,7 +263,7 @@ export function DatasetDetail({ id }: { id: string }) {
         onBack={() => setParams({ tab: "datasets" })}
         end={
           <>
-            <Button disabled={ds.kind === "simulated"} onClick={() => navigate(`/v2/eval/tasks?view=new&dataset=${ds.id}`)}>
+            <Button onClick={() => navigate(`/v2/eval/tasks?view=new&dataset=${ds.id}`)}>
               {t("v2.datasets.useInTask")}
             </Button>
             <Button
@@ -285,7 +274,7 @@ export function DatasetDetail({ id }: { id: string }) {
             >
               {t("v2.datasets.copySelected", { count: picked.size })}
             </Button>
-            <Button kind="primary" disabled={ds.kind === "simulated"} onClick={() => setParams({ tab: "datasets", view: "dataset-edit", id })}>
+            <Button kind="primary" onClick={() => setParams({ tab: "datasets", view: "dataset-edit", id })}>
               {t("v2.common.edit")}
             </Button>
           </>
@@ -300,6 +289,7 @@ export function DatasetDetail({ id }: { id: string }) {
             { label: t("v2.datasets.colOrigin"), value: t(`v2.datasets.origin.${datasetOrigin(ds)}`) },
             { label: t("v2.datasets.colCount"), value: t("v2.datasets.items", { count: ds.item_count }) },
             { label: t("v2.common.createdAt"), value: fmtTime(ds.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(ds) },
             { label: t("v2.datasets.description"), value: ds.description || "—" },
             { label: t("v2.datasets.colGt"), value: ds.has_ground_truth ? t("v2.common.yes") : t("v2.common.no") },
           ]}
@@ -375,125 +365,3 @@ export function DatasetDetail({ id }: { id: string }) {
   );
 }
 
-// ─── create / edit ─────────────────────────────────────────────────────────
-export function DatasetEditor({ id }: { id: string | null }) {
-  const { t } = useTranslation();
-  const [, setParams] = useSearchParams();
-  const toast = useV2Toast();
-  const list = useLoad(() => api.v2Datasets(), "datasets");
-  const ds = id ? (list.data?.datasets.find((d) => d.id === id) ?? null) : null;
-  const [seeded, setSeeded] = useState(id === null);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [rows, setRows] = useState<Row[]>(() => toRows(null));
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  if (!seeded && ds) {
-    setSeeded(true);
-    setName(ds.name);
-    setDescription(ds.description);
-    setRows(toRows(ds));
-  }
-
-  if (id && list.loading) return <Spin />;
-  if (id && !ds) return <Alert tone="error">{list.error ?? t("v2.datasets.notFound")}</Alert>;
-  const kind = ds?.kind ?? "predefined";
-
-  const setRow = (i: number, patch: Partial<Row>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-
-  const save = async () => {
-    const items = fromRows(rows, kind);
-    if (!name.trim()) return setError(t("v2.datasets.errName"));
-    if (items.length === 0) return setError(t("v2.datasets.errItems"));
-    if (items.length > 200) return setError(t("v2.datasets.errTooMany"));
-    setSaving(true);
-    setError(null);
-    try {
-      if (id) {
-        await api.v2UpdateDataset(id, { name: name.trim(), description, items });
-        toast("success", t("v2.datasets.saved"));
-        setParams({ tab: "datasets", view: "dataset", id });
-      } else {
-        const created = await api.v2CreateDataset({ name: name.trim(), description, items });
-        toast("success", t("v2.datasets.created"));
-        setParams({ tab: "datasets", view: "dataset", id: created.id });
-      }
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <>
-      <FlowHeader
-        title={id ? t("v2.datasets.editTitle") : t("v2.datasets.newTitle")}
-        onBack={() => setParams(id ? { tab: "datasets", view: "dataset", id } : { tab: "datasets" })}
-        end={
-          <Button kind="primary" disabled={saving} onClick={() => void save()} testId="v2-dataset-save">
-            {id ? t("v2.common.save") : t("v2.common.create")}
-          </Button>
-        }
-      />
-      {error && <Alert tone="error">{error}</Alert>}
-      <Card title={t("v2.datasets.basic")}>
-        <div className="v2-form cols-2">
-          <Field label={t("v2.datasets.colName")} required>
-            <input className="v2-input" value={name} maxLength={64} onChange={(e) => setName(e.target.value)} data-testid="v2-dataset-name" />
-          </Field>
-          <Field label={t("v2.datasets.colKind")} hint={t("v2.datasets.kindHint")}>
-            <input className="v2-input" disabled value={t(`v2.datasets.kind.${kind}`, { defaultValue: kind })} />
-          </Field>
-          <Field label={t("v2.datasets.description")} full>
-            <textarea className="v2-textarea" rows={2} value={description} maxLength={1000} onChange={(e) => setDescription(e.target.value)} />
-          </Field>
-        </div>
-      </Card>
-      <Card
-        title={t("v2.datasets.records")}
-        sub={t("v2.datasets.recordsSub")}
-        end={
-          <Button size="sm" disabled={rows.length >= 200} onClick={() => setRows([...rows, { input: "", expected: "", extraTurns: 0, original: null }])}>
-            <Plus size={13} aria-hidden="true" />
-            {t("v2.datasets.addRow")}
-          </Button>
-        }
-      >
-        <div className="v2-stack">
-          {rows.map((r, i) => (
-            <div key={i} className="v2-row" style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
-              <span className="v2-muted" style={{ width: 28, paddingTop: 6 }}>
-                {i + 1}
-              </span>
-              <textarea
-                className="v2-textarea"
-                style={{ minHeight: 56 }}
-                rows={2}
-                placeholder={t("v2.datasets.inputPlaceholder")}
-                value={r.input}
-                onChange={(e) => setRow(i, { input: e.target.value })}
-                aria-label={`Input ${i + 1}`}
-                data-testid={`v2-dataset-input-${i}`}
-              />
-              <textarea
-                className="v2-textarea"
-                style={{ minHeight: 56 }}
-                rows={2}
-                placeholder={t("v2.datasets.expectedPlaceholder")}
-                value={r.expected}
-                onChange={(e) => setRow(i, { expected: e.target.value })}
-                aria-label={`${t("v2.datasets.expected")} ${i + 1}`}
-              />
-              {r.extraTurns > 0 && <Tag tone="blue">{t("v2.datasets.turnCount", { count: r.extraTurns + 1 })}</Tag>}
-              <Button size="sm" title={t("v2.common.delete")} disabled={rows.length <= 1} onClick={() => setRows(rows.filter((_, j) => j !== i))}>
-                <Trash2 size={13} aria-hidden="true" />
-              </Button>
-            </div>
-          ))}
-        </div>
-      </Card>
-    </>
-  );
-}

@@ -2,22 +2,28 @@
 immutable versions fronted by a dedicated per-canary Gateway)."""
 
 import copy
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from app.core.db import SessionLocal
-from app.core.errors import AppError
+from app.core.errors import AppError, cleanup_error, is_not_found
 from app.evaluation import agentcore_eval as ac
+from app.evaluation.online_evaluators import ONLINE_EVAL_DEFAULT
 from app.models.ledger import Agent
 from app.optimization import canary_harness, canary_infra
 from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
 from app.schemas.agent import AgentSpec
+from app.services import creators
 from app.services.agentcore import harness as hc
+from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
 from app.services.memory import scoped_actor
 from app.services.workspace import WorkspaceContext, context_for_workspace
+
+logger = logging.getLogger(__name__)
 
 Progress = Callable[[str], None]
 RAMP_WEIGHTS = ((90, 10), (50, 50), (1, 99))
@@ -196,6 +202,46 @@ def is_harness(row: RuntimeCanary) -> bool:
     return (row.artifacts or {}).get("kind") == "harness"
 
 
+def _evaluator_artifacts(
+    online_evaluators: list[str] | None, primary_evaluator: str | None,
+) -> dict[str, Any]:
+    """The operator's evaluator choice as top-level artifact keys (absent when not given,
+    so a row created without it reads exactly like a row from before the choice)."""
+    out: dict[str, Any] = {}
+    if online_evaluators:
+        out["online_evaluators"] = list(online_evaluators)
+    if primary_evaluator:
+        out["primary_evaluator"] = primary_evaluator
+    return out
+
+
+def configured_evaluators(row: RuntimeCanary) -> list[str] | None:
+    """The evaluator ids both arms' online evaluations were created with, or None for a
+    row created before the choice existed (its configs carry the default pair)."""
+    artifacts = row.artifacts or {}
+    chosen = artifacts.get("online_evaluators") or (artifacts.get("setup") or {}).get(
+        "online_evaluators")
+    return list(chosen) if chosen else None
+
+
+def primary_evaluator(row: RuntimeCanary) -> str | None:
+    """The evaluator that alone decides the verdict, or None (legacy aggregate)."""
+    artifacts = row.artifacts or {}
+    return artifacts.get("primary_evaluator") or (artifacts.get("setup") or {}).get(
+        "primary_evaluator") or None
+
+
+def _setup_evaluator_keys(row: RuntimeCanary) -> dict[str, Any]:
+    """What setup copies into ``artifacts.setup`` so the detail page reads one place."""
+    out: dict[str, Any] = {
+        "online_evaluators": configured_evaluators(row) or list(ONLINE_EVAL_DEFAULT),
+    }
+    primary = primary_evaluator(row)
+    if primary:
+        out["primary_evaluator"] = primary
+    return out
+
+
 def start_harness_canary(
     agent: Any,
     *,
@@ -203,6 +249,9 @@ def start_harness_canary(
     treatment_version: str,
     workspace: WorkspaceContext,
     start_stage: int = 0,
+    online_evaluators: list[str] | None = None,
+    primary_evaluator: str | None = None,
+    creator: creators.Creator | None = None,
 ) -> RuntimeCanary:
     """Ledger row for a Harness canary: two EXISTING versions of one Harness.
 
@@ -229,8 +278,10 @@ def start_harness_canary(
             },
             "edited_spec": copy.deepcopy(agent.spec or {}),
             "rounds": [],
+            **_evaluator_artifacts(online_evaluators, primary_evaluator),
         },
     )
+    creators.stamp(row, creator)
     db = SessionLocal()
     try:
         db.add(row)
@@ -246,6 +297,10 @@ def start_canary(
     edited_spec: AgentSpec,
     workspace: WorkspaceContext,
     source_experiment_id: str | None = None,
+    *,
+    online_evaluators: list[str] | None = None,
+    primary_evaluator: str | None = None,
+    creator: creators.Creator | None = None,
 ) -> RuntimeCanary:
     """Create only the ledger row; setup mints the candidate version + gateway.
 
@@ -267,8 +322,10 @@ def start_canary(
             "agent_meta": _agent_meta(agent, control),
             "edited_spec": edited_spec.model_dump(),
             "rounds": [],
+            **_evaluator_artifacts(online_evaluators, primary_evaluator),
         },
     )
+    creators.stamp(row, creator)
     db = SessionLocal()
     try:
         db.add(row)
@@ -321,6 +378,12 @@ def metric_sample_count(metrics: list[dict[str, Any]]) -> int:
             for variant in metric.get("variants", [])
         )
     return total
+
+
+def evaluator_sample_count(metrics: list[dict[str, Any]], evaluator: str) -> int:
+    """:func:`metric_sample_count` of the one metric that belongs to ``evaluator``."""
+    return metric_sample_count([
+        m for m in metrics if experiment_service.metric_evaluator_id(m) == evaluator])
 
 
 def stage_not_ready_reason(row: RuntimeCanary, action: str) -> str | None:
@@ -423,6 +486,7 @@ def _create_variant_eval(
     endpoint: str,
     progress: Progress,
     role: str,
+    evaluators: list[str] | None = None,
 ) -> dict[str, Any]:
     """Per-variant online eval scoped to the variant's named-endpoint telemetry."""
     progress(f"creating {role} online evaluation config…")
@@ -432,6 +496,7 @@ def _create_variant_eval(
         log_group=canary_infra.endpoint_log_group(resource_id, endpoint),
         service_name=canary_infra.endpoint_service_name(runtime_name, endpoint),
         role_arn=workspace.resources["execution_role_arn"],
+        evaluators=evaluators,
     )
     return {
         "online_eval_id": online_eval.get("onlineEvaluationConfigId"),
@@ -574,6 +639,7 @@ def _setup_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> di
             log_group=log_group,
             service_name=canary_harness.endpoint_service_name(meta["harness_name"], endpoint),
             role_arn=role_arn,
+            evaluators=configured_evaluators(row),
         )
         evals[role] = {
             "online_eval_id": online_eval.get("onlineEvaluationConfigId"),
@@ -617,6 +683,7 @@ def _setup_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> di
         "v_candidate": v_treatment,
         "treatment_endpoint": treatment,
         "trace_delivery": tracing,
+        **_setup_evaluator_keys(row),
     }
     _update(canary_id, stage="setup", artifact={"setup": result, "rounds": []})
     return result
@@ -712,6 +779,7 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
         endpoint=stable,
         progress=progress,
         role="control",
+        evaluators=configured_evaluators(row),
     )
     treatment_eval = _create_variant_eval(
         control=control,
@@ -722,6 +790,7 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
         endpoint=treatment,
         progress=progress,
         role="treatment",
+        evaluators=configured_evaluators(row),
     )
 
     test_name = _test_name(canary_id)
@@ -760,6 +829,7 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
         # the zip behind v_candidate — cleanup owns it (unless it is still live)
         "candidate_s3_key": candidate_key,
         "treatment_endpoint": treatment,
+        **_setup_evaluator_keys(row),
     }
     _update(canary_id, stage="setup", artifact={"setup": result, "rounds": []})
     return result
@@ -883,6 +953,7 @@ def act_traffic(
         ac.get_ab_test(data_client(workspace), ab_test_id=setup["ab_test_id"])
     )
     baseline_n = metric_sample_count(metrics)
+    primary = primary_evaluator(row)
     harness_seams: dict[str, Any] = {}
     if is_harness(row):
         # passthrough targets relay the InvokeHarness body at /<target>/; one
@@ -904,6 +975,9 @@ def act_traffic(
         **result,
         **dataset_info,
         "baseline_n": baseline_n,
+        # the primary's own fresh-evidence marker: the verdict waits for IT to score
+        # this stage's traffic, not just for any evaluator to
+        **({"primary_baseline_n": evaluator_sample_count(metrics, primary)} if primary else {}),
         "completed_at": _now(),
     }
     rounds, current = _current_round(row, create=True)
@@ -918,6 +992,24 @@ def act_traffic(
 # ~10 min) until this share of pairs is scored on every evaluator, or the deadline
 PAIRED_SCORED_SHARE = 0.9
 PAIRED_VERDICT_DEADLINE_S = 1800
+
+
+def _scoring_keys(
+    configured: list[str] | None, metrics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """``evaluators`` (what the verdict was configured to read) and ``unscored`` (the
+    configured ones with no comparable score on both arms) — absent on legacy rows."""
+    if not configured:
+        return {}
+    scored = {
+        experiment_service.metric_evaluator_id(m) for m in metrics
+        if (m.get("control") or {}).get("mean") is not None
+        and any(v.get("mean") is not None for v in m.get("variants") or [])
+    }
+    return {
+        "evaluators": list(configured),
+        "unscored": [e for e in configured if e not in scored],
+    }
 
 
 def _paired_verdict(row: RuntimeCanary, current: dict[str, Any], progress: Progress,
@@ -940,6 +1032,10 @@ def _paired_verdict(row: RuntimeCanary, current: dict[str, Any], progress: Progr
     first = min((a.get("completed_at") or _now()) for a in current["traffic_attempts"])
     started = datetime.fromisoformat(first)
     deadline = datetime.now(UTC).timestamp() + PAIRED_VERDICT_DEADLINE_S
+    # wait on the evaluators the configs were created with; a legacy row (no stored
+    # list) waits on whichever evaluators have already scored, as before
+    configured = configured_evaluators(row)
+    primary = primary_evaluator(row)
     scores: dict[str, dict[str, float]] = {}
     while True:
         hours = math.ceil((datetime.now(UTC) - started).total_seconds() / 3600) + 1
@@ -950,7 +1046,7 @@ def _paired_verdict(row: RuntimeCanary, current: dict[str, Any], progress: Progr
         }
         rows = run_insights_queries(queries, hours, workspace=workspace) if queries else {}
         scores = canary_harness.parse_paired_scores([r for v in rows.values() for r in v])
-        evaluators = {e for s in scores.values() for e in s}
+        evaluators = set(configured or ()) or {e for s in scores.values() for e in s}
         scored = min(
             (sum(1 for p in complete
                  if e in scores.get(p["control_session_id"], {})
@@ -967,13 +1063,15 @@ def _paired_verdict(row: RuntimeCanary, current: dict[str, Any], progress: Progr
         experiment_service._sleep(45)
     metrics, rows_out = canary_harness.paired_metrics(
         complete, scores, polarity=ac.evaluator_polarity)
-    verdict = experiment_service.compute_verdict(metrics)
+    verdict = experiment_service.compute_verdict(metrics, primary=primary)
     if not metrics:
         verdict = {"verdict": "insufficient-data",
-                   "reason": "no paired session was scored by both online evaluations", "n": 0}
+                   "reason": "no paired session was scored by both online evaluations", "n": 0,
+                   **({"primary": primary} if primary else {})}
     return {
         "metrics": metrics,
         **verdict,
+        **_scoring_keys(configured, metrics),
         "mode": canary_harness.PAIRED_MODE,
         "pairs_sent": len(pairs),
         "pairs_complete": len(complete),
@@ -994,7 +1092,11 @@ def act_verdict(canary_id: str, progress: Progress) -> dict[str, Any]:
         current["verdict"] = stored
         _update(canary_id, stage="verdict", artifact={"rounds": rounds})
         return stored
-    baseline_n = int(current["traffic_attempts"][-1].get("baseline_n", 0))
+    attempt = current["traffic_attempts"][-1]
+    baseline_n = int(attempt.get("baseline_n", 0))
+    primary = primary_evaluator(row)
+    # an attempt recorded before the marker existed falls back to the aggregate one
+    primary_baseline = attempt.get("primary_baseline_n") if primary else None
     data = data_client(context_for_workspace(row.workspace_id))
     deadline = datetime.now(UTC).timestamp() + 900
     metrics: list[dict[str, Any]] = []
@@ -1004,7 +1106,9 @@ def act_verdict(canary_id: str, progress: Progress) -> dict[str, Any]:
         result = ac.get_ab_test(data, ab_test_id=setup["ab_test_id"])
         metrics = ac.normalize_ab_results(result)
         sample_n = metric_sample_count(metrics)
-        if sample_n > baseline_n:
+        primary_fresh = primary_baseline is None or (
+            evaluator_sample_count(metrics, primary or "") > int(primary_baseline))
+        if sample_n > baseline_n and primary_fresh:
             break
         if datetime.now(UTC).timestamp() >= deadline:
             break
@@ -1014,16 +1118,26 @@ def act_verdict(canary_id: str, progress: Progress) -> dict[str, Any]:
         )
         experiment_service._sleep(45)
 
-    verdict = experiment_service.compute_verdict(metrics)
+    verdict = experiment_service.compute_verdict(metrics, primary=primary)
     if sample_n <= baseline_n:
         verdict = {
             "verdict": "insufficient-data",
             "reason": "no new evaluator samples arrived after current-stage traffic",
             "n": sample_n,
+            **({"primary": primary} if primary else {}),
+        }
+    elif not primary_fresh and verdict.get("verdict") != "insufficient-data":
+        # the primary still decides on the previous stage's evidence only
+        verdict = {
+            "verdict": "insufficient-data",
+            "reason": "no new primary evaluator samples arrived after current-stage traffic",
+            "n": evaluator_sample_count(metrics, primary or ""),
+            "primary": primary,
         }
     stored = {
         "metrics": metrics,
         **verdict,
+        **_scoring_keys(configured_evaluators(row), metrics),
         "baseline_n": baseline_n,
         "recorded_at": _now(),
     }
@@ -1267,9 +1381,13 @@ def _owned_resources(
         if target.get("target_id")
     }
     if gateway_id:
-        for target in control.list_gateway_targets(
-            gatewayIdentifier=gateway_id
-        ).get("items", []):
+        try:
+            listed = control.list_gateway_targets(gatewayIdentifier=gateway_id).get("items", [])
+        except Exception as exc:
+            if type(exc).__name__ not in canary_infra._NOT_FOUND:
+                raise
+            listed = []  # a re-run after the dedicated gateway is gone
+        for target in listed:
             if target.get("name") in target_names and target.get("targetId"):
                 target_ids.add(target["targetId"])
 
@@ -1385,8 +1503,11 @@ def act_cleanup(
                 progress,
                 label="Runtime canary A/B test",
             )
-        except Exception:
-            pass
+        except Exception as exc:  # the delete below still runs and reports its result
+            if not is_not_found(exc):
+                message = f"could not stop A/B test {ab_test_id}: {cleanup_error(exc)}"
+                logger.warning("canary %s cleanup: %s", canary_id, message)
+                progress(message)
     # ac.cleanup_resources keeps delete_gateway=False (it must never delete a
     # shared gateway); the dedicated per-canary gateway is deleted explicitly
     # below after its targets drain.
@@ -1454,3 +1575,87 @@ def act_cleanup(
         artifact={"cleanup": results},
     )
     return results
+
+
+def cleanup_blockers(results: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The cleanup results that leave a canary-owned resource behind. ``skipped`` is
+    never success; the one exception is a candidate zip kept because it backs the live
+    version (``s3:`` — not a dependency of anything, removed once the agent is gone)."""
+    return [r for r in results
+            if r.get("status") == "skipped" and not str(r.get("category", "")).startswith("s3:")]
+
+
+def retained_artifact_keys(row: RuntimeCanary) -> list[str]:
+    """The S3 keys this canary uploaded (candidate at setup, restore at rollback)."""
+    artifacts = row.artifacts or {}
+    keys = [(artifacts.get("setup") or {}).get("candidate_s3_key"),
+            (artifacts.get("rollback") or {}).get("restored_s3_key")]
+    return [k for k in keys if k]
+
+
+def remaining_resources(row: RuntimeCanary, workspace: WorkspaceContext) -> list[dict[str, str]]:
+    """AWS readback of every resource this canary owns that still exists — empty only
+    when the A/B test, online-evaluation configs, dedicated gateway and BOTH named
+    endpoints are verifiably gone. ``act_cleanup`` returning is not that evidence:
+    endpoint, A/B test and gateway deletion are asynchronous (``DELETING`` for minutes).
+    Every entry is ``{category, status}``; a lookup error propagates (unknown ≠ gone)."""
+    artifacts = row.artifacts or {}
+    setup = artifacts.get("setup") or {}
+    control = control_client(workspace)
+    data = data_client(workspace)
+    out: list[dict[str, str]] = []
+
+    ab_ids = {setup.get("ab_test_id")} - {None}
+    for test in experiment_service.list_ab_tests(data):
+        if test.get("abTestId") in ab_ids or (
+                str(test.get("name", "")).lower() == _test_name(row.id).lower()):
+            out.append({"category": f"abtest:{test.get('abTestId')}",
+                        "status": str(test.get("status") or test.get("executionStatus") or "")})
+
+    eval_prefix = f"can_{row.id[:8]}_"
+    recorded = {t.get("online_eval_id") for t in (setup.get("champion") or {},
+                                                  setup.get("challenger") or {})} - {None}
+    for config in control.list_online_evaluation_configs().get("onlineEvaluationConfigs", []):
+        if (config.get("onlineEvaluationConfigId") in recorded
+                or str(config.get("onlineEvaluationConfigName", "")).startswith(eval_prefix)):
+            out.append({"category": f"online-eval:{config.get('onlineEvaluationConfigId')}",
+                        "status": str(config.get("status") or "")})
+
+    gateway_id = setup.get("gateway_id")
+    if gateway_id:
+        try:
+            gateway = control.get_gateway(gatewayIdentifier=gateway_id)
+            out.append({"category": f"gateway:{gateway_id}",
+                        "status": str(gateway.get("status") or "")})
+        except Exception as exc:
+            if type(exc).__name__ not in canary_infra._NOT_FOUND:
+                raise
+
+    if is_harness(row):
+        harness_id = setup.get("runtime_id") or (artifacts.get("agent_meta") or {}).get(
+            "resource_id")
+        names = {canary_harness.control_endpoint(row.id), canary_harness.treatment_endpoint(row.id)}
+        if harness_id:
+            try:
+                endpoints = hc.list_harness_endpoints(control, harness_id)
+            except Exception as exc:
+                if type(exc).__name__ not in canary_infra._NOT_FOUND:
+                    raise
+                endpoints = []  # the harness itself is gone, and its endpoints with it
+            out.extend({"category": f"endpoint:{e.get('endpointName')}",
+                        "status": str(e.get("status") or "")}
+                       for e in endpoints if e.get("endpointName") in names)
+    else:
+        runtime_id = setup.get("runtime_id")
+        for name in (setup.get("stable_endpoint"), setup.get("treatment_endpoint")):
+            if not (runtime_id and name):
+                continue
+            try:
+                endpoint = rt.get_runtime_endpoint(
+                    control, runtime_id=runtime_id, endpoint_name=name)
+                out.append({"category": f"endpoint:{name}",
+                            "status": str(endpoint.get("status") or "")})
+            except Exception as exc:
+                if type(exc).__name__ not in canary_infra._NOT_FOUND:
+                    raise
+    return out

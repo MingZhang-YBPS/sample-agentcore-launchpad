@@ -31,9 +31,12 @@ evaluate natural-language acceptance criteria.
 - [ ] `name`: `^[a-z][a-z0-9-]{2,47}$`; not starting with `launchpad-`, `harness-`,
       `system-`; not the name of an Agent already in the catalog.
 - [ ] `model_id` / `model_source` (`bedrock` | `mantle`).
-- [ ] `system_prompt`: 1–20,000 chars — and lean: identity, goal, hard boundaries,
-      escalation, tone, language — nothing more. No scenario scripts, no
-      golden tests pasted in; coverage comes from the Evaluation → Optimization loop.
+- [ ] `system_prompt`: schema allows 1–20,000 chars, but v1 is **≤ 50 characters**
+      (≤ 50 汉字 incl. punctuation; English ≤ 50 words): who the agent is and what it
+      does for whom — nothing more. No red lines, escalation, tone, tool instructions,
+      scenario scripts or golden tests; those live in golden tests, evaluators and
+      `requirements_baseline`, and reach the prompt through the Evaluation →
+      Optimization loop. Longer only when the user explicitly asked for it.
 - [ ] `tools`, `skills`, `knowledge_bases`: catalog keys/ids from the preamble ONLY,
       no repeats, ≤ 20 / 10 / 10. Anything missing from the catalog → `manual_tasks`.
 - [ ] `memory`: `disabled` | `workspace`.
@@ -196,6 +199,9 @@ barrier was confirmed (never `{}` or assumed).
       suggested note with `confirmed: false, selected: false`; `explored_empty` only on
       the customer's explicit "nothing there" after the suggestions; ≥ 1 confirmed
       note in the whole fishbone.
+- [ ] A blanket acceptance of the express close ("默认", "按你的建议", "都适用", the
+      "these apply" option) made each of its suggestions `confirmed: true` — the
+      fishbone is present, not omitted as "only assumed".
 - [ ] `parking_lot` ≤ 40 of `{original (1–1,000), converted_to? (≤ 200)}`.
 
 ## 7. Last look

@@ -176,7 +176,7 @@ def after_deploy(db: Session, agent: Agent, *, note: str | None, actor: str | No
             criteria_set_id=criteria_set.id if criteria_set else None,
             criteria_set_version=criteria_set.version if criteria_set else None,
             decision="pending",
-            requested_by=actor or agent.owner or "",
+            requested_by=actor or agent.created_by_name or agent.owner or "",
             note=note or "",
         ))
         db.flush()

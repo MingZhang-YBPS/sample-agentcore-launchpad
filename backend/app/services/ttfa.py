@@ -3,10 +3,12 @@
 The clock starts at the account's first successful login (`User.first_login_at`,
 falling back to `created_at` for accounts that logged in before the column
 existed) and stops at the end of the earliest **succeeded** `Deployment` of an
-`Agent` in this workspace whose `owner` is that account. `Agent.owner` is the
-creating identity's username, stamped server-side by the create/convert routes and
-by the assistant approval path; it is matched case-insensitively against
-`User.username_key`. Agents deleted since still count — TTFA is a historical fact.
+`Agent` in this workspace created by that account: `Agent.created_by_name` (the
+creating identity's username, stamped server-side by `services.creators` on create,
+convert and assistant approval), falling back to `Agent.owner` for rows created
+before creators were recorded (the T-line stamped the username there). It is matched
+case-insensitively against `User.username_key`. Agents deleted since still count —
+TTFA is a historical fact.
 
 The built-in admin has no `users` row and is never a sample. Pending accounts
 (no session possible yet) are excluded; every other account that can reach the
@@ -36,7 +38,11 @@ def compute_ttfa(db: Session, workspace_id: str) -> dict[str, Any]:
     # earliest succeeded deployment per lowercased owner, this workspace only
     firsts: dict[str, datetime] = {}
     rows = (
-        db.query(func.lower(Agent.owner), Deployment.ended_at, Deployment.started_at)
+        db.query(
+            func.lower(func.coalesce(Agent.created_by_name, Agent.owner)),
+            Deployment.ended_at,
+            Deployment.started_at,
+        )
         .join(Deployment, Deployment.agent_id == Agent.id)
         .filter(Agent.workspace_id == workspace_id, Deployment.status == "succeeded")
         .all()

@@ -38,12 +38,19 @@ from app.core.errors import AppError, NotFoundError
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import service as eval_service
 from app.evaluation.models import EvalRun, OnlineEvalConfig
-from app.evaluation.online_evaluators import normalize_online_evaluators
+from app.evaluation.online_evaluators import (
+    normalize_online_evaluators,
+    refuse_hidden_evaluators,
+)
 from app.evaluation.service import EVAL_SUPPORTED_METHODS, resolve_telemetry
 from app.models.ledger import Agent
+from app.optimization.models import Experiment, RuntimeCanary
 from app.routers.workspaces import WorkspaceScope
+from app.services import creators, visibility
 from app.services.agentcore.client import control_client, data_client
+from app.services.creators import Creator
 from app.services.observability import BIN_BY_RANGE, RANGE_HOURS, run_insights_queries
+from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext
 
 EXPERIMENT_PREFIXES = ("exp_", "can_")
@@ -91,6 +98,45 @@ def owner_of(name: str, config_id: str, ledger_ids: set[str]) -> Owner:
     if str(name or "").startswith(EXPERIMENT_PREFIXES):
         return "experiment"
     return "external"
+
+
+def _parent_creators(db: Session, ws: WorkspaceScope, name: str) -> list[str | None]:
+    """Creators of the experiment / canary an `exp_<id8>_…` / `can_<id8>_…` config
+    belongs to (its name embeds the first 8 chars of the owner's 12-char id)."""
+    model = (
+        Experiment if name.startswith("exp_")
+        else RuntimeCanary if name.startswith("can_")
+        else None
+    )
+    id8 = name[4:].split("_", 1)[0] if model is not None else ""
+    if model is None or not id8:
+        return []
+    return list(db.scalars(
+        select(model.created_by).where(
+            model.workspace_id == ws.id, model.id.startswith(id8, autoescape=True)
+        )
+    ))
+
+
+def config_visible(
+    db: Session, ws: WorkspaceScope, viewer: Viewer, *, name: str,
+    row: OnlineEvalConfig | None,
+) -> bool:
+    """Workspace isolation for one config: a ledger row → its creator; an
+    experiment/canary-owned config follows its owning record (shared when that
+    record is gone); an external config has no known creator → shared."""
+    if not viewer.filters:
+        return True
+    if row is not None:
+        return visibility.sees(viewer, db, row.created_by)
+    parents = _parent_creators(db, ws, str(name or ""))
+    return not parents or any(visibility.sees(viewer, db, c) for c in parents)
+
+
+def _not_found(config_id: str) -> NotFoundError:
+    return NotFoundError(
+        "online_eval.not_found", f"online evaluation config {config_id} not found"
+    )
 
 
 def mode_of(aws: dict[str, Any]) -> Mode:
@@ -170,8 +216,11 @@ def validate_filters(filters: Sequence[dict[str, Any]] | None) -> list[dict[str,
     return out
 
 
-def _agent_log_group_matchers(db: Session, ws: WorkspaceScope) -> list[tuple[Agent, str, bool]]:
-    """(agent, log-group needle, is_prefix) for every deployed agent in the workspace.
+def _agent_log_group_matchers(
+    db: Session, ws: WorkspaceScope, viewer: Viewer = Viewer.ALL
+) -> list[tuple[Agent, str, bool]]:
+    """(agent, log-group needle, is_prefix) for every deployed agent in the workspace
+    that ``viewer`` may see (a hidden agent is never named as the match).
 
     Derived offline: runtime methods log to ``runtimes/<resource_id>-<endpoint>``; a
     harness's backing runtime logs under ``runtimes/harness_<name>-*`` (see
@@ -179,7 +228,11 @@ def _agent_log_group_matchers(db: Session, ws: WorkspaceScope) -> list[tuple[Age
     ``matched_agent`` hint on external configs.
     """
     rows = db.scalars(
-        select(Agent).where(Agent.workspace_id == ws.id, Agent.status == "active")
+        select(Agent).where(
+            Agent.workspace_id == ws.id,
+            Agent.status == "active",
+            visibility.clause(viewer, Agent.created_by),
+        )
     ).all()
     out: list[tuple[Agent, str, bool]] = []
     for agent in rows:
@@ -249,6 +302,8 @@ def _normalize(
         "duplicate_enabled": False,
         "created_at": _iso(aws.get("createdAt")),
         "updated_at": _iso(aws.get("updatedAt")),
+        # console-created configs only: experiment/canary/external ones have no row
+        **creators.fields(row),
     }
     return out
 
@@ -273,12 +328,15 @@ def _require_owner(config: dict[str, Any], allowed: Sequence[Owner], action: str
 # ─── read side ──────────────────────────────────────────────────────────────
 
 
-def list_configs(db: Session, ws: WorkspaceScope, control: Any = None) -> list[dict[str, Any]]:
+def list_configs(
+    db: Session, ws: WorkspaceScope, control: Any = None, *, viewer: Viewer = Viewer.ALL
+) -> list[dict[str, Any]]:
     """Every config in the account, newest-updated first, classified + enriched.
 
     Summaries lack evaluators / rule, so agent- and external-owned rows get one
     ``Get`` each (experiment rows stay summary-only — their page is elsewhere).
     A failing ``Get`` degrades that row to its summary rather than failing the list.
+    Configs hidden from ``viewer`` (workspace isolation) are skipped before any Get.
     """
     control = control or control_client(ws.context)
     ledger = _ledger_rows(db, ws)
@@ -286,8 +344,11 @@ def list_configs(db: Session, ws: WorkspaceScope, control: Any = None) -> list[d
     out: list[dict[str, Any]] = []
     for summary in ac.list_online_eval_configs(control):
         config_id = summary["onlineEvaluationConfigId"]
-        owner = owner_of(summary.get("onlineEvaluationConfigName", ""), config_id, set(ledger))
+        name = summary.get("onlineEvaluationConfigName", "")
+        owner = owner_of(name, config_id, set(ledger))
         row = ledger.get(config_id)
+        if not config_visible(db, ws, viewer, name=name, row=row):
+            continue
         aws, detailed = summary, False
         if owner != "experiment":
             try:
@@ -297,7 +358,7 @@ def list_configs(db: Session, ws: WorkspaceScope, control: Any = None) -> list[d
         matched = None
         if owner == "external" and detailed:
             if matchers is None:
-                matchers = _agent_log_group_matchers(db, ws)
+                matchers = _agent_log_group_matchers(db, ws, viewer)
             ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
             matched = _match_agent(ds.get("logGroupNames") or [], matchers)
         out.append(_normalize(aws, owner=owner, row=row, matched_agent=matched,
@@ -317,23 +378,32 @@ def list_configs(db: Session, ws: WorkspaceScope, control: Any = None) -> list[d
 
 
 def get_config(
-    db: Session, ws: WorkspaceScope, config_id: str, control: Any = None
+    db: Session, ws: WorkspaceScope, config_id: str, control: Any = None, *,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
+    """One config, or 404 — also when workspace isolation hides it from ``viewer``
+    (a hidden ledger-backed config answers before any AWS call)."""
     control = control or control_client(ws.context)
     ledger = _ledger_rows(db, ws)
+    row = ledger.get(config_id)
+    if row is not None and not config_visible(db, ws, viewer, name=row.name, row=row):
+        raise _not_found(config_id)
     try:
         aws = ac.get_online_eval_config(control, config_id=config_id)
     except Exception as exc:
         if _is_not_found(exc):
-            raise NotFoundError(
-                "online_eval.not_found", f"online evaluation config {config_id} not found"
-            ) from exc
+            raise _not_found(config_id) from exc
         raise
-    owner = owner_of(aws.get("onlineEvaluationConfigName", ""), config_id, set(ledger))
+    name = aws.get("onlineEvaluationConfigName", "")
+    if row is None and not config_visible(db, ws, viewer, name=name, row=None):
+        raise _not_found(config_id)
+    owner = owner_of(name, config_id, set(ledger))
     matched = None
     if owner == "external":
         ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
-        matched = _match_agent(ds.get("logGroupNames") or [], _agent_log_group_matchers(db, ws))
+        matched = _match_agent(
+            ds.get("logGroupNames") or [], _agent_log_group_matchers(db, ws, viewer)
+        )
     return _normalize(aws, owner=owner, row=ledger.get(config_id), matched_agent=matched,
                       detailed=True)
 
@@ -357,6 +427,7 @@ def create_config(
     clustering_frequencies: Sequence[str] | None = None,
     control: Any = None,
     logs: Any = None,
+    creator: Creator | None = None,
 ) -> dict[str, Any]:
     control = control or control_client(ws.context)
     service_name, log_group = resolve_telemetry(agent, ws.context, logs)
@@ -420,6 +491,7 @@ def create_config(
         service_name=service_name,
         log_group=log_group,
     )
+    creators.stamp(row, creator)
     db.add(row)
     db.commit()
     # Create returns status/executionStatus/outputConfig but not the config body;
@@ -441,7 +513,8 @@ def create_config(
 
 
 def patch_config(
-    db: Session, ws: WorkspaceScope, config_id: str, patch: dict[str, Any], control: Any = None
+    db: Session, ws: WorkspaceScope, config_id: str, patch: dict[str, Any], control: Any = None,
+    *, viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """Update description / evaluators / sampling / timeout / filters on an agent config.
 
@@ -450,7 +523,7 @@ def patch_config(
     unchanged because omitted top-level fields are kept.
     """
     control = control or control_client(ws.context)
-    current = get_config(db, ws, config_id, control)
+    current = get_config(db, ws, config_id, control, viewer=viewer)
     _require_owner(current, ("agent",), "edit")
     fields: dict[str, Any] = {}
     if patch.get("description") is not None:
@@ -480,6 +553,9 @@ def patch_config(
         if patch.get("insights") is not None or patch.get("clustering_frequencies") is not None:
             raise _mode_conflict("this config runs evaluators — insights cannot be set")
         if patch.get("evaluators") is not None:
+            refuse_hidden_evaluators(
+                db, ws.id, viewer, patch["evaluators"], code_prefix="online_eval"
+            )
             chosen = normalize_online_evaluators(
                 patch["evaluators"], control, code_prefix="online_eval"
             )
@@ -501,10 +577,11 @@ def patch_config(
 
 
 def set_execution_status(
-    db: Session, ws: WorkspaceScope, config_id: str, *, enabled: bool, control: Any = None
+    db: Session, ws: WorkspaceScope, config_id: str, *, enabled: bool, control: Any = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     control = control or control_client(ws.context)
-    current = get_config(db, ws, config_id, control)
+    current = get_config(db, ws, config_id, control, viewer=viewer)
     _require_owner(current, ("agent", "external"), "resume" if enabled else "pause")
     ac.update_online_eval_config(
         control, config_id=config_id, executionStatus="ENABLED" if enabled else "DISABLED"
@@ -513,14 +590,17 @@ def set_execution_status(
 
 
 def delete_config(
-    db: Session, ws: WorkspaceScope, config_id: str, control: Any = None
+    db: Session, ws: WorkspaceScope, config_id: str, control: Any = None, *,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """Delete on AWS, drop the ledger row; the results log group is left in place."""
     control = control or control_client(ws.context)
     ledger = _ledger_rows(db, ws)
     row = ledger.get(config_id)
+    if row is not None and not config_visible(db, ws, viewer, name=row.name, row=row):
+        raise _not_found(config_id)
     try:
-        current = get_config(db, ws, config_id, control)
+        current = get_config(db, ws, config_id, control, viewer=viewer)
     except NotFoundError:
         if row is None:
             raise
@@ -742,6 +822,8 @@ def _report_row(summary: dict[str, Any], *, origin: str, run: EvalRun | None = N
         "origin": origin,
         "run_id": run.id if run else None,
         "error": (summary.get("errorDetails") or [None])[0] or (run.error if run else None),
+        # console-started reports only; AWS-scheduled batches have no creator
+        **creators.fields(run),
     }
 
 
@@ -755,12 +837,20 @@ def _console_runs(db: Session, ws: WorkspaceScope, config_id: str) -> list[EvalR
 
 def reports(
     db: Session, ws: WorkspaceScope, config_id: str, *, data: Any = None, control: Any = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """Every report of one config: console-started runs (ledger) merged with
-    AWS-scheduled batches attributed by their source ARN, newest first."""
-    config = get_config(db, ws, config_id, control)
+    AWS-scheduled batches attributed by their source ARN, newest first. A console
+    run hidden from ``viewer`` is dropped — and so is its batch, which would
+    otherwise resurface as an AWS-scheduled row."""
+    config = get_config(db, ws, config_id, control, viewer=viewer)
     data = data or data_client(ws.context)
     runs = _console_runs(db, ws, config_id)
+    hidden_batches = {
+        run.batch_eval_id for run in runs
+        if run.batch_eval_id and not visibility.sees(viewer, db, run.created_by)
+    }
+    runs = [run for run in runs if visibility.sees(viewer, db, run.created_by)]
     # The ledger half of the list must survive an AWS listing failure (throttle /
     # outage): console runs are still shown, flagged, and AWS-scheduled rows wait.
     aws_unavailable = False
@@ -771,7 +861,7 @@ def reports(
         summaries = {}
         aws_unavailable = True
     rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[str] = set(hidden_batches)
     for run in runs:  # console runs first — queued ones have no batch yet
         summary = summaries.get(run.batch_eval_id or "", {})
         detail = None
@@ -798,9 +888,14 @@ def reports(
 
 def report_detail(
     db: Session, ws: WorkspaceScope, config_id: str, batch_id: str, *,
-    data: Any = None, control: Any = None,
+    data: Any = None, control: Any = None, viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
-    config = get_config(db, ws, config_id, control)
+    config = get_config(db, ws, config_id, control, viewer=viewer)
+    if any(
+        run.batch_eval_id == batch_id and not visibility.sees(viewer, db, run.created_by)
+        for run in _console_runs(db, ws, config_id)
+    ):
+        raise NotFoundError("online_eval.report_not_found", f"report {batch_id}")
     data = data or data_client(ws.context)
     try:
         batch = ac.get_batch_evaluation(data, batch_id=batch_id)
@@ -832,13 +927,14 @@ def report_detail(
 
 def start_report(
     db: Session, ws: WorkspaceScope, config_id: str, range_key: str, *, control: Any = None,
+    creator: Creator | None = None, viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     """RUN REPORT NOW: an on-demand insights report over the sessions this config
     sampled in the window, through the bounded run queue (shared 5-active quota)."""
     if range_key not in REPORT_RANGES:
         raise AppError("online_eval.bad_range", f"range must be one of {sorted(REPORT_RANGES)}",
                        status_code=422)
-    config = get_config(db, ws, config_id, control)
+    config = get_config(db, ws, config_id, control, viewer=viewer)
     _require_owner(config, ("agent",), "run a report for")
     if config["mode"] != "insights":
         raise _mode_conflict("reports exist only for insights-mode configs")
@@ -851,7 +947,7 @@ def start_report(
         agent=agent, workspace=ws.context, dataset_items=[], dataset_id=None,
         dataset_name=f"online:{config_id}", evaluators=list(config["insights"]),
         mode="insights", insights=list(config["insights"]), time_range=time_range,
-        online_config_arn=config["arn"],
+        online_config_arn=config["arn"], creator=creator,
     )
     return {
         "run_id": run.id, "status": run.status, "queue_position": run.queue_position,
@@ -935,9 +1031,14 @@ def reset_names_cache() -> None:
     _names_cache.clear()
 
 
-def _agent_ledger_rows(db: Session, workspace_id: str) -> dict[str, OnlineEvalConfig]:
+def _agent_ledger_rows(
+    db: Session, workspace_id: str, viewer: Viewer = Viewer.ALL
+) -> dict[str, OnlineEvalConfig]:
     rows = db.scalars(
-        select(OnlineEvalConfig).where(OnlineEvalConfig.workspace_id == workspace_id)
+        select(OnlineEvalConfig).where(
+            OnlineEvalConfig.workspace_id == workspace_id,
+            visibility.clause(viewer, OnlineEvalConfig.created_by),
+        )
     ).all()
     return {r.config_id: r for r in rows}
 
@@ -1064,10 +1165,13 @@ def online_quality(
     workspace: WorkspaceContext,
     run_queries: Callable[..., dict[str, list[dict[str, str]]]] | None = None,
     logs: Any = None,
+    *,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
-    """24 h online quality over the workspace's agent-owned configs. No agent
-    config → the empty payload WITHOUT touching Logs Insights."""
-    ledger = _agent_ledger_rows(db, workspace.id)
+    """24 h online quality over the workspace's agent-owned configs — only those
+    ``viewer`` can see under workspace isolation. No (visible) agent config → the
+    empty payload WITHOUT touching Logs Insights."""
+    ledger = _agent_ledger_rows(db, workspace.id, viewer)
     if not ledger:
         return _empty_quality()
     run = run_queries or run_insights_queries

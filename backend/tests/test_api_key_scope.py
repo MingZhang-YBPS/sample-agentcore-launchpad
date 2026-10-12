@@ -4,11 +4,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.orm import Session
 
 import app.routers.public_api as public_api
 from app.core import db as db_module
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.models.ledger import Agent, ApiKey
+from app.models.ledger import Agent, ApiKey, User
 from app.services import api_keys as key_limits
 
 
@@ -60,8 +61,10 @@ def test_migration_adds_columns_with_legacy_defaults(tmp_path):
             " created_at) VALUES ('k1', 'default', 'old', 'lp_live_ab12', 'h', 1,"
             " '2026-01-01 00:00:00')"
         ))
+        # `created_by` / `created_by_name` are the lifecycle migration's (indexed), see
+        # test_t16_username_creator_is_reinterpreted_once below
         for col in ("agent_ids", "expires_at", "rate_per_minute", "last_used_at",
-                    "use_count", "created_by"):
+                    "use_count"):
             conn.execute(sa.text(f"ALTER TABLE api_keys DROP COLUMN {col}"))
     assert db_module.schema_drift(engine)["api_keys"]
     db_module.init_db(engine)
@@ -71,6 +74,43 @@ def test_migration_adds_columns_with_legacy_defaults(tmp_path):
             "SELECT agent_ids, expires_at, rate_per_minute, last_used_at, use_count"
             " FROM api_keys")).one()
     assert tuple(row) == (None, None, None, None, 0)
+
+
+def test_t16_username_creator_is_reinterpreted_once(tmp_path):
+    """A ledger written by the T16 line stored the minting *username* in
+    `api_keys.created_by` and had no `created_by_name`. The merge with the upstream
+    key lifecycle reinterprets it once: the name moves to `created_by_name`, and
+    `created_by` becomes the `users.id` (NULL with no `users` row — the config admin —
+    so that key is never treated as offboarded)."""
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'ledger.db'}")
+    db_module.init_db(engine)
+    with Session(engine) as db:
+        db.add(User(id="u-ada", username="ada", username_key="ada",
+                    email="ada@example.com", password_hash="x"))
+        db.commit()
+    with engine.begin() as conn:
+        conn.execute(sa.text("DROP INDEX ix_api_keys_created_by"))
+        conn.execute(sa.text("ALTER TABLE api_keys DROP COLUMN created_by_name"))
+        for kid, creator in (("k-ada", "ada"), ("k-admin", "admin"), ("k-legacy", None)):
+            conn.execute(sa.text(
+                "INSERT INTO api_keys (id, workspace_id, name, prefix, key_hash, enabled,"
+                " created_at, use_count, created_by) VALUES (:id, 'default', :id,"
+                " 'lp_live_ab12', :id, 1, '2026-01-01 00:00:00', 0, :by)"
+            ), {"id": kid, "by": creator})
+    db_module.init_db(engine)
+    db_module.init_db(engine)  # idempotent: the second pass must not touch the ids again
+    assert db_module.schema_drift(engine) == {}
+    with engine.begin() as conn:
+        rows = {
+            r.id: (r.created_by, r.created_by_name)
+            for r in conn.execute(sa.text(
+                "SELECT id, created_by, created_by_name FROM api_keys"))
+        }
+    assert rows == {
+        "k-ada": ("u-ada", "ada"),
+        "k-admin": (None, "admin"),
+        "k-legacy": (None, None),
+    }
 
 
 def test_unscoped_key_behaves_as_before(client):

@@ -17,10 +17,15 @@ error-code family (``experiment.evaluator_unsupported`` vs
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from app.services.visibility import Viewer
 
 # The pair every experiment used before the set became selectable; also the
 # create-form default on the online evaluation sub-page.
@@ -37,6 +42,7 @@ def normalize_online_evaluators(
     control: Any,
     *,
     code_prefix: str = "experiment",
+    require_numeric: bool = False,
 ) -> list[str]:
     """Validate an operator-chosen evaluator set for online evaluation.
 
@@ -44,6 +50,11 @@ def normalize_online_evaluators(
     judge costs one ``GetEvaluator``, so it happens after dedup and the count cap
     and only for non-``Builtin.`` ids — a built-in-only selection, the common
     case, makes no AWS call at all.
+
+    ``require_numeric`` additionally refuses a custom LLM judge whose rating scale
+    is categorical (``{code_prefix}.evaluator_categorical``): a caller that compares
+    arm means (the canary verdict) needs a numeric score. It reuses the same
+    ``GetEvaluator`` read, so it costs no extra AWS call.
     """
     code = f"{code_prefix}.evaluator_unsupported"
     chosen: list[str] = []
@@ -78,13 +89,77 @@ def normalize_online_evaluators(
             status_code=400,
         )
     for evaluator in (e for e in chosen if not e.startswith("Builtin.")):
-        _assert_no_ground_truth(control, evaluator, code)
+        _assert_no_ground_truth(
+            control, evaluator, code,
+            categorical_code=f"{code_prefix}.evaluator_categorical" if require_numeric else None,
+        )
     return chosen
 
 
-def _assert_no_ground_truth(control: Any, evaluator: str, code: str) -> None:
+def refuse_hidden_evaluators(
+    db: Session, workspace_id: str, viewer: Viewer, ids: Sequence[str] | None,
+    *, code_prefix: str = "experiment",
+) -> None:
+    """Workspace isolation: a custom evaluator the viewer cannot see is refused
+    exactly like one that does not exist (`{code_prefix}.evaluator_unsupported`,
+    "unknown evaluator"). Built-in and third-party ids are always visible."""
+    if not viewer.filters:
+        return
+    from app.services import creators, visibility
+
+    custom = [str(e).strip() for e in ids or () if not str(e).startswith(_MANAGED)]
+    hidden = visibility.hidden_aws_ids(viewer, db, workspace_id, creators.EVALUATOR, custom)
+    for evaluator in custom:
+        if evaluator in hidden:
+            raise AppError(
+                f"{code_prefix}.evaluator_unsupported",
+                f"unknown evaluator {evaluator}",
+                {"evaluator": evaluator},
+                status_code=400,
+            )
+
+
+_MANAGED = ("Builtin.", "ThirdParty.")
+
+
+def require_visible_evaluators(
+    db: Session, workspace_id: str, viewer: Viewer, ids: Sequence[str] | None,
+) -> None:
+    """Workspace isolation for routes that hand an evaluator id straight to AWS
+    (`GET/PUT/DELETE /api/eval/evaluators/{id}`, the session SCORE NOW): a hidden
+    custom evaluator answers exactly what a missing one does — AWS's own
+    `ResourceNotFoundException`, through the global ClientError handler."""
+    if not viewer.filters:
+        return
+    from botocore.exceptions import ClientError
+
+    from app.services import creators, visibility
+
+    custom = [str(e) for e in ids or () if not str(e).startswith(_MANAGED)]
+    hidden = visibility.hidden_aws_ids(viewer, db, workspace_id, creators.EVALUATOR, custom)
+    for evaluator in custom:
+        if evaluator in hidden:
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException",
+                           "Message": f"Evaluator {evaluator} not found"}},
+                "GetEvaluator",
+            )
+
+
+def is_categorical(detail: dict[str, Any] | None) -> bool:
+    """A custom LLM judge whose rating scale is categorical (no numeric score) —
+    the same rule as ``recommendations._evaluator_problem``."""
+    config = (detail or {}).get("evaluatorConfig") or {}
+    scale = (config.get("llmAsAJudge") or {}).get("ratingScale") or {}
+    return bool(scale.get("categorical"))
+
+
+def _assert_no_ground_truth(
+    control: Any, evaluator: str, code: str, *, categorical_code: str | None = None,
+) -> None:
     """Reject a custom judge — or a managed code evaluator whose rules read reference
-    inputs — that needs ground truth it will never get online."""
+    inputs — that needs ground truth it will never get online; with
+    ``categorical_code`` also a judge that scores on a categorical scale."""
     from app.assistant.evaluation_assets import managed_reference_gap
     from app.core.db import SessionLocal
 
@@ -115,13 +190,21 @@ def _assert_no_ground_truth(control: Any, evaluator: str, code: str) -> None:
         # a control-plane blip must not block the caller's action: AWS enforces
         # the same constraint server-side, so fail open and let it have the last word
         return
-    placeholders = ac.ground_truth_placeholders(ac.judge_instructions(detail))
+    placeholders = ac.online_unavailable_placeholders(ac.judge_instructions(detail))
     if placeholders:
         rendered = ", ".join(f"{{{p}}}" for p in placeholders)
         raise AppError(
             code,
-            f"{evaluator} references {rendered}, which is ground truth online "
-            "evaluation does not carry — use a batch evaluation run instead",
+            f"{evaluator} references {rendered}, which online evaluation does not "
+            "carry (reference inputs) — use a batch evaluation run instead",
             {"evaluator": evaluator, "placeholders": placeholders},
+            status_code=400,
+        )
+    if categorical_code and is_categorical(detail):
+        raise AppError(
+            categorical_code,
+            f"{evaluator} rates on a categorical scale, which gives no numeric score to "
+            "compare the two versions by — use a judge with a numerical rating scale",
+            {"evaluator": evaluator},
             status_code=400,
         )

@@ -430,6 +430,7 @@
         "inspection-failed": "Resource details could not be inspected.",
         "external-authorizer": "External custom JWT authorizer; Chat is unavailable.",
         "harness-managed": "Backing runtime of a managed Harness; use its Harness agent instead.",
+        "already-managed": "Already managed by a Launchpad agent.",
         "harness-not-ready": "Harness is not READY; it cannot be imported or chatted with.",
         "runtime-not-ready": "Runtime is not READY; Chat is unavailable.",
         "unknown": "Capability could not be determined."
@@ -2237,6 +2238,7 @@
     "skill_lab.attachment_path_conflict": "A generated task both declares an attached document and defines the same path inline.",
     "skill_lab.snapshot_exists": "This job already has an immutable input snapshot.",
     "agent.name_exists": "An agent with this name already exists",
+    "apikey.creator_offboarded": "This key cannot be re-enabled: the account that created it was deleted, disabled, expired, or lost access to this workspace. Mint a new key instead.",
     "agent.method_not_available": "This creation method ships in a later phase",
     "agent.not_active": "The agent is not active yet",
     "agent.invoke_not_supported": "This Runtime is not available for invocation",
@@ -2418,7 +2420,8 @@
     "share.not_found": "This link is not valid. It may have expired or been revoked.",
     "share.session_not_found": "This conversation is no longer available. Start a new one.",
     "share.rate_limited": "Too many messages in a short time. Please wait a moment and try again.",
-    "share.unavailable": "The assistant could not answer right now. Please try again."
+    "share.unavailable": "The assistant could not answer right now. Please try again.",
+    "evaluators.list_failed": "The account's evaluators could not be listed."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -4464,13 +4467,22 @@
       "datasetCloud": "A copy of a Dataset was synced to AWS by hand; that AWS Dataset stays (delete it in Evaluation → Datasets if unwanted).",
       "onlyTranscript": "No Agent, cloud asset or Dataset was created from it.",
       "blockers": "Cannot clear yet: {{list}}. Wait for it to finish (or stop it) and try again.",
-      "adminOnly": "This conversation created cloud assets or an Agent; only an administrator can clear it together with them.",
+      "noPermission": "This conversation created cloud assets or an Agent; clearing it together with them requires the agents.deploy permission (cloud assets) and the agents.delete permission (an Agent).",
       "irreversible": "This deletes real AWS resources and cannot be undone. Evaluation runs already recorded stay in the Evaluation list.",
       "irreversibleLocal": "This cannot be undone; nothing on AWS is touched.",
       "confirm": "CLEAR CONVERSATION & ASSETS",
       "working": "CLEARING…",
       "blocked": "The conversation still has work in flight — nothing was deleted.",
-      "doneToast": "Cleared “{{title}}” — {{agents}} Agent(s), {{operations}} asset operation(s), {{datasets}} Dataset(s) removed."
+      "doneToast": "Cleared “{{title}}” — {{agents}} Agent(s), {{operations}} asset operation(s), {{datasets}} Dataset(s) removed.",
+      "canaries": "Canaries on these Agents are stopped and removed first — their A/B test, online evaluations, dedicated gateway with its targets and trace delivery, and named endpoints — and read back gone before the Agent is deleted: {{list}}.",
+      "experiments": "Experiments on these Agents are cleaned (A/B tests, online evaluations, configuration bundles, gateway targets): {{list}}.",
+      "historyKept": "Canary and experiment records stay in their lists as history.",
+      "inProgress": "A clear of this conversation is already running ({{step}}). Confirm to follow its progress.",
+      "lastFailed": "The previous clear stopped: {{reason}} Clearing again resumes from what was already verified.",
+      "progress": "Clearing — {{step}}",
+      "starting": "starting",
+      "failedToast": "Clear stopped — the conversation was kept: {{reason}}",
+      "background": "The clear continues in the background — open CLEAR again to check on it."
     },
     "noConversation": "Start a conversation, then paste your Workshop output below.",
     "emptyThread": "PASTE YOUR WORKSHOP OUTPUT — THE ASSISTANT CONFIRMS THE BASELINE AND ASKS ONLY WHAT IS MISSING",
@@ -4593,7 +4605,7 @@
   "assistantEval": {
     "title": "EVALUATION ASSETS",
     "sub": "reviewed plan · separate from the Agent approval",
-    "scopeNote": "This plan is private to you until an administrator creates assets from it. Creating assets registers a local Dataset, AgentCore evaluators and — for each code evaluator — a separate Lambda with its own role. It never deploys the Agent, runs an evaluation, syncs the Dataset to AWS, enables online evaluation or invokes a model. Every evaluator here is an AgentCore evaluator; a golden test nothing in AgentCore can score is blocked with its reason and stays a manual task.",
+    "scopeNote": "This plan is private to you until assets are created from it. Creating assets registers a local Dataset, AgentCore evaluators and — for each code evaluator — a separate Lambda with its own role. It never deploys the Agent, runs an evaluation, syncs the Dataset to AWS, enables online evaluation or invokes a model. Every evaluator here is an AgentCore evaluator; a golden test nothing in AgentCore can score is blocked with its reason and stays a manual task.",
     "sourceRevision": "From proposal revision",
     "prepare": "PREPARE PLAN",
     "prepareAgain": "PREPARE AGAIN (new revision)",
@@ -4665,7 +4677,7 @@
       "declined": "declined"
     },
     "create": "CREATE ASSETS",
-    "adminOnly": "Only an administrator who owns this conversation can create assets. You can still prepare and edit the plan.",
+    "noPermission": "Creating assets requires the agents.deploy permission. You can still prepare and edit the plan.",
     "fixErrors": "Fix the validation errors first.",
     "unresolvedHint": "{{n}} recommendation(s) are unresolved — they will be shown as such, not implemented.",
     "confirmTitle": "Create the assets of plan revision {{n}}?",
@@ -4781,7 +4793,8 @@
       "oneAtATime": "A run of this agent on this Dataset is still active — wait for it to finish (or stop it on the Evaluation page) before starting another.",
       "tooManyEvaluators": "{{n}} evaluators are ready but one batch evaluation applies at most {{max}} — open New Run and deselect the ones that overlap (the run is otherwise identical).",
       "remove": "Remove this failed run from the history",
-      "removedToast": "Run {{id}} removed"
+      "removedToast": "Run {{id}} removed",
+      "meanScoreCoverage": "normalized mean {{mean}} over {{n}} evaluator(s), from {{scored}}/{{total}} sessions"
     },
     "iterate": {
       "title": "Read the scores and the traces, then iterate",
@@ -4832,15 +4845,22 @@
     "note": "Guidance only, with two exceptions: START EVALUATION submits a real run (the same request as New Run) and CONVERT TO RUNTIME deploys a new Runtime agent — both after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS.",
     "recommend": {
       "title": "Generate AI-recommended improvements",
-      "body": "An AI recommendation reads the traces of the run you pick (the newest clean run by default — any of this agent's runs, on any dataset) and proposes a revised system prompt (and tool descriptions): AgentCore Recommendations aimed at the evaluator you pick by default, or GEPA-lite. Review the diff; you can still edit the prompt when accepting, and Launchpad re-publishes the Harness with the final text, so AWS creates a new Harness version (DEFAULT follows it).",
+      "body": "An AI recommendation reads the traces of the run you pick (the newest usable run by default — clean, or one that only lost fewer than half of its sessions to incomplete traces; any of this agent's runs, on any dataset) and proposes a revised system prompt (and tool descriptions): AgentCore Recommendations aimed at the evaluator you pick by default, or GEPA-lite. Review the diff; you can still edit the prompt when accepting, and Launchpad re-publishes the Harness with the final text, so AWS creates a new Harness version (DEFAULT follows it).",
       "source": "Traces from",
       "version": "Harness now on v{{v}}",
       "publishing": "Publishing the new Harness version of “{{name}}”… Step 4 lists it once the deploy finishes.",
-      "waiting": "Available after a run in step 2 completes without errors — its traces seed the recommendation.",
+      "waiting": "Available once step 2 has a usable run — its traces seed the recommendation.",
       "newest": "newest",
       "historyTitle": "Recommendations from other runs ({{n}})",
       "historyAccepted": "Accepted · published over v{{v}}",
-      "historyOpen": "Show here"
+      "historyOpen": "Show here",
+      "sourceCoverage": "{{scored}}/{{total}} sessions",
+      "blocked": {
+        "evaluator_error": "A run completed partially with evaluator errors (not just missing traces), so it cannot seed a recommendation. Review the errors and run again.",
+        "low_coverage": "A run completed partially but scored fewer than half of its sessions, so it cannot seed a recommendation. Run again.",
+        "legacy": "A run completed partially and predates the failure details. Click “Read failure details” in step 2 — if it only lost traces, the run can seed a recommendation.",
+        "unknown": "A run completed partially and AWS gave no reason for the unscored sessions, so it cannot seed a recommendation. Run again."
+      }
     },
     "canary": {
       "title": "Canary experiment",
@@ -5222,6 +5242,7 @@
       "confirm": "Confirm",
       "create": "Create",
       "createdAt": "Created",
+      "creator": "Creator",
       "delete": "Delete",
       "detail": "Details",
       "done": "Done",
@@ -5872,6 +5893,7 @@
       },
       "origin": {
         "trace": "Trajectory import",
+        "logs": "Runtime logs",
         "manual": "Manual annotation"
       },
       "items": "{{count}} records",
@@ -5881,7 +5903,6 @@
       "new": "Create dataset",
       "search": "Search dataset name / description",
       "empty": "No datasets yet — create one or add trajectories",
-      "simulatedHint": "Simulated-persona datasets are edited in the classic console",
       "deleteTitle": "Delete dataset",
       "deleteBody": "Delete dataset “{{name}}”? This cannot be undone.",
       "deleted": "Dataset deleted",
@@ -5900,8 +5921,8 @@
       "created": "Dataset created",
       "editTitle": "Edit dataset",
       "newTitle": "Create dataset",
-      "kindHint": "New datasets use the scenario format; the type cannot change later.",
-      "recordsSub": "Input is required; expected output is the ground truth some evaluators need.",
+      "kindHint": "The type is fixed once the dataset is created.",
+      "recordsSub": "Each scenario needs at least one turn with input. Reference replies, assertions and the expected trajectory are the ground truth some evaluators read (all optional).",
       "addRow": "Add record",
       "inputPlaceholder": "User input",
       "expectedPlaceholder": "Expected output (optional)",
@@ -5913,7 +5934,57 @@
       "copyHint": "Copies the selected records as stored — every turn's input and reference answer, the assertions and the expected tool trajectory; the source dataset is unchanged.",
       "copyConfirm": "Create dataset",
       "copyDescription": "{{count}} records copied from “{{name}}”.",
-      "copied": "Created dataset “{{name}}” ({{count}} records)."
+      "copied": "Created dataset “{{name}}” ({{count}} records).",
+      "mode": "Input method",
+      "modeForm": "Form",
+      "modeImport": "Import JSON",
+      "modeImportHint": "The dataset type is inferred from the imported records.",
+      "kindDesc": {
+        "predefined": "Scripted multi-turn conversations: each turn's input and reference reply, plus optional assertions and an expected tool trajectory.",
+        "simulated": "An LLM plays a user with a set context and goal and talks to the agent freely; the assertions are the ground truth."
+      },
+      "prefill": "Fill sample",
+      "recordsSubSim": "Each simulated user needs a context, a goal and an opening message. Assertions are the only ground truth of a simulated scenario.",
+      "recordsSubImport": "Paste {\"scenarios\": [...]}, a JSON array, or JSONL with one {\"prompt\", \"expected\"} per line.",
+      "scenarioId": "Scenario ID",
+      "addScenario": "Add scenario",
+      "addPersona": "Add simulated user",
+      "removeScenario": "Delete scenario",
+      "addTurn": "Add turn",
+      "removeTurn": "Delete turn",
+      "assertions": "Assertions",
+      "assertionsHint": "Statements the agent's behavior must satisfy (optional).",
+      "addAssertion": "Add assertion",
+      "removeAssertion": "Delete assertion",
+      "trajectory": "Expected tool trajectory",
+      "trajectoryHint": "Comma-separated tool names in call order (optional).",
+      "editJson": "Edit JSON",
+      "backToForm": "Back to form",
+      "jsonLabel": "Scenario JSON",
+      "jsonHint": "The whole record is saved as typed; the server validates it.",
+      "jsonInvalid": "Scenario {{index}}: invalid JSON: {{error}}",
+      "jsonOnly": "This scenario has fields the form cannot show ({{reason}}), so it can only be edited as JSON; the form would drop them on save.",
+      "extraKeys": "Kept fields: {{keys}}",
+      "simDescription": "Scenario description",
+      "simContext": "User context",
+      "simContextHint": "What the simulated user knows and has already tried.",
+      "simGoal": "User goal",
+      "simGoalHint": "The conversation ends once the goal is reached.",
+      "simInput": "Opening message",
+      "simInputHint": "The first message the simulated user sends.",
+      "simTraits": "User traits",
+      "simTraitsHint": "Key / value pairs, e.g. expertise = non-technical (optional).",
+      "simTraitKey": "Trait name",
+      "simTraitValue": "Trait value",
+      "addTrait": "Add trait",
+      "removeTrait": "Delete trait",
+      "simMaxTurns": "Max turns",
+      "simMaxTurnsHint": "Default 10.",
+      "simAssertionsHint": "The ground truth of this scenario (optional).",
+      "simHint": "At run time an LLM actor plays each user (pick its model when you start the evaluation); the conversation stops when the goal is reached or at the turn limit.",
+      "simMixed": "This simulated-user dataset contains records without actor_profile (from an import), which the form cannot show. Fix the JSON and import it as a new dataset instead of editing it here.",
+      "importLabel": "Records",
+      "importPreview": "{{count}} records parsed"
     },
     "pipelines": {
       "colName": "Task name / description",
@@ -5936,6 +6007,7 @@
         "failed": "Failed"
       },
       "newDataset": "New dataset: {{name}}",
+      "datasetGone": "Dataset deleted",
       "manual": "Manual",
       "never": "Never run",
       "lastAdded": "{{count}} added",
@@ -5947,7 +6019,7 @@
       "new": "Create pipeline",
       "search": "Search pipeline name / description",
       "empty": "No pipelines yet",
-      "intro": "A pipeline reads observed sessions, extracts input/reply pairs, filters and de-duplicates them, and writes them into a dataset. Runs are started manually.",
+      "intro": "A pipeline reads observed sessions or CloudWatch logs, extracts question/answer pairs, filters and dedupes them, and writes them to a dataset. Runs are started manually.",
       "deleteTitle": "Delete pipeline",
       "deleteBody": "Delete pipeline “{{name}}”? Its dataset is kept.",
       "deleted": "Pipeline deleted",
@@ -5960,12 +6032,13 @@
       "editTitle": "Edit data-processing task",
       "newTitle": "Create data-processing task",
       "saveRun": "Save and run",
+      "started": "Run started — the list refreshes when it finishes",
       "lastFailed": "The last run failed: {{error}}",
       "sourceTitle": "Data source",
       "srcTraces": "Agent trajectories",
       "srcTracesDesc": "Sessions observed through OpenTelemetry",
       "srcLogs": "Runtime logs",
-      "srcLogsDesc": "Custom log formats need a conversion step first",
+      "srcLogsDesc": "Records in CloudWatch log groups, converted to conversations by a format rule",
       "agentHint": "Only sessions of this agent are read",
       "sessionStatus": "Session status",
       "maxSessions": "Max sessions per run",
@@ -5994,7 +6067,70 @@
       "description": "Description",
       "outputTarget": "Output dataset",
       "newDatasetName": "New dataset name",
-      "newDatasetHint": "Created on the first run; later runs append to it"
+      "newDatasetHint": "Created on the first run; later runs append to it",
+      "keepReplies": "Store the agent's replies as expected output",
+      "inputsOnlyNote": "Only user inputs are stored; the dataset carries no reference answers.",
+      "logs": {
+        "groups": "Log groups",
+        "groupsHint": "1–10 groups. Search by name; a platform agent's runtime group starts with /aws/bedrock-agentcore/runtimes/<agent name>.",
+        "keyword": "Keyword",
+        "keywordHint": "Only read records that contain it (case-insensitive, optional).",
+        "stepFormat": "Format conversion",
+        "formatTitle": "Format rule",
+        "formatSub": "How each log record becomes conversation turns. Fields are JSON dot paths, e.g. payload.messages.0.text.",
+        "preset": {
+          "genai": "GenAI content logs",
+          "message": "One record per message",
+          "exchange": "One record per Q&A"
+        },
+        "presetDesc": {
+          "genai": "OTel GenAI content records (e.g. otel-rt-logs of an AgentCore Runtime). No fields to map.",
+          "message": "Each record is one user or agent message, e.g. {\"conversation_id\", \"role\", \"content\"}.",
+          "exchange": "Each record holds a question and its answer, e.g. {\"request_id\", \"query\", \"answer\"}."
+        },
+        "sessionField": "Session field",
+        "sessionHint": "Records with the same value form one conversation. @logStream makes each log stream one session.",
+        "sessionGenaiHint": "Optional; defaults to attributes.session.id.",
+        "sessionExchangeHint": "Optional; leave empty to make each record its own scenario.",
+        "roleField": "Role field",
+        "roleHint": "Its value is mapped to user / agent by the lists below.",
+        "textField": "Text field",
+        "textHint": "A string, or a list of {text} parts.",
+        "userRoles": "User role values",
+        "assistantRoles": "Agent role values",
+        "rolesHint": "Comma-separated, case-insensitive. Records with other roles are skipped.",
+        "inputField": "Input field",
+        "inputHint": "The user's question.",
+        "outputField": "Output field",
+        "outputHint": "The agent's answer (optional).",
+        "previewTitle": "Conversion preview",
+        "previewStats": "{{events}} records read · {{parsed}} converted · {{sessions}} sessions",
+        "refresh": "Refresh preview",
+        "truncated": "Only the newest 10,000 records were read; narrow the time range or add a keyword.",
+        "nothingParsed": "No session was extracted. Compare the field paths with the raw records below.",
+        "noEvents": "No records in these log groups for the time range.",
+        "raw": "Raw records (newest)",
+        "converted": "Converted sessions",
+        "records": "{{count}} records",
+        "user": "User",
+        "assistant": "Agent",
+        "noTurns": "No conversation turns",
+        "reason": {
+          "not_json": "Not JSON",
+          "not_genai": "Not a GenAI record",
+          "no_session": "No session",
+          "no_text": "No text",
+          "other_role": "Other role"
+        },
+        "node1": "Read logs and convert the format",
+        "lastRunStats": "Last run read {{events}} records and converted {{parsed}}.",
+        "errGroups": "Add at least one log group",
+        "errPath": "A field path may contain only letters, digits, _ $ - separated by dots (or @logStream)",
+        "errSession": "Fill in the session field",
+        "errRole": "Fill in the role field",
+        "errText": "Fill in the text field",
+        "errInput": "Fill in the input field"
+      }
     },
     "tasks": {
       "title": "Evaluation tasks",
@@ -6147,7 +6283,7 @@
         "target": "Evaluation target",
         "targetAgent": "Platform agent",
         "targetAgentDesc": "An agent managed in this console",
-        "targetCw": "CloudWatch telemetry (no agent)",
+        "targetCw": "Telemetry logs (no agent)",
         "targetCwDesc": "An agent's spans and logs already in CloudWatch — e.g. an agent not hosted on AgentCore Runtime",
         "title": "Telemetry source",
         "sub": "The service name in the spans and the log groups the batch evaluation reads",
@@ -6187,7 +6323,9 @@
       "passKSub": "Off by default. Running a scenario k times answers whether the agent is consistent — and multiplies the cost by k.",
       "repeats": "Repeats (k)",
       "repeatsHint": "1 = run each scenario once.",
-      "confirmCost": "I accept the estimated cost of ${{usd}}"
+      "confirmCost": "I accept the estimated cost of ${{usd}}",
+      "actorModel": "User actor model",
+      "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached."
     },
     "taskStatus": {
       "queued": "Queued",
@@ -6232,7 +6370,8 @@
       },
       "insightsTitle": "Insight results",
       "insightsWait": "Insight clusters appear once the task completes.",
-      "insightsEmpty": "This task produced no insight clusters."
+      "insightsEmpty": "This task produced no insight clusters.",
+      "scenarioFailures": "{{count}} simulated scenario(s) still failed after retries and were skipped (not scored); the others were evaluated: {{list}}"
     },
     "outcome": {
       "passed": "Passed",
@@ -6266,6 +6405,8 @@
       "default": "Default",
       "loose": "Comfortable",
       "empty": "No evaluation results",
+      "emptyFiltered": "No results match the filters",
+      "filteredCount": "{{count}} of {{total}}",
       "detailTitle": "Result details",
       "openTrace": "Open trajectory",
       "addBadCase": "Add to dataset",
@@ -6388,7 +6529,8 @@
         "skill_content": "Content of that skill",
         "available_skills": "Skills available to the agent",
         "user_message": "The user message"
-      }
+      },
+      "customUnavailable": "Custom evaluators could not be loaded: {{msg}}. The list shows built-in evaluators only."
     },
     "online": {
       "title": "Online evaluation",
@@ -7236,7 +7378,8 @@
     },
     "picker": {
       "picked": "{{count}} / {{max}} selected",
-      "colNote": "Note"
+      "colNote": "Note",
+      "customUnavailable": "Custom evaluators could not be loaded ({{msg}}); only built-in evaluators are listed."
     },
     "canary": {
       "status": {
@@ -7287,6 +7430,23 @@
         "perQuestion": "Per question ({{n}})",
         "question": "Question",
         "prompt": "Prompt"
+      },
+      "eval": {
+        "title": "Evaluators",
+        "hint": "Both versions are scored by these evaluators (max {{max}}). Ground-truth evaluators are unavailable because online evaluation reads live traces, and a custom judge must rate on a numerical scale.",
+        "primary": "Primary evaluator",
+        "primaryHint": "The verdict's winner, significance and sample size come from this evaluator alone; the others are shown for reference.",
+        "summary": "Evaluators: {{evaluators}} · primary: {{primary}}",
+        "sep": ", ",
+        "primaryTag": "Primary",
+        "unscoredTag": "Unscored",
+        "unscored": "No score on both versions from: {{evaluators}}",
+        "decidedBy": "Decided by the primary evaluator {{primary}}",
+        "aggregate": "Decided by the aggregate of all evaluators",
+        "defaultPair": "{{evaluators}} (default)",
+        "change": "Change evaluators",
+        "confirm": "Both versions are scored by {{evaluators}}; the verdict is decided by {{primary}}.",
+        "none": "Pick at least one evaluator"
       }
     },
     "chat": {
@@ -7345,6 +7505,17 @@
       "noKeys": "No API keys yet",
       "keyEnabled": "Enabled",
       "keyDisabled": "Disabled",
+      "keyCreator": "Created by {{name}}",
+      "keyCreatorUnknown": "unknown",
+      "keyLastUsed": "last used {{time}}",
+      "keyNeverUsed": "never used",
+      "keyCreatorOffboarded": "Creator offboarded",
+      "keyOffboardedReason": {
+        "deleted": "The account that created this key was deleted — the key stays disabled. Mint a new key.",
+        "disabled": "The account that created this key is disabled — the key stays disabled. Mint a new key.",
+        "expired": "The account that created this key has expired — the key stays disabled. Mint a new key.",
+        "no_workspace_grant": "The account that created this key no longer has access to this workspace — the key stays disabled. Mint a new key."
+      },
       "enable": "Enable",
       "disable": "Disable",
       "auth": {
@@ -7414,6 +7585,7 @@
       "docsLoaded": "{{count}}{{more}} documents loaded",
       "attachCta": "Create an agent",
       "attachHint": "Mounting happens in the Create-Agent wizard: an ACTIVE knowledge base can be attached to Harness agents.",
+      "attachedHidden": "+{{n}} agent(s) not visible to you",
       "comingSoonLabel": "Coming soon:"
     },
     "memory": {
@@ -8103,6 +8275,9 @@
       "colTurns": "Turns",
       "colUpdated": "Last active",
       "collaborating": "Shared by an administrator; created by {{owner}}. You can keep discussing, prepare resources, review the proposal and run evaluations and experiments — only the creator can clear this conversation.",
+      "readOnly": "Read-only",
+      "readOnlyTip": "Another member's conversation, visible to you as an administrator. Share it to work on it.",
+      "readOnlyNotice": "Read-only: {{owner}}'s conversation, visible to you as an administrator. Nothing here can be changed — share it to discuss, prepare resources, review the proposal or run evaluations with {{owner}}.",
       "continue": "Continue",
       "discussion": "Requirements discussion",
       "evalAfterProposal": "Evaluation assets are prepared from a proposal revision — they become available once the assistant has proposed one.",
@@ -8120,6 +8295,7 @@
       "scope": "Scope",
       "scopeMine": "Mine",
       "scopeShared": "Shared with me",
+      "scopeReadOnly": "Other members' (read-only)",
       "search": "Search conversation title / ID",
       "share": "Share",
       "shared": "Shared",
@@ -8419,6 +8595,17 @@
           "mcp_record": "MCP registry record",
           "skill": "Skill (S3 prefix)"
         }
+      },
+      "visibility": {
+        "title": "Member visibility",
+        "sub": "Who sees the resources members create in this workspace. Saving moves no data; it applies from each member's next request.",
+        "label": "Visibility",
+        "current": "Current mode:",
+        "shared": "Shared",
+        "isolated": "Isolated",
+        "sharedHint": "Shared: every member sees every resource in this workspace (the default).",
+        "isolatedHint": "Isolated: a member sees only what they created, plus resources created by an admin or with an unknown creator. Admins always see everything. Applies to knowledge bases, memories, eval datasets, pipelines, tasks, online evals and custom evaluators, A/B experiments, canaries, Skill Lab and agents: a member cannot chat with, invoke (also via their /v1 API key) or observe another member's agent, and manages only the API keys they created.",
+        "saved": "Member visibility saved. It applies from the next request."
       }
     },
     "announcements": {
@@ -8539,6 +8726,21 @@
         "editedNote": "Edited: the acceptance is recorded as edited by you.",
         "resetEdit": "Reset to the recommendation",
         "acceptedEdited": "The prompt was edited before publishing."
+      },
+      "edit": {
+        "button": "Edit",
+        "title": "Edit the recommended prompt",
+        "hint": "Your revision is saved on this recommendation without publishing anything. The diff, COPY and ACCEPT then use it; the generated text is kept so you can restore it.",
+        "label": "Recommended system prompt (your revision)",
+        "save": "Save revision",
+        "saving": "Saving…",
+        "savedToast": "Revision saved — not published yet.",
+        "restore": "Restore the generated recommendation",
+        "restoredToast": "Restored the generated recommendation.",
+        "tag": "Manually edited",
+        "by": "Edited by {{by}} at {{at}}",
+        "afterLabel": "Recommended (edited)",
+        "noPermission": "Your account lacks the eval.run permission needed to edit a recommendation."
       },
       "toolDiff": "Tool description",
       "modelRequired": "Enter the custom model ID.",
@@ -9101,6 +9303,21 @@
       "uses": "used {{count}} time(s)",
       "publishedBy": "{{who}} in {{where}} · {{when}}",
       "needs": "You will need to supply: {{items}}"
+    },
+    "runCoverage": {
+      "tagTelemetry": "Completed · {{scored}}/{{total}} sessions",
+      "telemetry_incomplete": "{{failed}} session(s) have incomplete traces and were not scored.",
+      "evaluator_error": "{{failed}} session(s) hit evaluator errors and were not scored; scores cover the other {{scored}}. Review the errors and run again.",
+      "mixed": "{{failed}} session(s) were not scored — some have incomplete traces, some hit evaluator errors; scores cover the other {{scored}}.",
+      "unknown": "{{failed}} session(s) were not scored and AWS gave no reason; scores cover the other {{scored}}.",
+      "legacy": "{{failed}} of {{total}} sessions were not scored. This run predates the failure details — click “Read failure details” to fetch the reasons from AWS.",
+      "scenarios": "Unscored scenarios: {{list}}",
+      "scenarioSep": ", ",
+      "rawError": "Raw AWS error",
+      "readDetail": "Read failure details",
+      "readDetailHint": "Read this batch evaluation's results from AWS again to fill in why sessions were not scored. Read-only: nothing is re-run or billed.",
+      "readDetailDone": "Failure details read",
+      "notComparable": "These runs left different scenarios unscored, so their means are not directly comparable."
     }
   },
   "identity": {

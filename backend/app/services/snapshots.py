@@ -54,7 +54,7 @@ def record_snapshot(
         seq=(last or 0) + 1,
         spec=copy.deepcopy(agent.spec or {}),
         deployment_id=deployment_id,
-        created_by=created_by or agent.owner,
+        created_by=created_by or agent.created_by_name or agent.owner,
         note=note,
     )
     db.add(snap)

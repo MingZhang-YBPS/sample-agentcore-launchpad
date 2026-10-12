@@ -3,19 +3,24 @@
 import re
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.assistant import purge as assistant_purge
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
-from app.evaluation.models import EvalDataset
+from app.evaluation.online_evaluators import refuse_hidden_evaluators
+from app.evaluation.routers import _dataset_in
 from app.models.ledger import Agent
 from app.optimization import providers as rec_providers
 from app.optimization import readiness, service
 from app.optimization.models import STAGES, Experiment
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import agent_access, creators, visibility
 from app.services.agentcore.client import control_client
+from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 from app.system_agents import service as system_agents
 
 router = APIRouter(prefix="/api/experiments", tags=["experiments"])
@@ -36,6 +41,7 @@ def _out(exp: Experiment) -> dict[str, Any]:
         "progress": exp.progress,
         "error": exp.error,
         "created_at": exp.created_at.isoformat() if exp.created_at else None,
+        **creators.fields(exp),
     }
 
 
@@ -43,10 +49,12 @@ def _out(exp: Experiment) -> dict[str, Any]:
 def list_experiments(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     rows = (
         db.query(Experiment)
         .filter(Experiment.workspace_id == ws.id)
+        .filter(visibility.clause(viewer, Experiment.created_by))  # before .limit(20)
         .order_by(Experiment.created_at.desc())
         .limit(20)
         .all()
@@ -54,20 +62,28 @@ def list_experiments(
     return {"experiments": [_out(e) for e in rows]}
 
 
-def _experiment_in(db: Session, ws: WorkspaceScope, exp_id: str) -> Experiment:
-    """The experiment, or 404 — another workspace's row is not visible here."""
+def _experiment_in(
+    db: Session, ws: WorkspaceScope, exp_id: str, *, viewer: Viewer = Viewer.ALL
+) -> Experiment:
+    """The experiment, or 404 — another workspace's row, or one hidden from the
+    viewer by workspace isolation, is not visible here."""
     exp = db.get(Experiment, exp_id)
     if exp is None or exp.workspace_id != ws.id:
         raise NotFoundError("experiment.not_found", "experiment not found")
+    visibility.require_seen(
+        viewer, db, exp.created_by,
+        NotFoundError("experiment.not_found", "experiment not found"),
+    )
     return exp
 
 
-def _eligible_agent(agent_id: str, db: Session, ws: WorkspaceScope) -> Agent:
-    agent = db.get(Agent, agent_id)
-    if agent is not None and agent.workspace_id != ws.id:
-        agent = None
+def _eligible_agent(
+    agent_id: str, db: Session, ws: WorkspaceScope, viewer: Viewer = Viewer.ALL
+) -> Agent:
+    agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
+    assistant_purge.refuse_while_clearing(agent.id, "experiment")
     capability = service.experiment_capability(agent)
     if not capability["eligible"]:
         code = "experiment.agent_unsupported"
@@ -95,8 +111,9 @@ def experiment_readiness(
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    agent = _eligible_agent(agent_id, db, ws)
+    agent = _eligible_agent(agent_id, db, ws, viewer)
     return readiness.project_readiness(
         agent,
         db,
@@ -119,8 +136,9 @@ def get_experiment(
     exp_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return _out(_experiment_in(db, ws, exp_id))
+    return _out(_experiment_in(db, ws, exp_id, viewer=viewer))
 
 
 class ExperimentCreate(BaseModel):
@@ -135,8 +153,10 @@ class ExperimentCreate(BaseModel):
 @router.post("", status_code=201)
 def create_experiment(
     req: ExperimentCreate,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     # experiments share one gateway (EXP_GATEWAY_NAME) and the AB service
     # allows a single active test per gateway — a concurrent loop would fail
@@ -147,13 +167,19 @@ def create_experiment(
         .first()
     )
     if running is not None:
+        # the single-running slot is workspace-wide (one shared gateway), but a
+        # member of an isolated workspace is not told which hidden experiment holds it
+        named = (
+            f"experiment {running.name}"
+            if visibility.sees(viewer, db, running.created_by)
+            else "another experiment in this workspace"
+        )
         raise AppError(
             "experiment.already_running",
-            f"experiment {running.name} is still running — "
-            "wait for its verdict or clean it up first",
+            f"{named} is still running — wait for its verdict or clean it up first",
             status_code=409,
         )
-    agent = _eligible_agent(req.agent_id, db, ws)
+    agent = _eligible_agent(req.agent_id, db, ws, viewer)
     trace_readiness = readiness.project_readiness(
         agent,
         db,
@@ -167,7 +193,7 @@ def create_experiment(
             {"readiness": trace_readiness},
             status_code=409,
         )
-    exp = service.start_experiment(agent, ws.context)
+    exp = service.start_experiment(agent, ws.context, creator=Creator.of_request(request))
     return _out(exp)
 
 
@@ -239,16 +265,31 @@ def _validate_recommend_provider(req: ActionRequest) -> None:
         )
 
 
+# Actions that never touch the experiment's agent: the verdict read and the
+# teardown of the experiment's own resources.
+AGENT_FREE_ACTIONS = frozenset({"verdict", "cleanup"})
+
+
 @router.post("/{exp_id}/action")
 def experiment_action(
     exp_id: str, req: ActionRequest, response: Response,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    exp = _experiment_in(db, ws, exp_id)
+    exp = _experiment_in(db, ws, exp_id, viewer=viewer)
+    if req.action not in AGENT_FREE_ACTIONS:
+        # A visible experiment does not make its agent the caller's: every action
+        # that reads, invokes or re-publishes it needs the agent visible too
+        # (workspace isolation). Its own cleanup stays the experiment owner's.
+        agent_access.require_agent_visible(
+            db, viewer, db.get(Agent, exp.agent_id) if exp.agent_id else None,
+            NotFoundError("agent.not_found", "agent not found"),
+        )
     # A stale row that references a system-managed preset must not drive any
     # action — checked before running_action or any other state is written.
     system_agents.assert_not_system_agent(db, exp.agent_id, "experiment")
+    assistant_purge.refuse_while_clearing(exp.agent_id, f"experiment {req.action}")
     if exp.running_action:
         raise AppError(
             "experiment.action_in_flight",
@@ -316,9 +357,7 @@ def experiment_action(
                 "traffic requires a replay dataset",
                 status_code=422,
             )
-        dataset = db.get(EvalDataset, req.dataset_id)
-        if dataset is None or dataset.workspace_id != ws.id:
-            raise NotFoundError("dataset.not_found", "dataset not found")
+        dataset = _dataset_in(db, ws, req.dataset_id, viewer=viewer)
         try:
             prompts = service.resolve_traffic_prompts(dataset)
         except ValueError as exc:
@@ -336,7 +375,7 @@ def experiment_action(
         # another agent's should be an immediate API error, not a failed background
         # job the user has to go read a stage error to understand
         source = service.resolve_recommend_source(
-            exp.agent_id, req.recommend_source_run_id, ws.context
+            exp.agent_id, req.recommend_source_run_id, ws.context, viewer=viewer
         )
         service.run_action(
             exp.id, "recommend",
@@ -350,6 +389,7 @@ def experiment_action(
         service.assert_shared_gateway_available(ws.context)
         # validated here, not inside the thread: a bad evaluator id shouldn't
         # cost a gateway + runtime-target round-trip before it is caught
+        refuse_hidden_evaluators(db, ws.id, viewer, req.online_evaluators)
         evaluators = service.normalize_online_evaluators(
             req.online_evaluators, control_client(ws.context)
         )

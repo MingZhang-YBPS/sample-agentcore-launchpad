@@ -19,7 +19,8 @@ def test_items_carry_question_expected_and_the_agents_reply(monkeypatch):
     db = SessionLocal()
     try:
         ds = EvalDataset(workspace_id=WS, name="cal-items", kind="predefined", items=[
-            {"scenario_id": "kg-12", "turns": [{"input": "能退多少？", "expected_response": "退 ¥980"}]},
+            {"scenario_id": "kg-12",
+             "turns": [{"input": "能退多少？", "expected_response": "退 ¥980"}]},
         ])
         db.add(ds)
         db.flush()

@@ -129,8 +129,13 @@ HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默�
 转换)以及发起评估/洞察运行。成员默认全部持有;撤销后即可对该账号关闭部署与计费的
 评估任务。
 
-注意控制台没有按用户的数据隔离:每个成员看到并可修改同一套共享资源,因此成员账号
-只应发给可以托付整个环境的人。
+注意控制台默认没有按用户的数据隔离:在 `shared` workspace 中每个成员看到并可修改同一套
+共享资源,因此成员账号只应发给可以托付整个环境的人。管理员可以把 workspace 切换为 `isolated`
+(Workspaces → 详情 → 「成员可见性」卡片),此后每个成员只能看到自己创建的 Agent(连同其可观测性
+trace、记忆 actor 与 A2A 注册表记录)、知识库、托管记忆、评估资产、实验、灰度与 Skill Lab 任务/任务集,
+以及管理员创建或创建者未知的资源(发现导入的运行时与系统预设的创建者未知，因此保持共享)。成员也只能
+列出和启停自己的 `/v1` API 密钥，成员创建的密钥只能触达该成员能看到的 Agent。MCP / 技能注册表记录与
+Gateway 在两种模式下都保持共享。
 
 ### 系统托管预置
 
@@ -567,7 +572,7 @@ proxy_set_header X-Forwarded-Proto https;   # TLS 在 CloudFront 终结
 **3. 更新已有主机。**
 
 ```bash
-cp data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M)
+(cd backend && uv run python scripts/ledger_backup.py)   # 在线备份并校验；服务运行时不要 cp 台账
 git merge --ff-only origin/main
 cd backend && uv sync && cd ..
 cd frontend && npm run build && cd ..          # 必须:preview 只吃 dist/

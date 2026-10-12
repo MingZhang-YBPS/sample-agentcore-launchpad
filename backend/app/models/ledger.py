@@ -113,7 +113,15 @@ class Agent(Base):
     # Server-owned: the runtime version whose packaged entrypoint acknowledges
     # native attachments. Never copied from AgentSpec or an import descriptor.
     attachment_version: Mapped[str | None] = mapped_column(String(16), default=None)
+    # Provenance label only ("river" default, "system", "aws-discovery", the
+    # architect approver's username) — not a principal. Ownership is `created_by`.
     owner: Mapped[str] = mapped_column(String(64), default="river")
+    # The creating console principal (`app.services.creators`): `users.id` — the
+    # ownership key workspace visibility filters on — and the username at
+    # creation (display). NULL for discovered runtimes, system presets and
+    # legacy rows: a creator-unknown agent stays visible to every member.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     # Server-owned system identity. NULL for every ordinary agent; a preset key
     # (``app.system_agents.presets``) for a platform-managed preset the console
@@ -247,7 +255,45 @@ class ManagedMemory(Base):
     memory_id: Mapped[str] = mapped_column(String(128), index=True)
     # created (console CreateMemory) | adopted (administrator adopted an existing one)
     origin: Mapped[str] = mapped_column(String(16), default="created")
-    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Who brought it in (`app.services.creators`): `created_by` is the creator's
+    # `users.id` — NULL for the config admin / auth-disabled operator, for an
+    # adopted memory (it pre-existed in AWS, so the adopter is not its owner) and
+    # for rows whose username had no `users` row at migration. `created_by_name`
+    # is the creating (or adopting) principal's username, display only.
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ResourceCreator(Base):
+    """Who created an AWS-only resource through the console.
+
+    Knowledge bases and custom evaluators have no ledger row of their own — AWS is
+    their only store — so their creator lives here, keyed on (workspace, kind,
+    AWS resource id). Written only by the server right after the console's create
+    call succeeds and removed by the console's delete; a resource created outside
+    the console has no row (its creator reads as unknown), and one deleted outside
+    it leaves a harmless orphan that the workspace purge clears. Same column
+    semantics as `ApiKey.created_by` / `created_by_name` (not a FK).
+    """
+
+    __tablename__ = "resource_creators"
+    __table_args__ = (
+        Index(
+            "uq_resource_creators_workspace_kind_resource",
+            "workspace_id",
+            "kind",
+            "resource_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    kind: Mapped[str] = mapped_column(String(32))  # knowledge_base | evaluator
+    resource_id: Mapped[str] = mapped_column(String(128))
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -380,9 +426,19 @@ class ApiKey(Base):
     agent_ids: Mapped[list[str] | None] = mapped_column(JSON, default=None)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     rate_per_minute: Mapped[int | None] = mapped_column(default=None)
+    # Usage stamps, written by /v1 auth on every admitted call (`record_use`, T16):
+    # `use_count` is exact, `last_used_at` the latest admitted call.
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     use_count: Mapped[int] = mapped_column(default=0, server_default="0")
-    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # The minting console principal: `created_by` is its `users.id`, NULL for the
+    # config admin / auth-disabled operator (no `users` row) and for keys minted
+    # before this column existed. Not a FK — a deleted creator must leave the id
+    # behind, since that dangling id is how the key knows its creator is gone.
+    # `created_by_name` is the display name at mint time (NULL only on legacy rows;
+    # a key minted by the T16 line had its username in `created_by`, which the
+    # migration moves here — `db._migrate_api_key_lifecycle_columns`).
+    created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
 
 
 class ApiKeyUsage(Base):

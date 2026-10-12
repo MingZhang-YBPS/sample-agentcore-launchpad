@@ -72,6 +72,7 @@ WORKSPACE_SCOPED_TABLES = (
     "waivers",
     "admission_candidates",
     "watch_configs",
+    "resource_creators",
 )
 
 
@@ -268,6 +269,8 @@ def _migrate(bind) -> None:
             ("denominator", "ALTER TABLE eval_runs ADD COLUMN denominator JSON"),
             ("criteria_summary", "ALTER TABLE eval_runs ADD COLUMN criteria_summary JSON"),
             ("attempts", "ALTER TABLE eval_runs ADD COLUMN attempts JSON"),
+            ("session_failures", "ALTER TABLE eval_runs ADD COLUMN session_failures JSON"),
+            ("scenario_failures", "ALTER TABLE eval_runs ADD COLUMN scenario_failures JSON"),
         ):
             if column not in existing:
                 with bind.begin() as conn:
@@ -313,6 +316,8 @@ def _migrate(bind) -> None:
          "ALTER TABLE chat_sessions ADD COLUMN runtime_version VARCHAR(16)"),
         ("eval_recommendations", "accepted",
          "ALTER TABLE eval_recommendations ADD COLUMN accepted JSON"),
+        ("eval_recommendations", "edit",
+         "ALTER TABLE eval_recommendations ADD COLUMN edit JSON"),
     ):
         if table in inspector.get_table_names():
             existing = {c["name"] for c in inspector.get_columns(table)}
@@ -334,6 +339,189 @@ def _migrate(bind) -> None:
     _migrate_system_skill_records_index(bind)
     _migrate_identity_indexes(bind)
     _migrate_managed_memories_index(bind)
+    _migrate_api_key_lifecycle_columns(bind)
+    _migrate_creator_columns(bind)
+    _migrate_resource_creators_index(bind)
+
+
+def _migrate_creator_columns(bind) -> None:
+    """The creator of every user-managed resource (`app.services.creators`):
+    `created_by` (`users.id`, indexed — visibility filters on it) and
+    `created_by_name` (display). Existing rows keep NULL — a legacy row has an
+    unknown creator and is never backfilled.
+
+    `managed_memories` already carried `created_by` holding a **username**; it is
+    reinterpreted exactly once (guarded on `created_by_name` being absent): the
+    username moves to `created_by_name`, and `created_by` becomes the matching
+    `users.id` for console-created rows (NULL when no `users` row has that name —
+    the config admin / auth-disabled operator) and NULL for adopted rows, which
+    pre-existed in AWS and so have no owner.
+    """
+    from sqlalchemy import inspect, text
+
+    additions = {
+        "agents": {
+            "created_by": "ALTER TABLE agents ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": "ALTER TABLE agents ADD COLUMN created_by_name VARCHAR(64)",
+        },
+        "eval_datasets": {
+            "created_by": "ALTER TABLE eval_datasets ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": "ALTER TABLE eval_datasets ADD COLUMN created_by_name VARCHAR(64)",
+        },
+        "eval_pipelines": {
+            "created_by": "ALTER TABLE eval_pipelines ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": (
+                "ALTER TABLE eval_pipelines ADD COLUMN created_by_name VARCHAR(64)"
+            ),
+        },
+        "eval_runs": {
+            "created_by": "ALTER TABLE eval_runs ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": "ALTER TABLE eval_runs ADD COLUMN created_by_name VARCHAR(64)",
+        },
+        "online_eval_configs": {
+            "created_by": "ALTER TABLE online_eval_configs ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": (
+                "ALTER TABLE online_eval_configs ADD COLUMN created_by_name VARCHAR(64)"
+            ),
+        },
+        "experiments": {
+            "created_by": "ALTER TABLE experiments ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": "ALTER TABLE experiments ADD COLUMN created_by_name VARCHAR(64)",
+        },
+        "runtime_canaries": {
+            "created_by": "ALTER TABLE runtime_canaries ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": (
+                "ALTER TABLE runtime_canaries ADD COLUMN created_by_name VARCHAR(64)"
+            ),
+        },
+        "skill_lab_jobs": {
+            "created_by": "ALTER TABLE skill_lab_jobs ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": (
+                "ALTER TABLE skill_lab_jobs ADD COLUMN created_by_name VARCHAR(64)"
+            ),
+        },
+        "skill_lab_tasksets": {
+            "created_by": "ALTER TABLE skill_lab_tasksets ADD COLUMN created_by VARCHAR(32)",
+            "created_by_name": (
+                "ALTER TABLE skill_lab_tasksets ADD COLUMN created_by_name VARCHAR(64)"
+            ),
+        },
+    }
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    for table, columns in additions.items():
+        if table not in live_tables:
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        for column, ddl in columns.items():
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))
+        with bind.begin() as conn:
+            conn.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_created_by "
+                    f"ON {table} (created_by)"
+                )
+            )
+
+    if "managed_memories" not in live_tables:
+        return
+    existing = {c["name"] for c in inspector.get_columns("managed_memories")}
+    if "created_by_name" not in existing:
+        with bind.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE managed_memories ADD COLUMN created_by_name VARCHAR(64)")
+            )
+            conn.execute(text("UPDATE managed_memories SET created_by_name = created_by"))
+            if "users" in live_tables:
+                conn.execute(
+                    text(
+                        "UPDATE managed_memories SET created_by = ("
+                        "SELECT u.id FROM users u "
+                        "WHERE u.username = managed_memories.created_by_name"
+                        ") WHERE origin = 'created'"
+                    )
+                )
+            else:
+                conn.execute(
+                    text("UPDATE managed_memories SET created_by = NULL WHERE origin = 'created'")
+                )
+            conn.execute(
+                text("UPDATE managed_memories SET created_by = NULL WHERE origin = 'adopted'")
+            )
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_managed_memories_created_by "
+                "ON managed_memories (created_by)"
+            )
+        )
+
+
+def _migrate_resource_creators_index(bind) -> None:
+    """The unique (workspace, kind, resource) index of `resource_creators`: a
+    retried record of the same resource leaves one row. `create_all` builds it
+    with the table; this keeps a ledger whose table lost it honest."""
+    from sqlalchemy import inspect, text
+
+    if "resource_creators" not in inspect(bind).get_table_names():
+        return
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_resource_creators_workspace_kind_resource "
+                "ON resource_creators (workspace_id, kind, resource_id)"
+            )
+        )
+
+
+def _migrate_api_key_lifecycle_columns(bind) -> None:
+    """SE-054 credential lifecycle on `api_keys`: creator + last use. Existing rows
+    keep NULL — a legacy key has an unknown creator and is never offboarded."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "api_keys" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("api_keys")}
+    if "created_by" in existing and "created_by_name" not in existing:
+        # A ledger written by the T16 line (`_migrate_api_key_scope` before it
+        # stopped adding `created_by`) stored the minting **username** in
+        # `created_by`. Reinterpret it exactly once, like `managed_memories` in
+        # `_migrate_creator_columns`: the username moves to `created_by_name` and
+        # `created_by` becomes the matching `users.id` — NULL when no `users` row
+        # has that name (the config admin / auth-disabled operator), so such a key
+        # is never treated as offboarded.
+        with bind.begin() as conn:
+            conn.execute(text("ALTER TABLE api_keys ADD COLUMN created_by_name VARCHAR(64)"))
+            conn.execute(text("UPDATE api_keys SET created_by_name = created_by"))
+            if "users" in inspector.get_table_names():
+                conn.execute(
+                    text(
+                        "UPDATE api_keys SET created_by = ("
+                        "SELECT u.id FROM users u "
+                        "WHERE u.username = api_keys.created_by_name)"
+                    )
+                )
+            else:
+                conn.execute(text("UPDATE api_keys SET created_by = NULL"))
+        existing.add("created_by_name")
+    additions = {
+        "created_by": "ALTER TABLE api_keys ADD COLUMN created_by VARCHAR(32)",
+        "created_by_name": "ALTER TABLE api_keys ADD COLUMN created_by_name VARCHAR(64)",
+        "last_used_at": "ALTER TABLE api_keys ADD COLUMN last_used_at DATETIME",
+    }
+    for column, ddl in additions.items():
+        if column not in existing:
+            with bind.begin() as conn:
+                conn.execute(text(ddl))
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_api_keys_created_by ON api_keys (created_by)"
+            )
+        )
 
 
 def _migrate_inbound_auth_columns(bind) -> None:
@@ -450,7 +638,7 @@ def _migrate_api_key_scope(bind) -> None:
         "rate_per_minute": "ALTER TABLE api_keys ADD COLUMN rate_per_minute INTEGER",
         "last_used_at": "ALTER TABLE api_keys ADD COLUMN last_used_at DATETIME",
         "use_count": "ALTER TABLE api_keys ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0",
-        "created_by": "ALTER TABLE api_keys ADD COLUMN created_by VARCHAR(64)",
+        # `created_by` / `created_by_name` belong to `_migrate_api_key_lifecycle_columns`
     }
     for column, ddl in additions.items():
         if column not in existing:
@@ -673,6 +861,9 @@ def _migrate_assistant_columns(bind) -> None:
             ),
             "shared_by": "ALTER TABLE assistant_conversations ADD COLUMN shared_by VARCHAR(64)",
             "shared_at": "ALTER TABLE assistant_conversations ADD COLUMN shared_at DATETIME",
+            "purge_job_id": (
+                "ALTER TABLE assistant_conversations ADD COLUMN purge_job_id VARCHAR(32)"
+            ),
         },
         "assistant_proposals": {
             "bindings": "ALTER TABLE assistant_proposals ADD COLUMN bindings JSON",
@@ -790,6 +981,9 @@ def _migrate_workspace_columns(bind) -> None:
             "ALTER TABLE admission_candidates ADD COLUMN workspace_id VARCHAR(32)"
         ),
         "watch_configs": "ALTER TABLE watch_configs ADD COLUMN workspace_id VARCHAR(32)",
+        "resource_creators": (
+            "ALTER TABLE resource_creators ADD COLUMN workspace_id VARCHAR(32)"
+        ),
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

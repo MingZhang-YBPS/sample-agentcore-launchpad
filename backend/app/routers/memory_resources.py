@@ -26,10 +26,11 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError, mapped_aws_error
-from app.models.ledger import Agent
-from app.routers.auth import require_identity
+from app.models.ledger import Agent, ManagedMemory
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import memory_admin, memory_ownership
+from app.services import agent_access, creators, memory_admin, memory_ownership
+from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/memory/resources", tags=["memory-resources"])
 
@@ -123,12 +124,17 @@ def _guard(fn, *args, **kwargs):
         ) from exc
 
 
-def _agents_by_memory(db: Session, ws: WorkspaceScope) -> dict[str, list[dict[str, str]]]:
+def _agents_by_memory(
+    db: Session, ws: WorkspaceScope, viewer: Viewer = Viewer.ALL
+) -> dict[str, list[dict[str, str]]]:
     """Live agents grouped by the memory their spec pins (default users excluded).
 
     The reference lives inside the spec JSON, so this scans the workspace's
     agent rows in Python — bounded by the agent count, and only non-deleted rows.
+    Agents hidden from ``viewer`` (workspace isolation) are not named; callers
+    that need the true usage (the delete guard) count with ``Viewer.ALL``.
     """
+    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
     usage: dict[str, list[dict[str, str]]] = {}
     rows = (
         db.query(Agent)
@@ -137,24 +143,44 @@ def _agents_by_memory(db: Session, ws: WorkspaceScope) -> dict[str, list[dict[st
     )
     for agent in rows:
         mem_id = ((agent.spec or {}).get("memory") or {}).get("memory_id")
-        if mem_id:
+        if mem_id and agent.id not in hidden:
             usage.setdefault(mem_id, []).append({"id": agent.id, "name": agent.name})
     return usage
+
+
+def _creator_of(db: Session, ws: WorkspaceScope, memory_id: str) -> dict[str, Any]:
+    """`created_by` / `created_by_name` of a managed memory (nulls for the
+    bootstrap memory, which has no row)."""
+    row = (
+        db.query(ManagedMemory)
+        .filter(ManagedMemory.workspace_id == ws.id, ManagedMemory.memory_id == memory_id)
+        .first()
+    )
+    return creators.fields(row)
 
 
 @router.get("")
 def list_resources(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     page = _guard(memory_admin.list_memory_resources, ws.context)
-    usage = _agents_by_memory(db, ws)
+    # workspace isolation drops a hidden managed memory entirely — it must not
+    # resurface as a "detected" one
+    hidden = memory_ownership.hidden_ids(db, ws.context, viewer)
+    if hidden:
+        page["items"] = [i for i in page["items"] if (i.get("id") or "") not in hidden]
+    usage = _agents_by_memory(db, ws, viewer)
     managed = memory_ownership.managed_ids(db, ws.context)
+    rows = memory_ownership.managed_rows(db, ws.context)
     for item in page["items"]:
         item["agents"] = usage.get(item["id"] or "", [])
         # everything else in the account is detected, not managed: listed, but no
         # per-id route reaches it and no agent may pin it
         item["managed"] = bool(item["id"]) and item["id"] in managed
+        # the bootstrap memory and detected memories have no row → no creator
+        item.update(creators.fields(rows.get(item["id"] or "")))
     return page
 
 
@@ -179,9 +205,9 @@ def create_resource(
         ws.context,
         created.get("id") or "",
         origin="created",
-        created_by=require_identity(request).username,
+        creator=Creator.of_request(request),
     )
-    return {**created, "managed": True}
+    return {**created, **_creator_of(db, ws, created.get("id") or ""), "managed": True}
 
 
 @router.get("/{memory_id}")
@@ -189,10 +215,11 @@ def get_resource(
     memory_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    memory_ownership.require_managed(db, ws.context, memory_id)
+    memory_ownership.require_managed(db, ws.context, memory_id, viewer=viewer)
     detail = _guard(memory_admin.get_memory_resource, ws.context, memory_id)
-    return {**detail, "managed": True}
+    return {**detail, **_creator_of(db, ws, memory_id), "managed": True}
 
 
 @router.post("/{memory_id}/adopt")
@@ -215,9 +242,9 @@ def adopt_resource(
         ws.context,
         detail.get("id") or memory_id,
         origin="adopted",
-        created_by=require_identity(request).username,
+        creator=Creator.of_request(request),
     )
-    return {**detail, "managed": True}
+    return {**detail, **_creator_of(db, ws, detail.get("id") or memory_id), "managed": True}
 
 
 @router.put("/{memory_id}")
@@ -226,6 +253,7 @@ def update_resource(
     req: UpdateMemoryResourceRequest,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Edit description / event expiry; the reply is the refreshed detail.
 
@@ -234,7 +262,7 @@ def update_resource(
     confirm dialog (from the list route's ``agents`` annotation) so the operator
     knows whom a shorter expiry window reaches.
     """
-    memory_ownership.require_managed(db, ws.context, memory_id)
+    memory_ownership.require_managed(db, ws.context, memory_id, viewer=viewer)
     detail = _guard(
         memory_admin.update_memory_resource,
         ws.context,
@@ -242,7 +270,7 @@ def update_resource(
         description=req.description,
         event_expiry_days=req.event_expiry_days,
     )
-    return {**detail, "managed": True}
+    return {**detail, **_creator_of(db, ws, memory_id), "managed": True}
 
 
 @router.delete("/{memory_id}")
@@ -250,15 +278,18 @@ def delete_resource(
     memory_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    memory_ownership.require_managed(db, ws.context, memory_id)
+    memory_ownership.require_managed(db, ws.context, memory_id, viewer=viewer)
+    # the guard counts every agent; the 409 names only those the caller may see
     agents = _agents_by_memory(db, ws).get(memory_id, [])
     if agents:
+        hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
         raise AppError(
             "memory.in_use",
             f"{len(agents)} agent(s) still reference this memory — "
             "delete or re-point them first",
-            {"agents": agents},
+            {"agents": [a for a in agents if a["id"] not in hidden]},
             status_code=409,
         )
     deleted = _guard(memory_admin.delete_memory_resource, ws.context, memory_id)

@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import type { WorkspaceBootstrapStatus, WorkspaceTier } from "../../../lib/api";
+import type { ResourceVisibility, WorkspaceBootstrapStatus, WorkspaceTier } from "../../../lib/api";
 import { Tag, type TagTone } from "../../ui";
 import { STATUS_TONE } from "./status";
 
@@ -32,6 +32,16 @@ export function TierTag({ tier }: { tier: WorkspaceTier | undefined }) {
   return (
     <Tag tone={TIER_TONE[value]} title={t(`v2.workspaces.tierHint.${value}`)}>
       {t(`v2.workspaces.tier.${value}`)}
+    </Tag>
+  );
+}
+
+/** Member visibility; `isolated` stands out, `shared` (the default) stays quiet. */
+export function VisibilityTag({ mode }: { mode: ResourceVisibility }) {
+  const { t } = useTranslation();
+  return (
+    <Tag tone={mode === "isolated" ? "orange" : "gray"} testId={`v2-ws-visibility-tag-${mode}`}>
+      {t(`v2.workspaces.visibility.${mode}`)}
     </Tag>
   );
 }

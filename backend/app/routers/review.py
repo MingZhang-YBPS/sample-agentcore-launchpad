@@ -19,12 +19,17 @@ from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import display_name_of
+from app.services import agent_access, review_links, share_links
 from app.services import feedback as feedback_service
-from app.services import review_links, share_links
 
 REVIEW_PAGE_PATH = "/r"
 
-console_router = APIRouter(prefix="/api", tags=["review-links"])
+console_router = APIRouter(
+    prefix="/api",
+    tags=["review-links"],
+    # workspace isolation: a hidden `{agent_id}` / `{run_id}` reads as missing
+    dependencies=[Depends(agent_access.require_path_ids_visible)],
+)
 
 
 def _iso(value: datetime | None) -> str | None:

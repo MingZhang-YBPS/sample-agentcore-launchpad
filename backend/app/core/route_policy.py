@@ -37,6 +37,10 @@ resources (`/api/memory/resources` writes) is member-grantable via
 `perm:memory.manage` on the same default-granted, revocable terms — DeleteMemory
 is irreversible — and those routes reach only memories the workspace manages.
 Adopting an existing account memory into management is `ADMIN`.
+Amended 2026-10-08: the architect assistant's evaluation-assets routes (materialize,
+retry, Lambda revision review, cleanup) are member-grantable via `perm:agents.deploy`
+— the same permission that approves a proposal into a deployed Agent — instead of
+`ADMIN`; clearing a conversation with assets needs the matching `perm:` keys.
 Since 2026-08-12 the table carries a **second dimension**: whether a route
 operates inside a workspace (one account/region environment). `WORKSPACE_EXEMPT`
 names the hub-global routes; every other entry is workspace-scoped, and
@@ -161,7 +165,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/assistant/architect/conversations"): MEMBER,
     ("POST", "/api/assistant/architect/conversations"): MEMBER,
     ("GET", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
-    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/sharing"): ADMIN,
+    # sharing: the owner (amended 2026-10-08) or an administrator — the handler refuses
+    # a non-owner member; nobody can reach a private conversation it does not own
+    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/sharing"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/catalog"): MEMBER,
     ("PUT", "/api/assistant/architect/conversations/{conversation_id}/preparation"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/preparation/skills"):
@@ -173,29 +179,31 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
         PERM_AGENT_DEPLOY,
     # ---- SE-047 evaluation-assets plan: preparing/editing the private plan is
     # discussion (member, owner-bound); materializing creates AWS evaluators + a
-    # Lambda + IAM → admin, owner-bound, exact plan revision/hash; status is a
-    # ledger read; cleanup deletes only operation-owned artifacts → admin ----
+    # Lambda + IAM → the deploy permission (amended 2026-10-08: was admin), owner-
+    # bound, exact plan revision/hash; status is a ledger read; retry / review /
+    # cleanup of an operation ride the same permission ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/prepare"):
         MEMBER,
     ("PUT", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
     ("POST",
      "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize"):
-        ADMIN,
+        PERM_AGENT_DEPLOY,
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
      "{operation_id}"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
-     "{operation_id}/retry"): ADMIN,
+     "{operation_id}/retry"): PERM_AGENT_DEPLOY,
     # SE-049: reviewed recovery of the Lambda first-initialization RevisionId conflict —
-    # admin + owner, reads CloudTrail / Lambda, writes only the ledger review + requeue
+    # deploy permission + owner, reads CloudTrail / Lambda, writes only the ledger
+    # review + requeue
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
-     "{operation_id}/lambda-revision-review"): ADMIN,
+     "{operation_id}/lambda-revision-review"): PERM_AGENT_DEPLOY,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
-     "operations/{operation_id}/assets"): ADMIN,
+     "operations/{operation_id}/assets"): PERM_AGENT_DEPLOY,
     # ---- clearing a conversation (History panel): the footprint is a ledger read;
-    # the purge is owner-bound and MEMBER at the policy layer — the handler escalates
-    # to administrator as soon as the footprint holds cloud assets or an Agent
-    # (cleanup / deploy parity), so a plain transcript stays the member's to delete ----
+    # the purge is owner-bound and MEMBER at the policy layer — the handler adds
+    # agents.deploy for cloud assets and agents.delete for an Agent (cleanup /
+    # delete parity), so a plain transcript stays the member's to delete ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/footprint"): MEMBER,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
     # ---- credential minting ----
@@ -362,6 +370,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("PUT", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
     ("DELETE", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
     ("POST", "/api/eval/pipelines/{pipeline_id}/run"): MEMBER,
+    ("POST", "/api/eval/pipelines/preview-logs"): MEMBER,
     ("GET", "/api/eval/agents/{agent_id}/log-streams"): MEMBER,
     ("GET", "/api/eval/log-sessions"): MEMBER,
     ("GET", "/api/eval/log-groups"): MEMBER,
@@ -383,6 +392,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # starts billable AWS recommendation jobs — same revocable grant as a run
     ("POST", "/api/eval/runs/{run_id}/recommendations"): PERM_EVAL_RUN,
     # re-publishes the Harness (a new version) — the same grant as a redeploy
+    # saving a revision of a recommendation is ledger-only, on the generating permission
+    ("PUT", "/api/eval/runs/{run_id}/recommendations/{rec_id}/edit"): PERM_EVAL_RUN,
     ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept"): PERM_AGENT_DEPLOY,
     ("DELETE", "/api/eval/runs/{run_id}"): PERM_EVAL_RUN,
     # online evaluation configs: create/resume start billed judge calls on live
@@ -683,6 +694,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # Bulk grant/revoke from the workspace's side (per-user replacement stays on
     # PATCH /api/users/{id}); both write only `user_workspaces`.
     ("PUT", "/api/workspaces/{workspace_id}/grants"): ADMIN,
+    # Shared vs isolated member resource visibility (services/visibility.py).
+    ("GET", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
+    ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.
@@ -771,6 +785,9 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
         ("GET", "/api/workspaces/{workspace_id}/grants"),
         ("PUT", "/api/workspaces/{workspace_id}/grants"),
+        # The target is the path parameter, like grants.
+        ("GET", "/api/workspaces/{workspace_id}/settings/visibility"),
+        ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"),
     }
 )
 
@@ -854,6 +871,22 @@ PROD_UNPROTECTED_AGENT_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/agents/{agent_id}/waivers"): (
         "requesting a waiver is not granting one — approval is prod-protected"
     ),
+    # The architect assistant's evaluation assets (upstream 2026-10-08 moved them from
+    # ADMIN to `perm:agents.deploy`): they create / retry / review / clean up the eval
+    # datasets, evaluators and test Lambda of a conversation's plan. Evaluation stays
+    # open in prod; none of these changes what an agent serves.
+    ("POST",
+     "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize"): (
+        "creates evaluation assets for the plan; changes no agent"
+    ),
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
+     "{operation_id}/retry"): "retries an evaluation-asset operation; changes no agent",
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
+     "{operation_id}/lambda-revision-review"): (
+        "reviews an evaluation-asset Lambda conflict; ledger write + requeue only"
+    ),
+    ("DELETE", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
+     "operations/{operation_id}/assets"): "cleans up evaluation assets; changes no agent",
 }
 
 

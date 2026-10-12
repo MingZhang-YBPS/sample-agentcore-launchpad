@@ -6,6 +6,7 @@ registryRecordId.
 """
 
 import json
+import logging
 import re
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -15,7 +16,7 @@ import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import REPO_ROOT
-from app.core.errors import AppError
+from app.core.errors import AppError, cleanup_error, is_not_found
 from app.models.ledger import Agent
 from app.services import mcp_client
 from app.services.agentcore import policy as policy_api
@@ -39,6 +40,8 @@ from app.services.skill_ingest import (
 )
 from app.services.workspace import WorkspaceContext
 
+logger = logging.getLogger(__name__)
+
 # Shared frontmatter parser lives in skill_ingest now; kept as a module-level
 # name for the existing callers (upload_skill_bundle) and tests.
 _parse_frontmatter = parse_frontmatter
@@ -60,6 +63,12 @@ class RegistryUnavailableError(AppError):
             status_code=503,
         )
 
+
+# A Registry record's description: CreateRegistryRecord allows up to 4096 characters.
+# It used to be cut at 200, so saving ANY edit in the console silently dropped the rest
+# of a long description — which is exactly where Gateway records carry their tool fields
+# and test accounts for the architect assistant (live 2026-10-08, prod store-crm).
+RECORD_DESCRIPTION_MAX = 4096
 
 def _registry_id(workspace: WorkspaceContext) -> str:
     resources = workspace.resources
@@ -120,6 +129,46 @@ def register_agent_record(
         reg.wait_record_settled(client, registry_id, record_id)
         reg.submit_record(client, registry_id, record_id)
     return {"record_id": record_id, "created": created}
+
+
+def agent_record_state(agent: Agent, workspace: WorkspaceContext) -> str:
+    """Where the A2A record the deploy ``register`` stage created for ``agent`` stands:
+    ``none`` (never registered, or Registry not configured), ``absent`` (read back
+    gone), ``foreign`` (the id now names a record that is not this agent's — a
+    different name or type — so it is never ours to delete) or the record's status.
+    Lookup errors other than not-found propagate (unknown ≠ gone)."""
+    record_id = agent.registry_record_id
+    registry_id = workspace.resources.get("registry_id")
+    if not record_id or not registry_id:
+        return "none"
+    try:
+        record = registry_control_client(workspace).get_registry_record(
+            registryId=registry_id, recordId=record_id)
+    except Exception as exc:
+        if type(exc).__name__ in {"ResourceNotFoundException", "NotFoundException"}:
+            return "absent"
+        raise
+    if record.get("name") != agent.name or record.get("recordType") != reg.ga_record_type("A2A"):
+        return "foreign"
+    return str(record.get("status") or "PRESENT")
+
+
+def delete_agent_record(agent: Agent, workspace: WorkspaceContext) -> str:
+    """Delete the agent's own A2A record (see ``agent_record_state``); returns the state
+    it found. A ``foreign`` record, a protected one or ``none`` is left untouched."""
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    state = agent_record_state(agent, workspace)
+    if state in ("none", "absent", "foreign"):
+        return state
+    refuse_protected_mutation(workspace, agent.registry_record_id, "delete")
+    try:
+        reg.delete_record(registry_control_client(workspace), _registry_id(workspace),
+                          agent.registry_record_id)
+    except Exception as exc:
+        if type(exc).__name__ not in {"ResourceNotFoundException", "NotFoundException"}:
+            raise
+    return state
 
 
 def upload_skill_bundle(
@@ -194,7 +243,7 @@ def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
         client,
         registry_id,
         name=SKILL_NAME,
-        description=bundle["definition"]["description"][:200],
+        description=bundle["definition"]["description"][:RECORD_DESCRIPTION_MAX],
         descriptor_type="AGENT_SKILLS",
         descriptors=reg.build_skills_descriptors(
             skill_md=bundle["skill_md"], definition=bundle["definition"]
@@ -1130,7 +1179,7 @@ def register_skill_bundle(
             client,
             registry_id,
             name=name,
-            description=(description or name)[:200],
+            description=(description or name)[:RECORD_DESCRIPTION_MAX],
             descriptor_type="AGENT_SKILLS",
             descriptors=reg.build_skills_descriptors(
                 skill_md=bundle.skill_md, definition=definition
@@ -1166,8 +1215,12 @@ def _delete_keys(s3: Any, bucket: str, keys: list[str]) -> None:
     for key in keys:
         try:
             s3.delete_object(Bucket=bucket, Key=key)
-        except Exception:  # cleanup must never mask the original failure
-            pass
+        except Exception as exc:  # cleanup must never mask the original failure
+            if not is_not_found(exc):
+                logger.warning(
+                    "registry write cleanup: s3://%s/%s left behind: %s",
+                    bucket, key, cleanup_error(exc),
+                )
 
 
 def register_skill(
@@ -1328,7 +1381,7 @@ def _reupload_and_update(
         client,
         registry_id,
         name=name,
-        description=(description or name)[:200],
+        description=(description or name)[:RECORD_DESCRIPTION_MAX],
         descriptor_type="AGENT_SKILLS",
         descriptors=reg.build_skills_descriptors(
             skill_md=bundle.skill_md, definition=definition
@@ -1408,7 +1461,7 @@ def update_record(
         client,
         registry_id,
         name=name,
-        description=(new_desc or name)[:200],
+        description=(new_desc or name)[:RECORD_DESCRIPTION_MAX],
         descriptor_type=rtype,
         descriptors=record.get("descriptors") or {},
     )
@@ -1430,7 +1483,7 @@ def _update_mcp_url(
         client,
         registry_id,
         name=name,
-        description=(description or name)[:200],
+        description=(description or name)[:RECORD_DESCRIPTION_MAX],
         descriptor_type="MCP",
         descriptors=reg.build_mcp_descriptors(
             target=name, description=description, gateway_url=url, tools=None
@@ -1502,7 +1555,7 @@ def _update_skill_md(
         client,
         registry_id,
         name=name,
-        description=(definition["description"] or name)[:200],
+        description=(definition["description"] or name)[:RECORD_DESCRIPTION_MAX],
         descriptor_type="AGENT_SKILLS",
         descriptors=reg.build_skills_descriptors(skill_md=skill_md, definition=definition),
         record_version=new_version,

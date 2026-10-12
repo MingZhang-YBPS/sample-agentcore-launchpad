@@ -292,6 +292,9 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
   background: var(--v2-fill); color: var(--v2-ink-2); font-weight: 500; text-align: left; padding: 11px 16px;
   border-bottom: 1px solid var(--v2-line); white-space: nowrap; font-size: 14px; letter-spacing: 0; font-family: inherit;
 }
+.v2-th-sort { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
+.v2-th-sort svg { color: var(--v2-ink-4); }
+.v2-th-sort:hover, .v2-th-sort.on, .v2-th-sort.on svg { color: var(--v2-primary); }
 .v2-table th:first-child { border-top-left-radius: var(--v2-radius); }
 .v2-table th:last-child { border-top-right-radius: var(--v2-radius); }
 .v2-table td { padding: 12px 16px; border-bottom: 1px solid var(--v2-line-2); color: var(--v2-ink); vertical-align: middle; }
@@ -359,6 +362,10 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-alert.success { background: var(--v2-success-soft); color: var(--v2-success-ink-2); }
 .v2-alert .v2-link { margin-left: auto; }
 .v2-desc + .v2-alert { margin-top: 12px; }
+/* partially failed batch run: reason, unscored scenarios, raw AWS error (RunCoverage.tsx) */
+.v2-run-coverage { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.v2-run-coverage details summary { cursor: pointer; font-size: 12px; }
+.v2-run-coverage details .mono { margin-top: 4px; font-size: 12px; color: var(--v2-ink-2); white-space: pre-wrap; }
 .v2-muted { color: var(--v2-ink-3); }
 .v2-pre {
   background: var(--v2-fill); border: 1px solid var(--v2-line); border-radius: 6px; padding: 12px 14px; font-family: var(--v2-mono);
@@ -377,6 +384,11 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-score.bad { color: var(--v2-danger); }
 .v2-stack { display: flex; flex-direction: column; gap: 8px; }
 .v2-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* dataset editor: one scenario / simulated-user persona */
+.v2-scenario { border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.v2-scenario-head { display: flex; gap: 8px; align-items: center; }
+.v2-scenario-head .end { margin-left: auto; display: flex; gap: 8px; }
 
 /* deploy pipeline (agent detail): generate → package → provision → deploy → register */
 .v2-stages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }

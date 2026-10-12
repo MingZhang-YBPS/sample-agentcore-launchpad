@@ -25,9 +25,14 @@ from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.share import _agent_in, _link_out
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import channels, share_links
+from app.services import agent_access, channels, share_links
 
-console_router = APIRouter(prefix="/api", tags=["channels"])
+console_router = APIRouter(
+    prefix="/api",
+    tags=["channels"],
+    # workspace isolation: a hidden `{agent_id}` / `{run_id}` reads as missing
+    dependencies=[Depends(agent_access.require_path_ids_visible)],
+)
 router = APIRouter(prefix="/share/channels", tags=["channels"])
 
 WEBHOOK_PATH = "/share/channels"
