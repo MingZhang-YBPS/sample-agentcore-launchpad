@@ -301,7 +301,9 @@ def test_the_fix_ladder_route_compares_the_agents_runs(db, client):
 def test_the_fix_ladder_with_one_run_is_not_comparable(db, client):
     agent = _agent(db)
     cset = _set(db, agent.id, ["C1"])
-    _run(db, agent.id, cset, {("C1", "s1"): "fail"}, name="v1")
+    only = _run(db, agent.id, cset, {("C1", "s1"): "fail"}, name="v1")
     response = client.get(f"/api/agents/{agent.id}/ladder")
     assert response.status_code == 200, response.text
-    assert response.json()["comparable"] is False
+    body = response.json()
+    assert body["comparable"] is False
+    assert body["runs"] == [] and body["run_ids"] == [only.id]  # rungs, never bare ids

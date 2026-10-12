@@ -1277,7 +1277,9 @@ def fix_ladder(
         if visibility.sees(viewer, db, db.get(EvalRun, run_id).created_by)
     ]
     if len(ids) < 2:
-        return {"runs": ids, "comparable": False,
+        # `runs` is the rung list everywhere else (the consoles draw it as such); a
+        # bare id there broke the ladder chart for an agent with exactly one run
+        return {"runs": [], "run_ids": ids, "comparable": False,
                 "incomparable_reason": "fewer than two completed criteria runs"}
     return _compare_runs(db, ws, viewer, ids)
 
