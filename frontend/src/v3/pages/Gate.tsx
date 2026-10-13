@@ -11,6 +11,7 @@ import { gateSignal, releaseSignal } from "../signals";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { useLoad, useToast } from "../hooks";
 import { ago, pct } from "../format";
+import { dlcText } from "./standards/common";
 
 const ROW_SIGNAL: Record<GateRow["verdict"], Signal> = {
   PASS: "ok",
@@ -274,7 +275,7 @@ export function V3Gate() {
                       <td style={{ width: 30 }}><Lamp s={ROW_SIGNAL[row.verdict]} /></td>
                       <td>
                         <div style={{ fontWeight: 600 }}><span className="mono" style={{ color: "var(--v3-text-3)" }}>{row.key}</span> {row.text}</div>
-                        {row.reason && <div style={{ color: "var(--v3-text-3)", fontSize: 12 }}>{row.reason}</div>}
+                        {row.reason && <div style={{ color: "var(--v3-text-3)", fontSize: 12 }}>{dlcText(t, row.reason)}</div>}
                       </td>
                       <td>
                         <Chip s={row.tier === "redline" ? "act" : row.tier === "gate" ? "wait" : undefined}>

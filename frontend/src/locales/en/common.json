@@ -2434,7 +2434,8 @@
     "auth.email_taken": "This email is already registered.",
     "auth.invalid_username": "Username must be 3-32 characters of letters, digits, dot, underscore or hyphen.",
     "auth.invalid_email": "Enter a valid email address.",
-    "auth.email_domain_blocked": "This email domain is not accepted — use a company email address."
+    "auth.email_domain_blocked": "This email domain is not accepted — use a company email address.",
+    "criteria.invalid": "The criteria table has errors"
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -11365,6 +11366,37 @@
           "current": "Enter your current password.",
           "same": "Choose a password different from the current one.",
           "mismatch": "The two new passwords do not match."
+        }
+      }
+    },
+    "dlcText": {
+      "finding": {
+        "criteria.redline_judge": "A red line cannot be decided by an LLM judge — use a code assertion, a trajectory matcher or a metric",
+        "criteria.metric_dimension": "Cost and performance criteria are measured metrics, not evaluator scores",
+        "criteria.judge_uncalibrated_until_calibrated": "A judge criterion is observed (does not block) until it is calibrated",
+        "criteria.judge_needs_examples": "Add at least one positive and one negative example — they are how the judge is calibrated",
+        "criteria.dimension_missing": "No '{{dimension}}' criterion — add one or write 'n/a:{{raw}} <reason>' in a criterion note",
+        "criteria.no_redline": "A criteria set needs at least one red line",
+        "criteria.empty": "The set has no criteria",
+        "criteria.duplicate_key": "Duplicate key",
+        "criteria.empty_text": "Criterion text is empty"
+      },
+      "msg": {
+        "below threshold": "below threshold",
+        "judge not calibrated — observed until calibrated": "judge not calibrated — observed until calibrated",
+        "the runs used different criteria versions": "The runs used different criteria versions",
+        "the runs used different golden versions": "The runs used different golden versions",
+        "evaluationErrors": "{{n}} evaluation error(s)",
+        "noVerdict": "{{missing}} of {{expected}} expected items have no verdict",
+        "redlineViolations": "{{n}} violation(s) — red lines are never waived",
+        "bias": {
+          "session": "only traffic that already happened — long tail and new intents are absent",
+          "issue": "all failures — lowers the pass rate; tracked separately",
+          "manual": "the writer knows the answer — items read cleaner than real traffic",
+          "public": "terminology is not yours — use for cognition generalization only",
+          "synthetic": "same family as the agent under test — hides its blind spots",
+          "insight": "drawn from a failure cluster — re-label when the fix lands",
+          "review": "an SME's correction — strong label, narrow coverage"
         }
       }
     }

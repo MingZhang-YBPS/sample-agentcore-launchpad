@@ -25,7 +25,7 @@ import {
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { TierChip } from "./charts";
-import { stamp } from "./common";
+import { findingText, stamp } from "./common";
 
 const METRICS = ["latency_p95_ms", "cost_per_success_usd", "tokens_per_session"] as const;
 
@@ -391,7 +391,7 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
           {[...errors, ...payload.findings.filter((f) => f.level === "warning")].map((f, i) => (
             <Notice key={`${f.code}:${f.key ?? ""}:${i}`} s={f.level === "error" ? "act" : "wait"}>
               {f.key && <span className="mono">{f.key} · </span>}
-              {f.message}
+              {findingText(t, f)}
             </Notice>
           ))}
         </div>

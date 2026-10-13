@@ -17,7 +17,7 @@ import { DLC_DIMENSIONS, type RunComparison, type WatchView } from "../../../lib
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { BandChart, LadderChart } from "./charts";
-import { rate, stamp } from "./common";
+import { dlcText, rate, stamp } from "./common";
 
 function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: string; onReload: () => void }) {
   const { t } = useTranslation();
@@ -118,7 +118,7 @@ export function Watch({ agentId }: { agentId: string }) {
               <li key={`${a.family}:${a.criterion_key ?? a.dimension ?? i}`}>
                 <Chip s={a.severity === "page" ? "act" : "wait"}>{t(`v2.dlc.watch.family.${a.family}`)}</Chip>
                 <Chip>{t(`v2.dlc.watch.severity.${a.severity}`)}</Chip>
-                <span>{a.detail}</span>
+                <span>{dlcText(t, a.detail)}</span>
               </li>
             ))}
           </ul>
@@ -211,7 +211,7 @@ export function Compare({ agentId }: { agentId: string }) {
   if (!data.comparable && !data.two_numbers) {
     return (
       <Panel title={t("v2.dlc.compare.title")} signal="wait">
-        <Notice s="wait">{data.incomparable_reason ?? t("v2.dlc.compare.incomparable")}</Notice>
+        <Notice s="wait">{data.incomparable_reason ? dlcText(t, data.incomparable_reason) : t("v2.dlc.compare.incomparable")}</Notice>
         {data.runs && <div style={{ marginTop: 14 }}><LadderChart rungs={data.runs} /></div>}
       </Panel>
     );
@@ -224,7 +224,7 @@ export function Compare({ agentId }: { agentId: string }) {
         {data.warning && <div style={{ marginBottom: 12 }}><Notice s="wait">{data.warning}</Notice></div>}
         {!data.comparable && two && (
           <div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
-            <Notice s="wait">{data.incomparable_reason}</Notice>
+            <Notice s="wait">{dlcText(t, data.incomparable_reason)}</Notice>
             <div className="v3-grid c3">
               <Stat label={t("v2.dlc.compare.agentDelta")} value={two.agent_delta === null ? "—" : `${(two.agent_delta * 100).toFixed(1)}pp`}
                 foot={t("v2.dlc.compare.agentDeltaSub")} signal={(two.agent_delta ?? 0) < 0 ? "act" : undefined} />

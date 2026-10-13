@@ -62,3 +62,36 @@ export function attentionOf(card: Scorecard, t: (k: string, o?: Record<string, u
   return out;
 }
 
+
+/* ── backend copy ─────────────────────────────────────────────────────────── */
+
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+/** A backend English message shown in the console, in the console's language: the
+ * gate's row reasons, the ladder's incomparable reason, the watch's alert details.
+ * Unknown text passes through unchanged. */
+export function dlcText(t: Translate, text: string | null | undefined): string {
+  if (!text) return text ?? "";
+  let m = /^(\d+) evaluation error\(s\)$/.exec(text);
+  if (m) return t("v3.dlcText.msg.evaluationErrors", { n: Number(m[1]) });
+  m = /^(\d+) of (\d+) expected items have no verdict$/.exec(text);
+  if (m) return t("v3.dlcText.msg.noVerdict", { missing: Number(m[1]), expected: Number(m[2]) });
+  m = /^(\d+) violation\(s\) — red lines are never waived$/.exec(text);
+  if (m) return t("v3.dlcText.msg.redlineViolations", { n: Number(m[1]) });
+  return t(`v3.dlcText.msg.${text}`, { defaultValue: text });
+}
+
+/** A criteria-table finding (error or warning) in the console's language. */
+export function findingText(t: Translate, f: { code: string; message: string }): string {
+  const dim = /^no '(\w+)' criterion/.exec(f.message)?.[1];
+  return t(`v3.dlcText.finding.${f.code}`, {
+    defaultValue: f.message,
+    raw: dim ?? "",
+    dimension: dim ? t(`v2.dlc.dimension.${dim}`, { defaultValue: dim }) : "",
+  });
+}
+
+/** What a golden-set source is missing, in the console's language. */
+export function biasText(t: Translate, origin: string, bias: string): string {
+  return t(`v3.dlcText.msg.bias.${origin}`, { defaultValue: bias });
+}

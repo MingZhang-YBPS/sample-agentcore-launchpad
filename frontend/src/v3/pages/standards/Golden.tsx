@@ -14,6 +14,7 @@ import { CASE_TIERS, type CaseTier, type GoldenItem, type GoldenSet, type Golden
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { CoverageMatrix } from "./charts";
+import { biasText } from "./common";
 
 const SPLITS: GoldenSplit[] = ["dev", "regression", "holdout"];
 
@@ -306,7 +307,7 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
                       <tr key={s.origin}>
                         <td>{t(`v2.dlc.origin.${s.origin}`, { defaultValue: s.origin })}</td>
                         <td className="num">{s.count}</td>
-                        <td className="v3-std-muted">{s.bias}</td>
+                        <td className="v3-std-muted">{biasText(t, s.origin, s.bias)}</td>
                       </tr>
                     ))}
                   </tbody>

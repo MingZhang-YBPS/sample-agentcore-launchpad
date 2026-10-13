@@ -2434,7 +2434,8 @@
     "auth.email_taken": "这个邮箱已经注册过。",
     "auth.invalid_username": "用户名须为 3-32 个字母、数字、点、下划线或连字符。",
     "auth.invalid_email": "请输入有效的邮箱地址。",
-    "auth.email_domain_blocked": "不接受这个邮箱域名，请使用公司邮箱。"
+    "auth.email_domain_blocked": "不接受这个邮箱域名，请使用公司邮箱。",
+    "criteria.invalid": "判据表有错误"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -11365,6 +11366,37 @@
           "current": "请输入当前密码。",
           "same": "新密码不能与当前密码相同。",
           "mismatch": "两次输入的新密码不一致。"
+        }
+      }
+    },
+    "dlcText": {
+      "finding": {
+        "criteria.redline_judge": "红线不能由 LLM 裁判判定——请用代码断言、轨迹匹配或指标",
+        "criteria.metric_dimension": "成本与性能判据是测量出来的指标，不是评估器打分",
+        "criteria.judge_uncalibrated_until_calibrated": "裁判类判据在校准之前只作观察（不拦人）",
+        "criteria.judge_needs_examples": "至少加一个正例和一个反例——校准裁判靠的就是它们",
+        "criteria.dimension_missing": "缺少「{{dimension}}」维度的判据——添加一条，或在某条判据的备注里写 n/a:{{raw}} <原因>",
+        "criteria.no_redline": "判据表至少需要一条红线",
+        "criteria.empty": "判据表里还没有判据",
+        "criteria.duplicate_key": "编号重复",
+        "criteria.empty_text": "判据内容为空"
+      },
+      "msg": {
+        "below threshold": "低于阈值",
+        "judge not calibrated — observed until calibrated": "裁判未校准——校准之前只作观察",
+        "the runs used different criteria versions": "这些运行用的判据版本不同",
+        "the runs used different golden versions": "这些运行用的黄金集版本不同",
+        "evaluationErrors": "{{n}} 条评估出错",
+        "noVerdict": "{{missing}} / {{expected}} 个预期样本没有判定",
+        "redlineViolations": "{{n}} 次违规——红线永远不能豁免",
+        "bias": {
+          "session": "只有已经发生过的流量——长尾和新意图缺席",
+          "issue": "全是失败——会压低通过率，单独追踪",
+          "manual": "撰写人知道答案——样本比真实流量更干净",
+          "public": "术语不是你们的——只用于认知的泛化",
+          "synthetic": "与被测智能体同源——会掩盖它的盲区",
+          "insight": "取自一个失败聚类——修复上线后要重新标注",
+          "review": "领域专家的更正——标注可靠，覆盖面窄"
         }
       }
     }
