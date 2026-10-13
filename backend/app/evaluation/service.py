@@ -26,7 +26,12 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -44,7 +49,7 @@ from app.models.ledger import Agent
 from app.services import creators
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
-from app.services.agentcore.client import control_client, data_client
+from app.services.agentcore.client import control_client, data_client, stream_data_client
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates import gateway_support
 
@@ -356,6 +361,10 @@ def transient_invoke_error(exc: BaseException) -> bool:
         return exc.status_code >= 500 or exc.status_code == 429
     if isinstance(exc, httpx.TransportError):
         return True
+    # the SigV4 path's transport failures, the same as the bearer path's above: a
+    # stream that went silent past the read timeout or dropped mid-answer
+    if isinstance(exc, (ReadTimeoutError, ConnectionClosedError, EndpointConnectionError)):
+        return True
     if isinstance(exc, RuntimeError):
         return str(exc).startswith(("runtime client error", "internal server error"))
     return False
@@ -480,7 +489,7 @@ def execute_run(
                     )
                 actor["passed"] = actor["id"]
                 return rt.invoke_runtime_text(
-                    data,
+                    stream_data_client(workspace, method, protocol),
                     agent_arn,
                     prompt,
                     session_id=sid,

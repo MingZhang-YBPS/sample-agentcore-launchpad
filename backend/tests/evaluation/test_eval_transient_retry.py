@@ -167,3 +167,71 @@ def test_an_empty_stream_is_replayed(monkeypatch):
 
     assert len(sessions) == 3 and row.session_ids == [sessions[0], sessions[2]]
     assert finished == [row.id]
+
+
+def test_a_stalled_runtime_stream_is_transient():
+    """A runtime stream that went silent past the read timeout (live 2026-10-13: one
+    release-gate replay held 1000 s with no byte) or dropped mid-answer replays the
+    scenario, the same as the bearer path's httpx transport errors."""
+    from botocore.exceptions import ConnectionClosedError, EndpointConnectionError, ReadTimeoutError
+
+    assert evaluation.transient_invoke_error(ReadTimeoutError(endpoint_url="https://runtime"))
+    assert evaluation.transient_invoke_error(ConnectionClosedError(endpoint_url="https://runtime"))
+    assert evaluation.transient_invoke_error(EndpointConnectionError(endpoint_url="https://runtime"))
+
+
+def test_heartbeat_runtimes_stream_with_the_short_read_timeout(monkeypatch):
+    from app.services.agentcore import client as clients
+
+    seen = []
+
+    class Ctx:
+        def client(self, name, cache_token=None, config=None):
+            seen.append((name, config.read_timeout))
+            return name
+
+    monkeypatch.setattr(clients, "get_settings", lambda: type(
+        "S", (), {"agentcore_read_timeout_s": 1000, "agentcore_heartbeat_read_timeout_s": 120})())
+    for method, protocol in [("zip_runtime", "http"), ("container", "http"), ("byoc", "http"),
+                             ("harness", "http"), ("zip_runtime", "a2a")]:
+        clients.stream_data_client(Ctx(), method, protocol)
+    # platform templates heartbeat every 15 s; customer code (BYOC) and A2A owe none
+    assert [t for _, t in seen] == [120, 120, 1000, 1000, 1000]
+
+
+def test_a_stalled_zip_runtime_replay_is_retried_in_a_fresh_session(monkeypatch):
+    from botocore.exceptions import ReadTimeoutError
+
+    from app.services.agentcore import runtime as rt
+
+    calls = []
+
+    def invoke(client, arn, prompt, session_id=None, **_kw):
+        calls.append(session_id)
+        if len(calls) == 2:
+            raise ReadTimeoutError(endpoint_url="https://runtime")
+        return {"text": "ok", "session_id": session_id or f"s{len(calls)}"}
+
+    monkeypatch.setattr(rt, "invoke_runtime_text", invoke)
+    client = MagicMock()
+    client.start_batch_evaluation.return_value = {"batchEvaluationId": "batch-1"}
+    monkeypatch.setattr(evaluation, "data_client", lambda _ws: client)
+    monkeypatch.setattr(evaluation, "stream_data_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr(evaluation, "_wait_for_fresh_telemetry", lambda **_kw: None)
+    monkeypatch.setattr(evaluation, "_poll_batch", lambda *_a, **_kw: {})
+    finished = []
+    monkeypatch.setattr(evaluation, "_finish_from_result",
+                        lambda run_id, *_a, **_kw: finished.append(run_id))
+    run_id = _run_row()
+    evaluation.execute_run(
+        run_id, workspace=ws_ctx(),
+        agent_arn="arn:aws:bedrock-agentcore:us-east-1:111122223333:runtime/x",
+        method="zip_runtime", service_name="x.DEFAULT", log_group="/test",
+        items=[{"scenario_id": "first", "turns": [{"input": "first"}]},
+               {"scenario_id": "second", "turns": [{"input": "second"}]}],
+        evaluators=["Builtin.Correctness"], mode="evaluators", wait_seconds=0,
+    )
+    with SessionLocal() as db:
+        row = db.get(EvalRun, run_id)
+    assert len(calls) == 3 and finished == [run_id] and row.error is None
+    assert len(row.session_ids) == 2

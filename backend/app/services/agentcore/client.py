@@ -35,6 +35,32 @@ def data_client(ctx: WorkspaceContext) -> Any:
     )
 
 
+# Methods whose runtime runs a platform template that emits a ``heartbeat`` event at
+# least every 15 s (strands_agent / claude_sdk_agent main.py templates). BYOC and
+# imported runtimes run the customer's own code, which owes no heartbeat.
+HEARTBEAT_METHODS = frozenset({"zip_runtime", "container"})
+
+
+def heartbeat_data_client(ctx: WorkspaceContext) -> Any:
+    """Data-plane client for a heartbeat runtime's stream: a shorter read timeout,
+    because a silence longer than a few heartbeats is a dead stream."""
+    timeout = get_settings().agentcore_heartbeat_read_timeout_s
+    return ctx.client(
+        "bedrock-agentcore",
+        cache_token=f"read_timeout={timeout}",
+        config=Config(read_timeout=timeout),
+    )
+
+
+def stream_data_client(
+    ctx: WorkspaceContext, method: str | None, protocol: str | None = "http",
+) -> Any:
+    """The data-plane client to stream one runtime invocation with."""
+    if method in HEARTBEAT_METHODS and (protocol or "http") == "http":
+        return heartbeat_data_client(ctx)
+    return data_client(ctx)
+
+
 def registry_control_client(ctx: WorkspaceContext) -> Any:
     return ctx.client("agent-registry-control")
 

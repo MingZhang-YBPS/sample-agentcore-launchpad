@@ -155,6 +155,12 @@ class Settings(BaseSettings):
     # Keep the SDK read timeout above that service limit so buffered agents can
     # return their final response.
     agentcore_read_timeout_s: int = Field(default=1000, gt=0)
+    # Runtimes built from a platform template (Strands zip, Claude SDK container) send a
+    # heartbeat at least every 15 s while they work, so this much silence on their
+    # stream means the stream is dead, not that the agent is thinking. Without it a
+    # stalled InvokeAgentRuntime stream held a release-gate replay for the full
+    # ``agentcore_read_timeout_s`` (live 2026-10-13: 1 of 24 replays, 1000 s).
+    agentcore_heartbeat_read_timeout_s: int = Field(default=120, gt=0)
 
     # How many experiment/canary replay prompts are posted through the A/B gateway
     # at once (optimization.service.send_gateway_traffic). Each prompt is an
