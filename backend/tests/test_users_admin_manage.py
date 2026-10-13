@@ -242,7 +242,7 @@ class TestCreate:
         rows = audit_rows("user.create")
         assert len(rows) == 1
         assert rows[0].actor == ADMIN["username"]
-        assert rows[0].workspace_id is None
+        assert rows[0].workspace_id == DEFAULT_WORKSPACE_ID
         assert NEW["username"] in rows[0].target and "generated" in rows[0].target
         assert all(password not in row.target for row in audit_rows())
 
@@ -499,3 +499,41 @@ def test_status_marks_the_builtin_admin(app, admin):
     assert admin.get("/api/auth/status").json()["builtin"] is True
     member, _ = member_client(app, admin)
     assert member.get("/api/auth/status").json()["builtin"] is False
+
+
+def test_account_journal_keeps_the_startup_invariant(app, admin):
+    """Account audit rows name the hub workspace, so the next startup still boots."""
+    from app.core.db import (
+        _adopt_unscoped_account_audit_rows,
+        assert_every_row_has_a_workspace,
+        engine,
+    )
+
+    create(admin)
+    change_builtin_password(admin)
+    assert_every_row_has_a_workspace(engine)
+    # rows the 26d627a6 build wrote with a NULL workspace are adopted at startup ...
+    db = SessionLocal()
+    try:
+        db.add(AuditEvent(workspace_id=None, actor="operator", action="user.create", target="x"))
+        db.commit()
+    finally:
+        db.close()
+    _adopt_unscoped_account_audit_rows(engine)
+    assert_every_row_has_a_workspace(engine)
+    # ... but any other unstamped row still fails it
+    db = SessionLocal()
+    try:
+        db.add(AuditEvent(workspace_id=None, actor="operator", action="other", target="x"))
+        db.commit()
+    finally:
+        db.close()
+    _adopt_unscoped_account_audit_rows(engine)
+    with pytest.raises(RuntimeError):
+        assert_every_row_has_a_workspace(engine)
+    db = SessionLocal()
+    try:
+        db.query(AuditEvent).filter(AuditEvent.action == "other").delete()
+        db.commit()
+    finally:
+        db.close()

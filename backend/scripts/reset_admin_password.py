@@ -19,7 +19,7 @@ The other break-glass is the setting `LAUNCHPAD_AUTH_ADMIN_PASSWORD_OVERRIDE_DIS
 import argparse
 import sys
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.services import admin_credential
 from app.services.audit import record_audit_event
 
@@ -39,7 +39,7 @@ def main() -> int:
         db.close()
     if cleared:
         record_audit_event(
-            workspace_id=None,
+            workspace_id=DEFAULT_WORKSPACE_ID,
             actor="break-glass",
             action="admin.password_reset_to_config",
             target="scripts/reset_admin_password.py",

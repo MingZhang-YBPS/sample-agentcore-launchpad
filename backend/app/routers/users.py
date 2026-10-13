@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, StrictBool, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.db import get_db
+from app.core.db import DEFAULT_WORKSPACE_ID, get_db
 from app.core.errors import AppError
 from app.routers.auth import Identity, require_admin
 from app.services import admin_credential
@@ -73,7 +73,10 @@ class UserCreate(BaseModel):
 
 
 def _audit(db: Session, actor: Identity, action: str, target: str) -> None:
-    record_audit_event(workspace_id=None, actor=actor.username, action=action, target=target)
+    # hub-global, journaled under the hub's own workspace (audit rows must name one)
+    record_audit_event(
+        workspace_id=DEFAULT_WORKSPACE_ID, actor=actor.username, action=action, target=target
+    )
 
 
 @router.post("", status_code=201)

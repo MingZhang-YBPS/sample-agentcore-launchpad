@@ -690,7 +690,9 @@ class TestPurge:
         try:
             assert db.get(Workspace, neighbour["id"]) is not None
             assert _referencing_rows(db, neighbour["id"]) == {"agents": 1, "jobs": 1}
-            assert _referencing_rows(db, DEFAULT_WORKSPACE_ID) == {"jobs": 1}
+            # + the hub's journal row of the grant PATCH above (account audit rows are
+            # stamped with the hub's own workspace)
+            assert _referencing_rows(db, DEFAULT_WORKSPACE_ID) == {"jobs": 1, "audit_events": 1}
             assert (
                 db.query(UserWorkspace)
                 .filter(UserWorkspace.workspace_id == neighbour["id"])

@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError, envelope
 from app.models.ledger import User
 from app.services import admin_credential
@@ -608,7 +608,7 @@ def change_password(
     finally:
         db.close()
     record_audit_event(
-        workspace_id=None,
+        workspace_id=DEFAULT_WORKSPACE_ID,
         actor=identity.username,
         action="auth.password_change",
         target=f"{target} self-service",

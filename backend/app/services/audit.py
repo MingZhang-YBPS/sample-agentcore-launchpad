@@ -2,10 +2,10 @@
 
 One row per administrator break-glass agent mutation on a `prod` workspace, per
 workspace tier change, and per console-account change (create / update / delete /
-password change — hub-global, so `workspace_id` is None; a password is never part
-of a row). Deliberately tiny: an append, nothing else — reading it back
-is a ledger query, and any richer outcome lives on the Job / Deployment rows the
-action itself produces.
+password change — hub-global, journaled under the hub's own `default` workspace,
+because `audit_events` rows must name one; a password is never part of a row).
+Deliberately tiny: an append, nothing else — reading it back is a ledger query, and
+any richer outcome lives on the Job / Deployment rows the action itself produces.
 """
 
 from sqlalchemy.orm import Session
@@ -16,7 +16,7 @@ from app.models.ledger import AuditEvent
 
 def record_audit_event(
     *,
-    workspace_id: str | None,
+    workspace_id: str,
     actor: str,
     action: str,
     target: str = "",

@@ -136,7 +136,40 @@ def init_db(bind=None) -> None:
     from app.services.videos import seed_legacy_catalog
 
     seed_legacy_catalog(bind)
+    _adopt_unscoped_account_audit_rows(bind)
     assert_every_row_has_a_workspace(bind)
+
+
+# Console-account journal actions (routers/users.py, routers/auth.py,
+# scripts/reset_admin_password.py). They are hub-global and are stamped with the
+# hub's own `default` workspace; build 26d627a6 wrote them with a NULL workspace,
+# which `assert_every_row_has_a_workspace` then refused at the next startup.
+ACCOUNT_AUDIT_ACTIONS = (
+    "user.create",
+    "user.update",
+    "user.delete",
+    "auth.password_change",
+    "admin.password_change",
+    "admin.password_reset_to_config",
+)
+
+
+def _adopt_unscoped_account_audit_rows(bind) -> None:
+    """Give the account-journal rows that one build wrote without a workspace the
+    hub's. Narrow on purpose: only these actions, so any OTHER unstamped row still
+    fails startup the way the invariant intends."""
+    from sqlalchemy import bindparam, inspect, text
+
+    if "audit_events" not in inspect(bind).get_table_names():
+        return
+    statement = text(
+        "UPDATE audit_events SET workspace_id = :ws "
+        "WHERE workspace_id IS NULL AND action IN :actions"
+    ).bindparams(bindparam("actions", expanding=True))
+    with bind.begin() as conn:
+        conn.execute(
+            statement, {"ws": DEFAULT_WORKSPACE_ID, "actions": list(ACCOUNT_AUDIT_ACTIONS)}
+        )
 
 
 def schema_drift(bind) -> dict[str, list[str]]:
