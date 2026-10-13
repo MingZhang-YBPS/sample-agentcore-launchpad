@@ -553,21 +553,32 @@ def _items_from_run(
     """
     rows = engine_svc.results_for(db, run.id, criterion_key)
     texts = _scenario_texts(db, run)
+    # One item per replayed session (scenario + attempt): a trace-level judge scores
+    # every trace, and a session can hold more than one (live 2026-10-13: a replay
+    # the runtime answered twice gave kg-… two S2 verdicts, two items with one ref,
+    # and the task was refused with "every item needs a unique ref"). The session's
+    # verdict collapses its traces the way the gate does (`engine.collapse`).
+    grouped: dict[tuple[str, int], list[Any]] = {}
+    for row in rows:
+        grouped.setdefault((row.scenario_id, row.attempt), []).append(row)
     replies: dict[str, str] = {}
     out = []
-    for row in rows:
-        question, expected = texts.get(row.scenario_id, ("", ""))
-        if row.session_id and row.session_id not in replies:
-            replies[row.session_id] = _agent_reply(db, ws, run, row.session_id)
+    for (scenario_id, attempt), group in grouped.items():
+        first = group[0]
+        question, expected = texts.get(scenario_id, ("", ""))
+        if first.session_id and first.session_id not in replies:
+            replies[first.session_id] = _agent_reply(db, ws, run, first.session_id)
+        verdict = engine_svc.collapse([r.verdict for r in group])
+        explanation = "\n\n".join(dict.fromkeys(r.explanation for r in group if r.explanation))
         out.append({
-            "ref": f"{row.scenario_id}#{row.attempt}",
-            "session_id": row.session_id,
-            "scenario_id": row.scenario_id,
-            "input": question or row.scenario_id,
+            "ref": f"{scenario_id}#{attempt}",
+            "session_id": first.session_id,
+            "scenario_id": scenario_id,
+            "input": question or scenario_id,
             "expected": expected[:2000],
-            "answer": replies.get(row.session_id or "", "")[:4000],
-            "judge_label": row.verdict if row.verdict in ("pass", "fail") else "inconclusive",
-            "judge_explanation": row.explanation[:2000],
+            "answer": replies.get(first.session_id or "", "")[:4000],
+            "judge_label": verdict if verdict in ("pass", "fail") else "inconclusive",
+            "judge_explanation": explanation[:2000],
         })
     return out
 

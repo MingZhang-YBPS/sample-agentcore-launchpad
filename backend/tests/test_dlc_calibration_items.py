@@ -185,3 +185,46 @@ def test_a_task_created_with_empty_answers_is_backfilled_once(monkeypatch, clien
         assert len(reads) == first  # nothing re-read on the second view
     finally:
         _cleanup(db)
+
+
+def test_a_session_with_two_judged_traces_is_one_item(monkeypatch):
+    """A trace-level judge scores every trace; a replayed session that holds two
+    traces must still be one calibration item (one ref), its verdict collapsed the
+    way the gate collapses a session: any fail fails it."""
+    db = SessionLocal()
+    try:
+        ds = EvalDataset(workspace_id=WS, name="cal-items-2t", kind="predefined", items=[
+            {"scenario_id": "kb-77", "turns": [{"input": "q", "expected_response": "e"}]},
+            {"scenario_id": "kg-77", "turns": [{"input": "q2", "expected_response": "e2"}]},
+        ])
+        db.add(ds)
+        db.flush()
+        run = EvalRun(workspace_id=WS, agent_id="agent-x", agent_name="a", status="completed",
+                      name="r2t", dataset_id=ds.id, session_ids=["s-a", "s-b"])
+        db.add(run)
+        db.flush()
+        for sid, scen, unit, verdict, why in [("s-a", "kb-77", "t1", "pass", "first trace"),
+                                              ("s-a", "kb-77", "t2", "fail", "second trace"),
+                                              ("s-b", "kg-77", "t3", "pass", "only trace")]:
+            db.add(CriterionResult(workspace_id=WS, run_id=run.id, criterion_key="S2",
+                                   scenario_id=scen, attempt=1, session_id=sid, unit_ref=unit,
+                                   evaluator_id="judge", level="trace", verdict=verdict,
+                                   explanation=why))
+        db.commit()
+        monkeypatch.setattr(dlc_router, "_agent_reply", lambda *a, **k: "reply")
+        ws = SimpleNamespace(id=WS, context=SimpleNamespace(id=WS))
+        items = dlc_router._items_from_run(db, ws, run, "S2")
+
+        assert [i["ref"] for i in items] == ["kb-77#1", "kg-77#1"]
+        assert items[0]["judge_label"] == "fail"
+        assert "first trace" in items[0]["judge_explanation"]
+        assert "second trace" in items[0]["judge_explanation"]
+        assert items[1]["judge_label"] == "pass"
+    finally:
+        db.rollback()
+        db.query(CriterionResult).filter(
+            CriterionResult.scenario_id.in_(["kb-77", "kg-77"])).delete()
+        db.query(EvalRun).filter(EvalRun.name == "r2t").delete()
+        db.query(EvalDataset).filter(EvalDataset.name == "cal-items-2t").delete()
+        db.commit()
+        db.close()
