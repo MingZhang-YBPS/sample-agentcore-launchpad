@@ -21,7 +21,11 @@ export function ChangePasswordDialog({ username, builtin, onClose }: { username:
   const [error, setError] = useState<string | null>(null);
   const errors = validatePasswordChange(form);
   const shown = touched ? errors : {};
-  const set = (key: keyof PasswordChangeForm) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
+  // editing clears the last server error, so it never describes input that is gone
+  const set = (key: keyof PasswordChangeForm) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
+    setForm((prev) => ({ ...prev, [key]: e.target.value }));
+  };
 
   const submit = async () => {
     setTouched(true);

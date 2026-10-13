@@ -150,7 +150,10 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
   const renderDialogs = (opts: { onDeleted?: () => void; reservedName?: string | null } = {}) => {
     const copy = confirm ? copyFor(confirm.kind, confirm.user) : null;
     const createErrors: CreateErrors = creating && createTouched ? validateCreate(creating, opts.reservedName ?? null) : {};
-    const setField = <K extends keyof CreateForm>(key: K, value: CreateForm[K]) => setCreating((prev) => (prev ? { ...prev, [key]: value } : prev));
+    const setField = <K extends keyof CreateForm>(key: K, value: CreateForm[K]) => {
+      setCreateError(null);
+      setCreating((prev) => (prev ? { ...prev, [key]: value } : prev));
+    };
     return (
       <>
         {creating && (
