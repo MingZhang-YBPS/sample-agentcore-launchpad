@@ -6148,7 +6148,11 @@
         "notEvaluable": "该服务的 span 只来自 AgentCore Evaluation 不会作为 Agent span 读取的插桩 scope（{{scopes}}），每个会话都会以「No evaluable agent spans found」失败。请用受支持的框架插桩库为 Agent 埋点（例如 Strands，或 opentelemetry.instrumentation.* / openinference.instrumentation.* 的 GenAI 插桩库）。"
       },
       "actorModel": "扮演用户的模型",
-      "actorModelHint": "模拟用户数据集：由该 Bedrock 模型扮演每位用户与 Agent 对话，直到达成目标或达到轮次上限。"
+      "actorModelHint": "模拟用户数据集：由该 Bedrock 模型扮演每位用户与 Agent 对话，直到达成目标或达到轮次上限。",
+      "attention": {
+        "title": "失败——需要查看",
+        "empty": "没有失败的评估任务。"
+      }
     },
     "taskStatus": {
       "queued": "排队中",
@@ -6491,6 +6495,15 @@
         "filterKey": "过滤键只能包含字母、数字、点、下划线或连字符",
         "filterValue": "每条过滤条件都需要有效的值",
         "description": "描述最多 200 个字符"
+      },
+      "attention": {
+        "title": "需要关注",
+        "empty": "没有失败、变更中或重复评判同一个 Agent 的在线评估。",
+        "why": {
+          "failed": "失败",
+          "duplicate": "重复",
+          "settling": "变更中"
+        }
       }
     },
     "experiments": {
@@ -6554,7 +6567,13 @@
       "cleanupHint": "删除实验创建的 Bundle、临时 Target、A/B 测试和在线评估器；共享的实验网关会保留。",
       "legacyCanaryWeights": "基准版 {{c}}% · 挑战者 {{t1}}% · 第 {{stage}}/3 阶段",
       "notReached": "实验结束前未进行到这一步。",
-      "notPromoted": "未发布"
+      "notPromoted": "未发布",
+      "attention": {
+        "title": "进行中或等你决定",
+        "empty": "没有进行中或等待决定的实验。",
+        "decide": "已有判定：发布或清理",
+        "decideCleanup": "等你清理"
+      }
     },
     "picker": {
       "picked": "已选 {{count}} / {{max}}",
@@ -6627,6 +6646,12 @@
         "change": "修改评估器",
         "confirm": "两个版本都由 {{evaluators}} 打分；判定由 {{primary}} 决定。",
         "none": "请至少选择一个评估器"
+      },
+      "attention": {
+        "title": "进行中或等你决定",
+        "empty": "没有正在放量或等待决定的金丝雀。",
+        "decide": "已有判定：继续放量、全量发布或回滚",
+        "none": "还没有启动过金丝雀。"
       }
     },
     "chat": {
@@ -7205,6 +7230,10 @@
         "flowSub": "路由 Agent 自身的轨迹",
         "request": "请求",
         "response": "响应"
+      },
+      "attention": {
+        "title": "等待审批",
+        "empty": "没有等待审批的记录。"
       }
     },
     "governance": {
@@ -7454,7 +7483,20 @@
         "connecting": "正在连接实时画面…",
         "noSession": "当前没有浏览器会话"
       },
-      "testIdentity": "身份"
+      "testIdentity": "身份",
+      "attention": {
+        "title": "需要处理",
+        "allClear": "所有 Gateway 都处于 READY，目标都健康，也没有缺失的策略引擎。",
+        "notReady": "{{name}} 未就绪",
+        "engineMissing": "{{name}} 指向一个已删除的策略引擎",
+        "logOnly": "{{name}} 只记录决策",
+        "logOnlyHint": "策略引擎处于 LOG_ONLY：拒绝会被记录，但不会拦截任何调用。",
+        "targets_one": "{{name}}：{{count}} 个目标不健康",
+        "targets_other": "{{name}}：{{count}} 个目标不健康",
+        "inspect": "查看",
+        "fix": "修复",
+        "review": "审阅"
+      }
     },
     "assistant": {
       "clear": "清除",
@@ -7534,7 +7576,17 @@
       "trainLoop": "训练循环",
       "trainProgress": "训练进度",
       "uploaded": "上传",
-      "genRecords": "AI 生成记录"
+      "genRecords": "AI 生成记录",
+      "attention": {
+        "title": "需要关注",
+        "empty": "没有排队、运行中、失败或已中断的作业。",
+        "noJobs": "还没有技能实验室作业。",
+        "type": {
+          "eval": "评估",
+          "train": "优化",
+          "taskgen": "AI 生成"
+        }
+      }
     },
     "users": {
       "trendTitle": "注册趋势",
@@ -7747,6 +7799,11 @@
         "sharedHint": "共享：每位成员都能看到此工作空间的全部资源（默认）。",
         "isolatedHint": "隔离：成员只能看到自己创建的资源，以及管理员创建或创建者未知的资源；管理员始终可见全部。适用于知识库、记忆、评估数据集、数据处理、评估任务、在线评估与自定义评估器、A/B 实验、金丝雀发布、Skill Lab 和 Agent：成员无法与他人的 Agent 对话、调用（包括通过自己的 /v1 API 密钥）或查看其可观测性与记忆详情，且只能管理自己创建的 API 密钥。",
         "saved": "成员可见性已保存，从下一次请求起生效。"
+      },
+      "attention": {
+        "title": "需要你处理",
+        "empty": "所有工作区都已初始化或正在初始化。",
+        "failedHint": "初始化失败——打开查看失败的阶段并继续执行。"
       }
     },
     "announcements": {

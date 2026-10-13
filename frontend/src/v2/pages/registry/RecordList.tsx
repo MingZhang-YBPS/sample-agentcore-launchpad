@@ -3,18 +3,22 @@ import { type FormEvent, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { useAuth } from "../../../auth/auth-context";
 import { api, type DiscoverableRegistryRecord, errorMessage } from "../../../lib/api";
 import { REGISTRY_STATUSES, REGISTRY_TYPES } from "../../../lib/registry";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
   Alert,
+  type AttentionItem,
+  AttentionPanel,
   Button,
   Card,
   type Column,
   Confirm,
   FilterSelect,
   Kpi,
+  Lamp,
   LinkButton,
   PageHeader,
   Pager,
@@ -23,6 +27,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { approvalQueue } from "./attention";
 import { isRegistryUnavailable, type RegistryRecord, statusLabel, typeLabel } from "./common";
 import { StatusTag, SystemTag, TypeTag } from "./tags";
 
@@ -120,6 +125,12 @@ export function RecordList() {
   const [searching, setSearching] = useState(false);
   const [deleting, setDeleting] = useState<RegistryRecord | null>(null);
   const [busy, setBusy] = useState(false);
+  const { isAdmin } = useAuth();
+  // records whose inline approve / reject is in flight
+  const [acting, setActing] = useState<ReadonlySet<string>>(() => new Set());
+  // records decided from the queue, hidden until the reload replaces `data`, so a second
+  // click cannot send another action in the gap between success and the fresh list
+  const [decided, setDecided] = useState<{ data: unknown; ids: ReadonlySet<string> }>({ data: null, ids: new Set() });
 
   const records = useMemo(() => data?.records ?? [], [data]);
   const discoverableIds = data?.discoverable ? new Set(data.discoverable.map((r) => r.record_id)) : null;
@@ -178,9 +189,67 @@ export function RecordList() {
     }
   };
 
+  // the same call, toasts and reload as RecordDetail's lifecycle buttons (no confirm there either)
+  const decide = async (id: string, name: string, action: "approve" | "reject") => {
+    setActing((prev) => new Set(prev).add(id));
+    try {
+      const updated = await api.registryAction(id, action);
+      toast("success", t("v2.registry.actionDone", { name, status: statusLabel(t, updated.status) }));
+      setDecided((prev) => ({ data, ids: new Set(prev.data === data ? prev.ids : []).add(id) }));
+      setSearchHits(null);
+      reload();
+    } catch (err) {
+      toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
+    } finally {
+      setActing((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
   if (data?.unavailable) return <Unavailable tab="records" message={data.unavailable} />;
 
   const open = (r: RegistryRecord) => setParams({ view: "detail", id: r.record_id });
+  const undecided = decided.data === data ? records.filter((r) => !decided.ids.has(r.record_id)) : records;
+  const approvals = approvalQueue(undecided, isAdmin);
+  const attention: AttentionItem[] = approvals.entries.map((entry) => {
+    const v = entry.values;
+    const id = entry.recordId;
+    const inFlight = acting.has(id);
+    return {
+      key: entry.key,
+      signal: entry.signal,
+      title: v.name,
+      hint: v.detail,
+      meta: (
+        <>
+          {typeLabel(t, v.type)}
+          {v.version && <span className="mono"> · {v.version}</span>}
+        </>
+      ),
+      onOpen: () => setParams({ view: "detail", id }),
+      openLabel: t("v2.common.view"),
+      actions: (
+        <>
+          <Button
+            kind="primary"
+            size="sm"
+            disabled={inFlight}
+            onClick={() => void decide(id, v.name, "approve")}
+            testId={`v2-registry-att-approve-${id}`}
+          >
+            {t("v2.registry.action.approve")}
+          </Button>
+          <Button size="sm" disabled={inFlight} onClick={() => void decide(id, v.name, "reject")} testId={`v2-registry-att-reject-${id}`}>
+            {t("v2.registry.action.reject")}
+          </Button>
+        </>
+      ),
+      testId: `v2-registry-att-${id}`,
+    };
+  });
   const count = (tp: string) => records.filter((r) => r.type === tp).length;
   const pending = records.filter((r) => r.status === "PENDING_APPROVAL").length;
   const hiddenCount = records.filter(isHidden).length;
@@ -256,6 +325,20 @@ export function RecordList() {
           testId="v2-registry-kpi-pending"
         />
       </div>
+      {data && (
+        <AttentionPanel
+          title={t("v2.registry.attention.title")}
+          items={attention}
+          count={approvals.total}
+          testId="v2-registry-attention"
+          empty={
+            <>
+              <Lamp signal={records.length ? "ok" : "off"} />
+              {records.length ? t("v2.registry.attention.empty") : t("v2.registry.empty")}
+            </>
+          }
+        />
+      )}
       <Card>
         <div className="v2-toolbar">
           <Button onClick={() => { setSearchHits(null); reload(); }}>{t("v2.common.refresh")}</Button>

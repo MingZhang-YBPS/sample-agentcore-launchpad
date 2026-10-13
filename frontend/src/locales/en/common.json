@@ -6148,7 +6148,11 @@
         "notEvaluable": "This service's spans come only from instrumentation scopes AgentCore Evaluation does not read as agent spans ({{scopes}}), so every session would fail with “No evaluable agent spans found”. Instrument the agent with a supported framework library (e.g. Strands, or an opentelemetry.instrumentation.* / openinference.instrumentation.* GenAI library)."
       },
       "actorModel": "User actor model",
-      "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached."
+      "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached.",
+      "attention": {
+        "title": "Failed — needs a look",
+        "empty": "No evaluation task has failed."
+      }
     },
     "taskStatus": {
       "queued": "Queued",
@@ -6491,6 +6495,15 @@
         "filterKey": "Filter keys use letters, digits, dot, underscore or hyphen",
         "filterValue": "Every filter needs a valid value",
         "description": "Description is at most 200 characters"
+      },
+      "attention": {
+        "title": "Needs attention",
+        "empty": "No online evaluation has failed, is settling or watches an agent twice.",
+        "why": {
+          "failed": "failed",
+          "duplicate": "duplicate",
+          "settling": "settling"
+        }
       }
     },
     "experiments": {
@@ -6554,7 +6567,13 @@
       "cleanupHint": "Deletes the experiment's bundles, temporary target, A/B test and online evaluators; the shared gateway stays.",
       "legacyCanaryWeights": "Champion {{c}}% · challenger {{t1}}% · stage {{stage}}/3",
       "notReached": "Not reached before the experiment ended.",
-      "notPromoted": "Not promoted"
+      "notPromoted": "Not promoted",
+      "attention": {
+        "title": "In flight or waiting on you",
+        "empty": "No experiment is running or waiting on a decision.",
+        "decide": "A verdict is in: promote or clean up",
+        "decideCleanup": "Waiting on you to clean up"
+      }
     },
     "picker": {
       "picked": "{{count}} / {{max}} selected",
@@ -6627,6 +6646,12 @@
         "change": "Change evaluators",
         "confirm": "Both versions are scored by {{evaluators}}; the verdict is decided by {{primary}}.",
         "none": "Pick at least one evaluator"
+      },
+      "attention": {
+        "title": "In flight or waiting on you",
+        "empty": "No canary is ramping or waiting on a decision.",
+        "decide": "A verdict is in: ramp on, complete or roll back",
+        "none": "No canary has been started yet."
       }
     },
     "chat": {
@@ -7205,6 +7230,10 @@
         "flowSub": "The routing agent's own trace",
         "request": "Request",
         "response": "Response"
+      },
+      "attention": {
+        "title": "Waiting on approval",
+        "empty": "Nothing is waiting on approval."
       }
     },
     "governance": {
@@ -7454,7 +7483,20 @@
         "connecting": "Connecting live view…",
         "noSession": "No active browser session"
       },
-      "testIdentity": "Identity"
+      "testIdentity": "Identity",
+      "attention": {
+        "title": "Needs attention",
+        "allClear": "Every gateway is READY, its targets are healthy and no Policy Engine is missing.",
+        "notReady": "{{name}} is not ready",
+        "engineMissing": "{{name}} points at a deleted Policy Engine",
+        "logOnly": "{{name}} only logs decisions",
+        "logOnlyHint": "The Policy Engine is in LOG_ONLY: denials are recorded but nothing is blocked.",
+        "targets_one": "{{name}}: {{count}} target not healthy",
+        "targets_other": "{{name}}: {{count}} targets not healthy",
+        "inspect": "Inspect",
+        "fix": "Fix",
+        "review": "Review"
+      }
     },
     "assistant": {
       "clear": "Clear",
@@ -7534,7 +7576,17 @@
       "trainLoop": "Training loop",
       "trainProgress": "Training progress",
       "uploaded": "Uploaded",
-      "genRecords": "AI generation jobs"
+      "genRecords": "AI generation jobs",
+      "attention": {
+        "title": "Needs attention",
+        "empty": "No job is queued, running, failed or interrupted.",
+        "noJobs": "No Skill Lab job yet.",
+        "type": {
+          "eval": "Evaluation",
+          "train": "Optimization",
+          "taskgen": "AI generation"
+        }
+      }
     },
     "users": {
       "trendTitle": "Registrations",
@@ -7747,6 +7799,11 @@
         "sharedHint": "Shared: every member sees every resource in this workspace (the default).",
         "isolatedHint": "Isolated: a member sees only what they created, plus resources created by an admin or with an unknown creator. Admins always see everything. Applies to knowledge bases, memories, eval datasets, pipelines, tasks, online evals and custom evaluators, A/B experiments, canaries, Skill Lab and agents: a member cannot chat with, invoke (also via their /v1 API key) or observe another member's agent, and manages only the API keys they created.",
         "saved": "Member visibility saved. It applies from the next request."
+      },
+      "attention": {
+        "title": "Needs you",
+        "empty": "Every workspace is bootstrapped or bootstrapping.",
+        "failedHint": "The bootstrap failed — open it to see the stage and resume."
       }
     },
     "announcements": {
