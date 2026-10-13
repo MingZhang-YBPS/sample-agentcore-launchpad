@@ -13,7 +13,7 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
-import { type GateRow, type ReleaseState, type Waiver, goldenVersionsLabel, waiverGapLabel } from "../../../lib/dlc";
+import { type GateRow, type ReleaseState, type Waiver, estimateValue, goldenVersionsLabel, waiverGapLabel } from "../../../lib/dlc";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
@@ -333,9 +333,9 @@ export function Release({ agentId }: { agentId: string }) {
                 <small className="v3-hint">{t("v2.dlc.release.repeatsHint")}</small>
               </label>
               <Stat label={t("v2.dlc.cost.estimate")}
-                value={est?.total_usd === null || est?.total_usd === undefined ? t("v2.dlc.cost.unknown") : `$${est.total_usd.toFixed(2)}`}
+                value={estimateValue(est, t("v2.dlc.cost.unknown"))}
                 signal={est?.over_limit ? "act" : est?.confirm_required ? "wait" : undefined}
-                foot={t("v2.dlc.cost.sessions", { sessions: est?.sessions ?? 0, minutes: est?.duration_minutes ?? 0 })} />
+                foot={est ? t("v2.dlc.cost.sessions", { sessions: est.sessions ?? 0, minutes: est.duration_minutes ?? 0 }) : undefined} />
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {est?.unpriced && <Chip s="wait">{t("v2.dlc.cost.unpriced")}</Chip>}
                 {est?.over_limit && <Chip s="act">{t("v2.dlc.cost.overLimit")}</Chip>}

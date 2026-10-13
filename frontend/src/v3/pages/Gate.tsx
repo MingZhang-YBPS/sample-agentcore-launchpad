@@ -5,7 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { api, dlcApi, errorMessage } from "../../lib/api";
-import { type CostEstimate, type GateReport, type GateRow, type ReleaseState, type Scorecard, metricValueLabel } from "../../lib/dlc";
+import { type CostEstimate, type GateReport, type GateRow, type ReleaseState, type Scorecard, estimateValue, metricValueLabel } from "../../lib/dlc";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { gateSignal, releaseSignal } from "../signals";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -216,7 +216,7 @@ export function V3Gate() {
                 <span style={{ display: "inline-flex", gap: 8, alignItems: "center", marginLeft: "auto" }} title={t("v2.dlc.cost.basisHint")}>
                   <span style={{ color: "var(--v3-text-3)" }}>{t("v2.dlc.cost.estimate")}</span>
                   <b className="mono">
-                    {estimate.data?.total_usd == null ? t("v2.dlc.cost.unknown") : `$${estimate.data.total_usd.toFixed(2)}`}
+                    {estimateValue(estimate.data, t("v2.dlc.cost.unknown"))}
                   </b>
                   {estimate.data && (
                     <span style={{ color: "var(--v3-text-3)", fontSize: 12 }}>

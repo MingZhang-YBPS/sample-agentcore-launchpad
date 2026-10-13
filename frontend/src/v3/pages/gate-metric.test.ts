@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { metricValueLabel, waiverGapLabel } from "../../lib/dlc";
+import { estimateValue, metricValueLabel, waiverGapLabel } from "../../lib/dlc";
 
 describe("gate report: metric criteria", () => {
   it("shows a latency in milliseconds against its bound, not as a rate", () => {
@@ -40,5 +40,17 @@ describe("waiver table: measured / required", () => {
   it("never shows a metric value as a percentage, even without the report row", () => {
     expect(waiverGapLabel({ criterion_key: "K1", actual: 1098.33, threshold: 0.9 }, [])).toBe("1,098");
     expect(waiverGapLabel({ criterion_key: "K1", actual: null, threshold: 0.9 }, [])).toBe("—");
+  });
+});
+
+describe("estimated cost figure", () => {
+  it("shows a dash while the estimate is loading, not 'unpriced'", () => {
+    expect(estimateValue(null, "未定价")).toBe("—");
+    expect(estimateValue(undefined, "未定价")).toBe("—");
+  });
+
+  it("says unpriced only when the server could not price the run", () => {
+    expect(estimateValue({ total_usd: null }, "未定价")).toBe("未定价");
+    expect(estimateValue({ total_usd: 1.125 }, "未定价")).toBe("$1.13");
   });
 });

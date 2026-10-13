@@ -442,6 +442,17 @@ export function waiverGapLabel(
   return `${pctOf(waiver.actual, 1)} / ${pctOf(waiver.threshold, 0)}`;
 }
 
+/** The estimated-cost figure: a dash while the estimate is still loading (it used to
+ * read "unpriced" for the first second of every page load), the unknown label only
+ * when the server answered that it cannot price the run. */
+export function estimateValue(
+  est: { total_usd?: number | null } | null | undefined,
+  unknownLabel: string,
+): string {
+  if (!est) return "—";
+  return est.total_usd === null || est.total_usd === undefined ? unknownLabel : `$${est.total_usd.toFixed(2)}`;
+}
+
 /** What a release froze per golden split: `releases.py` writes the split's
  * dataset id, its version label (null until the split is versioned) and the
  * number of active items. Older records may hold a bare label. */
