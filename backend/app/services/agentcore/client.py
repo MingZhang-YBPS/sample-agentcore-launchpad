@@ -45,10 +45,14 @@ def heartbeat_data_client(ctx: WorkspaceContext) -> Any:
     """Data-plane client for a heartbeat runtime's stream: a shorter read timeout,
     because a silence longer than a few heartbeats is a dead stream."""
     timeout = get_settings().agentcore_heartbeat_read_timeout_s
+    # No automatic retry: botocore re-sends a timed-out InvokeAgentRuntime under the
+    # same runtime session, so the agent answered the question twice in one session
+    # (live 2026-10-13: an extra trace with no expected answer, two evaluator errors
+    # and a drift alert). The callers retry in a fresh session instead.
     return ctx.client(
         "bedrock-agentcore",
-        cache_token=f"read_timeout={timeout}",
-        config=Config(read_timeout=timeout),
+        cache_token=f"read_timeout={timeout};retries=0",
+        config=Config(read_timeout=timeout, retries={"max_attempts": 1, "mode": "standard"}),
     )
 
 

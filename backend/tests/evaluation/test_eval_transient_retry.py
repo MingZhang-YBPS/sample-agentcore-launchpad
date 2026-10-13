@@ -188,7 +188,10 @@ def test_heartbeat_runtimes_stream_with_the_short_read_timeout(monkeypatch):
     class Ctx:
         def client(self, name, cache_token=None, config=None):
             seen.append((name, config.read_timeout))
+            retries.append((config.retries or {}).get("max_attempts"))
             return name
+
+    retries = []
 
     monkeypatch.setattr(clients, "get_settings", lambda: type(
         "S", (), {"agentcore_read_timeout_s": 1000, "agentcore_heartbeat_read_timeout_s": 120})())
@@ -197,6 +200,8 @@ def test_heartbeat_runtimes_stream_with_the_short_read_timeout(monkeypatch):
         clients.stream_data_client(Ctx(), method, protocol)
     # platform templates heartbeat every 15 s; customer code (BYOC) and A2A owe none
     assert [t for _, t in seen] == [120, 120, 1000, 1000, 1000]
+    # a timed-out heartbeat stream is not re-sent by botocore under the same session
+    assert retries[:2] == [1, 1]
 
 
 def test_a_stalled_zip_runtime_replay_is_retried_in_a_fresh_session(monkeypatch):
