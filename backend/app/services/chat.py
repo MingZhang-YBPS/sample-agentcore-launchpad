@@ -140,7 +140,7 @@ def chat_stream(
                 workspace=workspace,
                 **invoke_kwargs,
             )
-        for event in source:
+        for event in with_keepalive(source):
             # while screening, text is withheld until the whole answer can be
             # screened; tool and heartbeat events still flow so the UI stays alive
             if screen and event.get("event") == "delta":
@@ -265,3 +265,39 @@ def sse_encode(event: dict[str, Any]) -> str:
     if event["event"] == "heartbeat":
         return ": keep-alive\n\n"
     return f"event: {event['event']}\ndata: {json.dumps(event['data'], ensure_ascii=False)}\n\n"
+
+# CloudFront drops a response that sends no byte for 60 s. Once the runtime starts
+# answering it heartbeats on its own, but while the invocation is still starting (or
+# stalled and about to be invoked once more) nothing comes back, so until the first
+# event the console stream sends its own heartbeats.
+KEEPALIVE_SECONDS = 15.0
+
+
+def with_keepalive(
+    events: Iterator[dict[str, Any]], interval: float = KEEPALIVE_SECONDS,
+) -> Iterator[dict[str, Any]]:
+    """Re-yield ``events``, adding a ``heartbeat`` every ``interval`` seconds until the
+    first event arrives. Only that first step runs on a worker thread; the rest is
+    iterated here, so closing this generator still closes the upstream stream."""
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FutureTimeout
+
+    source = iter(events)
+    _missing = object()
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chat-keepalive")
+    try:
+        # the source reads request-scoped context (workspace, identity): run it in a copy
+        future = pool.submit(contextvars.copy_context().run, next, source, _missing)
+        while True:
+            try:
+                first = future.result(timeout=interval)
+                break
+            except FutureTimeout:
+                yield {"event": "heartbeat", "data": {}}
+    finally:
+        pool.shutdown(wait=False)
+    if first is _missing:
+        return
+    yield first
+    yield from source

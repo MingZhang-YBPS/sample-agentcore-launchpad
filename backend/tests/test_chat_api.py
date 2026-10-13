@@ -113,6 +113,7 @@ def test_zip_runtime_streams_native_runtime_events_like_harness(monkeypatch):
 
     data = StreamingDataPlane()
     monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(invoke_service, "heartbeat_data_client", lambda _ws=None: data)
     monkeypatch.setattr(invoke_service.canary_service, "active_canary_route", lambda _id: None)
 
     events = list(chat_stream(agent, "hello", session_id="s" * 40, workspace=ws_ctx()))
@@ -142,6 +143,7 @@ def test_zip_runtime_legacy_json_result_still_renders(monkeypatch):
             return {"response": Body(), "contentType": "application/json"}
 
     monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: JsonDataPlane())
+    monkeypatch.setattr(invoke_service, "heartbeat_data_client", lambda _ws=None: JsonDataPlane())
     monkeypatch.setattr(invoke_service.canary_service, "active_canary_route", lambda _id: None)
 
     events = list(chat_stream(agent, "hello", session_id="s" * 40, workspace=ws_ctx()))

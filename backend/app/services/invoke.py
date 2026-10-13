@@ -9,7 +9,7 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ReadTimeoutError
 
 from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, aws_error_code
@@ -25,7 +25,12 @@ from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
-from app.services.agentcore.client import control_client, data_client
+from app.services.agentcore.client import (
+    HEARTBEAT_METHODS,
+    control_client,
+    data_client,
+    heartbeat_data_client,
+)
 from app.services.attachments import PreparedAttachments
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
@@ -773,17 +778,36 @@ def invoke_agent_events(
         force_reauth = _pending_force_reauth(agent, resolved_user)
         if force_reauth:
             kwargs["force_reauth_providers"] = force_reauth
-        for event in rt.stream_runtime_events(
-            data_client(workspace), agent.arn, prompt, **kwargs, **production_endpoint(agent)
-        ):
-            if event.get("event") == "auth_required":
-                event = {
-                    "event": "auth_required",
-                    "data": _record_auth_sessions(
-                        agent, resolved_user, [event["data"]], console_user=console_user,
-                    )[0],
-                }
-            yield event
+        # A platform-template runtime sends a heartbeat at least every 15 s, so its
+        # stream is read with the short heartbeat timeout; a stream that stays silent
+        # past it before sending anything is a stalled invocation (live 2026-10-13:
+        # the runtime answered, nothing reached the caller) and is invoked once more.
+        heartbeat = agent.method in HEARTBEAT_METHODS
+        client = heartbeat_data_client(workspace) if heartbeat else data_client(workspace)
+        for attempt in (1, 2):
+            delivered = False
+            try:
+                for event in rt.stream_runtime_events(
+                    client, agent.arn, prompt, **kwargs, **production_endpoint(agent)
+                ):
+                    if event.get("event") != "heartbeat":
+                        delivered = True
+                    if event.get("event") == "auth_required":
+                        event = {
+                            "event": "auth_required",
+                            "data": _record_auth_sessions(
+                                agent, resolved_user, [event["data"]], console_user=console_user,
+                            )[0],
+                        }
+                    yield event
+                return
+            except ReadTimeoutError:
+                if not heartbeat or delivered or attempt == 2:
+                    raise
+                logger.warning(
+                    "runtime stream for agent %s stayed silent past the heartbeat timeout; "
+                    "invoking it once more", agent.id,
+                )
         return
 
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}

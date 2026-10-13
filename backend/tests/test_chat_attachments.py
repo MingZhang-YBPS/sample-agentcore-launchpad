@@ -375,6 +375,10 @@ def test_native_bytes_reach_runtime_through_every_entrance(monkeypatch, protocol
     monkeypatch.setattr(
         invoke, "data_client", lambda _: SimpleNamespace(invoke_agent_runtime=runtime_invoke),
     )
+    monkeypatch.setattr(
+        invoke, "heartbeat_data_client",
+        lambda _: SimpleNamespace(invoke_agent_runtime=runtime_invoke),
+    )
     data = png()
     response = TestClient(create_app()).post(
         route.format(agent_id=row.id),
