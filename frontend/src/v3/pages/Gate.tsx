@@ -5,7 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { api, dlcApi, errorMessage } from "../../lib/api";
-import type { CostEstimate, GateReport, GateRow, ReleaseState, Scorecard } from "../../lib/dlc";
+import { type CostEstimate, type GateReport, type GateRow, type ReleaseState, type Scorecard, metricValueLabel } from "../../lib/dlc";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { gateSignal, releaseSignal } from "../signals";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -63,6 +63,8 @@ function Pipeline({ report }: { report: GateReport }) {
 /** A rate as a point inside its interval, against the threshold tick. */
 function Interval({ row }: { row: GateRow }) {
   const { t } = useTranslation();
+  // metric criteria (latency, tokens, cost) carry a value in their own unit, not a rate
+  if (row.kind === "metric") return <span className="mono">{metricValueLabel(row)}</span>;
   const rate = typeof row.measured === "number" ? row.measured : null;
   if (rate === null) return <span style={{ color: "var(--v3-text-3)" }}>—</span>;
   const x = (v: number) => `${Math.max(0, Math.min(100, v * 100))}%`;

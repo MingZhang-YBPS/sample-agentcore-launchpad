@@ -415,6 +415,33 @@ export interface GateRow {
   [key: string]: unknown;
 }
 
+/** A metric criterion's measured value in its own unit, against its bound. */
+export function metricValueLabel(row: { metric_rule?: unknown; value?: unknown; measured?: number | null }): string {
+  const rule = (row.metric_rule ?? {}) as { metric?: string; op?: string; value?: number };
+  const raw = typeof row.value === "number" ? row.value : typeof row.measured === "number" ? row.measured : null;
+  const usd = rule.metric === "cost_per_success_usd";
+  const fmt = (v: number) => (usd ? `$${v.toFixed(4)}` : Math.round(v).toLocaleString("en-US"));
+  const unit = rule.metric?.endsWith("_ms") ? " ms" : "";
+  const bound = typeof rule.value === "number" ? ` (${rule.op ?? "<="} ${fmt(rule.value)})` : "";
+  return raw === null ? "—" : `${fmt(raw)}${unit}${bound}`;
+}
+
+/** A waiver's "measured / required" cell. A metric criterion (latency, tokens,
+ * cost) is shown in its own unit against its bound, a rate as percentages. */
+export function waiverGapLabel(
+  waiver: { criterion_key: string; actual: number | null; threshold: number | null },
+  rows: { key: string; kind?: unknown; metric_rule?: unknown }[],
+): string {
+  if (waiver.actual === null) return "—";
+  const metricRow = rows.find((r) => r.key === waiver.criterion_key && r.kind === "metric");
+  if (metricRow) return metricValueLabel({ metric_rule: metricRow.metric_rule, value: waiver.actual });
+  // no report row to read the rule from: a value above 1 cannot be a rate
+  if (waiver.actual > 1) return Math.round(waiver.actual).toLocaleString("en-US");
+  if (waiver.threshold === null) return "—";
+  const pctOf = (v: number, digits: number) => `${(v * 100).toFixed(digits)}%`;
+  return `${pctOf(waiver.actual, 1)} / ${pctOf(waiver.threshold, 0)}`;
+}
+
 /** What a release froze per golden split: `releases.py` writes the split's
  * dataset id, its version label (null until the split is versioned) and the
  * number of active items. Older records may hold a bare label. */

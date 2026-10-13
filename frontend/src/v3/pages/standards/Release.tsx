@@ -13,11 +13,11 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
-import { type GateRow, type ReleaseState, type Waiver, goldenVersionsLabel } from "../../../lib/dlc";
+import { type GateRow, type ReleaseState, type Waiver, goldenVersionsLabel, waiverGapLabel } from "../../../lib/dlc";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
-import { decisionSignal, gateSignal, rate, stamp } from "./common";
+import { decisionSignal, gateSignal, stamp } from "./common";
 
 function Waivers({ state, rows, onReload }: { state: ReleaseState; rows: GateRow[]; onReload: () => void }) {
   const { t } = useTranslation();
@@ -65,7 +65,7 @@ function Waivers({ state, rows, onReload }: { state: ReleaseState; rows: GateRow
                 <tr key={row.id}>
                   <td className="mono">{row.criterion_key}</td>
                   <td><Chip s={row.active ? "info" : row.status === "rejected" ? "act" : row.status === "requested" ? "wait" : undefined}>{t(`v2.dlc.waiver.status.${row.status}`)}</Chip></td>
-                  <td className="mono">{row.actual !== null && row.threshold !== null ? `${rate(row.actual)} / ${rate(row.threshold, 0)}` : "—"}</td>
+                  <td className="mono">{waiverGapLabel(row, rows)}</td>
                   <td>{row.risk_owner}</td>
                   <td>{row.expires_on?.slice(0, 10) ?? "—"}</td>
                   <td>{(row.times_waived ?? 0) > 1 ? <Chip s="wait">{t("v2.dlc.waiver.repeat", { n: row.times_waived })}</Chip> : row.times_waived ?? 1}</td>
