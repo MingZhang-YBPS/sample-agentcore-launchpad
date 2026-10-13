@@ -13,6 +13,7 @@ import {
   CircleHelp,
   Compass,
   LayoutDashboard,
+  KeyRound,
   ListChecks,
   LogOut,
   MessagesSquare,
@@ -35,6 +36,7 @@ import { GLOSSARY_TERMS } from "../v2/Glossary";
 import { ModuleDemoProvider } from "../v2/pages/videos/ModuleDemo";
 import { V2ToastProvider } from "../v2/ui";
 import { useWorkspace } from "../workspace/workspace-context";
+import { ChangePasswordDialog } from "./ChangePassword";
 import { type Command, CommandPalette } from "./CommandPalette";
 import { ToastProvider } from "./ui";
 import { useLoad } from "./hooks";
@@ -149,7 +151,8 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAdmin, authRequired, username, logout } = useAuth();
+  const { isAdmin, authRequired, username, builtin, logout } = useAuth();
+  const [changingPassword, setChangingPassword] = useState(false);
   const { current } = useWorkspace();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
@@ -319,6 +322,12 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
               {displayName}
             </span>
             {authRequired && (
+              <button type="button" className="v3-btn ghost sm" onClick={() => setChangingPassword(true)} data-testid="v3-change-password"
+                aria-label={t("v3.account.password.title")} title={t("v3.account.password.title")}>
+                <KeyRound size={14} />
+              </button>
+            )}
+            {authRequired && (
               <button type="button" className="v3-btn ghost sm" onClick={() => void logout()} aria-label={`${t("auth.logout")} · ${displayName}`} title={displayName}>
                 <LogOut size={14} />
               </button>
@@ -425,6 +434,9 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
           )}
         </main>
 
+        {changingPassword && username && (
+          <ChangePasswordDialog username={username} builtin={builtin} onClose={() => setChangingPassword(false)} />
+        )}
         <CommandPalette open={paletteOpen} onClose={closePalette} agents={agents.data?.agents ?? []} pages={[...pages, ...help]} />
         <GlossaryDialog />
         {touring && <Tour onClose={() => setTouring(false)} />}

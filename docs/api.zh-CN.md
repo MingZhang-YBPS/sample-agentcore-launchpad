@@ -914,14 +914,18 @@ counter_complete{<counter>: bool}}`。
 
 | 方法 | 路径 | 鉴权 | 结果 |
 |---|---|---|---|
-| `GET` | `/api/auth/status` | 开放 | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions}`——身份字段在认证前为 null（`permissions` 为 `[]`） |
+| `GET` | `/api/auth/status` | 开放 | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions, builtin}`——身份字段在认证前为 null（`permissions` 为 `[]`） |
 | `POST` | `/api/auth/login` | 开放 | 设置 `launchpad_session` cookie（12 小时，且不超过账户有效期）并回显身份 |
 | `POST` | `/api/auth/register` | 开放 | `201`——创建一个 `member` 账户；默认 `status=pending` 且 `expires_at=null`，直到管理员批准，之后有效期为 `auth_registration_valid_days`（默认 7 天） |
 | `POST` | `/api/auth/logout` | 会话 | 清除 cookie |
-| `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&limit=&offset=` | 管理员 | 分页账户列表，带派生的 `state` / `days_remaining` |
+| `POST` | `/api/auth/password` | 会话 | `{current_password, new_password}`——已登录账户修改自己的密码（与注册相同的密码规则）。内置管理员的新密码以哈希覆盖值保存，取代配置中的 `auth_password`。该账户的其他会话全部结束，调用方的 cookie 会重新签发。`auth.invalid_current_password`（400）、`auth.not_enabled`（400，未启用登录） |
+| `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&limit=&offset=` | 管理员 | 分页账户列表，带派生的 `state` / `days_remaining`；另有 `builtin`——内置管理员（id `builtin-admin`，`password_source: config\|console`），在符合搜索与状态筛选时返回，不计入 `items` / `total` |
+| `POST` | `/api/users` | 管理员 | `201`——创建一个**立即生效**的账户（无需审批）：`username`、`email`（与注册相同的规则，包括内置管理员的保留名和邮箱域名）、`password`（省略 = 自动生成，并以 `generated_password` 一次性返回）、`role`（默认 `member`，可选 `operator`、`admin`）、`permissions`、`workspaces`（默认 `["default"]`；`admin` 必须为空），以及 `valid_days`（1-3650）、未来的 `expires_at`、`never_expires: true` 三者至多其一（都不传 = `auth_registration_valid_days`）。`users.invalid_workspaces` / `users.admin_no_grants` / `users.invalid_role`（400）、`users.invalid_expiry`（422）、`auth.username_taken` / `auth.email_taken`（409） |
 | `GET` | `/api/users/stats` | 管理员 | 汇总数据，包括 `pending` 审批队列、`expiring_soon`（≤3 天）、7 天内的注册/登录计数、14 天注册序列、邮箱域名排行 |
 | `PATCH` | `/api/users/{id}` | 管理员 | 以下任意字段：`status`（`pending`\|`active`\|`disabled`；对待审批账户设为 `active` 即批准并启动其有效期）、`role`、`extend_days`、`expires_at`（`null` = 永不过期）、`password`（`null` = 生成并一次性返回）、`permissions`（`{permission_key: bool}`，`null` = 全部授予）、`workspaces`（整体替换该账户的 workspace 授权，`null` 清空） |
 | `DELETE` | `/api/users/{id}` | 管理员 | 删除该账户 |
+
+对 `builtin-admin`，`PATCH` 只接受 `password`（设置，或 `null` = 自动生成），`DELETE` 会被拒绝（`users.builtin_immutable`，400）。会导致没有任何管理员能够登录的 `PATCH` / `DELETE` 返回 `users.last_admin`（409）；内置管理员计入在内，所以启用登录时它只是兜底。每次账户写操作都记入 `audit_events`（不属于任何工作区的行，只记录修改的字段名，从不记录密码）。
 
 注册错误码：`auth.registration_disabled`（400，认证门未开启或注册已关闭）、
 `auth.invalid_username` / `auth.invalid_email` / `auth.email_domain_blocked` / `auth.weak_password`（400）、

@@ -540,8 +540,12 @@ through the same workspace client funnel as everything else.
 While the gate is enabled, the login page also offers **registration**: a
 visitor supplies a username, a **company email**, and a password. By default the
 new account lands in **`pending`** and cannot sign in until an admin approves it;
-the **7-day** validity window starts at approval. The built-in admin above is
-never stored in the database, so it cannot be locked out.
+the **7-day** validity window starts at approval. An admin can also create an
+account directly in **Users → Add user** (active at once; any role, including
+administrator). The built-in admin above has no `users` row; if its password is
+changed in the console (**Change password**, the key icon in the top bar) the
+configured `auth_password` stops working until the override is cleared with
+`cd backend && uv run python scripts/reset_admin_password.py` (break-glass).
 
 Public / disposable mail domains (Gmail, QQ, 163, Outlook, mailinator, …) are
 rejected. Tune the policy with:

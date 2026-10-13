@@ -1552,6 +1552,18 @@ Cookie**:授权在每次请求时解析(配置的 admin → `admin`,其余以 `u
 状态的,可跨后端重启;修改内置 admin 凭证会使**所有**会话失效,因为签名密钥由其
 派生。
 
+**修改密码与新增管理员。** 任何已登录账号都可以用 `POST /api/auth/password`(当前密码 +
+新密码)修改自己的密码;管理员可以重置他人的密码(`PATCH /api/users/{id}` 的 `password`),
+也可以用 `POST /api/users` 直接创建账号(立即生效,任意角色,包括 `admin`;把已有账号设为
+管理员是 `PATCH … role=admin`)。内置 admin 的密码同样可以修改:新密码以 pbkdf2 哈希保存在
+`platform_settings` 表的 `auth.admin_password_hash` 行(`services/admin_credential.py`),
+优先于配置的 `auth_password`,后者随即失效。格式不正确的行会被忽略;回到配置密码有两条
+应急路径:`cd backend && uv run python scripts/reset_admin_password.py`(删除该行),或
+`LAUNCHPAD_AUTH_ADMIN_PASSWORD_OVERRIDE_DISABLED=true`(忽略该行)。会话 Cookie 带有账号密码
+哈希的指纹(内置 admin 用覆盖哈希,没有覆盖时为空),所以修改密码会结束该账号的其他所有会话。
+内置 admin 在用户管理中显示为固定的 `builtin` 行:不能删除、禁用、降级或过期。账号写操作都会
+记入 `audit_events`,不含密码。
+
 有两道守卫按顺序执行,回答的是不同的问题。
 
 **这个控制台是否允许处于开放状态?** 未认证的控制台只服务 loopback 调用方,其余一律

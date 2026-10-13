@@ -2421,7 +2421,20 @@
     "share.session_not_found": "This conversation is no longer available. Start a new one.",
     "share.rate_limited": "Too many messages in a short time. Please wait a moment and try again.",
     "share.unavailable": "The assistant could not answer right now. Please try again.",
-    "evaluators.list_failed": "The account's evaluators could not be listed."
+    "evaluators.list_failed": "The account's evaluators could not be listed.",
+    "users.builtin_immutable": "The built-in administrator cannot be deleted, disabled, demoted or expired — only its password can change.",
+    "users.last_admin": "This is the last administrator who can sign in — make another account an administrator first.",
+    "users.admin_no_grants": "An administrator reaches every workspace by role and holds no workspace grant.",
+    "users.invalid_expiry": "Choose one validity: a number of days (1-3650), a future date, or never.",
+    "users.invalid_role": "The role must be member, operator or administrator.",
+    "auth.invalid_current_password": "The current password is incorrect.",
+    "auth.not_enabled": "This console has no sign-in, so there is no password to change.",
+    "auth.weak_password": "The password must be at least 8 characters.",
+    "auth.username_taken": "This username is taken or reserved.",
+    "auth.email_taken": "This email is already registered.",
+    "auth.invalid_username": "Username must be 3-32 characters of letters, digits, dot, underscore or hyphen.",
+    "auth.invalid_email": "Enter a valid email address.",
+    "auth.email_domain_blocked": "This email domain is not accepted — use a company email address."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -11023,7 +11036,57 @@
       "pendingNotice_other": "{{count}} accounts are waiting for approval.",
       "showPending": "Show them",
       "total_one": "{{count}} account",
-      "total_other": "{{count}} accounts"
+      "total_other": "{{count}} accounts",
+      "create": {
+        "open": "Add user",
+        "title": "Add a user",
+        "body": "The account is active immediately — no approval step. Share the username and password with the person yourself.",
+        "submit": "Create account",
+        "usernameHint": "3-32 letters, digits, dot, underscore or hyphen; used to sign in",
+        "emailHint": "Same rules as self-registration (company domains)",
+        "roleHint": {
+          "member": "Builds, deploys and evaluates agents in the granted workspaces",
+          "operator": "Approves and runs releases; does not edit agents",
+          "admin": "Full access, including user and workspace management — every workspace by role"
+        },
+        "expiryDefault_one": "Default ({{count}} day)",
+        "expiryDefault_other": "Default ({{count}} days)",
+        "expiryDays": "Custom number of days",
+        "password": "Password",
+        "passwordGenerate": "Generate one",
+        "passwordSet": "Set it myself",
+        "passwordHint": "A generated password is shown once after creation; it is never stored in clear.",
+        "noGrant": "No workspace selected: the account can sign in but cannot open any environment until one is granted.",
+        "created": "Account {{username}} created",
+        "passwordTitle": "Account created — one-time password",
+        "passwordBody": "Share this password with {{username}}. It is shown only now; if it is lost, reset the password.",
+        "err": {
+          "username": "3-32 characters: letters, digits, dot, underscore or hyphen, starting with a letter or digit.",
+          "reserved": "This name belongs to the built-in administrator.",
+          "email": "Enter a valid email address.",
+          "password": "At least 8 characters.",
+          "days": "Between 1 and {{max}} whole days."
+        }
+      },
+      "ws": {
+        "open": "Edit workspaces",
+        "title": "Edit workspaces",
+        "body": "Workspaces {{username}} can open. The change applies to their next request — no sign-out needed.",
+        "save": "Save",
+        "hint": "Administrators reach every workspace by role and hold no grant.",
+        "noGrant": "No workspace selected: the account stays active but cannot open any environment until one is granted.",
+        "none": "No workspace granted — this account cannot open any environment."
+      },
+      "builtin": {
+        "chip": "Built-in",
+        "sub": "The administrator from the deployment configuration",
+        "notice": "The built-in administrator cannot be deleted, disabled, demoted or expired. Only its password can change here; once changed, the configured password (the stack's ConsolePassword output) stops working.",
+        "passwordSource": "Password",
+        "source": {
+          "config": "Configured (deployment)",
+          "console": "Changed in the console"
+        }
+      }
     },
     "workspaces": {
       "eyebrow": "Environments",
@@ -11284,6 +11347,24 @@
         "skill_lab_codex_target_model_id": {
           "name": "Skill Lab target (Codex)",
           "desc": "Target model of Skill Lab jobs on the Codex CLI."
+        }
+      }
+    },
+    "account": {
+      "password": {
+        "title": "Change password",
+        "body": "Change the password of {{username}}. Your other sessions end; this one stays signed in.",
+        "builtinNote": "You are the built-in administrator: the new password replaces the configured one (the stack's ConsolePassword output), which stops working.",
+        "current": "Current password",
+        "new": "New password",
+        "confirm": "New password again",
+        "hint": "At least 8 characters.",
+        "submit": "Change password",
+        "changed": "Password changed",
+        "err": {
+          "current": "Enter your current password.",
+          "same": "Choose a password different from the current one.",
+          "mismatch": "The two new passwords do not match."
         }
       }
     }

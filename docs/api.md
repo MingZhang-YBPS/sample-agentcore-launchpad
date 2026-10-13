@@ -1295,14 +1295,23 @@ it. Neither surface touches AWS. See
 
 | Method | Path | Auth | Result |
 |---|---|---|---|
-| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions}` — identity fields are null (`permissions`: `[]`) until authenticated |
+| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions, builtin}` — identity fields are null (`permissions`: `[]`) until authenticated |
 | `POST` | `/api/auth/login` | open | Sets the `launchpad_session` cookie (12h, clamped to the account validity) and echoes the identity |
 | `POST` | `/api/auth/register` | open | `201` — creates a `member` account; by default `status=pending` with `expires_at=null` until an admin approves it, then valid for `auth_registration_valid_days` (default 7) |
 | `POST` | `/api/auth/logout` | session | Clears the cookie |
-| `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&limit=&offset=` | admin | Paged account list with derived `state` / `days_remaining` |
+| `POST` | `/api/auth/password` | session | `{current_password, new_password}` — the signed-in account changes its own password (register's policy). For the built-in admin the new password is stored as a hash override that replaces the configured `auth_password`. Every other session of the account ends; the caller's cookie is re-issued. `auth.invalid_current_password` (400), `auth.not_enabled` (400, no gate) |
+| `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&limit=&offset=` | admin | Paged account list with derived `state` / `days_remaining`, plus `builtin` — the built-in admin (id `builtin-admin`, `password_source: config\|console`) when it matches the search and state filter; it is outside `items` / `total` |
+| `POST` | `/api/users` | admin | `201` — creates an account that is **active at once** (no approval): `username`, `email` (register's rules, incl. the reserved built-in name and email domains), `password` (omitted = generated and returned once as `generated_password`), `role` (`member` default, `operator`, `admin`), `permissions`, `workspaces` (default `["default"]`; must be empty for `admin`), and at most one of `valid_days` (1-3650), a future `expires_at`, `never_expires: true` (none = `auth_registration_valid_days`). `users.invalid_workspaces` / `users.admin_no_grants` / `users.invalid_role` (400), `users.invalid_expiry` (422), `auth.username_taken` / `auth.email_taken` (409) |
 | `GET` | `/api/users/stats` | admin | Totals including the `pending` approval queue, `expiring_soon` (≤3 days), 7-day registration/sign-in counts, a 14-day registration series, top email domains |
 | `PATCH` | `/api/users/{id}` | admin | Any of `status` (`pending`\|`active`\|`disabled`; `active` on a pending account approves it and starts its window), `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once), `permissions` (`{permission_key: bool}`, `null` = all granted), `workspaces` (full replacement of the account's workspace grants, `null` clears them) |
 | `DELETE` | `/api/users/{id}` | admin | Removes the account |
+
+On `builtin-admin`, `PATCH` accepts only `password` (set, or `null` = generate) and
+`DELETE` is refused (`users.builtin_immutable`, 400). A `PATCH` / `DELETE` that would
+leave no administrator able to sign in answers `users.last_admin` (409); the built-in
+admin counts, so while the gate is on it is a backstop. Every account write is
+journaled in `audit_events` (hub-global rows, changed field names only, never a
+password).
 
 Registration error codes: `auth.registration_disabled` (400, gate off or
 registration disabled), `auth.invalid_username` / `auth.invalid_email` /

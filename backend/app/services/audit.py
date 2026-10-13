@@ -1,7 +1,9 @@
 """The privileged-action journal (`audit_events`, T05).
 
-One row per administrator break-glass agent mutation on a `prod` workspace and per
-workspace tier change. Deliberately tiny: an append, nothing else — reading it back
+One row per administrator break-glass agent mutation on a `prod` workspace, per
+workspace tier change, and per console-account change (create / update / delete /
+password change — hub-global, so `workspace_id` is None; a password is never part
+of a row). Deliberately tiny: an append, nothing else — reading it back
 is a ledger query, and any richer outcome lives on the Job / Deployment rows the
 action itself produces.
 """
@@ -14,7 +16,7 @@ from app.models.ledger import AuditEvent
 
 def record_audit_event(
     *,
-    workspace_id: str,
+    workspace_id: str | None,
     actor: str,
     action: str,
     target: str = "",

@@ -1,7 +1,7 @@
 import "./users.css";
 
-import { ArrowLeft, KeyRound, RefreshCw, Search, ShieldAlert, ShieldCheck, Trash2, UserCheck, UserX } from "lucide-react";
-import { useMemo } from "react";
+import { ArrowLeft, KeyRound, Pencil, RefreshCw, Search, ShieldAlert, ShieldCheck, Trash2, UserCheck, UserPlus, UserX } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -11,6 +11,7 @@ import { isStatusFilter, PAGE_SIZE, USER_STATES } from "../../v2/pages/users/com
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad } from "../hooks";
+import { ChangePasswordDialog } from "../ChangePassword";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { useUserActions } from "./users/actions";
 import { GrantChip } from "./users/GrantChip";
@@ -23,9 +24,14 @@ function StateChip({ state }: { state: UserState }) {
   return <Chip s={s === "off" ? undefined : s}>{t(`v2.users.state.${state}`)}</Chip>;
 }
 
-function RoleChip({ role }: { role: ConsoleUser["role"] }) {
+function RoleChip({ role, builtin }: { role: ConsoleUser["role"]; builtin?: boolean }) {
   const { t } = useTranslation();
-  return <Chip s={role === "admin" ? "info" : undefined}>{t(`v2.users.role.${role}`)}</Chip>;
+  return (
+    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+      <Chip s={role === "admin" ? "info" : undefined}>{t(`v2.users.role.${role}`)}</Chip>
+      {builtin && <Chip>{t("v3.users.builtin.chip")}</Chip>}
+    </span>
+  );
 }
 
 /** Expiry + days left; a pending account's window only starts on approval. */
@@ -75,7 +81,7 @@ function UserList() {
     list.reload();
     stats.reload();
   };
-  const actions = useUserActions(reload);
+  const actions = useUserActions(reload, stats.data?.valid_days ?? 7);
   const setParam = (key: string, value: string | null) =>
     setParams(
       (prev) => {
@@ -87,7 +93,9 @@ function UserList() {
       },
       { replace: key === "q" },
     );
-  const rows = useMemo(() => list.data?.items ?? [], [list.data]);
+  // the built-in admin has no row to page over: pinned first on page 1 when it matches
+  const builtin = list.data?.builtin ?? null;
+  const rows = useMemo(() => [...(builtin && page === 1 ? [builtin] : []), ...(list.data?.items ?? [])], [list.data, builtin, page]);
   const total = list.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const s = stats.data;
@@ -101,7 +109,12 @@ function UserList() {
         eyebrow={t("v3.users.eyebrow")}
         title={t("nav.users")}
         sub={t("usersPage.meta", { days: s?.valid_days ?? 7 })}
-        end={<Btn kind="ghost" onClick={reload} disabled={list.loading}><RefreshCw size={14} /> {t("v3.users.refresh")}</Btn>}
+        end={
+          <>
+            <Btn kind="ghost" onClick={reload} disabled={list.loading}><RefreshCw size={14} /> {t("v3.users.refresh")}</Btn>
+            <Btn kind="primary" onClick={actions.openCreate}><UserPlus size={14} /> {t("v3.users.create.open")}</Btn>
+          </>
+        }
       />
 
       {s && s.pending > 0 && (
@@ -189,7 +202,7 @@ function UserList() {
                   <tr key={u.id} className="click" onClick={() => open(u)}>
                     <td style={{ width: 30 }}><Lamp s={STATE_SIGNAL[u.state]} /></td>
                     <td><div className="v3-name"><div><b>{u.username}</b><small>{u.email}</small></div></div></td>
-                    <td><RoleChip role={u.role} /></td>
+                    <td><RoleChip role={u.role} builtin={u.builtin} /></td>
                     <td><StateChip state={u.state} /></td>
                     <td>
                       {u.role === "admin" ? (
@@ -210,7 +223,7 @@ function UserList() {
                     </td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                        {u.state === "pending" ? (
+                        {u.builtin ? null : u.state === "pending" ? (
                           <>
                             <Btn size="sm" kind="primary" disabled={busy} onClick={() => actions.openApprove(u)}>{t("v2.users.action.approve")}</Btn>
                             <Btn size="sm" disabled={busy} onClick={() => actions.ask("reject", u)}>{t("v2.users.action.reject")}</Btn>
@@ -223,9 +236,11 @@ function UserList() {
                             </Btn>
                           </>
                         )}
-                        <Btn size="sm" kind="ghost" disabled={busy} onClick={() => actions.ask("delete", u)} title={t("v2.users.action.delete")}>
-                          <Trash2 size={13} />
-                        </Btn>
+                        {!u.builtin && (
+                          <Btn size="sm" kind="ghost" disabled={busy} onClick={() => actions.ask("delete", u)} title={t("v2.users.action.delete")}>
+                            <Trash2 size={13} />
+                          </Btn>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -242,7 +257,7 @@ function UserList() {
           </div>
         )}
       </Panel>
-      {actions.renderDialogs()}
+      {actions.renderDialogs({ reservedName: builtin?.username ?? null })}
     </div>
   );
 }
@@ -253,9 +268,12 @@ function UserDetail({ username }: { username: string }) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
   const { workspaces } = useWorkspace();
+  const auth = useAuth();
+  const [changingOwn, setChangingOwn] = useState(false);
   // there is no GET-by-id route: read it back through the list search, matched exactly
   const loaded = useLoad(async () => {
     const page = await api.listUsers({ q: username, limit: 200 });
+    if (page.builtin && page.builtin.username === username) return page.builtin;
     return page.items.find((u) => u.username === username) ?? null;
   }, `v3-user:${username}`);
   const actions = useUserActions(loaded.reload);
@@ -274,6 +292,48 @@ function UserDetail({ username }: { username: string }) {
   }
   const busy = actions.busyId === user.id;
   const isAdminRole = user.role === "admin";
+  // the signed-in account itself: change (current + new) instead of a reset that
+  // would end this very session
+  const isSelf = auth.username === user.username && (auth.builtin ? Boolean(user.builtin) : !user.builtin);
+  const passwordAction = isSelf ? (
+    <Btn disabled={busy} onClick={() => setChangingOwn(true)}><KeyRound size={14} /> {t("v3.account.password.title")}</Btn>
+  ) : (
+    <Btn disabled={busy} onClick={() => actions.ask("reset", user)}><KeyRound size={14} /> {t("v2.users.action.resetPassword")}</Btn>
+  );
+  const ownPasswordDialog = changingOwn && (
+    <ChangePasswordDialog username={user.username} builtin={user.builtin} onClose={() => { setChangingOwn(false); loaded.reload(); }} />
+  );
+
+  if (user.builtin) {
+    return (
+      <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
+        <div><button type="button" className="v3-btn ghost sm" onClick={back}><ArrowLeft size={14} /> {t("nav.users")}</button></div>
+        <PageHead
+          eyebrow={`${t("v3.users.eyebrow")} · ${t("v3.users.builtin.chip")}`}
+          title={
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 14 }}>
+              <Lamp s="ok" live />
+              {user.username}
+            </span>
+          }
+          sub={t("v3.users.builtin.sub")}
+          end={passwordAction}
+        />
+        <Notice s="wait">{t("v3.users.builtin.notice")}</Notice>
+        <div className="v3-grid c4">
+          <Panel signal="ok"><Stat label={t("v2.users.col.state")} value={t("v2.users.state.active")} /></Panel>
+          <Panel><Stat label={t("v2.users.col.role")} value={t("v2.users.role.admin")} /></Panel>
+          <Panel><Stat label={t("v2.users.col.validity")} value={t("usersPage.neverExpires")} /></Panel>
+          <Panel>
+            <Stat label={t("v3.users.builtin.passwordSource")} value={t(`v3.users.builtin.source.${user.password_source ?? "config"}`)}
+              foot={user.password_changed_at ? ago(user.password_changed_at) : undefined} />
+          </Panel>
+        </div>
+        {actions.renderDialogs({ onDeleted: back })}
+        {ownPasswordDialog}
+      </div>
+    );
+  }
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
@@ -300,7 +360,7 @@ function UserDetail({ username }: { username: string }) {
                 {t(user.status === "active" ? "v2.users.action.disable" : "v2.users.action.enable")}
               </Btn>
             )}
-            <Btn disabled={busy} onClick={() => actions.ask("reset", user)}><KeyRound size={14} /> {t("v2.users.action.resetPassword")}</Btn>
+            {passwordAction}
             <Btn kind="danger" disabled={busy} onClick={() => actions.ask("delete", user)}><Trash2 size={14} /> {t("v2.users.action.delete")}</Btn>
           </>
         }
@@ -369,30 +429,34 @@ function UserDetail({ username }: { username: string }) {
         )}
       </Panel>
 
-      <Panel title={t("v2.users.wsTitle")} end={<span>{t("v2.users.wsSub")}</span>}>
+      <Panel
+        title={t("v2.users.wsTitle")}
+        end={isAdminRole ? undefined : (
+          <Btn size="sm" disabled={busy} onClick={() => actions.openWorkspaces(user)}><Pencil size={13} /> {t("v3.users.ws.open")}</Btn>
+        )}
+      >
         {isAdminRole ? (
           // admins reach every workspace by role; a grant row would suggest revocable access
           <span className="v3-usr-muted">{t("v2.users.allByRole")}</span>
-        ) : workspaces.length === 0 ? (
-          <span className="v3-usr-muted">—</span>
+        ) : user.workspaces.length === 0 ? (
+          <Notice s="wait">{t("v3.users.ws.none")}</Notice>
         ) : (
-          <div className="v3-usr-chips">
-            {workspaces.map((ws) => {
-              const granted = user.workspaces.includes(ws.id);
+          <div className="v3-usr-chips" data-testid="v3-user-granted">
+            {user.workspaces.map((id) => {
+              const ws = workspaces.find((w) => w.id === id);
               return (
-                <GrantChip key={ws.id} on={granted} disabled={busy} title={`${ws.account_id} · ${ws.region}`}
-                  onClick={() => void actions.patch(user, {
-                    workspaces: granted ? user.workspaces.filter((id) => id !== ws.id) : [...user.workspaces, ws.id],
-                  }, "usersPage.workspacesUpdated")}>
-                  {ws.name || ws.id}
-                  <small className="mono">{ws.id}</small>
-                </GrantChip>
+                <Chip key={id} s="ok">
+                  {ws?.name || id}
+                  {ws && ws.name !== id && <small className="mono" style={{ marginLeft: 6 }}>{id}</small>}
+                </Chip>
               );
             })}
           </div>
         )}
+        {!isAdminRole && <small className="v3-hint" style={{ display: "block", marginTop: 10 }}>{t("v3.users.ws.hint")}</small>}
       </Panel>
       {actions.renderDialogs({ onDeleted: back })}
+      {ownPasswordDialog}
     </div>
   );
 }

@@ -32,7 +32,9 @@ from app.core.config import Settings, get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError, envelope
 from app.models.ledger import User
+from app.services import admin_credential
 from app.services import users as users_service
+from app.services.audit import record_audit_event
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -207,24 +209,35 @@ def resolve_identity(
     """Resolve the caller, or None when the session must be rejected.
 
     Rejected: missing/tampered/expired cookie, unknown subject, disabled account,
-    expired account. The config admin short-circuits before any DB access, so the
-    single-operator deployment stays database-free on the hot path.
+    expired account, or a password changed since the cookie was issued. The config
+    admin costs one `platform_settings` primary-key read (its console-set password
+    stamp); registered accounts one `users` read.
     """
     current = settings or get_settings()
     decoded = _decode(request.cookies.get(COOKIE_NAME), current)
     if decoded is None:
         return None
     subject, user_id, stamp, _ = decoded
-    if user_id is None and hmac.compare_digest(
+    is_builtin = user_id is None and hmac.compare_digest(
         subject.encode("utf-8"), current.auth_username.encode("utf-8")
-    ):
-        return Identity(username=current.auth_username, role=ROLE_ADMIN)
-    if user_id is None:
+    )
+    if user_id is None and not is_builtin:
         return None  # a registered account's session always names its user id
 
     owned = db is None
     session = db or SessionLocal()
     try:
+        if is_builtin:
+            # One primary-key read: a password the built-in admin set on the console
+            # (admin_credential) is stamped into its cookie like a registered
+            # account's, so changing it — or clearing it (break-glass) — ends the
+            # sessions opened with the previous one. No override ⇒ an empty stamp.
+            expected = admin_credential.session_stamp(session, current)
+            if not hmac.compare_digest(
+                (stamp or "").encode("utf-8"), expected.encode("utf-8")
+            ):
+                return None
+            return Identity(username=current.auth_username, role=ROLE_ADMIN)
         # Resolved by the immutable id, then the display name must still match: a
         # deleted account's cookie names an id that no longer exists, and never the
         # new account that re-registered the same username.
@@ -394,6 +407,7 @@ def _identity_fields(identity: Identity | None) -> dict[str, Any]:
             "email": None,
             "account_expires_at": None,
             "permissions": [],
+            "builtin": False,
         }
     return {
         "username": identity.username,
@@ -405,6 +419,9 @@ def _identity_fields(identity: Identity | None) -> dict[str, Any]:
             else None
         ),
         "permissions": sorted(identity.permissions),
+        # the config-driven admin (no `users` row): its password is changed through
+        # the same /api/auth/password, but replaces the configured one
+        "builtin": identity.user_id is None and identity.is_admin,
     }
 
 
@@ -445,18 +462,22 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         req.username.strip().encode("utf-8"),
         settings.auth_username.encode("utf-8"),
     )
-    password_ok = hmac.compare_digest(
-        req.password.encode("utf-8"),
-        password.encode("utf-8"),
-    )
     stamp: str | None = None
-    if username_ok and password_ok:
+    if username_ok:
+        # the built-in admin never falls through to the ledger's users table; its
+        # password is the console-set override when there is one, else the config's
+        db = SessionLocal()
+        try:
+            if not admin_credential.verify(db, req.password, settings):
+                raise AppError(
+                    "auth.invalid_credentials",
+                    "Invalid username or password",
+                    status_code=401,
+                )
+            stamp = admin_credential.session_stamp(db, settings) or None
+        finally:
+            db.close()
         identity = Identity(username=settings.auth_username, role=ROLE_ADMIN)
-    elif username_ok:
-        # the built-in admin never falls through to the ledger
-        raise AppError(
-            "auth.invalid_credentials", "Invalid username or password", status_code=401
-        )
     else:
         db = SessionLocal()
         try:
@@ -474,20 +495,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         finally:
             db.close()
 
-    expiry = int(time.time()) + SESSION_TTL_SECONDS
-    if identity.account_expires_at is not None:
-        # never outlive the account itself
-        expiry = min(expiry, int(identity.account_expires_at.timestamp()))
-    max_age = max(1, expiry - int(time.time()))
-    response.set_cookie(
-        COOKIE_NAME,
-        _issue(identity.username, expiry, settings, user_id=identity.user_id, stamp=stamp),
-        max_age=max_age,
-        httponly=True,
-        secure=cookie_secure(settings),
-        samesite="lax",
-        path="/",
-    )
+    expiry = _set_session_cookie(response, identity, settings, stamp)
     return {
         "ok": True,
         "auth_required": True,
@@ -524,6 +532,89 @@ def register(req: RegisterRequest) -> dict[str, Any]:
         }
     finally:
         db.close()
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+def _set_session_cookie(
+    response: Response,
+    identity: Identity,
+    settings: Settings,
+    stamp: str | None,
+) -> int:
+    expiry = int(time.time()) + SESSION_TTL_SECONDS
+    if identity.account_expires_at is not None:
+        # never outlive the account itself
+        expiry = min(expiry, int(identity.account_expires_at.timestamp()))
+    max_age = max(1, expiry - int(time.time()))
+    response.set_cookie(
+        COOKIE_NAME,
+        _issue(identity.username, expiry, settings, user_id=identity.user_id, stamp=stamp),
+        max_age=max_age,
+        httponly=True,
+        secure=cookie_secure(settings),
+        samesite="lax",
+        path="/",
+    )
+    return expiry
+
+
+@router.post("/password")
+def change_password(
+    req: PasswordChangeRequest, request: Request, response: Response
+) -> dict[str, Any]:
+    """The signed-in account changes its own password (current + new).
+
+    Works for the built-in admin too: its new password is stored as a hash override
+    (`services/admin_credential.py`) that takes precedence over the configured one.
+    Every other session of the account ends (the cookie stamp changes); this one is
+    re-issued with the new stamp so the caller stays signed in. Journaled; the
+    password itself is never logged or returned.
+    """
+    settings = get_settings()
+    if not enabled(settings):
+        raise AppError(
+            "auth.not_enabled",
+            "This console has no login gate, so there is no password to change",
+        )
+    identity = require_identity(request, settings)
+    db = SessionLocal()
+    try:
+        if identity.user_id is None:
+            if not admin_credential.verify(db, req.current_password, settings):
+                raise AppError(
+                    "auth.invalid_current_password", "The current password is incorrect"
+                )
+            admin_credential.set_password(db, req.new_password, identity.username)
+            db.commit()
+            stamp: str | None = admin_credential.session_stamp(db, settings) or None
+            target = f"{identity.username} (builtin)"
+        else:
+            user = db.get(User, identity.user_id)
+            if user is None:
+                raise AppError("auth.required", "Authentication required", status_code=401)
+            if not users_service.verify_password(req.current_password, user.password_hash):
+                raise AppError(
+                    "auth.invalid_current_password", "The current password is incorrect"
+                )
+            users_service.validate_password(req.new_password)
+            user.password_hash = users_service.hash_password(req.new_password)
+            db.commit()
+            stamp = users_service.credential_stamp(user.password_hash)
+            target = f"{user.username} ({user.id})"
+    finally:
+        db.close()
+    record_audit_event(
+        workspace_id=None,
+        actor=identity.username,
+        action="auth.password_change",
+        target=f"{target} self-service",
+    )
+    expiry = _set_session_cookie(response, identity, settings, stamp)
+    return {"ok": True, "expires_at": expiry}
 
 
 @router.post("/logout")

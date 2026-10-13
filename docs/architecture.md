@@ -3038,6 +3038,23 @@ cookie is otherwise stateless and survives a backend restart; changing the
 configured admin credentials invalidates **all** sessions, because the signing
 key derives from them.
 
+**Changing passwords and adding administrators.** Any signed-in account changes its
+own password with `POST /api/auth/password` (current + new); an admin resets anyone
+else's (`PATCH /api/users/{id}` `password`) and creates accounts directly with
+`POST /api/users` (active at once, any role including `admin`; promotion of an
+existing account is `PATCH … role=admin`). The built-in admin's password can change
+too: the new one is stored as a pbkdf2 hash in the `platform_settings` row
+`auth.admin_password_hash` (`services/admin_credential.py`) and takes precedence over
+the configured `auth_password`, which then stops working. A row that is not a
+well-formed hash is ignored, and there are two break-glass paths back to the
+configured password: `cd backend && uv run python scripts/reset_admin_password.py`
+(deletes the row) or `LAUNCHPAD_AUTH_ADMIN_PASSWORD_OVERRIDE_DISABLED=true` (ignores
+it). The session cookie carries a stamp of the account's password hash (the built-in
+admin's override hash, empty while there is none), so a password change ends every
+other session of that account. The built-in admin is listed in User Management as a
+fixed `builtin` row: it cannot be deleted, disabled, demoted or expired. Account
+writes are journaled in `audit_events` without the password.
+
 Two guards run in order, and they answer different questions.
 
 **Is the console allowed to be open at all?** An unauthenticated console serves

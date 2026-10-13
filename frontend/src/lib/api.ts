@@ -3132,6 +3132,8 @@ export interface AuthStatus {
   account_expires_at: string | null;
   /** granted agent-management permissions ([] until authenticated) */
   permissions: AgentPermission[];
+  /** the config-driven built-in admin (no ledger row) */
+  builtin?: boolean;
 }
 
 export interface AuthLoginResult extends AuthStatus {
@@ -3629,7 +3631,8 @@ export interface ConsoleUser {
   state: UserState;
   expires_at: string | null;
   days_remaining: number | null;
-  created_at: string;
+  /** null only on the built-in admin, which has no ledger row */
+  created_at: string | null;
   last_login_at: string | null;
   login_count: number;
   first_login_at: string | null;
@@ -3638,8 +3641,13 @@ export interface ConsoleUser {
   permissions: Record<AgentPermission, boolean>;
   /** granted workspace ids; empty for an admin, who reaches every workspace */
   workspaces: string[];
-  /** only present on a password reset the platform generated */
+  /** only present on a password reset / creation the platform generated */
   generated_password?: string;
+  /** the config-driven built-in admin: only its password can change */
+  builtin?: boolean;
+  /** built-in admin: "config" (auth_password) or "console" (a password set here) */
+  password_source?: "config" | "console";
+  password_changed_at?: string | null;
 }
 
 export interface UserListResult {
@@ -3647,6 +3655,24 @@ export interface UserListResult {
   total: number;
   limit: number;
   offset: number;
+  /** the built-in admin when it matches the search/state filter — outside `items`/`total` */
+  builtin?: ConsoleUser | null;
+}
+
+/** `POST /api/users` — an admin-created account, active at once. */
+export interface UserCreateBody {
+  username: string;
+  email: string;
+  /** omitted ⇒ the backend generates one and returns it once */
+  password?: string;
+  role?: ConsoleRole;
+  permissions?: Partial<Record<AgentPermission, boolean>>;
+  /** omitted ⇒ ["default"]; must be empty for an administrator */
+  workspaces?: string[];
+  /** pick at most one of these; none ⇒ the default validity */
+  valid_days?: number;
+  expires_at?: string;
+  never_expires?: boolean;
 }
 
 export interface UserStats {
@@ -5229,6 +5255,14 @@ export const api = {
     request<{ deleted: boolean; key: string }>(`/api/resource-mappings/${kind}/${encodeURIComponent(name)}`, {
       method: "DELETE",
       headers: pinnedWorkspace(workspaceId),
+    }),
+  createUser: (body: UserCreateBody) =>
+    request<ConsoleUser>("/api/users", { method: "POST", body: JSON.stringify(body) }),
+  /** The signed-in account's own password; other sessions end, this one continues. */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean; expires_at: number }>("/api/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
   updateUser: (id: string, patch: UserPatchBody) =>
     request<ConsoleUser>(`/api/users/${id}`, {

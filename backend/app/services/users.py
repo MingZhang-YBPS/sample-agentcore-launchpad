@@ -13,15 +13,18 @@ import hmac
 import re
 import secrets
 import string
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.db import DEFAULT_WORKSPACE_ID
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import User, UserWorkspace, Workspace
 
@@ -379,6 +382,173 @@ def register_user(
     return user
 
 
+def create_user(
+    db: Session,
+    *,
+    username: str,
+    email: str,
+    password: str | None,
+    role: str = ROLE_MEMBER,
+    permissions: dict[str, bool] | None = None,
+    workspaces: list[str] | None = None,
+    valid_days: int | None = None,
+    expires_at: datetime | None = None,
+    never_expires: bool = False,
+    created_by: str,
+    settings: Settings | None = None,
+) -> tuple[User, str | None]:
+    """An administrator creates an account that is active immediately.
+
+    Same username / email / password rules as self-registration (`register_user`),
+    but no pending state: the admin who creates it is the approval. Returns the user
+    and the generated password when none was provided (shown once by the caller;
+    only its hash is stored). Everything is validated before anything is written, and
+    the account + its workspace grants commit as one transaction.
+
+    Expiry: `valid_days` from now, an explicit future `expires_at`, `never_expires`,
+    or — none of them — the same `auth_registration_valid_days` an approval starts.
+    Workspaces: omitted means `default`, the grant an approval preselects; an
+    administrator holds none (it reaches every workspace by role).
+    """
+    current = settings or get_settings()
+    name = validate_username(username, current)
+    address = validate_email(email, current)
+    generated = None if password else generate_password()
+    chosen = password or generated or ""
+    validate_password(chosen)
+    if role not in ROLES:
+        raise AppError("users.invalid_role", f"Role must be one of {', '.join(ROLES)}")
+    overrides = _normalized_permissions(permissions, role)
+
+    if role == ROLE_ADMIN:
+        if workspaces:
+            raise AppError(
+                "users.admin_no_grants",
+                "An administrator reaches every workspace by role and holds no grant",
+            )
+        requested: list[str] = []
+    else:
+        requested = [DEFAULT_WORKSPACE_ID] if workspaces is None else workspaces
+    _validated_workspace_ids(db, requested)
+
+    chosen_expiry = sum(
+        1 for flag in (valid_days is not None, expires_at is not None, never_expires) if flag
+    )
+    if chosen_expiry > 1:
+        raise AppError(
+            "users.invalid_expiry",
+            "Choose one of valid_days, expires_at or never expiring",
+            status_code=422,
+        )
+    now = datetime.now(UTC)
+    if valid_days is not None:
+        if not 1 <= int(valid_days) <= 3650:
+            raise AppError("users.invalid_expiry", "valid_days must be 1-3650", status_code=422)
+        expiry: datetime | None = now + timedelta(days=int(valid_days))
+    elif expires_at is not None:
+        expiry = as_utc(expires_at)
+        if expiry is None or expiry <= now:
+            raise AppError(
+                "users.invalid_expiry", "expires_at must be in the future", status_code=422
+            )
+    elif never_expires:
+        expiry = None
+    else:
+        expiry = now + timedelta(days=current.auth_registration_valid_days)
+
+    if find_by_username(db, name) is not None:
+        raise AppError("auth.username_taken", "This username is already taken", status_code=409)
+    if find_by_email(db, address) is not None:
+        raise AppError("auth.email_taken", "This email is already registered", status_code=409)
+
+    user = User(
+        id=uuid.uuid4().hex,
+        username=name,
+        username_key=name.lower(),
+        email=address,
+        password_hash=hash_password(chosen),
+        role=role,
+        permissions=overrides,
+        status=STATUS_ACTIVE,
+        expires_at=expiry,
+        created_by=created_by[:64],
+    )
+    db.add(user)
+    for workspace_id in sorted(set(requested)):
+        db.add(UserWorkspace(user_id=user.id, workspace_id=workspace_id))
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # a concurrent create/registration won the unique username_key / email
+        db.rollback()
+        raise AppError(
+            "auth.username_taken", "This username or email is already taken", status_code=409
+        ) from exc
+    db.refresh(user)
+    return user, generated
+
+
+def _validated_workspace_ids(db: Session, value: Any) -> set[str]:
+    """The set of workspace ids `value` names; 400 unless every one exists."""
+    if value is None:
+        return set()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise AppError(
+            "users.invalid_workspaces", "workspaces must be a list of workspace ids"
+        )
+    requested = {item.strip() for item in value if item.strip()}
+    if requested:
+        known = set(
+            db.scalars(select(Workspace.id).where(Workspace.id.in_(sorted(requested))))
+        )
+        unknown = sorted(requested - known)
+        if unknown:
+            raise AppError(
+                "users.invalid_workspaces",
+                f"Unknown workspace id(s): {', '.join(unknown)}",
+                {"unknown": unknown},
+            )
+    return requested
+
+
+def builtin_admin_enabled(settings: Settings | None = None) -> bool:
+    """Whether the config-driven admin exists (the login gate is on)."""
+    secret = (settings or get_settings()).auth_password
+    return secret is not None and bool(secret.get_secret_value())
+
+
+def admins_who_can_sign_in(
+    db: Session, settings: Settings | None = None, excluding: str | None = None
+) -> int:
+    """Administrators able to sign in right now: the built-in one (while the gate is
+    on) plus every active, unexpired admin-role account other than `excluding`."""
+    now = datetime.now(UTC)
+    rows = db.scalars(
+        select(User).where(User.role == ROLE_ADMIN, User.status == STATUS_ACTIVE)
+    )
+    registered = sum(1 for row in rows if row.id != excluding and not is_expired(row, now))
+    return registered + (1 if builtin_admin_enabled(settings) else 0)
+
+
+def assert_not_last_admin(db: Session, user: User, settings: Settings | None = None) -> None:
+    """Refuse a change that would leave no administrator able to sign in.
+
+    The built-in admin counts and can never be demoted or disabled, so while the
+    login gate is on this is a backstop rather than a rule an admin meets in
+    practice; it exists so a future way of disabling the built-in admin cannot
+    leave the console without one.
+    """
+    if user.role != ROLE_ADMIN:
+        return
+    if admins_who_can_sign_in(db, settings, excluding=user.id) == 0:
+        raise AppError(
+            "users.last_admin",
+            "This is the last administrator who can sign in — make another account "
+            "an administrator first",
+            status_code=409,
+        )
+
+
 def authenticate(db: Session, username: str, password: str) -> User:
     """Return the account for valid credentials.
 
@@ -539,6 +709,7 @@ def apply_patch(
     """
     current = settings or get_settings()
     generated: str | None = None
+    was_signable_admin = _signable_admin(user)
     if "status" in patch:
         status = patch["status"]
         if status not in STATUSES:
@@ -581,12 +752,26 @@ def apply_patch(
         user.permissions = _normalized_permissions(patch["permissions"], user.role)
     if "workspaces" in patch:
         set_workspace_grants(db, user, patch["workspaces"])
+    if was_signable_admin and not _signable_admin(user):
+        # a demotion, disable or lapsed expiry of an admin: never the last one
+        if admins_who_can_sign_in(db, current, excluding=user.id) == 0:
+            db.rollback()
+            raise AppError(
+                "users.last_admin",
+                "This is the last administrator who can sign in — make another "
+                "account an administrator first",
+                status_code=409,
+            )
     # A disable, a lapsed expiry, a demotion or a revoked grant can each offboard
     # the account from keys it minted; same transaction as the change itself.
     _disable_offboarded_api_keys(db, user.id)
     db.commit()
     db.refresh(user)
     return generated
+
+
+def _signable_admin(user: User) -> bool:
+    return user.role == ROLE_ADMIN and user.status == STATUS_ACTIVE and not is_expired(user)
 
 
 def _disable_offboarded_api_keys(db: Session, user_id: str) -> None:
@@ -619,24 +804,7 @@ def set_workspace_grants(db: Session, user: User, value: Any) -> None:
     resurrect a grant the other one just removed. Staged on the session; the
     caller commits.
     """
-    if value is None:
-        requested: set[str] = set()
-    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
-        requested = {item.strip() for item in value if item.strip()}
-    else:
-        raise AppError(
-            "users.invalid_workspaces", "workspaces must be a list of workspace ids"
-        )
-    if requested:
-        known = set(
-            db.scalars(select(Workspace.id).where(Workspace.id.in_(sorted(requested))))
-        )
-        unknown = sorted(requested - known)
-        if unknown:
-            raise AppError(
-                "users.invalid_workspaces",
-                f"Unknown workspace id(s): {', '.join(unknown)}",
-            )
+    requested = _validated_workspace_ids(db, value)
     current = set(
         db.scalars(
             select(UserWorkspace.workspace_id).where(UserWorkspace.user_id == user.id)
@@ -682,7 +850,9 @@ def _normalized_permissions(value: Any, role: str = ROLE_MEMBER) -> dict[str, bo
     return overrides or None
 
 
-def delete_user(db: Session, user: User) -> None:
+def delete_user(db: Session, user: User, settings: Settings | None = None) -> None:
+    if _signable_admin(user):
+        assert_not_last_admin(db, user, settings)
     # grants first: SQLite does not enforce the FK, so the rows would linger and
     # a recycled user id would inherit them
     db.query(UserWorkspace).filter(UserWorkspace.user_id == user.id).delete()

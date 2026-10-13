@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # from the console.
     auth_username: str = Field(default="admin", min_length=1, max_length=64)
     auth_password: SecretStr | None = None
+    # A password the built-in admin set on the console (a hash in the ledger,
+    # app/services/admin_credential.py) takes precedence over `auth_password`.
+    # Break-glass: `true` ignores that override, so `auth_password` signs in again
+    # (the other way is `scripts/reset_admin_password.py`, which deletes it).
+    auth_admin_password_override_disabled: bool = False
     # Effective value is `auth_cookie_secure or run_mode == "prod"` — read it
     # through `routers.auth.cookie_secure()`, never directly, so prod is secure
     # by default while yaml can still force it on in dev.

@@ -9,6 +9,8 @@ export interface AuthContextValue {
   email: string | null;
   /** ISO account-validity end for registered users; null = never expires */
   accountExpiresAt: string | null;
+  /** the config-driven built-in admin (its password replaces the configured one) */
+  builtin: boolean;
   /** admin-only surfaces (an open console keeps full local-operator access) */
   isAdmin: boolean;
   /** member-grantable agent-management capability (admins always pass) */
@@ -22,6 +24,7 @@ export const AuthContext = createContext<AuthContextValue>({
   role: null,
   email: null,
   accountExpiresAt: null,
+  builtin: false,
   isAdmin: true,
   can: () => true,
   logout: async () => undefined,

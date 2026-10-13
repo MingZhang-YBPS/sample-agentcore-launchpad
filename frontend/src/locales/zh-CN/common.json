@@ -2421,7 +2421,20 @@
     "share.session_not_found": "该对话已不可用，请开始新的对话。",
     "share.rate_limited": "短时间内消息过多，请稍候再试。",
     "share.unavailable": "助手暂时无法回答，请稍后重试。",
-    "evaluators.list_failed": "无法列出该账号的评估器。"
+    "evaluators.list_failed": "无法列出该账号的评估器。",
+    "users.builtin_immutable": "内置管理员不能删除、禁用、降级或过期，只能修改密码。",
+    "users.last_admin": "这是最后一个可以登录的管理员——请先把另一个账号设为管理员。",
+    "users.admin_no_grants": "管理员按角色可访问所有工作区，不持有工作区授权。",
+    "users.invalid_expiry": "请选择一种有效期：天数（1-3650）、未来的日期或永不过期。",
+    "users.invalid_role": "角色必须是成员、运维或管理员。",
+    "auth.invalid_current_password": "当前密码不正确。",
+    "auth.not_enabled": "这个控制台未启用登录，没有可修改的密码。",
+    "auth.weak_password": "密码至少需要 8 个字符。",
+    "auth.username_taken": "这个用户名已被占用或为保留名。",
+    "auth.email_taken": "这个邮箱已经注册过。",
+    "auth.invalid_username": "用户名须为 3-32 个字母、数字、点、下划线或连字符。",
+    "auth.invalid_email": "请输入有效的邮箱地址。",
+    "auth.email_domain_blocked": "不接受这个邮箱域名，请使用公司邮箱。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -11023,7 +11036,57 @@
       "pendingNotice_other": "有 {{count}} 个账号等待审批。",
       "showPending": "查看",
       "total_one": "共 {{count}} 个账号",
-      "total_other": "共 {{count}} 个账号"
+      "total_other": "共 {{count}} 个账号",
+      "create": {
+        "open": "新增用户",
+        "title": "新增用户",
+        "body": "账号创建后立即可用，无需审批。请自行把用户名和密码告诉对方。",
+        "submit": "创建账号",
+        "usernameHint": "3-32 个字母、数字、点、下划线或连字符，用于登录",
+        "emailHint": "与自助注册规则相同（公司邮箱域名）",
+        "roleHint": {
+          "member": "在被授予的工作区中构建、部署和评测 Agent",
+          "operator": "审批并执行发布，不编辑 Agent",
+          "admin": "完全权限，包括用户和工作区管理——按角色可访问所有工作区"
+        },
+        "expiryDefault_one": "默认（{{count}} 天）",
+        "expiryDefault_other": "默认（{{count}} 天）",
+        "expiryDays": "自定义天数",
+        "password": "密码",
+        "passwordGenerate": "自动生成",
+        "passwordSet": "自己设置",
+        "passwordHint": "自动生成的密码只在创建后显示一次，不会以明文保存。",
+        "noGrant": "未选择工作区：账号可以登录，但在授予工作区之前无法进入任何环境。",
+        "created": "已创建账号 {{username}}",
+        "passwordTitle": "账号已创建——一次性密码",
+        "passwordBody": "请把这个密码告诉 {{username}}。它只显示这一次；如果丢失，请重置密码。",
+        "err": {
+          "username": "3-32 个字符：字母、数字、点、下划线或连字符，以字母或数字开头。",
+          "reserved": "这个名字属于内置管理员。",
+          "email": "请输入有效的邮箱地址。",
+          "password": "至少 8 个字符。",
+          "days": "1 到 {{max}} 之间的整数天。"
+        }
+      },
+      "ws": {
+        "open": "编辑工作区",
+        "title": "编辑工作区",
+        "body": "{{username}} 可以进入的工作区。修改在对方的下一次请求即生效，无需重新登录。",
+        "save": "保存",
+        "hint": "管理员按角色可访问所有工作区，不需要授权。",
+        "noGrant": "未选择工作区：账号仍然有效，但在授予工作区之前无法进入任何环境。",
+        "none": "未授予任何工作区——这个账号无法进入任何环境。"
+      },
+      "builtin": {
+        "chip": "内置",
+        "sub": "来自部署配置的管理员",
+        "notice": "内置管理员不能删除、禁用、降级或过期，这里只能修改它的密码；修改后，配置中的密码（堆栈输出 ConsolePassword）不再可用。",
+        "passwordSource": "密码",
+        "source": {
+          "config": "部署配置",
+          "console": "已在控制台修改"
+        }
+      }
     },
     "workspaces": {
       "eyebrow": "环境",
@@ -11284,6 +11347,24 @@
         "skill_lab_codex_target_model_id": {
           "name": "Skill Lab 目标（Codex）",
           "desc": "在 Codex CLI 上运行的 Skill Lab 任务目标模型。"
+        }
+      }
+    },
+    "account": {
+      "password": {
+        "title": "修改密码",
+        "body": "修改 {{username}} 的密码。你的其他会话会结束，当前会话保持登录。",
+        "builtinNote": "你是内置管理员：新密码会取代配置中的密码（堆栈输出 ConsolePassword），后者随即失效。",
+        "current": "当前密码",
+        "new": "新密码",
+        "confirm": "再次输入新密码",
+        "hint": "至少 8 个字符。",
+        "submit": "修改密码",
+        "changed": "密码已修改",
+        "err": {
+          "current": "请输入当前密码。",
+          "same": "新密码不能与当前密码相同。",
+          "mismatch": "两次输入的新密码不一致。"
         }
       }
     }

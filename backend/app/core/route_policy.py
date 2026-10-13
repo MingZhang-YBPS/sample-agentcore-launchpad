@@ -124,6 +124,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/auth/login"): PUBLIC,
     ("POST", "/api/auth/register"): PUBLIC,
     ("POST", "/api/auth/logout"): MEMBER,
+    # the signed-in account changes its OWN password (current one required)
+    ("POST", "/api/auth/password"): MEMBER,
     # ---- agents: lifecycle changes are member-grantable permissions (default
     # granted, revocable per user); reads and invoke are plain member ----
     ("GET", "/api/agents"): MEMBER,
@@ -684,6 +686,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/observability/prices/refresh"): MEMBER,  # rewrites shared config
     # ---- console account management ----
     ("GET", "/api/users"): ADMIN,
+    # an admin creates an account (active at once; only an admin can grant admin)
+    ("POST", "/api/users"): ADMIN,
     ("GET", "/api/users/stats"): ADMIN,
     ("PATCH", "/api/users/{user_id}"): ADMIN,
     ("DELETE", "/api/users/{user_id}"): ADMIN,
@@ -749,6 +753,7 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/auth/login"),
         ("POST", "/api/auth/register"),
         ("POST", "/api/auth/logout"),
+        ("POST", "/api/auth/password"),
         ("GET", "/api/agent-templates"),
         ("GET", "/api/models/defaults"),
         ("GET", "/api/models/settings"),
@@ -780,6 +785,7 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/videos/manage/{video_id}/unpublish"),
         ("DELETE", "/api/videos/manage/{video_id}"),
         ("GET", "/api/users"),
+        ("POST", "/api/users"),
         ("GET", "/api/users/stats"),
         ("PATCH", "/api/users/{user_id}"),
         ("DELETE", "/api/users/{user_id}"),
