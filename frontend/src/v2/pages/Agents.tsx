@@ -19,8 +19,19 @@ import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
 import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
+import { IntegrationCard } from "./agents/IntegrationCard";
+import { TryChat } from "./agents/TryChat";
 import { AgentWizard } from "./agents/AgentWizard";
 import { v2EditPath } from "./agents/classicUrl";
+import { deployLine, fmtElapsed, isFailed } from "./agents/deployStatus";
+import {
+  type AgentsListFilters,
+  listOnly,
+  parseListParams,
+  withView,
+  writeListParams,
+} from "./agents/agentsListParams";
+import "./agents/agents.css";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
   Alert,
@@ -208,18 +219,24 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
 function AgentList() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const { can } = useAuth();
   const perms = useAgentPermissions();
   const { data, loading, error, reload } = useLoad(() => api.listAgents(), "agents");
   const actions = useAgentActions(() => reload());
-  const [method, setMethod] = useState("");
-  const [status, setStatus] = useState("");
-  const [q, setQ] = useState("");
+  // filters live in the URL (defaults omitted) so Back from a detail and a reload keep them
+  const { method, status, q } = parseListParams(params);
 
   const agents = useMemo(() => data?.agents ?? [], [data]);
-  const methods = useMemo(() => [...new Set(agents.map((a) => a.method))].sort(), [agents]);
-  const statuses = useMemo(() => [...new Set(agents.map((a) => a.status))].sort(), [agents]);
+  // a filter from the URL stays pickable (and labelled) even when no agent matches it
+  const methods = useMemo(
+    () => [...new Set([...agents.map((a) => a.method), ...(method ? [method] : [])])].sort(),
+    [agents, method],
+  );
+  const statuses = useMemo(
+    () => [...new Set([...agents.map((a) => a.status), ...(status ? [status] : [])])].sort(),
+    [agents, status],
+  );
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return agents.filter((a) => {
@@ -229,6 +246,10 @@ function AgentList() {
     });
   }, [agents, method, status, q]);
   const paged = usePaged(rows, 12);
+  const filter = (patch: Partial<AgentsListFilters>) => {
+    setParams((prev) => writeListParams(prev, { ...parseListParams(prev), ...patch }), { replace: true });
+    paged.setPage(1);
+  };
   const count = (s: string) => agents.filter((a) => a.status === s).length;
 
   // a deploy in flight moves on its own: refresh the list until it settles
@@ -239,7 +260,11 @@ function AgentList() {
     return () => window.clearInterval(timer);
   }, [deploying, reload]);
 
-  const open = (a: AgentInfo) => setParams({ view: "detail", id: a.id });
+  // a normal (pushed) navigation: browser Back returns to this filtered list
+  const open = (a: AgentInfo) => setParams((prev) => withView(prev, "detail", a.id));
+  // `method` is also the wizard's prefill param, so the filters are not carried into
+  // `view=new`; the wizard's Back restores them from the navigation state
+  const create = () => setParams({ view: "new" }, { state: { listSearch: listOnly(params).toString() } });
 
   const columns: Column<AgentInfo>[] = [
     {
@@ -320,7 +345,7 @@ function AgentList() {
           <Button onClick={reload}>{t("v2.common.refresh")}</Button>
           <Button
             kind="primary"
-            onClick={() => setParams({ view: "new" })}
+            onClick={create}
             disabled={!can("agents.deploy")}
             title={can("agents.deploy") ? undefined : t("v2.agents.noPermission")}
             testId="v2-agent-new"
@@ -336,18 +361,18 @@ function AgentList() {
             label={t("v2.agents.colMethod")}
             value={method}
             allLabel={t("v2.common.all")}
-            onChange={setMethod}
+            onChange={(v) => filter({ method: v as AgentsListFilters["method"] })}
             options={methods.map((m) => ({ value: m, label: methodLabel(m) }))}
           />
           <FilterSelect
             label={t("v2.agents.colStatus")}
             value={status}
             allLabel={t("v2.common.all")}
-            onChange={setStatus}
+            onChange={(v) => filter({ status: v as AgentsListFilters["status"] })}
             options={statuses.map((s) => ({ value: s, label: t(`status.${s}`, { defaultValue: s }) }))}
           />
           <div className="end">
-            <SearchInput value={q} onChange={setQ} placeholder={t("v2.agents.search")} testId="v2-agents-search" />
+            <SearchInput value={q} onChange={(v) => filter({ q: v })} placeholder={t("v2.agents.search")} testId="v2-agents-search" />
             <span className="v2-count">{t("v2.common.total", { count: rows.length })}</span>
           </div>
         </div>
@@ -369,35 +394,84 @@ function AgentList() {
 }
 
 // ─── detail ────────────────────────────────────────────────────────────────
-function DeployProgress({ deployment, job }: { deployment: DeploymentInfo; job: JobInfo | null }) {
+function DeployProgress({
+  deployment,
+  job,
+  method,
+}: {
+  deployment: DeploymentInfo;
+  job: JobInfo | null;
+  method: string;
+}) {
   const { t } = useTranslation();
+  const failed = isFailed(deployment);
+  const inFlight = !failed && deployment.status === "running";
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [inFlight]);
+  const line = deployLine(method, deployment, now);
+  const elapsed = line.kind === "running" || line.kind === "done" ? line.elapsedMs : null;
+  const time = elapsed != null ? fmtElapsed(elapsed) : null;
   return (
     <Card
       title={t("v2.agents.deployTitle")}
       sub={deployment.job_id ? `job ${deployment.job_id.slice(0, 8)}` : undefined}
       testId="v2-agent-deploy"
     >
-      <div className="v2-stages">
-        {deployment.stages.map((s, i) => (
-          <div key={s.name} className={`v2-stage ${s.status}`}>
-            <span className="n">{s.status === "succeeded" || s.status === "skipped" ? "✓" : s.status === "failed" ? "✕" : i + 1}</span>
-            <div className="b">
-              <div className="t">
-                {t(`create.stages.${s.name}`, { defaultValue: s.name })}
-                <Tag tone={STAGE_TONE[s.status]}>{t(`v2.agents.stage.${s.status}`)}</Tag>
+      {line.kind === "running" && (
+        <p className="v2-deploy-line" data-testid="v2-agent-progress-line">
+          <span>{t(`v2.agents.progress.${line.key}`)}</span>
+          {time && <span className="elapsed">{t("v2.agents.progress.elapsed", { time })}</span>}
+        </p>
+      )}
+      {line.kind === "done" && time && (
+        <p className="v2-deploy-line" data-testid="v2-agent-progress-line">
+          <span>{t("v2.agents.progress.done", { time })}</span>
+        </p>
+      )}
+      {line.kind === "failed" && (
+        <Alert tone="error">
+          {line.stage
+            ? t("v2.agents.progress.failedAt", {
+                stage: t(`create.stages.${line.stage}`, { defaultValue: line.stage }),
+              })
+            : t("v2.agents.progress.failed")}
+        </Alert>
+      )}
+      {/* technical detail is collapsed unless the deploy failed; the key remounts the
+          element so a deploy that fails while the page is open auto-expands */}
+      <details
+        className="v2-deploy-details"
+        key={failed ? "failed" : "ok"}
+        open={failed}
+        data-testid="v2-agent-technical"
+      >
+        <summary>{t("v2.agents.progress.technical")}</summary>
+        <div className="v2-stages">
+          {deployment.stages.map((s, i) => (
+            <div key={s.name} className={`v2-stage ${s.status}`}>
+              <span className="n">{s.status === "succeeded" || s.status === "skipped" ? "✓" : s.status === "failed" ? "✕" : i + 1}</span>
+              <div className="b">
+                <div className="t">
+                  {t(`create.stages.${s.name}`, { defaultValue: s.name })}
+                  <Tag tone={STAGE_TONE[s.status]}>{t(`v2.agents.stage.${s.status}`)}</Tag>
+                </div>
+                <div className="d">{s.detail || "—"}</div>
               </div>
-              <div className="d">{s.detail || "—"}</div>
             </div>
-          </div>
-        ))}
-      </div>
-      {job?.error && <Alert tone="error">{job.error}</Alert>}
-      <h3 className="v2-sub-title">{t("v2.agents.logTitle")}</h3>
-      <pre className="v2-pre" data-testid="v2-agent-log">
-        {job?.events.length
-          ? job.events.map((e) => `${e.ts.slice(11, 19)}  ${e.stage.padEnd(9)} ${e.msg}`).join("\n")
-          : t("v2.agents.logEmpty")}
-      </pre>
+          ))}
+        </div>
+        {job?.error && <Alert tone="error">{job.error}</Alert>}
+        <h3 className="v2-sub-title">{t("v2.agents.logTitle")}</h3>
+        <pre className="v2-pre" data-testid="v2-agent-log">
+          {job?.events.length
+            ? job.events.map((e) => `${e.ts.slice(11, 19)}  ${e.stage.padEnd(9)} ${e.msg}`).join("\n")
+            : t("v2.agents.logEmpty")}
+        </pre>
+      </details>
     </Card>
   );
 }
@@ -473,8 +547,8 @@ function AgentDetail({ id }: { id: string }) {
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const actions = useAgentActions((action, target) => {
-    if (action === "deleted") setParams({});
-    else setParams({ view: "detail", id: target.id });
+    if (action === "deleted") setParams((prev) => listOnly(prev));
+    else setParams((prev) => withView(prev, "detail", target.id));
   });
 
   const jobId = agent?.deployments?.[0]?.job_id ?? null;
@@ -509,7 +583,7 @@ function AgentDetail({ id }: { id: string }) {
   if (error && !agent) {
     return (
       <>
-        <FlowHeader title={id} onBack={() => setParams({})} />
+        <FlowHeader title={id} onBack={() => setParams((prev) => listOnly(prev))} />
         <Alert tone="error">{error}</Alert>
       </>
     );
@@ -535,7 +609,7 @@ function AgentDetail({ id }: { id: string }) {
             </Tag>
           </span>
         }
-        onBack={() => setParams({})}
+        onBack={() => setParams((prev) => listOnly(prev))}
         end={
           <>
             <Button onClick={() => setNonce((n) => n + 1)}>{t("v2.common.refresh")}</Button>
@@ -544,7 +618,7 @@ function AgentDetail({ id }: { id: string }) {
             )}
             <Button onClick={() => navigate("/observability")}>{t("v2.agents.observability")}</Button>
             {agent.method !== "discovered_runtime" && (
-              <Button onClick={() => setParams({ view: "identity", id: agent.id })} testId="v2-agent-identity-open">
+              <Button onClick={() => setParams((prev) => withView(prev, "identity", agent.id))} testId="v2-agent-identity-open">
                 {t("v2.agents.identity.open")}
               </Button>
             )}
@@ -602,7 +676,10 @@ function AgentDetail({ id }: { id: string }) {
           ]}
         />
       </Card>
-      {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} />}
+      {agent.status === "active" && agent.invoke_capability.eligible && (
+        <TryChat key={agent.id} agentId={agent.id} />
+      )}
+      {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} method={agent.method} />}
       {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
         <InboundSwitchCard
           agentId={agent.id}
@@ -617,6 +694,7 @@ function AgentDetail({ id }: { id: string }) {
         />
       )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
+      {agent.invoke_capability.eligible && <IntegrationCard agentId={agent.id} />}
       {byoc && (
         <Card title={t("v2.agents.byocTitle")}>
           <Descriptions

@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import {
@@ -35,6 +35,9 @@ import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../..
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, FlowHeader, OptionCard, Steps, Tag } from "../../ui";
 import "./agents.css";
+import { KnowledgeField } from "./InlineKb";
+import { submitBlock } from "./inlineKbState";
+import { useInlineKb } from "./useInlineKb";
 import {
   BasicCard,
   ByocArtifactCard,
@@ -96,6 +99,9 @@ function editDraft(agent: AgentInfo): Draft {
 export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  // the list's filters at the moment "New" was pressed (they are not in this URL,
+  // because `method` here is the prefill param), so Back lands on the same list
+  const listSearch = (useLocation().state as { listSearch?: string } | null)?.listSearch ?? "";
   const toast = useV2Toast();
   const { can } = useAuth();
   const canDeploy = can("agents.deploy");
@@ -139,6 +145,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const set: SectionProps["set"] = (patch) =>
     setForm((prev) => ({ ...prev, ...(typeof patch === "function" ? patch(prev) : patch) }));
   const method = form.method;
+  const kb = useInlineKb(set);
 
   // Catalogs: a failed read leaves that section empty and never blocks the form.
   const attachables = useLoad(() => api.registryAttachables(), "attachables");
@@ -165,7 +172,13 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     gatewayTargets: cat.gatewayTargets,
     remoteMcp: cat.remoteMcp,
     storedGatewayConfig: initial.extras?.storedGatewayConfig ?? {},
-    kbInfo: (id) => resolveKb(id, cat.kbCatalog, initial.extras?.specKbs ?? []),
+    // the inline KB is not in the catalog (loaded once, ACTIVE only): its ref comes
+    // from the record so the spec still carries its name
+    kbInfo: (id) =>
+      resolveKb(id, cat.kbCatalog, [
+        ...(initial.extras?.specKbs ?? []),
+        ...(kb.inline ? [{ kb_id: kb.inline.kb_id, name: kb.inline.name, description: "" }] : []),
+      ]),
   };
 
   // Switching source re-seeds the model (and the byoc allowed-models list) to that
@@ -264,6 +277,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form, method, cat, connections, t]);
   const err = (key: string) => (touched ? problems[key] : undefined);
+  // a KB created here must exist (ACTIVE) to be mounted; its ingestion never blocks
+  const kbBlock = submitBlock(kb.inline, form.selectedKbs, kb.busy);
 
   const toReview = () => {
     setError(null);
@@ -276,7 +291,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const firstStep = edit ? 1 : 0;
 
   const submit = async () => {
-    if (submitting || !valid) return;
+    if (submitting || !valid || kbBlock) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -300,7 +315,12 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const converted = Boolean((edit?.spec as { code_bundle?: unknown } | undefined)?.code_bundle);
   const section = { form, set, cat, err, nameLocked: Boolean(edit), promptLocked: converted };
   const skillsKb = (kbNote: string) => (
-    <SkillsKbCard {...section} customSkills={customSkills} setCustomSkills={setCustomSkills} kbNote={kbNote} />
+    <SkillsKbCard
+      {...section}
+      customSkills={customSkills}
+      setCustomSkills={setCustomSkills}
+      kbSlot={<KnowledgeField form={form} set={set} cat={cat} kb={kb} note={kbNote} />}
+    />
   );
   const inboundCard = (
     <InboundCard
@@ -329,7 +349,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     <>
       <FlowHeader
         title={edit ? t("v2.agents.wizard.editTitle", { name: edit.name }) : t("v2.agents.new")}
-        onBack={() => setParams(edit ? { view: "detail", id: edit.id } : {})}
+        onBack={() => setParams(edit ? { view: "detail", id: edit.id } : new URLSearchParams(listSearch))}
         steps={<Steps steps={stepLabels} current={step - firstStep} onSelect={(i) => select(i + firstStep)} />}
         end={
           <>
@@ -337,11 +357,16 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
               {t("v2.common.prev")}
             </Button>
             {step < 2 ? (
-              <Button kind="primary" disabled={!canDeploy || ui.byocUploading} onClick={next} testId="v2-agent-wizard-next">
+              <Button kind="primary" disabled={!canDeploy || ui.byocUploading || kb.busy} onClick={next} testId="v2-agent-wizard-next">
                 {t("v2.common.next")}
               </Button>
             ) : (
-              <Button kind="primary" disabled={submitting || !canDeploy || !valid} onClick={() => void submit()} testId="v2-agent-wizard-submit">
+              <Button
+                kind="primary"
+                disabled={submitting || !canDeploy || !valid || Boolean(kbBlock)}
+                onClick={() => void submit()}
+                testId="v2-agent-wizard-submit"
+              >
                 {t(edit ? "v2.agents.wizard.redeploy" : "v2.agents.wizard.submit")}
               </Button>
             )}
@@ -486,6 +511,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           form={form}
           cat={cat}
           ui={{ ...ui, customSkills }}
+          inlineKb={kb.inline && form.selectedKbs.includes(kb.inline.kb_id) ? kb.inline : null}
+          kbBlock={kbBlock}
           shortTermOff={(edit?.spec as { memory?: { short_term?: boolean } } | undefined)?.memory?.short_term === false}
           workspaceDefault={inboundDefault.data?.default ?? null}
           cognitoIssuer={inboundDefault.data?.cognito_issuer ?? null}
