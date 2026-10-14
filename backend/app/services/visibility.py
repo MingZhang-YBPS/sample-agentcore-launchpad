@@ -136,22 +136,39 @@ def viewer_for_principal(db: Session, workspace: Workspace | None, principal: st
     return Viewer(user_id=user_id, filters=True)
 
 
-def viewer_for_key(db: Session, key: ApiKey) -> Viewer:
-    """The viewer of a `/v1` API key: its **creator's** current visibility.
+def scope_for_key(db: Session, key: ApiKey) -> Viewer:
+    """The viewer of a `/v1` API key (design projects §5.7): its **creator's**
+    current visibility inside the key's project.
 
-    Shared workspace → everything. A key with no recorded creator (config admin,
-    auth-disabled operator, legacy keys) → everything. A creator who is currently
-    an admin → everything. Otherwise the member's own view — re-evaluated on every
-    call, so switching the workspace to isolated narrows existing member keys at
-    once. (A deleted creator's key is refused before this by offboarding.)
+    The project is the key's own (`ApiKey.project_id`), never a header — /v1 runs
+    as it, so the isolation rule below applies inside it. Whether the creator is
+    still a member of that project is decided before this, at auth
+    (`api_keys.creator_offboarded`): a key whose creator left is refused, so this
+    only narrows within the project.
+
+    Shared workspace → everything in the project. A key with no recorded creator
+    (config admin, auth-disabled operator, legacy keys) → everything. A creator who
+    is currently an admin → everything. Otherwise the member's own view —
+    re-evaluated on every call, so switching the workspace to isolated narrows
+    existing member keys at once. (A deleted creator's key is refused before this
+    by offboarding.) A key not yet stamped with a project reads as `Viewer.ALL`
+    did before projects.
     """
+    project_id = key.project_id
+    everything = Viewer.ALL if project_id is None else Viewer(
+        user_id=None, filters=False, project_id=project_id,
+    )
     workspace = db.get(Workspace, key.workspace_id) if key.workspace_id else None
     if mode(workspace) != ISOLATED or key.created_by is None:
-        return Viewer.ALL
+        return everything
     user = db.get(User, key.created_by)
     if user is not None and user.role == _ROLE_ADMIN:
-        return Viewer.ALL
-    return Viewer(user_id=key.created_by, filters=True)
+        return everything
+    return Viewer(user_id=key.created_by, filters=True, project_id=project_id)
+
+
+# the pre-projects name, kept for callers and tests that still use it
+viewer_for_key = scope_for_key
 
 
 # ── predicates: a row check paired with its SQL clause ────────────────────────

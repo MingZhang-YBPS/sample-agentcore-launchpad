@@ -7,6 +7,12 @@ No `X-Workspace` header is involved here: the key itself names the environment
 it was minted for, so it both authenticates the caller and scopes what it can
 reach. Targeting stays the agent row's business (`invoke._agent_workspace`) —
 the two agree because a key only ever resolves agents from its own workspace.
+
+Nor is there an `X-Project` header: a key belongs to the project it was minted
+in (`api_keys.project_id`, design projects §5.7), and every /v1 call runs as that
+project (`api_key_project`) — the ORM's automatic criteria then confine the agent
+lookups, and the rows an invoke writes are stamped with it, exactly as in a
+console request. Another project's agent id reads as missing.
 """
 
 import time
@@ -19,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.assistant.sessions import refuse_assistant_session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context, set_current_project
 from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
 from app.schemas.agent import display_name_of
@@ -50,7 +57,8 @@ def require_api_key(
     """
     if not x_api_key:
         raise AppError("auth.missing_api_key", "X-Api-Key header required", status_code=401)
-    key = db.query(ApiKey).filter(ApiKey.key_hash == hash_key(x_api_key)).first()
+    with project_context(None):  # which project is what the key itself answers
+        key = db.query(ApiKey).filter(ApiKey.key_hash == hash_key(x_api_key)).first()
     if key is None or not key.enabled:
         raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
     if get_workspace_row(db, key.workspace_id or "") is None:
@@ -60,9 +68,10 @@ def require_api_key(
         raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
     if api_keys_service.creator_offboarded(db, key) is not None:
         # The member who minted it is gone (deleted, disabled, expired, or no
-        # longer granted this workspace). Disabled for good in the same request
-        # — expiry has no write event, so this is where it lands — and answered
-        # like any other unusable key: /v1 never says why.
+        # longer a member of the key's project here), or the project itself is
+        # archived or unbound. Disabled for good in the same request — expiry has
+        # no write event, so this is where it lands — and answered like any other
+        # unusable key: /v1 never says why.
         key.enabled = False
         db.commit()
         raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
@@ -75,6 +84,17 @@ def require_api_key(
     return key
 
 
+async def api_key_project(key: ApiKey = Depends(require_api_key)) -> ApiKey:
+    """The admitted key, with its project made current for the rest of the request.
+
+    Async on purpose, like `route_policy.bind_request_project`: it runs in the
+    request's own task, so the sync handler and a streaming response's generator
+    (each run in the threadpool with a copy of this context) see the project; a
+    sync dependency's context change would not outlive it."""
+    set_current_project(key.project_id)
+    return key
+
+
 class InvokeV1Request(AttachmentRequest):
     session_id: str | None = SessionIdField
     actor_id: str = "api"
@@ -82,11 +102,11 @@ class InvokeV1Request(AttachmentRequest):
 
 def _active_agent(db: Session, key: ApiKey, agent_id: str) -> Agent:
     """The agent this key may invoke. One from another workspace — or one its
-    creator cannot see under workspace isolation — reads exactly like a missing
-    one: the key's scope must not be probeable. So does one outside the key's own
-    `agent_ids` allow-list (T16)."""
+    creator cannot see under workspace isolation, or one of another project — reads
+    exactly like a missing one: the key's scope must not be probeable. So does one
+    outside the key's own `agent_ids` allow-list (T16)."""
     agent = agent_access.agent_in(
-        db, key.workspace_id, agent_id, viewer=visibility.viewer_for_key(db, key)
+        db, key.workspace_id, agent_id, viewer=visibility.scope_for_key(db, key)
     )
     if agent is None or not api_keys_service.allows_agent(key, agent_id):
         raise NotFoundError("agent.not_found", "agent not found")
@@ -96,7 +116,7 @@ def _active_agent(db: Session, key: ApiKey, agent_id: str) -> Agent:
 
 @router.get("/agents", summary="List active agents")
 def v1_list_agents(
-    db: Session = Depends(get_db), key: ApiKey = Depends(require_api_key)
+    db: Session = Depends(get_db), key: ApiKey = Depends(api_key_project)
 ) -> dict[str, Any]:
     agents = [
         agent
@@ -104,7 +124,7 @@ def v1_list_agents(
         .filter(
             Agent.status == "active",
             Agent.workspace_id == key.workspace_id,
-            agent_access.agent_clause(visibility.viewer_for_key(db, key)),
+            agent_access.agent_clause(visibility.scope_for_key(db, key)),
         )
         .all()
         if invoke_capability(agent)["eligible"] and api_keys_service.allows_agent(key, agent.id)
@@ -124,7 +144,7 @@ def v1_invoke(
     agent_id: str,
     req: InvokeV1Request,
     db: Session = Depends(get_db),
-    key: ApiKey = Depends(require_api_key),
+    key: ApiKey = Depends(api_key_project),
 ) -> dict[str, Any]:
     agent = _active_agent(db, key, agent_id)
     prepared = prepare_attachments(
@@ -157,7 +177,7 @@ def v1_invoke_stream(
     agent_id: str,
     req: InvokeV1Request,
     db: Session = Depends(get_db),
-    key: ApiKey = Depends(require_api_key),
+    key: ApiKey = Depends(api_key_project),
 ) -> StreamingResponse:
     agent = _active_agent(db, key, agent_id)
     refuse_assistant_session(agent, req.session_id)  # 404 before the stream opens
