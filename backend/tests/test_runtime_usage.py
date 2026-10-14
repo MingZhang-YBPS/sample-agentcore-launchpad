@@ -175,3 +175,31 @@ def test_flatten_sse_text_ignores_usage():
         {"event": {"metadata": {"usage": {"inputTokens": 1}}}},
     ).decode()
     assert rt.flatten_sse_text(raw) == "a"
+
+
+def test_usage_events_add_up_on_the_chat_session():
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+    from app.models.ledger import Agent, ChatSession
+    from app.services import chat_ledger
+
+    db = SessionLocal()
+    try:
+        agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="u", method="harness",
+                      status="active", spec={"name": "u"})
+        db.add(agent)
+        db.commit()
+        agent_id = agent.id
+    finally:
+        db.close()
+    chat_ledger.track_session(DEFAULT_WORKSPACE_ID, agent_id, "s" * 40, "river")
+    for _ in range(2):
+        chat_ledger.add_usage(DEFAULT_WORKSPACE_ID, agent_id, "s" * 40,
+                              {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13,
+                               "model_calls": 1})
+    chat_ledger.add_usage(DEFAULT_WORKSPACE_ID, agent_id, "s" * 40, {"input_tokens": "x"})
+    db = SessionLocal()
+    try:
+        row = db.query(ChatSession).one()
+        assert (row.input_tokens, row.output_tokens, row.total_tokens) == (20, 6, 26)
+    finally:
+        db.close()

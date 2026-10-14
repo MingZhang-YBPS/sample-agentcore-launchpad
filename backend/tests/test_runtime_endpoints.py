@@ -358,6 +358,7 @@ def test_stream_runtime_events_preserves_converse_text_and_tools(wrapped):
     assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == [
         {"event": "tool", "data": {"name": "search", "id": "t1"}},
         {"event": "delta", "data": {"text": "hello"}},
+        {"event": "usage", "data": {"input_tokens": 1, "total_tokens": 1, "model_calls": 1}},
     ]
     assert rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"] == "hello"
 

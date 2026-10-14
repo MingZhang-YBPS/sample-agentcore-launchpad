@@ -210,7 +210,7 @@ def _membership_refusal(db: Session, user: User, key: ApiKey) -> str | None:
     from app.services import access
 
     with project_context(None):  # access tables are not project-owned anyway
-        snapshot = access._load_snapshot(db, user.id, user.role, user.permissions)
+        snapshot = access.load_snapshot(db, user.id, user.role, user.permissions)
     membership = snapshot.memberships.get(key.project_id or "")
     if membership is not None and key.workspace_id in membership.workspaces:
         return None

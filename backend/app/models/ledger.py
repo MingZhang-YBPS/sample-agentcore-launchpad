@@ -348,7 +348,7 @@ class User(Base):
     )
     # Forced logout (design §7.4): part of the session cookie's credential stamp, so a
     # bump ends every open session. 0 stamps exactly as before the column existed.
-    session_epoch: Mapped[int] = mapped_column(default=0)
+    session_epoch: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -386,6 +386,10 @@ class ChatSession(ProjectOwned, Base):
     session_id: Mapped[str] = mapped_column(String(80), index=True)
     actor_id: Mapped[str] = mapped_column(String(64), default="river")
     turns: Mapped[int] = mapped_column(default=0)
+    # summed from the runtime's `usage` events (projects §16.3-3); 0 = not reported
+    input_tokens: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    total_tokens: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     runtime_version: Mapped[str | None] = mapped_column(String(16), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_at: Mapped[datetime] = mapped_column(

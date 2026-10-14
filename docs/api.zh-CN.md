@@ -58,6 +58,7 @@ curl -N -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke-stream \
   -d '{"prompt": "Tell me a two-sentence story."}'
 # event: meta   → {"session_id": "…", "mode": "stream"}
 # event: delta  → {"text": "Once"} … (增量分片)
+# event: usage  → {"input_tokens": 812, "output_tokens": 64, "total_tokens": 876, "model_calls": 1}（运行时上报用量时发送一次）
 # event: done   → {"latency_ms": 2100}
 ```
 
@@ -553,7 +554,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/agents/uploads?python_version=PYTHON_3_13` | `perm:agents.deploy`——`multipart/form-data`，单个名为 `file` 的部件，仅限 `.zip`，≤250 MiB（解压后 ≤750 MiB、条目 ≤2 万；zip-slip/绝对路径/符号链接会被拒绝）。存入制品桶 `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected, requirements: {status: ok\|failed\|skipped, package_count, error}}}`——`requirements` 是对 zip 内 requirements.txt 针对部署目标（linux/aarch64 + 可选 `python_version`，默认 PYTHON_3_13）的上传期干跑解析；`failed` 表示部署的 package 阶段会以同样方式失败，`skipped`（无 requirements.txt、解析超时约 90 秒、`uv` 不可用）不代表任何结论 |
+| `POST` | `/api/agents/uploads?python_version=PYTHON_3_13` | `perm:agents.deploy`——`multipart/form-data`，单个名为 `file` 的部件，仅限 `.zip`，≤250 MiB（解压后 ≤750 MiB、条目 ≤2 万；zip-slip/绝对路径/符号链接会被拒绝）。存入制品桶 `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected, adot_detected, adot_source, requirements: {status: ok\|failed\|skipped, package_count, error}}}`——`requirements` 是对 zip 内 requirements.txt 针对部署目标（linux/aarch64 + 可选 `python_version`，默认 PYTHON_3_13）的上传期干跑解析；`failed` 表示部署的 package 阶段会以同样方式失败，`skipped`（无 requirements.txt、解析超时约 90 秒、`uv` 不可用）不代表任何结论 |
 | `GET` | `/api/agents/uploads/{upload_id}` | member——已存储的清单（同一形状）；其他工作区的 upload_id 返回 404 |
 
 错误码：`byoc.invalid_upload`（400，缺少部件/非 zip/空文件）、

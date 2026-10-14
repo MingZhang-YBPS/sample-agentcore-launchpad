@@ -163,6 +163,8 @@ export interface ChatRequest {
 }
 
 export interface ChatStreamPayload {
+  /** heartbeat events: time since the turn started */
+  elapsed_ms?: number;
   session_id?: string;
   text?: string;
   name?: string;
@@ -877,6 +879,9 @@ export interface ByocUploadInfo {
     has_requirements: boolean;
     has_dockerfile: boolean;
     agentcore_sdk_detected: boolean;
+    /** ADOT distro found at upload (projects §17.3-1); absent on older manifests */
+    adot_detected?: boolean;
+    adot_source?: "requirements" | "vendored" | null;
     /**
      * Upload-time dry resolve of the zip's requirements.txt against the deploy
      * target (linux/aarch64 + the selected Python). `failed` means the deploy's
@@ -1415,6 +1420,8 @@ export interface AssistantMessage {
 }
 
 export interface AssistantConversationSummary {
+  /** earlier turns no longer fit the replay window (assistant-context C1) */
+  context_trimmed?: boolean;
   id: string;
   title: string;
   /** display username of the member who opened it */
@@ -1440,6 +1447,12 @@ export interface AssistantConversationSummary {
 }
 
 export interface AssistantConversationDetail extends AssistantConversationSummary {
+  context?: {
+    replayed_turns: number;
+    omitted_turns: number;
+    first_replayed_turn: number | null;
+    budget_used_ratio: number;
+  };
   catalog: AssistantCatalog;
   messages: AssistantMessage[];
   proposals: AssistantProposal[];

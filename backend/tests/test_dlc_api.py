@@ -229,12 +229,14 @@ def _golden(client, lineage, items=2, *, seeder=None):
     dataset_id = res.json()["id"]
     seeded = (seeder or client).post(f"/api/golden-sets/{dataset_id}/seed", json={
         "items": [{"split": "holdout", "scenario_id": f"h{n}",
-                   "turns": [{"input": f"hq{n}"}]} for n in range(items)],
+                   "turns": [{"input": f"hq{n}", "expected_response": f"ha{n}"}]}
+                  for n in range(items)],
     })
     assert seeded.status_code == 201, seeded.text
     body = client.post(f"/api/golden-sets/{dataset_id}/items", json={
         "split": "regression",
-        "items": [{"scenario_id": f"r{n}", "turns": [{"input": f"q{n}"}]}
+        "items": [{"scenario_id": f"r{n}",
+                   "turns": [{"input": f"q{n}", "expected_response": f"a{n}"}]}
                   for n in range(items)],
     })
     assert body.status_code == 201, body.text

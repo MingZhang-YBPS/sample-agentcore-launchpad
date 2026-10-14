@@ -21,7 +21,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
@@ -204,9 +204,11 @@ def reset_cache_for_tests() -> None:
         _bindings_cache.clear()
 
 
-def workspace_bindings(db: Session, workspace_id: str) -> list[Binding]:
+def workspace_bindings(
+    db: Session, workspace_id: str, *, epoch: int | None = None,
+) -> list[Binding]:
     """The projects bound to one workspace (active or archived), default first."""
-    epoch = current_epoch(db)
+    epoch = current_epoch(db) if epoch is None else epoch
     now = time.monotonic()
     with _lock:
         hit = _bindings_cache.get(workspace_id)
@@ -248,11 +250,12 @@ def _load_snapshot(
     project_ids = {r[0] for r in rows}
     if project_ids:
         for pid, key, perms in db.execute(
-            text("SELECT project_id, key, permissions FROM project_roles"),
+            text("SELECT project_id, key, permissions FROM project_roles"
+                 " WHERE project_id IN :ids").bindparams(bindparam("ids", expanding=True)),
+            {"ids": sorted(project_ids)},
         ).fetchall():
-            if pid in project_ids:
-                keys = perms if isinstance(perms, list) else _json_list(perms)
-                custom.setdefault(pid, {})[key] = frozenset(keys) & ALL_PROJECT_KEYS
+            keys = perms if isinstance(perms, list) else _json_list(perms)
+            custom.setdefault(pid, {})[key] = frozenset(keys) & ALL_PROJECT_KEYS
     grouped: dict[str, dict[str, Any]] = {}
     for pid, name, status, is_default, group_id, ws, ws_default, direct, ovr, group_role in rows:
         entry = grouped.setdefault(pid, {
@@ -296,6 +299,14 @@ def _load_snapshot(
     return snapshot
 
 
+def load_snapshot(
+    db: Session, user_id: str, role: str, overrides: dict[str, bool] | None,
+) -> AccessSnapshot:
+    """An uncached snapshot — for checks inside a write transaction that must see
+    its own not-yet-committed membership changes."""
+    return _load_snapshot(db, user_id, role, overrides)
+
+
 def _json_list(value: Any) -> list[str]:
     import json
 
@@ -318,7 +329,7 @@ def _json_dict(value: Any) -> dict[str, bool] | None:
     return {str(k): bool(v) for k, v in out.items()} if isinstance(out, dict) else None
 
 
-def snapshot_for(db: Session, identity: Any) -> AccessSnapshot:
+def snapshot_for(db: Session, identity: Any, *, epoch: int | None = None) -> AccessSnapshot:
     """The caller's memberships, from the epoch-checked cache."""
     user_id = getattr(identity, "user_id", None)
     if not user_id:
@@ -331,7 +342,7 @@ def snapshot_for(db: Session, identity: Any) -> AccessSnapshot:
         ).first()
         raw = found[0] if found else None
         overrides = raw if isinstance(raw, dict) else _json_dict(raw)
-    epoch = current_epoch(db)
+    epoch = current_epoch(db) if epoch is None else epoch
     now = time.monotonic()
     key = f"{user_id}:{role}"
     with _lock:
@@ -384,9 +395,12 @@ def _not_found(project_id: str) -> NotFoundError:
 def resolve_project(db: Session, identity: Any, workspace_id: str, requested: str,
                     method: str) -> ProjectScope:
     """§5.1.1: the project a workspace-scoped request runs in."""
-    bindings = workspace_bindings(db, workspace_id)
+    epoch = current_epoch(db)  # one PK read per request (design §5.11)
+    bindings = workspace_bindings(db, workspace_id, epoch=epoch)
     bypass = has_data_bypass(identity)
-    snapshot = AccessSnapshot(user_id=None) if bypass else snapshot_for(db, identity)
+    snapshot = (
+        AccessSnapshot(user_id=None) if bypass else snapshot_for(db, identity, epoch=epoch)
+    )
     reachable = {m.project_id: m for m in snapshot.reachable(workspace_id)}
     bound = {b.project_id: b for b in bindings}
     pid = requested
@@ -498,7 +512,9 @@ def sync_default_membership(db: Session, user_id: str, workspace_ids: set[str] |
             {"p": row[0], "u": user_id},
         )
         changed = changed or bool(result.rowcount)
-    if changed:
+    # any grant change moves reach (an inherit row's workspaces are the account's
+    # grants), even when no membership row was added or removed
+    if changed or granted != before:
         bump_epoch(db)
 
 

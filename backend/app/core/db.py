@@ -474,6 +474,11 @@ def _migrate_actor_user_id_columns(bind) -> None:
         "users": {
             "session_epoch": "ALTER TABLE users ADD COLUMN session_epoch INTEGER DEFAULT 0",
         },
+        "chat_sessions": {
+            "input_tokens": "ALTER TABLE chat_sessions ADD COLUMN input_tokens INTEGER DEFAULT 0",
+            "output_tokens": "ALTER TABLE chat_sessions ADD COLUMN output_tokens INTEGER DEFAULT 0",
+            "total_tokens": "ALTER TABLE chat_sessions ADD COLUMN total_tokens INTEGER DEFAULT 0",
+        },
         "audit_events": {
             "actor_user_id": "ALTER TABLE audit_events ADD COLUMN actor_user_id VARCHAR(32)",
         },

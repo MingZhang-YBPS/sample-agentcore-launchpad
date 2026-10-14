@@ -72,6 +72,10 @@ ASSISTANT_PREPARATION = "assistant_preparation"
 STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     "clear_stale_turn_claims": (ASSISTANT_TURN, ASSISTANT_PREPARATION),
     "resume_pending_jobs": (JOB,),
+    "migrate_preset_timeouts": (
+        "queues a preset repair job (a Job row, resumed like any other) for a preset still "
+        "on the legacy turn budget; idempotent, no row of its own"
+    ),
     "resume_evaluation_assets": (EVAL_ASSET_OPERATION,),
     "resume_interrupted_runs": (EVAL_RUN,),
     "clear_stale_running_actions": (EXPERIMENT_ACTION,),

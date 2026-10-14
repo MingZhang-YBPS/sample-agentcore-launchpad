@@ -74,7 +74,8 @@ def _golden(db, cset, items=3):
                                actor="biz")
     splits = golden_svc.splits_of(db, parent)
     golden_svc.add_items(db, splits["regression"], [
-        {"scenario_id": f"r{n}", "turns": [{"input": f"q{n}"}]} for n in range(items)
+        {"scenario_id": f"r{n}", "turns": [{"input": f"q{n}", "expected_response": f"a{n}"}]}
+        for n in range(items)
     ], actor="biz")
     db.commit()
     return parent

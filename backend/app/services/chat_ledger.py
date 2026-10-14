@@ -44,6 +44,28 @@ def save_message(
         db.close()
 
 
+def add_usage(workspace_id: str, agent_id: str, session_id: str, usage: dict[str, Any]) -> None:
+    """Add one turn's runtime-reported token usage to its session (projects §16.3-3)."""
+    def count(key: str) -> int:
+        value = usage.get(key)
+        return value if isinstance(value, int) and value > 0 else 0
+
+    db = SessionLocal()
+    try:
+        db.query(ChatSession).filter(
+            ChatSession.workspace_id == workspace_id,
+            ChatSession.agent_id == agent_id,
+            ChatSession.session_id == session_id,
+        ).update({
+            ChatSession.input_tokens: ChatSession.input_tokens + count("input_tokens"),
+            ChatSession.output_tokens: ChatSession.output_tokens + count("output_tokens"),
+            ChatSession.total_tokens: ChatSession.total_tokens + count("total_tokens"),
+        }, synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+
 def track_session(
     workspace_id: str, agent_id: str, session_id: str, actor_id: str,
     runtime_version: str | None = None,
@@ -130,6 +152,8 @@ def persist_events(
                              attachments=attachments)
             elif kind == "rule":
                 answered_by = f"rule:{data.get('rule_id', '')}"[:48]
+            elif kind == "usage" and session_id:
+                add_usage(workspace_id, agent_id, session_id, data)
             elif kind == "tool" and session_id:
                 # a tool call splits the answer bubble live — mirror it
                 saved = flush_answer()

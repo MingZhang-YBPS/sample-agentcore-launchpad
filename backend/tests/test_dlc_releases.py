@@ -128,7 +128,7 @@ def _golden(db, cset, agent):
     parent = golden_svc.create(db, WS, name="g", criteria_lineage_id=cset.lineage_id,
                                actor="biz")
     splits = golden_svc.splits_of(db, parent)
-    item = {"scenario_id": "s1", "turns": [{"input": "hi"}]}
+    item = {"scenario_id": "s1", "turns": [{"input": "hi", "expected_response": "hello"}]}
     golden_svc.add_items(db, splits["regression"], [item], actor="biz")
     golden_svc.add_items(db, splits["holdout"], [dict(item, scenario_id="h1")], actor="biz",
                          allow_holdout=True)
@@ -264,7 +264,7 @@ def test_seeding_curates_all_three_splits_and_seals_the_holdout(db):
     parent = golden_svc.create(db, WS, name="seeded", criteria_lineage_id=cset.lineage_id,
                                actor="biz")
     items = [
-        {"scenario_id": f"s{n}", "turns": [{"input": f"q{n}"}],
+        {"scenario_id": f"s{n}", "turns": [{"input": f"q{n}", "expected_response": f"a{n}"}],
          "metadata": {"dlc": {"case_tier": "known_good" if n % 2 else "adversarial"}}}
         for n in range(10)
     ]
@@ -290,8 +290,10 @@ def test_seeding_honours_an_explicit_split_and_refuses_an_unknown_one(db):
     parent = golden_svc.create(db, WS, name="named", criteria_lineage_id=cset.lineage_id,
                                actor="biz")
     counts = golden_svc.seed(db, parent, [
-        {"split": "holdout", "scenario_id": "h1", "turns": [{"input": "q"}]},
-        {"split": "dev", "scenario_id": "d1", "turns": [{"input": "q"}]},
+        {"split": "holdout", "scenario_id": "h1",
+         "turns": [{"input": "q", "expected_response": "a"}]},
+        {"split": "dev", "scenario_id": "d1",
+         "turns": [{"input": "q", "expected_response": "a"}]},
     ], actor="biz")
     db.commit()
     assert counts == {"dev": 1, "regression": 0, "holdout": 1}

@@ -68,6 +68,7 @@ curl -N -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke-stream \
   -d '{"prompt": "Tell me a two-sentence story."}'
 # event: meta   → {"session_id": "…", "mode": "stream"}
 # event: delta  → {"text": "Once"} … (incremental chunks)
+# event: usage  → {"input_tokens": 812, "output_tokens": 64, "total_tokens": 876, "model_calls": 1} (once, when the runtime reports usage)
 # event: done   → {"latency_ms": 2100}
 ```
 
@@ -156,7 +157,7 @@ returned `upload_id` goes into the create body's `spec.byoc`.
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/agents/uploads?python_version=PYTHON_3_13` | `perm:agents.deploy` — `multipart/form-data`, single part `file`, `.zip` only, ≤250 MiB (≤750 MiB uncompressed, ≤20k entries; zip-slip/absolute paths/symlinks refused). Stores `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` in the artifacts bucket → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected, requirements: {status: ok\|failed\|skipped, package_count, error}}}` — `requirements` is an upload-time dry resolve of the zip's requirements.txt against the deploy target (linux/aarch64 + the optional `python_version`, default PYTHON_3_13); `failed` means the deploy's package stage would fail the same way, `skipped` (no requirements.txt, resolver timeout ~90 s, `uv` unavailable) says nothing either way |
+| `POST` | `/api/agents/uploads?python_version=PYTHON_3_13` | `perm:agents.deploy` — `multipart/form-data`, single part `file`, `.zip` only, ≤250 MiB (≤750 MiB uncompressed, ≤20k entries; zip-slip/absolute paths/symlinks refused). Stores `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` in the artifacts bucket → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected, adot_detected, adot_source, requirements: {status: ok\|failed\|skipped, package_count, error}}}` — `requirements` is an upload-time dry resolve of the zip's requirements.txt against the deploy target (linux/aarch64 + the optional `python_version`, default PYTHON_3_13); `failed` means the deploy's package stage would fail the same way, `skipped` (no requirements.txt, resolver timeout ~90 s, `uv` unavailable) says nothing either way |
 | `GET` | `/api/agents/uploads/{upload_id}` | member — the stored manifest (same shape); another workspace's upload_id answers 404 |
 
 Error codes: `byoc.invalid_upload` (400, missing/non-zip part or empty file),

@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy import text, update
 from sqlalchemy.orm import Session
 
+from app.core.actor import user_id_for
 from app.core.db import SessionLocal
 from app.core.project_scope import project_context
 from app.models.ledger import Agent, Deployment, Job
@@ -163,6 +164,8 @@ def create_deployment(
             "skip_register": skip_register,
             # who published and why — read back by the Agent-DLC release bookkeeping
             "actor": actor,
+            # the requester's immutable id, for SoD on the release record (§3.6)
+            "actor_user_id": user_id_for(actor),
             "note": note,
             **(payload_extra or {}),
         },
@@ -370,7 +373,8 @@ def _finish(
         from app.dlc.releases import after_deploy
 
         payload = job.payload or {}
-        after_deploy(db, agent, note=payload.get("note"), actor=payload.get("actor"))
+        after_deploy(db, agent, note=payload.get("note"), actor=payload.get("actor"),
+                     actor_user_id=payload.get("actor_user_id"))
     else:
         job.status = "failed"
         job.error = error

@@ -428,6 +428,8 @@ class ByocProvenance(BaseModel):
     original_filename: str = Field(default="", max_length=255)
     uploaded_by: str = Field(default="", max_length=128)
     uploaded_at: str = Field(default="", max_length=64)
+    # server-stamped by the byoc generate stage: ADOT found → instrumented launch (§17.3-1)
+    adot_launcher: bool = False
 
 
 class ByocConfig(BaseModel):

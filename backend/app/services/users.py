@@ -734,7 +734,18 @@ def apply_patch(
             raise AppError(
                 "users.invalid_role", f"Role must be one of {', '.join(ROLES)}"
             )
+        demoted = user.role == ROLE_ADMIN and role != ROLE_ADMIN
         user.role = role
+        if demoted:
+            # admins hold no project rows (they bypass): give the account back the
+            # default-project memberships its workspace grants imply (design §8.5)
+            from app.services.access import sync_default_membership
+
+            grants = set(db.scalars(
+                select(UserWorkspace.workspace_id).where(UserWorkspace.user_id == user.id)
+            ))
+            db.flush()
+            sync_default_membership(db, user.id, grants, previous=set(), role=role)
     if "extend_days" in patch and patch["extend_days"] is not None:
         days = int(patch["extend_days"])
         if not 1 <= days <= 3650:

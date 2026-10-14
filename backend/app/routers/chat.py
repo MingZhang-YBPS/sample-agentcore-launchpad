@@ -292,6 +292,11 @@ def list_sessions(
                 "session_id": r.session_id,
                 "actor_id": r.actor_id,
                 "turns": r.turns,
+                "tokens": {
+                    "input": r.input_tokens or 0,
+                    "output": r.output_tokens or 0,
+                    "total": r.total_tokens or 0,
+                },
                 "last_at": r.last_at.isoformat() if r.last_at else None,
                 "ended_at": r.ended_at.isoformat() if r.ended_at else None,
                 "preview": preview(r.session_id),

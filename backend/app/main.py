@@ -259,6 +259,13 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
             logging.getLogger("launchpad").info(
                 "resumed %d interrupted deploy/bootstrap job(s)", len(resumed)
             )
+        from app.system_agents.timeout_migration import migrate_preset_timeouts
+
+        migrated = migrate_preset_timeouts()  # assistant-context C5: 900 s → 1500 s
+        if migrated:
+            logging.getLogger("launchpad").info(
+                "re-publishing %d system preset(s) onto the new turn budget", len(migrated)
+            )
         resumed_assets = resume_evaluation_assets()
         if resumed_assets:
             logging.getLogger("launchpad").info(

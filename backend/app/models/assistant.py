@@ -59,7 +59,8 @@ class AssistantConversation(ProjectOwned, Base):
     turns: Mapped[int] = mapped_column(default=0)
     # One in-flight turn per conversation: the turn number a request claimed
     # (atomic conditional UPDATE) and when, so an interrupted claim can be reclaimed
-    # after ``TURN_CLAIM_TTL_S`` and cleared on startup.
+    # after the preset turn budget's ``claim_ttl_s`` (fallback ``TURN_CLAIM_TTL_S``) and
+    # cleared on startup.
     active_turn: Mapped[int | None] = mapped_column(default=None)
     active_turn_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
