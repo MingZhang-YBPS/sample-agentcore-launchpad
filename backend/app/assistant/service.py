@@ -80,6 +80,7 @@ from app.assistant.principal import (
     project_can,
     viewer_clause,
 )
+from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import current_project
@@ -109,9 +110,19 @@ PERMISSION_DEPLOY = "agents.deploy"
 MAX_PROMPT_CHARS = 100_000
 MAX_PROMPT_BYTES = 300_000
 # The FINAL composed request (preamble + catalog + replayed turns + current message)
-# never exceeds this many characters; the newest turns that fit are kept.
+# never exceeds the replay budget; the newest turns that fit are kept. The budget is
+# half the architect model's context window in estimated tokens (``replay_budget``,
+# assistant-context C3); this many characters when that window is unknown.
 MAX_REPLAY_CHARS = 160_000
+# Default of ``settings.assistant_replay_max_turns``.
 MAX_REPLAY_TURNS = 12
+# Share of the model's context window the replay may fill; the rest is the turn's own
+# room for tool results and output (the preset's max_tokens).
+REPLAY_WINDOW_SHARE = 0.5
+# A turn that overflowed the model's context window inside one Harness execution
+# (``harness.context_window_exceeded``) is replayed with this share of the history
+# it replayed the first time (assistant-context C4); the current message is unchanged.
+OVERFLOW_HISTORY_SHARE = 0.5
 CATALOG_MAX_ENTRIES = 60
 # Explicit state bounds: a conversation is a requirement-intake session, not a log.
 MAX_TURNS = 200
@@ -895,6 +906,8 @@ def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, A
         # SE-047: materializing an evaluation plan (AWS evaluators + Lambda + IAM)
         # needs the deploy permission; every member prepares/edits plans
         "can_materialize_evaluation_assets": can_deploy,
+        # assistant-context C3: what one turn may replay with the preset's model
+        "replay_budget": replay_budget(db, row.id).as_dict(),
         "owner": identity.username,
         "principal": principal_of(identity),
     }
@@ -991,7 +1004,7 @@ def list_conversations(db: Session, workspace_id: str, identity: Identity) -> li
         .limit(ADMIN_LIST_LIMIT if identity.is_admin else LIST_LIMIT)
         .all()
     )
-    trimmed = context_trimmed(db, [r.id for r in rows])
+    trimmed = context_trimmed(db, [r.id for r in rows], workspace_id)
     return [{**conversation_summary(db, r, viewer=principal), "context_trimmed": r.id in trimmed}
             for r in rows]
 
@@ -1515,6 +1528,106 @@ def _strip_proposal_blocks(text: str) -> str:
     return _REPLAY_PROPOSAL_RE.sub(REPLAY_PROPOSAL_MARKER, text)
 
 
+# ---------------------------------------------------------------------------
+# the replay budget (assistant-context C3)
+# ---------------------------------------------------------------------------
+
+# CJK ideographs, kana, hangul, their punctuation and full-width forms: about one token
+# each; everything else is estimated at four characters per token (conservative).
+_CJK_RE = re.compile(
+    "[\u2e80-\u303f\u3040-\u30ff\u3100-\u31ff\u3400-\u4dbf\u4e00-\u9fff"
+    "\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef"
+    "\U00020000-\U0003134f]"
+)
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimated model tokens of ``text``: 1 per CJK character, 1 per 4 others."""
+    if not text:
+        return 0
+    other = len(_CJK_RE.sub("", text))
+    return (len(text) - other) + -(-other // 4)
+
+
+def _longest_key(table: dict[str, Any], model_id: str) -> Any:
+    """The entry whose key is the longest substring of ``model_id`` (case-insensitive),
+    like the ``model_prices`` lookup."""
+    lowered = model_id.lower()
+    hits = [k for k in table if isinstance(k, str) and k and k.lower() in lowered]
+    return table[max(hits, key=len)] if hits else None
+
+
+def model_context_window(model_id: str | None) -> tuple[int | None, str]:
+    """``(input context window in tokens, source)`` of the architect model: the
+    ``assistant_context_window_tokens`` override (``config``), else the model's
+    ``model_context_windows`` entry or its refreshed ``model_prices`` entry's
+    ``max_input_tokens`` (``model``), else ``(None, "fallback")``."""
+    settings = get_settings()
+    if settings.assistant_context_window_tokens > 0:
+        return settings.assistant_context_window_tokens, "config"
+    if model_id:
+        window = _longest_key(settings.model_context_windows or {}, model_id)
+        if not isinstance(window, int) or window <= 0:
+            priced = {k: v.get("max_input_tokens") for k, v in (settings.model_prices or {}).items()
+                      if isinstance(v, dict) and isinstance(v.get("max_input_tokens"), int)}
+            window = _longest_key(priced, model_id)
+        if isinstance(window, int) and window > 0:
+            return window, "model"
+    return None, "fallback"
+
+
+@dataclass(frozen=True)
+class ReplayBudget:
+    """How large one composed request may be, and in what unit it is measured."""
+
+    unit: str  # "tokens" (estimated) | "chars" (the model's window is unknown)
+    limit: int
+    max_turns: int
+    source: str  # config | model | fallback
+    model_id: str | None = None
+    context_window_tokens: int | None = None
+
+    def measure(self, text: str) -> int:
+        return estimate_tokens(text) if self.unit == "tokens" else len(text)
+
+    def overhead(self, chars: int) -> int:
+        """A fixed framing allowance given in characters, in this budget's unit."""
+        return -(-chars // 4) if self.unit == "tokens" else chars
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"unit": self.unit, "limit": self.limit, "max_turns": self.max_turns,
+                "source": self.source, "model_id": self.model_id,
+                "context_window_tokens": self.context_window_tokens,
+                "window_share": REPLAY_WINDOW_SHARE}
+
+
+def budget_for_model(model_id: str | None) -> ReplayBudget:
+    """The replay budget of an architect running ``model_id``:
+    ``min(window × REPLAY_WINDOW_SHARE, assistant_replay_max_tokens)`` estimated
+    tokens, or ``MAX_REPLAY_CHARS`` characters when the window is unknown."""
+    settings = get_settings()
+    max_turns = max(1, int(settings.assistant_replay_max_turns or MAX_REPLAY_TURNS))
+    window, source = model_context_window(model_id)
+    if window is None:
+        return ReplayBudget("chars", MAX_REPLAY_CHARS, max_turns, source, model_id)
+    limit = int(window * REPLAY_WINDOW_SHARE)
+    if settings.assistant_replay_max_tokens > 0:
+        limit = min(limit, settings.assistant_replay_max_tokens)
+    return ReplayBudget("tokens", limit, max_turns, source, model_id, window)
+
+
+def replay_budget(db: Session | None, workspace_id: str | None) -> ReplayBudget:
+    """The budget of the workspace's installed architect preset (its stored model)."""
+    agent = (system_agents.find_installed(db, workspace_id, PRESET)
+             if db is not None and workspace_id is not None else None)
+    model_id = (agent.spec or {}).get("model_id") if agent is not None else None
+    return budget_for_model(model_id if isinstance(model_id, str) and model_id else None)
+
+
+def _budget_of(conversation: AssistantConversation) -> ReplayBudget:
+    return replay_budget(object_session(conversation), conversation.workspace_id)
+
+
 def check_retry(db: Session, conversation: AssistantConversation, turn: int) -> None:
     """A retry names the conversation's LATEST turn, and only one that failed."""
     rows = [m for m in _messages(db, conversation.id) if m.turn == turn]
@@ -1537,12 +1650,14 @@ def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
             f"the message exceeds {MAX_PROMPT_CHARS} characters / {MAX_PROMPT_BYTES} bytes",
             {"max_chars": MAX_PROMPT_CHARS, "max_bytes": MAX_PROMPT_BYTES}, status_code=413,
         )
-    if len(_preamble(conversation, inline=True)) + len(prompt) + 200 > MAX_REPLAY_CHARS:
+    budget = _budget_of(conversation)
+    preamble = _preamble(conversation, inline=True)
+    if budget.measure(preamble) + budget.measure(prompt) + budget.overhead(200) > budget.limit:
         raise AppError(
             "assistant.prompt_too_large",
             "the message plus the protocol preamble exceeds the request budget; shorten "
             "the message or split it over several turns",
-            {"max_request_chars": MAX_REPLAY_CHARS}, status_code=413,
+            {f"max_request_{budget.unit}": budget.limit}, status_code=413,
         )
 
 
@@ -1554,13 +1669,21 @@ class ReplayWindow:
     omitted_turns: int
     # the stored turn number of the oldest replayed turn (None when none is replayed)
     first_replayed_turn: int | None
-    # share of ``MAX_REPLAY_CHARS`` the FINAL request uses
+    # share of the replay budget (``ReplayBudget.limit``) the FINAL request uses
     budget_used_ratio: float
+    # the budget the request was composed against (assistant-context C3)
+    budget: ReplayBudget | None = None
+    # how much of the budget the replayed turns took (budget units; C4 halves it)
+    history_used: int = 0
 
     def as_dict(self) -> dict[str, Any]:
-        return {"replayed_turns": self.replayed_turns, "omitted_turns": self.omitted_turns,
-                "first_replayed_turn": self.first_replayed_turn,
-                "budget_used_ratio": self.budget_used_ratio}
+        out = {"replayed_turns": self.replayed_turns, "omitted_turns": self.omitted_turns,
+               "first_replayed_turn": self.first_replayed_turn,
+               "budget_used_ratio": self.budget_used_ratio}
+        if self.budget is not None:
+            out["budget"] = {"unit": self.budget.unit, "limit": self.budget.limit,
+                             "source": self.budget.source}
+        return out
 
 
 def compose_messages(
@@ -1576,7 +1699,7 @@ def compose_messages(
 
 def compose_replay(
     conversation: AssistantConversation, history: list[AssistantMessage], prompt: str,
-    *, inline: bool = False,
+    *, inline: bool = False, history_cap: int | None = None,
 ) -> tuple[list[dict[str, Any]], ReplayWindow]:
     """The bounded ``InvokeHarness.messages`` replay and the window it keeps.
 
@@ -1586,8 +1709,11 @@ def compose_replay(
     and counts against the budget like any other. The newest turns that fit the
     FINAL budget (preamble + catalog + turns + current message) are kept, the count
     of omitted older turns is disclosed in the preamble, and the current message is
-    always sent whole (``check_prompt`` refuses one that cannot fit).
+    always sent whole (``check_prompt`` refuses one that cannot fit). The budget and
+    the turn count follow the architect model (``replay_budget``); ``history_cap``
+    further bounds the replayed turns (the overflow replay of C4).
     """
+    budget_spec = _budget_of(conversation)
     by_turn: dict[int, dict[str, list[str]]] = {}
     preamble = _preamble(conversation, inline=inline)
     strip = _base_of(conversation) is not None
@@ -1617,12 +1743,17 @@ def compose_replay(
         carried += slot["verdict"]
     if carried:
         prompt = "\n\n".join(carried + [prompt])
-    budget = MAX_REPLAY_CHARS - len(preamble) - len(prompt) - 200
+    measure = budget_spec.measure
+    fixed = measure(preamble) + measure(prompt) + budget_spec.overhead(200)
+    budget = budget_spec.limit - fixed
+    if history_cap is not None:
+        budget = min(budget, history_cap)
+    per_turn = budget_spec.overhead(80)
     kept: list[tuple[int, str, str | None]] = []
     used = 0
     for number, user_text, reply in reversed(turns):
-        size = len(user_text) + len(reply or "") + 80
-        if len(kept) >= MAX_REPLAY_TURNS or used + size > budget:
+        size = measure(user_text) + measure(reply or "") + per_turn
+        if len(kept) >= budget_spec.max_turns or used + size > budget:
             break
         kept.insert(0, (number, user_text, reply))
         used += size
@@ -1630,8 +1761,8 @@ def compose_replay(
     window = ReplayWindow(
         replayed_turns=len(kept), omitted_turns=omitted,
         first_replayed_turn=kept[0][0] if kept else None,
-        budget_used_ratio=round(
-            min(1.0, (len(preamble) + len(prompt) + 200 + used) / MAX_REPLAY_CHARS), 3),
+        budget_used_ratio=round(min(1.0, (fixed + used) / budget_spec.limit), 3),
+        budget=budget_spec, history_used=used,
     )
     if omitted:
         preamble += (
@@ -1666,13 +1797,17 @@ def context_window(db: Session, row: AssistantConversation) -> dict[str, Any]:
     return window.as_dict()
 
 
-def context_trimmed(db: Session, conversation_ids: list[str]) -> set[str]:
+def context_trimmed(
+    db: Session, conversation_ids: list[str], workspace_id: str | None = None,
+) -> set[str]:
     """The listed conversations whose next turn surely omits older turns: more
-    replayable turns than ``MAX_REPLAY_TURNS``, or more replayable text than the whole
-    request budget. One cheap query (lengths, never text); a lower bound of
-    ``context_window`` — a conversation it misses still shows its divider on open."""
+    replayable turns than the budget's turn count, or more replayable text than the
+    whole request budget (in tokens, at least a quarter of the characters). One cheap
+    query (lengths, never text); a lower bound of ``context_window`` — a conversation
+    it misses still shows its divider on open."""
     if not conversation_ids:
         return set()
+    budget = replay_budget(db, workspace_id) if workspace_id else budget_for_model(None)
     rows = db.execute(
         select(AssistantMessage.conversation_id, AssistantMessage.turn,
                AssistantMessage.role, AssistantMessage.name,
@@ -1691,7 +1826,8 @@ def context_trimmed(db: Session, conversation_ids: list[str]) -> set[str]:
             turns.setdefault(cid, set()).add(turn)
         chars[cid] = chars.get(cid, 0) + size
     return {cid for cid in conversation_ids
-            if len(turns.get(cid, ())) > MAX_REPLAY_TURNS or chars.get(cid, 0) > MAX_REPLAY_CHARS}
+            if len(turns.get(cid, ())) > budget.max_turns
+            or budget.overhead(chars.get(cid, 0)) > budget.limit}
 
 
 # ---------------------------------------------------------------------------
@@ -1885,7 +2021,7 @@ def record_unusable(
 
 def _persist_partial(
     db: Session, conversation: AssistantConversation | tuple[str, str | None], turn: int,
-    token: str, session_id: str, text: str, error: str,
+    token: str, session_id: str, text: str, error: str, trace: dict[str, Any] | None = None,
 ) -> bool:
     """Persist a partial/failed turn — only while this worker still holds the claim
     (a reclaimed turn's late worker writes nothing). ``conversation`` may be the plain
@@ -1904,6 +2040,8 @@ def _persist_partial(
             workspace_id=workspace_id, conversation_id=conversation_id,
             turn=turn, role="assistant", text=text, runtime_session_id=session_id,
         ))
+    if trace is not None:  # before the error row: a failed turn's last row stays its error
+        db.add(_trace_row((conversation_id, workspace_id), turn, session_id, trace))
     db.add(AssistantMessage(
         workspace_id=workspace_id, conversation_id=conversation_id,
         turn=turn, role="error", text=error[:4000], runtime_session_id=session_id,
@@ -2048,13 +2186,124 @@ def _submissions(
     )
 
 
+CONTEXT_OVERFLOW_CODE = "harness.context_window_exceeded"
+# ``name`` of the hidden SESSION_ROLE row that records a turn's trace attributes: the
+# replay window it was composed with and the tool results its execution streamed.
+TURN_TRACE_NAME = "turn_trace"
+
+
+class _ToolResultMeter:
+    """A data-plane client stand-in that counts the tool results a Harness execution
+    streams back (assistant-context C4): they accumulate inside the execution, out of
+    the replay budget's sight, and are what overflows a model's context window."""
+
+    def __init__(self, client: Any, stats: dict[str, int]) -> None:
+        self._client = client
+        self._stats = stats
+
+    def invoke_harness(self, **kwargs: Any) -> dict[str, Any]:
+        response = self._client.invoke_harness(**kwargs)
+        return {**response, "stream": _MeteredStream(response["stream"], self._stats)}
+
+
+class _MeteredStream:
+    def __init__(self, stream: Any, stats: dict[str, int]) -> None:
+        self._stream = stream
+        self._stats = stats
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        for event in self._stream:
+            if isinstance(event, dict):
+                self._count(event)
+            yield event
+
+    def _count(self, event: dict[str, Any]) -> None:
+        start = (event.get("contentBlockStart") or {}).get("start") or {}
+        result = start.get("toolResult")
+        if isinstance(result, dict):
+            self._stats["tool_results"] += 1
+            self._stats["tool_result_chars"] += _result_chars(result.get("content"))
+        delta = (event.get("contentBlockDelta") or {}).get("delta") or {}
+        self._stats["tool_result_chars"] += _result_chars(delta.get("toolResult"))
+
+    def close(self) -> None:
+        close = getattr(self._stream, "close", None)
+        if callable(close):
+            close()
+
+
+def _result_chars(parts: Any) -> int:
+    if not isinstance(parts, list):
+        return 0
+    total = 0
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        if isinstance(part.get("text"), str):
+            total += len(part["text"])
+        elif "json" in part:
+            total += len(json.dumps(part["json"], ensure_ascii=False, default=str))
+    return total
+
+
+def _new_tool_stats() -> dict[str, int]:
+    return {"tool_results": 0, "tool_result_chars": 0}
+
+
+def _trace_row(ids: tuple[str, str | None], turn: int, session_id: str,
+               trace: dict[str, Any]) -> AssistantMessage:
+    conversation_id, workspace_id = ids
+    return AssistantMessage(
+        workspace_id=workspace_id, conversation_id=conversation_id, turn=turn,
+        role=SESSION_ROLE, name=TURN_TRACE_NAME,
+        text=json.dumps(trace, ensure_ascii=False, sort_keys=True)[:4000],
+        runtime_session_id=session_id,
+    )
+
+
+def _turn_trace(window: ReplayWindow, stats: dict[str, int],
+                exc: BaseException | None = None) -> dict[str, Any]:
+    """One turn's trace attributes: the window its final attempt replayed and the
+    tool results that attempt's execution streamed (input for tuning
+    ``REPLAY_WINDOW_SHARE``), logged and kept on a hidden ledger row."""
+    trace: dict[str, Any] = {
+        **stats,
+        "replayed_turns": window.replayed_turns, "omitted_turns": window.omitted_turns,
+        "budget_used_ratio": window.budget_used_ratio,
+    }
+    if window.budget is not None:
+        trace["budget_unit"], trace["budget_limit"] = window.budget.unit, window.budget.limit
+    if exc is not None:
+        trace["error"] = str(getattr(exc, "code", None) or type(exc).__name__)
+    logger.info("assistant: turn trace %s", json.dumps(trace, sort_keys=True))
+    return trace
+
+
+def turn_trace(db: Session, conversation_id: str, turn: int) -> dict[str, Any] | None:
+    """The recorded trace attributes of one turn (None before it finished)."""
+    row = db.execute(
+        select(AssistantMessage.text)
+        .where(AssistantMessage.conversation_id == conversation_id,
+               AssistantMessage.turn == turn, AssistantMessage.role == SESSION_ROLE,
+               AssistantMessage.name == TURN_TRACE_NAME)
+        .order_by(AssistantMessage.id.desc()).limit(1)
+    ).scalar_one_or_none()
+    try:
+        return json.loads(row) if row else None
+    except ValueError:
+        return None
+
+
 def _replayable_turn_error(exc: BaseException) -> bool:
     """Transient upstream failures, plus a model call cut off at ``max_tokens``: live
     2026-10-05 a proposal call stopped there 40 s in, far short of the 65 536-token
-    budget (the manual retry wrote the 11 k-token proposal in 3 min). Timeouts and
-    iteration limits are never replayed."""
+    budget (the manual retry wrote the 11 k-token proposal in 3 min). A turn whose tool
+    results overflowed the model's context window is replayed too, with less history
+    (``OVERFLOW_HISTORY_SHARE``). Timeouts and iteration limits are never replayed."""
     from app.evaluation.service import transient_invoke_error
 
+    if getattr(exc, "code", None) == CONTEXT_OVERFLOW_CODE:
+        return True
     if getattr(exc, "code", None) == "harness.execution_limit":
         detail = getattr(exc, "detail", None)
         return isinstance(detail, dict) and detail.get("stop_reason") == "max_tokens"
@@ -2110,6 +2359,13 @@ def run_turn(
             history = [m for m in history if m.turn != retry_of]
         messages, window = compose_replay(conversation, history, prompt,
                                           inline=overrides is not None)
+        # the request an overflowed execution is replayed with (C4): the same message
+        # with a share of the history — composed here, the producer never reads ``db``
+        overflow_messages, overflow_window = messages, window
+        if window.replayed_turns:
+            overflow_messages, overflow_window = compose_replay(
+                conversation, history, prompt, inline=overrides is not None,
+                history_cap=int(window.history_used * OVERFLOW_HISTORY_SHARE))
         # the FIRST write is fenced like every other one: composing the replay took
         # time, and ownership may have been replaced meanwhile
         _lock_conversation(db, conversation_id)
@@ -2156,8 +2412,12 @@ def run_turn(
             # (the consumer's session), which a rollback below has already expired
             harness_arn = agent.arn
 
-            # the current attempt's Harness session (a replay starts a fresh one)
+            # the current attempt's Harness session (a replay starts a fresh one), its
+            # request (an overflow replay sends less history) and tool-result counts
             attempt_session = [session_id]
+            attempt_request = [messages]
+            attempt_stats = [_new_tool_stats()]
+            attempt_window = [window]
 
             def produce() -> None:
                 attempt = 0
@@ -2173,14 +2433,24 @@ def run_turn(
                             attempt_session[0] = hc.new_session_id()
                             if submissions is not None:
                                 submissions.reset()
-                            logger.warning("assistant: turn %s replayed after %s",
-                                           turn, _short(exc))
+                            failed_stats = attempt_stats[0]
+                            attempt_stats[0] = _new_tool_stats()
+                            overflow = getattr(exc, "code", None) == CONTEXT_OVERFLOW_CODE
+                            if overflow:
+                                attempt_request[0] = overflow_messages
+                                attempt_window[0] = overflow_window
+                            logger.warning("assistant: turn %s replayed after %s (tool results "
+                                           "%d, %d chars)", turn, _short(exc),
+                                           failed_stats["tool_results"],
+                                           failed_stats["tool_result_chars"])
                             # the new session is on the ledger before its data-plane call
                             # (like the first one): wait for the consumer to record it
                             recorded = threading.Event()
                             events.put(("retry", {"attempt": attempt, "reason": _short(exc),
                                                   "session_id": attempt_session[0],
-                                                  "recorded": recorded}))
+                                                  "recorded": recorded,
+                                                  "overflow": overflow,
+                                                  "tool_stats": failed_stats}))
                             deadline = time.monotonic() + RETRY_RECORD_WAIT_S
                             while not recorded.wait(HEARTBEAT_S):
                                 if run.cancelled or time.monotonic() > deadline:
@@ -2191,8 +2461,8 @@ def run_turn(
                         return
 
             def attempt_once() -> None:
-                request = messages
-                client = data_client(workspace)
+                request = attempt_request[0]
+                client = _ToolResultMeter(data_client(workspace), attempt_stats[0])
                 while True:
                     handoff: list[dict[str, Any]] | None = None
                     for produced in hc.invoke_harness_events(
@@ -2263,16 +2533,26 @@ def run_turn(
                     db.execute(delete(AssistantMessage).where(
                         AssistantMessage.conversation_id == conversation_id,
                         AssistantMessage.turn == turn, AssistantMessage.role == "tool"))
+                    failed = event["tool_stats"]
                     db.add(AssistantMessage(
                         workspace_id=conversation.workspace_id, conversation_id=conversation_id,
                         turn=turn, role=SESSION_ROLE, name="turn_replay",
-                        text=f"replay {event['attempt']} after {event['reason']}"[:4000],
+                        text=(f"replay {event['attempt']} after {event['reason']} (tool "
+                              f"results {failed['tool_results']}, "
+                              f"{failed['tool_result_chars']} chars)")[:4000],
                         runtime_session_id=session_id,
                     ))
                     db.commit()
                     event["recorded"].set()
-                    yield {"event": "retry", "data": {"attempt": event["attempt"],
-                                                      "reason": event["reason"]}}
+                    retry_data: dict[str, Any] = {"attempt": event["attempt"],
+                                                  "reason": event["reason"]}
+                    if event["overflow"]:
+                        # the replay sends less history: the console redraws its divider
+                        retry_data["code"] = CONTEXT_OVERFLOW_CODE
+                        retry_data["context"] = overflow_window.as_dict()
+                        retry_data["omitted_turns"] = overflow_window.omitted_turns
+                        retry_data["first_replayed_turn"] = overflow_window.first_replayed_turn
+                    yield {"event": "retry", "data": retry_data}
                     continue
                 if run.cancelled:
                     break  # the owner cancelled: handled as interrupted below
@@ -2312,7 +2592,9 @@ def run_turn(
                 yield event
         except Exception as exc:
             _persist_partial(db, ids, turn, token, session_id, "".join(parts),
-                             f"{type(exc).__name__}: {exc}")
+                             f"{type(exc).__name__}: {exc}",
+                             trace=_turn_trace(attempt_window[0], attempt_stats[0], exc)
+                             if producer is not None else None)
             terminal = True
             payload: dict[str, Any] = {"message": f"{type(exc).__name__}: {exc}"}
             if isinstance(exc, AppError):
@@ -2345,6 +2627,8 @@ def run_turn(
             workspace_id=conversation.workspace_id, conversation_id=conversation_id,
             turn=turn, role="assistant", text=text, runtime_session_id=session_id,
         ))
+        trace = _turn_trace(attempt_window[0], attempt_stats[0])
+        db.add(_trace_row(ids, turn, session_id, trace))
         fresh = db.get(AssistantConversation, conversation_id)
         preparation_event = None
         if requirements is not None:
@@ -2398,7 +2682,7 @@ def run_turn(
             yield proposal_event
         if preparation_event is not None:
             yield preparation_event
-        yield {"event": "done", "data": {"turn": turn}}
+        yield {"event": "done", "data": {"turn": turn, "trace": trace}}
     finally:
         if not terminal:
             # GeneratorExit (client went away) or an unexpected error before the

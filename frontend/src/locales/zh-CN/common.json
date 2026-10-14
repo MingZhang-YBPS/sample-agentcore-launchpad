@@ -2223,6 +2223,7 @@
     "harness.execution_timeout": "Harness 执行超时，未能完成。",
     "harness.execution_cancelled": "Harness 执行已取消，未能完成。",
     "harness.execution_limit": "Harness 执行达到限制，已停止。",
+    "harness.context_window_exceeded": "这一轮查阅的资料太多，超出了模型上下文。请把问题拆小，或让助手少查几篇文档。",
     "harness.incomplete_response": "Harness 响应不完整。",
     "observability.session_spans_missing": "所选时间范围内尚未找到该会话的 span 记录。",
     "observability.too_many_evaluators": "请选择 1 到 5 个 evaluator。",
@@ -10331,6 +10332,15 @@
         "submit": "切换并重新发布",
         "switching": "切换中…",
         "switched": "正在用 {{model}} 重新发布架构助手"
+      },
+      "budget": {
+        "label": "回放预算",
+        "tokens": "≈ {{value}} token",
+        "chars": "{{value}} 字符",
+        "model": "取本模型 {{window}} token 上下文窗口的一半，另一半留给每一轮的工具结果和输出。最多回放 {{turns}} 轮。",
+        "config": "取配置的 {{window}} token 上下文窗口（assistant_context_window_tokens）的一半，另一半留给每一轮的工具结果和输出。最多回放 {{turns}} 轮。",
+        "fallback": "查不到本模型的上下文窗口，较早的轮次按固定的字符预算回放。设置 assistant_context_window_tokens 可按模型计算。最多回放 {{turns}} 轮。",
+        "capped": "已按上限 {{limit}} token 截断（assistant_replay_max_tokens）。"
       },
       "context": {
         "divider": "以上 {{n}} 轮已不在助手的上下文中",

@@ -2223,6 +2223,7 @@
     "harness.execution_timeout": "The Harness execution timed out before completing.",
     "harness.execution_cancelled": "The Harness execution was cancelled before completing.",
     "harness.execution_limit": "The Harness execution stopped after reaching an execution limit.",
+    "harness.context_window_exceeded": "This turn read more material than fits in the model's context. Split the question up, or ask the assistant to consult fewer documents.",
     "harness.incomplete_response": "The Harness response was incomplete.",
     "observability.session_spans_missing": "No span records found for this session in the selected time range yet.",
     "observability.too_many_evaluators": "Choose between 1 and 5 evaluators.",
@@ -10331,6 +10332,15 @@
         "submit": "Switch and re-publish",
         "switching": "Switching…",
         "switched": "Re-publishing the architect assistant on {{model}}"
+      },
+      "budget": {
+        "label": "Replay budget",
+        "tokens": "≈ {{value}} tokens",
+        "chars": "{{value}} characters",
+        "model": "Half of this model's {{window}}-token context window; the other half stays free for each turn's tool results and output. At most {{turns}} earlier turns.",
+        "config": "Half of the configured {{window}}-token context window (assistant_context_window_tokens); the other half stays free for each turn's tool results and output. At most {{turns}} earlier turns.",
+        "fallback": "This model's context window is unknown, so earlier turns are replayed within a fixed character budget. Set assistant_context_window_tokens to size it to the model. At most {{turns}} earlier turns.",
+        "capped": "Capped at {{limit}} tokens (assistant_replay_max_tokens)."
       },
       "context": {
         "divider": "The {{n}} earlier turn(s) above are no longer in the assistant's context",

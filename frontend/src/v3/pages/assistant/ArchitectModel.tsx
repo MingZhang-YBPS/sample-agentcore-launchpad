@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, errorMessage, type SystemPresetInfo, type SystemPresetInstallInput } from "../../../lib/api";
+import { architectReplayBudget, budgetCapped, type ReplayBudget } from "../../../lib/api/assistant-budget";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import {
   CUSTOM_MODEL_OPTION,
@@ -119,6 +120,30 @@ function SwitchDialog({ preset, workspaceId, onClose, onSwitched }: {
   );
 }
 
+/** The replay budget of the preset's model (assistant-context C3), beside the model. */
+function BudgetStat({ budget }: { budget: ReplayBudget | null | undefined }) {
+  const { t, i18n } = useTranslation();
+  if (!budget) return <Stat label={t("v3.assistant.budget.label")} value="—" />;
+  const fmt = (n: number) => n.toLocaleString(i18n.language);
+  const value = t(budget.unit === "tokens" ? "v3.assistant.budget.tokens" : "v3.assistant.budget.chars", {
+    value: fmt(budget.limit),
+  });
+  const foot = [
+    t(`v3.assistant.budget.${budget.source}`, {
+      window: budget.context_window_tokens != null ? fmt(budget.context_window_tokens) : "—",
+      turns: budget.max_turns,
+    }),
+    budgetCapped(budget) ? t("v3.assistant.budget.capped", { limit: fmt(budget.limit) }) : "",
+  ].filter(Boolean).join(" ");
+  return (
+    <Stat
+      label={t("v3.assistant.budget.label")}
+      value={<span style={{ fontSize: 15 }} data-testid="v3-architect-budget">{value}</span>}
+      foot={foot}
+    />
+  );
+}
+
 /**
  * Administrators switch the architect assistant's model here instead of on the
  * classic system-presets page: a partial install edit (`model_id` + `model_source`),
@@ -129,6 +154,8 @@ export function ArchitectModelPanel({ workspaceId }: { workspaceId: string }) {
   const presets = useLoad(() => api.listSystemPresets(workspaceId), `v3-architect-presets:${workspaceId}`);
   const [open, setOpen] = useState(false);
   const preset = presets.data?.presets.find((p) => p.key === ARCHITECT_KEY) ?? null;
+  // keyed on the stored model: a switch re-reads the budget of the new one
+  const budget = useLoad(architectReplayBudget, `v3-architect-budget:${workspaceId}:${preset?.model_id ?? ""}`);
   if (!preset) return presets.error ? <Notice s="wait">{presets.error}</Notice> : null;
   const deploying = preset.status === "deploying" || preset.deployment_status === "running";
   return (
@@ -137,7 +164,7 @@ export function ArchitectModelPanel({ workspaceId }: { workspaceId: string }) {
       signal={deploying ? "wait" : preset.status === "failed" ? "act" : undefined}
       end={
         <span style={{ display: "inline-flex", gap: 8 }}>
-          <button type="button" className="v3-btn ghost sm" onClick={presets.reload} disabled={presets.loading}>
+          <button type="button" className="v3-btn ghost sm" onClick={() => { presets.reload(); budget.reload(); }} disabled={presets.loading}>
             <RefreshCw size={13} /> {t("v3.ux.refresh")}
           </button>
           <Btn size="sm" disabled={!preset.can_configure} title={preset.can_configure ? undefined : t("v3.assistant.model.cannot")} onClick={() => setOpen(true)}>
@@ -146,7 +173,7 @@ export function ArchitectModelPanel({ workspaceId }: { workspaceId: string }) {
         </span>
       }
     >
-      <div className="v3-grid c3" data-testid="v3-architect-model">
+      <div className="v3-grid c4" data-testid="v3-architect-model">
         <Stat label={t("v3.assistant.model.current")} value={<span className="mono" style={{ fontSize: 14, wordBreak: "break-all" }}>{preset.model_id ?? "—"}</span>} />
         <Stat label={t("v3.assistant.model.source")} value={<span style={{ fontSize: 15 }}>{preset.model_source ? t(`v2.agents.wizard.source.${preset.model_source}`) : "—"}</span>} />
         <Stat
@@ -154,6 +181,7 @@ export function ArchitectModelPanel({ workspaceId }: { workspaceId: string }) {
           value={<Chip s={deploying ? "wait" : preset.status === "active" ? "ok" : preset.status === "failed" ? "act" : undefined}>{t(`create.system.status.${preset.status}`)}</Chip>}
           foot={preset.status === "failed" ? preset.error ?? undefined : undefined}
         />
+        <BudgetStat budget={budget.data} />
       </div>
       {open && (
         <SwitchDialog preset={preset} workspaceId={workspaceId} onClose={() => setOpen(false)} onSwitched={presets.reload} />
