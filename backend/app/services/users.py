@@ -27,6 +27,7 @@ from app.core.config import Settings, get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import User, UserWorkspace, Workspace
+from app.models.projects import GroupMember, Project, ProjectGroup, ProjectMember
 
 # Member-grantable agent-management capabilities. Defined here (not in
 # routers.auth, which imports this module) so both auth and the users console
@@ -267,14 +268,18 @@ def days_remaining(user: User, now: datetime | None = None) -> int | None:
 
 
 def serialize(
-    user: User, now: datetime | None = None, workspaces: list[str] | None = None
+    user: User,
+    now: datetime | None = None,
+    workspaces: list[str] | None = None,
+    memberships: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Console-facing shape. The password hash never leaves the backend.
 
-    `workspaces` is the account's grant list; the caller passes it because it
-    needs a ledger session this function does not take. Admins reach every
-    workspace by role, so their (usually empty) grant list is not a capability
-    statement.
+    `workspaces` is the account's grant list and `memberships` its `projects` /
+    `groups` (`project_memberships`); the caller passes them because they need a
+    ledger session this function does not take. Admins reach every workspace and
+    project by role, so their grant list and member rows (kept for a demotion,
+    design §7.2) are not a capability statement.
     """
     moment = now or datetime.now(UTC)
     expires_at = as_utc(user.expires_at)
@@ -297,6 +302,8 @@ def serialize(
         "created_by": user.created_by,
         "permissions": effective_permissions(user),
         "workspaces": workspaces or [],
+        "projects": (memberships or {}).get("projects", []),
+        "groups": (memberships or {}).get("groups", []),
     }
 
 
@@ -399,6 +406,9 @@ def create_user(
     never_expires: bool = False,
     created_by: str,
     settings: Settings | None = None,
+    projects: list[dict[str, Any]] | None = None,
+    groups: list[dict[str, Any]] | None = None,
+    actor: Any = None,
 ) -> tuple[User, str | None]:
     """An administrator creates an account that is active immediately.
 
@@ -412,6 +422,10 @@ def create_user(
     or — none of them — the same `auth_registration_valid_days` an approval starts.
     Workspaces: omitted means `default`, the grant an approval preselects; an
     administrator holds none (it reaches every workspace by role).
+    Projects / groups (design §7.4): `[{project_id, role_key}]` / `[{group_id,
+    role_key}]` direct memberships written in the same transaction, journaled as
+    `actor` (an `Identity`; `created_by` when omitted). The default project's
+    `inherit` row still follows the workspace grants (`sync_default_membership`).
     """
     current = settings or get_settings()
     name = validate_username(username, current)
@@ -423,11 +437,14 @@ def create_user(
         raise AppError("users.invalid_role", f"Role must be one of {', '.join(ROLES)}")
     overrides = _normalized_permissions(permissions, role)
 
+    project_items = _project_items(db, projects)
+    group_items = _group_items(db, groups)
     if role == ROLE_ADMIN:
-        if workspaces:
+        if workspaces or project_items or group_items:
             raise AppError(
                 "users.admin_no_grants",
-                "An administrator reaches every workspace by role and holds no grant",
+                "An administrator reaches every workspace and project by role and holds "
+                "no grant or membership",
             )
         requested: list[str] = []
     else:
@@ -483,6 +500,11 @@ def create_user(
     from app.services.access import sync_default_membership
 
     sync_default_membership(db, user.id, set(requested), previous=set(), role=role)
+    who = actor or _SystemActor(created_by[:64])
+    if project_items:
+        set_project_memberships(db, who, user, project_items)
+    if group_items:
+        set_group_memberships(db, who, user, group_items)
     try:
         db.commit()
     except IntegrityError as exc:
@@ -617,9 +639,32 @@ def list_users(
     status: str = "all",
     limit: int = 50,
     offset: int = 0,
+    *,
+    role: str | None = None,
+    project_id: str | None = None,
+    group_id: str | None = None,
 ) -> UserPage:
+    """One page of accounts, newest first, each with its grants and memberships.
+
+    `role` filters the global role; `project_id` keeps the accounts that reach the
+    project as members (a direct row or the project's group — not the admin bypass);
+    `group_id` the group's members. An unknown project / group answers 404."""
     now = datetime.now(UTC)
     stmt = select(User)
+    if role:
+        if role not in ROLES:
+            raise AppError(
+                "users.invalid_role", f"Role must be one of {', '.join(ROLES)}", status_code=422
+            )
+        stmt = stmt.where(User.role == role)
+    if project_id:
+        stmt = stmt.where(User.id.in_(sorted(project_member_ids(db, project_id))))
+    if group_id:
+        if db.get(ProjectGroup, group_id) is None:
+            raise _group_not_found(group_id)
+        stmt = stmt.where(
+            User.id.in_(select(GroupMember.user_id).where(GroupMember.group_id == group_id))
+        )
     if q:
         needle = f"%{q.strip().lower()}%"
         stmt = stmt.where(
@@ -632,9 +677,14 @@ def list_users(
         rows = [row for row in rows if account_state(row, now) == status]
     total = len(rows)
     window = rows[offset : offset + limit] if limit > 0 else rows[offset:]
-    grants = workspace_grants(db, [row.id for row in window])
+    ids = [row.id for row in window]
+    grants = workspace_grants(db, ids)
+    memberships = project_memberships(db, ids)
     return UserPage(
-        items=[serialize(row, now, grants.get(row.id, [])) for row in window],
+        items=[
+            serialize(row, now, grants.get(row.id, []), memberships.get(row.id))
+            for row in window
+        ],
         total=total,
         limit=limit,
         offset=offset,
@@ -708,13 +758,21 @@ def apply_patch(
     user: User,
     patch: dict[str, Any],
     settings: Settings | None = None,
+    *,
+    actor: Any = None,
 ) -> str | None:
     """Apply an admin patch in place. Returns a generated password, if any.
 
     `patch` only carries keys the caller actually sent, so `{"expires_at": None}`
-    means "never expires" while an omitted key leaves the field alone.
+    means "never expires" while an omitted key leaves the field alone. `projects` /
+    `groups` replace the account's direct memberships (design §7.10, same semantics
+    as `workspaces`), journaled as `actor` — which is how an approval places a
+    pending account into projects in the same transaction (§7.5).
     """
     current = settings or get_settings()
+    # shape and existence first, so a bad item refuses the whole patch up front
+    project_items = _project_items(db, patch.get("projects")) if "projects" in patch else None
+    group_items = _group_items(db, patch.get("groups")) if "groups" in patch else None
     generated: str | None = None
     was_signable_admin = _signable_admin(user)
     if "status" in patch:
@@ -770,6 +828,12 @@ def apply_patch(
         user.permissions = _normalized_permissions(patch["permissions"], user.role)
     if "workspaces" in patch:
         set_workspace_grants(db, user, patch["workspaces"])
+    who = actor or _SystemActor("system")
+    if project_items is not None:
+        # after the grants: an `inherit` row they just added is kept unless replaced
+        set_project_memberships(db, who, user, project_items)
+    if group_items is not None:
+        set_group_memberships(db, who, user, group_items)
     if was_signable_admin and not _signable_admin(user):
         # a demotion, disable or lapsed expiry of an admin: never the last one
         if admins_who_can_sign_in(db, current, excluding=user.id) == 0:
@@ -925,3 +989,360 @@ def delete_user(db: Session, user: User, settings: Settings | None = None) -> No
     # and their dangling `created_by` keeps them from being re-enabled.
     _disable_offboarded_api_keys(db, user.id)
     db.commit()
+
+
+# --- project and group memberships (design projects §7.4–§7.6, §7.10) --------
+#
+# The user-side shape of the same `project_members` / `group_members` rows the
+# project side writes (`PUT /api/projects/{id}/members`): one source of truth, two
+# shapes, like the workspace grants. Project rows go through
+# `services.projects.upsert_members` (role checks, journal, epoch, API-key
+# offboarding); group rows are written here. Everything is staged on the session —
+# the caller commits, so a refused item leaves nothing behind.
+
+BULK_LIMIT = 200
+
+
+@dataclass(frozen=True)
+class _SystemActor:
+    """The journal's actor when a service call names no `Identity`."""
+
+    username: str
+    user_id: str | None = None
+    role: str = ROLE_ADMIN
+
+
+def _group_not_found(group_id: str) -> NotFoundError:
+    return NotFoundError(
+        "group.not_found", f"project group '{group_id}' not found", {"group_id": group_id}
+    )
+
+
+def _project_not_found(project_id: str) -> NotFoundError:
+    return NotFoundError(
+        "project.not_found", f"project '{project_id}' not found", {"project_id": project_id}
+    )
+
+
+def _membership_list(value: Any, field: str, id_key: str) -> list[dict[str, Any]]:
+    """`[{<id_key>, role_key, …}]`, each id once; 400 `users.invalid_<field>` otherwise."""
+    code = f"users.invalid_{field}"
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise AppError(code, f"{field} must be a list of {{{id_key}, role_key}} objects")
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in value:
+        target = raw.get(id_key)
+        role_key = raw.get("role_key")
+        if not isinstance(target, str) or not target.strip():
+            raise AppError(code, f"every {field} item needs a {id_key}")
+        if not isinstance(role_key, str) or not role_key.strip():
+            raise AppError(code, f"every {field} item needs a role_key", {id_key: target})
+        target = target.strip()
+        if target in seen:
+            raise AppError(code, f"{id_key} '{target}' is listed twice", {id_key: target})
+        seen.add(target)
+        item = {id_key: target, "role_key": role_key.strip()}
+        if "overrides" in raw:
+            overrides = raw["overrides"]
+            if overrides is not None and not isinstance(overrides, dict):
+                raise AppError(code, "overrides must be an object", {id_key: target})
+            item["overrides"] = overrides
+        items.append(item)
+    return items
+
+
+def _project_items(db: Session, value: Any) -> list[dict[str, Any]]:
+    """Validated `projects` items; 404 `project.not_found` for an unknown project."""
+    items = _membership_list(value, "projects", "project_id")
+    for item in items:
+        if db.get(Project, item["project_id"]) is None:
+            raise _project_not_found(item["project_id"])
+    return items
+
+
+def _group_items(db: Session, value: Any) -> list[dict[str, Any]]:
+    """Validated `groups` items: the group exists and the role is a built-in template
+    (custom roles are per project, design §2.2)."""
+    from app.services.access import ROLE_TEMPLATES
+
+    items = _membership_list(value, "groups", "group_id")
+    for item in items:
+        if "overrides" in item:
+            raise AppError(
+                "users.invalid_groups", "a group membership carries no overrides",
+                {"group_id": item["group_id"]},
+            )
+        if db.get(ProjectGroup, item["group_id"]) is None:
+            raise _group_not_found(item["group_id"])
+        if item["role_key"] not in ROLE_TEMPLATES:
+            raise AppError(
+                "group.role_unknown",
+                f"'{item['role_key']}' is not a built-in role (groups take templates only)",
+                {"role_key": item["role_key"], "group_id": item["group_id"]},
+            )
+    return items
+
+
+def set_project_memberships(
+    db: Session, actor: Any, user: User, items: list[dict[str, Any]]
+) -> None:
+    """Replace the account's direct project memberships with `items` (validated by
+    `_project_items`).
+
+    Replacement spares the default project's `inherit` rows that `items` does not
+    name: those follow the workspace grants (`sync_default_membership`), so a
+    client that only knows projects cannot revoke a grant's membership by omission.
+    Naming such a project replaces its role. An item without `overrides` keeps the
+    row's current ones."""
+    from app.services import projects as projects_service
+    from app.services.access import INHERIT_ROLE
+
+    db.flush()
+    current = {
+        row.project_id: row
+        for row in db.scalars(select(ProjectMember).where(ProjectMember.user_id == user.id))
+    }
+    wanted = {item["project_id"]: item for item in items}
+    for project_id, item in wanted.items():
+        entry: dict[str, Any] = {"user_id": user.id, "role_key": item["role_key"]}
+        if "overrides" in item:
+            entry["overrides"] = item["overrides"]
+        elif project_id in current:
+            entry["overrides"] = current[project_id].overrides
+        projects_service.upsert_members(
+            db, actor, projects_service.get_project(db, project_id), [entry], []
+        )
+    for project_id, row in sorted(current.items()):
+        if project_id in wanted or row.role_key == INHERIT_ROLE:
+            continue
+        project = db.get(Project, project_id)
+        if project is None:  # a dangling row (no FK): just drop it
+            db.delete(row)
+            continue
+        projects_service.upsert_members(db, actor, project, [], [user.id])
+
+
+def set_group_memberships(
+    db: Session, actor: Any, user: User, items: list[dict[str, Any]]
+) -> None:
+    """Replace the account's project-group memberships with `items` (validated by
+    `_group_items`). Joining or changing a role in an archived group is refused;
+    leaving one is not."""
+    from app.services.access import bump_epoch
+    from app.services.audit import record_structure_event
+
+    current = {
+        row.group_id: row
+        for row in db.scalars(select(GroupMember).where(GroupMember.user_id == user.id))
+    }
+    wanted = {item["group_id"]: item["role_key"] for item in items}
+    changes: list[tuple[str, str]] = []
+    for group_id, role_key in sorted(wanted.items()):
+        existing = current.get(group_id)
+        if existing is not None and existing.role_key == role_key:
+            continue
+        group = db.get(ProjectGroup, group_id)
+        if group is None:
+            raise _group_not_found(group_id)
+        if group.archived_at is not None:
+            raise AppError(
+                "group.archived", f"project group '{group_id}' is archived",
+                {"group_id": group_id}, status_code=409,
+            )
+        if existing is None:
+            db.add(GroupMember(group_id=group_id, user_id=user.id, role_key=role_key,
+                               added_by=getattr(actor, "user_id", None)))
+            changes.append(("group.members.add", f"group:{group_id} user:{user.username} "
+                            f"role:{role_key}"))
+        else:
+            existing.role_key = role_key
+            changes.append(("group.members.update", f"group:{group_id} user:{user.username} "
+                            f"role:{role_key}"))
+    for group_id in sorted(set(current) - set(wanted)):
+        db.delete(current[group_id])
+        changes.append(("group.members.remove", f"group:{group_id} user:{user.username}"))
+    if not changes:
+        return
+    db.flush()
+    bump_epoch(db)
+    for action, target in changes:
+        record_structure_event(
+            db=db, actor=actor.username, action=action, target=target,
+            actor_user_id=getattr(actor, "user_id", None),
+        )
+
+
+def project_member_ids(db: Session, project_id: str) -> set[str]:
+    """Accounts that are members of the project: a direct row, or a membership of the
+    project's (unarchived) group. 404 `project.not_found` for an unknown project."""
+    project = db.get(Project, project_id)
+    if project is None:
+        raise _project_not_found(project_id)
+    ids = set(db.scalars(
+        select(ProjectMember.user_id).where(ProjectMember.project_id == project_id)
+    ))
+    if project.group_id:
+        group = db.get(ProjectGroup, project.group_id)
+        if group is not None and group.archived_at is None:
+            ids |= set(db.scalars(
+                select(GroupMember.user_id).where(GroupMember.group_id == group.id)
+            ))
+    return ids
+
+
+def project_memberships(
+    db: Session, user_ids: Sequence[str]
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """`{user_id: {"projects": [...], "groups": [...]}}` for the list and detail rows.
+
+    A project entry is `{id, name, status, is_default, role, sources}`: `sources`
+    lists where the access comes from (`direct` and/or `group:<id>`, the shape of
+    `/api/me/access`'s `role_sources`) and `role` is the direct role, else the
+    group's. Group-sourced projects come from unarchived groups only, as in the
+    access snapshot. A group entry is `{id, name, role, archived}`."""
+    if not user_ids:
+        return {}
+    ids = list(user_ids)
+    direct = db.execute(
+        select(ProjectMember.user_id, ProjectMember.project_id, ProjectMember.role_key)
+        .where(ProjectMember.user_id.in_(ids))
+    ).all()
+    group_rows = db.execute(
+        select(GroupMember.user_id, GroupMember.group_id, GroupMember.role_key,
+               ProjectGroup.name, ProjectGroup.archived_at)
+        .join(ProjectGroup, ProjectGroup.id == GroupMember.group_id)
+        .where(GroupMember.user_id.in_(ids))
+    ).all()
+    live_groups = sorted({row[1] for row in group_rows if row[4] is None})
+    by_group: dict[str, list[str]] = {}
+    if live_groups:
+        for project_id, group_id in db.execute(
+            select(Project.id, Project.group_id).where(
+                Project.group_id.in_(live_groups), Project.status.in_(("active", "archived"))
+            )
+        ).all():
+            by_group.setdefault(group_id, []).append(project_id)
+    project_ids = {row[1] for row in direct} | {p for ps in by_group.values() for p in ps}
+    projects = (
+        {p.id: p for p in db.scalars(select(Project).where(Project.id.in_(sorted(project_ids))))}
+        if project_ids else {}
+    )
+    entries: dict[str, dict[str, dict[str, Any]]] = {}
+
+    def _entry(user_id: str, project_id: str) -> dict[str, Any] | None:
+        project = projects.get(project_id)
+        if project is None:
+            return None
+        return entries.setdefault(user_id, {}).setdefault(project_id, {
+            "id": project.id, "name": project.name, "status": project.status,
+            "is_default": bool(project.is_default), "role": None, "sources": [],
+        })
+
+    for user_id, project_id, role_key in direct:
+        entry = _entry(user_id, project_id)
+        if entry is not None:
+            entry["role"] = role_key
+            entry["sources"].insert(0, {"source": "direct", "role_key": role_key})
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for user_id, group_id, role_key, name, archived_at in group_rows:
+        groups.setdefault(user_id, []).append(
+            {"id": group_id, "name": name, "role": role_key, "archived": archived_at is not None}
+        )
+        if archived_at is not None:
+            continue
+        for project_id in by_group.get(group_id, []):
+            entry = _entry(user_id, project_id)
+            if entry is not None:
+                entry["role"] = entry["role"] or role_key
+                entry["sources"].append({"source": f"group:{group_id}", "role_key": role_key})
+    out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for user_id in ids:
+        rows = sorted(
+            entries.get(user_id, {}).values(),
+            key=lambda e: (not e["is_default"], e["name"].lower(), e["id"]),
+        )
+        out[user_id] = {
+            "projects": rows,
+            "groups": sorted(groups.get(user_id, []), key=lambda g: (g["name"].lower(), g["id"])),
+        }
+    return out
+
+
+def user_detail(db: Session, user: User) -> dict[str, Any]:
+    """`serialize` with the account's grants and memberships filled in."""
+    return serialize(
+        user,
+        workspaces=workspace_grants(db, [user.id]).get(user.id, []),
+        memberships=project_memberships(db, [user.id]).get(user.id),
+    )
+
+
+def bulk_add_to_project(
+    db: Session,
+    actor: Any,
+    *,
+    project_id: str,
+    user_ids: list[str],
+    role_key: str,
+    overrides: dict[str, bool] | None = None,
+) -> dict[str, Any]:
+    """Design §7.6: put several accounts into one project with one role.
+
+    An upsert of direct rows — an existing member's role (and overrides, when sent)
+    is replaced; nobody is removed and no workspace grant changes. Administrators
+    are skipped (they reach every project by role and hold no rows, the same rule as
+    `sync_default_membership`); an unknown id refuses the whole batch. Staged; the
+    caller commits."""
+    from app.services import projects as projects_service
+
+    wanted = list(dict.fromkeys(uid.strip() for uid in user_ids if uid and uid.strip()))
+    if not wanted:
+        raise AppError("users.invalid_bulk", "user_ids must name at least one account")
+    if len(wanted) > BULK_LIMIT:
+        raise AppError(
+            "users.invalid_bulk", f"at most {BULK_LIMIT} accounts per request", status_code=422
+        )
+    project = db.get(Project, project_id)
+    if project is None:
+        raise _project_not_found(project_id)
+    rows = {u.id: u for u in db.scalars(select(User).where(User.id.in_(wanted)))}
+    from app.services.admin_credential import BUILTIN_ADMIN_ID
+
+    unknown = [uid for uid in wanted if uid not in rows and uid != BUILTIN_ADMIN_ID]
+    if unknown:
+        raise NotFoundError(
+            "users.not_found", f"Unknown user id(s): {', '.join(unknown)}", {"unknown": unknown}
+        )
+    skipped = [
+        {"user_id": uid, "reason": "admin"}
+        for uid in wanted
+        if uid == BUILTIN_ADMIN_ID or rows[uid].role == ROLE_ADMIN
+    ]
+    skip_ids = {item["user_id"] for item in skipped}
+    upsert: list[dict[str, Any]] = []
+    for uid in wanted:
+        if uid in skip_ids:
+            continue
+        entry: dict[str, Any] = {"user_id": uid, "role_key": role_key}
+        if overrides is not None:
+            entry["overrides"] = overrides
+        else:
+            existing = db.get(ProjectMember, (project_id, uid))
+            entry["overrides"] = existing.overrides if existing is not None else None
+        upsert.append(entry)
+    result = (
+        projects_service.upsert_members(db, actor, project, upsert, [])
+        if upsert else {"added": [], "updated": [], "removed": []}
+    )
+    changed = set(result["added"]) | set(result["updated"])
+    return {
+        "project_id": project_id,
+        "role_key": role_key,
+        "added": result["added"],
+        "updated": result["updated"],
+        "unchanged": [item["user_id"] for item in upsert if item["user_id"] not in changed],
+        "skipped": skipped,
+    }

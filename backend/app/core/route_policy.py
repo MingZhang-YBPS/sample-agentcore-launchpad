@@ -1264,3 +1264,18 @@ PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
     ("GET", "/api/network-profiles/projects/{project_id}"),
     ("PUT", "/api/network-profiles/projects/{project_id}"),
 })
+
+# ---- P1F-users: user management with projects (design projects §7.4–§7.6, §7.10) ----
+# Account management stays ADMIN and hub-global (`/api/users` prefix): the account's
+# detail and effective access, and the bulk "add to project" that writes the same
+# `project_members` rows as `PUT /api/projects/{id}/members`.
+ROUTE_POLICY.update({
+    ("GET", "/api/users/{user_id}"): ADMIN,
+    ("GET", "/api/users/{user_id}/access"): ADMIN,
+    ("POST", "/api/users/bulk/projects"): ADMIN,
+})
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {
+    ("GET", "/api/users/{user_id}"),
+    ("GET", "/api/users/{user_id}/access"),
+    ("POST", "/api/users/bulk/projects"),
+}
