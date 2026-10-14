@@ -10111,6 +10111,26 @@
         "wait": "Deploying",
         "act": "Failed",
         "off": "Other"
+      },
+      "import": "Import existing runtime",
+      "actions": "Actions",
+      "rowMenu": "Actions for {{name}}",
+      "bulk": {
+        "select": "Select {{name}}",
+        "selectAll": "Select every agent that can be deleted",
+        "selected": "{{count}} selected",
+        "clear": "Clear selection",
+        "delete": "Delete {{count}}",
+        "title_one": "Delete this agent?",
+        "title_other": "Delete {{count}} agents?",
+        "body_one": "This agent and its AgentCore resources are deleted. This cannot be undone.",
+        "body_other": "These {{count}} agents and their AgentCore resources are deleted. This cannot be undone.",
+        "failedBody": "{{count}} could not be deleted. Fix the cause and try again, or cancel.",
+        "recordOnly": "(imported: only the platform record is removed)",
+        "confirm": "Delete {{count}}",
+        "retry": "Try again",
+        "deleted_one": "Deleted 1 agent",
+        "deleted_other": "Deleted {{count}} agents"
       }
     },
     "agent": {
