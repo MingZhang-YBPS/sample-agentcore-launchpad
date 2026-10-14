@@ -5,112 +5,19 @@
  * criterion with two items reports a rate that is noise.
  */
 import { Lock, Plus, Sprout } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
-import { CASE_TIERS, type CaseTier, type GoldenItem, type GoldenSet, type GoldenSplit, type WritableSplit } from "../../../lib/dlc";
+import type { GoldenSet, GoldenSplit, WritableSplit } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { CoverageMatrix } from "./charts";
 import { biasText } from "./common";
+import { ImportDialog } from "./golden/ImportDialog";
 
 const SPLITS: GoldenSplit[] = ["dev", "regression", "holdout"];
-
-/** One item per line: `scenario_id | question | expected answer`; a JSON array works too. */
-function parseItems(text: string): GoldenItem[] {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("[")) return JSON.parse(trimmed) as GoldenItem[];
-  return trimmed
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, index) => {
-      const [id, question, expected] = line.split("|").map((p) => p.trim());
-      return { scenario_id: id || `item-${index + 1}`, turns: [{ input: question ?? id, expected_response: expected ?? "" }] };
-    });
-}
-
-/**
- * The dialog's case tier is the fallback for items that carry none. An item that
- * already has its own `metadata.dlc` (a golden-set JSON file: case_tier,
- * criteria_ids, split) keeps it — overwriting it put every item of a seeded file
- * in one tier and dropped its criteria links, so the coverage matrix and the
- * stratified holdout were wrong and the only faithful path was the raw API.
- */
-export function withCaseTier(item: GoldenItem, caseTier: CaseTier): GoldenItem {
-  const meta = (item.metadata ?? {}) as Record<string, unknown>;
-  const dlc = (meta.dlc ?? {}) as Record<string, unknown>;
-  return { ...item, metadata: { ...meta, dlc: { case_tier: caseTier, ...dlc } } };
-}
-
-function ItemsDialog({
-  title,
-  hint,
-  busy,
-  extra,
-  onClose,
-  onSubmit,
-}: {
-  title: string;
-  hint: string;
-  busy: boolean;
-  extra?: ReactNode;
-  onClose: () => void;
-  onSubmit: (items: GoldenItem[], caseTier: CaseTier) => void;
-}) {
-  const { t } = useTranslation();
-  const [text, setText] = useState("");
-  const [caseTier, setCaseTier] = useState<CaseTier>("known_bad");
-  const [parseError, setParseError] = useState<string | null>(null);
-  return (
-    <Dialog
-      wide
-      title={title}
-      onClose={onClose}
-      foot={
-        <>
-          <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || text.trim() === ""}
-            onClick={() => {
-              try {
-                const items = parseItems(text);
-                setParseError(null);
-                onSubmit(items, caseTier);
-              } catch (err) {
-                setParseError(errorMessage(err));
-              }
-            }}>
-            {t("v3.standards.save")}
-          </Btn>
-        </>
-      }
-    >
-      <div style={{ display: "grid", gap: 12 }}>
-        <p style={{ margin: 0 }}>{hint}</p>
-        {extra}
-        <label className="v3-field">
-          <span>{t("v2.dlc.golden.caseTier")}</span>
-          <select className="v3-select" value={caseTier} onChange={(e) => setCaseTier(e.target.value as CaseTier)}>
-            {CASE_TIERS.map((c) => <option key={c} value={c}>{t(`v2.dlc.caseTier.${c}`)}</option>)}
-          </select>
-          <small className="v3-hint">{t("v2.dlc.golden.caseTierHint")}</small>
-        </label>
-        <label className="v3-field">
-          <span>{t("v2.dlc.golden.itemsField")}</span>
-          <textarea className="v3-input mono" rows={10} value={text} onChange={(e) => setText(e.target.value)} />
-          <input type="file" accept=".json,.txt,application/json,text/plain" data-testid="v3-golden-file"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void file.text().then(setText);
-            }} />
-          <small className={parseError ? "v3-err" : "v3-hint"}>{parseError ?? t("v2.dlc.golden.itemsHint")}</small>
-        </label>
-      </div>
-    </Dialog>
-  );
-}
 
 export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; label: string }[]; onOpen: (id: string) => void }) {
   const { t } = useTranslation();
@@ -321,28 +228,33 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
       </Panel>
 
       {adding && (
-        <ItemsDialog
+        <ImportDialog
+          mode="add"
+          split={adding}
+          goldenSet={goldenSet}
           title={t("v2.dlc.golden.addTitle", { split: t(`v2.dlc.split.${adding}`) })}
           hint={t("v2.dlc.golden.addHint")}
           busy={busy}
           onClose={() => setAdding(null)}
-          onSubmit={(items, caseTier) => {
+          onSubmit={(items) => {
             const split = adding;
             setAdding(null);
-            void run(() => dlcApi.addGoldenItems(goldenSet.id, split, items.map((i) => withCaseTier(i, caseTier))), "v2.dlc.golden.added");
+            void run(() => dlcApi.addGoldenItems(goldenSet.id, split, items), "v2.dlc.golden.added");
           }}
         />
       )}
       {seeding && (
-        <ItemsDialog
+        <ImportDialog
+          mode="seed"
+          goldenSet={goldenSet}
           title={t("v2.dlc.golden.seedTitle")}
           hint={t("v2.dlc.golden.seedHint")}
           busy={busy}
           extra={<Notice s="wait">{t("v2.dlc.golden.seedOnce")}</Notice>}
           onClose={() => setSeeding(false)}
-          onSubmit={(items, caseTier) => {
+          onSubmit={(items) => {
             setSeeding(false);
-            void run(() => dlcApi.seedGolden(goldenSet.id, items.map((i) => withCaseTier(i, caseTier))), "v2.dlc.golden.seeded");
+            void run(() => dlcApi.seedGolden(goldenSet.id, items), "v2.dlc.golden.seeded");
           }}
         />
       )}
