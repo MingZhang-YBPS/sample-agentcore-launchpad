@@ -159,15 +159,17 @@ _GW_EAGER_TOKEN_RE = re.compile(
     re.MULTILINE,
 )
 
-# The export's module-scope gateway-client construction — the import-time crash
-# site the v1 conversion caveat was protecting against.
+# The export's module-scope MCP-client construction — the import-time crash site
+# the v1 conversion caveat was protecting against. The CLI emits one line per kind
+# (`get_all_gateway_mcp_clients()` and/or `get_all_remote_mcp_clients()`).
 # `[ \t]*`, not `\s*`: `\s` matches newlines, so a greedy tail would swallow the
 # blank line after the call and silently reflow the exported source.
 _GW_CLIENTS_CALL_RE = re.compile(
     r"^(?P<indent>[ \t]*)"
-    r"(?P<call>mcp_clients[ \t]*\+=[ \t]*get_all_gateway_mcp_clients\(\)[ \t]*)$",
+    r"(?P<call>mcp_clients[ \t]*\+=[ \t]*get_all_(?P<kind>gateway|remote)_mcp_clients\(\)[ \t]*)$",
     re.MULTILINE,
 )
+_GW_CLIENTS_DEF = "def get_all_gateway_mcp_clients("
 _LEGACY_GRAFT_RE = re.compile(
     r"\n# ─── Launchpad platform contract: config bundles \(A/B experiments\)"
     r"[\s\S]*?# ─{10,}\n"
@@ -789,10 +791,11 @@ def graft_lazy_gateway_token(client_py: str) -> str:
     """
     if GW_LAZY_TOKEN_MARK in client_py or f"class {GW_NO_BUNDLE_CLIENT}(" in client_py:
         return client_py
-    if "MCPClient(" not in client_py:
-        # Nothing is constructed, so there is no eager fetch to defer. Checked
-        # before the anchor so "no gateway client" stays benign while "a client
-        # whose shape we no longer recognise" still fails loudly below.
+    if "MCPClient(" not in client_py or _GW_CLIENTS_DEF not in client_py:
+        # No Gateway client is constructed, so there is no eager fetch to defer
+        # (remote MCP clients fetch no token). Checked before the anchor so "no
+        # gateway client" stays benign while "a gateway client whose shape we no
+        # longer recognise" still fails loudly below.
         return client_py
 
     def _replace(match: re.Match[str]) -> str:
@@ -875,7 +878,9 @@ def graft_missing_gateway_clients(
     already constructs clients.
     """
     client_py = files.get("mcp_client/client.py") or ""
-    if GW_CLIENTS_MARK in client_py or "MCPClient(" in client_py:
+    # Remote MCP clients also construct MCPClient(...): only an exported Gateway
+    # getter means the CLI kept the Gateways.
+    if GW_CLIENTS_MARK in client_py or _GW_CLIENTS_DEF in client_py:
         return files
     gateways = []
     for tool in harness_tools:
@@ -988,42 +993,142 @@ def graft_missing_gateway_clients(
     return grafted
 
 
-def graft_gateway_softfail(main_py: str) -> str:
-    """Make the exported module-scope gateway-client construction fail soft.
+REMOTE_MCP_CLIENTS_MARK = "# <launchpad-remote-mcp-clients:v1>"
+_REMOTE_CLIENTS_DEF = "def get_all_remote_mcp_clients("
 
-    The export ends up with, at import time:
+
+def graft_missing_remote_mcp_clients(
+    files: dict[str, str],
+    mcp_tools: list[ToolRef],
+    allowed_tools: list[str] | None,
+) -> dict[str, str]:
+    """Restore the remote MCP clients the CLI export drops for a narrowed Harness.
+
+    The platform deploys a ``type="mcp"`` ToolRef as a Harness ``remote_mcp`` tool
+    (unauthenticated streamable-http, ``deployer/harness.py``). Like Gateways, the
+    CLI 0.21.x export of a Harness whose ``allowedTools`` is not ``*`` emits an
+    empty ``mcp_clients = []`` — so the twin would answer without those tools, and
+    the soft-fail graft found no call to wrap and failed the whole conversion.
+
+    The clients are rebuilt from the source spec in the CLI's own remote-MCP shape
+    (``get_<name>_mcp_client`` / ``get_all_remote_mcp_clients``), narrowed by the
+    spec's ``allowed_tools`` the same way the Gateway rebuild is. Idempotent; a
+    no-op when the export already constructs remote clients.
+    """
+    client_py = files.get("mcp_client/client.py") or ""
+    main_py = files.get("main.py") or ""
+    if (REMOTE_MCP_CLIENTS_MARK in client_py or _REMOTE_CLIENTS_DEF in client_py
+            or "get_all_remote_mcp_clients" in main_py):
+        return files
+    servers = []
+    for ref in mcp_tools:
+        url = (ref.config or {}).get("url")
+        if ref.type != "mcp" or not url:
+            continue
+        allow = _gateway_allowlist(ref.name, allowed_tools)
+        if allow == []:
+            continue
+        servers.append((ref.name, str(url), allow))
+    if not servers:
+        return files
+    if not _MCP_CLIENTS_INIT_RE.search(main_py):
+        raise ConversionError(
+            "graft anchor missing: module-scope 'mcp_clients = []' not found "
+            "(agentcore CLI codegen changed?)"
+        )
+    head = ["from mcp.client.streamable_http import streamablehttp_client",
+            "from strands.tools.mcp.mcp_client import MCPClient"]
+    if any(allow and any(set(name) & _GLOB_CHARS for name in allow) for *_, allow in servers):
+        head.insert(0, "import re")
+    lines = [REMOTE_MCP_CLIENTS_MARK,
+             "# Rebuilt by Launchpad: the CLI export drops remote MCP servers of a "
+             "narrowed Harness."]
+    getters = []
+    for name, url, allow in servers:
+        ident = re.sub(r"\W", "_", name)
+        rest = ""
+        if allow is not None:
+            matchers = ", ".join(
+                f"re.compile({fnmatch.translate(tool)!r})" if set(tool) & _GLOB_CHARS
+                else repr(tool)
+                for tool in allow
+            )
+            rest = f", tool_filters={{'allowed': [{matchers}]}}"
+        lines += [
+            "",
+            f"def get_{ident}_mcp_client() -> MCPClient | None:",
+            f'    """Returns an MCP Client for the {name} remote MCP server."""',
+            f"    url = {url!r}",
+            f"    return MCPClient(lambda: streamablehttp_client(url){rest})",
+        ]
+        getters.append(ident)
+    lines += [
+        "",
+        "def get_all_remote_mcp_clients() -> list[MCPClient]:",
+        '    """Returns all configured remote MCP clients."""',
+        f"    clients = [{', '.join(f'get_{ident}_mcp_client()' for ident in getters)}]",
+        "    return [c for c in clients if c is not None]",
+    ]
+    missing = [line for line in head if line not in client_py.splitlines()]
+    grafted = dict(files)
+    grafted["mcp_client/client.py"] = (
+        (client_py.rstrip() + "\n\n" if client_py.strip() else "")
+        + "\n".join(missing) + "\n\n" + "\n".join(lines) + "\n"
+    )
+    grafted.setdefault("mcp_client/__init__.py", "")
+    grafted["main.py"] = _MCP_CLIENTS_INIT_RE.sub(
+        "mcp_clients = []\n"
+        "from mcp_client.client import get_all_remote_mcp_clients  "
+        "# <launchpad-remote-mcp-clients:v1>\n"
+        "mcp_clients += get_all_remote_mcp_clients()",
+        main_py, count=1,
+    )
+    return grafted
+
+
+def graft_gateway_softfail(main_py: str) -> str:
+    """Make the exported module-scope MCP-client construction fail soft.
+
+    The export ends up with, at import time, one or both of:
 
         mcp_clients += get_all_gateway_mcp_clients()
+        mcp_clients += get_all_remote_mcp_clients()
 
-    which raises when the outbound M2M token cannot be fetched. A crash there is
-    worse than missing tools: the runtime never starts, the deploy pipeline's
-    health signal still reports the agent `active`, and every invoke fails.
+    The Gateway call raises when the outbound M2M token cannot be fetched; a remote
+    server's getter can raise too. A crash there is worse than missing tools: the
+    runtime never starts, the deploy pipeline's health signal still reports the
+    agent `active`, and every invoke fails. Each call is wrapped on its own, so a
+    failing remote server does not also take the Gateway tools down.
 
     Idempotent — re-grafting an already-grafted bundle is a no-op.
     """
     if GW_SOFTFAIL_START in main_py:
         return main_py
-    match = _GW_CLIENTS_CALL_RE.search(main_py)
-    if match is None:
+
+    def _wrap(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f"{indent}{GW_SOFTFAIL_START}\n"
+            f"{indent}try:\n"
+            f"{indent}    {match.group('call').strip()}\n"
+            f"{indent}except Exception as _launchpad_gw_exc:\n"
+            f"{indent}    print(\n"
+            f"{indent}        '[launchpad] {match.group('kind')} MCP clients unavailable: '\n"
+            f"{indent}        f'{{type(_launchpad_gw_exc).__name__}}: {{_launchpad_gw_exc}}',\n"
+            f"{indent}        flush=True,\n"
+            f"{indent}    )\n"
+            f"{indent}{GW_SOFTFAIL_END}"
+        )
+
+    grafted, count = _GW_CLIENTS_CALL_RE.subn(_wrap, main_py)
+    if count == 0:
         raise ConversionError(
             "graft anchor missing: module-scope 'mcp_clients += "
-            "get_all_gateway_mcp_clients()' not found while the export DOES carry "
-            "mcp_client/client.py (agentcore CLI codegen changed?)"
+            "get_all_gateway_mcp_clients()' / 'get_all_remote_mcp_clients()' not found "
+            "while mcp_client/client.py constructs MCP clients "
+            "(agentcore CLI codegen changed?)"
         )
-    indent = match.group("indent")
-    replacement = (
-        f"{indent}{GW_SOFTFAIL_START}\n"
-        f"{indent}try:\n"
-        f"{indent}    {match.group('call').strip()}\n"
-        f"{indent}except Exception as _launchpad_gw_exc:\n"
-        f"{indent}    print(\n"
-        f"{indent}        '[launchpad] gateway MCP clients unavailable: '\n"
-        f"{indent}        f'{{type(_launchpad_gw_exc).__name__}}: {{_launchpad_gw_exc}}',\n"
-        f"{indent}        flush=True,\n"
-        f"{indent}    )\n"
-        f"{indent}{GW_SOFTFAIL_END}"
-    )
-    return main_py[: match.start()] + replacement + main_py[match.end():]
+    return grafted
 
 
 def flatten_requirements(files: dict[str, str], platform: list[str]) -> list[str]:
@@ -1183,15 +1288,25 @@ def build_conversion_spec(
             grafted, list(harness.get("tools") or []), harness.get("allowedTools"),
             skip_gateway_arns=frozenset([kb_gw_arn]) if kbs and kb_gw_arn else frozenset(),
         )
+    # Remote MCP servers come from the spec (the URL is all the Harness carries), so
+    # no live Harness read is needed for them.
+    grafted = graft_missing_remote_mcp_clients(
+        grafted, gateway_tools, source_spec.get("allowed_tools"),
+    )
+    if (harness is None and any(t.type == "gateway" for t in gateway_tools)
+            and "get_all_gateway_mcp_clients" not in grafted["main.py"]):
+        # Only the live Harness can rebuild Gateway clients a narrowed export drops;
+        # without it the twin would deploy and silently reach none of them.
+        raise ConversionError(
+            "the export carries no Gateway MCP client for the source's Gateway tools "
+            "and the live Harness was not read to rebuild them"
+        )
     client_py = grafted.get("mcp_client/client.py")
-    if client_py is not None and (
-        gateway_tools
-        or "MCPClient(" in client_py
-        or "get_all_gateway_mcp_clients" in grafted["main.py"]
-    ):
-        # A tool-free export also carries an unused client.py scaffold returning
-        # no clients. Only that inert case may omit the main.py call; configured
-        # tools or actual client construction must still pass both graft guards.
+    mcp_calls = bool(_GW_CLIENTS_CALL_RE.search(grafted["main.py"]))
+    if client_py is not None and ("MCPClient(" in client_py or mcp_calls):
+        # A tool-free (or fully narrowed-away) export carries an unused client.py
+        # scaffold returning no clients; only that inert case skips the grafts.
+        # Actual client construction must still pass both graft guards.
         grafted["mcp_client/client.py"] = graft_lazy_gateway_token(
             grafted["mcp_client/client.py"]
         )
@@ -1228,7 +1343,12 @@ def build_conversion_spec(
             f"not verified — exported code fetches {len(code_other_skills)} "
             "non-S3 skill source(s); network egress for those is unverified"
         )
-    if gateway_tools:
+    if gateway_tools and not _GW_CLIENTS_CALL_RE.search(grafted["main.py"]):
+        notes["gateway_tools"] = (
+            f"not wired ({len(gateway_tools)} attachment(s) carried, but the Harness "
+            "allowedTools selects none of them, so the runtime mounts no MCP client)"
+        )
+    elif gateway_tools:
         notes["gateway_tools"] = (
             f"wired ({len(gateway_tools)} attachment(s) carried; exec role keeps its "
             "AgentCore Identity grants and invoke sends runtimeUserId so the "

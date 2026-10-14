@@ -1288,3 +1288,18 @@ PROJECT_STRUCTURE_ROUTES: dict[tuple[str, str], str] = {
 ROUTE_POLICY.update(PROJECT_STRUCTURE_ROUTES)
 HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/project-groups", "/api/departments")
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_STRUCTURE_ROUTES)
+
+# ---- P1F-users: user management with projects (design projects §7.4–§7.6, §7.10) ----
+# Account management stays ADMIN and hub-global (`/api/users` prefix): the account's
+# detail and effective access, and the bulk "add to project" that writes the same
+# `project_members` rows as `PUT /api/projects/{id}/members`.
+ROUTE_POLICY.update({
+    ("GET", "/api/users/{user_id}"): ADMIN,
+    ("GET", "/api/users/{user_id}/access"): ADMIN,
+    ("POST", "/api/users/bulk/projects"): ADMIN,
+})
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {
+    ("GET", "/api/users/{user_id}"),
+    ("GET", "/api/users/{user_id}/access"),
+    ("POST", "/api/users/bulk/projects"),
+}
