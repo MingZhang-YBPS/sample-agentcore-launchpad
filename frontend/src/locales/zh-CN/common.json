@@ -11538,5 +11538,30 @@
   "byocTelemetry": {
     "noAdotWarn": "未检测到 ADOT：这个 Agent 不会产生链路，可观测和评估都看不到它。两种做法：在 requirements.txt 里加上 aws-opentelemetry-distro（并保持安装依赖）后重新上传；或改用 Dockerfile 构建，用 opentelemetry-instrument 启动。",
     "adotOn": "已检测到 ADOT：Agent 会以 opentelemetry-instrument 启动，链路会出现在可观测里。"
+  },
+  "mcpServer": {
+    "stdio": {
+      "label": "传输方式",
+      "on": "stdio 服务器——由平台的 streamable-HTTP 桥接运行",
+      "hint": "适用于只支持 stdio 的服务器。部署时加入桥接程序（samples/mcp_stdio_bridge/），由它监听 0.0.0.0:8000/mcp，并把你的命令作为子进程启动。服务器本身已提供 streamable HTTP 时请保持关闭。",
+      "zipOnly": "桥接只包装代码 zip。Dockerfile 上下文或镜像请参照 samples/mcp_stdio_bridge/ 自行把桥接打进镜像。",
+      "base": "运行时",
+      "baseName": {
+        "python": "Python",
+        "node": "Node.js"
+      },
+      "baseHint": {
+        "python": "在托管 Python 运行时上运行；requirements.txt 照常解析。python / python3 即运行时自带的解释器。",
+        "node": "基于桥接的 Node 22 基础镜像构建（CodeBuild，arm64；npm ci --omit=dev），以容器方式部署。请上传已构建的 JavaScript；zip 中的 Dockerfile 会被替换。"
+      },
+      "command": "命令",
+      "commandHint": "只填程序名，如 python、node 或 npx。从 zip 根目录启动，不经过 shell。",
+      "args": "参数",
+      "argsHint": "每行一个，按原样传入（最多 {{max}} 个）。",
+      "preview": "启动：",
+      "errCommand": "只能是一个词，不含空格——其余部分请填到「参数」。",
+      "errArgs": "最多 {{max}} 个参数，每个不超过 1024 个字符。",
+      "limits": "每个容器只有一个服务器进程：适合无状态服务器或单会话。保存会话状态的服务器会把所有调用方视为同一个会话。响应为普通 JSON——服务器的进度和日志通知会被丢弃，它反向发起的请求（sampling、elicitation、roots）一律答复为不支持。"
+    }
   }
 }

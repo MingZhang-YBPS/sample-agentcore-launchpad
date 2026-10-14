@@ -11538,5 +11538,30 @@
   "byocTelemetry": {
     "noAdotWarn": "No ADOT detected — this agent will emit no traces, so neither Observability nor Evaluation will see it. Either add aws-opentelemetry-distro to requirements.txt (with dependency install on) and re-upload, or build from a Dockerfile that starts it under opentelemetry-instrument.",
     "adotOn": "ADOT detected — the agent starts under opentelemetry-instrument and its traces appear in Observability."
+  },
+  "mcpServer": {
+    "stdio": {
+      "label": "Transport",
+      "on": "stdio server — run it behind the platform's streamable-HTTP bridge",
+      "hint": "For a server that only speaks stdio. The deploy adds the bridge (samples/mcp_stdio_bridge/), which serves 0.0.0.0:8000/mcp and starts your command as its subprocess. Leave off when the server already serves streamable HTTP.",
+      "zipOnly": "The bridge wraps code zips only. For a Dockerfile context or an image, build the bridge in yourself from samples/mcp_stdio_bridge/.",
+      "base": "Runtime",
+      "baseName": {
+        "python": "Python",
+        "node": "Node.js"
+      },
+      "baseHint": {
+        "python": "Runs on the managed Python runtime; requirements.txt is resolved as usual. python / python3 is the runtime's interpreter.",
+        "node": "Builds an image on the bridge's Node 22 base (CodeBuild, arm64; npm ci --omit=dev) and deploys it as a container. Ship built JavaScript; a Dockerfile in the zip is replaced."
+      },
+      "command": "Command",
+      "commandHint": "The program only, e.g. python, node or npx. It runs from the zip root without a shell.",
+      "args": "Arguments",
+      "argsHint": "One per line, passed exactly as written (at most {{max}}).",
+      "preview": "Starts:",
+      "errCommand": "One word, no spaces — put the rest in Arguments.",
+      "errArgs": "At most {{max}} arguments of up to 1024 characters each.",
+      "limits": "One server process per container: fine for a stateless server or a single session. A server that keeps per-session state sees every caller as one session. Responses are plain JSON — the server's progress and logging notifications are dropped, and requests it sends back (sampling, elicitation, roots) are answered as unsupported."
+    }
   }
 }

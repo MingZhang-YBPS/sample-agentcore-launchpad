@@ -507,16 +507,58 @@ class ByocConfig(BaseModel):
 MCP_TARGET_NAME_RE = r"^[a-zA-Z0-9](?:-?[a-zA-Z0-9]){0,99}$"
 
 
+MCP_STDIO_ARGS_MAX = 32
+
+
+class McpStdioWrapper(BaseModel):
+    """A stdio-only MCP server, run behind the platform's streamable-HTTP bridge
+    (``samples/mcp_stdio_bridge/``). code_zip only: the deployer adds the bridge
+    to the bundle and starts ``command args…`` as its subprocess — no shell, so
+    the parts are passed exactly as given.
+
+    ``base`` picks the runtime the command needs: ``python`` stays on the
+    managed Python runtime; ``node`` builds an image from the bridge's Node
+    base image (CodeBuild) and deploys it as a container.
+    """
+
+    command: str = Field(min_length=1, max_length=255, pattern=r"^[^\s\x00]+$")
+    args: list[str] = Field(default_factory=list, max_length=MCP_STDIO_ARGS_MAX)
+    base: Literal["python", "node"] = "python"
+
+    @field_validator("args")
+    @classmethod
+    def _args_shape(cls, value: list[str]) -> list[str]:
+        for arg in value:
+            if len(arg) > 1024 or "\x00" in arg or "\n" in arg:
+                raise ValueError(
+                    "stdio_wrapper.args entries must be single-line and at most 1024 chars"
+                )
+        return value
+
+    def argv(self) -> list[str]:
+        return [self.command, *self.args]
+
+    @property
+    def builds_image(self) -> bool:
+        """The managed runtime is Python only: a Node server ships as an image
+        built in the workspace ECR repo (and its role needs the ECR pull)."""
+        return self.base == "node"
+
+
 class McpServerConfig(BaseModel):
     """A BYOC artifact hosted as an MCP server (``protocol="mcp"``).
 
-    The artifact serves streamable HTTP on ``0.0.0.0:8000/mcp``. The deploy
-    pipeline gives the runtime its own inbound Cognito client (JWT), an OAuth2
-    provider for that client and a target on the workspace Gateway, so agents
-    reach the tools through the Gateway as ``<target_name>___<tool>``.
+    The artifact serves streamable HTTP on ``0.0.0.0:8000/mcp`` — itself, or,
+    with ``stdio_wrapper``, through the platform bridge around a stdio server.
+    The deploy pipeline gives the runtime its own inbound Cognito client (JWT),
+    an OAuth2 provider for that client and a target on the workspace Gateway,
+    so agents reach the tools through the Gateway as ``<target_name>___<tool>``.
     """
 
     target_name: str = Field(min_length=1, max_length=100, pattern=MCP_TARGET_NAME_RE)
+    # None = the artifact serves streamable HTTP itself (every spec written
+    # before this field existed)
+    stdio_wrapper: McpStdioWrapper | None = None
     # Server-owned: stamped by the deploy pipeline (services/mcp_servers.py),
     # never taken from the client — the console only renders them back.
     client_id: str | None = Field(default=None, max_length=128)

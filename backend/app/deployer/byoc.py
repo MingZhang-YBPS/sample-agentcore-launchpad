@@ -11,11 +11,19 @@
                 + poll READY; re-publish → UpdateAgentRuntime (new version)
     register  → the shared A2A registry record stage
 
+An MCP server whose spec carries ``mcp.stdio_wrapper`` is a code_zip of a
+stdio-only server: package adds the platform bridge
+(``samples/mcp_stdio_bridge/``), which serves streamable HTTP on :8000/mcp and
+runs ``command args…`` as its subprocess. ``base="python"`` stays a code
+runtime with the bridge as its entrypoint; ``base="node"`` builds the zip into
+an image on the bridge's Node base (CodeBuild → ECR) and deploys a container.
+
 The platform NEVER executes the uploaded code on the Launchpad host: package
 work is archive extraction, file checks and a pip *download/install into the
 bundle directory* (wheels are unpacked, never imported or run).
 """
 
+import json
 import logging
 import os
 import shutil
@@ -28,14 +36,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from app.core.config import get_settings
+from app.core.config import REPO_ROOT, get_settings
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
-from app.schemas.agent import AgentSpec, ByocConfig, parse_ecr_image_uri
+from app.schemas.agent import AgentSpec, ByocConfig, McpStdioWrapper, parse_ecr_image_uri
 from app.services import agent_iam, byoc_uploads, mcp_servers
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
@@ -61,11 +69,46 @@ logger = logging.getLogger(__name__)
 
 PACKAGE_KEY_TMPL = "agents/{name}/byoc_package.zip"
 
+# the stdio → streamable-HTTP bridge (§15.5); copied into wrapped bundles
+STDIO_BRIDGE_DIR = REPO_ROOT / "samples" / "mcp_stdio_bridge"
+STDIO_BRIDGE_FILE = "mcp_stdio_bridge.py"
+# the bridge reads its subprocess argv from this env var (a JSON array)
+STDIO_COMMAND_ENV = "MCP_STDIO_COMMAND"
+# a first argument with one of these suffixes names a script that must ship in the zip
+_STDIO_SCRIPT_SUFFIXES = (".py", ".js", ".mjs", ".cjs")
+
 
 def _config(spec: AgentSpec) -> ByocConfig:
     if spec.byoc is None:  # schema guarantees this; belt for hand-built rows
         raise RuntimeError("byoc spec has no byoc settings block")
     return spec.byoc
+
+
+def stdio_wrapper(spec: AgentSpec) -> McpStdioWrapper | None:
+    """The stdio bridge settings of an MCP server spec, or None."""
+    if spec.protocol != "mcp" or spec.mcp is None:
+        return None
+    return spec.mcp.stdio_wrapper
+
+
+def runs_on_code_runtime(spec: AgentSpec) -> bool:
+    """codeConfiguration (managed Python runtime) vs containerConfiguration:
+    every code_zip except a stdio server whose base needs an image."""
+    cfg = _config(spec)
+    if cfg.artifact_kind != "code_zip":
+        return False
+    wrapper = stdio_wrapper(spec)
+    return wrapper is None or not wrapper.builds_image
+
+
+def _check_stdio_wrapper(spec: AgentSpec) -> McpStdioWrapper | None:
+    wrapper = stdio_wrapper(spec)
+    if wrapper is not None and _config(spec).artifact_kind != "code_zip":
+        raise RuntimeError(
+            "mcp.stdio_wrapper applies to artifact_kind=code_zip only — a Dockerfile "
+            "context or image can run the bridge itself (samples/mcp_stdio_bridge/)"
+        )
+    return wrapper
 
 
 # PYTHON_3_13 → 3.13 (the shape pip/uv take); shared with the upload pre-resolve
@@ -134,6 +177,7 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     """No code to generate — verify the artifact reference and stamp provenance."""
     spec = AgentSpec(**agent.spec)
     cfg = _config(spec)
+    wrapper = _check_stdio_wrapper(spec)
 
     if cfg.artifact_kind == "container_image":
         digest, pushed_at = describe_image(ctx.workspace, cfg.image_uri or "")
@@ -172,6 +216,11 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     _stamp_provenance(ctx, agent, provenance)
     if spec.protocol == "mcp":
         _stamp_mcp_inbound(ctx, agent)
+    if wrapper is not None:
+        ctx.log(
+            f"stdio MCP server · bridge on :8000/mcp → {' '.join(wrapper.argv())} "
+            f"({wrapper.base} base)"
+        )
     if (
         spec.protocol != "mcp"
         and cfg.artifact_kind == "code_zip"
@@ -291,28 +340,67 @@ def _zip_tree(src_root: Path, zip_path: Path) -> None:
 
 
 def _package_code_zip(
-    ctx: StageContext, agent: Agent, cfg: ByocConfig, bucket: str
+    ctx: StageContext,
+    agent: Agent,
+    cfg: ByocConfig,
+    bucket: str,
+    wrapper: McpStdioWrapper | None = None,
 ) -> StageResult:
     # Agent names are only unique within a workspace. Each attempt owns its
     # directory, including while another job is resolving dependencies.
     with tempfile.TemporaryDirectory(prefix="launchpad_byoc_") as tmp:
-        return _build_code_zip(ctx, agent, cfg, bucket, Path(tmp))
+        if wrapper is not None and wrapper.builds_image:
+            return _build_stdio_image(ctx, agent, cfg, wrapper, Path(tmp))
+        return _build_code_zip(ctx, agent, cfg, bucket, Path(tmp), wrapper)
+
+
+def _check_stdio_script(src_root: Path, wrapper: McpStdioWrapper) -> None:
+    """``python server.py`` / ``node build/index.js``: the script must be in the
+    zip — caught here instead of as a crash loop behind the bridge."""
+    script = wrapper.args[0] if wrapper.args else ""
+    if not script.endswith(_STDIO_SCRIPT_SUFFIXES):
+        return  # `-m pkg`, a binary on PATH, an npx package… — nothing to check
+    if script.startswith("/") or ".." in Path(script).parts:
+        raise RuntimeError(
+            f"stdio_wrapper script '{script}' must be a relative path inside the zip"
+        )
+    if not (src_root / script).is_file():
+        raise RuntimeError(
+            f"stdio_wrapper script '{script}' not found in the uploaded zip"
+        )
+
+
+def _add_stdio_bridge(ctx: StageContext, src_root: Path) -> None:
+    """Copy the platform bridge into the bundle root (it owns that file name)."""
+    target = src_root / STDIO_BRIDGE_FILE
+    if target.exists():
+        ctx.log(f"upload carries its own {STDIO_BRIDGE_FILE} — replaced by the platform's")
+    shutil.copy2(STDIO_BRIDGE_DIR / STDIO_BRIDGE_FILE, target)
 
 
 def _build_code_zip(
-    ctx: StageContext, agent: Agent, cfg: ByocConfig, bucket: str, build_dir: Path
+    ctx: StageContext,
+    agent: Agent,
+    cfg: ByocConfig,
+    bucket: str,
+    build_dir: Path,
+    wrapper: McpStdioWrapper | None = None,
 ) -> StageResult:
     zip_path = build_dir / "upload.zip"
     byoc_uploads.download_upload(ctx.workspace, agent.workspace_id, cfg.upload_id or "",
                                  zip_path)
     src_root = byoc_uploads.extract_zip(zip_path, build_dir / "src")
 
-    entry = src_root / cfg.entrypoint
-    if not entry.is_file():
-        raise RuntimeError(
-            f"entrypoint '{cfg.entrypoint}' not found in the uploaded zip — "
-            "pick one of the detected candidates or re-upload"
-        )
+    if wrapper is not None:
+        # the bridge is the entrypoint; the member's entrypoint field is unused
+        _check_stdio_script(src_root, wrapper)
+    else:
+        entry = src_root / cfg.entrypoint
+        if not entry.is_file():
+            raise RuntimeError(
+                f"entrypoint '{cfg.entrypoint}' not found in the uploaded zip — "
+                "pick one of the detected candidates or re-upload"
+            )
 
     t0 = time.monotonic()
     installed = 0
@@ -324,6 +412,9 @@ def _build_code_zip(
             ctx.log("no requirements.txt in the zip — bundle shipped as uploaded")
     else:
         ctx.log("install_requirements=false — bundle shipped as uploaded")
+    if wrapper is not None:
+        _add_stdio_bridge(ctx, src_root)
+        ctx.log(f"stdio bridge added · entrypoint {STDIO_BRIDGE_FILE}")
 
     final_zip = build_dir / "deployment_package.zip"
     _zip_tree(src_root, final_zip)
@@ -337,7 +428,41 @@ def _build_code_zip(
     detail = f"code_zip · {size_mb:.1f}MB · s3 ✓"
     if installed:
         detail += f" · {installed} deps resolved (aarch64)"
+    if wrapper is not None:
+        detail += " · stdio bridge"
     return StageResult(detail=detail)
+
+
+def _build_stdio_image(
+    ctx: StageContext,
+    agent: Agent,
+    cfg: ByocConfig,
+    wrapper: McpStdioWrapper,
+    build_dir: Path,
+) -> StageResult:
+    """A stdio server whose base needs an image: the zip + the bridge + the
+    bridge's base Dockerfile + the platform buildspec → CodeBuild → ECR."""
+    zip_path = build_dir / "upload.zip"
+    byoc_uploads.download_upload(ctx.workspace, agent.workspace_id, cfg.upload_id or "",
+                                 zip_path)
+    src_root = byoc_uploads.extract_zip(zip_path, build_dir / "src")
+    _check_stdio_script(src_root, wrapper)
+    _add_stdio_bridge(ctx, src_root)
+    # the platform owns the recipe: an uploaded Dockerfile / buildspec is replaced
+    for name, source in (
+        ("Dockerfile", STDIO_BRIDGE_DIR / f"Dockerfile.{wrapper.base}"),
+        ("buildspec.yml", platform_buildspec_path()),
+    ):
+        if (src_root / name).exists():
+            ctx.log(f"upload carries its own {name} — replaced by the platform's")
+        shutil.copy2(source, src_root / name)
+    archive = shutil.make_archive(str(build_dir / "context_src"), "zip", src_root)
+    tag, mins = build_and_push_image(ctx, agent, archive)
+    digest = ctx.scratch["image_digest"]
+    return StageResult(
+        detail=f"stdio bridge · {wrapper.base} base · codebuild · arm64 · {mins:.1f}m "
+        f"→ :{tag} @ {digest[:19]}…"
+    )
 
 
 def _package_container_source(
@@ -376,6 +501,7 @@ def _build_container_source(
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
     cfg = _config(spec)
+    wrapper = _check_stdio_wrapper(spec)
     if cfg.artifact_kind == "container_image":
         # nothing to build — deploy pins the URI the generate stage verified
         ctx.scratch["image_uri"] = cfg.image_uri
@@ -386,7 +512,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
             "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
     if cfg.artifact_kind == "code_zip":
-        return _package_code_zip(ctx, agent, cfg, bucket)
+        return _package_code_zip(ctx, agent, cfg, bucket, wrapper)
     return _package_container_source(ctx, agent, cfg)
 
 
@@ -442,16 +568,21 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         if spec.protocol != "mcp":  # an MCP server is granted no model
             environment.setdefault("MODEL_ID", spec.model_id)
             environment.setdefault("ALLOWED_MODEL_IDS", ",".join(spec.allowed_model_ids))
+        wrapper = stdio_wrapper(spec)
+        if wrapper is not None:
+            # the bridge's subprocess argv — platform-owned, so it wins over spec.env
+            environment[STDIO_COMMAND_ENV] = json.dumps(wrapper.argv())
+        code_runtime = runs_on_code_runtime(spec)
         # echoed on every update: an omitted protocolConfiguration resets to HTTP
         protocol = spec.protocol
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
-        instrument = cfg.artifact_kind == "code_zip" and _adot_launcher(row)
-        if cfg.artifact_kind == "code_zip":
+        instrument = code_runtime and _adot_launcher(row)
+        if code_runtime:
             ctx.log(f"telemetry: ADOT launcher {'on' if instrument else 'off'}")
 
         def _kwargs() -> dict:
-            if cfg.artifact_kind == "code_zip":
+            if code_runtime:
                 return {
                     "s3_bucket": ctx.scratch.get("s3_bucket")
                     or ctx.workspace.resources.get("artifacts_bucket", ""),
@@ -460,7 +591,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     "role_arn": role_arn,
                     "environment": environment,
                     "python_version": cfg.python_version,
-                    "entrypoint": cfg.entrypoint,
+                    "entrypoint": STDIO_BRIDGE_FILE if wrapper else cfg.entrypoint,
                     # only when the upload carries the ADOT distro: an absent
                     # opentelemetry-instrument launcher fails at start
                     "instrument": instrument,
@@ -476,14 +607,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "protocol": protocol,
             }
 
-        create_fn = (
-            rt.create_code_runtime if cfg.artifact_kind == "code_zip"
-            else rt.create_container_runtime
-        )
-        update_fn = (
-            rt.update_code_runtime if cfg.artifact_kind == "code_zip"
-            else rt.update_container_runtime
-        )
+        create_fn = rt.create_code_runtime if code_runtime else rt.create_container_runtime
+        update_fn = rt.update_code_runtime if code_runtime else rt.update_container_runtime
 
         if mode == "update" and row.resource_id:  # re-publish → new version, same ARN
             runtime_id = row.resource_id
@@ -618,7 +743,8 @@ register_method("byoc", STAGES)
 def delete_agent_resources(
     agent: Agent, workspace: WorkspaceContext, ecr_client: Any = None
 ) -> None:
-    """Runtime + staged upload objects + (container_source) the built image tags.
+    """Runtime + staged upload objects + the built image tags (container_source,
+    or a code_zip stdio server on the Node base).
 
     Everything after the runtime delete is best-effort: an orphan S3 object or
     ECR tag must never block deleting the agent."""
@@ -645,7 +771,11 @@ def delete_agent_resources(
     upload_id = cfg.get("upload_id")
     if upload_id:
         byoc_uploads.delete_upload_objects(workspace, agent.workspace_id, upload_id)
-    if cfg.get("artifact_kind") == "container_source":
+    wrapper = ((agent.spec or {}).get("mcp") or {}).get("stdio_wrapper") or {}
+    built_image = cfg.get("artifact_kind") == "container_source" or (
+        is_mcp and cfg.get("artifact_kind") == "code_zip" and wrapper.get("base") == "node"
+    )
+    if built_image:
         # the builds this agent pushed are {name}-v{version} tags on the shared repo
         repo = (workspace.resources or {}).get("ecr_repo", "launchpad-agents")
         try:
