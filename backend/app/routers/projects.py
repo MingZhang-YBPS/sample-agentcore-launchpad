@@ -219,7 +219,7 @@ def list_members(
     row = svc.visible_project(db, identity, project_id)
     return {"members": svc.members_view(
         db, row, full_email=access.can_manage_structure(identity),
-    )}
+    ), "sod_strict": svc.sod_strict(row)}
 
 
 @router.put("/{project_id}/members")
@@ -234,7 +234,7 @@ def put_members(
     db.commit()
     return {**result, "members": svc.members_view(
         db, row, full_email=access.can_manage_structure(identity),
-    )}
+    ), "sod_strict": svc.sod_strict(row)}
 
 
 @router.delete("/{project_id}/members/{user_id}", status_code=204)

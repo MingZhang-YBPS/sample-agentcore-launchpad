@@ -52,6 +52,13 @@ ADMIN_SETTINGS = OWNER_SETTINGS | {"sod_strict"}
 _VISIBILITY = ("shared", "isolated")
 CANDIDATE_LIMIT = 20
 TRANSFER_KINDS = ("agent",)
+# combined duties (design §3.6): one person holding both sides of a pair in one project
+# is flagged in the member views, and refused where the project sets `sod_strict`. The
+# object-level checks (no approving / signing your own request) stay the backstop.
+SOD_PAIRS: tuple[tuple[str, str], ...] = (
+    ("agents.deploy", "release.sign"),
+    ("criteria.manage", "criteria.sign"),
+)
 
 
 def _now() -> datetime:
@@ -209,9 +216,15 @@ def list_projects(
 
 
 def _check_org(db: Session, department_id: str | None, group_id: str | None) -> None:
-    if department_id and db.get(Department, department_id) is None:
-        raise NotFoundError("department.not_found", f"department '{department_id}' not found",
-                            {"department_id": department_id})
+    if department_id:
+        department = db.get(Department, department_id)
+        if department is None:
+            raise NotFoundError("department.not_found",
+                                f"department '{department_id}' not found",
+                                {"department_id": department_id})
+        if department.archived_at is not None:
+            raise AppError("department.archived", f"department '{department_id}' is archived",
+                           {"department_id": department_id}, status_code=409)
     if group_id:
         group = db.get(ProjectGroup, group_id)
         if group is None or group.archived_at is not None:
@@ -311,6 +324,7 @@ def update_project(
             setattr(row, key, (value.strip() if key == "name" else value) or
                     ("" if key == "description" else None))
             changed.append(key)
+    was_strict = sod_strict(row)
     group_moved = "group_id" in fields and (fields["group_id"] or None) != row.group_id
     if group_moved:
         row.group_id = fields["group_id"] or None
@@ -326,6 +340,10 @@ def update_project(
     if not changed:
         return row
     row.updated_at = _now()
+    if group_moved or (sod_strict(row) and not was_strict):
+        # a new group's roles, or strictness switched on, must not leave a combined duty
+        db.flush()
+        enforce_sod(db, row)
     if group_moved:
         # the old group's members lose the project, the new group's gain it
         access.bump_epoch(db)
@@ -542,6 +560,7 @@ def members_view(db: Session, row: Project, *, full_email: bool) -> list[dict[st
             sources.append({"source": "direct", "role_key": d.role_key})
         if g:
             sources.append({"source": f"group:{g.group_id}", "role_key": g.role_key})
+        keys = effective_keys(user, d, g, roles)
         out.append({
             "user_id": uid,
             "username": user.username if user else None,
@@ -557,9 +576,67 @@ def members_view(db: Session, row: Project, *, full_email: bool) -> list[dict[st
             "sources": sources,
             # an administrator holds every key anyway; the row is kept for a demotion
             "bypass": bool(user and user.role == ROLE_ADMIN),
-            "permissions": sorted(effective_keys(user, d, g, roles)),
+            "permissions": sorted(keys),
+            # the §3.6 "combined duties" hint (a refusal instead under sod_strict)
+            "sod_conflicts": sod_conflicts(keys),
         })
     return out
+
+
+# ── combined duties (design §3.6, D-22) ───────────────────────────────────────
+
+
+def sod_conflicts(keys: frozenset[str] | set[str]) -> list[list[str]]:
+    """The SoD pairs `keys` holds both sides of."""
+    return [list(pair) for pair in SOD_PAIRS if set(pair) <= keys]
+
+
+def sod_strict(row: Project) -> bool:
+    return bool((row.settings or {}).get("sod_strict"))
+
+
+def project_conflicts(
+    db: Session, row: Project, user_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Members of `row` (all, or just `user_ids`) whose effective keys combine duties,
+    read from the session — so a write path sees its own pending rows."""
+    direct = {m.user_id: m for m in db.scalars(
+        select(ProjectMember).where(ProjectMember.project_id == row.id)
+    )}
+    groups = _group_rows(db, row)
+    ids = set(direct) | set(groups)
+    if user_ids is not None:
+        ids &= user_ids
+    if not ids:
+        return []
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(sorted(ids))))}
+    roles = {k: frozenset(r.permissions or []) & access.ALL_PROJECT_KEYS
+             for k, r in custom_roles(db, row.id).items()}
+    out = []
+    for uid in sorted(ids):
+        user = users.get(uid)
+        pairs = sod_conflicts(effective_keys(user, direct.get(uid), groups.get(uid), roles))
+        if pairs:
+            out.append({"user_id": uid, "username": user.username if user else None,
+                        "pairs": pairs})
+    return out
+
+
+def enforce_sod(db: Session, row: Project, user_ids: set[str] | None = None) -> None:
+    """Under `settings.sod_strict`, refuse a write that leaves someone holding both
+    sides of an SoD pair in the project (409 `project.sod_conflict`). The caller
+    has flushed its change and has not committed: raising rolls all of it back."""
+    if not sod_strict(row):
+        return
+    conflicts = project_conflicts(db, row, user_ids)
+    if conflicts:
+        names = ", ".join(str(c["username"] or c["user_id"]) for c in conflicts)
+        raise AppError(
+            "project.sod_conflict",
+            f"project '{row.id}' separates duties (sod_strict): {names} would hold both "
+            "sides of " + "; ".join(" + ".join(p) for p in conflicts[0]["pairs"]),
+            {"project_id": row.id, "conflicts": conflicts}, status_code=409,
+        )
 
 
 def _refuse_self(identity: Any, user_ids: set[str]) -> None:
@@ -620,6 +697,7 @@ def upsert_members(
                  f"project:{row.id} user:{user.username if user else uid}")
     if any(result.values()):
         db.flush()
+        enforce_sod(db, row, set(result["added"]) | set(result["updated"]))
         access.bump_epoch(db)
         # a removed (or narrowed) creator's keys stop with their membership (§5.7)
         api_keys_service.disable_offboarded_keys_in_project(db, row.id)
@@ -702,6 +780,7 @@ def upsert_role(
         existing.based_on = based_on
         existing.updated_at = _now()
     db.flush()
+    enforce_sod(db, row)  # everyone holding the role gets its new keys
     access.bump_epoch(db)
     api_keys_service.disable_offboarded_keys_in_project(db, row.id)
     _journal(db, identity, "project.roles.upsert", f"project:{row.id} role:{role_key}")

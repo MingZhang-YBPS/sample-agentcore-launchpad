@@ -1264,3 +1264,27 @@ PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
     ("GET", "/api/network-profiles/projects/{project_id}"),
     ("PUT", "/api/network-profiles/projects/{project_id}"),
 })
+
+# ---- project groups and departments (design projects §7.7, §7.10, P1F-group) ----
+# Hub-global like the rest of project structure. Every write is structure, so ADMIN
+# (`access.can_manage_structure`); the department list is MEMBER — its names label
+# the project switcher's groups (§2.7) and it grants no access.
+PROJECT_STRUCTURE_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/project-groups"): ADMIN,
+    ("POST", "/api/project-groups"): ADMIN,
+    ("GET", "/api/project-groups/{group_id}"): ADMIN,
+    ("PATCH", "/api/project-groups/{group_id}"): ADMIN,
+    ("DELETE", "/api/project-groups/{group_id}"): ADMIN,  # archives
+    ("POST", "/api/project-groups/{group_id}/unarchive"): ADMIN,
+    ("PUT", "/api/project-groups/{group_id}/members"): ADMIN,
+    ("PUT", "/api/project-groups/{group_id}/projects"): ADMIN,
+    ("GET", "/api/departments"): MEMBER,
+    ("POST", "/api/departments"): ADMIN,
+    ("PATCH", "/api/departments/{department_id}"): ADMIN,
+    ("POST", "/api/departments/{department_id}/archive"): ADMIN,
+    ("POST", "/api/departments/{department_id}/unarchive"): ADMIN,
+    ("DELETE", "/api/departments/{department_id}"): ADMIN,  # only while unused
+}
+ROUTE_POLICY.update(PROJECT_STRUCTURE_ROUTES)
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/project-groups", "/api/departments")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_STRUCTURE_ROUTES)

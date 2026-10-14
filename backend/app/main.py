@@ -44,6 +44,7 @@ from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
+from app.routers.departments import router as departments_router
 from app.routers.dlc import router as dlc_router
 from app.routers.environments import router as environments_router
 from app.routers.execution import router as execution_router
@@ -60,6 +61,7 @@ from app.routers.model_defaults import workspace_router as model_catalog_router
 from app.routers.network_profiles import router as network_profiles_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
+from app.routers.project_groups import router as project_groups_router
 from app.routers.projects import me_router as my_access_router
 from app.routers.projects import router as projects_router
 from app.routers.projects import templates_router as role_templates_router
@@ -241,6 +243,8 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(projects_router)  # projects, members, roles, bindings (projects §7.10)
     app.include_router(role_templates_router)
     app.include_router(my_access_router)  # GET /api/me/access: the caller's projects + keys
+    app.include_router(project_groups_router)  # project groups: members + projects (§7.7)
+    app.include_router(departments_router)  # departments (projects §2.1, §7.10)
     app.include_router(network_profiles_router)  # VPC network profiles (projects §12)
     app.include_router(fleet_router)  # fleet overview, governance health, marketplace (T37-T39)
     app.include_router(alerts_router)  # spend attribution + threshold alerts (T28/T29)
