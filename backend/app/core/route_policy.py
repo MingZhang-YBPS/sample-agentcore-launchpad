@@ -734,6 +734,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # Shared vs isolated member resource visibility (services/visibility.py).
     ("GET", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
     ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
+    # ---- T18-tools: the agent detail's telemetry status (projects §17.3-4) — a cached,
+    # read-only aws/spans probe of one agent in the caller's project ----
+    ("GET", "/api/agents/{agent_id}/telemetry"): PERM_PROJECT_USE,
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.

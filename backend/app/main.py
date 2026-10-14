@@ -28,6 +28,7 @@ from app.optimization.canary_service import (
 from app.optimization.routers import router as experiments_router
 from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
+from app.routers.agent_telemetry import router as agent_telemetry_router
 from app.routers.agents import router as agents_router
 from app.routers.alerts import router as alerts_router
 from app.routers.announcements import router as announcements_router
@@ -212,6 +213,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(model_catalog_router)  # region model catalog + probe
     app.include_router(videos_router)
     app.include_router(agents_router)
+    app.include_router(agent_telemetry_router)  # detail-page telemetry status (§17.3-4)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources
     app.include_router(tools_router)
     app.include_router(identity_router)  # Connections + Connection-bound gateway targets

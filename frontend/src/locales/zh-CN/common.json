@@ -11956,5 +11956,68 @@
       "errArgs": "最多 {{max}} 个参数，每个不超过 1024 个字符。",
       "limits": "每个容器只有一个服务器进程：适合无状态服务器或单会话。保存会话状态的服务器会把所有调用方视为同一个会话。响应为普通 JSON——服务器的进度和日志通知会被丢弃，它反向发起的请求（sampling、elicitation、roots）一律答复为不支持。"
     }
+  },
+  "agentTools": {
+    "title": "工具与能力",
+    "refresh": "刷新",
+    "empty": "这个智能体没有登记任何工具或能力。",
+    "group": {
+      "gateway": "Gateway 工具",
+      "mcp": "远程 MCP 服务器",
+      "builtin": "内置工具",
+      "rest": "REST 工具",
+      "kb": "知识库",
+      "skill": "技能",
+      "toolkit": "演示工具集",
+      "native": "原生执行",
+      "template": "模板工具",
+      "allowed": "允许的工具",
+      "code": "代码中的工具"
+    },
+    "gatewayVia": "经网关 {{gateway}}",
+    "gatewayAll": "该记录的全部工具",
+    "mcpAuth": "出站认证：{{kind}} · {{mode}}",
+    "mcpAuthRegistry": "出站认证：{{kind}}",
+    "mcpAuthNone": "无出站认证",
+    "kbTools": "模型通过 {{tools}} 调用",
+    "templateHint": "calculator 和 current_utc_time 随 Strands 模板提供；选择工具集后由工具集中的工具替换。",
+    "native": {
+      "shell": "Shell",
+      "file_operations": "文件操作"
+    },
+    "allowedFrom": {
+      "kb": "知识库网关",
+      "mcp": "远程 MCP 服务器"
+    },
+    "allowedNone": "空列表：模型不能调用任何工具",
+    "allowedDerived": "未设置：按挂载的工具、技能与原生执行推导。",
+    "code": "工具写在智能体的代码里，平台不登记。智能体有遥测时，可观测里能看到它实际调用过的工具。",
+    "openObservability": "打开可观测",
+    "openPolicies": "打开该网关的策略",
+    "enforce": "网关 {{gateway}} 处于强制执行（ENFORCE），但没有 ACTIVE 的放行策略覆盖 {{tools}}——这些调用会被默认拒绝。",
+    "recordInactive": "注册记录 {{name}} 的状态为 {{status}}：已不再是批准状态，新的挂载会被拒绝，调用可能失败。",
+    "diff": {
+      "title": "候选版本 v{{candidate}} 尚未生效（线上：v{{live}}）。",
+      "added": "候选版本新增：{{items}}。",
+      "removed": "候选版本移除：{{items}}。",
+      "hint": "放行门通过之前，真实用户仍使用线上版本的工具。",
+      "new": "仅候选版本"
+    },
+    "telemetry": {
+      "label": "遥测",
+      "receiving": "最近一条 Span：{{window}}内",
+      "none": "最近 {{days}} 天从未收到遥测",
+      "unknown": "暂时无法检查遥测",
+      "unsupported": "这类智能体不提供遥测状态",
+      "not_deployed": "尚未部署",
+      "window": {
+        "1h": "最近 1 小时",
+        "24h": "最近 24 小时",
+        "7d": "最近 7 天",
+        "14d": "最近 14 天"
+      },
+      "byocNoAdot": "这个 BYOC 代码 zip 没有 ADOT 启动器，不会产生链路，可观测和评估都看不到它：在 requirements.txt 加入 aws-opentelemetry-distro（并打开安装依赖），或改用 Dockerfile 构建，然后重新发布。",
+      "noLogGroup": "这个端点上还没有调用过该智能体。"
+    }
   }
 }
