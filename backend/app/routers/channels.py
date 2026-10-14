@@ -33,7 +33,12 @@ console_router = APIRouter(
     # workspace isolation: a hidden `{agent_id}` / `{run_id}` reads as missing
     dependencies=[Depends(agent_access.require_path_ids_visible)],
 )
-router = APIRouter(prefix="/share/channels", tags=["channels"])
+# runs as the link's project (`share_links.bind_link_project`); the background turn
+# re-enters it from the row (`channels.handle_message`)
+router = APIRouter(
+    prefix="/share/channels", tags=["channels"],
+    dependencies=[Depends(share_links.bind_link_project)],
+)
 
 WEBHOOK_PATH = "/share/channels"
 

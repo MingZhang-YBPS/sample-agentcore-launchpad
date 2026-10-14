@@ -6,8 +6,15 @@ workspace, the target, whether it is still usable — so the public routes never
 read an `X-Workspace` header or a console session.
 
 Every unusable state (unknown, disabled, revoked, expired, target gone, workspace
-gone) collapses into the same 404 `share.not_found`: an outsider must not be able
-to tell a revoked link from one that never existed.
+gone, target moved to another project, project archived) collapses into the same 404
+`share.not_found`: an outsider must not be able to tell a revoked link from one that
+never existed.
+
+A link carries its project (design §5.8): `project_id` is stamped from the target row
+(the agent or annotation task, `ShareLink.__project_parent__`). The public routes run
+as that project (`bind_link_project`), so a visitor's session, messages and feedback
+are filed where the link's agent lives; the token lookup itself is unscoped, since
+nothing but the token names the project.
 """
 
 import hashlib
@@ -17,12 +24,16 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+from fastapi import Request
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.core.actor import user_id_for
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context, set_current_project
 from app.models.ledger import Agent, ShareLink
+from app.models.projects import Project
 from app.services.runtime_discovery import invoke_capability
 from app.services.workspace import get_workspace_row
 
@@ -186,12 +197,62 @@ def resolve_link(
 
     Kinds whose target is not an agent (`annotate`) resolve the target themselves.
     """
-    if not raw_token or len(raw_token) > _MAX_TOKEN_LEN or not raw_token.startswith(TOKEN_PREFIX):
+    if not _well_formed(raw_token):
         raise not_found()
-    link = db.query(ShareLink).filter(ShareLink.token_hash == hash_token(raw_token)).first()
-    if link is None or link_state(link) != "active" or link.kind not in kinds:
-        raise not_found()
+    # unscoped: the token alone names the link, and through it the project
+    with project_context(None):
+        link = db.query(ShareLink).filter(ShareLink.token_hash == hash_token(raw_token)).first()
+        if (
+            link is None
+            or link_state(link) != "active"
+            or link.kind not in kinds
+            or not _project_active(db, link.project_id)
+        ):
+            raise not_found()
     return link
+
+
+def _well_formed(raw_token: str) -> bool:
+    return bool(raw_token) and len(raw_token) <= _MAX_TOKEN_LEN and raw_token.startswith(
+        TOKEN_PREFIX
+    )
+
+
+def _project_active(db: Session, project_id: str | None) -> bool:
+    """A link answers only while its project does: an archived (or missing) project
+    closes every link into it, before P1F's archive has revoked them."""
+    if not project_id:
+        return False  # an owned row without a project is unreachable by design
+    project = db.get(Project, project_id)
+    return project is not None and project.status == "active"
+
+
+def link_project(raw_token: str) -> str | None:
+    """The project a token's row belongs to, or None when nothing matches. Only picks
+    the request's project; whether the link is usable is still `resolve_link`'s call."""
+    if not _well_formed(raw_token):
+        return None
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            row = (
+                db.query(ShareLink.project_id)
+                .filter(ShareLink.token_hash == hash_token(raw_token))
+                .first()
+            )
+        return row[0] if row else None
+    finally:
+        db.close()
+
+
+async def bind_link_project(request: Request) -> None:
+    """Router-level dependency of the public `/share/*` routers: run the request as the
+    link's project. Async on purpose, like `route_policy.bind_request_project` (which
+    has already set None here — `/share` resolves no console project): it runs in the
+    request's own task, so the sync handler, a streaming response's generator and
+    BackgroundTasks all inherit it."""
+    pid = await run_in_threadpool(link_project, str(request.path_params.get("token") or ""))
+    set_current_project(pid)
 
 
 def resolve(
@@ -212,6 +273,8 @@ def live_agent(db: Session, link: ShareLink) -> Agent:
         agent is None
         or agent.status == "deleted"
         or agent.workspace_id != link.workspace_id
+        # the agent moved (or the link was minted elsewhere): the link stays with its project
+        or agent.project_id != link.project_id
         or getattr(agent, "system_key", None)
         or not invoke_capability(agent)["eligible"]
     ):
@@ -224,13 +287,35 @@ def record_use(link_id: str) -> None:
     request's)."""
     db = SessionLocal()
     try:
-        link = db.get(ShareLink, link_id)
-        if link is not None:
-            link.use_count = (link.use_count or 0) + 1
-            link.last_used_at = datetime.now(UTC)
-            db.commit()
+        with project_context(None):  # the id alone names the link
+            link = db.get(ShareLink, link_id)
+            if link is not None:
+                link.use_count = (link.use_count or 0) + 1
+                link.last_used_at = datetime.now(UTC)
+                db.commit()
     finally:
         db.close()
+
+
+def revoke_project_links(db: Session, project_id: str) -> int:
+    """Revoke every live link into one project — share, review, annotate and channel
+    alike (design §5.8: archiving a project revokes its links). Flushes but does not
+    commit, so the caller's archive stays one transaction. Returns how many it revoked;
+    already-revoked links keep their first revocation time."""
+    now = datetime.now(UTC)
+    with project_context(None):
+        rows = (
+            db.query(ShareLink)
+            .filter(ShareLink.project_id == project_id, ShareLink.revoked_at.is_(None))
+            .all()
+        )
+        for row in rows:
+            row.revoked_at = now
+            row.enabled = False
+        db.flush()
+    for row in rows:
+        limiter.forget(row.id)
+    return len(rows)
 
 
 class TokenBucket:

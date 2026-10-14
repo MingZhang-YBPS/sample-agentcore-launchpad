@@ -105,7 +105,11 @@ def resolve(db: Session, raw_token: str) -> tuple[ShareLink, AnnotationTask]:
     """Token → (live link, its task), or the same opaque 404 for every dead state."""
     link = share_links.resolve_link(db, raw_token, kinds=(KIND_ANNOTATE,))
     task = db.get(AnnotationTask, link.target_id)
-    if task is None or task.workspace_id != link.workspace_id:
+    if (
+        task is None
+        or task.workspace_id != link.workspace_id
+        or task.project_id != link.project_id
+    ):
         raise share_links.not_found()
     workspace = db.get(Workspace, link.workspace_id or "")
     # a workspace promoted to prod after the link was issued closes the link too
