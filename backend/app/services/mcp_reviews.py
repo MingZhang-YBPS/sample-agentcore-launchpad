@@ -16,11 +16,16 @@ one; when it is not, the server's target is withheld until a review is approved.
 * Separation of duties (§3.6): the deployer (``requested_by``) cannot decide, compared
   by ``users.id`` when both sides carry one, else by name — for administrators too,
   like signing a release.
+* The subject is usually a hosted server's agent row; a console-created Lambda target
+  or an adopted hand-made MCP target (`models/lambda_tools.py`, §15.12, §15.15) is
+  reviewed the same way through a :class:`Subject` — its row id stands in the
+  ``agent_id`` column.
 """
 
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -34,6 +39,8 @@ from app.models.mcp_review import McpToolReview
 from app.services.audit import record_audit_event
 
 SYSTEM_BASELINE = "system:baseline"
+# rollback restores an earlier approved list as the current one (§15.8)
+SOURCE_ROLLBACK = "rollback"
 MAX_NOTE = 2000
 LONG_DESCRIPTION = 1000
 
@@ -249,8 +256,35 @@ def deployer_of(db: Session, agent: Agent) -> tuple[str, str | None]:
 # ── writes ────────────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class Subject:
+    """What a review decides about: one Gateway target's tool list and who asked."""
+
+    id: str
+    workspace_id: str | None
+    project_id: str | None
+    target_name: str
+    version: str | None = None
+    requested_by: str = ""
+    requested_by_user_id: str | None = None
+
+
+def subject_of(db: Session, agent: "Agent | Subject") -> Subject:
+    """A hosted server's subject: its agent row, its target, its latest deployer."""
+    if isinstance(agent, Subject):
+        return agent
+    requested_by, requested_by_user_id = deployer_of(db, agent)
+    return Subject(
+        id=agent.id, workspace_id=agent.workspace_id, project_id=agent.project_id,
+        target_name=str(((agent.spec or {}).get("mcp") or {}).get("target_name") or ""),
+        version=agent.version, requested_by=requested_by,
+        requested_by_user_id=requested_by_user_id,
+    )
+
+
 def record_tool_list(
-    db: Session, agent: Agent, tools: list[dict[str, Any]], *, source: str = "deploy",
+    db: Session, agent: "Agent | Subject", tools: list[dict[str, Any]], *,
+    source: str = "deploy",
 ) -> McpToolReview:
     """The review deciding ``tools``: the latest approved one when the hash matches
     (the gate is open), else the open review for this exact list — created now, with
@@ -264,14 +298,13 @@ def record_tool_list(
         return pending
     if pending is not None:
         pending.status = "superseded"
-    requested_by, requested_by_user_id = deployer_of(db, agent)
-    target_name = str(((agent.spec or {}).get("mcp") or {}).get("target_name") or "")
+    subject = subject_of(db, agent)
     review = McpToolReview(
-        workspace_id=agent.workspace_id,
-        agent_id=agent.id,
-        project_id=agent.project_id,
-        version=agent.version,
-        target_name=target_name,
+        workspace_id=subject.workspace_id,
+        agent_id=subject.id,
+        project_id=subject.project_id,
+        version=subject.version,
+        target_name=subject.target_name,
         tools=tools,
         tools_hash=digest,
         base_review_id=approved.id if approved is not None else None,
@@ -279,33 +312,89 @@ def record_tool_list(
         hints=static_hints(tools),
         status="reviewing",
         source=source,
-        requested_by=requested_by,
-        requested_by_user_id=requested_by_user_id,
+        requested_by=subject.requested_by,
+        requested_by_user_id=subject.requested_by_user_id,
     )
     db.add(review)
-    record_audit_event(workspace_id=agent.workspace_id, actor=requested_by or "system",
-                       action=f"mcp.review.{source}", target=agent.id, db=db,
-                       project_id=agent.project_id)
+    record_audit_event(workspace_id=subject.workspace_id,
+                       actor=subject.requested_by or "system",
+                       action=f"mcp.review.{source}", target=subject.id, db=db,
+                       project_id=subject.project_id)
     db.flush()
     return review
 
 
-def record_baseline(db: Session, agent: Agent, tools: list[dict[str, Any]]) -> McpToolReview:
-    """§15.15: a server deployed before tool review existed — its live list becomes the
-    approved baseline, so its first re-sync does not pull a target agents already use."""
-    target_name = str(((agent.spec or {}).get("mcp") or {}).get("target_name") or "")
+def record_baseline(
+    db: Session, agent: "Agent | Subject", tools: list[dict[str, Any]], *,
+    note: str = "recorded as approved: the server was live before tool review existed",
+) -> McpToolReview:
+    """§15.15: a server deployed before tool review existed (or a hand-made target
+    brought under review) — its live list becomes the approved baseline, so its first
+    re-sync does not pull a target agents already use."""
+    subject = agent if isinstance(agent, Subject) else Subject(
+        id=agent.id, workspace_id=agent.workspace_id, project_id=agent.project_id,
+        target_name=str(((agent.spec or {}).get("mcp") or {}).get("target_name") or ""),
+        version=agent.version,
+    )
     review = McpToolReview(
-        workspace_id=agent.workspace_id, agent_id=agent.id, project_id=agent.project_id,
-        version=agent.version, target_name=target_name, tools=tools,
+        workspace_id=subject.workspace_id, agent_id=subject.id,
+        project_id=subject.project_id, version=subject.version,
+        target_name=subject.target_name, tools=tools,
         tools_hash=tools_hash(tools), diff=diff_tools(None, tools),
         hints=static_hints(tools), status="approved", source="baseline",
         requested_by=SYSTEM_BASELINE, decided_by=SYSTEM_BASELINE, decided_at=_now(),
-        note="recorded as approved: the server was live before tool review existed",
+        note=note[:MAX_NOTE],
         publish_status="published",
     )
     db.add(review)
     db.flush()
     return review
+
+
+def approved_versions(db: Session, agent_id: str) -> list[McpToolReview]:
+    """The latest approved review of each runtime version, newest first — what a
+    rollback can return to (§15.8)."""
+    seen: set[str] = set()
+    out: list[McpToolReview] = []
+    for review in db.scalars(
+        select(McpToolReview)
+        .where(McpToolReview.agent_id == agent_id, McpToolReview.status == "approved")
+        .order_by(McpToolReview.created_at.desc())
+    ):
+        if review.version and review.version not in seen:
+            seen.add(review.version)
+            out.append(review)
+    return out
+
+
+def restore_approved(
+    db: Session, review: McpToolReview, *, actor: str, actor_user_id: str | None = None,
+) -> McpToolReview:
+    """Rollback (§15.8): an earlier approved list becomes the current approved one —
+    a new approved row (so `latest_approved` and the gate read it), never a re-decision
+    of the old row. An open review is superseded: it was against the list rolled away
+    from. The caller commits."""
+    pending = open_review(db, review.agent_id)
+    if pending is not None:
+        pending.status = "superseded"
+    restored = McpToolReview(
+        workspace_id=review.workspace_id, agent_id=review.agent_id,
+        project_id=review.project_id, version=review.version,
+        target_name=review.target_name, tools=review.tools, tools_hash=review.tools_hash,
+        base_review_id=review.id, diff=diff_tools(None, review.tools or []),
+        hints=review.hints or [], status="approved", source=SOURCE_ROLLBACK,
+        requested_by=actor[:64], requested_by_user_id=actor_user_id,
+        decided_by=review.decided_by, decided_by_user_id=review.decided_by_user_id,
+        decided_at=_now(),
+        note=f"restored by rollback to version {review.version} (review {review.id})",
+        publish_status="published",
+    )
+    db.add(restored)
+    record_audit_event(workspace_id=review.workspace_id, actor=actor,
+                       action="mcp.review.rollback", target=review.agent_id, db=db,
+                       project_id=review.project_id)
+    db.flush()
+    return restored
 
 
 def decide(

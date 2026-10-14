@@ -8,7 +8,10 @@ This adds a single 60-second tick that:
 
 * runs `watch_configs` that are due (respecting their cost ceiling);
 * evaluates alert rules and notifies only on a transition;
-* sweeps calibration and waiver expiry into inbox-visible state.
+* sweeps calibration and waiver expiry into inbox-visible state;
+* checks every hosted MCP server's Gateway target hourly (`mcp.health`, design
+  projects §15.8): re-sync, tool-list drift against the approved list, health stored,
+  and the same drift check for hand-made targets brought under review (§15.15).
 
 Single-writer safety: every task claims a `scheduler_claims` row with a conditional
 UPDATE, so a second backend process cannot double-run it; a claim older than ten minutes
@@ -35,6 +38,7 @@ TICK_SECONDS = 60
 CLAIM_STALE_AFTER = timedelta(minutes=10)
 ALERT_EVERY = timedelta(minutes=5)
 SWEEP_EVERY = timedelta(hours=1)
+MCP_HEALTH_EVERY = timedelta(hours=1)
 _STOP = threading.Event()
 _THREAD: threading.Thread | None = None
 
@@ -280,12 +284,58 @@ def sweep_deleted_resources(db: Session) -> dict[str, Any]:
         out.append({"agent_id": agent.id, "status": "deleted"})
     return {"checked": len(rows), "results": out}
 
+def run_mcp_health(db: Session) -> dict[str, Any]:
+    """One health check per active hosted MCP server and adopted hand-made target,
+    each inside its row's project; an archived project's are skipped."""
+    from app.core.project_scope import project_context
+    from app.models.lambda_tools import ExternalMcpTarget
+    from app.models.projects import Project
+    from app.services import gateway_tools, mcp_servers
+    from app.services.workspace import context_for_workspace
+
+    def archived(project_id: str | None) -> bool:
+        project = db.get(Project, project_id) if project_id else None
+        return project is not None and project.status != "active"
+
+    servers: list[dict[str, Any]] = []
+    for agent in mcp_servers.health_candidates(db):
+        if archived(agent.project_id):
+            servers.append({"agent_id": agent.id, "status": "skipped",
+                            "reason": "project.archived"})
+            continue
+        try:
+            with project_context(agent.project_id):
+                health = mcp_servers.check_health(
+                    context_for_workspace(agent.workspace_id), agent
+                )
+            servers.append({"agent_id": agent.id, "status": health.get("status")})
+        except Exception as exc:  # noqa: BLE001 - one server must not stop the rest
+            logger.warning("MCP health check of %s failed: %s", agent.id, exc)
+            servers.append({"agent_id": agent.id, "status": f"error:{type(exc).__name__}"})
+    external: list[dict[str, Any]] = []
+    for row in db.query(ExternalMcpTarget).all():
+        if archived(row.project_id):
+            continue
+        try:
+            with project_context(row.project_id):
+                health = gateway_tools.check_external(
+                    context_for_workspace(row.workspace_id), row.id
+                )
+            external.append({"tool_id": row.id, "status": health.get("status")})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("drift check of hand-made target %s failed: %s", row.id, exc)
+            external.append({"tool_id": row.id, "status": f"error:{type(exc).__name__}"})
+    return {"servers": servers, "external": external}
+
+
 TASKS = (
     ("dlc.watch", run_due_watches, TICK_SECONDS),
     ("dlc.alerts", evaluate_alerts, int(ALERT_EVERY.total_seconds())),
     ("dlc.expiry", sweep_expiries, int(SWEEP_EVERY.total_seconds())),
     # AWS teardown a delete request could not wait out (endpoints mid-deletion)
     ("dlc.teardown", sweep_deleted_resources, TICK_SECONDS),
+    # hosted MCP servers: health, tool-list drift, live endpoint (projects §15.8)
+    ("mcp.health", run_mcp_health, int(MCP_HEALTH_EVERY.total_seconds())),
 )
 
 

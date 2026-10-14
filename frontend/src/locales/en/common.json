@@ -12619,7 +12619,8 @@
     "source": {
       "deploy": "deploy",
       "drift": "drift",
-      "baseline": "baseline"
+      "baseline": "baseline",
+      "rollback": "rollback"
     },
     "withheld": "The Gateway target is withheld: agents cannot call these tools until a member holding mcp.approve (not the deployer) approves this list.",
     "rejectedNotice": "The last tool list was rejected. The target stays withheld until a new deploy is approved.",
@@ -12686,6 +12687,110 @@
       "warn": "warnings",
       "blocked": "blocked",
       "unchecked": "not checked"
+    "history": "History ({{count}})",
+    "ops": {
+      "health": "Health",
+      "healthState": {
+        "healthy": "healthy",
+        "drift": "tools drifted",
+        "failing": "failing",
+        "withheld": "withheld (review open)",
+        "unknown": "not checked yet"
+      },
+      "checkedAgo": "checked {{ago}} ago",
+      "toolCount": "{{count}} tool(s)",
+      "check": "Check now",
+      "checkHint": "Follow the live endpoint, re-sync the Gateway target and compare its tools with the approved list (runs hourly on its own)",
+      "checked": "Health check done",
+      "checkFailed": "Health check failed",
+      "alert": "The last {{count}} health checks failed in a row.",
+      "endpoint": "Endpoint",
+      "followsDefault": "DEFAULT · follows every new version",
+      "pinned": "live · pinned at v{{version}}",
+      "pinnedHint": "A rollback pinned the target to an earlier version. The next deploy moves it back to DEFAULT.",
+      "rollbackTo": "Roll back to v{{version}}",
+      "noRollback": "No earlier version with an approved tool list to roll back to.",
+      "rollbackTitle": "Roll back to version {{version}}?",
+      "rollbackBody": "The Gateway target will call the endpoint `live` pinned at version {{version}}, and that version's approved tool list becomes the current one. If the server now lists other tools, the target is withheld and a review opens.",
+      "rollback": "Roll back",
+      "cancel": "Cancel",
+      "rollbackStarted": "Rollback started",
+      "rollbackFailed": "Could not start the rollback",
+      "operation": {
+        "rollback": "Rollback to v{{version}}",
+        "scaffold": "Cedar scaffold"
+      },
+      "opStatus": {
+        "running": "running",
+        "succeeded": "done",
+        "failed": "failed"
+      },
+      "cedar": "Cedar policies",
+      "cedarHint": "A forbid covers the tools of an open review; a permit covers the approved list (members of this project only when the workspace holds several). They are written through Governance, one operation at a time; while the Gateway runs LOG_ONLY its decision log shows what ENFORCE would refuse.",
+      "mode": "Gateway mode after the policies",
+      "modeKeep": "keep the Gateway mode",
+      "confirmName": "Type the Gateway name to switch to ENFORCE",
+      "overrideReason": "Reason, if there is no LOG_ONLY evidence yet",
+      "preview": "Preview",
+      "planMeta": "Gateway {{gateway}} · mode now {{mode}}",
+      "action": {
+        "create": "create",
+        "update": "update",
+        "delete": "delete",
+        "keep": "unchanged"
+      },
+      "apply": "Apply",
+      "scaffoldStarted": "Writing the Cedar policies…",
+      "scaffoldFailed": "Cedar scaffold failed"
+    }
+  },
+  "lambdaTool": {
+    "status": {
+      "reviewing": "awaiting review",
+      "publishing": "publishing",
+      "live": "live",
+      "rejected": "rejected",
+      "failed": "failed"
+    },
+    "form": {
+      "title": "New Lambda tool target",
+      "intro": "Put a Lambda function on the workspace Gateway as MCP tools. The tool schema is reviewed first: a member holding mcp.approve (not you) approves it, then the Gateway role is allowed to invoke the function and the target is created. A Lambda in a VPC can reach private backends.",
+      "arn": "Lambda function ARN (this workspace's account and region)",
+      "targetName": "Target name",
+      "targetNameHint": "Agents call the tools as {{name}}___<tool>.",
+      "description": "Description (optional)",
+      "schema": "Tool schema (JSON)",
+      "schemaHint": "A list of MCP tool definitions: name, description, inputSchema (type \"object\").",
+      "submit": "Create and request review",
+      "created": "Lambda target recorded; its tool schema awaits review",
+      "failed": "Could not create the Lambda target",
+      "badArn": "Not a Lambda function ARN",
+      "badName": "Letters and digits, single dashes between them",
+      "badJson": "Not valid JSON",
+      "badShape": "Expected a non-empty list of tools, each with a name and an inputSchema object"
+    },
+    "list": {
+      "title": "Lambda tool targets",
+      "empty": "No Lambda tool targets yet",
+      "tools": "{{count}} tool(s)",
+      "showReview": "Review",
+      "hideReview": "Hide review",
+      "delete": "Delete",
+      "deleteTitle": "Delete the Lambda target {{name}}?",
+      "deleteBody": "The Gateway target is deleted and the Gateway role loses its permission to invoke the function. Agents that use these tools lose them. The reviews stay as history.",
+      "deleted": "Deleted {{name}}",
+      "deleteFailed": "Could not delete the Lambda target"
+    },
+    "external": {
+      "title": "Externally hosted MCP targets",
+      "intro": "MCP-server targets made by hand through Connections. The platform does not deploy, version or roll them back; it can review their tools, check them for drift hourly, and govern them with Cedar.",
+      "empty": "No hand-made MCP targets on this Gateway",
+      "hosted": "externally hosted",
+      "adopt": "Bring under review",
+      "adoptHint": "Record the tools it lists today as the approved baseline (nothing is withheld); later changes open a review",
+      "adopted": "{{name}} is under tool review",
+      "adoptFailed": "Could not bring the target under review",
+      "elsewhere": "under review in another project"
     }
   }
 }

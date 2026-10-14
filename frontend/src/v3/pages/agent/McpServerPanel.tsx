@@ -6,7 +6,9 @@ import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type AgentInfo } from "../../../lib/api";
 import { useLoad } from "../../hooks";
 import { Chip, Empty, Notice, Panel, type Signal, Skeleton, Stat } from "../../ui";
+import type { McpServerOps } from "../../../lib/api/mcpReviews";
 import { McpReviewSection } from "./McpReviewSection";
+import { McpServerOpsSection } from "./McpServerOps";
 
 const TARGET_SIGNAL = (status: string | null): Signal =>
   status === "READY" ? "ok" : status === "FAILED" || status === "MISSING" || status?.endsWith("UNSUCCESSFUL") ? "act" : status ? "wait" : "off";
@@ -14,7 +16,8 @@ const TARGET_SIGNAL = (status: string | null): Signal =>
 /**
  * An MCP server is a tool, not an agent: no chat, no gate. What matters is its
  * Gateway target, the tools agents see through it (`<target>___<tool>`) and the
- * tool review that decides whether the target is served at all (§15.6).
+ * tool review that decides whether the target is served at all (§15.6), then its
+ * health, endpoint / rollback and Cedar scaffold (§15.7, §15.8).
  */
 export function McpServerPanel({ agent }: { agent: AgentInfo }) {
   const { t } = useTranslation();
@@ -22,7 +25,7 @@ export function McpServerPanel({ agent }: { agent: AgentInfo }) {
     () => api.agentMcp(agent.id),
     `v3-agent-mcp:${agent.id}:${agent.status}:${agent.version}`,
   );
-  const d = status.data;
+  const d = status.data as (typeof status.data & McpServerOps) | null;
   return (
     <Panel
       title={t("v3.mcp.title")}
@@ -64,6 +67,7 @@ export function McpServerPanel({ agent }: { agent: AgentInfo }) {
             <Empty title={t("v3.mcp.noTools")} />
           ) : null}
           <McpReviewSection agentId={agent.id} drift={Boolean(d.review?.drift)} onChanged={status.reload} />
+          <McpServerOpsSection agentId={agent.id} ops={d} version={agent.version ?? null} onChanged={status.reload} />
           <Notice s="info">
             {t("v3.mcp.howToUse", { target: d.target_name })}{" "}
             <Link to="/v3/governance" style={{ textDecoration: "underline" }}>{t("v3.mcp.openGovernance")}</Link>

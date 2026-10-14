@@ -1352,4 +1352,36 @@ ROUTE_POLICY.update({
 # (another project's agent answers 404 through the project-scoped agent lookup).
 ROUTE_POLICY.update({
     ("GET", "/api/agents/{agent_id}/network"): MEMBER,
+
+# ---- MCP server operations, Lambda / adopted tool targets (projects §15.7, §15.8,
+# §15.12, §15.13, §15.15, M15-rest) ----
+# A health check re-syncs the server's target: an ordinary project write. Rollback is
+# classified as participation and the handler demands the real key — release.sign when
+# the server's live endpoint is a gated agent's, agents.deploy for DEFAULT (one route,
+# two keys). The Cedar scaffold is mcp.approve; a mode switch in the same request asks
+# `require_infra(infra+perm:mcp.approve)` in the handler. Lambda targets change the
+# shared Gateway: infra (§10.6-6 lowers them to project level once Cedar is per
+# project). Adopting a hand-made target is mcp.approve here and infra in the handler
+# (`infra+perm:<project key>` is not a table role). Reviews follow the MCP-server ones.
+INFRA_AGENT_DEPLOY = "infra+perm:agents.deploy"
+ROUTE_POLICY.update({
+    ("POST", "/api/mcp-servers/{agent_id}/health"): PERM_PROJECT_WRITE,
+    ("POST", "/api/mcp-servers/{agent_id}/rollback"): PERM_PROJECT_USE,
+    ("POST", "/api/mcp-servers/{agent_id}/policies/scaffold"): PERM_MCP_APPROVE,
+    ("GET", "/api/gateway-tools/lambda"): PERM_PROJECT_USE,
+    ("POST", "/api/gateway-tools/lambda"): INFRA_AGENT_DEPLOY,
+    ("DELETE", "/api/gateway-tools/lambda/{target_id}"): INFRA_AGENT_DEPLOY,
+    ("GET", "/api/gateway-tools/external"): PERM_PROJECT_USE,
+    ("POST", "/api/gateway-tools/external/{target_id}/adopt"): PERM_MCP_APPROVE,
+    ("GET", "/api/gateway-tools/{tool_id}/reviews"): PERM_PROJECT_USE,
+    ("GET", "/api/gateway-tools/{tool_id}/reviews/{review_id}"): PERM_PROJECT_USE,
+    ("POST", "/api/gateway-tools/{tool_id}/reviews/{review_id}/approve"): PERM_MCP_APPROVE,
+    ("POST", "/api/gateway-tools/{tool_id}/reviews/{review_id}/reject"): PERM_MCP_APPROVE,
+})
+# what production serves: a member may not roll a prod server back or change the prod
+# Gateway's Lambda tools (an admin's change is journaled), like a release rollback
+PROD_PROTECTED = PROD_PROTECTED | frozenset({
+    ("POST", "/api/mcp-servers/{agent_id}/rollback"),
+    ("POST", "/api/gateway-tools/lambda"),
+    ("DELETE", "/api/gateway-tools/lambda/{target_id}"),
 })
