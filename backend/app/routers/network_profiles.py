@@ -8,7 +8,9 @@ infrastructure, and `PUT /api/network-profiles/projects/{project_id}` names its
 project in the path. (Not under `/api/projects`: that prefix is hub-global, while an
 allowed set belongs to one workspace.)
 
-Preflight (`POST …/{profile_id}/check`) and the probe arrive with V12-check.
+Preflight (`POST …/{profile_id}/check`, §12.4) and the probe (`POST …/probe`, §12.7)
+are administrator routes on one profile; `GET/PUT …/settings` and `GET …/enforcement`
+hold the workspace's network switches and the condition-key policy (§12.5).
 """
 
 import re
@@ -22,6 +24,7 @@ from app.core.db import get_db
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import network_enforcement as enforcement
 from app.services import network_profiles as service
 from app.services.audit import record_audit_event
 
@@ -90,6 +93,13 @@ class ProjectProfilesBody(BaseModel):
 
     profile_ids: list[str] = Field(default_factory=list, max_length=50)
     default_profile_id: str | None = None
+
+
+class NetworkSettingsBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    network_enforcement: bool | None = None
+    network_public_allowed: bool | None = None
 
 
 def _check_ids(subnets: list[str], groups: list[str]) -> None:
@@ -164,6 +174,50 @@ def put_project_profiles(
                                           body.default_profile_id)
     _audit(ws, request, "network_profile.project_set", f"project:{project_id}")
     return result
+
+
+@router.get("/settings")
+def get_network_settings(
+    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return enforcement.network_settings(db, ws.id)
+
+
+@router.put("/settings")
+def put_network_settings(
+    body: NetworkSettingsBody, request: Request, db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    result = enforcement.set_network_settings(db, ws.id, body.model_dump())
+    _audit(ws, request, "network_profile.settings", f"workspace:{ws.id}")
+    return result
+
+
+@router.get("/enforcement")
+def get_enforcement(
+    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return enforcement.enforcement(db, ws.id)
+
+
+@router.post("/{profile_id}/check")
+def check_profile(
+    profile_id: str, request: Request, db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    checked = service.run_check(db, ws.context, profile_id)
+    _audit(ws, request, "network_profile.check", f"network_profile:{profile_id}")
+    return checked
+
+
+@router.post("/{profile_id}/probe", status_code=202)
+def probe_profile(
+    profile_id: str, request: Request, db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    started = service.start_probe(db, ws.context, profile_id)
+    _audit(ws, request, "network_profile.probe", f"network_profile:{profile_id}")
+    return started
 
 
 @router.get("/{profile_id}")
