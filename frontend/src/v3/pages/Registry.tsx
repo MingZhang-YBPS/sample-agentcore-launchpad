@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { api, errorMessage, type RegistryRecordOut } from "../../lib/api";
 import { descriptorExcerpt, parseAgentCard, parseMcpUrl, parseSkillDefinition, skillPath } from "../../lib/registry";
 import { isRegistryUnavailable } from "../../v2/pages/registry/common";
@@ -61,7 +62,7 @@ function useLifecycle(onDone: () => void) {
       toast("ok", t("v2.registry.actionDone", { name: record.name, status: statusLabel(updated.status) }));
       onDone();
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }));
+      toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
     } finally {
       setBusy((prev) => {
         const next = new Set(prev);
@@ -182,7 +183,7 @@ function RecordList({ tab }: { tab: RegistryTab }) {
         records.loading && !records.data ? (
           <Panel><Skeleton rows={6} /></Panel>
         ) : records.error ? (
-          <Notice s="act">{records.error}</Notice>
+          <Notice s="act"><ApiErrorDetail error={records.failure} /></Notice>
         ) : (
           <PendingTab
             queue={queue}
@@ -227,7 +228,7 @@ function RecordList({ tab }: { tab: RegistryTab }) {
             {records.loading && !records.data ? (
               <div style={{ padding: 20 }}><Skeleton rows={6} /></div>
             ) : records.error ? (
-              <div style={{ padding: 20 }}><Notice s="act">{records.error}</Notice></div>
+              <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={records.failure} /></Notice></div>
             ) : rows.length === 0 ? (
               <Empty title={existing.length ? t("v3.registry.none") : t("v3.registry.empty")} />
             ) : (
@@ -318,7 +319,7 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
   const r = detail.data;
 
   if (detail.loading && !r) return <Skeleton rows={6} />;
-  if (!r) return <Notice s="act">{detail.error ?? t("v3.registry.notFound")}</Notice>;
+  if (!r) return <Notice s="act">{detail.error ? <ApiErrorDetail error={detail.failure} /> : t("v3.registry.notFound")}</Notice>;
 
   const s = registrySignal(r.status);
   const lifecycleAllowed = !r.system || isAdmin;
@@ -343,7 +344,7 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
       toast("ok", t("registry.deleted", { name: r.name }));
       navigate(back);
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }));
+      toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
       setBusy(false);
       setConfirm(null);
     }
@@ -355,7 +356,7 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
       toast("ok", t("registry.drawer.reimportOk", { name: updated.name }));
       setTick((n) => n + 1);
     } catch (err) {
-      toast("act", t("registry.drawer.reimportFailed", { msg: errorMessage(err) }));
+      toast("act", t("registry.drawer.reimportFailed", { msg: errorMessage(err) }), err);
     } finally {
       setBusy(false);
     }

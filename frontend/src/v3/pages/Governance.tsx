@@ -1,7 +1,7 @@
 import "./governance.css";
 
 import { ArrowRight, Play, RefreshCw, Search, ShieldCheck } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -20,30 +20,6 @@ import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type 
 
 type Tab = "gateways" | "tools";
 type EngineFilter = "all" | "attached" | "enforce" | "logOnly" | "none";
-
-/**
- * `useLoad` keeps only the failure's text; `track` also keeps the error itself so
- * the notice can show its AWS details (projects §19). The rejection still carries
- * the `code: message` text the page showed before.
- */
-function useFailure() {
-  const [failure, setFailure] = useState<unknown>(null);
-  const track = useCallback(
-    <T,>(p: Promise<T>): Promise<T> =>
-      p.then(
-        (value) => {
-          setFailure(null);
-          return value;
-        },
-        (err: unknown) => {
-          setFailure(err);
-          return Promise.reject(new Error(governanceError(err)));
-        },
-      ),
-    [],
-  );
-  return [failure, track] as const;
-}
 
 const CODE_DEMO = "import math\nprint('sqrt(1764) =', math.isqrt(1764))";
 
@@ -382,8 +358,7 @@ function CodeInterpreterDemo() {
 
 function ToolsTab() {
   const { t } = useTranslation();
-  const [catalogFailure, trackCatalog] = useFailure();
-  const catalog = useLoad(() => trackCatalog(api.governanceToolCatalog()), "v3-gov-tools");
+  const catalog = useLoad(() => api.governanceToolCatalog(), "v3-gov-tools");
   const [source, setSource] = useState<"all" | "gateway" | "builtin">("all");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<GovernanceToolInfo | null>(null);
@@ -429,7 +404,7 @@ function ToolsTab() {
         {catalog.loading && !catalog.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={5} /></div>
         ) : catalog.error ? (
-          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={catalogFailure ?? catalog.error} /></Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={catalog.failure} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v3.governance.tools.empty")} />
         ) : (
@@ -495,9 +470,8 @@ export function V3Governance() {
   const tab: Tab = params.get("tab") === "tools" ? "tools" : "gateways";
   const [force, setForce] = useState(0);
   // the first load may come from the backend cache; refresh bypasses it
-  const [gatewaysFailure, trackGateways] = useFailure();
   const gateways = useLoad(
-    () => trackGateways(api.listGovernanceGateways(force > 0)),
+    () => api.listGovernanceGateways(force > 0),
     `v3-gov-gateways:${current?.id ?? ""}:${force}`,
   );
 
@@ -525,7 +499,7 @@ export function V3Governance() {
           </>
         }
       />
-      {tab === "gateways" ? <GatewaysTab data={gateways.data} loading={gateways.loading} error={gateways.error ? gatewaysFailure ?? gateways.error : null} /> : <ToolsTab />}
+      {tab === "gateways" ? <GatewaysTab data={gateways.data} loading={gateways.loading} error={gateways.error ? gateways.failure : null} /> : <ToolsTab />}
     </div>
   );
 }

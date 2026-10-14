@@ -3,7 +3,8 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { api, dlcApi, errorMessage, type V2Range } from "../../../lib/api";
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { api, dlcApi, type V2Range } from "../../../lib/api";
 import { unpricedJudges } from "../../../lib/dlc";
 import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
@@ -166,7 +167,8 @@ export function TaskWizard() {
   const evaluators = useLoad(() => api.v2Evaluators(), "v3-wiz-evaluators");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [step, setStep] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  // a validation string the wizard wrote, or what the create call threw (projects §19)
+  const [error, setError] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
   const [evalLevel, setEvalLevel] = useState<"all" | EvaluatorLevel>("all");
   const [evalQ, setEvalQ] = useState("");
@@ -202,7 +204,7 @@ export function TaskWizard() {
         : Promise.resolve(null),
     `v3-task-estimate:${repeatable}:${draft?.agentId}:${draft?.dataset}:${draft?.repeats}:${draft?.evaluators.join(",")}`,
   );
-  if (seed.error) return <Notice s="act">{seed.error}</Notice>;
+  if (seed.error) return <Notice s="act"><ApiErrorDetail error={seed.failure} /></Notice>;
   if (!draft) return <Skeleton rows={6} />;
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
 
@@ -284,7 +286,7 @@ export function TaskWizard() {
         navigate(detailUrl({ kind: "run", id: run.id }));
       }
     } catch (err) {
-      setError(errorMessage(err));
+      setError(err);
     } finally {
       setSubmitting(false);
     }
@@ -343,7 +345,7 @@ export function TaskWizard() {
           </div>
         }
       />
-      {error && <Notice s="act">{error}</Notice>}
+      {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
 
       {step === 0 && (
         <>
@@ -467,7 +469,7 @@ export function TaskWizard() {
                         })
                       : t("v2.common.loading")}
                   </Notice>
-                  {cwWindow.error ? <Notice s="act">{cwWindow.error}</Notice> : (cwWindow.data?.streams.length ?? 0) > 0 && (
+                  {cwWindow.error ? <Notice s="act"><ApiErrorDetail error={cwWindow.failure} /></Notice> : (cwWindow.data?.streams.length ?? 0) > 0 && (
                     <table className="v3-table" style={{ marginTop: 10 }}>
                       <thead><tr><th>{t("v2.traces.colSession")}</th><th className="num">{t("v2.pipelines.traceCount")}</th><th className="num">{t("v2.pipelines.lastActive")}</th></tr></thead>
                       <tbody>
@@ -535,7 +537,7 @@ export function TaskWizard() {
                   {sessions.loading ? (
                     <Skeleton rows={3} />
                   ) : sessions.error ? (
-                    <Notice s="act">{sessions.error}</Notice>
+                    <Notice s="act"><ApiErrorDetail error={sessions.failure} /></Notice>
                   ) : (draft.source === "window" ? windowSessions : agentSessions).length === 0 ? (
                     <Empty title={t("v2.tasks.previewNoSessions")} />
                   ) : (
@@ -659,7 +661,7 @@ export function TaskWizard() {
           {evaluators.loading && !evaluators.data ? (
             <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
           ) : evaluators.error ? (
-            <div style={{ padding: "0 20px 16px" }}><Notice s="act">{evaluators.error}</Notice></div>
+            <div style={{ padding: "0 20px 16px" }}><Notice s="act"><ApiErrorDetail error={evaluators.failure} /></Notice></div>
           ) : (
             <table className="v3-table">
               <thead>
