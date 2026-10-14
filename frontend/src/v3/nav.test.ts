@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { V2_NAV } from "../v2/nav";
-import { hostedGroups, isActive, v3TwinOf } from "./nav";
+import { hostedGroups, isActive, V3_AFTER, v3TwinOf } from "./nav";
 
 describe("hostedGroups", () => {
   it("reaches every V2 page V3 has not rebuilt", () => {
@@ -24,6 +24,14 @@ describe("hostedGroups", () => {
   it("lists the V3-only Models page in the admin group, for administrators only", () => {
     expect(hostedGroups(true).find((g) => g.key === "admin")?.items.map((i) => i.to)).toContain("/v3/models");
     expect(hostedGroups(false).flatMap((g) => g.items.map((i) => i.to))).not.toContain("/v3/models");
+  });
+
+  it("places the people and structure pages right after Users (projects §7.9), for administrators only", () => {
+    const admin = hostedGroups(true).find((g) => g.key === "admin")?.items.map((i) => i.to) ?? [];
+    const at = admin.indexOf("/v3/users");
+    expect(admin.slice(at, at + 5)).toEqual(["/v3/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments"]);
+    const member = hostedGroups(false).flatMap((g) => g.items.map((i) => i.to));
+    expect(member.filter((to) => V3_AFTER["/v2/users"].some((i) => i.to === to))).toEqual([]);
   });
 
   it("hides administrator pages from members", () => {

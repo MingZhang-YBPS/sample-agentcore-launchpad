@@ -11663,6 +11663,82 @@
           "config": "Configured (deployment)",
           "console": "Changed in the console"
         }
+      },
+      "col": {
+        "projects": "Projects (role)"
+      },
+      "filter": {
+        "role": "Global role",
+        "anyRole": "Any role",
+        "project": "Project",
+        "anyProject": "Any project",
+        "group": "Project group",
+        "anyGroup": "Any group"
+      },
+      "bulk": {
+        "open_one": "Add {{count}} to project…",
+        "open_other": "Add {{count}} to project…",
+        "title_one": "Add {{count}} account to a project",
+        "title_other": "Add {{count}} accounts to a project",
+        "body": "Each selected account becomes a direct member with the role below. An existing member's role is replaced; nobody is removed and no workspace grant changes.",
+        "hint": "Administrators reach every project by role and are skipped.",
+        "submit": "Add to project",
+        "select": "Select {{username}}",
+        "selectAll": "Select every account on this page",
+        "done": "Added {{added}}, updated {{updated}}, unchanged {{unchanged}}, skipped {{skipped}}"
+      },
+      "sessions": {
+        "action": "Force sign-out",
+        "title": "Force sign-out?",
+        "body": "Every session {{username}} holds ends on its next request; they must sign in again. Their password, role and access stay the same.",
+        "hint": "Ends every current session of this account",
+        "revoked": "{{username}} has been signed out everywhere"
+      },
+      "memberships": {
+        "projects": "Projects",
+        "groups": "Project groups",
+        "projectsNone": "No project yet — the account joins the default project through the workspace grant only.",
+        "groupsNone": "Not in any project group.",
+        "projectsTarget": "Project",
+        "groupsTarget": "Project group",
+        "projectsAdd": "Add project",
+        "groupsAdd": "Add project group",
+        "role": "Role",
+        "remove": "Remove",
+        "legacy": "Legacy workspace grants (advanced)",
+        "legacyHint": "A granted “default” workspace joins the default project with the inherited global role — what workshops use.",
+        "open": "Edit projects and groups",
+        "title": "Projects and groups · {{username}}",
+        "body": "The direct project memberships and the project groups of this account. Saving replaces both lists; access changes on the next request.",
+        "inheritHint": "The default project's “inherits global role” membership follows the workspace grant and is not edited here.",
+        "save": "Save",
+        "saved": "Projects and groups of {{username}} saved",
+        "err": {
+          "projectsIncomplete": "Pick a project and a role on every row.",
+          "projectsDuplicate": "A project appears twice.",
+          "groupsIncomplete": "Pick a group and a role on every row.",
+          "groupsDuplicate": "A group appears twice."
+        }
+      },
+      "access": {
+        "projectsTitle": "Projects and roles",
+        "groupsTitle": "Project groups",
+        "reachTitle": "Workspaces (reachable)",
+        "reachSub": "From the projects and the grants",
+        "project": "Project",
+        "role": "Effective role",
+        "source": "Source",
+        "keys": "Keys",
+        "direct": "Direct ({{role}})",
+        "fromGroup": "Group “{{group}}” ({{role}})",
+        "allProjects": "All (administrator)",
+        "noProjects": "Not a member of any project — this account cannot open any project.",
+        "noGroups": "Not in any project group.",
+        "archived": "archived",
+        "grantOnly": "Granted directly; no reachable project",
+        "via": "via {{projects}}",
+        "globalPermTitle": "Global permissions (for projects that inherit the global role)",
+        "globalPermSub": "Applies where the project role is “inherits global role”"
       }
     },
     "workspaces": {
@@ -12276,6 +12352,161 @@
         "sodStrictAdmin": "Only a platform administrator changes this.",
         "saved": "{{name}} saved"
       }
+    "admins": {
+      "nav": "Administrators",
+      "navProjects": "Projects",
+      "eyebrow": "Accounts · administrators",
+      "title": "Administrators",
+      "sub": "Platform administrators hold every permission and can enter every project. Keep at least one administrator who can sign in.",
+      "empty": "No administrator",
+      "lastNotice": "Only one administrator can sign in: it cannot be demoted, disabled or left to expire.",
+      "col": {
+        "type": "Type"
+      },
+      "type": {
+        "account": "Account"
+      },
+      "passwordSource": "Password: {{source}} ({{when}})",
+      "block": {
+        "builtin": "The built-in administrator cannot be demoted",
+        "last": "The last administrator who can sign in cannot be demoted",
+        "self": "You cannot demote yourself — ask another administrator"
+      },
+      "demote": {
+        "action": "Demote",
+        "title": "Demote {{username}}?",
+        "body": "{{username}} loses the administrator role and every project they reached by role.",
+        "role": "New global role",
+        "noProjects": "After demotion this person belongs to no project.",
+        "restores": "Their kept memberships take effect again: {{projects}}",
+        "done": "{{username}} is no longer an administrator"
+      },
+      "add": {
+        "open": "Add administrator",
+        "title": "Add an administrator",
+        "promote": "Promote an existing account",
+        "create": "Create an administrator account",
+        "search": "Search by username or email",
+        "noMatch": "No matching account that is not already an administrator.",
+        "projectCount_one": "{{count}} project",
+        "projectCount_other": "{{count}} projects",
+        "warning": "Administrators can enter every project and see all business data.",
+        "submit": "Add"
+      },
+      "breakGlass": "Lost the built-in administrator's password? Reset it on the instance with scripts/reset_admin_password.py, or set LAUNCHPAD_AUTH_ADMIN_PASSWORD_OVERRIDE_DISABLED=true to go back to the configured one."
+    },
+    "groups": {
+      "nav": "Project groups",
+      "eyebrow": "Structure · project groups",
+      "title": "Project groups",
+      "sub": "A group's members reach every project in the group with the group's role; direct project members are not affected.",
+      "create": "New project group",
+      "edit": "Edit",
+      "archive": "Archive",
+      "unarchive": "Unarchive",
+      "empty": "No project group",
+      "emptyBody": "Group projects that share a team, then add the team once.",
+      "notFound": "Project group {{id}} was not found.",
+      "noDepartment": "No department",
+      "status": {
+        "active": "Active",
+        "archived": "Archived",
+        "all": "All"
+      },
+      "col": {
+        "group": "Group",
+        "department": "Department",
+        "projects": "Projects",
+        "members": "Members"
+      },
+      "tab": {
+        "projects": "Projects",
+        "members": "Members"
+      },
+      "created": "Project group {{name}} created",
+      "saved": "Project group {{name}} saved",
+      "archived": "Project group {{name}} archived ({{keys}} API keys disabled)",
+      "unarchived": "Project group {{name}} unarchived",
+      "archivedNotice": "This group is archived: its members no longer reach its projects through it.",
+      "archiveTitle": "Archive {{name}}?",
+      "archiveBody_one": "The access {{count}} member got through this group stops; the projects keep their group and direct members keep their access.",
+      "archiveBody_other": "The access {{count}} members got through this group stops; the projects keep their group and direct members keep their access.",
+      "form": {
+        "createTitle": "New project group",
+        "editTitle": "Edit project group",
+        "name": "Name",
+        "id": "ID",
+        "description": "Description",
+        "idHint": "2-32 lowercase letters, digits or hyphens; cannot change later",
+        "idFixed": "The ID cannot change",
+        "create": "Create",
+        "save": "Save",
+        "err": {
+          "id": "2-32 lowercase letters, digits or hyphens, starting with a letter or digit.",
+          "name": "Enter a name."
+        }
+      },
+      "projects": {
+        "sub": "Group members see a project the moment it joins; when it leaves, the access the group gave is revoked.",
+        "none": "No project in this group yet.",
+        "pick": "Pick a project…",
+        "add": "Add to group",
+        "inOther": "in group {{group}}",
+        "added": "Project added to the group",
+        "remove": "Remove from group",
+        "removed": "Project removed from the group",
+        "removeTitle": "Remove {{name}} from the group?",
+        "removeBody_one": "This revokes the access {{count}} member got through this group; direct members are not affected.",
+        "removeBody_other": "This revokes the access {{count}} members got through this group; direct members are not affected."
+      },
+      "members": {
+        "none": "No member yet.",
+        "add": "Add members",
+        "addTitle": "Add members to {{name}}",
+        "addSubmit_one": "Add {{count}} member",
+        "addSubmit_other": "Add {{count}} members",
+        "picked": "Selected: {{names}}",
+        "templatesOnly": "Groups take built-in roles only; custom roles belong to one project.",
+        "addedMany_one": "{{count}} member added",
+        "addedMany_other": "{{count}} members added",
+        "updated": "Role of {{username}} updated",
+        "remove": "Remove from group",
+        "removed": "{{username}} removed from the group",
+        "removeTitle": "Remove {{username}} from the group?",
+        "removeBody_one": "They lose the access this group gave them in {{count}} project; a direct membership stays.",
+        "removeBody_other": "They lose the access this group gave them in {{count}} projects; a direct membership stays.",
+        "sod_one": "Combined duties in {{count}} project",
+        "sod_other": "Combined duties in {{count}} projects"
+      }
+    },
+    "departments": {
+      "nav": "Departments",
+      "eyebrow": "Structure · departments",
+      "title": "Departments",
+      "sub": "Departments label projects and project groups and group the project switcher. Phase 1 has a name and a description only.",
+      "create": "New department",
+      "delete": "Delete",
+      "empty": "No department",
+      "emptyBody": "Add one, then pick it on a project or a project group.",
+      "inUse": "Still named by a project or a group — archive it instead",
+      "col": {
+        "department": "Department",
+        "projects": "Projects",
+        "groups": "Groups"
+      },
+      "form": {
+        "createTitle": "New department",
+        "editTitle": "Edit department"
+      },
+      "created": "Department {{name}} created",
+      "saved": "Department {{name}} saved",
+      "archived": "Department {{name}} archived",
+      "unarchived": "Department {{name}} unarchived",
+      "deleted": "Department {{name}} deleted",
+      "archiveTitle": "Archive {{name}}?",
+      "archiveBody": "{{name}} is hidden from new choices; projects and groups that name it keep it.",
+      "deleteTitle": "Delete {{name}}?",
+      "deleteBody": "{{name}} is removed for good. No project or group names it."
     }
   },
   "models": {

@@ -192,6 +192,28 @@ dlc: {
 
 `expected_source = agent_observed` (today's from-sessions output) is shown with a warning and cannot back a gate criterion until re-annotated.
 
+#### 4.2.1 Unique names and deletion
+
+**Problem**: `POST /api/dlc/golden-sets` does not check for duplicate names, so a double click creates two golden sets with the same name. The only way to delete one is the Datasets tab of the data center, four rows at a time (parent + three splits), and `split_of` does not cascade — deleting just the parent leaves three orphan splits. Worse, with two golden sets on the same criteria lineage the gate picks the newest by `created_at` (`golden.for_criteria`), so an empty duplicate created later makes the gate return `release.empty_golden`.
+
+**Design**:
+
+1. **Reject duplicate names on create.** Within a workspace, parent rows (`role = golden`, `split_of IS NULL`) must have distinct names (exact match after trimming); otherwise return 409 `golden.duplicate_name` and show "A golden set with this name already exists" in the create dialog. Checked in the application, not as a database unique constraint — deployed instances may already hold duplicates, and a constraint would fail the migration.
+2. **Delete the whole set from the golden-set page.** New `DELETE /api/dlc/golden-sets/{id}` (a parent id or any split id, both resolve to the parent) deletes the parent and every split whose `split_of` points at it in one transaction, plus the AWS Datasets of splits that were synced. The button sits at the top right of **Standards → Golden set** detail.
+3. **Who may delete depends on state:**
+
+   | State | Who may delete | Interaction |
+   |---|---|---|
+   | Holdout empty (not curated) | Any workspace member who can create golden sets (including `developer`) | Plain confirm |
+   | Holdout sealed, no release record references it | Holders of `golden.admit` (`biz-owner`) | Type the set name to confirm |
+   | A release record's `golden_versions` references one of its splits | Nobody; 409 `golden.in_use` | "Referenced by N release records" |
+
+   Referenced sets are kept to protect release lineage (§4.5): release records store split `dataset_id`s, and deleting them loses which data a decision was made on.
+4. **The data center takes the same path.** `DELETE /api/eval/datasets/{id}` on a golden parent delegates to item 2 (same rules, whole set); deleting a single split returns 409 `golden.split_delete` pointing to the golden-set page. To clean up history, an orphan split whose parent no longer exists may be deleted directly.
+5. **Audit**: each deletion writes a `golden.delete` audit event with the name, split counts and actor (§8).
+
+**Tests**: duplicate create returns 409; nothing is left after a whole-set delete; the permission matrix across the three states; refusal when referenced by a release record; data center parent delete cascades, split delete is refused, orphan split delete succeeds.
+
 ### 4.3 Run extensions
 
 New columns on `eval_runs`:

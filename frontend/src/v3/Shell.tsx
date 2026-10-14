@@ -192,7 +192,11 @@ function ProjectSwitch() {
  */
 /** Pages whose content belongs to the installation, not a workspace: they must not
  *  remount (and lose an admin's draft) when the workspace switches. */
-const HUB_GLOBAL = new Set(["/announcements", "/v2/announcements", "/v3/announcements", "/videos", "/v2/videos", "/v3/videos", "/v2/video-management", "/v3/video-management"]);
+const HUB_GLOBAL = new Set([
+  "/announcements", "/v2/announcements", "/v3/announcements", "/videos", "/v2/videos", "/v3/videos", "/v2/video-management", "/v3/video-management",
+  // people and structure (projects §7.9): never bound to the workspace or project in the switcher
+  "/v3/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments",
+]);
 
 export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const { t } = useTranslation();

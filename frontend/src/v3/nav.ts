@@ -1,4 +1,4 @@
-import { Cpu } from "lucide-react";
+import { Building2, Cpu, FolderKanban, Network, UserCog } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -55,6 +55,20 @@ export const V3_ONLY: Record<string, V2NavItem[]> = {
   admin: [{ to: "/v3/models", labelKey: "v3.models.nav", icon: Cpu, admin: true }],
 };
 
+/**
+ * V3-only pages placed right after a V2 entry rather than at the group's end:
+ * Configure reads Users → Administrators → Projects → Project groups → Departments
+ * (projects §7.9). All hub-global and administrator-only (phase 1).
+ */
+export const V3_AFTER: Record<string, V2NavItem[]> = {
+  "/v2/users": [
+    { to: "/v3/admins", labelKey: "v3.admins.nav", icon: UserCog, admin: true },
+    { to: "/v3/projects", labelKey: "v3.admins.navProjects", icon: FolderKanban, admin: true },
+    { to: "/v3/project-groups", labelKey: "v3.groups.nav", icon: Network, admin: true },
+    { to: "/v3/departments", labelKey: "v3.departments.nav", icon: Building2, admin: true },
+  ],
+};
+
 export interface V3ModuleGroup {
   key: string;
   labelKey: string;
@@ -70,7 +84,7 @@ export function hostedGroups(isAdmin: boolean): V3ModuleGroup[] {
   return V2_NAV.map((group) => ({
     key: group.key,
     labelKey: group.labelKey,
-    items: [...group.items, ...(V3_ONLY[group.key] ?? [])]
+    items: [...group.items.flatMap((item) => [item, ...(V3_AFTER[item.to] ?? [])]), ...(V3_ONLY[group.key] ?? [])]
       .filter((item) => !REBUILT.has(item.to) && (!item.admin || isAdmin))
       .map((item) => {
         const [path, query] = item.to.split("?");
