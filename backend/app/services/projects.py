@@ -14,7 +14,7 @@ never 403: a project's existence can itself be sensitive.
 """
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select, text, update
@@ -196,6 +196,8 @@ def list_projects(
         query = query.where(Project.group_id == group_id)
     if status and status != "all":
         query = query.where(Project.status == status)
+    elif not status:
+        query = query.where(Project.status != "deleted")  # tombstones only when asked
     if workspace_id:
         query = query.where(Project.id.in_(
             select(ProjectWorkspace.project_id).where(ProjectWorkspace.workspace_id == workspace_id)
@@ -359,6 +361,7 @@ def archive_project(db: Session, identity: Any, row: Project) -> dict[str, int]:
                        {"project_id": row.id}, status_code=409)
     if row.status == STATUS_ARCHIVED:
         return {"links_revoked": 0, "keys_disabled": 0}
+    _refuse_past_archived(row)
     row.status = STATUS_ARCHIVED
     row.archived_at = row.updated_at = _now()
     db.flush()
@@ -373,11 +376,125 @@ def unarchive_project(db: Session, identity: Any, row: Project) -> None:
     """Writable again. Revoked links and disabled keys stay so (design §11.5)."""
     if row.status == STATUS_ACTIVE_PROJECT:
         return
+    _refuse_past_archived(row)
+    if _deletion(row):
+        raise AppError("project.deletion_pending",
+                       f"project '{row.id}' is scheduled for deletion — cancel that first",
+                       {"project_id": row.id}, status_code=409)
     row.status = STATUS_ACTIVE_PROJECT
     row.archived_at = None
     row.updated_at = _now()
     access.bump_epoch(db)
     _journal(db, identity, "project.unarchive", f"project:{row.id}")
+
+
+# ── deletion (design §11.5): request → cooling-off → purge → tombstone ────────
+
+
+def _deletion(row: Project) -> dict[str, Any] | None:
+    from app.services import project_purge
+
+    return project_purge.lifecycle(row).get("deletion") or None
+
+
+def _refuse_past_archived(row: Project) -> None:
+    """`deleting` / `deleted` accept no lifecycle change but the purge's own."""
+    from app.services import project_purge
+
+    if row.status == project_purge.STATUS_DELETED:
+        raise AppError("project.deleted", f"project '{row.id}' is deleted",
+                       {"project_id": row.id}, status_code=409)
+    if row.status == project_purge.STATUS_DELETING:
+        raise AppError("project.deleting", f"project '{row.id}' is being deleted",
+                       {"project_id": row.id}, status_code=409)
+
+
+def lifecycle_view(db: Session, row: Project, *, now: datetime | None = None) -> dict[str, Any]:
+    """The project's place in the lifecycle: the deletion request and its cooling-off,
+    the export bundles, the latest purge job."""
+    from app.services import project_purge
+
+    now = now or _now()
+    state = project_purge.lifecycle(row)
+    deletion = state.get("deletion")
+    if deletion:
+        purge_after = datetime.fromisoformat(deletion["purge_after"])
+        deletion = {**deletion, "purge_ready": now >= purge_after,
+                    "seconds_left": max(0, int((purge_after - now).total_seconds()))}
+    return {
+        "project_id": row.id,
+        "status": row.status,
+        "is_default": bool(row.is_default),
+        "archived_at": row.archived_at.isoformat() if row.archived_at else None,
+        "cooling_off_days": project_purge.cooling_off_days(db),
+        "deletion": deletion,
+        "deleted": state.get("deleted"),
+        "exports": list(state.get("exports") or []),
+        "purge_job": project_purge.job_view(project_purge.latest_job(db, row.id)),
+    }
+
+
+def request_deletion(db: Session, identity: Any, row: Project, *,
+                     now: datetime | None = None) -> dict[str, Any]:
+    """Ask for an archived project's deletion: writes the export bundle, then starts the
+    cooling-off (`project_deletion_cooling_off_days`, default 7) — cancellable until the
+    purge starts. The default project and a workspace's default project cannot go."""
+    from app.services import project_purge
+
+    now = now or _now()
+    if row.is_default:
+        raise AppError("project.default_locked", "the default project cannot be deleted",
+                       {"project_id": row.id}, status_code=409)
+    _refuse_past_archived(row)
+    if row.status != STATUS_ARCHIVED:
+        raise AppError("project.not_archived",
+                       f"archive project '{row.id}' before requesting its deletion",
+                       {"project_id": row.id}, status_code=409)
+    if _deletion(row):
+        raise AppError("project.deletion_pending",
+                       f"the deletion of project '{row.id}' is already requested",
+                       {"project_id": row.id}, status_code=409)
+    defaults = sorted(b.workspace_id for b in _bindings(db, row.id) if b.is_workspace_default)
+    if defaults:
+        raise AppError("project.workspace_default",
+                       f"project '{row.id}' is the default project of {defaults} — "
+                       "make another project the default first",
+                       {"project_id": row.id, "workspaces": defaults}, status_code=409)
+    export = project_purge.build_export(db, identity, row)
+    days = project_purge.cooling_off_days(db)
+    state = project_purge.lifecycle(row)
+    state["deletion"] = {
+        "requested_at": now.isoformat(),
+        "requested_by": identity.username,
+        "requested_by_user_id": getattr(identity, "user_id", None),
+        "cooling_off_days": days,
+        "purge_after": (now + timedelta(days=days)).isoformat(),
+        "export_id": export["id"],
+        "job_id": None,
+    }
+    project_purge.set_lifecycle(row, state)
+    row.updated_at = now
+    project_purge.journal(db, identity, "project.delete_request", row.id)
+    return lifecycle_view(db, row, now=now)
+
+
+def cancel_deletion(db: Session, identity: Any, row: Project) -> dict[str, Any]:
+    """Withdraw a deletion request during its cooling-off. A failed purge leaves the
+    project archived with its request kept, so that can be withdrawn too (the agents
+    the failed job already deleted stay deleted)."""
+    from app.services import project_purge
+
+    _refuse_past_archived(row)
+    if not _deletion(row):
+        raise AppError("project.deletion_not_requested",
+                       f"no deletion of project '{row.id}' is requested",
+                       {"project_id": row.id}, status_code=409)
+    state = project_purge.lifecycle(row)
+    state.pop("deletion", None)
+    project_purge.set_lifecycle(row, state)
+    row.updated_at = _now()
+    project_purge.journal(db, identity, "project.delete_cancel", row.id)
+    return lifecycle_view(db, row)
 
 
 # ── workspace bindings ────────────────────────────────────────────────────────
@@ -420,6 +537,7 @@ def update_bindings(
     An unbind is refused while the workspace still holds any of the project's rows
     (agents, runs, keys…) — the same protection a workspace detach has — and for the
     workspace-default binding (another project must become the default first)."""
+    _refuse_past_archived(row)
     if set(bind) & set(unbind):
         raise AppError("project.binding_conflict", "a workspace cannot be bound and unbound "
                        "in one request", {"workspaces": sorted(set(bind) & set(unbind))})

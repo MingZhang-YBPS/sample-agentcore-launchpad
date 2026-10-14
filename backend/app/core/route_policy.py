@@ -1386,3 +1386,20 @@ PROD_PROTECTED = PROD_PROTECTED | frozenset({
     ("POST", "/api/gateway-tools/lambda"),
     ("DELETE", "/api/gateway-tools/lambda/{target_id}"),
 })
+
+# ---- project lifecycle: export, deletion request, cooling-off, purge (projects design
+# §11.5, G11-life) ----
+# Structure, like archive: administrators only (the steward two-person rule arrives with
+# §11.4). Hub-global — the project is the one in the path. Another project's export id
+# answers 404 in the handler.
+PROJECT_LIFECYCLE_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/projects/{project_id}/lifecycle"): ADMIN,
+    ("POST", "/api/projects/{project_id}/export"): ADMIN,
+    ("GET", "/api/projects/{project_id}/exports/{export_id}"): ADMIN,
+    ("POST", "/api/projects/{project_id}/delete-request"): ADMIN,
+    ("POST", "/api/projects/{project_id}/delete-request/cancel"): ADMIN,
+    # `?dry_run=true` lists what would go; otherwise starts the `project_purge` job
+    ("POST", "/api/projects/{project_id}/purge"): ADMIN,
+}
+ROUTE_POLICY.update(PROJECT_LIFECYCLE_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_LIFECYCLE_ROUTES)
