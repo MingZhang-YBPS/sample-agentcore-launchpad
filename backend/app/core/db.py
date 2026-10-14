@@ -74,6 +74,9 @@ WORKSPACE_SCOPED_TABLES = (
     "admission_candidates",
     "watch_configs",
     "resource_creators",
+    # VPC network profiles + each project's allowed set (models/network.py, §12.3)
+    "network_profiles",
+    "project_network_profiles",
 )
 
 # Project boundary (design §4). STRICT rows always belong to one project; SHARED rows
@@ -200,6 +203,7 @@ def init_db(bind=None) -> None:
     from app.models import announcement as _announcement_models  # noqa: F401
     from app.models import assistant as _assistant_models  # noqa: F401
     from app.models import dlc as _dlc_models  # noqa: F401 — Agent-DLC tables
+    from app.models import network as _network_models  # noqa: F401 — projects §12
     from app.models import platform_settings as _platform_settings  # noqa: F401
     from app.models import projects as _project_models  # noqa: F401 — design §2.2
     from app.models import resource_mapping as _mapping_models  # noqa: F401
@@ -222,6 +226,7 @@ def init_db(bind=None) -> None:
     _seed_default_projects(bind)
     _backfill_sod_user_ids(bind)
     assert_every_row_has_a_project(bind)
+    convert_inline_networks(bind)
 
 
 # Console-account journal actions (routers/users.py, routers/auth.py,
@@ -1257,6 +1262,11 @@ def _migrate_workspace_columns(bind) -> None:
         "resource_creators": (
             "ALTER TABLE resource_creators ADD COLUMN workspace_id VARCHAR(32)"
         ),
+        # born with the column (projects §12); listed so the scoped-tables drift test holds
+        "network_profiles": "ALTER TABLE network_profiles ADD COLUMN workspace_id VARCHAR(32)",
+        "project_network_profiles": (
+            "ALTER TABLE project_network_profiles ADD COLUMN workspace_id VARCHAR(32)"
+        ),
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())
@@ -1750,3 +1760,73 @@ def assert_every_row_has_a_project(bind) -> None:
         "projects, so the owner is ambiguous — run scripts/backfill_projects.py "
         "--workspace <id> --project <id>, or find the write path that did not stamp it."
     )
+
+
+def convert_inline_networks(bind) -> dict[str, int]:
+    """Turn every agent's inline `network` into a `legacy-<hash8>` profile (design §12.10).
+
+    Only BYO-mount container agents ever carried one. Each distinct (workspace, subnet
+    set, SG set) becomes one `unchecked` profile, allowed in the agent's project, and
+    the spec is rewritten to `{"profile_id": ...}` — the deployer resolves it back to
+    the same subnets and SGs, so nothing deploys differently. Idempotent and run on
+    every startup: a second pass finds no inline spec, and one written by an older
+    build after a rollback is converted the next time. Core statements on the model
+    tables (JSON columns serialize on every backend); no project filter applies.
+    """
+    from sqlalchemy import insert, inspect, select, update
+
+    from app.models.network import legacy_profile_id
+
+    live = set(inspect(bind).get_table_names())
+    if not {"agents", "network_profiles", "project_network_profiles"} <= live:
+        return {}
+    agents = Base.metadata.tables["agents"]
+    profiles = Base.metadata.tables["network_profiles"]
+    allowed = Base.metadata.tables["project_network_profiles"]
+    now = datetime.now(UTC)
+    counts = {"agents": 0, "profiles": 0, "bindings": 0}
+    with bind.begin() as conn:
+        rows = conn.execute(
+            select(agents.c.id, agents.c.workspace_id, agents.c.project_id, agents.c.spec)
+        ).fetchall()
+        for agent_id, workspace_id, project_id, spec in rows:
+            network = (spec or {}).get("network") if isinstance(spec, dict) else None
+            if not isinstance(network, dict) or "profile_id" in network:
+                continue
+            subnets = [str(s) for s in network.get("subnets") or []]
+            groups = [str(g) for g in network.get("security_groups") or []]
+            if not (subnets and groups and workspace_id):
+                continue  # not a usable network; AgentSpec would refuse it anyway
+            pid = legacy_profile_id(workspace_id, subnets, groups)
+            if conn.execute(select(profiles.c.id).where(profiles.c.id == pid)).first() is None:
+                conn.execute(insert(profiles).values(
+                    id=pid, workspace_id=workspace_id, name=pid, vpc_id=None,
+                    subnet_ids=list(dict.fromkeys(subnets)),
+                    security_group_ids=list(dict.fromkeys(groups)),
+                    purpose="agents", internet="none", reachable=None, check_results=None,
+                    status="unchecked", checked_at=None, created_by="migration",
+                    created_at=now, updated_at=now, archived_at=None,
+                ))
+                counts["profiles"] += 1
+            if project_id and conn.execute(
+                select(allowed.c.profile_id).where(allowed.c.project_id == project_id,
+                                                   allowed.c.profile_id == pid)
+            ).first() is None:
+                conn.execute(insert(allowed).values(
+                    project_id=project_id, profile_id=pid, workspace_id=workspace_id,
+                    is_default=False,
+                ))
+                counts["bindings"] += 1
+            conn.execute(
+                update(agents).where(agents.c.id == agent_id)
+                .values(spec={**spec, "network": {"profile_id": pid}})
+            )
+            counts["agents"] += 1
+    if counts["agents"]:
+        import logging
+
+        logging.getLogger(__name__).info(
+            "network profiles: moved %d agent spec(s) onto %d new legacy profile(s)",
+            counts["agents"], counts["profiles"],
+        )
+    return counts

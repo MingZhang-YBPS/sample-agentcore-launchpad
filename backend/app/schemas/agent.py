@@ -301,10 +301,32 @@ class ByoMount(BaseModel):
 
 
 class VpcNetwork(BaseModel):
-    """networkModeConfig for networkMode=VPC — required by BYO file systems."""
+    """Inline networkModeConfig for networkMode=VPC — the legacy shape (design §12.3).
+
+    Kept so an older client's submission (and a stored snapshot) still parses; the
+    ledger holds `NetworkProfileRef` instead (startup turns inline specs into
+    `legacy-<hash8>` profiles, §12.10)."""
 
     subnets: list[str] = Field(min_length=1, max_length=8)
     security_groups: list[str] = Field(min_length=1, max_length=5)
+
+
+# `np-<hex>` for a profile created in the console, `legacy-<hash8>` for one the
+# startup migration made (models/network.py)
+NETWORK_PROFILE_ID_RE = r"^[a-z0-9][a-z0-9-]{1,31}$"
+
+
+class NetworkProfileRef(BaseModel):
+    """networkMode=VPC through a workspace network profile; the deployer resolves it
+    to subnets + security groups (`services/network_profiles.resolve_vpc`)."""
+
+    model_config = {"extra": "forbid"}
+
+    profile_id: str = Field(pattern=NETWORK_PROFILE_ID_RE)
+
+
+# null = PUBLIC; {profile_id} = a network profile; {subnets, security_groups} = legacy
+AgentNetwork = NetworkProfileRef | VpcNetwork
 
 
 class FilesystemConfig(BaseModel):
@@ -643,8 +665,9 @@ class AgentSpec(BaseModel):
     # AgentCore Runtime persistent storage. Session storage mounts on the harness,
     # zip_runtime/studio and container methods; BYO mounts are container-only.
     filesystem: FilesystemConfig = Field(default_factory=FilesystemConfig)
-    # VPC networkModeConfig; mandatory whenever a BYO file system is mounted
-    network: VpcNetwork | None = None
+    # VPC networking (design §12.3): None = PUBLIC, a profile reference, or the legacy
+    # inline subnets/SGs. Mandatory whenever a BYO file system is mounted.
+    network: AgentNetwork | None = Field(default=None, union_mode="left_to_right")
     # Managed KBs mounted on this agent. Two channels, picked by method:
     #   harness           → launchpad-kb-gw attached as an agentcore_gateway tool
     #                       (per-KB Retrieve + per-agent AgenticRetrieveStream)
@@ -960,6 +983,19 @@ class AgentSpec(BaseModel):
         # stage's hashed lockfile is what makes the resolved set reproducible.
         assert_all_pinned(self.requirements)
         return self
+
+    @field_validator("network", mode="before")
+    @classmethod
+    def _one_network_shape(cls, value: Any) -> Any:
+        # left_to_right would let {profile_id, subnets} fall through to VpcNetwork and
+        # silently drop the profile; a spec names its network one way only
+        if isinstance(value, dict) and "profile_id" in value and (
+            "subnets" in value or "security_groups" in value
+        ):
+            raise ValueError(
+                "network takes either {profile_id} or {subnets, security_groups}, not both"
+            )
+        return value
 
     @model_validator(mode="after")
     def _byo_needs_vpc(self) -> "AgentSpec":

@@ -1142,3 +1142,26 @@ def require_infra(request: Request, role: str) -> None:
             )
         return
     require_permission(request, infra_key(role))
+
+
+# ---- network profiles (design projects §12.11, V12-model) ----
+# A profile is workspace infrastructure an administrator keeps; reads run inside the
+# request's project (a member sees the project's allowed set, an admin all of them).
+# Writes and the per-project allowed set are ADMIN and project-exempt — the allowed
+# set names its project in the path. Preflight / probe routes arrive with V12-check.
+ROUTE_POLICY.update({
+    ("GET", "/api/network-profiles"): MEMBER,
+    ("GET", "/api/network-profiles/{profile_id}"): MEMBER,
+    ("POST", "/api/network-profiles"): ADMIN,
+    ("PATCH", "/api/network-profiles/{profile_id}"): ADMIN,
+    ("DELETE", "/api/network-profiles/{profile_id}"): ADMIN,
+    ("GET", "/api/network-profiles/projects/{project_id}"): ADMIN,
+    ("PUT", "/api/network-profiles/projects/{project_id}"): ADMIN,
+})
+PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
+    ("POST", "/api/network-profiles"),
+    ("PATCH", "/api/network-profiles/{profile_id}"),
+    ("DELETE", "/api/network-profiles/{profile_id}"),
+    ("GET", "/api/network-profiles/projects/{project_id}"),
+    ("PUT", "/api/network-profiles/projects/{project_id}"),
+})

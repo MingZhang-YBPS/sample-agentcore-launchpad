@@ -56,6 +56,7 @@ from app.routers.memory import router as memory_router
 from app.routers.memory_resources import router as memory_resources_router
 from app.routers.model_defaults import router as model_defaults_router
 from app.routers.model_defaults import workspace_router as model_catalog_router
+from app.routers.network_profiles import router as network_profiles_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
 from app.routers.promotions import router as promotions_router
@@ -232,6 +233,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management
     app.include_router(workspaces_router)  # environments + the request-boundary grants
+    app.include_router(network_profiles_router)  # VPC network profiles (projects §12)
     app.include_router(fleet_router)  # fleet overview, governance health, marketplace (T37-T39)
     app.include_router(alerts_router)  # spend attribution + threshold alerts (T28/T29)
     app.include_router(promotions_router)  # release bundles, promotions, inbox (T20-T22)
