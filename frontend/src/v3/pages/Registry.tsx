@@ -1,4 +1,6 @@
-import { ArrowLeft, Copy, Eye, EyeOff, Plus, RefreshCw, Search } from "lucide-react";
+import "./registry/registry.css";
+
+import { ArrowLeft, ArrowRight, Copy, Eye, EyeOff, Plus, RefreshCw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -28,6 +30,8 @@ import {
   type TrackNode,
 } from "../ui";
 import { Term } from "../onboarding/Glossary";
+import { PendingTab } from "./registry/PendingTab";
+import { isPending, oldestWait, parseTab, pendingQueue, type RegistryTab } from "./registry/queue";
 
 type RecordType = RegistryRecordOut["type"];
 type Lifecycle = "submit" | "approve" | "reject" | "disable";
@@ -42,14 +46,16 @@ function useTypeLabel() {
   return (type: string) => t(`v2.registry.type.${type}`, { defaultValue: type });
 }
 
-/** Lifecycle actions, run from the list's approval queue and from a record. */
+/** Lifecycle actions, run from the list's approval queue and from a record.
+ *  `busy` is per record, so one row's action does not lock the others. */
 function useLifecycle(onDone: () => void) {
   const { t } = useTranslation();
   const toast = useToast();
   const statusLabel = useStatusLabel();
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const run = async (record: RegistryRecordOut, action: Lifecycle) => {
-    setBusy(record.record_id);
+    const id = record.record_id;
+    setBusy((prev) => new Set(prev).add(id));
     try {
       const updated = await api.registryAction(record.record_id, action);
       toast("ok", t("v2.registry.actionDone", { name: record.name, status: statusLabel(updated.status) }));
@@ -57,7 +63,11 @@ function useLifecycle(onDone: () => void) {
     } catch (err) {
       toast("act", t("common.actionFailed", { msg: errorMessage(err) }));
     } finally {
-      setBusy(null);
+      setBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
   return { busy, run };
@@ -65,9 +75,13 @@ function useLifecycle(onDone: () => void) {
 
 /* ── list ────────────────────────────────────────────────────────────────── */
 
-function RecordList() {
+/** The list URL for a tab; the default tab keeps the bare path. */
+const listUrl = (tab: RegistryTab) => (tab === "pending" ? "/v3/registry?tab=pending" : "/v3/registry");
+
+function RecordList({ tab }: { tab: RegistryTab }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [, setParams] = useSearchParams();
   const { isAdmin } = useAuth();
   const { current } = useWorkspace();
   const statusLabel = useStatusLabel();
@@ -96,18 +110,25 @@ function RecordList() {
   const [q, setQ] = useState("");
 
   const all = useMemo(() => records.data?.records ?? [], [records.data]);
+  // the existing-records tab never repeats the queue; the pending tab is the queue
+  const existing = useMemo(() => all.filter((r) => !isPending(r)), [all]);
+  const queue = useMemo(() => pendingQueue(all), [all]);
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return all
+    return existing
       .filter((r) => type === "all" || r.type === type)
       .filter((r) => state === "all" || registrySignal(r.status) === state)
       .filter((r) => !needle || `${r.name} ${r.record_id} ${r.description}`.toLowerCase().includes(needle))
       .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
-  }, [all, type, state, q]);
-  // a member cannot move a system record; the server enforces it, the queue just hides it
-  const pending = all.filter((r) => r.status === "PENDING_APPROVAL" && (!r.system || isAdmin));
+  }, [existing, type, state, q]);
   const countType = (k: RecordType) => all.filter((r) => r.type === k).length;
-  const countState = (s: Signal) => all.filter((r) => registrySignal(r.status) === s).length;
+  const countExistingType = (k: RecordType) => existing.filter((r) => r.type === k).length;
+  const countState = (s: Signal) => existing.filter((r) => registrySignal(r.status) === s).length;
+  const longest = oldestWait(queue);
+  const hiddenCount = discoverable.data ? all.filter((r) => !discoverable.data!.has(r.record_id)).length : null;
+  // replace: switching tabs is not a navigation, and a refresh or a return from a record keeps it
+  const setTab = (next: RegistryTab) => setParams(next === "pending" ? { tab: "pending" } : {}, { replace: true });
+  const open = (id: string) => navigate(`/v3/registry?id=${encodeURIComponent(id)}${tab === "pending" ? "&tab=pending" : ""}`);
 
   if (records.data?.unavailable) {
     return <Notice s="wait">{t("v3.registry.unavailable")}</Notice>;
@@ -133,126 +154,130 @@ function RecordList() {
         <Panel><Stat label={<Term term="a2a">{typeLabel("A2A")}</Term>} value={countType("A2A")} foot={t("v3.registry.footA2A")} /></Panel>
         <Panel><Stat label={<Term term="mcp">{typeLabel("MCP")}</Term>} value={countType("MCP")} foot={t("v3.registry.footMcp")} /></Panel>
         <Panel><Stat label={<Term term="skill">{typeLabel("AGENT_SKILLS")}</Term>} value={countType("AGENT_SKILLS")} foot={t("v3.registry.footSkills")} /></Panel>
-        <Panel signal={pending.length ? "wait" : undefined}>
-          <Stat label={t("v3.registry.pending")} value={pending.length} signal={pending.length ? "wait" : undefined}
-            foot={discoverable.data ? t("v3.registry.hiddenFoot", { count: all.filter((r) => !discoverable.data!.has(r.record_id)).length }) : undefined} />
+        <Panel signal={queue.length ? "wait" : undefined}>
+          <button type="button" className="v3-reg-statlink" onClick={() => setTab("pending")} title={t("v3.registry.openPending")}>
+            <Stat
+              label={<span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>{t("v3.registry.pending")} <ArrowRight size={13} aria-hidden="true" /></span>}
+              value={queue.length}
+              signal={queue.length ? "wait" : undefined}
+              foot={[
+                longest ? t("v3.registry.longestWait", { ago: ago(longest) }) : null,
+                hiddenCount != null ? t("v3.registry.hiddenFoot", { count: hiddenCount }) : null,
+              ].filter(Boolean).join(" · ") || undefined}
+            />
+          </button>
         </Panel>
       </div>
 
-      {pending.length > 0 && (
-        <Panel title={t("v3.registry.queue")} signal="wait" flush end={<span className="mono">{pending.length}</span>}>
-          <table className="v3-table">
-            <tbody>
-              {pending.map((r) => (
-                <tr key={r.record_id}>
-                  <td style={{ width: 30 }}><Lamp s="wait" live /></td>
-                  <td>
-                    <div className="v3-name"><div><b>{r.name}</b><small>{(r.description || r.record_id).slice(0, 90)}</small></div></div>
-                  </td>
-                  <td><Chip>{typeLabel(r.type)}</Chip></td>
-                  <td className="mono" style={{ color: "var(--v3-text-2)", whiteSpace: "nowrap" }}>{r.version ?? "—"}</td>
-                  <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(r.updated_at)}</td>
-                  <td style={{ width: 1, whiteSpace: "nowrap" }}>
-                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      <Btn size="sm" kind="primary" disabled={lifecycle.busy === r.record_id} onClick={() => void lifecycle.run(r, "approve")}>
-                        {t("v2.registry.action.approve")}
-                      </Btn>
-                      <Btn size="sm" disabled={lifecycle.busy === r.record_id} onClick={() => void lifecycle.run(r, "reject")}>
-                        {t("v2.registry.action.reject")}
-                      </Btn>
-                      <Btn size="sm" kind="ghost" onClick={() => navigate(`/v3/registry?id=${encodeURIComponent(r.record_id)}`)}>
-                        {t("v3.registry.open")}
-                      </Btn>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
-      )}
+      <Filters
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "existing", label: t("v3.registry.tabs.existing"), count: existing.length },
+          { value: "pending", label: t("v3.registry.tabs.pending"), count: queue.length, s: queue.length ? "wait" : undefined },
+        ]}
+      />
 
-      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <Filters
-          value={type}
-          onChange={setType}
-          options={[
-            { value: "all", label: t("v3.registry.allTypes"), count: all.length },
-            ...(["A2A", "MCP", "AGENT_SKILLS"] as const).map((k) => ({ value: k, label: typeLabel(k), count: countType(k) })),
-          ]}
-        />
-        <span style={{ width: 1, height: 20, background: "var(--v3-line)" }} aria-hidden="true" />
-        <Filters
-          value={state}
-          onChange={setState}
-          options={[
-            { value: "all", label: t("v3.registry.allStates") },
-            { value: "ok", label: statusLabel("APPROVED"), s: "ok", count: countState("ok") },
-            { value: "wait", label: statusLabel("PENDING_APPROVAL"), s: "wait", count: countState("wait") },
-            { value: "act", label: statusLabel("REJECTED"), s: "act", count: countState("act") },
-            { value: "off", label: t("v3.registry.draftOrRetired"), s: "off", count: countState("off") },
-          ]}
-        />
-        <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 300 }}>
-          <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />
-          <input className="v3-input" style={{ paddingLeft: 34 }} value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder={t("v3.registry.search")} aria-label={t("v3.registry.search")} />
-        </div>
-      </div>
-
-      <Panel flush>
-        {records.loading && !records.data ? (
-          <div style={{ padding: 20 }}><Skeleton rows={6} /></div>
+      {tab === "pending" ? (
+        records.loading && !records.data ? (
+          <Panel><Skeleton rows={6} /></Panel>
         ) : records.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{records.error}</Notice></div>
-        ) : rows.length === 0 ? (
-          <Empty title={all.length ? t("v3.registry.none") : t("v3.registry.empty")} />
+          <Notice s="act">{records.error}</Notice>
         ) : (
-          <table className="v3-table">
-            <thead>
-              <tr>
-                <th />
-                <th>{t("v3.registry.name")}</th>
-                <th>{t("v3.registry.type")}</th>
-                <th>{t("v3.registry.version")}</th>
-                <th>{t("v3.registry.status")}</th>
-                <th>{t("v3.registry.consumers")}</th>
-                <th className="num">{t("v3.registry.updated")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const s = registrySignal(r.status);
-                const hidden = discoverable.data ? !discoverable.data.has(r.record_id) : null;
-                return (
-                  <tr key={r.record_id} className="click" onClick={() => navigate(`/v3/registry?id=${encodeURIComponent(r.record_id)}`)}>
-                    <td style={{ width: 30 }}><Lamp s={s} live={s === "ok"} /></td>
-                    <td>
-                      <div className="v3-name">
-                        <div>
-                          <b>{r.name}</b>
-                          <small>{r.description ? r.description.slice(0, 90) : r.record_id}</small>
-                        </div>
-                      </div>
-                    </td>
-                    <td><Chip>{typeLabel(r.type)}</Chip>{r.system && <> <Chip s="info">{t("v2.registry.system")}</Chip></>}</td>
-                    <td className="mono" style={{ color: "var(--v3-text-2)", whiteSpace: "nowrap" }}>{r.version ?? "—"}</td>
-                    <td><Chip s={s === "off" ? undefined : s}>{statusLabel(r.status)}</Chip></td>
-                    <td style={{ color: hidden ? "var(--v3-text-3)" : "var(--v3-text-2)" }}>
-                      {hidden == null ? "—" : hidden ? (
-                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><EyeOff size={14} /> {t("v3.registry.hidden")}</span>
-                      ) : (
-                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Eye size={14} /> {t("v3.registry.visible")}</span>
-                      )}
-                    </td>
-                    <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(r.updated_at)}</td>
+          <PendingTab
+            queue={queue}
+            isAdmin={isAdmin}
+            typeLabel={typeLabel}
+            statusLabel={statusLabel}
+            single={lifecycle}
+            onOpen={open}
+            onDone={() => setTick((n) => n + 1)}
+          />
+        )
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <Filters
+              value={type}
+              onChange={setType}
+              options={[
+                { value: "all", label: t("v3.registry.allTypes"), count: existing.length },
+                ...(["A2A", "MCP", "AGENT_SKILLS"] as const).map((k) => ({ value: k, label: typeLabel(k), count: countExistingType(k) })),
+              ]}
+            />
+            <span style={{ width: 1, height: 20, background: "var(--v3-line)" }} aria-hidden="true" />
+            <Filters
+              value={state}
+              onChange={setState}
+              options={[
+                { value: "all", label: t("v3.registry.allStates") },
+                { value: "ok", label: statusLabel("APPROVED"), s: "ok", count: countState("ok") },
+                { value: "act", label: statusLabel("REJECTED"), s: "act", count: countState("act") },
+                { value: "off", label: t("v3.registry.draftOrRetired"), s: "off", count: countState("off") },
+              ]}
+            />
+            <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 300 }}>
+              <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />
+              <input className="v3-input" style={{ paddingLeft: 34 }} value={q} onChange={(e) => setQ(e.target.value)}
+                placeholder={t("v3.registry.search")} aria-label={t("v3.registry.search")} />
+            </div>
+          </div>
+
+          <Panel flush>
+            {records.loading && !records.data ? (
+              <div style={{ padding: 20 }}><Skeleton rows={6} /></div>
+            ) : records.error ? (
+              <div style={{ padding: 20 }}><Notice s="act">{records.error}</Notice></div>
+            ) : rows.length === 0 ? (
+              <Empty title={existing.length ? t("v3.registry.none") : t("v3.registry.empty")} />
+            ) : (
+              <table className="v3-table">
+                <thead>
+                  <tr>
+                    <th />
+                    <th>{t("v3.registry.name")}</th>
+                    <th>{t("v3.registry.type")}</th>
+                    <th>{t("v3.registry.version")}</th>
+                    <th>{t("v3.registry.status")}</th>
+                    <th>{t("v3.registry.consumers")}</th>
+                    <th className="num">{t("v3.registry.updated")}</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </Panel>
+                </thead>
+                <tbody>
+                  {rows.map((r) => {
+                    const s = registrySignal(r.status);
+                    const hidden = discoverable.data ? !discoverable.data.has(r.record_id) : null;
+                    return (
+                      <tr key={r.record_id} className="click" onClick={() => open(r.record_id)}>
+                        <td style={{ width: 30 }}><Lamp s={s} live={s === "ok"} /></td>
+                        <td>
+                          <div className="v3-name">
+                            <div>
+                              <b>{r.name}</b>
+                              <small>{r.description ? r.description.slice(0, 90) : r.record_id}</small>
+                            </div>
+                          </div>
+                        </td>
+                        <td><Chip>{typeLabel(r.type)}</Chip>{r.system && <> <Chip s="info">{t("v2.registry.system")}</Chip></>}</td>
+                        <td className="mono" style={{ color: "var(--v3-text-2)", whiteSpace: "nowrap" }}>{r.version ?? "—"}</td>
+                        <td><Chip s={s === "off" ? undefined : s}>{statusLabel(r.status)}</Chip></td>
+                        <td style={{ color: hidden ? "var(--v3-text-3)" : "var(--v3-text-2)" }}>
+                          {hidden == null ? "—" : hidden ? (
+                            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><EyeOff size={14} /> {t("v3.registry.hidden")}</span>
+                          ) : (
+                            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Eye size={14} /> {t("v3.registry.visible")}</span>
+                          )}
+                        </td>
+                        <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(r.updated_at)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </Panel>
+        </>
+      )}
     </div>
   );
 }
@@ -274,7 +299,7 @@ function lifecycleNodes(status: string, statusLabel: (s: string) => string): Tra
   return nodes;
 }
 
-function RecordDetail({ id }: { id: string }) {
+function RecordDetail({ id, back }: { id: string; back: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
@@ -305,7 +330,7 @@ function RecordDetail({ id }: { id: string }) {
   const canEdit = r.type !== "A2A" && r.status !== "DEPRECATED" && !r.system;
   const canReimport = r.type === "AGENT_SKILLS" && !r.system && r.status !== "DEPRECATED"
     && (skill?.source?.kind === "git" || skill?.source?.kind === "url");
-  const busyHere = lifecycle.busy === r.record_id || busy;
+  const busyHere = lifecycle.busy.has(r.record_id) || busy;
 
   const useInAgent = () => {
     if (r.type === "MCP") navigate(`/v2/agents?view=new&gateway=${encodeURIComponent(r.name)}`);
@@ -316,7 +341,7 @@ function RecordDetail({ id }: { id: string }) {
     try {
       await api.registryDelete(r.record_id);
       toast("ok", t("registry.deleted", { name: r.name }));
-      navigate("/v3/registry");
+      navigate(back);
     } catch (err) {
       toast("act", t("common.actionFailed", { msg: errorMessage(err) }));
       setBusy(false);
@@ -339,7 +364,7 @@ function RecordDetail({ id }: { id: string }) {
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
       <div>
-        <button type="button" className="v3-btn ghost sm" onClick={() => navigate("/v3/registry")}>
+        <button type="button" className="v3-btn ghost sm" onClick={() => navigate(back)}>
           <ArrowLeft size={14} /> {t("v3.registry.title")}
         </button>
       </div>
@@ -508,5 +533,6 @@ function RecordDetail({ id }: { id: string }) {
 export function V3Registry() {
   const [params] = useSearchParams();
   const id = params.get("id");
-  return id ? <RecordDetail key={id} id={id} /> : <RecordList />;
+  const tab = parseTab(params.get("tab"));
+  return id ? <RecordDetail key={id} id={id} back={listUrl(tab)} /> : <RecordList tab={tab} />;
 }

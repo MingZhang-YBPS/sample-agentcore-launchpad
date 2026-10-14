@@ -10147,7 +10147,46 @@
       "deleteTitle": "删除这条记录？",
       "deleteBody": "“{{name}}”会从注册中心永久移除。已部署的智能体继续运行，只是目录中的这一项消失。",
       "disableTitle": "停用这条记录？",
-      "disableBody": "“{{name}}”将不再可被发现，新的智能体也无法挂载它。已经在用它的智能体不受影响。"
+      "disableBody": "“{{name}}”将不再可被发现，新的智能体也无法挂载它。已经在用它的智能体不受影响。",
+      "openPending": "打开审批队列",
+      "longestWait": "最久 {{ago}}",
+      "waiting": "等待 {{ago}}",
+      "pendingEmpty": "没有待审批的记录",
+      "keysHint": "↑/↓ 移动 · 空格 勾选 · A 批准 · R 拒绝",
+      "perPage": "每页 {{count}} 条",
+      "pages": "分页",
+      "prevPage": "上一页",
+      "nextPage": "下一页",
+      "tabs": {
+        "existing": "已有记录",
+        "pending": "待审批"
+      },
+      "batch": {
+        "selectAll_one": "全选（{{count}}）",
+        "selectAll_other": "全选（{{count}}）",
+        "selected_one": "已选 {{count}}",
+        "selected_other": "已选 {{count}}",
+        "approve": "批准所选",
+        "reject": "拒绝所选",
+        "confirmTitle_approve_one": "批准 {{count}} 条记录？",
+        "confirmTitle_approve_other": "批准 {{count}} 条记录？",
+        "confirmTitle_reject_one": "拒绝 {{count}} 条记录？",
+        "confirmTitle_reject_other": "拒绝 {{count}} 条记录？",
+        "confirmBody_approve_one": "批准后，消费者可以发现这条记录，智能体可以挂载它：",
+        "confirmBody_approve_other": "批准后，消费者可以发现这些记录，智能体可以挂载它们：",
+        "confirmBody_reject_one": "这条记录将以“已拒绝”退回给提交者：",
+        "confirmBody_reject_other": "这些记录将以“已拒绝”退回给提交者：",
+        "more_one": "等 {{count}} 条",
+        "more_other": "等 {{count}} 条",
+        "approveDone": "已批准",
+        "rejectDone": "已拒绝",
+        "summary": "{{verb}} {{ok}} 条，{{failed}} 条失败；失败的行保留勾选",
+        "summaryOk": "{{verb}} {{ok}} 条",
+        "retryFailed_one": "重试失败的 {{count}} 条",
+        "retryFailed_other": "重试失败的 {{count}} 条",
+        "rowRunning": "处理中…",
+        "rowFailed": "失败（{{msg}}）"
+      }
     },
     "common": {
       "cancel": "取消"
