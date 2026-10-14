@@ -1,10 +1,27 @@
 // Chat helpers shared by the classic `/chat` page and the native V2 page.
 import { type AgentInfo, type ChatStreamPayload, localizedMessage } from "./api";
 
-/** Parse a `text/event-stream` body into `{event, data}` frames. */
+/** A chat stream frame's payload; a `heartbeat` carries the turn's elapsed time. */
+export type ChatStreamFrame = ChatStreamPayload & { elapsed_ms?: number };
+
+/**
+ * The console chat stream sends a named `heartbeat` (`{elapsed_ms}`) whenever the
+ * agent is quiet for a while, so the connection survives long reasoning and slow
+ * tools. It is transport, not content: no page renders it as a message.
+ */
+export function isHeartbeat(event: string): boolean {
+  return event === "heartbeat";
+}
+
+/**
+ * Parse a `text/event-stream` body into `{event, data}` frames. Heartbeats are
+ * dropped unless `heartbeats` is set (for a caller that times the turn or watches
+ * the connection); SSE comments (`: keep-alive`, the /v1 form) never yield.
+ */
 export async function* sseEvents(
   res: Response,
-): AsyncGenerator<{ event: string; data: ChatStreamPayload }> {
+  { heartbeats = false }: { heartbeats?: boolean } = {},
+): AsyncGenerator<{ event: string; data: ChatStreamFrame }> {
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -21,7 +38,8 @@ export async function* sseEvents(
         if (line.startsWith("event:")) event = line.slice(6).trim();
         if (line.startsWith("data:")) data += line.slice(5).trim();
       }
-      if (data) yield { event, data: JSON.parse(data) as ChatStreamPayload };
+      if (!data || (!heartbeats && isHeartbeat(event))) continue;
+      yield { event, data: JSON.parse(data) as ChatStreamFrame };
     }
   }
 }

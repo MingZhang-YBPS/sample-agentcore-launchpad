@@ -234,7 +234,9 @@ def chat(
             runtime_version=agent.version,
             attachments=prepared.metadata if prepared else None,
         ):
-            yield sse_encode(event)
+            # a named heartbeat (with `elapsed_ms`) lets the page time the turn and
+            # tell a live connection from a dead one; /v1 keeps the comment
+            yield sse_encode(event, named_heartbeat=True)
 
     return StreamingResponse(
         generate(),
