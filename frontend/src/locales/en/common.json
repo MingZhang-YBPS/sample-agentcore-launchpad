@@ -10685,6 +10685,13 @@
         "summarizePrompt": "Please list the requirements, constraints and open questions confirmed so far, and update them in the proposal's requirements_baseline / assumptions.",
         "trimmed": "Trimmed",
         "trimmedTip": "Earlier turns of this conversation are no longer in the assistant's context"
+      },
+      "digest": {
+        "show": "What the assistant sees of turns 1–{{n}} (summary)",
+        "note": "Generated automatically from the turns above; it may be incomplete. The assistant is told to confirm anything it is unsure of.",
+        "regenerate": "Wrong? Regenerate",
+        "regenerating": "Regenerating…",
+        "generating": "Summarizing the earlier turns for the assistant…"
       }
     },
     "releases": {

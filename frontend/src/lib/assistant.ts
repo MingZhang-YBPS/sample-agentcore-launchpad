@@ -193,6 +193,71 @@ export function contextDividerIndex(
   return stored >= 0 ? stored : messages.length;
 }
 
+// ─── confirmed-items digest (assistant-context C2) ────────────────────────
+
+/**
+ * The summary of the turns outside the replay window, which the assistant sees in its
+ * protocol preamble instead of those turns. Session state, never part of a proposal.
+ */
+export interface AssistantContextDigest {
+  /** Markdown; null while no digest was stored yet */
+  text: string | null;
+  /** the last turn it covers (inclusive) */
+  through_turn: number | null;
+  updated_at: string | null;
+  /** a refresh or a rebuild is running on the server */
+  generating: boolean;
+}
+
+/** The `context_digest` member of a conversation detail (absent on an older backend). */
+export function conversationDigest(detail: object | null | undefined): AssistantContextDigest | null {
+  const d = (detail as { context_digest?: unknown } | null | undefined)?.context_digest;
+  return d && typeof d === "object" && "text" in d ? (d as AssistantContextDigest) : null;
+}
+
+/**
+ * Whether the digest is still catching up with the window: turns before the oldest
+ * replayed one are not all covered, or a refresh is running. The console re-reads the
+ * conversation a few times while this holds (the refresh runs after the turn ended).
+ */
+export function digestPending(
+  ctx: AssistantContextWindow | null,
+  digest: AssistantContextDigest | null,
+): boolean {
+  if (!ctx || ctx.omitted_turns <= 0 || !digest) return false;
+  if (digest.generating) return true;
+  if (ctx.first_replayed_turn === null) return false; // nothing replayed: cannot tell
+  return (digest.through_turn ?? 0) < ctx.first_replayed_turn - 1;
+}
+
+/**
+ * `POST …/conversations/{id}/digest/regenerate` — the owner rebuilds the digest from
+ * every omitted turn (synchronous: one model call). Pinned to the conversation's workspace.
+ */
+export async function regenerateDigest(
+  conversationId: string,
+  workspaceId: string | null,
+): Promise<AssistantContextDigest> {
+  const res = await fetch(
+    `/api/assistant/architect/conversations/${encodeURIComponent(conversationId)}/digest/regenerate`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(workspaceId ? { [WORKSPACE_HEADER]: workspaceId } : {}),
+      },
+    },
+  );
+  const body = (await res.json().catch(() => ({}))) as {
+    code?: string; message?: string; detail?: unknown; context_digest?: AssistantContextDigest;
+  };
+  if (!res.ok || !body.context_digest) {
+    if (res.status === 401) window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
+    throw new ApiError(body.code ?? `http.${res.status}`, body.message ?? res.statusText, body.detail ?? null);
+  }
+  return body.context_digest;
+}
+
 /** The typed proposal pane shows the block; the transcript shows a pointer instead. */
 export function stripProposalBlock(text: string, marker: string): string {
   return text.replace(PROPOSAL_FENCE_RE, `> ${marker}`).replace(PREPARATION_FENCE_RE, "");

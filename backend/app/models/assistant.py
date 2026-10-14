@@ -82,6 +82,16 @@ class AssistantConversation(ProjectOwned, Base):
     shared: Mapped[bool] = mapped_column(default=False)
     shared_by: Mapped[str | None] = mapped_column(String(64), default=None)
     shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # The confirmed-items digest (assistant-context C2): turns that fell out of the
+    # replay window, rolled into ≤ 8 000 characters of Markdown shown to the model in
+    # the protocol preamble. Session state only — never part of a proposal or its hash.
+    # ``context_digest_through_turn`` is the last turn it covers (inclusive) and the
+    # condition of every write, so two concurrent refreshes store one result.
+    context_digest: Mapped[str | None] = mapped_column(Text, default=None)
+    context_digest_through_turn: Mapped[int | None] = mapped_column(default=None)
+    context_digest_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

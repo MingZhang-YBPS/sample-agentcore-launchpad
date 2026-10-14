@@ -17,16 +17,20 @@ import {
 } from "../../../lib/api";
 import {
   ASSISTANT_JOB_POLL_MS,
+  type AssistantContextDigest,
   type AssistantContextWindow,
   type AssistantLiveMessage,
   contextFromMeta,
   conversationContext,
+  conversationDigest,
+  digestPending,
   isAssistantUnauthorized,
   openAssistantTurn,
   proposalContentFromDraft,
   proposalEditErrors,
   proposalEditStart,
   type ProposalEditDraft,
+  regenerateDigest,
   sseEvents,
   toLiveMessages,
 } from "../../../lib/assistant";
@@ -40,6 +44,9 @@ import { PreparationCard } from "./Preparation";
 import { AdlcCard, CreationProgressCard } from "./Progress";
 import { Outcome, ProposalEditor, ProposalView } from "./Proposal";
 import { useClearConversation } from "./useClearConversation";
+
+const DIGEST_POLL_MS = 5000;
+const DIGEST_MAX_POLLS = 12;
 
 /** What the approve dialog was opened on — submitted verbatim, never "the latest". */
 interface PinnedApproval {
@@ -75,6 +82,9 @@ export function AssistantDetail({
   const [messages, setMessages] = useState<AssistantLiveMessage[]>([]);
   // the replay window: the next turn's from GET, the streaming turn's from `meta`
   const [contextWindow, setContextWindow] = useState<AssistantContextWindow | null>(null);
+  // the confirmed-items digest of the omitted turns (C2), refreshed after a turn
+  const [digest, setDigest] = useState<AssistantContextDigest | null>(null);
+  const [regeneratingDigest, setRegeneratingDigest] = useState(false);
   const [input, setInput] = useState("");
   // edit-and-retry: the failed turn the next send replaces in the model replay
   const [retryOf, setRetryOf] = useState<number | null>(null);
@@ -118,6 +128,7 @@ export function AssistantDetail({
         setConversation(detail);
         setMessages(toLiveMessages(detail.messages));
         setContextWindow(conversationContext(detail));
+        setDigest(conversationDigest(detail));
       },
       (err: unknown) => {
         if (!live || !alive.current) return;
@@ -202,7 +213,40 @@ export function AssistantDetail({
     setConversation(detail);
     setMessages(toLiveMessages(detail.messages));
     setContextWindow(conversationContext(detail));
+    setDigest(conversationDigest(detail));
     return detail;
+  };
+
+  // The digest is refreshed in the background once a turn ended: re-read it a few
+  // times while it is behind the window (a failed refresh just stops the polling).
+  const digestBehind = !busy && digestPending(contextWindow, digest);
+  const [digestPolls, setDigestPolls] = useState(0);
+  useEffect(() => {
+    if (!digestBehind || digestPolls >= DIGEST_MAX_POLLS) return;
+    const timer = window.setTimeout(() => {
+      api.assistantConversation(id, workspaceId).then(
+        (detail) => {
+          if (!alive.current || detail.id !== id) return;
+          setDigest(conversationDigest(detail));
+          setDigestPolls((n) => n + 1);
+        },
+        () => { if (alive.current) setDigestPolls(DIGEST_MAX_POLLS); },
+      );
+    }, DIGEST_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [digestBehind, digestPolls, id, workspaceId]);
+
+  const regenerate = async () => {
+    if (!conversation || regeneratingDigest) return;
+    setRegeneratingDigest(true);
+    try {
+      const fresh = await regenerateDigest(conversation.id, workspaceId);
+      if (alive.current) setDigest(fresh);
+    } catch (err) {
+      if (alive.current) toast("error", apiMessage(err));
+    } finally {
+      if (alive.current) setRegeneratingDigest(false);
+    }
   };
 
   const newConversation = async () => {
@@ -244,6 +288,7 @@ export function AssistantDetail({
     const { prompt } = request;
     if (!repairing) setInput("");
     setBusy(true);
+    setDigestPolls(0); // the turn moves the window: the digest may fall behind again
     setMessages((m) => [...m, { role: "user", text: prompt }, { role: "assistant", text: "", streaming: true }]);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -547,6 +592,9 @@ export function AssistantDetail({
           retryOf={retryOf}
           context={contextWindow}
           onSummarize={() => void send({ prompt: t("v3.assistant.context.summarizePrompt") })}
+          digest={digest}
+          regeneratingDigest={regeneratingDigest}
+          onRegenerateDigest={conversation.mine ? () => void regenerate() : undefined}
           onRetry={(target) => {
             setRetryOf(target?.turn ?? null);
             if (target) {

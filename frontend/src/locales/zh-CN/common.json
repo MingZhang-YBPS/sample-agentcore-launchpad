@@ -10685,6 +10685,13 @@
         "summarizePrompt": "请把目前已确认的需求、约束和未决问题整理成清单，并更新到提议的 requirements_baseline / assumptions 中。",
         "trimmed": "已截断",
         "trimmedTip": "这个对话较早的轮次已不在助手的上下文中"
+      },
+      "digest": {
+        "show": "助手看到的较早摘要（第 1–{{n}} 轮）",
+        "note": "根据以上轮次自动生成，可能不完整；助手会就拿不准的内容向你确认。",
+        "regenerate": "有误，重新生成",
+        "regenerating": "正在重新生成…",
+        "generating": "正在为助手总结较早的轮次…"
       }
     },
     "releases": {

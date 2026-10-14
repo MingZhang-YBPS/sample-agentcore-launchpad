@@ -1141,6 +1141,16 @@ def _migrate_assistant_columns(bind) -> None:
             "purge_job_id": (
                 "ALTER TABLE assistant_conversations ADD COLUMN purge_job_id VARCHAR(32)"
             ),
+            # the confirmed-items digest (assistant-context C2)
+            "context_digest": "ALTER TABLE assistant_conversations ADD COLUMN context_digest TEXT",
+            "context_digest_through_turn": (
+                "ALTER TABLE assistant_conversations ADD COLUMN context_digest_through_turn "
+                "INTEGER"
+            ),
+            "context_digest_updated_at": (
+                "ALTER TABLE assistant_conversations ADD COLUMN context_digest_updated_at "
+                "DATETIME"
+            ),
         },
         "assistant_proposals": {
             "bindings": "ALTER TABLE assistant_proposals ADD COLUMN bindings JSON",

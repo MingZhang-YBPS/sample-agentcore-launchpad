@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.assistant import evaluation_repair, preparation, service
+from app.assistant import digest, evaluation_repair, preparation, service
 from app.assistant import proposal as proposal_contract
 from app.assistant.principal import principal_of, project_can
 from app.core.db import SessionLocal, get_db
@@ -347,6 +347,23 @@ def turn(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/conversations/{conversation_id}/digest/regenerate")
+def regenerate_digest(
+    conversation_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The owner's "wrong, regenerate" on the confirmed-items digest (assistant-context
+    C2, D-4): rebuilt from every turn outside the replay window by one Converse call on
+    the workspace's cheap default model. A collaborator of a shared conversation reads
+    the digest but gets 403 here; anyone else 404. Writes the ledger only."""
+    identity = _caller(request)
+    principal = principal_of(identity)
+    row = service.accessible_conversation(db, ws.id, principal, conversation_id)
+    return {"context_digest": digest.regenerate(db, row, ws.context, principal)}
 
 
 @router.put("/conversations/{conversation_id}/preparation")
