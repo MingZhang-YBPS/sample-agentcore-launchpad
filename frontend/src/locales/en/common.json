@@ -2436,6 +2436,9 @@
     "auth.invalid_email": "Enter a valid email address.",
     "auth.email_domain_blocked": "This email domain is not accepted — use a company email address.",
     "criteria.invalid": "The criteria table has errors",
+    "golden.empty_input": "Some items have no question — every turn needs an input.",
+    "golden.empty_expected": "Some items have no expected answer — write one for every turn before adding them.",
+    "golden.unknown_criteria": "Some items name criteria that are not in this golden set's criteria table.",
     "runtime.empty_reply": "The agent's runtime answered with an empty response.",
     "runtime.unrecognized_reply": "The agent answered in a format the console cannot read. The start of the response:"
   },

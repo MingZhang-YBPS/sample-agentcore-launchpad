@@ -2436,6 +2436,9 @@
     "auth.invalid_email": "请输入有效的邮箱地址。",
     "auth.email_domain_blocked": "不接受这个邮箱域名，请使用公司邮箱。",
     "criteria.invalid": "判据表有错误",
+    "golden.empty_input": "有样本缺少问题：每一轮都要填写输入。",
+    "golden.empty_expected": "有样本缺少期望答案：每一轮都要先写好期望答案再添加。",
+    "golden.unknown_criteria": "有样本引用了该黄金集判据表中没有的判据编号。",
     "runtime.empty_reply": "智能体的运行时返回了空响应。",
     "runtime.unrecognized_reply": "智能体返回了控制台无法识别的格式。响应的开头是："
   },

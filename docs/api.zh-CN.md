@@ -729,6 +729,18 @@ AWS Dataset，各有不可变版本。样本出处记录在 `metadata.dlc`（`ca
 | `POST` | `/api/golden-sets/{id}/move` | `criteria.manage` —— `{scenario_id, to: dev\|regression}`。样本既不会移入也不会移出保留集 |
 | `POST` | `/api/golden-sets/{id}/retire` | `criteria.manage` —— `{split, scenario_id, reason}`。退役样本离开放行门的分母，但仍会被重放，这样修好的问题不会悄悄回来 |
 
+`items` 与 `seed` 在写入前逐条校验，任何一条不通过都整体拒绝，什么都不写（`seed` 也就不封存保留集，改好后可以重新提交）：
+
+| 错误码 | 何时返回 |
+|---|---|
+| `422 golden.empty_input` | `turns` 为空，或任一轮的 `input` 为空 |
+| `422 golden.empty_expected` | 任一轮的 `expected_response` 为空（与 `admission.no_expected` 同一条规则） |
+| `422 golden.unknown_criteria` | `metadata.dlc.criteria_ids` 里有所服务判据表（该谱系最新已发布版本及更新的草稿）中没有的编号；黄金集没有关联判据谱系时不检查 |
+
+`code` 取第一条出错样本的规则；`detail` 为 `{errors: [{index, scenario_id, code, criteria_ids?}], count, unknown_criteria?}`：
+`errors` 列出前 20 条问题（`index` 是该样本在请求 `items` 里的下标，同一条样本可能出现两次），`count` 是问题总数，
+`unknown_criteria` 汇总所有未知编号。已经写入的样本不受这些规则影响。
+
 ### 标注与裁判校准
 
 标注是**盲的**：任务关闭前不会把裁判的判定给标注人看——先看到它，一致性这个数字就没有意义了。

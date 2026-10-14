@@ -1069,6 +1069,18 @@ provenance lives in `metadata.dlc` (`case_tier`, `criteria_ids`, `origin`,
 | `POST` | `/api/golden-sets/{id}/move` | `criteria.manage` — `{scenario_id, to: dev\|regression}`. Items never move into or out of the holdout |
 | `POST` | `/api/golden-sets/{id}/retire` | `criteria.manage` — `{split, scenario_id, reason}`. A retired item leaves the gate's denominator but is still replayed, so a fixed bug cannot come back unnoticed |
 
+`items` and `seed` check every item before writing; if any item fails, the whole request is refused and nothing is written (so `seed` does not seal the holdout, and the corrected batch can be sent again):
+
+| Error | When |
+|---|---|
+| `422 golden.empty_input` | `turns` is empty, or a turn has an empty `input` |
+| `422 golden.empty_expected` | a turn has an empty `expected_response` (the same rule as `admission.no_expected`) |
+| `422 golden.unknown_criteria` | `metadata.dlc.criteria_ids` names a key the served criteria table does not have (the lineage's latest published version plus any newer draft); not checked when the golden set has no criteria lineage |
+
+`code` is the rule of the first failing item; `detail` is `{errors: [{index, scenario_id, code, criteria_ids?}], count, unknown_criteria?}`:
+`errors` lists the first 20 problems (`index` is the item's position in the request's `items`; one item can appear twice), `count` is the total,
+and `unknown_criteria` collects every unknown key. Items already written are not affected by these rules.
+
 ### Annotation and judge calibration
 
 Labelling is **blind**: the judge's verdict is withheld from annotators until the

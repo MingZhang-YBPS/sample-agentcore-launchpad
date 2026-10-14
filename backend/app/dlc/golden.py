@@ -41,6 +41,8 @@ SOURCE_BIAS = {
     "review": "an SME's correction — strong label, narrow coverage",
 }
 MAX_ITEMS = 200
+# how many failing rows a 422 lists in `detail.errors` (the total is in `detail.count`)
+MAX_REPORTED_ERRORS = 20
 
 
 def _now() -> datetime:
@@ -141,20 +143,91 @@ def _version_label(split: EvalDataset) -> str | None:
     return str(versions[-1]["version"]) if versions else None
 
 
-def add_items(
-    db: Session,
+def _blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _criteria_keys(db: Session, split: EvalDataset) -> set[str] | None:
+    """Criterion keys of the table this set serves: the latest published version plus a
+    newer draft (a key about to be published may already have items written for it).
+    `None` when the set names no lineage, or the lineage cannot be resolved here."""
+    if not split.criteria_set_id:
+        return None
+    from app.dlc import criteria as criteria_svc
+
+    versions = [criteria_svc.latest_published(db, split.workspace_id, split.criteria_set_id)]
+    try:
+        versions.append(criteria_svc.get_version(db, split.workspace_id, split.criteria_set_id))
+    except NotFoundError:
+        pass
+    versions = [v for v in versions if v is not None]
+    if not versions:
+        return None
+    return {c.key for v in {v.id: v for v in versions}.values()
+            for c in criteria_svc.criteria_of(db, v.id)}
+
+
+def item_errors(item: dict[str, Any], known: set[str] | None) -> list[dict[str, Any]]:
+    """What makes one item unusable as evidence (G4): no question, no expected answer
+    (the gate could never judge it), or criteria the served table does not have (the
+    item would count towards no criterion's coverage)."""
+    errors: list[dict[str, Any]] = []
+    turns = item.get("turns")
+    if not isinstance(turns, list) or not turns or any(
+        not isinstance(t, dict) or _blank(t.get("input")) for t in turns
+    ):
+        errors.append({"code": "golden.empty_input"})
+    elif any(_blank(t.get("expected_response")) for t in turns):
+        errors.append({"code": "golden.empty_expected"})
+    if known is not None:
+        unknown = [str(k) for k in dlc_meta(item).get("criteria_ids") or []
+                   if str(k) not in known]
+        if unknown:
+            errors.append({"code": "golden.unknown_criteria", "criteria_ids": unknown})
+    return errors
+
+
+_ERROR_TEXT = {
+    "golden.empty_input": "has no question (empty turns or an empty input)",
+    "golden.empty_expected": "has a turn with no expected answer",
+    "golden.unknown_criteria": "names criteria the served criteria table does not have",
+}
+
+
+def validate_items(db: Session, split: EvalDataset, items: list[dict[str, Any]]) -> None:
+    """422 listing the first failing rows (`index` = position in the request) when any
+    item breaks a G4 rule; nothing is written."""
+    known = _criteria_keys(db, split)
+    failures = []
+    for position, item in enumerate(items):
+        for error in item_errors(item, known):
+            failures.append({
+                "index": position,
+                "scenario_id": str(item.get("scenario_id") or ""),
+                **error,
+            })
+    if not failures:
+        return
+    first = failures[0]
+    unknown = sorted({k for f in failures for k in f.get("criteria_ids", [])})
+    raise AppError(
+        first["code"],
+        f"{len(failures)} problem(s); item {first['index']} "
+        f"('{first['scenario_id']}') {_ERROR_TEXT[first['code']]}",
+        {"errors": failures[:MAX_REPORTED_ERRORS], "count": len(failures),
+         **({"unknown_criteria": unknown} if unknown else {})},
+        status_code=422,
+    )
+
+
+def _prepare(
     split: EvalDataset,
     items: list[dict[str, Any]],
     *,
     actor: str,
-    origin: str = "manual",
-    allow_holdout: bool = False,
-) -> list[dict[str, Any]]:
-    """Append items with provenance; refuses the holdout split unless curating it."""
-    if split.split == "holdout" and not allow_holdout:
-        raise AppError("golden.holdout_closed",
-                       "the holdout split is never written by admission — it stays out of "
-                       "the development loop", status_code=409)
+    origin: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The split's new item list and the stamped additions — nothing is mutated."""
     existing = list(split.items or [])
     ids = {str(i.get("scenario_id")) for i in existing}
     added = []
@@ -181,6 +254,25 @@ def add_items(
         added.append(stamped)
     if len(existing) > MAX_ITEMS:
         raise AppError("golden.full", f"a split holds at most {MAX_ITEMS} items")
+    return existing, added
+
+
+def add_items(
+    db: Session,
+    split: EvalDataset,
+    items: list[dict[str, Any]],
+    *,
+    actor: str,
+    origin: str = "manual",
+    allow_holdout: bool = False,
+) -> list[dict[str, Any]]:
+    """Append items with provenance; refuses the holdout split unless curating it."""
+    if split.split == "holdout" and not allow_holdout:
+        raise AppError("golden.holdout_closed",
+                       "the holdout split is never written by admission — it stays out of "
+                       "the development loop", status_code=409)
+    validate_items(db, split, items)
+    existing, added = _prepare(split, items, actor=actor, origin=origin)
     split.items = existing
     db.flush()
     return added
@@ -226,6 +318,9 @@ def seed(
             raise AppError("golden.bad_split", f"split must be one of {SPLITS}")
         else:
             unassigned[dlc_meta(body).get("case_tier") or "known_good"].append(body)
+    # the whole batch is checked before any split is written: one bad item refuses the
+    # seed and leaves the holdout unsealed, so the curator can fix the file and retry
+    validate_items(db, holdout, items)
     # stratify each case tier separately, so the mix is the same in all three splits
     order = [s for s, _ in sorted(zip(SPLITS, shares, strict=True), key=lambda p: -p[1])]
     for tier_items in unassigned.values():
@@ -237,11 +332,12 @@ def seed(
                 if position < cumulative or split_name == order[-1]:
                     buckets[split_name].append(body)
                     break
+    prepared = {name: _prepare(splits[name], body, actor=actor, origin="manual")[0]
+                for name, body in buckets.items() if body}
     counts = {}
-    for split_name, body in buckets.items():
-        if body:
-            add_items(db, splits[split_name], body, actor=actor,
-                      allow_holdout=split_name == "holdout")
+    for split_name in buckets:
+        if split_name in prepared:
+            splits[split_name].items = prepared[split_name]
         counts[split_name] = len(active_items(splits[split_name]))
     db.flush()
     return counts
