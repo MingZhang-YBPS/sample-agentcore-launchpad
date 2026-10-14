@@ -12815,6 +12815,121 @@
         "telemetry": "该配置档无法访问 {{services}}：该 Agent 的链路与日志可能会静默丢失，请检查相应端点及安全组的 443 出站规则。",
         "change": "更改网络…"
       }
+    },
+    "storage": {
+      "nav": "存储",
+      "eyebrow": "配置",
+      "title": "存储",
+      "sub": "{{workspace}}（{{region}}）中 Agent 可挂载的 S3 Files 与 EFS 访问点",
+      "create": "登记存储",
+      "empty": "尚未登记存储",
+      "emptyBody": "登记一个 S3 Files 或 EFS 访问点，Agent 即可按 ID 挂载。",
+      "created": "已登记 {{name}}",
+      "saved": "已保存 {{name}}",
+      "archived": "已归档 {{name}}",
+      "checked": "已校验 {{name}}",
+      "check": "校验",
+      "inUse": "{{count}} 个 Agent 正在挂载",
+      "never": "从未校验",
+      "counts": "{{block}} 个阻断 · {{warn}} 个警告",
+      "usage": "{{projects}} 个项目 · {{agents}} 个 Agent",
+      "multiWriterChip": "多写者",
+      "archiveTitle": "归档 {{name}}？",
+      "archiveBody": "Agent 将无法再挂载 {{name}}，它也会从所有项目的允许集合中移除。文件系统与数据不受影响。",
+      "col": {
+        "name": "名称",
+        "kind": "类型",
+        "azs": "挂载目标可用区",
+        "mode": "模式上限 · 数据",
+        "check": "校验",
+        "users": "使用方"
+      },
+      "kind": {
+        "s3files": "S3 Files",
+        "efs": "EFS"
+      },
+      "mode": {
+        "ro": "只读",
+        "rw": "读写"
+      },
+      "dataClass": {
+        "reference": "参考数据",
+        "shared_state": "共享状态",
+        "scratch": "临时数据"
+      },
+      "status": {
+        "unchecked": "未校验",
+        "ok": "通过",
+        "warn": "有警告",
+        "blocked": "阻断"
+      },
+      "form": {
+        "createTitle": "登记存储",
+        "editTitle": "编辑存储",
+        "create": "登记",
+        "save": "保存",
+        "id": "ID",
+        "idHint": "Agent 按此 ID 引用；2–32 位小写字母、数字或“-”，登记后不可修改。",
+        "name": "名称",
+        "arn": "访问点 ARN",
+        "arnHint": "S3 Files 或 EFS 访问点。校验会读取其文件系统、POSIX 身份与挂载目标。",
+        "maxMode": "最高模式",
+        "dataClass": "数据类别",
+        "profile": "默认网络配置档",
+        "noProfile": "无",
+        "profileHint": "校验时同时检查该网络能否到达挂载目标（同一 VPC、覆盖每个可用区、TCP 2049）。",
+        "rwHint": "Agent 可以读写方式挂载该存储。共享它的多个 Agent 需要自行加锁或分目录写入。",
+        "errId": "2–32 位小写字母、数字或“-”",
+        "errArn": "不是 S3 Files 或 EFS 访问点 ARN",
+        "errName": "最多 64 个字符"
+      },
+      "detail": {
+        "basic": "存储",
+        "fileSystem": "文件系统",
+        "bucket": "存储桶",
+        "posix": "POSIX 身份",
+        "mountTargets": "挂载目标",
+        "checkedAt": "最近校验",
+        "checks": "校验结果",
+        "noChecks": "尚未校验。",
+        "shared": "共享视图",
+        "projects": "允许的项目：{{projects}}",
+        "noAgents": "没有 Agent 挂载它。",
+        "multiWriter": "{{count}} 个 Agent 以读写方式挂载该存储。S3 Files 只在 NFS 客户端之间保证 close-to-open 一致，多个写者需要自行加锁或分目录。",
+        "agent": "Agent",
+        "project": "项目",
+        "version": "版本",
+        "endpoint": "端点",
+        "path": "路径",
+        "mode": "模式"
+      },
+      "access": {
+        "title": "项目访问",
+        "sub": "各项目的 Agent 在本工作区可挂载哪些存储。其他项目的成员看不到它。",
+        "project": "项目",
+        "allowed": "允许",
+        "save": "保存访问设置",
+        "saved": "已保存 {{project}} 的存储访问设置"
+      },
+      "card": {
+        "title": "存储",
+        "change": "更改存储…",
+        "unavailable": "无法读取存储信息",
+        "storage": "存储",
+        "missing": "不在目录中",
+        "archived": "已归档",
+        "inline": "内联",
+        "inlineHint": "内联访问点为读写，且无法晋级。请在存储目录中登记后按 ID 挂载。"
+      },
+      "picker": {
+        "title": "从存储目录挂载",
+        "hint": "S3 Files / EFS 挂载合计最多 {{max}} 个。除非存储允许读写，否则为只读。",
+        "choose": "选择存储…",
+        "add": "添加挂载",
+        "none": "本项目没有可用的存储，请联系管理员登记。",
+        "modeTooWide": "该存储只能以只读方式挂载",
+        "preflightOk": "存储预检通过"
+      }
     }
   },
   "models": {

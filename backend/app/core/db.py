@@ -84,6 +84,9 @@ WORKSPACE_SCOPED_TABLES = (
     "mcp_servers",
     "lambda_tool_targets",
     "external_mcp_targets",
+    # the storage catalog + each project's allowed set (models/storage.py, storage-mounts §4)
+    "storage_mounts",
+    "project_storage_mounts",
 )
 
 # Project boundary (design §4). STRICT rows always belong to one project; SHARED rows
@@ -221,6 +224,7 @@ def init_db(bind=None) -> None:
     from app.models import projects as _project_models  # noqa: F401 — design §2.2
     from app.models import resource_mapping as _mapping_models  # noqa: F401
     from app.models import selfservice as _selfservice_models  # noqa: F401 — T35/T36
+    from app.models import storage as _storage_models  # noqa: F401 — storage-mounts §4
     from app.models import video as _video_models  # noqa: F401 — register tables before create_all
     from app.optimization import models as _optimization_models  # noqa: F401
     from app.skill_lab import models as _skill_lab_models  # noqa: F401
@@ -1347,6 +1351,11 @@ def _migrate_workspace_columns(bind) -> None:
         ),
         "external_mcp_targets": (
             "ALTER TABLE external_mcp_targets ADD COLUMN workspace_id VARCHAR(32)"
+        ),
+        # born with the column (storage-mounts §4); listed so the scoped-tables drift test holds
+        "storage_mounts": "ALTER TABLE storage_mounts ADD COLUMN workspace_id VARCHAR(32)",
+        "project_storage_mounts": (
+            "ALTER TABLE project_storage_mounts ADD COLUMN workspace_id VARCHAR(32)"
         ),
     }
     inspector = inspect(bind)

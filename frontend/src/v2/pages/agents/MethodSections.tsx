@@ -1,5 +1,5 @@
 import { Plus, Trash2, Upload } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -7,6 +7,7 @@ import {
   BYOC_KINDS,
   BYOC_MODELS_MAX,
   BYOC_PYTHON_VERSIONS,
+  type AgentForm,
   byoMountsAllowed,
   DEFAULT_SESSION_MOUNT,
   DISPLAY_NAME_MAX,
@@ -22,7 +23,7 @@ import {
   toggle,
   toolkitToolNames,
 } from "../../../lib/agent-spec";
-import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
+import { type ByocPythonVersion, errorMessage, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
 import { adotLauncher } from "../../../lib/byocTelemetry";
 import {
   MCP_STDIO_ARGS_MAX,
@@ -35,6 +36,17 @@ import {
   mcpStdioIssues,
   withBase,
 } from "../../../lib/mcp-stdio";
+import {
+  type CatalogMountRow,
+  catalogMountsSpec,
+  MAX_BYO_MOUNTS,
+  modeAllowed,
+  newCatalogRow,
+  pickable,
+  type StorageEntry,
+  type StoragePreflight,
+  storageApi,
+} from "../../../lib/api/storage";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { byoRowsMode, mountNeedsProfile } from "../../../lib/storage-mounts";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
@@ -396,6 +408,130 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
   );
 }
 
+/** The wizard form once it carries catalog picks (`lib/agent-spec` `catalogMounts`). */
+type CatalogForm = AgentForm & { catalogMounts?: CatalogMountRow[] };
+
+const PREFLIGHT_DEBOUNCE_MS = 600;
+const SEVERITY_TONE = { ok: "green", warn: "orange", block: "red", info: "gray" } as const;
+
+/**
+ * Mounts from the workspace's storage catalog (storage-mounts §4, §10): pick an entry of
+ * the project's allowed set, its path (default `/mnt/<id>`) and its mode — read-only by
+ * default, read-write only where the entry allows it. Each change re-runs the §5
+ * preflight (storage × the network step's profile) and shows its findings; the deploy
+ * runs it again and refuses on a blocking one. Shown once the form carries
+ * `catalogMounts`; members pick here too — the entry, not the ARN, is what they name.
+ */
+function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"> & { form: CatalogForm; inlineCount: number }) {
+  const { t } = useTranslation();
+  const rows = form.catalogMounts ?? [];
+  const [entries, setEntries] = useState<StorageEntry[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [report, setReport] = useState<StoragePreflight | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [pick, setPick] = useState("");
+  const setRows = (next: CatalogMountRow[]) => set({ catalogMounts: next } as Partial<AgentForm>);
+
+  useEffect(() => {
+    let live = true;
+    storageApi
+      .list()
+      .then((res) => live && setEntries(res.storage))
+      .catch((e: unknown) => {
+        if (!live) return;
+        setEntries([]);
+        setLoadError(errorMessage(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const key = JSON.stringify([rows, form.networkProfileId, form.method]);
+  useEffect(() => {
+    if (rows.length === 0) {
+      setReport(null);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      setChecking(true);
+      storageApi
+        .preflight({ mounts: catalogMountsSpec(rows), network_profile_id: form.networkProfileId || null, method: form.method })
+        .then((res) => live && setReport(res))
+        .catch((e: unknown) => live && setReport({ status: "blocked", results: [{ check: "preflight", severity: "block", message: errorMessage(e) }] }))
+        .finally(() => live && setChecking(false));
+    }, PREFLIGHT_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+    // the serialized inputs are the dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  const byId = new Map((entries ?? []).map((e) => [e.id, e]));
+  const options = pickable(entries ?? [], rows).map((e) => ({ value: e.id, label: `${e.name} (${e.id})` }));
+  const full = rows.length + inlineCount >= MAX_BYO_MOUNTS;
+  const patch = (i: number, change: Partial<CatalogMountRow>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...change } : r)));
+  return (
+    <Field label={t("v3.storage.picker.title")} hint={t("v3.storage.picker.hint", { max: MAX_BYO_MOUNTS })}>
+      {entries === null ? <Spin /> : (
+        <div className="v2-agents-rows" data-testid="v2-agent-fs-catalog">
+          {loadError && <Alert tone="error">{loadError}</Alert>}
+          {rows.map((row, i) => {
+            const entry = byId.get(row.storageId);
+            return (
+              <div key={row.storageId} className="v2-agents-row mount">
+                <span className="mono" title={entry?.access_point_arn}>{entry ? `${entry.name} (${row.storageId})` : row.storageId}</span>
+                <input
+                  className="v2-input mono"
+                  value={row.path}
+                  aria-label={t("v2.agents.wizard.fsPath")}
+                  onChange={(e) => patch(i, { path: e.target.value })}
+                  data-testid={`v2-agent-fs-catalog-path-${i}`}
+                />
+                <Select
+                  value={row.mode}
+                  ariaLabel={t("v3.storage.detail.mode")}
+                  options={[
+                    { value: "ro", label: t("v3.storage.mode.ro") },
+                    ...(entry?.max_mode === "rw" || row.mode === "rw" ? [{ value: "rw", label: t("v3.storage.mode.rw") }] : []),
+                  ]}
+                  onChange={(v) => patch(i, { mode: v === "rw" ? "rw" : "ro" })}
+                  testId={`v2-agent-fs-catalog-mode-${i}`}
+                />
+                <RemoveButton onClick={() => setRows(rows.filter((_, j) => j !== i))} />
+                {entry && !modeAllowed(row, entry) && <span className="v2-agents-err">{t("v3.storage.picker.modeTooWide")}</span>}
+              </div>
+            );
+          })}
+          {options.length > 0 && !full ? (
+            <div style={{ display: "flex", gap: 8 }}>
+              <Select value={pick} options={options} placeholder={t("v3.storage.picker.choose")} onChange={setPick} testId="v2-agent-fs-catalog-pick" />
+              <Button size="sm" disabled={!pick} onClick={() => { setRows([...rows, newCatalogRow(pick)]); setPick(""); }} testId="v2-agent-fs-catalog-add">
+                <Plus size={13} aria-hidden="true" />
+                {t("v3.storage.picker.add")}
+              </Button>
+            </div>
+          ) : (entries.length === 0 && <div className="v2-muted">{t("v3.storage.picker.none")}</div>)}
+          {checking && <Spin />}
+          {report && report.results.filter((r) => r.severity !== "ok").length > 0 && (
+            <div data-testid="v2-agent-fs-catalog-preflight" style={{ display: "grid", gap: 4 }}>
+              {report.results.filter((r) => r.severity !== "ok").map((r, i) => (
+                <div key={`${r.check}-${i}`}>
+                  <Tag tone={SEVERITY_TONE[r.severity] ?? "gray"}>{r.storage_id ?? r.check}</Tag> <span>{r.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {report?.status === "ok" && <div className="v2-muted">{t("v3.storage.picker.preflightOk")}</div>}
+        </div>
+      )}
+    </Field>
+  );
+}
+
 /**
  * The storage card: managed session storage, and the BYO S3 Files / EFS mounts of the
  * methods that take them (storage-mounts §3). The BYO rows are inline access point
@@ -517,6 +653,9 @@ export function FilesystemCard({
           <div className="v2-muted" data-testid="v2-agent-fs-ask-admin">
             {t("storage.mount.askAdmin")}
           </div>
+        )}
+        {byoAllowed && "catalogMounts" in form && (
+          <CatalogMountsField form={form as CatalogForm} set={set} inlineCount={form.s3Mounts.length + form.efsMounts.length} />
         )}
         {touched && issues.duplicatePaths && <span className="v2-agents-err">{t("v2.agents.wizard.errDupPath")}</span>}
         {needsProfile && (
