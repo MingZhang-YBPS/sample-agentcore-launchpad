@@ -7073,7 +7073,12 @@
         },
         "pickCriterion": "选择判据",
         "fromRun": "取自评估运行",
-        "fromRunHint": "一次已完成、且对该判据有判定结果的运行。",
+        "fromRunHint": "填运行 ID（12 位字符，不是运行名称）：一次已完成、并且对这条判据有判定结果的运行。可以在评估任务详情页复制。",
+        "runNotFound": "没有找到 ID 为 {{id}} 的运行。这里要填运行 ID（12 位字符），不是运行名称；可以在评估任务详情页复制。",
+        "runNamedLike": "名为该名称的运行 ID 是 {{id}}。",
+        "useThisRun": "使用这个运行",
+        "runOtherAgent": "这次运行评估的是 {{agent}}，不是当前选中的智能体。",
+        "noResultsForCriterion": "这次运行没有 {{key}} 的判定结果。可能是运行时没有使用 {{key}} 的评估器，或者 {{key}} 是指标类判据（不需要校准）。",
         "annotators": "标注人",
         "annotatorsHint": "至少两人，否则人与人之间的一致性根本无从测量。",
         "adjudicator": "仲裁人",
@@ -10960,7 +10965,12 @@
         "evaluating": "评估中",
         "completed": "已完成"
       },
-      "close": "关闭"
+      "close": "关闭",
+      "runId": "运行 ID",
+      "taskId": "任务 ID",
+      "copyId": "复制 ID",
+      "copied": "已复制运行 ID",
+      "copiedTaskId": "已复制任务 ID"
     },
     "fleet": {
       "eyebrow": "全局",

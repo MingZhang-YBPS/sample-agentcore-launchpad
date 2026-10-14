@@ -10,11 +10,12 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
-import { dlcApi, errorMessage } from "../../../lib/api";
+import { api, dlcApi, errorMessage } from "../../../lib/api";
 import type { AnnotationTask } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { ConfusionMatrix } from "./charts";
+import { runNamed, runRefusal } from "./calibrationRunError";
 import { kappaSignal, stamp } from "./common";
 
 const LABELS = ["pass", "fail", "inconclusive"] as const;
@@ -311,6 +312,22 @@ function NewTask({ agentId, lineageId, criteriaKeys, people, onClose, onCreated 
   const [annotators, setAnnotators] = useState<string[]>([]);
   const [adjudicator, setAdjudicator] = useState("");
   const [busy, setBusy] = useState(false);
+  // a run refusal stays in the dialog (not a toast): it may offer the id of a run
+  // whose name was typed, which the user confirms before saving again
+  const [refusal, setRefusal] = useState<{ message: string; suggestion: string | null } | null>(null);
+  const refused = (err: unknown, typed: string) => {
+    const why = runRefusal(err, typed, key);
+    if (!why) { toast("act", errorMessage(err)); return; }
+    setRefusal({ message: t(why.key, why.vars), suggestion: null });
+    const name = why.lookupName;
+    if (!name) return;
+    api.listEvaluationRuns({ agent_id: agentId ?? undefined, mode: "evaluators", limit: 200 })
+      .then((res) => {
+        const id = runNamed(res.runs, name);
+        if (id && id !== typed) setRefusal((prev) => prev && { ...prev, suggestion: id });
+      })
+      .catch(() => undefined); // the explanation stands without the suggestion
+  };
   return (
     <Dialog
       wide
@@ -320,13 +337,15 @@ function NewTask({ agentId, lineageId, criteriaKeys, people, onClose, onCreated 
         <>
           <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
           {/* two raters at least: one person's labels are not a consensus */}
-          <Btn kind="primary" disabled={busy || !key || annotators.length < 2 || !runId}
+          <Btn kind="primary" disabled={busy || !key || annotators.length < 2 || !runId.trim()}
             onClick={() => {
+              const typed = runId.trim();
               setBusy(true);
+              setRefusal(null);
               dlcApi
-                .createTask({ agent_id: agentId, criteria_lineage_id: lineageId, criterion_key: key, annotators, adjudicator: adjudicator || null, run_id: runId })
+                .createTask({ agent_id: agentId, criteria_lineage_id: lineageId, criterion_key: key, annotators, adjudicator: adjudicator || null, run_id: typed })
                 .then((created) => { toast("ok", t("v2.dlc.calibration.taskCreated")); onCreated(created.id); })
-                .catch((err: unknown) => toast("act", errorMessage(err)))
+                .catch((err: unknown) => refused(err, typed))
                 .finally(() => setBusy(false));
             }}>
             {t("v3.standards.save")}
@@ -339,17 +358,30 @@ function NewTask({ agentId, lineageId, criteriaKeys, people, onClose, onCreated 
         <div className="v3-grid c2">
           <label className="v3-field">
             <span>{t("v2.dlc.criteria.key")}</span>
-            <select className="v3-select" value={key} onChange={(e) => setKey(e.target.value)}>
+            <select className="v3-select" value={key} onChange={(e) => { setKey(e.target.value); setRefusal(null); }}>
               <option value="">{t("v2.dlc.calibration.pickCriterion")}</option>
               {criteriaKeys.map((k) => <option key={k} value={k}>{k}</option>)}
             </select>
           </label>
           <label className="v3-field">
             <span>{t("v2.dlc.calibration.fromRun")}</span>
-            <input className="v3-input mono" value={runId} onChange={(e) => setRunId(e.target.value)} />
+            <input className="v3-input mono" value={runId} onChange={(e) => { setRunId(e.target.value); setRefusal(null); }} />
             <small className="v3-hint">{t("v2.dlc.calibration.fromRunHint")}</small>
           </label>
         </div>
+        {refusal && (
+          <Notice s="act">
+            {refusal.message}
+            {refusal.suggestion && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                <span>{t("v2.dlc.calibration.runNamedLike", { id: refusal.suggestion })}</span>
+                <Btn size="sm" onClick={() => { setRunId(refusal.suggestion ?? ""); setRefusal(null); }}>
+                  {t("v2.dlc.calibration.useThisRun")}
+                </Btn>
+              </div>
+            )}
+          </Notice>
+        )}
         <div className="v3-field">
           <span>{t("v2.dlc.calibration.annotators")}</span>
           <div className="v3-std-keys">

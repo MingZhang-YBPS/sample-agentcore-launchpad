@@ -19,6 +19,7 @@ import {
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../../ui";
+import { CopyId } from "./CopyId";
 import { copyUrl, detailUrl, rankTasks, taskSignal } from "./model";
 
 type Pending = { task: V2Task; action: "stop" | "pause" | "resume" | "delete" };
@@ -40,6 +41,7 @@ export function TaskList() {
   const [shown, setShown] = useState(PAGE);
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hovered, setHovered] = useState<string | null>(null);
   const mayRun = can("eval.run");
 
   const tasks = useMemo(() => list.data ?? [], [list.data]);
@@ -231,14 +233,17 @@ export function TaskList() {
                 {rows.slice(0, shown).map((task) => {
                   const s = taskSignal(task.status);
                   const label = (id: string) => taskItemLabel(t, task, id);
+                  const rowKey = `${task.kind}:${task.id}`;
                   return (
-                    <tr key={`${task.kind}:${task.id}`} className="click" onClick={() => navigate(detailUrl(task))}>
+                    <tr key={rowKey} className="click" onClick={() => navigate(detailUrl(task))}
+                      onMouseEnter={() => setHovered(rowKey)} onMouseLeave={() => setHovered((k) => (k === rowKey ? null : k))}
+                      onFocus={() => setHovered(rowKey)}>
                       <td style={{ width: 30 }}><Lamp s={s} live={s === "info"} title={statusLabel(t, task.status)} /></td>
                       <td>
                         <div className="v3-name">
                           <div>
                             <b className="v3-task-clip" title={task.name}>{task.name}</b>
-                            <small>{statusLabel(t, task.status)} · {task.id.slice(0, 12)}</small>
+                            <small>{statusLabel(t, task.status)} · <CopyId id={task.id} kind={task.kind} quiet={hovered !== rowKey} /></small>
                           </div>
                         </div>
                       </td>

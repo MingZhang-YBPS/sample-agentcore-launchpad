@@ -7073,7 +7073,12 @@
         },
         "pickCriterion": "Choose a criterion",
         "fromRun": "From run",
-        "fromRunHint": "A completed run that has verdicts for this criterion.",
+        "fromRunHint": "The run ID (12 characters, not the run name) of a completed run that has verdicts for this criterion. Copy it from the evaluation task's detail page.",
+        "runNotFound": "No run has the ID {{id}}. This field takes a run ID (12 characters), not a run name; copy it from the evaluation task's detail page.",
+        "runNamedLike": "A run has that name: its ID is {{id}}.",
+        "useThisRun": "Use this run",
+        "runOtherAgent": "This run evaluated {{agent}}, not the selected agent.",
+        "noResultsForCriterion": "This run has no verdicts for {{key}}. Either the run did not use {{key}}'s evaluator, or {{key}} is a metric criterion (which needs no calibration).",
         "annotators": "Annotators",
         "annotatorsHint": "At least two, so human–human agreement can be measured at all.",
         "adjudicator": "Adjudicator",
@@ -10960,7 +10965,12 @@
         "evaluating": "Evaluating",
         "completed": "Completed"
       },
-      "close": "Close"
+      "close": "Close",
+      "runId": "Run ID",
+      "taskId": "Task ID",
+      "copyId": "Copy ID",
+      "copied": "Run ID copied",
+      "copiedTaskId": "Task ID copied"
     },
     "fleet": {
       "eyebrow": "Fleet",

@@ -512,7 +512,9 @@ class TaskCreate(BaseModel):
     purpose: Literal["judge_calibration", "golden_answer", "admission"] = "judge_calibration"
     annotators: list[str] = Field(min_length=2, max_length=10)
     adjudicator: str | None = Field(default=None, max_length=64)
-    run_id: str | None = Field(default=None, max_length=32)
+    # longer than any id: a pasted run name must reach `run.not_found` (which explains
+    # the mix-up), not a bare length validation error
+    run_id: str | None = Field(default=None, max_length=200)
     dataset_id: str | None = Field(default=None, max_length=32)
     items: list[dict[str, Any]] | None = Field(default=None, max_length=200)
 
@@ -645,20 +647,35 @@ def create_annotation_task(
         if dataset is None or dataset.workspace_id != ws.id:
             raise NotFoundError("dataset.not_found", "dataset not found")
     items = req.items
+    if items is not None and req.run_id and len(req.run_id) > 32:
+        # stored as-is beside supplied items, and no id is that long
+        raise NotFoundError("run.not_found", f"no run has the id {req.run_id!r}",
+                            detail={"run_id": req.run_id})
     if items is None:
         if not req.run_id:
             raise AppError("annotation.no_items",
                            "supply items, or a run_id to take them from")
+        # people paste the run's name (what the task list shows) where its id belongs;
+        # `detail` carries what was looked up so the console can say which, and offer
+        # a same-named run — the codes stay as they were
         run = db.get(EvalRun, req.run_id)
         if run is None or run.workspace_id != ws.id:
-            raise NotFoundError("run.not_found", "run not found")
+            raise NotFoundError(
+                "run.not_found",
+                f"no run has the id {req.run_id!r} — this takes a run id, not a run name",
+                detail={"run_id": req.run_id})
         if req.agent_id and run.agent_id != req.agent_id:
             raise AppError("annotation.run_mismatch",
-                           "that run evaluated a different agent", status_code=422)
+                           f"that run evaluated {run.agent_name or run.agent_id!r}, "
+                           "not this agent",
+                           detail={"run_id": run.id, "agent_id": run.agent_id,
+                                   "agent_name": run.agent_name},
+                           status_code=422)
         items = _items_from_run(db, ws, run, req.criterion_key)
         if not items:
             raise AppError("annotation.no_items",
-                           "that run has no verdicts for this criterion")
+                           f"that run has no verdicts for {req.criterion_key}",
+                           detail={"run_id": run.id, "criterion_key": req.criterion_key})
     cset = (
         criteria_svc.latest_published(db, ws.id, req.criteria_lineage_id)
         if req.criteria_lineage_id else None
