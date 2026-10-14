@@ -14,6 +14,7 @@ import {
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
+import { ArchitectModelPanel } from "./assistant/ArchitectModel";
 import { conversationSignal } from "../signals";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 
@@ -177,6 +178,8 @@ export function V3Assistant() {
           {isAdmin && <Link to="/agents/new" style={{ textDecoration: "underline" }}>{t("assistantPage.goToPresets")}</Link>}
         </Notice>
       )}
+
+      {isAdmin && ws && <ArchitectModelPanel workspaceId={ws} />}
 
       <div className="v3-grid c4">
         <Panel><Stat label={t("v3.assistant.conversations")} value={list.data ? all.length : "—"} foot={s ? `${s.owner}` : undefined} /></Panel>

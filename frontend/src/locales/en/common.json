@@ -10252,7 +10252,24 @@
       "owner": "Owner",
       "proposal": "Proposal",
       "turns": "Turns",
-      "updated": "Updated"
+      "updated": "Updated",
+      "model": {
+        "title": "Assistant model",
+        "current": "Current model",
+        "source": "Model source",
+        "status": "Status",
+        "switch": "Switch model",
+        "cannot": "Available to administrators once the assistant is installed and not deploying",
+        "dialogTitle": "Switch the architect assistant's model",
+        "dialogBody": "Pick the model the architect assistant runs on. The other settings stay as they are.",
+        "model": "Model",
+        "custom": "Custom model ID…",
+        "customId": "Model ID",
+        "redeployNote": "Saving re-publishes the assistant as a new Harness version (about a minute); a reply started meanwhile may fail. Afterwards every new turn uses the new model.",
+        "submit": "Switch and re-publish",
+        "switching": "Switching…",
+        "switched": "Re-publishing the architect assistant on {{model}}"
+      }
     },
     "releases": {
       "eyebrow": "Release desk",

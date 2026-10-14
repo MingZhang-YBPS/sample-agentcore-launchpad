@@ -10252,7 +10252,24 @@
       "owner": "负责人",
       "proposal": "方案",
       "turns": "轮次",
-      "updated": "更新于"
+      "updated": "更新于",
+      "model": {
+        "title": "助手模型",
+        "current": "当前模型",
+        "source": "模型来源",
+        "status": "状态",
+        "switch": "切换模型",
+        "cannot": "架构助手安装完成且不在部署中时，管理员可以切换",
+        "dialogTitle": "切换架构助手的模型",
+        "dialogBody": "选择架构助手使用的模型，其余设置保持不变。",
+        "model": "模型",
+        "custom": "自定义模型 ID…",
+        "customId": "模型 ID",
+        "redeployNote": "保存后会把架构助手重新发布为新的 Harness 版本（约一分钟），这期间发起的回复可能失败；完成后每一轮新回复都使用新模型。",
+        "submit": "切换并重新发布",
+        "switching": "切换中…",
+        "switched": "正在用 {{model}} 重新发布架构助手"
+      }
     },
     "releases": {
       "eyebrow": "发布台",
