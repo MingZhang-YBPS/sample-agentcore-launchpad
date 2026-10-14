@@ -125,6 +125,52 @@ invalid`、`AWS access denied`、`AWS is throttling this request`、`AWS resourc
 `detail` 只含 `aws_error_code`——AWS 原文会暴露本部署的角色 ARN、实例 id 与操作名,这些只留在
 API-key 信任边界的控制台一侧。
 
+## 控制台 Identity API——Connections 与绑定的网关目标 / Console Identity API
+
+控制台把 Connections 显示为 **出站凭证**，把调用者的授权显示为 **我的授权**；路径、字段与错误码仍沿用 `connection`。
+
+**Connection** 是工作区令牌保管库中的一个 AgentCore Identity 凭据提供方（OAuth2 或 API Key），服务模型
+调研与设计见 [identity.md](identity.md)。读取对成员开放；每个变更都需要 `identity.manage` 权限
+（`ROUTE_POLICY` 中为 `perm:identity.manage`；工作区共享的网关目标写入为 `infra+perm:identity.manage`）。
+密钥（`client_secret`、`api_key`）只转发给 AWS，既不存入台账也不返回。Connections 属于项目或平台
+（`identity_providers.project_id` 可为 NULL）：一个项目只看到自己的与平台级的 Connections；名字仍在工作区内唯一。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/identity/connections` | `{connections[{name, kind: oauth2\|api_key, vendor, arn, callback_url, client_id, scopes, template, description, created_at, created_by, system, source: system\|launchpad\|external, status: ready\|missing, referenced_by[{type: agent\|gateway_target, id, name}]}]}`——令牌保管库与台账的合并视图；`missing` 表示 Launchpad 记录过但已不在保管库中 |
+| `GET` | `/api/identity/connections/templates` | `{templates[{id, kind, vendor, fields[], discovery_hint?}]}`——创建表单的提供方模板 |
+| `GET` | `/api/identity/connections/oidc-sources` | 成员——`{sources[{name, vendor, discovery_url, issuer, derived_from: discovery_url\|issuer}]}`：存储的 `oauthDiscovery` 能得出 OIDC discovery URL 的 OAuth2 Connections（入站 JWT 表单的“从 Connection 选择”）。系统提供方与 GitHub 不在其中；不返回 Connection 的 client id |
+| `GET` | `/api/identity/connections/{kind}/{name}` | 单个 Connection（同一形状），从 AWS 重新读取——回调 URL 对话框使用 |
+| `POST` | `/api/identity/connections/oauth2` | `201` Connection。请求体 `{name, vendor, template?, description?, client_id, client_secret, discovery_url? \| issuer+authorization_endpoint+token_endpoint, scopes[], obo?{grant_type: TOKEN_EXCHANGE\|JWT_AUTHORIZATION_GRANT, actor_token_content?: NONE\|M2M, actor_token_scopes?[]}}`。`obo`（P3）设置 `onBehalfOfTokenExchangeConfig`，仅限 CustomOauth2（`422 identity.obo_vendor_unsupported`）；对 Cognito 或 discovery 文档未声明该授权方式的 IdP 拒绝（`422 identity.obo_unsupported`）；Connection 条目以 `obo` 回显 |
+| `POST` | `/api/identity/connections/api-key` | `201` Connection。请求体 `{name, description?, api_key}` |
+| `DELETE` | `/api/identity/connections/{kind}/{name}` | `{deleted: true}`；仍被 Agent spec 或网关目标引用时拒绝，`409 identity.connection_referenced` |
+| `GET` | `/api/identity/gateway-targets` | 工作区网关的 `{gateway_id, targets[{target_id, name, description, status, status_reasons, source, system, auth, connection, mode, scopes}]}` |
+| `POST` | `/api/identity/gateway-targets` | `201` 目标 + `warnings[{code, message, detail}]`（不阻止）。请求体 `{name, description?, source: openapi\|mcp, openapi_schema \| mcp_endpoint, connection, kind, mode: as_agent\|as_user\|obo, scopes[], api_key?{location: HEADER\|QUERY_PARAMETER, parameter_name, prefix?}}`；MCP 服务器目标只接受 OAuth2 Connection。`mode: obo` 设置 `grantType: TOKEN_EXCHANGE`，需要 CUSTOM_JWT 网关（`409 identity.obo_needs_jwt_gateway`）和配置了 OBO 的 Connection（`422 identity.obo_unsupported`）。Connection 的 issuer 与网关 JWT 授权方的 issuer 不同时仍会创建目标，`warnings` 中带 `identity.obo_issuer_mismatch` `{connection, connection_issuer, gateway_issuer}`：IdP 必须信任网关的入站 issuer |
+| `DELETE` | `/api/identity/gateway-targets/{target_id}` | `{deleted: true}`；只限绑定了 Connection 的非系统目标 |
+| `POST` | `/api/identity/oauth/complete` | `identity.grant`——as_user（3LO）绑定环节，由 `/auth/return` 页面调用。请求体 `{session_id}`（AgentCore Identity 附加到返回 URL 上的 `session_id`，一次性能力凭证）→ 对该会话记录的用户执行 `CompleteResourceTokenAuth` 后返回 `{completed: true, provider, agent_id, agent_name, tool}`。调用者必须是该用户。`404 identity.session_unknown`（从未签发、已用过或被撤销清除）、`409 identity.session_expired`（超过 15 分钟）、`403 identity.session_user_mismatch`、`409 identity.session_token_unavailable`、`409 identity.as_user_requires_user_jwt`、`502 identity.session_completion_failed`。见 [identity.md §7.4](identity.md#74-routes-permission-and-errors) |
+| `GET` | `/api/identity/grants` | 成员——调用者**本人**的 as_user 授权，从不包括其他成员的：`{grants[{connection, agent_id, agent_name, tool, scopes[], status: pending\|authorized\|revoked, force_reauth, created_at, updated_at, authorized_at, revoked_at}]}`，最新的在前（我的授权） |
+| `GET` | `/api/identity/grants/{connection}/status?agent_id=` | 成员——`{connection, agent_id, status: none\|pending\|authorized\|revoked, force_reauth, authorized_at}`；对话中的授权卡片轮询它直到授权完成（记录到请求之前为 `none`）。只有 `authorized` 且 `force_reauth: false` 时授权才可用 |
+| `DELETE` | `/api/identity/grants/{connection}` | `identity.grant`——撤销（强制重新授权）：`{revoked: true, provider, agents}`；经该 Connection 的下一次调用带 `forceAuthentication=true` 并重新征求同意。只有新的同意完成后撤销状态才清除 |
+| `GET` | `/api/identity/consent-portal` | 成员——`{gateway_id, portal: {id, name, status, status_reason, portal_url, execution_role_arn, connection, scopes[], audience, created_at, …} \| null}`，每次都从 AWS 读回工作区网关的 Consent Portal（没有网关时 `gateway_id: null`） |
+| `POST` | `/api/identity/consent-portal` | **管理员**——`202 {gateway_id, portal}`。请求体 `{name, description?, connection, scopes[]（默认 [openid]）, audience?, execution_role_arn}`：为 as_user 网关目标创建门户（`connection` 为入站 IdP，与网关 JWT 授权方同一 issuer；执行角色由运维提供）。不可授予成员：`identity.manage` 不够。`409 identity.gateway_missing` / `identity.consent_portal_exists`，`422 identity.invalid_portal_name` / `identity.invalid_role_arn` / `identity.role_account_mismatch` / `identity.portal_scopes`；见 [identity.md §7.6](identity.md#76-consent-portal-as_user-gateway-targets) |
+| `DELETE` | `/api/identity/consent-portal` | **管理员**——`{deleted: true}`；`404 identity.consent_portal_not_found` |
+| `GET` | `/api/agents/{agent_id}/identity` | 成员——`{agent_id, name, method, workload_identity{status, name, arn, allowed_return_urls}, inbound{mode: iam\|jwt, source}, downstreams[{type, name, tool_type, via: agent\|gateway, mode, connection, kind, scopes, connection_status: ready\|missing\|unbound}]}`——只读的“身份”页 |
+| `POST` | `/api/agents/{agent_id}/inbound-auth` | `agents.deploy`——`202 {agent, job_id, deployment_id}`。请求体 `{inbound_auth: {mode: iam\|jwt, jwt?} \| null}`（`null` 取消固定 → 工作区默认值；该键必填，未知键以 `422 validation.invalid_request` 拒绝，所以拼错的请求体不会触发重新部署）。用替换后的固定值重新发布存储的 spec：对同一 runtime 执行 UpdateAgentRuntime，产生新版本。`422 agent.inbound_auth_unsupported`（harness / A2A 上的 JWT）、`422 agent.inbound_auth_invalid`、`409 agent.deploy_in_progress` |
+| `GET` | `/api/identity/inbound-auth/default` | 成员——`{workspace_id, default: {mode: iam\|jwt, jwt?}, configured, cognito, cognito_issuer}`；`configured=false` 即隐式 IAM；`cognito` 是工作区用户池的现成 JWT 配置（bootstrap 之前为 null）；`cognito_issuer` 是用户池的 issuer（控制台、`/v1` 与评估出示的每个令牌的 issuer），或 null |
+| `PUT` | `/api/identity/inbound-auth/default` | `infra+perm:identity.manage`（工作区共享的默认值：工作区绑定多个项目时只限管理员）——请求体 `{mode, jwt?: {discovery_url, allowed_clients[], allowed_audience[], allowed_scopes[], custom_claims[], source_connection?}}` → GET 的形状。`source_connection` 只用于显示，不会传给授权方。先探测 discovery 文档（`422 identity.discovery_unreachable` / `identity.discovery_invalid`）。已部署的 Agent 在重新部署前保留原授权方 |
+
+错误码（`identity.*`）：409——`connection_exists`、`target_exists`、`connection_referenced`、
+`system_connection`、`system_target`、`target_unbound`、`no_gateway`；404——`connection_not_found`、
+`target_not_found`；422——`unsupported_vendor`、`missing_endpoints`、`endpoints_custom_only`、
+`invalid_target_name`、`invalid_openapi`、`invalid_mcp_endpoint`、`target_auth_unsupported`、
+`obo_invalid`、`obo_vendor_unsupported`、`obo_unsupported`、`discovery_unreachable`、
+`discovery_invalid`；409——`obo_needs_jwt_gateway`。as_user 同意与 Consent Portal 的错误码
+（`session_*`、`as_user_requires_user_jwt`、`consent_portal_*`、`gateway_missing`……）见
+[identity.md §7.4](identity.md#74-routes-permission-and-errors)。Agent 创建 / 重新部署还会拒绝：
+`ToolRef.auth` 指向未知 Connection（`connection_unknown`）、类型与之不符（`kind_mismatch`）、对
+api_key Connection 使用 `as_user`（schema 返回 422），或在工具上使用 `obo`（`mode_unsupported`；obo
+运行在网关目标上）。
+
 ## 控制台系统 Agent API——托管预置 / Console System Agents API
 
 系统托管预置（见架构文档“系统托管预置”）只能在这里安装、修复与移除。读取不触达 AWS；
@@ -1126,6 +1172,13 @@ id 返回 `404 project.not_found`，从不返回 403，因为项目是否存在�
 - `404 project.not_found`：所指项目未绑定到该 Workspace，或调用者无法访问。
 - `409 project.archived`：对已归档项目的非读取请求。
 
+Workspace 范围的路由还有两种策略值。`perm:project.use`（对话、调用、反馈、标注、调用者本人的会话）与
+`perm:project.write`（其余普通写入）是项目级权限键，由项目角色决定。`infra` 标记对 Workspace 共享基础设施的
+写入（治理、注册中心的 MCP 与技能记录、网关目标与工具、模板市场发布、价格刷新）：Workspace 只有一个活跃项目时
+等同 `project.write`，有多个时只限管理员（`403 auth.infra_admin_required`）。`PROJECT_EXEMPT` 中的 Workspace
+范围路由（目录、Workspace 设置、`/api/costs`、`/api/inbox`……）完全不解析项目。本文末尾路由索引的“范围”列
+标明每条路由属于哪一种。
+
 成员在项目中的**有效权限键**由两部分组成：先取直接角色与项目所属组角色的并集，再叠加直接成员行的
 `overrides`（`{key: bool}`）。内置角色模板（代码常量，见 `GET /api/role-templates`）：
 
@@ -1252,3 +1305,331 @@ created_at, updated_at, archived_at, allowed, is_default}`。各字段含义如�
 `network_profile.nothing_to_probe`（400）、`network_profile.probe_running`（409）、`network.public_not_allowed`（400）、`network.preflight_failed`（409）、`project.not_found`（404，该项目
 未绑定到此 Workspace），以及 `validation.invalid_request`（422，请求体不符合 schema，或 VPC / 子网 /
 安全组 id 格式错误）。
+
+## 控制台路由索引——其余路由 / Console route index
+
+上面各节深入说明了较大的接口面；本索引列出 `ROUTE_POLICY`（`backend/app/core/route_policy.py`）中其余的每一条
+路由，使每条已分类的路由都在本文出现；`backend/scripts/check_api_docs.py ../docs/api.zh-CN.md` 会报告遗漏的
+路由。每行背后的行为见 [architecture.zh-CN.md](architecture.zh-CN.md) 的对应章节。
+
+**列说明。** “角色”是 `ROUTE_POLICY` 的值：
+
+- `public` 不需要会话，`member` 需要任意有效会话，`admin` 需要管理员。
+- `perm:<key>` 需要 `<key>`。在项目范围的路由上按调用者在请求所在项目中的有效权限键检查（见“控制台项目 API”），否则按账户自身的权限键检查。
+- `infra` / `infra+perm:<key>` 改动 Workspace 共享的基础设施。Workspace 只有一个活跃项目时，需要在该项目中持有 `project.write`（或 `<key>`）；有多个时只有管理员能通过（`403 auth.infra_admin_required`，`detail.projects`）。
+
+“范围”说明路由如何解析：
+
+- `hub`：中枢全局，既不读 `X-Workspace` 也不读 `X-Project`。
+- `ws`：Workspace 范围（`X-Workspace`），但在 `PROJECT_EXEMPT` 中：不需要项目，只看到 Workspace 级数据。
+- `project`：Workspace 范围，并在请求所在项目中运行（`X-Project`，或“控制台项目 API”中说明的缺省规则）。列表只含该项目的行（外加系统预置等平台级行），其他项目的 id 返回该类资源普通的 `404`。
+
+### 健康检查、文档与静态目录
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/health` | public | hub | `{status: "ok", version, region}` |
+| `GET` | `/api/docs` | public | hub | Swagger UI 页面 |
+| `GET` | `/api/openapi.json` | public | hub | OpenAPI 文档 |
+| `GET` | `/api/agent-templates` | member | hub | `{templates[…]}`：向导的场景模板目录（T10），静态数据，在客户端应用 |
+| `GET` | `/api/models/defaults` | member | hub | 每个模型用途的生效模型 id（配置值或控制台覆盖值） |
+| `GET` | `/api/models/settings` | admin | hub | `{roles[…]}`：每个模型用途的配置默认值与控制台覆盖值 |
+| `PUT` | `/api/models/settings/{field}` | admin | hub | 请求体 `{model_id}` → 该用途行：设置控制台覆盖值 |
+| `DELETE` | `/api/models/settings/{field}` | admin | hub | → 该用途行：清除覆盖值，恢复配置默认值 |
+| `GET` | `/api/model-catalog?refresh=` | member | ws | `{region, models[…], error}`：Workspace 区域内可调用的 Bedrock 模型，带缓存（`refresh=true` 重新读取） |
+| `POST` | `/api/model-probe` | admin | ws | 请求体 `{field, model_id}` → `{model_id, region, ok, checks[…]}`：该模型能否在该 Workspace 中承担该用途 |
+
+### Workspace
+
+见 [architecture.zh-CN.md](architecture.zh-CN.md)「Workspaces —— 多账号/多区域环境」。Workspace 的形状为
+`{id, name, account_id, region, cross_account, bootstrap_status, tier, is_default, resource_visibility,
+created_at, updated_at, role_arn}`；从不返回 `external_id`。删除或清除 Workspace 时同时移除它的项目绑定。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `POST` | `/api/workspaces` | admin | hub | 请求体 `{id, name, account_id, region, role_arn?, external_id?, tier?}` → `201` Workspace（`bootstrap_status: registered`）。`400 workspace.reserved_id` / `workspace.invalid_id`，`409 workspace.exists` / `workspace.environment_taken`（该账号与区域已有 Workspace） |
+| `GET` | `/api/workspaces/hub-identity` | admin | hub | `{account_id, caller_arn, role_arn}`：spoke 栈要信任的值。`502 workspace.hub_identity_unavailable` |
+| `POST` | `/api/workspaces/preflight` | admin | hub | 请求体 `{account_id, region, role_arn, external_id}` → `{ok, caller_account, diagnostic}`。一次 AssumeRole + `GetCallerIdentity`；AssumeRole 被拒是 `ok: false`（200），不是错误。不写入任何东西 |
+| `PATCH` | `/api/workspaces/{workspace_id}` | admin | hub | `{name, tier, confirm_tier_change}` 中任意项 → Workspace。移入或移出 `prod` 需要 `confirm_tier_change: true`（`409 workspace.tier_change_unconfirmed`），并记为 `workspace.tier_change` 审计 |
+| `DELETE` | `/api/workspaces/{workspace_id}` | admin | hub | `{deleted: true, workspace_id}`。只解除登记，不动 AWS。拒绝删除 `default`（`400 workspace.reserved_id`），也拒绝仍有范围内行指向它的 Workspace（`409 workspace.in_use`，`detail.rows`）。授权、项目绑定以及指向它的发布申请随之移除 |
+| `POST` | `/api/workspaces/{workspace_id}/bootstrap` | admin | hub | `202 {job_id, workspace_id, bootstrap_status, stages}`；轮询 `GET /api/jobs/{job_id}`。`400 workspace.default_not_bootstrappable`；初始化中或已就绪时 `409` |
+| `GET` | `/api/workspaces/{workspace_id}/bootstrap` | admin | hub | `{workspace_id, bootstrap_status, job: {id, status, stages} \| null}`：最近一次初始化 |
+| `POST` | `/api/workspaces/{workspace_id}/observability/repair` | admin | hub | 为已就绪的 Workspace 重跑可观测阶段（Transaction Search）→ `{workspace_id, …}`。`409 workspace.not_ready` |
+| `POST` | `/api/workspaces/{workspace_id}/purge?dry_run=` | admin | hub | `{purged, dry_run, workspace_id, rows{table: count}, resource_keys[]}`。在一个事务里删除处于 `registered` 或 `failed`、没有 Agent、不是 `default` 的 Workspace 及其所有行；`dry_run=true` 只报告 |
+| `GET` | `/api/workspaces/{workspace_id}/grants?q=&granted=all\|granted\|ungranted&limit=&offset=` | admin | hub | `{workspace_id, users[{id, username, email, role, status, granted}], total, granted_total}`：成员账号及其是否持有该 Workspace；不列管理员。`400 workspace.invalid_grant_filter` |
+| `PUT` | `/api/workspaces/{workspace_id}/grants` | admin | hub | 请求体 `{grant[user_id], revoke[user_id]}` → `{workspace_id, added, removed, granted_total}`。写 `user_workspaces`，并在同一事务里同步默认项目的 `inherit` 成员资格（见 architecture.zh-CN.md「项目」）；被撤销成员在该 Workspace 中的 API Key 被停用。`400 workspace.grant_conflict` / `workspace.invalid_grant_targets`（未知 id 或管理员） |
+
+### Agent：生命周期、发现、快照
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `DELETE` | `/api/agents/{agent_id}` | `perm:agents.delete` | project | `{deleted: true, agent_id, aws_resource_deleted}`。受 prod 保护。其架构助手会话正在清理时 `409 assistant.agent_clearing` |
+| `GET` | `/api/agents/discovery` | member | project | `{region, runtimes[…], harnesses[…], harness_scan_error}`：Workspace 账号中的 Runtime 与 Harness，被管理的标出管理它的 Agent；其他项目管理的 runtime 只显示“已被管理”。没有 Agent 管理的 runtime 只对持有 `agents.import` 的调用者列出 |
+| `POST` | `/api/agents/discovery/import` | `perm:agents.import` | project | 请求体 `{runtime_ids[], harness_ids[]}` → 按类型分桶的结果（已导入、已被管理、失败）。导入的 Agent 属于请求所在项目。受 prod 保护 |
+| `POST` | `/api/agent-skills/import` | `perm:agents.deploy` | project | 请求体 `{staging_id, selections[]}` → 部署向导可挂载的 `{name, path}` 条目（上传到按请求划分的 S3 前缀）。单项失败不中止整批。受 prod 保护 |
+| `GET` | `/api/agents/{agent_id}/snapshots` | member | project | `{snapshots[…]}`：台账中的 spec 快照，最新在前，不含 spec |
+| `GET` | `/api/agents/{agent_id}/snapshots/{seq}` | member | project | 单个快照，含 `spec` |
+| `GET` | `/api/agents/{agent_id}/snapshots/diff?from_seq=&to_seq=` | member | project | `{from, to, changes[…]}`：两个快照 spec 的字段级差异 |
+| `POST` | `/api/agents/{agent_id}/snapshots/{seq}/rollback` | `perm:agents.deploy` | project | 与重新部署一样返回 `202`：把存储的 spec 作为新版本再次发布。spec 已不能通过校验时 `409 snapshot.spec_invalid`。受 prod 保护 |
+| `GET` | `/api/agents/{agent_id}/suggested-questions?lang=` | member | project | 试聊面板的 3–5 个起始问题；带缓存，模型失败时也不返回 500 |
+| `GET` | `/api/chat/{agent_id}/memory?session_id=` | member | project | 一个对话会话的记忆摘要，外加 `actor_id`（复合 actor `<agent>__<human>`）。`502 memory.unavailable` |
+| `POST` | `/api/chat/{agent_id}/feedback` | `perm:project.use` | project | 请求体 `{session_id, message_id, verdict: up\|down, comment?}` → `{message_id, verdict}`：记录控制台中的点赞 / 点踩 |
+
+### 发布包、发布申请与资源映射
+
+见 [architecture.zh-CN.md](architecture.zh-CN.md)。发布包的形状为 `{id, agent_id, agent_name, display_name,
+method, snapshot_seq, digest, artifact, evaluation, policy, workspace_id, created_by, note, created_at}`；
+发布申请为 `{id, bundle_id, bundle, source_workspace_id, target_workspace_id, status, gates, stages, action,
+job_id, previous_bundle_id, change_note, rollback_note, requested_by, reviewed_by, reviewed_at, review_note,
+started_at, finished_at, failed_stage, error, created_at, updated_at}`。发布申请保持其项目不变：目标
+Workspace 必须绑定了发布包的项目，否则 `404 project.not_found`。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/agents/{agent_id}/release-bundles` | member | project | `{bundles[发布包]}`，最新在前 |
+| `POST` | `/api/agents/{agent_id}/release-bundles` | `perm:promotion.request` | project | 请求体 `{snapshot_seq?, note?}` → `201` 发布包：把这次发布冻结为不可变、以摘要标识的发布包 |
+| `GET` | `/api/release-bundles/{bundle_id}` | member | project | 单个发布包。`404 promotion.bundle_not_found` |
+| `GET` | `/api/release-bundles/{bundle_id}/export` | member | project | `application/yaml` 格式的发布包（`<agent>.release.yaml`，响应头 `X-Bundle-Digest`） |
+| `GET` | `/api/release-bundles/{bundle_id}/resolution?target_workspace_id=` | member | project | `{target_workspace_id, complete, resolved[…], unmapped[…], spec}`：发布到目标会改写什么。只读；调用者必须能在本项目中进入目标 |
+| `GET` | `/api/promotions?status=&target=` | member | project | `{promotions[发布申请]}`：从本 Workspace 发起的申请，最新在前。`target_visible` 表示调用者是否被授权访问目标 |
+| `POST` | `/api/promotions` | `perm:promotion.request` | project | 请求体 `{bundle_id, target_workspace_id, change_note?, rollback_note?}` → `201` 发布申请 |
+| `GET` | `/api/promotions/{promotion_id}` | member | project | 发布申请，外加 `target_agent {id, status, version} \| null`、`target_name_taken`（目标中该名字被其他项目的 Agent 占用）与相对目标的 `diff[…]`；未被授权访问目标的调用者看到的目标字段为空 |
+| `GET` | `/api/promotions/{promotion_id}/plan` | member | project | 执行后会在目标中创建或改变什么。只读 |
+| `POST` | `/api/promotions/{promotion_id}/review` | `perm:promotion.approve` | project | 请求体 `{decision: approve\|reject, note?}` → 发布申请。申请人不能审批自己的申请（`promotion.self_approval`）。记入审计 |
+| `POST` | `/api/promotions/{promotion_id}/execute` | `perm:promotion.approve` | project | `202 {promotion, job_id}`。有阻断门失败时拒绝（`409 promotion.gate_failed.<gate>`），`409 promotion.already_executing` / `promotion.not_executable`。记入审计 |
+| `GET` | `/api/promotions/{promotion_id}/execution` | member | project | `{promotion, log[…]}`：逐阶段进度与目标 Job 日志，只对被授权访问目标的调用者 |
+| `POST` | `/api/promotions/{promotion_id}/rollback` | `perm:promotion.approve` | project | `202`：重新部署目标此前运行的发布包。`409 promotion.not_rollbackable` / `promotion.no_previous_bundle` / `promotion.already_executing` |
+| `GET` | `/api/release-policies/{workspace_id}` | member | ws | `{workspace_id, tier, policy, effective}`：目标 Workspace 的放行策略 |
+| `GET` | `/api/inbox` | admin | ws | `{items[{key, severity, count, to, sample[]}]}`：待审批账号、即将过期账号、需要处理的 Workspace，以及所选 Workspace 中失败的 Job 与待处理的发布申请 |
+| `GET` | `/api/resource-mappings` | member | project | `{workspace_id, kinds[], mappings[{id, key, kind, name, resource_id, note, scope: project\|workspace, project_id, workspace_id, updated_by, updated_at}]}`：本项目的映射与 Workspace 默认映射 |
+| `PUT` | `/api/resource-mappings/{kind}/{name}?scope=project\|workspace` | `perm:promotion.approve` | project | 请求体 `{resource_id, note?}` → 映射。`scope=project`（默认）写本项目的映射；`scope=workspace` 写所有项目回退使用的默认映射，在多项目 Workspace 中需要管理员（`403 mapping.workspace_scope_forbidden`）。指向其他项目知识库或记忆的 `resource_id` 视为不存在。记入审计 |
+| `DELETE` | `/api/resource-mappings/{kind}/{name}?scope=` | `perm:promotion.approve` | project | `{deleted: true, key}`。`404 mapping.not_found` |
+
+### 分享、评审与渠道链接；`/share` 接口
+
+链接的形状为 `{id, kind, agent_id, label, prefix, state: active|revoked|disabled|expired, created_by,
+expires_at, revoked_at, last_used_at, use_count, created_at}`，渠道链接另有 `channel`（平台以及哪些密钥已设置，
+从不返回值）。原始令牌只在创建时返回一次，只存储其哈希。链接属于其 Agent 的项目：Agent 离开该项目或项目被归档后，
+链接不再解析（`404`，与已撤销的令牌相同），归档会撤销项目的所有链接。`/share/*` 路由在链接的项目中运行，忽略
+`X-Project`，并按链接限流。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/agents/{agent_id}/share-links` | member | project | 该 Agent 所有类型的 `{links[链接]}`，最新在前 |
+| `POST` | `/api/agents/{agent_id}/share-links` | `perm:project.write` | project | 请求体 `{label?, expires_in_days?（1–365）}` → `201` 链接 + `{token, path, url, embed_url, embed_snippet}` |
+| `GET` | `/api/agents/{agent_id}/review-links` | member | project | 类型为 `review` 的 `{links[链接]}` |
+| `POST` | `/api/agents/{agent_id}/review-links` | `perm:project.write` | project | 请求体 `{label?, expires_in_days?}` → `201` 链接 + `{token, path, url}`：领域专家评审页 |
+| `POST` | `/api/agents/{agent_id}/channel-links` | `perm:project.write` | project | 请求体 `{platform: slack\|feishu, label?, expires_in_days?, credentials{…}}` → `201` 链接 + `{token, path, url}`：在 IM 平台中配置的 webhook 地址。`422 channel.unsupported` / `channel.invalid_setup` |
+| `POST` | `/api/share-links/{link_id}/revoke` | `perm:project.write` | project | → 链接。幂等：以第一次撤销时间为准 |
+| `GET` | `/share/{token}?embed=` | public | hub | `{kind, embed, label, agent{display_name}, expires_at}` |
+| `POST` | `/share/{token}/chat` | public | hub | 请求体 `{prompt, session_id?}` → 访客可见事件的 SSE。新会话得到由链接派生的匿名 actor；`session_id` 必须是这个链接开启的会话 |
+| `POST` | `/share/{token}/feedback` | public | hub | 请求体 `{session_id, message_id, verdict, comment?}` → `{message_id, verdict}`（来源 `share`） |
+| `GET` | `/share/review/{token}` | public | hub | `{kind, label, agent{display_name}, expires_at, items[…]}`：待评审的回答 |
+| `POST` | `/share/review/{token}/rate` | public | hub | 请求体 `{message_id, verdict, comment?, correction?}` → `{message_id, verdict}`（来源 `review`） |
+| `POST` | `/share/channels/{platform}/{token}` | public | hub | IM 平台的入站 webhook。按平台校验签名；握手请求当场应答，消息立即确认（`{ok: true}`，重复投递的事件带 `duplicate: true`），回答异步发回 |
+
+### 业务自助：反馈、问题箱、意图、精选答案
+
+问题的形状为 `{id, agent_id, agent_name, session_id, message_id, kind, status: open|fixed|wont_fix, question,
+answer, comment, correction, opened_by, fixes[…], history[…], resolved_by, resolved_at, resolution_note,
+hours_to_close, created_at, updated_at}`；精选答案（规则）为 `{id, agent_id, position, name, match, pattern,
+answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/feedback?verdict=up\|down&agent_id=&limit=` | member | project | `{items[…], counts, down_session_ids[]}`：来自控制台、分享页与评审页的点赞 / 点踩 |
+| `GET` | `/api/issues?status=&agent_id=&limit=` | member | project | `{items[问题], summary}` |
+| `POST` | `/api/issues` | `perm:project.write` | project | 请求体 `{agent_id, session_id, message_id, kind, note?}` → `201` 问题 |
+| `POST` | `/api/issues/sync` | `perm:project.write` | project | `{opened}`：为每个还没有问题的点踩开一个问题（幂等） |
+| `GET` | `/api/issues/{issue_id}` | member | project | 问题 + `transcript[…]` |
+| `POST` | `/api/issues/{issue_id}/fixes` | `perm:project.write` | project | 请求体 `{action, ref?, note?}` → 问题：记录为它做了什么 |
+| `POST` | `/api/issues/{issue_id}/resolve` | `perm:project.write` | project | 请求体 `{status: fixed\|wont_fix, note?}` → 问题 |
+| `POST` | `/api/issues/{issue_id}/reopen` | `perm:project.write` | project | 请求体 `{note?}` → 问题 |
+| `GET` | `/api/intents?agent_id=&days=1–30&lang=&refresh=` | member | project | `{generated_at, …}`：本项目的对话轮次按用户意图归类，按项目缓存 |
+| `GET` | `/api/agents/{agent_id}/rules` | member | project | `{agent_id, enabled, rules[规则], limit}` |
+| `POST` | `/api/agents/{agent_id}/rules` | `perm:project.write` | project | 请求体 `{name, match, pattern, answer, enabled?, issue_id?}` → `201` 规则；带未关闭的 `issue_id` 时规则记为该问题的修复。`409 rule.limit_reached` |
+| `PATCH` | `/api/agents/{agent_id}/rules/{rule_id}` | `perm:project.write` | project | `{name, match, pattern, answer, enabled}` 中任意项 → 规则 |
+| `DELETE` | `/api/agents/{agent_id}/rules/{rule_id}` | `perm:project.write` | project | `{deleted: true}` |
+| `PUT` | `/api/agents/{agent_id}/rules-enabled` | `perm:project.write` | project | 请求体 `{enabled}` → 规则视图：为该 Agent 开关精选答案 |
+| `PUT` | `/api/agents/{agent_id}/rules-order` | `perm:project.write` | project | 请求体 `{ids[]}` → 按新顺序的规则视图 |
+| `POST` | `/api/agents/{agent_id}/rules/test` | `perm:project.use` | project | 请求体 `{question}` → `{agent_enabled, matched, rule \| null}`：哪条规则会回答。不改计数、不调用模型 |
+
+### Agent-DLC：其余路由
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/agents/{agent_id}/watch` | member | project | 该 Agent 的漂移监测：排程、判据、黄金集、预算、最近的运行 |
+| `PUT` | `/api/agents/{agent_id}/watch` | `perm:criteria.manage` | project | 请求体 `{criteria_lineage_id?, dataset_id?, every, at_hour, tz, repeats, max_cost_usd?, enabled}` → 监测视图。数据集必须是本项目的黄金集。受 prod 保护 |
+| `GET` | `/api/calibration/run-criteria/{run_id}` | `perm:criteria.manage` | project | `{run_id, status, mode, agent_id, criteria[{key, items}]}`：一次运行可以生成标注任务的评估器类判据及各自的样本数 |
+| `POST` | `/api/admission/{candidate_id}/duplicate` | `perm:golden.admit` | project | 请求体 `{duplicate_of}` → 候选：把准入候选标为重复 |
+| `POST` | `/api/waivers/{waiver_id}/reject` | `perm:waiver.approve` | project | 请求体 `{note?}` → 豁免 |
+
+### 告警、成本、多环境总览、治理健康度、模板市场、概览
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/alerts` | member | project | `{rules[规则], firing, kinds[]}`：Workspace 级规则与本项目的规则。规则为 `{id, kind, name, comparison, threshold, window, enabled, has_webhook, scope: workspace\|project, project_id, state, last_value, last_detail, last_checked_at, last_fired_at, last_notified_at, created_by, created_at}` |
+| `POST` | `/api/alerts` | admin | project | 请求体 `{kind, name, threshold, comparison?, window, enabled?, webhook_url?, scope?: workspace\|project, project_id?}` → `201` 规则。`scope=project` 只度量一个项目（默认是请求所在项目），该项目必须绑定到此 Workspace |
+| `PATCH` | `/api/alerts/{rule_id}` | admin | project | `{name, threshold, window, enabled, webhook_url}` 中任意项 → 规则 |
+| `DELETE` | `/api/alerts/{rule_id}` | admin | project | `{deleted: rule_id}` |
+| `POST` | `/api/alerts/evaluate?notify=` | admin | project | `{workspace_id, evaluated_at, rules[…], firing, unknown}`：立即重读每条启用的规则；`notify=false` 不投递 webhook |
+| `GET` | `/api/costs?range=&project=&force=` | admin | ws | `{range, hours, generated_at, by_agent[…], sessions, …}`：按 Agent、按人、按模型的估算花费；`unpriced_models` 列出没有价格的模型。`project` 收窄到一个已绑定的项目；不带时覆盖整个 Workspace，并含未归属的桶。`422 costs.bad_range` |
+| `GET` | `/api/costs/month-to-date?project=&force=` | admin | ws | `{workspace_id, project?, est_cost_usd}`：`cost_mtd_usd` 告警比较的数值 |
+| `GET` | `/api/fleet?project=` | admin | hub | 所有 Workspace 一张表（Agent、失败、待处理发布、正在告警），每项也按项目列出；`project` 收窄到一个项目。只读台账；不可用的 Workspace 报告 `readable: false`。`404 project.not_found` |
+| `GET` | `/api/governance/health` | member | project | `{workspace_id, generated_at, score, grade, agents_considered, findings[{…, to}]}` |
+| `GET` | `/api/overview/ttfa` | admin | project | 该 Workspace 各账号的首个 Agent 用时（TTFA），跨该 Workspace 的所有项目。只读台账 |
+| `GET` | `/api/marketplace/templates` | member | ws | 来自所有 Workspace 的 `{templates[{id, title, summary, method, spec, requirements, source_workspace_id, source_agent_name, published_by, uses, own, created_at, updated_at}]}` |
+| `POST` | `/api/marketplace/templates` | `infra` | project | 请求体 `{agent_id, title, summary?}` → `201` 模板：把本项目一个运行中的 Agent 发布为模板 |
+| `DELETE` | `/api/marketplace/templates/{template_id}` | `infra` | project | `{deleted: template_id}`。只有发布它的 Workspace、且是其中发布它的项目可以撤回（`403 marketplace.not_yours`）；管理员总是可以 |
+| `POST` | `/api/marketplace/templates/{template_id}/use` | `perm:project.write` | project | → 模板：向导默认值以及使用者仍需提供的内容。不创建 Agent |
+
+### 治理、注册中心与工具：其余路由
+
+治理策略、注册中心的 MCP 与技能记录以及网关工具都是 Workspace 基础设施：所有项目都能读，写入为 `infra`。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/governance/policies` | member | project | `{engine{id, name, status, attached_mode, attached}, policies[{id, name, status, statement}]}`：网关策略引擎上的 Cedar 策略。`503 policy.engine_deleted` |
+| `DELETE` | `/api/governance/gateways/{gateway_id}/policies/{policy_id}` | `infra` | project | 请求体 `{expected_gateway_updated_at, expected_policy_updated_at, acknowledged_gateway_ids[], confirmation_name, override_reason?}` → `202 {operation}`：排队并记入审计的策略变更（见“控制台治理 API”） |
+| `GET` | `/api/governance/decisions` | member | project | `{decisions[{at, principal, tool, outcome, reason, source}], source: "demo"}`：`policy-test` 记录的最近 30 条决策 |
+| `POST` | `/api/governance/policy-test` | `infra` | project | 请求体 `{tool, arguments, username}` → `{principal, tool, outcome: ALLOW\|DENY\|ERROR, detail, policy_id, decision_id, recorded}`：以该主体做一次真实的 `tools/call`。只记录 ALLOW 与 DENY |
+| `POST` | `/api/governance/policy-generation` | `infra` | project | 请求体 `{text, name}` → `{available, generation_id, status}`（预览 API；AWS 拒绝时 `available: false` 并带 `error`） |
+| `GET` | `/api/governance/policy-generation/{generation_id}` | member | ws | `{status, assets[{id, statement}]}` |
+| `GET` | `/api/governance/guardrail` | member | ws | 该 Workspace 是否有 `launchpad-pii` 护栏及其状态 |
+| `POST` | `/api/governance/guardrail` | admin | project | `201` → 护栏视图。创建预设，或接管同名的已有护栏 |
+| `GET` | `/api/traces/{session_id}?lookback_hours=` | member | project | 会话的 span 链路。在绑定多个项目的 Workspace 中，只能读取当前项目的对话会话（否则 `404 trace.not_found`） |
+| `GET` | `/api/registry/records/search?q=` | member | project | `{records[…]}`：注册中心语义搜索；项目外 Agent 的 A2A 记录被去掉 |
+| `GET` | `/api/registry/attachables?refresh=` | member | project | 创建向导可挂载的已批准 MCP 服务器与技能，按 Workspace 缓存 60 秒 |
+| `POST` | `/api/registry/records` | `infra` | project | 请求体 `{type: MCP\|AGENT_SKILLS, name, description, url?（MCP）, skill_md?（技能）}` → `201` 记录。`400 registry.invalid_url` / `registry.skill_md_required` |
+| `PUT` | `/api/registry/records/{record_id}` | `infra` | project | `{description, url, skill_md, staging_id, index}` 中任意项 → 记录。改内容会递增记录版本；DEPRECATED、A2A 与系统托管的记录不可编辑。`400 registry.nothing_to_update` / `registry.field_conflict` / `registry.field_type_mismatch`，`410 registry.staging_expired` |
+| `DELETE` | `/api/registry/records/{record_id}` | `infra` | project | `{deleted: true, record_id}` |
+| `POST` | `/api/registry/records/{record_id}/reimport` | `infra` | project | → 记录：重新获取 git 或 URL 来源的技能并递增版本。`400 registry.not_reimportable`，`422 registry.skill_invalid` |
+| `POST` | `/api/registry/sync-defaults` | `infra` | project | `{results[…]}`：注册网关的 MCP 目标与示例技能包 |
+| `POST` | `/api/registry/skills/inspect` | `perm:agents.deploy` | project | multipart `.zip` 或 JSON `{source{…}}`（git）→ `{staging_id, skills[…]}`：校验后的技能包暂存以供预览，绑定调用者、Workspace 与项目。不写 S3 |
+| `POST` | `/api/registry/skills/import` | `infra` | project | 请求体 `{staging_id, selections[{index, name?, name_override?, description_override?}]}` → `{records[{name, ok, record?, error?, error_code?}]}`。单项失败不中止整批。`410 registry.staging_expired` |
+| `GET` | `/api/registry/skills/capabilities` | member | ws | `{git{…}}`：git 导入所需的 `git` CLI 是否可用 |
+| `POST` | `/api/registry/skills/capabilities/git-install` | `infra` | project | 尽力在后端主机上安装 `git` CLI |
+| `POST` | `/api/registry/a2a-demo` | `perm:project.use` | project | 请求体 `{agent_id, question}` → `{answer, trace[…], session_id, …}`：以 SigV4 调用本项目的前台 runtime Agent。`404 registry.a2a_demo_agent`，`400 registry.a2a_demo_unsupported`，`409 registry.a2a_demo_jwt_unsupported`，`502 registry.a2a_demo_failed` |
+| `GET` | `/api/tools?refresh=` | member | ws | `{gateway_url, gateway_error, tools[{name, source, target, description, inputSchema, auth}]}`：网关工具（缓存 60 秒）与内置工具 |
+| `POST` | `/api/tools/call` | `infra` | project | 请求体 `{name, arguments}` → MCP `tools/call` 的结果 |
+| `GET` | `/api/demos/browser/options` | member | ws | `{browsers[…], profiles[…]}`：账号中的自定义 AgentCore 浏览器与浏览器配置。`502 tools.browser_options_failed` |
+| `POST` | `/api/demos/browser` | `perm:project.write` | project | 请求体 `{url, web_bot_auth?, browser_identifier?, profile_identifier?, save_profile?}` → `{url, title, session_id, latency_ms, live_view_url, live_view_expires_in, viewport, browser_identifier, web_bot_auth, profile_identifier, …}`：在为 Live View 保持的 AgentCore Browser 会话中打开页面 |
+| `DELETE` | `/api/demos/browser/{session_id}` | `perm:project.write` | project | `{session_id, …}`：停止本项目的演示会话（启动时要求保存配置的会保存）。`502 tools.browser_stop_failed` |
+| `POST` | `/api/demos/code-interpreter` | `perm:project.write` | project | 请求体 `{code}` → `{stdout, session_id, latency_ms}`：在 Workspace 账号中的 AgentCore Code Interpreter 会话里运行一次 Python |
+
+### 可观测：其余路由
+
+在绑定多个项目的 Workspace 中，只有能解析到当前项目的 Agent（或平台 Agent）的 span 与会话才会显示；无法归属的
+对非管理员隐藏。单项目 Workspace 与以前一样显示全部。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/observability/dashboard?range=&force=` | member | project | 该时间范围的仪表盘指标与序列，按 Workspace 与项目缓存 |
+| `GET` | `/api/observability/sessions?range=&force=` | member | project | `{sessions[…], count, …}` |
+| `GET` | `/api/observability/traces?range=&agent=&status=&session=&force=` | member | project | `{traces[…], count, …}`；`session` 匹配会话或 trace id 的子串 |
+| `GET` | `/api/observability/traces/{trace_id}?range=&force=` | member | project | 单条 trace 及其 span。`404 observability.trace_not_found`，其他项目的 trace 也如此 |
+| `GET` | `/api/observability/prices` | member | ws | `{prices, meta, source, refresh_hours}`：模型价格表 |
+| `POST` | `/api/observability/prices/refresh` | `infra` | project | 从配置的 litellm 来源拉取最新价格写入本地配置。不调用 AWS |
+
+### 评估、实验与运行时金丝雀：其余路由
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `POST` | `/api/eval/datasets/upload` | `perm:project.write` | project | 请求体 `{name, locale?, description?, jsonl}` → `201` 数据集。`422 dataset.invalid_jsonl` / `dataset.invalid_item` / `dataset.empty` |
+| `PUT` | `/api/eval/datasets/{dataset_id}` | `perm:project.write` | project | `{name, description, items[]}` 中任意项 → 数据集。替换的条目必须保持数据集的类型（`400 dataset.kind_immutable`） |
+| `DELETE` | `/api/eval/datasets/{dataset_id}` | `perm:project.write` | project | `{deleted: true}` |
+| `GET` | `/api/eval/pipelines` | member | project | `{pipelines[…]}`：数据处理流水线（V2），最新在前 |
+| `GET` | `/api/eval/pipelines/{pipeline_id}` | member | project | 单条流水线 |
+| `PUT` | `/api/eval/pipelines/{pipeline_id}` | `perm:project.write` | project | 请求体 `{name, description?, source, processing, output}` → 流水线。`409 pipeline.running`；输出数据集与来源日志组必须属于本项目 |
+| `DELETE` | `/api/eval/pipelines/{pipeline_id}` | `perm:project.write` | project | `{deleted: true}` |
+| `GET` | `/api/eval/online/{config_id}/results?range=` | member | project | 在线评估配置的各评估器均值、标签、趋势与最近记录。在多项目 Workspace 中，其他项目的配置视为不存在 |
+| `POST` | `/api/eval/online/{config_id}/resume` | `perm:eval.run` | project | → 配置：把执行状态恢复为启用 |
+| `GET` | `/api/experiments` | member | project | `{experiments[…]}`：最新 20 个 |
+| `GET` | `/api/experiments/providers` | member | ws | `{providers[…]}`：推荐阶段的生成器（`agentcore`、`gepa_lite`） |
+| `GET` | `/api/experiments/{exp_id}` | member | project | 单个实验，含阶段、产物与 `running_action` |
+| `POST` | `/api/experiments/{exp_id}/action` | `perm:project.write` | project | 请求体 `{action: recommend\|accept\|bundles\|gateway\|abtest\|traffic\|verdict\|promote\|cleanup, …阶段选项}` → 实验（后台运行的动作返回 `202`）。`409 experiment.action_in_flight` / `experiment.stage_not_ready`，`canary` / `ramp` 返回 `410 experiment.action_moved`。除 `verdict` / `cleanup` 外的动作还要求 Agent 可见。受 prod 保护 |
+| `GET` | `/api/runtime-canaries` | member | project | `{canaries[…]}`：最新 20 个 |
+| `GET` | `/api/runtime-canaries/{canary_id}` | member | project | 单个金丝雀 |
+| `POST` | `/api/runtime-canaries/{canary_id}/action` | `perm:project.write` | project | 请求体 `{action: setup\|traffic\|verdict\|advance\|complete\|rollback\|cleanup, dataset_id?（traffic）, allow_non_significant?}` → 金丝雀。旧式金丝雀的独立挑战者必须在同一项目中。`409 canary.action_in_flight` / `canary.stage_not_ready`，`422 canary.dataset_required` / `canary.dataset_unsupported`。受 prod 保护 |
+
+### Skill Lab：任务与任务集
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/skill-lab/status` | member | ws | `{provisioned, missing[], venv_ready, default_target_model, default_judge_model, default_codex_target_model, target_backends[], judge_modes[], agentic_judge_ready, judge_codex_ready, judge_claude_ready, judge_cli_ready}` |
+| `GET` | `/api/skill-lab/tasksets` | member | project | `[任务集]`：本项目的任务集 |
+| `POST` | `/api/skill-lab/tasksets` | `perm:project.write` | project | 请求体 `{name, description?, mode, tasks_by_split{…}}` → `201` 任务集 |
+| `GET` | `/api/skill-lab/tasksets/{taskset_id}?full=` | member | project | 单个任务集（`full=true` 含全部任务） |
+| `PUT` | `/api/skill-lab/tasksets/{taskset_id}` | `perm:project.write` | project | `{name, description, tasks_by_split}` 中任意项 → 任务集 |
+| `DELETE` | `/api/skill-lab/tasksets/{taskset_id}` | `perm:project.write` | project | `{ok: true}` |
+| `POST` | `/api/skill-lab/task-assets` | `perm:project.write` | project | multipart `files[]` → `201 {assets[…]}`：暂存的任务附件 |
+| `GET` | `/api/skill-lab/jobs?type=` | member | project | `[任务]` |
+| `POST` | `/api/skill-lab/jobs` | `perm:project.write` | project | 请求体 `{type: eval\|train\|taskgen, skill_source, taskset_id, split?, target_split?, attachments?, params?}` → `201` 任务。`422 skill_lab.bad_params` |
+| `GET` | `/api/skill-lab/jobs/{job_id}` | member | project | 单个任务 |
+| `GET` | `/api/skill-lab/jobs/{job_id}/log?offset=` | member | project | 从 `offset` 起的任务日志 |
+| `GET` | `/api/skill-lab/jobs/{job_id}/diff` | member | project | 训练任务的技能版本差异。`404 skill_lab.results_pending` |
+| `GET` | `/api/skill-lab/jobs/{job_id}/train-summary` | member | project | 训练步骤。`404 skill_lab.results_pending` |
+| `POST` | `/api/skill-lab/jobs/{job_id}/cancel` | `perm:project.write` | project | → 任务 |
+| `POST` | `/api/skill-lab/jobs/{job_id}/resume` | `perm:project.write` | project | → 任务 |
+| `POST` | `/api/skill-lab/jobs/{job_id}/publish` | `infra` | project | 请求体 `{reapprove?}` → 结果：把训练出的技能发布到 Workspace 注册中心 |
+| `DELETE` | `/api/skill-lab/jobs/{job_id}` | `perm:project.write` | project | `{ok: true}` |
+
+### 架构助手：准备、评估计划与清理
+
+计划与操作的形状见上文“控制台架构助手 API”。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `PUT` | `/api/assistant/architect/conversations/{conversation_id}/preparation` | `perm:project.use` | project | `{expected_revision, knowledge_bases: [kb_id], skills: [catalog_key], tools?: [catalog_key]}` → 完整会话详情（含 `preparation`）。缺少 `tools` 时为旧客户端保留已有的 MCP 选择，`[]` 表示明确移除。校验实时资源绑定，适用时生成新的可审阅提案版本。准备版本过期或有进行中的轮次时拒绝 |
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/preparation/skills` | `perm:agents.deploy` | project | `{expected_revision, staging_id, selections: [{index}]}` → `{conversation, results: [{name, ok, key?, error?}]}`。兼容旧版助手导入的端点：把服务端校验过的暂存技能包导入会话自有来源并选中成功的项；从不接受客户端提供的 S3 路径 |
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/prepare` | `perm:project.use` | project | 请求体 `{revision}` → `201 {plan, …计划状态}`：从一个提案版本起草计划版本。没有资源副作用 |
+| `PUT` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan` | `perm:project.use` | project | 请求体 `{content}` → `{plan, …计划状态}`：成员的编辑生成新的计划版本（草稿，或带错误的无效版本） |
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize` | `perm:agents.deploy` | project | 请求体 `{plan_revision, plan_hash, acknowledge_disclosure: true}` → 本次调用创建了操作时 `202 {operation, started: true}`，重复请求时 `200` 返回已记录的操作。`422 assistant.disclosure_required` |
+| `GET` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}` | member | project | `{operation}`。只读台账 |
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/retry` | `perm:agents.deploy` | project | `{operation, started}`：恢复部分完成或失败操作的已持久化意图 |
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/lambda-revision-review` | `perm:agents.deploy` | project | 请求体 `{plan_hash, expected_created_revision_id, expected_current_revision_id, cloudtrail_event_id, reason}` → `{operation, review, started}`：经审阅地恢复一次 Lambda 版本冲突。不写云端 |
+| `DELETE` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/assets` | `perm:agents.deploy` | project | `{operation}`：只删除该操作创建的云端产物；本地数据集保留 |
+| `GET` | `/api/assistant/architect/conversations/{conversation_id}/footprint` | member（所有者） | project | 清除（CLEAR）会移除什么：`{agents[…], canaries[…], experiments[…], operations[…], datasets[…], blockers[…], required_permissions[], can_clear, purge \| null, turns, proposals}`。只读台账 |
+| `DELETE` | `/api/assistant/architect/conversations/{conversation_id}` | `perm:project.use`（所有者）+ 每个 `required_permissions` 键 | project | 只有对话记录的会话当场删除：`200 {deleted: true, …}`；其他情况是持久的清除 Job：`202 {deleted: false, job_id, status, …}`，轮询 `GET /api/jobs/{job_id}`。按依赖顺序删除会话 Agent 上的金丝雀、实验、评估资产、本地数据集与 Agent，每一步都在 AWS 读回确认。`409 assistant.conversation_busy`、`403 auth.permission_required`；完整说明见英文版 api.md |
+
+### Studio 本地执行与代码生成
+
+这些路由在后端主机上运行生成的 Agent 代码（`local_exec`），在 prod 中除非显式开启否则拒绝；真正的边界是这个守卫。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `POST` | `/api/execute` | `perm:project.use` | project | 请求体 `{code, input_data?, openai_api_key?, bedrock_api_key?}` → `{success, output \| error, execution_time_ms}` |
+| `POST` | `/api/execute/stream` | `perm:project.use` | project | 同样的请求体 → 子进程 stdout 的 SSE，以 `[STREAM_COMPLETE:<seconds>]` 结尾 |
+| `POST` | `/api/fix-code/stream` | `perm:project.use` | project | 请求体 `{code, error, flow_data, graph_mode, input_data?}` → 编码 Agent 诊断与修复的 SSE |
+| `GET` | `/api/generate-code/status` | member | ws | 编码 Agent 后端是否可用（决定修复按钮是否可用） |
+| `GET` | `/api/conversations` | member | project | Studio 对话会话 |
+| `POST` | `/api/conversations` | `perm:project.use` | project | 请求体 `{generated_code, flow_data, project_id?, version?, openai_api_key?, bedrock_api_key?}` → 会话。`project_id` 是 Studio 流程的 id，不是 Launchpad 项目 |
+| `GET` | `/api/conversations/{session_id}` | member | project | 会话历史 |
+| `DELETE` | `/api/conversations/{session_id}` | `perm:project.use` | project | 删除会话 |
+| `PUT` | `/api/conversations/{session_id}/code` | `perm:project.use` | project | 请求体 `{generated_code}` → 会话：替换代码，保留消息 |
+| `GET` | `/api/conversations/{session_id}/messages` | member | project | `{messages[…]}` |
+| `POST` | `/api/conversations/{session_id}/messages` | `perm:project.use` | project | 请求体 `{message}` → 回复 |
+| `POST` | `/api/conversations/{session_id}/messages/stream` | `perm:project.use` | project | 请求体 `{message}` → SSE，以 `[CHAT_COMPLETE:<id>]` 或 `[CHAT_ERROR:<json>]` 结尾 |
+
+### API Key、环境对比、公告与视频
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `POST` | `/api/apikeys/{key_id}/disable` | `perm:project.write` | project | → Key。Key 属于一个项目；用它发起的 `/v1` 调用在该项目中运行 |
+| `GET` | `/api/apikeys/{key_id}/usage?days=1–90` | member | project | `{key_id, total, last_used_at, days[…]}`：每个 UTC 日被接受的 `/v1` 调用数，缺日补零 |
+| `GET` | `/api/environments/compare?agent=` | member | project | `{agent, reference_workspace, environments[…], summary}`：调用者能进入、且当前项目也绑定了的每个 Workspace 中同名的 Agent |
+| `GET` | `/api/environments/drift?agent=` | member | project | `{workspace_id, state, counts, agents[…], checked, truncated}`：台账预期与 AWS 实际的对比。只读 |
+| `GET` | `/api/announcements?limit=&offset=` | member | hub | `{announcements[…], total}`：已发布的内容 |
+| `GET` | `/api/announcements/manage?limit=&offset=` | admin | hub | 含草稿的 `{announcements[…], total}` |
+| `POST` | `/api/announcements` | admin | hub | 请求体 `{title, body, link_url?, link_label?}` → `201` 公告 `{id, status, revision, content, published_content, has_unpublished_changes, created_by, updated_by, created_at, updated_at, published_at}` |
+| `GET` | `/api/announcements/{announcement_id}` | admin | hub | 单条公告 |
+| `PUT` | `/api/announcements/{announcement_id}` | admin | hub | 创建时的请求体 + `expected_revision` → 公告（版本过期时 `409`） |
+| `POST` | `/api/announcements/{announcement_id}/publish` / `…/unpublish` | admin | hub | 请求体 `{expected_revision}` → 公告 |
+| `DELETE` | `/api/announcements/{announcement_id}?expected_revision=` | admin | hub | `{deleted: true}` |
+| `GET` | `/api/videos` | member | hub | `{schemaVersion, categories, collections, videos}`：已发布的教程视频目录 |
+| `GET` | `/api/videos/manage` | admin | hub | 含草稿的 `{taxonomy, videos[…]}` |
+| `POST` | `/api/videos/manage` | admin | hub | 请求体 `{category_id, section_id, console_version, title, description, cdn_url, webm_url?, poster_url?, caption_url?, duration_seconds, chapters[], sort_order}` → `201` 视频（与公告相同的带版本形状） |
+| `GET` | `/api/videos/manage/{video_id}` | admin | hub | 单个视频 |
+| `PUT` | `/api/videos/manage/{video_id}` | admin | hub | 创建时的请求体 + `expected_revision` → 视频 |
+| `POST` | `/api/videos/manage/{video_id}/publish` / `…/unpublish` | admin | hub | 请求体 `{expected_revision}` → 视频 |
+| `DELETE` | `/api/videos/manage/{video_id}?expected_revision=` | admin | hub | `{deleted: true}` |

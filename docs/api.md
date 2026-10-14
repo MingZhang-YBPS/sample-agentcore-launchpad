@@ -255,7 +255,10 @@ The console labels Connections **Outbound credentials** (出站凭证) and the c
 A **Connection** is an AgentCore Identity credential provider (OAuth2 or API key) in
 the workspace's token vault; see [identity.md](identity.md) for the service-model
 findings and the design. Reads are open to members; every mutation requires the
-`identity.manage` agent permission (`perm:identity.manage` in `ROUTE_POLICY`).
+`identity.manage` agent permission (`perm:identity.manage` in `ROUTE_POLICY`; the
+workspace-shared gateway-target writes are `infra+perm:identity.manage`). Connections
+belong to a project or to the platform (`identity_providers.project_id` may be NULL):
+a project sees its own and the platform's; names stay unique per workspace.
 Secrets (`client_secret`, `api_key`) are forwarded to AWS and never stored in the
 ledger nor returned.
 
@@ -281,7 +284,7 @@ ledger nor returned.
 | `GET` | `/api/agents/{agent_id}/identity` | member — `{agent_id, name, method, workload_identity{status, name, arn, allowed_return_urls}, inbound{mode: iam\|jwt, source}, downstreams[{type, name, tool_type, via: agent\|gateway, mode, connection, kind, scopes, connection_status: ready\|missing\|unbound}]}` — the read-only 身份 page |
 | `POST` | `/api/agents/{agent_id}/inbound-auth` | `agent.deploy` — `202 {agent, job_id, deployment_id}`. Body `{inbound_auth: {mode: iam\|jwt, jwt?} \| null}` (`null` unpins → workspace default; the key is required and unknown keys are refused with `422 validation.invalid_request`, so a mistyped body never starts a redeploy). Re-publishes the stored spec with the pin swapped: UpdateAgentRuntime on the same runtime, new version. `422 agent.inbound_auth_unsupported` (JWT on harness / A2A), `422 agent.inbound_auth_invalid`, `409 agent.deploy_in_progress` |
 | `GET` | `/api/identity/inbound-auth/default` | member — `{workspace_id, default: {mode: iam\|jwt, jwt?}, configured, cognito, cognito_issuer}`; `configured=false` = implicit IAM; `cognito` is a ready-to-use JWT config for the workspace pool, or null before bootstrap; `cognito_issuer` is the pool's issuer (the issuer of every token the console, `/v1` and evaluation present), or null |
-| `PUT` | `/api/identity/inbound-auth/default` | `identity.manage` — body `{mode, jwt?: {discovery_url, allowed_clients[], allowed_audience[], allowed_scopes[], custom_claims[], source_connection?}}` → the GET shape. `source_connection` is display-only and never reaches the authorizer. The discovery document is probed first (`422 identity.discovery_unreachable` / `identity.discovery_invalid`). Deployed agents keep their authorizer until redeployed |
+| `PUT` | `/api/identity/inbound-auth/default` | `infra+perm:identity.manage` (a workspace-shared default: administrator-only once the workspace binds several projects) — body `{mode, jwt?: {discovery_url, allowed_clients[], allowed_audience[], allowed_scopes[], custom_claims[], source_connection?}}` → the GET shape. `source_connection` is display-only and never reaches the authorizer. The discovery document is probed first (`422 identity.discovery_unreachable` / `identity.discovery_invalid`). Deployed agents keep their authorizer until redeployed |
 
 Error codes (`identity.*`): 409 — `connection_exists`, `target_exists`,
 `connection_referenced`, `system_connection`, `system_target`, `target_unbound`,
