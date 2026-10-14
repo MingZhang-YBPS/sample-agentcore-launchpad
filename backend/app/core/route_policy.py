@@ -1352,6 +1352,7 @@ ROUTE_POLICY.update({
 # (another project's agent answers 404 through the project-scoped agent lookup).
 ROUTE_POLICY.update({
     ("GET", "/api/agents/{agent_id}/network"): MEMBER,
+})
 
 # ---- MCP server operations, Lambda / adopted tool targets (projects §15.7, §15.8,
 # §15.12, §15.13, §15.15, M15-rest) ----

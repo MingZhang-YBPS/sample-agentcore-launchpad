@@ -12352,6 +12352,7 @@
         "sodStrictAdmin": "Only a platform administrator changes this.",
         "saved": "{{name}} saved"
       }
+    },
     "admins": {
       "nav": "Administrators",
       "navProjects": "Projects",
@@ -12659,34 +12660,6 @@
     "checkDrift": "The tools changed: a review is open and the target is withheld",
     "checkNoTarget": "No live Gateway target to check",
     "checkFailed": "Drift check failed",
-    "history": "History ({{count}})"
-  },
-  "network": {
-    "title": "Network",
-    "sub": "Where the agent's runtime runs: AgentCore's public network, or your VPC through a network profile.",
-    "public": "Public",
-    "vpc": "VPC profile",
-    "publicNote": "AgentCore-managed network — reaches the internet and public AWS endpoints.",
-    "inlineNote": "This container agent runs in the subnets and security groups set under storage (an older inline network). Pick a VPC profile to replace them.",
-    "profile": "Network profile",
-    "pick": "Choose a network profile",
-    "default": "default",
-    "none": "No network profile is available to this project — ask an administrator to allow one.",
-    "errPick": "Choose a network profile, or switch back to Public.",
-    "stored": "Runs in network profile {{id}}, which this project can no longer pick.",
-    "checkedAt": "checked {{at}}",
-    "subnets": "Subnets: {{ids}}",
-    "groups": "Security groups: {{ids}}",
-    "blocked": "This profile failed its preflight — the deploy will be refused until an administrator fixes it and re-runs the check.",
-    "warn": "The last preflight of this profile reported warnings — see the profile on the network page.",
-    "unchecked": "This profile has not been checked yet; the deploy runs its preflight first.",
-    "preflightNote": "Before the deploy starts, the platform checks this profile against what this agent uses (endpoints, routes, security groups). A blocking finding stops the deploy.",
-    "republishNote": "Changing an existing agent's network publishes a new version of it.",
-    "status": {
-      "ok": "preflight passed",
-      "warn": "warnings",
-      "blocked": "blocked",
-      "unchecked": "not checked"
     "history": "History ({{count}})",
     "ops": {
       "health": "Health",
@@ -12742,6 +12715,34 @@
       "apply": "Apply",
       "scaffoldStarted": "Writing the Cedar policies…",
       "scaffoldFailed": "Cedar scaffold failed"
+    }
+  },
+  "network": {
+    "title": "Network",
+    "sub": "Where the agent's runtime runs: AgentCore's public network, or your VPC through a network profile.",
+    "public": "Public",
+    "vpc": "VPC profile",
+    "publicNote": "AgentCore-managed network — reaches the internet and public AWS endpoints.",
+    "inlineNote": "This container agent runs in the subnets and security groups set under storage (an older inline network). Pick a VPC profile to replace them.",
+    "profile": "Network profile",
+    "pick": "Choose a network profile",
+    "default": "default",
+    "none": "No network profile is available to this project — ask an administrator to allow one.",
+    "errPick": "Choose a network profile, or switch back to Public.",
+    "stored": "Runs in network profile {{id}}, which this project can no longer pick.",
+    "checkedAt": "checked {{at}}",
+    "subnets": "Subnets: {{ids}}",
+    "groups": "Security groups: {{ids}}",
+    "blocked": "This profile failed its preflight — the deploy will be refused until an administrator fixes it and re-runs the check.",
+    "warn": "The last preflight of this profile reported warnings — see the profile on the network page.",
+    "unchecked": "This profile has not been checked yet; the deploy runs its preflight first.",
+    "preflightNote": "Before the deploy starts, the platform checks this profile against what this agent uses (endpoints, routes, security groups). A blocking finding stops the deploy.",
+    "republishNote": "Changing an existing agent's network publishes a new version of it.",
+    "status": {
+      "ok": "preflight passed",
+      "warn": "warnings",
+      "blocked": "blocked",
+      "unchecked": "not checked"
     }
   },
   "lambdaTool": {
