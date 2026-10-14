@@ -28,7 +28,8 @@ class ResourceMapping(ProjectShared, Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    # kb | memory | gateway | mcp_record | skill  (services.resource_mapping.KINDS)
+    # kb | memory | gateway | mcp_record | skill | network_profile
+    # (services.resource_mapping.KINDS)
     kind: Mapped[str] = mapped_column(String(16))
     # the logical name, e.g. `hr-policy` — the mapping key is `<kind>:<name>`
     name: Mapped[str] = mapped_column(String(64))

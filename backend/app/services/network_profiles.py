@@ -275,6 +275,17 @@ def archive_profile(db: Session, workspace_id: str, profile_id: str) -> None:
                        f"{used} agent(s) still use network profile '{row.name}' — move "
                        "them to another network first",
                        {"profile_id": profile_id, "agents": used}, status_code=409)
+    from app.deployer.pipeline import pending_eni_releases
+
+    releasing = pending_eni_releases(db, workspace_id, profile_id)
+    if releasing:
+        # a deleted agent's ENIs still sit in these subnets: archiving now invites
+        # deleting the VPC resources before AgentCore has let go of them (§12.9)
+        raise AppError("network_profile.enis_pending",
+                       f"AgentCore has not yet released the network interfaces of "
+                       f"{len(releasing)} deleted agent(s) in '{row.name}' — try again "
+                       "in a few minutes",
+                       {"profile_id": profile_id, "agents": releasing}, status_code=409)
     row.archived_at = _now()
     row.updated_at = row.archived_at
     for binding in allowed_bindings_of_profile(db, profile_id):
@@ -417,6 +428,39 @@ def normalize_spec_network(
                                      workspace_id=workspace_id, is_default=False))
     db.commit()
     return {**spec, "network": {"profile_id": pid}}
+
+
+# ── telemetry (§12.9) ─────────────────────────────────────────────────────────
+
+TELEMETRY_ENDPOINTS = ("logs", "xray")
+
+
+def telemetry_hint(db: Session, workspace_id: str, spec: dict[str, Any]) -> dict[str, Any] | None:
+    """For the observability page: why a VPC agent's telemetry may be silently lost —
+    its profile's last preflight found no usable `logs` (or `xray`) endpoint and no NAT
+    to reach them, or the profile was never checked. None for PUBLIC agents and for
+    profiles whose telemetry endpoints passed. The caller shows it when the agent had
+    invocations but no spans in the last 30 minutes."""
+    pid = network_profile_id((spec or {}).get("network"))
+    if pid is None:
+        return None
+    row = db.get(NetworkProfile, pid)
+    if row is None or row.workspace_id != workspace_id:
+        return None
+    if row.status == "unchecked" or not row.check_results:
+        return {"code": "network.telemetry_unchecked", "profile_id": pid, "missing": [],
+                "message": f"network profile '{row.name}' has not been checked — its logs / "
+                           "X-Ray endpoints may be missing; run its preflight"}
+    by_check = {r.get("check"): r for r in row.check_results or []}
+    missing = [svc for svc in TELEMETRY_ENDPOINTS
+               if (by_check.get(f"endpoint.{svc}") or {}).get("severity") not in (None, "ok")]
+    if not missing:
+        return None
+    return {"code": "network.telemetry_endpoint_missing", "profile_id": pid,
+            "missing": missing,
+            "message": f"agents on network profile '{row.name}' cannot reach "
+                       f"{' / '.join(missing)} — check the {' and '.join(missing)} interface "
+                       "endpoint(s) and the security group's outbound 443"}
 
 
 # ── preflight (§12.4) ─────────────────────────────────────────────────────────

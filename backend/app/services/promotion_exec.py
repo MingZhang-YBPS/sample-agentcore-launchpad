@@ -320,6 +320,14 @@ def _stage_resolve(run: Run) -> pipeline.StageResult:
             source_resources=getattr(source, "resources", None),
             target_resources=target.resources,
         )
+        # the network profile first: its refusal names the mapping to create (§12)
+        try:
+            resource_mapping.assert_network_mapped(
+                db, bundle.spec or {}, source_workspace_id=bundle.workspace_id,
+                target_workspace_id=target.id, project_id=run.project_id,
+            )
+        except AppError as exc:
+            raise StageFailed(exc.message) from exc
         if not resolution.complete:
             missing = "; ".join(u["reason"] for u in resolution.unmapped[:3])
             raise StageFailed(f"unmapped references: {missing}")
@@ -1104,7 +1112,18 @@ def admit(
 
     The caller commits and then starts the worker, so a crash in between leaves a queued
     job the startup resume picks up rather than a promotion stuck `executing` with none.
+    A bundle whose agent runs in a network profile with no mapping into the target is
+    refused here (409 `network_profile.unmapped`) — the rollback route runs no gates.
     """
+    from app.services import resource_mapping
+
+    bundle = db.get(ReleaseBundle, bundle_id)
+    if bundle is not None:
+        resource_mapping.assert_network_mapped(
+            db, bundle.spec or {}, source_workspace_id=bundle.workspace_id,
+            target_workspace_id=promotion.target_workspace_id,
+            project_id=promotion.project_id,
+        )
     job = Job(
         workspace_id=promotion.target_workspace_id,
         type=JOB_TYPE,

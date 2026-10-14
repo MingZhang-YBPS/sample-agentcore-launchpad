@@ -13,6 +13,7 @@ non-succeeded stage.
 import json
 import logging
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -249,6 +250,222 @@ def network_gate(
             status_code=409,
         )
     return extras
+
+
+# ── teardown: wait for AgentCore to release a VPC agent's ENIs (design projects §12.9) ──
+#
+# AgentCore's network service-linked role holds ENIs in the profile's subnets and lets
+# go of them some time after the runtime / harness is deleted; until then the subnets
+# and security groups cannot be deleted. The agent delete starts one `agent_eni_release`
+# job (`start_eni_release_wait`) that polls `ec2:DescribeNetworkInterfaces` (filtered by
+# the profile's security groups and subnets) for a few minutes; what is still there
+# after that is the scheduled teardown's (`sweep_eni_releases`, run by `dlc.teardown`)
+# until a hard deadline fails the job with the ENI ids. The profile cannot be archived
+# while such a job runs (`network_profiles.archive_profile`).
+#
+# Which ENIs are this agent's: the ones whose description names its runtime / harness
+# id; when no other live agent shares the profile, every ENI in its subnets + SGs (the
+# service documents no tag or description format, so a shared profile without a
+# matching description has nothing attributable to wait for).
+
+ENI_JOB_TYPE = "agent_eni_release"
+ENI_WAIT_SECONDS = 300
+ENI_POLL_SECONDS = 15
+ENI_DEADLINE = 6 * 3600  # seconds after the delete; then the job fails with the ids
+
+# ec2 client factory for the ENI poll; tests swap it (`set_teardown_ec2`)
+_teardown_ec2: Callable[[WorkspaceContext], Any] = _workspace_ec2
+_eni_sleep: Callable[[float], None] = time.sleep
+_ENI_WAITERS: dict[str, threading.Thread] = {}
+
+
+def set_teardown_ec2(
+    factory: Callable[[WorkspaceContext], Any],
+) -> Callable[[WorkspaceContext], Any]:
+    """Swap the EC2 client the teardown ENI poll reads (tests); returns the old one."""
+    global _teardown_ec2
+    previous, _teardown_ec2 = _teardown_ec2, factory
+    return previous
+
+
+def _agent_enis(workspace: WorkspaceContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ENIs still held for the deleted agent the job payload describes."""
+    vpc = payload.get("vpc") or {}
+    ec2 = _teardown_ec2(workspace)
+    kwargs: dict[str, Any] = {"Filters": [
+        {"Name": "group-id", "Values": list(vpc.get("security_groups") or [])},
+        {"Name": "subnet-id", "Values": list(vpc.get("subnets") or [])},
+    ]}
+    rows: list[dict[str, Any]] = []
+    while True:
+        page = ec2.describe_network_interfaces(**kwargs)
+        rows.extend(page.get("NetworkInterfaces") or [])
+        token = page.get("NextToken")
+        if not token:
+            break
+        kwargs["NextToken"] = token
+    marks = [m for m in (payload.get("resource_id"), payload.get("arn")) if m]
+    named = [e for e in rows if any(m in str(e.get("Description") or "") for m in marks)]
+    if named or payload.get("shared"):
+        return named
+    return rows
+
+
+def start_eni_release_wait(
+    db: Session, agent: Agent, workspace: WorkspaceContext, *, start: bool = True,
+) -> str | None:
+    """After an agent's AWS resource is deleted: the job id of the ENI wait, or None
+    when the agent ran PUBLIC (nothing to wait for) or its network no longer resolves."""
+    from app.core.errors import AppError
+    from app.services import network_profiles
+
+    network = (agent.spec or {}).get("network") or None
+    if network is None or not (agent.resource_id or agent.arn):
+        return None
+    try:
+        vpc = network_profiles.resolve_vpc(db, agent.workspace_id or "", network)
+    except AppError:
+        return None
+    if not vpc:
+        return None
+    profile_id = network_profiles.network_profile_id(network)
+    shared = False
+    if profile_id is not None:
+        users = network_profiles.agents_using(db, agent.workspace_id or "", profile_id)
+        # the agent itself still counts while its row is not yet marked deleted
+        own = 0 if agent.status == "deleted" else 1
+        shared = users.get(profile_id, 0) - own > 0
+    deadline = datetime.now(UTC).timestamp() + ENI_DEADLINE
+    job = Job(
+        workspace_id=agent.workspace_id,
+        project_id=agent.project_id,
+        type=ENI_JOB_TYPE,
+        status="running",
+        payload={
+            **({"platform": True} if agent.project_id is None else {}),
+            "agent_id": agent.id,
+            "resource_id": agent.resource_id,
+            "arn": agent.arn,
+            "profile_id": profile_id,
+            "vpc": vpc,
+            "shared": shared,
+            "deadline": deadline,
+        },
+    )
+    db.add(job)
+    db.commit()
+    _append_log(db, job.id, "teardown",
+                f"waiting for AgentCore to release the ENIs in {', '.join(vpc['subnets'])}")
+    if start:
+        start_eni_release_async(job.id)
+    return job.id
+
+
+def _poll_eni_job(db: Session, job: Job) -> bool:
+    """One look; True once nothing attributable remains (the job is then succeeded)."""
+    workspace = context_for_workspace(job.workspace_id)
+    remaining = _agent_enis(workspace, job.payload or {})
+    if not remaining:
+        job.status = "succeeded"
+        job.error = None
+        db.commit()
+        _append_log(db, job.id, "teardown", "every ENI released")
+        return True
+    ids = sorted(str(e.get("NetworkInterfaceId")) for e in remaining)
+    if datetime.now(UTC).timestamp() >= float((job.payload or {}).get("deadline") or 0):
+        job.status = "failed"
+        job.error = (f"{len(ids)} ENI(s) still present after {ENI_DEADLINE // 3600} h: "
+                     f"{', '.join(ids)} — check them in the EC2 console before deleting "
+                     "the subnets or security groups")
+        db.commit()
+        _append_log(db, job.id, "teardown", job.error, level="error")
+        return True
+    payload = dict(job.payload or {})
+    payload["remaining"] = ids
+    job.payload = payload
+    db.commit()
+    return False
+
+
+def wait_for_eni_release(job_id: str, *, wait_seconds: float = ENI_WAIT_SECONDS,
+                         poll_seconds: float = ENI_POLL_SECONDS) -> None:
+    """The waiter: poll every `poll_seconds` for up to `wait_seconds`, inside the job's
+    project; then leave the job running for the scheduled sweep."""
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id)
+        if job is None or job.type != ENI_JOB_TYPE or job.status != "running":
+            return
+        with project_context(job.project_id):
+            waited = 0.0
+            while True:
+                try:
+                    if _poll_eni_job(db, job):
+                        return
+                except Exception as exc:  # noqa: BLE001 — a read failure is the sweep's
+                    _append_log(db, job_id, "teardown",
+                                f"ENI read failed ({type(exc).__name__}: {exc})",
+                                level="warning")
+                    break
+                if waited >= wait_seconds:
+                    break
+                _eni_sleep(poll_seconds)
+                waited += poll_seconds
+            _append_log(db, job_id, "teardown",
+                        "ENIs still present — the scheduled teardown keeps checking")
+    finally:
+        db.close()
+
+
+def start_eni_release_async(job_id: str) -> threading.Thread:
+    with _LIVE_LOCK:
+        existing = _ENI_WAITERS.get(job_id)
+        if existing is not None and existing.is_alive():
+            return existing
+
+        def run() -> None:
+            try:
+                wait_for_eni_release(job_id)
+            finally:
+                with _LIVE_LOCK:
+                    if _ENI_WAITERS.get(job_id) is threading.current_thread():
+                        del _ENI_WAITERS[job_id]
+
+        thread = threading.Thread(target=run, daemon=True, name=f"eni-{job_id[:8]}")
+        _ENI_WAITERS[job_id] = thread
+        thread.start()
+        return thread
+
+
+def sweep_eni_releases(db: Session) -> dict[str, Any]:
+    """The scheduled half (`dlc.teardown`): one look at each ENI wait no live waiter
+    of this process is polling."""
+    with project_context(None):
+        jobs = db.query(Job).filter(Job.type == ENI_JOB_TYPE, Job.status == "running") \
+            .limit(50).all()
+    out: list[dict[str, Any]] = []
+    for job in jobs:
+        with _LIVE_LOCK:
+            waiter = _ENI_WAITERS.get(job.id)
+        if waiter is not None and waiter.is_alive():
+            continue
+        try:
+            with project_context(job.project_id):
+                done = _poll_eni_job(db, job)
+            out.append({"job_id": job.id, "status": job.status if done else "waiting"})
+        except Exception as exc:  # noqa: BLE001 — one job must not stop the rest
+            db.rollback()
+            out.append({"job_id": job.id, "status": f"error:{type(exc).__name__}"})
+    return {"eni_releases": out}
+
+
+def pending_eni_releases(db: Session, workspace_id: str, profile_id: str) -> list[str]:
+    """Agents of this profile whose ENIs are still being waited for."""
+    with project_context(None):
+        jobs = db.query(Job).filter(Job.type == ENI_JOB_TYPE, Job.status == "running",
+                                    Job.workspace_id == workspace_id).all()
+    return [str((j.payload or {}).get("agent_id")) for j in jobs
+            if (j.payload or {}).get("profile_id") == profile_id]
 
 
 # Jobs the startup resume is about to adopt: the only launches allowed to take a job a
@@ -517,6 +734,8 @@ def resume_pending_jobs() -> list[str]:
         promotion_exec.JOB_TYPE: promotion_exec.start_resume,
         # an architect-conversation CLEAR resumes from its verified checkpoints
         assistant_purge.JOB_TYPE: assistant_purge.start_purge_resume,
+        # a VPC agent's teardown keeps waiting for its ENIs (§12.9)
+        ENI_JOB_TYPE: start_eni_release_async,
     }
     db = SessionLocal()
     try:
