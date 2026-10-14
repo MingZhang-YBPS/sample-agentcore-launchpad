@@ -207,6 +207,19 @@ class Settings(BaseSettings):
     # Default model of the system architect agent on a new install. reasoning_effort
     # is preset only when this is an OpenAI model (the only family that takes it).
     architect_model_id: str = "global.openai.gpt-6-astra"
+    # The architect assistant's replay budget (assistant-context C3): half the
+    # architect model's input context window, in estimated tokens, capped at
+    # assistant_replay_max_tokens; the other half stays free for the turn's own tool
+    # results and output. The window is this override when > 0, else the model's
+    # entry in model_context_windows / a refreshed model_prices entry's
+    # max_input_tokens (longest substring key wins); with neither the replay keeps
+    # the 160 000-character budget.
+    assistant_context_window_tokens: int = 0
+    assistant_replay_max_tokens: int = 200_000
+    assistant_replay_max_turns: int = 12
+    # Input context windows (tokens) by model-id substring, for models whose
+    # model_prices entry carries no max_input_tokens. Overridable in launchpad.yaml.
+    model_context_windows: dict[str, int] = {}
     # Default simulated-user (actor) model the console pre-selects for persona
     # scenarios; it must accept Converse forced tool choice (any / tool).
     actor_model_id: str = "global.openai.gpt-6-luna"

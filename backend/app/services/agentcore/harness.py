@@ -379,6 +379,9 @@ def bounded_tool_input(raw: str) -> str:
     return text[:TOOL_INPUT_MAX_CHARS] + f"… [+{len(text) - TOOL_INPUT_MAX_CHARS} chars]"
 
 
+CONTEXT_WINDOW_STOPS = frozenset({"model_context_window_exceeded", "context_window_exceeded"})
+
+
 def _stop_error(reason: Any) -> AppError | None:
     """Decode service stops, including the exported ExecutionLimitsHook messages."""
     normalized = reason.strip().lower() if isinstance(reason, str) else ""
@@ -395,9 +398,16 @@ def _stop_error(reason: Any) -> AppError | None:
         )
     elif normalized in {"cancelled", "canceled", "interrupted"}:
         code, message = "harness.execution_cancelled", "Harness execution was cancelled"
+    elif normalized in CONTEXT_WINDOW_STOPS:
+        # the turn's own tool results overflowed the model's context window: distinct
+        # from a budget limit, a replay with less history can succeed
+        code, message = (
+            "harness.context_window_exceeded",
+            "Harness execution exceeded the model's context window",
+        )
     elif normalized in {
         "max_tokens", "max_iterations", "execution_limit_exceeded",
-        "max_iterations_exceeded", "max_output_tokens_exceeded", "model_context_window_exceeded",
+        "max_iterations_exceeded", "max_output_tokens_exceeded",
         "limit_turns", "limit_output_tokens", "limit_total_tokens",
     } or normalized.startswith(("max iterations exceeded:", "max output tokens exceeded:")):
         code, message = "harness.execution_limit", "Harness execution reached its limit"
