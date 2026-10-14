@@ -9984,7 +9984,7 @@
       "failed": "The last deploy failed.",
       "chat": "Chat",
       "gate": "Release gate",
-      "edit": "Manage",
+      "edit": "Edit",
       "lifecycle": "Lifecycle",
       "pending": "Version v{{version}} is waiting on the release gate.",
       "openGate": "Open the gate",
@@ -9997,7 +9997,183 @@
       "endpoints": "Serving on",
       "try": "Try it",
       "tryPlaceholder": "Ask the agent something",
-      "run": "Run"
+      "run": "Run",
+      "observability": "Observability",
+      "identity": "Identity",
+      "more": "More",
+      "editMenu": {
+        "wizard": "Edit and republish",
+        "canvas": "Edit in canvas",
+        "preset": "Configure preset",
+        "classic": "Open the classic detail page"
+      },
+      "editBlocked": {
+        "presetAdminOnly": "Only administrators can configure system presets.",
+        "deploying": "A deploy is in progress for this agent."
+      },
+      "convert": "Convert to code agent",
+      "rollback": "Roll back to a snapshot…",
+      "delete": "Delete",
+      "remove": "Remove",
+      "tabs": {
+        "label": "Agent sections",
+        "overview": "Overview",
+        "deploy": "Deploy & versions",
+        "access": "Access & integration",
+        "release": "Release"
+      },
+      "action": {
+        "convertTitle": "Convert to a code agent?",
+        "convertBody": "Create a code-based runtime twin of the Harness agent {{name}}. The Harness agent keeps running.",
+        "deleteTitle": "Delete this agent?",
+        "deleteBody": "Delete {{name}} and its AgentCore resources. This cannot be undone.",
+        "removeTitle": "Remove this imported runtime?",
+        "removeBody": "Only the platform record of {{name}} is deleted; the runtime on AWS is kept.",
+        "typeName": "Type {{name}} to confirm",
+        "cancel": "Cancel",
+        "deleted": "Deleted {{name}}",
+        "removed": "Removed {{name}} from the platform",
+        "convertStarted": "Conversion started: {{name}}"
+      },
+      "basic": {
+        "title": "Basic information",
+        "displayName": "Display name",
+        "resourceName": "Resource name",
+        "id": "ID",
+        "method": "Method",
+        "protocol": "Protocol",
+        "creator": "Created by",
+        "created": "Created",
+        "updated": "Updated",
+        "registry": "Registry record",
+        "arn": "ARN",
+        "copy": "Copy {{label}}",
+        "copied": "{{label}} copied",
+        "copyFailed": "Could not copy to the clipboard."
+      },
+      "systemNote": "Platform-managed preset {{label}} (skill version {{version}}). Only administrators can change its settings; it cannot be deleted or converted here.",
+      "byoc": {
+        "title": "Uploaded code",
+        "kind": "Artifact",
+        "image": "Image",
+        "entrypoint": "Entrypoint",
+        "models": "Allowed models"
+      },
+      "converted": {
+        "title": "Converted from a Harness agent",
+        "from": "Source: {{name}}"
+      },
+      "kbs": "Knowledge bases",
+      "progress": {
+        "title": "Deploy progress",
+        "running": "Deploying",
+        "elapsed": "Elapsed {{time}}",
+        "done": "Ready in {{time}}",
+        "failed": "The agent could not be deployed. The technical log below shows what went wrong.",
+        "technical": "Technical log",
+        "log": "Deploy log",
+        "logEmpty": "No log events yet",
+        "line": {
+          "harness": "Preparing your agent — about 30 seconds",
+          "zipPackage": "Installing dependencies and packaging — 1 to 3 minutes",
+          "containerBuild": "Building the container image — 2 to 4 minutes",
+          "package": "Packaging your agent — 1 to 3 minutes",
+          "prepare": "Preparing your agent — a few seconds",
+          "start": "Starting your agent — about 1 minute",
+          "register": "Finishing up — a few seconds"
+        }
+      },
+      "snapshots": {
+        "title": "Snapshots",
+        "sub": "The full configuration saved at every publish. Compare any two, or roll back by re-publishing an older one.",
+        "compare": "Compare selected",
+        "current": "Current",
+        "rollback": "Roll back",
+        "by": "Published by",
+        "at": "Published",
+        "note": "Note",
+        "pick": "Select snapshot {{seq}} to compare",
+        "rollbackTitle": "Roll back to snapshot {{seq}}?",
+        "rollbackBody": "This re-publishes snapshot {{seq}}'s configuration as a new version. Nothing is reverted on AWS; the current configuration stays in the snapshot list.",
+        "rolledBack": "Re-publishing snapshot {{seq}}.",
+        "diffTitle": "Snapshot {{from}} → {{to}}",
+        "noChanges": "These snapshots are identical.",
+        "empty": "No snapshots yet.",
+        "close": "Close",
+        "blocked": "Rolling back re-publishes the agent, which needs the edit permission and no deploy in progress.",
+        "group": {
+          "prompt": "Prompt",
+          "model": "Model",
+          "tools": "Tools",
+          "skills": "Skills",
+          "knowledge_bases": "Knowledge bases",
+          "memory": "Memory",
+          "guardrail": "Guardrail",
+          "other": "Other"
+        },
+        "kind": {
+          "added": "added",
+          "removed": "removed",
+          "changed": "changed"
+        }
+      },
+      "inbound": {
+        "toJwtTitle": "Switch to a JWT authorizer",
+        "claimsKept": "{{count}} custom claim rule(s) carried over unchanged. Edit them on the classic page.",
+        "classic": "Full JWT editor (classic page)"
+      },
+      "integration": {
+        "title": "Integration",
+        "sub": "Call this agent from your own system through the public /v1 API. Replace {{key}} with an API key.",
+        "language": "Language",
+        "mode": "Call style",
+        "lang": {
+          "curl": "curl",
+          "python": "Python (httpx)",
+          "javascript": "JavaScript (fetch)"
+        },
+        "modes": {
+          "sync": "Synchronous",
+          "stream": "Streaming (SSE)"
+        },
+        "copy": "Copy",
+        "copied": "Snippet copied.",
+        "copyFailed": "Could not copy to the clipboard.",
+        "keyHint": "Create keys, optionally limited to this agent, with an expiry and a rate limit, from the API keys panel in the Chat console.",
+        "unavailable": "This agent cannot be called through the /v1 API."
+      },
+      "identityEntry": {
+        "title": "Identity",
+        "body": "Workload identity, outbound credentials and the Connections this agent uses.",
+        "open": "Open the identity page",
+        "imported": "An imported runtime keeps the identity it has on AWS; the platform does not manage it."
+      },
+      "gateEntry": {
+        "title": "Release gate",
+        "body": "Run the release standards against the candidate version before it serves traffic.",
+        "open": "Open the gate"
+      },
+      "promotion": {
+        "title": "Promote to another workspace",
+        "sub": "Freeze this publish as a bundle, then ask for it to be released elsewhere.",
+        "bundle": "Create bundle",
+        "bundled": "Bundle {{digest}} ready",
+        "publish": "Share as template",
+        "published": "Published to shared templates",
+        "empty": "No bundles yet.",
+        "live": "live spec",
+        "publishN": "publish #{{n}}",
+        "request": "Request release",
+        "requestTitle": "Request a release",
+        "requestConfirm": "Send request",
+        "requested": "Request sent",
+        "noTargets": "No other workspace is registered, so there is nowhere to release to yet.",
+        "target": "Target workspace",
+        "changeNote": "What changed",
+        "rollbackNote": "How to roll back",
+        "inactive": "Only an active agent can be promoted.",
+        "system": "System presets are installed per workspace and are not promoted."
+      }
     },
     "life": {
       "build": "Built",

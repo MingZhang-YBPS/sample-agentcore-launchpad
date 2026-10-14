@@ -64,7 +64,16 @@ describe("v3TwinOf", () => {
     expect(v3TwinOf("/v2/issues", "?view=rules")).toBe("/v3/issues?view=rules");
     expect(v3TwinOf("/v2/assistant", "?view=detail&id=c1")).toBeNull();
     expect(v3TwinOf("/v2/agents", "?view=new&scenario=it")).toBeNull();
-    expect(v3TwinOf("/v2/agents", "?view=detail&id=a")).toBeNull();
+    expect(v3TwinOf("/v2/agents", "?view=detail&id=a")).toBe("/v3/agents?id=a");
+    expect(v3TwinOf("/v2/agents", "?view=detail&id=a%20b")).toBe("/v3/agents?id=a%20b");
+  });
+
+  it("keeps the agent editor, identity page and the full detail page hosted (v3-agent-management §2.5)", () => {
+    expect(v3TwinOf("/v2/agents", "?view=edit&id=a")).toBeNull();
+    expect(v3TwinOf("/v2/agents", "?view=identity&id=a")).toBeNull();
+    expect(v3TwinOf("/v2/agents", "?view=detail&id=a&full=1")).toBeNull();
+    expect(v3TwinOf("/v2/agents", "?view=detail")).toBeNull();
+    expect(v3TwinOf("/v2/agents", "")).toBeNull();
   });
 
   it("keeps the V2 sub-pages V3 hosts, and anything asked for in full", () => {

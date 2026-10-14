@@ -1,11 +1,11 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { api, errorMessage, type ReleaseBundleInfo, type Workspace } from "../../../lib/api";
+import { releasable, useRelease } from "../../../lib/agent-admin/release";
+import { errorMessage } from "../../../lib/api";
 import { fmtTime } from "../../format";
-import { useLoad, useV2Toast } from "../../hooks";
+import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, Modal, Select, Spin, Tag } from "../../ui";
 
 /**
@@ -33,71 +33,21 @@ export function ReleaseCard({
   const { can } = useAuth();
   const toast = useV2Toast();
   const navigate = useNavigate();
-  const [tick, setTick] = useState(0);
-  const bundles = useLoad(
-    () => api.agentReleaseBundles(agentId),
-    `bundles:${agentId}:${tick}`,
+  const rel = useRelease(
+    { agentId, agentTitle, currentWorkspaceId },
+    {
+      onBundled: (created) => toast("success", t("v2.release.bundled", { digest: created.digest.slice(0, 12) })),
+      onPublished: () => toast("success", t("v2.release.published")),
+      onRequested: (id) => {
+        toast("success", t("v2.release.requested"));
+        navigate(`/v2/promotions?view=detail&id=${encodeURIComponent(id)}`);
+      },
+      onError: (error) => toast("error", errorMessage(error)),
+    },
   );
-  const workspaces = useLoad(() => api.listWorkspaces(), "release-workspaces");
-  const [asking, setAsking] = useState<ReleaseBundleInfo | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [changeNote, setChangeNote] = useState("");
-  const [rollbackNote, setRollbackNote] = useState("");
-  const [target, setTarget] = useState("");
+  const { bundles, rows, targets, busy, asking, target, changeNote, rollbackNote } = rel;
 
-  if (systemManaged || agentStatus !== "active") return null;
-
-  const rows = bundles.data?.bundles ?? [];
-  const targets = (workspaces.data?.workspaces ?? []).filter(
-    (row: Workspace) => row.id !== currentWorkspaceId,
-  );
-
-  const bundle = async () => {
-    setBusy(true);
-    try {
-      const created = await api.createReleaseBundle(agentId);
-      toast("success", t("v2.release.bundled", { digest: created.digest.slice(0, 12) }));
-      setTick((n) => n + 1);
-    } catch (error) {
-      toast("error", errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // T38: publishing shares the agent's shape with other workspaces. Environment ids and
-  // secrets are stripped server-side, so the console does not have to decide what is safe.
-  const publish = async () => {
-    setBusy(true);
-    try {
-      await api.publishTemplate({ agent_id: agentId, title: agentTitle });
-      toast("success", t("v2.release.published"));
-    } catch (error) {
-      toast("error", errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const request = async () => {
-    if (!asking) return;
-    setBusy(true);
-    try {
-      const created = await api.createPromotion({
-        bundle_id: asking.id,
-        target_workspace_id: target,
-        change_note: changeNote.trim(),
-        rollback_note: rollbackNote.trim(),
-      });
-      toast("success", t("v2.release.requested"));
-      setAsking(null);
-      navigate(`/v2/promotions?view=detail&id=${encodeURIComponent(created.id)}`);
-    } catch (error) {
-      toast("error", errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (!releasable({ status: agentStatus, system: systemManaged })) return null;
 
   return (
     <Card
@@ -106,11 +56,11 @@ export function ReleaseCard({
       testId="v2-agent-release"
       end={
         <>
-          <Button size="sm" disabled={busy} onClick={() => void publish()} testId="v2-agent-publish">
+          <Button size="sm" disabled={busy} onClick={() => void rel.publish()} testId="v2-agent-publish">
             {t("v2.release.publish")}
           </Button>
           {can("promotion.request") && (
-            <Button size="sm" disabled={busy} onClick={() => void bundle()} testId="v2-agent-bundle">
+            <Button size="sm" disabled={busy} onClick={() => void rel.bundle()} testId="v2-agent-bundle">
               {busy ? <Spin /> : t("v2.release.bundle")}
             </Button>
           )}
@@ -132,12 +82,7 @@ export function ReleaseCard({
             <span style={{ marginLeft: "auto" }}>
             <Button
               size="sm"
-              onClick={() => {
-                setAsking(row);
-                setTarget(targets[0].id);
-                setChangeNote("");
-                setRollbackNote("");
-              }}
+              onClick={() => rel.ask(row)}
               testId={`v2-agent-promote-${row.id}`}
             >
               {t("v2.release.request")}
@@ -153,14 +98,14 @@ export function ReleaseCard({
         <Modal
           title={t("v2.release.requestTitle")}
           open
-          onClose={() => setAsking(null)}
+          onClose={() => rel.cancelAsk()}
           footer={
             <>
-              <Button onClick={() => setAsking(null)}>{t("common.cancel")}</Button>
+              <Button onClick={() => rel.cancelAsk()}>{t("common.cancel")}</Button>
               <Button
                 kind="primary"
-                disabled={busy || !changeNote.trim() || !rollbackNote.trim() || !target}
-                onClick={() => void request()}
+                disabled={!rel.canRequest}
+                onClick={() => void rel.request()}
                 testId="v2-agent-promote-submit"
               >
                 {busy ? <Spin /> : t("v2.release.requestConfirm")}
@@ -176,7 +121,7 @@ export function ReleaseCard({
                   value: row.id,
                   label: `${row.name} · ${row.id}${row.tier && row.tier !== "dev" ? ` (${row.tier})` : ""}`,
                 }))}
-                onChange={setTarget}
+                onChange={rel.setTarget}
                 testId="v2-agent-promote-target"
               />
             </Field>
@@ -186,7 +131,7 @@ export function ReleaseCard({
                 rows={3}
                 maxLength={4000}
                 value={changeNote}
-                onChange={(event) => setChangeNote(event.target.value)}
+                onChange={(event) => rel.setChangeNote(event.target.value)}
                 data-testid="v2-agent-promote-change"
               />
             </Field>
@@ -200,7 +145,7 @@ export function ReleaseCard({
                 rows={3}
                 maxLength={4000}
                 value={rollbackNote}
-                onChange={(event) => setRollbackNote(event.target.value)}
+                onChange={(event) => rel.setRollbackNote(event.target.value)}
                 data-testid="v2-agent-promote-rollback"
               />
             </Field>

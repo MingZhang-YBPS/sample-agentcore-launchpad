@@ -1,14 +1,7 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  buildSnippet,
-  KEY_PLACEHOLDER,
-  SNIPPET_LANGS,
-  SNIPPET_MODES,
-  type SnippetLang,
-  type SnippetMode,
-} from "../../../lib/snippets";
+import { useIntegration } from "../../../lib/agent-admin/integration";
+import { KEY_PLACEHOLDER, SNIPPET_LANGS, SNIPPET_MODES } from "../../../lib/snippets";
 import { Button, Card, Segmented } from "../../ui";
 import { useV2Toast } from "../../hooks";
 
@@ -17,15 +10,12 @@ import { useV2Toast } from "../../hooks";
 export function IntegrationCard({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
-  const [lang, setLang] = useState<SnippetLang>("curl");
-  const [mode, setMode] = useState<SnippetMode>("sync");
-  const snippet = buildSnippet({ baseUrl: window.location.origin, agentId }, lang, mode);
+  const { lang, setLang, mode, setMode, snippet, copy: copySnippet } = useIntegration(agentId);
 
   const copy = () => {
-    navigator.clipboard
-      .writeText(snippet)
-      .then(() => toast("success", t("v2.agents.integration.copied")))
-      .catch(() => toast("error", t("v2.agents.integration.copyFailed")));
+    void copySnippet().then((ok) =>
+      ok ? toast("success", t("v2.agents.integration.copied")) : toast("error", t("v2.agents.integration.copyFailed")),
+    );
   };
 
   return (
