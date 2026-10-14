@@ -2248,6 +2248,7 @@
     "videos.conflict": "This video changed. Reload it before saving or publishing.",
     "chat.session_stop_unsupported": "This agent's sessions cannot be ended from the console — a Harness has no session-stop operation",
     "chat.session_not_found": "Chat session not found",
+    "feedback.message_not_found": "This answer can't be rated: it was removed, or its agent isn't visible to you.",
     "runtime.discovery_failed": "AgentCore Runtime discovery failed",
     "job.not_found": "Job not found",
     "validation.invalid_request": "Request validation failed",
@@ -6816,7 +6817,10 @@
       "caller": {
         "user_jwt": "Called as you",
         "m2m": "Called as M2M client"
-      }
+      },
+      "rateAnswer": "Rate this answer",
+      "thumbUp": "Good answer",
+      "thumbDown": "Bad answer"
     },
     "knowledge": {
       "basic": "Basic info",
@@ -8486,6 +8490,24 @@
       "workspace": "Workspace",
       "observability": "Observability",
       "trace": "Trace"
+    }
+  },
+  "feedbackCard": {
+    "title": "Thumbs-down answers",
+    "desc": "Answers rated in Chat during this range. A thumbs-down is a bad case — add its sessions to a dataset to keep it as a regression test.",
+    "up": "Thumbs up",
+    "down": "Thumbs down",
+    "toDataset": "Add to dataset ({{count}})",
+    "toDatasetHint": "Adds the down-rated sessions of this range. Sessions whose trace is gone are skipped, and the result says how many.",
+    "empty": "No thumbs-down answers in this range.",
+    "colAgent": "Agent",
+    "colQuestion": "Question",
+    "colAnswer": "Answer",
+    "colWho": "Rated by",
+    "colSource": "From",
+    "openSession": "Open session",
+    "source": {
+      "console": "Chat"
     }
   }
 }
