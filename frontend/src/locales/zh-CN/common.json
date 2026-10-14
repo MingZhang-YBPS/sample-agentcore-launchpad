@@ -12595,7 +12595,7 @@
       "nav": "部门",
       "eyebrow": "组织 · 部门",
       "title": "部门",
-      "sub": "部门用于标注项目和项目组，并在项目切换器中分组。阶段 1 只有名称和描述。",
+      "sub": "部门为项目和项目组标注归属，并在项目切换器中分组。每个部门可以有自己的部门管理员，在为部门开放的工作区内管理本部门的项目和项目组。",
       "create": "新建部门",
       "delete": "删除",
       "empty": "没有部门",
@@ -12604,7 +12604,8 @@
       "col": {
         "department": "部门",
         "projects": "项目",
-        "groups": "项目组"
+        "groups": "项目组",
+        "workspaces": "开放的工作区"
       },
       "form": {
         "createTitle": "新建部门",
@@ -12618,7 +12619,68 @@
       "archiveTitle": "归档 {{name}}？",
       "archiveBody": "{{name}} 不再出现在新的选择中；已使用它的项目和项目组保留不变。",
       "deleteTitle": "删除 {{name}}？",
-      "deleteBody": "{{name}} 将被永久删除。没有项目或项目组使用它。"
+      "deleteBody": "{{name}} 将被永久删除。没有项目或项目组使用它。",
+      "manage": "管理员与工作区",
+      "detail": {
+        "title": "部门 {{name}}",
+        "close": "关闭"
+      },
+      "tab": {
+        "admins": "部门管理员",
+        "workspaces": "开放的工作区",
+        "settings": "设置"
+      },
+      "admins": {
+        "hint": "部门管理员可以创建本部门的项目，管理其成员、角色和项目组，并把项目绑定到开放的工作区。除非把自己加为成员（会单独记入审计），否则看不到项目数据。",
+        "empty": "暂无部门管理员",
+        "add": "添加管理员",
+        "remove": "移除",
+        "added": "{{name}} 已成为本部门管理员",
+        "removed": "{{name}} 不再是本部门管理员"
+      },
+      "workspaces": {
+        "hint": "部门管理员只能把本部门的项目绑定到这些工作区。关闭某个工作区不会解除已有的绑定。",
+        "empty": "尚未为本部门开放任何工作区",
+        "open": "开放工作区",
+        "choose": "选择工作区",
+        "openSubmit": "开放",
+        "close": "对本部门关闭",
+        "opened": "已开放工作区 {{name}}",
+        "closed": "已关闭工作区 {{name}}"
+      },
+      "settings": {
+        "canCreateUsers": "允许部门管理员邀请新账号",
+        "canCreateUsersHint": "被邀请的账号为普通成员（member），有效期受限，并直接加入本部门的某个项目。",
+        "validityDays": "被邀请账号的最长有效期（天）",
+        "maxProjects": "部门最多可拥有的项目数",
+        "noCap": "不限",
+        "save": "保存设置",
+        "saved": "已保存 {{name}} 的设置",
+        "err": {
+          "count": "请输入不小于 1 的整数，留空表示不限",
+          "days": "请输入 1 到 3650 之间的整数天数"
+        }
+      },
+      "mine": {
+        "title": "我的部门",
+        "sub": "你管理的部门：可在“项目”和“项目组”中管理这些部门的项目和项目组。",
+        "noWorkspace": "暂无——请联系平台管理员"
+      },
+      "invite": {
+        "open": "邀请",
+        "disabled": "本部门不允许部门管理员邀请账号",
+        "title": "邀请加入 {{name}}",
+        "username": "用户名",
+        "email": "邮箱",
+        "project": "项目",
+        "noProject": "本部门还没有活动的项目",
+        "days": "有效期（天，最多 {{max}}）",
+        "daysErr": "请输入 1 到 {{max}} 之间的整数",
+        "submit": "创建账号",
+        "done": "已创建 {{name}} 并加入 {{project}}",
+        "password": "初始密码",
+        "passwordOnce": "仅显示这一次，请通过安全渠道转交。"
+      }
     },
     "network": {
       "nav": "网络配置档",

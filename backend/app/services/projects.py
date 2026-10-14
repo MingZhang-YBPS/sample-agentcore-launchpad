@@ -11,6 +11,12 @@ caller's (the router), like ``services/users.py``.
 
 Ids of projects the caller cannot see answer 404 ``project.not_found`` (design §5.4),
 never 403: a project's existence can itself be sensitive.
+
+A department administrator (§11.1) manages the structure of their department's
+projects without being a member: they see those projects (not their data), create
+them in the workspaces opened to the department, rename / regroup / archive them and
+manage their members and roles. ``core/route_policy.py`` lets them reach the routes;
+the checks that need the body (department, workspaces, settings) are here.
 """
 
 import re
@@ -53,6 +59,9 @@ OWNER_SETTINGS = frozenset({"resource_visibility"})
 # the /v1 project window and the project's own inbound JWT default, design §10.7, are
 # infrastructure decisions like the workspace default they stand in for)
 ADMIN_SETTINGS = OWNER_SETTINGS | {"sod_strict", "quotas", "inbound_auth_default"}
+# …and a department administrator (§11.1) the owner's plus strictness — the /v1
+# window and the inbound JWT default stay platform infrastructure
+DEPARTMENT_SETTINGS = OWNER_SETTINGS | {"sod_strict"}
 # `settings.quotas` keys accepted so far (§11.3 adds the rest with its own route)
 QUOTA_KEYS = frozenset({api_keys_service.PROJECT_RATE_KEY})
 _VISIBILITY = ("shared", "isolated")
@@ -103,13 +112,24 @@ def get_project(db: Session, project_id: str) -> Project:
 
 
 def visible_project(db: Session, identity: Any, project_id: str) -> Project:
-    """The project, when the caller may see it: an administrator always, anyone else
-    only as a member reaching it in some workspace (else 404)."""
+    """The project, when the caller may see it: an administrator always, a department
+    administrator their department's (§11.1), anyone else only as a member reaching
+    it in some workspace (else 404)."""
     if not access.has_data_bypass(identity):
         snapshot = access.snapshot_for(db, identity)
         if project_id not in snapshot.memberships:
-            raise not_found(project_id)
+            row = db.get(Project, project_id)
+            if row is None or not access.can_manage_structure(
+                    identity, row.department_id, db=db):
+                raise not_found(project_id)
+            return row
     return get_project(db, project_id)
+
+
+def can_manage(db: Session, identity: Any, row: Project) -> bool:
+    """May manage this project's structure: an administrator, or an administrator of
+    the project's department (§11.1)."""
+    return access.can_manage_structure(identity, row.department_id, db=db)
 
 
 def caller_permissions(db: Session, identity: Any, project_id: str) -> list[str]:
@@ -195,7 +215,10 @@ def list_projects(
     query = select(Project).order_by(Project.is_default.desc(), Project.name)
     if not access.has_data_bypass(identity):
         mine = sorted(access.snapshot_for(db, identity).memberships)
-        query = query.where(Project.id.in_(mine))
+        managed = sorted(access.managed_departments(db, identity))
+        # a department administrator also lists their department's projects (§11.1)
+        query = query.where(or_(Project.id.in_(mine), Project.department_id.in_(managed))
+                            if managed else Project.id.in_(mine))
     if department_id:
         query = query.where(Project.department_id == department_id)
     if group_id:
@@ -315,6 +338,52 @@ def _workspace(db: Session, workspace_id: str) -> Workspace:
     return row
 
 
+def _check_department_scope(
+    db: Session, identity: Any, department_id: str | None, group_id: str | None,
+) -> None:
+    """A department administrator's project stays in a department they administer,
+    and its group (if any) is one of that department's (§11.1)."""
+    if not access.can_manage_structure(identity, department_id, db=db):
+        raise AppError("department.not_managed",
+                       "a department administrator works inside their own department — "
+                       "name one you administer",
+                       {"department_id": department_id}, status_code=403)
+    if group_id:
+        group = db.get(ProjectGroup, group_id)
+        if group is None or group.department_id != department_id:
+            raise NotFoundError("group.not_found", f"project group '{group_id}' not found",
+                                {"group_id": group_id})
+
+
+def _check_open_workspaces(db: Session, department_id: str | None, workspaces: list[str]) -> None:
+    """§11.1: a department administrator binds only to the workspaces an administrator
+    opened to the department."""
+    closed = sorted(set(workspaces) - access.open_workspaces(db, department_id))
+    if closed:
+        raise AppError("department.workspace_not_open",
+                       f"workspaces {closed} are not open to department '{department_id}'",
+                       {"department_id": department_id, "workspaces": closed}, status_code=403)
+
+
+def _check_project_limit(db: Session, department_id: str | None) -> None:
+    """The department's `settings.max_projects` (§11.1), counting every project that
+    is not a tombstone."""
+    from app.services.project_groups import department_settings
+
+    department = db.get(Department, department_id) if department_id else None
+    limit = department_settings(department)["max_projects"] if department else None
+    if limit is None:
+        return
+    count = db.execute(select(func.count()).select_from(Project).where(
+        Project.department_id == department_id, Project.status != "deleted",
+    )).scalar_one()
+    if count >= int(limit):
+        raise AppError("department.project_limit",
+                       f"department '{department_id}' already has {count} of its "
+                       f"{limit} projects", {"department_id": department_id, "limit": limit},
+                       status_code=409)
+
+
 def create_project(
     db: Session, identity: Any, *, project_id: str, name: str, description: str = "",
     department_id: str | None = None, group_id: str | None = None,
@@ -332,7 +401,12 @@ def create_project(
     if not workspaces:
         raise AppError("project.workspaces_required", "bind the project to at least one workspace")
     _check_org(db, department_id, group_id)
-    clean = _check_settings(settings or {}, ADMIN_SETTINGS)
+    platform = access.can_manage_structure(identity)
+    if not platform:
+        _check_department_scope(db, identity, department_id or None, group_id or None)
+        _check_open_workspaces(db, department_id, workspaces)
+        _check_project_limit(db, department_id)
+    clean = _check_settings(settings or {}, ADMIN_SETTINGS if platform else DEPARTMENT_SETTINGS)
     for ws in workspaces:
         _workspace(db, ws)
     row = Project(
@@ -362,16 +436,23 @@ def create_project(
 def update_project(
     db: Session, identity: Any, row: Project, fields: dict[str, Any],
 ) -> Project:
-    """Name / department / group are structure (administrators); description and the
-    owner-editable settings are the project's own (`project.members`)."""
+    """Name / department / group are structure (administrators, and the department's
+    administrators inside their department); description and the owner-editable
+    settings are the project's own (`project.members`)."""
     structure = access.can_manage_structure(identity)
+    department = not structure and can_manage(db, identity, row)
     admin_fields = {"name", "department_id", "group_id"} & set(fields)
-    if admin_fields and not structure:
+    if admin_fields and not (structure or department):
         raise AppError("auth.forbidden",
                        f"only an administrator may change {sorted(admin_fields)}",
                        {"fields": sorted(admin_fields)}, status_code=403)
     if "department_id" in fields or "group_id" in fields:
         _check_org(db, fields.get("department_id"), fields.get("group_id"))
+        if department:
+            _check_department_scope(
+                db, identity, fields.get("department_id", row.department_id) or None,
+                fields.get("group_id") or None,  # a group named now: the department's
+            )
     changed: list[str] = []
     for key in ("name", "description", "department_id"):
         if key in fields and getattr(row, key) != fields[key]:
@@ -386,7 +467,7 @@ def update_project(
         changed.append("group_id")
     if "settings" in fields and fields["settings"] is not None:
         clean = _check_settings(fields["settings"], ADMIN_SETTINGS if structure
-                                else OWNER_SETTINGS)
+                                else DEPARTMENT_SETTINGS if department else OWNER_SETTINGS)
         merged = _merge_settings(row.settings or {}, clean)
         if merged != (row.settings or {}):
             row.settings = merged or None
@@ -590,6 +671,15 @@ def update_bindings(
     (agents, runs, keys…) — the same protection a workspace detach has — and for the
     workspace-default binding (another project must become the default first)."""
     _refuse_past_archived(row)
+    if not access.can_manage_structure(identity):
+        # a department administrator (§11.1): only the department's open workspaces,
+        # and never a workspace's default project — that is the whole workspace's
+        new = [ws for ws in bind if ws not in {b.workspace_id for b in _bindings(db, row.id)}]
+        _check_open_workspaces(db, row.department_id, new)
+        if make_default:
+            raise AppError("auth.forbidden", "only an administrator may change a workspace's "
+                           "default project", {"workspaces": sorted(set(make_default))},
+                           status_code=403)
     if set(bind) & set(unbind):
         raise AppError("project.binding_conflict", "a workspace cannot be bound and unbound "
                        "in one request", {"workspaces": sorted(set(bind) & set(unbind))})
@@ -809,13 +899,18 @@ def enforce_sod(db: Session, row: Project, user_ids: set[str] | None = None) -> 
         )
 
 
-def _refuse_self(identity: Any, user_ids: set[str]) -> None:
+def _refuse_self(db: Session, identity: Any, row: Project, user_ids: set[str]) -> bool:
     """Design §3.6 / D-22: nobody but an administrator edits their own membership —
-    an owner could otherwise hand themselves the sign / approve keys."""
+    an owner could otherwise hand themselves the sign / approve keys. A department
+    administrator may (§11.1: that is how they get data access); True tells the caller
+    to journal it as such."""
     me = getattr(identity, "user_id", None)
-    if me and me in user_ids and not access.can_manage_structure(identity):
-        raise AppError("project.self_membership", "you cannot change your own membership",
-                       {"user_id": me}, status_code=403)
+    if not me or me not in user_ids or access.can_manage_structure(identity):
+        return False
+    if can_manage(db, identity, row):
+        return True
+    raise AppError("project.self_membership", "you cannot change your own membership",
+                   {"user_id": me}, status_code=403)
 
 
 def upsert_members(
@@ -825,8 +920,7 @@ def upsert_members(
     """Add / update direct members and remove direct rows. Group-sourced access is
     managed on the group; removing someone with no direct row is a 404."""
     targets = {u["user_id"] for u in upsert} | set(remove)
-    if check_self:
-        _refuse_self(identity, targets)
+    self_edit = _refuse_self(db, identity, row, targets) if check_self else False
     if {u["user_id"] for u in upsert} & set(remove):
         raise AppError("project.member_conflict", "a user cannot be upserted and removed "
                        "in one request")
@@ -865,6 +959,13 @@ def upsert_members(
         result["removed"].append(uid)
         _journal(db, identity, "project.members.remove",
                  f"project:{row.id} user:{user.username if user else uid}")
+    if self_edit and any(getattr(identity, "user_id", None) in ids for ids in result.values()):
+        # a department administrator giving themselves data access: its own journal
+        # line, so the project's owners can see it in the audit view (§11.1)
+        role = next((u["role_key"] for u in upsert if u["user_id"] == identity.user_id), "-")
+        _journal(db, identity, "department.admins.self_membership",
+                 f"department:{row.department_id} project:{row.id} user:{identity.username}"
+                 f" role:{role}")
     if any(result.values()):
         db.flush()
         enforce_sod(db, row, set(result["added"]) | set(result["updated"]))
@@ -1168,5 +1269,18 @@ def access_view(db: Session, identity: Any) -> dict[str, Any]:
         "username": identity.username, "user_id": getattr(identity, "user_id", None),
         "role": identity.role, "is_admin": bypass,
         "can_manage_structure": access.can_manage_structure(identity),
+        # §11.1: what the console shows a department administrator (their department's
+        # projects and groups, and where they may bind)
+        "managed_departments": _managed_view(db, identity),
         "workspaces": out,
     }
+
+
+def _managed_view(db: Session, identity: Any) -> list[dict[str, Any]]:
+    ids = sorted(access.managed_departments(db, identity))
+    rows = {d.id: d for d in db.scalars(select(Department).where(Department.id.in_(ids)))}
+    return [
+        {"id": did, "name": rows[did].name if did in rows else did,
+         "workspaces": sorted(access.open_workspaces(db, did))}
+        for did in ids
+    ]

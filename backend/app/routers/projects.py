@@ -3,7 +3,8 @@
 Hub-global: a project spans workspaces, so nothing here reads `X-Workspace` or
 `X-Project` — the project is the one named in the path. Who may do what is in
 `core/route_policy.py` (`ADMIN` for structure, `pperm:project.members` for the
-project's own members and roles, checked against the path's project); the
+project's own members and roles, checked against the path's project; a department
+administrator passes both for their department's projects, §11.1); the
 membership-checked reads answer 404 to non-members here (`visible_project`).
 The logic lives in `services/projects.py`; this module is request shapes only.
 """
@@ -80,7 +81,9 @@ class TransferBody(BaseModel):
 
 def _detail(db: Session, identity: Any, row: Any) -> dict[str, Any]:
     return {**svc.project_view(db, row),
-            "my_permissions": svc.caller_permissions(db, identity, row.id)}
+            "my_permissions": svc.caller_permissions(db, identity, row.id),
+            # an administrator, or one of the project's department's (§11.1)
+            "can_manage": svc.can_manage(db, identity, row)}
 
 
 # ── the caller's access, templates ────────────────────────────────────────────

@@ -39,6 +39,33 @@ class Department(Base):
     created_by: Mapped[str | None] = mapped_column(String(32), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # §11.1: {can_create_users, max_projects, user_validity_max_days}; None = defaults
+    settings: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+
+
+class DepartmentAdmin(Base):
+    """A department administrator (design §11.1): manages the structure of the
+    department's projects and groups. Grants no data access by itself."""
+
+    __tablename__ = "department_admins"
+    __table_args__ = (Index("ix_department_admins_user", "user_id"),)
+
+    department_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    added_by: Mapped[str | None] = mapped_column(String(32), default=None)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class DepartmentWorkspace(Base):
+    """A workspace a platform administrator opened to a department: its department
+    administrators may bind the department's projects there, and nowhere else."""
+
+    __tablename__ = "department_workspaces"
+
+    department_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    added_by: Mapped[str | None] = mapped_column(String(32), default=None)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Project(Base):

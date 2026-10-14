@@ -1166,6 +1166,9 @@ def enforce_route_policy(request: Request) -> None:
             "(app/core/route_policy.py) — classify it before serving it.",
             status_code=500,
         )
+    if (role == ADMIN or role.startswith(PPERM_PREFIX)) and department_admin_passes(
+            request, path_format):
+        return  # §11.1: a department administrator, inside their department (hub-global)
     if role == ADMIN:
         require_admin(request)
     if is_workspace_scoped(request.method, path_format):
@@ -1465,3 +1468,118 @@ PROJECT_LIFECYCLE_ROUTES: dict[tuple[str, str], str] = {
 }
 ROUTE_POLICY.update(PROJECT_LIFECYCLE_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_LIFECYCLE_ROUTES)
+
+
+# ---- department administrators (projects design §11.1, G11-dept) ----
+# The design's `dadmin` policy, kept as an overlay so each route's entry above stays
+# what everyone else needs (ADMIN, or `pperm:project.members` — "dadmin or the
+# existing policy"): an administrator passes as before; a department administrator
+# passes when the route's target belongs to a department they administer. The value
+# says where the target's department is read:
+#   project     — the path's `{project_id}` (projects.department_id)
+#   group       — the path's `{group_id}` (project_groups.department_id)
+#   department  — the path's `{department_id}`
+#   query       — the `department_id` query parameter (a list filtered to it)
+#   any         — the body names it: the caller administers some department, and the
+#                 handler checks the body's (`services/projects.create_project`,
+#                 `services/project_groups.create_group`)
+# Another department's project or group answers 404 (its existence is not theirs to
+# learn); a caller who administers no department meets the route's own entry.
+# Appointing department administrators and opening workspaces stay ADMIN.
+DEPARTMENT_ADMIN_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/projects"): "any",
+    ("PATCH", "/api/projects/{project_id}"): "project",
+    ("POST", "/api/projects/{project_id}/archive"): "project",
+    ("POST", "/api/projects/{project_id}/unarchive"): "project",
+    ("PUT", "/api/projects/{project_id}/workspaces"): "project",  # open workspaces only
+    ("PUT", "/api/projects/{project_id}/members"): "project",
+    ("DELETE", "/api/projects/{project_id}/members/{user_id}"): "project",
+    ("GET", "/api/projects/{project_id}/candidates"): "project",
+    ("PUT", "/api/projects/{project_id}/roles/{role_key}"): "project",
+    ("DELETE", "/api/projects/{project_id}/roles/{role_key}"): "project",
+    ("GET", "/api/project-groups"): "query",
+    ("POST", "/api/project-groups"): "any",
+    ("GET", "/api/project-groups/{group_id}"): "group",
+    ("PATCH", "/api/project-groups/{group_id}"): "group",
+    ("DELETE", "/api/project-groups/{group_id}"): "group",
+    ("POST", "/api/project-groups/{group_id}/unarchive"): "group",
+    ("PUT", "/api/project-groups/{group_id}/members"): "group",
+    ("PUT", "/api/project-groups/{group_id}/projects"): "group",  # the department's projects
+    ("POST", "/api/departments/{department_id}/invitations"): "department",
+}
+DEPARTMENT_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/departments/{department_id}/admins"): ADMIN,
+    ("PUT", "/api/departments/{department_id}/admins"): ADMIN,
+    ("GET", "/api/departments/{department_id}/workspaces"): ADMIN,
+    ("PUT", "/api/departments/{department_id}/workspaces"): ADMIN,
+    # + `settings.can_create_users` for a department administrator (in the handler)
+    ("POST", "/api/departments/{department_id}/invitations"): ADMIN,
+}
+ROUTE_POLICY.update(DEPARTMENT_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(DEPARTMENT_ROUTES)
+
+
+def department_admin_passes(request: Request, path_format: str) -> bool:
+    """The `dadmin` overlay: True when a department administrator may call this route
+    on this target; False to fall through to the route's own entry; 404 for another
+    department's project or group."""
+    lookup = "GET" if request.method == "HEAD" else request.method
+    where = DEPARTMENT_ADMIN_ROUTES.get((lookup, path_format))
+    if where is None:
+        return False
+    identity = require_identity(request)
+    if identity.is_admin or not getattr(identity, "user_id", None):
+        return False  # an administrator meets ADMIN / pperm as before
+    from app.core.db import SessionLocal
+    from app.core.errors import NotFoundError
+    from app.core.project_scope import project_context
+    from app.services import access
+
+    params = request.path_params
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            managed = access.managed_departments(db, identity)
+            if not managed:
+                return False
+            status = None
+            if where == "project":
+                found = db.execute(
+                    text("SELECT department_id, status FROM projects WHERE id = :p"),
+                    {"p": str(params.get("project_id") or "")},
+                ).first()
+                target, status = (found[0], found[1]) if found else (None, None)
+            elif where == "group":
+                target = db.execute(
+                    text("SELECT department_id FROM project_groups WHERE id = :g"),
+                    {"g": str(params.get("group_id") or "")},
+                ).scalar()
+            elif where == "department":
+                target = str(params.get("department_id") or "")
+            elif where == "query":
+                target = request.query_params.get("department_id") or None
+            else:  # any
+                return True
+    finally:
+        db.close()
+    if target in managed:
+        if (where == "project" and status not in (None, "active")
+                and request.method not in access.READ_METHODS
+                and not path_format.endswith(("/archive", "/unarchive"))):
+            raise AppError("project.archived",
+                           f"project '{params.get('project_id')}' is archived",
+                           {"project_id": params.get("project_id")}, status_code=409)
+        return True
+    if where == "project":
+        # a member with the key still passes `pperm:` for a project outside the
+        # department; for anyone else another department's project does not exist
+        if ROUTE_POLICY[(lookup, path_format)].startswith(PPERM_PREFIX):
+            return False
+        pid = str(params.get("project_id") or "")
+        raise NotFoundError("project.not_found", f"project '{pid}' not found",
+                            {"project_id": pid})
+    if where == "group":
+        gid = str(params.get("group_id") or "")
+        raise NotFoundError("group.not_found", f"project group '{gid}' not found",
+                            {"group_id": gid})
+    return False

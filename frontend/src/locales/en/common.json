@@ -12595,7 +12595,7 @@
       "nav": "Departments",
       "eyebrow": "Structure · departments",
       "title": "Departments",
-      "sub": "Departments label projects and project groups and group the project switcher. Phase 1 has a name and a description only.",
+      "sub": "Departments label projects and project groups and group the project switcher. Each one can have its own administrators, who manage its projects and groups in the workspaces opened to it.",
       "create": "New department",
       "delete": "Delete",
       "empty": "No department",
@@ -12604,7 +12604,8 @@
       "col": {
         "department": "Department",
         "projects": "Projects",
-        "groups": "Groups"
+        "groups": "Groups",
+        "workspaces": "Open workspaces"
       },
       "form": {
         "createTitle": "New department",
@@ -12618,7 +12619,68 @@
       "archiveTitle": "Archive {{name}}?",
       "archiveBody": "{{name}} is hidden from new choices; projects and groups that name it keep it.",
       "deleteTitle": "Delete {{name}}?",
-      "deleteBody": "{{name}} is removed for good. No project or group names it."
+      "deleteBody": "{{name}} is removed for good. No project or group names it.",
+      "manage": "Administrators & workspaces",
+      "detail": {
+        "title": "Department {{name}}",
+        "close": "Close"
+      },
+      "tab": {
+        "admins": "Administrators",
+        "workspaces": "Open workspaces",
+        "settings": "Settings"
+      },
+      "admins": {
+        "hint": "Department administrators create the department's projects, manage their members, roles and groups, and bind them to the open workspaces. They see no project data unless they add themselves as a member — that is journaled.",
+        "empty": "No department administrator",
+        "add": "Add an administrator",
+        "remove": "Remove",
+        "added": "{{name}} now administers this department",
+        "removed": "{{name}} no longer administers this department"
+      },
+      "workspaces": {
+        "hint": "The department's administrators may bind its projects to these workspaces only. Closing one keeps the bindings already made.",
+        "empty": "No workspace is open to this department",
+        "open": "Open a workspace",
+        "choose": "Choose a workspace",
+        "openSubmit": "Open",
+        "close": "Close to the department",
+        "opened": "Workspace {{name}} opened",
+        "closed": "Workspace {{name}} closed"
+      },
+      "settings": {
+        "canCreateUsers": "Department administrators may invite new accounts",
+        "canCreateUsersHint": "An invited account is a member, valid for a limited time, and starts in one of the department's projects.",
+        "validityDays": "Longest validity of an invited account (days)",
+        "maxProjects": "Most projects the department may have",
+        "noCap": "no cap",
+        "save": "Save settings",
+        "saved": "Settings of {{name}} saved",
+        "err": {
+          "count": "A whole number from 1, or empty for no cap",
+          "days": "A whole number of days from 1 to 3650"
+        }
+      },
+      "mine": {
+        "title": "My departments",
+        "sub": "The departments you administer: their projects and groups are yours to manage under Projects and Project groups.",
+        "noWorkspace": "none yet — ask an administrator"
+      },
+      "invite": {
+        "open": "Invite",
+        "disabled": "This department does not let its administrators invite accounts",
+        "title": "Invite into {{name}}",
+        "username": "Username",
+        "email": "Email",
+        "project": "Project",
+        "noProject": "The department has no active project yet",
+        "days": "Valid for (days, at most {{max}})",
+        "daysErr": "A whole number from 1 to {{max}}",
+        "submit": "Create the account",
+        "done": "{{name}} was created and added to {{project}}",
+        "password": "Initial password",
+        "passwordOnce": "Shown only now — pass it on securely."
+      }
     },
     "network": {
       "nav": "Network profiles",
