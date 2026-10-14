@@ -1,7 +1,11 @@
 """API key management — keys are stored as sha256 hashes, never plaintext.
 
-A key records the console principal that minted it; once that account is
-offboarded the key is disabled and cannot be re-enabled (`services.api_keys`).
+A key records the console principal that minted it and the project it was
+minted in (the request's current project, design projects §5.7); every route
+here runs inside that project, so the list, the toggles and the usage only ever
+see its keys — another project's key id reads as missing. Once the creator is
+offboarded (or leaves the project) the key is disabled and cannot be re-enabled
+(`services.api_keys`).
 """
 
 import hashlib
@@ -16,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project
 from app.models.ledger import Agent, ApiKey
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
@@ -60,6 +65,8 @@ def _key_out(key: ApiKey, offboarded: str | None = None) -> dict[str, Any]:
         "id": key.id,
         "name": key.name,
         "prefix": key.prefix,
+        # the project the key runs as on /v1 (design projects §5.7)
+        "project_id": key.project_id,
         "enabled": key.enabled,
         "created_at": key.created_at.isoformat() if key.created_at else None,
         # NULL on keys minted before creators were recorded — "unknown".
@@ -147,19 +154,27 @@ def list_keys(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    # the current project's keys only: the automatic criteria already confine the
+    # query, the explicit term keeps it so should the route ever lose its project
+    pid = current_project()
     keys = (
         db.query(ApiKey)
-        .filter(ApiKey.workspace_id == ws.id, _own_clause(viewer))
+        .filter(
+            ApiKey.workspace_id == ws.id,
+            ApiKey.project_id == pid if pid is not None else true(),
+            _own_clause(viewer),
+        )
         .order_by(ApiKey.created_at.desc())
         .all()
     )
-    # one predicate evaluation per creator (the list is a single workspace's)
-    reasons: dict[str | None, str | None] = {}
+    # one predicate evaluation per creator (the list is one project's in one workspace)
+    reasons: dict[tuple[str | None, str | None], str | None] = {}
     out = []
     for key in keys:
-        if key.created_by not in reasons:
-            reasons[key.created_by] = api_keys_service.creator_offboarded(db, key)
-        out.append(_key_out(key, reasons[key.created_by]))
+        slot = (key.created_by, key.project_id)
+        if slot not in reasons:
+            reasons[slot] = api_keys_service.creator_offboarded(db, key)
+        out.append(_key_out(key, reasons[slot]))
     return {"keys": out}
 
 
@@ -176,9 +191,11 @@ def create_key(
     # The key's workspace is what scopes it on /v1 — a key minted here reaches
     # this environment's agents only. Its creator is what keeps it alive: the
     # `users.id` when the principal has a row (the config admin and the
-    # auth-disabled operator do not, so their keys are never offboarded).
+    # auth-disabled operator do not, so their keys are never offboarded). Its
+    # project is the request's: /v1 runs every call of the key as that project.
     key = ApiKey(
         workspace_id=ws.id,
+        project_id=current_project(),
         name=req.name,
         prefix=raw[:12] + "…",
         key_hash=hash_key(raw),
@@ -221,7 +238,8 @@ def enable_key(
         # was offboarded — /v1 would refuse (and re-disable) it on first use.
         raise AppError(
             "apikey.creator_offboarded",
-            "this key's creator no longer has access to this workspace; mint a new key",
+            "this key's creator no longer has access to its project in this workspace "
+            "(or the project is archived); mint a new key",
             {"reason": reason},
             status_code=409,
         )

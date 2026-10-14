@@ -766,8 +766,9 @@ def apply_patch(
                 "account an administrator first",
                 status_code=409,
             )
-    # A disable, a lapsed expiry, a demotion or a revoked grant can each offboard
-    # the account from keys it minted; same transaction as the change itself.
+    # A disable, a lapsed expiry, a demotion or a revoked grant (and with it the
+    # default project's `inherit` membership) can each offboard the account from
+    # keys it minted; same transaction as the change itself.
     _disable_offboarded_api_keys(db, user.id)
     db.commit()
     db.refresh(user)
@@ -779,6 +780,8 @@ def _signable_admin(user: User) -> bool:
 
 
 def _disable_offboarded_api_keys(db: Session, user_id: str) -> None:
+    # Every project's keys of this account (design projects §5.7): the predicate
+    # reads the pending membership rows, so call it after the write it follows.
     # Imported here: services.api_keys reads this module's account-state helpers.
     from app.services import api_keys as api_keys_service
 

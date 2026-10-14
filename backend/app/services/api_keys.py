@@ -13,9 +13,11 @@ Design notes (T16):
 
 Lifecycle:
 
-A key carries its creator (`ApiKey.created_by`, a `users.id`). Once that account
-is offboarded the key stops working — `creator_offboarded` is the ONE definition
-of "offboarded", used in three places:
+A key carries its creator (`ApiKey.created_by`, a `users.id`) and its project
+(`ApiKey.project_id`, stamped at mint from the console's current project; design
+projects §5.7). Once that account is offboarded — or the key's project is archived
+or no longer bound to the key's workspace — the key stops working.
+`creator_offboarded` is the ONE definition of "offboarded", used in three places:
 
 * `/v1` auth (`routers.public_api.require_api_key`) refuses the key with the same
   401 as any unusable key and flips it to disabled in that request;
@@ -25,7 +27,8 @@ of "offboarded", used in three places:
 Offboarding has several paths and one of them never writes: account expiry is
 checked lazily per request, nothing fires when `expires_at` passes. So the check
 at use is what guarantees the rule; the explicit write paths (admin disable /
-delete, grant removal) additionally call `disable_offboarded_keys` so the console
+delete, grant removal, a project membership removed) additionally call
+`disable_offboarded_keys` / `disable_offboarded_keys_in_project` so the console
 shows those keys disabled at once. Keys are only ever disabled here, never
 deleted, and a key whose creator has no `users` row (the config admin, the
 auth-disabled operator, or a legacy NULL creator) is never offboarded.
@@ -36,10 +39,11 @@ import time
 from collections import deque
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
+from app.core.project_scope import project_context
 from app.models.ledger import ApiKey, ApiKeyUsage, User, UserWorkspace
 from app.services import users as users_service
 
@@ -70,7 +74,9 @@ def is_expired(key: ApiKey, now: datetime | None = None) -> bool:
 
 
 def allows_agent(key: ApiKey, agent_id: str) -> bool:
-    """Empty/NULL scope means every agent in the key's workspace (legacy keys)."""
+    """Empty/NULL scope means every agent of the key's project in its workspace
+    (legacy keys); /v1 runs as the key's project, so other projects' agents never
+    reach this check."""
     return not key.agent_ids or agent_id in key.agent_ids
 
 
@@ -137,18 +143,30 @@ REASON_DELETED = "deleted"
 REASON_DISABLED = "disabled"
 REASON_EXPIRED = "expired"
 REASON_NO_GRANT = "no_workspace_grant"
+# projects §5.7: the creator still reaches the workspace, but not the key's project
+REASON_NO_PROJECT = "not_a_project_member"
+# §11.5: an archived project's keys are disabled (un-archiving does not revive them)
+REASON_PROJECT_ARCHIVED = "project_archived"
+# the key's project is gone or no longer bound to the key's workspace
+REASON_PROJECT_UNBOUND = "project_unbound"
 
 
 def creator_offboarded(
     db: Session, key: ApiKey, now: datetime | None = None
 ) -> str | None:
-    """Why this key's creator may no longer hold it, or None.
+    """Why this key may no longer be used, or None.
 
-    Mirrors what the creator's own console session would be refused for: a
-    missing, non-active or expired account, or — for a member — no grant to the
-    key's workspace. Admins reach every workspace by role, so for them only the
-    account state counts.
+    First the key's project, whoever minted it: it must still be active and bound
+    to the key's workspace. Then the creator, mirroring what their own console
+    session would be refused for: a missing, non-active or expired account, or —
+    for a member — no membership of the key's project reaching this workspace
+    (direct or through its group; the default project's `inherit` row follows the
+    workspace grant, so a single-project console keeps the grant rule). Admins
+    reach every project by role, so for them only the account state counts.
     """
+    project_reason = _project_refusal(db, key)
+    if project_reason is not None:
+        return project_reason
     if key.created_by is None:
         return None
     user = db.get(User, key.created_by)
@@ -158,9 +176,66 @@ def creator_offboarded(
         return REASON_DISABLED
     if users_service.is_expired(user, now):
         return REASON_EXPIRED
-    if user.role != "admin" and not _granted(db, user.id, key.workspace_id):
-        return REASON_NO_GRANT
+    if user.role == "admin":
+        return None
+    if key.project_id is None:
+        # not stamped yet (an unmigrated row): the pre-projects workspace rule
+        return None if _granted(db, user.id, key.workspace_id) else REASON_NO_GRANT
+    return _membership_refusal(db, user, key)
+
+
+def _project_refusal(db: Session, key: ApiKey) -> str | None:
+    if key.project_id is None:
+        return None
+    row = db.execute(
+        text(
+            "SELECT p.status FROM projects p JOIN project_workspaces pw"
+            " ON pw.project_id = p.id AND pw.workspace_id = :ws WHERE p.id = :p"
+        ),
+        {"p": key.project_id, "ws": key.workspace_id or ""},
+    ).first()
+    if row is None:
+        return REASON_PROJECT_UNBOUND
+    if row[0] != "active":
+        return REASON_PROJECT_ARCHIVED
     return None
+
+
+def _membership_refusal(db: Session, user: User, key: ApiKey) -> str | None:
+    """Memberships are read straight from the session, never from the access cache:
+    a write path's pending membership change is not committed (the cache must not
+    hold an uncommitted view), and a workspace grant change does not move the
+    access epoch when the default project's `inherit` row stays (another granted
+    workspace shares it) — the cached snapshot would still reach the workspace."""
+    from app.services import access
+
+    with project_context(None):  # access tables are not project-owned anyway
+        snapshot = access._load_snapshot(db, user.id, user.role, user.permissions)
+    membership = snapshot.memberships.get(key.project_id or "")
+    if membership is not None and key.workspace_id in membership.workspaces:
+        return None
+    granted = _granted(db, user.id, key.workspace_id)
+    if granted and _is_workspace_default(db, key.project_id, key.workspace_id):
+        # A direct grant IS the workspace default project's `inherit` membership
+        # (design §8.5 keeps the row in step with the grant); an account whose row
+        # was never written — an admin demoted outside the console, a pre-projects
+        # account — keeps its keys there, as before projects.
+        return None
+    reaches_workspace = granted or bool(snapshot.reachable(key.workspace_id or ""))
+    return REASON_NO_PROJECT if reaches_workspace else REASON_NO_GRANT
+
+
+def _is_workspace_default(db: Session, project_id: str | None, workspace_id: str | None) -> bool:
+    return (
+        db.execute(
+            text(
+                "SELECT 1 FROM project_workspaces WHERE project_id = :p AND workspace_id = :ws"
+                " AND is_workspace_default = 1"
+            ),
+            {"p": project_id or "", "ws": workspace_id or ""},
+        ).first()
+        is not None
+    )
 
 
 def _granted(db: Session, user_id: str, workspace_id: str | None) -> bool:
@@ -177,20 +252,41 @@ def _granted(db: Session, user_id: str, workspace_id: str | None) -> bool:
     )
 
 
-def disable_offboarded_keys(db: Session, user_id: str) -> int:
-    """Disable every enabled key `user_id` minted that `creator_offboarded` now
-    refuses. Staged on the session (flushed first, so pending grant/status
-    changes are what the predicate sees); the caller commits."""
-    db.flush()
-    keys = db.scalars(
-        select(ApiKey).where(ApiKey.created_by == user_id, ApiKey.enabled.is_(True))
-    ).all()
+def _disable_refused(db: Session, keys: list[ApiKey]) -> int:
     disabled = 0
     for key in keys:
         if creator_offboarded(db, key) is not None:
             key.enabled = False
             disabled += 1
     return disabled
+
+
+def disable_offboarded_keys(db: Session, user_id: str) -> int:
+    """Disable every enabled key `user_id` minted that `creator_offboarded` now
+    refuses — in every project. Staged on the session (flushed first, so pending
+    grant/status/membership changes are what the predicate sees); the caller
+    commits."""
+    db.flush()
+    with project_context(None):  # the user's keys in every project
+        keys = db.scalars(
+            select(ApiKey).where(ApiKey.created_by == user_id, ApiKey.enabled.is_(True))
+        ).all()
+        return _disable_refused(db, list(keys))
+
+
+def disable_offboarded_keys_in_project(db: Session, project_id: str) -> int:
+    """Disable every enabled key of `project_id` that `creator_offboarded` now refuses.
+
+    For the project-side write paths — a member or a group removed, a project
+    moved out of a group, archived or unbound from a workspace — where the affected
+    creators are not known one by one. Same staging contract as
+    `disable_offboarded_keys`."""
+    db.flush()
+    with project_context(None):
+        keys = db.scalars(
+            select(ApiKey).where(ApiKey.project_id == project_id, ApiKey.enabled.is_(True))
+        ).all()
+        return _disable_refused(db, list(keys))
 
 
 def touch_last_used(key: ApiKey, now: datetime | None = None) -> bool:
