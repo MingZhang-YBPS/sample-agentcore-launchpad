@@ -36,6 +36,7 @@ import { GLOSSARY_TERMS } from "../v2/Glossary";
 import { ModuleDemoProvider } from "../v2/pages/videos/ModuleDemo";
 import { V2ToastProvider } from "../v2/ui";
 import { useWorkspace } from "../workspace/workspace-context";
+import { v2CounterpartOf } from "./backToV2";
 import { ChangePasswordDialog } from "./ChangePassword";
 import { type Command, CommandPalette } from "./CommandPalette";
 import { ToastProvider } from "./ui";
@@ -180,16 +181,11 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   }, []);
 
   // A hosted page has the same URL in V2, which simply re-renders it in the V2
-  // shell; a native V3 page goes to its V2 counterpart.
+  // shell; a native V3 page goes to its V2 counterpart (same record or tab).
   const backToV2 = () => {
     setUiVersion("v2");
-    const { pathname, search } = location;
-    if (!pathname.startsWith("/v3")) return;
-    const id = new URLSearchParams(search).get("id");
-    if (pathname === "/v3/chat") navigate(`/v2/chat${search}`);
-    else if (pathname === "/v3/agents") navigate(id ? `/v2/agents?view=detail&id=${encodeURIComponent(id)}` : "/v2/agents");
-    else if (pathname === "/v3/gate") navigate("/v2/eval/standards");
-    else navigate("/v2");
+    const to = v2CounterpartOf(location.pathname, location.search);
+    if (to) navigate(to);
   };
 
   // business mode shows the build → run essentials; expert shows every module.
