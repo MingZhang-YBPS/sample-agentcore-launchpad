@@ -206,6 +206,7 @@ def notify(rule: AlertRule, value: float, detail: str, workspace_id: str) -> str
         {
             "text": text,
             "workspace_id": workspace_id,
+            "project_id": rule.project_id,
             "rule_id": rule.id,
             "kind": rule.kind,
             "value": value,
@@ -237,9 +238,15 @@ def evaluate_rules(
     ).all()
     now = datetime.now(UTC)
     evaluated: list[dict[str, Any]] = []
+    inactive = _inactive_projects(db, {r.project_id for r in rules if r.project_id})
     for rule in rules:
         if not rule.enabled:
             evaluated.append(rule_out(rule, skipped="disabled"))
+            continue
+        if rule.project_id in inactive:
+            # an archived project serves reads only (design §5.12): its rules keep the
+            # state they last saw rather than re-reading (billed) and re-notifying
+            evaluated.append(rule_out(rule, skipped="project_archived"))
             continue
         value, detail = read_value(rule, db, workspace)
         previous = rule.state
@@ -267,6 +274,19 @@ def evaluate_rules(
         "firing": len(firing),
         "unknown": len([row for row in evaluated if row["state"] == STATE_UNKNOWN]),
     }
+
+
+def _inactive_projects(db: Session, project_ids: set[str]) -> set[str]:
+    """Which of these projects are not active (archived, or on their way out)."""
+    if not project_ids:
+        return set()
+    from app.models.projects import Project
+
+    with project_context(None):
+        rows = db.execute(
+            select(Project.id, Project.status).where(Project.id.in_(project_ids))
+        ).all()
+    return {pid for pid, status in rows if status != "active"}
 
 
 def firing_rules(db: Session, workspace_id: str) -> list[AlertRule]:
