@@ -1,4 +1,4 @@
-import { ArrowUp, Plus, ShieldX, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
+import { ArrowUp, Plus, ShieldX, Square, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -13,7 +13,24 @@ import {
   feedbackApi,
   type FeedbackVerdict,
 } from "../../lib/api";
-import { chatEligible, chatErrorText, sseEvents } from "../../lib/chat";
+import {
+  activityLabel,
+  chatEligible,
+  chatErrorText,
+  isHarnessAgent,
+  seconds,
+  sseEvents,
+  STALL_ABORT_MS,
+  TOOL_RUN_GLYPH,
+  type ToolRun,
+  toolRunById,
+  toolRunLabel,
+  turnActivity,
+  turnElapsedMs,
+  type TurnStatus,
+  turnStopReason,
+  useChatTurn,
+} from "../../lib/chat";
 import { useStickToBottom } from "../../lib/useStickToBottom";
 import { livePolicyDeny, type PolicyDeny, policyDenyHref, restoredPolicyDeny } from "../../lib/policy-deny";
 import { useAuth } from "../../auth/auth-context";
@@ -25,6 +42,11 @@ import { Btn, Empty, Lamp, Notice, Skeleton } from "../ui";
 import { useLoad, useToast } from "../hooks";
 import { ago } from "../format";
 import "./chat.css";
+import "./chatStatus.css";
+
+/** A thread item; a tool row of a live turn carries its run (status, duration),
+ *  tagged with the turn it belongs to. `note`: a neutral notice (the user stopped). */
+type Msg = ChatMessage & { run?: ToolRun; turn?: number; note?: boolean };
 
 /**
  * Chat, rebuilt around the conversation. The same SSE invoke chain as V2 and the
@@ -74,11 +96,14 @@ export function V3Chat() {
   const agent = eligible.find((a) => a.id === agentId);
   const [sessionId, setSessionId] = useState<string | undefined>(params.get("session") ?? undefined);
   const [sessions, setSessions] = useState<ChatSessionInfo[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [needsV2, setNeedsV2] = useState(false);
+  // chat-streaming S2: what the running turn is doing, its timer and its stop
+  const turn = useChatTurn();
+  const turnSeq = useRef(0);
   // follows the stream only while the reader is at the bottom
   const thread = useStickToBottom();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -153,20 +178,31 @@ export function V3Chat() {
     let failed = false;
     let completed = false;
     let active = sessionId;
+    const signal = turn.begin();
+    const key = ++turnSeq.current;
+    // a tool row follows its run in the turn status (ids repeat across turns)
+    const syncRuns = (status: TurnStatus | null) =>
+      setMessages((m) =>
+        m.map((msg) => (msg.turn === key && msg.run ? { ...msg, run: toolRunById(status, msg.run.id) ?? msg.run } : msg)),
+      );
     try {
       const res = await chatApi.stream(agentId, { prompt, session_id: sessionId ?? null });
       if (!res.body) throw new Error(t("v3.chat.interrupted"));
       let openBubble = false;
       let curated = false;
-      for await (const { event, data } of sseEvents(res)) {
-        if (event === "meta" && data.session_id) {
+      for await (const { event, data } of sseEvents(res, { heartbeats: true, signal })) {
+        const status = turn.feed(event, data);
+        if (event === "tool_end") {
+          syncRuns(status);
+        } else if (event === "meta" && data.session_id) {
           active = data.session_id;
           setSessionId(data.session_id);
           setParams({ agent: agentId, session: data.session_id }, { replace: true });
         } else if (event === "rule") {
           curated = true;
         } else if (event === "tool") {
-          setMessages((m) => [...m, { kind: "tool", text: data.name ?? "tool", name: data.name }]);
+          const run = status?.tools[status.tools.length - 1];
+          setMessages((m) => [...m, { kind: "tool", text: data.name ?? "tool", name: data.name, run, turn: key }]);
           openBubble = false;
         } else if (event === "auth_required") {
           // consent cards are V2's for now: say so rather than half-render one
@@ -192,23 +228,46 @@ export function V3Chat() {
           });
         } else if (event === "error") {
           failed = true;
+          syncRuns(status);
           setMessages((m) => [...m, { kind: "error", text: chatErrorText(data, t("v3.chat.failed")) }]);
         } else if (event === "done") {
           completed = true;
+          syncRuns(status);
         }
       }
-      if (!completed && !failed) throw new Error(t("v3.chat.interrupted"));
+      const reason = turnStopReason(signal);
+      if (reason === "stop" && !completed && !failed) {
+        setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped"), note: true }]);
+      } else if (reason === "stalled") {
+        throw new Error(t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }));
+      } else if (!completed && !failed) {
+        throw new Error(t("v3.chat.interrupted"));
+      }
     } catch (err) {
       failed = true;
       setMessages((m) => [...m, { kind: "error", text: errorMessage(err) }]);
     } finally {
       if (failed) setInput(prompt);
+      // a call the stream never ended stopped with the turn
+      if (!completed) syncRuns(turn.feed("error", {}));
+      turn.end();
       setMessages((m) => m.map((msg) => (msg.streaming ? { ...msg, streaming: false } : msg)));
       setBusy(false);
       if (active) void loadSessions(agentId);
       inputRef.current?.focus();
     }
   };
+
+  // Stop: close the stream (the server then stops reading the runtime); a code
+  // runtime's session is stopped too. A Harness has no stop operation — closing
+  // the connection is all there is.
+  const stopTurn = () => {
+    turn.stop("stop");
+    if (agentId && sessionId && !isHarnessAgent(agent)) {
+      void api.stopChatSession(agentId, sessionId).catch(() => undefined);
+    }
+  };
+  const activity = turn.status ? turnActivity(turn.status, turn.now) : null;
 
   const rate = async (index: number, verdict: FeedbackVerdict | "none") => {
     const msg = messages[index];
@@ -293,11 +352,17 @@ export function V3Chat() {
               if (m.kind === "user") return <div key={i} className="v3-msg user"><div className="bubble">{m.text}</div></div>;
               if (m.kind === "tool")
                 return (
-                  <div key={i} className="v3-msg tool">
-                    <Wrench size={12} aria-hidden="true" /> <span className="mono">{m.name ?? m.text}</span>
+                  <div key={i} className="v3-msg tool" data-run={m.run?.status} data-testid="chat-tool">
+                    {m.run ? (
+                      <span className="v3-tool-glyph" aria-hidden="true">{TOOL_RUN_GLYPH[m.run.status]}</span>
+                    ) : (
+                      <Wrench size={12} aria-hidden="true" />
+                    )}{" "}
+                    <span className="mono">{m.name ?? m.text}</span>
+                    {m.run && <span className="v3-tool-state">{toolRunLabel(t, m.run, turn.now)}</span>}
                   </div>
                 );
-              if (m.kind === "error") return <div key={i} className="v3-msg"><Notice s="act">{m.text}</Notice></div>;
+              if (m.kind === "error") return <div key={i} className="v3-msg"><Notice s={m.note ? "wait" : "act"}>{m.text}</Notice></div>;
               if (m.kind === "policy" && m.policy) return <div key={i} className="v3-msg"><PolicyDenied deny={m.policy} /></div>;
               if (m.kind !== "agent") return null;
               return (
@@ -322,6 +387,17 @@ export function V3Chat() {
                 </div>
               );
             })
+          )}
+          {turn.status && activity && (
+            <div className="v3-msg agent v3-working" data-kind={activity.kind} data-testid="chat-working" role="status">
+              <div className="bubble">
+                <span className="v3-working-dot" aria-hidden="true" />
+                <span>{activityLabel(t, activity)}</span>
+                <span className="mono v3-working-time">
+                  {t("v3.chat.status.elapsed", { s: seconds(turnElapsedMs(turn.status, turn.now)) })}
+                </span>
+              </div>
+            </div>
           )}
           {needsV2 && (
             <div className="v3-msg">
@@ -353,9 +429,16 @@ export function V3Chat() {
             disabled={!agent || busy}
             aria-label={t("v3.chat.placeholder", { name: agent?.name ?? "" })}
           />
-          <button type="submit" className="v3-btn primary" disabled={!agent || busy || !input.trim()} aria-label={t("v3.chat.send")}>
-            <ArrowUp size={16} />
-          </button>
+          {busy ? (
+            <button type="button" className="v3-btn" onClick={stopTurn} aria-label={t("v3.chat.status.stop")}
+              title={t("v3.chat.status.stop")} data-testid="chat-stop">
+              <Square size={14} />
+            </button>
+          ) : (
+            <button type="submit" className="v3-btn primary" disabled={!agent || !input.trim()} aria-label={t("v3.chat.send")}>
+              <ArrowUp size={16} />
+            </button>
+          )}
         </form>
       </section>
     </div>

@@ -40,6 +40,7 @@ def chat_stream(
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
     console_user: bool = True,
+    status_events: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
 
@@ -55,6 +56,13 @@ def chat_stream(
     the workspace M2M token or fails with a named error).
     ``console_user=False`` (public /v1) refuses as_user consent asks by name —
     see ``invoke._record_auth_sessions``.
+
+    ``status_events`` (the console chat, chat-streaming §3.1) adds the working-status
+    stream: ``meta.started_at`` and ``tool.started_at`` (epoch ms), ``phase``
+    (``starting`` → ``waiting_model`` → ``streaming``), ``thinking`` (Harness
+    reasoning, status only — never the reasoning text) and ``tool_end``
+    (``{id, status: success|error|denied, duration_ms}``). Off, the stream is
+    exactly what /v1 and the share page document.
     """
     session_id = session_id or new_session_id()
     workspace = workspace if workspace is not None else context_for_workspace(
@@ -82,6 +90,8 @@ def chat_stream(
             "mode": "jwt",
             "caller": "user_jwt" if bearer_token else "m2m",
         }
+    if status_events:
+        meta["started_at"] = _epoch_ms()
     yield {
         "event": "meta",
         "data": meta,
@@ -122,6 +132,7 @@ def chat_stream(
                 workspace,
                 runtime_user_id=runtime_user_id,
                 gateway_access_token=gateway_access_token,
+                thinking=status_events,
             )
         else:
             invoke_kwargs: dict[str, Any] = {}
@@ -145,6 +156,8 @@ def chat_stream(
             )
         if screen:
             source = _withhold_deltas(source, buffered)
+        if status_events:
+            source = _status_events(source, reports_tool_end=harness)
         # withheld deltas never reach the keepalive, so a guardrail turn that streams
         # text upstream but sends nothing down still gets its heartbeats
         yield from with_keepalive(source, started=started)
@@ -197,7 +210,15 @@ def _harness_events(
     *,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    thinking: bool = False,
 ) -> Iterator[dict[str, Any]]:
+    """Map one InvokeHarness stream onto chat events.
+
+    ``thinking`` (status events on): a ``reasoningContent`` delta yields a bare
+    ``thinking`` event — at most one per ``THINKING_THROTTLE_SECONDS`` and never
+    the reasoning text (chat-streaming D-2) — and each finished toolResult yields
+    ``tool_end`` with its status (``denied`` when the Gateway's policy refused it;
+    ``_status_events`` adds the duration)."""
     params: dict[str, Any] = {
         "harnessArn": agent.arn,
         "runtimeSessionId": session_id,
@@ -218,6 +239,7 @@ def _harness_events(
     # index): a Cedar denial only shows up in a result's text (policy_denials)
     tool_names: dict[Any, str] = {}
     results: dict[Any, dict[str, Any]] = {}
+    last_thinking: float | None = None
     with closing(hc.iter_harness_stream(response["stream"])) as events:
         for event in events:
             if "contentBlockStart" in event:
@@ -242,6 +264,11 @@ def _harness_events(
                 delta = block.get("delta", {})
                 if delta.get("text"):
                     yield {"event": "delta", "data": {"text": delta["text"]}}
+                elif thinking and delta.get("reasoningContent"):
+                    now = time.monotonic()
+                    if last_thinking is None or now - last_thinking >= THINKING_THROTTLE_SECONDS:
+                        last_thinking = now
+                        yield {"event": "thinking", "data": {}}
                 pending = results.get(block.get("contentBlockIndex"))
                 if pending is not None and isinstance(delta.get("toolResult"), list):
                     pending["chunks"].extend(
@@ -253,6 +280,81 @@ def _harness_events(
                 denied = _policy_denied(done, tool_names, workspace)
                 if denied is not None:
                     yield {"event": "policy_denied", "data": denied}
+                if thinking and done is not None:
+                    status = (
+                        "denied" if denied is not None
+                        else "error" if done.get("status") == "error" else "success"
+                    )
+                    yield {"event": "tool_end", "data": {"id": done["id"], "status": status}}
+
+
+# chat-streaming §3.1: reasoning deltas arrive token by token; the status line only
+# needs to know reasoning is under way, so ``thinking`` is sent at most this often.
+THINKING_THROTTLE_SECONDS = 0.2
+
+# Events a code runtime's tool call cannot have ended on: its own keep-alive, and
+# usage the stream reports at its very end (after which open tools close anyway).
+_NOT_A_TOOL_END = frozenset({"heartbeat", "thinking", "usage", "tool", "tool_end"})
+
+
+def _epoch_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _status_events(
+    events: Iterator[dict[str, Any]], *, reports_tool_end: bool = False,
+) -> Iterator[dict[str, Any]]:
+    """Add the working-status events (chat-streaming §3.1) to a turn's upstream.
+
+    ``phase``: ``starting`` before the upstream is invoked, ``waiting_model`` on its
+    first event (any, a runtime heartbeat included), ``streaming`` on the first text.
+    ``tool`` gains ``started_at`` (and an id when the runtime sent none, so its end
+    can be matched). A Harness reports each ``tool_end`` itself
+    (``reports_tool_end``); a code runtime does not, so a tool still open is ended —
+    ``success``, timed up to here — by the next event that is not a tool event or
+    keep-alive. Every tool still open when the stream ends is ended the same way."""
+    yield {"event": "phase", "data": {"phase": "starting"}}
+    phase = "starting"
+    started: dict[Any, float] = {}  # open tool id → monotonic start
+    count = 0
+
+    def tool_end(tool_id: Any, status: str = "success") -> dict[str, Any]:
+        begun = started.pop(tool_id, None)
+        duration = None if begun is None else int((time.monotonic() - begun) * 1000)
+        return {"event": "tool_end",
+                "data": {"id": tool_id, "status": status, "duration_ms": duration}}
+
+    try:
+        for event in events:
+            kind = event.get("event")
+            if phase == "starting":
+                phase = "waiting_model"
+                yield {"event": "phase", "data": {"phase": phase}}
+            if kind == "tool":
+                count += 1
+                data = dict(event["data"])
+                data["id"] = data.get("id") or f"tool-{count}"
+                data["started_at"] = _epoch_ms()
+                started[data["id"]] = time.monotonic()
+                yield {"event": "tool", "data": data}
+                continue
+            if kind == "tool_end":
+                yield tool_end(event["data"].get("id"), event["data"].get("status", "success"))
+                continue
+            if not reports_tool_end and kind not in _NOT_A_TOOL_END:
+                for tool_id in list(started):
+                    yield tool_end(tool_id)
+            if kind == "delta" and phase != "streaming":
+                phase = "streaming"
+                yield {"event": "phase", "data": {"phase": phase}}
+            yield event
+        for tool_id in list(started):
+            yield tool_end(tool_id)
+    finally:
+        # closing this wrapper (client gone) closes the upstream stream too
+        close = getattr(events, "close", None)
+        if close is not None:
+            close()
 
 
 def _policy_denied(

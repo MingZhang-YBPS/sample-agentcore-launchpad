@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { AttachmentHint } from "../../components/chat/AttachmentViews";
+import { TurnStatusLine } from "../../components/chat/TurnStatus";
 import type { PendingAttachment } from "../../components/chat/attachments";
 import {
   attachmentMediaType,
@@ -33,7 +34,11 @@ import {
   asUserField,
   chatEligible,
   isHarnessAgent,
+  seconds,
   sseEvents,
+  STALL_ABORT_MS,
+  turnStopReason,
+  useChatTurn,
 } from "../../lib/chat";
 import { livePolicyDeny, restoredPolicyDeny } from "../../lib/policy-deny";
 import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
@@ -107,6 +112,8 @@ export function V2Chat() {
   const [traceBusy, setTraceBusy] = useState(false);
   const [tab, setTab] = useState<InspectorTab>("trace");
   const [sharing, setSharing] = useState(false);
+  // chat-streaming S2: what the running turn is doing, its timer and its stop
+  const turn = useChatTurn();
 
   // Resolve the deep link once, when the agent list first answers.
   useEffect(() => {
@@ -246,6 +253,7 @@ export function V2Chat() {
     let failed = false;
     let completed = false;
     let activeSessionId = sessionId;
+    const signal = turn.begin();
     try {
       const request: ChatRequest = { prompt, session_id: sessionId };
       const asUserValue = asUserField(jwtAgent, asUser);
@@ -261,7 +269,8 @@ export function V2Chat() {
       if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
       let agentOpen = false;
       let curated = false; // T35: a `rule` event precedes a curated answer's text
-      for await (const { event, data: payload } of sseEvents(res)) {
+      for await (const { event, data: payload } of sseEvents(res, { heartbeats: true, signal })) {
+        turn.feed(event, payload);
         if (event === "meta") {
           if (payload.session_id) {
             activeSessionId = payload.session_id;
@@ -325,7 +334,14 @@ export function V2Chat() {
           if (!failed && memoryState === "on") setMessages((m) => [...m, { kind: "memory", text: "" }]);
         }
       }
-      if (!completed && !failed) throw new Error(t("chatPage.streamInterrupted"));
+      const reason = turnStopReason(signal);
+      if (reason === "stop" && !completed && !failed) {
+        setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped") }]);
+      } else if (reason === "stalled") {
+        throw new Error(t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }));
+      } else if (!completed && !failed) {
+        throw new Error(t("chatPage.streamInterrupted"));
+      }
       if (completed && !failed && !retrying) resetAttachments();
     } catch (err) {
       failed = true;
@@ -334,6 +350,7 @@ export function V2Chat() {
       if (files.length) setAttachmentError(message);
     } finally {
       if (failed && !retrying) setInput(prompt);
+      turn.end();
       setMessages((m) => m.map((msg) => (msg.streaming ? { ...msg, streaming: false } : msg)));
       sendInFlight.current = false;
       setBusy(false);
@@ -439,6 +456,12 @@ export function V2Chat() {
               : undefined;
   const currentEndReason = endReason(sessionId, currentEnded);
   const userLabel = authRequired && username ? username : t("v2.chat.you");
+  // Stop: close the stream (the server then stops reading the runtime); a code
+  // runtime's session is stopped too — a Harness has no stop operation.
+  const stopTurn = () => {
+    turn.stop("stop");
+    if (agentId && sessionId && !harness) void api.stopChatSession(agentId, sessionId).catch(() => undefined);
+  };
 
   return (
     <>
@@ -628,6 +651,7 @@ export function V2Chat() {
               onRetry={(prompt) => void send(prompt)}
               retryDisabled={busy || restoring}
             />
+            {turn.status && <TurnStatusLine status={turn.status} now={turn.now} onStop={stopTurn} testId="chat-turn-status" />}
             <Composer
               value={input}
               onChange={setInput}
