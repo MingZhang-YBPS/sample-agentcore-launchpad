@@ -16,7 +16,7 @@ from app.optimization import canary_harness, canary_infra
 from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
 from app.schemas.agent import AgentSpec
-from app.services import creators
+from app.services import creators, snapshots
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
@@ -1215,6 +1215,12 @@ def act_complete(
             raise RuntimeError("the agent behind this canary no longer exists")
         agent.spec = copy.deepcopy(row.artifacts["edited_spec"])
         agent.version = setup["v_candidate"]
+        # a canary win is a publish like any other (no deployment row, though): the
+        # promoted spec joins the snapshot history, stamped with the version it made live
+        snap = snapshots.record_snapshot(
+            db, agent, actor=_canary_actor(row), note="canary promoted"
+        )
+        snap.aws_version = str(setup["v_candidate"])
         db.commit()
     finally:
         db.close()
@@ -1306,6 +1312,14 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     return result
 
 
+def _canary_actor(row: RuntimeCanary) -> creators.Creator | None:
+    """Who a canary's ledger publish is attributed to: the canary's creator (the
+    action thread carries no request identity); None falls back to the agent's."""
+    if row.created_by is None and row.created_by_name is None:
+        return None
+    return creators.Creator(user_id=row.created_by, name=row.created_by_name)
+
+
 def _prompt_text(system_prompt: Any) -> str:
     """HarnessSystemPrompt ``[{text}]`` → the ledger's single system_prompt string."""
     if isinstance(system_prompt, list):
@@ -1313,6 +1327,23 @@ def _prompt_text(system_prompt: Any) -> str:
             str(block.get("text") or "") for block in system_prompt if isinstance(block, dict)
         ).strip()
     return str(system_prompt or "")
+
+
+def _ledger_prompt(spec: dict[str, Any], deployed_prompt: str) -> str:
+    """A prompt read back from the live Harness, as the ledger stores it.
+
+    The deployed ``systemPrompt`` is the spec prompt plus the platform-appended KB
+    section (`deployer.harness._kb_prompt`); storing it whole would make the next
+    publish — or a snapshot rollback to this state — append the section twice. An
+    unreadable stored spec keeps the text as read."""
+    from pydantic import ValidationError
+
+    from app.deployer.harness import strip_generated_prompt
+
+    try:
+        return strip_generated_prompt(AgentSpec(**spec), deployed_prompt)
+    except ValidationError:
+        return deployed_prompt
 
 
 def _rollback_harness(canary_id: str, row: RuntimeCanary, progress: Progress) -> dict[str, Any]:
@@ -1341,9 +1372,14 @@ def _rollback_harness(canary_id: str, row: RuntimeCanary, progress: Progress) ->
         agent = db.get(Agent, meta["id"])
         if agent is not None:
             spec = dict(agent.spec or {})
-            spec["system_prompt"] = _prompt_text(config.get("systemPrompt"))
+            spec["system_prompt"] = _ledger_prompt(spec, _prompt_text(config.get("systemPrompt")))
             agent.spec = spec
             agent.version = v_restored or agent.version
+            # the restored prompt is a publish too: snapshot it at the restored version
+            snap = snapshots.record_snapshot(
+                db, agent, actor=_canary_actor(row), note="canary rolled back"
+            )
+            snap.aws_version = str(agent.version) if agent.version else None
             db.commit()
     finally:
         db.close()
