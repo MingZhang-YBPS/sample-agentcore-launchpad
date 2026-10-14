@@ -10432,6 +10432,9 @@
         "busy": "The service is busy right now. Please try again shortly.",
         "empty": "The agent finished without answering.",
         "attachments": "A turn with attachments is not retried — send it again with its files."
+      },
+      "resume": {
+        "reconnecting": "Connection lost — the agent is still answering; reconnecting ({{n}}/{{total}})…"
       }
     },
     "gate": {

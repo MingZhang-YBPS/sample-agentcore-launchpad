@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import exists
 from sqlalchemy.orm import Session
@@ -19,12 +19,12 @@ from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.attachments import AttachmentRequest, SessionIdField
-from app.services import agent_access, memory_ownership, oauth_sessions, policy_identity
+from app.services import agent_access, chat_turns, memory_ownership, oauth_sessions, policy_identity
 from app.services import feedback as feedback_service
 from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
 from app.services.attachments import prepare_attachments
-from app.services.chat import chat_stream, sse_encode
+from app.services.chat import StopSignal, chat_stream, sse_encode
 from app.services.chat_ledger import persist_events, visible_rows
 from app.services.invoke import stop_agent_session
 from app.services.runtime_discovery import require_invoke_capability
@@ -354,7 +354,7 @@ def chat(
     workspace = ws.context
     timeout_s = (agent.spec or {}).get("timeout_seconds")
 
-    def generate():
+    def run(stop: StopSignal) -> Iterator[dict[str, Any]]:
         stream_kwargs: dict[str, Any] = {}
         if prepared:
             stream_kwargs["attachments"] = prepared
@@ -371,11 +371,12 @@ def chat(
             actor_id=mem_actor,
             workspace=workspace,
             status_events=True,  # console only: phase / thinking / tool_end (chat-streaming S2)
+            stop=stop,
             **stream_kwargs,
         )), timeout_s=timeout_s)
         # Thread items are persisted in event order (int-pk = replay order) so
         # the playground can restore a session's history exactly as rendered.
-        for event in persist_events(
+        return persist_events(
             events,
             workspace_id=workspace_id,
             agent_id=agent.id,
@@ -385,16 +386,90 @@ def chat(
             runtime_version=agent.version,
             attachments=prepared.metadata if prepared else None,
             retry_of=retry_of,
-        ):
+        )
+
+    # chat-streaming §5.2: the turn runs on a background worker, so a dropped
+    # connection no longer ends it; this response is the turn's first subscriber.
+    # A system preset (no project of its own) runs as the caller's project.
+    turn = chat_turns.start_turn(
+        run, workspace_id=workspace_id, agent_id=agent.id,
+        project_id=agent.project_id or current_project(),
+        session_id=req.session_id, timeout_s=timeout_s,
+    )
+    return _turn_response(turn, after=0)
+
+
+def _turn_response(turn: chat_turns.Turn, after: int) -> StreamingResponse:
+    def generate() -> Iterator[str]:
+        for seq, event in turn.subscribe(after):
             # a named heartbeat (with `elapsed_ms`) lets the page time the turn and
-            # tell a live connection from a dead one; /v1 keeps the comment
-            yield sse_encode(event, named_heartbeat=True)
+            # tell a live connection from a dead one; /v1 keeps the comment. The SSE
+            # `id` (the frame's last field) is the event's seq, what a resume continues
+            # after.
+            frame = sse_encode(event, named_heartbeat=True)
+            yield frame if seq is None else f"{frame[:-1]}id: {seq}\n\n"
 
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _turn_in(db: Session, ws: WorkspaceScope, agent: Agent, turn_id: str) -> chat_turns.Turn:
+    """A turn of this agent, workspace and project whose session the caller can see,
+    or 404 — a turn of another project must not be told apart from a missing one."""
+    turn = chat_turns.registry.get(turn_id)
+    pid = current_project()
+    if (
+        turn is None or turn.workspace_id != ws.id or turn.agent_id != agent.id
+        or (pid is not None and turn.project_id != pid)
+        or not turn.session_id
+        or db.query(ChatSession.id).filter(
+            ChatSession.workspace_id == ws.id,
+            ChatSession.agent_id == agent.id,
+            ChatSession.session_id == turn.session_id,
+        ).first() is None
+    ):
+        raise NotFoundError("chat.turn_not_found", "chat turn not found",
+                            {"turn_id": turn_id})
+    return turn
+
+
+@router.get("/chat/{agent_id}/turns/{turn_id}/events")
+def turn_events(
+    agent_id: str,
+    turn_id: str,
+    after: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> StreamingResponse:
+    """Resume a console chat turn (chat-streaming §5.2): the events after ``after``
+    (the SSE ``id`` last received; 0 = the whole turn), then the live ones, closing
+    when the turn has ended. A ``gap {after, first_seq}`` first when some of them
+    already left the buffer. 404 ``chat.turn_not_found`` once the turn is gone from
+    this process (it finished a while ago, or the server restarted) — the ledger
+    (``GET …/history``) then has what it saved."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    return _turn_response(_turn_in(db, ws, agent, turn_id), after=after)
+
+
+@router.post("/chat/{agent_id}/turns/{turn_id}/stop")
+def stop_turn(
+    agent_id: str,
+    turn_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """The stop button: end a running turn (the upstream is closed, the partial answer
+    and an ``interrupted: stopped by the user`` row are saved). Answers once the
+    worker recorded it, so the session's next turn is accepted at once.
+    ``stopped: false`` when the turn had already ended."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    turn = _turn_in(db, ws, agent, turn_id)
+    return {"turn_id": turn.id, "stopped": chat_turns.stop_turn(turn)}
 
 
 @router.get("/chat/{agent_id}/sessions")
@@ -487,6 +562,9 @@ def stop_session(
     if row is None:
         # Another agent's or workspace's session must look like a missing one.
         raise NotFoundError("chat.session_not_found", "chat session not found")
+    running = chat_turns.registry.running_for(ws.id, agent.id, session_id)
+    if running is not None:
+        chat_turns.stop_turn(running)  # chat-streaming §5.2: the turn no longer ends with the page
     result = stop_agent_session(agent, session_id, workspace=ws.context)
     if row.ended_at is None:
         row.ended_at = datetime.now(UTC)
@@ -523,6 +601,10 @@ def session_history(
         .all()
     )
     rows = visible_rows(rows)  # a retried turn is shown once, as its retry
+    running = chat_turns.registry.running_for(ws.id, agent_id, session_id)
+    pid = current_project()
+    if running is not None and pid is not None and running.project_id != pid:
+        running = None
     mine = feedback_service.verdicts_for(
         db, ws.id,
         require_identity(request).username if auth_enabled() else "river",
@@ -541,7 +623,13 @@ def session_history(
                 "at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows
-        ]
+        ],
+        # chat-streaming §5.2: a turn still answering — the page shows the thread up to
+        # its user row and resumes it from `GET …/turns/{turn_id}/events?after=0`
+        "running_turn": (
+            {"turn_id": running.id, "user_message_id": running.user_message_id}
+            if running is not None and running.user_message_id is not None else None
+        ),
     }
 
 

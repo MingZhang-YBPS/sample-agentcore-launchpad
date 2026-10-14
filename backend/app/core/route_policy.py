@@ -1303,3 +1303,12 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {
     ("GET", "/api/users/{user_id}/access"),
     ("POST", "/api/users/bulk/projects"),
 }
+
+# ---- CS-4: disconnect-safe console chat turns (chat-streaming §5.2) ----
+# Following and stopping a turn are part of the member's own interaction with the agent,
+# so they need what sending it needs; both are project-scoped, and a turn of another
+# project answers 404 like a missing one.
+ROUTE_POLICY.update({
+    ("GET", "/api/chat/{agent_id}/turns/{turn_id}/events"): PERM_PROJECT_USE,
+    ("POST", "/api/chat/{agent_id}/turns/{turn_id}/stop"): PERM_PROJECT_USE,
+})

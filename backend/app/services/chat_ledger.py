@@ -224,8 +224,11 @@ def persist_events(
         # keep the partial answer the user already saw, and say why it stops there,
         # so a reload replays it and the turn can be retried from its user message
         if not closed:
+            # a stopped background turn (chat-streaming §5.2) names its own reason
+            interruption = getattr(exc, "interruption", None)
             reason = (
-                "client disconnected" if isinstance(exc, GeneratorExit)
+                interruption if isinstance(interruption, str) and interruption
+                else "client disconnected" if isinstance(exc, GeneratorExit)
                 else f"{type(exc).__name__}: {exc}"
             )
             _record_interruption(flush_answer, workspace_id, agent_id, session_id, reason,

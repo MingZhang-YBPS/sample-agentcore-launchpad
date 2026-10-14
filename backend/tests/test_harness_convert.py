@@ -128,7 +128,7 @@ def test_build_tool_free_export_with_unused_gateway_scaffold(gateway_attached):
         "pyproject.toml": PYPROJECT,
     }
     if gateway_attached:
-        with pytest.raises(hc.ConversionError, match="module-scope"):
+        with pytest.raises(hc.ConversionError, match="live Harness was not read"):
             hc.build_conversion_spec(
                 source, files, ["bedrock-agentcore==1.17.*"], "no-tools-rt", ws_ctx({}),
             )
@@ -347,7 +347,7 @@ def test_gateway_softfail_graft_is_idempotent_and_preserves_layout():
 def test_gateway_softfail_graft_fails_on_a_missing_anchor():
     """Same posture as the config-bundle graft: codegen drift FAILS the conversion
     rather than shipping a runtime that can crash at import."""
-    with pytest.raises(hc.ConversionError, match="get_all_gateway_mcp_clients"):
+    with pytest.raises(hc.ConversionError, match="get_all_remote_mcp_clients"):
         hc.graft_gateway_softfail(
             MAIN_PY.replace("mcp_clients += get_all_gateway_mcp_clients()", "pass")
         )
@@ -1369,7 +1369,7 @@ def test_conversion_of_a_narrowed_harness_restores_its_gateway_tools():
     source.spec = {**source.spec, "memory": {"short_term": False, "long_term": False},
                    "tools": [{"type": "gateway", "name": "anyhr-leave",
                               "config": {"gateway_id": "launchpad-gw-a1b2c3d4e5"}}]}
-    with pytest.raises(hc.ConversionError, match="module-scope"):
+    with pytest.raises(hc.ConversionError, match="live Harness was not read"):
         hc.build_conversion_spec(
             source, _narrowed_files(), ["bedrock-agentcore==1.17.*"], "hr-rt", workspace,
         )
@@ -1382,6 +1382,112 @@ def test_conversion_of_a_narrowed_harness_restores_its_gateway_tools():
     assert hc.GW_LAZY_TOKEN_MARK in client
     assert "tool_filters={'allowed': [" in client
     assert spec.env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"].startswith("https://")
+
+
+REMOTE_MCP_URL = "https://mcp.example.com/mcp"
+
+
+def _remote_mcp_source(allowed_tools=None, extra_tools=()):
+    source = _source_agent()
+    source.spec = {**source.spec, "memory": {"short_term": False, "long_term": False},
+                   "tools": [{"type": "mcp", "name": "order-db",
+                              "config": {"url": REMOTE_MCP_URL}}, *extra_tools]}
+    if allowed_tools is not None:
+        source.spec["allowed_tools"] = allowed_tools
+    return source
+
+
+def test_conversion_of_a_remote_mcp_only_harness_rebuilds_its_client():
+    """Customer regression 2026-10-14: a Harness whose only MCP tool is a remote
+    (registry) server failed conversion with "graft anchor missing: module-scope
+    'mcp_clients += get_all_gateway_mcp_clients()' not found" — the narrowed export
+    carries an empty client scaffold, and the soft-fail graft demanded a Gateway call
+    whenever any gateway/mcp ToolRef was configured."""
+    workspace = ws_ctx({})
+    spec = hc.build_conversion_spec(
+        _remote_mcp_source(), _narrowed_files(), ["bedrock-agentcore==1.17.*"],
+        "order-rt", workspace,
+    )
+    main, client = spec.code_bundle["main.py"], spec.code_bundle["mcp_client/client.py"]
+    compile(main, "main.py", "exec")
+    compile(client, "client.py", "exec")
+    assert "def get_all_remote_mcp_clients()" in client
+    assert f"url = {REMOTE_MCP_URL!r}" in client
+    # the call is contained, and no Gateway graft was forced onto a remote server
+    assert hc.GW_SOFTFAIL_START in main
+    assert "    mcp_clients += get_all_remote_mcp_clients()" in main
+    assert "get_all_gateway_mcp_clients" not in main
+    assert hc.GW_LAZY_TOKEN_MARK not in client
+    assert [t.type for t in spec.tools] == ["mcp"]
+    assert spec.conversion_notes["gateway_tools"].startswith("wired")
+
+
+def test_remote_mcp_rebuild_follows_allowed_tools():
+    narrowed = hc.graft_missing_remote_mcp_clients(
+        _narrowed_files(), [hc.ToolRef(type="mcp", name="order-db",
+                                       config={"url": REMOTE_MCP_URL})],
+        ["@order-db/get_order", "shell"],
+    )
+    assert "tool_filters={'allowed': ['get_order']}" in narrowed["mcp_client/client.py"]
+    unselected = hc.graft_missing_remote_mcp_clients(
+        _narrowed_files(), [hc.ToolRef(type="mcp", name="order-db",
+                                       config={"url": REMOTE_MCP_URL})],
+        ["shell"],
+    )
+    assert unselected == _narrowed_files()
+
+
+def test_remote_mcp_rebuild_is_idempotent_and_keeps_an_exported_client():
+    tools = [hc.ToolRef(type="mcp", name="order-db", config={"url": REMOTE_MCP_URL})]
+    once = hc.graft_missing_remote_mcp_clients(_narrowed_files(), tools, None)
+    assert hc.graft_missing_remote_mcp_clients(once, tools, None) == once
+    exported = {**_narrowed_files(), "main.py": NARROWED_MAIN.replace(
+        "mcp_clients = []",
+        "mcp_clients = []\nmcp_clients += get_all_remote_mcp_clients()",
+    )}
+    assert hc.graft_missing_remote_mcp_clients(exported, tools, None) == exported
+
+
+def test_conversion_with_gateway_and_remote_mcp_rebuilds_both():
+    """Remote clients construct MCPClient(...) too; they must not hide the Gateway
+    clients the export dropped (the Gateway rebuild used to return early on any
+    MCPClient in client.py)."""
+    workspace = ws_ctx({
+        "gateway_id": "launchpad-gw-a1b2c3d4e5",
+        "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
+        "kb_gateway_arn": KB_GW_ARN,
+    })
+    source = _remote_mcp_source(extra_tools=[
+        {"type": "gateway", "name": "anyhr-leave",
+         "config": {"gateway_id": "launchpad-gw-a1b2c3d4e5"}}])
+    spec = hc.build_conversion_spec(
+        source, _narrowed_files(), ["bedrock-agentcore==1.17.*"], "hr-rt", workspace,
+        harness=NARROWED_HARNESS,
+    )
+    main, client = spec.code_bundle["main.py"], spec.code_bundle["mcp_client/client.py"]
+    compile(main, "main.py", "exec")
+    compile(client, "client.py", "exec")
+    assert "def get_all_gateway_mcp_clients()" in client
+    assert "def get_all_remote_mcp_clients()" in client
+    assert hc.GW_LAZY_TOKEN_MARK in client
+    # one soft-fail block per call: a failing remote server keeps the Gateway tools
+    assert main.count(hc.GW_SOFTFAIL_START) == 2
+    assert "'[launchpad] remote MCP clients unavailable: '" in main
+    assert "'[launchpad] gateway MCP clients unavailable: '" in main
+
+
+def test_an_export_that_keeps_its_remote_client_is_not_lazy_token_grafted():
+    remote_client = (
+        "from mcp.client.streamable_http import streamablehttp_client\n"
+        "from strands.tools.mcp.mcp_client import MCPClient\n\n"
+        "def get_order_db_mcp_client() -> MCPClient | None:\n"
+        f"    url = {REMOTE_MCP_URL!r}\n"
+        "    return MCPClient(lambda: streamablehttp_client(url))\n\n"
+        "def get_all_remote_mcp_clients() -> list[MCPClient]:\n"
+        "    clients = [get_order_db_mcp_client()]\n"
+        "    return [c for c in clients if c is not None]\n"
+    )
+    assert hc.graft_lazy_gateway_token(remote_client) == remote_client
 
 
 def test_convert_route_reads_the_live_harness_only_for_gateway_sources(client, monkeypatch):

@@ -7,7 +7,7 @@ import { JumpToLatest } from "../../components/JumpToLatest";
 import { Markdown } from "../../components/Markdown";
 import {
   api,
-  chatApi,
+  type ChatHistoryMessage,
   type ChatSessionInfo,
   errorMessage,
   feedbackApi,
@@ -18,18 +18,27 @@ import {
   AUTO_RETRIES,
   chatEligible,
   chatErrorText,
+  chatHistory,
   connectionFailure,
   errorEventFailure,
   failureText,
   isHarnessAgent,
   isOutputEvent,
+  isStoppedRow,
+  isTurnGone,
   lastUserIndex,
   requestFailure,
+  RESUME_DELAYS_MS,
   restoredFailure,
+  resumeChat,
+  resumeDelay,
+  rowsBeforeTurn,
+  type RunningTurn,
   seconds,
   shouldAutoRetry,
   sseEvents,
   STALL_ABORT_MS,
+  stopChatTurn,
   streamChat,
   type TurnFailure,
   TOOL_RUN_GLYPH,
@@ -126,6 +135,10 @@ export function V3Chat() {
   // the wait before it — the stop button cancels that wait
   const [retrying, setRetrying] = useState<number | null>(null);
   const retryWait = useRef<AbortController | null>(null);
+  // chat-streaming S4: reconnecting to the running turn (`n` of the attempts), and
+  // the turn the stream follows — what the stop button ends on the server
+  const [resuming, setResuming] = useState<number | null>(null);
+  const liveTurn = useRef<string | undefined>(undefined);
   // chat-streaming S2: what the running turn is doing, its timer and its stop
   const turn = useChatTurn();
   const turnSeq = useRef(0);
@@ -145,33 +158,52 @@ export function V3Chat() {
     if (agentId) void loadSessions(agentId);
   }, [agentId]);
 
+  // a consent ask is not replayed (its URL is single-use): the next turn asks again
+  const restoredThread = (rows: ChatHistoryMessage[]): Msg[] =>
+    rows.filter((r) => r.role !== "auth").map((r): Msg =>
+      r.role === "user"
+        ? { kind: "user", text: r.text, ledgerId: r.id }
+        : r.role === "agent"
+          ? { kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null, curated: !!r.answered_by }
+          : r.role === "tool"
+            ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
+            : r.role === "policy"
+              ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
+              : restoredError(r.text),
+    );
+
   const open = async (sid: string) => {
     if (!agentId || busy) return;
     setRestoring(true);
     setNeedsV2(false);
+    let running: RunningTurn | null = null;
     try {
-      const rows = (await chatApi.history(agentId, sid)).messages;
-      setMessages(
-        // a consent ask is not replayed (its URL is single-use): the next turn asks again
-        rows.filter((r) => r.role !== "auth").map((r): Msg =>
-          r.role === "user"
-            ? { kind: "user", text: r.text, ledgerId: r.id }
-            : r.role === "agent"
-              ? { kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null, curated: !!r.answered_by }
-              : r.role === "tool"
-                ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
-                : r.role === "policy"
-                  ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
-                  : restoredError(r.text),
-        ),
-      );
+      const history = await chatHistory(agentId, sid);
+      running = history.running_turn ?? null;
+      // a turn still answering is shown up to its user message; the rest is replayed
+      const rows = rowsBeforeTurn(history.messages, running);
+      setMessages(restoredThread(rows));
       setSessionId(sid);
       setParams({ agent: agentId, session: sid }, { replace: true });
       thread.toBottom(); // an opened conversation starts at its latest turn
     } catch (err) {
+      running = null;
       toast("act", errorMessage(err), err);
     } finally {
       setRestoring(false);
+    }
+    if (running) await followTurn(running, sid);
+  };
+
+  // Reload / reopen (chat-streaming §5.2): pick up a turn still answering in the
+  // background — its whole event stream is replayed, then followed live.
+  const followTurn = async (running: RunningTurn, sid: string) => {
+    setBusy(true);
+    try {
+      await streamTurn({ follow: running.turn_id, session: sid });
+    } finally {
+      setBusy(false);
+      void loadSessions(agentId);
     }
   };
 
@@ -193,8 +225,10 @@ export function V3Chat() {
     inputRef.current?.focus();
   };
 
-  // a restored error row offers a retry; its text is the §4.3 advice
+  // a restored error row offers a retry; its text is the §4.3 advice. A turn the
+  // user stopped reads as stopped, as it did live.
   const restoredError = (text: string): Msg => {
+    if (isStoppedRow(text)) return { kind: "error", text: t("v3.chat.status.stopped"), note: true };
     const failure = restoredFailure(text);
     return { kind: "error", text: failureText(t, failure), failure };
   };
@@ -228,7 +262,7 @@ export function V3Chat() {
     let failure: TurnFailure | null = null;
     try {
       for (let attempt = 0; ; attempt++) {
-        const result = await streamTurn(prompt, session, replaces);
+        const result = await streamTurn({ prompt, session, retryOf: replaces });
         session = result.session ?? session;
         failure = result.failure;
         if (!shouldAutoRetry(failure, attempt)) break;
@@ -256,13 +290,25 @@ export function V3Chat() {
     }
   };
 
-  const streamTurn = async (prompt: string, session: string | undefined, retryOf: number | undefined): Promise<Attempt> => {
+  /** One attempt at a turn — a new one (`prompt`), or a running one to follow
+   *  (`follow`: its turn id, replayed from its first event). A dropped or silent
+   *  connection reconnects to the turn (`RESUME_DELAYS_MS`) before it counts as a
+   *  failure; a turn no longer held by the server is shown from the ledger. */
+  const streamTurn = async ({ prompt = "", session, retryOf, follow }: {
+    prompt?: string; session?: string; retryOf?: number; follow?: string;
+  }): Promise<Attempt> => {
     let failure: TurnFailure | null = null;
     let completed = false;
     let produced = false; // a replay could repeat something the user saw
     let answered = false;
     const attempt: Attempt = { failure: null, session };
-    const signal = turn.begin();
+    let signal = turn.begin();
+    liveTurn.current = follow;
+    let lastSeq = 0;
+    // the server no longer holds the turn / some of its events left its buffer: the
+    // ledger is what is shown
+    let gone = false;
+    let gapped = false;
     const key = ++turnSeq.current;
     // a tool row follows its run in the turn status (ids repeat across turns)
     const syncRuns = (status: TurnStatus | null) =>
@@ -274,18 +320,21 @@ export function V3Chat() {
       setMessages((m) => [...m, { kind: "error", text: failureText(t, next), failure: next }]);
     };
     const stopped = () => setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped"), note: true }]);
-    try {
-      // the turn's signal also aborts the request itself (Stop before the first frame)
-      const res = await streamChat(agentId, { prompt, session_id: session ?? null, retry_of: retryOf }, signal);
+    let openBubble = false;
+    let curated = false;
+    // read one connection to the turn, to its end or until it drops
+    const read = async (res: Response): Promise<void> => {
       if (!res.body) throw new Error(t("v3.chat.interrupted"));
-      let openBubble = false;
-      let curated = false;
-      for await (const { event, data } of sseEvents(res, { heartbeats: true, signal })) {
+      for await (const { event, data, seq } of sseEvents(res, { heartbeats: true, signal })) {
+        if (seq !== undefined) lastSeq = seq;
         const status = turn.feed(event, data);
         if (isOutputEvent(event)) produced = true;
-        if (event === "tool_end") {
+        if (event === "gap") {
+          gapped = true;
+        } else if (event === "tool_end") {
           syncRuns(status);
         } else if (event === "meta" && data.session_id) {
+          liveTurn.current = data.turn_id ?? liveTurn.current;
           attempt.session = data.session_id;
           attempt.userMessageId = data.user_message_id;
           const ledgerId = data.user_message_id;
@@ -332,6 +381,50 @@ export function V3Chat() {
           syncRuns(status);
         }
       }
+    };
+    // reconnect to the running turn after a drop; false: give up (stop, or no more tries)
+    const resume = async (): Promise<boolean> => {
+      const turnId = liveTurn.current;
+      if (!turnId) return false;
+      for (let tries = 0; ; tries++) {
+        const delay = resumeDelay(tries);
+        if (delay === null || turnStopReason(signal) === "stop") return false;
+        setResuming(tries + 1);
+        signal = turn.reconnect();
+        const go = await waitForRetry(signal, delay);
+        setResuming(null);
+        if (!go) return false;
+        try {
+          await read(await resumeChat(agentId, turnId, lastSeq, signal));
+          return true;
+        } catch (err) {
+          if (isTurnGone(err)) {
+            gone = true;
+            return false;
+          }
+          if (turnStopReason(signal) === "stop") return false;
+        }
+      }
+    };
+    try {
+      // the turn's signal also aborts the request itself (Stop before the first frame)
+      const first = follow
+        ? resumeChat(agentId, follow, 0, signal)
+        : streamChat(agentId, { prompt, session_id: session ?? null, retry_of: retryOf }, signal);
+      try {
+        await read(await first);
+      } catch (err) {
+        // a connection that broke mid-turn is resumed below; any other failure is the turn's
+        if (!liveTurn.current || turnStopReason(signal) === "stop") throw err;
+        gone = isTurnGone(err);
+      }
+      while (!completed && !failure && !gone && turnStopReason(signal) !== "stop") {
+        if (!(await resume())) break;
+      }
+      if (attempt.session && ((gone && !completed && !failure) || (gapped && completed))) {
+        // shown from the ledger: the answer it saved, or how it ended
+        if (await showSaved(attempt.session)) return attempt;
+      }
       const reason = turnStopReason(signal);
       if (reason === "stop" && !completed && !failure) {
         stopped();
@@ -354,6 +447,8 @@ export function V3Chat() {
         fail(requestFailure(err, produced));
       }
     } finally {
+      setResuming(null);
+      liveTurn.current = undefined;
       // a call the stream never ended stopped with the turn
       if (!completed) syncRuns(turn.feed("error", {}));
       turn.end();
@@ -363,12 +458,27 @@ export function V3Chat() {
     return attempt;
   };
 
-  // Stop: close the stream (the server then stops reading the runtime); a code
-  // runtime's session is stopped too. A Harness has no stop operation — closing
-  // the connection is all there is.
+  /** A turn the server no longer holds (or one whose events were lost): show the
+   *  session as the ledger saved it. True when the saved turn says how it ended (an
+   *  answer or an error row); false when it holds neither. */
+  const showSaved = async (sid: string): Promise<boolean> => {
+    try {
+      const rows = (await chatHistory(agentId, sid)).messages;
+      setMessages(restoredThread(rows));
+      const tail = rows.slice(rows.map((r) => r.role).lastIndexOf("user") + 1);
+      return tail.some((r) => r.role === "agent" || r.role === "error");
+    } catch {
+      return false; // the ledger is out of reach too
+    }
+  };
+
+  // Stop: close the stream and end the background turn on the server (§5.2 — the
+  // turn no longer ends with the connection); a code runtime's session is stopped
+  // too. A Harness has no session-stop operation.
   const stopTurn = () => {
     retryWait.current?.abort(); // a pending automatic retry is not made
     turn.stop("stop");
+    if (agentId && liveTurn.current) void stopChatTurn(agentId, liveTurn.current).catch(() => undefined);
     if (agentId && sessionId && !isHarnessAgent(agent)) {
       void api.stopChatSession(agentId, sessionId).catch(() => undefined);
     }
@@ -521,6 +631,11 @@ export function V3Chat() {
                   {t("v3.chat.status.elapsed", { s: seconds(turnElapsedMs(turn.status, turn.now)) })}
                 </span>
               </div>
+            </div>
+          )}
+          {resuming !== null && (
+            <div className="v3-msg" data-testid="chat-resuming">
+              <Notice s="wait">{t("v3.chat.resume.reconnecting", { n: resuming, total: RESUME_DELAYS_MS.length })}</Notice>
             </div>
           )}
           {retrying !== null && (

@@ -4,11 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type AgentInfo,
+  type ChatHistoryMessage,
   type ChatRequest,
   type ChatStreamPayload,
   errorMessage,
+  getJson,
   localizedMessage,
   responseMessage,
+  sendJson,
 } from "./api";
 
 /**
@@ -28,6 +31,10 @@ export type ChatStreamFrame = ChatStreamPayload & {
   user_message_id?: number;
   /** `error`: how the console may retry the turn (chat-streaming §4.2) */
   retry?: ChatRetryHint;
+  /** `meta`: the background turn this stream follows — what a resume names (§5.2) */
+  turn_id?: string;
+  /** `gap`: the first seq the turn's buffer still holds */
+  first_seq?: number;
 };
 
 /**
@@ -44,12 +51,15 @@ export function isHeartbeat(event: string): boolean {
  * dropped unless `heartbeats` is set (for a caller that times the turn or watches
  * the connection); SSE comments (`: keep-alive`, the /v1 form) never yield.
  * Aborting `signal` (the stop button, a stalled turn) cancels the body — which
- * closes the connection, so the server stops the turn — and ends the frames.
+ * closes the connection — and ends the frames. A console turn runs on in the
+ * background after that (chat-streaming §5.2): the stop button also calls
+ * `stopChatTurn`. `seq` is the frame's SSE `id` (the console chat numbers every
+ * event but heartbeats), what `resumeChat` continues after.
  */
 export async function* sseEvents(
   res: Response,
   { heartbeats = false, signal }: { heartbeats?: boolean; signal?: AbortSignal } = {},
-): AsyncGenerator<{ event: string; data: ChatStreamFrame }> {
+): AsyncGenerator<{ event: string; data: ChatStreamFrame; seq?: number }> {
   const reader = res.body!.getReader();
   const cancel = () => void reader.cancel().catch(() => undefined);
   if (signal?.aborted) cancel();
@@ -75,12 +85,18 @@ export async function* sseEvents(
         if (signal?.aborted) return;
         let event = "message";
         let data = "";
+        let seq: number | undefined;
         for (const line of frame.split("\n")) {
           if (line.startsWith("event:")) event = line.slice(6).trim();
           if (line.startsWith("data:")) data += line.slice(5).trim();
+          if (line.startsWith("id:")) {
+            const id = Number(line.slice(3).trim());
+            if (Number.isInteger(id)) seq = id;
+          }
         }
         if (!data || (!heartbeats && isHeartbeat(event))) continue;
-        yield { event, data: JSON.parse(data) as ChatStreamFrame };
+        const parsed = { event, data: JSON.parse(data) as ChatStreamFrame };
+        yield seq === undefined ? parsed : { ...parsed, seq };
       }
     }
   } finally {
@@ -382,6 +398,16 @@ export function useChatTurn() {
   const stop = useCallback((reason: TurnStopReason = "stop") => {
     controller.current?.abort(reason);
   }, []);
+  // a new connection to the same turn (chat-streaming §5.2): its status stays, the
+  // silence clock restarts, and the new signal is the one `stop()` aborts
+  const reconnect = useCallback((): AbortSignal => {
+    controller.current = new AbortController();
+    if (current.current) {
+      current.current = { ...current.current, lastEventAt: Date.now() };
+      setStatus(current.current);
+    }
+    return controller.current.signal;
+  }, []);
   const end = useCallback(() => {
     controller.current = null;
     current.current = null;
@@ -392,7 +418,7 @@ export function useChatTurn() {
     if (status && turnStalled(status, now)) stop("stalled");
   }, [status, now, stop]);
 
-  return { status, now, begin, feed, stop, end };
+  return { status, now, begin, feed, stop, reconnect, end };
 }
 
 // ---------------------------------------------------------------------------
@@ -487,12 +513,23 @@ export function requestFailure(err: unknown, produced: boolean): TurnFailure {
   return { category: "other", manual: true, auto: false, detail };
 }
 
-/** A restored error row: an `interrupted: …` row is a dropped connection; any other
- *  row is offered as a retry (the backend still refuses a turn it cannot retry). */
+/** A restored error row: an `interrupted: …` row is a dropped connection (or a turn
+ *  past its time limit); any other row is offered as a retry (the backend still
+ *  refuses a turn it cannot retry). A turn the user stopped: `isStoppedRow`. */
 export function restoredFailure(text: string): TurnFailure {
+  if (text.startsWith(LIMIT_ROW_PREFIX)) return { category: "timeout", manual: false, auto: false, detail: "" };
   return text.startsWith("interrupted: ")
     ? { category: "connection", manual: true, auto: false, detail: "" }
     : { category: "other", manual: true, auto: false, detail: text };
+}
+
+/** The ledger row of a turn the stop button ended (chat-streaming §5.2). */
+export const STOPPED_ROW = "interrupted: stopped by the user";
+/** The start of the ledger row of a turn that ran past its time limit. */
+const LIMIT_ROW_PREFIX = "interrupted: the turn ran past";
+
+export function isStoppedRow(text: string): boolean {
+  return text === STOPPED_ROW;
 }
 
 /** The thread's words for a failure (chat-streaming §4.3): the cause and the next
@@ -549,4 +586,66 @@ export function latestTurnRetryable(messages: { kind: string }[]): boolean {
   if (start < 0) return false;
   const rest = messages.slice(start + 1);
   return rest.some((m) => m.kind === "error") || !rest.some((m) => m.kind === "agent");
+}
+
+// ---------------------------------------------------------------------------
+// Resume (chat-streaming S4, §5.2): a console turn runs on in the background when the
+// connection drops; the page follows it again from the last event it received.
+
+/** Pauses before each reconnect attempt; past the last one the turn is given up
+ *  on and the S3 retry takes over. */
+export const RESUME_DELAYS_MS = [2_000, 4_000, 8_000] as const;
+
+/** The pause before reconnect attempt `attempt` (0-based), or null: no more tries. */
+export function resumeDelay(attempt: number): number | null {
+  return attempt >= 0 && attempt < RESUME_DELAYS_MS.length ? RESUME_DELAYS_MS[attempt] : null;
+}
+
+/** A session's turn still answering, as `GET …/history` names it. */
+export interface RunningTurn {
+  turn_id: string;
+  /** the turn's user row: the thread is shown up to it, the rest is replayed */
+  user_message_id: number;
+}
+
+export interface ChatHistory {
+  messages: ChatHistoryMessage[];
+  /** absent from an older backend */
+  running_turn?: RunningTurn | null;
+}
+
+const enc = encodeURIComponent;
+
+/** `GET /api/chat/{agent_id}/history`, with the session's running turn. */
+export function chatHistory(agentId: string, sessionId: string): Promise<ChatHistory> {
+  return getJson<ChatHistory>(`/api/chat/${enc(agentId)}/history?session_id=${enc(sessionId)}`);
+}
+
+/**
+ * Follow a running turn again: the events after `after` (the last `seq` received;
+ * 0 = the whole turn), then the live ones. Read it with `sseEvents`. A refusal keeps
+ * its HTTP status: 404 (`isTurnGone`) means the turn is no longer held — it ended a
+ * while ago, or the server restarted — and the ledger has what was saved.
+ */
+export async function resumeChat(agentId: string, turnId: string, after: number, signal?: AbortSignal): Promise<Response> {
+  const res = await fetch(`/api/chat/${enc(agentId)}/turns/${enc(turnId)}/events?after=${after}`, { signal });
+  if (!res.ok) throw new ChatHttpError(res.status, await responseMessage(res));
+  return res;
+}
+
+export function isTurnGone(err: unknown): boolean {
+  return err instanceof ChatHttpError && err.status === 404;
+}
+
+/** The stop button: end the background turn itself, not just this page's connection. */
+export function stopChatTurn(agentId: string, turnId: string): Promise<{ turn_id: string; stopped: boolean }> {
+  return sendJson(`/api/chat/${enc(agentId)}/turns/${enc(turnId)}/stop`, "POST");
+}
+
+/** The history rows a page shows while it replays the running turn: everything up to
+ *  and including the turn's user row (the rest arrives again from the replay). */
+export function rowsBeforeTurn<T extends { id?: number }>(rows: T[], turn: RunningTurn | null | undefined): T[] {
+  if (!turn) return rows;
+  const at = rows.findIndex((row) => row.id === turn.user_message_id);
+  return at < 0 ? rows : rows.slice(0, at + 1);
 }
