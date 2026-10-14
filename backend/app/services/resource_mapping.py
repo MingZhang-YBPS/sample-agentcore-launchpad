@@ -18,6 +18,14 @@ carries; a reference the platform does not model cannot be found here):
   profile is workspace infrastructure; the target must name its own). It has no implicit
   default — an unmapped profile refuses the release with `network_profile.unmapped`
   (`assert_network_mapped`), and a mapping must name a live profile the project may use.
+* `filesystem.mounts[].storage_id`  -> kind `storage` (design storage-mounts §6). The
+  catalog id is the logical name, so DEV's `datasets` maps to the target's own
+  `datasets` without a mapping row; a row maps it elsewhere. Either way the target entry
+  must be live and allowed for the project, or the release is refused with
+  `storage.unmapped` (`assert_storage_mapped`); the resolved spec's mounts are re-stamped
+  with the target entry's access point. Inline access points (`filesystem.s3_files` /
+  `efs`) carry the source account in their ARN and are always refused
+  (`storage.inline_not_promotable`).
 
 Free-form `env` values and the code inside a BYOC artifact are NOT scanned: the platform
 cannot tell an id from any other string there. That is a stated limit, not an oversight.
@@ -54,7 +62,11 @@ KIND_GATEWAY = "gateway"
 KIND_MCP_RECORD = "mcp_record"
 KIND_SKILL = "skill"
 KIND_NETWORK_PROFILE = "network_profile"
-KINDS = (KIND_KB, KIND_MEMORY, KIND_GATEWAY, KIND_MCP_RECORD, KIND_SKILL, KIND_NETWORK_PROFILE)
+KIND_STORAGE = "storage"
+# an inline S3 Files / EFS access point: listed so the gate names it, never mappable
+KIND_INLINE_MOUNT = "inline_mount"
+KINDS = (KIND_KB, KIND_MEMORY, KIND_GATEWAY, KIND_MCP_RECORD, KIND_SKILL, KIND_NETWORK_PROFILE,
+         KIND_STORAGE)
 
 # Who a mapping row is for (design §5.6): a project's own override, or the workspace
 # default (project_id NULL) every project of the workspace falls back to.
@@ -71,7 +83,12 @@ _TOKEN_RE = re.compile(r"^\S{1,512}$")
 # the shape `schemas.agent.NETWORK_PROFILE_ID_RE` accepts
 _NETWORK_PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 
+# the shape `schemas.agent.STORAGE_ID_RE` accepts
+_STORAGE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
+
 NETWORK_UNMAPPED = "network_profile.unmapped"
+STORAGE_UNMAPPED = "storage.unmapped"
+INLINE_NOT_PROMOTABLE = "storage.inline_not_promotable"
 
 # resources-map keys whose value is the workspace's own default for a kind
 _IMPLICIT_RESOURCE_KEY = {KIND_GATEWAY: "gateway_id", KIND_MEMORY: "memory_id"}
@@ -107,6 +124,7 @@ def validate_mapping(kind: str, name: str, resource_id: str) -> None:
         KIND_MCP_RECORD: _TOKEN_RE,
         KIND_SKILL: re.compile(r"^s3://\S{3,500}$"),
         KIND_NETWORK_PROFILE: _NETWORK_PROFILE_RE,
+        KIND_STORAGE: _STORAGE_RE,
     }[kind]
     if not shape.fullmatch(resource_id):
         raise AppError(
@@ -177,6 +195,19 @@ def extract_references(spec: dict[str, Any]) -> list[Reference]:
     if isinstance(network, dict) and isinstance(network.get("profile_id"), str):
         refs.append(Reference(KIND_NETWORK_PROFILE, network["profile_id"],
                               ("network", "profile_id")))
+    fs = spec.get("filesystem") or {}
+    if isinstance(fs, dict):
+        for i, mount in enumerate(fs.get("mounts") or []):
+            if isinstance(mount, dict) and isinstance(mount.get("storage_id"), str):
+                refs.append(Reference(KIND_STORAGE, mount["storage_id"],
+                                      ("filesystem", "mounts", i, "storage_id"),
+                                      mount["storage_id"]))
+        for key in ("s3_files", "efs"):
+            for i, mount in enumerate(fs.get(key) or []):
+                if isinstance(mount, dict) and mount.get("access_point_arn"):
+                    refs.append(Reference(KIND_INLINE_MOUNT, str(mount["access_point_arn"]),
+                                          ("filesystem", key, i, "access_point_arn"),
+                                          str(mount.get("mount_path") or "")))
     return refs
 
 
@@ -252,6 +283,9 @@ def upsert_mapping(
     if kind == KIND_NETWORK_PROFILE:
         _assert_mappable_profile(db, workspace_id, resource_id,
                                  None if scope == SCOPE_WORKSPACE else current_project())
+    if kind == KIND_STORAGE:
+        _assert_mappable_storage(db, workspace_id, resource_id,
+                                 None if scope == SCOPE_WORKSPACE else current_project())
     row = _find(db, workspace_id, kind, name, scope)
     created = row is None
     if row is None:
@@ -299,6 +333,26 @@ def _assert_mappable_profile(
                             {"profile_id": profile_id})
 
 
+def _assert_mappable_storage(
+    db: Session, workspace_id: str, storage_id: str, project_id: str | None,
+) -> None:
+    """A storage mapping names a live catalog entry of its workspace — for a project's
+    own mapping, one in the project's allowed set (any other reads as missing)."""
+    from app.services import storage_mounts
+
+    storage_mounts.usable_entry(db, workspace_id, project_id, storage_id)
+
+
+def _storage_target(
+    db: Session, workspace_id: str, storage_id: str, project_id: str | None,
+) -> bool:
+    try:
+        _assert_mappable_storage(db, workspace_id, storage_id, project_id)
+    except AppError:
+        return False
+    return True
+
+
 def _profile_names(db: Session, workspace_id: str | None, ids: set[str]) -> dict[str, str]:
     """Source profile id → its name: the logical name a reference falls back to."""
     if not workspace_id or not ids:
@@ -344,6 +398,7 @@ def resolve_spec(
     target_workspace_id: str,
     source_resources: dict[str, Any] | None = None,
     target_resources: dict[str, Any] | None = None,
+    project_id: str | None = None,
 ) -> Resolution:
     """Rewrite `spec` for the target workspace, or say what is missing.
 
@@ -396,8 +451,25 @@ def resolve_spec(
                 {**entry, "target_id": str(tgt_res[implicit_key]), "via": "workspace-default"}
             )
             continue
+        if ref.kind == KIND_STORAGE and _storage_target(
+            db, target_workspace_id, name, project_id
+        ):
+            # the catalog id is the logical name: the target's own entry of that id
+            _set_path(out, ref.path, name)
+            resolved.append({**entry, "target_id": name, "via": "same-id"})
+            continue
+        if ref.kind == KIND_INLINE_MOUNT:
+            unmapped.append({
+                **entry, "code": INLINE_NOT_PROMOTABLE,
+                "reason": f"the inline access point at {ref.hint or ref.path_text} names the "
+                          "source account — register it in the storage catalog and mount it "
+                          "by id",
+            })
+            continue
         if ref.kind == KIND_NETWORK_PROFILE:
             entry["code"] = NETWORK_UNMAPPED
+        if ref.kind == KIND_STORAGE:
+            entry["code"] = STORAGE_UNMAPPED
         unmapped.append(
             {
                 **entry,
@@ -407,6 +479,11 @@ def resolve_spec(
                 ),
             }
         )
+    if any(r.kind == KIND_STORAGE for r in refs):
+        # the mapped ids name the target's entries: their access points replace the source's
+        from app.services import storage_mounts
+
+        storage_mounts.restamp_spec(db, target_workspace_id, out, project_id)
     return Resolution(out, resolved, unmapped)
 
 
@@ -421,6 +498,7 @@ def resolve_gate(
         target_workspace_id=target.id,
         source_resources=getattr(source, "resources", None),
         target_resources=getattr(target, "resources", None),
+        project_id=getattr(bundle, "project_id", None),
     )
     total = len(resolution.resolved) + len(resolution.unmapped)
     if resolution.complete:
@@ -456,7 +534,28 @@ def assert_network_mapped(
     """The target's profile for a promoted spec's network (None: the spec runs PUBLIC
     or names an inline legacy network): its mapping must exist and name a live profile
     the releasing project may use there. Otherwise a 409 `network_profile.unmapped` that
-    says which mapping to create — a profile id never means anything in another account."""
+    says which mapping to create — a profile id never means anything in another account.
+
+    Every caller (the execute route, the job admission, the resolve stage) also needs
+    the spec's storage to land, so the storage refusals (`assert_storage_mapped`) are
+    raised from here too, after the network's."""
+    target_profile = _assert_network_profile_mapped(
+        db, spec, source_workspace_id=source_workspace_id,
+        target_workspace_id=target_workspace_id, project_id=project_id,
+    )
+    assert_storage_mapped(db, spec, source_workspace_id=source_workspace_id,
+                          target_workspace_id=target_workspace_id, project_id=project_id)
+    return target_profile
+
+
+def _assert_network_profile_mapped(
+    db: Session,
+    spec: dict[str, Any],
+    *,
+    source_workspace_id: str | None,
+    target_workspace_id: str,
+    project_id: str | None,
+) -> str | None:
     ref = next((r for r in extract_references(spec) if r.kind == KIND_NETWORK_PROFILE), None)
     if ref is None:
         return None
@@ -491,3 +590,58 @@ def assert_network_mapped(
             {**detail, "target_id": target.resource_id}, status_code=409,
         ) from exc
     return target.resource_id
+
+
+def assert_storage_mapped(
+    db: Session,
+    spec: dict[str, Any],
+    *,
+    source_workspace_id: str | None,
+    target_workspace_id: str,
+    project_id: str | None,
+) -> list[str]:
+    """The target's catalog ids for a promoted spec's mounts (design storage-mounts §6):
+    each mapped (a row, or the target's entry of the same id) to a live entry the
+    releasing project may use. An inline access point is refused outright — its ARN
+    names the source account. 409 `storage.unmapped` / `storage.inline_not_promotable`
+    say what to register or map."""
+    refs = [r for r in extract_references(spec) if r.kind in (KIND_STORAGE, KIND_INLINE_MOUNT)]
+    inline = [r for r in refs if r.kind == KIND_INLINE_MOUNT]
+    if inline:
+        paths = ", ".join(r.hint or r.path_text for r in inline)
+        raise AppError(
+            INLINE_NOT_PROMOTABLE,
+            f"the agent mounts inline access point(s) at {paths}, which name the source "
+            "account — register the storage in the catalog of both workspaces and mount it "
+            "by id before promoting",
+            {"paths": [r.path_text for r in inline], "target_workspace_id": target_workspace_id},
+            status_code=409,
+        )
+    if not refs:
+        return []
+    source_by_id: dict[tuple[str, str], str] = {}
+    if source_workspace_id:
+        for row in _defaults_first(list_mappings(db, source_workspace_id)):
+            source_by_id[(row.kind, row.resource_id)] = row.name
+    targets = {
+        (row.kind, row.name): row
+        for row in _defaults_first(list_mappings(db, target_workspace_id))
+    }
+    out: list[str] = []
+    for ref in refs:
+        name = _logical_name(ref, source_by_id)
+        mapped = targets.get((KIND_STORAGE, name))
+        target_id = mapped.resource_id if mapped is not None else name
+        if not _storage_target(db, target_workspace_id, target_id, project_id):
+            raise AppError(
+                STORAGE_UNMAPPED,
+                f"the agent mounts storage '{ref.source_id}', and workspace "
+                f"'{target_workspace_id}' has no usable entry for "
+                f"{key_of(KIND_STORAGE, name)} — register '{target_id}' there (and allow it "
+                "for this project), or map it to another entry",
+                {"logical": key_of(KIND_STORAGE, name), "source_id": ref.source_id,
+                 "target_id": target_id, "target_workspace_id": target_workspace_id},
+                status_code=409,
+            )
+        out.append(target_id)
+    return out

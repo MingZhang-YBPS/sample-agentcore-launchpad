@@ -79,6 +79,7 @@ from app.routers.review import router as review_router
 from app.routers.share import console_router as share_links_router
 from app.routers.share import router as share_router
 from app.routers.share_annotate import router as share_annotate_router
+from app.routers.storage_mounts import router as storage_mounts_router
 from app.routers.system_agents import router as system_agents_router
 from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
@@ -253,6 +254,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(project_groups_router)  # project groups: members + projects (§7.7)
     app.include_router(departments_router)  # departments (projects §2.1, §7.10)
     app.include_router(network_profiles_router)  # VPC network profiles (projects §12)
+    app.include_router(storage_mounts_router)  # the storage catalog (storage-mounts §4)
     app.include_router(mcp_reviews_router)  # MCP server tool reviews (projects §15.6)
     app.include_router(gateway_lambda_router)  # Lambda / adopted tool targets (§15.12)
     app.include_router(fleet_router)  # fleet overview, governance health, marketplace (T37-T39)

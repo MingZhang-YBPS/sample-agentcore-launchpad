@@ -300,6 +300,51 @@ class ByoMount(BaseModel):
     mount_path: str = Field(pattern=MOUNT_PATH_RE, min_length=6, max_length=200)
 
 
+# a storage catalog id (`models/storage.STORAGE_ID_PATTERN`): `datasets`, `skills-lib`
+STORAGE_ID_RE = r"^[a-z0-9][a-z0-9-]{1,31}$"
+# S3 Files + EFS mounts together (catalog + inline), leaving one of AgentCore's five
+# filesystemConfigurations for session storage (storage-mounts §4.2)
+MAX_BYO_MOUNTS = 4
+
+
+class StorageMountRef(BaseModel):
+    """A mount of a storage catalog entry (storage-mounts §4.2): the entry's id, where
+    it appears, and read-only or read-write (D-1: read-only by default; at most the
+    entry's `max_mode`).
+
+    ``kind`` and ``access_point_arn`` are the catalog entry's, stamped by the server when
+    the spec is stored (`services/storage_mounts.normalize_spec_storage`) so the deployers
+    map the reference without a catalog read; whatever a client sends there is replaced,
+    and promotion re-stamps them from the target workspace's entry."""
+
+    model_config = {"extra": "forbid"}
+
+    storage_id: str = Field(pattern=STORAGE_ID_RE)
+    # default `/mnt/<storage_id>`
+    mount_path: str = Field(default="", max_length=200)
+    mode: Literal["ro", "rw"] = "ro"
+    kind: Literal["s3files", "efs"] | None = None
+    access_point_arn: str | None = Field(default=None, max_length=2048)
+
+    @model_validator(mode="after")
+    def _path(self) -> "StorageMountRef":
+        if not self.mount_path:
+            self.mount_path = f"/mnt/{self.storage_id}"
+        if not re.match(MOUNT_PATH_RE, self.mount_path) or len(self.mount_path) < 6:
+            raise ValueError(f"'{self.mount_path}' is not a mount path (/mnt/<name>)")
+        if self.access_point_arn and self.kind:
+            shape = _S3_FILES_AP_RE if self.kind == "s3files" else _EFS_AP_RE
+            if not shape.match(self.access_point_arn):
+                raise ValueError(
+                    f"'{self.access_point_arn}' is not an {self.kind} access point ARN"
+                )
+        return self
+
+    @property
+    def resolved(self) -> bool:
+        return bool(self.kind and self.access_point_arn)
+
+
 class VpcNetwork(BaseModel):
     """Inline networkModeConfig for networkMode=VPC — the legacy shape (design §12.3).
 
@@ -342,7 +387,8 @@ BYO_MOUNT_UNSUPPORTED: dict[str, str] = {}
 
 
 class FilesystemConfig(BaseModel):
-    """AgentCore Runtime filesystemConfigurations (≤1 session, ≤2 s3, ≤2 efs).
+    """AgentCore Runtime filesystemConfigurations (≤1 session, ≤2 inline s3, ≤2 inline
+    efs, ≤4 BYO mounts in all counting catalog references).
 
     session_storage defaults ON; an explicit JSON null disables it. BYO mounts need
     the agent in a VPC (its network profile, `AgentSpec.network`) and a method of
@@ -352,18 +398,32 @@ class FilesystemConfig(BaseModel):
     session_storage: SessionStorageFs | None = Field(default_factory=SessionStorageFs)
     s3_files: list[ByoMount] = Field(default_factory=list, max_length=2)
     efs: list[ByoMount] = Field(default_factory=list, max_length=2)
+    # storage catalog references (storage-mounts §4.2); the inline lists above are the
+    # legacy shape, still accepted
+    mounts: list[StorageMountRef] = Field(default_factory=list, max_length=MAX_BYO_MOUNTS)
 
     @property
     def byo(self) -> bool:
-        return bool(self.s3_files or self.efs)
+        return bool(self.s3_files or self.efs or self.mounts)
 
     def byo_mounts(self) -> list[tuple[str, ByoMount]]:
-        """``(kind, mount)`` for every BYO mount, ``kind`` ∈ {s3files, efs}."""
+        """``(kind, mount)`` for every inline BYO mount, ``kind`` ∈ {s3files, efs}."""
         return [*(("s3files", m) for m in self.s3_files), *(("efs", m) for m in self.efs)]
+
+    def catalog_mounts(self) -> list[tuple[str, StorageMountRef]]:
+        """``(kind, mount)`` for every resolved catalog mount (``mount.mode`` set)."""
+        return [(m.kind, m) for m in self.mounts if m.resolved and m.kind]
 
     @model_validator(mode="after")
     def _check(self) -> "FilesystemConfig":
-        paths = [m.mount_path.rstrip("/") for m in (*self.s3_files, *self.efs)]
+        if len(self.s3_files) + len(self.efs) + len(self.mounts) > MAX_BYO_MOUNTS:
+            raise ValueError(
+                f"at most {MAX_BYO_MOUNTS} S3 Files / EFS mounts per agent (plus session "
+                "storage)"
+            )
+        if len({m.storage_id for m in self.mounts}) != len(self.mounts):
+            raise ValueError("a storage entry is mounted once per agent")
+        paths = [m.mount_path.rstrip("/") for m in (*self.s3_files, *self.efs, *self.mounts)]
         if self.session_storage:
             paths.append(self.session_storage.mount_path.rstrip("/"))
         if len(paths) != len(set(paths)):

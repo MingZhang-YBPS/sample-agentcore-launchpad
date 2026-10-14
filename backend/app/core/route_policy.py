@@ -1465,3 +1465,32 @@ PROJECT_LIFECYCLE_ROUTES: dict[tuple[str, str], str] = {
 }
 ROUTE_POLICY.update(PROJECT_LIFECYCLE_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_LIFECYCLE_ROUTES)
+
+# ---- storage catalog (design storage-mounts §4, §5, §9, SM-2) ----
+# An entry is workspace infrastructure an administrator keeps, like a network profile:
+# reads run inside the request's project (a member sees the project's allowed set, an
+# admin every entry with the shared view); registering, checking, editing, archiving
+# and the per-project allowed set are ADMIN and project-exempt — the allowed set names
+# its project in the path. The wizard's preflight reads AWS for the request's project
+# and writes nothing: participation. The agent's storage card is a read of the agent.
+ROUTE_POLICY.update({
+    ("GET", "/api/storage-mounts"): MEMBER,
+    ("GET", "/api/storage-mounts/{storage_id}"): MEMBER,
+    ("GET", "/api/storage-mounts/{storage_id}/usage"): MEMBER,
+    ("GET", "/api/storage-mounts/agents/{agent_id}"): MEMBER,
+    ("POST", "/api/storage-mounts/preflight"): PERM_PROJECT_USE,
+    ("POST", "/api/storage-mounts"): ADMIN,
+    ("POST", "/api/storage-mounts/{storage_id}/check"): ADMIN,
+    ("PATCH", "/api/storage-mounts/{storage_id}"): ADMIN,
+    ("DELETE", "/api/storage-mounts/{storage_id}"): ADMIN,
+    ("GET", "/api/storage-mounts/projects/{project_id}"): ADMIN,
+    ("PUT", "/api/storage-mounts/projects/{project_id}"): ADMIN,
+})
+PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
+    ("POST", "/api/storage-mounts"),
+    ("POST", "/api/storage-mounts/{storage_id}/check"),
+    ("PATCH", "/api/storage-mounts/{storage_id}"),
+    ("DELETE", "/api/storage-mounts/{storage_id}"),
+    ("GET", "/api/storage-mounts/projects/{project_id}"),
+    ("PUT", "/api/storage-mounts/projects/{project_id}"),
+})
