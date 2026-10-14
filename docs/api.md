@@ -1585,6 +1585,17 @@ workspace or the workspace's default project. Resolution failures:
 - `404 project.not_found`: the named project is not bound to the workspace or is not reachable by the caller.
 - `409 project.archived`: a non-read request on an archived project.
 
+Two more policy values exist for workspace-scoped routes. `perm:project.use` (chat,
+invoke, feedback, labels, the caller's own sessions) and `perm:project.write` (every
+other ordinary write) are project keys, so a project role decides them. `infra`
+marks a write to workspace-shared infrastructure (governance, registry MCP and skill
+records, gateway targets and tools, marketplace publishing, price refresh): it is
+`project.write` while the workspace holds one active project and administrator-only
+(`403 auth.infra_admin_required`) once it holds several. Workspace-scoped routes in
+`PROJECT_EXEMPT` (catalogues, workspace settings, `/api/costs`, `/api/inbox`, …)
+resolve no project at all. The *Scope* column of the route index at the end of this
+file says which applies to each route.
+
 A member's **effective keys** in a project combine two sources. First the direct
 role is united with the project group's role. The direct row's `overrides`
 (`{key: bool}`) are then applied on top. Built-in role templates (code constants,
@@ -1745,3 +1756,343 @@ profile, or outside the allowed set), `network_profile.name_exists` (409,
 `network.preflight_failed` (409), `project.not_found` (404, the project is not bound to the workspace), and
 `validation.invalid_request` (422, a body outside the schema or a malformed
 VPC / subnet / security-group id).
+
+## Console route index — the remaining routes
+
+The sections above document the larger surfaces in depth. This index lists every other
+route in `ROUTE_POLICY` (`backend/app/core/route_policy.py`), so that each classified
+route appears somewhere in this file; `backend/scripts/check_api_docs.py` reports any
+that do not. For the behavior behind a row, see the matching section of
+[architecture.md](architecture.md).
+
+**Columns.** *Role* is the `ROUTE_POLICY` value:
+
+- `public` needs no session, `member` any live session, `admin` an administrator.
+- `perm:<key>` needs `<key>`. On a project-scoped route the key is checked among the caller's effective keys in the request's project (see *Console Projects API*), otherwise among the account's own keys.
+- `infra` / `infra+perm:<key>` changes workspace-shared infrastructure. While the workspace holds one active project it needs `project.write` (or `<key>`) in that project. Once it holds several, only an administrator passes (`403 auth.infra_admin_required`, `detail.projects`).
+
+*Scope* says how the route is resolved:
+
+- `hub`: hub-global. It reads neither `X-Workspace` nor `X-Project`.
+- `ws`: workspace-scoped (`X-Workspace`) but in `PROJECT_EXEMPT`. It needs no project and sees workspace-level data only.
+- `project`: workspace-scoped and run inside the request's project (`X-Project`, or the fallback described under *Console Projects API*). Lists hold only that project's rows (plus platform rows such as system presets), and an id of another project answers that kind's ordinary `404`.
+
+### Health, docs and static catalogues
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/health` | public | hub | `{status: "ok", version, region}` |
+| `GET` | `/api/docs` | public | hub | The Swagger UI page |
+| `GET` | `/api/openapi.json` | public | hub | The OpenAPI document |
+| `GET` | `/api/agent-templates` | member | hub | `{templates[…]}`: the wizard's scenario-template catalogue (T10). Static data, applied client-side |
+| `GET` | `/api/models/defaults` | member | hub | The effective model id per role (configured value or console override) |
+| `GET` | `/api/models/settings` | admin | hub | `{roles[…]}`: each model role with its configured default and console override |
+| `PUT` | `/api/models/settings/{field}` | admin | hub | Body `{model_id}` → the role row. Sets the console override for one role |
+| `DELETE` | `/api/models/settings/{field}` | admin | hub | → the role row. Clears the override; the configured default applies again |
+| `GET` | `/api/model-catalog?refresh=` | member | ws | `{region, models[…], error}`: the Bedrock models callable in the workspace Region, cached (`refresh=true` re-reads) |
+| `POST` | `/api/model-probe` | admin | ws | Body `{field, model_id}` → `{model_id, region, ok, checks[…]}`: whether that model works for that role in the workspace |
+
+### Workspaces
+
+See [architecture.md](architecture.md#workspaces--multi-accountmulti-region-environments).
+A workspace is `{id, name, account_id, region, cross_account, bootstrap_status, tier,
+is_default, resource_visibility, created_at, updated_at, role_arn}`. `external_id` is
+never returned. Deleting or purging a workspace also removes its project bindings.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `POST` | `/api/workspaces` | admin | hub | Body `{id, name, account_id, region, role_arn?, external_id?, tier?}` → `201` workspace (`bootstrap_status: registered`). `400 workspace.reserved_id` / `workspace.invalid_id`, `409 workspace.exists` / `workspace.environment_taken` (that account and Region already have a workspace) |
+| `GET` | `/api/workspaces/hub-identity` | admin | hub | `{account_id, caller_arn, role_arn}`: the values a spoke stack trusts. `502 workspace.hub_identity_unavailable` |
+| `POST` | `/api/workspaces/preflight` | admin | hub | Body `{account_id, region, role_arn, external_id}` → `{ok, caller_account, diagnostic}`. One AssumeRole + `GetCallerIdentity`; a refused AssumeRole is `ok: false` (200), not an error. Writes nothing |
+| `PATCH` | `/api/workspaces/{workspace_id}` | admin | hub | Any of `{name, tier, confirm_tier_change}` → workspace. A move into or out of `prod` needs `confirm_tier_change: true` (`409 workspace.tier_change_unconfirmed`) and is journaled as `workspace.tier_change` |
+| `DELETE` | `/api/workspaces/{workspace_id}` | admin | hub | `{deleted: true, workspace_id}`. Detach only: AWS is untouched. Refused for `default` (`400 workspace.reserved_id`) and while any scoped row names the workspace (`409 workspace.in_use`, `detail.rows`). Grants, project bindings and promotions aimed at it go with it |
+| `POST` | `/api/workspaces/{workspace_id}/bootstrap` | admin | hub | `202 {job_id, workspace_id, bootstrap_status, stages}`. Poll `GET /api/jobs/{job_id}`. `400 workspace.default_not_bootstrappable`, `409` while bootstrapping or ready |
+| `GET` | `/api/workspaces/{workspace_id}/bootstrap` | admin | hub | `{workspace_id, bootstrap_status, job: {id, status, stages} \| null}`: the latest bootstrap run |
+| `POST` | `/api/workspaces/{workspace_id}/observability/repair` | admin | hub | Re-runs the observability stage (Transaction Search) for a ready workspace → `{workspace_id, …}`. `409 workspace.not_ready` |
+| `POST` | `/api/workspaces/{workspace_id}/purge?dry_run=` | admin | hub | `{purged, dry_run, workspace_id, rows{table: count}, resource_keys[]}`. Deletes a `registered` or `failed`, agent-free, non-`default` workspace with all its rows in one transaction; `dry_run=true` only reports |
+| `GET` | `/api/workspaces/{workspace_id}/grants?q=&granted=all\|granted\|ungranted&limit=&offset=` | admin | hub | `{workspace_id, users[{id, username, email, role, status, granted}], total, granted_total}`: the member accounts and whether each holds this workspace. Administrators are absent. `400 workspace.invalid_grant_filter` |
+| `PUT` | `/api/workspaces/{workspace_id}/grants` | admin | hub | Body `{grant[user_id], revoke[user_id]}` → `{workspace_id, added, removed, granted_total}`. Writes `user_workspaces` and, in the same transaction, the default project's `inherit` memberships (see *Projects* in architecture.md); a revoked member's API keys in this workspace are disabled. `400 workspace.grant_conflict` / `workspace.invalid_grant_targets` (unknown id or an administrator) |
+
+### Agents: lifecycle, discovery, snapshots
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `DELETE` | `/api/agents/{agent_id}` | `perm:agents.delete` | project | `{deleted: true, agent_id, aws_resource_deleted}`. Prod-protected. `409 assistant.agent_clearing` while its conversation is being cleared |
+| `GET` | `/api/agents/discovery` | member | project | `{region, runtimes[…], harnesses[…], harness_scan_error}`: the Runtimes and Harnesses in the workspace account, each marked with the managing agent when one exists. Another project's managed runtime shows only that it is managed. Runtimes no agent manages are listed only for a caller holding `agents.import` |
+| `POST` | `/api/agents/discovery/import` | `perm:agents.import` | project | Body `{runtime_ids[], harness_ids[]}` → per-kind result buckets (imported, already managed, failed). Imported agents belong to the request's project. Prod-protected |
+| `POST` | `/api/agent-skills/import` | `perm:agents.deploy` | project | Body `{staging_id, selections[]}` → attachable `{name, path}` entries for the deploy wizard, uploaded to a per-request S3 prefix. A per-item failure does not abort the batch. Prod-protected |
+| `GET` | `/api/agents/{agent_id}/snapshots` | member | project | `{snapshots[…]}`: the ledger spec snapshots, newest first, without specs |
+| `GET` | `/api/agents/{agent_id}/snapshots/{seq}` | member | project | One snapshot with its `spec` |
+| `GET` | `/api/agents/{agent_id}/snapshots/diff?from_seq=&to_seq=` | member | project | `{from, to, changes[…]}`: a field-level difference of two snapshots' specs |
+| `POST` | `/api/agents/{agent_id}/snapshots/{seq}/rollback` | `perm:agents.deploy` | project | `202` like a redeploy: the stored spec is published again as a new version. `409 snapshot.spec_invalid` when it no longer validates. Prod-protected |
+| `GET` | `/api/agents/{agent_id}/suggested-questions?lang=` | member | project | Three to five starter questions for the try-chat panel; cached, never a 500 when the model fails |
+| `GET` | `/api/chat/{agent_id}/memory?session_id=` | member | project | The memory summary of one chat session plus `actor_id` (the compound `<agent>__<human>` actor). `502 memory.unavailable` |
+| `POST` | `/api/chat/{agent_id}/feedback` | `perm:project.use` | project | Body `{session_id, message_id, verdict: up\|down, comment?}` → `{message_id, verdict}`. Records console thumbs feedback |
+
+### Release bundles, promotions and resource mappings
+
+See [architecture.md](architecture.md#the-dev--ops-hand-off-operator-role-release-bundles-promotions-inbox-roadmap-t19t22).
+A bundle is `{id, agent_id, agent_name, display_name, method, snapshot_seq, digest,
+artifact, evaluation, policy, workspace_id, created_by, note, created_at}`. A
+promotion is `{id, bundle_id, bundle, source_workspace_id, target_workspace_id,
+status, gates, stages, action, job_id, previous_bundle_id, change_note,
+rollback_note, requested_by, reviewed_by, reviewed_at, review_note, started_at,
+finished_at, failed_stage, error, created_at, updated_at}`. A promotion keeps its
+project: the target workspace must be bound to the bundle's project, otherwise
+`404 project.not_found`.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/agents/{agent_id}/release-bundles` | member | project | `{bundles[bundle]}`, newest first |
+| `POST` | `/api/agents/{agent_id}/release-bundles` | `perm:promotion.request` | project | Body `{snapshot_seq?, note?}` → `201` bundle: the publish frozen as an immutable, digest-identified bundle |
+| `GET` | `/api/release-bundles/{bundle_id}` | member | project | One bundle. `404 promotion.bundle_not_found` |
+| `GET` | `/api/release-bundles/{bundle_id}/export` | member | project | The bundle as `application/yaml` (`<agent>.release.yaml`, header `X-Bundle-Digest`) |
+| `GET` | `/api/release-bundles/{bundle_id}/resolution?target_workspace_id=` | member | project | `{target_workspace_id, complete, resolved[…], unmapped[…], spec}`: what promoting into the target would rewrite. Read-only; the caller must reach the target in this project |
+| `GET` | `/api/promotions?status=&target=` | member | project | `{promotions[promotion]}` raised from this workspace, newest first. `target_visible` says whether the caller is granted on the target |
+| `POST` | `/api/promotions` | `perm:promotion.request` | project | Body `{bundle_id, target_workspace_id, change_note?, rollback_note?}` → `201` promotion |
+| `GET` | `/api/promotions/{promotion_id}` | member | project | The promotion plus `target_agent {id, status, version} \| null`, `target_name_taken` (the name is held by another project's agent in the target) and `diff[…]` against the target; target fields are blank for a caller not granted on the target |
+| `GET` | `/api/promotions/{promotion_id}/plan` | member | project | What executing would create or change in the target. Read-only |
+| `POST` | `/api/promotions/{promotion_id}/review` | `perm:promotion.approve` | project | Body `{decision: approve\|reject, note?}` → promotion. The requester never reviews their own (`promotion.self_approval`). Journaled |
+| `POST` | `/api/promotions/{promotion_id}/execute` | `perm:promotion.approve` | project | `202 {promotion, job_id}`. Refused while a blocking gate fails (`409 promotion.gate_failed.<gate>`), `409 promotion.already_executing` / `promotion.not_executable`. Journaled |
+| `GET` | `/api/promotions/{promotion_id}/execution` | member | project | `{promotion, log[…]}`: per-stage progress and the target job's log, for a caller granted on the target |
+| `POST` | `/api/promotions/{promotion_id}/rollback` | `perm:promotion.approve` | project | `202`: re-deploys the bundle the target ran before. `409 promotion.not_rollbackable` / `promotion.no_previous_bundle` / `promotion.already_executing` |
+| `GET` | `/api/release-policies/{workspace_id}` | member | ws | `{workspace_id, tier, policy, effective}`: a target workspace's release policy |
+| `GET` | `/api/inbox` | admin | ws | `{items[{key, severity, count, to, sample[]}]}`: pending accounts, expiring accounts, workspaces needing attention, and the selected workspace's failed jobs and pending promotions |
+| `GET` | `/api/resource-mappings` | member | project | `{workspace_id, kinds[], mappings[{id, key, kind, name, resource_id, note, scope: project\|workspace, project_id, workspace_id, updated_by, updated_at}]}`: the project's mappings and the workspace defaults |
+| `PUT` | `/api/resource-mappings/{kind}/{name}?scope=project\|workspace` | `perm:promotion.approve` | project | Body `{resource_id, note?}` → mapping. `scope=project` (default) writes this project's mapping; `scope=workspace` writes the default every project falls back to and needs an administrator in a multi-project workspace (`403 mapping.workspace_scope_forbidden`). A `resource_id` naming another project's knowledge base or memory reads as missing. Journaled |
+| `DELETE` | `/api/resource-mappings/{kind}/{name}?scope=` | `perm:promotion.approve` | project | `{deleted: true, key}`. `404 mapping.not_found` |
+
+### Share, review and channel links; the `/share` surface
+
+See [architecture.md](architecture.md#share-links-external-pages-and-thumbs-feedback-roadmap-t13t15).
+A link is `{id, kind, agent_id, label, prefix, state: active|revoked|disabled|expired,
+created_by, expires_at, revoked_at, last_used_at, use_count, created_at}`, plus
+`channel` (platform and which secrets are set, never a value) on a channel link. The
+raw token is returned once, at creation; only its hash is stored. A link belongs to
+its agent's project: it stops resolving (`404`, like a revoked token) when the agent
+leaves that project or the project is archived, and archiving revokes the project's
+links. The `/share/*` routes run inside the link's project, ignore `X-Project`, and
+are rate limited per link.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/agents/{agent_id}/share-links` | member | project | `{links[link]}` of every kind for the agent, newest first |
+| `POST` | `/api/agents/{agent_id}/share-links` | `perm:project.write` | project | Body `{label?, expires_in_days? (1–365)}` → `201` link + `{token, path, url, embed_url, embed_snippet}` |
+| `GET` | `/api/agents/{agent_id}/review-links` | member | project | `{links[link]}` of kind `review` |
+| `POST` | `/api/agents/{agent_id}/review-links` | `perm:project.write` | project | Body `{label?, expires_in_days?}` → `201` link + `{token, path, url}`: an SME review page |
+| `POST` | `/api/agents/{agent_id}/channel-links` | `perm:project.write` | project | Body `{platform: slack\|feishu, label?, expires_in_days?, credentials{…}}` → `201` link + `{token, path, url}`: the webhook URL to configure in the IM platform. `422 channel.unsupported` / `channel.invalid_setup` |
+| `POST` | `/api/share-links/{link_id}/revoke` | `perm:project.write` | project | → link. Idempotent: the first revocation time stands |
+| `GET` | `/share/{token}?embed=` | public | hub | `{kind, embed, label, agent{display_name}, expires_at}` |
+| `POST` | `/share/{token}/chat` | public | hub | Body `{prompt, session_id?}` → SSE of the visitor-visible events. A new session gets an anonymous actor derived from the link; a `session_id` must be one this link started |
+| `POST` | `/share/{token}/feedback` | public | hub | Body `{session_id, message_id, verdict, comment?}` → `{message_id, verdict}` (source `share`) |
+| `GET` | `/share/review/{token}` | public | hub | `{kind, label, agent{display_name}, expires_at, items[…]}`: the answers queued for review |
+| `POST` | `/share/review/{token}/rate` | public | hub | Body `{message_id, verdict, comment?, correction?}` → `{message_id, verdict}` (source `review`) |
+| `POST` | `/share/channels/{platform}/{token}` | public | hub | The IM platform's inbound webhook. The signature is verified per platform; a handshake is answered inline, a message is acknowledged at once (`{ok: true}`, `duplicate: true` for a redelivered event) and answered out of band |
+
+### Business self-service: feedback, issues, intents, curated answers
+
+See [architecture.md](architecture.md#business-self-service-intents-sme-review-curated-answers-issue-box-roadmap-t33t36).
+An issue is `{id, agent_id, agent_name, session_id, message_id, kind, status:
+open|fixed|wont_fix, question, answer, comment, correction, opened_by, fixes[…],
+history[…], resolved_by, resolved_at, resolution_note, hours_to_close, created_at,
+updated_at}`. A curated answer (rule) is `{id, agent_id, position, name, match,
+pattern, answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/feedback?verdict=up\|down&agent_id=&limit=` | member | project | `{items[…], counts, down_session_ids[]}`: thumbs feedback from the console, share and review pages |
+| `GET` | `/api/issues?status=&agent_id=&limit=` | member | project | `{items[issue], summary}` |
+| `POST` | `/api/issues` | `perm:project.write` | project | Body `{agent_id, session_id, message_id, kind, note?}` → `201` issue |
+| `POST` | `/api/issues/sync` | `perm:project.write` | project | `{opened}`: opens an issue for every thumbs-down that has none (idempotent) |
+| `GET` | `/api/issues/{issue_id}` | member | project | Issue + `transcript[…]` |
+| `POST` | `/api/issues/{issue_id}/fixes` | `perm:project.write` | project | Body `{action, ref?, note?}` → issue: records what was done about it |
+| `POST` | `/api/issues/{issue_id}/resolve` | `perm:project.write` | project | Body `{status: fixed\|wont_fix, note?}` → issue |
+| `POST` | `/api/issues/{issue_id}/reopen` | `perm:project.write` | project | Body `{note?}` → issue |
+| `GET` | `/api/intents?agent_id=&days=1–30&lang=&refresh=` | member | project | `{generated_at, …}`: the project's chat turns clustered into user intents, cached per project |
+| `GET` | `/api/agents/{agent_id}/rules` | member | project | `{agent_id, enabled, rules[rule], limit}` |
+| `POST` | `/api/agents/{agent_id}/rules` | `perm:project.write` | project | Body `{name, match, pattern, answer, enabled?, issue_id?}` → `201` rule; with an open `issue_id` the rule is recorded as that issue's fix. `409 rule.limit_reached` |
+| `PATCH` | `/api/agents/{agent_id}/rules/{rule_id}` | `perm:project.write` | project | Any of `{name, match, pattern, answer, enabled}` → rule |
+| `DELETE` | `/api/agents/{agent_id}/rules/{rule_id}` | `perm:project.write` | project | `{deleted: true}` |
+| `PUT` | `/api/agents/{agent_id}/rules-enabled` | `perm:project.write` | project | Body `{enabled}` → the rules view: curated answers on or off for the agent |
+| `PUT` | `/api/agents/{agent_id}/rules-order` | `perm:project.write` | project | Body `{ids[]}` → the rules view, in the new order |
+| `POST` | `/api/agents/{agent_id}/rules/test` | `perm:project.use` | project | Body `{question}` → `{agent_enabled, matched, rule \| null}`: which rule would answer. No counter moves, no model call |
+
+### Agent-DLC: the remaining routes
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/agents/{agent_id}/watch` | member | project | The agent's drift watch: schedule, criteria, golden dataset, budget, last runs |
+| `PUT` | `/api/agents/{agent_id}/watch` | `perm:criteria.manage` | project | Body `{criteria_lineage_id?, dataset_id?, every, at_hour, tz, repeats, max_cost_usd?, enabled}` → the watch view. The dataset must be a golden set of this project. Prod-protected |
+| `GET` | `/api/calibration/run-criteria/{run_id}` | `perm:criteria.manage` | project | `{run_id, status, mode, agent_id, criteria[{key, items}]}`: the evaluator criteria a run can seed an annotation task for, with the sample count each gives |
+| `POST` | `/api/admission/{candidate_id}/duplicate` | `perm:golden.admit` | project | Body `{duplicate_of}` → candidate: marks an admission candidate as a duplicate |
+| `POST` | `/api/waivers/{waiver_id}/reject` | `perm:waiver.approve` | project | Body `{note?}` → waiver |
+
+### Alerts, costs, fleet, governance health, marketplace, overview
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/alerts` | member | project | `{rules[rule], firing, kinds[]}`: the workspace-level rules and this project's rules. A rule is `{id, kind, name, comparison, threshold, window, enabled, has_webhook, scope: workspace\|project, project_id, state, last_value, last_detail, last_checked_at, last_fired_at, last_notified_at, created_by, created_at}` |
+| `POST` | `/api/alerts` | admin | project | Body `{kind, name, threshold, comparison?, window, enabled?, webhook_url?, scope?: workspace\|project, project_id?}` → `201` rule. `scope=project` measures one project (default the request's), which must be bound to the workspace |
+| `PATCH` | `/api/alerts/{rule_id}` | admin | project | Any of `{name, threshold, window, enabled, webhook_url}` → rule |
+| `DELETE` | `/api/alerts/{rule_id}` | admin | project | `{deleted: rule_id}` |
+| `POST` | `/api/alerts/evaluate?notify=` | admin | project | `{workspace_id, evaluated_at, rules[…], firing, unknown}`: re-reads every enabled rule now; `notify=false` does not deliver webhooks |
+| `GET` | `/api/costs?range=&project=&force=` | admin | ws | `{range, hours, generated_at, by_agent[…], sessions, …}`: estimated spend by agent, person and model; `unpriced_models` names models with no price. `project` narrows to one bound project; without it the report spans the workspace, with an unattributed bucket. `422 costs.bad_range` |
+| `GET` | `/api/costs/month-to-date?project=&force=` | admin | ws | `{workspace_id, project?, est_cost_usd}`: the figure a `cost_mtd_usd` alert compares against |
+| `GET` | `/api/fleet?project=` | admin | hub | Every workspace in one table (agents, failures, pending releases, firing alerts), each also per project; `project` narrows to one project. A ledger read; an unusable workspace reports `readable: false`. `404 project.not_found` |
+| `GET` | `/api/governance/health` | member | project | `{workspace_id, generated_at, score, grade, agents_considered, findings[{…, to}]}` |
+| `GET` | `/api/overview/ttfa` | admin | project | Time to First Agent for the workspace's accounts, across every project of the workspace. Ledger read |
+| `GET` | `/api/marketplace/templates` | member | ws | `{templates[{id, title, summary, method, spec, requirements, source_workspace_id, source_agent_name, published_by, uses, own, created_at, updated_at}]}` from every workspace |
+| `POST` | `/api/marketplace/templates` | `infra` | project | Body `{agent_id, title, summary?}` → `201` template: one of this project's active agents published as a template |
+| `DELETE` | `/api/marketplace/templates/{template_id}` | `infra` | project | `{deleted: template_id}`. Only the publishing workspace and, in it, the publishing project (`403 marketplace.not_yours`); administrators always |
+| `POST` | `/api/marketplace/templates/{template_id}/use` | `perm:project.write` | project | → template: the wizard defaults and what the consumer must still supply. Creates no agent |
+
+### Governance, registry and tools: the remaining routes
+
+Governance policies, the registry's MCP and skill records and the gateway's tools are
+workspace infrastructure: every project reads them, and their writes are `infra`.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/governance/policies` | member | project | `{engine{id, name, status, attached_mode, attached}, policies[{id, name, status, statement}]}`: the Cedar policies on the gateway's policy engine. `503 policy.engine_deleted` |
+| `DELETE` | `/api/governance/gateways/{gateway_id}/policies/{policy_id}` | `infra` | project | Body `{expected_gateway_updated_at, expected_policy_updated_at, acknowledged_gateway_ids[], confirmation_name, override_reason?}` → `202 {operation}`: a queued, journaled policy change (see *Console Governance API*) |
+| `GET` | `/api/governance/decisions` | member | project | `{decisions[{at, principal, tool, outcome, reason, source}], source: "demo"}`: the last 30 decisions recorded by `policy-test` |
+| `POST` | `/api/governance/policy-test` | `infra` | project | Body `{tool, arguments, username}` → `{principal, tool, outcome: ALLOW\|DENY\|ERROR, detail, policy_id, decision_id, recorded}`: a real `tools/call` as that principal. Only ALLOW and DENY are journaled |
+| `POST` | `/api/governance/policy-generation` | `infra` | project | Body `{text, name}` → `{available, generation_id, status}` (preview API; `available: false` with `error` when AWS refuses) |
+| `GET` | `/api/governance/policy-generation/{generation_id}` | member | ws | `{status, assets[{id, statement}]}` |
+| `GET` | `/api/governance/guardrail` | member | ws | Whether the workspace has the `launchpad-pii` guardrail, and its state |
+| `POST` | `/api/governance/guardrail` | admin | project | `201` → the guardrail view. Creates the preset, or adopts one of that name |
+| `GET` | `/api/traces/{session_id}?lookback_hours=` | member | project | The session's span trace. In a workspace bound to several projects, only a chat session of the current project is readable (`404 trace.not_found` otherwise) |
+| `GET` | `/api/registry/records/search?q=` | member | project | `{records[…]}`: semantic registry search; A2A records of agents outside the project are dropped |
+| `GET` | `/api/registry/attachables?refresh=` | member | project | The approved MCP servers and skills the create wizard can mount, cached 60 s per workspace |
+| `POST` | `/api/registry/records` | `infra` | project | Body `{type: MCP\|AGENT_SKILLS, name, description, url? (MCP), skill_md? (skill)}` → `201` record. `400 registry.invalid_url` / `registry.skill_md_required` |
+| `PUT` | `/api/registry/records/{record_id}` | `infra` | project | Any of `{description, url, skill_md, staging_id, index}` → record. A content edit bumps the record version; DEPRECATED, A2A and system-managed records are not editable. `400 registry.nothing_to_update` / `registry.field_conflict` / `registry.field_type_mismatch`, `410 registry.staging_expired` |
+| `DELETE` | `/api/registry/records/{record_id}` | `infra` | project | `{deleted: true, record_id}` |
+| `POST` | `/api/registry/records/{record_id}/reimport` | `infra` | project | → record: re-acquires a git- or URL-sourced skill and bumps its version. `400 registry.not_reimportable`, `422 registry.skill_invalid` |
+| `POST` | `/api/registry/sync-defaults` | `infra` | project | `{results[…]}`: registers the gateway's MCP targets and the sample skill bundle |
+| `POST` | `/api/registry/skills/inspect` | `perm:agents.deploy` | project | A multipart `.zip` or JSON `{source{…}}` (git) → `{staging_id, skills[…]}`: validated bundles parked in staging for preview, bound to the caller, workspace and project. Writes nothing to S3 |
+| `POST` | `/api/registry/skills/import` | `infra` | project | Body `{staging_id, selections[{index, name?, name_override?, description_override?}]}` → `{records[{name, ok, record?, error?, error_code?}]}`. A per-item failure never aborts the batch. `410 registry.staging_expired` |
+| `GET` | `/api/registry/skills/capabilities` | member | ws | `{git{…}}`: whether the `git` CLI is available for git imports |
+| `POST` | `/api/registry/skills/capabilities/git-install` | `infra` | project | A best-effort install of the `git` CLI on the backend host |
+| `POST` | `/api/registry/a2a-demo` | `perm:project.use` | project | Body `{agent_id, question}` → `{answer, trace[…], session_id, …}`: invokes a front-desk runtime agent of the project with SigV4. `404 registry.a2a_demo_agent`, `400 registry.a2a_demo_unsupported`, `409 registry.a2a_demo_jwt_unsupported`, `502 registry.a2a_demo_failed` |
+| `GET` | `/api/tools?refresh=` | member | ws | `{gateway_url, gateway_error, tools[{name, source, target, description, inputSchema, auth}]}`: the gateway's tools (cached 60 s) plus the built-in ones |
+| `POST` | `/api/tools/call` | `infra` | project | Body `{name, arguments}` → the MCP `tools/call` result |
+| `GET` | `/api/demos/browser/options` | member | ws | `{browsers[…], profiles[…]}`: the account's custom AgentCore browsers and browser profiles. `502 tools.browser_options_failed` |
+| `POST` | `/api/demos/browser` | `perm:project.write` | project | Body `{url, web_bot_auth?, browser_identifier?, profile_identifier?, save_profile?}` → `{url, title, session_id, latency_ms, live_view_url, live_view_expires_in, viewport, browser_identifier, web_bot_auth, profile_identifier, …}`: opens the page in an AgentCore Browser session kept alive for Live View |
+| `DELETE` | `/api/demos/browser/{session_id}` | `perm:project.write` | project | `{session_id, …}`: stops a demo session of this project (saving the profile when asked at start). `502 tools.browser_stop_failed` |
+| `POST` | `/api/demos/code-interpreter` | `perm:project.write` | project | Body `{code}` → `{stdout, session_id, latency_ms}`: one Python run in an AgentCore Code Interpreter session in the workspace account |
+
+### Observability: the remaining routes
+
+In a workspace bound to several projects, a span or session is shown only when it
+resolves to an agent of the current project (or a platform agent); one that resolves
+to no agent is hidden from non-administrators. A single-project workspace shows
+everything, as before.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/observability/dashboard?range=&force=` | member | project | The dashboard tiles and series for the range, cached per workspace and project |
+| `GET` | `/api/observability/sessions?range=&force=` | member | project | `{sessions[…], count, …}` |
+| `GET` | `/api/observability/traces?range=&agent=&status=&session=&force=` | member | project | `{traces[…], count, …}`; `session` matches a session or trace id substring |
+| `GET` | `/api/observability/traces/{trace_id}?range=&force=` | member | project | One trace with its spans. `404 observability.trace_not_found`, also for another project's trace |
+| `GET` | `/api/observability/prices` | member | ws | `{prices, meta, source, refresh_hours}`: the model price table |
+| `POST` | `/api/observability/prices/refresh` | `infra` | project | Pulls the latest prices from the configured litellm source into the local config. No AWS call |
+
+### Evaluation, experiments and runtime canaries: the remaining routes
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `POST` | `/api/eval/datasets/upload` | `perm:project.write` | project | Body `{name, locale?, description?, jsonl}` → `201` dataset. `422 dataset.invalid_jsonl` / `dataset.invalid_item` / `dataset.empty` |
+| `PUT` | `/api/eval/datasets/{dataset_id}` | `perm:project.write` | project | Any of `{name, description, items[]}` → dataset. Replacement items keep the dataset's kind (`400 dataset.kind_immutable`) |
+| `DELETE` | `/api/eval/datasets/{dataset_id}` | `perm:project.write` | project | `{deleted: true}` |
+| `GET` | `/api/eval/pipelines` | member | project | `{pipelines[…]}`: the data-processing pipelines (V2), newest first |
+| `GET` | `/api/eval/pipelines/{pipeline_id}` | member | project | One pipeline |
+| `PUT` | `/api/eval/pipelines/{pipeline_id}` | `perm:project.write` | project | Body `{name, description?, source, processing, output}` → pipeline. `409 pipeline.running`; the output dataset and the source log groups must be this project's |
+| `DELETE` | `/api/eval/pipelines/{pipeline_id}` | `perm:project.write` | project | `{deleted: true}` |
+| `GET` | `/api/eval/online/{config_id}/results?range=` | member | project | Per-evaluator means, labels, trend and recent records of an online evaluation config. Another project's config reads as missing in a multi-project workspace |
+| `POST` | `/api/eval/online/{config_id}/resume` | `perm:eval.run` | project | → config: sets its execution status back to enabled |
+| `GET` | `/api/experiments` | member | project | `{experiments[…]}`: the 20 newest |
+| `GET` | `/api/experiments/providers` | member | ws | `{providers[…]}`: the recommend-stage generators (`agentcore`, `gepa_lite`) |
+| `GET` | `/api/experiments/{exp_id}` | member | project | One experiment with its stages, artifacts and `running_action` |
+| `POST` | `/api/experiments/{exp_id}/action` | `perm:project.write` | project | Body `{action: recommend\|accept\|bundles\|gateway\|abtest\|traffic\|verdict\|promote\|cleanup, …stage options}` → the experiment (`202` for an action that runs in the background). `409 experiment.action_in_flight` / `experiment.stage_not_ready`, `410 experiment.action_moved` for `canary` / `ramp`. Every action except `verdict` / `cleanup` also needs the agent to be visible. Prod-protected |
+| `GET` | `/api/runtime-canaries` | member | project | `{canaries[…]}`: the 20 newest |
+| `GET` | `/api/runtime-canaries/{canary_id}` | member | project | One canary |
+| `POST` | `/api/runtime-canaries/{canary_id}/action` | `perm:project.write` | project | Body `{action: setup\|traffic\|verdict\|advance\|complete\|rollback\|cleanup, dataset_id? (traffic), allow_non_significant?}` → the canary. A legacy canary's separate challenger must be in the same project. `409 canary.action_in_flight` / `canary.stage_not_ready`, `422 canary.dataset_required` / `canary.dataset_unsupported`. Prod-protected |
+
+### Skill Lab: jobs and task sets
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/skill-lab/status` | member | ws | `{provisioned, missing[], venv_ready, default_target_model, default_judge_model, default_codex_target_model, target_backends[], judge_modes[], agentic_judge_ready, judge_codex_ready, judge_claude_ready, judge_cli_ready}` |
+| `GET` | `/api/skill-lab/tasksets` | member | project | `[taskset]`: the project's task sets |
+| `POST` | `/api/skill-lab/tasksets` | `perm:project.write` | project | Body `{name, description?, mode, tasks_by_split{…}}` → `201` task set |
+| `GET` | `/api/skill-lab/tasksets/{taskset_id}?full=` | member | project | One task set (`full=true` includes every task) |
+| `PUT` | `/api/skill-lab/tasksets/{taskset_id}` | `perm:project.write` | project | Any of `{name, description, tasks_by_split}` → task set |
+| `DELETE` | `/api/skill-lab/tasksets/{taskset_id}` | `perm:project.write` | project | `{ok: true}` |
+| `POST` | `/api/skill-lab/task-assets` | `perm:project.write` | project | Multipart `files[]` → `201 {assets[…]}`: staged task attachments |
+| `GET` | `/api/skill-lab/jobs?type=` | member | project | `[job]` |
+| `POST` | `/api/skill-lab/jobs` | `perm:project.write` | project | Body `{type: eval\|train\|taskgen, skill_source, taskset_id, split?, target_split?, attachments?, params?}` → `201` job. `422 skill_lab.bad_params` |
+| `GET` | `/api/skill-lab/jobs/{job_id}` | member | project | One job |
+| `GET` | `/api/skill-lab/jobs/{job_id}/log?offset=` | member | project | The job log from `offset` |
+| `GET` | `/api/skill-lab/jobs/{job_id}/diff` | member | project | The skill-version diff of a training job. `404 skill_lab.results_pending` |
+| `GET` | `/api/skill-lab/jobs/{job_id}/train-summary` | member | project | The training steps. `404 skill_lab.results_pending` |
+| `POST` | `/api/skill-lab/jobs/{job_id}/cancel` | `perm:project.write` | project | → job |
+| `POST` | `/api/skill-lab/jobs/{job_id}/resume` | `perm:project.write` | project | → job |
+| `POST` | `/api/skill-lab/jobs/{job_id}/publish` | `infra` | project | Body `{reapprove?}` → result: publishes the trained skill to the workspace registry |
+| `DELETE` | `/api/skill-lab/jobs/{job_id}` | `perm:project.write` | project | `{ok: true}` |
+
+### Architect assistant: evaluation plan and operations
+
+See *Console Architect Assistant API* above for the plan and operation shapes.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/prepare` | `perm:project.use` | project | Body `{revision}` → `201 {plan, …plan state}`: drafts a plan revision from one proposal revision. No resource side effects |
+| `PUT` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan` | `perm:project.use` | project | Body `{content}` → `{plan, …plan state}`: a member edit is a new plan revision (draft, or invalid with its errors) |
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize` | `perm:agents.deploy` | project | Body `{plan_revision, plan_hash, acknowledge_disclosure: true}` → `202 {operation, started: true}` when this call created the operation, `200` with the recorded operation for a repeat. `422 assistant.disclosure_required` |
+| `GET` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}` | member | project | `{operation}`. Ledger read |
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/retry` | `perm:agents.deploy` | project | `{operation, started}`: resumes the persisted intents of a partial or failed operation |
+| `POST` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/lambda-revision-review` | `perm:agents.deploy` | project | Body `{plan_hash, expected_created_revision_id, expected_current_revision_id, cloudtrail_event_id, reason}` → `{operation, review, started}`: the reviewed recovery of one Lambda revision conflict. No cloud write |
+| `DELETE` | `/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/assets` | `perm:agents.deploy` | project | `{operation}`: deletes exactly the cloud artifacts the operation created; the local dataset stays |
+
+### Studio local execution and code generation
+
+These routes run generated agent code on the backend host (`local_exec`) and are
+refused in prod unless explicitly enabled; that guard is the real boundary.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `POST` | `/api/execute` | `perm:project.use` | project | Body `{code, input_data?, openai_api_key?, bedrock_api_key?}` → `{success, output \| error, execution_time_ms}` |
+| `POST` | `/api/execute/stream` | `perm:project.use` | project | Same body → SSE of the subprocess stdout, ending with `[STREAM_COMPLETE:<seconds>]` |
+| `POST` | `/api/fix-code/stream` | `perm:project.use` | project | Body `{code, error, flow_data, graph_mode, input_data?}` → SSE from the coding agent's diagnosis and fix |
+| `GET` | `/api/generate-code/status` | member | ws | Coding-agent backend availability (drives the Fix button) |
+| `GET` | `/api/conversations` | member | project | The studio conversation sessions |
+| `POST` | `/api/conversations` | `perm:project.use` | project | Body `{generated_code, flow_data, project_id?, version?, openai_api_key?, bedrock_api_key?}` → session. `project_id` is the studio flow's id, not a Launchpad project |
+| `GET` | `/api/conversations/{session_id}` | member | project | The session history |
+| `DELETE` | `/api/conversations/{session_id}` | `perm:project.use` | project | Deletes the session |
+| `PUT` | `/api/conversations/{session_id}/code` | `perm:project.use` | project | Body `{generated_code}` → session: replaces the code, keeps the messages |
+| `GET` | `/api/conversations/{session_id}/messages` | member | project | `{messages[…]}` |
+| `POST` | `/api/conversations/{session_id}/messages` | `perm:project.use` | project | Body `{message}` → the reply |
+| `POST` | `/api/conversations/{session_id}/messages/stream` | `perm:project.use` | project | Body `{message}` → SSE, ending with `[CHAT_COMPLETE:<id>]` or `[CHAT_ERROR:<json>]` |
+
+### API keys, environments, announcements and videos
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `POST` | `/api/apikeys/{key_id}/disable` | `perm:project.write` | project | → key. A key belongs to one project; `/v1` calls with it run in that project |
+| `GET` | `/api/apikeys/{key_id}/usage?days=1–90` | member | project | `{key_id, total, last_used_at, days[…]}`: admitted `/v1` calls per UTC day, zero-filled |
+| `GET` | `/api/environments/compare?agent=` | member | project | `{agent, reference_workspace, environments[…], summary}`: the agent of that name in every workspace the caller reaches and the current project is bound to |
+| `GET` | `/api/environments/drift?agent=` | member | project | `{workspace_id, state, counts, agents[…], checked, truncated}`: ledger expectation against what AWS reports. Read-only |
+| `GET` | `/api/announcements?limit=&offset=` | member | hub | `{announcements[…], total}`: the published projection |
+| `GET` | `/api/announcements/manage?limit=&offset=` | admin | hub | `{announcements[…], total}` with drafts |
+| `POST` | `/api/announcements` | admin | hub | Body `{title, body, link_url?, link_label?}` → `201` announcement `{id, status, revision, content, published_content, has_unpublished_changes, created_by, updated_by, created_at, updated_at, published_at}` |
+| `GET` | `/api/announcements/{announcement_id}` | admin | hub | One announcement |
+| `PUT` | `/api/announcements/{announcement_id}` | admin | hub | The create body + `expected_revision` → announcement (`409` on a stale revision) |
+| `POST` | `/api/announcements/{announcement_id}/publish` / `…/unpublish` | admin | hub | Body `{expected_revision}` → announcement |
+| `DELETE` | `/api/announcements/{announcement_id}?expected_revision=` | admin | hub | `{deleted: true}` |
+| `GET` | `/api/videos` | member | hub | `{schemaVersion, categories, collections, videos}`: the published tutorial catalogue |
+| `GET` | `/api/videos/manage` | admin | hub | `{taxonomy, videos[…]}` with drafts |
+| `POST` | `/api/videos/manage` | admin | hub | Body `{category_id, section_id, console_version, title, description, cdn_url, webm_url?, poster_url?, caption_url?, duration_seconds, chapters[], sort_order}` → `201` video (same revisioned shape as an announcement) |
+| `GET` | `/api/videos/manage/{video_id}` | admin | hub | One video |
+| `PUT` | `/api/videos/manage/{video_id}` | admin | hub | The create body + `expected_revision` → video |
+| `POST` | `/api/videos/manage/{video_id}/publish` / `…/unpublish` | admin | hub | Body `{expected_revision}` → video |
+| `DELETE` | `/api/videos/manage/{video_id}?expected_revision=` | admin | hub | `{deleted: true}` |
