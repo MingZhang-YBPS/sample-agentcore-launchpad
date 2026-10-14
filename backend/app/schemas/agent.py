@@ -861,6 +861,13 @@ class AgentSpec(BaseModel):
             )
         if self.mcp is None:
             raise ValueError("protocol='mcp' requires the mcp settings block")
+        if self.mcp.stdio_wrapper is not None and (
+            self.byoc is None or self.byoc.artifact_kind != "code_zip"
+        ):
+            raise ValueError(
+                "mcp.stdio_wrapper applies to artifact_kind=code_zip only — a Dockerfile "
+                "context or image can run the bridge itself (samples/mcp_stdio_bridge)"
+            )
         if self.tools:
             raise ValueError(
                 "an MCP server declares no tools of its own — its tools are what it "

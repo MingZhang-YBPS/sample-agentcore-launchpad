@@ -477,8 +477,21 @@ through the Gateway (`<target>___<tool>`) back live — the V3 agent page render
 place of the lifecycle, chat and try-it panels. Delete runs in reverse: Gateway target →
 runtime → OAuth2 provider → Cognito client, idempotent. Sample:
 [`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md) (`mcp>=1.10,<2`).
-Not in this version: tool review, Cedar scaffolding, the stdio bridge, health
-schedules, Lambda targets, VPC mode.
+Not in this version: tool review, Cedar scaffolding, health schedules, Lambda
+targets, VPC mode.
+
+**stdio bridge (§15.5).** A stdio-only server ships as a code zip with
+`mcp.stdio_wrapper = {command, args, base}` (code_zip only — a Dockerfile context or
+an image builds the bridge in itself). The deployer adds
+[`samples/mcp_stdio_bridge/`](../samples/mcp_stdio_bridge/README.md), which serves
+`0.0.0.0:8000/mcp` and starts the command (no shell, from the bundle root; argv in
+env `MCP_STDIO_COMMAND`) as its subprocess: base `python` stays on the managed
+Python runtime with the bridge as entrypoint, base `node` builds an image on the
+bridge's Node base (CodeBuild, arm64) and deploys a container runtime. One
+subprocess per container, so a server that keeps per-session state sees every
+caller as one session; responses are plain JSON (the server's notifications are
+dropped, its requests back answered as unsupported). The V2 wizard's MCP server
+card has the switch, and hides the entrypoint picker while it is on.
 
 ### Recommendation trace source
 
@@ -2953,8 +2966,10 @@ backend surface.
   `v3`. Opening any `/v3` page counts as choosing V3.
 - **Native pages.** Command center (`/v3`: a ranked "needs you" queue built from
   failed deploys, releases awaiting signature and gates that stopped —
-  `v3/signals.ts`), Agents (`/v3/agents`, `?id=` for one agent: lifecycle line,
-  deploy stages, versions/endpoints, try-it), Chat (`/v3/chat`, the same
+  `v3/signals.ts`), Agents (`/v3/agents`, `?id=` for one agent: a header with
+  Edit ▾ / ⋯ More — convert, roll back, delete with a typed-name confirm; an
+  imported runtime is removed from the platform instead — and the tabs overview /
+  deploy & versions / access & integration / release, kept in `?tab=`), Chat (`/v3/chat`, the same
   `chat_stream` SSE chain), and Release gate (`/v3/gate`: the four-gate pipeline,
   per-criterion intervals, sign / block / roll back / run the gate).
 - **Rebuilt modules (batch 1, Agent build).** `/v3/create` is the launch page: the

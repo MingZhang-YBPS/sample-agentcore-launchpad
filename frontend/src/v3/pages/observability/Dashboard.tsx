@@ -125,7 +125,7 @@ function Tokens({ data, onPricesRefreshed }: { data: ObsDashboard; onPricesRefre
         toast("ok", t("obs.prices.refreshed", { updated: res.meta.updated.length, added: res.meta.added.length }));
         onPricesRefreshed();
       })
-      .catch((err: unknown) => toast("act", t("obs.loadFailed", { msg: errorMessage(err) })))
+      .catch((err: unknown) => toast("act", t("obs.loadFailed", { msg: errorMessage(err) }), err))
       .finally(() => setBusy(false));
   };
   return (

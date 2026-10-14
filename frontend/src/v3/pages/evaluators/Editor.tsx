@@ -19,6 +19,7 @@ import {
   judgeModelOptions,
   LEVEL_PLACEHOLDERS,
 } from "../../../lib/evaluators";
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
@@ -135,7 +136,7 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
 
   // seed the edit form once the evaluator arrives
   if (editing && draft === null && detail.data) setDraft(draftFrom(detail.data));
-  if (editing && (detail.loading || draft === null)) return detail.error ? <Notice s="act">{detail.error}</Notice> : <Skeleton rows={6} />;
+  if (editing && (detail.loading || draft === null)) return detail.error ? <Notice s="act"><ApiErrorDetail error={detail.failure ?? detail.error} /></Notice> : <Skeleton rows={6} />;
   if (!draft) return <Skeleton rows={6} />;
 
   const bases = (catalog.data?.evaluators ?? []).filter((e) => e.source !== "custom");

@@ -116,7 +116,7 @@ export function EvalView({ id }: { id: string }) {
         back();
       }
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
       setConfirm(null);

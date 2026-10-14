@@ -37,6 +37,8 @@ import {
   seconds,
   sseEvents,
   STALL_ABORT_MS,
+  toolRunById,
+  type TurnStatus,
   turnStopReason,
   useChatTurn,
 } from "../../lib/chat";
@@ -114,6 +116,7 @@ export function V2Chat() {
   const [sharing, setSharing] = useState(false);
   // chat-streaming S2: what the running turn is doing, its timer and its stop
   const turn = useChatTurn();
+  const turnSeq = useRef(0);
 
   // Resolve the deep link once, when the agent list first answers.
   useEffect(() => {
@@ -254,6 +257,12 @@ export function V2Chat() {
     let completed = false;
     let activeSessionId = sessionId;
     const signal = turn.begin();
+    const key = ++turnSeq.current;
+    // a tool row follows its run in the turn status (ids repeat across turns)
+    const syncRuns = (status: TurnStatus | null) =>
+      setMessages((m) =>
+        m.map((msg) => (msg.turn === key && msg.run ? { ...msg, run: toolRunById(status, msg.run.id) ?? msg.run } : msg)),
+      );
     try {
       const request: ChatRequest = { prompt, session_id: sessionId };
       const asUserValue = asUserField(jwtAgent, asUser);
@@ -263,15 +272,18 @@ export function V2Chat() {
           throw new Error(t("chatPage.attachments.readFailed"));
         });
       }
-      const res = await chatApi.stream(agentId, request);
+      // the turn's signal also aborts the request itself (Stop before the first frame)
+      const res = await chatApi.stream(agentId, request, signal);
       // Encoded bytes are request-only; release them while the response streams.
       delete request.attachments;
       if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
       let agentOpen = false;
       let curated = false; // T35: a `rule` event precedes a curated answer's text
       for await (const { event, data: payload } of sseEvents(res, { heartbeats: true, signal })) {
-        turn.feed(event, payload);
-        if (event === "meta") {
+        const status = turn.feed(event, payload);
+        if (event === "tool_end") {
+          syncRuns(status);
+        } else if (event === "meta") {
           if (payload.session_id) {
             activeSessionId = payload.session_id;
             setSessionId(payload.session_id);
@@ -287,7 +299,8 @@ export function V2Chat() {
         } else if (event === "rule") {
           curated = true;
         } else if (event === "tool") {
-          setMessages((m) => [...m, { kind: "tool", text: payload.name ?? "tool", name: payload.name }]);
+          const run = status?.tools[status.tools.length - 1];
+          setMessages((m) => [...m, { kind: "tool", text: payload.name ?? "tool", name: payload.name, run, turn: key }]);
           agentOpen = false;
         } else if (event === "auth_required") {
           const ask: Partial<AuthRequiredEvent> = payload;
@@ -324,11 +337,13 @@ export function V2Chat() {
           });
         } else if (event === "error") {
           failed = true;
+          syncRuns(status);
           const message = chatErrorText(payload, t("chatPage.sendFailed"));
           setMessages((m) => [...m, { kind: "error", text: message }]);
           if (files.length) setAttachmentError(message);
         } else if (event === "done") {
           completed = true;
+          syncRuns(status);
           // Only an agent whose spec turns memory on persists the turn; the
           // console itself never writes memory.
           if (!failed && memoryState === "on") setMessages((m) => [...m, { kind: "memory", text: "" }]);
@@ -344,12 +359,20 @@ export function V2Chat() {
       }
       if (completed && !failed && !retrying) resetAttachments();
     } catch (err) {
-      failed = true;
-      const message = errorMessage(err);
-      setMessages((m) => [...m, { kind: "error", text: message }]);
-      if (files.length) setAttachmentError(message);
+      const reason = turnStopReason(signal);
+      if (reason === "stop" && !completed && !failed) {
+        // stopped before the stream opened: the fetch rejected with the abort
+        setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped") }]);
+      } else {
+        failed = true;
+        const message = reason === "stalled" ? t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }) : errorMessage(err);
+        setMessages((m) => [...m, { kind: "error", text: message }]);
+        if (files.length) setAttachmentError(message);
+      }
     } finally {
       if (failed && !retrying) setInput(prompt);
+      // a call the stream never ended stopped with the turn
+      if (!completed) syncRuns(turn.feed("error", {}));
       turn.end();
       setMessages((m) => m.map((msg) => (msg.streaming ? { ...msg, streaming: false } : msg)));
       sendInFlight.current = false;
@@ -650,6 +673,7 @@ export function V2Chat() {
               onRate={(index, verdict) => void rate(index, verdict)}
               onRetry={(prompt) => void send(prompt)}
               retryDisabled={busy || restoring}
+              now={turn.now}
             />
             {turn.status && <TurnStatusLine status={turn.status} now={turn.now} onStop={stopTurn} testId="chat-turn-status" />}
             <Composer

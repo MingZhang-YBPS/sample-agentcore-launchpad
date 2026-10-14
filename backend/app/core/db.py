@@ -195,12 +195,18 @@ def init_db(bind=None) -> None:
     they exercise this exact sequence rather than a copy of it.
     """
     bind = bind if bind is not None else engine
+    # every model module, so an out-of-process caller (scripts/) gets every table
+    from app.evaluation import models as _eval_models  # noqa: F401
+    from app.models import announcement as _announcement_models  # noqa: F401
+    from app.models import assistant as _assistant_models  # noqa: F401
     from app.models import dlc as _dlc_models  # noqa: F401 — Agent-DLC tables
     from app.models import platform_settings as _platform_settings  # noqa: F401
     from app.models import projects as _project_models  # noqa: F401 — design §2.2
     from app.models import resource_mapping as _mapping_models  # noqa: F401
     from app.models import selfservice as _selfservice_models  # noqa: F401 — T35/T36
     from app.models import video as _video_models  # noqa: F401 — register tables before create_all
+    from app.optimization import models as _optimization_models  # noqa: F401
+    from app.skill_lab import models as _skill_lab_models  # noqa: F401
 
     Base.metadata.create_all(bind=bind)
     _migrate(bind)
@@ -1697,6 +1703,31 @@ def claim_sole_project_rows(bind) -> dict[str, int]:
     return claimed_per_table
 
 
+def derive_projects_from_parents(bind) -> dict[str, int]:
+    """Unprojected derived rows take their parent's project, where it has one —
+    unambiguous however many projects the workspace holds."""
+    from sqlalchemy import inspect, text
+
+    live = set(inspect(bind).get_table_names())
+    stamped: dict[str, int] = {}
+    with bind.begin() as conn:
+        for table, column, parent in _PROJECT_BACKFILL_DERIVED:
+            if table not in live or parent not in live:
+                continue
+            parent_project = (
+                f"(SELECT p.project_id FROM {parent} p WHERE p.id = {table}.{column})"
+            )
+            changed = conn.execute(
+                text(
+                    f"UPDATE {table} SET project_id = {parent_project}"  # noqa: S608
+                    f" WHERE project_id IS NULL AND {parent_project} IS NOT NULL"
+                )
+            ).rowcount
+            if changed:
+                stamped[table] = stamped.get(table, 0) + int(changed)
+    return stamped
+
+
 def assert_every_row_has_a_project(bind) -> None:
     """Fail startup on a strict row with no project — unless its workspace is bound
     to a single project, which then adopts it unambiguously (a WARNING): the case of
@@ -1704,6 +1735,9 @@ def assert_every_row_has_a_project(bind) -> None:
     import logging
 
     log = logging.getLogger(__name__)
+    for table, derived in derive_projects_from_parents(bind).items():
+        log.warning("filed %d %s rows with no project under their parent's project",
+                    derived, table)
     for table, claimed in claim_sole_project_rows(bind).items():
         log.warning("adopted %d %s rows with no project into their workspace's "
                     "only project", claimed, table)

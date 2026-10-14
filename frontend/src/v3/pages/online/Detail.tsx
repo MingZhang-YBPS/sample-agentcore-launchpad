@@ -89,7 +89,7 @@ function ScoresPanel({ row }: { row: OnlineEvalConfigRow }) {
         {results.loading && !results.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={3} /></div>
         ) : results.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{results.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={results.failure ?? results.error} /></Notice></div>
         ) : stats.length === 0 ? (
           <Empty title={t("v2.online.noResults", { count: row.session_timeout_minutes ?? 15 })} />
         ) : (
@@ -168,7 +168,7 @@ function ReportDialog({ configId, report, onClose }: { configId: string; report:
         ) : detail.loading && !d ? (
           <Skeleton rows={3} />
         ) : detail.error ? (
-          <Notice s="act">{detail.error}</Notice>
+          <Notice s="act"><ApiErrorDetail error={detail.failure ?? detail.error} /></Notice>
         ) : d ? (
           <>
             <dl className="v3-kv">
@@ -275,7 +275,7 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
       {reports.loading && !reports.data ? (
         <div style={{ padding: 20 }}><Skeleton rows={3} /></div>
       ) : reports.error ? (
-        <div style={{ padding: 20 }}><Notice s="act">{reports.error}</Notice></div>
+        <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={reports.failure ?? reports.error} /></Notice></div>
       ) : shown.length === 0 ? (
         <Empty title={t("v2.online.noReports")} />
       ) : (
@@ -342,7 +342,7 @@ export function OnlineDetail({ id }: { id: string }) {
   }, [transient]);
 
   if (config.loading && !row) return <Skeleton rows={6} />;
-  if (config.error && !row) return <Notice s="act">{config.error}</Notice>;
+  if (config.error && !row) return <Notice s="act"><ApiErrorDetail error={config.failure ?? config.error} /></Notice>;
   if (!row) return null;
   const mode = modeOf(row);
   const s = configSignal(row);

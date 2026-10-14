@@ -9,6 +9,7 @@ import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
 import { type AdmissionCandidate, type AdmissionQueue, CASE_TIERS, type CaseTier, type Redaction, type WritableSplit } from "../../../lib/dlc";
@@ -50,7 +51,7 @@ function AdmitDialog({ candidate, criteriaKeys, onClose, onDone }: { candidate: 
         onDone();
         onClose();
       })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 
@@ -146,7 +147,7 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
     dlcApi
       .admissionQueue({ agentId, status, refresh: true })
       .then(() => setNonce((n) => n + 1))
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 
@@ -171,7 +172,7 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
         {queue.loading && !data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : queue.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{queue.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={queue.failure ?? queue.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.dlc.admission.empty")} />
         ) : (
@@ -243,7 +244,7 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
                   dlcApi
                     .rejectCandidate(target.id, note)
                     .then(() => { toast("ok", t("v2.dlc.admission.rejected")); setNonce((n) => n + 1); })
-                    .catch((err: unknown) => toast("act", errorMessage(err)))
+                    .catch((err: unknown) => toast("act", errorMessage(err), err))
                     .finally(() => setBusy(false));
                 }}>
                 {t("v2.dlc.admission.reject")}

@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, errorMessage, type V2Dataset } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { ago } from "../../format";
@@ -49,7 +50,7 @@ export function DatasetsTab() {
       setDeleting(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -91,7 +92,7 @@ export function DatasetsTab() {
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={5} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.datasets.empty")} />
         ) : (
@@ -162,7 +163,7 @@ export function DatasetDetail({ id }: { id: string }) {
   const [copying, setCopying] = useState(false);
 
   if (list.loading && !list.data) return <Skeleton rows={6} />;
-  if (list.error) return <Notice s="act">{list.error}</Notice>;
+  if (list.error) return <Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice>;
   if (!ds) return <Notice s="act">{t("v2.datasets.notFound")}</Notice>;
   const simulated = ds.kind === "simulated";
   const toggle = (i: number) =>
@@ -195,7 +196,7 @@ export function DatasetDetail({ id }: { id: string }) {
       setPicked(new Set());
       setParams({ tab: "datasets", view: "dataset", id: created.id });
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setCopying(false);
     }

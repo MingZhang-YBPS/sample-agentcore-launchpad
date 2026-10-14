@@ -112,7 +112,7 @@ export function LongTerm({
     setSearching(true);
     api.memorySearchRecords({ query: query.trim(), actor_id: actorId, strategy_id: usable?.strategy_id ?? undefined, top_k: topK })
       .then((res) => setResults(res.items))
-      .catch((err: unknown) => toast("act", t("v3.memory.loadFailed", { msg: errorMessage(err) })))
+      .catch((err: unknown) => toast("act", t("v3.memory.loadFailed", { msg: errorMessage(err) }), err))
       .finally(() => setSearching(false));
   };
 

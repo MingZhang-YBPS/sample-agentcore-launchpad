@@ -962,7 +962,7 @@ export interface AgentSpecInput {
   /** Runtime protocol; "mcp" hosts a byoc artifact as an MCP server. Omitted ⇒ "http". */
   protocol?: "http" | "a2a" | "mcp";
   /** required iff protocol="mcp": the Gateway target the server's tools appear under */
-  mcp?: { target_name: string };
+  mcp?: { target_name: string; stdio_wrapper?: import("./mcp-stdio").McpStdioWrapperInput | null };
 }
 
 /** `GET /api/agents/{id}/mcp` — an MCP server's Gateway wiring, read back live. */
@@ -1217,6 +1217,8 @@ export interface AssistantStatus {
   owner: string;
   /** the immutable principal conversations are bound to */
   principal: string;
+  /** assistant-context C3: what one turn may replay; absent from an older backend */
+  replay_budget?: import("./api/assistant-budget").ReplayBudget;
 }
 
 export interface AssistantCatalogTool {
@@ -6567,12 +6569,14 @@ export const chatApi = {
       method: "POST",
     }),
   /** `POST /api/chat/{agent_id}` — returns the raw SSE response (read it with
-   *  `sseEvents`); a non-2xx answer throws with the localized envelope message. */
-  stream: async (agentId: string, body: ChatRequest): Promise<Response> => {
+   *  `sseEvents`); a non-2xx answer throws with the localized envelope message.
+   *  `signal` aborts the request and the stream (the console's Stop button). */
+  stream: async (agentId: string, body: ChatRequest, signal?: AbortSignal): Promise<Response> => {
     const res = await fetch(`/api/chat/${encodeURIComponent(agentId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
     if (!res.ok) throw new Error(await responseMessage(res));
     return res;

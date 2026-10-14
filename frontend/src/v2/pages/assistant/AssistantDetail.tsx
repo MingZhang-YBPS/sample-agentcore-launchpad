@@ -276,6 +276,9 @@ export function AssistantDetail({
             return copy;
           });
         } else if (evt.event === "retry") {
+          // a replay after a context overflow sends less history: redraw the divider
+          const window = contextFromMeta(data);
+          if (window) setContextWindow(window);
           // the server replays the turn in a fresh session after a transient upstream
           // failure: drop what the failed attempt streamed (text and tool cards)
           setMessages((m) => {

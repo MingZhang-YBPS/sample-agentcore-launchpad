@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type MemoryResourceRow } from "../../../lib/api";
 import { isTransient, POLL_MS } from "../../../v2/pages/memory/common";
@@ -69,7 +70,7 @@ export function Resources() {
       setPending(null);
       setTick((n) => n + 1);
     } catch (err) {
-      toast("act", t(kind === "delete" ? "memoryPage.resources.deleteFailed" : "v2.memory.res.adoptFailed", { msg: errorMessage(err) }));
+      toast("act", t(kind === "delete" ? "memoryPage.resources.deleteFailed" : "v2.memory.res.adoptFailed", { msg: errorMessage(err) }), err);
     } finally {
       setBusy(false);
     }
@@ -97,7 +98,7 @@ export function Resources() {
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={all.length ? t("v2.memory.res.noMatch") : t("memoryPage.resources.empty")} />
         ) : (

@@ -36,7 +36,7 @@ function Waivers({ state, rows, onReload }: { state: ReleaseState; rows: GateRow
     setBusy(true);
     fn()
       .then(() => { toast("ok", t(okKey)); onReload(); })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 
@@ -211,7 +211,7 @@ function PolicyPanel() {
         eval_cost_max_usd: form.max === "" ? null : Number(form.max),
       })
       .then(() => { toast("ok", t("v2.dlc.policy.saved")); setNonce((n) => n + 1); })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 
@@ -274,7 +274,7 @@ export function Release({ agentId }: { agentId: string }) {
     setBusy(true);
     fn()
       .then(() => { toast("ok", t(okKey)); setNonce((n) => n + 1); })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 

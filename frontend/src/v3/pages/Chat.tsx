@@ -22,7 +22,6 @@ import {
   sseEvents,
   STALL_ABORT_MS,
   TOOL_RUN_GLYPH,
-  type ToolRun,
   toolRunById,
   toolRunLabel,
   turnActivity,
@@ -45,8 +44,9 @@ import "./chat.css";
 import "./chatStatus.css";
 
 /** A thread item; a tool row of a live turn carries its run (status, duration),
- *  tagged with the turn it belongs to. `note`: a neutral notice (the user stopped). */
-type Msg = ChatMessage & { run?: ToolRun; turn?: number; note?: boolean };
+ *  tagged with the turn it belongs to (`ChatMessage.run` / `.turn`).
+ *  `note`: a neutral notice (the user stopped). */
+type Msg = ChatMessage & { note?: boolean };
 
 /**
  * Chat, rebuilt around the conversation. The same SSE invoke chain as V2 and the
@@ -144,7 +144,7 @@ export function V3Chat() {
       setParams({ agent: agentId, session: sid }, { replace: true });
       thread.toBottom(); // an opened conversation starts at its latest turn
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setRestoring(false);
     }
@@ -186,7 +186,8 @@ export function V3Chat() {
         m.map((msg) => (msg.turn === key && msg.run ? { ...msg, run: toolRunById(status, msg.run.id) ?? msg.run } : msg)),
       );
     try {
-      const res = await chatApi.stream(agentId, { prompt, session_id: sessionId ?? null });
+      // the turn's signal also aborts the request itself (Stop before the first frame)
+      const res = await chatApi.stream(agentId, { prompt, session_id: sessionId ?? null }, signal);
       if (!res.body) throw new Error(t("v3.chat.interrupted"));
       let openBubble = false;
       let curated = false;
@@ -244,8 +245,15 @@ export function V3Chat() {
         throw new Error(t("v3.chat.interrupted"));
       }
     } catch (err) {
-      failed = true;
-      setMessages((m) => [...m, { kind: "error", text: errorMessage(err) }]);
+      const reason = turnStopReason(signal);
+      if (reason === "stop" && !completed && !failed) {
+        // stopped before the stream opened: the fetch rejected with the abort
+        setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped"), note: true }]);
+      } else {
+        failed = true;
+        const text = reason === "stalled" ? t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }) : errorMessage(err);
+        setMessages((m) => [...m, { kind: "error", text }]);
+      }
     } finally {
       if (failed) setInput(prompt);
       // a call the stream never ended stopped with the turn
@@ -278,7 +286,7 @@ export function V3Chat() {
       await feedbackApi.rate(agentId, { session_id: sessionId, message_id: msg.id, verdict });
     } catch (err) {
       setMessages((m) => m.map((x, i) => (i === index ? { ...x, verdict: before } : x)));
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     }
   };
 

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { errorMessage, type IssueDetail, issueApi, type IssueStatus, ruleApi } from "../../../lib/api";
 import { V2ToastProvider } from "../../../v2/ui";
 import { AddToDatasetModal } from "../../../v2/pages/data/AddToDataset";
@@ -95,7 +96,7 @@ export function IssueBox() {
           {list.loading && !list.data ? (
             <div style={{ padding: 20 }}><Skeleton rows={5} /></div>
           ) : list.error ? (
-            <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+            <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
           ) : items.length === 0 ? (
             <Empty title={status === "open" ? t("v3.issues.clear") : t("selfService.issues.empty")}>
               {status === "open" && t("v3.issues.clearSub")}

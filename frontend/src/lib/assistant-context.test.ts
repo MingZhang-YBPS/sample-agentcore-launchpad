@@ -46,6 +46,14 @@ describe("assistant context window", () => {
     expect(contextFromMeta({ turn: 15 })).toBeNull();
   });
 
+  it("reads the smaller window a retry after a context overflow carries", () => {
+    const ctx = { replayed_turns: 4, omitted_turns: 10, first_replayed_turn: 11 };
+    const retry = { attempt: 1, reason: "overflow", code: "assistant.context_overflow", context: ctx, omitted_turns: 10, first_replayed_turn: 11 };
+    expect(contextFromMeta(retry)).toEqual(ctx);
+    // a transient retry (no overflow) leaves the window alone
+    expect(contextFromMeta({ attempt: 1, reason: "throttled" })).toBeNull();
+  });
+
   it("marks only list rows the backend flagged", () => {
     expect(isContextTrimmed({ id: "a", context_trimmed: true })).toBe(true);
     expect(isContextTrimmed({ id: "b", context_trimmed: false })).toBe(false);

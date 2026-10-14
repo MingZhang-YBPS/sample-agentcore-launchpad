@@ -108,7 +108,7 @@ export function CriteriaIndex({
         onReload();
         onOpen(created.set.lineage_id);
       })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 
@@ -344,7 +344,7 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
       setDirty(false);
       onReload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }

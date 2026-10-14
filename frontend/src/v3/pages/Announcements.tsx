@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
 import { api, type Announcement, type AnnouncementContent } from "../../lib/api";
 import { announcementLink } from "../../lib/announcements";
@@ -153,7 +154,7 @@ function List({
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("announcements.manageEmpty")} />
         ) : (

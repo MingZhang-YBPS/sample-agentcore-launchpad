@@ -3,7 +3,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
-  type AgentForm,
   BUILTIN_TOOLS,
   BYOC_KINDS,
   BYOC_MODELS_MAX,
@@ -31,7 +30,6 @@ import {
   MCP_STDIO_DEFAULT_COMMAND,
   MCP_STDIO_OFF,
   type McpStdioBase,
-  type McpStdioFields,
   type McpStdioForm,
   mcpStdioArgs,
   mcpStdioIssues,
@@ -540,12 +538,9 @@ export function ByocBasicCard(props: Omit<SectionProps, "cat">) {
 export function McpServerCard({ form, set, err }: Omit<SectionProps, "cat">) {
   const { t } = useTranslation();
   const target = form.mcpTargetName.trim();
-  // `AgentForm.mcpStdio` (lib/mcp-stdio.ts); a form without it reads as off
-  const stdio = (form as AgentForm & McpStdioFields).mcpStdio ?? MCP_STDIO_OFF;
-  const setStdio = (next: McpStdioForm) => {
-    const patch: Partial<AgentForm> & McpStdioFields = { mcpStdio: next };
-    set(patch);
-  };
+  // a form without it (older drafts) reads as off
+  const stdio = form.mcpStdio ?? MCP_STDIO_OFF;
+  const setStdio = (next: McpStdioForm) => set({ mcpStdio: next });
   const zip = form.byocKind === "code_zip";
   const issues = mcpStdioIssues(stdio, form.byocKind);
   const argv = [stdio.command.trim(), ...mcpStdioArgs(stdio.args)].filter(Boolean).join(" ");
@@ -651,6 +646,7 @@ export function ByocArtifactCard({
   const upload = ui.byocUpload;
   const reqs = upload?.detected.requirements;
   const candidates = upload?.detected.entrypoint_candidates ?? [];
+  const stdioBridge = form.protocol === "mcp" && !!form.mcpStdio?.on;
   return (
     <Card title={t("v2.agents.wizard.artifactTitle")}>
       <div className="v2-options">
@@ -747,6 +743,8 @@ export function ByocArtifactCard({
         )}
         {kind === "code_zip" && (
           <div className="v2-form cols-2">
+            {/* a stdio MCP server: the platform bridge is the entrypoint */}
+            {!stdioBridge && (
             <Field label={t("create.configure.byocEntrypoint")} required error={err("byocEntrypoint")}>
               {candidates.length > 0 ? (
                 <Select
@@ -769,6 +767,7 @@ export function ByocArtifactCard({
                 />
               )}
             </Field>
+            )}
             <Field label={t("create.configure.byocPython")}>
               <Select
                 value={form.byocPython}

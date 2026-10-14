@@ -2,6 +2,7 @@ import { CheckCircle2, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
 import { api, errorMessage, type ModelProbeResult, type ModelSettingRole } from "../../lib/api";
 import { activeCatalogIds, useModelCatalog } from "../../lib/model-catalog";
@@ -59,7 +60,7 @@ function RoleRow({ role, onSaved }: { role: ModelSettingRole; onSaved: (row: Mod
       void reloadModelDefaults();
       toast("ok", t(okKey, { role: t(`v3.models.role.${role.field}.name`, { defaultValue: role.field }) }));
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setSaving(false);
     }
@@ -180,7 +181,7 @@ function Manager() {
           <span>{t("v3.models.noteCatalog", { count: catalog.length })}</span>
         </div>
       </Notice>
-      {settings.error && <Notice s="act">{settings.error}</Notice>}
+      {settings.error && <Notice s="act"><ApiErrorDetail error={settings.failure ?? settings.error} /></Notice>}
       {settings.loading && !settings.data ? (
         <Skeleton rows={8} />
       ) : (

@@ -369,7 +369,9 @@ TIMEOUT_SCENARIO_RETRIES = 1
 # The agent spent its own budget on the scenario (timeout after its replay, iteration /
 # token limit): that is the scenario's result — its session is scored as it stands and
 # recorded in ``EvalRun.budget_stops`` instead of failing the whole run.
-BUDGET_STOP_CODES = frozenset({"harness.execution_timeout", "harness.execution_limit"})
+BUDGET_STOP_CODES = frozenset({
+    "harness.execution_timeout", "harness.execution_limit", "harness.context_window_exceeded",
+})
 SCENARIO_ERROR_CHARS = 300
 
 

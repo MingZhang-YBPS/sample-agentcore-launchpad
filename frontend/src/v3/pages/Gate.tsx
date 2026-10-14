@@ -150,7 +150,7 @@ export function V3Gate() {
         toast("ok", t(ok));
         setNonce((n) => n + 1);
       })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 

@@ -5,6 +5,7 @@ import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { JumpToLatest } from "../../../components/JumpToLatest";
 import { Markdown } from "../../../components/Markdown";
 import type { FeedbackVerdict } from "../../../lib/api";
+import { TOOL_RUN_GLYPH, toolRunLabel } from "../../../lib/chat";
 import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
 import { Alert, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
@@ -23,6 +24,7 @@ export function Thread({
   onRate,
   onRetry,
   retryDisabled = false,
+  now,
 }: {
   messages: ChatMessage[];
   userLabel: string;
@@ -33,6 +35,8 @@ export function Thread({
   /** re-send a prompt (an auth card's retry) */
   onRetry?: (prompt: string) => void;
   retryDisabled?: boolean;
+  /** the running turn's clock (a running tool row's elapsed time); omitted ⇒ render time */
+  now?: number;
 }) {
   const { t } = useTranslation();
   // follows the stream only while the reader is at the bottom
@@ -99,10 +103,18 @@ export function Thread({
             )}
           </div>
         ) : msg.kind === "tool" ? (
-          <div key={i} className="v2-chat-tool" data-testid="tool-call">
-            <Wrench size={14} aria-hidden="true" />
+          <div key={i} className="v2-chat-tool" data-run={msg.run?.status} data-testid="tool-call">
+            {msg.run ? (
+              <span className="mono" aria-hidden="true">{TOOL_RUN_GLYPH[msg.run.status]}</span>
+            ) : (
+              <Wrench size={14} aria-hidden="true" />
+            )}
             <span className="mono">{msg.name}</span>
-            <Tag tone="green">{t("v2.chat.toolCalled")}</Tag>
+            {msg.run ? (
+              <span className="v2-muted">{toolRunLabel(t, msg.run, now ?? Date.now())}</span>
+            ) : (
+              <Tag tone="green">{t("v2.chat.toolCalled")}</Tag>
+            )}
           </div>
         ) : msg.kind === "auth" && msg.auth ? (
           <AuthCard

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
 import { api, errorMessage, type UserGrantInfo } from "../../lib/api";
 import { revokeDisabled, runRevoke } from "../../lib/user-grants";
@@ -47,7 +48,7 @@ export function V3Connections() {
         setConfirm(null);
         grants.reload();
       },
-      onError: (err) => toast("act", errorMessage(err)),
+      onError: (err) => toast("act", errorMessage(err), err),
     });
 
   return (
@@ -76,7 +77,7 @@ export function V3Connections() {
         {grants.loading && !grants.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : grants.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{grants.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={grants.failure ?? grants.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={all.length ? t("v3.connections.none") : t("v2.myConnections.empty")}>{!all.length && t("v3.connections.emptySub")}</Empty>
         ) : (

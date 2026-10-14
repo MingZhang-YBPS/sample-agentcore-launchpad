@@ -2,6 +2,7 @@ import { Copy, Link2 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { errorMessage, reviewLinkApi, type ShareLinkCreated, type ShareLinkInfo, shareLinkApi } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { ago } from "../../format";
@@ -42,7 +43,7 @@ export function Reviewers() {
       setName("");
       setTick((n) => n + 1);
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -99,7 +100,7 @@ export function Reviewers() {
         {links.loading && !links.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={3} /></div>
         ) : links.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{links.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={links.failure ?? links.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("selfService.reviewers.empty")} />
         ) : (
@@ -148,7 +149,7 @@ export function Reviewers() {
               await shareLinkApi.revoke(target.id);
               setTick((n) => n + 1);
             } catch (err) {
-              toast("act", errorMessage(err));
+              toast("act", errorMessage(err), err);
             }
           }}
         >

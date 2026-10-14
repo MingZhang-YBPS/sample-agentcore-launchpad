@@ -2454,7 +2454,10 @@
     "golden.unknown_criteria": "Some items name criteria that are not in this golden set's criteria table.",
     "runtime.empty_reply": "The agent's runtime answered with an empty response.",
     "runtime.unrecognized_reply": "The agent answered in a format the console cannot read. The start of the response:",
-    "eval.no_telemetry": "This agent has written no spans, so the evaluation would find nothing to score. A BYOC code zip emits spans only with the ADOT launcher: add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, republish, then start the evaluation."
+    "eval.no_telemetry": "This agent has written no spans, so the evaluation would find nothing to score. A BYOC code zip emits spans only with the ADOT launcher: add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, republish, then start the evaluation.",
+    "eval.harness_no_telemetry": "This Harness has no telemetry log group yet. Run at least one chat or invoke session first, then start the evaluation.",
+    "online_eval.no_telemetry": "This agent has no telemetry log group yet. Run at least one chat or invoke session first, then create the online evaluation.",
+    "trace.not_found": "Trace not found in this project."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -6986,13 +6989,13 @@
         "unsealed": "Holdout empty",
         "seed": "Curate the splits",
         "seedTitle": "Curate all three splits",
-        "seedHint": "Items are stratified by case tier so every split sees the same mix, unless an item names its own split.",
+        "seedHint": "Items are stratified by case tier so every split sees the same mix, unless an item names its own split. Excel, CSV and JSON are accepted; download a template first.",
         "seedOnce": "This happens once. Afterwards the holdout is sealed — that is the only thing that makes it a holdout.",
         "seedNeeded": "The holdout is empty, so a release gate will report INVALID. Curate the splits to open it.",
         "seeded": "Splits curated and the holdout sealed",
         "addTo": "Add to {{split}}",
         "addTitle": "Add to {{split}}",
-        "addHint": "One item per line: `id | question | expected answer`. A JSON array is accepted too.",
+        "addHint": "One item per line: `id | question | expected answer`, a JSON array, or an Excel / CSV file.",
         "added": "Items added",
         "itemsField": "Items",
         "itemsHint": "The expected answer is the standard. Leave it out and the item cannot decide anything.",

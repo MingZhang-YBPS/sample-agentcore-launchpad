@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { api, errorMessage, type EvaluatorRow } from "../../lib/api";
 import { evaluatorLabel } from "../../lib/evaluators";
 import { useWorkspace } from "../../workspace/workspace-context";
@@ -51,7 +52,7 @@ function EvaluatorList() {
       setDeleting(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -99,7 +100,7 @@ function EvaluatorList() {
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={6} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v3.evaluators.none")} />
         ) : (

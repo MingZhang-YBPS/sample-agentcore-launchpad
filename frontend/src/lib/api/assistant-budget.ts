@@ -1,4 +1,4 @@
-import { api, type AssistantStatus } from "../api";
+import { api } from "../api";
 
 /**
  * What one architect-assistant turn may replay of its conversation
@@ -18,7 +18,7 @@ export interface ReplayBudget {
 
 /** The architect preset's replay budget; null from a backend that predates it. */
 export async function architectReplayBudget(): Promise<ReplayBudget | null> {
-  const status = (await api.assistantStatus()) as AssistantStatus & { replay_budget?: ReplayBudget };
+  const status = await api.assistantStatus();
   return status.replay_budget ?? null;
 }
 

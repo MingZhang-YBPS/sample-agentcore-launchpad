@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { api, errorMessage, type FleetRow, type SharedTemplateInfo } from "../../lib/api";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
@@ -72,7 +73,7 @@ function FleetView() {
         {report.loading && !data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : report.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{report.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={report.failure ?? report.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={(data?.workspaces.length ?? 0) ? t("v3.fleet.none") : t("v2.fleet.empty")} />
         ) : (
@@ -145,7 +146,7 @@ function HealthView() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      {health.error && <Notice s="act">{health.error}</Notice>}
+      {health.error && <Notice s="act"><ApiErrorDetail error={health.failure ?? health.error} /></Notice>}
       <div className="v3-grid c3">
         <Panel signal={gradeSignal}>
           <Stat label={t("v3.fleet.score")} value={data ? data.score : "—"} signal={gradeSignal}
@@ -208,7 +209,7 @@ function MarketView() {
       // the template hands over defaults only: the consumer still goes through the wizard
       navigate(`/v2/agents?${new URLSearchParams({ view: "new", template: entry.id })}`);
     } catch (error) {
-      toast("act", errorMessage(error));
+      toast("act", errorMessage(error), error);
     }
   };
   const withdraw = async () => {
@@ -219,7 +220,7 @@ function MarketView() {
       toast("ok", t("v2.fleet.withdrawn"));
       setTick((n) => n + 1);
     } catch (error) {
-      toast("act", errorMessage(error));
+      toast("act", errorMessage(error), error);
     } finally {
       setBusy(false);
       setWithdrawing(null);
@@ -232,7 +233,7 @@ function MarketView() {
         {list.loading && !list.data ? (
           <Skeleton rows={3} />
         ) : list.error ? (
-          <Notice s="act">{list.error}</Notice>
+          <Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.fleet.marketEmpty")} />
         ) : (

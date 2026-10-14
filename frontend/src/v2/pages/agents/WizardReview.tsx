@@ -11,6 +11,7 @@ import {
   toolkitToolNames,
 } from "../../../lib/agent-spec";
 import type { InboundAuth } from "../../../lib/api";
+import { mcpStdioArgs } from "../../../lib/mcp-stdio";
 import { inboundCapable, issuerMismatch, jwtSummary, wizardDeployedJwt } from "../../../lib/inbound-auth";
 import { Alert, Card, Descriptions } from "../../ui";
 import { InlineKbState } from "./InlineKb";
@@ -85,10 +86,22 @@ export function WizardReview({
   if (mcpServer) {
     const env = Object.keys(byocEnv(form.byocEnvRows));
     const upload = ui.byocUpload;
+    // the bridge is the entrypoint; the row shows the argv it starts
+    const stdio = form.mcpStdio?.on && form.byocKind === "code_zip" ? form.mcpStdio : null;
     items = [
       ...head,
       { label: t("v2.agents.wizard.mcp.kind"), value: t("v2.agents.wizard.mcp.kindValue") },
       { label: t("v2.agents.wizard.mcp.targetName"), value: mono(form.mcpTargetName.trim()) },
+      ...(stdio
+        ? [{
+            label: t("mcpServer.stdio.label"),
+            value: (
+              <>
+                {mono([stdio.command.trim(), ...mcpStdioArgs(stdio.args)].join(" "))} · {t(`mcpServer.stdio.baseName.${stdio.base}`)}
+              </>
+            ),
+          }]
+        : []),
       { label: t("v2.agents.wizard.artifactTitle"), value: t(`create.configure.byocKindName.${form.byocKind}`) },
       form.byocKind === "container_image"
         ? { label: t("create.configure.byocImageUri"), value: mono(form.byocImageUri.trim()) }
@@ -96,7 +109,7 @@ export function WizardReview({
             label: t("create.configure.byocUpload"),
             value: upload ? mono(`${upload.original_filename} · sha256 ${upload.sha256.slice(0, 12)}…`) : none,
           },
-      ...(form.byocKind === "code_zip"
+      ...(form.byocKind === "code_zip" && !stdio
         ? [{
             label: t("v2.agents.wizard.entryPython"),
             value: mono(`${form.byocEntrypoint.trim() || "main.py"} · ${pythonLabel(form.byocPython)}`),

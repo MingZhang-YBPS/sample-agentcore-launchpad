@@ -1,4 +1,4 @@
-import { parseUtc } from "../../../v2/pages/agents/deployStatus";
+import { parseUtc } from "../../../lib/agent-admin/deployStatus";
 import { ago } from "../../format";
 
 /** A ledger timestamp as local date and time, with "how long ago" after it. */

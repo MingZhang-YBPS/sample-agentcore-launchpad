@@ -94,7 +94,7 @@ export function Grants({ workspaceId, onTotal }: { workspaceId: string; onTotal:
       setSelected(new Set());
       await load();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }

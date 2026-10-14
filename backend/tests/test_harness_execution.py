@@ -347,6 +347,14 @@ def sse_events(response):
     return [event for event in events if event["event"] != "saved"]
 
 
+# the console chat adds working-status events (chat-streaming S2); the outcome is the rest
+_STATUS_EVENTS = {"phase", "thinking", "tool_end", "heartbeat"}
+
+
+def _without_status(events):
+    return [e for e in events if e["event"] not in _STATUS_EVENTS]
+
+
 @pytest.mark.parametrize("entrance", ["chat", "public-stream", "console-sync", "public-sync"])
 @pytest.mark.parametrize(("reasons", "code", "status"), [
     (["cancelled", "timeout_exceeded"], "harness.execution_timeout", 504),
@@ -370,7 +378,7 @@ def test_real_endpoints_preserve_late_harness_failure(
 
     if entrance in {"chat", "public-stream"}:
         assert response.status_code == 200  # status was sent before the stream failed
-        events = sse_events(response)
+        events = _without_status(sse_events(response))
         assert [event["event"] for event in events] == ["meta", "delta", "error"]
         assert events[1]["data"] == {"text": "partial answer"}
         error = events[-1]["data"]
@@ -410,9 +418,10 @@ def test_stream_endpoints_complete_normal_tool_cycles(client, monkeypatch, entra
     response = invoke_endpoint(client, entrance, agent.id)
 
     assert response.status_code == 200
-    events = sse_events(response)
+    events = _without_status(sse_events(response))
     assert [event["event"] for event in events] == ["meta", "tool", "delta", "done"]
-    assert events[1]["data"] == {"name": "kb_search", "id": "tool-1"}
+    tool = {k: v for k, v in events[1]["data"].items() if k != "started_at"}  # console: S2 timer
+    assert tool == {"name": "kb_search", "id": "tool-1"}
     assert events[2]["data"] == {"text": "final answer"}
     assert stream.drained and stream.closed == 1
 
@@ -422,7 +431,7 @@ def test_empty_stream_is_an_sse_error_without_done(client, monkeypatch, entrance
     stream = Stream([])
     monkeypatch.setattr(chat, "data_client", lambda _ws=None: client_for(stream))
     response = invoke_endpoint(client, entrance, create_agent().id)
-    events = sse_events(response)
+    events = _without_status(sse_events(response))
     assert [event["event"] for event in events] == ["meta", "error"]
     assert events[-1]["data"]["code"] == "harness.incomplete_response"
     assert events[-1]["data"]["detail"] == {"stop_reason": None}

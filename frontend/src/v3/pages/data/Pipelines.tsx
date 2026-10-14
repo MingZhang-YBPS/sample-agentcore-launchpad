@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, errorMessage, type V2Pipeline } from "../../../lib/api";
 import { rangeLabel } from "../../../v2/format";
 import { useWorkspace } from "../../../workspace/workspace-context";
@@ -45,7 +46,7 @@ export function PipelinesTab() {
       else toast("ok", t("v2.pipelines.ran", { count: out.last_run?.added ?? 0 }));
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setRunning(null);
     }
@@ -59,7 +60,7 @@ export function PipelinesTab() {
       setDeleting(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -98,7 +99,7 @@ export function PipelinesTab() {
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.pipelines.empty")} />
         ) : (

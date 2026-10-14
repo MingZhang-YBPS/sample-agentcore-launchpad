@@ -5,7 +5,10 @@ import {
   agentFormValid,
   authToolIssues,
   buildAgentSpec,
+  buildMcpServerSpec,
+  byocIssues,
   type ConnectionRef,
+  emptyAgentForm,
   formFromStoredSpec,
   republishSpec,
 } from "./agent-spec";
@@ -140,5 +143,32 @@ describe("a missing Connection blocks submission", () => {
     const form = { ...load(STORED), protocol: "a2a" as const };
     expect(authToolIssues(form, CONNECTIONS).unsupported).toBe(true);
     expect(valid(form, CONNECTIONS)).toBe(false);
+  });
+});
+
+describe("MCP stdio wrapper (§15.5)", () => {
+  const server = () => ({
+    ...emptyAgentForm("byoc"),
+    name: "stdio_srv",
+    protocol: "mcp" as const,
+    mcpTargetName: "crm",
+    byocUploadId: "up-1",
+  });
+  const on = { on: true, base: "node" as const, command: "node", args: "build/index.js" };
+
+  it("writes stdio_wrapper only for a code zip with the switch on", () => {
+    expect(buildMcpServerSpec(server()).mcp).toEqual({ target_name: "crm" });
+    const spec = buildMcpServerSpec({ ...server(), mcpStdio: on });
+    expect(spec.mcp).toEqual({ target_name: "crm", stdio_wrapper: { command: "node", args: ["build/index.js"], base: "node" } });
+    const image = buildMcpServerSpec({ ...server(), mcpStdio: on, byocKind: "container_image", byocImageUri: "x" });
+    expect(image.mcp).toEqual({ target_name: "crm" });
+  });
+
+  it("reads the wrapper back and stops asking for a .py entrypoint", () => {
+    const stored = { protocol: "mcp", mcp: { target_name: "crm", stdio_wrapper: { command: "node", args: ["a.js"], base: "node" } } };
+    expect(formFromStoredSpec("byoc", "stdio_srv", { ...stored, byoc: { artifact_kind: "code_zip" } }).form.mcpStdio).toEqual({ on: true, base: "node", command: "node", args: "a.js" });
+    expect(formFromStoredSpec("byoc", "stdio_srv", { protocol: "mcp", mcp: { target_name: "crm" } }).form.mcpStdio?.on).toBe(false);
+    expect(byocIssues({ ...server(), byocEntrypoint: "index.js" }).entrypoint).toBe(true);
+    expect(byocIssues({ ...server(), byocEntrypoint: "index.js", mcpStdio: on }).entrypoint).toBe(false);
   });
 });

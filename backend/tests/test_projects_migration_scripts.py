@@ -216,9 +216,9 @@ def test_rehearsal_fails_on_a_ledger_startup_would_refuse(tmp_path, rehearse, ca
 
     captured = capsys.readouterr()
     assert "FAIL init_db failed: RuntimeError: ledger rows with no project_id" in captured.out
-    # startup does not derive from parents: the message is refused too (the backfill
-    # script files it under its agent's project)
-    assert "agents=1, chat_messages=1" in captured.out
+    # startup files the message under its parent's project; only the agent is ambiguous
+    assert "agents=1" in captured.out and "chat_messages=" not in captured.out.split(
+        "ledger rows with no project_id", 1)[1].split("\n", 1)[0]
     assert "FAIL strict rows with no project:" in captured.out
     assert f"migrated copy kept at {out_path}" in captured.err
     assert out_path.exists()

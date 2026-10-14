@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
 import { api, type ConnectionInfo, errorMessage, type IdentityGatewayTarget, type TargetWarning } from "../../lib/api";
 import { ago } from "../format";
@@ -73,7 +74,7 @@ function Connections() {
       // re-read: the list's value may be the create-time snapshot
       setCallback(await api.getConnection(row.kind, row.name));
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     }
   };
   const remove = async () => {
@@ -85,7 +86,7 @@ function Connections() {
       setRemoving(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -115,7 +116,7 @@ function Connections() {
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.connections.empty")} />
         ) : (
@@ -236,7 +237,7 @@ function Targets() {
       setRemoving(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -276,7 +277,7 @@ function Targets() {
         {list.loading && !data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.connections.targets.empty")} />
         ) : (

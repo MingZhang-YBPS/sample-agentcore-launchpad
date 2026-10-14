@@ -47,7 +47,15 @@ export async function* sseEvents(
   let buffer = "";
   try {
     while (!signal?.aborted) {
-      const { done, value } = await reader.read();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        // the same signal on the fetch rejects the pending read: that is a stop, not a failure
+        if (signal?.aborted) break;
+        throw err;
+      }
+      const { done, value } = chunk;
       if (done || signal?.aborted) break;
       buffer += decoder.decode(value, { stream: true });
       const frames = buffer.split("\n\n");

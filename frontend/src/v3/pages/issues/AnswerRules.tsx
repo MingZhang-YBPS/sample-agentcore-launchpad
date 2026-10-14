@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, FlaskConical, Pencil, Plus, Power, Trash2 } from "l
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { type AnswerRuleInfo, errorMessage, ruleApi } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { ago } from "../../format";
@@ -35,7 +36,7 @@ export function AnswerRules() {
       await fn();
       reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     }
   };
   const move = (index: number, delta: number) => {
@@ -72,7 +73,7 @@ export function AnswerRules() {
         ) : list.loading && !data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rules.length === 0 ? (
           <Empty title={t("selfService.answers.empty")} />
         ) : (

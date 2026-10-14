@@ -270,7 +270,7 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       toast("ok", t("workspacesPage.bootstrapQueued", { name: row.name }));
       await reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -284,7 +284,7 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       toast("ok", t("v2.workspaces.tierChanged", { name: row.name, tier: t(`v2.workspaces.tier.${tier}`) }));
       await reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
       setPendingTier(null);
@@ -312,8 +312,8 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
     } catch (err) {
       if (err instanceof ApiError && err.code === "workspace.in_use") {
         const rows = (err.detail as { rows?: Record<string, number> } | null)?.rows ?? {};
-        toast("act", t("workspacesPage.deleteInUse", { rows: formatRowCounts(rows) }));
-      } else toast("act", errorMessage(err));
+        toast("act", t("workspacesPage.deleteInUse", { rows: formatRowCounts(rows) }), err);
+      } else toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -323,8 +323,8 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const purgeFailed = (err: unknown) => {
     if (err instanceof ApiError && err.code === "workspace.purge_refused") {
       const reason = (err.detail as { reason?: string } | null)?.reason ?? "";
-      toast("act", t("workspacesPage.detail.purgeRefused", { reason: t(`workspacesPage.detail.purgeReason.${reason}`, err.message) }));
-    } else toast("act", errorMessage(err));
+      toast("act", t("workspacesPage.detail.purgeRefused", { reason: t(`workspacesPage.detail.purgeReason.${reason}`, err.message) }), err);
+    } else toast("act", errorMessage(err), err);
   };
   const openPurge = async () => {
     if (!row) return;

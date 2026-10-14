@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, feedbackApi, type V2Range } from "../../../lib/api";
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { hasInsightTrees } from "../../../lib/evaluation";
@@ -412,7 +413,7 @@ export function FeedbackPanel({ range }: { range: V2Range }) {
           </div>
         ) : feedback.error ? (
           <div style={{ padding: 20 }}>
-            <Notice s="act">{feedback.error}</Notice>
+            <Notice s="act"><ApiErrorDetail error={feedback.failure ?? feedback.error} /></Notice>
           </div>
         ) : (data?.items ?? []).length === 0 ? (
           <Empty title={t("feedbackCard.empty")} />

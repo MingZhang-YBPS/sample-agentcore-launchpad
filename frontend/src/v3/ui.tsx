@@ -260,6 +260,7 @@ export function Confirm({
   cancelLabel,
   danger,
   busy,
+  confirmDisabled,
   onConfirm,
   onCancel,
 }: {
@@ -269,6 +270,8 @@ export function Confirm({
   cancelLabel: string;
   danger?: boolean;
   busy?: boolean;
+  /** hold the confirm button (e.g. until a typed name matches); cancel stays live */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -282,7 +285,7 @@ export function Confirm({
           <Btn kind="ghost" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </Btn>
-          <Btn kind={danger ? "danger" : "primary"} onClick={onConfirm} disabled={busy}>
+          <Btn kind={danger ? "danger" : "primary"} onClick={onConfirm} disabled={busy || confirmDisabled}>
             {confirmLabel}
           </Btn>
         </div>

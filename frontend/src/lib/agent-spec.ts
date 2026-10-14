@@ -16,6 +16,7 @@ import type {
   Toolkit,
 } from "./api";
 import type { ModelSource, ReasoningEffort } from "./models";
+import { MCP_STDIO_OFF, mcpStdioFromSpec, mcpStdioIssues, mcpStdioSpec, type McpStdioForm, type McpStdioWrapperInput } from "./mcp-stdio";
 import {
   CLAUDE_SDK_MODEL_SOURCE,
   DEFAULT_MODEL_SOURCE,
@@ -481,6 +482,9 @@ export interface AgentForm {
   protocol: "http" | "a2a" | "mcp";
   /** byoc + protocol "mcp": the Gateway target its tools appear under */
   mcpTargetName: string;
+  /** byoc + protocol "mcp" + code_zip: a stdio-only server behind the platform bridge
+   *  (`spec.mcp.stdio_wrapper`, projects §15.5); absent / off ⇒ streamable HTTP */
+  mcpStdio?: McpStdioForm;
   a2aSkills: A2aSkillRow[];
   // byoc
   byocKind: ByocArtifactKind;
@@ -539,6 +543,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   vpcSgs: "",
   protocol: "http",
   mcpTargetName: "",
+  mcpStdio: { ...MCP_STDIO_OFF },
   a2aSkills: [],
   byocKind: "code_zip",
   byocUploadId: null,
@@ -578,7 +583,7 @@ export interface StoredAgentSpec {
   knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean; memory_id?: string | null };
   protocol?: "http" | "a2a" | "mcp";
-  mcp?: { target_name?: string } | null;
+  mcp?: { target_name?: string; stdio_wrapper?: McpStdioWrapperInput | null } | null;
   a2a_skills?: { id?: string; name?: string; description?: string; tags?: string[] }[];
   env?: Record<string, string>;
   filesystem?: {
@@ -651,6 +656,7 @@ export function formFromStoredSpec(
     vpcSgs: (spec.network?.security_groups ?? []).join(", "),
     protocol: spec.protocol ?? "http",
     mcpTargetName: spec.mcp?.target_name ?? "",
+    mcpStdio: mcpStdioFromSpec(spec.mcp?.stdio_wrapper),
     a2aSkills: (spec.a2a_skills ?? []).map((s) => ({
       name: s.name ?? "",
       description: s.description ?? "",
@@ -786,6 +792,8 @@ const byocArtifact = (form: AgentForm) => {
  */
 export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
   const env = byocEnv(form.byocEnvRows);
+  // code_zip + stdio on only (mcpStdioSpec returns null otherwise)
+  const stdio = mcpStdioSpec(form.mcpStdio, form.byocKind);
   return {
     name: form.name,
     ...displayNameField(form),
@@ -794,7 +802,7 @@ export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
     // optional for byoc; doubles as the server's description
     system_prompt: form.byocDescription,
     ...(Object.keys(env).length ? { env } : {}),
-    mcp: { target_name: form.mcpTargetName.trim() },
+    mcp: { target_name: form.mcpTargetName.trim(), ...(stdio ? { stdio_wrapper: stdio } : {}) },
     byoc: byocArtifact(form) as ByocConfigInput,
   };
 }
@@ -1088,6 +1096,8 @@ export interface ByocIssues {
   entrypoint: boolean;
   /** protocol "mcp": the Gateway target name (`MCP_TARGET_NAME_RE`) */
   mcpTarget: boolean;
+  /** protocol "mcp" with the stdio bridge: its command / arguments (`mcpStdioIssues`) */
+  mcpStdio: boolean;
 }
 
 /** A Gateway target name, as the backend's `MCP_TARGET_NAME_RE` (no trailing hyphen). */
@@ -1100,9 +1110,12 @@ export function byocIssues(form: AgentForm): ByocIssues {
     // an MCP server is granted no model
     models: !mcp && !form.byocModels.some((m) => m.trim().length > 0),
     mcpTarget: mcp && !MCP_TARGET_NAME_RE.test(form.mcpTargetName.trim()),
+    mcpStdio: mcp && Object.values(mcpStdioIssues(form.mcpStdio, form.byocKind)).some(Boolean),
     imageUri: image && !ECR_IMAGE_RE.test(form.byocImageUri.trim()),
     upload: !image && form.byocUploadId == null,
-    entrypoint: form.byocKind === "code_zip" && !form.byocEntrypoint.trim().endsWith(".py"),
+    // a stdio MCP server's entrypoint is the platform bridge (the field is hidden)
+    entrypoint:
+      form.byocKind === "code_zip" && !(mcp && form.mcpStdio?.on) && !form.byocEntrypoint.trim().endsWith(".py"),
   };
 }
 

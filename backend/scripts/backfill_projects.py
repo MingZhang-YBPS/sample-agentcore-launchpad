@@ -237,28 +237,9 @@ def bring_schema_up(bind) -> None:
 
 def derive_from_parents(bind) -> dict[str, int]:
     """Unprojected derived rows take their parent's project, where it has one."""
-    from sqlalchemy import inspect, text
+    from app.core.db import derive_projects_from_parents
 
-    from app.core.db import _PROJECT_BACKFILL_DERIVED
-
-    live = set(inspect(bind).get_table_names())
-    stamped: dict[str, int] = {}
-    with bind.begin() as conn:
-        for table, column, parent in _PROJECT_BACKFILL_DERIVED:
-            if table not in live or parent not in live:
-                continue
-            parent_project = (
-                f"(SELECT p.project_id FROM {parent} p WHERE p.id = {table}.{column})"
-            )
-            changed = conn.execute(
-                text(
-                    f"UPDATE {table} SET project_id = {parent_project}"  # noqa: S608
-                    f" WHERE project_id IS NULL AND {parent_project} IS NOT NULL"
-                )
-            ).rowcount
-            if changed:
-                stamped[table] = stamped.get(table, 0) + int(changed)
-    return stamped
+    return derive_projects_from_parents(bind)
 
 
 def assign_workspace(bind, workspace_id: str, project_id: str) -> dict[str, int]:

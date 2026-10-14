@@ -45,7 +45,7 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
       onChanged();
       return true;
     } catch (err) {
-      toast("act", t("usersPage.actionFailed", { msg: errorMessage(err) }));
+      toast("act", t("usersPage.actionFailed", { msg: errorMessage(err) }), err);
       return false;
     } finally {
       setBusyId(null);
@@ -60,7 +60,7 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
       onChanged();
       return true;
     } catch (err) {
-      toast("act", t("usersPage.actionFailed", { msg: errorMessage(err) }));
+      toast("act", t("usersPage.actionFailed", { msg: errorMessage(err) }), err);
       return false;
     } finally {
       setBusyId(null);

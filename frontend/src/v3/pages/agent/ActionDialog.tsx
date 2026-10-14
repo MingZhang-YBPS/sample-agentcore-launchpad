@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { isImported, needsTypedName, typedNameMatches, type useAgentActions } from "../../../lib/agent-admin/actions";
-import { Btn, Dialog, Notice } from "../../ui";
+import { Confirm, Notice } from "../../ui";
 
 type Actions = ReturnType<typeof useAgentActions>;
 
@@ -28,19 +28,15 @@ export function ActionDialog({ actions }: { actions: Actions }) {
     actions.cancel();
   };
   return (
-    <Dialog
+    <Confirm
       title={t(`v3.agent.action.${key}Title`)}
-      onClose={() => !busy && close()}
-      foot={
-        <>
-          <Btn kind="ghost" onClick={close} disabled={busy}>
-            {t("v3.agent.action.cancel")}
-          </Btn>
-          <Btn kind={kind === "convert" ? "primary" : "danger"} disabled={!ready} onClick={() => void actions.confirm()}>
-            {kind === "convert" ? t("v3.agent.convert") : imported ? t("v3.agent.remove") : t("v3.agent.delete")}
-          </Btn>
-        </>
-      }
+      confirmLabel={kind === "convert" ? t("v3.agent.convert") : imported ? t("v3.agent.remove") : t("v3.agent.delete")}
+      cancelLabel={t("v3.agent.action.cancel")}
+      danger={kind !== "convert"}
+      busy={busy}
+      confirmDisabled={!ready}
+      onConfirm={() => void actions.confirm()}
+      onCancel={close}
     >
       <div style={{ display: "grid", gap: 12 }} data-testid={`v3-agent-${key}-dialog`}>
         <p style={{ margin: 0 }}>{t(`v3.agent.action.${key}Body`, { name })}</p>
@@ -68,6 +64,6 @@ export function ActionDialog({ actions }: { actions: Actions }) {
           </Notice>
         )}
       </div>
-    </Dialog>
+    </Confirm>
   );
 }

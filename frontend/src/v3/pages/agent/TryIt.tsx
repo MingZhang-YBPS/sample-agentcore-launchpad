@@ -23,7 +23,7 @@ export function TryIt({ agent }: { agent: AgentInfo }) {
     api
       .invokeAgent(agent.id, prompt.trim())
       .then((res) => setAnswer({ text: res.text, latency: res.latency_ms }))
-      .catch((err: unknown) => { setError(errorMessage(err)); toast("act", errorMessage(err)); })
+      .catch((err: unknown) => { setError(errorMessage(err)); toast("act", errorMessage(err), err); })
       .finally(() => setBusy(false));
   };
   return (

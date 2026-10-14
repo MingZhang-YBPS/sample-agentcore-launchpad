@@ -2,6 +2,7 @@ import { ArrowLeft, Pencil } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type EvaluatorDetail } from "../../../lib/api";
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { useLoad } from "../../hooks";
@@ -21,7 +22,7 @@ export function EvaluatorView({ id }: { id: string }) {
   const level = d?.level ?? row?.level ?? null;
 
   if ((detail.loading && !d && !managed) || (list.loading && !list.data)) return <Skeleton rows={6} />;
-  if (detail.error) return <Notice s="act">{detail.error}</Notice>;
+  if (detail.error) return <Notice s="act"><ApiErrorDetail error={detail.failure ?? detail.error} /></Notice>;
   const s = row ? evaluatorSignal(row) : "info";
 
   return (

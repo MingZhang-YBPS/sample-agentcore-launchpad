@@ -8,6 +8,7 @@ import { Lock, Plus, Sprout } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
 import type { GoldenSet, GoldenSplit, WritableSplit } from "../../../lib/dlc";
@@ -38,7 +39,7 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
         setCreating(false);
         onOpen(created.id);
       })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 
@@ -49,7 +50,7 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={3} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.dlc.golden.noSets")}>{t("v2.dlc.golden.indexSub")}</Empty>
         ) : (
@@ -141,7 +142,7 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
       toast("ok", t(okKey));
       onReload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { type AlertKind, type AlertRuleInfo, api, errorMessage } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
@@ -154,7 +155,7 @@ function SpendView() {
           {report.loading && !data ? (
             <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
           ) : report.error ? (
-            <div style={{ padding: 20 }}><Notice s="act">{report.error}</Notice></div>
+            <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={report.failure ?? report.error} /></Notice></div>
           ) : !data?.by_agent.length ? (
             <Empty title={t("v2.costs.empty")} />
           ) : (
@@ -255,7 +256,7 @@ function NewRuleDialog({ onClose, onDone }: { onClose: () => void; onDone: () =>
       onDone();
       onClose();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -333,7 +334,7 @@ function AlertsView() {
       toast("ok", t("v2.alerts.rechecked", { firing: result.firing }));
       refresh();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -343,7 +344,7 @@ function AlertsView() {
       await api.updateAlertRule(rule.id, { enabled: !rule.enabled });
       refresh();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     }
   };
   const remove = async (rule: AlertRuleInfo) => {
@@ -352,7 +353,7 @@ function AlertsView() {
       toast("ok", t("v2.alerts.deleted"));
       refresh();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     }
   };
 
@@ -381,7 +382,7 @@ function AlertsView() {
       {list.loading && !list.data ? (
         <Panel><Skeleton rows={4} /></Panel>
       ) : list.error ? (
-        <Notice s="act">{list.error}</Notice>
+        <Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice>
       ) : rows.length === 0 ? (
         <Panel><Empty title={t("v2.alerts.empty")} /></Panel>
       ) : (

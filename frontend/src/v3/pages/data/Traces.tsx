@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type V2Range } from "../../../lib/api";
 import { fmtNumber, RANGES, rangeLabel } from "../../../v2/format";
 import { useWorkspace } from "../../../workspace/workspace-context";
@@ -98,7 +99,7 @@ export function TracesTab() {
         {traces.loading && !traces.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={6} /></div>
         ) : traces.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{traces.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={traces.failure ?? traces.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.traces.empty")} />
         ) : (

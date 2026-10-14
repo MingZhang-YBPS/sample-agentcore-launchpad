@@ -156,7 +156,8 @@ export function conversationContext(detail: object | null | undefined): Assistan
     : null;
 }
 
-/** The window a turn stream's `meta` event announces, or null. */
+/** The window a turn stream's `meta` event announces, or null. A `retry` event after a
+ *  context overflow carries the same members (the replay's smaller window): read it too. */
 export function contextFromMeta(data: Record<string, unknown>): AssistantContextWindow | null {
   const omitted = data.omitted_turns;
   if (typeof omitted !== "number") return null;

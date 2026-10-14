@@ -9,6 +9,7 @@ import { Copy, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
 import { type CandidateRun, calibrationApi, candidateLabel, DROPDOWN_RUNS } from "../../../lib/api/calibration";
@@ -81,7 +82,7 @@ function LinkPanel({ taskId }: { taskId: string }) {
                         dlcApi
                           .revokeAnnotationLink(taskId, row.id)
                           .then(() => { toast("ok", t("v2.dlc.calibration.linkRevoked")); setNonce((n) => n + 1); })
-                          .catch((err: unknown) => toast("act", errorMessage(err)))
+                          .catch((err: unknown) => toast("act", errorMessage(err), err))
                           .finally(() => setBusy(false));
                       }}>
                       {t("v2.dlc.calibration.revokeLink")}
@@ -113,7 +114,7 @@ function LinkPanel({ taskId }: { taskId: string }) {
                   setLabel("");
                   setNonce((n) => n + 1);
                 })
-                .catch((err: unknown) => toast("act", errorMessage(err)))
+                .catch((err: unknown) => toast("act", errorMessage(err), err))
                 .finally(() => setBusy(false));
             }}>
             {t("v2.dlc.calibration.createLink")}
@@ -142,7 +143,7 @@ function TaskBench({ taskId, onBack }: { taskId: string; onBack: () => void }) {
     setBusy(true);
     fn()
       .then(() => { if (okKey) toast("ok", t(okKey)); setNonce((n) => n + 1); })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 
@@ -380,7 +381,7 @@ function RunListDialog({ agentId, agentName, criterionKey, selected, onClose, on
         {list.loading && !list.data ? (
           <Skeleton rows={4} />
         ) : list.error ? (
-          <Notice s="act">{list.error}</Notice>
+          <Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice>
         ) : rows.length === 0 ? (
           <p className="v3-std-muted" style={{ margin: 0 }}>{t("v2.dlc.calibration.noRunsMatch")}</p>
         ) : (
@@ -566,7 +567,7 @@ function NewTask({ agentId, agentName, lineageId, criteriaKeys, people, initialR
   const [refusal, setRefusal] = useState<{ message: string; suggestion: string | null } | null>(null);
   const refused = (err: unknown, typed: string) => {
     const why = runRefusal(err, typed, key);
-    if (!why) { toast("act", errorMessage(err)); return; }
+    if (!why) { toast("act", errorMessage(err), err); return; }
     setRefusal({ message: t(why.key, why.vars), suggestion: null });
     const name = why.lookupName;
     if (!name || !agentId) return;
@@ -698,7 +699,7 @@ export function Calibration({ agentId, agentName, lineageId, criteriaKeys, peopl
         {tasks.loading && !tasks.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={3} /></div>
         ) : tasks.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{tasks.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={tasks.failure ?? tasks.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.dlc.calibration.noTasks")} />
         ) : (

@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
 import {
   api,
@@ -37,7 +38,7 @@ function useClear(onCleared: () => void) {
       setTarget((cur) => (cur?.id === c.id ? { ...cur, fp } : cur));
     } catch (err) {
       setTarget(null);
-      toast("act", message(err));
+      toast("act", message(err), err);
     }
   };
   const fp = target?.fp ?? null;
@@ -54,7 +55,7 @@ function useClear(onCleared: () => void) {
       setTarget(null);
       onCleared();
     } catch (err) {
-      toast("act", message(err));
+      toast("act", message(err), err);
       setTarget(null);
     } finally {
       setBusy(false);
@@ -139,7 +140,7 @@ export function V3Assistant() {
       if (detail.catalog.warnings.length) toast("act", t("assistantPage.catalogWarnings", { list: detail.catalog.warnings.join("; ") }));
       navigate(open(detail.id));
     } catch (err) {
-      toast("act", err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err));
+      toast("act", err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err), err);
       if (err instanceof ApiError && err.code === "assistant.unavailable") status.reload();
     } finally {
       setCreating(false);
@@ -152,7 +153,7 @@ export function V3Assistant() {
       toast("ok", t(res.shared ? "v2.assistant.sharedToast" : "v2.assistant.unsharedToast"));
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setSharing(null);
     }
@@ -171,7 +172,7 @@ export function V3Assistant() {
         }
       />
 
-      {status.error && <Notice s="act">{status.error}</Notice>}
+      {status.error && <Notice s="act"><ApiErrorDetail error={status.failure ?? status.error} /></Notice>}
       {s && !s.available && (
         <Notice s="wait">
           {t("assistantPage.unavailableBody", { label: s.preset.label, status: t(`create.system.status.${s.preset.status}`) })}{" "}
@@ -224,7 +225,7 @@ export function V3Assistant() {
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={5} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={all.length ? t("v3.assistant.none") : t("v3.assistant.empty")}>{!all.length && t("v3.assistant.emptySub")}</Empty>
         ) : (

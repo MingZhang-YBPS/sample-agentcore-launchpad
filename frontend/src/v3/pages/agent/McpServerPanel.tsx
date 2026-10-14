@@ -2,6 +2,7 @@ import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type AgentInfo } from "../../../lib/api";
 import { useLoad } from "../../hooks";
 import { Chip, Empty, Notice, Panel, type Signal, Skeleton, Stat } from "../../ui";
@@ -24,7 +25,7 @@ export function McpServerPanel({ agent }: { agent: AgentInfo }) {
       end={<button type="button" className="v3-btn ghost sm" onClick={status.reload} disabled={status.loading}><RefreshCw size={13} /> {t("v3.ux.refresh")}</button>}
     >
       {status.error ? (
-        <Notice s="act">{status.error}</Notice>
+        <Notice s="act"><ApiErrorDetail error={status.failure ?? status.error} /></Notice>
       ) : !d ? (
         <Skeleton rows={3} />
       ) : (

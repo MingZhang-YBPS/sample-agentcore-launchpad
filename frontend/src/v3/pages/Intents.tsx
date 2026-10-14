@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { errorMessage, type IntentCluster, intentApi, type IntentSession, issueApi } from "../../lib/api";
 import { useAgents } from "../../v2/pages/selfservice/useAgents";
 import { useWorkspace } from "../../workspace/workspace-context";
@@ -57,7 +58,7 @@ export function V3Intents() {
       setSent((prev) => new Set(prev).add(s.session_id));
       toast("ok", t("selfService.intents.sent"));
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     }
   };
 
@@ -98,7 +99,7 @@ export function V3Intents() {
         }
       />
 
-      {view.error && <Notice s="act">{view.error}</Notice>}
+      {view.error && <Notice s="act"><ApiErrorDetail error={view.failure ?? view.error} /></Notice>}
       {data?.source === "fallback" && clusters.length > 0 && <Notice s="wait">{t("selfService.intents.fallback")}</Notice>}
 
       <div className="v3-grid c4">

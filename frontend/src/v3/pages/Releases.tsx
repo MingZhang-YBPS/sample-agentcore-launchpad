@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
 import {
   api,
@@ -135,7 +136,7 @@ function ReleaseDesk() {
         </Panel>
       </div>
 
-      {list.error && <Notice s="act">{list.error}</Notice>}
+      {list.error && <Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice>}
 
       {queue.length > 0 && (
         <Panel title={t("v3.releases.queue")} signal="wait" flush end={<span className="mono">{queue.length}</span>}>
@@ -331,7 +332,7 @@ function PlanPanel({ p, onStarted }: { p: PromotionInfo; onStarted: () => void }
       setConfirming(false);
       onStarted();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
       setConfirming(false);
       plan.reload();
     } finally {
@@ -352,7 +353,7 @@ function PlanPanel({ p, onStarted }: { p: PromotionInfo; onStarted: () => void }
     >
       <p style={{ margin: "0 0 12px", color: "var(--v3-text-3)", fontSize: 13 }}>{t("v2.promotions.planSub", { target: p.target_workspace_id })}</p>
       {plan.loading && !data && <Skeleton rows={3} />}
-      {plan.error && <Notice s="act">{plan.error}</Notice>}
+      {plan.error && <Notice s="act"><ApiErrorDetail error={plan.failure ?? plan.error} /></Notice>}
       {data && (
         <div style={{ display: "grid", gap: 10 }}>
           {data.blocked_by.length > 0 && (
@@ -440,7 +441,7 @@ function ExecutionPanel({ p, onChanged }: { p: PromotionInfo; onChanged: () => v
       previous.current = "executing";
       onChanged();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
       setConfirming(false);
     } finally {
       setBusy(false);
@@ -503,7 +504,7 @@ function ReviewDialog({ p, decision, onClose, onDone }: { p: PromotionInfo; deci
       onDone();
       onClose();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }

@@ -11,6 +11,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
 import { DLC_DIMENSIONS, type RunComparison, type WatchView } from "../../../lib/dlc";
@@ -37,7 +38,7 @@ function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: st
     setBusy(true);
     fn()
       .then(() => { toast("ok", t(okKey)); onReload(); })
-      .catch((err: unknown) => toast("act", errorMessage(err)))
+      .catch((err: unknown) => toast("act", errorMessage(err), err))
       .finally(() => setBusy(false));
   };
 
@@ -305,7 +306,7 @@ export function Audit({ agentId }: { agentId: string | null }) {
         {trail.loading && !trail.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
         ) : trail.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{trail.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={trail.failure ?? trail.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v2.dlc.audit.empty")} />
         ) : (

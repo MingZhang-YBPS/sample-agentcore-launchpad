@@ -15,6 +15,7 @@ import {
   environmentApi,
   errorMessage,
 } from "../../lib/api";
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
@@ -151,7 +152,7 @@ export function V3Environments() {
     try {
       setDrift(await environmentApi.drift());
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setChecking(false);
     }
@@ -172,7 +173,7 @@ export function V3Environments() {
       setExtra(await environmentApi.compare(name));
       select(name);
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setLooking(false);
     }
@@ -218,7 +219,7 @@ export function V3Environments() {
         </Panel>
       </div>
 
-      {agents.error && <Notice s="act">{agents.error}</Notice>}
+      {agents.error && <Notice s="act"><ApiErrorDetail error={agents.failure ?? agents.error} /></Notice>}
       {total > MAX_ROWS && <Notice s="wait">{t("v3.environments.capped", { max: MAX_ROWS, total })}</Notice>}
       {drift?.truncated && <Notice s="wait">{t("v2.environments.truncated")}</Notice>}
       {drift && drift.counts.unknown > 0 && <Notice>{t("v2.environments.unknownNote")}</Notice>}

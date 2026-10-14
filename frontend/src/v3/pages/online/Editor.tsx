@@ -140,7 +140,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
   };
 
   if (editing && existing.loading && !row) return <Skeleton rows={6} />;
-  if (editing && existing.error && !row) return <Notice s="act">{existing.error}</Notice>;
+  if (editing && existing.error && !row) return <Notice s="act"><ApiErrorDetail error={existing.failure ?? existing.error} /></Notice>;
   const head = (
     <div>
       <button type="button" className="v3-btn ghost sm" onClick={back}>

@@ -2454,7 +2454,10 @@
     "golden.unknown_criteria": "有样本引用了该黄金集判据表中没有的判据编号。",
     "runtime.empty_reply": "智能体的运行时返回了空响应。",
     "runtime.unrecognized_reply": "智能体返回了控制台无法识别的格式。响应的开头是：",
-    "eval.no_telemetry": "这个 Agent 没有产生任何 Span，评估找不到可打分的内容。BYOC 代码 zip 只有带 ADOT 启动器才会产生 Span：在 requirements.txt 里加 aws-opentelemetry-distro（并打开“安装依赖”），或改用 Dockerfile 构建，重新发布后再开始评估。"
+    "eval.no_telemetry": "这个 Agent 没有产生任何 Span，评估找不到可打分的内容。BYOC 代码 zip 只有带 ADOT 启动器才会产生 Span：在 requirements.txt 里加 aws-opentelemetry-distro（并打开“安装依赖”），或改用 Dockerfile 构建，重新发布后再开始评估。",
+    "eval.harness_no_telemetry": "这个 Harness 还没有遥测日志组。请先运行至少一次对话或调用，再开始评估。",
+    "online_eval.no_telemetry": "这个 Agent 还没有遥测日志组。请先运行至少一次对话或调用，再创建在线评估。",
+    "trace.not_found": "在当前项目中找不到该 Trace。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -6986,13 +6989,13 @@
         "unsealed": "保留集为空",
         "seed": "初次编制切分",
         "seedTitle": "一次性编制三个切分",
-        "seedHint": "样本按用例档位分层，使三个切分见到同样的构成；若样本自己指定了切分，则按指定放入。",
+        "seedHint": "样本按用例档位分层，使三个切分见到同样的构成；若样本自己指定了切分，则按指定放入。支持 Excel、CSV、JSON，可先下载模板。",
         "seedOnce": "这一步只做一次。之后保留集会被封存——正是这一点让它成为保留集。",
         "seedNeeded": "保留集为空，放行门会判为“无法判定”。编制切分以打开它。",
         "seeded": "切分已编制，保留集已封存",
         "addTo": "添加到{{split}}",
         "addTitle": "添加到{{split}}",
-        "addHint": "每行一条：`编号 | 问题 | 期望答案`。也支持 JSON 数组。",
+        "addHint": "每行一条：`编号 | 问题 | 期望答案`；也支持 JSON 数组、Excel 和 CSV 文件。",
         "added": "样本已添加",
         "itemsField": "样本",
         "itemsHint": "期望答案就是标准。不写它，这条样本判不了任何事。",

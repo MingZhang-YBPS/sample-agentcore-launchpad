@@ -79,7 +79,7 @@ function useKbDelete(onDeleted: () => void) {
       if (err instanceof ApiError && err.code === "kb.has_attached_agents" && !force) {
         setConflict(extractConflictAgents({ detail: err.detail }));
       } else {
-        toast("act", t("common.actionFailed", { msg: errorMessage(err) }));
+        toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
         close();
       }
     } finally {
@@ -175,7 +175,7 @@ function KbShelf() {
       {list.loading && !list.data ? (
         <Panel><Skeleton rows={5} /></Panel>
       ) : list.error ? (
-        <Notice s="act">{list.error}</Notice>
+        <Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice>
       ) : rows.length === 0 ? (
         <Panel><Empty title={kbs.length ? t("v3.kb.none") : t("v3.kb.empty")}>{!kbs.length && t("v3.kb.emptySub")}</Empty></Panel>
       ) : (
@@ -598,7 +598,7 @@ function KbDetail({ id }: { id: string }) {
       toast("ok", t("knowledge.detail.sources.syncStarted"));
       refresh();
     } catch (err) {
-      toast("act", t("knowledge.detail.sources.syncFailed", { msg: errorMessage(err) }));
+      toast("act", t("knowledge.detail.sources.syncFailed", { msg: errorMessage(err) }), err);
     } finally {
       setSyncing(null);
     }
@@ -612,7 +612,7 @@ function KbDetail({ id }: { id: string }) {
       sourceWaitTicks.current = 0;
       refresh();
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }));
+      toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
     } finally {
       setRepairing(false);
     }
@@ -626,7 +626,7 @@ function KbDetail({ id }: { id: string }) {
       setRemoveDs(null);
       refresh();
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }));
+      toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
     } finally {
       setRemoving(false);
     }

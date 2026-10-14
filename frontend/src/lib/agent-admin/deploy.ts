@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, type AgentInfo, type DeploymentInfo, errorMessage, type JobInfo } from "../api";
-import { fmtElapsed, parseUtc, progressKey, runningStage } from "../../v2/pages/agents/deployStatus";
+import { fmtElapsed, parseUtc, progressKey, runningStage } from "./deployStatus";
 
 /**
  * One agent and its latest deploy job, followed while a deploy is in flight

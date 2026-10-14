@@ -20,6 +20,10 @@ export interface ChatMessage {
   curated?: boolean;
   /** kind "policy": a Gateway tool call a Cedar policy denied */
   policy?: PolicyDeny;
+  /** kind "tool" of a live turn: the call's run (status, duration); a restored row has none */
+  run?: import("../../../lib/chat").ToolRun;
+  /** the live turn a tool row belongs to (tool ids repeat across turns) */
+  turn?: number;
 }
 
 /** Append a streamed delta. An auth card asked mid-answer sits after the open

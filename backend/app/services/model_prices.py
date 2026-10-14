@@ -60,7 +60,7 @@ def _fetch_source(url: str) -> dict[str, Any]:
     return data
 
 
-def _entry_from_litellm(spec: dict[str, Any]) -> dict[str, float] | None:
+def _entry_from_litellm(spec: dict[str, Any]) -> dict[str, Any] | None:
     """litellm per-token USD costs → our per-1M entry; None when unpriced."""
     try:
         cost_in = float(spec["input_cost_per_token"])
@@ -77,6 +77,9 @@ def _entry_from_litellm(spec: dict[str, Any]) -> dict[str, float] | None:
         value = spec.get(src)
         if isinstance(value, (int, float)) and value >= 0:
             entry[dst] = round(float(value) * 1e6, 4)
+    window = spec.get("max_input_tokens")
+    if isinstance(window, int) and window > 0:
+        entry["max_input_tokens"] = window  # the assistant's replay budget (C3)
     return entry
 
 

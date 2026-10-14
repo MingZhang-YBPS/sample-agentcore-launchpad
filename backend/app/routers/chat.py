@@ -220,6 +220,7 @@ def chat(
             session_id=req.session_id,
             actor_id=mem_actor,
             workspace=workspace,
+            status_events=True,  # console only: phase / thinking / tool_end (chat-streaming S2)
             **stream_kwargs,
         ))
         # Thread items are persisted in event order (int-pk = replay order) so

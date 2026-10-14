@@ -66,7 +66,7 @@ export function TryChat({ agentId }: { agentId: string }) {
     let failed = false;
     const signal = turn.begin();
     try {
-      const res = await chatApi.stream(agentId, { prompt, session_id: sessionRef.current });
+      const res = await chatApi.stream(agentId, { prompt, session_id: sessionRef.current }, signal);
       if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
       for await (const { event, data } of sseEvents(res, { heartbeats: true, signal })) {
         turn.feed(event, data);
@@ -82,7 +82,10 @@ export function TryChat({ agentId }: { agentId: string }) {
       else if (reason === "stalled") throw new Error(t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }));
       else if (!completed && !failed) throw new Error(t("chatPage.streamInterrupted"));
     } catch (err) {
-      push({ role: "error", text: errorMessage(err) });
+      const reason = turnStopReason(signal);
+      // a Stop before the stream opened rejects the fetch with the abort
+      if (reason === "stop" && !completed && !failed) push({ role: "error", text: t("v3.chat.status.stopped") });
+      else push({ role: "error", text: reason === "stalled" ? t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }) : errorMessage(err) });
     } finally {
       turn.end();
       setBusy(false);

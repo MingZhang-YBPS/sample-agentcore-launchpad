@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type V2Range } from "../../../lib/api";
 import { calibrationApi } from "../../../lib/api/calibration";
@@ -581,14 +582,14 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       setConfirm(null);
       task.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
   };
 
   if (task.loading && !data) return <Skeleton rows={6} />;
-  if (task.error && !data) return <Notice s="act">{task.error}</Notice>;
+  if (task.error && !data) return <Notice s="act"><ApiErrorDetail error={task.failure ?? task.error} /></Notice>;
   if (!data) return null;
 
   const mayRun = can("eval.run");
@@ -608,7 +609,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       );
       task.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }

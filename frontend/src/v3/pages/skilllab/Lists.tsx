@@ -60,7 +60,7 @@ function useJobActions(type: "eval" | "train" | "taskgen", onDone: () => void) {
       setPending(null);
       onDone();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -276,7 +276,7 @@ export function TasksetTable({
       setPending(null);
       reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }

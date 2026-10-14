@@ -101,7 +101,7 @@ export function ImportDialog({
 
   const download = (fn: () => Promise<void>) => {
     setDownloading(true);
-    fn().catch((err: unknown) => toast("act", errorMessage(err))).finally(() => setDownloading(false));
+    fn().catch((err: unknown) => toast("act", errorMessage(err), err)).finally(() => setDownloading(false));
   };
   const template = (format: TableFormat) => download(() => downloadTemplate(format, goldenSet.name, t, criteria, zh));
   const hasItems = Object.values(goldenSet.splits).some((s) => (s?.items ?? 0) > 0);
@@ -222,7 +222,7 @@ export function ImportDialog({
                     setText(out.text);
                   }
                 })
-                .catch((err: unknown) => toast("act", errorMessage(err)));
+                .catch((err: unknown) => toast("act", errorMessage(err), err));
             }} />
           <small className={source.error ? "v3-err" : "v3-hint"}>{source.error ?? `${t(`${K}.formats`)} ${t("v2.dlc.golden.itemsHint")}`}</small>
           {lineage && served.error && <small className="v3-hint">{t(`${K}.criteriaUnavailable`)}</small>}

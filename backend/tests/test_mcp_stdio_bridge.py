@@ -104,13 +104,15 @@ def test_module_and_binary_commands_are_not_checked(aws):
 
 
 def test_stdio_wrapper_is_code_zip_only(aws):
+    """Refused at the spec (the deployer keeps its own guard for stored specs)."""
+    from pydantic import ValidationError
+
+    from app.schemas.agent import AgentSpec
+
     spec = _wrapped()
     spec["byoc"] = {"artifact_kind": "container_source", "upload_id": "u1"}
-    agent_id, ctx = _ctx_for(spec, aws, {"Dockerfile": b"FROM x\n"})
-    with pytest.raises(RuntimeError, match="artifact_kind=code_zip only"):
-        byoc_dep._stage_generate(ctx, _get_agent(agent_id))
-    with pytest.raises(RuntimeError, match="artifact_kind=code_zip only"):
-        byoc_dep._stage_package(ctx, _get_agent(agent_id))
+    with pytest.raises(ValidationError, match="artifact_kind=code_zip only"):
+        AgentSpec.model_validate(spec)
 
 
 def test_node_base_builds_an_image_from_the_bridge_dockerfile(aws, monkeypatch):

@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
@@ -85,7 +86,7 @@ export function TaskList() {
       setPending(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err));
+      toast("act", errorMessage(err), err);
     } finally {
       setBusy(false);
     }
@@ -231,7 +232,7 @@ export function TaskList() {
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={6} /></div>
         ) : list.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{list.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={tasks.length ? t("v3.tasks.none") : t("v2.tasks.empty")}>{!tasks.length && t("v3.tasks.emptySub")}</Empty>
         ) : (

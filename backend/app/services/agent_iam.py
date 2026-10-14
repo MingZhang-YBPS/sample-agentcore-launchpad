@@ -667,7 +667,13 @@ def policy_document(
 
     # ---- container image pull ----
     byoc_kind = spec.byoc.artifact_kind if spec.byoc else None
-    if spec.method == "container" or byoc_kind in ("container_source", "container_image"):
+    # a Node stdio MCP server is built into the shared repo on the Node bridge base
+    node_stdio = (
+        byoc_kind == "code_zip" and spec.mcp is not None
+        and spec.mcp.stdio_wrapper is not None and spec.mcp.stdio_wrapper.base == "node"
+    )
+    if (spec.method == "container" or node_stdio
+            or byoc_kind in ("container_source", "container_image")):
         # byoc container_image may name any repo in this account; scope to it
         # rather than the shared launchpad-agents repo
         if byoc_kind == "container_image" and spec.byoc and spec.byoc.image_uri:
