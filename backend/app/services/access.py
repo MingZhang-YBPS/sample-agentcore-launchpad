@@ -12,7 +12,9 @@ The one place project access is decided:
 * ``resolve_project`` — the request's project from ``X-Project`` (or the §2.6
   fallback); anything the caller cannot reach answers 404 ``project.not_found``.
 * ``has_data_bypass`` / ``can_manage_structure`` — the only places "an admin can"
-  is decided for project data and structure (phase 3's steward changes just these).
+  is decided for project data and structure (phase 3's steward changes just these);
+  ``can_manage_structure(identity, department_id, db=db)`` adds the department
+  administrators of §11.1 for that department's projects and groups.
 """
 
 import threading
@@ -143,9 +145,49 @@ def has_data_bypass(identity: Any) -> bool:
     return getattr(identity, "role", None) == ROLE_ADMIN
 
 
-def can_manage_structure(identity: Any) -> bool:
-    """May create projects, groups, departments and bind workspaces (phase 1: admins)."""
-    return getattr(identity, "role", None) == ROLE_ADMIN
+_ANY_DEPARTMENT: Any = object()  # `department_id` omitted: the whole platform's structure
+
+
+def can_manage_structure(
+    identity: Any, department_id: Any = _ANY_DEPARTMENT, *, db: Session | None = None,
+) -> bool:
+    """May manage structure. Without `department_id`: the platform's — departments,
+    workspaces, every project and group (platform administrators). With one (§11.1):
+    that department's projects and groups — an administrator, or one of the
+    department's administrators (`department_admins`; needs `db`). A project or group
+    with no department is the platform's only."""
+    if getattr(identity, "role", None) == ROLE_ADMIN:
+        return True
+    if department_id is _ANY_DEPARTMENT or not department_id or db is None:
+        return False
+    return department_id in managed_departments(db, identity)
+
+
+def managed_departments(db: Session, identity: Any) -> frozenset[str]:
+    """The active departments the caller administers (§11.1) — rows only, so empty
+    for a platform administrator, who manages every department by role anyway. Read
+    per call (one indexed query), not from the access snapshot: it is authorization
+    for structure writes, never data access."""
+    user_id = getattr(identity, "user_id", None)
+    if not user_id:
+        return frozenset()
+    return frozenset(r[0] for r in db.execute(
+        text("SELECT da.department_id FROM department_admins da"
+             " JOIN departments d ON d.id = da.department_id"
+             " WHERE da.user_id = :uid AND d.archived_at IS NULL"),
+        {"uid": user_id},
+    ).fetchall())
+
+
+def open_workspaces(db: Session, department_id: str | None) -> frozenset[str]:
+    """The workspaces opened to a department (§11.1): where its administrators may
+    bind its projects."""
+    if not department_id:
+        return frozenset()
+    return frozenset(r[0] for r in db.execute(
+        text("SELECT workspace_id FROM department_workspaces WHERE department_id = :d"),
+        {"d": department_id},
+    ).fetchall())
 
 
 # ── the snapshot ──────────────────────────────────────────────────────────────

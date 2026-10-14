@@ -483,6 +483,21 @@ def _migrate(bind) -> None:
     _migrate_actor_user_id_columns(bind)
     _migrate_isolation_columns(bind)
     _migrate_audit_outcome(bind)
+    _migrate_department_settings(bind)
+
+
+def _migrate_department_settings(bind) -> None:
+    """`departments.settings` (projects design §11.1): the department administrators'
+    limits; NULL on every existing row means the defaults. The `department_admins` and
+    `department_workspaces` tables are new, so `create_all` builds them."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "departments" not in inspector.get_table_names():
+        return
+    if "settings" not in {c["name"] for c in inspector.get_columns("departments")}:
+        with bind.begin() as conn:
+            conn.execute(text("ALTER TABLE departments ADD COLUMN settings JSON"))
 
 
 def _migrate_isolation_columns(bind) -> None:
