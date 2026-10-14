@@ -11462,5 +11462,9 @@
       "custom": "自定义模型 ID…",
       "customPlaceholder": "任意 Bedrock 模型或推理配置文件 ID，例如 {{example}}"
     }
+  },
+  "byocTelemetry": {
+    "noAdotWarn": "未检测到 ADOT：这个 Agent 不会产生链路，可观测和评估都看不到它。两种做法：在 requirements.txt 里加上 aws-opentelemetry-distro（并保持安装依赖）后重新上传；或改用 Dockerfile 构建，用 opentelemetry-instrument 启动。",
+    "adotOn": "已检测到 ADOT：Agent 会以 opentelemetry-instrument 启动，链路会出现在可观测里。"
   }
 }

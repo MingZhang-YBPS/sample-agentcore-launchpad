@@ -23,6 +23,7 @@ import {
   toolkitToolNames,
 } from "../../../lib/agent-spec";
 import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
+import { adotLauncher } from "../../../lib/byocTelemetry";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
 import { HintLabel } from "../../Glossary";
@@ -637,6 +638,15 @@ export function ByocArtifactCard({
             </label>
             {upload && kind === "code_zip" && !upload.detected.agentcore_sdk_detected && (
               <Alert tone="warn">{t("create.configure.byocNoSdkWarn")}</Alert>
+            )}
+            {upload && kind === "code_zip" && (
+              <div data-testid="v2-agent-byoc-telemetry">
+                {adotLauncher(upload.detected, form.byocInstallReqs) ? (
+                  <Alert tone="success">{t("byocTelemetry.adotOn")}</Alert>
+                ) : (
+                  <Alert tone="warn">{t("byocTelemetry.noAdotWarn")}</Alert>
+                )}
+              </div>
             )}
             {upload && kind === "container_source" && !upload.detected.has_dockerfile && (
               <Alert tone="warn">{t("create.configure.byocNoDockerfileWarn")}</Alert>

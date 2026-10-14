@@ -11462,5 +11462,9 @@
       "custom": "Custom model ID…",
       "customPlaceholder": "Any Bedrock model or inference-profile ID, e.g. {{example}}"
     }
+  },
+  "byocTelemetry": {
+    "noAdotWarn": "No ADOT detected — this agent will emit no traces, so neither Observability nor Evaluation will see it. Either add aws-opentelemetry-distro to requirements.txt (with dependency install on) and re-upload, or build from a Dockerfile that starts it under opentelemetry-instrument.",
+    "adotOn": "ADOT detected — the agent starts under opentelemetry-instrument and its traces appear in Observability."
   }
 }
