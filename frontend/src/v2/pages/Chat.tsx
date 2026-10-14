@@ -1,4 +1,4 @@
-import { Plus, RefreshCw, RotateCcw, Share2, Square } from "lucide-react";
+import { Plus, RefreshCw, Share2, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -64,7 +64,7 @@ import { Composer } from "./chat/Composer";
 import { ShareLinksModal } from "./chat/ShareLinks";
 import { Inspector, type InspectorTab } from "./chat/Inspector";
 import { SessionRail } from "./chat/SessionRail";
-import { appendDelta } from "./chat/messages";
+import { appendDelta, latestRetryTarget } from "./chat/messages";
 import { type ChatMessage, Thread } from "./chat/Thread";
 
 /** The latest turn's retry offer (chat-streaming §4.1): the failure, the prompt to
@@ -221,11 +221,11 @@ export function V2Chat() {
                     : { kind: "error", text: failureText(t, restoredFailure(r.text)) },
         );
       setMessages(restored);
-      // a latest turn that failed (and carried no files) can be retried from here
+      // a latest turn that failed can be retried from here (one with files only says so)
       const user = rows[lastUserIndex(rows.map((r) => ({ kind: r.role })))];
       const last = rows[rows.length - 1];
       setRetryOffer(
-        user && last?.role === "error" && !user.attachments?.length && latestTurnRetryable(restored)
+        user && last?.role === "error" && latestTurnRetryable(restored)
           ? { failure: restoredFailure(last.text), prompt: user.text, ledgerId: user.id }
           : null,
       );
@@ -447,7 +447,8 @@ export function V2Chat() {
         }
         replaces = userLedgerId ?? replaces;
       }
-      if (failure?.manual && !files.length) {
+      // a turn with files gets the offer too: its error item says to re-send the files
+      if (failure?.manual) {
         setRetryOffer({ failure, prompt, ledgerId: userLedgerId ?? replaces });
       }
     } finally {
@@ -463,7 +464,7 @@ export function V2Chat() {
   // The retry button: the latest turn's items after its user message give way to
   // the retry, which names that turn's ledger row.
   const retryTurn = () => {
-    if (!retryOffer || busy) return;
+    if (!retryOffer || busy || latestRetryTarget(messages)?.attachments) return;
     const { prompt, ledgerId } = retryOffer;
     setMessages((m) => m.slice(0, lastUserIndex(m) + 1));
     void send(prompt, ledgerId ?? null);
@@ -762,18 +763,11 @@ export function V2Chat() {
               onRate={(index, verdict) => void rate(index, verdict)}
               onRetry={(prompt) => void send(prompt)}
               retryDisabled={busy || restoring}
+              onRetryTurn={retryOffer && !busy && !restoring ? retryTurn : undefined}
               now={turn.now}
             />
             {retrying !== null && (
               <Alert tone="warn">{t("v3.chat.retry.retrying", { n: retrying, total: AUTO_RETRIES })}</Alert>
-            )}
-            {retryOffer && !busy && !restoring && (
-              <div className="v2-row" style={{ justifyContent: "flex-end", margin: "6px 0" }}>
-                <Button size="sm" onClick={retryTurn} testId="chat-retry">
-                  <RotateCcw size={12} aria-hidden="true" />
-                  {t("v3.chat.retry.button")}
-                </Button>
-              </div>
             )}
             {turn.status && <TurnStatusLine status={turn.status} now={turn.now} onStop={stopTurn} testId="chat-turn-status" />}
             <Composer

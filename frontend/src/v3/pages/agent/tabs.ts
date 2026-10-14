@@ -32,7 +32,6 @@ export function detailSections(agent: AgentInfo) {
   const mcp = isMcpServer(agent);
   const imported = agent.method === "discovered_runtime";
   const ownRuntime = !!agent.arn && !imported;
-  const kbs = (spec.knowledge_bases as unknown[] | undefined) ?? [];
   return {
     // overview
     lifecycle: !mcp,
@@ -40,7 +39,6 @@ export function detailSections(agent: AgentInfo) {
     systemNote: !!agent.system,
     byoc: agent.method === "byoc" && !!spec.byoc,
     converted: !!(spec.source_harness as { agent_name?: string } | undefined)?.agent_name,
-    knowledgeBases: kbs.length > 0,
     tryIt: !mcp,
     // deploy & versions
     deployProgress: !!(agent.deployments?.[0] ?? agent.deployment),

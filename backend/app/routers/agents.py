@@ -260,6 +260,25 @@ def _require_project_connections(db: Session, spec: AgentSpec, ws: WorkspaceScop
             )
 
 
+def _stored_network(
+    db: Session, ws: WorkspaceScope, request: Request, spec: AgentSpec,
+) -> AgentSpec:
+    """The spec with its network in stored form (design §12.10-2): a usable profile
+    reference; inline ids only from an administrator, filed as a legacy profile."""
+    if spec.network is None:
+        return spec
+    from app.services import network_profiles
+
+    identity = require_identity(request)
+    project = getattr(request.state, "project", None)
+    stored = network_profiles.normalize_spec_network(
+        db, ws.id, project.id if project is not None else None,
+        spec.model_dump(mode="json", exclude_none=False),
+        is_admin=identity.is_admin, actor=identity.username,
+    )
+    return AgentSpec.model_validate(stored)
+
+
 @router.post("/agents", status_code=202)
 def create_agent(
     spec: AgentSpec,
@@ -268,6 +287,7 @@ def create_agent(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    spec = _stored_network(db, ws, request, spec)
     if spec.method not in SUPPORTED_METHODS:
         raise AppError(
             "agent.method_not_available",
@@ -690,6 +710,7 @@ def redeploy_agent(
     agent = _agent_in(db, ws, agent_id, viewer)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
+    spec = _stored_network(db, ws, request, spec)
     return republish_agent(
         db, agent, spec, ws, actor=require_identity(request).username, viewer=viewer
     )

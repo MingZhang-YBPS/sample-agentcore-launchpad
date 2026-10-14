@@ -84,10 +84,9 @@ describe("detailSections per method", () => {
     expect(s).toMatchObject({ systemNote: true, promotion: false });
   });
 
-  it("BYOC, converted and knowledge-base cards follow the spec", () => {
+  it("BYOC and converted cards follow the spec", () => {
     expect(detailSections(agent({ method: "byoc", spec: { byoc: { artifact_kind: "zip" } } })).byoc).toBe(true);
     expect(detailSections(agent({ spec: { source_harness: { agent_name: "h" } } })).converted).toBe(true);
-    expect(detailSections(agent({ spec: { knowledge_bases: [{ kb_id: "k", name: "K" }] } })).knowledgeBases).toBe(true);
     expect(detailSections(agent()).byoc).toBe(false);
   });
 

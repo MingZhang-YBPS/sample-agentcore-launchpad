@@ -178,6 +178,14 @@ principal 绑定**（`user:<id>` / `config-admin` / `local-operator`；用户名
 principal——其他成员、管理员、或同名重新注册的账号——的会话返回
 `404 assistant.conversation_not_found`。除特别说明外读取仅访问台账。
 
+会话详情还包含 `context_digest: {text, through_turn, updated_at, generating}`，即已确认事项摘要。
+滑出重放窗口的轮次会连同上一版摘要一起，汇总成一份简短的 Markdown 列表：已陈述、已建议、已确认的事项，
+以及未决问题。摘要放在轮次前言中、当前提案之前，并标注为可能不完整。一轮结束后，如果下一轮的窗口将省略
+摘要尚未覆盖的轮次，就在后台启动一次刷新。刷新是对廉价默认模型（`assistant_digest_model_id`，否则为
+`agent_default_model_id`）的一次 Bedrock Converse 调用，读取超时 60 秒，不重试。失败时保留上一版摘要，
+任何轮次都不等待它。没有摘要时 `text`、`through_turn`（覆盖到的最后一轮）与 `updated_at` 为 `null`。
+本进程内刷新或重建进行中时，`generating` 为 true。摘要只是会话状态：它从不进入提案、提案哈希或批准。
+
 | 方法 | 路径 | 角色 | 结果 |
 |---|---|---|---|
 | `GET` | `/api/assistant/architect` | 成员 | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], capabilities{shared_memory, kb_gateway}, is_admin, owner, principal}`——`available` ⇔ 预置为 `active`；`capabilities` 说明提案可绑定哪些前置资源（此处绝不创建）；仅读台账 |
@@ -187,6 +195,7 @@ principal——其他成员、管理员、或同名重新注册的账号——�
 | `PUT` | `/api/assistant/architect/conversations/{id}/sharing` | 成员（所有者）或管理员 | 请求体 `{shared: bool}` → 摘要。向本 Workspace 所有成员开放（或收回）该会话，记录 `shared_by` / `shared_at`；不改变 `updated_at`。只能共享调用者本身可访问的会话（自己的，或已共享的；管理员可访问所有会话，因此可共享任意会话——只读会话由此转为协作），非管理员访问其他成员的私有会话返回 404；对已共享会话，既非所有者也非管理员的协作者返回 403 `assistant.share_forbidden`。共享期间，下列会话路由（发消息、目录、资源准备、提案编辑/驳回/批准、评估计划与评估资产）对所有成员开放，各自原有的权限要求不变（在每次写入内复查，取消共享立即生效）；仅 `footprint` 与 `DELETE`（清除）限所有者（协作者得到 404）。管理员对未共享会话的读取（`GET` 详情、`evaluation-plan`、`evaluation-plan/operations/{id}`）不会放宽任何写入：共享之前，所有写入路由对其返回 404 |
 | `POST` | `/api/assistant/architect/conversations/{id}/catalog` | 成员 | 重新读取目录 → `{catalog}` |
 | `POST` | `/api/assistant/architect/conversations/{id}/turns` | 成员 | 请求体 `{prompt}`（≤ 100k 字符 / 300k 字节，且须与前言一起放入请求预算）→ SSE `meta{conversation_id, turn, session_id, agent, omitted_turns} → (tool|delta)* → proposal? → done` 或 `error{code?, message}`（保留在记录中；客户端关闭流时留下部分回答 + 一条 `interrupted` 错误行，且无提案）。对预置发起一次携带有界重放记录（按轮次配对，≤ 12 轮 / 含前言 160k 字符）的 `InvokeHarness`；`launchpad-proposal` 块（≤ 64 000 字节）成为新修订（`draft` 或 `invalid`）；**无其他写入**。流打开前：`409 assistant.unavailable`、`409 assistant.turn_in_progress`（`detail.active_turn`——每会话单轮在途）、`409 assistant.conversation_full`（200 轮）、`413 assistant.prompt_too_large` |
+| `POST` | `/api/assistant/architect/conversations/{id}/digest/regenerate` | `perm:project.use`（所有者） | 无请求体 → `{context_digest}`（形状见上）。所有者的“有误，重新生成”：同步地从重放窗口之外的全部轮次重建摘要，忽略已存储的摘要（一次 Converse 调用，输入上限 60 000 字符）。只写台账，并以已存储的摘要为写入条件，因此并发刷新不会存下第二份结果。共享会话的协作者可以读取摘要，但这里返回 `403 assistant.digest_owner_only`；其他人返回 `404 assistant.conversation_not_found`。`409 assistant.digest_nothing_to_summarize`（所有轮次仍在重放窗口内）、`409 assistant.digest_busy`（该会话已有刷新或重建在进行）、`409 assistant.conversation_clearing`、`502 assistant.digest_failed`（模型调用失败；保留上一版摘要） |
 | `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | 成员 | 请求体 `{content}`（提案白名单；未知外层成员 → 422）→ `{proposal}`——一个**新**修订（`source: member`，唯一单调编号），绝非就地修改；无效内容按 `invalid` 保存并附 `validation_errors`，从不被更正；序列化超过 64 000 字节返回 `413 assistant.proposal_too_large`（不存储任何内容；规范化后的存储内容按同一上限复查）；达到 50 个修订返回 `409 assistant.conversation_full`。所有助手写请求同时在入口受限：实际接收超过 512 000 字节返回 `413 assistant.request_too_large` |
 | `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | 成员 | 请求体 `{revision}` → `{proposal}`，`status: rejected`（不可执行）；条件转换——非当前修订返回 `409 assistant.proposal_stale`，期间已执行的修订返回 `409 assistant.proposal_already_approved`（`detail.approval`） |
 | `POST` | `/api/assistant/architect/conversations/{id}/proposal/approve` | `perm:agents.deploy` | 请求体 `{revision, content_hash}` → 本次调用声明该修订、声明 Agent 名称（与 `POST /api/agents` 共享）并在一次提交中创建普通 Agent + Deployment + `deploy_agent` 任务且把其 ID 写到提案上时返回 `202 {proposal, agent, job_id, deployment_id, started: true}`；重复、并发或历史（已批准，即使有更新修订）请求返回已记录结果 `200 … started: false`——并重新唤醒仍 `queued` 且无活跃 worker 的任务。拒绝均发生在任何写入之前：`401 auth.required` / `403 auth.permission_required` / `403 workspace.forbidden`（实时目录读取之后、在声明处从数据库重新解析）、`409 assistant.proposal_stale`（修订不存在 / 哈希不同 / 批准期间变化）、`409 assistant.proposal_not_approvable`（无效、已取消、已被替代）、`409 assistant.workspace_not_ready`、`409 assistant.proposal_invalid`（实时目录已无所引用资源或前置条件——如知识库 Gateway）、`409 agent.name_reserved`、`409 agent.name_exists`（原子——两个竞争创建者之一）、`409 assistant.bindings_changed`（`detail.changed[]`——某个 key 解析到了与审阅时不同的 URL、Gateway 认证身份、技能内容、记忆或知识库 Gateway）、`502 assistant.catalog_unavailable`（实时目录无法读取且无胜出方）；每个“已批准”响应都先重新校验调用者 |
@@ -524,7 +533,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
-| `POST` | `/api/chat/{agent_id}` | 一轮对话，SSE 形式（`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`）；`{prompt, session_id?, as_user?}`，不带 id 即开启新会话。`as_user`（仅 JWT 入站智能体）：`true` 发送登录用户的 Cognito JWT，`false` 使用工作区 M2M 令牌，省略时有用户池登录则用用户 JWT，否则用 M2M；未经用户池登录却传 `true` 返回 `409 chat.as_user_unavailable`。`meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`；两种情况下 Memory actor 都是 `scoped_actor`。`auth_required` `{provider, tool, scopes[], url, agent_id}` 是工具发起的 as_user（3LO）授权请求：`url` 为一次性授权 URL（控制台仅在其为 `https:` 时显示链接），`sessionUri` 留在服务端，回答会在其前后继续流式输出。历史中该请求保存为不含 URL 的 `role: "auth"` 行（`text` 为凭证名，`name` 为工具），因此恢复后只能重试；轮询 `GET /api/identity/grants/{connection}/status` 可得知授权何时完成。`policy_denied`（Harness；字段见“流式调用”）保存为 `role: "policy"` 行（`text` 为原因，`name` 为工具），恢复后显示为 V2 Chat 的策略拦截卡片，此时链接指向治理首页而非某个网关。仅控制台的状态事件（chat-streaming S2；公开 `/v1` 流与分享页从不发送）：`meta.started_at` 与 `tool.started_at`（epoch 毫秒）、`phase {phase: starting\|waiting_model\|streaming}`、`thinking {}`（Harness 正在推理；有节流，从不含推理文本）、`tool_end {id, status: success\|error\|denied, duration_ms}`（代码运行时未结束的工具由下一个事件结束）、每段静默期发送的具名 `heartbeat {elapsed_ms}`（`/v1` 仍是 `: keep-alive` 注释），以及运行时报告用量时在末尾发送一次的 `usage {input_tokens, output_tokens, total_tokens, model_calls}` |
+| `POST` | `/api/chat/{agent_id}` | 一轮对话，SSE 形式（`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`）；`{prompt, session_id?, as_user?, retry_of?}`（`retry_of` 见下文“重试失败的轮次”），不带 id 即开启新会话。`as_user`（仅 JWT 入站智能体）：`true` 发送登录用户的 Cognito JWT，`false` 使用工作区 M2M 令牌，省略时有用户池登录则用用户 JWT，否则用 M2M；未经用户池登录却传 `true` 返回 `409 chat.as_user_unavailable`。`meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`；两种情况下 Memory actor 都是 `scoped_actor`。`auth_required` `{provider, tool, scopes[], url, agent_id}` 是工具发起的 as_user（3LO）授权请求：`url` 为一次性授权 URL（控制台仅在其为 `https:` 时显示链接），`sessionUri` 留在服务端，回答会在其前后继续流式输出。历史中该请求保存为不含 URL 的 `role: "auth"` 行（`text` 为凭证名，`name` 为工具），因此恢复后只能重试；轮询 `GET /api/identity/grants/{connection}/status` 可得知授权何时完成。`policy_denied`（Harness；字段见“流式调用”）保存为 `role: "policy"` 行（`text` 为原因，`name` 为工具），恢复后显示为 V2 Chat 的策略拦截卡片，此时链接指向治理首页而非某个网关。仅控制台的状态事件（chat-streaming S2；公开 `/v1` 流与分享页从不发送）：`meta.started_at` 与 `tool.started_at`（epoch 毫秒）、`phase {phase: starting\|waiting_model\|streaming}`、`thinking {}`（Harness 正在推理；有节流，从不含推理文本）、`tool_end {id, status: success\|error\|denied, duration_ms}`（代码运行时未结束的工具由下一个事件结束）、每段静默期发送的具名 `heartbeat {elapsed_ms}`（`/v1` 仍是 `: keep-alive` 注释），以及运行时报告用量时在末尾发送一次的 `usage {input_tokens, output_tokens, total_tokens, model_calls}` |
 | `POST` | `/api/agents/{agent_id}/inbound-auth` | `agent.deploy`——`202 {agent, job_id, deployment_id}`。请求体 `{inbound_auth: {mode: iam\|jwt, jwt?} \| null}`（`null` 取消固定，改为继承工作区默认值）。以替换后的固定值重新发布已存规格：对同一 Runtime 执行 UpdateAgentRuntime，产生新版本。`422 agent.inbound_auth_unsupported`（harness／A2A 不支持 JWT）、`422 agent.inbound_auth_invalid`、`409 agent.deploy_in_progress` |
 | `GET` | `/api/identity/inbound-auth/default` | 成员——`{workspace_id, default: {mode: iam\|jwt, jwt?}, configured, cognito, cognito_issuer}`；`configured=false` 表示隐式 IAM；`cognito` 是面向工作区用户池的现成 JWT 配置，引导前为 null；`cognito_issuer` 是该用户池的 issuer（控制台、`/v1` 与评估所出示令牌的 issuer），无用户池时为 null |
 | `PUT` | `/api/identity/inbound-auth/default` | `identity.manage`——请求体 `{mode, jwt?: {discovery_url, allowed_clients[], allowed_audience[], allowed_scopes[], custom_claims[], source_connection?}}` → 同 GET 形状。`source_connection` 仅用于展示，不进入授权器配置。持久化前先探测发现文档（`422 identity.discovery_unreachable`／`identity.discovery_invalid`）。已部署的智能体在重新部署前保持原授权器 |
@@ -545,6 +554,35 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 结束是显式动作：控制台的「新会话」只在本地忘掉 id，留下的 runtime 会话会自行空闲过期。
 重新发布之后应当按「结束会话」——AgentCore 会把存活的会话钉在首次服务它的版本上，
 验证新版本需要一个全新的会话。
+
+**重试失败的轮次。** 控制台流携带重试所需的台账 id，`/v1` 与分享页不发送这些字段。
+
+| 事件 | 新增成员 |
+|---|---|
+| `meta` | `user_message_id`：本轮用户行的台账 id，即重试时要指定的 id |
+| `error` | `message_id`：已持久化的错误行的台账 id。`transient: bool`：评估运行器的瞬时错误判定是否识别该失败（限流、5xx、连接断开）。`retry: {category: timeout\|connection\|busy\|config\|other, manual, auto, timeout_s?}`：控制台如何提供重试 |
+
+`category` 取以下值：
+
+- `timeout`：`harness.execution_timeout`，Agent 用尽了全部时间预算。Agent 设置了 `timeout_seconds` 时，`timeout_s` 为该值。
+- `connection`：到 runtime 的传输断开或超时。
+- `busy`：其他瞬时失败。
+- `config`：其他具名错误，例如权限、参数、限额或策略。
+- `other`：其余情况。
+
+`manual`（显示重试按钮）在 `connection`、`busy`、`other` 时为 true；`timeout` 与
+`config` 重放也无法修复，因此从不为 true。`auto`（不询问、自动重试一次）仅在
+`connection` 或 `busy` 且本轮尚未流出 `delta`、`tool`、`auth_required` 或
+`policy_denied` 时为 true，这样重放不会重复用户已看到的内容或工具副作用。
+
+重试方法：以同一 `session_id` 发送，并把 `retry_of` 设为失败轮次的任一台账 id，即其
+`user_message_id` 或错误事件的 `message_id`。该轮必须是会话的最新一轮，且失败或没有任何回答。
+新的用户行记录 `retry_of`。失败的轮次保留在台账中，但 `GET …/history` 不再回放它，因此恢复的
+会话中该消息只出现一次。若某个中断的流所在轮次已被重试取代，则不再写入 `interrupted` 行。
+以下拒绝发生在流打开之前：
+
+- `404 chat.message_not_found`：该 id 不存在、属于其他会话、Agent、Workspace 或项目，或缺少 `session_id`。
+- `409 chat.retry_not_allowed`（`detail.retry_of`）：该轮不是最新一轮，或已经正常回答而没有错误。
 
 ## 控制台 Agent API——BYOC 上传 / Console Agents API: BYOC uploads
 
@@ -606,6 +644,30 @@ tools/toolkits/skills/knowledge_bases 与 `a2a` 协议。部署时服务端会�
 错误码:`agent.not_found`(404,未知 id 或其他 workspace 的 Agent)、`agent.no_resource`(409,该行没有可查询的
 AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Runtime 也非 Harness 的形态;`message` 即面板展示的
 人类可读原因)。AWS `ClientError` 映射为标准 4xx 信封。
+
+## 控制台 Agent API——遥测状态 / Console Agents API: telemetry status
+
+`GET /api/agents/{agent_id}/telemetry` 支撑 Agent 详情页的“工具与能力”卡片：该 Agent 的生产端点是否写入了
+span，以及最近一次在多久之前。未带 ADOT 启动器部署的 BYOC 代码 zip 不产生任何 span，因此不会出现在可观测页面，
+也无法评估；这个读取让该问题变得可见。它复用评估探测（评估解析器推导出的服务名，再对 `aws/spans` 做
+`FilterLogEvents` 扫描），不向 AWS 或台账写入任何内容。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/telemetry?refresh=` | `perm:project.use`——`{agent_id, endpoint, service_name, status: receiving\|none\|unknown\|unsupported\|not_deployed, last_span_within: 1h\|24h\|7d\|14d\|null, lookback_days, reason, byoc_no_adot, checked_at, cached}`。`endpoint` 是生产流量使用的端点（受门控的 Agent 为 `live`，否则为 `DEFAULT`）；`service_name` 为 `<runtimeName>.<endpoint>`（无法解析时为 null）。时间窗口从最窄开始探测，`last_span_within` 是第一个含有 span 的窗口；`lookback_days` 是最宽窗口（14，即评估预检的回看期）。`byoc_no_adot` 在 `byoc` `code_zip` 且 `spec.byoc.provenance.adot_launcher` 未设置时为 true。按 Agent、资源 id、版本与端点缓存 5 分钟（`unknown` 结果只缓存 30 秒）；`refresh=true` 绕过缓存重新探测。`cached` 表示本次结果是否来自缓存 |
+
+`status` 与 `reason`：
+
+| `status` | 含义 | `reason` |
+|---|---|---|
+| `receiving` | 在 `last_span_within` 内收到过 span | `null` |
+| `none` | 最近 `lookback_days` 天内没有 span | `byoc_no_adot` 时为 `byoc_code_zip_no_adot`；从未在该端点调用过的 Harness 为 `no_log_group`；否则为 `null` |
+| `unknown` | 探测无法判断（繁忙日志组触及分页上限、CloudWatch 拒绝读取、服务名无法解析） | `probe_failed`，或解析器的错误码 |
+| `unsupported` | 该创建方式没有可探测的 span 遥测（导入的 Harness，或不在评估支持集合 `zip_runtime`/`studio`/`container`/`harness`/`byoc` 内的方式） | `method_unsupported` |
+| `not_deployed` | 该行还没有 AWS 资源 | `not_deployed` |
+
+错误码：`agent.not_found`（404，未知 id，或属于其他 Workspace、其他项目、对调用者隐藏的 Agent）。探测失败从不让请求失败，
+而是返回 `status: unknown`。
 
 ## 控制台评估数据集 API / Console Evaluation Datasets API
 
@@ -949,8 +1011,14 @@ counter_complete{<counter>: bool}}`。
 | `GET` | `/api/users/stats` | 管理员 | 汇总数据，包括 `pending` 审批队列、`expiring_soon`（≤3 天）、7 天内的注册/登录计数、14 天注册序列、邮箱域名排行 |
 | `PATCH` | `/api/users/{id}` | 管理员 | 以下任意字段：`status`（`pending`\|`active`\|`disabled`；对待审批账户设为 `active` 即批准并启动其有效期）、`role`、`extend_days`、`expires_at`（`null` = 永不过期）、`password`（`null` = 生成并一次性返回）、`permissions`（`{permission_key: bool}`，`null` = 全部授予）、`workspaces`（整体替换该账户的 workspace 授权，`null` 清空） |
 | `DELETE` | `/api/users/{id}` | 管理员 | 删除该账户 |
+| `POST` | `/api/users/{id}/sessions/revoke` | 管理员 | 强制登出 → `{ok: true, user_id, session_epoch}`。cookie 是无状态的，因此这里递增该账户的 `session_epoch`；它是每个 cookie 所带戳记的一部分，此前签发的所有会话在下一次请求时返回 `401 auth.required`。记入结构事件 `user.sessions.revoke`。对 `builtin-admin` 返回 `users.builtin_immutable`（400）：它的会话在其密码修改时结束 |
+| `GET` | `/api/admins` | 管理员 | 管理员页面的列表：`{items[…], total, can_sign_in}`。登录门开启时 `items` 以内置管理员开头（`builtin: true`、`can_sign_in: true`、`can_demote: false`），其后是所有 admin 角色账户（最早创建的在前），形状同 `GET /api/users` 的条目，另加 `builtin: false`、`can_sign_in`（已激活且未过期）、`last_signable`（剩下的唯一一位可登录管理员）与 `can_demote`（对调用者本人和 `last_signable` 为 false）。顶层 `can_sign_in` 是当前可登录的管理员数，含内置管理员 |
 
 对 `builtin-admin`，`PATCH` 只接受 `password`（设置，或 `null` = 自动生成），`DELETE` 会被拒绝（`users.builtin_immutable`，400）。会导致没有任何管理员能够登录的 `PATCH` / `DELETE` 返回 `users.last_admin`（409）；内置管理员计入在内，所以启用登录时它只是兜底。每次账户写操作都记入 `audit_events`（不属于任何工作区的行，只记录修改的字段名，从不记录密码）。
+
+**管理员。** 授予或撤销 admin 角色的 `PATCH {role}` 会在 `user.update` 之外再记入结构事件
+`admin.grant` / `admin.revoke`。任何人都不能撤销自己的管理员角色：这样的 `PATCH` 返回
+`users.self_demote`（409）；若它同时会移除最后一位可登录的管理员，则先返回 `users.last_admin`（409）。
 
 注册错误码：`auth.registration_disabled`（400，认证门未开启或注册已关闭）、
 `auth.invalid_username` / `auth.invalid_email` / `auth.email_domain_blocked` / `auth.weak_password`（400）、
@@ -961,3 +1029,118 @@ counter_complete{<counter>: bool}}`。
 
 会话与角色错误：`auth.required`（401——cookie 缺失、被篡改或已过期，也包括账户此后被禁用、过期或删除）、
 `auth.forbidden`（403——member 会话访问 `/api/users*`）、`users.not_found`（404）。
+
+## 控制台项目 API / Console Projects API
+
+**项目**把人员、Agent 及其派生行组织在一个或多个 Workspace 中。成员通过项目角色进入项目，该角色授予的权限键
+决定其在项目内可做的事。`/api/projects*`、`/api/role-templates` 与 `/api/me/access` 属于全局路由：项目跨越多个
+Workspace，因此它们既不读取 `X-Workspace` 也不读取 `X-Project`，所指的项目就是路径中的那个。调用者看不到的项目
+id 返回 `404 project.not_found`，从不返回 403，因为项目是否存在本身就可能敏感。每一次改变“谁能访问什么”的写入，
+都在同一事务中递增 `access_epoch`，因此每个进程的下一次请求都能看到变化。这些写入还会记入结构事件
+（`project.create`、`project.update`、`project.archive`、`project.unarchive`、`project.workspaces.bind` /
+`.unbind`、`project.members.add` / `.update` / `.remove`、`project.roles.upsert` / `.delete`、
+`project.transfer`）。
+
+**权限标记。** 除 `成员`、`管理员` 与 `perm:<key>` 之外，路由表（`core/route_policy.py`）还使用 `pperm:<key>`。
+它是项目范围的权限，依据调用者在路径 `{project_id}` 所指项目中的角色解析，从不依据 `X-Project`：
+
+- 非成员返回 `404 project.not_found`。
+- 有效权限键中没有 `<key>` 的成员返回 `403 auth.permission_required`（`detail.permission`、`detail.project_id`）。
+- 管理员直接通过以上两项检查。
+- 随后，对已归档项目的非读取请求返回 `409 project.archived`，管理员也不例外。
+
+在 Workspace 范围的路由上，`perm:<key>` 同样按请求所在项目的有效权限键检查，而不是账户自身的权限键。
+请求所在项目由 `X-Project` 指定；未带该请求头时，取调用者在该 Workspace 中唯一的项目，或该 Workspace
+的默认项目。解析失败的情况：
+
+- `400 project.header_required`（`detail.available`）：调用者在该 Workspace 中有多个项目，且都不是默认项目。
+- `403 project.none`：调用者不是该 Workspace 中任何项目的成员。
+- `409 project.unbound`：管理员发起请求，但该 Workspace 没有项目。
+- `404 project.not_found`：所指项目未绑定到该 Workspace，或调用者无法访问。
+- `409 project.archived`：对已归档项目的非读取请求。
+
+成员在项目中的**有效权限键**由两部分组成：先取直接角色与项目所属组角色的并集，再叠加直接成员行的
+`overrides`（`{key: bool}`）。内置角色模板（代码常量，见 `GET /api/role-templates`）：
+
+| 模板 | 权限键 |
+|---|---|
+| `project_owner` | `project.members`、`project.audit`、`project.share`、`project.use`、`project.write` 与构建类权限键（`agents.*`、`eval.run`、`promotion.request`、`identity.manage`、`identity.grant`、`memory.manage`、`criteria.manage`）。刻意不含批准与签署类权限键 |
+| `developer` | `project.use`、`project.write` 与成员的默认权限键 |
+| `biz_owner` | `project.use`、`project.write`、`eval.run`、`criteria.manage`、`criteria.sign`、`golden.admit`、`judge.calibrate`、`identity.grant` |
+| `release_ops` | `project.use`、`project.write` 与 operator 的默认权限键（含 `promotion.approve`、`waiver.approve`、`release.sign`） |
+| `sme` | `project.use`、`identity.grant` |
+| `viewer` | 无（只读） |
+| `inherit` | 账户自身的全局权限键，加上 `project.use` / `project.write`；只存在于默认项目 |
+
+项目级权限键为：`project.use`（对话 / 调用、反馈、标注、自己的会话）、`project.write`（项目内的普通写入）、
+`project.members`（管理本项目的成员与自定义角色），以及 `project.audit` / `project.share`（留待第三阶段）。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/me/access` | 成员 | 调用者的访问图，是项目切换器与控制台 `can()` 的数据来源：`{username, user_id, role, is_admin, can_manage_structure, workspaces[{workspace_id, name, default_project_id, projects[{id, name, status, is_default, is_workspace_default, permissions[], role_sources[{source: direct\|group:<id>, role_key}], bypass}]}]}`。管理员看到所有 Workspace 与所有已绑定项目，并持有全部权限键（非成员的项目 `bypass: true`）。`default_project_id` 是不带请求头的请求会使用的项目 |
+| `GET` | `/api/role-templates` | 成员 | 静态数据：`{templates[{key, permissions[]}], inherit: "inherit", agent_keys[], project_keys[]}` |
+| `GET` | `/api/projects?department_id=&group_id=&status=&workspace_id=&q=` | 成员 | `{projects[project]}`：管理员看到所有项目，其他人只看到自己的项目；默认项目在前，其余按名称排序。`status` 为 `active`、`archived` 或 `all`；`q` 匹配 id 或名称 |
+| `POST` | `/api/projects` | 管理员 | 请求体 `{id, name（1–64）, description?（≤ 2000）, department_id?, group_id?, workspaces[1–50], owners?[users.id]（≤ 50，以 `project_owner` 加入）, settings?{resource_visibility: shared\|isolated, sod_strict: bool}}` → `201` 项目详情。`id` 须匹配 `^[a-z0-9][a-z0-9-]{1,31}$`。提交后会尽力为每个新绑定的 Workspace 生成本项目自己的 Skill Lab 示例任务集 |
+| `GET` | `/api/projects/{project_id}` | 成员（非成员 404） | 项目详情：`{id, name, description, department_id, group_id, status: active\|archived, is_default, settings, created_by, created_by_name, created_at, updated_at, archived_at, workspaces[binding], member_count, agent_count, my_permissions[]}` |
+| `PATCH` | `/api/projects/{project_id}` | `pperm:project.members` | `{name, description, department_id, group_id, settings}` 中任意字段 → 详情。`name`、`department_id`、`group_id` 仅限管理员修改（`403 auth.forbidden`，`detail.fields`）。`settings` 合并进已存设置（`null` 删除该键）：所有者可改 `resource_visibility`，只有管理员可改 `sod_strict`。把项目移到另一个组时会重新评估 API key |
+| `POST` | `/api/projects/{project_id}/archive` | 管理员 | → 详情 + `{links_revoked, keys_disabled}`。项目变为只读：其分享链接被撤销，创建者已无法访问该项目的 key 被停用。对已归档项目再次归档不做任何改变（`0` / `0`）。默认项目返回 `409 project.default_locked` |
+| `POST` | `/api/projects/{project_id}/unarchive` | 管理员 | → 详情；恢复可写。已撤销的链接与已停用的 key 保持原状 |
+| `GET` | `/api/projects/{project_id}/workspaces` | 成员（非成员 404） | `{workspaces[{workspace_id, name, region, tier, is_workspace_default, enabled_by, enabled_at}]}` |
+| `PUT` | `/api/projects/{project_id}/workspaces` | 管理员 | 请求体 `{bind[], unbind[], make_default[]}`（各 ≤ 50）→ `{workspaces[binding], bound[]}`，`bound` 列出新绑定的 Workspace，它们会获得 Skill Lab 示例。`make_default` 把本项目设为该 Workspace 的默认项目（不带请求头的请求所指的项目；每个 Workspace 一个）。以下情况拒绝解绑：默认项目、Workspace 默认绑定，以及该 Workspace 仍持有本项目的任何行（`detail.rows` = `{table: count}`） |
+| `GET` | `/api/projects/{project_id}/members` | 成员（非成员 404） | `{members[{user_id, username, email, account_role, status, direct{role_key, overrides, added_by, added_at} \| null, group{group_id, role_key} \| null, sources[{source, role_key}], bypass, permissions[]}]}`：直接成员与组成员及其有效权限键。管理员看到完整 `email`，其他人看到掩码形式（`z***@corp.com`）。`bypass` 标记 admin 角色账户，它本来就持有全部权限键 |
+| `PUT` | `/api/projects/{project_id}/members` | `pperm:project.members` | 请求体 `{upsert[{user_id, role_key, overrides?{key: bool}}]（≤ 500）, remove[user_id]（≤ 500）}` → `{added[], updated[], removed[], members[…]}`。`role_key` 可以是内置模板、本项目的自定义角色，或 `inherit`（仅默认项目）。只写直接成员行，来自组的访问在组上管理。除管理员外，任何人都不能修改自己的成员资格。被移除或权限收窄的成员在本项目中的 API key 会被停用 |
+| `DELETE` | `/api/projects/{project_id}/members/{user_id}` | `pperm:project.members` | `204`，即 `remove` 的单成员形式 |
+| `GET` | `/api/projects/{project_id}/candidates?q=` | `pperm:project.members` | `{candidates[{user_id, username, email（掩码）, is_member}]}`：用户名或邮箱匹配 `q` 的已激活非管理员账户，最多 20 个 |
+| `GET` | `/api/projects/{project_id}/roles` | 成员（非成员 404） | `role-templates` 的形状，另加 `inherit_available`（仅默认项目）与 `custom[{key, name, permissions[], based_on, members, updated_at}]` |
+| `PUT` | `/api/projects/{project_id}/roles/{role_key}` | `pperm:project.members` | 请求体 `{name（1–64）, permissions[]（≤ 64 个已知权限键）, based_on?（内置模板）}` → 角色视图。创建或替换自定义角色；`role_key` 须匹配 `^[a-z][a-z0-9_]{1,31}$` 且不是内置名称。持有该角色的成员会立即重新评估，其 API key 也随之重新评估 |
+| `DELETE` | `/api/projects/{project_id}/roles/{role_key}` | `pperm:project.members` | `204`；仍有成员持有该角色时拒绝 |
+| `POST` | `/api/projects/{project_id}/transfer` | 管理员 | 请求体 `{kind: "agent"（默认；第一阶段唯一支持的类型）, resource_id, to_project_id}` → `{agent_id, from_project_id, to_project_id, rows{table: count}}`。一次事务内只改台账：该 Agent、所有由它（递归）派生的行及其任务被改标到目标项目；目标项目须为活跃状态，且已绑定到该 Agent 所在的 Workspace。源项目中限定到该 Agent 的 API key 会去掉它，因此不再限定任何 Agent 的 key 会被停用。在目标项目中记入 `project.transfer` |
+
+错误码（未注明者均为 `project.*`）：
+
+- 400：`invalid_id`、`workspaces_required`、`binding_conflict`（同一请求中既绑定又解绑）、`member_conflict`（同一请求中既 upsert 又 remove）、`role_unknown`、`override_unknown`、`role_invalid_key`、`setting_invalid`、`transfer_kind`（`detail.supported`）、`transfer_same`。
+- 400 或 403：`setting_forbidden`（`detail.keys`）。所有者修改仅限管理员的设置时为 403，未知设置为 400。
+- 403：`self_membership`、`auth.forbidden`、`auth.permission_required`。
+- 404：`not_found`、`member_not_found`（无直接成员行）、`role_not_found`、`department.not_found`、`group.not_found`、`workspace.not_found`、`user.not_found`（`upsert` 中的 `user_id` 不存在）、`agent.not_found`（转移时该 Agent 不在源项目中，或已删除）。
+- 409：`exists`、`archived`、`default_locked`、`workspace_default`、`workspace_in_use`、`not_bound`、`member_from_group`（`detail.group_id`）、`role_in_use`（`detail.members`）、`transfer_platform`（系统预置）、`transfer_busy`（该 Agent 的任务仍在排队或运行）、`transfer_linked`（运行中的金丝雀把它与另一个 Agent 配对；`detail.canary_id`）。
+
+## 控制台网络配置 API / Console Network Profiles API
+
+**网络配置**是由管理员维护的 Workspace VPC 设置，项目的 Agent 可以运行在其中。Agent 规格以
+`network: {profile_id}` 引用它，部署器再把它解析为该配置的子网与安全组。每个项目在每个 Workspace 中有一个
+**允许集合**，其中最多一个为默认。不在请求所在项目允许集合中的配置，读取结果与不存在的 id 完全相同
+（`404 network_profile.not_found`）。管理员看到该 Workspace 的所有配置。这里不调用 AWS。新配置为
+`status: unchecked`；填写 `check_results` / `checked_at` / `status` 的预检路由（`POST …/{profile_id}/check`）
+另行提供。这些路由属于 Workspace 范围（`X-Workspace`）。读取在请求所在项目内进行；写入与按项目的允许集合仅限
+管理员且不进入项目范围，因此允许集合路由在路径中写明项目。写入会记入 Workspace 级审计事件：
+`network_profile.create`、`.update`、`.archive` 与 `.project_set`。
+
+配置为 `{id, workspace_id, name, vpc_id, subnet_ids[], security_group_ids[], purpose: agents|tools|both,
+internet: none|nat, reachable[{cidr|host, port, note?}], status, check_results, checked_at, legacy, created_by,
+created_at, updated_at, archived_at, allowed, is_default}`。各字段含义如下：
+
+- `id` 为 `np-<12 位十六进制>`；由旧版内联规格归档而来的配置为 `legacy-<hash8>`（`legacy: true`）。
+- `allowed` 与 `is_default` 相对于请求所在项目。
+- 管理员视图另加 `projects[{project_id, is_default}]`（所有允许使用它的项目）与 `agents`（任意项目中引用它的存活 Agent 数）。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/network-profiles?include_archived=` | 成员 | `{profiles[…]}`，按名称排序。成员得到当前项目的允许集合（没有则为空）。管理员得到该 Workspace 的所有存活配置；`include_archived=true` 时也包括已归档的配置 |
+| `GET` | `/api/network-profiles/{profile_id}` | 成员 | 单个配置；对成员而言，仅当它在项目的允许集合中时才返回 |
+| `POST` | `/api/network-profiles` | 管理员 | 请求体（`extra="forbid"`）`{name（1–64）, vpc_id（vpc-…）, subnet_ids（2–8 个 subnet-…；AgentCore 需要两个可用区）, security_group_ids（1–5 个 sg-…）, purpose?（默认 agents）, internet?（默认 none）, reachable?（≤ 50 个 `{cidr` 或 `host, port 1–65535, note? ≤ 200}`）}` → `201` 配置（`status: unchecked`、`projects: []`、`agents: 0`）。重复的 id 会被去掉；名称在该 Workspace 的存活配置中唯一 |
+| `PATCH` | `/api/network-profiles/{profile_id}` | 管理员 | 创建字段的任意子集 → 管理员视图。修改 `vpc_id`、`subnet_ids`、`security_group_ids` 或 `internet` 会让配置回到 `unchecked`，并清空 `check_results` / `checked_at` |
+| `DELETE` | `/api/network-profiles/{profile_id}` | 管理员 | `204`。归档该配置（行保留，因为快照可能仍引用它），并把它从所有项目的允许集合中移除。仍有存活 Agent 引用它时拒绝，因为其 runtime 的 ENI 位于这些子网中 |
+| `GET` | `/api/network-profiles/projects/{project_id}` | 管理员 | `{project_id, workspace_id, profiles[…], default_profile_id}`：该项目在请求所在 Workspace 中的允许集合 |
+| `PUT` | `/api/network-profiles/projects/{project_id}` | 管理员 | 请求体 `{profile_ids[]（≤ 50）, default_profile_id?}` → 同 GET 形状。替换该项目在此 Workspace 中的允许集合及其默认值 |
+
+`POST /api/agents` 与 `POST /api/agents/{id}/redeploy` 会规范化 `spec.network`：
+
+- `{profile_id}` 必须在项目的允许集合中（`404 network_profile.not_found`），且未被上次预检阻止（`409 network_profile.blocked`）。
+- 旧版客户端的内联 `{subnets, security_groups}` 只接受管理员提交（否则 `400 network.inline_not_allowed`）。管理员的内联网络会匹配到或归档为 `legacy-<hash8>` 配置，并加入项目的允许集合。
+- 重新部署时，无论配置处于何种状态，都会继续解析该 Agent 已引用的配置。
+
+错误码：`network_profile.not_found`（404，不存在、已归档、属于其他 Workspace，或不在允许集合中）、
+`network_profile.name_exists`（409，`detail.profile_id`）、`network_profile.in_use`（409，`detail.agents`）、
+`network_profile.default_not_allowed`（400，默认值不在 `profile_ids` 中）、`project.not_found`（404，该项目
+未绑定到此 Workspace），以及 `validation.invalid_request`（422，请求体不符合 schema，或 VPC / 子网 /
+安全组 id 格式错误）。

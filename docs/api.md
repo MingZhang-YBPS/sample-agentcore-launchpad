@@ -219,6 +219,34 @@ running, failed first deploy, deleted, or a shape that is neither Runtime nor
 Harness; `message` is the human reason the panel shows). AWS `ClientError`s map to
 the standard 4xx envelope.
 
+## Console Agents API — telemetry status
+
+`GET /api/agents/{agent_id}/telemetry` backs the agent detail's "Tools &
+capabilities" card: has the agent's production endpoint written spans, and how
+recently. A BYOC code zip deployed without the ADOT launcher emits no span, so it
+never appears in Observability and cannot be evaluated; this read is where that
+becomes visible. It reuses the evaluation probes (the service name the evaluation
+resolver derives, then a `FilterLogEvents` scan of `aws/spans`) and writes nothing
+to AWS or the ledger.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/telemetry?refresh=` | `perm:project.use` — `{agent_id, endpoint, service_name, status: receiving\|none\|unknown\|unsupported\|not_deployed, last_span_within: 1h\|24h\|7d\|14d\|null, lookback_days, reason, byoc_no_adot, checked_at, cached}`. `endpoint` is the endpoint production traffic uses (`live` for a gated agent, else `DEFAULT`); `service_name` is `<runtimeName>.<endpoint>` (null when it could not be resolved). The windows are probed narrowest first, and `last_span_within` is the first one holding a span; `lookback_days` is the widest (14, the evaluation pre-check's lookback). `byoc_no_adot` is true for a `byoc` `code_zip` whose `spec.byoc.provenance.adot_launcher` is unset. Cached per agent, resource id, version and endpoint for 5 minutes (an `unknown` answer for 30 s); `refresh=true` bypasses the cache and probes again. `cached` says whether this answer came from the cache |
+
+`status` and `reason`:
+
+| `status` | Meaning | `reason` |
+|---|---|---|
+| `receiving` | A span arrived within `last_span_within` | `null` |
+| `none` | No span in the last `lookback_days` days | `byoc_code_zip_no_adot` when `byoc_no_adot`; `no_log_group` for a Harness never invoked on this endpoint; else `null` |
+| `unknown` | The probe could not tell (a page cap on a busy group, CloudWatch refused the read, the service name could not be resolved) | `probe_failed`, or the resolver's error code |
+| `unsupported` | The method has no span telemetry to probe (an imported Harness, or a method outside the evaluation-supported set `zip_runtime`/`studio`/`container`/`harness`/`byoc`) | `method_unsupported` |
+| `not_deployed` | The row has no AWS resource yet | `not_deployed` |
+
+Error codes: `agent.not_found` (404, unknown id, or an agent of another workspace or
+project or hidden from the caller). Probe failures never fail the request; they are
+`status: unknown`.
+
 ## Console Identity API — Connections and bound Gateway targets
 
 The console labels Connections **Outbound credentials** (出站凭证) and the caller's grants **My authorizations** (我的授权); paths, fields and error codes keep `connection`.
@@ -353,6 +381,20 @@ skills, tools, requirements}`. `tools` contains Registry MCP/Gateway catalog key
 `materials: string[]`, and `required: boolean`. Selections and requirements are private
 to the conversation owner; they do not grant resource access or approve deployment.
 
+Conversation detail also contains `context_digest: {text, through_turn, updated_at,
+generating}`, the confirmed-items digest. Turns that fall out of the replay window
+are rolled, together with the previous digest, into a short Markdown list of what
+was stated, suggested and confirmed, plus the open questions. The digest is placed
+in the turn preamble before the current proposal and is marked as possibly
+incomplete. After a turn ends, a background refresh starts when the next turn's
+window would omit turns the digest does not cover yet. The refresh is one Bedrock
+Converse call on the cheap default model (`assistant_digest_model_id`, else
+`agent_default_model_id`), with a 60 s read timeout and no retries. A failure keeps
+the previous digest, and no turn waits for it. `text`, `through_turn` (the last turn
+covered) and `updated_at` are `null` while there is no digest. `generating` is true
+while a refresh or rebuild is in flight in this process. The digest is conversation
+state only: it never enters a proposal, its hash or its approval.
+
 | Method | Path | Role | Result |
 |---|---|---|---|
 | `GET` | `/api/assistant/architect` | member | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], capabilities{shared_memory, kb_gateway}, is_admin, owner, principal}` — `available` ⇔ the preset is `active`; `capabilities` says which prerequisites a proposal may bind to (never created here); ledger-only |
@@ -364,6 +406,7 @@ to the conversation owner; they do not grant resource access or approve deployme
 | `PUT` | `/api/assistant/architect/conversations/{id}/preparation` | member | `{expected_revision, knowledge_bases: [kb_id], skills: [catalog_key], tools?: [catalog_key]}` → full conversation detail, including `preparation`. Missing `tools` preserves existing MCP choices for older clients; `[]` explicitly removes them. Every list is unique. Validates live resource bindings and creates a new reviewable proposal revision when applicable, retaining evaluation rules for fresh validation rather than broadening them. Refuses a stale preparation revision or an in-flight turn. |
 | `POST` | `/api/assistant/architect/conversations/{id}/preparation/skills` | `perm:agents.deploy` | `{expected_revision, staging_id, selections: [{index}]}` → `{conversation, results: [{name, ok, key?, error?}]}`. Compatibility endpoint for earlier assistant imports; the current console creates new Skills in Registry. Imports server-validated staged bundles into conversation-owned sources and selects successful imports; never accepts a client S3 path. |
 | `POST` | `/api/assistant/architect/conversations/{id}/turns` | member | body `{prompt}` (≤ 100k chars / 300k bytes, and it must fit the request budget with the preamble) → SSE `meta{conversation_id, turn, session_id, agent, omitted_turns} → (tool|delta)* → proposal? → done` or `error{code?, message}`; a transient upstream failure first emits `retry{attempt, reason}` and replays the turn once in a fresh session (discard what was streamed so far) (errors are kept on the transcript; a stream closed by the client leaves the partial answer + an `interrupted` error row and no proposal). One `InvokeHarness` on the preset with the bounded replayed transcript (paired by turn, ≤ 12 turns / 160k chars incl. preamble); a `launchpad-proposal` block (≤ 64 000 bytes) becomes a new revision (`draft` or `invalid`); **no other write**. Before the stream opens: `409 assistant.unavailable`, `409 assistant.turn_in_progress` (`detail.active_turn` — one in-flight turn per conversation), `409 assistant.conversation_full` (200 turns), `413 assistant.prompt_too_large` |
+| `POST` | `/api/assistant/architect/conversations/{id}/digest/regenerate` | `perm:project.use` (owner) | no body → `{context_digest}` (the shape above). The owner's "wrong, regenerate": rebuilds the digest synchronously from every turn outside the replay window, ignoring the stored digest (one Converse call, input bounded at 60 000 chars). Writes only the ledger, conditioned on the stored digest so a concurrent refresh cannot store a second result. A collaborator of a shared conversation reads the digest but gets `403 assistant.digest_owner_only`; anyone else gets `404 assistant.conversation_not_found`. `409 assistant.digest_nothing_to_summarize` (every turn is still in the replay window), `409 assistant.digest_busy` (a refresh or rebuild is already running for the conversation), `409 assistant.conversation_clearing`, `502 assistant.digest_failed` (the model call failed; the previous digest is kept) |
 | `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | member | body `{content}` (the proposal allowlist; unknown outer members → 422) → `{proposal}` — a **new** revision (`source: member`, unique monotonic number), never a mutation; invalid content is stored as `invalid` with `validation_errors`, never corrected; `413 assistant.proposal_too_large` above 64 000 serialized bytes (nothing stored; the normalized stored content is re-checked against the same cap); `409 assistant.conversation_full` at 50 revisions. Every assistant write is also bounded at ingress: `413 assistant.request_too_large` above 512 000 received bytes |
 | `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | member | body `{revision}` → `{proposal}` with `status: rejected` (non-executable); a conditional transition — `409 assistant.proposal_stale` for a non-current revision, `409 assistant.proposal_already_approved` (`detail.approval`) when the revision was executed meanwhile |
 | `POST` | `/api/assistant/architect/conversations/{id}/proposal/approve` | `perm:agents.deploy` | body `{revision, content_hash}` → `202 {proposal, agent, job_id, deployment_id, started: true}` when this call claimed the revision, claimed the agent name (shared with `POST /api/agents`) and created the ordinary agent + deployment + `deploy_agent` job with their ids on the proposal in one commit; `200 … started: false` with the recorded outcome for a repeated, concurrent or historical (already approved, even if newer revisions exist) request — and a still-`queued` job with no live worker is re-woken. Refusals, all before any write: `401 auth.required` / `403 auth.permission_required` / `403 workspace.forbidden` (re-resolved from the database at the claim, after the live catalog read), `409 assistant.proposal_stale` (unknown revision / hash differs / changed while approving), `409 assistant.proposal_not_approvable` (invalid, rejected, superseded), `409 assistant.workspace_not_ready`, `409 assistant.proposal_invalid` (live catalog no longer has a referenced resource or prerequisite — e.g. the KB gateway), `409 agent.name_reserved`, `409 agent.name_exists` (atomic — one of two racing creators), `409 assistant.bindings_changed` (`detail.changed[]` — a key resolves to a different URL, gateway auth identity, skill content, memory or KB gateway than reviewed), `502 assistant.catalog_unavailable` (live catalog unreadable and no winner exists); every already-approved answer re-validates the caller first |
@@ -839,7 +882,7 @@ console sends as `runtimeSessionId` is the one the ledger tracks.
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`); `{prompt?, attachments?, session_id?}`, a missing id starts a new session; message text or at least one attachment is required. `as_user?: bool` (JWT-inbound agents only): `true` sends the signed-in user's Cognito JWT, `false` the workspace M2M token, omitted = the user JWT when a pool sign-in exists, else M2M; `409 chat.as_user_unavailable` when `true` without a pool sign-in. `meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`; the Memory actor is `scoped_actor` in both cases. `auth_required` `{provider, tool, scopes[], url, agent_id}` is an as_user (3LO) consent ask from a tool: `url` is the single-use authorization URL (the console links it only when it is `https:`), the `sessionUri` stays server-side, and the answer keeps streaming around it. History keeps the ask as a `role: "auth"` row (`text` = the Connection, `name` = the tool) **without** the URL, so a restored ask can only be retried; poll `GET /api/identity/grants/{connection}/status` to see when consent completes. `policy_denied` (Harness; payload under *Streaming invoke*) is kept as a `role: "policy"` row (`text` = the reason, `name` = the tool) and restored as the V2 Chat policy-deny card, which then links to the Governance landing page rather than a specific gateway. Console-only status events (chat-streaming S2; the public `/v1` stream and the share page never send them): `meta.started_at` and `tool.started_at` (epoch ms), `phase {phase: starting\|waiting_model\|streaming}`, `thinking {}` (a Harness is reasoning; throttled, never the reasoning text), `tool_end {id, status: success\|error\|denied, duration_ms}` (a code runtime's open tool is ended by the next event), a named `heartbeat {elapsed_ms}` in every quiet stretch (`/v1` keeps the `: keep-alive` comment), and `usage {input_tokens, output_tokens, total_tokens, model_calls}` once at the end when the runtime reports it |
+| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`); `{prompt?, attachments?, session_id?, retry_of?}` (`retry_of`: see *Retrying a failed turn* below), a missing id starts a new session; message text or at least one attachment is required. `as_user?: bool` (JWT-inbound agents only): `true` sends the signed-in user's Cognito JWT, `false` the workspace M2M token, omitted = the user JWT when a pool sign-in exists, else M2M; `409 chat.as_user_unavailable` when `true` without a pool sign-in. `meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`; the Memory actor is `scoped_actor` in both cases. `auth_required` `{provider, tool, scopes[], url, agent_id}` is an as_user (3LO) consent ask from a tool: `url` is the single-use authorization URL (the console links it only when it is `https:`), the `sessionUri` stays server-side, and the answer keeps streaming around it. History keeps the ask as a `role: "auth"` row (`text` = the Connection, `name` = the tool) **without** the URL, so a restored ask can only be retried; poll `GET /api/identity/grants/{connection}/status` to see when consent completes. `policy_denied` (Harness; payload under *Streaming invoke*) is kept as a `role: "policy"` row (`text` = the reason, `name` = the tool) and restored as the V2 Chat policy-deny card, which then links to the Governance landing page rather than a specific gateway. Console-only status events (chat-streaming S2; the public `/v1` stream and the share page never send them): `meta.started_at` and `tool.started_at` (epoch ms), `phase {phase: starting\|waiting_model\|streaming}`, `thinking {}` (a Harness is reasoning; throttled, never the reasoning text), `tool_end {id, status: success\|error\|denied, duration_ms}` (a code runtime's open tool is ended by the next event), a named `heartbeat {elapsed_ms}` in every quiet stretch (`/v1` keeps the `: keep-alive` comment), and `usage {input_tokens, output_tokens, total_tokens, model_calls}` once at the end when the runtime reports it |
 | `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
 | `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |
@@ -848,6 +891,39 @@ Ending is explicit: NEW SESSION in the console only forgets the id locally, so t
 runtime session it leaves behind idles out on its own. END SESSION is what to press
 after a re-publish — AgentCore pins a live session to the version that first
 served it, so validation of the new version needs a fresh session.
+
+**Retrying a failed turn.** The console stream carries the ledger ids a retry
+needs. `/v1` and the share page do not send them.
+
+| Event | Added members |
+|---|---|
+| `meta` | `user_message_id`: the ledger id of this turn's user row, the id a retry names |
+| `error` | `message_id`: the ledger id of the persisted error row. `transient: bool`: whether the evaluation runner's transient-error test recognises the failure (throttling, 5xx, a dropped connection). `retry: {category: timeout\|connection\|busy\|config\|other, manual, auto, timeout_s?}`: how the console offers the retry |
+
+`category` is one of these values:
+
+- `timeout`: `harness.execution_timeout`, the agent used its whole budget. `timeout_s` is the agent's `timeout_seconds` when it is set.
+- `connection`: the transport to the runtime dropped or timed out.
+- `busy`: any other transient failure.
+- `config`: any other named error, such as a permission, a parameter, a limit or a policy.
+- `other`: everything else.
+
+`manual` (the retry button is offered) is true for `connection`, `busy` and `other`,
+never for `timeout` or `config`, which a replay cannot fix. `auto` (retry once
+without asking) is true only for `connection` or `busy` when the turn has not yet
+streamed a `delta`, `tool`, `auth_required` or `policy_denied`, so a replay repeats
+nothing the user saw and no tool side effect.
+
+To retry, post the same `session_id` with `retry_of` set to any ledger id of the
+failed turn: its `user_message_id`, or the error's `message_id`. The turn must be the
+session's latest and must have failed or answered nothing. The new user row records
+`retry_of`. The failed turn stays in the ledger, but `GET …/history` no longer replays
+it, so a restored session shows the message once. An interrupted stream whose turn a
+retry has already replaced records no `interrupted` row. Refusals happen before the
+stream opens:
+
+- `404 chat.message_not_found`: the id does not exist, belongs to another session, agent, workspace or project, or `session_id` is missing.
+- `409 chat.retry_not_allowed` (`detail.retry_of`): the turn is not the latest, or it answered without an error.
 
 All invoke entrances accept optional
 `attachments: [{name, media_type, data}]`, where `data` is standard base64.
@@ -1333,6 +1409,8 @@ it. Neither surface touches AWS. See
 | `GET` | `/api/users/stats` | admin | Totals including the `pending` approval queue, `expiring_soon` (≤3 days), 7-day registration/sign-in counts, a 14-day registration series, top email domains |
 | `PATCH` | `/api/users/{id}` | admin | Any of `status` (`pending`\|`active`\|`disabled`; `active` on a pending account approves it and starts its window), `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once), `permissions` (`{permission_key: bool}`, `null` = all granted), `workspaces` (full replacement of the account's workspace grants, `null` clears them) |
 | `DELETE` | `/api/users/{id}` | admin | Removes the account |
+| `POST` | `/api/users/{id}/sessions/revoke` | admin | Forced logout → `{ok: true, user_id, session_epoch}`. Cookies are stateless, so this bumps the account's `session_epoch`, which is part of the stamp every cookie carries; every session issued before answers `401 auth.required` on its next request. Journaled as the structure event `user.sessions.revoke`. On `builtin-admin` → `users.builtin_immutable` (400): its sessions end when its password changes |
+| `GET` | `/api/admins` | admin | The administrator page's list: `{items[…], total, can_sign_in}`. `items` starts with the built-in admin while the login gate is on (`builtin: true`, `can_sign_in: true`, `can_demote: false`), then every admin-role account oldest first in the `GET /api/users` item shape plus `builtin: false`, `can_sign_in` (active and unexpired), `last_signable` (the only admin left who can sign in) and `can_demote` (false for the caller themselves and for `last_signable`). The top-level `can_sign_in` counts the administrators able to sign in right now, built-in included |
 
 On `builtin-admin`, `PATCH` accepts only `password` (set, or `null` = generate) and
 `DELETE` is refused (`users.builtin_immutable`, 400). A `PATCH` / `DELETE` that would
@@ -1340,6 +1418,12 @@ leave no administrator able to sign in answers `users.last_admin` (409); the bui
 admin counts, so while the gate is on it is a backstop. Every account write is
 journaled in `audit_events` (hub-global rows, changed field names only, never a
 password).
+
+**Administrators.** A `PATCH {role}` that grants or revokes the admin role also
+journals the structure event `admin.grant` / `admin.revoke` beside `user.update`.
+Nobody removes their own admin role: such a `PATCH` answers `users.self_demote` (409),
+unless it would also remove the last admin who can sign in, in which case
+`users.last_admin` (409) answers first.
 
 Registration error codes: `auth.registration_disabled` (400, gate off or
 registration disabled), `auth.invalid_username` / `auth.invalid_email` /
@@ -1354,3 +1438,137 @@ Session and role errors: `auth.required` (401 — missing, tampered, or expired
 cookie, and also an account that has since been disabled, expired, or deleted),
 `auth.forbidden` (403 — member session on `/api/users*`), `users.not_found`
 (404).
+
+## Console Projects API
+
+A **project** groups people, agents and their derived rows inside one or more
+workspaces. Members reach a project through a project role, and the keys that role
+grants decide what they may do there. `/api/projects*`, `/api/role-templates` and
+`/api/me/access` are hub-global: a project spans workspaces, so they read neither
+`X-Workspace` nor `X-Project`, and the project is the one named in the path. Project
+ids the caller cannot see answer `404 project.not_found`, never 403, because a
+project's existence can itself be sensitive. Every write that changes who reaches
+what bumps `access_epoch` in the same transaction, so the next request in every
+process sees it. It also journals a structure event (`project.create`,
+`project.update`, `project.archive`, `project.unarchive`, `project.workspaces.bind` /
+`.unbind`, `project.members.add` / `.update` / `.remove`, `project.roles.upsert` /
+`.delete`, `project.transfer`).
+
+**Permission notation.** Besides `member`, `admin` and `perm:<key>`, the route table
+(`core/route_policy.py`) uses `pperm:<key>`. It is a project-scoped permission,
+resolved from the caller's role in the project named by `{project_id}` in the path,
+never from `X-Project`:
+
+- A non-member gets `404 project.not_found`.
+- A member whose effective keys lack `<key>` gets `403 auth.permission_required` (`detail.permission`, `detail.project_id`).
+- Administrators pass both checks.
+- A non-read request on an archived project then gets `409 project.archived`, administrators included.
+
+On workspace-scoped routes, `perm:<key>` is likewise checked against the effective
+keys of the request's project, not the account's own keys. That project is
+`X-Project`, or, when the header is absent, the caller's only project in the
+workspace or the workspace's default project. Resolution failures:
+
+- `400 project.header_required` (`detail.available`): the caller has several projects in the workspace and none is the default.
+- `403 project.none`: the caller is a member of no project in the workspace.
+- `409 project.unbound`: an administrator, but the workspace has no project.
+- `404 project.not_found`: the named project is not bound to the workspace or is not reachable by the caller.
+- `409 project.archived`: a non-read request on an archived project.
+
+A member's **effective keys** in a project combine two sources. First the direct
+role is united with the project group's role. The direct row's `overrides`
+(`{key: bool}`) are then applied on top. Built-in role templates (code constants,
+see `GET /api/role-templates`):
+
+| Template | Keys |
+|---|---|
+| `project_owner` | `project.members`, `project.audit`, `project.share`, `project.use`, `project.write` and the build keys (`agents.*`, `eval.run`, `promotion.request`, `identity.manage`, `identity.grant`, `memory.manage`, `criteria.manage`). It deliberately has no approve or sign keys |
+| `developer` | `project.use`, `project.write` and a member's default keys |
+| `biz_owner` | `project.use`, `project.write`, `eval.run`, `criteria.manage`, `criteria.sign`, `golden.admit`, `judge.calibrate`, `identity.grant` |
+| `release_ops` | `project.use`, `project.write` and an operator's default keys (including `promotion.approve`, `waiver.approve`, `release.sign`) |
+| `sme` | `project.use`, `identity.grant` |
+| `viewer` | none (read only) |
+| `inherit` | the account's own global keys plus `project.use` / `project.write`; it exists in the default project only |
+
+The project keys are `project.use` (chat / invoke, feedback, labels, own sessions),
+`project.write` (ordinary writes in the project), `project.members` (the project's
+members and custom roles), and `project.audit` / `project.share` (reserved for
+phase 3).
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/me/access` | member | The caller's access map, the data source of the project switcher and of the console's `can()`: `{username, user_id, role, is_admin, can_manage_structure, workspaces[{workspace_id, name, default_project_id, projects[{id, name, status, is_default, is_workspace_default, permissions[], role_sources[{source: direct\|group:<id>, role_key}], bypass}]}]}`. An administrator sees every workspace and every bound project with all keys (`bypass: true` where they are not a member). `default_project_id` is the project a header-less request would use |
+| `GET` | `/api/role-templates` | member | Static: `{templates[{key, permissions[]}], inherit: "inherit", agent_keys[], project_keys[]}` |
+| `GET` | `/api/projects?department_id=&group_id=&status=&workspace_id=&q=` | member | `{projects[project]}`, every project for an administrator and the caller's own for anyone else; the default project first, then by name. `status` is `active`, `archived` or `all`. `q` matches the id or the name |
+| `POST` | `/api/projects` | admin | Body `{id, name (1–64), description? (≤ 2000), department_id?, group_id?, workspaces[1–50], owners?[users.id] (≤ 50, added as `project_owner`), settings?{resource_visibility: shared\|isolated, sod_strict: bool}}` → `201` project detail. `id` matches `^[a-z0-9][a-z0-9-]{1,31}$`. Each newly bound workspace gets the project's own Skill Lab sample task sets, best effort after the commit |
+| `GET` | `/api/projects/{project_id}` | member (404 to non-members) | Project detail: `{id, name, description, department_id, group_id, status: active\|archived, is_default, settings, created_by, created_by_name, created_at, updated_at, archived_at, workspaces[binding], member_count, agent_count, my_permissions[]}` |
+| `PATCH` | `/api/projects/{project_id}` | `pperm:project.members` | Any of `{name, description, department_id, group_id, settings}` → detail. `name`, `department_id` and `group_id` are admin-only (`403 auth.forbidden`, `detail.fields`). `settings` is merged into the stored settings (`null` removes a key): an owner may change `resource_visibility`, and only an administrator may change `sod_strict`. Moving the project to another group re-evaluates API keys |
+| `POST` | `/api/projects/{project_id}/archive` | admin | → detail + `{links_revoked, keys_disabled}`. The project becomes read-only: its share links are revoked and the keys whose creator no longer reaches it are disabled. Archiving an already archived project changes nothing (`0` / `0`). The default project → `409 project.default_locked` |
+| `POST` | `/api/projects/{project_id}/unarchive` | admin | → detail; writable again. Revoked links and disabled keys stay so |
+| `GET` | `/api/projects/{project_id}/workspaces` | member (404 to non-members) | `{workspaces[{workspace_id, name, region, tier, is_workspace_default, enabled_by, enabled_at}]}` |
+| `PUT` | `/api/projects/{project_id}/workspaces` | admin | Body `{bind[], unbind[], make_default[]}` (each ≤ 50) → `{workspaces[binding], bound[]}`, where `bound` lists the newly bound workspaces, which get their Skill Lab samples. `make_default` makes this project the workspace's default (the project a header-less request means; one per workspace). An unbind is refused for the default project, for the workspace-default binding, and while the workspace still holds any of the project's rows (`detail.rows` = `{table: count}`) |
+| `GET` | `/api/projects/{project_id}/members` | member (404 to non-members) | `{members[{user_id, username, email, account_role, status, direct{role_key, overrides, added_by, added_at} \| null, group{group_id, role_key} \| null, sources[{source, role_key}], bypass, permissions[]}]}`: direct and group members with their effective keys. `email` is in full for an administrator and masked (`z***@corp.com`) otherwise. `bypass` marks an admin-role account, which holds every key anyway |
+| `PUT` | `/api/projects/{project_id}/members` | `pperm:project.members` | Body `{upsert[{user_id, role_key, overrides?{key: bool}}] (≤ 500), remove[user_id] (≤ 500)}` → `{added[], updated[], removed[], members[…]}`. `role_key` is a built-in template, one of the project's custom roles, or `inherit` (default project only). Only direct rows are written; group-sourced access is managed on the group. Nobody but an administrator edits their own membership. A removed or narrowed member's API keys in the project are disabled |
+| `DELETE` | `/api/projects/{project_id}/members/{user_id}` | `pperm:project.members` | `204`, the single-member form of `remove` |
+| `GET` | `/api/projects/{project_id}/candidates?q=` | `pperm:project.members` | `{candidates[{user_id, username, email (masked), is_member}]}`: at most 20 active, non-admin accounts whose username or email matches `q` |
+| `GET` | `/api/projects/{project_id}/roles` | member (404 to non-members) | The `role-templates` shape plus `inherit_available` (the default project only) and `custom[{key, name, permissions[], based_on, members, updated_at}]` |
+| `PUT` | `/api/projects/{project_id}/roles/{role_key}` | `pperm:project.members` | Body `{name (1–64), permissions[] (≤ 64 known keys), based_on? (a built-in template)}` → the roles view. Creates or replaces a custom role; `role_key` matches `^[a-z][a-z0-9_]{1,31}$` and is not a built-in name. Members holding the role are re-evaluated at once, and their API keys with them |
+| `DELETE` | `/api/projects/{project_id}/roles/{role_key}` | `pperm:project.members` | `204`; refused while a member holds the role |
+| `POST` | `/api/projects/{project_id}/transfer` | admin | Body `{kind: "agent" (default; the only kind in phase 1), resource_id, to_project_id}` → `{agent_id, from_project_id, to_project_id, rows{table: count}}`. A ledger-only move in one transaction: the agent and every row derived from it (transitively), together with its jobs, are re-tagged to the target project, which must be active and bound to the agent's workspace. Source-project API keys scoped to the agent lose it, and a key left with no agent is disabled. Journaled as `project.transfer` in the target project |
+
+Error codes (`project.*` unless noted):
+
+- 400: `invalid_id`, `workspaces_required`, `binding_conflict` (bound and unbound in one request), `member_conflict` (upserted and removed in one request), `role_unknown`, `override_unknown`, `role_invalid_key`, `setting_invalid`, `transfer_kind` (`detail.supported`), `transfer_same`.
+- 400 or 403: `setting_forbidden` (`detail.keys`). It is 403 for an admin-only setting changed by an owner and 400 for an unknown setting.
+- 403: `self_membership`, `auth.forbidden`, `auth.permission_required`.
+- 404: `not_found`, `member_not_found` (no direct row), `role_not_found`, `department.not_found`, `group.not_found`, `workspace.not_found`, `user.not_found` (an unknown `user_id` in `upsert`), `agent.not_found` (transfer: not in the source project, or deleted).
+- 409: `exists`, `archived`, `default_locked`, `workspace_default`, `workspace_in_use`, `not_bound`, `member_from_group` (`detail.group_id`), `role_in_use` (`detail.members`), `transfer_platform` (a system preset), `transfer_busy` (a job of the agent is queued or running), `transfer_linked` (a running canary pairs it with another agent; `detail.canary_id`).
+
+## Console Network Profiles API
+
+A **network profile** is a workspace VPC setting, kept by administrators, that a
+project's agents may run in. An agent spec names it as `network: {profile_id}`, and
+the deployer resolves it to the profile's subnets and security groups. Each project
+has an **allowed set** of profiles per workspace, with at most one default. A
+profile outside the request project's allowed set reads as missing
+(`404 network_profile.not_found`), exactly like an id that does not exist.
+Administrators see every profile of the workspace. Nothing here calls AWS. A new
+profile is `status: unchecked`; the preflight route (`POST …/{profile_id}/check`),
+which fills `check_results` / `checked_at` / `status`, ships separately. The routes
+are workspace-scoped (`X-Workspace`). Reads run inside the request's project. Writes
+and the per-project allowed set are admin and project-exempt, so the allowed-set
+routes name their project in the path. Writes are journaled as workspace-level audit
+events: `network_profile.create`, `.update`, `.archive` and `.project_set`.
+
+A profile is `{id, workspace_id, name, vpc_id, subnet_ids[], security_group_ids[],
+purpose: agents|tools|both, internet: none|nat, reachable[{cidr|host, port, note?}],
+status, check_results, checked_at, legacy, created_by, created_at, updated_at,
+archived_at, allowed, is_default}`. The fields mean the following:
+
+- `id` is `np-<12 hex>`, or `legacy-<hash8>` (`legacy: true`) for a profile filed from an older inline spec.
+- `allowed` and `is_default` are relative to the request's project.
+- The administrator view adds `projects[{project_id, is_default}]` (every project allowed to use it) and `agents` (the live agents of any project naming it).
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/network-profiles?include_archived=` | member | `{profiles[…]}` sorted by name. A member gets the current project's allowed set (empty when it has none). An administrator gets every live profile of the workspace, and archived ones too with `include_archived=true` |
+| `GET` | `/api/network-profiles/{profile_id}` | member | One profile; for a member, only when it is in the project's allowed set |
+| `POST` | `/api/network-profiles` | admin | Body (`extra="forbid"`) `{name (1–64), vpc_id (vpc-…), subnet_ids (2–8 subnet-…; AgentCore wants two AZs), security_group_ids (1–5 sg-…), purpose? (default agents), internet? (default none), reachable? (≤ 50 `{cidr` or `host, port 1–65535, note? ≤ 200}`)}` → `201` profile (`status: unchecked`, `projects: []`, `agents: 0`). Duplicate ids are dropped. The name is unique among the workspace's live profiles |
+| `PATCH` | `/api/network-profiles/{profile_id}` | admin | Any subset of the create fields → the administrator view. Changing `vpc_id`, `subnet_ids`, `security_group_ids` or `internet` moves the profile back to `unchecked` and clears `check_results` / `checked_at` |
+| `DELETE` | `/api/network-profiles/{profile_id}` | admin | `204`. Archives the profile (the row stays because snapshots may still name it) and removes it from every project's allowed set. Refused while a live agent names it, because its runtime's ENIs sit in these subnets |
+| `GET` | `/api/network-profiles/projects/{project_id}` | admin | `{project_id, workspace_id, profiles[…], default_profile_id}`: the project's allowed set in the request's workspace |
+| `PUT` | `/api/network-profiles/projects/{project_id}` | admin | Body `{profile_ids[] (≤ 50), default_profile_id?}` → the GET shape. Replaces the project's allowed set and its default in this workspace |
+
+`POST /api/agents` and `POST /api/agents/{id}/redeploy` normalize `spec.network`:
+
+- A `{profile_id}` must be in the project's allowed set (`404 network_profile.not_found`) and must not be blocked by its last preflight (`409 network_profile.blocked`).
+- Inline `{subnets, security_groups}` from an older client is accepted from administrators only (`400 network.inline_not_allowed` otherwise). The administrator's inline network is matched to, or filed as, the `legacy-<hash8>` profile and added to the project's allowed set.
+- A redeploy keeps resolving the profile the agent already names, whatever its status.
+
+Error codes: `network_profile.not_found` (404, unknown, archived, another workspace's
+profile, or outside the allowed set), `network_profile.name_exists` (409,
+`detail.profile_id`), `network_profile.in_use` (409, `detail.agents`),
+`network_profile.default_not_allowed` (400, the default is not among `profile_ids`),
+`project.not_found` (404, the project is not bound to the workspace), and
+`validation.invalid_request` (422, a body outside the schema or a malformed
+VPC / subnet / security-group id).

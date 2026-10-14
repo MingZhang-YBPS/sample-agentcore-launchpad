@@ -38,6 +38,7 @@ STRUCTURE_ACTIONS = frozenset({
     "group.create", "group.update", "group.archive",
     "admin.grant", "admin.revoke",
     "user.sessions.revoke",
+    "project.transfer",
 })
 STRUCTURE_ACTION_PREFIXES = ("group.members.", "group.projects.", "department.")
 

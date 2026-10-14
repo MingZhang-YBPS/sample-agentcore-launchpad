@@ -179,8 +179,13 @@ class TestNoDrift:
         }
         project_roles = {"perm:project.use", "perm:project.write"}
         infra_roles = {INFRA} | {f"{INFRA}+{role}" for role in permission_roles}
+        from app.services.access import ALL_PROJECT_KEYS
+
+        # pperm:<key> — a project key checked against the project named in the path
+        pperm_roles = {f"pperm:{key}" for key in ALL_PROJECT_KEYS}
         assert set(ROUTE_POLICY.values()) <= (
             {ADMIN, MEMBER, PUBLIC} | permission_roles | project_roles | infra_roles
+            | pperm_roles
         )
 
     def test_no_workspace_write_is_left_to_any_member(self):

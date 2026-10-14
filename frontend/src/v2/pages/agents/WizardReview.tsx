@@ -227,9 +227,11 @@ export function WizardReview({
             efs: form.efsMounts.length,
           }),
         },
-        ...(hasByoMounts(form)
-          ? [{ label: "VPC", value: mono(`${form.vpcSubnets} · ${form.vpcSgs}`) }]
-          : []),
+        ...(form.networkProfileId
+          ? [{ label: "VPC", value: t("v2.agents.wizard.networkProfile", { id: form.networkProfileId }) }]
+          : hasByoMounts(form)
+            ? [{ label: "VPC", value: mono(`${form.vpcSubnets} · ${form.vpcSgs}`) }]
+            : []),
       ];
     }
   }

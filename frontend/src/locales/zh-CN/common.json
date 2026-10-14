@@ -2457,7 +2457,53 @@
     "eval.no_telemetry": "这个 Agent 没有产生任何 Span，评估找不到可打分的内容。BYOC 代码 zip 只有带 ADOT 启动器才会产生 Span：在 requirements.txt 里加 aws-opentelemetry-distro（并打开“安装依赖”），或改用 Dockerfile 构建，重新发布后再开始评估。",
     "eval.harness_no_telemetry": "这个 Harness 还没有遥测日志组。请先运行至少一次对话或调用，再开始评估。",
     "online_eval.no_telemetry": "这个 Agent 还没有遥测日志组。请先运行至少一次对话或调用，再创建在线评估。",
-    "trace.not_found": "在当前项目中找不到该 Trace。"
+    "trace.not_found": "在当前项目中找不到该 Trace。",
+    "assistant.digest_owner_only": "只有对话所有者可以重新生成摘要。",
+    "assistant.digest_nothing_to_summarize": "所有轮次仍在助手的上下文中，没有需要总结的内容。",
+    "assistant.digest_busy": "摘要正在生成，请稍后再试。",
+    "assistant.digest_failed": "摘要生成失败，已保留之前的摘要。",
+    "chat.message_not_found": "该消息已不在此会话中，请重新加载会话。",
+    "chat.retry_not_allowed": "只能重试最新一轮，且仅限失败或无回答的一轮。",
+    "users.self_demote": "不能撤销自己的管理员角色，请让其他管理员操作。",
+    "users.not_found": "该用户不存在。",
+    "user.not_found": "该用户不存在。",
+    "department.not_found": "该部门不存在。",
+    "group.not_found": "该项目组不存在。",
+    "project.not_found": "该项目不存在，或你不是其成员。",
+    "project.invalid_id": "项目 ID 须为 2–32 个小写字母、数字或“-”。",
+    "project.exists": "已存在相同 ID 的项目。",
+    "project.workspaces_required": "请为项目绑定至少一个工作区。",
+    "project.archived": "该项目已归档，请先取消归档。",
+    "project.default_locked": "默认项目不能归档，也不能解除与其工作区的绑定。",
+    "project.binding_conflict": "同一请求中不能同时绑定和解绑同一个工作区。",
+    "project.not_bound": "该项目未绑定到该工作区。",
+    "project.workspace_default": "该项目是该工作区的默认项目，请先将其他项目设为默认。",
+    "project.workspace_in_use": "该工作区仍有此项目的智能体、运行或密钥，请先迁移或删除。",
+    "project.member_conflict": "同一请求中不能同时添加和移除同一用户。",
+    "project.member_from_group": "该访问权限来自项目组，请在项目组中管理。",
+    "project.member_not_found": "该用户不是此项目的直接成员。",
+    "project.self_membership": "不能修改自己的成员身份，请让其他所有者或管理员操作。",
+    "project.role_unknown": "此项目中没有该角色。",
+    "project.role_invalid_key": "自定义角色键须为 2–32 个 a–z、0–9 或“_”，以字母开头，且不能与内置角色重名。",
+    "project.role_not_found": "该自定义角色不存在。",
+    "project.role_in_use": "仍有成员使用该角色，请先为他们更换角色。",
+    "project.override_unknown": "部分权限覆盖项包含未知权限。",
+    "project.setting_forbidden": "部分项目设置不能在此修改。",
+    "project.setting_invalid": "某项项目设置的值无效。",
+    "project.transfer_kind": "目前只能在项目之间迁移智能体。",
+    "project.transfer_same": "该智能体已在目标项目中。",
+    "project.transfer_platform": "系统预置属于平台，不属于任何项目。",
+    "project.transfer_busy": "该智能体仍有任务在运行，请等待其完成。",
+    "project.transfer_linked": "运行中的金丝雀发布将该智能体与另一个智能体关联，请先结束金丝雀发布。",
+    "project.header_required": "该账号在此工作区有多个项目，请选择一个项目。",
+    "project.none": "该账号不是此工作区中任何项目的成员。",
+    "project.unbound": "该工作区尚无项目。",
+    "network.inline_not_allowed": "请选择网络配置，仅管理员可以直接填写子网和安全组。",
+    "network_profile.not_found": "此工作区中不存在该网络配置。",
+    "network_profile.name_exists": "此工作区中已存在同名的网络配置。",
+    "network_profile.in_use": "仍有智能体使用该网络配置，请先将它们迁移到其他网络。",
+    "network_profile.blocked": "该网络配置未通过预检，请修复后重新检查，或选择其他网络。",
+    "network_profile.default_not_allowed": "默认网络配置必须是允许的网络配置之一。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -5736,7 +5782,8 @@
           "kind": "类型",
           "kindValue": "MCP 服务器（工具，不是智能体）",
           "reviewSub": "部署会创建 Runtime、Cognito 客户端、OAuth2 提供方和网关目标，然后列出服务器的工具。"
-        }
+        },
+        "networkProfile": "网络配置：{{id}}"
       },
       "identity": {
         "open": "身份",
@@ -11804,6 +11851,10 @@
         "architect_model_id": {
           "name": "系统架构师智能体",
           "desc": "系统架构师智能体的安装默认模型。"
+        },
+        "assistant_digest_model_id": {
+          "name": "助手上下文摘要",
+          "desc": "总结架构师助手上下文窗口之外的轮次；留空则使用“新建智能体”的模型。"
         },
         "agent_default_model_id": {
           "name": "新建智能体",

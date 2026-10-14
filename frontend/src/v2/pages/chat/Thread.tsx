@@ -1,4 +1,4 @@
-import { Database, MessagesSquare, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
+import { Database, MessagesSquare, RotateCcw, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { MessageAttachments } from "../../../components/chat/AttachmentViews";
@@ -7,10 +7,10 @@ import { Markdown } from "../../../components/Markdown";
 import type { FeedbackVerdict } from "../../../lib/api";
 import { TOOL_RUN_GLYPH, toolRunLabel } from "../../../lib/chat";
 import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
-import { Alert, Spin, Tag } from "../../ui";
+import { Alert, Button, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
 import { PolicyDenyCard } from "./PolicyDenyCard";
-import { type ChatMessage, retryPromptFor } from "./messages";
+import { type ChatMessage, latestRetryTarget, retryPromptFor } from "./messages";
 
 export type { ChatMessage } from "./messages";
 
@@ -24,6 +24,7 @@ export function Thread({
   onRate,
   onRetry,
   retryDisabled = false,
+  onRetryTurn,
   now,
 }: {
   messages: ChatMessage[];
@@ -35,6 +36,9 @@ export function Thread({
   /** re-send a prompt (an auth card's retry) */
   onRetry?: (prompt: string) => void;
   retryDisabled?: boolean;
+  /** retry the latest failed turn (chat-streaming §4.1): a Retry button inside its
+   *  error item — or, when that turn carried files, the note that it is not retried */
+  onRetryTurn?: () => void;
   /** the running turn's clock (a running tool row's elapsed time); omitted ⇒ render time */
   now?: number;
 }) {
@@ -42,6 +46,7 @@ export function Thread({
   // follows the stream only while the reader is at the bottom
   const thread = useStickToBottom();
   useFollowOwnTurns(messages.length, messages[messages.length - 1]?.kind === "user", thread.toBottom);
+  const retryTarget = onRetryTurn ? latestRetryTarget(messages) : null;
 
   return (
     <div className="v2-chat-thread" ref={thread.ref} data-testid="thread">
@@ -134,7 +139,22 @@ export function Thread({
           </div>
         ) : (
           <div key={i} className="v2-chat-error">
-            <Alert tone="error">{msg.text}</Alert>
+            <Alert tone="error">
+              {msg.text}
+              {retryTarget?.index === i &&
+                (retryTarget.attachments ? (
+                  <div className="v2-muted" style={{ marginTop: 6 }} data-testid="chat-retry-attachments">
+                    {t("v3.chat.retry.attachments")}
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 6 }}>
+                    <Button size="sm" onClick={onRetryTurn} testId="chat-retry">
+                      <RotateCcw size={12} aria-hidden="true" />
+                      {t("v3.chat.retry.button")}
+                    </Button>
+                  </div>
+                ))}
+            </Alert>
           </div>
         ),
       )}

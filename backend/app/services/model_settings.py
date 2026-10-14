@@ -53,6 +53,7 @@ ROLES: tuple[Role, ...] = (
     Role("judge_fallback_model_id", probe="judge", allow_empty=True),
     Role("assistant_model_id", needs_tools=True),
     Role("architect_model_id", needs_tools=True),
+    Role("assistant_digest_model_id", allow_empty=True),
     Role("agent_default_model_id", needs_tools=True),
     Role("actor_model_id", probe="actor", needs_tools=True),
     Role("codegen_model", families=("anthropic",)),

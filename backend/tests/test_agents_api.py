@@ -272,7 +272,9 @@ def test_create_container_agent_with_capabilities_and_fs(client):
     assert spec["tools"][0]["config"]["url"] == "https://mcp.deepwiki.com/mcp"
     assert spec["filesystem"]["session_storage"]["mount_path"] == "/mnt/workspace"
     assert spec["filesystem"]["s3_files"][0]["mount_path"] == "/mnt/datasets"
-    assert spec["network"]["subnets"] == ["subnet-a"]
+    # inline ids from an admin are filed as a legacy network profile (projects §12.10-2)
+    assert set(spec["network"]) == {"profile_id"}
+    assert spec["network"]["profile_id"].startswith("legacy-")
 
 
 def test_container_spec_without_agent_sdk_defaults_to_claude(client):

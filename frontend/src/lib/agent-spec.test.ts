@@ -172,3 +172,26 @@ describe("MCP stdio wrapper (§15.5)", () => {
     expect(byocIssues({ ...server(), byocEntrypoint: "index.js", mcpStdio: on }).entrypoint).toBe(false);
   });
 });
+
+describe("container network profile", () => {
+  const stored = {
+    model_id: "m",
+    filesystem: { session_storage: null, s3_files: [{ access_point_arn: "arn:aws:s3files:us-east-1:1:ap/x", mount_path: "/mnt/data" }] },
+    network: { profile_id: "np-1" },
+  };
+
+  it("keeps a stored profile reference instead of inline ids", () => {
+    const form = formFromStoredSpec("container", "c1", stored).form;
+    expect(form.networkProfileId).toBe("np-1");
+    expect(buildAgentSpec(form, CATALOGS).network).toEqual({ profile_id: "np-1" });
+  });
+
+  it("a legacy inline network stays inline", () => {
+    const form = formFromStoredSpec("container", "c1", {
+      ...stored,
+      network: { subnets: ["subnet-0a", "subnet-0b"], security_groups: ["sg-0a"] },
+    }).form;
+    expect(form.networkProfileId).toBe("");
+    expect(buildAgentSpec(form, CATALOGS).network).toEqual({ subnets: ["subnet-0a", "subnet-0b"], security_groups: ["sg-0a"] });
+  });
+});

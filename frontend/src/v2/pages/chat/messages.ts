@@ -46,3 +46,24 @@ export function appendDelta(
   }
   return next;
 }
+
+/**
+ * The error item a turn retry attaches to: the latest error after the thread's last
+ * user message (only the latest turn can be retried), and whether that turn carried
+ * files (a turn with attachments is not retried — the user sends it again). Null
+ * when the latest turn shows no error.
+ */
+export function latestRetryTarget(messages: ChatMessage[]): { index: number; attachments: boolean } | null {
+  let user = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].kind === "user") {
+      user = i;
+      break;
+    }
+  }
+  if (user < 0) return null;
+  for (let i = messages.length - 1; i > user; i -= 1) {
+    if (messages[i].kind === "error") return { index: i, attachments: !!messages[user].attachments?.length };
+  }
+  return null;
+}

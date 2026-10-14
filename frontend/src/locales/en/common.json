@@ -2457,7 +2457,53 @@
     "eval.no_telemetry": "This agent has written no spans, so the evaluation would find nothing to score. A BYOC code zip emits spans only with the ADOT launcher: add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, republish, then start the evaluation.",
     "eval.harness_no_telemetry": "This Harness has no telemetry log group yet. Run at least one chat or invoke session first, then start the evaluation.",
     "online_eval.no_telemetry": "This agent has no telemetry log group yet. Run at least one chat or invoke session first, then create the online evaluation.",
-    "trace.not_found": "Trace not found in this project."
+    "trace.not_found": "Trace not found in this project.",
+    "assistant.digest_owner_only": "Only the conversation's owner can regenerate its summary.",
+    "assistant.digest_nothing_to_summarize": "Every turn is still in the assistant's context — there is nothing to summarize.",
+    "assistant.digest_busy": "The summary is being generated — try again in a moment.",
+    "assistant.digest_failed": "The summary could not be generated; the previous one is kept.",
+    "chat.message_not_found": "That message is not in this conversation any more — reload the conversation.",
+    "chat.retry_not_allowed": "Only the latest turn, and only a failed or empty one, can be retried.",
+    "users.self_demote": "You cannot remove your own administrator role — ask another administrator.",
+    "users.not_found": "That user does not exist.",
+    "user.not_found": "That user does not exist.",
+    "department.not_found": "That department does not exist.",
+    "group.not_found": "That project group does not exist.",
+    "project.not_found": "That project does not exist, or you are not a member of it.",
+    "project.invalid_id": "A project id is 2–32 lowercase letters, digits or '-'.",
+    "project.exists": "A project with that id already exists.",
+    "project.workspaces_required": "Bind the project to at least one workspace.",
+    "project.archived": "This project is archived — unarchive it first.",
+    "project.default_locked": "The default project cannot be archived or unbound from its workspaces.",
+    "project.binding_conflict": "A workspace cannot be bound and unbound in the same request.",
+    "project.not_bound": "The project is not bound to that workspace.",
+    "project.workspace_default": "This project is that workspace's default — make another project the default first.",
+    "project.workspace_in_use": "That workspace still holds this project's agents, runs or keys — move or delete them first.",
+    "project.member_conflict": "A user cannot be added and removed in the same request.",
+    "project.member_from_group": "This access comes from the project's group — manage it there.",
+    "project.member_not_found": "That user is not a direct member of this project.",
+    "project.self_membership": "You cannot change your own membership — ask another owner or an administrator.",
+    "project.role_unknown": "That role is not defined in this project.",
+    "project.role_invalid_key": "A custom role key is 2–32 of a–z, 0–9 and '_', starts with a letter and is not a built-in role.",
+    "project.role_not_found": "That custom role does not exist.",
+    "project.role_in_use": "Members still hold this role — give them another role first.",
+    "project.override_unknown": "Some permission overrides name unknown permissions.",
+    "project.setting_forbidden": "Some of these project settings cannot be changed here.",
+    "project.setting_invalid": "A project setting has an invalid value.",
+    "project.transfer_kind": "Only agents can be moved between projects for now.",
+    "project.transfer_same": "The agent is already in that project.",
+    "project.transfer_platform": "A system preset belongs to the platform, not to a project.",
+    "project.transfer_busy": "A job of this agent is still running — wait for it to finish.",
+    "project.transfer_linked": "A running canary pairs this agent with another one — end the canary first.",
+    "project.header_required": "This account has several projects in this workspace — choose a project.",
+    "project.none": "This account is not a member of any project in this workspace.",
+    "project.unbound": "This workspace has no project yet.",
+    "network.inline_not_allowed": "Choose a network profile — inline subnets and security groups are accepted from administrators only.",
+    "network_profile.not_found": "That network profile does not exist in this workspace.",
+    "network_profile.name_exists": "A network profile with that name already exists in this workspace.",
+    "network_profile.in_use": "Agents still use this network profile — move them to another network first.",
+    "network_profile.blocked": "This network profile failed its preflight — fix it, re-run the check, or choose another network.",
+    "network_profile.default_not_allowed": "The default network profile must be one of the allowed profiles."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -5736,7 +5782,8 @@
           "kind": "Type",
           "kindValue": "MCP server (tool, not an agent)",
           "reviewSub": "Deploying creates the runtime, a Cognito client, an OAuth2 provider and the Gateway target, then lists the server's tools."
-        }
+        },
+        "networkProfile": "Network profile: {{id}}"
       },
       "identity": {
         "open": "Identity",
@@ -11804,6 +11851,10 @@
         "architect_model_id": {
           "name": "System architect agent",
           "desc": "Install default of the system architect agent."
+        },
+        "assistant_digest_model_id": {
+          "name": "Assistant context summary",
+          "desc": "Summarizes the architect assistant's turns outside its context window; empty uses the New agents model."
         },
         "agent_default_model_id": {
           "name": "New agents",

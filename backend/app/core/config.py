@@ -207,6 +207,9 @@ class Settings(BaseSettings):
     # Default model of the system architect agent on a new install. reasoning_effort
     # is preset only when this is an OpenAI model (the only family that takes it).
     architect_model_id: str = "global.openai.gpt-6-astra"
+    # Model of the architect assistant's confirmed-items digest (assistant-context C2,
+    # D-2); empty = agent_default_model_id (the workspace's cheap default).
+    assistant_digest_model_id: str = ""
     # The architect assistant's replay budget (assistant-context C3): half the
     # architect model's input context window, in estimated tokens, capped at
     # assistant_replay_max_tokens; the other half stays free for the turn's own tool

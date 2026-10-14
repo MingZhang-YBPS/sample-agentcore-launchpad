@@ -29,6 +29,15 @@ from app.services.runtime_discovery import is_discovered_harness
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 
+def _with_transient(data: dict[str, Any], exc: Exception, console: bool) -> dict[str, Any]:
+    """Console errors say whether a retry may help (chat-streaming S3); /v1 is unchanged."""
+    if console:
+        from app.evaluation.service import transient_invoke_error
+
+        data = {**data, "transient": bool(transient_invoke_error(exc))}
+    return data
+
+
 def chat_stream(
     agent: Agent,
     prompt: str,
@@ -162,10 +171,12 @@ def chat_stream(
         # text upstream but sends nothing down still gets its heartbeats
         yield from with_keepalive(source, started=started)
     except AppError as exc:
-        yield {"event": "error", "data": envelope(exc.code, exc.message, exc.detail)}
+        yield {"event": "error", "data": _with_transient(
+            envelope(exc.code, exc.message, exc.detail), exc, status_events)}
         return
     except Exception as exc:
-        yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
+        yield {"event": "error", "data": _with_transient(
+            {"message": f"{type(exc).__name__}: {exc}"}, exc, status_events)}
         return
     if screen:
         try:

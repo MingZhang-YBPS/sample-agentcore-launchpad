@@ -160,6 +160,9 @@ export interface ChatRequest {
    * workspace M2M token; omitted ⇒ the user JWT when one can be minted. Ignored
    * for IAM agents. */
   as_user?: boolean;
+  /** retry the latest failed (or empty) turn: the ledger id of its user message
+   *  (`meta.user_message_id`); anything else answers 409 `chat.retry_not_allowed` */
+  retry_of?: number;
 }
 
 export interface ChatStreamPayload {
@@ -191,6 +194,12 @@ export interface ChatStreamPayload {
   reason?: string;
   policy_id?: string | null;
   gateway_id?: string | null;
+  /** `meta`: the ledger id of this turn's user message — what `retry_of` names */
+  user_message_id?: number;
+  /** `error`: how the console may retry the turn (`ChatRetryHint` in lib/chat.ts) */
+  retry?: unknown;
+  /** `error`: the failure is transient (throttling, a dropped stream) */
+  transient?: boolean;
 }
 
 export interface ChatHistoryMessage {
@@ -1168,6 +1177,25 @@ export function getJson<T>(path: string): Promise<T> {
   return request<T>(path);
 }
 
+/**
+ * A JSON write with the shared envelope handling (`ApiError`, localized copy, the
+ * 401 event) — for feature modules under `lib/api/` that keep their own clients.
+ * `body` omitted ⇒ no request body; a 204 (no content) resolves `undefined`.
+ */
+export async function sendJson<T>(
+  path: string,
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (res.status === 204) return undefined as T;
+  return parseResponse<T>(path, res);
+}
+
 /** Console copy for a non-2xx `Response` a page fetched itself (same envelope rules). */
 export async function responseMessage(res: Response): Promise<string> {
   try {
@@ -1459,6 +1487,14 @@ export interface AssistantConversationDetail extends AssistantConversationSummar
   messages: AssistantMessage[];
   proposals: AssistantProposal[];
   preparation?: AssistantPreparation;
+  /** the confirmed-items digest of the turns outside the replay window
+   *  (absent on an older backend) — see `conversationDigest` in lib/assistant.ts */
+  context_digest?: {
+    text: string | null;
+    through_turn: number | null;
+    updated_at: string | null;
+    generating: boolean;
+  };
 }
 
 export interface AssistantPreparationRequirement {

@@ -478,6 +478,9 @@ export interface AgentForm {
   efsMounts: MountRow[];
   vpcSubnets: string;
   vpcSgs: string;
+  /** a stored spec's `network: {profile_id}` (a workspace network profile): shown
+   *  read-only and carried into the re-published spec instead of inline ids */
+  networkProfileId: string;
   // zip_runtime service protocol; byoc can also host an MCP server ("mcp")
   protocol: "http" | "a2a" | "mcp";
   /** byoc + protocol "mcp": the Gateway target its tools appear under */
@@ -541,6 +544,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   efsMounts: [],
   vpcSubnets: "",
   vpcSgs: "",
+  networkProfileId: "",
   protocol: "http",
   mcpTargetName: "",
   mcpStdio: { ...MCP_STDIO_OFF },
@@ -591,7 +595,8 @@ export interface StoredAgentSpec {
     s3_files?: { access_point_arn?: string; mount_path?: string }[];
     efs?: { access_point_arn?: string; mount_path?: string }[];
   };
-  network?: { subnets?: string[]; security_groups?: string[] };
+  /** inline VPC ids (legacy) or a workspace network profile */
+  network?: { subnets?: string[]; security_groups?: string[]; profile_id?: string } | null;
   byoc?: ByocConfigInput;
   inbound_auth?: InboundAuth | null;
 }
@@ -654,6 +659,7 @@ export function formFromStoredSpec(
     efsMounts: (fs?.efs ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
     vpcSubnets: (spec.network?.subnets ?? []).join(", "),
     vpcSgs: (spec.network?.security_groups ?? []).join(", "),
+    networkProfileId: spec.network?.profile_id ?? "",
     protocol: spec.protocol ?? "http",
     mcpTargetName: spec.mcp?.target_name ?? "",
     mcpStdio: mcpStdioFromSpec(spec.mcp?.stdio_wrapper),
@@ -939,14 +945,17 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
             s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
             efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
           },
-          ...(hasByoMounts(form)
-            ? {
-                network: {
-                  subnets: splitIds(form.vpcSubnets),
-                  security_groups: splitIds(form.vpcSgs),
-                },
-              }
-            : {}),
+          // a stored profile reference is kept as it is (the backend resolves it)
+          ...(form.networkProfileId
+            ? { network: { profile_id: form.networkProfileId } }
+            : hasByoMounts(form)
+              ? {
+                  network: {
+                    subnets: splitIds(form.vpcSubnets),
+                    security_groups: splitIds(form.vpcSgs),
+                  },
+                }
+              : {}),
         }
       : {}),
   } as AgentSpecInput;
@@ -1062,6 +1071,7 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
     duplicatePaths: new Set(paths).size !== paths.length,
     vpc:
       hasByoMounts({ s3Mounts, efsMounts }) &&
+      !form.networkProfileId &&
       (splitIds(form.vpcSubnets).length === 0 || splitIds(form.vpcSgs).length === 0),
   };
 }

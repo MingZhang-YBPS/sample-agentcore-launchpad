@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 
+import { toolsCount } from "../../../lib/agent-tools";
 import type { AgentInfo } from "../../../lib/api";
 import { ago } from "../../format";
 import { Panel, Stat } from "../../ui";
@@ -8,7 +9,7 @@ import { isMcpServer } from "./tabs";
 /** Version, model (or MCP kind), tool count (or MCP target), last update. */
 export function StatsRow({ agent }: { agent: AgentInfo }) {
   const { t } = useTranslation();
-  const spec = agent.spec as { model_id?: string; model?: string; tools?: unknown[]; mcp?: { target_name?: string } };
+  const spec = agent.spec as { model_id?: string; model?: string; mcp?: { target_name?: string } };
   const mcp = isMcpServer(agent);
   return (
     <div className="v3-grid c4">
@@ -21,7 +22,7 @@ export function StatsRow({ agent }: { agent: AgentInfo }) {
       {mcp ? (
         <Panel><Stat label={t("v3.mcp.target")} value={<span className="mono" style={{ fontSize: 15 }}>{spec.mcp?.target_name ?? "—"}</span>} /></Panel>
       ) : (
-        <Panel><Stat label={t("v3.agent.tools")} value={Array.isArray(spec.tools) ? spec.tools.length : 0} /></Panel>
+        <Panel><Stat label={t("v3.agent.tools")} value={<a href="#agent-tools">{toolsCount(agent)}</a>} /></Panel>
       )}
       <Panel><Stat label={t("v3.agents.updated")} value={ago(agent.updated_at)} /></Panel>
     </div>

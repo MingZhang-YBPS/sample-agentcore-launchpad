@@ -188,7 +188,7 @@ interface StoredSpec {
     s3_files?: { access_point_arn?: string; mount_path?: string }[];
     efs?: { access_point_arn?: string; mount_path?: string }[];
   };
-  network?: { subnets?: string[]; security_groups?: string[] };
+  network?: { subnets?: string[]; security_groups?: string[]; profile_id?: string } | null;
   byoc?: ByocConfigInput;
 }
 
@@ -886,6 +886,8 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [efsMounts, setEfsMounts] = useState<MountRow[]>([]);
   const [vpcSubnets, setVpcSubnets] = useState("");
   const [vpcSgs, setVpcSgs] = useState("");
+  // a stored `network: {profile_id}`: no input here, carried into the re-publish
+  const [networkProfileId, setNetworkProfileId] = useState("");
   // zip runtime service protocol: standard HTTP invocations vs a real A2A
   // JSON-RPC server (serverProtocol=A2A) with configurable agent-card skills
   const [protocol, setProtocol] = useState<"http" | "a2a">("http");
@@ -1150,6 +1152,7 @@ const deployLock = !canDeploy
     setS3Mounts([]);
     setEfsMounts([]);
     setVpcSubnets("");
+    setNetworkProfileId("");
     setVpcSgs("");
     setProtocol("http");
     setA2aSkills([]);
@@ -1257,6 +1260,7 @@ const deployLock = !canDeploy
     efsMounts,
     vpcSubnets,
     vpcSgs,
+    networkProfileId,
     protocol,
     // the classic wizard has no MCP-server mode
     mcpTargetName: "",
@@ -1570,6 +1574,7 @@ const deployLock = !canDeploy
     );
     setVpcSubnets((spec.network?.subnets ?? []).join(", "));
     setVpcSgs((spec.network?.security_groups ?? []).join(", "));
+    setNetworkProfileId(spec.network?.profile_id ?? "");
     setProtocol(spec.protocol ?? "http");
     setA2aSkills(
       (spec.a2a_skills ?? []).map((s) => ({

@@ -204,11 +204,19 @@ def _run_scan_gate(
         )
 
 
-def _vpc(spec: AgentSpec) -> dict | None:
-    """networkModeConfig input — only when BYO mounts force VPC mode."""
+def _vpc(spec: AgentSpec, workspace_id: str | None = None) -> dict | None:
+    """networkModeConfig input — only when BYO mounts force VPC mode. The spec holds
+    a network profile reference (or, before migration, inline ids): resolve it."""
     if not (spec.filesystem.byo and spec.network):
         return None
-    return {"subnets": spec.network.subnets, "security_groups": spec.network.security_groups}
+    from app.core.db import SessionLocal
+    from app.services import network_profiles
+
+    db = SessionLocal()
+    try:
+        return network_profiles.resolve_vpc(db, workspace_id or "", spec.network)
+    finally:
+        db.close()
 
 
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
@@ -258,7 +266,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 or workspace.resources.get("execution_role_arn", ""),
                 "environment": runtime_environment(spec, workspace.resources),
                 "filesystem_configurations": filesystem_configurations(spec) or None,
-                "vpc": _vpc(spec),
+                "vpc": _vpc(spec, agent.workspace_id),
                 # Echoed on every update; omitting (None = IAM) resets a JWT
                 # runtime back to SigV4 — that IS the JWT→IAM transition.
                 "authorizer_configuration": authorizer,

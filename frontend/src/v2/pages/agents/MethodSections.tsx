@@ -483,7 +483,12 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
           </Field>
         ))}
         {touched && issues.duplicatePaths && <span className="v2-agents-err">{t("v2.agents.wizard.errDupPath")}</span>}
-        {byo && (
+        {form.networkProfileId ? (
+          // a stored profile reference: the profile's ids live on the profile, not here
+          <div className="v2-muted" data-testid="v2-agent-network-profile">
+            {t("v2.agents.wizard.networkProfile", { id: form.networkProfileId })}
+          </div>
+        ) : byo && (
           <div className="v2-form cols-2">
             <Field label={t("create.configure.fsSubnets")} required error={show(issues.vpc && !form.vpcSubnets.trim(), "v2.agents.wizard.errVpc")}>
               <input

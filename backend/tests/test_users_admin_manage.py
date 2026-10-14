@@ -461,15 +461,18 @@ class TestAdministrators:
         assert still["role"] == "admin" and still["state"] == "active"
         # with a second admin the same demotion goes through
         create(solo, username="other-admin", email="oa@acme-corp.com", role="admin",
-               workspaces=[])
-        assert solo.patch(f"/api/users/{me['id']}", json={"role": "member"}).status_code == 200
+               password="admin-pass-3", workspaces=[])
+        other = login(app, "other-admin", "admin-pass-3")  # nobody demotes themselves
+        assert other.patch(f"/api/users/{me['id']}", json={"role": "member"}).status_code == 200
 
-    def test_with_the_builtin_admin_a_registered_admin_may_step_down(self, app, admin):
+    def test_with_the_builtin_admin_a_registered_admin_is_demoted_by_another(self, app, admin):
         create(admin, username="solo-admin", email="solo@acme-corp.com",
                role="admin", password="admin-pass-2", workspaces=[])
         solo = login(app, "solo-admin", "admin-pass-2")
         me = solo.get("/api/users", params={"q": "solo-admin"}).json()["items"][0]
-        assert solo.patch(f"/api/users/{me['id']}", json={"role": "member"}).status_code == 200
+        refused = solo.patch(f"/api/users/{me['id']}", json={"role": "member"})
+        assert refused.status_code == 409 and refused.json()["code"] == "users.self_demote"
+        assert admin.patch(f"/api/users/{me['id']}", json={"role": "member"}).status_code == 200
 
 
 def test_break_glass_script(app, admin, monkeypatch, capsys):
