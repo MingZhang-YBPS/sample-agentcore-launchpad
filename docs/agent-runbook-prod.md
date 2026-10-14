@@ -98,6 +98,30 @@ The return URL is baked into each as_user agent at deploy time (runtime env
 setting or changing it, **re-publish every agent that has an as_user tool**.
 The frontend unit needs nothing.
 
+### Enabling the alert check (one box only)
+
+Alert rules (`/v2/costs?view=alerts`) post their webhooks only from a background
+thread, which is **off by default**. Turn it on with a drop-in on **exactly one**
+backend that shares the AWS account: prod and prod2 share one, and each box
+evaluates its own ledger's rules, so two enabled boxes can post the same breach
+twice. The thread assumes one uvicorn process per box, which is what the unit runs.
+
+```bash
+sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
+printf '[Service]\nEnvironment=LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true\n' \
+  | sudo tee /etc/systemd/system/launchpad-backend.service.d/alerts-scheduler.conf
+sudo systemctl daemon-reload && sudo systemctl restart launchpad-backend
+sudo systemctl show launchpad-backend -p Environment | grep -c ALERTS_SCHEDULER_ENABLED=true   # want 1
+```
+
+Then confirm on the Alerts view: its banner (`GET /api/alerts/scheduler`) reads the
+running process's setting, so it says whether this box checks. Don't grep the journal
+for the thread's start line: the backend configures no logging, so its INFO lines
+never reach the journal (only warnings, such as a failed workspace check, do). The interval is
+`LAUNCHPAD_ALERTS_SCHEDULER_INTERVAL_SECONDS` (default 300, minimum 60). Each pass
+runs Logs Insights queries, which are billed. Remove the drop-in and restart to
+turn the thread off.
+
 ### Update recipe (verified sequence)
 
 ```bash
