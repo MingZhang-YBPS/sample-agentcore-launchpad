@@ -1,4 +1,4 @@
-import { Play, RotateCcw, ShieldCheck, ShieldX } from "lucide-react";
+import { Play, RotateCcw, ShieldCheck, ShieldX, Tag } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -11,6 +11,7 @@ import { gateSignal, releaseSignal } from "../signals";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { useLoad, useToast } from "../hooks";
 import { ago, pct } from "../format";
+import { calibrateUrl } from "./standards/calibrationLink";
 import { dlcText } from "./standards/common";
 
 const ROW_SIGNAL: Record<GateRow["verdict"], Signal> = {
@@ -205,6 +206,22 @@ export function V3Gate() {
               {report.provenance.issues.length > 0 && (
                 <div style={{ marginTop: 14 }}>
                   <Notice s="wait">{report.provenance.issues.join(" · ")}</Notice>
+                </div>
+              )}
+              {/* the regression run is the recommended calibration source; the holdout
+                  offers no such link — labelling it would show people its samples */}
+              {can("criteria.manage") && (report.runs ?? []).some((r) => r.split === "regression" && r.status === "completed") && (
+                <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+                  <div className="v3-rail-label">{t("v2.dlc.calibration.gateRuns")}</div>
+                  {(report.runs ?? []).filter((r) => r.split === "regression" && r.status === "completed").map((r) => (
+                    <div key={r.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <Chip>{t("v2.dlc.split.regression")}</Chip>
+                      <span className="mono" style={{ color: "var(--v3-text-2)" }}>{r.id}</span>
+                      <Link to={calibrateUrl(agent.id, r.id)} className="v3-btn ghost sm">
+                        <Tag size={13} /> {t("v2.dlc.calibration.calibrateFromRegression")}
+                      </Link>
+                    </div>
+                  ))}
                 </div>
               )}
             </Panel>

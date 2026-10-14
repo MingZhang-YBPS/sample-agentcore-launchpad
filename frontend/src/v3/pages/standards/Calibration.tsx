@@ -6,14 +6,15 @@
  * the numbers do not support it or when the decider labelled the evidence.
  */
 import { Copy, Plus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
-import { api, dlcApi, errorMessage } from "../../../lib/api";
+import { dlcApi, errorMessage } from "../../../lib/api";
+import { type CandidateRun, calibrationApi, candidateLabel, DROPDOWN_RUNS } from "../../../lib/api/calibration";
 import type { AnnotationTask } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
-import { Btn, Chip, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
+import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { ConfusionMatrix } from "./charts";
 import { runNamed, runRefusal } from "./calibrationRunError";
 import { kappaSignal, stamp } from "./common";
@@ -297,21 +298,269 @@ function TaskBench({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   );
 }
 
-function NewTask({ agentId, lineageId, criteriaKeys, people, onClose, onCreated }: {
+type SinceFilter = "any" | "7" | "30";
+type SourceFilter = "all" | "gate" | "manual";
+const LIST_PAGE = 20;
+
+const sinceIso = (since: SinceFilter): string | undefined =>
+  since === "any" ? undefined : new Date(Date.now() - Number(since) * 86_400_000).toISOString();
+
+/** One run as the picker shows it: name, release tag, finished time, id. */
+function RunName({ run }: { run: CandidateRun }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {candidateLabel(run)}
+      {run.release_id && <> <Chip s="info">{t("v2.dlc.calibration.releaseTag")}</Chip></>}
+    </>
+  );
+}
+
+/** §4.2: every run of the agent, searchable and filterable, one picked. */
+function RunListDialog({ agentId, agentName, criterionKey, selected, onClose, onPick }: {
+  agentId: string;
+  agentName: string;
+  criterionKey: string;
+  selected: string;
+  onClose: () => void;
+  onPick: (run: CandidateRun) => void;
+}) {
+  const { t } = useTranslation();
+  const [q, setQ] = useState("");
+  const [since, setSince] = useState<SinceFilter>("any");
+  const [source, setSource] = useState<SourceFilter>("all");
+  const [onlyEligible, setOnlyEligible] = useState(true);
+  const [page, setPage] = useState(0);
+  const [choice, setChoice] = useState<CandidateRun | null>(null);
+  const needle = q.trim();
+  const list = useLoad(
+    () => calibrationApi.candidateRuns({
+      agentId, criterionKey, q: needle, since: sinceIso(since), source: source === "all" ? undefined : source,
+      onlyEligible, limit: LIST_PAGE, offset: page * LIST_PAGE,
+    }),
+    `v3-cal-runlist:${agentId}:${criterionKey}:${needle}:${since}:${source}:${onlyEligible}:${page}`,
+  );
+  const rows = list.data?.runs ?? [];
+  const pages = Math.max(1, Math.ceil((list.data?.total ?? 0) / LIST_PAGE));
+  const current = choice?.id ?? selected;
+  const reset = () => setPage(0);
+  return (
+    <Dialog
+      wide
+      title={t("v2.dlc.calibration.listTitle", { key: criterionKey, agent: agentName })}
+      onClose={onClose}
+      foot={
+        <>
+          <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
+          <Btn kind="primary" disabled={!choice} onClick={() => choice && onPick(choice)}>{t("v2.dlc.calibration.choose")}</Btn>
+        </>
+      }
+    >
+      <div style={{ display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input className="v3-input" style={{ flex: "1 1 220px" }} value={q} placeholder={t("v2.dlc.calibration.searchRun")}
+            aria-label={t("v2.dlc.calibration.searchRun")} onChange={(e) => { setQ(e.target.value); reset(); }} />
+          <select className="v3-select" style={{ width: 140 }} value={since} aria-label={t("v2.dlc.calibration.colFinished")}
+            onChange={(e) => { setSince(e.target.value as SinceFilter); reset(); }}>
+            <option value="any">{t("v2.dlc.calibration.sinceAny")}</option>
+            <option value="7">{t("v2.dlc.calibration.since7")}</option>
+            <option value="30">{t("v2.dlc.calibration.since30")}</option>
+          </select>
+          <Filters value={source} onChange={(v) => { setSource(v); reset(); }}
+            options={[
+              { value: "all", label: t("v2.dlc.calibration.sourceAll") },
+              { value: "gate", label: t("v2.dlc.calibration.sourceGate") },
+              { value: "manual", label: t("v2.dlc.calibration.sourceManual") },
+            ]} />
+          <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={onlyEligible} onChange={(e) => { setOnlyEligible(e.target.checked); reset(); }} />
+            <span>{t("v2.dlc.calibration.onlyEligible", { key: criterionKey })}</span>
+          </label>
+        </div>
+        {list.loading && !list.data ? (
+          <Skeleton rows={4} />
+        ) : list.error ? (
+          <Notice s="act">{list.error}</Notice>
+        ) : rows.length === 0 ? (
+          <p className="v3-std-muted" style={{ margin: 0 }}>{t("v2.dlc.calibration.noRunsMatch")}</p>
+        ) : (
+          <table className="v3-table">
+            <thead>
+              <tr>
+                <th />
+                <th>{t("v2.dlc.calibration.colName")}</th>
+                <th>{t("v2.dlc.calibration.colFinished")}</th>
+                <th>{t("v2.dlc.calibration.colId")}</th>
+                <th className="num">{t("v2.dlc.calibration.colResults", { key: criterionKey })}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((run) => (
+                <tr key={run.id} className={run.eligible ? "click" : undefined}
+                  style={{ opacity: run.eligible ? 1 : 0.55, background: run.id === current ? "var(--v3-info-dim)" : undefined }}
+                  title={run.reason ? t(`v2.dlc.calibration.ineligibleReason.${run.reason}`) : undefined}
+                  onClick={() => run.eligible && setChoice(run)}>
+                  <td style={{ width: 30 }}>
+                    <input type="radio" name="cal-run" checked={run.id === current} disabled={!run.eligible}
+                      aria-label={candidateLabel(run)} onChange={() => setChoice(run)} />
+                  </td>
+                  <td>
+                    <RunName run={run} />
+                    {run.reason && <small className="v3-hint" style={{ display: "block" }}>{t(`v2.dlc.calibration.ineligibleReason.${run.reason}`)}</small>}
+                  </td>
+                  <td>{stamp(run.finished_at)}</td>
+                  <td className="mono">{run.id}</td>
+                  <td className="num">{t("v2.dlc.calibration.runItems", { count: run.items })}</td>
+                  <td style={{ width: 1 }}>
+                    <a href={`/v3/tasks?view=detail&kind=run&id=${encodeURIComponent(run.id)}`} target="_blank" rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}>{t("v2.dlc.calibration.viewRun")}</a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {pages > 1 && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+            <Btn size="sm" kind="ghost" disabled={page === 0} onClick={() => setPage((n) => n - 1)}>‹</Btn>
+            <span className="v3-std-muted">{t("v2.dlc.calibration.page", { page: page + 1, pages })}</span>
+            <Btn size="sm" kind="ghost" disabled={page + 1 >= pages} onClick={() => setPage((n) => n + 1)}>›</Btn>
+          </div>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
+const PASTE = "__paste__";
+
+/**
+ * §4.1: the run a task is taken from. The agent's latest runs (D-1: 20) with the
+ * criterion's sample count, pickable ones first; older runs by pasting an id (checked
+ * as it is typed) or through the full list.
+ */
+function RunPicker({ agentId, criterionKey, value, picked, pasting, onPasting, onChange, onList }: {
   agentId: string | null;
+  criterionKey: string;
+  value: string;
+  /** a run chosen in the full list, which may be older than the dropdown's 20 */
+  picked: CandidateRun | null;
+  pasting: boolean;
+  onPasting: (on: boolean) => void;
+  onChange: (id: string) => void;
+  onList: () => void;
+}) {
+  const { t } = useTranslation();
+  const ready = Boolean(agentId && criterionKey);
+  const recent = useLoad(
+    () => (agentId && criterionKey
+      ? calibrationApi.candidateRuns({ agentId, criterionKey, onlyEligible: false, limit: DROPDOWN_RUNS })
+      : Promise.resolve(null)),
+    `v3-cal-recent:${agentId ?? ""}:${criterionKey}`,
+  );
+  const runs = recent.data?.runs ?? [];
+  const eligible = runs.filter((r) => r.eligible);
+  const ineligible = runs.filter((r) => !r.eligible);
+  const extra = picked && !runs.some((r) => r.id === picked.id) ? picked : null;
+  const known = [...runs, ...(extra ? [extra] : [])].find((r) => r.id === value) ?? null;
+  // a prefilled id the dropdown does not hold is shown as pasted, and checked
+  useEffect(() => {
+    if (recent.data && value && !known) onPasting(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only once the list arrives
+  }, [recent.data]);
+
+  const typed = value.trim();
+  // a pasted id is checked once typing pauses, against the same list the dropdown reads
+  const [check, setCheck] = useState<{ id: string; key: string; run: CandidateRun | null } | null>(null);
+  useEffect(() => {
+    if (!pasting || !typed || !agentId || !criterionKey) return;
+    let live = true;
+    const timer = window.setTimeout(() => {
+      calibrationApi.candidateRuns({ agentId, criterionKey, q: typed, onlyEligible: false, limit: 5 })
+        .then((res) => live && setCheck({ id: typed, key: criterionKey, run: res.runs.find((r) => r.id === typed) ?? null }))
+        .catch(() => live && setCheck({ id: typed, key: criterionKey, run: null }));
+    }, 300);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [pasting, typed, agentId, criterionKey]);
+  const checked = check && check.id === typed && check.key === criterionKey ? check : null;
+  const pastedRun = checked?.run ?? null;
+
+  const option = (run: CandidateRun) => (
+    <option key={run.id} value={run.id} disabled={!run.eligible}>
+      {`${candidateLabel(run)}${run.release_id ? ` · ${t("v2.dlc.calibration.releaseTag")}` : ""}   ${stamp(run.finished_at ?? run.created_at, 16).slice(5)}   ${run.id}   ${t("v2.dlc.calibration.runItems", { count: run.items })}`}
+    </option>
+  );
+
+  return (
+    <div className="v3-field">
+      <span>{t("v2.dlc.calibration.fromRun")}</span>
+      <div style={{ display: "flex", gap: 8 }}>
+        <select className="v3-select mono" style={{ flex: 1, minWidth: 0 }} disabled={!ready}
+          value={pasting ? PASTE : known ? value : ""}
+          onChange={(e) => {
+            if (e.target.value === PASTE) { onPasting(true); onChange(""); return; }
+            onPasting(false);
+            onChange(e.target.value);
+          }}>
+          <option value="">{t("v2.dlc.calibration.pickRun")}</option>
+          {extra && option(extra)}
+          {eligible.map(option)}
+          {ineligible.length > 0 && (
+            <optgroup label={t("v2.dlc.calibration.ineligibleGroup", { key: criterionKey })}>
+              {ineligible.map(option)}
+            </optgroup>
+          )}
+          <option value={PASTE}>{t("v2.dlc.calibration.pasteRunId")}</option>
+        </select>
+        <Btn size="sm" disabled={!ready} onClick={onList}>{t("v2.dlc.calibration.pickFromList")}</Btn>
+      </div>
+      {pasting && (
+        <input className="v3-input mono" autoFocus value={value} aria-label={t("v2.dlc.calibration.pasteRunId")}
+          onChange={(e) => onChange(e.target.value)} />
+      )}
+      {pasting && typed ? (
+        <small className="v3-hint">
+          {!checked ? t("v2.dlc.calibration.pasteChecking")
+            : pastedRun ? `${candidateLabel(pastedRun)} · ${pastedRun.reason ? t(`v2.dlc.calibration.ineligibleReason.${pastedRun.reason}`) : t("v2.dlc.calibration.runItems", { count: pastedRun.items })}`
+              : t("v2.dlc.calibration.pasteNotListed", { key: criterionKey })}
+        </small>
+      ) : recent.data && eligible.length === 0 && !extra ? (
+        <small className="v3-hint">{t("v2.dlc.calibration.noCandidateRuns", { key: criterionKey })}</small>
+      ) : (
+        <small className="v3-hint">
+          {known ? t("v2.dlc.calibration.runItems", { count: known.items }) : t("v2.dlc.calibration.pickRunHint")}
+        </small>
+      )}
+      {recent.error && <small className="v3-hint" style={{ color: "var(--v3-act)" }}>{recent.error}</small>}
+    </div>
+  );
+}
+
+function NewTask({ agentId, agentName, lineageId, criteriaKeys, people, initialRunId, initialKey, onClose, onCreated }: {
+  agentId: string | null;
+  agentName: string;
   lineageId: string | null;
   criteriaKeys: string[];
   people: string[];
+  initialRunId?: string;
+  initialKey?: string | null;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [key, setKey] = useState(criteriaKeys[0] ?? "");
-  const [runId, setRunId] = useState("");
+  const [key, setKey] = useState(initialKey ?? (initialRunId ? "" : criteriaKeys[0] ?? ""));
+  const [runId, setRunId] = useState(initialRunId ?? "");
+  const [pasting, setPasting] = useState(false);
+  const [picked, setPicked] = useState<CandidateRun | null>(null);
+  // the full list opens beside this dialog, not inside it, and Esc closes only the list
+  const [listing, setListing] = useState(false);
   const [annotators, setAnnotators] = useState<string[]>([]);
   const [adjudicator, setAdjudicator] = useState("");
   const [busy, setBusy] = useState(false);
+  // a prefilled criterion may arrive before the agent's table has loaded
+  const keys = key && !criteriaKeys.includes(key) ? [key, ...criteriaKeys] : criteriaKeys;
   // a run refusal stays in the dialog (not a toast): it may offer the id of a run
   // whose name was typed, which the user confirms before saving again
   const [refusal, setRefusal] = useState<{ message: string; suggestion: string | null } | null>(null);
@@ -320,8 +569,9 @@ function NewTask({ agentId, lineageId, criteriaKeys, people, onClose, onCreated 
     if (!why) { toast("act", errorMessage(err)); return; }
     setRefusal({ message: t(why.key, why.vars), suggestion: null });
     const name = why.lookupName;
-    if (!name) return;
-    api.listEvaluationRuns({ agent_id: agentId ?? undefined, mode: "evaluators", limit: 200 })
+    if (!name || !agentId) return;
+    // the picker's own search matches names, so a typed name finds its run here
+    calibrationApi.candidateRuns({ agentId, criterionKey: key, q: name, onlyEligible: false, limit: 100 })
       .then((res) => {
         const id = runNamed(res.runs, name);
         if (id && id !== typed) setRefusal((prev) => prev && { ...prev, suggestion: id });
@@ -329,98 +579,113 @@ function NewTask({ agentId, lineageId, criteriaKeys, people, onClose, onCreated 
       .catch(() => undefined); // the explanation stands without the suggestion
   };
   return (
-    <Dialog
-      wide
-      title={t("v2.dlc.calibration.newTaskTitle")}
-      onClose={onClose}
-      foot={
-        <>
-          <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          {/* two raters at least: one person's labels are not a consensus */}
-          <Btn kind="primary" disabled={busy || !key || annotators.length < 2 || !runId.trim()}
-            onClick={() => {
-              const typed = runId.trim();
-              setBusy(true);
-              setRefusal(null);
-              dlcApi
-                .createTask({ agent_id: agentId, criteria_lineage_id: lineageId, criterion_key: key, annotators, adjudicator: adjudicator || null, run_id: typed })
-                .then((created) => { toast("ok", t("v2.dlc.calibration.taskCreated")); onCreated(created.id); })
-                .catch((err: unknown) => refused(err, typed))
-                .finally(() => setBusy(false));
-            }}>
-            {t("v3.standards.save")}
-          </Btn>
-        </>
-      }
-    >
-      <div style={{ display: "grid", gap: 12 }}>
-        <p style={{ margin: 0 }}>{t("v2.dlc.calibration.newTaskHint")}</p>
-        <div className="v3-grid c2">
-          <label className="v3-field">
-            <span>{t("v2.dlc.criteria.key")}</span>
-            <select className="v3-select" value={key} onChange={(e) => { setKey(e.target.value); setRefusal(null); }}>
-              <option value="">{t("v2.dlc.calibration.pickCriterion")}</option>
-              {criteriaKeys.map((k) => <option key={k} value={k}>{k}</option>)}
-            </select>
-          </label>
-          <label className="v3-field">
-            <span>{t("v2.dlc.calibration.fromRun")}</span>
-            <input className="v3-input mono" value={runId} onChange={(e) => { setRunId(e.target.value); setRefusal(null); }} />
-            <small className="v3-hint">{t("v2.dlc.calibration.fromRunHint")}</small>
-          </label>
-        </div>
-        {refusal && (
-          <Notice s="act">
-            {refusal.message}
-            {refusal.suggestion && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
-                <span>{t("v2.dlc.calibration.runNamedLike", { id: refusal.suggestion })}</span>
-                <Btn size="sm" onClick={() => { setRunId(refusal.suggestion ?? ""); setRefusal(null); }}>
-                  {t("v2.dlc.calibration.useThisRun")}
-                </Btn>
-              </div>
-            )}
-          </Notice>
-        )}
-        <div className="v3-field">
-          <span>{t("v2.dlc.calibration.annotators")}</span>
-          <div className="v3-std-keys">
-            {people.map((person) => (
-              <label key={person}>
-                <input type="checkbox" checked={annotators.includes(person)}
-                  onChange={(e) => setAnnotators((prev) => (e.target.checked ? [...prev, person] : prev.filter((p) => p !== person)))} />
-                <span>{person}</span>
-              </label>
-            ))}
-            {people.length === 0 && <span className="v3-std-muted">{t("v3.standards.noPeople")}</span>}
+    <>
+      <Dialog
+        wide
+        title={t("v2.dlc.calibration.newTaskTitle")}
+        onClose={listing ? () => undefined : onClose}
+        foot={
+          <>
+            <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
+            {/* two raters at least: one person's labels are not a consensus */}
+            <Btn kind="primary" disabled={busy || !key || annotators.length < 2 || !runId.trim()}
+              onClick={() => {
+                const typed = runId.trim();
+                setBusy(true);
+                setRefusal(null);
+                dlcApi
+                  .createTask({ agent_id: agentId, criteria_lineage_id: lineageId, criterion_key: key, annotators, adjudicator: adjudicator || null, run_id: typed })
+                  .then((created) => { toast("ok", t("v2.dlc.calibration.taskCreated")); onCreated(created.id); })
+                  .catch((err: unknown) => refused(err, typed))
+                  .finally(() => setBusy(false));
+              }}>
+              {t("v3.standards.save")}
+            </Btn>
+          </>
+        }
+      >
+        <div style={{ display: "grid", gap: 12 }}>
+          <p style={{ margin: 0 }}>{t("v2.dlc.calibration.newTaskHint")}</p>
+          <div className="v3-grid c2">
+            <label className="v3-field">
+              <span>{t("v2.dlc.criteria.key")}</span>
+              <select className="v3-select" value={key} onChange={(e) => { setKey(e.target.value); setRefusal(null); }}>
+                <option value="">{t("v2.dlc.calibration.pickCriterion")}</option>
+                {keys.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </label>
+            <RunPicker agentId={agentId} criterionKey={key} value={runId} picked={picked}
+              pasting={pasting} onPasting={setPasting} onList={() => setListing(true)}
+              onChange={(id) => { setRunId(id); setRefusal(null); }} />
           </div>
-          <small className="v3-hint">{t("v2.dlc.calibration.annotatorsHint")}</small>
+          {refusal && (
+            <Notice s="act">
+              {refusal.message}
+              {refusal.suggestion && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                  <span>{t("v2.dlc.calibration.runNamedLike", { id: refusal.suggestion })}</span>
+                  <Btn size="sm" onClick={() => { setRunId(refusal.suggestion ?? ""); setPasting(true); setRefusal(null); }}>
+                    {t("v2.dlc.calibration.useThisRun")}
+                  </Btn>
+                </div>
+              )}
+            </Notice>
+          )}
+          <div className="v3-field">
+            <span>{t("v2.dlc.calibration.annotators")}</span>
+            <div className="v3-std-keys">
+              {people.map((person) => (
+                <label key={person}>
+                  <input type="checkbox" checked={annotators.includes(person)}
+                    onChange={(e) => setAnnotators((prev) => (e.target.checked ? [...prev, person] : prev.filter((p) => p !== person)))} />
+                  <span>{person}</span>
+                </label>
+              ))}
+              {people.length === 0 && <span className="v3-std-muted">{t("v3.standards.noPeople")}</span>}
+            </div>
+            <small className="v3-hint">{t("v2.dlc.calibration.annotatorsHint")}</small>
+          </div>
+          <label className="v3-field">
+            <span>{t("v2.dlc.calibration.adjudicator")}</span>
+            <select className="v3-select" value={adjudicator} onChange={(e) => setAdjudicator(e.target.value)}>
+              <option value="">{t("v2.dlc.calibration.noAdjudicator")}</option>
+              {people.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <small className="v3-hint">{t("v2.dlc.calibration.adjudicatorHint")}</small>
+          </label>
         </div>
-        <label className="v3-field">
-          <span>{t("v2.dlc.calibration.adjudicator")}</span>
-          <select className="v3-select" value={adjudicator} onChange={(e) => setAdjudicator(e.target.value)}>
-            <option value="">{t("v2.dlc.calibration.noAdjudicator")}</option>
-            {people.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <small className="v3-hint">{t("v2.dlc.calibration.adjudicatorHint")}</small>
-        </label>
-      </div>
-    </Dialog>
+      </Dialog>
+      {listing && agentId && (
+        <RunListDialog agentId={agentId} agentName={agentName} criterionKey={key} selected={runId}
+          onClose={() => setListing(false)}
+          onPick={(run) => { setPicked(run); setPasting(false); setRunId(run.id); setRefusal(null); setListing(false); }} />
+      )}
+    </>
   );
 }
 
-export function Calibration({ agentId, lineageId, criteriaKeys, people, taskId, onOpenTask }: {
+export function Calibration({ agentId, agentName, lineageId, criteriaKeys, people, taskId, prefill, onPrefillDone, onOpenTask }: {
   agentId: string | null;
+  agentName?: string;
   lineageId: string | null;
   criteriaKeys: string[];
   people: string[];
   taskId: string | null;
+  /** `new=1&run=&criterion=` from a "build an annotation task from this run" link */
+  prefill?: { runId: string; criterion: string | null } | null;
+  /** drop the prefill from the address once the dialog is closed or the task created */
+  onPrefillDone?: () => void;
   onOpenTask: (id: string | null) => void;
 }) {
   const { t } = useTranslation();
   const [nonce, setNonce] = useState(0);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(Boolean(prefill));
   const tasks = useLoad<{ tasks: AnnotationTask[] }>(() => dlcApi.listTasks({ agentId: agentId ?? undefined }), `v3-std-tasks:${agentId ?? ""}:${nonce}`);
+  const prefillKey = prefill ? `${prefill.runId}:${prefill.criterion ?? ""}` : "";
+  // a link followed while the page is already open
+  useEffect(() => {
+    if (prefillKey) setCreating(true);
+  }, [prefillKey]);
   if (taskId) return <TaskBench taskId={taskId} onBack={() => onOpenTask(null)} />;
   const rows = tasks.data?.tasks ?? [];
   const open = rows.filter((r) => r.status !== "closed").length;
@@ -464,8 +729,10 @@ export function Calibration({ agentId, lineageId, criteriaKeys, people, taskId, 
         )}
       </Panel>
       {creating && (
-        <NewTask agentId={agentId} lineageId={lineageId} criteriaKeys={criteriaKeys} people={people}
-          onClose={() => setCreating(false)}
+        <NewTask key={prefillKey} agentId={agentId} agentName={agentName || agentId || ""} lineageId={lineageId}
+          criteriaKeys={criteriaKeys} people={people}
+          initialRunId={prefill?.runId} initialKey={prefill?.criterion}
+          onClose={() => { setCreating(false); onPrefillDone?.(); }}
           onCreated={(id) => { setCreating(false); setNonce((n) => n + 1); onOpenTask(id); }} />
       )}
     </div>

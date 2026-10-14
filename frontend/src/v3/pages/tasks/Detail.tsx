@@ -8,6 +8,7 @@ import {
   RefreshCw,
   RotateCw,
   Square,
+  Tag,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -15,6 +16,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type V2Range } from "../../../lib/api";
+import { calibrationApi } from "../../../lib/api/calibration";
 import { hasInsightTrees } from "../../../lib/evaluation";
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { downloadCsv, fmtTime, RANGES, rangeLabel } from "../../../v2/format";
@@ -54,6 +56,12 @@ import {
   Track,
   type TrackNode,
 } from "../../ui";
+import {
+  calibratableCriteria,
+  calibrateBlocker,
+  calibrateUrl,
+  soleCriterion,
+} from "../standards/calibrationLink";
 import { AtShell, HostedV2, ScoreChip } from "./common";
 import { CopyId } from "./CopyId";
 import { copyUrl, outcomeSignal, scoreSignal, taskSignal } from "./model";
@@ -166,7 +174,7 @@ function ResultDialog({
                 kind="ghost"
                 onClick={() =>
                   navigate(
-                    `/v2/eval/data?tab=traces&view=trace&id=${row.traceId}&range=${range}`,
+                    `/v2/eval/data?tab=traces&view=trace&id=${encodeURIComponent(row.traceId ?? "")}&range=${range}`,
                   )
                 }
               >
@@ -547,6 +555,21 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   );
   const rows = useMemo(() => results.data?.rows ?? [], [results.data]);
   const summary = useMemo(() => summarize(rows), [rows]);
+  // "build an annotation task from this run" (calibration-run-picker §3): the same key
+  // as the criteria page's new-task button; the run's evaluator criteria and their
+  // sample counts decide whether it is usable and which criterion the link carries
+  const mayCalibrate = can("criteria.manage");
+  const calibrationAsk =
+    mayCalibrate &&
+    data?.kind === "run" &&
+    calibrateBlocker(data) === null;
+  const calibration = useLoad(
+    () =>
+      calibrationAsk && data
+        ? calibrationApi.runCriteria(data.id)
+        : Promise.resolve(null),
+    `v3-task-calibration:${kind}:${id}:${calibrationAsk ? "ask" : "no"}`,
+  );
 
   const act = async () => {
     if (!confirm || !data) return;
@@ -590,6 +613,13 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       setBusy(false);
     }
   };
+  const calibrationKeys = calibratableCriteria(calibration.data?.criteria);
+  const calibrationWhy = calibrateBlocker(
+    data,
+    calibration.data ? calibrationKeys : undefined,
+  );
+  const calibrateTo = (criterion: string | null) =>
+    data.agentId && navigate(calibrateUrl(data.agentId, data.id, criterion));
   const scorable = summary.total - summary.errors;
   const passRate =
     scorable > 0 ? Math.round((summary.passed / scorable) * 100) : null;
@@ -661,6 +691,19 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
                   <Play size={13} /> {t("v2.tasks.resume")}
                 </Btn>
               )}
+              {data.kind === "run" && mayCalibrate && (
+                <Btn
+                  disabled={calibrationWhy !== null || calibration.loading}
+                  title={
+                    calibrationWhy
+                      ? t(`v3.tasks.calibrateBlocked.${calibrationWhy}`)
+                      : undefined
+                  }
+                  onClick={() => calibrateTo(soleCriterion(calibrationKeys))}
+                >
+                  <Tag size={13} /> {t("v3.tasks.calibrate")}
+                </Btn>
+              )}
               <Btn disabled={!mayRun} onClick={() => navigate(copyUrl(data))}>
                 <Copy size={13} /> {t("v2.tasks.copy")}
               </Btn>
@@ -674,6 +717,34 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             </>
           }
         />
+
+        {mayCalibrate && calibrationWhy === null && calibrationKeys.length > 1 && (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              flexWrap: "wrap",
+              color: "var(--v3-text-2)",
+            }}
+          >
+            <span>{t("v3.tasks.calibrateCriteria")}</span>
+            {(calibration.data?.criteria ?? [])
+              .filter((c) => c.items > 0)
+              .map((c) => (
+                <Btn
+                  key={c.key}
+                  size="sm"
+                  kind="ghost"
+                  title={t("v3.tasks.calibrateCriterion")}
+                  onClick={() => calibrateTo(c.key)}
+                >
+                  <Tag size={12} /> <span className="mono">{c.key}</span>{" "}
+                  · {t("v2.dlc.calibration.runItems", { count: c.items })}
+                </Btn>
+              ))}
+          </div>
+        )}
 
         {data.run?.error && (
           <Notice s={data.status === "failed" ? "act" : "wait"}>

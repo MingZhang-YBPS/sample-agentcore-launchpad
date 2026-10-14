@@ -1,4 +1,4 @@
-import { Copy, Pause, Play, Plus, RefreshCw, Search, Square, Trash2 } from "lucide-react";
+import { Copy, Pause, Play, Plus, RefreshCw, Search, Square, Tag, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -19,6 +19,7 @@ import {
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../../ui";
+import { calibrateBlocker, calibrateUrl } from "../standards/calibrationLink";
 import { CopyId } from "./CopyId";
 import { copyUrl, detailUrl, rankTasks, taskSignal } from "./model";
 
@@ -42,7 +43,11 @@ export function TaskList() {
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
+  // "usable for calibration": completed batch evaluator runs, the annotation-task candidates
+  const [calibratable, setCalibratable] = useState(false);
   const mayRun = can("eval.run");
+  // the same key as the criteria page's new-annotation-task button
+  const mayCalibrate = can("criteria.manage");
 
   const tasks = useMemo(() => list.data ?? [], [list.data]);
   const agents = useMemo(() => [...new Set(tasks.map((task) => task.agentName))].sort(), [tasks]);
@@ -54,10 +59,11 @@ export function TaskList() {
         if (mode !== "all" && task.mode !== mode) return false;
         if (source && task.source !== source) return false;
         if (agent && task.agentName !== agent) return false;
+        if (calibratable && calibrateBlocker(task) !== null) return false;
         return !needle || `${task.name} ${task.id} ${task.description}`.toLowerCase().includes(needle);
       }),
     );
-  }, [tasks, state, mode, source, agent, q]);
+  }, [tasks, state, mode, source, agent, q, calibratable]);
   const count = (s: Signal) => tasks.filter((task) => taskSignal(task.status) === s).length;
   const failed = rankTasks(tasks.filter((task) => task.status === "failed")).slice(0, 5);
   const modeLabel = (m: TaskMode) => t(m === "insights" ? "v2.tasks.modeInsightsShort" : "v2.tasks.modeEvaluators");
@@ -104,6 +110,16 @@ export function TaskList() {
             <Play size={13} />
           </Btn>
         )}
+        {task.kind === "run" && mayCalibrate && (() => {
+          const why = calibrateBlocker(task);
+          return (
+            <Btn size="sm" kind="ghost" disabled={why !== null}
+              title={why ? t(`v3.tasks.calibrateBlocked.${why}`) : t("v3.tasks.calibrateShort")}
+              onClick={() => task.agentId && navigate(calibrateUrl(task.agentId, task.id))}>
+              <Tag size={13} />
+            </Btn>
+          );
+        })()}
         <Btn size="sm" kind="ghost" disabled={!mayRun} title={t("v2.tasks.copy")} onClick={() => navigate(copyUrl(task))}>
           <Copy size={13} />
         </Btn>
@@ -200,6 +216,10 @@ export function TaskList() {
           <option value="">{t("v3.tasks.anyAgent")}</option>
           {agents.map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
+        <label style={{ display: "inline-flex", gap: 6, alignItems: "center", color: "var(--v3-text-2)" }}>
+          <input type="checkbox" checked={calibratable} onChange={(e) => { setCalibratable(e.target.checked); setShown(PAGE); }} />
+          <span>{t("v3.tasks.filterCalibratable")}</span>
+        </label>
         <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 280 }}>
           <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />
           <input className="v3-input" style={{ paddingLeft: 34 }} value={q} onChange={(e) => setQ(e.target.value)}

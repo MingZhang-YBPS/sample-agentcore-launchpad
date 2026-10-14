@@ -12,6 +12,7 @@ import { useLoad } from "../hooks";
 import { Filters, Notice, PageHead, Skeleton } from "../ui";
 import { Admission } from "./standards/Admission";
 import { Calibration } from "./standards/Calibration";
+import { readPrefill, withoutPrefill } from "./standards/calibrationLink";
 import { VIEWS, type View } from "./standards/common";
 import { CriteriaEditor, CriteriaIndex } from "./standards/Criteria";
 import { GoldenCurator, GoldenIndex } from "./standards/Golden";
@@ -24,6 +25,8 @@ import { Audit, Compare, Watch } from "./standards/Watch";
  * criteria table, a golden set, a gate and a watch are all that agent's standard),
  * so the agent picker sits in the header. Same `?view=` names and params as V2
  * (`agent`, `lineage`, `golden`, `task`), so every V2 link lands on the same state.
+ * `new=1&run=&criterion=` opens the calibration view's new-task dialog prefilled
+ * (the "build an annotation task from this run" links); the dialog drops them again.
  */
 export function V3Standards() {
   const { t } = useTranslation();
@@ -37,6 +40,7 @@ export function V3Standards() {
   const lineageId = params.get("lineage");
   const goldenId = params.get("golden");
   const taskId = params.get("task");
+  const prefill = view === "calibration" && !taskId ? readPrefill(params) : null;
 
   const agents = useLoad(() => api.listAgents(), `v3-std-agents:${ws}`);
   const sets = useLoad(() => dlcApi.listSets(agentId ? { agentId } : {}), `v3-std-sets:${ws}:${agentId ?? ""}`);
@@ -123,8 +127,17 @@ export function V3Standards() {
       {view === "admission" && <Admission agentId={agentId} criteriaKeys={criteriaKeys} />}
 
       {view === "calibration" && (
-        <Calibration agentId={agentId} lineageId={agentSet?.lineage_id ?? null} criteriaKeys={criteriaKeys} people={annotators}
-          taskId={taskId} onOpenTask={(id) => setParam("task", id)} />
+        <Calibration agentId={agentId} agentName={agent ? agent.display_name || agent.name : undefined}
+          lineageId={agentSet?.lineage_id ?? null} criteriaKeys={criteriaKeys} people={annotators}
+          taskId={taskId} prefill={prefill}
+          onPrefillDone={() => setParams(withoutPrefill(params), { replace: true })}
+          onOpenTask={(id) => {
+            // a task created from a prefilled link leaves the link behind
+            const next = withoutPrefill(params);
+            if (id === null) next.delete("task");
+            else next.set("task", id);
+            setParams(next);
+          }} />
       )}
 
       {agentId && view === "release" && <Release key={agentId} agentId={agentId} />}
