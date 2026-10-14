@@ -96,7 +96,7 @@ function FleetView() {
                     <td>
                       <div className="v3-name">
                         <div>
-                          <b><Link to="/v2/workspaces">{row.name}</Link></b>
+                          <b><Link to={`/v3/workspaces?view=detail&id=${encodeURIComponent(row.id)}`}>{row.name}</Link></b>
                           <small>{row.account_id} · {row.region}{row.cross_account ? ` · ${t("v3.fleet.crossAccount")}` : ""}</small>
                         </div>
                       </div>
