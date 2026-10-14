@@ -132,14 +132,18 @@ def owned_get[ModelT](db: Session, model: type[ModelT], ident: Any) -> ModelT | 
 # ── write: stamping ───────────────────────────────────────────────────────────
 
 
-def _parent_project(session: Session, obj: _ProjectColumn) -> str | None:
+_NO_PARENT = object()
+
+
+def _parent_project(session: Session, obj: _ProjectColumn) -> Any:
+    """The parent row's project_id (None for a platform parent), or ``_NO_PARENT``."""
     spec = type(obj).__project_parent__
     if spec is None:
-        return None
+        return _NO_PARENT
     attr, tables = spec
     parent_id = getattr(obj, attr, None)
     if not parent_id:
-        return None
+        return _NO_PARENT
     # a parent created in this same flush is not in the database yet
     for pending in session.new:
         if (
@@ -156,7 +160,7 @@ def _parent_project(session: Session, obj: _ProjectColumn) -> str | None:
         ).first()
         if found is not None:
             return found[0]
-    return None
+    return _NO_PARENT
 
 
 def _sole_workspace_project(session: Session, workspace_id: str | None) -> str | None:
@@ -198,8 +202,11 @@ def _stamp_new_rows(session: Session, _flush_context: Any, _instances: Any) -> N
         for obj in pending:
             if isinstance(obj, ProjectShared) and obj.project_platform_row():
                 continue
+            parent = _parent_project(session, obj)
+            if parent is None and isinstance(obj, ProjectShared):
+                continue  # a platform parent (a system preset): the child is platform too
             pid = (
-                _parent_project(session, obj)
+                (parent if parent is not _NO_PARENT else None)
                 or _CURRENT_PROJECT.get()
                 or _sole_workspace_project(session, getattr(obj, "workspace_id", None))
             )

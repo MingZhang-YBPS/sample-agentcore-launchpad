@@ -19,7 +19,7 @@ from app.core.project_scope import (
 )
 from app.evaluation.models import EvalRun
 from app.main import create_app
-from app.models.ledger import Agent, ChatSession
+from app.models.ledger import Agent, ChatSession, Deployment
 from app.models.projects import Project, ProjectMember, ProjectWorkspace
 from app.services import access
 from app.services import users as users_service
@@ -176,6 +176,20 @@ def test_a_child_row_takes_its_parents_project():
         with project_context(None):
             assert db.scalar(select(ChatSession.project_id)) == "alpha"
             assert db.get(EvalRun, run.id).project_id == "alpha"
+    finally:
+        db.close()
+
+
+def test_a_platform_parent_keeps_its_shared_children_platform_level():
+    _project("alpha")
+    preset = _agent("preset", None, system_key="aws-agent-solution-architect")
+    db = SessionLocal()
+    try:
+        with project_context("alpha"):  # even while some project is current
+            row = Deployment(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=preset)
+            db.add(row)
+            db.commit()
+        assert row.project_id is None
     finally:
         db.close()
 

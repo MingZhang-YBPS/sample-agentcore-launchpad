@@ -352,7 +352,7 @@ class User(Base):
     )
 
 
-class Deployment(ProjectOwned, Base):
+class Deployment(ProjectShared, Base):
     __tablename__ = "deployments"
     __project_parent__ = ("agent_id", ("agents",))
 
@@ -464,7 +464,7 @@ class ApiKeyUsage(ProjectOwned, Base):
     count: Mapped[int] = mapped_column(default=0)
 
 
-class SpecSnapshot(ProjectOwned, Base):
+class SpecSnapshot(ProjectShared, Base):
     """The full agent spec as of one publish (T18): one row per create/redeploy.
 
     Rollback re-publishes a stored spec as a NEW snapshot; rows are never edited

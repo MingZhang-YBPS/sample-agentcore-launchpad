@@ -19,7 +19,9 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.route_policy import (
     ADMIN,
+    INFRA,
     MEMBER,
+    PROJECT_EXEMPT,
     PUBLIC,
     ROUTE_POLICY,
     WORKSPACE_EXEMPT,
@@ -119,8 +121,14 @@ def admin_session(gated_app):
 
 ADMIN_ROUTES = sorted(k for k, v in ROUTE_POLICY.items() if v == ADMIN)
 MEMBER_ROUTES = sorted(k for k, v in ROUTE_POLICY.items() if v == MEMBER)
+# account keys only: project.use / project.write come with every project membership,
+# so revoking the account's keys does not close them (see TestProjectKeyRoutes)
 PERMISSION_ROUTES = sorted(
-    k for k, v in ROUTE_POLICY.items() if v.startswith("perm:")
+    k for k, v in ROUTE_POLICY.items()
+    if v.startswith("perm:") and not v.startswith("perm:project.")
+)
+PROJECT_KEY_ROUTES = sorted(
+    k for k, v in ROUTE_POLICY.items() if v.startswith(("perm:project.", INFRA))
 )
 
 
@@ -169,7 +177,36 @@ class TestNoDrift:
         permission_roles = {
             f"perm:{key}" for key in users_service.AGENT_PERMISSIONS
         }
-        assert set(ROUTE_POLICY.values()) <= {ADMIN, MEMBER, PUBLIC} | permission_roles
+        project_roles = {"perm:project.use", "perm:project.write"}
+        infra_roles = {INFRA} | {f"{INFRA}+{role}" for role in permission_roles}
+        assert set(ROUTE_POLICY.values()) <= (
+            {ADMIN, MEMBER, PUBLIC} | permission_roles | project_roles | infra_roles
+        )
+
+    def test_no_workspace_write_is_left_to_any_member(self):
+        """Design §5.3: inside a project every write states the key it needs —
+        participation (project.use), an ordinary write (project.write), a named key, or
+        workspace-shared infrastructure (infra). Bare MEMBER writes stay hub-global."""
+        loose = sorted(
+            (method, path) for (method, path), role in ROUTE_POLICY.items()
+            if role == MEMBER and method != "GET" and (method, path) not in WORKSPACE_EXEMPT
+        )
+        assert not loose, f"classify these workspace writes (design §5.3): {loose}"
+
+    def test_infra_routes_run_inside_a_project(self):
+        """`infra` reads the workspace's project count and the project's keys, so it
+        must be workspace-scoped and project-resolved."""
+        infra = {k for k, v in ROUTE_POLICY.items() if v.startswith(INFRA)}
+        assert infra and not infra & (WORKSPACE_EXEMPT | PROJECT_EXEMPT)
+
+    def test_the_project_exemptions_are_live_workspace_routes(self):
+        """Both directions: an exemption names a classified, workspace-scoped route
+        (hub-global ones never resolve a project anyway), and a project-key role never
+        sits on an exempt route, where it would silently fall back to account keys."""
+        assert PROJECT_EXEMPT <= set(ROUTE_POLICY)
+        assert not PROJECT_EXEMPT & WORKSPACE_EXEMPT
+        for key in PROJECT_EXEMPT:
+            assert not ROUTE_POLICY[key].startswith(("perm:project.", INFRA)), key
 
     def test_the_open_paths_are_public(self):
         """`auth_middleware` lets these through, so the table must agree."""
@@ -271,6 +308,77 @@ class TestPermissionRoutesAreEnforced:
         response = member_session.request(method, _concrete(path_format))
         assert response.status_code == 403, response.text
         assert response.json()["code"] == "auth.permission_required"
+
+
+class TestProjectKeyRoutes:
+    """`perm:project.*` and `infra` routes: anonymous 401; a member whose project role
+    holds no keys (viewer) 403 before any handler runs."""
+
+    @pytest.mark.parametrize(("method", "path_format"), PROJECT_KEY_ROUTES)
+    def test_anonymous_gets_401(self, anon_session, method, path_format):
+        response = anon_session.request(method, _concrete(path_format))
+        assert response.status_code == 401, response.text
+
+    @pytest.mark.parametrize(("method", "path_format"), PROJECT_KEY_ROUTES)
+    def test_a_viewer_gets_403(self, member_session, method, path_format):
+        _set_default_role("viewer")
+        response = member_session.request(method, _concrete(path_format))
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.permission_required"
+
+
+def _set_default_role(role_key: str) -> None:
+    from sqlalchemy import text
+
+    from app.services import access
+
+    db = SessionLocal()
+    try:
+        user = users_service.find_by_username(db, MEMBER_CREDS["username"])
+        assert user is not None
+        db.execute(text("DELETE FROM project_members WHERE user_id = :u"), {"u": user.id})
+        db.execute(
+            text("INSERT INTO project_members (project_id, user_id, role_key, added_at)"
+                 " VALUES ('default', :u, :r, '2026-10-14 00:00:00')"),
+            {"u": user.id, "r": role_key},
+        )
+        access.bump_epoch(db)
+        db.commit()
+    finally:
+        db.close()
+
+
+class TestInfraNeedsAnAdminOnceProjectsShareTheWorkspace:
+    INFRA_ROUTE = next(k for k in PROJECT_KEY_ROUTES if ROUTE_POLICY[k] == INFRA)
+
+    def test_one_project_means_the_projects_write_key(self, member_session):
+        from app.core.route_policy import infra_key
+
+        assert infra_key(INFRA) == "project.write"
+        assert infra_key(f"{INFRA}+perm:identity.manage") == "identity.manage"
+
+    def test_several_projects_mean_admin_only(self, member_session):
+        from sqlalchemy import text
+
+        from app.services import access
+
+        _set_default_role("developer")  # holds project.write: only the count refuses
+        db = SessionLocal()
+        try:
+            db.execute(text("INSERT INTO projects (id, name, description, status, is_default,"
+                            " created_at, updated_at) VALUES ('alpha', 'Alpha', '', 'active', 0,"
+                            " '2026-10-14 00:00:00', '2026-10-14 00:00:00')"))
+            db.execute(text("INSERT INTO project_workspaces (project_id, workspace_id,"
+                            " is_workspace_default, enabled_at) VALUES ('alpha', 'default', 0,"
+                            " '2026-10-14 00:00:00')"))
+            access.bump_epoch(db)
+            db.commit()
+        finally:
+            db.close()
+        method, path_format = self.INFRA_ROUTE
+        response = member_session.request(method, _concrete(path_format))
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.infra_admin_required"
 
 
 class TestUnclassifiedRouteFailsClosed:

@@ -375,12 +375,18 @@ def test_replies_may_only_go_to_the_known_hosts():
         transport.post_json("http://slack.com/api/chat.postMessage", {})
 
 
-def test_webhook_is_public_hub_global_and_console_route_is_member():
-    from app.core.route_policy import MEMBER, PUBLIC, ROUTE_POLICY, WORKSPACE_EXEMPT, is_hub_global
+def test_webhook_is_public_hub_global_and_console_route_is_a_project_write():
+    from app.core.route_policy import (
+        PERM_PROJECT_WRITE,
+        PUBLIC,
+        ROUTE_POLICY,
+        WORKSPACE_EXEMPT,
+        is_hub_global,
+    )
 
     hook = ("POST", "/share/channels/{platform}/{token}")
     assert ROUTE_POLICY[hook] == PUBLIC and hook in WORKSPACE_EXEMPT and is_hub_global(hook[1])
-    assert ROUTE_POLICY[("POST", "/api/agents/{agent_id}/channel-links")] == MEMBER
+    assert ROUTE_POLICY[("POST", "/api/agents/{agent_id}/channel-links")] == PERM_PROJECT_WRITE
 
 
 def test_channel_columns_are_added_to_an_older_share_links_table(tmp_path):

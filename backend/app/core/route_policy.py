@@ -100,6 +100,15 @@ PERM_EVAL_RUN = "perm:eval.run"
 PERM_PROMOTION_REQUEST = "perm:promotion.request"
 PERM_PROMOTION_APPROVE = "perm:promotion.approve"
 PERM_IDENTITY_MANAGE = "perm:identity.manage"
+# Project keys (design §3.1, §5.3): inside a project, participation and ordinary writes
+# are permissions of the caller's project role, not "any member".
+PERM_PROJECT_USE = "perm:project.use"
+PERM_PROJECT_WRITE = "perm:project.write"
+# Workspace-shared infrastructure (governance, registry MCP/skill records, gateway
+# targets…): project.write while the workspace holds one active project, admin-only
+# once it holds several — one project must not reshape what another runs on.
+INFRA = "infra"
+INFRA_IDENTITY_MANAGE = "infra+perm:identity.manage"
 PERM_IDENTITY_GRANT = "perm:identity.grant"
 PERM_MEMORY_MANAGE = "perm:memory.manage"
 # Agent-DLC: who may edit the ruler, sign it, admit samples, calibrate a judge, approve
@@ -149,7 +158,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/agents/{agent_id}/snapshots/{seq}"): MEMBER,
     ("POST", "/api/agents/{agent_id}/snapshots/{seq}/rollback"): PERM_AGENT_DEPLOY,
     ("POST", "/api/agents/{agent_id}/inbound-auth"): PERM_AGENT_DEPLOY,
-    ("POST", "/api/agents/{agent_id}/invoke"): MEMBER,  # parity with Chat
+    ("POST", "/api/agents/{agent_id}/invoke"): PERM_PROJECT_USE,  # parity with Chat
     ("GET", "/api/jobs/{job_id}"): MEMBER,
     # ---- system-managed presets: status is a ledger read; install/repair and
     # uninstall create or delete billable AWS resources on an operator's explicit
@@ -166,18 +175,20 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # same permission as POST /api/agents. Conversations are owner-bound on top. ----
     ("GET", "/api/assistant/architect"): MEMBER,
     ("GET", "/api/assistant/architect/conversations"): MEMBER,
-    ("POST", "/api/assistant/architect/conversations"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations"): PERM_PROJECT_USE,
     ("GET", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
     # sharing: the owner (amended 2026-10-08) or an administrator — the handler refuses
     # a non-owner member; nobody can reach a private conversation it does not own
-    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/sharing"): MEMBER,
-    ("POST", "/api/assistant/architect/conversations/{conversation_id}/catalog"): MEMBER,
-    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/preparation"): MEMBER,
+    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/sharing"): PERM_PROJECT_USE,
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/catalog"): PERM_PROJECT_USE,
+    ("PUT",
+     "/api/assistant/architect/conversations/{conversation_id}/preparation"): PERM_PROJECT_USE,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/preparation/skills"):
         PERM_AGENT_DEPLOY,
-    ("POST", "/api/assistant/architect/conversations/{conversation_id}/turns"): MEMBER,
-    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/proposal"): MEMBER,
-    ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/reject"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/turns"): PERM_PROJECT_USE,
+    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/proposal"): PERM_PROJECT_USE,
+    ("POST",
+     "/api/assistant/architect/conversations/{conversation_id}/proposal/reject"): PERM_PROJECT_USE,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/approve"):
         PERM_AGENT_DEPLOY,
     # ---- SE-047 evaluation-assets plan: preparing/editing the private plan is
@@ -187,8 +198,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # cleanup of an operation ride the same permission ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/prepare"):
-        MEMBER,
-    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
+        PERM_PROJECT_USE,
+    ("PUT",
+     "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): PERM_PROJECT_USE,
     ("POST",
      "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize"):
         PERM_AGENT_DEPLOY,
@@ -208,59 +220,59 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # agents.deploy for cloud assets and agents.delete for an Agent (cleanup /
     # delete parity), so a plain transcript stays the member's to delete ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/footprint"): MEMBER,
-    ("DELETE", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
+    ("DELETE", "/api/assistant/architect/conversations/{conversation_id}"): PERM_PROJECT_USE,
     # ---- credential minting ----
     ("GET", "/api/apikeys"): MEMBER,
-    ("POST", "/api/apikeys"): MEMBER,
-    ("POST", "/api/apikeys/{key_id}/disable"): MEMBER,
-    ("POST", "/api/apikeys/{key_id}/enable"): MEMBER,
-    ("PATCH", "/api/apikeys/{key_id}"): MEMBER,  # scope / expiry / rate limit (T16)
+    ("POST", "/api/apikeys"): PERM_PROJECT_WRITE,
+    ("POST", "/api/apikeys/{key_id}/disable"): PERM_PROJECT_WRITE,
+    ("POST", "/api/apikeys/{key_id}/enable"): PERM_PROJECT_WRITE,
+    ("PATCH", "/api/apikeys/{key_id}"): PERM_PROJECT_WRITE,  # scope / expiry / rate limit (T16)
     ("GET", "/api/apikeys/{key_id}/usage"): MEMBER,
     # ---- chat: the member-facing invoke surface ----
-    ("POST", "/api/chat/{agent_id}"): MEMBER,
+    ("POST", "/api/chat/{agent_id}"): PERM_PROJECT_USE,
     ("GET", "/api/chat/{agent_id}/history"): MEMBER,
     ("GET", "/api/chat/{agent_id}/memory"): MEMBER,
     ("GET", "/api/chat/{agent_id}/sessions"): MEMBER,
-    ("POST", "/api/chat/{agent_id}/sessions/{session_id}/stop"): MEMBER,
+    ("POST", "/api/chat/{agent_id}/sessions/{session_id}/stop"): PERM_PROJECT_USE,
     # ---- studio local-debug scaffolding: prod refuses these in the handler
     # (local_exec guard) regardless of role ----
     ("GET", "/api/conversations"): MEMBER,
-    ("POST", "/api/conversations"): MEMBER,
+    ("POST", "/api/conversations"): PERM_PROJECT_USE,
     ("GET", "/api/conversations/{session_id}"): MEMBER,
-    ("DELETE", "/api/conversations/{session_id}"): MEMBER,
-    ("PUT", "/api/conversations/{session_id}/code"): MEMBER,
+    ("DELETE", "/api/conversations/{session_id}"): PERM_PROJECT_USE,
+    ("PUT", "/api/conversations/{session_id}/code"): PERM_PROJECT_USE,
     ("GET", "/api/conversations/{session_id}/messages"): MEMBER,
-    ("POST", "/api/conversations/{session_id}/messages"): MEMBER,
-    ("POST", "/api/conversations/{session_id}/messages/stream"): MEMBER,
+    ("POST", "/api/conversations/{session_id}/messages"): PERM_PROJECT_USE,
+    ("POST", "/api/conversations/{session_id}/messages/stream"): PERM_PROJECT_USE,
     # ---- local code execution (also refused outright in prod; see local_exec) ----
-    ("POST", "/api/execute"): MEMBER,
-    ("POST", "/api/execute/stream"): MEMBER,
-    ("POST", "/api/fix-code/stream"): MEMBER,
+    ("POST", "/api/execute"): PERM_PROJECT_USE,
+    ("POST", "/api/execute/stream"): PERM_PROJECT_USE,
+    ("POST", "/api/fix-code/stream"): PERM_PROJECT_USE,
     ("GET", "/api/generate-code/status"): MEMBER,
     # ---- registry skill sources become deployable code; the two staging
     # helpers ride the deploy permission because the create wizard needs them ----
     ("POST", "/api/agent-skills/import"): PERM_AGENT_DEPLOY,
     ("GET", "/api/registry/records"): MEMBER,
-    ("POST", "/api/registry/records"): MEMBER,
+    ("POST", "/api/registry/records"): INFRA,
     ("GET", "/api/registry/records/search"): MEMBER,
     # data-plane read (ListDiscoverableRegistryRecords) of the workspace registry
     ("GET", "/api/registry/records/discoverable"): MEMBER,
     ("GET", "/api/registry/records/{record_id}"): MEMBER,
     # a data-plane read (GetAgentCard) of the agent's own runtime; no ARN from the client
     ("GET", "/api/registry/records/{record_id}/live-agent-card"): MEMBER,
-    ("PUT", "/api/registry/records/{record_id}"): MEMBER,
-    ("DELETE", "/api/registry/records/{record_id}"): MEMBER,
-    ("POST", "/api/registry/records/{record_id}/action"): MEMBER,
-    ("POST", "/api/registry/records/{record_id}/reimport"): MEMBER,
+    ("PUT", "/api/registry/records/{record_id}"): INFRA,
+    ("DELETE", "/api/registry/records/{record_id}"): INFRA,
+    ("POST", "/api/registry/records/{record_id}/action"): INFRA,
+    ("POST", "/api/registry/records/{record_id}/reimport"): INFRA,
     ("GET", "/api/registry/skills/capabilities"): MEMBER,
     # installs software on the server host
-    ("POST", "/api/registry/skills/capabilities/git-install"): MEMBER,
-    ("POST", "/api/registry/skills/import"): MEMBER,
+    ("POST", "/api/registry/skills/capabilities/git-install"): INFRA,
+    ("POST", "/api/registry/skills/import"): INFRA,
     # fetches remote content (SSRF-guarded); staging-only, needed by deploy
     ("POST", "/api/registry/skills/inspect"): PERM_AGENT_DEPLOY,
-    ("POST", "/api/registry/sync-defaults"): MEMBER,
+    ("POST", "/api/registry/sync-defaults"): INFRA,
     ("GET", "/api/registry/attachables"): MEMBER,
-    ("POST", "/api/registry/a2a-demo"): MEMBER,  # an invoke; parity with Chat
+    ("POST", "/api/registry/a2a-demo"): PERM_PROJECT_USE,  # an invoke; parity with Chat
     # ---- identity: Connections (credential providers) and gateway targets
     # bound to one. Reads are plain member; creating/deleting a vault entry or a
     # target is the member-grantable identity.manage permission ----
@@ -272,8 +284,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/identity/connections/api-key"): PERM_IDENTITY_MANAGE,
     ("DELETE", "/api/identity/connections/{kind}/{name}"): PERM_IDENTITY_MANAGE,
     ("GET", "/api/identity/gateway-targets"): MEMBER,
-    ("POST", "/api/identity/gateway-targets"): PERM_IDENTITY_MANAGE,
-    ("DELETE", "/api/identity/gateway-targets/{target_id}"): PERM_IDENTITY_MANAGE,
+    ("POST", "/api/identity/gateway-targets"): INFRA_IDENTITY_MANAGE,
+    ("DELETE", "/api/identity/gateway-targets/{target_id}"): INFRA_IDENTITY_MANAGE,
     # as_user (3LO): binding a consent into the vault or revoking one is the
     # member-grantable identity.grant permission; reading one's OWN grants
     # (the router scopes every query to the caller) is plain member
@@ -291,29 +303,29 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # wizard shows the effective value); changing it flips how every inheriting
     # agent authenticates its callers on next deploy
     ("GET", "/api/identity/inbound-auth/default"): MEMBER,
-    ("PUT", "/api/identity/inbound-auth/default"): PERM_IDENTITY_MANAGE,
+    ("PUT", "/api/identity/inbound-auth/default"): INFRA_IDENTITY_MANAGE,
     # ---- tools + demos: /tools/call can mutate external systems through a
     # gateway target, and the demos open billable cloud sessions ----
     ("GET", "/api/tools"): MEMBER,
-    ("POST", "/api/tools/call"): MEMBER,
-    ("POST", "/api/demos/code-interpreter"): MEMBER,
+    ("POST", "/api/tools/call"): INFRA,
+    ("POST", "/api/demos/code-interpreter"): PERM_PROJECT_WRITE,
     ("GET", "/api/demos/browser/options"): MEMBER,
-    ("POST", "/api/demos/browser"): MEMBER,  # takes a caller-supplied URL
-    ("DELETE", "/api/demos/browser/{session_id}"): MEMBER,
+    ("POST", "/api/demos/browser"): PERM_PROJECT_WRITE,  # takes a caller-supplied URL
+    ("DELETE", "/api/demos/browser/{session_id}"): PERM_PROJECT_WRITE,
     # ---- knowledge bases: reads and the retrieval playground stay open ----
     ("GET", "/api/knowledge-bases"): MEMBER,
-    ("POST", "/api/knowledge-bases"): MEMBER,
-    ("POST", "/api/knowledge-bases/ensure-gateway"): MEMBER,
+    ("POST", "/api/knowledge-bases"): PERM_PROJECT_WRITE,
+    ("POST", "/api/knowledge-bases/ensure-gateway"): INFRA,
     ("GET", "/api/knowledge-bases/{kb_id}"): MEMBER,
-    ("PATCH", "/api/knowledge-bases/{kb_id}"): MEMBER,
-    ("DELETE", "/api/knowledge-bases/{kb_id}"): MEMBER,
-    ("POST", "/api/knowledge-bases/{kb_id}/files"): MEMBER,
-    ("POST", "/api/knowledge-bases/{kb_id}/data-sources"): MEMBER,
-    ("DELETE", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}"): MEMBER,
+    ("PATCH", "/api/knowledge-bases/{kb_id}"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/knowledge-bases/{kb_id}"): PERM_PROJECT_WRITE,
+    ("POST", "/api/knowledge-bases/{kb_id}/files"): PERM_PROJECT_WRITE,
+    ("POST", "/api/knowledge-bases/{kb_id}/data-sources"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}"): PERM_PROJECT_WRITE,
     ("GET", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/documents"): MEMBER,
     ("GET", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs"): MEMBER,
-    ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): MEMBER,
-    ("POST", "/api/knowledge-bases/{kb_id}/query"): MEMBER,  # retrieval playground
+    ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): PERM_PROJECT_WRITE,
+    ("POST", "/api/knowledge-bases/{kb_id}/query"): PERM_PROJECT_USE,  # retrieval playground
     # ---- governance ----
     # the workspace's PII guardrail preset (T12): reading it is a member's business
     # (the wizard shows whether it exists); creating the real Bedrock resource is not
@@ -321,25 +333,25 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/governance/guardrail"): ADMIN,
     ("GET", "/api/governance/gateways"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
-    ("DELETE", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/manage"): INFRA,
+    ("DELETE", "/api/governance/gateways/{gateway_id}/manage"): INFRA,
     ("GET", "/api/governance/gateways/{gateway_id}/registry-preview"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/registry-import"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/retire-legacy-records"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/registry-import"): INFRA,
+    ("POST", "/api/governance/gateways/{gateway_id}/retire-legacy-records"): INFRA,
     ("GET", "/api/governance/gateways/{gateway_id}/policies"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies"): MEMBER,
-    ("PUT", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): MEMBER,
-    ("DELETE", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/promote"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/rollback"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/engine"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/policies"): INFRA,
+    ("PUT", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): INFRA,
+    ("DELETE", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): INFRA,
+    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/promote"): INFRA,
+    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/rollback"): INFRA,
+    ("POST", "/api/governance/gateways/{gateway_id}/engine"): INFRA,
     ("GET", "/api/governance/gateways/{gateway_id}/rate-limits"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/rate-limits"): MEMBER,
-    ("PUT", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): MEMBER,
-    ("DELETE", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/targets/{target_id}/synchronize"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/mode"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/generations"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/rate-limits"): INFRA,
+    ("PUT", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): INFRA,
+    ("DELETE", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): INFRA,
+    ("POST", "/api/governance/gateways/{gateway_id}/targets/{target_id}/synchronize"): INFRA,
+    ("POST", "/api/governance/gateways/{gateway_id}/mode"): INFRA,
+    ("POST", "/api/governance/gateways/{gateway_id}/generations"): INFRA,
     ("GET", "/api/governance/gateways/{gateway_id}/generations/{generation_id}"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}/audit"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}/decisions"): MEMBER,
@@ -348,41 +360,41 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/governance/decisions"): MEMBER,
     # Not a dry run: it performs a real tools/call as the chosen principal and
     # journals a PolicyDecision row (routers/governance.py:406).
-    ("POST", "/api/governance/policy-test"): MEMBER,
-    ("POST", "/api/governance/policy-generation"): MEMBER,
+    ("POST", "/api/governance/policy-test"): INFRA,
+    ("POST", "/api/governance/policy-generation"): INFRA,
     ("GET", "/api/governance/policy-generation/{generation_id}"): MEMBER,
     ("GET", "/api/traces/{session_id}"): MEMBER,
     # ---- evaluation: runs invoke agents and create AWS eval jobs ----
     ("GET", "/api/eval/datasets"): MEMBER,
-    ("POST", "/api/eval/datasets"): MEMBER,
-    ("POST", "/api/eval/datasets/upload"): MEMBER,
+    ("POST", "/api/eval/datasets"): PERM_PROJECT_WRITE,
+    ("POST", "/api/eval/datasets/upload"): PERM_PROJECT_WRITE,
     ("GET", "/api/eval/datasets/cloud"): MEMBER,
     ("GET", "/api/eval/datasets/cloud/{cloud_id}"): MEMBER,
-    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}"): MEMBER,
-    ("POST", "/api/eval/datasets/cloud/{cloud_id}/publish-version"): MEMBER,
-    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}/versions/{version}"): MEMBER,
-    ("PUT", "/api/eval/datasets/{dataset_id}"): MEMBER,
-    ("DELETE", "/api/eval/datasets/{dataset_id}"): MEMBER,
-    ("POST", "/api/eval/datasets/{dataset_id}/sync-to-aws"): MEMBER,
-    ("POST", "/api/eval/datasets/{dataset_id}/publish-version"): MEMBER,
+    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}"): PERM_PROJECT_WRITE,
+    ("POST", "/api/eval/datasets/cloud/{cloud_id}/publish-version"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}/versions/{version}"): PERM_PROJECT_WRITE,
+    ("PUT", "/api/eval/datasets/{dataset_id}"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/eval/datasets/{dataset_id}"): PERM_PROJECT_WRITE,
+    ("POST", "/api/eval/datasets/{dataset_id}/sync-to-aws"): PERM_PROJECT_WRITE,
+    ("POST", "/api/eval/datasets/{dataset_id}/publish-version"): PERM_PROJECT_WRITE,
     # console V2 数据处理: observed sessions → local datasets (reads + ledger writes)
-    ("POST", "/api/eval/datasets/from-sessions"): MEMBER,
+    ("POST", "/api/eval/datasets/from-sessions"): PERM_PROJECT_WRITE,
     ("GET", "/api/eval/pipelines"): MEMBER,
-    ("POST", "/api/eval/pipelines"): MEMBER,
+    ("POST", "/api/eval/pipelines"): PERM_PROJECT_WRITE,
     ("GET", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
-    ("PUT", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
-    ("DELETE", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
-    ("POST", "/api/eval/pipelines/{pipeline_id}/run"): MEMBER,
-    ("POST", "/api/eval/pipelines/preview-logs"): MEMBER,
+    ("PUT", "/api/eval/pipelines/{pipeline_id}"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/eval/pipelines/{pipeline_id}"): PERM_PROJECT_WRITE,
+    ("POST", "/api/eval/pipelines/{pipeline_id}/run"): PERM_PROJECT_WRITE,
+    ("POST", "/api/eval/pipelines/preview-logs"): PERM_PROJECT_WRITE,
     ("GET", "/api/eval/agents/{agent_id}/log-streams"): MEMBER,
     ("GET", "/api/eval/log-sessions"): MEMBER,
     ("GET", "/api/eval/log-groups"): MEMBER,
     ("GET", "/api/eval/log-services"): MEMBER,
     ("GET", "/api/eval/evaluators"): MEMBER,
-    ("POST", "/api/eval/evaluators"): MEMBER,
+    ("POST", "/api/eval/evaluators"): PERM_PROJECT_WRITE,
     ("GET", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
-    ("PUT", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
-    ("DELETE", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
+    ("PUT", "/api/eval/evaluators/{evaluator_id}"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/eval/evaluators/{evaluator_id}"): PERM_PROJECT_WRITE,
     ("GET", "/api/eval/queue"): MEMBER,
     ("GET", "/api/eval/runs"): MEMBER,
     ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
@@ -404,31 +416,31 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/online"): MEMBER,
     ("POST", "/api/eval/online"): PERM_EVAL_RUN,
     ("GET", "/api/eval/online/{config_id}"): MEMBER,
-    ("PATCH", "/api/eval/online/{config_id}"): MEMBER,
-    ("POST", "/api/eval/online/{config_id}/pause"): MEMBER,
+    ("PATCH", "/api/eval/online/{config_id}"): PERM_PROJECT_WRITE,
+    ("POST", "/api/eval/online/{config_id}/pause"): PERM_PROJECT_WRITE,
     ("POST", "/api/eval/online/{config_id}/resume"): PERM_EVAL_RUN,
-    ("DELETE", "/api/eval/online/{config_id}"): MEMBER,
+    ("DELETE", "/api/eval/online/{config_id}"): PERM_PROJECT_WRITE,
     ("GET", "/api/eval/online/{config_id}/results"): MEMBER,
     ("GET", "/api/eval/online/{config_id}/reports"): MEMBER,
     ("POST", "/api/eval/online/{config_id}/reports"): PERM_EVAL_RUN,
     ("GET", "/api/eval/online/{config_id}/reports/{batch_id}"): MEMBER,
     # ---- skill lab: local task assets/task sets + Runtime-backed jobs ----
     ("GET", "/api/skill-lab/status"): MEMBER,
-    ("POST", "/api/skill-lab/task-assets"): MEMBER,
+    ("POST", "/api/skill-lab/task-assets"): PERM_PROJECT_WRITE,
     ("GET", "/api/skill-lab/tasksets"): MEMBER,
-    ("POST", "/api/skill-lab/tasksets"): MEMBER,
+    ("POST", "/api/skill-lab/tasksets"): PERM_PROJECT_WRITE,
     ("GET", "/api/skill-lab/tasksets/{taskset_id}"): MEMBER,
-    ("PUT", "/api/skill-lab/tasksets/{taskset_id}"): MEMBER,
-    ("DELETE", "/api/skill-lab/tasksets/{taskset_id}"): MEMBER,
+    ("PUT", "/api/skill-lab/tasksets/{taskset_id}"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/skill-lab/tasksets/{taskset_id}"): PERM_PROJECT_WRITE,
     ("GET", "/api/skill-lab/jobs"): MEMBER,
-    ("POST", "/api/skill-lab/jobs"): MEMBER,
+    ("POST", "/api/skill-lab/jobs"): PERM_PROJECT_WRITE,
     ("GET", "/api/skill-lab/jobs/{job_id}"): MEMBER,
-    ("POST", "/api/skill-lab/jobs/{job_id}/cancel"): MEMBER,
-    ("DELETE", "/api/skill-lab/jobs/{job_id}"): MEMBER,
-    ("POST", "/api/skill-lab/jobs/{job_id}/resume"): MEMBER,
-    ("POST", "/api/skill-lab/jobs/{job_id}/publish"): MEMBER,
-    ("POST", "/api/skill-lab/jobs/{job_id}/import-taskset"): MEMBER,
-    ("POST", "/api/skill-lab/jobs/{job_id}/apply-expansion"): MEMBER,
+    ("POST", "/api/skill-lab/jobs/{job_id}/cancel"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/skill-lab/jobs/{job_id}"): PERM_PROJECT_WRITE,
+    ("POST", "/api/skill-lab/jobs/{job_id}/resume"): PERM_PROJECT_WRITE,
+    ("POST", "/api/skill-lab/jobs/{job_id}/publish"): INFRA,
+    ("POST", "/api/skill-lab/jobs/{job_id}/import-taskset"): PERM_PROJECT_WRITE,
+    ("POST", "/api/skill-lab/jobs/{job_id}/apply-expansion"): PERM_PROJECT_WRITE,
     ("GET", "/api/skill-lab/jobs/{job_id}/train-summary"): MEMBER,
     ("GET", "/api/skill-lab/jobs/{job_id}/diff"): MEMBER,
     ("GET", "/api/skill-lab/jobs/{job_id}/log"): MEMBER,
@@ -438,14 +450,14 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/experiments"): MEMBER,
     ("GET", "/api/experiments/readiness"): MEMBER,
     ("GET", "/api/experiments/providers"): MEMBER,
-    ("POST", "/api/experiments"): MEMBER,
+    ("POST", "/api/experiments"): PERM_PROJECT_WRITE,
     ("GET", "/api/experiments/{exp_id}"): MEMBER,
-    ("POST", "/api/experiments/{exp_id}/action"): MEMBER,
+    ("POST", "/api/experiments/{exp_id}/action"): PERM_PROJECT_WRITE,
     # canaries provision real AgentCore runtimes
     ("GET", "/api/runtime-canaries"): MEMBER,
-    ("POST", "/api/runtime-canaries"): MEMBER,
+    ("POST", "/api/runtime-canaries"): PERM_PROJECT_WRITE,
     ("GET", "/api/runtime-canaries/{canary_id}"): MEMBER,
-    ("POST", "/api/runtime-canaries/{canary_id}/action"): MEMBER,
+    ("POST", "/api/runtime-canaries/{canary_id}/action"): PERM_PROJECT_WRITE,
     # ---- read-only consoles ----
     # the wizard's scenario-template gallery (T10): static data, no workspace
     ("GET", "/api/agent-templates"): MEMBER,
@@ -504,9 +516,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # Reads are cross-workspace by design (that is what publishing is for); writing is
     # scoped to the publishing workspace, which the handler enforces.
     ("GET", "/api/marketplace/templates"): MEMBER,
-    ("POST", "/api/marketplace/templates"): MEMBER,
-    ("POST", "/api/marketplace/templates/{template_id}/use"): MEMBER,
-    ("DELETE", "/api/marketplace/templates/{template_id}"): MEMBER,
+    ("POST", "/api/marketplace/templates"): INFRA,
+    ("POST", "/api/marketplace/templates/{template_id}/use"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/marketplace/templates/{template_id}"): INFRA,
     # ---- logical resource mapping (T23) ----
     # Reads are plain member (a builder previews what a bundle resolves to). Writes decide
     # which of the SELECTED (target) workspace's resources a promoted agent is wired to,
@@ -527,9 +539,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # Creating a link is not an agent mutation, so it is deliberately NOT in
     # PROD_PROTECTED: a prod workspace may still hand out a chat link.
     ("GET", "/api/agents/{agent_id}/share-links"): MEMBER,
-    ("POST", "/api/agents/{agent_id}/share-links"): MEMBER,
-    ("POST", "/api/share-links/{link_id}/revoke"): MEMBER,
-    ("POST", "/api/chat/{agent_id}/feedback"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/share-links"): PERM_PROJECT_WRITE,
+    ("POST", "/api/share-links/{link_id}/revoke"): PERM_PROJECT_WRITE,
+    ("POST", "/api/chat/{agent_id}/feedback"): PERM_PROJECT_USE,
     ("GET", "/api/feedback"): MEMBER,
     # The account-free surface (T13): outside `/api`, so no console session, and
     # PUBLIC + hub-global so no workspace header is read either — the link's own
@@ -547,7 +559,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/share/annotate/{token}"): PUBLIC,
     ("POST", "/share/annotate/{token}/label"): PUBLIC,
     ("GET", "/api/agents/{agent_id}/review-links"): MEMBER,
-    ("POST", "/api/agents/{agent_id}/review-links"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/review-links"): PERM_PROJECT_WRITE,
     # ---- business self-service: intent view, curated answers, issue box (T33/T35/T36) ----
     # Deliberately NOT in PROD_PROTECTED: the point of a curated answer is that a business
     # owner fixes production without a redeploy. Rule writes are journaled in audit_events.
@@ -578,7 +590,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/annotation-tasks"): PERM_CRITERIA_MANAGE,
     ("GET", "/api/annotation-tasks/{task_id}"): MEMBER,
     # labelling is the annotator's own act; the service refuses a non-annotator
-    ("POST", "/api/annotation-tasks/{task_id}/labels"): MEMBER,
+    ("POST", "/api/annotation-tasks/{task_id}/labels"): PERM_PROJECT_USE,
     ("POST", "/api/annotation-tasks/{task_id}/adjudicate"): PERM_JUDGE_CALIBRATE,
     ("GET", "/api/annotation-tasks/{task_id}/agreement"): MEMBER,
     ("POST", "/api/annotation-tasks/{task_id}/decide"): PERM_JUDGE_CALIBRATE,
@@ -595,7 +607,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/agents/{agent_id}/release/rollback"): PERM_RELEASE_SIGN,
     ("GET", "/api/release-records"): MEMBER,
     ("GET", "/api/release-records/{record_id}"): MEMBER,
-    ("POST", "/api/agents/{agent_id}/waivers"): MEMBER,  # asking is not deciding
+    ("POST", "/api/agents/{agent_id}/waivers"): PERM_PROJECT_WRITE,  # asking is not deciding
     ("POST", "/api/waivers/{waiver_id}/approve"): PERM_WAIVER_APPROVE,
     ("POST", "/api/waivers/{waiver_id}/reject"): PERM_WAIVER_APPROVE,
     ("DELETE", "/api/waivers/{waiver_id}"): PERM_WAIVER_APPROVE,
@@ -610,30 +622,30 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/runs/{run_id}/criteria"): MEMBER,
     ("POST", "/api/eval/runs/{run_id}/criteria/snapshot"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/compare"): MEMBER,
-    ("POST", "/api/eval/runs/estimate"): MEMBER,
+    ("POST", "/api/eval/runs/estimate"): PERM_PROJECT_USE,
     ("GET", "/api/agents/{agent_id}/ladder"): MEMBER,
     ("GET", "/api/agents/{agent_id}/scorecard"): MEMBER,
     ("GET", "/api/audit"): ADMIN,
     ("GET", "/api/intents"): MEMBER,
     ("GET", "/api/agents/{agent_id}/rules"): MEMBER,
-    ("POST", "/api/agents/{agent_id}/rules"): MEMBER,
-    ("PATCH", "/api/agents/{agent_id}/rules/{rule_id}"): MEMBER,
-    ("DELETE", "/api/agents/{agent_id}/rules/{rule_id}"): MEMBER,
-    ("PUT", "/api/agents/{agent_id}/rules-order"): MEMBER,
-    ("PUT", "/api/agents/{agent_id}/rules-enabled"): MEMBER,
-    ("POST", "/api/agents/{agent_id}/rules/test"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/rules"): PERM_PROJECT_WRITE,
+    ("PATCH", "/api/agents/{agent_id}/rules/{rule_id}"): PERM_PROJECT_WRITE,
+    ("DELETE", "/api/agents/{agent_id}/rules/{rule_id}"): PERM_PROJECT_WRITE,
+    ("PUT", "/api/agents/{agent_id}/rules-order"): PERM_PROJECT_WRITE,
+    ("PUT", "/api/agents/{agent_id}/rules-enabled"): PERM_PROJECT_WRITE,
+    ("POST", "/api/agents/{agent_id}/rules/test"): PERM_PROJECT_USE,
     ("GET", "/api/issues"): MEMBER,
-    ("POST", "/api/issues"): MEMBER,
-    ("POST", "/api/issues/sync"): MEMBER,
+    ("POST", "/api/issues"): PERM_PROJECT_WRITE,
+    ("POST", "/api/issues/sync"): PERM_PROJECT_WRITE,
     ("GET", "/api/issues/{issue_id}"): MEMBER,
-    ("POST", "/api/issues/{issue_id}/resolve"): MEMBER,
-    ("POST", "/api/issues/{issue_id}/reopen"): MEMBER,
-    ("POST", "/api/issues/{issue_id}/fixes"): MEMBER,
+    ("POST", "/api/issues/{issue_id}/resolve"): PERM_PROJECT_WRITE,
+    ("POST", "/api/issues/{issue_id}/reopen"): PERM_PROJECT_WRITE,
+    ("POST", "/api/issues/{issue_id}/fixes"): PERM_PROJECT_WRITE,
     # ---- channel publishing (T30) ----
     # Creating a channel link is like creating a share link: MEMBER, not prod-protected.
     # The webhook is PUBLIC: Slack / Feishu call it, authenticated per request by the
     # adapter (signing secret / verification token) on top of the link token in the path.
-    ("POST", "/api/agents/{agent_id}/channel-links"): MEMBER,
+    ("POST", "/api/agents/{agent_id}/channel-links"): PERM_PROJECT_WRITE,
     ("POST", "/share/channels/{platform}/{token}"): PUBLIC,
     ("GET", "/api/overview"): MEMBER,
     ("GET", "/api/overview/online-quality"): MEMBER,
@@ -663,7 +675,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/memory/extraction-jobs"): MEMBER,
     ("GET", "/api/memory/namespaces"): MEMBER,
     ("GET", "/api/memory/records"): MEMBER,
-    ("POST", "/api/memory/records/search"): MEMBER,  # a search, not a mutation
+    ("POST", "/api/memory/records/search"): PERM_PROJECT_USE,  # a search, not a mutation
     ("GET", "/api/memory/sessions"): MEMBER,
     ("GET", "/api/memory/resources"): MEMBER,
     # creates a billable AgentCore Memory resource, registered as managed
@@ -680,11 +692,11 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/observability/sessions/{session_id}"): MEMBER,
     ("GET", "/api/observability/sessions/{session_id}/transcript"): MEMBER,
     # on-demand Evaluate: a judge inference, persists nothing
-    ("POST", "/api/observability/sessions/{session_id}/evaluate"): MEMBER,
+    ("POST", "/api/observability/sessions/{session_id}/evaluate"): PERM_PROJECT_WRITE,
     ("GET", "/api/observability/traces"): MEMBER,
     ("GET", "/api/observability/traces/{trace_id}"): MEMBER,
     ("GET", "/api/observability/prices"): MEMBER,
-    ("POST", "/api/observability/prices/refresh"): MEMBER,  # rewrites shared config
+    ("POST", "/api/observability/prices/refresh"): INFRA,  # rewrites shared config
     # ---- console account management ----
     ("GET", "/api/users"): ADMIN,
     # an admin creates an account (active at once; only an admin can grant admin)
@@ -969,7 +981,35 @@ def is_workspace_scoped(method: str, path_format: str) -> bool:
 
 # Workspace-scoped routes that need no project (design §5.3 PROJECT_EXEMPT): workspace
 # configuration and catalogs, not project data. Extended as routers are reviewed.
-PROJECT_EXEMPT: frozenset[tuple[str, str]] = frozenset()
+PROJECT_EXEMPT: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("DELETE", "/api/system-agents/{preset_key}"),
+        ("GET", "/api/audit"),
+        ("GET", "/api/costs"),
+        ("GET", "/api/costs/month-to-date"),
+        ("GET", "/api/demos/browser/options"),
+        ("GET", "/api/experiments/providers"),
+        ("GET", "/api/generate-code/status"),
+        ("GET", "/api/governance/guardrail"),
+        ("GET", "/api/governance/policy-generation/{generation_id}"),
+        ("GET", "/api/identity/connections/templates"),
+        ("GET", "/api/identity/consent-portal"),
+        ("GET", "/api/identity/inbound-auth/default"),
+        ("GET", "/api/inbox"),
+        ("GET", "/api/marketplace/templates"),
+        ("GET", "/api/model-catalog"),
+        ("GET", "/api/observability/prices"),
+        ("GET", "/api/registry/skills/capabilities"),
+        ("GET", "/api/release-policies/{workspace_id}"),
+        ("GET", "/api/skill-lab/status"),
+        ("GET", "/api/system-agents"),
+        ("GET", "/api/tools"),
+        ("POST", "/api/model-probe"),
+        ("POST", "/api/system-agents/{preset_key}/install"),
+        ("POST", "/api/system-agents/{preset_key}/skill-registration"),
+        ("PUT", "/api/release-policies/{workspace_id}"),
+    }
+)
 
 
 def is_project_scoped(method: str, path_format: str) -> bool:
@@ -1047,9 +1087,54 @@ def enforce_route_policy(request: Request) -> None:
         except AppError:
             # Keep the old precedence for a caller who lacks the key outright: they
             # learn "you may not do this", not which workspaces or projects exist.
-            if role.startswith(_PERM_PREFIX):
-                require_permission(request, role.removeprefix(_PERM_PREFIX))
+            # (project.* keys exist only inside a project, so they cannot be checked here)
+            key = (
+                role.removeprefix(_PERM_PREFIX) if role.startswith(_PERM_PREFIX)
+                else infra_key(role) if role.startswith(INFRA) else ""
+            )
+            if key and not key.startswith("project."):
+                require_permission(request, key)
             raise
         _guard_prod(request, scope, request.method, path_format)
     if role.startswith(_PERM_PREFIX):
         require_permission(request, role.removeprefix(_PERM_PREFIX))
+    elif role.startswith(INFRA):
+        require_infra(request, role)
+
+
+def infra_key(role: str) -> str:
+    """The project key an `infra` route needs while its workspace holds one project."""
+    _, _, key = role.partition("+perm:")
+    return key or "project.write"
+
+
+def require_infra(request: Request, role: str) -> None:
+    """`infra` / `infra+perm:<key>` (design §5.3): a write to workspace-shared
+    infrastructure. With one active project in the workspace it is that project's
+    `<key>` (project.write by default) — today's behaviour for every single-project
+    console; with several, only an administrator may change what all of them share."""
+    from app.core.db import SessionLocal
+    from app.services import access
+
+    workspace = getattr(request.state, "workspace", None)
+    if workspace is None:  # an infra route must be workspace-scoped (drift test)
+        require_admin(request)
+        return
+    db = SessionLocal()
+    try:
+        active = [b for b in access.workspace_bindings(db, workspace.id) if b.status == "active"]
+    finally:
+        db.close()
+    if len(active) > 1:
+        identity = require_identity(request)
+        if not identity.is_admin:
+            raise AppError(
+                "auth.infra_admin_required",
+                "this workspace holds several projects, so its shared infrastructure "
+                "(governance, registry catalog, gateway targets…) is changed by an "
+                "administrator only",
+                {"projects": len(active)},
+                status_code=403,
+            )
+        return
+    require_permission(request, infra_key(role))

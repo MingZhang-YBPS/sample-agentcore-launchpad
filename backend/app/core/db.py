@@ -82,7 +82,7 @@ WORKSPACE_SCOPED_TABLES = (
 PROJECT_STRICT_TABLES = (
     "api_keys", "resource_creators", "eval_datasets", "eval_pipelines",
     "skill_lab_tasksets", "assistant_conversations", "criteria_sets",
-    "deployments", "spec_snapshots", "chat_sessions", "chat_messages", "chat_feedback",
+    "chat_sessions", "chat_messages", "chat_feedback",
     "issues", "answer_rules", "answer_rule_sets", "oauth_pending_sessions", "user_grants",
     "release_bundles", "eval_runs", "online_eval_configs", "experiments",
     "annotation_tasks", "calibration_records", "release_records", "waivers",
@@ -92,7 +92,9 @@ PROJECT_STRICT_TABLES = (
     "criteria", "criterion_results", "annotations", "skill_lab_jobs",
 )
 PROJECT_SHARED_TABLES = (
-    "agents", "jobs", "managed_memories", "policy_decisions", "policy_changes",
+    # a system preset's deployments and spec snapshots belong to no project, like it
+    "agents", "jobs", "managed_memories", "deployments", "spec_snapshots",
+    "policy_decisions", "policy_changes",
     "audit_events", "alert_rules", "resource_mappings", "identity_providers",
     "user_token_revocations",
 )
