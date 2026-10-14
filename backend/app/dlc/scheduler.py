@@ -91,13 +91,18 @@ def run_due_watches(db: Session) -> dict[str, Any]:
     from app.core.errors import AppError
     from app.core.project_scope import project_context
     from app.dlc import watch as watch_svc
+    from app.models.ledger import Agent
     from app.models.projects import Project
     from app.services.workspace import context_for_workspace
 
     started, skipped = [], []
     # the scan is unscoped (every workspace, every project); each run is not
     for config in watch_svc.due_configs(db):
-        project = db.get(Project, config.project_id) if config.project_id else None
+        # the agent is the subject: its project decides (a config row stamped before
+        # the agent moved projects must not run — or write — as the old one)
+        agent = db.get(Agent, config.agent_id)
+        project_id = (agent.project_id if agent is not None else None) or config.project_id
+        project = db.get(Project, project_id) if project_id else None
         if project is not None and project.status != "active":
             # an archived project serves reads only (design §5.12): nothing is queued
             config.last_status = "skipped"
@@ -108,7 +113,7 @@ def run_due_watches(db: Session) -> dict[str, Any]:
             db.commit()
             continue
         try:
-            with project_context(config.project_id):
+            with project_context(project_id):
                 run_id = watch_svc.run_now(
                     db, config, workspace_ctx=context_for_workspace(config.workspace_id),
                     actor="scheduler",
