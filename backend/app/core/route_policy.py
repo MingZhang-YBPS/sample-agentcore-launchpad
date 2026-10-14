@@ -77,6 +77,7 @@ the entry.
 from typing import Any
 
 from fastapi import Request
+from sqlalchemy import text
 
 from app.core.errors import AppError
 from app.routers.auth import require_admin, require_identity, require_permission
@@ -742,6 +743,9 @@ HUB_GLOBAL_PREFIXES = (
     "/api/fleet",
     # the account-free share surface (T13): the token's row decides the workspace
     "/share",
+    # project administration and the caller's access map (projects design §7.10):
+    # projects span workspaces, so none of it runs inside one
+    "/api/projects", "/api/role-templates", "/api/me",
 )
 
 
@@ -829,6 +833,78 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"),
     }
 )
+
+# ---- project administration (projects design §7.10, P1F-proj) ----
+# Hub-global (HUB_GLOBAL_PREFIXES): a project spans workspaces. `pperm:<key>` is the
+# design's path-project permission: <key> among the caller's effective keys in the
+# project named by `{project_id}` in the PATH (never X-Project) — a non-member gets
+# 404 `project.not_found`, a member without the key 403. Administrators pass.
+# Membership-checked reads are MEMBER here; their handlers answer 404 to non-members.
+PPERM_PREFIX = "pperm:"
+PPERM_PROJECT_MEMBERS = "pperm:project.members"
+PROJECT_ADMIN_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/me/access"): MEMBER,  # the caller's own projects and keys
+    ("GET", "/api/role-templates"): MEMBER,  # static: built-in templates and keys
+    ("GET", "/api/projects"): MEMBER,  # admins: all; anyone else: their own
+    ("POST", "/api/projects"): ADMIN,
+    ("GET", "/api/projects/{project_id}"): MEMBER,
+    # name / department / group are admin-only inside the handler; an owner edits
+    # the description and the owner-editable settings
+    ("PATCH", "/api/projects/{project_id}"): PPERM_PROJECT_MEMBERS,
+    ("POST", "/api/projects/{project_id}/archive"): ADMIN,
+    ("POST", "/api/projects/{project_id}/unarchive"): ADMIN,
+    ("GET", "/api/projects/{project_id}/workspaces"): MEMBER,
+    ("PUT", "/api/projects/{project_id}/workspaces"): ADMIN,
+    ("GET", "/api/projects/{project_id}/members"): MEMBER,
+    ("PUT", "/api/projects/{project_id}/members"): PPERM_PROJECT_MEMBERS,
+    ("DELETE", "/api/projects/{project_id}/members/{user_id}"): PPERM_PROJECT_MEMBERS,
+    ("GET", "/api/projects/{project_id}/candidates"): PPERM_PROJECT_MEMBERS,
+    ("GET", "/api/projects/{project_id}/roles"): MEMBER,
+    ("PUT", "/api/projects/{project_id}/roles/{role_key}"): PPERM_PROJECT_MEMBERS,
+    ("DELETE", "/api/projects/{project_id}/roles/{role_key}"): PPERM_PROJECT_MEMBERS,
+    # moves an agent and its derived rows to another project of its workspace
+    ("POST", "/api/projects/{project_id}/transfer"): ADMIN,
+}
+ROUTE_POLICY.update(PROJECT_ADMIN_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_ADMIN_ROUTES)
+
+
+def require_path_project_permission(request: Request, key: str) -> None:
+    """`pperm:<key>`: the caller holds <key> in the project named by the path."""
+    from app.core.db import SessionLocal
+    from app.core.errors import NotFoundError
+    from app.core.project_scope import project_context
+    from app.services import access
+
+    identity = require_identity(request)
+    project_id = str(request.path_params.get("project_id") or "")
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            status = db.execute(
+                text("SELECT status FROM projects WHERE id = :p"), {"p": project_id},
+            ).scalar()
+            membership = (
+                None if access.has_data_bypass(identity)
+                else access.snapshot_for(db, identity).memberships.get(project_id)
+            )
+    finally:
+        db.close()
+    if not access.has_data_bypass(identity):
+        if status is None or membership is None:
+            raise NotFoundError("project.not_found", f"project '{project_id}' not found",
+                                {"project_id": project_id})
+        if key not in membership.permissions:
+            raise AppError(
+                "auth.permission_required",
+                f"This action requires the '{key}' permission in project '{project_id}'",
+                {"permission": key, "project_id": project_id},
+                status_code=403,
+            )
+    if status is not None and status != "active" and request.method not in access.READ_METHODS:
+        raise AppError("project.archived", f"project '{project_id}' is archived",
+                       {"project_id": project_id}, status_code=409)
+
 
 # ---- third dimension (T05): prod protection ----
 # The agent-mutating routes. On a workspace whose tier is `prod`, a member calling
@@ -1102,6 +1178,8 @@ def enforce_route_policy(request: Request) -> None:
         _guard_prod(request, scope, request.method, path_format)
     if role.startswith(_PERM_PREFIX):
         require_permission(request, role.removeprefix(_PERM_PREFIX))
+    elif role.startswith(PPERM_PREFIX):
+        require_path_project_permission(request, role.removeprefix(PPERM_PREFIX))
     elif role.startswith(INFRA):
         require_infra(request, role)
 

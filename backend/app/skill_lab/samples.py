@@ -251,3 +251,27 @@ def ensure_skill_lab_samples(
     skills = _seed_skills(workspace, log)
     tasksets = _seed_tasksets(db, workspace_id, log)
     return f"{skills} sample skills · {tasksets} sample task sets seeded"
+
+
+def ensure_project_samples(
+    db: Any, workspace_id: str, project_id: str, log: Callable[[str], None] = lambda _m: None
+) -> int:
+    """Seed the demo task sets for one project newly bound to a workspace.
+
+    Only where the workspace's skill-lab stage already seeded samples (some project
+    there holds them): a workspace that never ran it seeds every bound project when
+    it does, so there is nothing to catch up on. Idempotent and per-item degrading
+    like the stage; returns how many task sets it created."""
+    if not DEMO_ROOT.is_dir():
+        return 0
+    with project_context(None):
+        seeded_here = db.scalars(
+            select(SkillLabTaskset.id).where(
+                SkillLabTaskset.workspace_id == workspace_id,
+                SkillLabTaskset.sample.is_(True),
+            )
+        ).first()
+    if seeded_here is None:
+        return 0
+    with project_context(project_id):
+        return _seed_project_tasksets(db, workspace_id, project_id, log)
