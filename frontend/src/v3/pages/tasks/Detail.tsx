@@ -55,6 +55,7 @@ import {
   type TrackNode,
 } from "../../ui";
 import { AtShell, HostedV2, ScoreChip } from "./common";
+import { CopyId } from "./CopyId";
 import { copyUrl, outcomeSignal, scoreSignal, taskSignal } from "./model";
 
 const POLL_MS = 8000;
@@ -606,7 +607,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           </button>
         </div>
         <PageHead
-          eyebrow={`${data.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory")} · ${data.id}`}
+          eyebrow={data.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory")}
           title={
             <span
               style={{ display: "inline-flex", alignItems: "center", gap: 14 }}
@@ -622,6 +623,9 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
               </Chip>{" "}
               {data.agentName} · {sourceLabel(t, data)}
               {data.description ? ` — ${data.description}` : ""}
+              <span style={{ display: "block", marginTop: 6 }}>
+                <CopyId id={data.id} kind={data.kind} labelled />
+              </span>
             </span>
           }
           end={
