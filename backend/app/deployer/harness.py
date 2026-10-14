@@ -21,7 +21,7 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.harness_tool_access import gateway_target_selectors, selected_tool_patterns
 from app.models.ledger import Agent
 from app.schemas.agent import DEFAULT_GPT_MAX_TOKENS, AgentSpec, is_openai_model_id
-from app.services import agent_iam, registry_console
+from app.services import agent_iam, inference_profiles, project_telemetry, registry_console
 from app.services import kb_gateway as kbgw
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
@@ -504,6 +504,41 @@ def _execution_role_arn(ctx: StageContext, agent: Agent) -> str:
     return arn
 
 
+def _attribute_to_project(
+    ctx: StageContext, agent: Agent, params: dict[str, Any]
+) -> dict[str, Any]:
+    """Projects design §10.8 for an isolated project's harness: the span resource
+    attributes on its environment variables, the matching `launchpad:*` tags on the
+    create, and — behind `project_inference_profiles`, Bedrock-hosted models only —
+    the project's application inference profile as the model id. Any other agent's
+    request is returned unchanged."""
+    if not project_telemetry.attributed(agent.project_id):
+        return params
+    out = dict(params)
+    environment = project_telemetry.with_project_attributes(
+        out.get("environmentVariables") or {}, project_id=agent.project_id,
+        agent_id=agent.id, workspace_id=ctx.workspace.id,
+    )
+    out["environmentVariables"] = environment
+    out["tags"] = project_telemetry.tags_from_environment(environment)
+    spec = AgentSpec(**agent.spec)
+    if spec.model_source == "bedrock" and inference_profiles.enabled():
+        db = ctx.session()
+        try:
+            model_id = inference_profiles.model_id_for(
+                db, project_id=agent.project_id, workspace=ctx.workspace,
+                model_id=spec.model_id, log=ctx.log,
+            )
+        finally:
+            db.close()
+        if model_id != spec.model_id:
+            model = dict(out["model"])
+            model["bedrockModelConfig"] = {**model["bedrockModelConfig"], "modelId": model_id}
+            out["model"] = model
+            ctx.log(f"model {spec.model_id} via the project's inference profile {model_id}")
+    return out
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
     if agent.system_key:
@@ -514,7 +549,7 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     pin = ctx.scratch.get("assistant_pin")
     if pin:
         _verify_pinned_resources(ctx, spec, pin, skills=True)
-    params = _build_live_params(spec, ctx.workspace, pin)
+    params = _attribute_to_project(ctx, agent, _build_live_params(spec, ctx.workspace, pin))
     ctx.scratch["create_params"] = params
     ctx.log(
         f"harness request generated for {params['harnessName']} · "
@@ -677,7 +712,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         def _params() -> dict[str, Any]:
             params = ctx.scratch.get("create_params")
             if params is None:  # resume/update path without scratch — regenerate
-                params = _build_live_params(AgentSpec(**row.spec), ctx.workspace, pin)
+                params = _attribute_to_project(
+                    ctx, row, _build_live_params(AgentSpec(**row.spec), ctx.workspace, pin)
+                )
             if pin:
                 # the last check before the write: the reviewed resources still are
                 # what the request is about to send
@@ -693,6 +730,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         if mode == "update" and row.resource_id:  # in-place re-publish → UpdateHarness
             harness_id = row.resource_id
             update_params = hc.wrap_params_for_update(_params())
+            # UpdateHarness takes no tags: the harness is tagged after the update
+            tags = update_params.pop("tags", None)
             update_params["harnessId"] = harness_id
             update_params["environment"] = hc.environment_for_update(
                 hc.get_harness(client, harness_id),
@@ -709,6 +748,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             ctx.log(
                 f"UpdateHarness accepted · harnessId {harness_id} · new version {row.version}"
             )
+            _tag_harness(client, harness.get("arn") or row.arn, tags, ctx.log)
         elif row.resource_id:  # resumed create — harness already made, just poll
             harness_id = row.resource_id
             ctx.log(f"resuming — harness {harness_id} already created, polling status")
@@ -731,6 +771,19 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         return StageResult(detail=f"READY · {ready['arn']}")
     finally:
         db.close()
+
+
+def _tag_harness(client: Any, arn: str | None, tags: dict[str, str] | None,
+                 log: Any) -> None:
+    """A re-publish of an isolated project's harness catches up on its project tags
+    (one created before isolation has none). Best-effort: the span attributes
+    already attribute it, so a refusal is logged and the deploy goes on."""
+    if not tags or not arn:
+        return
+    try:
+        client.tag_resource(resourceArn=arn, tags=tags)
+    except Exception as exc:  # noqa: BLE001 — attribution must not fail a publish
+        log(f"tagging {arn} with its project failed: {exc}")
 
 
 def _stage_register(ctx: StageContext, agent: Agent) -> StageResult:

@@ -86,6 +86,7 @@ def create_code_runtime(
     authorizer_configuration: dict[str, Any] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
     vpc: dict[str, Any] | None = None,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
 
@@ -97,7 +98,9 @@ def create_code_runtime(
     ``vpc`` = the spec's resolved network profile ``{subnets, security_groups}``
     (`network_profiles.resolve_vpc`); None = PUBLIC. ``filesystem_configurations``
     (`deployer/filesystem.py`) is the session storage plus any S3 Files / EFS
-    mounts; the latter need ``vpc`` (storage-mounts §3.2)."""
+    mounts; the latter need ``vpc`` (storage-mounts §3.2). ``tags`` are added to
+    the `launchpad:*` project tags the environment's span attributes imply
+    (`_runtime_tags`)."""
     _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
@@ -116,7 +119,41 @@ def create_code_runtime(
         params["authorizerConfiguration"] = authorizer_configuration
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
+    if resource_tags := _runtime_tags(environment, tags):
+        params["tags"] = resource_tags
     return client.create_agent_runtime(**params)
+
+
+def _runtime_tags(
+    environment: dict[str, str] | None, tags: dict[str, str] | None = None
+) -> dict[str, str]:
+    """CreateAgentRuntime ``tags``: the `launchpad:project` / `launchpad:workspace` /
+    `launchpad:agent-id` tags matching the span attributes `runtime_environment`
+    set for an isolated project's agent (projects design §10.8), plus any explicit
+    ones. Empty for every other deploy, so its request is unchanged. The ``tags``
+    member is in the service model (botocore 1.43); unverified live."""
+    from app.services.project_telemetry import tags_from_environment
+
+    return {**tags_from_environment(environment), **(tags or {})}
+
+
+def _tag_updated_runtime(
+    client: Any, response: dict[str, Any], environment: dict[str, str] | None
+) -> None:
+    """UpdateAgentRuntime takes no tags, so a re-publish that now carries project
+    attributes tags the runtime with TagResource — the runtime created before its
+    project was isolated catches up on its next publish. Best-effort: a refusal is
+    logged, never fails the deploy (the span attributes already attribute it)."""
+    resource_tags = _runtime_tags(environment)
+    if not resource_tags:
+        return
+    arn = (response or {}).get("agentRuntimeArn")
+    if not arn:
+        return
+    try:
+        client.tag_resource(resourceArn=arn, tags=resource_tags)
+    except Exception as exc:  # noqa: BLE001 — attribution must not fail a publish
+        logger.warning("TagResource on %s failed: %s", arn, exc)
 
 
 def _byo_entries(filesystem_configurations: list[dict[str, Any]] | None) -> bool:
@@ -164,12 +201,14 @@ def create_container_runtime(
     lifecycle: dict[str, int] | None = None,
     authorizer_configuration: dict[str, Any] | None = None,
     protocol: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from an ECR image (Claude SDK container path).
 
     ``lifecycle`` = {idleRuntimeSessionTimeout, maxLifetime} seconds (the Skill
     Lab exec worker caps sessions at 8h and reaps idle ones at 5min).
-    ``protocol`` as ``create_code_runtime`` (None / "http" = the HTTP default)."""
+    ``protocol`` and ``tags`` as ``create_code_runtime`` (None / "http" = the HTTP
+    default)."""
     _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
@@ -190,6 +229,8 @@ def create_container_runtime(
         params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
+    if resource_tags := _runtime_tags(environment, tags):
+        params["tags"] = resource_tags
     return client.create_agent_runtime(**params)
 
 
@@ -265,7 +306,9 @@ def update_code_runtime(
         params["authorizerConfiguration"] = authorizer_configuration
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
-    return client.update_agent_runtime(**params)
+    response = client.update_agent_runtime(**params)
+    _tag_updated_runtime(client, response, environment)
+    return response
 
 
 def update_container_runtime(
@@ -304,7 +347,9 @@ def update_container_runtime(
         params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
-    return client.update_agent_runtime(**params)
+    response = client.update_agent_runtime(**params)
+    _tag_updated_runtime(client, response, environment)
+    return response
 
 
 def get_runtime(client: Any, runtime_id: str) -> dict[str, Any]:

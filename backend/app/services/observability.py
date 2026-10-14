@@ -29,10 +29,12 @@ from app.core.errors import AppError
 from app.core.project_scope import current_project, project_context
 from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
+from app.models.projects import PROJECT_ID_PATTERN
 from app.optimization.models import Experiment
-from app.services import memory, memory_ownership
+from app.services import inference_profiles, memory, memory_ownership
 from app.services.agentcore import evaluation as agentcore_evaluation
 from app.services.agentcore.client import data_client
+from app.services.project_telemetry import ATTR_PROJECT
 from app.services.workspace import WorkspaceContext
 
 SPANS_LOG_GROUP = "aws/spans"
@@ -78,6 +80,11 @@ CACHE_WRITE_FACTOR = 1.25
 # would matter inside a double-quoted Logs Insights literal (`"`, `\`, `|`).
 TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_\-#:.@]{8,256}$")
+# The span resource attribute naming an isolated project's agent (design §10.8,
+# `services/project_telemetry.py`); its value is a project slug, re-checked before it
+# is read from a row or interpolated into a filter.
+SPAN_PROJECT_ATTR = ATTR_PROJECT
+_PROJECT_RE = re.compile(PROJECT_ID_PATTERN)
 
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_LOCK = threading.Lock()
@@ -304,6 +311,7 @@ def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) 
         min(startTimeUnixNano) as start_ns, max(endTimeUnixNano) as end_ns,
         latest(attributes.session.id) as session_id,
         latest(resource.attributes.service.name) as service,
+        latest(resource.attributes.{SPAN_PROJECT_ATTR}) as project,
         latest(telemetry_model) as model,
         count_distinct(telemetry_model) as model_count
   by traceId
@@ -413,6 +421,7 @@ def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
         sum(is_error) as errors,
         min(startTimeUnixNano) as first_ns, max(endTimeUnixNano) as last_ns,
         latest(resource.attributes.service.name) as service,
+        latest(resource.attributes.{SPAN_PROJECT_ATTR}) as project,
         latest(telemetry_model) as model
   by attributes.session.id as session_id
 | sort last_ns desc
@@ -579,9 +588,12 @@ def _ns_to_iso(ns: float | None) -> str | None:
 
 
 def match_price(model: str | None, prices: dict[str, Any]) -> dict[str, float] | None:
-    """Longest price-map key that is a substring of the model id."""
+    """Longest price-map key that is a substring of the model id. A project's
+    application inference profile (its ARN is the span's model id, design §10.8) is
+    priced as the model it was copied from."""
     if not model:
         return None
+    model = inference_profiles.price_model(model) or model
     best: tuple[int, dict[str, float]] | None = None
     for key, entry in prices.items():
         if key in model and isinstance(entry, dict):
@@ -753,10 +765,11 @@ def several_projects(db: Session, workspace_id: str | None) -> bool:
 class ProjectAgents:
     """What one project may see of the account-wide telemetry: an **allow-set**.
 
-    AWS spans carry no project, so a row is attributed through the ledger — its
-    session (a chat, eval-run, assistant or experiment session id → that row's
-    project), else its span `service.name` → the agent that owns the runtime
-    (`build_agent_resolver(all_projects=True)`) → `agents.project_id`. A row is kept
+    A row is attributed by its spans' `launchpad.project` resource attribute when
+    they carry one (an isolated project's agents, design §10.8); otherwise through
+    the ledger — its session (a chat, eval-run, assistant or experiment session id →
+    that row's project), else its span `service.name` → the agent that owns the
+    runtime (`build_agent_resolver(all_projects=True)`) → `agents.project_id`. A row is kept
     when it is attributed to the current project or to a platform preset (NULL);
     one that cannot be attributed is kept only for an administrator (`bypass`).
 
@@ -827,18 +840,44 @@ class ProjectAgents:
         }
         return sorted(b for b in bases if b and _SERVICE_BASE_RE.fullmatch(b))
 
+    @cached_property
+    def stamped(self) -> bool:
+        """Whether this project's agents stamp their spans with the project (it is
+        isolated, §10.8) — the filter then names the attribute first."""
+        from app.services.project_telemetry import attributed
+
+        return bool(self.project_id) and attributed(self.project_id)
+
     def service_filter(self) -> str | None:
         """A Logs Insights line keeping only the allowed agents' spans (symmetric with
         the resolver: `<base>`, `harness_<base>` or any `…<base>` before the first
         dot); "" when no filter is needed; None when the project has no runtime at
-        all, so the query can be skipped."""
+        all, so the query can be skipped.
+
+        For an isolated project the line keeps the spans stamped with the project
+        (`launchpad.project`), plus the unstamped spans of its runtimes (published
+        before isolation, or BYOC code that replaced the OTEL resource); a span
+        stamped with another project never passes on its service name."""
         if not self.active:
             return ""
         bases = self.service_bases()
+        if not self.stamped or not _PROJECT_RE.fullmatch(self.project_id or ""):
+            if not bases:
+                return None
+            alternatives = "|".join(bases)
+            return (
+                "\n| filter resource.attributes.service.name like "
+                f"/^[^.]*({alternatives})(\\.|$)/"
+            )
+        attr = f"resource.attributes.{SPAN_PROJECT_ATTR}"
+        stamped = f'{attr} = "{self.project_id}"'
         if not bases:
-            return None
+            return f"\n| filter {stamped}"
         alternatives = "|".join(bases)
-        return f"\n| filter resource.attributes.service.name like /^[^.]*({alternatives})(\\.|$)/"
+        return (
+            f"\n| filter {stamped} or (not ispresent({attr}) and "
+            f"resource.attributes.service.name like /^[^.]*({alternatives})(\\.|$)/)"
+        )
 
     # ── sessions ────────────────────────────────────────────────────────────
 
@@ -909,8 +948,10 @@ class ProjectAgents:
 
     def _keeps(
         self, service: str | None, session_ids: Iterable[str | None],
-        owners: dict[str, str | None],
+        owners: dict[str, str | None], span_project: str | None = None,
     ) -> bool:
+        if span_project:  # the spans named their project: nothing else decides
+            return span_project == self.project_id
         claimed = [owners[s] for s in session_ids if s and s in owners]
         if claimed:
             return all(pid == self.project_id for pid in claimed)
@@ -920,13 +961,14 @@ class ProjectAgents:
         return self.bypass
 
     def keep_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Trace / session list rows (`service`, `session_id`) this project may see."""
+        """Trace / session list rows (`project`, `service`, `session_id`) this project
+        may see."""
         if not self.active:
             return rows
-        owners = self.session_owners(r.get("session_id") for r in rows)
+        owners = self.session_owners(r.get("session_id") for r in rows if not r.get("project"))
         return [
             r for r in rows
-            if self._keeps(r.get("service"), [r.get("session_id")], owners)
+            if self._keeps(r.get("service"), [r.get("session_id")], owners, r.get("project"))
         ]
 
     def keeps_trace(self, payload: dict[str, Any]) -> bool:
@@ -934,6 +976,8 @@ class ProjectAgents:
         if not self.active:
             return True
         meta = payload.get("meta") or {}
+        if meta.get("project"):
+            return meta["project"] == self.project_id
         sids = [meta.get("session_id"), *(meta.get("session_ids") or [])]
         return self._keeps(meta.get("service"), sids, self.session_owners(sids))
 
@@ -942,6 +986,9 @@ class ProjectAgents:
         a trace's runtime is ours (and none is another project's)."""
         if not self.active:
             return True
+        stamped = {t.get("project") for t in payload.get("traces") or [] if t.get("project")}
+        if stamped:
+            return stamped == {self.project_id}
         verdict = self.session_verdict(session_id)
         if verdict is not None:
             return verdict
@@ -1257,6 +1304,15 @@ def query_token_usage_metrics(
 # ── Row composers ───────────────────────────────────────────────────────────
 
 
+def _span_project(row: dict[str, Any]) -> dict[str, str]:
+    """`{"project": <id>}` when the spans named their project (§10.8), else {} — a
+    row of today's spans keeps today's shape."""
+    project = row.get("project")
+    if isinstance(project, str) and _PROJECT_RE.fullmatch(project):
+        return {"project": project}
+    return {}
+
+
 def _trace_row(
     agg: dict[str, str],
     root: dict[str, str] | None,
@@ -1274,6 +1330,7 @@ def _trace_row(
     service = agg.get("service") or (root or {}).get("service")
     duration_ns = _num(root or {}, "durationNano") or (end_ns - start_ns)
     return {
+        **_span_project(agg),
         "trace_id": agg.get("traceId"),
         "time": _ns_to_iso(start_ns),
         "root_operation": (root or {}).get("name") or "trace",
@@ -1302,6 +1359,7 @@ def _session_row(row: dict[str, str], map_agent: Callable[[str | None], str],
     service = row.get("service")
     session_id = row.get("session_id") or ""
     return {
+        **_span_project(row),
         "session_id": session_id,
         "service": service,
         "agent": map_agent(service),
@@ -1539,12 +1597,21 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
              if s["attributes"].get("session.id")),
             None,
         )
+        project = next(
+            (
+                (sp.get("resource") or {}).get("attributes", {}).get(SPAN_PROJECT_ATTR)
+                for sp in raw_spans
+                if (sp.get("resource") or {}).get("attributes", {}).get(SPAN_PROJECT_ATTR)
+            ),
+            None,
+        )
         map_agent = build_agent_mapper(db, workspace.id)
         root = tree["tree"][0] if tree["tree"] else None
         return {
             "trace_id": trace_id,
             "range": range_key,
             "meta": {
+                **_span_project({"project": project}),
                 "root_operation": root["name"] if root else None,
                 "service": service,
                 "agent": map_agent(service),
