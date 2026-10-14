@@ -1,4 +1,4 @@
-import { ArrowUpDown, Download, RefreshCw, Search, Trash2 } from "lucide-react";
+import { ArrowUpDown, Download, MessagesSquare, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -15,7 +15,7 @@ import { ActionDialog } from "./agent/ActionDialog";
 import { AgentDetail } from "./agent/AgentDetail";
 import { BulkDeleteDialog } from "./agents-list/BulkDeleteDialog";
 import { RowMenu } from "./agents-list/RowMenu";
-import { bulkDeletable, liveSelection, toggleSelection } from "./agents-list/rows";
+import { bulkDeletable, liveSelection, opensDetail, rowChat, toggleSelection } from "./agents-list/rows";
 
 function AgentList() {
   const { t } = useTranslation();
@@ -64,6 +64,8 @@ function AgentList() {
   const pickable = rows.filter((a) => bulkDeletable(a, perms)).map((a) => a.id);
   const picked = liveSelection(selected, rows, perms);
   const allPicked = pickable.length > 0 && pickable.every((id) => selected.has(id));
+  // a click on a row is "view": the detail page, keeping the list's filters for the way back
+  const detailHref = (a: AgentInfo) => `/v3/agents?${new URLSearchParams({ ...Object.fromEntries(params), id: a.id })}`;
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
@@ -143,7 +145,8 @@ function AgentList() {
             </thead>
             <tbody>
               {rows.map((a) => (
-                <tr key={a.id}>
+                <tr key={a.id} className="v3-agents-row" data-testid={`v3-agents-tr-${a.id}`}
+                  onClick={(e) => { if (opensDetail(e.target as Element)) navigate(detailHref(a)); }}>
                   {picking && (
                     <td className="pick">
                       {perms.canDelete(a) && (
@@ -158,7 +161,7 @@ function AgentList() {
                   <td>
                     <div className="v3-name">
                       <div>
-                        <Link className="v3-inline-link" to={`/v3/agents?${new URLSearchParams({ ...Object.fromEntries(params), id: a.id })}`}><b>{a.display_name || a.name}</b></Link>
+                        <Link className="v3-inline-link" to={detailHref(a)}><b>{a.display_name || a.name}</b></Link>
                         <small>{a.status === "failed" ? (a.error ?? "").slice(0, 80) : a.name}</small>
                       </div>
                     </div>
@@ -167,7 +170,16 @@ function AgentList() {
                   <td className="num">v{a.version ?? "—"}</td>
                   <td className="mono" style={{ color: "var(--v3-text-2)" }}>{a.created_by_name || a.owner || "—"}</td>
                   <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(a.updated_at)}</td>
-                  <td className="end"><RowMenu agent={a} perms={perms} actions={actions} /></td>
+                  <td className="end">
+                    <div className="v3-agents-row-actions">
+                      {rowChat(a) && (
+                        <Link to={`/v3/chat?agent=${encodeURIComponent(a.id)}`} className="v3-btn sm" data-testid={`v3-agents-chat-${a.id}`}>
+                          <MessagesSquare size={14} /> {t("v3.agent.chat")}
+                        </Link>
+                      )}
+                      <RowMenu agent={a} perms={perms} actions={actions} />
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

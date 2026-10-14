@@ -10263,7 +10263,8 @@
       "failed": "The last deploy failed.",
       "chat": "Chat",
       "gate": "Release gate",
-      "edit": "Edit",
+      "edit": "Edit configuration",
+      "editHint": "Change the configuration and publish a new version",
       "lifecycle": "Lifecycle",
       "pending": "Version v{{version}} is waiting on the release gate.",
       "openGate": "Open the gate",
@@ -10281,9 +10282,9 @@
       "identity": "Identity",
       "more": "More",
       "editMenu": {
-        "wizard": "Edit and republish",
-        "canvas": "Edit in canvas",
-        "preset": "Configure preset",
+        "wizard": "In the wizard",
+        "canvas": "On the canvas",
+        "preset": "Preset configuration",
         "classic": "Open the classic detail page"
       },
       "editBlocked": {

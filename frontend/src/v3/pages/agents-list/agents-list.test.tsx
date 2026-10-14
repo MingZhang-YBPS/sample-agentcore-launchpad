@@ -8,7 +8,7 @@ import { agentPermissions } from "../../../lib/agent-admin/permissions";
 import type { AgentInfo } from "../../../lib/api";
 import { BulkDeleteDialog } from "./BulkDeleteDialog";
 import { RowMenu } from "./RowMenu";
-import { bulkDeletable, deleteMany, liveSelection, rowEntries, toggleSelection } from "./rows";
+import { bulkDeletable, deleteMany, liveSelection, opensDetail, rowChat, rowEntries, toggleSelection } from "./rows";
 
 const agent = (over: Partial<AgentInfo> = {}): AgentInfo =>
   ({
@@ -34,34 +34,44 @@ beforeAll(async () => {
 });
 
 describe("row menu entries", () => {
-  it("a platform agent: chat, edit, delete; a Harness agent can also convert", () => {
-    expect(keys(agent())).toEqual(["chat", "edit", "delete"]);
-    expect(keys(agent({ method: "harness" }))).toEqual(["chat", "edit", "convert", "delete"]);
+  it("a platform agent: edit configuration, delete; a Harness agent can also convert", () => {
+    expect(keys(agent())).toEqual(["edit", "delete"]);
+    expect(keys(agent({ method: "harness" }))).toEqual(["edit", "convert", "delete"]);
   });
 
   it("an imported runtime has no editor and is removed, not deleted", () => {
-    expect(keys(agent({ method: "discovered_runtime" }))).toEqual(["chat", "remove"]);
+    expect(keys(agent({ method: "discovered_runtime" }))).toEqual(["remove"]);
   });
 
-  it("an MCP server has no chat", () => {
+  it("chat is the row's own button, never for an MCP server, and never in the menu", () => {
+    expect(rowChat(agent())).toBe(true);
+    expect(rowChat(agent({ method: "discovered_runtime" }))).toBe(true);
+    expect(rowChat(agent({ spec: { protocol: "mcp" } }))).toBe(false);
     expect(keys(agent({ spec: { protocol: "mcp" } }))).toEqual(["edit", "delete"]);
   });
 
   it("a preset: never deleted or converted, its edit disabled for a non-admin", () => {
     const entries = rowEntries(agent({ system: PRESET, method: "harness" }), member);
-    expect(entries.map((e) => e.key)).toEqual(["chat", "edit"]);
-    expect(entries[1]).toMatchObject({ disabled: true, why: "presetAdminOnly" });
-    expect(rowEntries(agent({ system: PRESET }), perms({ isAdmin: true }))[1]).toMatchObject({ disabled: false, why: null });
+    expect(entries.map((e) => e.key)).toEqual(["edit"]);
+    expect(entries[0]).toMatchObject({ disabled: true, why: "presetAdminOnly" });
+    expect(rowEntries(agent({ system: PRESET }), perms({ isAdmin: true }))[0]).toMatchObject({ disabled: false, why: null });
   });
 
   it("without the permissions the entries are left out", () => {
-    expect(keys(agent({ method: "harness" }), perms({ canDeploy: false, canDelete: false, canConvert: false }))).toEqual(["chat"]);
+    expect(keys(agent({ method: "harness" }), perms({ canDeploy: false, canDelete: false, canConvert: false }))).toEqual([]);
   });
 
   it("the prod lock disables, it does not hide", () => {
     const entries = rowEntries(agent({ method: "harness" }), perms({ locked: true, lockTitle: "prod" }));
-    expect(entries.map((e) => e.key)).toEqual(["chat", "edit", "convert", "delete"]);
-    expect(entries.filter((e) => e.key !== "chat").every((e) => e.disabled && e.why === "locked")).toBe(true);
+    expect(entries.map((e) => e.key)).toEqual(["edit", "convert", "delete"]);
+    expect(entries.every((e) => e.disabled && e.why === "locked")).toBe(true);
+  });
+
+  it("a click on the row opens the detail, except on its own controls", () => {
+    const at = (inside: string | null) => ({ closest: (sel: string) => (inside && sel.split(", ").includes(inside) ? {} : null) });
+    expect(opensDetail(at(null))).toBe(true);
+    for (const control of ["a", "button", "input", "label", "select", "[role='menu']", "td.pick"]) expect(opensDetail(at(control)), control).toBe(false);
+    expect(opensDetail(null)).toBe(false);
   });
 
   it("a deploy in flight disables edit and conversion, not chat", () => {
@@ -80,6 +90,7 @@ describe("row menu entries", () => {
     expect(html).toContain('data-testid="v3-agents-row-menu-a1"');
     expect(html).toContain('aria-label="Actions for Lab service"');
     expect(html).not.toContain('role="menu"');
+    expect(html).not.toMatch(/Manage|Chat/);
     const none = renderToStaticMarkup(
       <MemoryRouter>
         <RowMenu agent={agent({ spec: { protocol: "mcp" } })} perms={perms({ canDeploy: false, canDelete: false })} actions={actions} />

@@ -32,3 +32,10 @@ export function classicDetailPath(agentId: string): string {
 export function identityPath(agentId: string): string {
   return `/v2/agents?view=identity&id=${encodeURIComponent(agentId)}`;
 }
+
+/**
+ * The one verb for "change and re-publish" on every agent page, V2 and V3
+ * (no "manage", no bare "edit"): the button label and its tooltip.
+ */
+export const EDIT_LABEL_KEY = "v3.agent.edit";
+export const EDIT_HINT_KEY = "v3.agent.editHint";

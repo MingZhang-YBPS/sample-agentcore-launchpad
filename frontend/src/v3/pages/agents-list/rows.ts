@@ -6,7 +6,7 @@ import { isMcpServer } from "../agent/tabs";
 type AgentLike = Pick<AgentInfo, "method" | "status" | "system" | "spec">;
 
 export interface RowEntry {
-  key: "chat" | "edit" | "convert" | "delete" | "remove";
+  key: "edit" | "convert" | "delete" | "remove";
   disabled: boolean;
   /** why it is disabled: an edit rule, or `lock` (the prod-lock title explains) */
   why: EditBlocked | null;
@@ -14,15 +14,16 @@ export interface RowEntry {
 }
 
 /**
- * A list row's "⋯" menu (v3-agent-management §3): chat (never an MCP server),
- * edit, convert, delete — "remove" for an imported runtime. The rules are the
- * detail page's (§2.4): without the permission an entry is left out; the prod
- * lock, a preset for a non-admin or a deploy in flight disable it with the reason.
+ * A list row's "⋯" menu (v3-agent-management §3, UX-agents): edit configuration,
+ * convert, delete — "remove" for an imported runtime. Chat is the row's own
+ * button (`rowChat`) and viewing is a click on the row, so neither is here. The
+ * rules are the detail page's (§2.4): without the permission an entry is left
+ * out; the prod lock, a preset for a non-admin or a deploy in flight disable it
+ * with the reason.
  */
 export function rowEntries(agent: AgentLike, perms: AgentPermissions): RowEntry[] {
   const lock = perms.locked ? ("locked" as const) : null;
   const out: RowEntry[] = [];
-  if (!isMcpServer(agent)) out.push({ key: "chat", disabled: false, why: null });
   const edit = perms.editState(agent);
   if (edit.visible) out.push({ key: "edit", disabled: edit.blocked !== null, why: edit.blocked });
   if (perms.canConvert(agent)) out.push({ key: "convert", disabled: perms.locked, why: lock });
@@ -30,6 +31,20 @@ export function rowEntries(agent: AgentLike, perms: AgentPermissions): RowEntry[
     out.push({ key: isImported(agent) ? "remove" : "delete", disabled: perms.locked, why: lock, danger: true });
   }
   return out;
+}
+
+/** A row's inline "Chat" button: every agent but an MCP server (it has no chat). */
+export function rowChat(agent: AgentLike): boolean {
+  return !isMcpServer(agent);
+}
+
+/**
+ * Whether a click on a list row opens the agent's detail: anywhere on the row
+ * except its own controls (the checkbox and its cell, Chat, the "⋯" menu and
+ * its items, the name link, which opens it already).
+ */
+export function opensDetail(target: { closest(selector: string): unknown } | null): boolean {
+  return !!target && !target.closest("a, button, input, label, select, [role='menu'], td.pick");
 }
 
 /**

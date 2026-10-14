@@ -4,7 +4,7 @@ import type { AgentInfo } from "../../../lib/api";
 type AgentLike = Pick<AgentInfo, "method" | "status" | "system">;
 
 export interface MoreEntry {
-  key: "convert" | "rollback" | "delete" | "remove";
+  key: "convert" | "rollback" | "classic" | "delete" | "remove";
   disabled: boolean;
   /** `lock` ⇒ the prod-lock title explains why it is disabled */
   why: "lock" | null;
@@ -13,8 +13,10 @@ export interface MoreEntry {
 
 /**
  * "⋯ More": convert (active Harness only), roll back (re-publishes, so the edit
- * rule; never an import), delete — "remove" for an imported runtime. An entry
- * without the permission is left out; the prod lock disables, it does not hide.
+ * rule; never an import), open the classic detail page (always — the V2 page
+ * stays reachable for anything V3 does not draw yet), delete — "remove" for an
+ * imported runtime, last as the one dangerous entry. An entry without the
+ * permission is left out; the prod lock disables, it does not hide.
  */
 export function moreEntries(agent: AgentLike, perms: AgentPermissions): MoreEntry[] {
   const imported = agent.method === "discovered_runtime";
@@ -22,6 +24,7 @@ export function moreEntries(agent: AgentLike, perms: AgentPermissions): MoreEntr
   const out: MoreEntry[] = [];
   if (perms.canConvert(agent)) out.push({ key: "convert", disabled: perms.locked, why: lock });
   if (!imported && perms.canEdit(agent)) out.push({ key: "rollback", disabled: perms.locked, why: lock });
+  out.push({ key: "classic", disabled: false, why: null });
   if (perms.canDelete(agent)) out.push({ key: imported ? "remove" : "delete", disabled: perms.locked, why: lock, danger: true });
   return out;
 }

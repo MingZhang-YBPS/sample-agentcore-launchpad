@@ -2,7 +2,7 @@ import { Activity, ChevronDown, Ellipsis, KeyRound, MessagesSquare, RefreshCw, S
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
-import { classicDetailPath, editKind, editPath, identityPath } from "../../../lib/agent-admin/edit";
+import { classicDetailPath, EDIT_HINT_KEY, EDIT_LABEL_KEY, editKind, editPath, identityPath } from "../../../lib/agent-admin/edit";
 import type { AgentPermissions } from "../../../lib/agent-admin/permissions";
 import type { useAgentActions } from "../../../lib/agent-admin/actions";
 import type { AgentInfo } from "../../../lib/api";
@@ -12,10 +12,11 @@ import { isMcpServer } from "./tabs";
 
 /**
  * The detail page's header row: refresh, chat, gate, observability, identity,
- * then "Edit ▾" (the right editor for the agent's method) and "⋯ More" (convert,
- * roll back, delete). Without the permission a control is hidden; on a locked
- * prod workspace, for a preset when not an admin, or while a deploy runs it is
- * shown disabled with the reason as its title (§2.4).
+ * then "Edit configuration ▾" (only the editor for the agent's method — wizard,
+ * canvas or preset) and "⋯ More" (convert, roll back, the classic detail page,
+ * delete). Without the permission a control is hidden; on a locked prod
+ * workspace, for a preset when not an admin, or while a deploy runs it is shown
+ * disabled with the reason as its title (§2.4).
  */
 export function HeaderActions({
   agent,
@@ -40,30 +41,27 @@ export function HeaderActions({
 
   const edit = perms.editState(agent);
   const editTitle =
-    edit.blocked === "locked" ? perms.lockTitle : edit.blocked ? t(`v3.agent.editBlocked.${edit.blocked}`) : undefined;
-  const editItems: MenuItem[] = [
-    ...(edit.visible
-      ? [{
-          key: "editor",
-          label: t(`v3.agent.editMenu.${editKind(agent)}`),
-          onSelect: () => navigate(editPath(agent)),
-          disabled: edit.blocked !== null,
-          title: editTitle,
-        }]
-      : []),
-    // the V2 page stays reachable for anything V3 does not draw yet
-    { key: "classic", label: t("v3.agent.editMenu.classic"), onSelect: () => navigate(classicDetailPath(agent.id)), separated: edit.visible },
-  ];
+    edit.blocked === "locked" ? perms.lockTitle : edit.blocked ? t(`v3.agent.editBlocked.${edit.blocked}`) : t(EDIT_HINT_KEY);
+  const editItems: MenuItem[] = edit.visible
+    ? [{
+        key: "editor",
+        label: t(`v3.agent.editMenu.${editKind(agent)}`),
+        onSelect: () => navigate(editPath(agent)),
+        disabled: edit.blocked !== null,
+        title: editTitle,
+      }]
+    : [];
 
   const run: Record<MoreEntry["key"], () => void> = {
     convert: () => actions.askConvert(agent),
     rollback: onRollback,
+    classic: () => navigate(classicDetailPath(agent.id)),
     delete: () => actions.askDelete(agent),
     remove: () => actions.askDelete(agent),
   };
   const moreItems: MenuItem[] = moreEntries(agent, perms).map((entry) => ({
     key: entry.key,
-    label: t(`v3.agent.${entry.key}`),
+    label: t(entry.key === "classic" ? "v3.agent.editMenu.classic" : `v3.agent.${entry.key}`),
     onSelect: run[entry.key],
     disabled: entry.disabled,
     title: entry.why === "lock" ? perms.lockTitle : undefined,
@@ -86,7 +84,7 @@ export function HeaderActions({
       )}
       <Menu
         kind="primary"
-        label={<><Settings2 size={14} /> {t("v3.agent.edit")} <ChevronDown size={13} /></>}
+        label={<span title={t(EDIT_HINT_KEY)} style={{ display: "inline-flex", alignItems: "center", gap: "inherit" }}><Settings2 size={14} /> {t(EDIT_LABEL_KEY)} <ChevronDown size={13} /></span>}
         items={editItems}
         testId="v3-agent-edit"
       />

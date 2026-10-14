@@ -10263,7 +10263,8 @@
       "failed": "最近一次部署失败。",
       "chat": "对话",
       "gate": "放行门",
-      "edit": "编辑",
+      "edit": "编辑配置",
+      "editHint": "修改配置并发布新版本",
       "lifecycle": "生命周期",
       "pending": "版本 v{{version}} 正在等待放行门。",
       "openGate": "打开放行门",
@@ -10281,9 +10282,9 @@
       "identity": "身份",
       "more": "更多",
       "editMenu": {
-        "wizard": "编辑并重新发布",
-        "canvas": "在画布中编辑",
-        "preset": "配置预置",
+        "wizard": "用向导编辑",
+        "canvas": "用画布编辑",
+        "preset": "编辑预置配置",
         "classic": "打开经典详情页"
       },
       "editBlocked": {

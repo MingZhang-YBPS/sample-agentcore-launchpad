@@ -97,25 +97,27 @@ describe("detailSections per method", () => {
 });
 
 describe("⋯ More", () => {
-  it("convert for an active Harness agent, roll back, delete", () => {
-    expect(moreEntries(agent({ method: "harness" }), member).map((e) => e.key)).toEqual(["convert", "rollback", "delete"]);
-    expect(moreEntries(agent(), member).map((e) => e.key)).toEqual(["rollback", "delete"]);
+  it("convert for an active Harness agent, roll back, the classic page, delete last", () => {
+    expect(moreEntries(agent({ method: "harness" }), member).map((e) => e.key)).toEqual(["convert", "rollback", "classic", "delete"]);
+    expect(moreEntries(agent(), member).map((e) => e.key)).toEqual(["rollback", "classic", "delete"]);
   });
 
   it("an import is removed, never rolled back; a preset is neither deleted nor converted", () => {
-    expect(moreEntries(agent({ method: "discovered_runtime" }), member).map((e) => e.key)).toEqual(["remove"]);
-    expect(moreEntries(agent({ system: PRESET, method: "harness" }), member)).toEqual([]);
+    expect(moreEntries(agent({ method: "discovered_runtime" }), member).map((e) => e.key)).toEqual(["classic", "remove"]);
+    expect(moreEntries(agent({ system: PRESET, method: "harness" }), member).map((e) => e.key)).toEqual(["classic"]);
   });
 
-  it("no rollback while deploying; the prod lock disables rather than hides", () => {
-    expect(moreEntries(agent({ status: "deploying" }), member).map((e) => e.key)).toEqual(["delete"]);
+  it("no rollback while deploying; the prod lock disables rather than hides, but never the classic page", () => {
+    expect(moreEntries(agent({ status: "deploying" }), member).map((e) => e.key)).toEqual(["classic", "delete"]);
     const locked = agentPermissions({ canDeploy: true, canDelete: true, canConvert: true, isAdmin: false, locked: true, lockTitle: "prod" });
-    expect(moreEntries(agent(), locked).every((e) => e.disabled && e.why === "lock")).toBe(true);
+    const entries = moreEntries(agent(), locked);
+    expect(entries.filter((e) => e.key !== "classic").every((e) => e.disabled && e.why === "lock")).toBe(true);
+    expect(entries.find((e) => e.key === "classic")).toMatchObject({ disabled: false, why: null });
   });
 
-  it("hides what the role may not do", () => {
+  it("hides what the role may not do; the classic page stays", () => {
     const viewer = agentPermissions({ canDeploy: false, canDelete: false, canConvert: false, isAdmin: false, locked: false, lockTitle: undefined });
-    expect(moreEntries(agent({ method: "harness" }), viewer)).toEqual([]);
+    expect(moreEntries(agent({ method: "harness" }), viewer).map((e) => e.key)).toEqual(["classic"]);
   });
 });
 
@@ -170,8 +172,11 @@ describe("header and basic information", () => {
       </MemoryRouter>,
     );
 
-  it("links chat, gate, observability and the identity page; Edit ▾ and More are menus", () => {
+  it("links chat, gate, observability and the identity page; Edit configuration ▾ and More are menus", () => {
     const html = header(agent());
+    expect(html).toContain("Edit configuration");
+    expect(html).toContain('title="Change the configuration and publish a new version"');
+    expect(html).not.toMatch(/Manage/);
     expect(html).toContain('href="/v3/chat?agent=a1"');
     expect(html).toContain('href="/v3/gate?agent=a1"');
     expect(html).toContain('href="/v3/observability"');
@@ -181,13 +186,28 @@ describe("header and basic information", () => {
     expect(html).not.toContain("/v2/agents?view=detail");
   });
 
-  it("an import has no identity link; an MCP server no chat or gate; a viewer no More", () => {
+  it("an import has no identity link; an MCP server no chat or gate; a viewer no Edit configuration", () => {
     expect(header(agent({ method: "discovered_runtime" }))).not.toContain("v3-agent-identity-open");
     const mcp = header(agent({ spec: { protocol: "mcp" } }));
     expect(mcp).not.toContain("/v3/chat");
     expect(mcp).not.toContain("/v3/gate");
     const viewer = agentPermissions({ canDeploy: false, canDelete: false, canConvert: false, isAdmin: false, locked: false, lockTitle: undefined });
-    expect(header(agent(), viewer)).not.toContain("v3-agent-more");
+    const html = header(agent(), viewer);
+    expect(html).not.toContain('data-testid="v3-agent-edit"');
+    // More still opens the classic detail page
+    expect(html).toContain('data-testid="v3-agent-more"');
+  });
+
+  it("the Chinese wording: 编辑配置 with its hint, never 管理", async () => {
+    await i18n.changeLanguage("zh-CN");
+    try {
+      const html = header(agent());
+      expect(html).toContain("编辑配置");
+      expect(html).toContain('title="修改配置并发布新版本"');
+      expect(html).not.toContain("管理");
+    } finally {
+      await i18n.changeLanguage("en");
+    }
   });
 
   it("lists the agent's facts with copy buttons", () => {

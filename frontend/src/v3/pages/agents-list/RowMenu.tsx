@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import type { useAgentActions } from "../../../lib/agent-admin/actions";
-import { editKind, editPath } from "../../../lib/agent-admin/edit";
+import { EDIT_HINT_KEY, EDIT_LABEL_KEY, editPath } from "../../../lib/agent-admin/edit";
 import type { AgentPermissions } from "../../../lib/agent-admin/permissions";
 import type { AgentInfo } from "../../../lib/api";
 import "../agent/agent.css";
@@ -58,15 +58,15 @@ export function RowMenu({
   if (entries.length === 0) return null;
   const name = agent.display_name || agent.name;
   const run: Record<RowEntry["key"], () => void> = {
-    chat: () => navigate(`/v3/chat?agent=${encodeURIComponent(agent.id)}`),
     edit: () => navigate(editPath(agent)),
     convert: () => actions.askConvert(agent),
     delete: () => actions.askDelete(agent),
     remove: () => actions.askDelete(agent),
   };
-  const label = (entry: RowEntry) => (entry.key === "edit" ? t(`v3.agent.editMenu.${editKind(agent)}`) : t(`v3.agent.${entry.key}`));
+  const label = (entry: RowEntry) => t(entry.key === "edit" ? EDIT_LABEL_KEY : `v3.agent.${entry.key}`);
+  // a disabled entry says why; an enabled "Edit configuration" says what it does
   const title = (entry: RowEntry) =>
-    entry.why === "locked" ? perms.lockTitle : entry.why ? t(`v3.agent.editBlocked.${entry.why}`) : undefined;
+    entry.why === "locked" ? perms.lockTitle : entry.why ? t(`v3.agent.editBlocked.${entry.why}`) : entry.key === "edit" ? t(EDIT_HINT_KEY) : undefined;
   const toggle = () => {
     if (at) return setAt(null);
     const box = button.current?.getBoundingClientRect();
