@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import current_project
 from app.evaluation import online
 from app.evaluation.online_evaluators import ONLINE_EVAL_MAX, refuse_hidden_evaluators
@@ -101,10 +101,14 @@ class ReportStart(BaseModel):
 def _agent_in(
     db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
 ) -> Agent:
-    """An active agent of this workspace the caller may see; a foreign, missing or
-    isolation-hidden id answers 400 ``agent.not_active`` alike."""
+    """An active agent of this workspace the caller may see. A missing, foreign
+    (another workspace's or project's) or isolation-hidden id answers 404
+    ``agent.not_found`` alike; 400 ``agent.not_active`` is only for a visible
+    agent that is not active."""
     agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
-    if agent is None or agent.status != "active":
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    if agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
     return agent
 

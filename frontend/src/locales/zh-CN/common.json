@@ -2550,7 +2550,8 @@
     "mcp.operation_in_flight": "此 MCP 服务器的另一项操作仍在进行——请等待其完成。",
     "mcp.rollback_noop": "Gateway 目标已在使用该版本。",
     "mcp.rollback_unavailable": "此 MCP 服务器没有已批准工具清单的更早版本可供回滚。",
-    "mcp.scaffold_nothing_reviewed": "此 MCP 服务器尚无工具清单——请先部署，以便审核其工具。"
+    "mcp.scaffold_nothing_reviewed": "此 MCP 服务器尚无工具清单——请先部署，以便审核其工具。",
+    "trace.not_found": "当前项目中没有该会话的调用链。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",

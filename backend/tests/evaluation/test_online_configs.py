@@ -312,7 +312,7 @@ def test_create_requires_active_agent_and_bootstrapped_workspace(client, monkeyp
     stub_environment(monkeypatch)
     res = client.post("/api/eval/online", json={
         "agent_id": "nope", "evaluators": ["Builtin.Helpfulness"]})
-    assert res.json()["code"] == "agent.not_active"
+    assert res.status_code == 404 and res.json()["code"] == "agent.not_found"
     set_default_resources({})
     res = client.post(
         "/api/eval/online", json={"agent_id": agent.id, "evaluators": ["Builtin.Helpfulness"]}

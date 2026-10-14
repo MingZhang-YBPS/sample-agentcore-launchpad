@@ -2550,7 +2550,8 @@
     "mcp.operation_in_flight": "Another operation on this MCP server is still running — wait for it to finish.",
     "mcp.rollback_noop": "The Gateway target already serves this version.",
     "mcp.rollback_unavailable": "No earlier version of this MCP server has an approved tool list to roll back to.",
-    "mcp.scaffold_nothing_reviewed": "This MCP server has no tool list yet — deploy it so its tools can be reviewed."
+    "mcp.scaffold_nothing_reviewed": "This MCP server has no tool list yet — deploy it so its tools can be reviewed.",
+    "trace.not_found": "No trace for this session in the current project."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",

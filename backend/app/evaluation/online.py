@@ -1027,7 +1027,7 @@ RESULTS_SOURCE = f"SOURCE logGroups(namePrefix: ['{ac.ONLINE_EVAL_RESULTS_PREFIX
 SESSION_SCORES_LIMIT = 200
 QUALITY_RANGE = "24h"
 _NAMES_TTL_SECONDS = 120.0
-_names_cache: dict[str, tuple[float, dict[str, str]]] = {}
+_names_cache: dict[tuple[str, str | None], tuple[float, dict[str, str]]] = {}
 _names_lock = threading.Lock()
 
 
@@ -1068,26 +1068,37 @@ def quality_queries(config_ids: Sequence[str]) -> dict[str, str]:
     }
 
 
-def config_names(workspace: WorkspaceContext, control: Any = None) -> dict[str, str]:
+def config_names(
+    workspace: WorkspaceContext, control: Any = None, db: Session | None = None
+) -> dict[str, str]:
     """``{config_id: name}`` for every config in the account (one paginated List,
-    cached 120 s per workspace). Only feeds owner classification of results that
-    no ledger row explains; a failure degrades to ``{}`` (→ ``external``)."""
-    hit = _names_cache.get(workspace.id)
+    cached 120 s per (workspace, project)). Only feeds owner classification of
+    results that no ledger row explains; a failure degrades to ``{}`` (→
+    ``external``). With ``db``, a workspace holding several projects drops the
+    configs another project owns (its ledger rows and experiment / canary arms),
+    so no name crosses projects."""
+    key = (workspace.id, current_project())
+    hit = _names_cache.get(key)
     if hit and time.monotonic() - hit[0] < _NAMES_TTL_SECONDS:
         return hit[1]
     with _names_lock:
-        hit = _names_cache.get(workspace.id)
+        hit = _names_cache.get(key)
         if hit and time.monotonic() - hit[0] < _NAMES_TTL_SECONDS:
             return hit[1]
         try:
             names = {
-                c["onlineEvaluationConfigId"]: c.get("name", "")
+                c["onlineEvaluationConfigId"]: (
+                    c.get("onlineEvaluationConfigName") or c.get("name") or ""
+                )
                 for c in ac.list_online_eval_configs(control or control_client(workspace))
                 if c.get("onlineEvaluationConfigId")
             }
         except Exception:
             names = {}
-        _names_cache[workspace.id] = (time.monotonic(), names)
+        fence = _ProjectConfigs.load(db, workspace) if db is not None else None
+        if fence is not None:
+            names = {cid: n for cid, n in names.items() if fence.decide(cid, n) is not False}
+        _names_cache[key] = (time.monotonic(), names)
         return names
 
 
@@ -1168,7 +1179,7 @@ def session_online_scores(
                    logs=logs, workspace=workspace)["scores"]
     except Exception:
         return {"configs": [], "total": 0, "unavailable": True, "configs_exist": exists}
-    names = config_names(workspace, control) if any(
+    names = config_names(workspace, control, db) if any(
         (r.get("config_id") or "") not in ledger for r in rows
     ) else {}
     return {**parse_session_scores(rows, ledger, names), "configs_exist": exists}
