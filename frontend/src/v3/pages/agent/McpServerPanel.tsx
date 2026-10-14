@@ -4,19 +4,25 @@ import { Link } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type AgentInfo } from "../../../lib/api";
+import type { McpServerStatusWithReview } from "../../../lib/api/mcpReviews";
 import { useLoad } from "../../hooks";
 import { Chip, Empty, Notice, Panel, type Signal, Skeleton, Stat } from "../../ui";
+import { McpReviewSection } from "./McpReviewSection";
 
 const TARGET_SIGNAL = (status: string | null): Signal =>
   status === "READY" ? "ok" : status === "FAILED" || status === "MISSING" || status?.endsWith("UNSUCCESSFUL") ? "act" : status ? "wait" : "off";
 
 /**
  * An MCP server is a tool, not an agent: no chat, no gate. What matters is its
- * Gateway target and the tools agents see through it (`<target>___<tool>`).
+ * Gateway target, the tools agents see through it (`<target>___<tool>`) and the
+ * tool review that decides whether the target is served at all (§15.6).
  */
 export function McpServerPanel({ agent }: { agent: AgentInfo }) {
   const { t } = useTranslation();
-  const status = useLoad(() => api.agentMcp(agent.id), `v3-agent-mcp:${agent.id}:${agent.status}:${agent.version}`);
+  const status = useLoad(
+    () => api.agentMcp(agent.id) as Promise<McpServerStatusWithReview>,
+    `v3-agent-mcp:${agent.id}:${agent.status}:${agent.version}`,
+  );
   const d = status.data;
   return (
     <Panel
@@ -58,6 +64,7 @@ export function McpServerPanel({ agent }: { agent: AgentInfo }) {
           ) : d.target_status === "READY" && !d.tools_error ? (
             <Empty title={t("v3.mcp.noTools")} />
           ) : null}
+          <McpReviewSection agentId={agent.id} drift={Boolean(d.review?.drift)} onChanged={status.reload} />
           <Notice s="info">
             {t("v3.mcp.howToUse", { target: d.target_name })}{" "}
             <Link to="/v3/governance" style={{ textDecoration: "underline" }}>{t("v3.mcp.openGovernance")}</Link>

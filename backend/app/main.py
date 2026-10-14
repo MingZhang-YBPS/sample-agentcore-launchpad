@@ -53,6 +53,7 @@ from app.routers.governance import router as governance_router
 from app.routers.identity import router as identity_router
 from app.routers.issues import router as issues_router
 from app.routers.knowledge import router as knowledge_router
+from app.routers.mcp_reviews import router as mcp_reviews_router
 from app.routers.memory import router as memory_router
 from app.routers.memory_resources import router as memory_resources_router
 from app.routers.model_defaults import router as model_defaults_router
@@ -242,6 +243,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(role_templates_router)
     app.include_router(my_access_router)  # GET /api/me/access: the caller's projects + keys
     app.include_router(network_profiles_router)  # VPC network profiles (projects §12)
+    app.include_router(mcp_reviews_router)  # MCP server tool reviews (projects §15.6)
     app.include_router(fleet_router)  # fleet overview, governance health, marketplace (T37-T39)
     app.include_router(alerts_router)  # spend attribution + threshold alerts (T28/T29)
     app.include_router(promotions_router)  # release bundles, promotions, inbox (T20-T22)

@@ -18,22 +18,35 @@ under its Cedar policy. The Gateway-level Registry record is NOT rewritten
 here: an update resets an approved record to DRAFT for every agent that
 attaches it, so refreshing the catalog stays an explicit Governance action.
 
-Design: docs/design/projects.zh-CN.md §15 (minimal version: public network,
-no tool review, no Cedar scaffolding). Teardown runs in reverse and is
-idempotent (``teardown_target`` before the runtime, ``release_identity``
-after it).
+Tool review (§15.6) is the gate: creating or re-syncing the target is how the
+server's tools are listed, and right after that the list is compared with the
+last approved one (``services/mcp_reviews.py``). A list nobody approved yet —
+a first deploy, a re-publish that changed a tool, a drift — opens a review and
+the target is deleted again, so agents cannot call (or even read) the new tools
+until a member holding ``mcp.approve`` who is not the deployer approves; the
+approval re-creates the target in the background (``publish_approved``). Until
+Cedar scaffolding lands (§15.7) withholding the whole target is the gate.
+
+Design: docs/design/projects.zh-CN.md §15 (public network, no Cedar
+scaffolding yet). Teardown runs in reverse and is idempotent
+(``teardown_target`` before the runtime, ``release_identity`` after it).
 """
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
+from app.core.db import SessionLocal
 from app.core.errors import AppError, is_not_found
+from app.core.project_scope import project_context
 from app.models.ledger import Agent
-from app.services import mcp_client
+from app.models.mcp_review import McpToolReview
+from app.services import mcp_client, mcp_reviews
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -242,13 +255,15 @@ def ensure_target(
     provider_arn: str,
     previous_target_id: str | None,
     log: Log,
-) -> tuple[str, str]:
-    """Create the MCP-server target, or re-sync the one this server already owns.
+) -> tuple[str | None, str]:
+    """Create the MCP-server target, or re-sync the one this server already owns,
+    then pass it through the tool-review gate.
 
-    Returns ``(target_id, outcome)`` with outcome ``created`` | ``synchronized``.
-    A target of the same name that points elsewhere is somebody else's: refused
-    (``409 mcp.target_name_taken``) rather than repointed. A renamed server's
-    previous target is deleted first.
+    Returns ``(target_id, outcome)`` with outcome ``created`` | ``synchronized``;
+    ``(None, "… withheld …")`` when the listed tools are not the approved ones (the
+    target was deleted again and a review is open). A target of the same name that
+    points elsewhere is somebody else's: refused (``409 mcp.target_name_taken``)
+    rather than repointed. A renamed server's previous target is deleted first.
     """
     control = control_client(workspace)
     gateway_id = _gateway_id(workspace)
@@ -273,9 +288,15 @@ def ensure_target(
         target_id = str(same_name["targetId"])
         # a re-publish keeps the URL (DEFAULT follows the new version): re-list tools
         _wait_target(control, gateway_id, target_id, log)
+        if previous_target_id == target_id:
+            # only a target a finished deploy stamped: one left by a deploy that died
+            # before the gate must not become the baseline unread
+            _baseline_if_unreviewed(workspace, agent, target_name, log)
         policy_api.synchronize_gateway_target(control, gateway_id, target_id)
         _wait_target(control, gateway_id, target_id, log)
-        return target_id, "synchronized"
+        return _through_gate(
+            workspace, agent, control, gateway_id, target_id, target_name, "synchronized", log
+        )
     created = control.create_gateway_target(
         gatewayIdentifier=gateway_id,
         name=target_name,
@@ -297,7 +318,193 @@ def ensure_target(
     target_id = str(created["targetId"])
     log(f"created gateway target {target_name} ({target_id}) → {url}")
     _wait_target(control, gateway_id, target_id, log)
-    return target_id, "created"
+    return _through_gate(
+        workspace, agent, control, gateway_id, target_id, target_name, "created", log
+    )
+
+
+# ── the tool-review gate (§15.6) ───────────────────────────────────────────────
+
+
+def listed_tools(workspace: WorkspaceContext, target_name: str) -> list[dict[str, Any]]:
+    """The target's tools through the Gateway, as a review snapshot (prefix stripped)."""
+    return mcp_reviews.normalize_tools(mcp_client.tools_list(workspace), target_name)
+
+
+def _baseline_if_unreviewed(
+    workspace: WorkspaceContext, agent: Agent, target_name: str, log: Log
+) -> None:
+    """A server whose target predates tool review: record what agents use today as
+    the approved baseline (read BEFORE the re-sync), so only a change needs review."""
+    with project_context(agent.project_id):
+        db = SessionLocal()
+        try:
+            if mcp_reviews.has_reviews(db, agent.id):
+                return
+            try:
+                tools = listed_tools(workspace, target_name)
+            except (AppError, httpx.HTTPError) as exc:
+                log(f"tool-review baseline skipped (tools/list failed: {exc})")
+                return
+            mcp_reviews.record_baseline(db, agent, tools)
+            db.commit()
+            log(f"tool review: recorded the live {len(tools)} tool(s) as the approved baseline")
+        finally:
+            db.close()
+
+
+def _withhold(control: Any, gateway_id: str, target_id: str, *, wait: bool = True) -> None:
+    if wait:
+        _delete_target_and_wait(control, gateway_id, target_id)
+        return
+    try:
+        control.delete_gateway_target(gatewayIdentifier=gateway_id, targetId=target_id)
+    except ClientError as exc:
+        if not is_not_found(exc):
+            raise
+
+
+def gate(agent: Agent, tools: list[dict[str, Any]], *, source: str) -> McpToolReview:
+    """The review deciding ``tools`` (committed): approved = the gate is open."""
+    with project_context(agent.project_id):
+        db = SessionLocal()
+        try:
+            review = mcp_reviews.record_tool_list(db, agent, tools, source=source)
+            db.commit()
+            db.refresh(review)
+            db.expunge(review)
+            return review
+        finally:
+            db.close()
+
+
+def _through_gate(
+    workspace: WorkspaceContext,
+    agent: Agent,
+    control: Any,
+    gateway_id: str,
+    target_id: str,
+    target_name: str,
+    outcome: str,
+    log: Log,
+) -> tuple[str | None, str]:
+    try:
+        tools = listed_tools(workspace, target_name)
+    except (AppError, httpx.HTTPError) as exc:
+        # fail closed: an unread list cannot be reviewed, so it is not served either
+        _withhold(control, gateway_id, target_id)
+        raise RuntimeError(
+            f"could not read the MCP server's tools through the Gateway for review ({exc}); "
+            "the target was withheld — re-run the deploy once tools/list works"
+        ) from exc
+    review = gate(agent, tools, source="deploy")
+    if review.status == "approved":
+        log(f"tool review: {len(tools)} tool(s) match the approved list — target live")
+        return target_id, outcome
+    _withhold(control, gateway_id, target_id)
+    log(
+        f"tool review {review.id} opened for {len(tools)} tool(s) "
+        f"(+{len(review.diff.get('added', []))} −{len(review.diff.get('removed', []))} "
+        f"~{len(review.diff.get('description_changed', []))} described "
+        f"~{len(review.diff.get('schema_changed', []))} schema, {len(review.hints)} hint(s)); "
+        "the target is withheld until a member with mcp.approve other than the deployer "
+        "approves it"
+    )
+    return None, f"{outcome}, then withheld for tool review"
+
+
+def _stamp_target_id(agent_id: str, target_id: str | None) -> None:
+    db = SessionLocal()
+    try:
+        row = db.get(Agent, agent_id)
+        if row is None:
+            return
+        spec = dict(row.spec or {})
+        spec["mcp"] = {**(spec.get("mcp") or {}), "target_id": target_id}
+        row.spec = spec
+        db.commit()
+    finally:
+        db.close()
+
+
+def check_drift(workspace: WorkspaceContext, agent: Agent) -> dict[str, Any]:
+    """Re-sync the live target and compare its tool list with the approved one (a
+    server can change its tools without a re-deploy); a difference opens a ``drift``
+    review and withholds the target. Returns what was found."""
+    mcp = (agent.spec or {}).get("mcp") or {}
+    target_id = mcp.get("target_id")
+    target_name = str(mcp.get("target_name") or "")
+    if not target_id or not target_name:
+        return {"checked": False, "reason": "no_target", "drift": False}
+    control = control_client(workspace)
+    gateway_id = _gateway_id(workspace)
+    noop: Log = lambda _msg: None  # noqa: E731
+    _wait_target(control, gateway_id, str(target_id), noop)
+    policy_api.synchronize_gateway_target(control, gateway_id, str(target_id))
+    _wait_target(control, gateway_id, str(target_id), noop)
+    try:
+        tools = listed_tools(workspace, target_name)
+    except (AppError, httpx.HTTPError):
+        _withhold(control, gateway_id, str(target_id), wait=False)  # fail closed
+        _stamp_target_id(agent.id, None)
+        raise
+    review = gate(agent, tools, source="drift")
+    if review.status == "approved":
+        return {"checked": True, "drift": False, "review_id": review.id}
+    _withhold(control, gateway_id, str(target_id), wait=False)
+    _stamp_target_id(agent.id, None)
+    logger.warning("agent %s: MCP tool list drifted; target %s withheld (review %s)",
+                   agent.id, target_id, review.id)
+    return {"checked": True, "drift": True, "review_id": review.id}
+
+
+def publish_approved(workspace: WorkspaceContext, agent_id: str, review_id: str) -> None:
+    """After an approval: re-create the withheld target (through the gate again —
+    the server must still list exactly the approved tools) and stamp its id."""
+    db = SessionLocal()
+    try:
+        review = db.get(McpToolReview, review_id)
+        agent = db.get(Agent, agent_id)
+        if review is None or agent is None:
+            return
+        mcp = (agent.spec or {}).get("mcp") or {}
+        error: str | None = None
+        try:
+            if agent.status == "deleted" or not agent.arn:
+                raise RuntimeError("the MCP server has no runtime — re-deploy it")
+            if not mcp.get("provider_arn"):
+                raise RuntimeError("the MCP server has no OAuth2 provider — re-deploy it")
+            target_id, _outcome = ensure_target(
+                workspace, agent, target_name=str(mcp.get("target_name") or ""),
+                provider_arn=str(mcp["provider_arn"]),
+                previous_target_id=mcp.get("target_id"),
+                log=lambda msg: logger.info("agent %s: %s", agent_id, msg),
+            )
+            _stamp_target_id(agent_id, target_id)
+            if target_id is None:
+                error = "the server now lists different tools — a new review is open"
+        except (AppError, ClientError, BotoCoreError, RuntimeError) as exc:
+            error = f"{type(exc).__name__}: {getattr(exc, 'message', None) or exc}"
+        db.refresh(review)
+        review.publish_status = "failed" if error else "published"
+        review.publish_error = error[:2000] if error else None
+        db.commit()
+    finally:
+        db.close()
+
+
+def start_publish(workspace: WorkspaceContext, agent: Agent, review_id: str) -> None:
+    """Run ``publish_approved`` on a daemon thread, inside the server's project."""
+    project_id, agent_id = agent.project_id, agent.id
+
+    def run() -> None:
+        with project_context(project_id):
+            try:
+                publish_approved(workspace, agent_id, review_id)
+            except Exception:  # a crashed publish must not kill the process
+                logger.exception("agent %s: publishing approved MCP tools failed", agent_id)
+
+    threading.Thread(target=run, daemon=True, name=f"mcp-publish-{agent_id[:8]}").start()
 
 
 def gateway_tools(workspace: WorkspaceContext, target_name: str) -> list[dict[str, Any]]:
@@ -360,6 +567,7 @@ def server_status(workspace: WorkspaceContext, agent: Agent) -> dict[str, Any]:
         "status_reasons": [],
         "tools": [],
         "tools_error": None,
+        "review": None,
     }
     target_id = mcp.get("target_id")
     if target_id:
@@ -374,9 +582,29 @@ def server_status(workspace: WorkspaceContext, agent: Agent) -> dict[str, Any]:
         except RuntimeError as exc:  # the workspace map lost its gateway
             out["target_status"] = "UNKNOWN"
             out["status_reasons"] = [str(exc)]
+    live_hash: str | None = None
     if out["target_status"] == "READY" and target_name:
         try:
-            out["tools"] = gateway_tools(workspace, target_name)
+            raw = mcp_client.tools_list(workspace)
+            prefix = f"{target_name}___"
+            out["tools"] = [
+                {"name": str(t.get("name") or ""), "description": str(t.get("description") or "")}
+                for t in raw if str(t.get("name") or "").startswith(prefix)
+            ]
+            live_hash = mcp_reviews.tools_hash(mcp_reviews.normalize_tools(raw, target_name))
         except AppError as exc:
             out["tools_error"] = exc.message
+    db = SessionLocal()
+    try:
+        gate_state = mcp_reviews.state(db, agent.id)
+    finally:
+        db.close()
+    approved_hash = gate_state["approved_hash"]
+    out["review"] = {
+        **gate_state,
+        "live_hash": live_hash,
+        # read-only: a mismatch is recorded (and the target withheld) by
+        # POST /api/mcp-servers/{agent_id}/reviews/check or the next deploy
+        "drift": bool(live_hash and approved_hash and live_hash != approved_hash),
+    }
     return out

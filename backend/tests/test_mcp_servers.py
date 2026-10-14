@@ -204,10 +204,11 @@ def aws(monkeypatch):
     monkeypatch.setattr(mcp_servers, "control_client", lambda _ws=None: control)
     monkeypatch.setattr(byoc_dep, "control_client", lambda _ws=None: control)
     monkeypatch.setattr(mcp_servers.time, "sleep", lambda _s: None)
+    # the Gateway lists a target's tools only while the target exists
     monkeypatch.setattr(
         mcp_servers.mcp_client, "tools_list",
-        lambda _ws: [{"name": "crm-lookup___find_order", "description": "Find"},
-                     {"name": "other___x"}],
+        lambda _ws: [{"name": f"{t['name']}___find_order", "description": "Find"}
+                     for t in control.targets.values()] + [{"name": "other___x"}],
     )
     from app.dlc import releases as releases_mod
 
@@ -276,7 +277,27 @@ def test_update_container_runtime_echoes_the_protocol():
     assert stub.updated_with["protocolConfiguration"] == {"serverProtocol": "MCP"}
 
 
-def _registered(aws) -> str:
+FIND_ORDER = [{"name": "find_order", "description": "Find", "input_schema": {}}]
+
+
+def approve_tools(agent_id: str, tools: list[dict] | None = None) -> None:
+    """An approved tool review of ``tools`` (default: what the stub Gateway lists), as
+    if a reviewer had approved an earlier deploy — so the gate keeps the target."""
+    from app.models.mcp_review import McpToolReview
+    from app.services import mcp_reviews
+
+    listed = FIND_ORDER if tools is None else tools
+    db = SessionLocal()
+    db.add(McpToolReview(
+        workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id, tools=listed,
+        tools_hash=mcp_reviews.tools_hash(listed), status="approved",
+        requested_by="dev", decided_by="reviewer",
+    ))
+    db.commit()
+    db.close()
+
+
+def _registered(aws, *, approved: bool = True) -> str:
     spec = AgentSpec(**_mcp_spec())
     spec.mcp.client_id = "client-1"
     agent_id, dep_id = _mk_agent(spec)
@@ -284,9 +305,12 @@ def _registered(aws) -> str:
         "ClientName": f"lp-mcp-{agent_id[:12]}", "ClientSecret": "s",
     }
     _active(agent_id)
+    if approved:
+        approve_tools(agent_id)
     ctx = _stage_ctx(agent_id, dep_id, ws_ctx(RESOURCES))
     result = byoc_dep._stage_register(ctx, _get_agent(agent_id))
-    assert "crm-lookup created" in result.detail and "1 tool(s)" in result.detail
+    assert "crm-lookup created" in result.detail
+    assert ("1 tool(s)" if approved else "0 tool(s)") in result.detail
     return agent_id
 
 

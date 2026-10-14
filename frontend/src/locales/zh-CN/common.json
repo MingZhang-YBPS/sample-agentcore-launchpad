@@ -12070,5 +12070,58 @@
       "byocNoAdot": "这个 BYOC 代码 zip 没有 ADOT 启动器，不会产生链路，可观测和评估都看不到它：在 requirements.txt 加入 aws-opentelemetry-distro（并打开安装依赖），或改用 Dockerfile 构建，然后重新发布。",
       "noLogGroup": "这个端点上还没有调用过该智能体。"
     }
+  },
+  "mcpReview": {
+    "title": "工具审阅",
+    "state": {
+      "none": "尚无工具清单",
+      "reviewing": "待审阅",
+      "approved": "已批准",
+      "rejected": "已拒绝",
+      "superseded": "已被取代"
+    },
+    "source": {
+      "deploy": "部署",
+      "drift": "漂移",
+      "baseline": "基线"
+    },
+    "withheld": "网关目标已暂扣：在持有 mcp.approve 的成员（不能是部署者）批准此清单之前，Agent 无法调用这些工具。",
+    "rejectedNotice": "上一份工具清单已被拒绝。在新的部署获批之前，目标保持暂扣。",
+    "none": "尚未审阅任何工具清单。首次部署会开启审阅。",
+    "driftNotice": "网关列出的工具与已批准清单不一致。执行“检查漂移”以记录变化，并在审阅前暂扣目标。",
+    "publishing": "已批准，正在重新创建网关目标……",
+    "publishFailed": "已批准，但未能重新创建网关目标：",
+    "meta": "v{{version}} · {{source}} · 部署者 {{by}} · {{ago}}前",
+    "decidedBy": "{{by}} {{status}}",
+    "diff": "对比已批准清单：+{{added}} −{{removed}} · {{described}} 个描述、{{schema}} 个 schema 有改动 · {{hints}} 条提示",
+    "tool": "工具",
+    "description": "描述（原文，模型将原样读到）",
+    "hints": "提示",
+    "schema": "输入 schema",
+    "schemaChanged": "输入 schema 有改动",
+    "removed": "本清单已删除",
+    "hint": {
+      "dangerous_verb": "破坏性动词",
+      "write_name": "写类工具",
+      "missing_description": "缺少描述",
+      "injection_phrase": "类指令短语",
+      "url": "含 URL",
+      "cross_tool_reference": "指向其他工具",
+      "long_description": "描述过长"
+    },
+    "note": "备注（可选）",
+    "approve": "批准",
+    "reject": "拒绝",
+    "sod": "需要 mcp.approve；部署者不能审阅自己的服务器。",
+    "approved": "工具清单已批准，正在重新创建网关目标",
+    "rejected": "工具清单已拒绝",
+    "decideFailed": "未能记录审阅结果",
+    "check": "检查漂移",
+    "checkHint": "重新同步网关目标，并与已批准清单比对工具",
+    "checkClean": "线上工具与已批准清单一致",
+    "checkDrift": "工具有变化：已开启审阅并暂扣目标",
+    "checkNoTarget": "没有可检查的线上网关目标",
+    "checkFailed": "漂移检查失败",
+    "history": "历史（{{count}}）"
   }
 }
