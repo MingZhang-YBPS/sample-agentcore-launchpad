@@ -58,8 +58,9 @@ export const V3_ONLY: Record<string, V2NavItem[]> = {
 /**
  * V3-only pages placed right after a V2 entry rather than at the group's end:
  * Configure reads Users → Administrators → Projects → Project groups → Departments
- * (projects §7.9), all hub-global and administrator-only (phase 1), then Project
- * settings for an administrator or a `project.members` holder.
+ * (projects §7.9), all hub-global and administrator-only (phase 1) — the last three
+ * also a department administrator's (§11.1, `DEPARTMENT_ADMIN_ENTRIES`) — then
+ * Project settings for an administrator or a `project.members` holder.
  */
 export const V3_AFTER: Record<string, V2NavItem[]> = {
   "/v2/users": [
@@ -81,6 +82,9 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
   ],
 };
 
+/** `admin` entries a department administrator (non-empty `managed_departments`) sees too. */
+export const DEPARTMENT_ADMIN_ENTRIES: ReadonlySet<string> = new Set(["/v3/projects", "/v3/project-groups", "/v3/departments"]);
+
 export interface V3ModuleGroup {
   key: string;
   labelKey: string;
@@ -92,12 +96,12 @@ export interface V3ModuleGroup {
  * than redesigns, in V2's groups. Derived from `V2_NAV` so a page added to V2
  * shows up in V3 too, instead of becoming unreachable from it.
  */
-export function hostedGroups(isAdmin: boolean, perms: readonly string[] = []): V3ModuleGroup[] {
+export function hostedGroups(isAdmin: boolean, perms: readonly string[] = [], managesDepartment = false): V3ModuleGroup[] {
   return V2_NAV.map((group) => ({
     key: group.key,
     labelKey: group.labelKey,
     items: [...group.items.flatMap((item) => [item, ...(V3_AFTER[item.to] ?? [])]), ...(V3_ONLY[group.key] ?? [])]
-      .filter((item) => !REBUILT.has(item.to) && visible(item, isAdmin, perms))
+      .filter((item) => !REBUILT.has(item.to) && visible(item, isAdmin, perms, managesDepartment))
       .map((item) => {
         const [path, query] = item.to.split("?");
         const twin = v3TwinOf(path, query ? `?${query}` : "");
@@ -110,10 +114,12 @@ export function hostedGroups(isAdmin: boolean, perms: readonly string[] = []): V
   })).filter((group) => group.items.length > 0);
 }
 
-/** `admin` entries are an administrator's; `perm` ones also a holder of that permission. */
-function visible(item: V2NavItem, isAdmin: boolean, perms: readonly string[]): boolean {
+/** `admin` entries are an administrator's; `perm` ones also a holder of that permission;
+ *  the structure pages also a department administrator's. */
+function visible(item: V2NavItem, isAdmin: boolean, perms: readonly string[], managesDepartment: boolean): boolean {
   if (isAdmin) return true;
   if (item.perm) return perms.includes(item.perm);
+  if (managesDepartment && DEPARTMENT_ADMIN_ENTRIES.has(item.to)) return true;
   return !item.admin;
 }
 

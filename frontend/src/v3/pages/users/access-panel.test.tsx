@@ -31,6 +31,7 @@ const access: UserAccess = {
   role: "member",
   is_admin: false,
   can_manage_structure: false,
+  managed_departments: [],
   state: "active",
   workspaces: [
     {

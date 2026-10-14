@@ -2,15 +2,25 @@ import { useMemo } from "react";
 
 import { api } from "../../../lib/api";
 import { departmentsApi, projectGroupsApi } from "../../../lib/api/project-groups";
+import { useProject } from "../../../workspace/project-context";
 import { useLoad } from "../../hooks";
+import { groupsOfDepartments } from "../groups/model";
 
 /** id → name lookups of the list's department / group / workspace columns */
 export function useStructureNames(isAdmin: boolean) {
+  const { managedDepartments } = useProject();
+  const managed = isAdmin ? "" : managedDepartments.map((d) => d.id).join(",");
   const departments = useLoad(() => departmentsApi.list("active"), "v3-projects:departments");
-  // project groups are an administrator's structure (`GET /api/project-groups` is ADMIN)
+  // project groups are an administrator's structure — and a department
+  // administrator's for their departments (§11.1: the list needs `department_id`)
   const groups = useLoad(
-    () => (isAdmin ? projectGroupsApi.list({ status: "active" }) : Promise.resolve({ groups: [] })),
-    `v3-projects:groups:${isAdmin}`,
+    async () => {
+      if (isAdmin) return projectGroupsApi.list({ status: "active" });
+      if (!managed) return { groups: [] };
+      const pages = await Promise.all(managed.split(",").map((d) => projectGroupsApi.list({ status: "active", department_id: d })));
+      return { groups: groupsOfDepartments(pages) };
+    },
+    `v3-projects:groups:${isAdmin}:${managed}`,
   );
   const workspaces = useLoad(() => api.listWorkspaces(), "v3-projects:workspaces");
   return useMemo(() => {

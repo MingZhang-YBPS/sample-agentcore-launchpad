@@ -17,10 +17,11 @@ import {
 } from "../../../lib/api/project-groups";
 import { projectsApi } from "../../../lib/api/projects";
 import { usersApi } from "../../../lib/api/users";
+import { useProject } from "../../../workspace/project-context";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { useRoleLabel } from "../users/structure";
-import { emptyStructureForm, projectChoices, projectSummary } from "./model";
+import { emptyStructureForm, groupsOfDepartments, projectChoices, projectSummary } from "./model";
 import { StructureDialog } from "./StructureDialog";
 
 function Forbidden() {
@@ -39,16 +40,33 @@ function Forbidden() {
 
 /* ── list ────────────────────────────────────────────────────────────────── */
 
+/** What the caller manages here: everything (an administrator), or their departments' groups (§11.1). */
+function useGroupScope() {
+  const { isAdmin } = useAuth();
+  const { managedDepartments } = useProject();
+  const managed = isAdmin ? [] : managedDepartments.map((d) => d.id);
+  return { isAdmin, managed };
+}
+
 function GroupList() {
   const { t } = useTranslation();
   const toast = useToast();
+  const { isAdmin, managed } = useGroupScope();
   const [params, setParams] = useSearchParams();
   const status = (["active", "archived", "all"].includes(params.get("status") ?? "") ? params.get("status") : "active") as StructureStatus;
-  const list = useLoad(() => projectGroupsApi.list({ status }), `v3-groups:${status}`);
+  // a department administrator lists per department (`?department_id=` is required)
+  const list = useLoad(
+    async () => (isAdmin
+      ? projectGroupsApi.list({ status })
+      : { groups: groupsOfDepartments(await Promise.all(managed.map((d) => projectGroupsApi.list({ status, department_id: d })))) }),
+    `v3-groups:${status}:${managed.join(",")}`,
+  );
   const departments = useLoad(() => departmentsApi.list("all"), "v3-groups-departments");
   const [creating, setCreating] = useState(false);
   const deptName = (id: string | null) => (id ? (departments.data?.departments.find((d) => d.id === id)?.name ?? id) : "—");
   const groups = list.data?.groups ?? [];
+  // the create / edit dialogs offer only the departments the caller may place a group in
+  const deptChoices = (departments.data?.departments ?? []).filter((d) => isAdmin || managed.includes(d.id));
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
@@ -108,7 +126,8 @@ function GroupList() {
         )}
       </Panel>
       {creating && (
-        <StructureDialog kind="group" creating initial={emptyStructureForm()} departments={departments.data?.departments}
+        <StructureDialog kind="group" creating departments={deptChoices} requireDepartment={!isAdmin}
+          initial={{ ...emptyStructureForm(), department_id: isAdmin ? "" : (managed[0] ?? "") }}
           onClose={() => setCreating(false)}
           onSubmit={async (form) => {
             const created = await projectGroupsApi.create({
@@ -126,25 +145,37 @@ function GroupList() {
 /* ── one group ───────────────────────────────────────────────────────────── */
 
 /** Add accounts to the group with one built-in template (§7.7 "batch add"). */
+type Candidate = Pick<ConsoleUser, "id" | "username" | "email">;
+
+/** Accounts to add: the user directory for an administrator; a department
+ *  administrator (no `GET /api/users`) searches a group project's candidates. */
+async function searchCandidates(isAdmin: boolean, group: ProjectGroupDetail, q: string): Promise<Candidate[]> {
+  if (isAdmin) return (await usersApi.list({ q, limit: 20 })).items;
+  const via = group.projects[0]?.id;
+  if (!via) return [];
+  return (await projectsApi.candidates(via, q)).candidates.map((c) => ({ id: c.user_id, username: c.username, email: c.email }));
+}
+
 function AddMembersDialog({ group, templates, onClose, onDone }: {
   group: ProjectGroupDetail;
   templates: string[];
   onClose: () => void;
   onDone: (result: ProjectGroupDetail) => void;
 }) {
+  const { isAdmin } = useAuth();
   const { t } = useTranslation();
   const label = useRoleLabel();
   const [q, setQ] = useState("");
-  const [picked, setPicked] = useState<ConsoleUser[]>([]);
+  const [picked, setPicked] = useState<Candidate[]>([]);
   const [role, setRole] = useState(templates.includes("developer") ? "developer" : (templates[0] ?? ""));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const existing = new Set(group.members.map((m) => m.user_id));
   const search = useLoad(
-    async () => (q.trim() ? (await usersApi.list({ q: q.trim(), limit: 20 })).items.filter((u) => !existing.has(u.id)) : []),
+    async () => (q.trim() ? (await searchCandidates(isAdmin, group, q.trim())).filter((u) => !existing.has(u.id)) : []),
     `v3-group-candidates:${group.id}:${q.trim()}`,
   );
-  const toggle = (u: ConsoleUser) =>
+  const toggle = (u: Candidate) =>
     setPicked((prev) => (prev.some((p) => p.id === u.id) ? prev.filter((p) => p.id !== u.id) : [...prev, u]));
 
   const submit = async () => {
@@ -190,6 +221,7 @@ function AddMembersDialog({ group, templates, onClose, onDone }: {
           })}
           {q.trim() && !search.loading && (search.data ?? []).length === 0 && <small className="v3-hint">{t("v3.admins.add.noMatch")}</small>}
         </div>
+        {!isAdmin && group.projects.length === 0 && <small className="v3-hint">{t("v3.groups.members.needProject")}</small>}
         {picked.length > 0 && <small className="v3-hint">{t("v3.groups.members.picked", { names: picked.map((u) => u.username).join(", ") })}</small>}
         <label className="v3-field">
           <span>{t("v3.users.access.role")}</span>
@@ -206,6 +238,7 @@ function AddMembersDialog({ group, templates, onClose, onDone }: {
 
 function GroupDetail({ id }: { id: string }) {
   const { t } = useTranslation();
+  const { isAdmin, managed } = useGroupScope();
   const toast = useToast();
   const label = useRoleLabel();
   const [params, setParams] = useSearchParams();
@@ -250,7 +283,12 @@ function GroupDetail({ id }: { id: string }) {
     );
   }
   const dept = group.department_id ? departments.data?.departments.find((d) => d.id === group.department_id) : null;
-  const choices = projectChoices(projects.data?.projects ?? [], group);
+  // a department administrator adds only their department's projects to its groups
+  const choices = projectChoices(
+    (projects.data?.projects ?? []).filter((p) => isAdmin || (p.department_id !== null && p.department_id === group.department_id)),
+    group,
+  );
+  const deptChoices = (departments.data?.departments ?? []).filter((d) => isAdmin || managed.includes(d.id));
   const memberCount = group.members.length;
 
   return (
@@ -380,7 +418,7 @@ function GroupDetail({ id }: { id: string }) {
       )}
 
       {editing && (
-        <StructureDialog kind="group" creating={false} departments={departments.data?.departments}
+        <StructureDialog kind="group" creating={false} departments={deptChoices} requireDepartment={!isAdmin}
           initial={{ id: group.id, name: group.name, description: group.description, department_id: group.department_id ?? "" }}
           onClose={() => setEditing(false)}
           onSubmit={async (form) => {
@@ -434,7 +472,8 @@ function GroupDetail({ id }: { id: string }) {
 }
 
 /**
- * Project groups (projects §7.7, platform administrators only): the list with each
+ * Project groups (projects §7.7; platform administrators, and since §11.1 a
+ * department administrator for their own departments' groups): the list with each
  * group's department, projects and member count; one group at `?id=` with its
  * projects (join / leave — leaving revokes the access the group gave, direct
  * members keep theirs) and its members (built-in templates only). Archive stops
@@ -442,8 +481,9 @@ function GroupDetail({ id }: { id: string }) {
  */
 export function V3ProjectGroups() {
   const { isAdmin } = useAuth();
+  const { managedDepartments } = useProject();
   const [params] = useSearchParams();
-  if (!isAdmin) return <Forbidden />;
+  if (!isAdmin && managedDepartments.length === 0) return <Forbidden />;
   const id = params.get("id");
   return id ? <GroupDetail key={id} id={id} /> : <GroupList />;
 }

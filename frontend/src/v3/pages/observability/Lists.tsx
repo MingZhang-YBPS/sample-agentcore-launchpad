@@ -108,6 +108,8 @@ export function SessionsView({
     });
   }, [all, agent, errors, q]);
   const withErrors = all.filter((r) => r.errors > 0).length;
+  // R10-obs: a project column once the spans carry their project
+  const withProject = rows.some((r) => r.project);
 
   return (
     <>
@@ -138,6 +140,7 @@ export function SessionsView({
                   <th />
                   <th>{t("v3.obs.session")}</th>
                   <th>{t("v3.obs.agent")}</th>
+                  {withProject && <th>{t("v3.obs.project")}</th>}
                   <th className="num">{t("v3.obs.traces")}</th>
                   <th className="num">{t("v3.obs.llmCalls")}</th>
                   <th className="num">{t("v3.obs.tokensCost")}</th>
@@ -151,6 +154,7 @@ export function SessionsView({
                     <td style={{ width: 30 }}><Lamp s={r.errors > 0 ? "act" : "ok"} /></td>
                     <td><CopyId id={r.session_id} chars={22} /></td>
                     <td style={{ color: "var(--v3-text-2)" }}>{r.agent || "—"}</td>
+                    {withProject && <td className="mono">{r.project ?? "—"}</td>}
                     <td className="num">{r.traces}</td>
                     <td className="num">{r.llm_calls}</td>
                     <td className="num">
@@ -207,6 +211,8 @@ export function TracesView({
     });
   }, [visible, agent, status, q]);
   const failed = visible.filter((r) => r.status === "error").length;
+  // R10-obs: a project column once the spans carry their project
+  const withProject = rows.some((r) => r.project);
 
   return (
     <>
@@ -243,6 +249,7 @@ export function TracesView({
                   <th />
                   <th>{t("v3.obs.trace")}</th>
                   <th>{t("v3.obs.agent")}</th>
+                  {withProject && <th>{t("v3.obs.project")}</th>}
                   <th>{t("v3.obs.session")}</th>
                   <th className="num">{t("v3.obs.duration")}</th>
                   <th className="num">{t("v3.obs.spansLlm")}</th>
@@ -259,6 +266,7 @@ export function TracesView({
                       <span className="v3-obs-sub">{ago(r.time)} · {r.root_operation}</span>
                     </td>
                     <td style={{ color: "var(--v3-text-2)" }}>{r.agent || "—"}</td>
+                    {withProject && <td className="mono">{r.project ?? "—"}</td>}
                     <td onClick={(e) => e.stopPropagation()}>
                       {r.session_id ? (
                         <button type="button" className="v3-obs-link mono" style={{ fontSize: 12.5 }} title={r.session_id}

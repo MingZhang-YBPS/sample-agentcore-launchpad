@@ -339,13 +339,36 @@ refused (422), and `runtime.py` refuses the combination again before any
 Create/Update call. The mount rides the same `spec_vpc` placement every method
 already uses; there is no container-only VPC path any more.
 
-**Who may set them.** Until the storage catalog exists (storage-mounts §4),
-mounts are inline access point ARNs, and — as inline subnets / security groups —
+**Who may set them.** Inline mounts (the form that predates the storage catalog
+below) are access point ARNs, and — as inline subnets / security groups —
 only administrators may add or change one (`services/mount_policy.py`,
 `storage.inline_not_allowed`, 400). A member may re-publish an agent whose mounts
 stay as an administrator set them, or remove them. The execution role gets the
 `launchpad-fs-<agent>` inline policy for every method (always with
 `ClientWrite`; a read-only mode arrives with the catalog).
+
+**The storage catalog** (storage-mounts §4, SM-2, `services/storage_mounts.py`,
+[api.md](api.md#console-storage-catalog-api)). An administrator registers an S3 Files
+or EFS access point once per workspace as a catalog entry (`storage_mounts`: id, kind,
+access point, `max_mode` `ro` / `rw`, `data_class`, an optional default network
+profile) and allows it per project (`project_storage_mounts`), like network profiles;
+an entry outside the project's allowed set reads as missing. A spec then mounts it by
+id, `filesystem.mounts[{storage_id, mount_path, mode}]` (read-only by default, at most
+`max_mode`), so members pick storage in the wizard without ever naming an ARN; the
+server stamps the entry's kind and access point into the stored spec. The **check**
+reads the access point, file system and mount targets through the workspace's
+read-only describe calls; the **preflight** (`POST /api/storage-mounts/preflight` from
+the wizard, and again at deploy time, `409 storage.preflight_failed`) runs each mount
+against the spec's network profile: same VPC, a mount target in every subnet's AZ, NFS
+(TCP 2049) out of the agent's security groups and into the mount targets'. **IAM is per
+mode**: `storage_iam_statements` grants `ClientMount` for every mount and adds
+`ClientWrite` only for `rw` ones (inline mounts stay read-write). On **promotion** a
+catalog mount is a resource-mapping reference of kind `storage`: the catalog id is the
+logical name, the target workspace's entry (or the one a mapping row names) must be
+live and allowed for the project, else the release is refused (`storage.unmapped`),
+and the resolved spec is re-stamped with the target's access point. Inline access
+points name the source account and are not promotable
+(`storage.inline_not_promotable`).
 
 **What the agent is told** (`app/deployer/mounts.py`). Code runtimes (zip,
 studio, container, BYOC) get `LAUNCHPAD_MOUNTS` — JSON
@@ -4566,7 +4589,7 @@ authorization).
 | Member | `project_members` | A user's direct role in a project (`role_key`) plus per-key `overrides` |
 | Custom role | `project_roles` | A per-project key set based on a built-in template |
 | Project group | `project_groups`, `group_members` | An access bundle: its members get a built-in template in every project of the group. A project is in at most one group |
-| Department | `departments` | An organizational label on projects and groups; grants nothing (phase 3 adds department administrators) |
+| Department | `departments`, `department_admins`, `department_workspaces` | An organizational label on projects and groups; grants no data access. Its administrators manage its projects and groups, in the workspaces opened to it (see *Department administrators*) |
 | Access epoch | `access_epoch` | A one-row counter bumped by every access-affecting write (see *Caching*) |
 
 All of these are platform tables (no `workspace_id`). A user's effective keys in a
@@ -4677,6 +4700,58 @@ so a re-registered username is not the old actor. In addition:
 
 - nobody but an administrator edits their own project membership (`403 project.self_membership`), so an owner cannot hand themselves a sign key;
 - the member views flag a person who holds both sides of a pair in one project (`agents.deploy` + `release.sign`, `criteria.manage` + `criteria.sign`), and with the admin-only setting `settings.sod_strict` such writes are refused (`409 project.sod_conflict`).
+
+### Department administrators
+
+A department (`departments`) can have **department administrators**
+(`department_admins`, appointed by a platform administrator) and a set of workspaces
+**open** to it (`department_workspaces`). For their department's projects and groups a
+department administrator passes the structure routes without being a member: create
+projects (only in the open workspaces, up to `settings.max_projects`), rename, regroup,
+archive, bind open workspaces (never `make_default`), manage members and custom roles,
+and every project-group route (the group list only with `?department_id=`). With
+`settings.can_create_users` they may also invite new `member` accounts into one of the
+department's projects, valid at most `settings.user_validity_max_days`. The overlay is
+`DEPARTMENT_ADMIN_ROUTES` in `core/route_policy.py`, read per request (no access epoch:
+it grants no data access): another department's project or group answers 404, and
+workspace-scoped routes still need a membership, so a department administrator sees
+the department's projects but not their data. `GET /api/me/access` returns
+`managed_departments[{id, name, workspaces}]` and project detail `can_manage`, which is
+how the V3 console shows them the Configure pages and pickers.
+
+### Phase 2: the project IAM boundary
+
+When a project is switched to `isolated` (`PUT /api/projects/{id}/isolation`), the
+provisioning job's `boundary` stage (`services/project_iam.py`) writes one customer
+managed policy per project × workspace, `launchpad-project-<pid>` (with a Region
+suffix where needed), and every agent of the project gets its own execution role
+with that policy as its **permissions boundary**. The per-agent identity policy stays
+least-privilege from the spec; the boundary is the ceiling over it, built from the
+project's tag (`aws:ResourceTag/launchpad:project`), name prefixes (memory, S3, ECR,
+M2M provider) and explicit ARNs (knowledge bases, Connections). It is versioned
+(`agents.isolation_applied = boundary-v<N>`) and widened at deploy time when a spec adds
+a Connection or a KB. An isolated project's agent never uses the shared execution role:
+a deploy without a per-agent role is refused with
+`409 project.isolation_requires_per_agent_role`, and one whose boundary cannot be made
+current with `409 project.boundary_unavailable`.
+
+### Per-project telemetry and cost
+
+For an agent of an isolated project the deployer adds two marks
+(`services/project_telemetry.py`): `OTEL_RESOURCE_ATTRIBUTES` carries
+`launchpad.project`, `launchpad.agent` and `launchpad.workspace` (the platform's entries
+first; a spec cannot set a `launchpad.*` key), and the runtime / harness / project
+memory are created with the tags `launchpad:project`, `launchpad:workspace`,
+`launchpad:agent-id`, derived from the same attributes so the two never disagree. The
+observability queries filter on the span attribute, and rows then carry `project`;
+spans without it (a shared project, BYOC code with its own OTEL setup) fall back to the
+ledger resolver. Model spend is billed to the model, not the runtime, so behind
+`LAUNCHPAD_PROJECT_INFERENCE_PROFILES` (off by default) an isolated project's agents
+use an **application inference profile** per project × workspace × model, tagged with
+the project, that Cost Explorer can split once the payer account activates the tag.
+`/api/costs` attributes each row from the span attribute, else the profile in the model
+id, else the ledger agent (`project_source`), and returns a `by_project` breakdown.
+Shared projects keep today's requests exactly.
 
 ### Administration
 

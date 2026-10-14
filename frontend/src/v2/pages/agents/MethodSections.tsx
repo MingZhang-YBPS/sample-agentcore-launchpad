@@ -408,9 +408,6 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
   );
 }
 
-/** The wizard form once it carries catalog picks (`lib/agent-spec` `catalogMounts`). */
-type CatalogForm = AgentForm & { catalogMounts?: CatalogMountRow[] };
-
 const PREFLIGHT_DEBOUNCE_MS = 600;
 const SEVERITY_TONE = { ok: "green", warn: "orange", block: "red", info: "gray" } as const;
 
@@ -419,10 +416,9 @@ const SEVERITY_TONE = { ok: "green", warn: "orange", block: "red", info: "gray" 
  * the project's allowed set, its path (default `/mnt/<id>`) and its mode — read-only by
  * default, read-write only where the entry allows it. Each change re-runs the §5
  * preflight (storage × the network step's profile) and shows its findings; the deploy
- * runs it again and refuses on a blocking one. Shown once the form carries
- * `catalogMounts`; members pick here too — the entry, not the ARN, is what they name.
+ * runs it again and refuses on a blocking one. Members pick here too — the entry, not the ARN, is what they name.
  */
-function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"> & { form: CatalogForm; inlineCount: number }) {
+function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"> & { form: AgentForm; inlineCount: number }) {
   const { t } = useTranslation();
   const rows = form.catalogMounts ?? [];
   const [entries, setEntries] = useState<StorageEntry[] | null>(null);
@@ -430,7 +426,7 @@ function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"
   const [report, setReport] = useState<StoragePreflight | null>(null);
   const [checking, setChecking] = useState(false);
   const [pick, setPick] = useState("");
-  const setRows = (next: CatalogMountRow[]) => set({ catalogMounts: next } as Partial<AgentForm>);
+  const setRows = (next: CatalogMountRow[]) => set({ catalogMounts: next });
 
   useEffect(() => {
     let live = true;
@@ -654,10 +650,11 @@ export function FilesystemCard({
             {t("storage.mount.askAdmin")}
           </div>
         )}
-        {byoAllowed && "catalogMounts" in form && (
-          <CatalogMountsField form={form as CatalogForm} set={set} inlineCount={form.s3Mounts.length + form.efsMounts.length} />
+        {byoAllowed && (
+          <CatalogMountsField form={form} set={set} inlineCount={form.s3Mounts.length + form.efsMounts.length} />
         )}
         {touched && issues.duplicatePaths && <span className="v2-agents-err">{t("v2.agents.wizard.errDupPath")}</span>}
+        {issues.tooMany && <span className="v2-agents-err" data-testid="v2-agent-fs-too-many">{t("v2.agents.wizard.errTooManyMounts", { max: MAX_BYO_MOUNTS })}</span>}
         {needsProfile && (
           <div data-testid="v2-agent-fs-needs-profile">
             <Alert tone={touched ? "error" : "warn"}>{t("storage.mount.needsProfile")}</Alert>

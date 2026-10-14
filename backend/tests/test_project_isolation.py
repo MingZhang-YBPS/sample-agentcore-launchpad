@@ -358,6 +358,8 @@ PARAMS: dict[str, Any] = {
     "kb_id": lambda i: i["kb"],
     "review_id": lambda i: i["mcp_tool_reviews"],
     "tool_id": lambda i: i["lambda_tool_targets"],
+    # workspace infrastructure; a project sees it only through its allowed set
+    "storage_id": lambda i: f"zz{i['_pid']}store",
     "memory_id": lambda i: i["memory"],
     "profile_id": lambda i: i["profile"],
     "promotion_id": lambda i: i["promotions"],

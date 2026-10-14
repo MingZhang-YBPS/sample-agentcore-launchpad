@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import type { ProjectGroup } from "../../../lib/api/project-groups";
 import type { ProjectSummary } from "../../../lib/api/projects";
 import { deletable } from "../departments/model";
-import { emptyStructureForm, projectChoices, projectSummary, slugify, validateStructure } from "./model";
+import { emptyStructureForm, groupsOfDepartments, projectChoices, projectSummary, slugify, validateStructure } from "./model";
 
 const project = (id: string, over: Partial<ProjectSummary> = {}) =>
   ({ id, name: id.toUpperCase(), status: "active", group_id: null, ...over }) as ProjectSummary;
@@ -45,5 +46,13 @@ describe("project groups and departments (projects §7.7)", () => {
     expect(deletable({ project_count: 0, group_count: 0 })).toBe(true);
     expect(deletable({ project_count: 1, group_count: 0 })).toBe(false);
     expect(deletable({ project_count: 0, group_count: 2 })).toBe(false);
+  });
+});
+
+describe("a department administrator's groups (§11.1)", () => {
+  it("merges the per-department lists, each group once, by name", () => {
+    const g = (id: string, name: string) => ({ id, name }) as ProjectGroup;
+    const merged = groupsOfDepartments([{ groups: [g("b", "Beta"), g("a", "Alpha")] }, { groups: [g("a", "Alpha"), g("c", "Gamma")] }]);
+    expect(merged.map((x) => x.id)).toEqual(["a", "b", "c"]);
   });
 });

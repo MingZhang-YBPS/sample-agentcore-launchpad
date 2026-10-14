@@ -21,6 +21,9 @@ function StatusChip({ status }: { status: ProjectStatus }) {
 export function ProjectList() {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();
+  // a department administrator (§11.1) creates projects in their departments
+  const { managedDepartments } = useProject();
+  const canCreate = isAdmin || managedDepartments.length > 0;
   const [params, setParams] = useSearchParams();
   const [filter, setFilter] = useState<ProjectListFilter>({ status: "active" });
   const [q, setQ] = useState("");
@@ -44,7 +47,7 @@ export function ProjectList() {
         end={
           <>
             <Btn kind="ghost" onClick={reload} title={t("v3.projects.reload")}><RefreshCw size={14} /></Btn>
-            {isAdmin && <Btn kind="primary" onClick={() => setCreating(true)}><Plus size={14} /> {t("v3.projects.new")}</Btn>}
+            {canCreate && <Btn kind="primary" onClick={() => setCreating(true)}><Plus size={14} /> {t("v3.projects.new")}</Btn>}
           </>
         }
       />
@@ -55,7 +58,7 @@ export function ProjectList() {
           <option value="">{t("v3.projects.filter.department")}: {t("v3.projects.filter.all")}</option>
           {names.departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        {isAdmin && (
+        {canCreate && (
           <select className="v3-input" aria-label={t("v3.projects.filter.group")} value={filter.group_id ?? ""}
             onChange={(e) => set({ group_id: e.target.value || undefined })}>
             <option value="">{t("v3.projects.filter.group")}: {t("v3.projects.filter.all")}</option>
@@ -166,13 +169,20 @@ function CreateProjectDialog({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const { refresh } = useProject();
-  const names = useStructureNames(true);
+  const { isAdmin } = useAuth();
+  const { refresh, managedDepartments } = useProject();
+  const names = useStructureNames(isAdmin);
   const [id, setId] = useState("");
   const [idTouched, setIdTouched] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [departmentId, setDepartmentId] = useState("");
+  // a department administrator picks one of their departments (required), then its open workspaces
+  const [departmentId, setDepartmentId] = useState(isAdmin ? "" : (managedDepartments[0]?.id ?? ""));
+  const departments = isAdmin ? names.departments : names.departments.filter((d) => managedDepartments.some((m) => m.id === d.id));
+  const openWs = managedDepartments.find((d) => d.id === departmentId)?.workspaces ?? [];
+  const wsChoices = isAdmin
+    ? names.workspaces
+    : openWs.map((id) => names.workspaces.find((w) => w.id === id) ?? { id, name: id, region: "", tier: undefined });
   const [groupId, setGroupId] = useState("");
   const [workspaces, setWorkspaces] = useState<string[]>(initialWorkspace ? [initialWorkspace] : []);
   const [owners, setOwners] = useState<Pick<ConsoleUser, "id" | "username">[]>([]);
@@ -180,14 +190,15 @@ function CreateProjectDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const users = useLoad(
-    () => (ownerQ.trim() ? api.listUsers({ q: ownerQ.trim(), status: "active", limit: 8 }) : Promise.resolve(null)),
+    () => (isAdmin && ownerQ.trim() ? api.listUsers({ q: ownerQ.trim(), status: "active", limit: 8 }) : Promise.resolve(null)),
     `v3-projects:owners:${ownerQ.trim()}`,
   );
   const suggestions = (users.data?.items ?? []).filter((u) => u.role !== "admin" && !owners.some((o) => o.id === u.id));
   // a group belongs to at most one department: offer the ones that fit
   const groups = names.groups.filter((g) => !departmentId || !g.department_id || g.department_id === departmentId);
   const idValid = isProjectId(id);
-  const valid = idValid && name.trim() !== "" && workspaces.length > 0;
+  const chosen = workspaces.filter((ws) => isAdmin || openWs.includes(ws));
+  const valid = idValid && name.trim() !== "" && chosen.length > 0 && (isAdmin || departmentId !== "");
 
   const onName = (value: string) => {
     setName(value);
@@ -203,9 +214,9 @@ function CreateProjectDialog({
     try {
       const row = await projectsApi.create({
         id, name: name.trim(), description, department_id: departmentId || null, group_id: groupId || null,
-        workspaces, owners: owners.map((o) => o.id),
+        workspaces: chosen, owners: owners.map((o) => o.id),
       });
-      if (makeDefault && initialWorkspace && workspaces.includes(initialWorkspace)) {
+      if (isAdmin && makeDefault && initialWorkspace && chosen.includes(initialWorkspace)) {
         await projectsApi.putWorkspaces(row.id, { make_default: [initialWorkspace] });
       }
       toast("ok", t("v3.projects.create.done", { name: row.name }));
@@ -247,8 +258,9 @@ function CreateProjectDialog({
         <label className="v3-field">
           <span>{t("v3.projects.create.department")}</span>
           <select className="v3-input" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
-            <option value="">{t("v3.projects.none")}</option>
-            {names.departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            {isAdmin && <option value="">{t("v3.projects.none")}</option>}
+            {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            {!isAdmin && departmentId && !departments.some((d) => d.id === departmentId) && <option value={departmentId}>{departmentId}</option>}
           </select>
         </label>
         <label className="v3-field">
@@ -265,17 +277,18 @@ function CreateProjectDialog({
         <div className="v3-field">
           <span>{t("v3.projects.create.workspaces")}*</span>
           <div className="v3-prj-checks">
-            {names.workspaces.map((w) => (
+            {wsChoices.map((w) => (
               <label key={w.id}>
                 <input type="checkbox" checked={workspaces.includes(w.id)} onChange={() => toggleWs(w.id)} />
-                {w.name} · <span className="mono">{w.region}</span>
+                {w.name}{w.region && <> · <span className="mono">{w.region}</span></>}
                 {w.tier === "prod" && <Chip s="act">prod</Chip>}
               </label>
             ))}
           </div>
-          {workspaces.length === 0 && <small className="v3-hint">{t("v3.projects.create.workspacesRequired")}</small>}
+          {!isAdmin && wsChoices.length === 0 && <small className="v3-hint">{t("v3.projects.create.noOpenWorkspace")}</small>}
+          {chosen.length === 0 && <small className="v3-hint">{t("v3.projects.create.workspacesRequired")}</small>}
         </div>
-        <div className="v3-field">
+        {isAdmin && <div className="v3-field">
           <span>{t("v3.projects.create.owners")}</span>
           {owners.length > 0 && (
             <span className="v3-prj-chips">
@@ -302,7 +315,7 @@ function CreateProjectDialog({
               ))}
             </div>
           )}
-        </div>
+        </div>}
         {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
       </div>
     </Dialog>

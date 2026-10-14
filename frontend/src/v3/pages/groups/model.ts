@@ -62,3 +62,11 @@ export function projectChoices(projects: ProjectSummary[], group: Pick<ProjectGr
 export function projectSummary(projects: GroupProject[], max = 3): { names: string; more: number } {
   return { names: projects.slice(0, max).map((p) => p.name).join(", "), more: Math.max(0, projects.length - max) };
 }
+
+/** One list of the groups several per-department reads returned (a department
+ *  administrator's), each group once, by name. */
+export function groupsOfDepartments(pages: { groups: ProjectGroup[] }[]): ProjectGroup[] {
+  const seen = new Map<string, ProjectGroup>();
+  for (const page of pages) for (const g of page.groups) if (!seen.has(g.id)) seen.set(g.id, g);
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+}

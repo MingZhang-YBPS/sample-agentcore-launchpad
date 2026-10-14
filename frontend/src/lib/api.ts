@@ -822,6 +822,8 @@ export interface FilesystemInput {
   session_storage: { mount_path: string } | null;
   s3_files: ByoMountInput[];
   efs: ByoMountInput[];
+  /** catalog picks by id (storage-mounts §4) */
+  mounts?: { storage_id: string; mount_path?: string; mode?: "ro" | "rw" }[];
 }
 
 export interface VpcNetworkInput {
@@ -2678,6 +2680,8 @@ export interface ObsTraceRow {
   multi_model: boolean;
   tokens: ObsTokens;
   est_cost_usd: number | null;
+  /** the project the spans named (R10-obs); absent on older spans */
+  project?: string;
 }
 
 export interface ObsTraces {
@@ -2766,6 +2770,8 @@ export interface ObsSessionRow {
   first: string | null;
   last: string | null;
   platform: boolean;
+  /** the project the spans named (R10-obs); absent on older spans */
+  project?: string;
 }
 
 export interface ObsSessions {
@@ -4928,6 +4934,17 @@ export interface CostRow {
   tokens: number;
   llm_calls: number;
   est_cost_usd: number | null;
+  /** the project the spend is attributed to (R10-obs) and how it was known */
+  project_id?: string | null;
+  project_source?: "span" | "inference_profile" | "agent" | null;
+}
+
+/** R10-obs — spend per project (null = unattributed), costliest first. */
+export interface CostProjectRow {
+  project_id: string | null;
+  agents: number;
+  tokens: number;
+  est_cost_usd: number;
 }
 
 export interface CostActorRow {
@@ -4945,6 +4962,8 @@ export interface CostReport {
   total_tokens: number;
   by_agent: CostRow[];
   by_actor: CostActorRow[];
+  /** absent from a backend without per-project attribution */
+  by_project?: CostProjectRow[];
   unpriced_models: string[];
   estimate: boolean;
 }

@@ -2,8 +2,12 @@
 
 Hub-global: a group bundles projects across workspaces, so nothing here reads
 `X-Workspace` or `X-Project`. Every route is `ADMIN` in `core/route_policy.py`
-(phase 1: structure is the platform administrator's, `access.can_manage_structure`).
-The logic lives in `services/project_groups.py`; this module is request shapes only.
+(structure is the platform administrator's, `access.can_manage_structure`), and the
+administrators of a group's department pass too (§11.1, `DEPARTMENT_ADMIN_ROUTES`): a
+group route when the group is their department's, `POST` when the body names their
+department, and the list only with `?department_id=` set to one they administer.
+Another department's group answers 404 `group.not_found`. The logic lives in
+`services/project_groups.py`; this module is request shapes only.
 """
 
 from typing import Any

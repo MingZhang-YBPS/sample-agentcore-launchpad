@@ -112,6 +112,7 @@ function SpendView() {
   const data = report.data;
   const watched = (rules.data?.rules ?? []).filter((r) => ["act", "wait"].includes(ruleSignal(r)));
   const maxAgent = Math.max(...(data?.by_agent ?? []).map((r) => r.est_cost_usd ?? 0), 0) || 1;
+  const maxProject = Math.max(...(data?.by_project ?? []).map((r) => r.est_cost_usd), 0) || 1;
   const maxActor = Math.max(...(data?.by_actor ?? []).map((r) => r.est_cost_usd), 0) || 1;
 
   return (
@@ -193,6 +194,34 @@ function SpendView() {
             </table>
           )}
         </Panel>
+        {data?.by_project && data.by_project.length > 0 && (
+          <Panel flush title={t("v3.costs.byProject")}>
+            <table className="v3-table" data-testid="v3-costs-by-project">
+              <thead>
+                <tr>
+                  <th>{t("v3.costs.colProject")}</th>
+                  <th className="num">{t("v2.costs.kpiAgents")}</th>
+                  <th className="num">{t("v2.costs.colTokens")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.by_project.map((row) => (
+                  <tr key={row.project_id ?? "—"}>
+                    <td>
+                      <div className="v3-cost-bar">
+                        <span>{row.project_id ? <span className="mono">{row.project_id}</span> : <span style={{ color: "var(--v3-text-3)" }}>{t("v2.costs.unattributed")}</span>}</span>
+                        <span className="mono">{usd(row.est_cost_usd)}</span>
+                        <span className="track"><i style={{ width: `${(row.est_cost_usd / maxProject) * 100}%` }} /></span>
+                      </div>
+                    </td>
+                    <td className="num">{row.agents}</td>
+                    <td className="num">{row.tokens.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Panel>
+        )}
         <Panel flush title={t("v2.costs.byActor")}>
           {report.loading && !data ? (
             <div style={{ padding: 20 }}><Skeleton rows={4} /></div>

@@ -21,9 +21,12 @@ import { WorkspacesTab } from "./WorkspacesTab";
 
 /** What the caller may do on this project's pages. */
 export interface ProjectAbilities {
-  /** an administrator: structure, bindings, archive, transfer, `sod_strict` */
+  /** a platform administrator: transfer, lifecycle, workspace defaults */
   admin: boolean;
-  /** `project.members` here (or an administrator): members, custom roles, owner settings */
+  /** structure, bindings (open workspaces), archive, `sod_strict`: an administrator,
+   *  or an administrator of the project's department (`can_manage`, §11.1) */
+  structure: boolean;
+  /** `project.members` here (or `structure`): members, custom roles, owner settings */
   manage: boolean;
 }
 
@@ -61,9 +64,11 @@ export function ProjectDetailPage({ projectId, tab: requested }: { projectId: st
       </div>
     );
   }
+  const structure = isAdmin || project.can_manage === true;
   const abilities: ProjectAbilities = {
     admin: isAdmin,
-    manage: isAdmin || project.my_permissions.includes("project.members"),
+    structure,
+    manage: structure || project.my_permissions.includes("project.members"),
   };
   // §11.6: the audit tab needs `project.audit` here (or an administrator)
   const canAudit = isAdmin || project.my_permissions.includes("project.audit");
@@ -117,7 +122,7 @@ export function ProjectDetailPage({ projectId, tab: requested }: { projectId: st
             {abilities.admin && !archived && (
               <Btn onClick={() => setTransferring(true)}><ArrowRightLeft size={14} /> {t("v3.projects.transfer.action")}</Btn>
             )}
-            {abilities.admin && !project.is_default && (
+            {abilities.structure && !project.is_default && (
               archived ? (
                 <Btn onClick={() => setConfirm("unarchive")} disabled={busy}><ArchiveRestore size={14} /> {t("v3.projects.archive.unarchive")}</Btn>
               ) : (

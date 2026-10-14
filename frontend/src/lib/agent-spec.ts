@@ -24,6 +24,7 @@ import {
   specDefaultModelId,
 } from "./models";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
+import { type CatalogMountRow, catalogMountsSpec, catalogRowsFromSpec, MAX_BYO_MOUNTS } from "./api/storage";
 import { BYO_MOUNT_METHODS } from "./storage-mounts";
 import {
   choiceFromSpec,
@@ -479,6 +480,8 @@ export interface AgentForm {
   sessionMount: string;
   s3Mounts: MountRow[];
   efsMounts: MountRow[];
+  /** mounts picked from the workspace's storage catalog (storage-mounts §4, SM-2) */
+  catalogMounts: CatalogMountRow[];
   vpcSubnets: string;
   vpcSgs: string;
   /** `network: {profile_id}` — the workspace network profile the agent runs in
@@ -549,6 +552,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   sessionMount: DEFAULT_SESSION_MOUNT,
   s3Mounts: [],
   efsMounts: [],
+  catalogMounts: [],
   vpcSubnets: "",
   vpcSgs: "",
   networkProfileId: "",
@@ -601,6 +605,8 @@ export interface StoredAgentSpec {
     session_storage?: { mount_path?: string } | null;
     s3_files?: { access_point_arn?: string; mount_path?: string }[];
     efs?: { access_point_arn?: string; mount_path?: string }[];
+    /** catalog picks by id (the server stamps kind and ARN) */
+    mounts?: { storage_id?: string; mount_path?: string; mode?: string }[];
   };
   /** inline VPC ids (legacy) or a workspace network profile */
   network?: { subnets?: string[]; security_groups?: string[]; profile_id?: string } | null;
@@ -664,6 +670,7 @@ export function formFromStoredSpec(
     sessionMount: fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT,
     s3Mounts: (fs?.s3_files ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
     efsMounts: (fs?.efs ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
+    catalogMounts: catalogRowsFromSpec(fs),
     vpcSubnets: (spec.network?.subnets ?? []).join(", "),
     vpcSgs: (spec.network?.security_groups ?? []).join(", "),
     networkProfileId: spec.network?.profile_id ?? "",
@@ -761,8 +768,9 @@ export const byocEnv = (rows: EnvRow[]) =>
 
 export const byocModelList = (models: string[]) => models.map((m) => m.trim()).filter(Boolean);
 
-export const hasByoMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts">) =>
-  form.s3Mounts.length > 0 || form.efsMounts.length > 0;
+/** Any S3 Files / EFS mount: inline by ARN, or picked from the catalog. */
+export const hasByoMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts"> & { catalogMounts?: readonly CatalogMountRow[] }) =>
+  form.s3Mounts.length > 0 || form.efsMounts.length > 0 || (form.catalogMounts?.length ?? 0) > 0;
 
 /**
  * `inbound_auth` as the form states it: nothing for a method that cannot carry a
@@ -804,13 +812,15 @@ const byocArtifact = (form: AgentForm) => {
  * target itself (`backend/app/services/mcp_servers.py`).
  */
 /** `filesystem` — the session storage plus the BYO S3 Files / EFS mounts (every
- *  method, storage-mounts §3); shared by the ordinary, BYOC and MCP server specs. */
+ *  method, storage-mounts §3) and the catalog picks (`mounts`, §4); shared by the
+ *  ordinary, BYOC and MCP server specs. */
 export function filesystemSpec(form: AgentForm): Pick<AgentSpecInput, "filesystem"> {
   return {
     filesystem: {
       session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null,
       s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
       efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
+      mounts: catalogMountsSpec(form.catalogMounts ?? []),
     },
   };
 }
@@ -1074,6 +1084,8 @@ export interface FilesystemIssues {
   /** `s3:<i>` / `efs:<i>` → which half of the row is invalid */
   rows: Record<string, { arn: boolean; path: boolean }>;
   duplicatePaths: boolean;
+  /** inline + catalog mounts over `MAX_BYO_MOUNTS` */
+  tooMany: boolean;
   vpc: boolean;
 }
 
@@ -1081,10 +1093,12 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
   const byo = byoMountsAllowed(form.method);
   const s3Mounts = byo ? form.s3Mounts : [];
   const efsMounts = byo ? form.efsMounts : [];
+  const catalogMounts = byo ? (form.catalogMounts ?? []) : [];
   const paths = [
     ...(form.sessionFs ? [form.sessionMount] : []),
     ...s3Mounts.map((m) => m.path),
     ...efsMounts.map((m) => m.path),
+    ...catalogMountsSpec(catalogMounts).map((m) => m.mount_path),
   ];
   const rows: FilesystemIssues["rows"] = {};
   for (const [kind, list] of [["s3", s3Mounts], ["efs", efsMounts]] as const) {
@@ -1098,8 +1112,9 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
     sessionMount: form.sessionFs && !MOUNT_RE.test(form.sessionMount),
     rows,
     duplicatePaths: new Set(paths).size !== paths.length,
+    tooMany: s3Mounts.length + efsMounts.length + catalogMounts.length > MAX_BYO_MOUNTS,
     vpc:
-      hasByoMounts({ s3Mounts, efsMounts }) &&
+      hasByoMounts({ s3Mounts, efsMounts, catalogMounts }) &&
       !form.networkProfileId &&
       (form.method !== "container" ||
         splitIds(form.vpcSubnets).length === 0 ||
@@ -1114,6 +1129,7 @@ export const filesystemValid = (form: AgentForm) => {
     !issues.sessionMount &&
     Object.keys(issues.rows).length === 0 &&
     !issues.duplicatePaths &&
+    !issues.tooMany &&
     !issues.vpc
   );
 };

@@ -1206,11 +1206,11 @@ Workspace 范围的路由还有两种策略值。`perm:project.use`（对话、�
 
 | 方法 | 路径 | 角色 | 结果 |
 |---|---|---|---|
-| `GET` | `/api/me/access` | 成员 | 调用者的访问图，是项目切换器与控制台 `can()` 的数据来源：`{username, user_id, role, is_admin, can_manage_structure, workspaces[{workspace_id, name, default_project_id, bound_projects, projects[{id, name, status, is_default, is_workspace_default, permissions[], role_sources[{source: direct\|group:<id>, role_key}], bypass, department_id, department_name}]}]}`。管理员看到所有 Workspace 与所有已绑定项目，并持有全部权限键（非成员的项目 `bypass: true`）。`default_project_id` 是不带请求头的请求会使用的项目。`department_id` / `department_name`（项目没有部门时为 null）用于给切换器的选项分组。`bound_projects` 是该 Workspace 绑定的活跃项目数（无论调用者能否访问）：切换器隐藏（只有一个可达项目）但 `bound_projects > 1` 时，V3 顶栏以只读 chip 显示当前项目 |
+| `GET` | `/api/me/access` | 成员 | 调用者的访问图，是项目切换器与控制台 `can()` 的数据来源：`{username, user_id, role, is_admin, can_manage_structure, workspaces[{workspace_id, name, default_project_id, bound_projects, projects[{id, name, status, is_default, is_workspace_default, permissions[], role_sources[{source: direct\|group:<id>, role_key}], bypass, department_id, department_name}]}], managed_departments[{id, name, workspaces[]}]}`。管理员看到所有 Workspace 与所有已绑定项目，并持有全部权限键（非成员的项目 `bypass: true`）。`default_project_id` 是不带请求头的请求会使用的项目。`department_id` / `department_name`（项目没有部门时为 null）用于给切换器的选项分组。`bound_projects` 是该 Workspace 绑定的活跃项目数（无论调用者能否访问）：切换器隐藏（只有一个可达项目）但 `bound_projects > 1` 时，V3 顶栏以只读 chip 显示当前项目。`managed_departments` 列出调用者担任管理员的部门（见下文“部门管理员”）及向各部门开放的 Workspace，已排序；其他人（包括平台管理员）为空 |
 | `GET` | `/api/role-templates` | 成员 | 静态数据：`{templates[{key, permissions[]}], inherit: "inherit", agent_keys[], project_keys[]}` |
 | `GET` | `/api/projects?department_id=&group_id=&status=&workspace_id=&q=` | 成员 | `{projects[project]}`：管理员看到所有项目，其他人只看到自己的项目；默认项目在前，其余按名称排序。`status` 为 `active`、`archived` 或 `all`；`q` 匹配 id 或名称 |
 | `POST` | `/api/projects` | 管理员 | 请求体 `{id, name（1–64）, description?（≤ 2000）, department_id?, group_id?, workspaces[1–50], owners?[users.id]（≤ 50，以 `project_owner` 加入）, settings?{resource_visibility: shared\|isolated, sod_strict: bool}}` → `201` 项目详情。`id` 须匹配 `^[a-z0-9][a-z0-9-]{1,31}$`。提交后会尽力为每个新绑定的 Workspace 生成本项目自己的 Skill Lab 示例任务集 |
-| `GET` | `/api/projects/{project_id}` | 成员（非成员 404） | 项目详情：`{id, name, description, department_id, group_id, status: active\|archived, is_default, settings, created_by, created_by_name, created_at, updated_at, archived_at, workspaces[binding], member_count, agent_count, my_permissions[]}` |
+| `GET` | `/api/projects/{project_id}` | 成员（非成员 404） | 项目详情：`{id, name, description, department_id, group_id, status: active\|archived, is_default, settings, created_by, created_by_name, created_at, updated_at, archived_at, workspaces[binding], member_count, agent_count, my_permissions[], can_manage}`。`can_manage` 对管理员和该项目所属部门的部门管理员为 true：调用者可以修改项目结构（名称、部门、项目组、归档、Workspace、成员、角色） |
 | `PATCH` | `/api/projects/{project_id}` | `pperm:project.members` | `{name, description, department_id, group_id, settings}` 中任意字段 → 详情。`name`、`department_id`、`group_id` 仅限管理员修改（`403 auth.forbidden`，`detail.fields`）。`settings` 合并进已存设置（`null` 删除该键）：所有者可改 `resource_visibility`，只有管理员可改 `sod_strict`。把项目移到另一个组时会重新评估 API key |
 | `POST` | `/api/projects/{project_id}/archive` | 管理员 | → 详情 + `{links_revoked, keys_disabled}`。项目变为只读：其分享链接被撤销，创建者已无法访问该项目的 key 被停用。对已归档项目再次归档不做任何改变（`0` / `0`）。默认项目返回 `409 project.default_locked` |
 | `POST` | `/api/projects/{project_id}/unarchive` | 管理员 | → 详情；恢复可写。已撤销的链接与已停用的 key 保持原状 |
@@ -1244,20 +1244,28 @@ Workspace 范围的路由还有两种策略值。`perm:project.use`（对话、�
 - 400 或 403：`setting_forbidden`（`detail.keys`）。所有者修改仅限管理员的设置时为 403，未知设置为 400。
 - 403：`self_membership`、`auth.forbidden`、`auth.permission_required`。
 - 404：`not_found`、`member_not_found`（无直接成员行）、`role_not_found`、`department.not_found`、`group.not_found`、`workspace.not_found`、`user.not_found`（`upsert` 中的 `user_id` 不存在）、`agent.not_found`（转移时该 Agent 不在源项目中，或已删除）。
+- 部署隔离项目中的 Agent 时（`POST /api/agents`、重新部署、转换）返回 409：`isolation_requires_per_agent_role`（共享执行角色不带权限边界，隔离项目的 Agent 需要自己的执行角色；按 Agent 建角色被关闭，或运行时未报告角色）、`boundary_unavailable`（无法在该 Workspace 创建或更新项目的权限边界 `launchpad-project-<pid>`，`detail.project_id`）。
+- 403：`department.not_managed`（部门管理员指定了不由自己管理的部门，或未指定部门）、`department.workspace_not_open`（`detail.workspaces`：部门管理员绑定了未向该部门开放的 Workspace）。
+- 409：`department.project_limit`（`detail.limit`：已达到部门的 `settings.max_projects`）。
 - 409：`exists`、`archived`、`default_locked`、`workspace_default`、`workspace_in_use`、`not_bound`、`member_from_group`（`detail.group_id`）、`role_in_use`（`detail.members`）、`sod_conflict`（`detail.conflicts`）、`department.archived`、`group.archived`、`transfer_platform`（系统预置）、`transfer_busy`（该 Agent 的任务仍在排队或运行）、`transfer_linked`（运行中的金丝雀把它与另一个 Agent 配对；`detail.canary_id`）。
 
 ### 项目组与部门 / Project groups and departments
 
-**部门**是项目与项目组上的组织标签：它不授予任何访问，V3 项目切换器按它给选项分组。**项目组**跨 Workspace 汇集多个项目，并在组内每个项目中授予其成员一个内置角色模板（一个项目最多属于一个项目组）。成员在某项目中的有效权限键是组角色与直接角色的并集，再叠加直接成员行的 `overrides`。两组接口都是全局路由（`/api/project-groups*`、`/api/departments*` 既不读取 `X-Workspace` 也不读取 `X-Project`）。除成员可读的 `GET /api/departments` 外，所有路由仅限管理员。项目组与部门 id 遵循项目 id 的规则（`^[a-z0-9][a-z0-9-]{1,31}$`，否则 `400 group.invalid_id` / `department.invalid_id`）。改变“谁能访问什么”的项目组写入会递增 `access_epoch`，并停用创建者已失去项目访问的 API key。写入记入结构事件：`department.create` / `.update` / `.archive` / `.unarchive` / `.delete`、`group.create` / `.update` / `.archive` / `.unarchive`、`group.members.add` / `.update` / `.remove`、`group.projects.add` / `.remove`。
+**部门**是项目与项目组上的组织标签：它不授予任何访问，V3 项目切换器按它给选项分组。**项目组**跨 Workspace 汇集多个项目，并在组内每个项目中授予其成员一个内置角色模板（一个项目最多属于一个项目组）。成员在某项目中的有效权限键是组角色与直接角色的并集，再叠加直接成员行的 `overrides`。两组接口都是全局路由（`/api/project-groups*`、`/api/departments*` 既不读取 `X-Workspace` 也不读取 `X-Project`）。除成员可读的 `GET /api/departments` 和部门管理员可通过的路由（见下文）外，所有路由仅限管理员。项目组与部门 id 遵循项目 id 的规则（`^[a-z0-9][a-z0-9-]{1,31}$`，否则 `400 group.invalid_id` / `department.invalid_id`）。改变“谁能访问什么”的项目组写入会递增 `access_epoch`，并停用创建者已失去项目访问的 API key。写入记入结构事件：`department.create` / `.update` / `.archive` / `.unarchive` / `.delete`、`group.create` / `.update` / `.archive` / `.unarchive`、`group.members.add` / `.update` / `.remove`、`group.projects.add` / `.remove`、`department.admins.add` / `.remove`、`department.workspaces.add` / `.remove`、`department.invite`。
 
 | 方法 | 路径 | 角色 | 结果 |
 |---|---|---|---|
 | `GET` | `/api/departments?status=active\|archived\|all` | 成员 | `{departments[{id, name, description, archived, archived_at, created_by, created_at, updated_at, project_count, group_count}]}`；`status` 默认 `active`（其他值返回 `400 structure.invalid_status`） |
 | `POST` | `/api/departments` | 管理员 | 请求体 `{id, name（1–64）, description?（≤ 2000）}` → `201` 部门。`409 department.exists` |
-| `PATCH` | `/api/departments/{department_id}` | 管理员 | `{name, description}` 中任意字段 → 部门 |
+| `PATCH` | `/api/departments/{department_id}` | 管理员 | `{name, description, settings}` 中任意字段 → 部门。`settings` 可部分提交：`{can_create_users: bool（默认 false）, max_projects: 1–10000 \| null（默认 null，不限）, user_validity_max_days: 1–3650（默认 90）}`；值为 `null` 时恢复该键的默认值。未知键或取值不合法 → `400 department.setting_invalid`（`detail.key` / `detail.keys`） |
 | `POST` | `/api/departments/{department_id}/archive` / `…/unarchive` | 管理员 | → 部门。已归档的部门不能再分配给项目或项目组（`409 department.archived`） |
 | `DELETE` | `/api/departments/{department_id}` | 管理员 | `204`，仅当没有项目和项目组引用它时：否则 `409 department.in_use`（`detail.projects`、`detail.groups`） |
-| `GET` | `/api/project-groups?status=&department_id=` | 管理员 | `{groups[{id, name, description, department_id, archived, archived_at, created_by, created_at, updated_at, projects[{id, name, status}], member_count}]}`，按名称排序 |
+| `GET` | `/api/departments/{department_id}/admins` | 管理员 | `{admins[{user_id, username, email, account_role, status, added_by, added_at}]}`，按用户名排序 |
+| `PUT` | `/api/departments/{department_id}/admins` | 管理员 | 请求体 `{add[users.id]（≤ 200）, remove[users.id]（≤ 200）}` → `{added[], removed[], admins[…]}`。任命或撤销部门管理员；重复任命不产生变化。`400 department.admin_conflict`（同一用户既添加又移除）、`404 user.not_found`、`404 department.admin_not_found`（移除的用户并非部门管理员） |
+| `GET` | `/api/departments/{department_id}/workspaces` | 管理员 | `{workspaces[{workspace_id, name, region, added_by, added_at}]}`：向该部门开放、其部门管理员可在其中绑定项目的 Workspace |
+| `PUT` | `/api/departments/{department_id}/workspaces` | 管理员 | 请求体 `{add[]（≤ 200）, remove[]（≤ 200）}` → `{added[], removed[], workspaces[…]}`。关闭某个 Workspace 只阻止新的绑定，已有绑定保留。`400 department.workspace_conflict`、`404 workspace.not_found`、`404 department.workspace_not_found`（移除的 Workspace 并未开放） |
+| `POST` | `/api/departments/{department_id}/invitations` | 管理员；部门 `settings.can_create_users` 开启时也可由该部门的部门管理员调用 | 请求体 `{username, email, project_id, role_key?（默认 developer）, valid_days?（1–user_validity_max_days）}` → `201` `{user_id, username, email, expires_at, project_id, role_key, generated_password}`：新建一个 `member` 账户，有效期为 `user_validity_max_days`（`valid_days` 更短时取它），以一个项目角色（不能是 `inherit`）加入该部门的一个活跃项目，自身不获得 Workspace 授权。密码只显示一次，与 `POST /api/users` 相同。`403 department.invitations_disabled`、`409 department.archived`、`404 project.not_found`（不是本部门的项目）、`409 project.archived`、`400 project.role_unknown`、`422 department.validity_too_long`（`detail.max_days`） |
+| `GET` | `/api/project-groups?status=&department_id=` | 管理员（部门管理员须把 `department_id` 设为自己的部门） | `{groups[{id, name, description, department_id, archived, archived_at, created_by, created_at, updated_at, projects[{id, name, status}], member_count}]}`，按名称排序 |
 | `POST` | `/api/project-groups` | 管理员 | 请求体 `{id, name（1–64）, description?, department_id?}` → `201` 项目组详情。`409 group.exists` |
 | `GET` | `/api/project-groups/{group_id}` | 管理员 | 项目组详情：列表形状另加 `members[{user_id, username, email, account_role, status, role_key, added_by, added_at, sod_conflicts[{project_id, pairs, strict}]}]`，`sod_conflicts` 列出该成员在组内哪些项目中合并了职责 |
 | `PATCH` | `/api/project-groups/{group_id}` | 管理员 | `{name, description, department_id}` 中任意字段 → 详情；均不改变访问 |
@@ -1265,6 +1273,17 @@ Workspace 范围的路由还有两种策略值。`perm:project.use`（对话、�
 | `POST` | `/api/project-groups/{group_id}/unarchive` | 管理员 | → 详情。在 `sod_strict` 下，若有成员会因此重新合并职责则拒绝 |
 | `PUT` | `/api/project-groups/{group_id}/members` | 管理员 | 请求体 `{upsert[{user_id, role_key}]（≤ 500）, remove[user_id]（≤ 500）}` → `{added[], updated[], removed[]}` + 详情。`role_key` 只能是内置模板：自定义角色只属于单个项目（`400 group.role_invalid`，`detail.templates`）。`400 group.member_conflict`（同一请求中既 upsert 又 remove）、`404 group.member_not_found`、`404 user.not_found`、`409 group.archived` |
 | `PUT` | `/api/project-groups/{group_id}/projects` | 管理员 | 请求体 `{add[]（≤ 200）, remove[]（≤ 200）}` → `{added[], removed[]}` + 详情。已在另一个活跃项目组中的项目必须先从那里移除（`409 group.project_in_other_group`，`detail.group_id`）。移出项目会撤销项目组在那里授予的访问。`400 group.project_conflict`、`404 group.project_not_found`（不在本组中）、`404 project.not_found`、`409 group.archived`（向已归档的组添加） |
+
+**部门管理员。**平台管理员任命部门管理员（`PUT /api/departments/{department_id}/admins`），并向部门开放 Workspace（`PUT …/workspaces`）；这两项以及部门本身的创建、编辑、归档与删除仍仅限管理员。部门管理员是普通账户：对于自己所管部门的项目和项目组，无需成为成员即可通过仅限管理员和 `pperm:project.members` 的项目结构路由（`core/route_policy.py` 中的 `DEPARTMENT_ADMIN_ROUTES`）：
+
+- `POST /api/projects`（请求体的 `department_id` 必须是自己的部门，否则 `403 department.not_managed`；项目组必须属于该部门；Workspace 必须已向该部门开放，否则 `403 department.workspace_not_open`；`settings.max_projects` 限制项目数，`409 department.project_limit`）；
+- `PATCH /api/projects/{project_id}`（名称、自己范围内的部门、项目组），`POST …/archive` / `…/unarchive`；
+- `PUT /api/projects/{project_id}/workspaces`，只能绑定已开放的 Workspace，且不能使用 `make_default`（`403 auth.forbidden`）；
+- `PUT /api/projects/{project_id}/members`、`DELETE …/members/{user_id}`、`GET …/candidates`、`PUT` / `DELETE …/roles/{role_key}`；
+- 所有 `/api/project-groups` 路由：`GET /api/project-groups` 必须带 `?department_id=` 且为自己的部门，`POST` 在请求体中指定该部门，项目组路由只对该部门的项目组有效（`PUT …/projects` 只接受该部门的项目）；
+- `POST /api/departments/{department_id}/invitations`，前提是部门的 `settings.can_create_users` 已开启。
+
+其他部门的项目返回 `404 project.not_found`、其项目组返回 `404 group.not_found`，不暴露其存在；对自己部门中已归档项目的非读请求返回 `409 project.archived`（归档 / 恢复归档除外）。部门管理员能在 `GET /api/projects` 中看到本部门的项目，但看不到其数据：Workspace 范围的路由仍需项目成员身份。控制台读取 `GET /api/me/access` 的 `managed_departments[{id, name, workspaces}]` 来向其显示“配置”下的项目、项目组和部门页面并填充选择器，读取 `GET /api/projects/{project_id}` 的 `can_manage` 来显示结构操作。
 
 ## 控制台网络配置 API / Console Network Profiles API
 
@@ -1318,6 +1337,28 @@ created_at, updated_at, archived_at, allowed, is_default}`。各字段含义如�
 `network_profile.nothing_to_probe`（400）、`network_profile.probe_running`（409）、`network.public_not_allowed`（400）、`network.preflight_failed`（409）、`project.not_found`（404，该项目
 未绑定到此 Workspace），以及 `validation.invalid_request`（422，请求体不符合 schema，或 VPC / 子网 /
 安全组 id 格式错误）。
+
+## 控制台存储目录 API / Console Storage Catalog API
+
+**存储目录**收录管理员按 Workspace 登记的 S3 Files 与 EFS 接入点，项目的 Agent 可以按 id 挂载，而不必填写 ARN（设计 storage-mounts §4）。与网络配置档相同，每个项目在每个 Workspace 中有一个**允许集合**；不在请求项目允许集合中的条目视同不存在（`404 storage.not_found`）。管理员看到全部条目，并附带共享视图：允许使用它的项目，以及正在挂载它的在线 Agent。这些路由按 Workspace 划分（`X-Workspace`）；读取在请求的项目内进行，写入与允许集合仅限管理员且不解析项目。写入记为 Workspace 级审计事件：`storage.register`、`.update`、`.archive`、`.check`、`.project_set`。
+
+条目形如 `{id, workspace_id, name, kind: s3files|efs, access_point_arn, file_system_arn, bucket_arn, posix_uid, posix_gid, root_directory, mount_target_azs[], mount_targets[], vpc_id, network_profile_id, max_mode: ro|rw, data_class: reference|shared_state|scratch, origin, status: unchecked|ok|warn|blocked, check_results, checked_at, created_by, created_at, updated_at, archived_at, allowed}`。`allowed` 相对于请求的项目。管理员视图另加 `projects[]`、`agents[{agent_id, name, project_id, version, status, endpoint_mode, mode, mount_path}]`、`writers` 与 `multi_writer`（读写 Agent 多于一个：S3 Files 在 NFS 客户端之间只保证 close-to-open 一致性，多个写入者需要自行加锁或分目录）。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/storage-mounts?include_archived=` | 成员 | `{storage[…]}`，按名称排序：成员得到当前项目的允许集合，管理员得到全部在用条目（`include_archived=true` 时含已归档条目） |
+| `POST` | `/api/storage-mounts` | 管理员 | 请求体（`extra="forbid"`）`{id, name?（≤ 64，默认为 id）, access_point_arn, max_mode?（默认 ro）, data_class?（默认 reference）, network_profile_id?, check?（默认 true）}` → `201` 管理员视图（`status: unchecked`）。`id` 遵循项目 id 规则（`^[a-z0-9][a-z0-9-]{1,31}$`）。`check` 为真时立即运行检查；检查失败时条目照常登记，响应附带 `check_error{code, message}`。`409 storage.id_exists`（已有同 id 的在用条目）、`422 storage.invalid_access_point`（不是 S3 Files 或 EFS 接入点 ARN）、`404 network_profile.not_found` |
+| `GET` | `/api/storage-mounts/{storage_id}` | 成员 | 单个条目；对成员而言，仅当它在项目允许集合中时可读 |
+| `GET` | `/api/storage-mounts/{storage_id}/usage` | 成员 | `{storage_id, agents[…], writers, multi_writer}`：成员只看到本项目的 Agent，以及整个 Workspace 的写入者数量 |
+| `PATCH` | `/api/storage-mounts/{storage_id}` | 管理员 | `{name, max_mode, data_class, network_profile_id（"" 表示清除）}` 中任意字段 → 管理员视图。接入点不可修改。仍有 Agent 以读写方式挂载时把 `max_mode` 降为 `ro` → `409 storage.mode_exceeds_max`（`detail.agents`）。更换默认网络配置档会使条目回到 `unchecked` |
+| `DELETE` | `/api/storage-mounts/{storage_id}` | 管理员 | `204`。归档条目（记录保留，因为快照可能引用它），并从所有允许集合中移除。平台从不删除存储本身。仍有在线 Agent 挂载时 → `409 storage.in_use`（`detail.agents`） |
+| `POST` | `/api/storage-mounts/{storage_id}/check` | 管理员 | → 管理员视图，含 `check_results[{check, severity: ok\|warn\|block, message, details}]`、`checked_at`、`status`。用 Workspace 的只读 describe 调用（S3 Files 的 `GetAccessPoint` / `GetFileSystem` / `ListMountTargets` / `GetMountTarget`，或 EFS 的 `Describe*`）读取接入点、文件系统与挂载目标，并填入 POSIX 用户、根目录、挂载目标所在可用区和 VPC。设置了默认网络配置档时，还会对它运行预检中的网络检查。`502 storage.check_failed`（`detail.aws_code`；访问被拒时会指明需要更新的 spoke 模板） |
+| `GET` | `/api/storage-mounts/projects/{project_id}` | 管理员 | `{project_id, workspace_id, storage[…]}`：该项目在请求 Workspace 中的允许集合。项目未绑定到该 Workspace 时 → `404 project.not_found` |
+| `PUT` | `/api/storage-mounts/projects/{project_id}` | 管理员 | 请求体 `{storage_ids[]（≤ 50）}` → GET 形状。整体替换允许集合。可以从仍有 Agent 挂载的项目中移除条目；这些 Agent 下次发布会被拒绝，直到移除挂载或重新允许该条目 |
+| `POST` | `/api/storage-mounts/preflight` | `perm:project.use` | 请求体 `{mounts[{storage_id, mount_path?, mode?: ro\|rw}]（1–4）, network_profile_id?, method?, byoc_artifact_kind?}` → `{status: ok\|warn\|blocked, results[{check, severity, message, details, storage_id}]}`。向导对 spec 中目录挂载与其网络的检查（§5），不写入任何内容：必须选择网络配置档（S3 Files / EFS 需要 VPC），然后检查同一 VPC、每个子网所在可用区都有挂载目标、Agent 安全组出站与挂载目标安全组入站放行 NFS（TCP 2049）、模式不超过 `max_mode`，并附部署方式与发布模式提示。EC2 读取失败时网络检查降级为警告。项目不能使用的条目 → `404 storage.not_found` |
+| `GET` | `/api/storage-mounts/agents/{agent_id}` | 成员 | Agent 详情页的存储卡片：`{agent_id, version, mounts[{storage_id, mount_path, mode, entry{name, kind, status, max_mode, data_class, archived, checked_at, blocking, warnings} \| null, missing}], inline[{kind, access_point_arn, mount_path, mode: rw}], session_storage}`。其他项目的 Agent → `404 agent.not_found` |
+
+Agent spec 以 `filesystem.mounts[{storage_id, mount_path?（默认 /mnt/<storage_id>）, mode?（默认 ro）}]` 挂载条目；与内联的 `s3_files` / `efs` 挂载合计每个 Agent 最多 4 个，每个条目只能挂载一次，所有挂载路径互不相同。在 `POST /api/agents` 与重新部署时，每个挂载必须在项目允许集合中（`404 storage.not_found`）、未被上次检查阻断（`409 storage.blocked`）、且不超过 `max_mode`（`400 storage.mode_exceeds_max`）；服务端把条目的 `kind` 与 `access_point_arn` 写入保存的 spec，覆盖客户端发送的值。部署时的预检在任何任务创建前拒绝阻断结果（`409 storage.preflight_failed`，`detail.results`）。执行角色对每个挂载获得 `ClientMount`，只有 `rw` 挂载另获 `ClientWrite`。内联接入点挂载仍仅限管理员（`400 storage.inline_not_allowed`，`detail.mount_paths`）。发布晋级时目录 id 就是逻辑名（资源映射种类 `storage`）：除非有映射行指向别的条目，否则使用目标 Workspace 中同 id 的条目；该条目必须在用且允许该项目使用，否则发布被拒（`409 storage.unmapped`）；内联接入点带有源账户，一律拒绝（`409 storage.inline_not_promotable`）。
 
 ## 控制台路由索引——其余路由 / Console route index
 
@@ -1486,7 +1527,7 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 | `PATCH` | `/api/alerts/{rule_id}` | admin | project | `{name, threshold, window, enabled, webhook_url}` 中任意项 → 规则 |
 | `DELETE` | `/api/alerts/{rule_id}` | admin | project | `{deleted: rule_id}` |
 | `POST` | `/api/alerts/evaluate?notify=` | admin | project | `{workspace_id, evaluated_at, rules[…], firing, unknown}`：立即重读每条启用的规则；`notify=false` 不投递 webhook |
-| `GET` | `/api/costs?range=&project=&force=` | admin | ws | `{range, hours, generated_at, by_agent[…], sessions, …}`：按 Agent、按人、按模型的估算花费；`unpriced_models` 列出没有价格的模型。`project` 收窄到一个已绑定的项目；不带时覆盖整个 Workspace，并含未归属的桶。`422 costs.bad_range` |
+| `GET` | `/api/costs?range=&project=&force=` | admin | ws | `{range, hours, generated_at, by_agent[…], sessions, …}`：按 Agent、按人、按模型的估算花费；`unpriced_models` 列出没有价格的模型。`project` 收窄到一个已绑定的项目；不带时覆盖整个 Workspace，并含未归属的桶。每个 `by_agent` 行带 `project_id` 与 `project_source: span\|inference_profile\|agent\|null`（项目从何得知：span 的 `launchpad.project` 属性、模型 id 中项目的应用推理配置文件，否则按账本中的 Agent）；`by_project[{project_id, agents, tokens, est_cost_usd}]` 按项目汇总，花费高者在前，`project_id: null` 为未归属任何项目的花费。`422 costs.bad_range` |
 | `GET` | `/api/costs/month-to-date?project=&force=` | admin | ws | `{workspace_id, project?, est_cost_usd}`：`cost_mtd_usd` 告警比较的数值 |
 | `GET` | `/api/fleet?project=` | admin | hub | 所有 Workspace 一张表（Agent、失败、待处理发布、正在告警），每项也按项目列出；`project` 收窄到一个项目。只读台账；不可用的 Workspace 报告 `readable: false`。`404 project.not_found` |
 | `GET` | `/api/governance/health` | member | project | `{workspace_id, generated_at, score, grade, agents_considered, findings[{…, to}]}` |
@@ -1538,8 +1579,8 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 | 方法 | 路径 | 角色 | 范围 | 结果 |
 |---|---|---|---|---|
 | `GET` | `/api/observability/dashboard?range=&force=` | member | project | 该时间范围的仪表盘指标与序列，按 Workspace 与项目缓存 |
-| `GET` | `/api/observability/sessions?range=&force=` | member | project | `{sessions[…], count, …}` |
-| `GET` | `/api/observability/traces?range=&agent=&status=&session=&force=` | member | project | `{traces[…], count, …}`；`session` 匹配会话或 trace id 的子串 |
+| `GET` | `/api/observability/sessions?range=&force=` | member | project | `{sessions[…], count, …}`。span 自带项目时（隔离项目 Agent 的 `launchpad.project` 资源属性）行中带 `project`；没有该属性的行保持原有形状 |
+| `GET` | `/api/observability/traces?range=&agent=&status=&session=&force=` | member | project | `{traces[…], count, …}`；`session` 匹配会话或 trace id 的子串。span 自带项目时行中带 `project`，同上；单条 trace 的 `meta.project` 亦然 |
 | `GET` | `/api/observability/traces/{trace_id}?range=&force=` | member | project | 单条 trace 及其 span。`404 observability.trace_not_found`，其他项目的 trace 也如此 |
 | `GET` | `/api/observability/prices` | member | ws | `{prices, meta, source, refresh_hours}`：模型价格表 |
 | `POST` | `/api/observability/prices/refresh` | `infra` | project | 从配置的 litellm 来源拉取最新价格写入本地配置。不调用 AWS |

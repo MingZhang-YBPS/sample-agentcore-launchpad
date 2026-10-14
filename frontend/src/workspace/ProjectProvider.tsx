@@ -110,6 +110,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, [location.hash, location.pathname, location.search, navigate, workspaceId]);
 
   const projects = useMemo(() => entry?.projects ?? [], [entry]);
+  const managedDepartments = useMemo(() => access.data?.managed_departments ?? [], [access.data]);
   const current = useMemo(
     () =>
       resolveProject(
@@ -147,8 +148,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       boundProjects: entry?.bound_projects ?? 0,
       select,
       refresh,
+      managedDepartments,
     }),
-    [current, entry?.bound_projects, projects, refresh, select],
+    [current, entry?.bound_projects, managedDepartments, projects, refresh, select],
   );
 
   const authValue = useMemo(

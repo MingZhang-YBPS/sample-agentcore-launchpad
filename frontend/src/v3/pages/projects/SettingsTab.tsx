@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { type ProjectDetail, projectsApi } from "../../../lib/api/projects";
+import { useProject } from "../../../workspace/project-context";
 import { useToast } from "../../hooks";
 import { Btn, Notice, Panel } from "../../ui";
 import { LifecycleSection } from "./LifecycleSection";
@@ -13,7 +14,8 @@ import { useStructureNames } from "./useStructureNames";
 
 /**
  * §6.3 "Settings": name / department / group and `sod_strict` are an
- * administrator's; the description and `resource_visibility` are the owner's too
+ * administrator's (and a department administrator's inside their departments,
+ * §11.1); the description and `resource_visibility` are the owner's too
  * (`project.members`). A save sends only the changed fields the caller may change.
  */
 export function SettingsTab({
@@ -28,12 +30,15 @@ export function SettingsTab({
   const { t } = useTranslation();
   const toast = useToast();
   const names = useStructureNames(abilities.admin);
+  const { managedDepartments } = useProject();
+  // a department administrator moves the project between the departments they administer
+  const departments = abilities.admin ? names.departments : names.departments.filter((d) => managedDepartments.some((m) => m.id === d.id));
   const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraft(project));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const editable = abilities.manage && project.status === "active";
-  const admin = abilities.admin && project.status === "active";
-  const patch = settingsPatch(project, draft, abilities.admin);
+  const admin = abilities.structure && project.status === "active";
+  const patch = settingsPatch(project, draft, abilities.structure);
   const set = (next: Partial<SettingsDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const groups = names.groups.filter((g) => !draft.department_id || !g.department_id || g.department_id === draft.department_id);
 
@@ -63,9 +68,9 @@ export function SettingsTab({
           <label className="v3-field">
             <span>{t("v3.projects.create.department")}</span>
             <select className="v3-input" value={draft.department_id} disabled={!admin} onChange={(e) => set({ department_id: e.target.value })}>
-              <option value="">{t("v3.projects.none")}</option>
-              {names.departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-              {draft.department_id && !names.departments.some((d) => d.id === draft.department_id) && (
+              {abilities.admin && <option value="">{t("v3.projects.none")}</option>}
+              {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {draft.department_id && !departments.some((d) => d.id === draft.department_id) && (
                 <option value={draft.department_id}>{draft.department_id}</option>
               )}
             </select>
@@ -78,7 +83,7 @@ export function SettingsTab({
               {draft.group_id && !groups.some((g) => g.id === draft.group_id) && <option value={draft.group_id}>{draft.group_id}</option>}
             </select>
           </label>
-          {!abilities.admin && <small className="v3-hint">{t("v3.projects.settings.adminOnly")}</small>}
+          {!abilities.structure && <small className="v3-hint">{t("v3.projects.settings.adminOnly")}</small>}
           <label className="v3-field">
             <span>{t("v3.projects.create.description")}</span>
             <textarea className="v3-input" value={draft.description} maxLength={2000} disabled={!editable}
@@ -102,7 +107,7 @@ export function SettingsTab({
               <input type="checkbox" checked={draft.sod_strict} disabled={!admin} onChange={(e) => set({ sod_strict: e.target.checked })} />
               {t("v3.projects.settings.sodStrict")}
             </span>
-            <small className="v3-hint">{t(abilities.admin ? "v3.projects.settings.sodStrictHint" : "v3.projects.settings.sodStrictAdmin")}</small>
+            <small className="v3-hint">{t(abilities.structure ? "v3.projects.settings.sodStrictHint" : "v3.projects.settings.sodStrictAdmin")}</small>
           </label>
         </div>
       </Panel>

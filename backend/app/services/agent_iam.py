@@ -871,34 +871,10 @@ def fs_policy_document(spec: AgentSpec) -> dict | None:
     - AgentCore's create/update validation ALSO requires ListMountTargets on the
       file system (undocumented).
     """
-    statements: list[dict] = []
-    if spec.filesystem.s3_files:
-        arns = [m.access_point_arn for m in spec.filesystem.s3_files]
-        fs_arns = sorted({a.split("/access-point/")[0] for a in arns})
-        statements.append({
-            "Effect": "Allow",
-            "Action": ["s3files:ClientMount", "s3files:ClientWrite"],
-            "Resource": fs_arns,
-            "Condition": {"ArnEquals": {"s3files:AccessPointArn": arns}},
-        })
-        statements.append({
-            "Effect": "Allow",
-            "Action": ["s3files:GetAccessPoint"],
-            "Resource": arns,
-        })
-        statements.append({
-            "Effect": "Allow",
-            "Action": ["s3files:ListMountTargets"],
-            "Resource": fs_arns,
-        })
-    if spec.filesystem.efs:
-        arns = [m.access_point_arn for m in spec.filesystem.efs]
-        statements.append({
-            "Effect": "Allow",
-            "Action": ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"],
-            "Resource": "*",
-            "Condition": {"ArnEquals": {"elasticfilesystem:AccessPointArn": arns}},
-        })
+    # inline (read-write) and catalog (per-mode) mounts, one builder (storage-mounts §4.3)
+    from app.services.storage_mounts import storage_iam_statements
+
+    statements: list[dict] = storage_iam_statements(spec)
     if not statements:
         return None
     return {"Version": "2012-10-17", "Statement": statements}

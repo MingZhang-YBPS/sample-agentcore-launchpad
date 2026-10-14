@@ -31,7 +31,7 @@ _KIND_LABEL = {"s3files": "S3 Files", "efs": "EFS"}
 def mount_manifest(spec: AgentSpec) -> list[dict[str, str]]:
     """``[{name, path, kind, mode}]`` for the spec's BYO mounts (``[]`` when none)."""
     out: list[dict[str, str]] = []
-    for kind, mount in spec.filesystem.byo_mounts():
+    for kind, mount in [*spec.filesystem.byo_mounts(), *spec.filesystem.catalog_mounts()]:
         path = mount.mount_path.rstrip("/")
         out.append({
             "name": path.rsplit("/", 1)[-1],
@@ -97,4 +97,9 @@ def manifest_paths(spec: dict[str, Any] | None) -> set[str]:
             path = str((mount or {}).get("mount_path") or "").rstrip("/")
             if path:
                 paths.add(path)
+    for mount in fs.get("mounts") or []:  # catalog references
+        sid = str((mount or {}).get("storage_id") or "")
+        path = str((mount or {}).get("mount_path") or (f"/mnt/{sid}" if sid else "")).rstrip("/")
+        if path:
+            paths.add(path)
     return paths

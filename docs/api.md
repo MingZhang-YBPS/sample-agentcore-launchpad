@@ -1633,11 +1633,11 @@ your own request) stay the backstop.
 
 | Method | Path | Role | Result |
 |---|---|---|---|
-| `GET` | `/api/me/access` | member | The caller's access map, the data source of the project switcher and of the console's `can()`: `{username, user_id, role, is_admin, can_manage_structure, workspaces[{workspace_id, name, default_project_id, bound_projects, projects[{id, name, status, is_default, is_workspace_default, permissions[], role_sources[{source: direct\|group:<id>, role_key}], bypass, department_id, department_name}]}]}`. An administrator sees every workspace and every bound project with all keys (`bypass: true` where they are not a member). `default_project_id` is the project a header-less request would use. `department_id` / `department_name` (null when the project has none) group the switcher's options. `bound_projects` counts the workspace's active bound projects, reachable or not: when the switcher is hidden (one reachable project) but `bound_projects > 1`, the V3 top bar shows the current project as a read-only chip |
+| `GET` | `/api/me/access` | member | The caller's access map, the data source of the project switcher and of the console's `can()`: `{username, user_id, role, is_admin, can_manage_structure, workspaces[{workspace_id, name, default_project_id, bound_projects, projects[{id, name, status, is_default, is_workspace_default, permissions[], role_sources[{source: direct\|group:<id>, role_key}], bypass, department_id, department_name}]}], managed_departments[{id, name, workspaces[]}]}`. An administrator sees every workspace and every bound project with all keys (`bypass: true` where they are not a member). `default_project_id` is the project a header-less request would use. `department_id` / `department_name` (null when the project has none) group the switcher's options. `bound_projects` counts the workspace's active bound projects, reachable or not: when the switcher is hidden (one reachable project) but `bound_projects > 1`, the V3 top bar shows the current project as a read-only chip. `managed_departments` lists the departments the caller administers (see *Department administrators* below) with the workspaces open to each, sorted; it is empty for everyone else, administrators included |
 | `GET` | `/api/role-templates` | member | Static: `{templates[{key, permissions[]}], inherit: "inherit", agent_keys[], project_keys[]}` |
 | `GET` | `/api/projects?department_id=&group_id=&status=&workspace_id=&q=` | member | `{projects[project]}`, every project for an administrator and the caller's own for anyone else; the default project first, then by name. `status` is `active`, `archived` or `all`. `q` matches the id or the name |
 | `POST` | `/api/projects` | admin | Body `{id, name (1–64), description? (≤ 2000), department_id?, group_id?, workspaces[1–50], owners?[users.id] (≤ 50, added as `project_owner`), settings?{resource_visibility: shared\|isolated, sod_strict: bool}}` → `201` project detail. `id` matches `^[a-z0-9][a-z0-9-]{1,31}$`. Each newly bound workspace gets the project's own Skill Lab sample task sets, best effort after the commit |
-| `GET` | `/api/projects/{project_id}` | member (404 to non-members) | Project detail: `{id, name, description, department_id, group_id, status: active\|archived, is_default, settings, created_by, created_by_name, created_at, updated_at, archived_at, workspaces[binding], member_count, agent_count, my_permissions[]}` |
+| `GET` | `/api/projects/{project_id}` | member (404 to non-members) | Project detail: `{id, name, description, department_id, group_id, status: active\|archived, is_default, settings, created_by, created_by_name, created_at, updated_at, archived_at, workspaces[binding], member_count, agent_count, my_permissions[], can_manage}`. `can_manage` is true for an administrator and for an administrator of the project's department: the caller may change the project's structure (name, department, group, archive, workspaces, members, roles) |
 | `PATCH` | `/api/projects/{project_id}` | `pperm:project.members` | Any of `{name, description, department_id, group_id, settings}` → detail. `name`, `department_id` and `group_id` are admin-only (`403 auth.forbidden`, `detail.fields`). `settings` is merged into the stored settings (`null` removes a key): an owner may change `resource_visibility`, and only an administrator may change `sod_strict`. Moving the project to another group re-evaluates API keys |
 | `POST` | `/api/projects/{project_id}/archive` | admin | → detail + `{links_revoked, keys_disabled}`. The project becomes read-only: its share links are revoked and the keys whose creator no longer reaches it are disabled. Archiving an already archived project changes nothing (`0` / `0`). The default project → `409 project.default_locked` |
 | `POST` | `/api/projects/{project_id}/unarchive` | admin | → detail; writable again. Revoked links and disabled keys stay so |
@@ -1671,6 +1671,9 @@ Error codes (`project.*` unless noted):
 - 400 or 403: `setting_forbidden` (`detail.keys`). It is 403 for an admin-only setting changed by an owner and 400 for an unknown setting.
 - 403: `self_membership`, `auth.forbidden`, `auth.permission_required`.
 - 404: `not_found`, `member_not_found` (no direct row), `role_not_found`, `department.not_found`, `group.not_found`, `workspace.not_found`, `user.not_found` (an unknown `user_id` in `upsert`), `agent.not_found` (transfer: not in the source project, or deleted).
+- 409 on deploy (`POST /api/agents`, redeploy, convert) of an agent in an isolated project: `isolation_requires_per_agent_role` (the shared execution role carries no boundary, so an isolated project's agent needs its own role; per-agent roles are switched off, or the runtime reports none) and `boundary_unavailable` (the project's permissions boundary `launchpad-project-<pid>` could not be created or updated in the workspace, `detail.project_id`).
+- 403: `department.not_managed` (a department administrator named a department they do not administer, or none), `department.workspace_not_open` (`detail.workspaces`: a department administrator bound a workspace not open to the department).
+- 409: `department.project_limit` (`detail.limit`: the department's `settings.max_projects` is reached).
 - 409: `exists`, `archived`, `default_locked`, `workspace_default`, `workspace_in_use`, `not_bound`, `member_from_group` (`detail.group_id`), `role_in_use` (`detail.members`), `sod_conflict` (`detail.conflicts`), `department.archived`, `group.archived`, `transfer_platform` (a system preset), `transfer_busy` (a job of the agent is queued or running), `transfer_linked` (a running canary pairs it with another agent; `detail.canary_id`).
 
 ### Project groups and departments
@@ -1682,22 +1685,30 @@ every project of the group (a project is in at most one group). A member's effec
 keys in a project unite the group's role with any direct role, and the direct row's
 `overrides` apply on top. Both surfaces are hub-global (`/api/project-groups*`,
 `/api/departments*` read neither `X-Workspace` nor `X-Project`). Every route is admin,
-except `GET /api/departments`, which members may read. Group and department ids
+except `GET /api/departments`, which members may read, and the routes department
+administrators pass (below). Group and department ids
 follow the project id rule (`^[a-z0-9][a-z0-9-]{1,31}$`, `400 group.invalid_id` /
 `department.invalid_id`). A group write that changes who reaches what bumps
 `access_epoch` and disables the API keys whose creators lost a project. Writes are
 journaled as structure events: `department.create` / `.update` / `.archive` /
 `.unarchive` / `.delete`, `group.create` / `.update` / `.archive` / `.unarchive`,
-`group.members.add` / `.update` / `.remove`, `group.projects.add` / `.remove`.
+`group.members.add` / `.update` / `.remove`, `group.projects.add` / `.remove`,
+`department.admins.add` / `.remove`, `department.workspaces.add` / `.remove`,
+`department.invite`.
 
 | Method | Path | Role | Result |
 |---|---|---|---|
 | `GET` | `/api/departments?status=active\|archived\|all` | member | `{departments[{id, name, description, archived, archived_at, created_by, created_at, updated_at, project_count, group_count}]}`; `status` defaults to `active` (`400 structure.invalid_status` otherwise) |
 | `POST` | `/api/departments` | admin | Body `{id, name (1–64), description? (≤ 2000)}` → `201` department. `409 department.exists` |
-| `PATCH` | `/api/departments/{department_id}` | admin | Any of `{name, description}` → department |
+| `PATCH` | `/api/departments/{department_id}` | admin | Any of `{name, description, settings}` → department. `settings` is partial: `{can_create_users: bool (default false), max_projects: 1–10000 \| null (default null, no limit), user_validity_max_days: 1–3650 (default 90)}`; a `null` value restores that key's default. An unknown key or a bad value → `400 department.setting_invalid` (`detail.key` / `detail.keys`) |
 | `POST` | `/api/departments/{department_id}/archive` / `…/unarchive` | admin | → department. An archived department cannot be given to a project or group (`409 department.archived`) |
 | `DELETE` | `/api/departments/{department_id}` | admin | `204`, only while no project and no group names it: `409 department.in_use` (`detail.projects`, `detail.groups`) |
-| `GET` | `/api/project-groups?status=&department_id=` | admin | `{groups[{id, name, description, department_id, archived, archived_at, created_by, created_at, updated_at, projects[{id, name, status}], member_count}]}`, by name |
+| `GET` | `/api/departments/{department_id}/admins` | admin | `{admins[{user_id, username, email, account_role, status, added_by, added_at}]}`, by username |
+| `PUT` | `/api/departments/{department_id}/admins` | admin | Body `{add[users.id] (≤ 200), remove[users.id] (≤ 200)}` → `{added[], removed[], admins[…]}`. Appoints or removes department administrators; adding one already appointed changes nothing. `400 department.admin_conflict` (a user both added and removed), `404 user.not_found`, `404 department.admin_not_found` (removing a user who is not one) |
+| `GET` | `/api/departments/{department_id}/workspaces` | admin | `{workspaces[{workspace_id, name, region, added_by, added_at}]}`: the workspaces open to the department, where its administrators may bind projects |
+| `PUT` | `/api/departments/{department_id}/workspaces` | admin | Body `{add[] (≤ 200), remove[] (≤ 200)}` → `{added[], removed[], workspaces[…]}`. Closing a workspace stops new bindings only; bindings already made stay. `400 department.workspace_conflict`, `404 workspace.not_found`, `404 department.workspace_not_found` (removing one not open) |
+| `POST` | `/api/departments/{department_id}/invitations` | admin, or the department's administrators when `settings.can_create_users` | Body `{username, email, project_id, role_key? (default developer), valid_days? (1–user_validity_max_days)}` → `201` `{user_id, username, email, expires_at, project_id, role_key, generated_password}`: a new `member` account, valid `user_validity_max_days` unless `valid_days` is shorter, added to one of the department's active projects with a project role (not `inherit`) and no workspace grant of its own. The password is shown once, like `POST /api/users`. `403 department.invitations_disabled`, `409 department.archived`, `404 project.not_found` (not a project of this department), `409 project.archived`, `400 project.role_unknown`, `422 department.validity_too_long` (`detail.max_days`) |
+| `GET` | `/api/project-groups?status=&department_id=` | admin (a department administrator with `department_id` set to their department) | `{groups[{id, name, description, department_id, archived, archived_at, created_by, created_at, updated_at, projects[{id, name, status}], member_count}]}`, by name |
 | `POST` | `/api/project-groups` | admin | Body `{id, name (1–64), description?, department_id?}` → `201` group detail. `409 group.exists` |
 | `GET` | `/api/project-groups/{group_id}` | admin | Group detail: the list shape plus `members[{user_id, username, email, account_role, status, role_key, added_by, added_at, sod_conflicts[{project_id, pairs, strict}]}]`, where `sod_conflicts` lists the group's projects in which that member combines duties |
 | `PATCH` | `/api/project-groups/{group_id}` | admin | Any of `{name, description, department_id}` → detail; none of it changes access |
@@ -1705,6 +1716,30 @@ journaled as structure events: `department.create` / `.update` / `.archive` /
 | `POST` | `/api/project-groups/{group_id}/unarchive` | admin | → detail. Under `sod_strict` it is refused if a member would regain a combined duty |
 | `PUT` | `/api/project-groups/{group_id}/members` | admin | Body `{upsert[{user_id, role_key}] (≤ 500), remove[user_id] (≤ 500)}` → `{added[], updated[], removed[]}` + detail. `role_key` is a built-in template only: custom roles are per project (`400 group.role_invalid`, `detail.templates`). `400 group.member_conflict` (upserted and removed in one request), `404 group.member_not_found`, `404 user.not_found`, `409 group.archived` |
 | `PUT` | `/api/project-groups/{group_id}/projects` | admin | Body `{add[] (≤ 200), remove[] (≤ 200)}` → `{added[], removed[]}` + detail. A project in another active group must leave it first (`409 group.project_in_other_group`, `detail.group_id`). Taking a project out revokes the access the group gave there. `400 group.project_conflict`, `404 group.project_not_found` (not in this group), `404 project.not_found`, `409 group.archived` (adding to an archived group) |
+
+**Department administrators.** A platform administrator appoints department
+administrators (`PUT /api/departments/{department_id}/admins`) and opens workspaces to
+the department (`PUT …/workspaces`); both stay admin-only, as do the department's own
+create, edit, archive and delete. A department administrator is an ordinary account
+that, for the projects and groups of a department they administer, passes the
+admin-only and `pperm:project.members` project-structure routes without being a member
+(`DEPARTMENT_ADMIN_ROUTES` in `core/route_policy.py`):
+
+- `POST /api/projects` (the body's `department_id` must be theirs, `403 department.not_managed`; its group must be the department's; its workspaces must be open to the department, `403 department.workspace_not_open`; `settings.max_projects` caps the count, `409 department.project_limit`);
+- `PATCH /api/projects/{project_id}` (name, department within theirs, group), `POST …/archive` / `…/unarchive`;
+- `PUT /api/projects/{project_id}/workspaces` with open workspaces only, and without `make_default` (`403 auth.forbidden`);
+- `PUT /api/projects/{project_id}/members`, `DELETE …/members/{user_id}`, `GET …/candidates`, `PUT` / `DELETE …/roles/{role_key}`;
+- every `/api/project-groups` route: `GET /api/project-groups` only with `?department_id=` set to their department, `POST` with the department named in the body, and the group routes for the department's groups (`PUT …/projects` takes only the department's projects);
+- `POST /api/departments/{department_id}/invitations`, when the department's `settings.can_create_users` is on.
+
+Another department's project answers `404 project.not_found` and its group
+`404 group.not_found`, so its existence is not disclosed; a non-read call on an archived
+project of their own department answers `409 project.archived` (archive / unarchive
+excepted). They see the department's projects in `GET /api/projects`, but not their data:
+workspace-scoped routes still need a project membership. The console reads
+`GET /api/me/access` → `managed_departments[{id, name, workspaces}]` to show them the
+Configure pages (projects, project groups, departments) and to fill the pickers, and
+`GET /api/projects/{project_id}` → `can_manage` to show the structure controls.
 
 ## Console Network Profiles API
 
@@ -1772,6 +1807,61 @@ profile, or outside the allowed set), `network_profile.name_exists` (409,
 `network.preflight_failed` (409), `project.not_found` (404, the project is not bound to the workspace), and
 `validation.invalid_request` (422, a body outside the schema or a malformed
 VPC / subnet / security-group id).
+
+## Console Storage Catalog API
+
+The **storage catalog** lists S3 Files and EFS access points an administrator registers
+per workspace, so a project's agents can mount them by id instead of naming an ARN
+(design storage-mounts §4). Like network profiles, each project has an **allowed set**
+per workspace, and an entry outside the request project's allowed set reads as missing
+(`404 storage.not_found`). Administrators see every entry, with the shared view: the
+projects allowed to use it and the live agents mounting it. The routes are
+workspace-scoped (`X-Workspace`); reads run inside the request's project, while writes
+and the allowed set are admin and project-exempt. Writes are journaled as
+workspace-level audit events: `storage.register`, `.update`, `.archive`, `.check`,
+`.project_set`.
+
+An entry is `{id, workspace_id, name, kind: s3files|efs, access_point_arn,
+file_system_arn, bucket_arn, posix_uid, posix_gid, root_directory, mount_target_azs[],
+mount_targets[], vpc_id, network_profile_id, max_mode: ro|rw, data_class:
+reference|shared_state|scratch, origin, status: unchecked|ok|warn|blocked,
+check_results, checked_at, created_by, created_at, updated_at, archived_at, allowed}`.
+`allowed` is relative to the request's project. The administrator view adds
+`projects[]`, `agents[{agent_id, name, project_id, version, status, endpoint_mode, mode,
+mount_path}]`, `writers` and `multi_writer` (more than one read-write agent: S3 Files is
+close-to-open consistent between NFS clients only, so several writers need their own
+locking or directory split).
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/storage-mounts?include_archived=` | member | `{storage[…]}` by name: a member gets the current project's allowed set, an administrator every live entry (archived ones too with `include_archived=true`) |
+| `POST` | `/api/storage-mounts` | admin | Body (`extra="forbid"`) `{id, name? (≤ 64, default the id), access_point_arn, max_mode? (default ro), data_class? (default reference), network_profile_id?, check? (default true)}` → `201` the administrator view (`status: unchecked`). `id` follows the project id rule (`^[a-z0-9][a-z0-9-]{1,31}$`). With `check` the check runs right away; if it fails the entry is registered anyway and the answer carries `check_error{code, message}`. `409 storage.id_exists` (a live entry has this id), `422 storage.invalid_access_point` (not an S3 Files or EFS access point ARN), `404 network_profile.not_found` |
+| `GET` | `/api/storage-mounts/{storage_id}` | member | One entry; for a member only when it is in the project's allowed set |
+| `GET` | `/api/storage-mounts/{storage_id}/usage` | member | `{storage_id, agents[…], writers, multi_writer}`: a member sees their own project's agents only, and the workspace-wide writer count |
+| `PATCH` | `/api/storage-mounts/{storage_id}` | admin | Any of `{name, max_mode, data_class, network_profile_id ("" clears it)}` → the administrator view. The access point is immutable. Lowering `max_mode` to `ro` while an agent mounts it read-write → `409 storage.mode_exceeds_max` (`detail.agents`). A new default profile moves the entry back to `unchecked` |
+| `DELETE` | `/api/storage-mounts/{storage_id}` | admin | `204`. Archives the entry (the row stays, since snapshots may name it) and removes it from every allowed set. The platform never deletes the storage itself. `409 storage.in_use` (`detail.agents`) while a live agent mounts it |
+| `POST` | `/api/storage-mounts/{storage_id}/check` | admin | → the administrator view with `check_results[{check, severity: ok\|warn\|block, message, details}]`, `checked_at`, `status`. Reads the access point, its file system and mount targets with the workspace's read-only describe calls (S3 Files `GetAccessPoint` / `GetFileSystem` / `ListMountTargets` / `GetMountTarget`, or EFS `Describe*`) and fills the POSIX user, root directory, mount-target AZs and VPC. With a default network profile it also runs the preflight's network checks against it. `502 storage.check_failed` (`detail.aws_code`; an access denial names the spoke template update) |
+| `GET` | `/api/storage-mounts/projects/{project_id}` | admin | `{project_id, workspace_id, storage[…]}`: the project's allowed set in the request's workspace. `404 project.not_found` when the project is not bound to it |
+| `PUT` | `/api/storage-mounts/projects/{project_id}` | admin | Body `{storage_ids[] (≤ 50)}` → the GET shape. Replaces the allowed set. Taking an entry away from a project whose agents mount it is allowed; their next publish is refused until the mount is removed or the entry is allowed again |
+| `POST` | `/api/storage-mounts/preflight` | `perm:project.use` | Body `{mounts[{storage_id, mount_path?, mode?: ro\|rw}] (1–4), network_profile_id?, method?, byoc_artifact_kind?}` → `{status: ok\|warn\|blocked, results[{check, severity, message, details, storage_id}]}`. The wizard's check of a spec's catalog mounts against its network (§5), writing nothing: the network profile is required (S3 Files / EFS need a VPC), then same VPC, a mount target in every subnet's AZ, NFS (TCP 2049) out of the agent's security groups and into the mount targets', the mode within `max_mode`, plus method and release-mode notes. A failed EC2 read degrades the network checks to warnings. An entry the project may not use → `404 storage.not_found` |
+| `GET` | `/api/storage-mounts/agents/{agent_id}` | member | The agent detail page's storage card: `{agent_id, version, mounts[{storage_id, mount_path, mode, entry{name, kind, status, max_mode, data_class, archived, checked_at, blocking, warnings} \| null, missing}], inline[{kind, access_point_arn, mount_path, mode: rw}], session_storage}`. Another project's agent → `404 agent.not_found` |
+
+An agent spec mounts an entry as `filesystem.mounts[{storage_id, mount_path? (default
+/mnt/<storage_id>), mode? (default ro)}]`; together with the inline `s3_files` / `efs`
+mounts an agent has at most 4, each entry once, all mount paths unique. On
+`POST /api/agents` and redeploy each mount must be in the project's allowed set
+(`404 storage.not_found`), not blocked by its last check (`409 storage.blocked`) and
+within `max_mode` (`400 storage.mode_exceeds_max`); the server stamps the entry's `kind`
+and `access_point_arn` into the stored spec, replacing whatever the client sent. The
+deploy-time preflight refuses a blocking result before any job exists
+(`409 storage.preflight_failed`, `detail.results`). The execution role gets
+`ClientMount` for every mount and `ClientWrite` only for `rw` ones. Inline access-point
+mounts stay administrator-only (`400 storage.inline_not_allowed`, `detail.mount_paths`).
+On promotion the catalog id is the logical name (resource mapping kind `storage`): the
+target workspace's entry of the same id is used unless a mapping row names another, and
+it must be live and allowed for the project, else the release is refused with
+`409 storage.unmapped`; inline access points carry the source account and are refused
+with `409 storage.inline_not_promotable`.
 
 ## Console route index — the remaining routes
 
@@ -1952,7 +2042,7 @@ pattern, answer, enabled, created_by, updated_by, source_issue_id, hit_count, �
 | `PATCH` | `/api/alerts/{rule_id}` | admin | project | Any of `{name, threshold, window, enabled, webhook_url}` → rule |
 | `DELETE` | `/api/alerts/{rule_id}` | admin | project | `{deleted: rule_id}` |
 | `POST` | `/api/alerts/evaluate?notify=` | admin | project | `{workspace_id, evaluated_at, rules[…], firing, unknown}`: re-reads every enabled rule now; `notify=false` does not deliver webhooks |
-| `GET` | `/api/costs?range=&project=&force=` | admin | ws | `{range, hours, generated_at, by_agent[…], sessions, …}`: estimated spend by agent, person and model; `unpriced_models` names models with no price. `project` narrows to one bound project; without it the report spans the workspace, with an unattributed bucket. `422 costs.bad_range` |
+| `GET` | `/api/costs?range=&project=&force=` | admin | ws | `{range, hours, generated_at, by_agent[…], sessions, …}`: estimated spend by agent, person and model; `unpriced_models` names models with no price. `project` narrows to one bound project; without it the report spans the workspace, with an unattributed bucket. Each `by_agent` row carries `project_id` and `project_source: span\|inference_profile\|agent\|null` (how the project was known: the spans' `launchpad.project` attribute, the project's application inference profile in the model id, else the ledger agent); `by_project[{project_id, agents, tokens, est_cost_usd}]` sums them per project, most expensive first, `project_id: null` being the spend attributed to no project. `422 costs.bad_range` |
 | `GET` | `/api/costs/month-to-date?project=&force=` | admin | ws | `{workspace_id, project?, est_cost_usd}`: the figure a `cost_mtd_usd` alert compares against |
 | `GET` | `/api/fleet?project=` | admin | hub | Every workspace in one table (agents, failures, pending releases, firing alerts), each also per project; `project` narrows to one project. A ledger read; an unusable workspace reports `readable: false`. `404 project.not_found` |
 | `GET` | `/api/governance/health` | member | project | `{workspace_id, generated_at, score, grade, agents_considered, findings[{…, to}]}` |
@@ -2007,8 +2097,8 @@ everything, as before.
 | Method | Path | Role | Scope | Result |
 |---|---|---|---|---|
 | `GET` | `/api/observability/dashboard?range=&force=` | member | project | The dashboard tiles and series for the range, cached per workspace and project |
-| `GET` | `/api/observability/sessions?range=&force=` | member | project | `{sessions[…], count, …}` |
-| `GET` | `/api/observability/traces?range=&agent=&status=&session=&force=` | member | project | `{traces[…], count, …}`; `session` matches a session or trace id substring |
+| `GET` | `/api/observability/sessions?range=&force=` | member | project | `{sessions[…], count, …}`. A row carries `project` when its spans name their project (the `launchpad.project` resource attribute of an isolated project's agent); rows without it keep their old shape |
+| `GET` | `/api/observability/traces?range=&agent=&status=&session=&force=` | member | project | `{traces[…], count, …}`; `session` matches a session or trace id substring. A row carries `project` when its spans name it, as above; one trace's `meta.project` likewise |
 | `GET` | `/api/observability/traces/{trace_id}?range=&force=` | member | project | One trace with its spans. `404 observability.trace_not_found`, also for another project's trace |
 | `GET` | `/api/observability/prices` | member | ws | `{prices, meta, source, refresh_hours}`: the model price table |
 | `POST` | `/api/observability/prices/refresh` | `infra` | project | Pulls the latest prices from the configured litellm source into the local config. No AWS call |

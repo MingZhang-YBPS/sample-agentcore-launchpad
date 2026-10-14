@@ -30,4 +30,7 @@ def filesystem_configurations(spec: AgentSpec) -> list[dict]:
         out.append({"efsAccessPoint": {
             "accessPointArn": mount.access_point_arn, "mountPath": mount.mount_path,
         }})
+    from app.services.storage_mounts import filesystem_entries
+
+    out.extend(filesystem_entries(spec))  # catalog mounts (storage-mounts §4.2)
     return out

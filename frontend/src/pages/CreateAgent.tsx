@@ -45,6 +45,7 @@ import type {
   Toolkit,
 } from "../lib/api";
 import { api, ApiError, HARNESS_NATIVE_TOOLS } from "../lib/api";
+import { catalogRowsFromSpec } from "../lib/api/storage";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
 import { adotLauncher } from "../lib/byocTelemetry";
 import {
@@ -1258,6 +1259,8 @@ const deployLock = !canDeploy
     sessionMount,
     s3Mounts,
     efsMounts,
+    // the classic wizard has no catalog picker: a re-publish keeps the stored picks
+    catalogMounts: catalogRowsFromSpec((editing?.spec as { filesystem?: Parameters<typeof catalogRowsFromSpec>[0] } | undefined)?.filesystem),
     vpcSubnets,
     vpcSgs,
     networkProfileId,

@@ -592,6 +592,23 @@ Resources:
                   - kms:ListKeys
                 Resource: "*"
 
+              # ── S3 Files / EFS (read-only) ───────────────────────────────────
+              # Storage catalog check (storage-mounts §4.4): the access point, its
+              # file system and mount targets an Agent would mount.
+              - Sid: StorageCatalogCheck
+                Effect: Allow
+                Action:
+                  - elasticfilesystem:DescribeAccessPoints
+                  - elasticfilesystem:DescribeFileSystems
+                  - elasticfilesystem:DescribeMountTargetSecurityGroups
+                  - elasticfilesystem:DescribeMountTargets
+                  - s3files:GetAccessPoint
+                  - s3files:GetFileSystem
+                  - s3files:GetMountTarget
+                  - s3files:ListAccessPoints
+                  - s3files:ListMountTargets
+                Resource: "*"
+
               # ── EC2 (read-only) ─────────────────────────────────────────────
               # Network profile preflight (design projects §12.4): describe the
               # subnets, security groups, routes and endpoints an Agent would use.

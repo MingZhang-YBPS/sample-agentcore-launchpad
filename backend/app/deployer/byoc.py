@@ -564,7 +564,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         spec = AgentSpec(**row.spec)
         cfg = _config(spec)
         role_arn = ctx.scratch["execution_role_arn"]
-        environment = runtime_environment(spec, ctx.workspace.resources, agent_id=row.id)
+        environment = runtime_environment(spec, ctx.workspace.resources, agent_id=row.id,
+                                          workspace_id=row.workspace_id or "")
         # The per-agent execution role scopes bedrock:InvokeModel to exactly
         # spec.allowed_model_ids (agent_iam.allowed_model_resources) — hand the
         # permitted ids to the user code: MODEL_ID is the primary (= model_id),

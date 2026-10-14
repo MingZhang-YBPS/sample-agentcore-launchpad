@@ -562,7 +562,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
             environment = with_mounts_env(
-                runtime_environment(spec, resources, agent_id=row.id), spec
+                runtime_environment(spec, resources, agent_id=row.id,
+                                    workspace_id=row.workspace_id or ""), spec
             )
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")

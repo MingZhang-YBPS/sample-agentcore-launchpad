@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-import type { AccessProject, AccessWorkspace } from "../lib/api/projects";
+import type { AccessProject, AccessWorkspace, MyAccess } from "../lib/api/projects";
 import { isProjectId } from "../lib/workspace-header";
 
 export interface ProjectContextValue {
@@ -16,6 +16,8 @@ export interface ProjectContextValue {
   select: (id: string) => void;
   /** re-read `GET /api/me/access` (after a membership or binding change) */
   refresh: () => Promise<void>;
+  /** the departments the caller administers (§11.1); empty for everyone else */
+  managedDepartments: MyAccess["managed_departments"];
 }
 
 export const ProjectContext = createContext<ProjectContextValue>({
@@ -25,6 +27,7 @@ export const ProjectContext = createContext<ProjectContextValue>({
   boundProjects: 0,
   select: () => undefined,
   refresh: async () => undefined,
+  managedDepartments: [],
 });
 
 export function useProject() {

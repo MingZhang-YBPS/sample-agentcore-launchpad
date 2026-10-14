@@ -268,7 +268,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or workspace.resources.get("execution_role_arn", ""),
                 "environment": with_mounts_env(
-                    runtime_environment(spec, workspace.resources), spec
+                    runtime_environment(spec, workspace.resources, agent_id=agent.id,
+                                        workspace_id=agent.workspace_id or ""), spec
                 ),
                 "filesystem_configurations": filesystem_configurations(spec) or None,
                 "vpc": vpc,

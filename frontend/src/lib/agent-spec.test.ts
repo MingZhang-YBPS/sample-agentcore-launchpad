@@ -11,6 +11,7 @@ import {
   emptyAgentForm,
   filesystemIssues,
   formFromStoredSpec,
+  hasByoMounts,
   republishSpec,
 } from "./agent-spec";
 
@@ -233,6 +234,7 @@ describe("BYO mounts on every method (storage-mounts §3)", () => {
     session_storage: { mount_path: "/mnt/workspace" },
     s3_files: [{ access_point_arn: s3[0].arn, mount_path: "/mnt/data" }],
     efs: [{ access_point_arn: efs[0].arn, mount_path: "/mnt/shared" }],
+    mounts: [],
   };
 
   it("harness, zip_runtime, container, byoc and MCP servers send the same filesystem block", () => {
@@ -254,5 +256,39 @@ describe("BYO mounts on every method (storage-mounts §3)", () => {
     const container = { ...emptyAgentForm("container"), s3Mounts: s3 };
     expect(filesystemIssues(container).vpc).toBe(true);
     expect(filesystemIssues({ ...container, vpcSubnets: "subnet-1", vpcSgs: "sg-1" }).vpc).toBe(false);
+  });
+});
+
+describe("storage catalog mounts in the wizard (storage-mounts SM-2)", () => {
+  const picks = [
+    { storageId: "datasets", path: "/mnt/datasets", mode: "ro" as const },
+    { storageId: "state", path: "/mnt/state", mode: "rw" as const },
+  ];
+
+  it("starts empty, sends `filesystem.mounts` and round-trips through a stored spec", () => {
+    expect(emptyAgentForm("harness").catalogMounts).toEqual([]);
+    const form = { ...emptyAgentForm("harness"), name: "fs-c", systemPrompt: "hi", catalogMounts: picks, networkProfileId: "np-1" };
+    const spec = buildAgentSpec(form, CATALOGS);
+    expect(spec.filesystem?.mounts).toEqual([
+      { storage_id: "datasets", mount_path: "/mnt/datasets", mode: "ro" },
+      { storage_id: "state", mount_path: "/mnt/state", mode: "rw" },
+    ]);
+    expect(formFromStoredSpec("harness", "fs-c", spec).form.catalogMounts).toEqual(picks);
+  });
+
+  it("counts catalog picks as BYO mounts: a profile is needed", () => {
+    const form = { ...emptyAgentForm("zip_runtime"), catalogMounts: picks };
+    expect(hasByoMounts(form)).toBe(true);
+    expect(filesystemIssues(form).vpc).toBe(true);
+    expect(filesystemIssues({ ...form, networkProfileId: "np-1" }).vpc).toBe(false);
+  });
+
+  it("checks catalog paths for duplicates and caps inline + catalog at four", () => {
+    const base = { ...emptyAgentForm("container"), networkProfileId: "np-1" };
+    const dup = { ...base, s3Mounts: [{ arn: "arn:aws:s3files:us-east-1:1:ap/x", path: "/mnt/datasets" }], catalogMounts: picks };
+    expect(filesystemIssues(dup).duplicatePaths).toBe(true);
+    const inline = [1, 2, 3].map((i) => ({ arn: `arn:aws:s3files:us-east-1:1:ap/${i}`, path: `/mnt/in${i}` }));
+    expect(filesystemIssues({ ...base, s3Mounts: inline.slice(0, 2), catalogMounts: picks }).tooMany).toBe(false);
+    expect(filesystemIssues({ ...base, s3Mounts: inline, catalogMounts: picks }).tooMany).toBe(true);
   });
 });

@@ -280,6 +280,23 @@ def _stored_network(
     return AgentSpec.model_validate(stored)
 
 
+def _stored_storage(
+    db: Session, ws: WorkspaceScope, request: Request, spec: AgentSpec,
+) -> AgentSpec:
+    """Catalog mounts in stored form (storage-mounts §4.2, §5): each entry in the
+    project's allowed set and within its max mode, its kind and access point stamped by
+    the server, and the storage × network preflight passed."""
+    if not spec.filesystem.mounts:
+        return spec
+    from app.services import storage_mounts
+
+    project = getattr(request.state, "project", None)
+    pid = project.id if project is not None else None
+    stored = storage_mounts.normalize_spec_storage(db, ws.id, pid, spec.model_dump(mode="json"))
+    storage_mounts.assert_preflight(db, ws.context, stored, pid)
+    return AgentSpec.model_validate(stored)
+
+
 @router.post("/agents", status_code=202)
 def create_agent(
     spec: AgentSpec,
@@ -293,6 +310,7 @@ def create_agent(
     mount_policy.assert_inline_mounts_allowed(
         spec, None, is_admin=require_identity(request).is_admin,
     )
+    spec = _stored_storage(db, ws, request, spec)
     if spec.method not in SUPPORTED_METHODS:
         raise AppError(
             "agent.method_not_available",
@@ -741,6 +759,7 @@ def redeploy_agent(
     mount_policy.assert_inline_mounts_allowed(
         spec, agent.spec, is_admin=require_identity(request).is_admin,
     )
+    spec = _stored_storage(db, ws, request, spec)
     return republish_agent(
         db, agent, spec, ws, actor=require_identity(request).username, viewer=viewer
     )

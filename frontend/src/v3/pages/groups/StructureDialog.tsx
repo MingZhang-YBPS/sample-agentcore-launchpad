@@ -16,6 +16,7 @@ export function StructureDialog({
   initial,
   creating,
   departments,
+  requireDepartment = false,
   onClose,
   onSubmit,
 }: {
@@ -24,6 +25,8 @@ export function StructureDialog({
   creating: boolean;
   /** groups: the department choices */
   departments?: Department[];
+  /** groups: no "no department" choice (a department administrator's, §11.1) */
+  requireDepartment?: boolean;
   onClose: () => void;
   onSubmit: (form: StructureForm) => Promise<void>;
 }) {
@@ -92,7 +95,7 @@ export function StructureDialog({
           <label className="v3-field">
             <span>{t("v3.groups.col.department")}</span>
             <select className="v3-select" value={form.department_id} onChange={(e) => setForm((prev) => ({ ...prev, department_id: e.target.value }))}>
-              <option value="">{t("v3.groups.noDepartment")}</option>
+              {!requireDepartment && <option value="">{t("v3.groups.noDepartment")}</option>}
               {(departments ?? []).filter((d) => !d.archived || d.id === form.department_id).map((d) => (
                 <option key={d.id} value={d.id}>{d.name}</option>
               ))}

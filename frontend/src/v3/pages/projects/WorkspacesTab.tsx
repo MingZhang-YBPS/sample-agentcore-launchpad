@@ -6,6 +6,7 @@ import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, errorMessage } from "../../../lib/api";
 import { type BindingsPut, type ProjectBinding, type ProjectDetail, projectsApi } from "../../../lib/api/projects";
 import { formatRowCounts } from "../../../lib/workspaces";
+import { useProject } from "../../../workspace/project-context";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Notice, Panel, Skeleton } from "../../ui";
@@ -14,7 +15,8 @@ import type { ProjectAbilities } from "./ProjectDetail";
 
 /**
  * §6.3 "Workspaces": the bindings; an administrator binds, unbinds and makes the
- * project a workspace's default. An unbind is refused while the workspace holds
+ * project a workspace's default. A department administrator (§11.1) binds to the
+ * workspaces open to the project's department and unbinds; no defaults. An unbind is refused while the workspace holds
  * any of the project's rows — the refusal lists them by table.
  */
 export function WorkspacesTab({
@@ -34,13 +36,18 @@ export function WorkspacesTab({
     () => (abilities.admin ? api.listWorkspaces() : Promise.resolve(null)),
     `v3-project-ws-all:${abilities.admin}`,
   );
+  const { managedDepartments } = useProject();
   const [pick, setPick] = useState("");
   const [unbinding, setUnbinding] = useState<ProjectBinding | null>(null);
   const [refusal, setRefusal] = useState<{ ws: string; rows: Record<string, number>; err: unknown } | null>(null);
   const [busy, setBusy] = useState(false);
   const rows = bindings.data?.workspaces ?? [];
   const bound = new Set(rows.map((b) => b.workspace_id));
-  const free = (all.data?.workspaces ?? []).filter((w) => !bound.has(w.id));
+  // an administrator: every workspace; a department administrator: the department's open ones
+  const open = managedDepartments.find((d) => d.id === project.department_id)?.workspaces ?? [];
+  const free: { id: string; name: string; region: string | null }[] = abilities.admin
+    ? (all.data?.workspaces ?? []).filter((w) => !bound.has(w.id))
+    : open.filter((ws) => !bound.has(ws)).map((ws) => ({ id: ws, name: ws, region: null }));
   const active = project.status === "active";
 
   const put = async (body: BindingsPut, ok: string) => {
@@ -65,11 +72,11 @@ export function WorkspacesTab({
 
   return (
     <div style={{ display: "grid", gap: 12 }} data-testid="project-workspaces">
-      {abilities.admin && active && (
+      {abilities.structure && active && (
         <div className="v3-prj-filters">
           <select className="v3-input" aria-label={t("v3.projects.workspaces.pick")} value={pick} onChange={(e) => setPick(e.target.value)}>
             <option value="">{t("v3.projects.workspaces.pick")}</option>
-            {free.map((w) => <option key={w.id} value={w.id}>{w.name} · {w.region}</option>)}
+            {free.map((w) => <option key={w.id} value={w.id}>{w.region ? `${w.name} · ${w.region}` : w.name}</option>)}
           </select>
           <Btn kind="primary" disabled={!pick || busy}
             onClick={() => void put({ bind: [pick] }, t("v3.projects.workspaces.bound", { workspace: free.find((w) => w.id === pick)?.name ?? pick }))}>
@@ -116,9 +123,9 @@ export function WorkspacesTab({
                   <td>{b.is_workspace_default ? <Chip s="info"><Star size={11} /> {t("v3.projects.workspaces.isDefault")}</Chip> : "—"}</td>
                   <td className="num v3-prj-muted">{ago(b.enabled_at)}</td>
                   <td style={{ width: 1, whiteSpace: "nowrap" }}>
-                    {abilities.admin && (
+                    {abilities.structure && (
                       <span style={{ display: "inline-flex", gap: 6 }}>
-                        {!b.is_workspace_default && active && (
+                        {abilities.admin && !b.is_workspace_default && active && (
                           <Btn size="sm" disabled={busy}
                             onClick={() => void put({ make_default: [b.workspace_id] }, t("v3.projects.workspaces.madeDefault", { workspace: b.name }))}>
                             <Star size={12} /> {t("v3.projects.workspaces.makeDefault")}

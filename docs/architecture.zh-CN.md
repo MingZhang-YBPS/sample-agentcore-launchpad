@@ -257,10 +257,24 @@ P4 Harness 由 PUBLIC 重新发布到 VPC、P5 BYOC 镜像、P8 只读）。探�
 `runtime.py` 在任何 Create / Update 调用之前再拒绝一次。挂载沿用各方式已有的 `spec_vpc` 网络放置，
 不再有只属于 container 的 VPC 路径。
 
-**谁可以设置。** 存储目录（storage-mounts §4）上线之前，挂载是内联的 Access Point ARN；与内联子网 /
+**谁可以设置。** 内联挂载（早于下文存储目录的形式）是 Access Point ARN；与内联子网 /
 安全组一样，只有管理员可以新增或修改（`services/mount_policy.py`，`storage.inline_not_allowed`，400）。
 成员可以在管理员设置的挂载保持不变时重新发布，也可以删除挂载。每种方式的执行角色都会得到
 `launchpad-fs-<agent>` 内联策略（总是包含 `ClientWrite`；只读模式随存储目录一起提供）。
+
+**存储目录**（storage-mounts §4、SM-2，`services/storage_mounts.py`，[api.zh-CN.md](api.zh-CN.md)
+「控制台存储目录 API」）。管理员按工作区把 S3 Files 或 EFS 接入点登记为目录条目（`storage_mounts`：id、种类、
+接入点、`max_mode` `ro` / `rw`、`data_class`、可选的默认网络配置档），并像网络配置档一样按项目放行
+（`project_storage_mounts`）；不在项目允许集合中的条目视同不存在。spec 随后按 id 挂载：
+`filesystem.mounts[{storage_id, mount_path, mode}]`（默认只读，最高为 `max_mode`），成员在向导中选择存储，
+无需填写 ARN；服务端把条目的种类与接入点写入保存的 spec。**检查**通过工作区的只读 describe 调用读取接入点、
+文件系统与挂载目标；**预检**（向导调用 `POST /api/storage-mounts/preflight`，部署时再跑一次，
+`409 storage.preflight_failed`）把每个挂载与 spec 的网络配置档对照：同一 VPC、每个子网所在可用区都有挂载目标、
+Agent 安全组出站与挂载目标安全组入站放行 NFS（TCP 2049）。**IAM 按模式授予**：`storage_iam_statements`
+对每个挂载授予 `ClientMount`，只有 `rw` 挂载另加 `ClientWrite`（内联挂载仍为读写）。**晋级**时目录挂载是种类为
+`storage` 的资源映射引用：目录 id 即逻辑名，目标工作区的同名条目（或映射行指定的条目）必须在用且允许该项目使用，
+否则拒绝发布（`storage.unmapped`），解析后的 spec 以目标的接入点重新盖章。内联接入点带有源账户，不能晋级
+（`storage.inline_not_promotable`）。
 
 **Agent 如何得知挂载**（`app/deployer/mounts.py`）。代码运行时（zip、studio、container、BYOC）的环境变量
 里有 `LAUNCHPAD_MOUNTS`（JSON：`[{name, path, kind, mode}]`）；Strands HTTP 模板、Claude SDK 容器模板与
@@ -2075,7 +2089,7 @@ namespaces / search / 抽取任务返回 `memory.actor_not_found`，共享的 `d
 | 成员 | `project_members` | 用户在项目中的直接角色（`role_key`）与按键的 `overrides` |
 | 自定义角色 | `project_roles` | 基于内置模板、按项目定义的权限键集合 |
 | 项目组 | `project_groups`、`group_members` | 访问捆绑：组成员在组内每个项目中获得一个内置模板。一个项目至多属于一个组 |
-| 部门 | `departments` | 项目与项目组上的组织标签，不授予任何访问（阶段 3 才有部门管理员） |
+| 部门 | `departments`、`department_admins`、`department_workspaces` | 项目与项目组上的组织标签，不授予数据访问。部门管理员在向部门开放的工作区中管理其项目与项目组（见「部门管理员」） |
 | 访问纪元 | `access_epoch` | 单行计数器，任何影响访问的写入都会加一（见「缓存」） |
 
 这些都是平台级表（不带 `workspace_id`）。用户在项目中的有效权限是直接角色与项目组角色的权限键
@@ -2164,6 +2178,39 @@ namespaces / search / 抽取任务返回 `memory.actor_not_found`，共享的 `d
 
 - 除管理员外，没有人能修改自己的项目成员资格（`403 project.self_membership`），负责人因此不能给自己加签字权限；
 - 成员视图会标出在同一项目里同时持有一对职责两端的人（`agents.deploy` + `release.sign`、`criteria.manage` + `criteria.sign`）；管理员专属设置 `settings.sod_strict` 打开时，这类写入被拒绝（`409 project.sod_conflict`）。
+
+### 部门管理员
+
+部门（`departments`）可以有**部门管理员**（`department_admins`，由平台管理员任命），以及一组向它**开放**的工作区
+（`department_workspaces`）。对本部门的项目与项目组，部门管理员无需成为成员即可通过结构路由：创建项目（只能在已开放的
+工作区中，且不超过 `settings.max_projects`）、改名、调整项目组、归档、绑定已开放的工作区（不能 `make_default`）、
+管理成员与自定义角色，以及所有项目组路由（列表须带 `?department_id=`）。部门开启 `settings.can_create_users` 时，
+他们还可以把新的 `member` 账户邀请进本部门的某个项目，有效期最长为 `settings.user_validity_max_days`。这一叠加规则是
+`core/route_policy.py` 中的 `DEPARTMENT_ADMIN_ROUTES`，每次请求读取（不涉及访问纪元：它不授予数据访问）：其他部门的
+项目或项目组返回 404，工作区范围的路由仍需成员身份，所以部门管理员能看到本部门的项目，却看不到其数据。
+`GET /api/me/access` 返回 `managed_departments[{id, name, workspaces}]`，项目详情返回 `can_manage`，V3 控制台据此向他们
+显示“配置”页面与选择器。
+
+### 阶段 2：项目 IAM 边界
+
+项目切换为 `isolated`（`PUT /api/projects/{id}/isolation`）后，预置任务的 `boundary` 阶段（`services/project_iam.py`）
+为每个项目 × 工作区写入一个客户托管策略 `launchpad-project-<pid>`（必要时带 Region 后缀），项目的每个 Agent 都有自己的
+执行角色，并以该策略作为**权限边界**。按 Agent 的身份策略仍按 spec 最小授权；边界是其上限，由项目标签
+（`aws:ResourceTag/launchpad:project`）、名称前缀（记忆、S3、ECR、M2M 提供方）与显式 ARN（知识库、Connection）组成。
+边界带版本（`agents.isolation_applied = boundary-v<N>`），spec 新增 Connection 或知识库时在部署时扩展。隔离项目的 Agent
+从不使用共享执行角色：没有按 Agent 角色的部署被拒绝，返回 `409 project.isolation_requires_per_agent_role`；边界无法更新到
+最新时返回 `409 project.boundary_unavailable`。
+
+### 按项目的遥测与成本
+
+对隔离项目的 Agent，部署器加上两种标记（`services/project_telemetry.py`）：`OTEL_RESOURCE_ATTRIBUTES` 带上
+`launchpad.project`、`launchpad.agent` 与 `launchpad.workspace`（平台的条目在前；spec 不能设置 `launchpad.*` 键），
+运行时 / Harness / 项目记忆创建时带上标签 `launchpad:project`、`launchpad:workspace`、`launchpad:agent-id`，二者由同一组属性
+派生，因而不会不一致。可观测查询按 span 属性过滤，行中随之带上 `project`；没有该属性的 span（共享项目、自带 OTEL 设置的
+BYOC 代码）退回账本解析。模型花费记在模型而非运行时名下，因此在 `LAUNCHPAD_PROJECT_INFERENCE_PROFILES`（默认关闭）开启时，
+隔离项目的 Agent 按项目 × 工作区 × 模型使用带项目标签的**应用推理配置文件**，付款账户激活该成本分配标签后 Cost Explorer
+即可按项目拆分。`/api/costs` 依次按 span 属性、模型 id 中的推理配置文件、账本中的 Agent 归属每一行（`project_source`），
+并返回 `by_project` 汇总。共享项目的请求与现在完全相同。
 
 ### 管理
 

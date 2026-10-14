@@ -210,6 +210,9 @@ class Settings(BaseSettings):
     # Model of the architect assistant's confirmed-items digest (assistant-context C2,
     # D-2); empty = agent_default_model_id (the workspace's cheap default).
     assistant_digest_model_id: str = ""
+    # Per-project Bedrock application inference profiles for isolated projects (projects
+    # design §10.8): cost per project at the model call; off until verified live.
+    project_inference_profiles: bool = False
     # The architect assistant's replay budget (assistant-context C3): half the
     # architect model's input context window, in estimated tokens, capped at
     # assistant_replay_max_tokens; the other half stays free for the turn's own tool

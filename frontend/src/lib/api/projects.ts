@@ -73,6 +73,9 @@ export interface ProjectSummary {
 /** A single project as its detail routes return it: plus the caller's effective keys. */
 export interface ProjectDetail extends ProjectSummary {
   my_permissions: string[];
+  /** the caller manages this project's structure: an administrator, or an
+   *  administrator of its department (§11.1) */
+  can_manage: boolean;
 }
 
 export interface ProjectListFilter {
@@ -279,6 +282,9 @@ export interface MyAccess {
   role: string;
   is_admin: boolean;
   can_manage_structure: boolean;
+  /** the departments the caller administers (§11.1) and their open workspaces;
+   *  empty for a platform administrator and for everyone else */
+  managed_departments: { id: string; name: string; workspaces: string[] }[];
   workspaces: AccessWorkspace[];
 }
 

@@ -50,7 +50,7 @@ function project(over: Partial<ProjectDetail> = {}): ProjectDetail {
   return {
     id: "risk", name: "Risk", description: "", department_id: null, group_id: null, status: "active",
     is_default: false, settings: {}, created_by: null, created_by_name: null, created_at: null, updated_at: null,
-    archived_at: null, workspaces: [], member_count: 0, agent_count: 0, my_permissions: [], ...over,
+    archived_at: null, workspaces: [], member_count: 0, agent_count: 0, my_permissions: [], can_manage: false, ...over,
   };
 }
 

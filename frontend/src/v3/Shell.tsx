@@ -262,7 +262,9 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const [navMode, setNavMode] = useNavMode(isAdmin);
   // a `perm` rail entry (Project settings) shows for a holder in any project here
   const perms = useMemo(() => [...new Set(project.projects.flatMap((p) => p.permissions))], [project.projects]);
-  const allGroups = useMemo(() => hostedGroups(isAdmin, perms), [isAdmin, perms]);
+  // a department administrator (§11.1) also sees Projects, Project groups and Departments
+  const managesDepartment = project.managedDepartments.length > 0;
+  const allGroups = useMemo(() => hostedGroups(isAdmin, perms, managesDepartment), [isAdmin, perms, managesDepartment]);
   const groups = useMemo(
     () =>
       navMode === "expert"

@@ -42,6 +42,14 @@ describe("hostedGroups", () => {
     expect(tos(false, ["project.members"])).not.toContain("/v3/projects");
   });
 
+  it("shows Projects, Project groups and Departments to a department administrator (§11.1)", () => {
+    const tos = hostedGroups(false, [], true).flatMap((g) => g.items.map((i) => i.to));
+    expect(tos).toEqual(expect.arrayContaining(["/v3/projects", "/v3/project-groups", "/v3/departments"]));
+    expect(tos).not.toContain("/v3/users");
+    expect(tos).not.toContain("/v3/admins");
+    expect(tos).not.toContain("/v3/models");
+  });
+
   it("lists the Gateway tools page for every member", () => {
     expect(hostedGroups(false).flatMap((g) => g.items.map((i) => i.to))).toContain("/v3/tools/gateway");
   });

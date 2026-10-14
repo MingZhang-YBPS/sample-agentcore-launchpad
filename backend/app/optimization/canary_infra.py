@@ -156,7 +156,7 @@ def mint_candidate_version(
     # inherit them. Read from the live resource rather than derived from the agent
     # name, so an agent deployed before per-agent roles existed still works.
     live = rt.get_runtime(control_client, agent.resource_id)
-    role_arn = agent_iam.live_runtime_role_arn(live, workspace)
+    role_arn = agent_iam.live_runtime_role_arn(live, workspace, agent.project_id)
     if not role_arn:
         raise RuntimeError(
             "the runtime reports no execution role and execution_role_arn is missing "
