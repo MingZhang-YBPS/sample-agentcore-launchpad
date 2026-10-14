@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
+  type AgentForm,
   BUILTIN_TOOLS,
   BYOC_KINDS,
   BYOC_MODELS_MAX,
@@ -24,6 +25,18 @@ import {
 } from "../../../lib/agent-spec";
 import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
 import { adotLauncher } from "../../../lib/byocTelemetry";
+import {
+  MCP_STDIO_ARGS_MAX,
+  MCP_STDIO_BASES,
+  MCP_STDIO_DEFAULT_COMMAND,
+  MCP_STDIO_OFF,
+  type McpStdioBase,
+  type McpStdioFields,
+  type McpStdioForm,
+  mcpStdioArgs,
+  mcpStdioIssues,
+  withBase,
+} from "../../../lib/mcp-stdio";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
 import { HintLabel } from "../../Glossary";
@@ -522,10 +535,20 @@ export function ByocBasicCard(props: Omit<SectionProps, "cat">) {
   );
 }
 
-/** byoc + protocol "mcp": where the server's tools appear on the Gateway. */
+/** byoc + protocol "mcp": where the server's tools appear on the Gateway, and
+ *  (code zip) whether it is a stdio-only server run behind the platform bridge. */
 export function McpServerCard({ form, set, err }: Omit<SectionProps, "cat">) {
   const { t } = useTranslation();
   const target = form.mcpTargetName.trim();
+  // `AgentForm.mcpStdio` (lib/mcp-stdio.ts); a form without it reads as off
+  const stdio = (form as AgentForm & McpStdioFields).mcpStdio ?? MCP_STDIO_OFF;
+  const setStdio = (next: McpStdioForm) => {
+    const patch: Partial<AgentForm> & McpStdioFields = { mcpStdio: next };
+    set(patch);
+  };
+  const zip = form.byocKind === "code_zip";
+  const issues = mcpStdioIssues(stdio, form.byocKind);
+  const argv = [stdio.command.trim(), ...mcpStdioArgs(stdio.args)].filter(Boolean).join(" ");
   return (
     <Card title={t("v2.agents.wizard.mcp.cardTitle")} sub={t("v2.agents.wizard.mcp.cardSub")} testId="v2-agent-mcp">
       <div className="v2-form">
@@ -544,6 +567,67 @@ export function McpServerCard({ form, set, err }: Omit<SectionProps, "cat">) {
             data-testid="v2-agent-mcp-target"
           />
         </Field>
+        <Field label={t("mcpServer.stdio.label")} hint={t(zip ? "mcpServer.stdio.hint" : "mcpServer.stdio.zipOnly")}>
+          <label className="v2-check">
+            <input
+              type="checkbox"
+              checked={zip && stdio.on}
+              disabled={!zip}
+              onChange={(e) => setStdio({ ...stdio, on: e.target.checked })}
+              data-testid="v2-agent-mcp-stdio"
+            />
+            {t("mcpServer.stdio.on")}
+          </label>
+        </Field>
+        {zip && stdio.on && (
+          <>
+            <Field label={t("mcpServer.stdio.base")} hint={t(`mcpServer.stdio.baseHint.${stdio.base}`)}>
+              <Segmented<McpStdioBase>
+                value={stdio.base}
+                ariaLabel={t("mcpServer.stdio.base")}
+                options={MCP_STDIO_BASES.map((b) => ({ value: b, label: t(`mcpServer.stdio.baseName.${b}`) }))}
+                onChange={(b) => setStdio(withBase(stdio, b))}
+              />
+            </Field>
+            <div className="v2-form cols-2">
+              <Field
+                label={t("mcpServer.stdio.command")}
+                required
+                hint={t("mcpServer.stdio.commandHint")}
+                error={err("mcpStdio") ?? (issues.command && stdio.command.trim() ? t("mcpServer.stdio.errCommand") : undefined)}
+              >
+                <input
+                  className="v2-input mono"
+                  value={stdio.command}
+                  maxLength={255}
+                  placeholder={MCP_STDIO_DEFAULT_COMMAND[stdio.base]}
+                  onChange={(e) => setStdio({ ...stdio, command: e.target.value })}
+                  data-testid="v2-agent-mcp-stdio-command"
+                />
+              </Field>
+              <Field
+                label={t("mcpServer.stdio.args")}
+                hint={t("mcpServer.stdio.argsHint", { max: MCP_STDIO_ARGS_MAX })}
+                error={issues.args ? t("mcpServer.stdio.errArgs", { max: MCP_STDIO_ARGS_MAX }) : undefined}
+              >
+                <textarea
+                  className="v2-textarea code"
+                  rows={3}
+                  value={stdio.args}
+                  placeholder={stdio.base === "node" ? "build/index.js" : "server.py"}
+                  onChange={(e) => setStdio({ ...stdio, args: e.target.value })}
+                  data-testid="v2-agent-mcp-stdio-args"
+                />
+              </Field>
+            </div>
+            {argv && (
+              <span className="v2-muted">
+                {t("mcpServer.stdio.preview")} <span className="mono">{argv}</span>
+              </span>
+            )}
+            <Alert tone="warn">{t("mcpServer.stdio.limits")}</Alert>
+          </>
+        )}
         <Alert>{t("v2.agents.wizard.mcp.wiring")}</Alert>
       </div>
     </Card>

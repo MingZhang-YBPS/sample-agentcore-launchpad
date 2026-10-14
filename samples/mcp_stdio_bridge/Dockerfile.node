@@ -1,0 +1,28 @@
+# stdio MCP server (Node.js) behind the streamable-HTTP bridge — AgentCore
+# Runtime MCP contract: linux/arm64, 0.0.0.0:8000/mcp.
+#
+# Build context: your server's files (built JavaScript — no build step runs
+# here) + package.json / package-lock.json + mcp_stdio_bridge.py from this
+# directory. The bridge is Python standard library only; python3 is the one
+# extra package. The stdio command comes from MCP_STDIO_COMMAND (JSON array).
+FROM --platform=linux/arm64 node:22-bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    NODE_ENV=production \
+    MCP_STDIO_CWD=/app
+
+WORKDIR /app
+COPY . .
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev; \
+    elif [ -f package.json ]; then npm install --omit=dev; fi
+
+# the image's unprivileged user
+USER node
+EXPOSE 8000
+# override with your server's command, e.g. ["node", "build/index.js"]
+ENV MCP_STDIO_COMMAND='["node", "index.js"]'
+ENTRYPOINT ["python3", "/app/mcp_stdio_bridge.py"]
