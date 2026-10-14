@@ -47,6 +47,19 @@ def regional_role_name(base_name: str, region: str) -> str:
     return base_name if region == LEGACY_REGION else f"{base_name}-{region}"
 
 
+# Phase 2 isolation (projects design §10.3): one customer managed policy per
+# (isolated project, workspace), used as the permissions boundary of that project's
+# agent roles. The spoke template scopes its policy grants and the CreateRole boundary
+# condition to this prefix (`policy/launchpad-project-*`), so every name must keep it.
+PROJECT_BOUNDARY_POLICY_PREFIX = "launchpad-project-"
+
+
+def project_boundary_policy_name(project_id: str, region: str) -> str:
+    """`launchpad-project-<pid>[-<region>]` — the same regional rule as the roles, since
+    policy names are account-global too and one workspace exists per (account, region)."""
+    return regional_role_name(f"{PROJECT_BOUNDARY_POLICY_PREFIX}{project_id}", region)
+
+
 def service_trust_policy(
     service: str, account_id: str, *, source_account: bool = True
 ) -> dict[str, Any]:
