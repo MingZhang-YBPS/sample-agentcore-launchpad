@@ -2,7 +2,14 @@
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { type AgentInfo, type ChatStreamPayload, localizedMessage } from "./api";
+import {
+  type AgentInfo,
+  type ChatRequest,
+  type ChatStreamPayload,
+  errorMessage,
+  localizedMessage,
+  responseMessage,
+} from "./api";
 
 /**
  * A chat stream frame's payload; a `heartbeat` carries the turn's elapsed time.
@@ -17,6 +24,10 @@ export type ChatStreamFrame = ChatStreamPayload & {
   id?: string | null;
   status?: ToolRunStatus;
   duration_ms?: number | null;
+  /** `meta`: the ledger id of this turn's user message — what a retry names */
+  user_message_id?: number;
+  /** `error`: how the console may retry the turn (chat-streaming §4.2) */
+  retry?: ChatRetryHint;
 };
 
 /**
@@ -382,4 +393,160 @@ export function useChatTurn() {
   }, [status, now, stop]);
 
   return { status, now, begin, feed, stop, end };
+}
+
+// ---------------------------------------------------------------------------
+// Retry (chat-streaming S3): a failed turn offers a retry button, and a transient
+// failure of a turn that produced nothing is retried once by itself.
+
+/** `connection`: the link to the agent dropped; `timeout`: the agent used its whole
+ *  budget; `busy`: throttling / 5xx / an upstream hiccup; `config`: a permission,
+ *  parameter or limit error a replay cannot fix; `other`: anything unclassified. */
+export type RetryCategory = "connection" | "timeout" | "busy" | "config" | "other";
+
+/** The `retry` hint on a console `error` event (set by the backend). */
+export interface ChatRetryHint {
+  category: RetryCategory;
+  /** the retry button is offered */
+  manual: boolean;
+  /** retried once without asking: nothing was shown and the failure is transient */
+  auto: boolean;
+  /** `timeout`: the agent's execution budget */
+  timeout_s?: number;
+}
+
+/** A failed turn as the thread shows it: why, the raw detail, and what it offers. */
+export interface TurnFailure extends ChatRetryHint {
+  /** the error's own text (the agent's or the request's), shown under the advice */
+  detail: string;
+}
+
+/** `POST /api/chat/{agent_id}` with `retry_of`: this turn retries a failed one. */
+export type ChatTurnRequest = ChatRequest & { retry_of?: number };
+
+/** Automatic retries per turn (chat-streaming D-3). */
+export const AUTO_RETRIES = 1;
+/** The pause before an automatic retry. */
+export const RETRY_DELAY_MS = 2_000;
+
+/** Events after which a replay could repeat what the user saw or a tool's side
+ *  effect — the backend's `OUTPUT_EVENTS`. */
+export function isOutputEvent(event: string): boolean {
+  return event === "delta" || event === "tool" || event === "auth_required" || event === "policy_denied";
+}
+
+/** A non-2xx answer to the chat request, with its HTTP status. */
+export class ChatHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Open a console chat turn and return the raw SSE response (read it with
+ * `sseEvents`). Like `chatApi.stream`, but a refusal keeps its HTTP status, so a
+ * 429 / 5xx can be retried and a 4xx cannot.
+ */
+export async function streamChat(agentId: string, body: ChatTurnRequest, signal?: AbortSignal): Promise<Response> {
+  const res = await fetch(`/api/chat/${encodeURIComponent(agentId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) throw new ChatHttpError(res.status, await responseMessage(res));
+  return res;
+}
+
+/** An `error` event's failure. An older backend sends no hint: the user may retry,
+ *  nothing retries by itself. */
+export function errorEventFailure(data: ChatStreamFrame, detail: string): TurnFailure {
+  const hint = data.retry ?? { category: data.code ? "config" : "other", manual: !data.code, auto: false };
+  return { ...hint, detail };
+}
+
+/** The stream dropped (network, no `done`, a silent turn the page gave up on). */
+export function connectionFailure(produced: boolean, detail: string): TurnFailure {
+  return { category: "connection", manual: true, auto: !produced, detail };
+}
+
+/** The request itself failed: a network error, or a refusal by status (429 / 5xx
+ *  are transient, any other status is final). */
+export function requestFailure(err: unknown, produced: boolean): TurnFailure {
+  const detail = errorMessage(err);
+  if (err instanceof TypeError) return connectionFailure(produced, detail);
+  if (err instanceof ChatHttpError) {
+    const transient = err.status === 429 || err.status >= 500;
+    return transient
+      ? { category: "busy", manual: true, auto: !produced, detail }
+      : { category: "config", manual: false, auto: false, detail };
+  }
+  return { category: "other", manual: true, auto: false, detail };
+}
+
+/** A restored error row: an `interrupted: …` row is a dropped connection; any other
+ *  row is offered as a retry (the backend still refuses a turn it cannot retry). */
+export function restoredFailure(text: string): TurnFailure {
+  return text.startsWith("interrupted: ")
+    ? { category: "connection", manual: true, auto: false, detail: "" }
+    : { category: "other", manual: true, auto: false, detail: text };
+}
+
+/** The thread's words for a failure (chat-streaming §4.3): the cause and the next
+ *  step, then the error's own text; a `config` / `other` error is its own text. */
+export function failureText(t: TFunction, failure: TurnFailure): string {
+  const advice =
+    failure.category === "connection"
+      ? t("v3.chat.retry.connection")
+      : failure.category === "busy"
+        ? t("v3.chat.retry.busy")
+        : failure.category === "timeout"
+          ? failure.timeout_s
+            ? t("v3.chat.retry.timeout", { s: failure.timeout_s })
+            : t("v3.chat.retry.timeoutUnknown")
+          : "";
+  if (!advice) return failure.detail;
+  return failure.detail ? `${advice}\n${failure.detail}` : advice;
+}
+
+/** May this failure be retried by itself now (`attempt` retries already made)? */
+export function shouldAutoRetry(failure: TurnFailure | null, attempt: number): boolean {
+  return !!failure && failure.auto && attempt < AUTO_RETRIES;
+}
+
+/** Wait before an automatic retry; false when `signal` aborted the wait (Stop). */
+export function waitForRetry(signal: AbortSignal, ms = RETRY_DELAY_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve(false);
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Index of the last user message (where the latest turn starts), or -1. */
+export function lastUserIndex(messages: { kind: string }[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) if (messages[i].kind === "user") return i;
+  return -1;
+}
+
+/**
+ * Whether the thread's latest turn can be retried: it failed (an error item after
+ * its user message) or answered nothing at all. Only the latest turn — the backend
+ * refuses any other (409 `chat.retry_not_allowed`).
+ */
+export function latestTurnRetryable(messages: { kind: string }[]): boolean {
+  const start = lastUserIndex(messages);
+  if (start < 0) return false;
+  const rest = messages.slice(start + 1);
+  return rest.some((m) => m.kind === "error") || !rest.some((m) => m.kind === "agent");
 }

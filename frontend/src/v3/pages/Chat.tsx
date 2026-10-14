@@ -1,4 +1,4 @@
-import { ArrowUp, Plus, ShieldX, Square, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
+import { ArrowUp, Plus, RotateCcw, ShieldX, Square, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -15,12 +15,23 @@ import {
 } from "../../lib/api";
 import {
   activityLabel,
+  AUTO_RETRIES,
   chatEligible,
   chatErrorText,
+  connectionFailure,
+  errorEventFailure,
+  failureText,
   isHarnessAgent,
+  isOutputEvent,
+  lastUserIndex,
+  requestFailure,
+  restoredFailure,
   seconds,
+  shouldAutoRetry,
   sseEvents,
   STALL_ABORT_MS,
+  streamChat,
+  type TurnFailure,
   TOOL_RUN_GLYPH,
   toolRunById,
   toolRunLabel,
@@ -29,6 +40,7 @@ import {
   type TurnStatus,
   turnStopReason,
   useChatTurn,
+  waitForRetry,
 } from "../../lib/chat";
 import { useStickToBottom } from "../../lib/useStickToBottom";
 import { livePolicyDeny, type PolicyDeny, policyDenyHref, restoredPolicyDeny } from "../../lib/policy-deny";
@@ -45,8 +57,17 @@ import "./chatStatus.css";
 
 /** A thread item; a tool row of a live turn carries its run (status, duration),
  *  tagged with the turn it belongs to (`ChatMessage.run` / `.turn`).
- *  `note`: a neutral notice (the user stopped). */
-type Msg = ChatMessage & { note?: boolean };
+ *  `note`: a neutral notice (the user stopped). `ledgerId`: a user message's ledger
+ *  row (what a retry names). `failure`: an error item's cause and retry offer. */
+type Msg = ChatMessage & { note?: boolean; ledgerId?: number; failure?: TurnFailure };
+
+/** How one attempt at a turn ended: its failure (null: answered or stopped), the
+ *  session it ran in and its user message's ledger row. */
+interface Attempt {
+  failure: TurnFailure | null;
+  session?: string;
+  userMessageId?: number;
+}
 
 /**
  * Chat, rebuilt around the conversation. The same SSE invoke chain as V2 and the
@@ -101,6 +122,10 @@ export function V3Chat() {
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [needsV2, setNeedsV2] = useState(false);
+  // chat-streaming S3: the automatic retry under way (`n` of `AUTO_RETRIES`), and
+  // the wait before it — the stop button cancels that wait
+  const [retrying, setRetrying] = useState<number | null>(null);
+  const retryWait = useRef<AbortController | null>(null);
   // chat-streaming S2: what the running turn is doing, its timer and its stop
   const turn = useChatTurn();
   const turnSeq = useRef(0);
@@ -128,16 +153,16 @@ export function V3Chat() {
       const rows = (await chatApi.history(agentId, sid)).messages;
       setMessages(
         // a consent ask is not replayed (its URL is single-use): the next turn asks again
-        rows.filter((r) => r.role !== "auth").map((r): ChatMessage =>
+        rows.filter((r) => r.role !== "auth").map((r): Msg =>
           r.role === "user"
-            ? { kind: "user", text: r.text }
+            ? { kind: "user", text: r.text, ledgerId: r.id }
             : r.role === "agent"
               ? { kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null, curated: !!r.answered_by }
               : r.role === "tool"
                 ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
                 : r.role === "policy"
                   ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
-                  : { kind: "error", text: r.text },
+                  : restoredError(r.text),
         ),
       );
       setSessionId(sid);
@@ -168,16 +193,75 @@ export function V3Chat() {
     inputRef.current?.focus();
   };
 
+  // a restored error row offers a retry; its text is the §4.3 advice
+  const restoredError = (text: string): Msg => {
+    const failure = restoredFailure(text);
+    return { kind: "error", text: failureText(t, failure), failure };
+  };
+
   const send = async () => {
     const prompt = input.trim();
     if (!prompt || !agentId || busy) return;
     setInput("");
-    setBusy(true);
     setMessages((m) => [...m, { kind: "user", text: prompt }]);
     thread.toBottom(); // the reader's own turn is always in view
-    let failed = false;
+    await runTurn(prompt, undefined, true);
+  };
+
+  // Retry (chat-streaming §4.1): the latest turn is re-sent in the same session and
+  // replaces the failed one — its user message stays, everything after it goes.
+  const retry = async () => {
+    if (!agentId || busy) return;
+    const user = messages[lastUserIndex(messages)];
+    if (!user) return;
+    setMessages((m) => m.slice(0, lastUserIndex(m) + 1));
+    thread.toBottom();
+    await runTurn(user.text, user.ledgerId, false);
+  };
+
+  // One turn, retried once by itself when it failed transiently before showing
+  // anything (§4.2); each retry names the attempt it replaces (`retry_of`).
+  const runTurn = async (prompt: string, retryOf: number | undefined, fromComposer: boolean) => {
+    setBusy(true);
+    let session = sessionId;
+    let replaces = retryOf;
+    let failure: TurnFailure | null = null;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const result = await streamTurn(prompt, session, replaces);
+        session = result.session ?? session;
+        failure = result.failure;
+        if (!shouldAutoRetry(failure, attempt)) break;
+        // the failed attempt gives way to the retry notice; the user message stays
+        setMessages((m) => m.slice(0, lastUserIndex(m) + 1));
+        setRetrying(attempt + 1);
+        const wait = new AbortController();
+        retryWait.current = wait;
+        const go = await waitForRetry(wait.signal);
+        retryWait.current = null;
+        setRetrying(null);
+        if (!go) {
+          failure = null;
+          setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped"), note: true }]);
+          break;
+        }
+        replaces = result.userMessageId ?? replaces;
+      }
+    } finally {
+      // a failure the retry button cannot fix hands the prompt back for editing
+      if (failure && !failure.manual && fromComposer) setInput((current) => current || prompt);
+      setBusy(false);
+      if (session) void loadSessions(agentId);
+      inputRef.current?.focus();
+    }
+  };
+
+  const streamTurn = async (prompt: string, session: string | undefined, retryOf: number | undefined): Promise<Attempt> => {
+    let failure: TurnFailure | null = null;
     let completed = false;
-    let active = sessionId;
+    let produced = false; // a replay could repeat something the user saw
+    let answered = false;
+    const attempt: Attempt = { failure: null, session };
     const signal = turn.begin();
     const key = ++turnSeq.current;
     // a tool row follows its run in the turn status (ids repeat across turns)
@@ -185,18 +269,30 @@ export function V3Chat() {
       setMessages((m) =>
         m.map((msg) => (msg.turn === key && msg.run ? { ...msg, run: toolRunById(status, msg.run.id) ?? msg.run } : msg)),
       );
+    const fail = (next: TurnFailure) => {
+      failure = next;
+      setMessages((m) => [...m, { kind: "error", text: failureText(t, next), failure: next }]);
+    };
+    const stopped = () => setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped"), note: true }]);
     try {
       // the turn's signal also aborts the request itself (Stop before the first frame)
-      const res = await chatApi.stream(agentId, { prompt, session_id: sessionId ?? null }, signal);
+      const res = await streamChat(agentId, { prompt, session_id: session ?? null, retry_of: retryOf }, signal);
       if (!res.body) throw new Error(t("v3.chat.interrupted"));
       let openBubble = false;
       let curated = false;
       for await (const { event, data } of sseEvents(res, { heartbeats: true, signal })) {
         const status = turn.feed(event, data);
+        if (isOutputEvent(event)) produced = true;
         if (event === "tool_end") {
           syncRuns(status);
         } else if (event === "meta" && data.session_id) {
-          active = data.session_id;
+          attempt.session = data.session_id;
+          attempt.userMessageId = data.user_message_id;
+          const ledgerId = data.user_message_id;
+          setMessages((m) => {
+            const at = lastUserIndex(m);
+            return at < 0 ? m : m.map((msg, i) => (i === at ? { ...msg, ledgerId } : msg));
+          });
           setSessionId(data.session_id);
           setParams({ agent: agentId, session: data.session_id }, { replace: true });
         } else if (event === "rule") {
@@ -214,6 +310,7 @@ export function V3Chat() {
           setMessages((m) => [...m, { kind: "policy", text: policy.reason, name: policy.tool, policy }]);
         } else if (event === "delta") {
           const wasOpen = openBubble;
+          answered = true;
           setMessages((m) => appendDelta(m, data.text ?? "", wasOpen, curated));
           openBubble = true;
         } else if (event === "saved") {
@@ -228,54 +325,57 @@ export function V3Chat() {
             return next;
           });
         } else if (event === "error") {
-          failed = true;
           syncRuns(status);
-          setMessages((m) => [...m, { kind: "error", text: chatErrorText(data, t("v3.chat.failed")) }]);
+          fail(errorEventFailure(data, chatErrorText(data, t("v3.chat.failed"))));
         } else if (event === "done") {
           completed = true;
           syncRuns(status);
         }
       }
       const reason = turnStopReason(signal);
-      if (reason === "stop" && !completed && !failed) {
-        setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped"), note: true }]);
+      if (reason === "stop" && !completed && !failure) {
+        stopped();
       } else if (reason === "stalled") {
-        throw new Error(t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }));
-      } else if (!completed && !failed) {
-        throw new Error(t("v3.chat.interrupted"));
+        fail(connectionFailure(produced, t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) })));
+      } else if (!completed && !failure) {
+        fail(connectionFailure(produced, ""));
+      } else if (completed && !failure && !answered) {
+        // the turn ended without a word: it may be retried, never by itself
+        fail({ category: "other", manual: true, auto: false, detail: t("v3.chat.retry.empty") });
       }
     } catch (err) {
       const reason = turnStopReason(signal);
-      if (reason === "stop" && !completed && !failed) {
+      if (reason === "stop" && !completed && !failure) {
         // stopped before the stream opened: the fetch rejected with the abort
-        setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped"), note: true }]);
-      } else {
-        failed = true;
-        const text = reason === "stalled" ? t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }) : errorMessage(err);
-        setMessages((m) => [...m, { kind: "error", text }]);
+        stopped();
+      } else if (reason === "stalled") {
+        fail(connectionFailure(produced, t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) })));
+      } else if (!failure) {
+        fail(requestFailure(err, produced));
       }
     } finally {
-      if (failed) setInput(prompt);
       // a call the stream never ended stopped with the turn
       if (!completed) syncRuns(turn.feed("error", {}));
       turn.end();
       setMessages((m) => m.map((msg) => (msg.streaming ? { ...msg, streaming: false } : msg)));
-      setBusy(false);
-      if (active) void loadSessions(agentId);
-      inputRef.current?.focus();
     }
+    attempt.failure = failure;
+    return attempt;
   };
 
   // Stop: close the stream (the server then stops reading the runtime); a code
   // runtime's session is stopped too. A Harness has no stop operation — closing
   // the connection is all there is.
   const stopTurn = () => {
+    retryWait.current?.abort(); // a pending automatic retry is not made
     turn.stop("stop");
     if (agentId && sessionId && !isHarnessAgent(agent)) {
       void api.stopChatSession(agentId, sessionId).catch(() => undefined);
     }
   };
   const activity = turn.status ? turnActivity(turn.status, turn.now) : null;
+  // only the latest turn can be retried (the backend refuses any other)
+  const latestUser = lastUserIndex(messages);
 
   const rate = async (index: number, verdict: FeedbackVerdict | "none") => {
     const msg = messages[index];
@@ -370,7 +470,23 @@ export function V3Chat() {
                     {m.run && <span className="v3-tool-state">{toolRunLabel(t, m.run, turn.now)}</span>}
                   </div>
                 );
-              if (m.kind === "error") return <div key={i} className="v3-msg"><Notice s={m.note ? "wait" : "act"}>{m.text}</Notice></div>;
+              if (m.kind === "error")
+                return (
+                  <div key={i} className="v3-msg" data-testid="chat-error" data-category={m.failure?.category}>
+                    <Notice s={m.note ? "wait" : "act"}>
+                      {m.text.split("\n").map((line, j) => (
+                        <span key={j} style={{ display: "block" }}>{line}</span>
+                      ))}
+                      {m.failure?.manual && i > latestUser && !busy && (
+                        <span style={{ display: "block", marginTop: 8 }}>
+                          <Btn size="sm" onClick={() => void retry()}>
+                            <RotateCcw size={13} aria-hidden="true" /> {t("v3.chat.retry.button")}
+                          </Btn>
+                        </span>
+                      )}
+                    </Notice>
+                  </div>
+                );
               if (m.kind === "policy" && m.policy) return <div key={i} className="v3-msg"><PolicyDenied deny={m.policy} /></div>;
               if (m.kind !== "agent") return null;
               return (
@@ -405,6 +521,11 @@ export function V3Chat() {
                   {t("v3.chat.status.elapsed", { s: seconds(turnElapsedMs(turn.status, turn.now)) })}
                 </span>
               </div>
+            </div>
+          )}
+          {retrying !== null && (
+            <div className="v3-msg" data-testid="chat-retrying">
+              <Notice s="wait">{t("v3.chat.retry.retrying", { n: retrying, total: AUTO_RETRIES })}</Notice>
             </div>
           )}
           {needsV2 && (

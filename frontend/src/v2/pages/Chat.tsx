@@ -1,4 +1,4 @@
-import { Plus, RefreshCw, Share2, Square } from "lucide-react";
+import { Plus, RefreshCw, RotateCcw, Share2, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
@@ -18,7 +18,6 @@ import {
   api,
   chatApi,
   type ChatMemorySummary,
-  type ChatRequest,
   type ChatSessionInfo,
   type ChatTraceInfo,
   type AuthRequiredEvent,
@@ -32,15 +31,29 @@ import {
   type AsUserChoice,
   asUserChecked,
   asUserField,
+  AUTO_RETRIES,
   chatEligible,
+  type ChatTurnRequest,
+  connectionFailure,
+  errorEventFailure,
+  failureText,
   isHarnessAgent,
+  isOutputEvent,
+  lastUserIndex,
+  latestTurnRetryable,
+  requestFailure,
+  restoredFailure,
   seconds,
+  shouldAutoRetry,
   sseEvents,
   STALL_ABORT_MS,
+  streamChat,
   toolRunById,
+  type TurnFailure,
   type TurnStatus,
   turnStopReason,
   useChatTurn,
+  waitForRetry,
 } from "../../lib/chat";
 import { livePolicyDeny, restoredPolicyDeny } from "../../lib/policy-deny";
 import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
@@ -53,6 +66,14 @@ import { Inspector, type InspectorTab } from "./chat/Inspector";
 import { SessionRail } from "./chat/SessionRail";
 import { appendDelta } from "./chat/messages";
 import { type ChatMessage, Thread } from "./chat/Thread";
+
+/** The latest turn's retry offer (chat-streaming §4.1): the failure, the prompt to
+ *  re-send and the turn's user row in the ledger (what `retry_of` names). */
+interface RetryOffer {
+  failure: TurnFailure;
+  prompt: string;
+  ledgerId?: number;
+}
 
 const MEMORY_TAG = {
   on: "v2.chat.memoryOn",
@@ -117,6 +138,11 @@ export function V2Chat() {
   // chat-streaming S2: what the running turn is doing, its timer and its stop
   const turn = useChatTurn();
   const turnSeq = useRef(0);
+  // chat-streaming S3: the retry the latest turn offers, the automatic retry under
+  // way (`n` of `AUTO_RETRIES`) and the wait before it (the stop button cancels it)
+  const [retryOffer, setRetryOffer] = useState<RetryOffer | null>(null);
+  const [retrying, setRetrying] = useState<number | null>(null);
+  const retryWait = useRef<AbortController | null>(null);
 
   // Resolve the deep link once, when the agent list first answers.
   useEffect(() => {
@@ -175,8 +201,7 @@ export function V2Chat() {
     try {
       const rows = (await chatApi.history(agentId, sid)).messages;
       if (requestId !== historyRequest.current) return;
-      setMessages(
-        rows.map((r): ChatMessage =>
+      const restored = rows.map((r): ChatMessage =>
           r.role === "user"
             ? { kind: "user", text: r.text, attachments: r.attachments }
             : r.role === "agent"
@@ -193,8 +218,16 @@ export function V2Chat() {
                     }
                   : r.role === "policy"
                     ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
-                    : { kind: "error", text: r.text },
-        ),
+                    : { kind: "error", text: failureText(t, restoredFailure(r.text)) },
+        );
+      setMessages(restored);
+      // a latest turn that failed (and carried no files) can be retried from here
+      const user = rows[lastUserIndex(rows.map((r) => ({ kind: r.role })))];
+      const last = rows[rows.length - 1];
+      setRetryOffer(
+        user && last?.role === "error" && !user.attachments?.length && latestTurnRetryable(restored)
+          ? { failure: restoredFailure(last.text), prompt: user.text, ledgerId: user.id }
+          : null,
       );
       setSessionId(sid);
       setInput("");
@@ -228,9 +261,12 @@ export function V2Chat() {
   );
 
   // `retryPrompt`: an auth card's retry re-sends that turn's text, never the
-  // composer's draft or its pending files.
-  const send = async (retryPrompt?: string) => {
+  // composer's draft or its pending files. `retryOf` (the retry button,
+  // chat-streaming §4.1): the latest turn is re-sent in place — its user message is
+  // already in the thread — naming its ledger row, so the retry replaces it.
+  const send = async (retryPrompt?: string, retryOf?: number | null) => {
     const retrying = retryPrompt !== undefined;
+    const replacing = retryOf !== undefined;
     const prompt = (retrying ? retryPrompt : input).trim();
     const files = retrying ? [] : pendingFiles;
     if ((!prompt && !files.length) || !agentId || busy || restoring || sendInFlight.current) return;
@@ -247,139 +283,190 @@ export function V2Chat() {
       setAttachmentError(null);
     }
     setBusy(true);
+    setRetryOffer(null);
     const userMessage: ChatMessage = {
       kind: "user",
       text: prompt,
       attachments: capability && files.length ? files.map((f) => attachmentMetadata(f, capability)) : undefined,
     };
-    setMessages((m) => [...m, userMessage]);
-    let failed = false;
-    let completed = false;
+    if (!replacing) setMessages((m) => [...m, userMessage]);
     let activeSessionId = sessionId;
-    const signal = turn.begin();
-    const key = ++turnSeq.current;
-    // a tool row follows its run in the turn status (ids repeat across turns)
-    const syncRuns = (status: TurnStatus | null) =>
-      setMessages((m) =>
-        m.map((msg) => (msg.turn === key && msg.run ? { ...msg, run: toolRunById(status, msg.run.id) ?? msg.run } : msg)),
-      );
-    try {
-      const request: ChatRequest = { prompt, session_id: sessionId };
-      const asUserValue = asUserField(jwtAgent, asUser);
-      if (asUserValue !== undefined) request.as_user = asUserValue;
-      if (files.length) {
-        request.attachments = await Promise.all(files.map(encodeAttachment)).catch(() => {
-          throw new Error(t("chatPage.attachments.readFailed"));
-        });
-      }
-      // the turn's signal also aborts the request itself (Stop before the first frame)
-      const res = await chatApi.stream(agentId, request, signal);
-      // Encoded bytes are request-only; release them while the response streams.
-      delete request.attachments;
-      if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
-      let agentOpen = false;
-      let curated = false; // T35: a `rule` event precedes a curated answer's text
-      for await (const { event, data: payload } of sseEvents(res, { heartbeats: true, signal })) {
-        const status = turn.feed(event, payload);
-        if (event === "tool_end") {
-          syncRuns(status);
-        } else if (event === "meta") {
-          if (payload.session_id) {
-            activeSessionId = payload.session_id;
-            setSessionId(payload.session_id);
-            // keep the session in the URL so a reload restores this conversation
-            setParams({ agent: agentId, session: payload.session_id }, { replace: true });
-          }
-          setCaller(payload.inbound?.caller ?? null);
-          if (payload.attachments) {
-            setMessages((m) =>
-              m.map((msg) => (msg === userMessage ? { ...msg, attachments: payload.attachments } : msg)),
-            );
-          }
-        } else if (event === "rule") {
-          curated = true;
-        } else if (event === "tool") {
-          const run = status?.tools[status.tools.length - 1];
-          setMessages((m) => [...m, { kind: "tool", text: payload.name ?? "tool", name: payload.name, run, turn: key }]);
-          agentOpen = false;
-        } else if (event === "auth_required") {
-          const ask: Partial<AuthRequiredEvent> = payload;
-          setMessages((m) => [
-            ...m,
-            {
-              kind: "auth",
-              text: ask.provider ?? "",
-              name: ask.tool,
-              auth: liveAuthAsk(ask, agentId),
-            },
-          ]);
-          // the answer keeps streaming into the same bubble around the card
-        } else if (event === "policy_denied") {
-          // follows its tool row, which already closed the open bubble
-          const policy = livePolicyDeny(payload);
-          setMessages((m) => [...m, { kind: "policy", text: policy.reason, name: policy.tool, policy }]);
-        } else if (event === "delta") {
-          const open = agentOpen;
-          setMessages((m) => appendDelta(m, payload.text ?? "", open, curated));
-          agentOpen = true;
-        } else if (event === "saved") {
-          // the answer bubble just closed: attach its ledger id so it can be rated
-          const messageId = payload.message_id;
-          setMessages((m) => {
-            const next = [...m];
-            for (let i = next.length - 1; i >= 0; i--) {
-              if (next[i].kind === "agent") {
-                if (next[i].id == null) next[i] = { ...next[i], id: messageId };
-                break;
-              }
-            }
-            return next;
-          });
-        } else if (event === "error") {
-          failed = true;
-          syncRuns(status);
-          const message = chatErrorText(payload, t("chatPage.sendFailed"));
-          setMessages((m) => [...m, { kind: "error", text: message }]);
-          if (files.length) setAttachmentError(message);
-        } else if (event === "done") {
-          completed = true;
-          syncRuns(status);
-          // Only an agent whose spec turns memory on persists the turn; the
-          // console itself never writes memory.
-          if (!failed && memoryState === "on") setMessages((m) => [...m, { kind: "memory", text: "" }]);
-        }
-      }
-      const reason = turnStopReason(signal);
-      if (reason === "stop" && !completed && !failed) {
-        setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped") }]);
-      } else if (reason === "stalled") {
-        throw new Error(t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }));
-      } else if (!completed && !failed) {
-        throw new Error(t("chatPage.streamInterrupted"));
-      }
-      if (completed && !failed && !retrying) resetAttachments();
-    } catch (err) {
-      const reason = turnStopReason(signal);
-      if (reason === "stop" && !completed && !failed) {
-        // stopped before the stream opened: the fetch rejected with the abort
-        setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped") }]);
-      } else {
-        failed = true;
-        const message = reason === "stalled" ? t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }) : errorMessage(err);
+    let replaces = retryOf ?? undefined;
+    let failure: TurnFailure | null = null;
+    let userLedgerId: number | undefined;
+
+    // One attempt at the turn; returns how it failed (null: answered or stopped).
+    const attemptTurn = async (): Promise<TurnFailure | null> => {
+      let failed: TurnFailure | null = null;
+      let completed = false;
+      let produced = false; // a replay could repeat something the user saw
+      const signal = turn.begin();
+      const key = ++turnSeq.current;
+      // a tool row follows its run in the turn status (ids repeat across turns)
+      const syncRuns = (status: TurnStatus | null) =>
+        setMessages((m) =>
+          m.map((msg) => (msg.turn === key && msg.run ? { ...msg, run: toolRunById(status, msg.run.id) ?? msg.run } : msg)),
+        );
+      const fail = (next: TurnFailure) => {
+        failed = next;
+        const message = failureText(t, next);
         setMessages((m) => [...m, { kind: "error", text: message }]);
         if (files.length) setAttachmentError(message);
+      };
+      try {
+        const request: ChatTurnRequest = { prompt, session_id: activeSessionId };
+        if (replaces !== undefined) request.retry_of = replaces;
+        const asUserValue = asUserField(jwtAgent, asUser);
+        if (asUserValue !== undefined) request.as_user = asUserValue;
+        if (files.length) {
+          request.attachments = await Promise.all(files.map(encodeAttachment)).catch(() => {
+            throw new Error(t("chatPage.attachments.readFailed"));
+          });
+        }
+        // the turn's signal also aborts the request itself (Stop before the first frame)
+        const res = await streamChat(agentId, request, signal);
+        // Encoded bytes are request-only; release them while the response streams.
+        delete request.attachments;
+        if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
+        let agentOpen = false;
+        let curated = false; // T35: a `rule` event precedes a curated answer's text
+        for await (const { event, data: payload } of sseEvents(res, { heartbeats: true, signal })) {
+          const status = turn.feed(event, payload);
+          if (isOutputEvent(event)) produced = true;
+          if (event === "tool_end") {
+            syncRuns(status);
+          } else if (event === "meta") {
+            if (payload.session_id) {
+              activeSessionId = payload.session_id;
+              setSessionId(payload.session_id);
+              // keep the session in the URL so a reload restores this conversation
+              setParams({ agent: agentId, session: payload.session_id }, { replace: true });
+            }
+            if (payload.user_message_id !== undefined) userLedgerId = payload.user_message_id;
+            setCaller(payload.inbound?.caller ?? null);
+            if (payload.attachments) {
+              setMessages((m) =>
+                m.map((msg) => (msg === userMessage ? { ...msg, attachments: payload.attachments } : msg)),
+              );
+            }
+          } else if (event === "rule") {
+            curated = true;
+          } else if (event === "tool") {
+            const run = status?.tools[status.tools.length - 1];
+            setMessages((m) => [...m, { kind: "tool", text: payload.name ?? "tool", name: payload.name, run, turn: key }]);
+            agentOpen = false;
+          } else if (event === "auth_required") {
+            const ask: Partial<AuthRequiredEvent> = payload;
+            setMessages((m) => [
+              ...m,
+              {
+                kind: "auth",
+                text: ask.provider ?? "",
+                name: ask.tool,
+                auth: liveAuthAsk(ask, agentId),
+              },
+            ]);
+            // the answer keeps streaming into the same bubble around the card
+          } else if (event === "policy_denied") {
+            // follows its tool row, which already closed the open bubble
+            const policy = livePolicyDeny(payload);
+            setMessages((m) => [...m, { kind: "policy", text: policy.reason, name: policy.tool, policy }]);
+          } else if (event === "delta") {
+            const open = agentOpen;
+            setMessages((m) => appendDelta(m, payload.text ?? "", open, curated));
+            agentOpen = true;
+          } else if (event === "saved") {
+            // the answer bubble just closed: attach its ledger id so it can be rated
+            const messageId = payload.message_id;
+            setMessages((m) => {
+              const next = [...m];
+              for (let i = next.length - 1; i >= 0; i--) {
+                if (next[i].kind === "agent") {
+                  if (next[i].id == null) next[i] = { ...next[i], id: messageId };
+                  break;
+                }
+              }
+              return next;
+            });
+          } else if (event === "error") {
+            syncRuns(status);
+            fail(errorEventFailure(payload, chatErrorText(payload, t("chatPage.sendFailed"))));
+          } else if (event === "done") {
+            completed = true;
+            syncRuns(status);
+            // Only an agent whose spec turns memory on persists the turn; the
+            // console itself never writes memory.
+            if (!failed && memoryState === "on") setMessages((m) => [...m, { kind: "memory", text: "" }]);
+          }
+        }
+        const reason = turnStopReason(signal);
+        if (reason === "stop" && !completed && !failed) {
+          setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped") }]);
+        } else if (reason === "stalled") {
+          fail(connectionFailure(produced, t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) })));
+        } else if (!completed && !failed) {
+          fail(connectionFailure(produced, ""));
+        }
+        if (completed && !failed && !retrying) resetAttachments();
+      } catch (err) {
+        const reason = turnStopReason(signal);
+        if (reason === "stop" && !completed && !failed) {
+          // stopped before the stream opened: the fetch rejected with the abort
+          setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped") }]);
+        } else if (reason === "stalled") {
+          fail(connectionFailure(produced, t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) })));
+        } else if (!failed) {
+          fail(requestFailure(err, produced));
+        }
+      } finally {
+        // a call the stream never ended stopped with the turn
+        if (!completed) syncRuns(turn.feed("error", {}));
+        turn.end();
+        setMessages((m) => m.map((msg) => (msg.streaming ? { ...msg, streaming: false } : msg)));
+      }
+      return failed;
+    };
+
+    try {
+      for (let attempt = 0; ; attempt++) {
+        failure = await attemptTurn();
+        // files are not re-sent by themselves: a turn with attachments is the user's to repeat
+        if (files.length || !shouldAutoRetry(failure, attempt)) break;
+        // chat-streaming §4.2: the failed attempt gives way to the retry notice
+        setMessages((m) => m.slice(0, lastUserIndex(m) + 1));
+        setRetrying(attempt + 1);
+        const wait = new AbortController();
+        retryWait.current = wait;
+        const go = await waitForRetry(wait.signal);
+        retryWait.current = null;
+        setRetrying(null);
+        if (!go) {
+          failure = null;
+          setMessages((m) => [...m, { kind: "error", text: t("v3.chat.status.stopped") }]);
+          break;
+        }
+        replaces = userLedgerId ?? replaces;
+      }
+      if (failure?.manual && !files.length) {
+        setRetryOffer({ failure, prompt, ledgerId: userLedgerId ?? replaces });
       }
     } finally {
-      if (failed && !retrying) setInput(prompt);
-      // a call the stream never ended stopped with the turn
-      if (!completed) syncRuns(turn.feed("error", {}));
-      turn.end();
-      setMessages((m) => m.map((msg) => (msg.streaming ? { ...msg, streaming: false } : msg)));
+      // a failure the retry offer does not cover hands the prompt back for editing
+      if (failure && !retrying && (!failure.manual || files.length)) setInput(prompt);
       sendInFlight.current = false;
       setBusy(false);
       if (activeSessionId) void refreshMemory(activeSessionId);
       if (agentId) void loadSessions(agentId);
     }
+  };
+
+  // The retry button: the latest turn's items after its user message give way to
+  // the retry, which names that turn's ledger row.
+  const retryTurn = () => {
+    if (!retryOffer || busy) return;
+    const { prompt, ledgerId } = retryOffer;
+    setMessages((m) => m.slice(0, lastUserIndex(m) + 1));
+    void send(prompt, ledgerId ?? null);
   };
 
   // Thumbs: optimistic, reverted (with the reason) when the backend refuses.
@@ -406,6 +493,7 @@ export function V2Chat() {
     resetAttachments();
     setSessionId(null);
     setMessages([]);
+    setRetryOffer(null);
     setCaller(null);
     setMemory(null);
     setTrace(null);
@@ -482,6 +570,7 @@ export function V2Chat() {
   // Stop: close the stream (the server then stops reading the runtime); a code
   // runtime's session is stopped too — a Harness has no stop operation.
   const stopTurn = () => {
+    retryWait.current?.abort(); // a pending automatic retry is not made
     turn.stop("stop");
     if (agentId && sessionId && !harness) void api.stopChatSession(agentId, sessionId).catch(() => undefined);
   };
@@ -675,6 +764,17 @@ export function V2Chat() {
               retryDisabled={busy || restoring}
               now={turn.now}
             />
+            {retrying !== null && (
+              <Alert tone="warn">{t("v3.chat.retry.retrying", { n: retrying, total: AUTO_RETRIES })}</Alert>
+            )}
+            {retryOffer && !busy && !restoring && (
+              <div className="v2-row" style={{ justifyContent: "flex-end", margin: "6px 0" }}>
+                <Button size="sm" onClick={retryTurn} testId="chat-retry">
+                  <RotateCcw size={12} aria-hidden="true" />
+                  {t("v3.chat.retry.button")}
+                </Button>
+              </div>
+            )}
             {turn.status && <TurnStatusLine status={turn.status} now={turn.now} onStop={stopTurn} testId="chat-turn-status" />}
             <Composer
               value={input}

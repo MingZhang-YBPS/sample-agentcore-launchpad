@@ -10355,6 +10355,16 @@
         "done": "{{s}}s",
         "failed": "failed",
         "denied": "denied by policy"
+      },
+      "retry": {
+        "button": "Retry",
+        "retrying": "Connection lost — retrying ({{n}}/{{total}})…",
+        "connection": "The connection to the agent dropped (possibly a network blip).",
+        "timeout": "The agent did not finish within {{s}} seconds. Split the question into smaller parts and try again, or ask an administrator to raise the timeout.",
+        "timeoutUnknown": "The agent did not finish in time. Split the question into smaller parts and try again, or ask an administrator to raise the timeout.",
+        "busy": "The service is busy right now. Please try again shortly.",
+        "empty": "The agent finished without answering.",
+        "attachments": "A turn with attachments is not retried — send it again with its files."
       }
     },
     "gate": {
