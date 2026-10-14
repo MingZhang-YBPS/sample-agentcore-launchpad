@@ -35,8 +35,21 @@ admin or the auth-disabled local operator (no `users` row) and legacy keys are n
 offboarded. A key follows its **creator's current** workspace visibility: under
 `isolated`, a member-minted key lists and invokes only the agents that member can see
 (another agent → `404 agent.not_found`), re-evaluated on every call; keys minted by an
-admin, the config admin or before creators were recorded are unrestricted. Expiry,
-scopes and agent allowlists are not implemented.
+admin, the config admin or before creators were recorded are unrestricted.
+
+**Key limits (optional).** `POST /api/apikeys` and `PATCH /api/apikeys/{id}` take
+three optional limits; omitted means unrestricted (the legacy key), and on `PATCH`
+an explicit `null` clears a limit:
+
+| Field | Effect on `/v1` |
+|---|---|
+| `agent_ids` (≤ 50 agents of the key's workspace) | Only these agents are listed and invocable; any other → `404 agent.not_found` |
+| `expires_at` (must be in the future) | From that moment the key answers `401 auth.expired_api_key` |
+| `rate_per_minute` (1–100000) | Over the limit → `429 auth.rate_limited` with `Retry-After` (per backend process) |
+
+The console creates keys by name only and can enable / disable them; the limits are
+set through the API.
+密钥可选限制 `agent_ids` / `expires_at` / `rate_per_minute` 通过 API 设置,控制台目前只能按名称新建、启用与停用。
 
 ## Sync invoke / 同步调用
 

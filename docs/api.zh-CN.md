@@ -29,7 +29,17 @@ curl -s -X POST localhost:8000/api/apikeys -H 'Content-Type: application/json' \
 (`detail.reason`)。由配置内置管理员或未开启鉴权时的本地操作者(没有 `users` 行)创建的密钥，
 以及旧密钥，永远不会被判定为创建者失效。密钥跟随其**创建者当前**的工作空间可见性：在 `isolated` 下，
 成员创建的密钥只能列出和调用该成员能看到的 Agent（其他 Agent → `404 agent.not_found`），每次调用时重新判定；
-由管理员、配置内置管理员创建的密钥以及记录创建者之前的旧密钥不受限制。过期时间、权限范围与 Agent 白名单尚未实现。
+由管理员、配置内置管理员创建的密钥以及记录创建者之前的旧密钥不受限制。
+
+**密钥限制（可选）。** `POST /api/apikeys` 与 `PATCH /api/apikeys/{id}` 接受三项可选限制；不传即不受限（旧密钥的行为），`PATCH` 中显式传 `null` 表示清除该限制：
+
+| 字段 | 对 `/v1` 的作用 |
+|---|---|
+| `agent_ids`（密钥所属 workspace 中的 Agent，最多 50 个） | 只能列出和调用这些 Agent；其他 Agent 返回 `404 agent.not_found` |
+| `expires_at`（必须是未来时间） | 到期后返回 `401 auth.expired_api_key` |
+| `rate_per_minute`（1–100000） | 超限返回 `429 auth.rate_limited`，并带 `Retry-After`（按后端进程计数） |
+
+控制台目前只能按名称新建密钥并启用、停用；这三项限制通过 API 设置。
 
 ## 同步调用 / Sync invoke
 
