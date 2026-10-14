@@ -11663,6 +11663,82 @@
           "config": "部署配置",
           "console": "已在控制台修改"
         }
+      },
+      "col": {
+        "projects": "项目（角色）"
+      },
+      "filter": {
+        "role": "全局角色",
+        "anyRole": "全部角色",
+        "project": "项目",
+        "anyProject": "全部项目",
+        "group": "项目组",
+        "anyGroup": "全部项目组"
+      },
+      "bulk": {
+        "open_one": "批量加入项目（{{count}}）…",
+        "open_other": "批量加入项目（{{count}}）…",
+        "title_one": "把 {{count}} 个账号加入项目",
+        "title_other": "把 {{count}} 个账号加入项目",
+        "body": "所选账号都以下面的角色成为直接成员。已是成员的会改为这个角色；不移除任何人，也不改工作区授权。",
+        "hint": "管理员按角色进入所有项目，会被跳过。",
+        "submit": "加入项目",
+        "select": "选择 {{username}}",
+        "selectAll": "选择本页全部账号",
+        "done": "新增 {{added}}，更新 {{updated}}，未变 {{unchanged}}，跳过 {{skipped}}"
+      },
+      "sessions": {
+        "action": "强制下线",
+        "title": "强制下线？",
+        "body": "{{username}} 的所有会话在下一次请求时失效，需要重新登录。密码、角色和访问权限不变。",
+        "hint": "结束此账号当前的全部会话",
+        "revoked": "{{username}} 已在所有地方下线"
+      },
+      "memberships": {
+        "projects": "项目",
+        "groups": "项目组",
+        "projectsNone": "还没有项目——此账号只通过工作区授权加入默认项目。",
+        "groupsNone": "不在任何项目组中。",
+        "projectsTarget": "项目",
+        "groupsTarget": "项目组",
+        "projectsAdd": "添加项目",
+        "groupsAdd": "添加项目组",
+        "role": "角色",
+        "remove": "移除",
+        "legacy": "遗留工作区授权（高级）",
+        "legacyHint": "勾选 “default” 工作区即以“继承全局角色”加入默认项目——workshop 的做法。",
+        "open": "编辑项目与项目组",
+        "title": "项目与项目组 · {{username}}",
+        "body": "此账号的直接项目成员资格和所在项目组。保存会整体替换这两个列表；下一次请求即生效。",
+        "inheritHint": "默认项目的“继承全局角色”成员资格随工作区授权变化，不在这里编辑。",
+        "save": "保存",
+        "saved": "已保存 {{username}} 的项目与项目组",
+        "err": {
+          "projectsIncomplete": "每一行都要选择项目和角色。",
+          "projectsDuplicate": "同一个项目出现了两次。",
+          "groupsIncomplete": "每一行都要选择项目组和角色。",
+          "groupsDuplicate": "同一个项目组出现了两次。"
+        }
+      },
+      "access": {
+        "projectsTitle": "项目与角色",
+        "groupsTitle": "项目组",
+        "reachTitle": "工作区（可达）",
+        "reachSub": "来自项目与授权",
+        "project": "项目",
+        "role": "有效角色",
+        "source": "来源",
+        "keys": "权限数",
+        "direct": "直接（{{role}}）",
+        "fromGroup": "来自项目组「{{group}}」（{{role}}）",
+        "allProjects": "全部（管理员）",
+        "noProjects": "不属于任何项目——此账号进不了任何项目。",
+        "noGroups": "不在任何项目组中。",
+        "archived": "已归档",
+        "grantOnly": "直接授权；没有可达的项目",
+        "via": "来自：{{projects}}",
+        "globalPermTitle": "全局权限（作用于“继承全局”的项目）",
+        "globalPermSub": "项目角色为“继承全局角色”时生效"
       }
     },
     "workspaces": {
@@ -12036,6 +12112,162 @@
         "body": "你的账号可以进入工作区「{{workspace}}」，但还不是其中任何项目的成员。请联系项目负责人或平台管理员把你加入项目。",
         "switchWorkspace": "切换工作区"
       }
+    },
+    "admins": {
+      "nav": "管理员管理",
+      "navProjects": "项目",
+      "eyebrow": "账号 · 管理员",
+      "title": "管理员管理",
+      "sub": "平台管理员拥有全部权限，可进入所有项目。至少保留一个可登录的管理员。",
+      "empty": "没有管理员",
+      "lastNotice": "只有一个管理员可以登录：不能降级、禁用或让它过期。",
+      "col": {
+        "type": "类型"
+      },
+      "type": {
+        "account": "账号"
+      },
+      "passwordSource": "密码来源：{{source}}（{{when}}）",
+      "block": {
+        "builtin": "内置管理员不能降级",
+        "last": "最后一个可登录的管理员不能降级",
+        "self": "不能降级自己——请让另一位管理员操作"
+      },
+      "demote": {
+        "action": "降级",
+        "title": "降级 {{username}}？",
+        "body": "{{username}} 将失去管理员角色，以及按角色进入的所有项目。",
+        "role": "新的全局角色",
+        "noProjects": "降级后此人不属于任何项目。",
+        "restores": "保留的项目成员资格将重新生效：{{projects}}",
+        "done": "{{username}} 已不再是管理员"
+      },
+      "add": {
+        "open": "添加管理员",
+        "title": "添加管理员",
+        "promote": "提升现有账号",
+        "create": "新建管理员账号",
+        "search": "搜索用户名或邮箱",
+        "noMatch": "没有匹配的非管理员账号。",
+        "projectCount_one": "{{count}} 个项目",
+        "projectCount_other": "{{count}} 个项目",
+        "warning": "管理员可进入所有项目并看到全部业务数据。",
+        "submit": "添加"
+      },
+      "breakGlass": "忘记内置管理员密码？在实例上运行 scripts/reset_admin_password.py 重置，或设置 LAUNCHPAD_AUTH_ADMIN_PASSWORD_OVERRIDE_DISABLED=true 恢复配置文件中的密码。"
+    },
+    "groups": {
+      "nav": "项目组",
+      "eyebrow": "组织 · 项目组",
+      "title": "项目组",
+      "sub": "项目组成员以组的角色进入组内全部项目；项目的直接成员不受影响。",
+      "create": "新建项目组",
+      "edit": "编辑",
+      "archive": "归档",
+      "unarchive": "取消归档",
+      "empty": "没有项目组",
+      "emptyBody": "把同一团队的项目放进一个组，团队只需添加一次。",
+      "notFound": "找不到项目组 {{id}}。",
+      "noDepartment": "无部门",
+      "status": {
+        "active": "活跃",
+        "archived": "已归档",
+        "all": "全部"
+      },
+      "col": {
+        "group": "组",
+        "department": "部门",
+        "projects": "项目",
+        "members": "成员"
+      },
+      "tab": {
+        "projects": "项目",
+        "members": "成员"
+      },
+      "created": "已创建项目组 {{name}}",
+      "saved": "已保存项目组 {{name}}",
+      "archived": "已归档项目组 {{name}}（禁用 {{keys}} 个 API Key）",
+      "unarchived": "已取消归档项目组 {{name}}",
+      "archivedNotice": "此组已归档：成员不再经由本组进入组内项目。",
+      "archiveTitle": "归档 {{name}}？",
+      "archiveBody_one": "{{count}} 名成员经由本组获得的访问将停止；项目仍属于本组，直接成员不受影响。",
+      "archiveBody_other": "{{count}} 名成员经由本组获得的访问将停止；项目仍属于本组，直接成员不受影响。",
+      "form": {
+        "createTitle": "新建项目组",
+        "editTitle": "编辑项目组",
+        "name": "名称",
+        "id": "ID",
+        "description": "描述",
+        "idHint": "2-32 位小写字母、数字或连字符；创建后不能修改",
+        "idFixed": "ID 不能修改",
+        "create": "创建",
+        "save": "保存",
+        "err": {
+          "id": "2-32 位小写字母、数字或连字符，以字母或数字开头。",
+          "name": "请输入名称。"
+        }
+      },
+      "projects": {
+        "sub": "项目加入组后，组成员立即可见；移出时，组带来的访问随即撤销。",
+        "none": "组里还没有项目。",
+        "pick": "选择项目…",
+        "add": "加入本组",
+        "inOther": "在项目组 {{group}} 中",
+        "added": "项目已加入本组",
+        "remove": "移出本组",
+        "removed": "项目已移出本组",
+        "removeTitle": "把 {{name}} 移出本组？",
+        "removeBody_one": "将撤销 {{count}} 人经由本组获得的访问；直接成员不受影响。",
+        "removeBody_other": "将撤销 {{count}} 人经由本组获得的访问；直接成员不受影响。"
+      },
+      "members": {
+        "none": "还没有成员。",
+        "add": "添加成员",
+        "addTitle": "向 {{name}} 添加成员",
+        "addSubmit_one": "添加 {{count}} 人",
+        "addSubmit_other": "添加 {{count}} 人",
+        "picked": "已选择：{{names}}",
+        "templatesOnly": "项目组只能使用内置角色；自定义角色属于单个项目。",
+        "addedMany_one": "已添加 {{count}} 名成员",
+        "addedMany_other": "已添加 {{count}} 名成员",
+        "updated": "已更新 {{username}} 的角色",
+        "remove": "移出本组",
+        "removed": "已把 {{username}} 移出本组",
+        "removeTitle": "把 {{username}} 移出本组？",
+        "removeBody_one": "此人将失去本组在 {{count}} 个项目中给予的访问；直接成员资格保留。",
+        "removeBody_other": "此人将失去本组在 {{count}} 个项目中给予的访问；直接成员资格保留。",
+        "sod_one": "在 {{count}} 个项目中职责合并",
+        "sod_other": "在 {{count}} 个项目中职责合并"
+      }
+    },
+    "departments": {
+      "nav": "部门",
+      "eyebrow": "组织 · 部门",
+      "title": "部门",
+      "sub": "部门用于标注项目和项目组，并在项目切换器中分组。阶段 1 只有名称和描述。",
+      "create": "新建部门",
+      "delete": "删除",
+      "empty": "没有部门",
+      "emptyBody": "先添加部门，再在项目或项目组上选择它。",
+      "inUse": "仍有项目或项目组使用它——请改为归档",
+      "col": {
+        "department": "部门",
+        "projects": "项目",
+        "groups": "项目组"
+      },
+      "form": {
+        "createTitle": "新建部门",
+        "editTitle": "编辑部门"
+      },
+      "created": "已创建部门 {{name}}",
+      "saved": "已保存部门 {{name}}",
+      "archived": "已归档部门 {{name}}",
+      "unarchived": "已取消归档部门 {{name}}",
+      "deleted": "已删除部门 {{name}}",
+      "archiveTitle": "归档 {{name}}？",
+      "archiveBody": "{{name}} 不再出现在新的选择中；已使用它的项目和项目组保留不变。",
+      "deleteTitle": "删除 {{name}}？",
+      "deleteBody": "{{name}} 将被永久删除。没有项目或项目组使用它。"
     }
   },
   "models": {
