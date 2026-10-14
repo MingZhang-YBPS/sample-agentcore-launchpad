@@ -1,0 +1,37 @@
+/* chat-streaming S2: the placeholder bubble of a running turn and the state of
+   its tool rows. */
+.v3 .v3-msg.v3-working .bubble {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--v3-text-2);
+  font-size: 13px;
+}
+.v3 .v3-working-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--v3-ok);
+  animation: v3-working-pulse 1.2s ease-in-out infinite;
+}
+.v3 .v3-msg.v3-working[data-kind="stalled"] .v3-working-dot { background: var(--v3-wait); animation: none; }
+.v3 .v3-msg.v3-working[data-kind="stalled"] .bubble { color: var(--v3-wait); }
+.v3 .v3-working-time { color: var(--v3-text-3); font-variant-numeric: tabular-nums; }
+.v3 .v3-tool-glyph { width: 12px; text-align: center; }
+.v3 .v3-msg.tool[data-run="running"] .v3-tool-glyph { display: inline-block; animation: v3-working-spin 1.2s linear infinite; }
+.v3 .v3-msg.tool[data-run="success"] .v3-tool-glyph { color: var(--v3-ok); }
+.v3 .v3-msg.tool[data-run="error"] .v3-tool-glyph,
+.v3 .v3-msg.tool[data-run="error"] .v3-tool-state,
+.v3 .v3-msg.tool[data-run="denied"] .v3-tool-state { color: var(--v3-act); }
+.v3 .v3-tool-state { font-variant-numeric: tabular-nums; }
+@keyframes v3-working-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes v3-working-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-working-dot,
+  .v3 .v3-msg.tool[data-run="running"] .v3-tool-glyph { animation: none; }
+}

@@ -1,8 +1,23 @@
-// Chat helpers shared by the classic `/chat` page and the native V2 page.
+// Chat helpers shared by the V3 and V2 chat pages and the agent try-chat.
+import type { TFunction } from "i18next";
+import { useCallback, useEffect, useRef, useState } from "react";
+
 import { type AgentInfo, type ChatStreamPayload, localizedMessage } from "./api";
 
-/** A chat stream frame's payload; a `heartbeat` carries the turn's elapsed time. */
-export type ChatStreamFrame = ChatStreamPayload & { elapsed_ms?: number };
+/**
+ * A chat stream frame's payload; a `heartbeat` carries the turn's elapsed time.
+ * The working-status fields (chat-streaming §3.1) ride on `meta` / `tool`
+ * (`started_at`, epoch ms), `phase` (`phase`) and `tool_end`
+ * (`id`, `status`, `duration_ms`).
+ */
+export type ChatStreamFrame = ChatStreamPayload & {
+  elapsed_ms?: number;
+  started_at?: number;
+  phase?: ChatPhase;
+  id?: string | null;
+  status?: ToolRunStatus;
+  duration_ms?: number | null;
+};
 
 /**
  * The console chat stream sends a named `heartbeat` (`{elapsed_ms}`) whenever the
@@ -17,30 +32,40 @@ export function isHeartbeat(event: string): boolean {
  * Parse a `text/event-stream` body into `{event, data}` frames. Heartbeats are
  * dropped unless `heartbeats` is set (for a caller that times the turn or watches
  * the connection); SSE comments (`: keep-alive`, the /v1 form) never yield.
+ * Aborting `signal` (the stop button, a stalled turn) cancels the body — which
+ * closes the connection, so the server stops the turn — and ends the frames.
  */
 export async function* sseEvents(
   res: Response,
-  { heartbeats = false }: { heartbeats?: boolean } = {},
+  { heartbeats = false, signal }: { heartbeats?: boolean; signal?: AbortSignal } = {},
 ): AsyncGenerator<{ event: string; data: ChatStreamFrame }> {
   const reader = res.body!.getReader();
+  const cancel = () => void reader.cancel().catch(() => undefined);
+  if (signal?.aborted) cancel();
+  signal?.addEventListener("abort", cancel, { once: true });
   const decoder = new TextDecoder();
   let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      let event = "message";
-      let data = "";
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        if (line.startsWith("data:")) data += line.slice(5).trim();
+  try {
+    while (!signal?.aborted) {
+      const { done, value } = await reader.read();
+      if (done || signal?.aborted) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        if (signal?.aborted) return;
+        let event = "message";
+        let data = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (!data || (!heartbeats && isHeartbeat(event))) continue;
+        yield { event, data: JSON.parse(data) as ChatStreamFrame };
       }
-      if (!data || (!heartbeats && isHeartbeat(event))) continue;
-      yield { event, data: JSON.parse(data) as ChatStreamFrame };
     }
+  } finally {
+    signal?.removeEventListener("abort", cancel);
   }
 }
 
@@ -105,4 +130,248 @@ export function chatErrorText(data: ChatStreamPayload, fallback: string): string
   const text = localizedMessage(data.code ?? "", data.message ?? fallback);
   const sample = data.detail?.sample;
   return typeof sample === "string" && sample ? `${text}\n${sample}` : text;
+}
+
+// ---------------------------------------------------------------------------
+// Working status (chat-streaming S2): what the agent is doing while a turn runs.
+
+/** `starting`: invoking the runtime; `waiting_model`: it answered, no text yet;
+ *  `streaming`: text is arriving. */
+export type ChatPhase = "starting" | "waiting_model" | "streaming";
+
+export type ToolRunStatus = "running" | "success" | "error" | "denied";
+
+/** One tool call of the running turn. `startedAt` is on the local clock. */
+export interface ToolRun {
+  id: string;
+  name: string;
+  status: ToolRunStatus;
+  startedAt: number;
+  durationMs?: number | null;
+}
+
+export interface TurnStatus {
+  /** null until the stream's first `phase` (a stream without status events —
+   *  an older backend — never sends one; then `meta` is all there is to go by) */
+  phase: ChatPhase | null;
+  /** `meta` arrived: the console reached the agent's turn */
+  connected: boolean;
+  /** the model is reasoning (a `thinking` since the last text or tool event) */
+  reasoning: boolean;
+  /** a text bubble is open: the placeholder has become the answer */
+  textOpen: boolean;
+  tools: ToolRun[];
+  /** local clock (ms) at which the turn's elapsed time was 0 — re-based on every
+   *  heartbeat's `elapsed_ms`, so a throttled background tab does not drift */
+  base: number;
+  /** local clock (ms) of the last frame of any kind, heartbeats included */
+  lastEventAt: number;
+}
+
+/** No frame for this long: the placeholder warns the connection may be gone. */
+export const STALL_WARN_MS = 30_000;
+/** No frame for this long: the page aborts the turn itself (before CloudFront's
+ *  60 s cut), so it ends with a definite state instead of hanging. */
+export const STALL_ABORT_MS = 45_000;
+
+export function startTurnStatus(now: number): TurnStatus {
+  return {
+    phase: null,
+    connected: false,
+    reasoning: false,
+    textOpen: false,
+    tools: [],
+    base: now,
+    lastEventAt: now,
+  };
+}
+
+/** Fold one stream frame into the turn's status (pure: `now` is the local clock). */
+export function reduceTurnStatus(
+  status: TurnStatus,
+  event: string,
+  data: ChatStreamFrame,
+  now: number,
+): TurnStatus {
+  const next: TurnStatus = { ...status, lastEventAt: now };
+  switch (event) {
+    case "meta":
+      next.connected = true;
+      return next;
+    case "heartbeat":
+      if (typeof data.elapsed_ms === "number") next.base = now - data.elapsed_ms;
+      return next;
+    case "phase":
+      if (data.phase) next.phase = data.phase;
+      return next;
+    case "thinking":
+      next.reasoning = true;
+      return next;
+    case "tool":
+      next.reasoning = false;
+      next.textOpen = false;
+      next.tools = [
+        ...status.tools,
+        {
+          id: data.id ?? `tool-${status.tools.length + 1}`,
+          name: data.name ?? "tool",
+          status: "running",
+          startedAt: now,
+        },
+      ];
+      return next;
+    case "tool_end":
+      next.tools = status.tools.map((run) =>
+        run.id === data.id && run.status === "running"
+          ? {
+              ...run,
+              status: data.status && data.status !== "running" ? data.status : "success",
+              durationMs: data.duration_ms ?? now - run.startedAt,
+            }
+          : run,
+      );
+      return next;
+    case "delta":
+      next.reasoning = false;
+      next.textOpen = true;
+      if (next.phase !== null) next.phase = "streaming";
+      return next;
+    case "done":
+    case "error":
+      // a call the stream never ended is over with the turn
+      next.tools = status.tools.map((run) =>
+        run.status === "running"
+          ? { ...run, status: event === "error" ? "error" : "success", durationMs: now - run.startedAt }
+          : run,
+      );
+      return next;
+    default:
+      return next;
+  }
+}
+
+export function turnElapsedMs(status: TurnStatus, now: number): number {
+  return Math.max(0, now - status.base);
+}
+
+/** What the placeholder says. `null`: nothing to show (the answer is streaming). */
+export type TurnActivity =
+  | { kind: "connecting" | "thinking" | "reasoning" | "stalled" }
+  | { kind: "tool"; tool: string; ms: number };
+
+export function turnActivity(status: TurnStatus, now: number): TurnActivity | null {
+  if (now - status.lastEventAt >= STALL_WARN_MS) return { kind: "stalled" };
+  const running = status.tools.filter((run) => run.status === "running");
+  if (running.length) {
+    const run = running[running.length - 1];
+    return { kind: "tool", tool: run.name, ms: now - run.startedAt };
+  }
+  if (status.textOpen) return null;
+  if (status.phase === "starting" || (status.phase === null && !status.connected)) {
+    return { kind: "connecting" };
+  }
+  return { kind: status.reasoning ? "reasoning" : "thinking" };
+}
+
+/** True when the turn has been silent long enough to give up on it. */
+export function turnStalled(status: TurnStatus, now: number): boolean {
+  return now - status.lastEventAt >= STALL_ABORT_MS;
+}
+
+/** A tool row's run in the turn status, by the `tool` event's id. */
+export function toolRunById(status: TurnStatus | null, id: string | undefined): ToolRun | undefined {
+  return id ? status?.tools.find((run) => run.id === id) : undefined;
+}
+
+/** Whole seconds, for the timers. */
+export function seconds(ms: number): number {
+  return Math.floor(ms / 1000);
+}
+
+/** One decimal under a minute (`2.4`), whole seconds after. */
+export function toolSeconds(ms: number): string {
+  return ms < 60_000 ? (ms / 1000).toFixed(1) : String(Math.round(ms / 1000));
+}
+
+/** The placeholder's words for what the agent is doing (chat-streaming §3.2). */
+export function activityLabel(t: TFunction, activity: TurnActivity): string {
+  if (activity.kind === "tool") return t("v3.chat.status.tool", { tool: activity.tool });
+  return t(`v3.chat.status.${activity.kind}`);
+}
+
+/** A tool row's state: `running 8s`, `2.4s`, `failed`, `denied by policy`. */
+export function toolRunLabel(t: TFunction, run: ToolRun, now: number): string {
+  if (run.status === "running") return t("v3.chat.tool.running", { s: seconds(now - run.startedAt) });
+  if (run.status === "error") return t("v3.chat.tool.failed");
+  if (run.status === "denied") return t("v3.chat.tool.denied");
+  return run.durationMs == null ? "" : t("v3.chat.tool.done", { s: toolSeconds(run.durationMs) });
+}
+
+/** The glyph in front of a tool row: ⟳ running, ✓ done, ✗ failed, ⛔ denied. */
+export const TOOL_RUN_GLYPH: Record<ToolRun["status"], string> = {
+  running: "⟳",
+  success: "✓",
+  error: "✗",
+  denied: "⛔",
+};
+
+/** Re-render once a second while `active`, returning the local clock. */
+export function useNow(active: boolean, everyMs = 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), everyMs);
+    return () => window.clearInterval(timer);
+  }, [active, everyMs]);
+  return now;
+}
+
+/** Why a turn was aborted from the page: the stop button, or a silent stream. */
+export type TurnStopReason = "stop" | "stalled";
+
+export function turnStopReason(signal: AbortSignal): TurnStopReason | null {
+  if (!signal.aborted) return null;
+  return signal.reason === "stalled" ? "stalled" : "stop";
+}
+
+/**
+ * One chat turn's working status, shared by the three chat surfaces. `begin()`
+ * returns the signal to read the stream with (`sseEvents(res, {heartbeats: true,
+ * signal})`); `feed()` folds each frame in and returns the new status; `stop()`
+ * aborts the turn (the stop button); `end()` clears it. A turn silent for
+ * `STALL_ABORT_MS` aborts itself with reason `stalled`.
+ */
+export function useChatTurn() {
+  const [status, setStatus] = useState<TurnStatus | null>(null);
+  const current = useRef<TurnStatus | null>(null);
+  const controller = useRef<AbortController | null>(null);
+  const now = useNow(status !== null);
+
+  const begin = useCallback((): AbortSignal => {
+    controller.current = new AbortController();
+    current.current = startTurnStatus(Date.now());
+    setStatus(current.current);
+    return controller.current.signal;
+  }, []);
+  const feed = useCallback((event: string, data: ChatStreamFrame): TurnStatus | null => {
+    if (!current.current) return null;
+    current.current = reduceTurnStatus(current.current, event, data, Date.now());
+    setStatus(current.current);
+    return current.current;
+  }, []);
+  const stop = useCallback((reason: TurnStopReason = "stop") => {
+    controller.current?.abort(reason);
+  }, []);
+  const end = useCallback(() => {
+    controller.current = null;
+    current.current = null;
+    setStatus(null);
+  }, []);
+
+  useEffect(() => {
+    if (status && turnStalled(status, now)) stop("stalled");
+  }, [status, now, stop]);
+
+  return { status, now, begin, feed, stop, end };
 }

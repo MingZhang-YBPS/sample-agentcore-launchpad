@@ -10157,7 +10157,24 @@
       "up": "Good answer",
       "down": "Bad answer",
       "consentInV2": "This turn needs the user's consent for a tool — consent cards are handled in the full chat for now.",
-      "openInV2": "Continue in the full chat"
+      "openInV2": "Continue in the full chat",
+      "status": {
+        "connecting": "Connecting to the agent…",
+        "thinking": "Thinking…",
+        "reasoning": "Reasoning…",
+        "tool": "Calling {{tool}}…",
+        "stalled": "The connection may have dropped — still waiting…",
+        "elapsed": "{{s}}s",
+        "stop": "Stop",
+        "stopped": "You stopped this reply.",
+        "lost": "Nothing arrived from the agent for {{s}} seconds, so the connection was closed."
+      },
+      "tool": {
+        "running": "running {{s}}s",
+        "done": "{{s}}s",
+        "failed": "failed",
+        "denied": "denied by policy"
+      }
     },
     "gate": {
       "eyebrow": "Release gate",
