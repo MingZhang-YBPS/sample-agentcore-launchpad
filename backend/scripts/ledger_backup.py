@@ -37,8 +37,14 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
+
+# `datetime.UTC` is 3.11+; this script must also run under an older system python3
+UTC = timezone.utc  # noqa: UP017
+# the result-code constants landed in sqlite3 with 3.11 too (values from sqlite3.h)
+SQLITE_BUSY = getattr(sqlite3, "SQLITE_BUSY", 5)
+SQLITE_LOCKED = getattr(sqlite3, "SQLITE_LOCKED", 6)
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -99,7 +105,7 @@ def take_backup(ledger: Path, dest_dir: Path, *, now: datetime, timeout: float) 
     deadline = time.monotonic() + timeout
 
     def _progress(status: int, _remaining: int, _total: int) -> None:
-        if status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) and (
+        if status in (SQLITE_BUSY, SQLITE_LOCKED) and (
             time.monotonic() > deadline
         ):
             raise TimeoutError(f"the ledger stayed locked for {timeout:g}s")
