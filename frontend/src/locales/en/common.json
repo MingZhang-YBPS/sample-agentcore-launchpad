@@ -10127,7 +10127,46 @@
       "deleteTitle": "Delete this record?",
       "deleteBody": "“{{name}}” is removed from the registry for good. Deployed agents keep running; only the catalog entry goes.",
       "disableTitle": "Retire this record?",
-      "disableBody": "“{{name}}” stops being discoverable and cannot be mounted by new agents. Agents that already use it are not changed."
+      "disableBody": "“{{name}}” stops being discoverable and cannot be mounted by new agents. Agents that already use it are not changed.",
+      "openPending": "Open the approval queue",
+      "longestWait": "longest {{ago}}",
+      "waiting": "waiting {{ago}}",
+      "pendingEmpty": "No records waiting approval",
+      "keysHint": "↑/↓ move · Space select · A approve · R reject",
+      "perPage": "{{count}} per page",
+      "pages": "Pages",
+      "prevPage": "Previous page",
+      "nextPage": "Next page",
+      "tabs": {
+        "existing": "Existing records",
+        "pending": "Waiting approval"
+      },
+      "batch": {
+        "selectAll_one": "Select all ({{count}})",
+        "selectAll_other": "Select all ({{count}})",
+        "selected_one": "{{count}} selected",
+        "selected_other": "{{count}} selected",
+        "approve": "Approve selected",
+        "reject": "Reject selected",
+        "confirmTitle_approve_one": "Approve {{count}} record?",
+        "confirmTitle_approve_other": "Approve {{count}} records?",
+        "confirmTitle_reject_one": "Reject {{count}} record?",
+        "confirmTitle_reject_other": "Reject {{count}} records?",
+        "confirmBody_approve_one": "Once approved, this record can be found by consumers and mounted by agents:",
+        "confirmBody_approve_other": "Once approved, these records can be found by consumers and mounted by agents:",
+        "confirmBody_reject_one": "This record goes back to its owner as rejected:",
+        "confirmBody_reject_other": "These records go back to their owners as rejected:",
+        "more_one": "and {{count}} more",
+        "more_other": "and {{count}} more",
+        "approveDone": "Approved",
+        "rejectDone": "Rejected",
+        "summary": "{{verb}} {{ok}}, {{failed}} failed — failed rows stay selected",
+        "summaryOk": "{{verb}} {{ok}}",
+        "retryFailed_one": "Retry {{count}} failed",
+        "retryFailed_other": "Retry {{count}} failed",
+        "rowRunning": "working…",
+        "rowFailed": "failed ({{msg}})"
+      }
     },
     "common": {
       "cancel": "Cancel"

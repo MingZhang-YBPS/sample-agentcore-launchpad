@@ -1,0 +1,10 @@
+/* V3 registry — the clickable pending stat card and the approval queue's row states */
+.v3 .v3-reg-statlink {
+  display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit;
+  font: inherit; text-align: left; cursor: pointer;
+}
+.v3 .v3-reg-statlink:focus-visible { outline: 2px solid var(--v3-info); outline-offset: 4px; border-radius: 4px; }
+.v3 .v3-reg-statlink:hover .label { color: var(--v3-text); }
+.v3 table.v3-registry-queue tbody tr { transition: background 0.12s, opacity 0.6s 0.4s; }
+.v3 table.v3-registry-queue tbody tr[data-cursor="true"] { box-shadow: inset 2px 0 0 var(--v3-info); background: rgba(110, 168, 255, 0.045); }
+.v3 table.v3-registry-queue tbody tr[data-row="ok"] { opacity: 0; }
