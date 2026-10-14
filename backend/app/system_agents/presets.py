@@ -67,7 +67,11 @@ class SystemPreset:
     max_tokens: int | None = 65536
     reasoning_effort: ReasoningEffort | None = "high"
     max_iterations: int = 100
-    timeout_seconds: int = 900
+    # One turn's whole Harness budget. 1500 s fits the architect's measured 7–8
+    # "reason + AWS Knowledge call" steps (~1–2 min each, growing with the context)
+    # with ~1.5× headroom; 900 s timed out mid-design (assistant-context §6). The turn
+    # claim TTL is derived from the stored value (``assistant.service.claim_ttl_s``).
+    timeout_seconds: int = 1500
     skill_dir: str = ""  # directory name under SKILLS_ROOT
 
     def default_options(self) -> "InstallOptions":
@@ -167,6 +171,22 @@ ARCHITECT = SystemPreset(
 )
 
 PRESETS: dict[str, SystemPreset] = {ARCHITECT.key: ARCHITECT}
+
+# Earlier builds' catalogue default for ``timeout_seconds``. A stored preset spec that
+# still carries it is taken as "never changed by an administrator" and moved to the
+# current default once (``system_agents.timeout_migration``); any other stored value
+# is an administrator's choice and is kept.
+LEGACY_TIMEOUT_SECONDS: dict[str, int] = {ARCHITECT.key: 900}
+
+
+def timeout_migration_target(preset: "SystemPreset", spec: dict | None) -> int | None:
+    """The ``timeout_seconds`` a stored spec should move to, or ``None`` when it stays:
+    only a spec still on the preset's legacy default moves, to this build's default.
+    Idempotent — a migrated spec carries the new default and never matches again."""
+    legacy = LEGACY_TIMEOUT_SECONDS.get(preset.key)
+    if not spec or legacy is None or legacy == preset.timeout_seconds:
+        return None
+    return preset.timeout_seconds if spec.get("timeout_seconds") == legacy else None
 RESERVED_AGENT_NAMES: frozenset[str] = frozenset(p.name for p in PRESETS.values())
 
 

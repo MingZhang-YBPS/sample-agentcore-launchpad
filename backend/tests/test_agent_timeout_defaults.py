@@ -66,8 +66,8 @@ def test_explicit_budgets_survive_proposal_mapping(budget):
     assert spec.timeout_seconds == budget
 
 
-def test_architect_preset_keeps_its_900_second_budget():
-    assert ARCHITECT.timeout_seconds == 900
+def test_architect_preset_has_a_1500_second_budget():
+    assert ARCHITECT.timeout_seconds == 1500
 
 
 def test_a_proposal_without_a_model_gets_the_wizard_default_not_the_spec_fallback():

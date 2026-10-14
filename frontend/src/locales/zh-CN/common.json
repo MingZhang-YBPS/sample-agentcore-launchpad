@@ -10280,6 +10280,14 @@
         "submit": "切换并重新发布",
         "switching": "切换中…",
         "switched": "正在用 {{model}} 重新发布架构助手"
+      },
+      "context": {
+        "divider": "以上 {{n}} 轮已不在助手的上下文中",
+        "hint": "助手只能看到之后的对话和当前提议。重要的约束请让助手写进提议，或在新对话里重新说明。",
+        "summarize": "让助手总结已确认事项",
+        "summarizePrompt": "请把目前已确认的需求、约束和未决问题整理成清单，并更新到提议的 requirements_baseline / assumptions 中。",
+        "trimmed": "已截断",
+        "trimmedTip": "这个对话较早的轮次已不在助手的上下文中"
       }
     },
     "releases": {

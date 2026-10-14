@@ -2686,7 +2686,7 @@ def test_architect_defaults_are_gpt6_astra_64k_output_high_effort():
     assert (spec.model_id, spec.model_source) == (ASTRA, "bedrock")
     assert spec.max_tokens == 65536 and spec.reasoning_effort == "high"
     # the loop limits are separate knobs
-    assert (spec.max_iterations, spec.timeout_seconds) == (100, 900)
+    assert (spec.max_iterations, spec.timeout_seconds) == (100, 1500)
     params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
     model = params["model"]["bedrockModelConfig"]
     assert model == {

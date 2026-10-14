@@ -10280,6 +10280,14 @@
         "submit": "Switch and re-publish",
         "switching": "Switching…",
         "switched": "Re-publishing the architect assistant on {{model}}"
+      },
+      "context": {
+        "divider": "The {{n}} earlier turn(s) above are no longer in the assistant's context",
+        "hint": "The assistant only sees the turns below and the current proposal. Ask it to write important constraints into the proposal, or restate them in a new conversation.",
+        "summarize": "Ask the assistant to summarize what is confirmed",
+        "summarizePrompt": "Please list the requirements, constraints and open questions confirmed so far, and update them in the proposal's requirements_baseline / assumptions.",
+        "trimmed": "Trimmed",
+        "trimmedTip": "Earlier turns of this conversation are no longer in the assistant's context"
       }
     },
     "releases": {
