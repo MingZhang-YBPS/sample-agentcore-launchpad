@@ -7,6 +7,8 @@ import { api, chatApi, errorMessage, localizedMessage } from "../../../lib/api";
 import { sseEvents } from "../../../lib/chat";
 import { Alert, Button, Card } from "../../ui";
 import "./tryChat.css";
+import { JumpToLatest } from "../../../components/JumpToLatest";
+import { useStickToBottom } from "../../../lib/useStickToBottom";
 
 interface Turn {
   role: "user" | "agent" | "error";
@@ -28,7 +30,8 @@ export function TryChat({ agentId }: { agentId: string }) {
   const [busy, setBusy] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const sessionRef = useRef<string | null>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
+  // follows the stream only while the reader is at the bottom
+  const body = useStickToBottom();
 
   useEffect(() => {
     let live = true;
@@ -40,10 +43,6 @@ export function TryChat({ agentId }: { agentId: string }) {
       live = false;
     };
   }, [agentId, i18n.language]);
-
-  useEffect(() => {
-    bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight });
-  }, [turns]);
 
   const push = (turn: Turn) => setTurns((prev) => [...prev, turn].slice(-MAX_TURNS));
   const appendToAgent = (delta: string) =>
@@ -59,6 +58,7 @@ export function TryChat({ agentId }: { agentId: string }) {
     setText("");
     setBusy(true);
     push({ role: "user", text: prompt });
+    body.toBottom();
     let completed = false;
     try {
       const res = await chatApi.stream(agentId, { prompt, session_id: sessionRef.current });
@@ -80,7 +80,7 @@ export function TryChat({ agentId }: { agentId: string }) {
 
   return (
     <Card title={t("v2.agents.tryChat.title")} sub={t("v2.agents.tryChat.sub")} testId="v2-agent-trychat">
-      <div className="v2-trychat-body" ref={bodyRef} aria-live="polite">
+      <div className="v2-trychat-body" ref={body.ref} aria-live="polite">
         {turns.length === 0 && <p className="v2-trychat-empty">{t("v2.agents.tryChat.empty")}</p>}
         {turns.map((turn, i) =>
           turn.role === "error" ? (
@@ -96,6 +96,7 @@ export function TryChat({ agentId }: { agentId: string }) {
         {busy && turns[turns.length - 1]?.role === "user" && (
           <div className="v2-trychat-msg agent pending">{t("v2.agents.tryChat.thinking")}</div>
         )}
+        <JumpToLatest show={!body.atBottom} onClick={body.toBottom} />
       </div>
       {suggestions.length > 0 && (
         <div className="v2-trychat-chips" data-testid="v2-agent-suggestions">

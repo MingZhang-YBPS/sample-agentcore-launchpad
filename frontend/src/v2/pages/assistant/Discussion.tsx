@@ -1,10 +1,11 @@
-import type { RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
 import { Markdown } from "../../../components";
+import { JumpToLatest } from "../../../components/JumpToLatest";
 import type { AssistantCatalog, AssistantConversationDetail } from "../../../lib/api";
 import { type AssistantLiveMessage, retryableTurn, stripProposalBlock, TURN_RETRIED_NAME } from "../../../lib/assistant";
+import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
 import { Alert, Button, Descriptions, LinkButton, Tag } from "../../ui";
 import { SECTION_IDS, useReadOnly } from "./common";
 
@@ -12,7 +13,7 @@ export const COMPOSER_ID = "v2-assistant-input";
 
 /** The streaming transcript, the composer and the workspace catalog summary. */
 export function DiscussionCard({
-  conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog, threadRef,
+  conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog,
   retryOf, onRetry,
 }: {
   conversation: AssistantConversationDetail;
@@ -23,7 +24,6 @@ export function DiscussionCard({
   preparing: boolean;
   onSend: () => void;
   onRefreshCatalog: () => void;
-  threadRef: RefObject<HTMLDivElement>;
   /** the failed turn the composer will retry (null = an ordinary new turn) */
   retryOf: number | null;
   /** start (turn, prompt) or cancel (null) an edit-and-retry */
@@ -32,6 +32,9 @@ export function DiscussionCard({
   const { t } = useTranslation();
   const { username } = useAuth();
   const readOnly = useReadOnly();
+  // follows the stream only while the reader is at the bottom
+  const thread = useStickToBottom();
+  useFollowOwnTurns(messages.length, messages[messages.length - 1]?.role === "user", thread.toBottom);
   // A shared conversation has several senders: name everyone but the caller.
   const sender = (author?: string | null) =>
     author && author !== username ? author : t("assistantPage.you");
@@ -53,7 +56,7 @@ export function DiscussionCard({
         </h2>
         <div
           className="v2-assistant-thread"
-          ref={threadRef}
+          ref={thread.ref}
           data-testid="v2-assistant-thread"
           data-conversation={conversation.id}
         >
@@ -113,6 +116,7 @@ export function DiscussionCard({
               </div>
             ),
           )}
+          <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
         </div>
         {!readOnly && <div className="v2-assistant-composer">
           <label className="v2-muted" style={{ fontSize: 12.5 }} htmlFor={COMPOSER_ID}>

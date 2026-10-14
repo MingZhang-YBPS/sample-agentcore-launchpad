@@ -1,13 +1,13 @@
 // Presentational AI Fix UI (progress log, applied notice, diagnosis card),
 // used by ChatDrawer. Launchpad-styled; behavior ported
 // from strands_studio_ui `src/components/ai-fix-progress.tsx` (origin/main).
-import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Loader, Sparkles, Wrench, XCircle } from "lucide-react";
 
 import { Chip } from "../components";
 import type { FixProgressEvent } from "./useAiFix";
 import type { FixDiagnosis, FixSuggestion } from "./lib/debug-client";
+import { useStickToBottom } from "../lib/useStickToBottom";
 
 interface AiFixPanelProps {
   isFixing: boolean;
@@ -48,11 +48,8 @@ export function AiFixPanel({
   onDismissDiagnosis,
 }: AiFixPanelProps) {
   const { t } = useTranslation();
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [fixEvents]);
+  // follows new events only while the reader is at the bottom
+  const events = useStickToBottom();
 
   return (
     <>
@@ -71,7 +68,7 @@ export function AiFixPanel({
               </button>
             )}
           </div>
-          <div className="studio-fix-events" ref={scrollRef}>
+          <div className="studio-fix-events" ref={events.ref}>
             {fixEvents.map((event) => (
               <div key={event.id} className={`studio-fix-ev k-${event.kind}`}>
                 {event.text}

@@ -65,6 +65,8 @@ import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
 import { PreparationPanel } from "./assistant/PreparationPanel";
 import { AdlcMethodology } from "./assistant/AdlcMethodology";
 import { CreationProgress } from "./assistant/CreationProgress";
+import { JumpToLatest } from "../components/JumpToLatest";
+import { useStickToBottom } from "../lib/useStickToBottom";
 
 /**
  * Architect assistant (SE-039): a member conversation with the protected
@@ -152,7 +154,8 @@ export function CreateAgentAssistant() {
     job: JobInfo | null;
     agent: AgentInfo | null;
   }>({ jobId: "", job: null, agent: null });
-  const threadRef = useRef<HTMLDivElement>(null);
+  // follows the stream only while the reader is at the bottom
+  const thread = useStickToBottom();
   const abortRef = useRef<AbortController | null>(null);
 
   // ---- staleness: workspace scope + operation generation ------------------------
@@ -316,10 +319,6 @@ export function CreateAgentAssistant() {
     status?.available,
     workspaceId,
   ]);
-
-  useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
-  }, [messages]);
 
   const proposals = useMemo(
     () => conversation?.proposals ?? [],
@@ -618,6 +617,7 @@ export function CreateAgentAssistant() {
       { role: "user", text: prompt },
       { role: "assistant", text: "", streaming: true },
     ]);
+    thread.toBottom(); // the reader's own turn is always in view
     const controller = new AbortController();
     abortRef.current = controller;
     const append = (text: string) =>
@@ -970,7 +970,7 @@ export function CreateAgentAssistant() {
           >
             <div
               className="thread assist-thread"
-              ref={threadRef}
+              ref={thread.ref}
               data-testid="assistant-thread"
               data-conversation={conversation?.id ?? ""}
             >
@@ -1061,6 +1061,7 @@ export function CreateAgentAssistant() {
                   </div>
                 ),
               )}
+              <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
             </div>
             <div className="assist-composer">
               <label

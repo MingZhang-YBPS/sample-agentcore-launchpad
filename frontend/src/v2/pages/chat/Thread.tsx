@@ -1,10 +1,11 @@
 import { Database, MessagesSquare, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
-import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { MessageAttachments } from "../../../components/chat/AttachmentViews";
+import { JumpToLatest } from "../../../components/JumpToLatest";
 import { Markdown } from "../../../components/Markdown";
 import type { FeedbackVerdict } from "../../../lib/api";
+import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
 import { Alert, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
 import { PolicyDenyCard } from "./PolicyDenyCard";
@@ -34,13 +35,12 @@ export function Thread({
   retryDisabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    ref.current?.scrollTo({ top: ref.current.scrollHeight });
-  }, [messages]);
+  // follows the stream only while the reader is at the bottom
+  const thread = useStickToBottom();
+  useFollowOwnTurns(messages.length, messages[messages.length - 1]?.kind === "user", thread.toBottom);
 
   return (
-    <div className="v2-chat-thread" ref={ref} data-testid="thread">
+    <div className="v2-chat-thread" ref={thread.ref} data-testid="thread">
       {restoring && messages.length === 0 && <Spin />}
       {!restoring && messages.length === 0 && (
         <div className="v2-chat-empty">
@@ -126,6 +126,7 @@ export function Thread({
           </div>
         ),
       )}
+      <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
     </div>
   );
 }

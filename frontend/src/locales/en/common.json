@@ -3985,7 +3985,8 @@
     "close": "Close",
     "retry": "RETRY",
     "loadFailed": "Failed to load: {{msg}}",
-    "loadFailedShort": "failed to load"
+    "loadFailedShort": "failed to load",
+    "jumpToLatest": "Jump to latest"
   },
   "memoryPage": {
     "kicker": "// CONTEXT LAYER",

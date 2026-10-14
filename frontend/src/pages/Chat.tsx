@@ -34,6 +34,8 @@ import type {
 import { api, errorMessage, localizedMessage, responseMessage } from "../lib/api";
 import { agentMemoryState, chatEligible, isHarnessAgent, sseEvents } from "../lib/chat";
 import { type AuthAsk, liveAuthAsk, restoredAuthAsk } from "../lib/user-grants";
+import { JumpToLatest } from "../components/JumpToLatest";
+import { useStickToBottom } from "../lib/useStickToBottom";
 
 interface Message {
   kind: "user" | "agent" | "tool" | "memory" | "error" | "auth";
@@ -162,7 +164,8 @@ export function Chat() {
   const [traceBusy, setTraceBusy] = useState(false);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [newKey, setNewKey] = useState<KeyInfo | null>(null);
-  const threadRef = useRef<HTMLDivElement>(null);
+  // follows the stream only while the reader is at the bottom
+  const thread = useStickToBottom();
   const restoredRef = useRef(false);
   // "?agent=<id>" that no active agent matches: the notice names it and the
   // picker stays on its placeholder — never silently another agent's runtime.
@@ -198,10 +201,6 @@ export function Chat() {
     void loadKeys();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
-  }, [messages]);
 
   const loadKeys = async () => {
     try {
@@ -305,6 +304,7 @@ export function Chat() {
       attachments: capability ? pendingFiles.map((f) => attachmentMetadata(f, capability)) : undefined,
     };
     setMessages((m) => [...m, userMessage]);
+    thread.toBottom(); // the reader's own turn is always in view
     let failed = false;
     let completed = false;
     let activeSessionId = sessionId;
@@ -604,7 +604,7 @@ export function Chat() {
           style={{ "--i": 0 } as CSSProperties}
         >
           {agent && <AttachmentHint capability={capability} />}
-          <div className="thread" ref={threadRef} data-testid="thread">
+          <div className="thread" ref={thread.ref} data-testid="thread">
             {agentsError && agents.length === 0 && (
               <LoadError
                 message={agentsError}
@@ -658,6 +658,7 @@ export function Chat() {
                 </div>
               ),
             )}
+            <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
           </div>
           <div
             className={`chat-composer${draggingFiles ? " dragging" : ""}`}

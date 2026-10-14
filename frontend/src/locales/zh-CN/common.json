@@ -3985,7 +3985,8 @@
     "close": "关闭",
     "retry": "重试",
     "loadFailed": "加载失败：{{msg}}",
-    "loadFailedShort": "加载失败"
+    "loadFailedShort": "加载失败",
+    "jumpToLatest": "回到最新"
   },
   "memoryPage": {
     "kicker": "// 上下文层",

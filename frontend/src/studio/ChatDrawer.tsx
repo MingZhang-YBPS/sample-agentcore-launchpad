@@ -20,6 +20,8 @@ import {
   type DebugApiKeys,
   type FlowData,
 } from "./lib/debug-client";
+import { JumpToLatest } from "../components/JumpToLatest";
+import { useStickToBottom } from "../lib/useStickToBottom";
 
 interface ChatDrawerProps {
   active: boolean;
@@ -55,7 +57,8 @@ export function ChatDrawer({
 
   const abortRef = useRef<AbortController | null>(null);
   const sessionCodeRef = useRef(code);
-  const endRef = useRef<HTMLDivElement | null>(null);
+  // follows the stream only while the reader is at the bottom
+  const thread = useStickToBottom();
   // In-flight guard for session creation. MUST be a ref, not the `creating`
   // state: with `creating` in the effect deps, setCreating(true) re-ran the
   // effect, whose cleanup cancelled its own fetch — every attempt self-cancelled.
@@ -134,10 +137,6 @@ export function ChatDrawer({
         setCreating(false);
       });
   }, [active, session, t]);
-
-  useEffect(() => {
-    if (active) endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent, active]);
 
   // Abort any in-flight streamed turn when the drawer unmounts (e.g. the debug
   // pane is closed mid-stream) so we don't leak a reader or a backend subprocess.
@@ -307,7 +306,7 @@ export function ChatDrawer({
         </div>
       )}
 
-      <div className="studio-chat-thread">
+      <div className="studio-chat-thread" ref={thread.ref}>
         {initError && (
           <div className="note" style={{ borderColor: "var(--crit)" }}>
             <span className="i" style={{ color: "var(--crit)" }}>
@@ -352,7 +351,7 @@ export function ChatDrawer({
             </div>
           </div>
         )}
-        <div ref={endRef} />
+        <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
       </div>
 
       {showFixPanel && (

@@ -86,7 +86,6 @@ export function AssistantDetail({
   const [polled, setPolled] = useState<{ jobId: string; job: JobInfo | null; agent: AgentInfo | null }>({
     jobId: "", job: null, agent: null,
   });
-  const threadRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const alive = useRef(true);
   const tRef = useRef(t);
@@ -126,10 +125,6 @@ export function AssistantDetail({
     );
     return () => { live = false; };
   }, [id, workspaceId, nonce, apiMessage, back, toast]);
-
-  useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
-  }, [messages]);
 
   const proposals = useMemo(() => conversation?.proposals ?? [], [conversation]);
   const latest = proposals.length ? proposals[proposals.length - 1] : null;
@@ -536,7 +531,6 @@ export function AssistantDetail({
             void send(retry === null ? { prompt: input } : { prompt: input, retry_of_turn: retry });
           }}
           onRefreshCatalog={() => void refreshCatalog()}
-          threadRef={threadRef}
           retryOf={retryOf}
           onRetry={(target) => {
             setRetryOf(target?.turn ?? null);

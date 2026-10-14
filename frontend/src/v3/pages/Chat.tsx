@@ -3,6 +3,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { JumpToLatest } from "../../components/JumpToLatest";
 import { Markdown } from "../../components/Markdown";
 import {
   api,
@@ -14,6 +15,7 @@ import {
   localizedMessage,
 } from "../../lib/api";
 import { chatEligible, sseEvents } from "../../lib/chat";
+import { useStickToBottom } from "../../lib/useStickToBottom";
 import { livePolicyDeny, type PolicyDeny, policyDenyHref, restoredPolicyDeny } from "../../lib/policy-deny";
 import { useAuth } from "../../auth/auth-context";
 import { useWorkspace } from "../../workspace/workspace-context";
@@ -78,7 +80,8 @@ export function V3Chat() {
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [needsV2, setNeedsV2] = useState(false);
-  const threadRef = useRef<HTMLDivElement>(null);
+  // follows the stream only while the reader is at the bottom
+  const thread = useStickToBottom();
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // the first eligible agent is the default, so the page is never empty on arrival
@@ -92,10 +95,6 @@ export function V3Chat() {
   useEffect(() => {
     if (agentId) void loadSessions(agentId);
   }, [agentId]);
-
-  useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
 
   const open = async (sid: string) => {
     if (!agentId || busy) return;
@@ -119,6 +118,7 @@ export function V3Chat() {
       );
       setSessionId(sid);
       setParams({ agent: agentId, session: sid }, { replace: true });
+      thread.toBottom(); // an opened conversation starts at its latest turn
     } catch (err) {
       toast("act", errorMessage(err));
     } finally {
@@ -150,6 +150,7 @@ export function V3Chat() {
     setInput("");
     setBusy(true);
     setMessages((m) => [...m, { kind: "user", text: prompt }]);
+    thread.toBottom(); // the reader's own turn is always in view
     let failed = false;
     let completed = false;
     let active = sessionId;
@@ -283,7 +284,7 @@ export function V3Chat() {
           )}
         </header>
 
-        <div className="v3-chat-thread" ref={threadRef}>
+        <div className="v3-chat-thread" ref={thread.ref}>
           {restoring ? (
             <Skeleton rows={5} />
           ) : messages.length === 0 ? (
@@ -333,6 +334,7 @@ export function V3Chat() {
               </Notice>
             </div>
           )}
+          <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
         </div>
 
         <form
