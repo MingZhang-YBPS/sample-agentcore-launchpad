@@ -656,6 +656,10 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
         text = delta.get("text")
         if text:
             yield {"event": "delta", "data": {"text": str(text)}}
+        usage = _converse_usage(inner.get("metadata"))
+        if usage is not None:
+            # one model call's tokens; `_normalized_runtime_events` sums them
+            yield {"event": "usage", "data": usage}
     if "result" in payload:
         yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
     elif not converse_event:
@@ -728,6 +732,48 @@ def _is_converse_stream_event(payload: dict[str, Any]) -> bool:
     return isinstance(detail.get(field), field_type)
 
 
+# Converse `metadata.usage` counters → the normalized `usage` event's fields.
+# Strands forwards Bedrock's camelCase as-is; snake_case is accepted for code
+# that re-serializes it.
+_USAGE_FIELDS = (
+    ("input_tokens", ("inputTokens", "input_tokens")),
+    ("output_tokens", ("outputTokens", "output_tokens")),
+    ("total_tokens", ("totalTokens", "total_tokens")),
+    ("cache_read_input_tokens", ("cacheReadInputTokens", "cache_read_input_tokens")),
+    ("cache_write_input_tokens", ("cacheWriteInputTokens", "cache_write_input_tokens")),
+)
+
+
+def _converse_usage(metadata: Any) -> dict[str, int] | None:
+    """The token counts of one Converse ``metadata`` event, or None when it
+    carries none. Only non-negative integers count; a missing total is
+    input + output."""
+    usage = metadata.get("usage") if isinstance(metadata, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    counts: dict[str, int] = {}
+    for field, keys in _USAGE_FIELDS:
+        for key in keys:
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                counts[field] = value
+                break
+    if not counts:
+        return None
+    if "total_tokens" not in counts:
+        counts["total_tokens"] = counts.get("input_tokens", 0) + counts.get("output_tokens", 0)
+    return counts
+
+
+def _add_usage(total: dict[str, int] | None, usage: dict[str, int]) -> dict[str, int]:
+    """Sum per-model-call usage into the turn's totals (``model_calls`` counts them)."""
+    calls = (total or {}).get("model_calls", 0) + 1
+    summed = {k: v for k, v in (total or {}).items() if k != "model_calls"}
+    for field, value in usage.items():
+        summed[field] = summed.get(field, 0) + value
+    return {**summed, "model_calls": calls}
+
+
 # Conventional text keys, in preference order: the devguide example, then the
 # names BYOC code in the wild actually uses (measured 2026-09-18: a CrewAI
 # agent answering {"answer", "session_id", "turns", "latency_ms"} rendered as
@@ -782,7 +828,13 @@ def _normalized_runtime_events(
 
     ``require_text`` (the invoke stream that Chat, ``/v1`` and evaluation share): a
     stream that ends with no text, tool call or consent ask to show raises a named
-    error carrying the start of what the runtime sent, instead of a blank turn."""
+    error carrying the start of what the runtime sent, instead of a blank turn.
+
+    Token usage the runtime reports (Converse ``metadata.usage``, one per model
+    call — a tool turn has several) is summed and yielded once, as a ``usage``
+    event, when the stream ends: ``{input_tokens, output_tokens, total_tokens,
+    model_calls[, cache_*_input_tokens]}``. No usage reported → no event."""
+    usage: dict[str, int] | None = None
     saw_delta = False
     saw_other = False
     acknowledged = False
@@ -797,6 +849,9 @@ def _normalized_runtime_events(
         for event in _runtime_payload_events(payload):
             if event["event"] == "attachments":
                 acknowledged = event["data"].get("contract") == "v1"
+                continue
+            if event["event"] == "usage":
+                usage = _add_usage(usage, event["data"])
                 continue
             if require_attachments and not acknowledged and event["event"] != "heartbeat":
                 raise _attachment_ack_error()
@@ -813,6 +868,9 @@ def _normalized_runtime_events(
                 yield event
     if require_attachments and not acknowledged:
         raise _attachment_ack_error()
+    if usage is not None:
+        # before the unreadable-reply error below: those tokens were still spent
+        yield {"event": "usage", "data": usage}
     if require_text and not saw_delta and not saw_other:
         if payload_count == 0:
             raise AppError(
@@ -979,7 +1037,8 @@ def invoke_runtime_text(
 
     as_user consent asks (``auth_required`` events) are collected onto
     ``result["auth_required"]`` — a non-streaming caller still needs the
-    authorization URL to relay to the user.
+    authorization URL to relay to the user. Reported token usage (the stream's
+    ``usage`` event) lands on ``result["usage"]``.
     """
     session_id = session_id or new_session_id()
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
@@ -987,6 +1046,7 @@ def invoke_runtime_text(
         extra["force_reauth_providers"] = force_reauth_providers
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
+    usage: dict[str, int] | None = None
     for event in stream_runtime_events(
         client,
         runtime_arn,
@@ -1002,9 +1062,13 @@ def invoke_runtime_text(
             parts.append(event["data"]["text"])
         elif event["event"] == "auth_required":
             auth_required.append(event["data"])
+        elif event["event"] == "usage":
+            usage = event["data"]
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
+    if usage is not None:
+        result["usage"] = usage
     return result
 
 
@@ -1120,6 +1184,7 @@ def invoke_runtime_text_bearer(
     session_id = session_id or new_session_id()
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
+    usage: dict[str, int] | None = None
     for event in stream_runtime_events_bearer(
         region,
         runtime_arn,
@@ -1135,9 +1200,13 @@ def invoke_runtime_text_bearer(
             parts.append(event["data"]["text"])
         elif event["event"] == "auth_required":
             auth_required.append(event["data"])
+        elif event["event"] == "usage":
+            usage = event["data"]
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
+    if usage is not None:
+        result["usage"] = usage
     return result
 
 
