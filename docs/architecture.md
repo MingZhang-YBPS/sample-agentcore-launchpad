@@ -316,33 +316,74 @@ stop/resume with the same `runtimeSessionId`, holds up to 1 GB, expires after
 
 | Method | Session storage | BYO S3 Files / EFS (+ VPC) | Where it is sent |
 |---|---|---|---|
-| `harness` | yes | refused (422) | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
-| `zip_runtime` / `studio` | yes | refused (422) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
-| `container` | yes | yes | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `harness` | yes | yes (probe P3/P4 pending) | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
+| `zip_runtime` / `studio` | yes | yes (probe P1/P2 pending) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `container` | yes | yes (probed live 2026-07-13) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `byoc` (code zip, image; agents and MCP servers) | yes | yes (probe P5 pending) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+
+`schemas/agent.BYO_MOUNT_METHODS` lists the methods that accept BYO mounts (design
+storage-mounts §3). The request shapes are in the `bedrock-agentcore-control`
+service model for all of them; the live behaviour probes are
+`backend/scripts/probe_storage_mounts.py` (P1 zip create, P2 zip path change, P3
+harness create, P4 harness PUBLIC → VPC re-publish, P5 BYOC image, P8 read-only).
+A method a probe refutes leaves the set and is refused with the probe's
+conclusion (`BYO_MOUNT_UNSUPPORTED`). BYOC sent no `filesystemConfigurations`
+at all before; it now sends the spec's list (session storage included) on create
+and on every update, so an existing BYOC agent gains `/mnt/workspace` on its next
+re-publish.
+
+**Mounts need the agent's network.** An S3 Files / EFS mount target is reached
+from the runtime's ENIs, so a spec with a BYO mount must name a network
+(`spec.network`, a network profile — see *Agent network* below); a PUBLIC one is
+refused (422), and `runtime.py` refuses the combination again before any
+Create/Update call. The mount rides the same `spec_vpc` placement every method
+already uses; there is no container-only VPC path any more.
+
+**Who may set them.** Until the storage catalog exists (storage-mounts §4),
+mounts are inline access point ARNs, and — as inline subnets / security groups —
+only administrators may add or change one (`services/mount_policy.py`,
+`storage.inline_not_allowed`, 400). A member may re-publish an agent whose mounts
+stay as an administrator set them, or remove them. The execution role gets the
+`launchpad-fs-<agent>` inline policy for every method (always with
+`ClientWrite`; a read-only mode arrives with the catalog).
+
+**What the agent is told** (`app/deployer/mounts.py`). Code runtimes (zip,
+studio, container, BYOC) get `LAUNCHPAD_MOUNTS` — JSON
+`[{name, path, kind, mode}]` — in their environment; the Strands HTTP template,
+the Claude SDK container template and the harness also get a "Shared
+directories" paragraph at the end of the system prompt (rendered into the code
+for the templates; appended to `systemPrompt` for the harness, and stripped
+again when a prompt is read back from the live harness). Studio and converted
+code, and A2A agents (whose card description is cut from the prompt), read the
+variable only. Managed session storage is not listed.
 
 The two update APIs behave differently on a re-publish (probed live 2026-10-04):
 
 - **UpdateAgentRuntime clears an omitted `filesystemConfigurations`**, the same
-  way it resets `protocolConfiguration`. The zip, container and canary-candidate
-  paths therefore send the list on every update; leaving it out is how
-  "session storage off" detaches the mount.
+  way it resets `protocolConfiguration`. The zip, container, BYOC and
+  canary-candidate paths therefore send the list on every update; leaving it out
+  is how "session storage off" detaches the mount.
 - **UpdateHarness keeps an omitted `environment`** and replaces the list as a
   whole when one is sent (`[]` detaches everything). The harness re-publish
-  reads `GetHarness` first (`harness.environment_for_update`). It swaps only the
-  `sessionStorage` entry and keeps any network/lifecycle settings and EFS /
-  S3 Files mounts made outside the platform. A canary rollback omits
-  `environment`, so it keeps the current mounts.
+  reads `GetHarness` first (`harness.environment_for_update`) and merges by
+  `mountPath`: the spec's entries (session storage and BYO mounts) are the
+  platform's and are sent as they are; a live entry at a path an earlier publish
+  of the agent set (its spec snapshots) is the platform's too, so a mount removed
+  from the spec is detached; any other live entry — an EFS / S3 Files mount made
+  outside the platform — is kept, with the network/lifecycle settings. A live
+  entry the platform never set at a path the spec now uses is replaced by the
+  spec's, with a line in the deploy log. A canary rollback omits `environment`,
+  so it keeps the current mounts.
 
 Every stored spec already carries the default, because it is written with
 `model_dump()`. So an existing harness or Strands agent gains `/mnt/workspace`
 on its next re-publish unless the member turns it off. Session storage needs no
 IAM grant. In a VPC network profile (see *Agent network* below) the runtime reaches
 the `acr-storage-*` S3 buckets through the profile's S3 gateway endpoint, which the
-profile preflight requires of every agent. The generated agents are
-not told about the mount (the container template is not either). A Harness
-reaches it through its native `shell` / `file_operations` tools. Only the V2
-wizard (`FilesystemCard`) edits the setting for harness / Strands agents; the
-classic console round-trips the stored value unchanged.
+profile preflight requires of every agent. A Harness reaches its mounts through its
+native `shell` / `file_operations` tools. The V2 wizard (`FilesystemCard`) edits
+the setting; the BYO rows are editable by administrators only, and the classic
+console round-trips the stored value unchanged.
 
 ### Agent network (`AgentSpec.network`)
 

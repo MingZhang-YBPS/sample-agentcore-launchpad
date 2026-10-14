@@ -12809,5 +12809,19 @@
       "adoptFailed": "Could not bring the target under review",
       "elsewhere": "under review in another project"
     }
+  },
+  "storage": {
+    "mount": {
+      "note": "Managed session storage persists files under its mount path across stop/resume of the same session (14-day idle expiry); every re-publish resets it. S3 Files / EFS mounts are shared across sessions and need the agent in a VPC network profile.",
+      "noteByo": "S3 Files / EFS mounts run in the agent's VPC network profile (TCP 2049 egress to the mount targets required). The execution role is granted mount permissions automatically, and the agent is told the mounted paths. Re-publish resets managed session storage only.",
+      "adminOnly": "S3 Files / EFS mounts are set by an administrator. You can re-publish with them or remove them; ask an administrator to add or change one.",
+      "askAdmin": "Need a shared S3 Files / EFS directory? An administrator can add the mount.",
+      "needsProfile": "S3 Files / EFS mounts need the agent in a VPC — choose a network profile in the network step.",
+      "mcp": {
+        "network": "Network",
+        "public": "Public (AgentCore managed network). Choose a VPC profile in the network step when the server's tools call private back ends (databases, internal APIs).",
+        "vpc": "VPC profile {{id}}: the server's outbound calls leave from the profile's subnets. The Gateway still reaches it through the AgentCore data plane, not through your VPC. The profile needs the endpoints for pulling the image and for the server's own back ends; bedrock-runtime is usually not needed."
+      }
+    }
   }
 }

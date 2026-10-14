@@ -239,26 +239,53 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 
 | 方式 | 会话存储 | 自带 S3 Files / EFS（+ VPC） | 发送位置 |
 |---|---|---|---|
-| `harness` | 支持 | 拒绝（422） | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
-| `zip_runtime` / `studio` | 支持 | 拒绝（422） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
-| `container` | 支持 | 支持 | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `harness` | 支持 | 支持（P3 / P4 探测待做） | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
+| `zip_runtime` / `studio` | 支持 | 支持（P1 / P2 探测待做） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `container` | 支持 | 支持（2026-07-13 实测） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `byoc`（代码 zip、镜像；Agent 与 MCP 服务器） | 支持 | 支持（P5 探测待做） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+
+`schemas/agent.BYO_MOUNT_METHODS` 列出接受自带挂载的方式（设计 storage-mounts §3）。
+所有方式的请求形状都在 `bedrock-agentcore-control` service model 中；线上行为探测脚本是
+`backend/scripts/probe_storage_mounts.py`（P1 zip 创建、P2 zip 换路径、P3 Harness 创建、
+P4 Harness 由 PUBLIC 重新发布到 VPC、P5 BYOC 镜像、P8 只读）。探测否定的方式会移出该集合，
+并以探测结论拒绝（`BYO_MOUNT_UNSUPPORTED`）。BYOC 过去完全不发 `filesystemConfigurations`；
+现在创建与每次更新都发送 spec 的列表（含会话存储），所以现有 BYOC Agent 下次重新发布时会挂上
+`/mnt/workspace`。
+
+**挂载依赖 Agent 的网络。** S3 Files / EFS 的挂载目标从运行时的 ENI 访问，所以带自带挂载的 spec
+必须引用网络（`spec.network`，即网络配置档，见下文「Agent 网络」）；PUBLIC 会被拒绝（422），
+`runtime.py` 在任何 Create / Update 调用之前再拒绝一次。挂载沿用各方式已有的 `spec_vpc` 网络放置，
+不再有只属于 container 的 VPC 路径。
+
+**谁可以设置。** 存储目录（storage-mounts §4）上线之前，挂载是内联的 Access Point ARN；与内联子网 /
+安全组一样，只有管理员可以新增或修改（`services/mount_policy.py`，`storage.inline_not_allowed`，400）。
+成员可以在管理员设置的挂载保持不变时重新发布，也可以删除挂载。每种方式的执行角色都会得到
+`launchpad-fs-<agent>` 内联策略（总是包含 `ClientWrite`；只读模式随存储目录一起提供）。
+
+**Agent 如何得知挂载**（`app/deployer/mounts.py`）。代码运行时（zip、studio、container、BYOC）的环境变量
+里有 `LAUNCHPAD_MOUNTS`（JSON：`[{name, path, kind, mode}]`）；Strands HTTP 模板、Claude SDK 容器模板与
+Harness 还会在系统提示词末尾附一段「Shared directories」说明（模板渲染进代码；Harness 拼进 `systemPrompt`，
+从线上 Harness 读回提示词时再去掉）。Studio 与转换后的代码、A2A Agent（其卡片描述截自提示词开头）只读取
+环境变量。托管会话存储不在列表中。
 
 两个更新 API 在重新发布时的语义不同（2026-10-04 实测）：
 
 - **UpdateAgentRuntime 省略 `filesystemConfigurations` 会清空挂载**，和它重置
-  `protocolConfiguration` 的方式一样。因此 zip、container 和金丝雀候选版本每次更新都发送该列表；
+  `protocolConfiguration` 的方式一样。因此 zip、container、BYOC 和金丝雀候选版本每次更新都发送该列表；
   “关闭会话存储”正是靠省略它来卸载。
 - **UpdateHarness 省略 `environment` 则保留原配置**，发送时整体替换列表（`[]` 卸载全部）。
-  Harness 重新发布前先读 `GetHarness`（`harness.environment_for_update`），只替换
-  `sessionStorage` 条目，平台之外配置的网络/生命周期设置以及 EFS / S3 Files 挂载都会保留。
-  金丝雀回滚不带 `environment`，因此保留当前挂载。
+  Harness 重新发布前先读 `GetHarness`（`harness.environment_for_update`），按 `mountPath` 合并：
+  spec 的条目（会话存储与自带挂载）归平台，原样发送；线上条目所在路径若曾由该 Agent 的某次发布设置
+  （其 spec 快照），也归平台，因此从 spec 删除的挂载会被卸载；其余线上条目（平台之外配置的 EFS /
+  S3 Files 挂载）与网络/生命周期设置一起保留。spec 现在使用的路径上若有平台从未设置的线上条目，
+  以 spec 为准替换，并在部署日志记一行。金丝雀回滚不带 `environment`，因此保留当前挂载。
 
 所有已存储的 spec 都是 `model_dump()` 写入的，本身就带着默认值。所以现有的 Harness 或 Strands
 Agent 下次重新发布时会挂上 `/mnt/workspace`，除非用户把它关掉。会话存储不需要 IAM 授权。
 在 VPC 网络配置档中（见下文「Agent 网络」），运行时经配置档的 S3 网关端点访问
-`acr-storage-*` S3 桶，配置档预检对每个 Agent 都要求该端点。生成的 Agent 不会被告知挂载路径（container 模板同样没有）；Harness 通过
-原生 `shell` / `file_operations` 工具访问它。Harness / Strands Agent 的这一设置只有 V2 向导
-（`FilesystemCard`）可以编辑，经典控制台会原样回传已存储的值。
+`acr-storage-*` S3 桶，配置档预检对每个 Agent 都要求该端点。Harness 通过原生 `shell` /
+`file_operations` 工具访问挂载。V2 向导（`FilesystemCard`）编辑这一设置，其中自带挂载行只有管理员可以编辑；
+经典控制台会原样回传已存储的值。
 
 ### Agent 网络（`AgentSpec.network`）
 

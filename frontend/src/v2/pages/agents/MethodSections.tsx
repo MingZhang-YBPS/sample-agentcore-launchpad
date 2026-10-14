@@ -36,7 +36,9 @@ import {
   withBase,
 } from "../../../lib/mcp-stdio";
 import { useModelCatalog } from "../../../lib/model-catalog";
+import { byoRowsMode, mountNeedsProfile } from "../../../lib/storage-mounts";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
+import { useAuth } from "../../../auth/auth-context";
 import { HintLabel } from "../../Glossary";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
 import { NetworkSection } from "./NetworkSection";
@@ -394,12 +396,29 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
   );
 }
 
-export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" | "err"> & { touched: boolean }) {
+/**
+ * The storage card: managed session storage, and the BYO S3 Files / EFS mounts of the
+ * methods that take them (storage-mounts §3). The BYO rows are inline access point
+ * ARNs that only an administrator edits (D-2); a member sees an administrator's rows
+ * read-only. A mount runs in the agent's network profile (the network step); only a
+ * container agent may still carry the legacy inline subnets / security groups.
+ * `network={false}` leaves the network step out, for a method whose own card has it
+ * (BYOC's artifact card).
+ */
+export function FilesystemCard({
+  form,
+  set,
+  touched,
+  network = true,
+}: Omit<SectionProps, "cat" | "err"> & { touched: boolean; network?: boolean }) {
   const { t } = useTranslation();
+  const { isAdmin } = useAuth();
   const issues = filesystemIssues(form);
-  // harness / Strands mount managed session storage only — BYO needs the container's VPC wiring
   const byoAllowed = byoMountsAllowed(form.method);
   const byo = byoAllowed && hasByoMounts(form);
+  const rowsMode = byoAllowed ? byoRowsMode(form.method, isAdmin, byo) : "hidden";
+  const editable = rowsMode === "edit";
+  const needsProfile = mountNeedsProfile({ method: form.method, networkProfileId: form.networkProfileId, hasByo: byo });
   const show = (on: boolean, key: string) => (touched && on ? t(key) : undefined);
   const kinds = [
     { kind: "s3" as const, field: "s3Mounts" as const, label: "S3 Files", ph: "create.configure.fsS3ArnPlaceholder" },
@@ -411,7 +430,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
     <>
     <Card
       title={t("v2.agents.wizard.fsTitle")}
-      sub={t(byo ? "create.configure.fsNoteByo" : byoAllowed ? "create.configure.fsNote" : "v2.agents.wizard.fsNoteSession")}
+      sub={t(byo ? "storage.mount.noteByo" : byoAllowed ? "storage.mount.note" : "v2.agents.wizard.fsNoteSession")}
       testId="v2-agent-fs"
     >
       <div className="v2-form">
@@ -434,7 +453,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
             </Field>
           )}
         </div>
-        {byoAllowed && kinds.map(({ kind, field, label, ph }) => (
+        {rowsMode !== "hidden" && kinds.map(({ kind, field, label, ph }) => (
           <Field key={kind} label={t("v2.agents.wizard.fsMounts", { kind: label })} hint={t("v2.agents.wizard.fsMountsHint", { max: MAX_MOUNTS_PER_KIND })}>
             {form[field].length > 0 && (
               <div className="v2-agents-rows">
@@ -448,6 +467,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
                           value={row.arn}
                           placeholder={t(ph)}
                           aria-label={t("v2.agents.wizard.fsArn")}
+                          readOnly={!editable}
                           onChange={(e) => patchRow(field, i, { arn: e.target.value })}
                           data-testid={`v2-agent-fs-${kind}-arn-${i}`}
                         />
@@ -456,9 +476,11 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
                           value={row.path}
                           placeholder="/mnt/data"
                           aria-label={t("v2.agents.wizard.fsPath")}
+                          readOnly={!editable}
                           onChange={(e) => patchRow(field, i, { path: e.target.value })}
                           data-testid={`v2-agent-fs-${kind}-path-${i}`}
                         />
+                        {/* removing is allowed to a member too: it adds no access */}
                         <RemoveButton onClick={() => set((prev) => ({ [field]: prev[field].filter((_, j) => j !== i) }))} />
                       </div>
                       {touched && bad && (
@@ -471,31 +493,50 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
                 })}
               </div>
             )}
-            <div>
-              <Button
-                size="sm"
-                disabled={form[field].length >= MAX_MOUNTS_PER_KIND}
-                onClick={() => set((prev) => ({ [field]: [...prev[field], { arn: "", path: "" }] }))}
-                testId={`v2-agent-fs-add-${kind}`}
-              >
-                <Plus size={13} aria-hidden="true" />
-                {t("v2.agents.wizard.fsAdd", { kind: label })}
-              </Button>
-            </div>
+            {editable && (
+              <div>
+                <Button
+                  size="sm"
+                  disabled={form[field].length >= MAX_MOUNTS_PER_KIND}
+                  onClick={() => set((prev) => ({ [field]: [...prev[field], { arn: "", path: "" }] }))}
+                  testId={`v2-agent-fs-add-${kind}`}
+                >
+                  <Plus size={13} aria-hidden="true" />
+                  {t("v2.agents.wizard.fsAdd", { kind: label })}
+                </Button>
+              </div>
+            )}
           </Field>
         ))}
+        {rowsMode === "readonly" && (
+          <div className="v2-muted" data-testid="v2-agent-fs-admin-only">
+            {t("storage.mount.adminOnly")}
+          </div>
+        )}
+        {byoAllowed && !isAdmin && !byo && (
+          <div className="v2-muted" data-testid="v2-agent-fs-ask-admin">
+            {t("storage.mount.askAdmin")}
+          </div>
+        )}
         {touched && issues.duplicatePaths && <span className="v2-agents-err">{t("v2.agents.wizard.errDupPath")}</span>}
+        {needsProfile && (
+          <div data-testid="v2-agent-fs-needs-profile">
+            <Alert tone={touched ? "error" : "warn"}>{t("storage.mount.needsProfile")}</Alert>
+          </div>
+        )}
         {form.networkProfileId ? (
           // a stored profile reference: the profile's ids live on the profile, not here
           <div className="v2-muted" data-testid="v2-agent-network-profile">
             {t("v2.agents.wizard.networkProfile", { id: form.networkProfileId })}
           </div>
-        ) : byo && (
+        ) : byo && form.method === "container" && (
+          // the legacy inline network a container agent's mounts predate profiles with
           <div className="v2-form cols-2">
             <Field label={t("create.configure.fsSubnets")} required error={show(issues.vpc && !form.vpcSubnets.trim(), "v2.agents.wizard.errVpc")}>
               <input
                 className="v2-input mono"
                 value={form.vpcSubnets}
+                readOnly={!editable}
                 onChange={(e) => set({ vpcSubnets: e.target.value })}
                 placeholder="subnet-0abc, subnet-0def"
                 data-testid="v2-agent-fs-subnets"
@@ -505,6 +546,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
               <input
                 className="v2-input mono"
                 value={form.vpcSgs}
+                readOnly={!editable}
                 onChange={(e) => set({ vpcSgs: e.target.value })}
                 placeholder="sg-0abc"
                 data-testid="v2-agent-fs-sgs"
@@ -515,7 +557,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
       </div>
     </Card>
     {/* the network step (projects §12.6) — harness, Strands / A2A and container */}
-    <NetworkSection form={form} set={set} />
+    {network && <NetworkSection form={form} set={set} />}
     </>
   );
 }
@@ -634,6 +676,15 @@ export function McpServerCard({ form, set, err }: Omit<SectionProps, "cat">) {
           </>
         )}
         <Alert>{t("v2.agents.wizard.mcp.wiring")}</Alert>
+        {/* §15.10: the server may sit in a VPC profile (the network step below, shared
+            with every BYOC artifact); it changes the server's outbound path only */}
+        <Field label={t("storage.mount.mcp.network")}>
+          <div className="v2-muted" data-testid="v2-agent-mcp-network">
+            {form.networkProfileId
+              ? t("storage.mount.mcp.vpc", { id: form.networkProfileId })
+              : t("storage.mount.mcp.public")}
+          </div>
+        </Field>
       </div>
     </Card>
   );

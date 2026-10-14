@@ -12809,5 +12809,19 @@
       "adoptFailed": "未能将目标纳入审阅",
       "elsewhere": "已在其他项目中审阅"
     }
+  },
+  "storage": {
+    "mount": {
+      "note": "托管会话存储让同一会话在停止和恢复之间保留挂载路径下的文件（闲置 14 天过期），每次重新发布都会重置。S3 Files / EFS 挂载跨会话共享，需要 Agent 位于 VPC 网络配置档中。",
+      "noteByo": "S3 Files / EFS 挂载运行在 Agent 的 VPC 网络配置档中（需放行到挂载目标的 TCP 2049 出站）。执行角色会自动获得挂载权限，Agent 也会被告知挂载路径。重新发布仅重置托管会话存储。",
+      "adminOnly": "S3 Files / EFS 挂载由管理员设置。你可以保留它们重新发布，也可以删除；新增或修改请联系管理员。",
+      "askAdmin": "需要共享的 S3 Files / EFS 目录？可以请管理员添加挂载。",
+      "needsProfile": "S3 Files / EFS 挂载需要 Agent 位于 VPC 中——请在网络步骤中选择一个网络配置档。",
+      "mcp": {
+        "network": "网络",
+        "public": "公网（AgentCore 托管网络）。服务器的工具需要访问私有后端（数据库、内部 API）时，请在网络步骤中选择 VPC 配置档。",
+        "vpc": "VPC 配置档 {{id}}：服务器的出站调用从该配置档的子网发出。网关仍经 AgentCore 数据面访问它，不经过你的 VPC。配置档需要拉取镜像与服务器自身后端所需的端点；通常不需要 bedrock-runtime。"
+      }
+    }
   }
 }
