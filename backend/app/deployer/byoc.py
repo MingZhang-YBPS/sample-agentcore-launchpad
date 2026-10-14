@@ -162,10 +162,16 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
         "uploaded_by": manifest.get("uploaded_by", ""),
         "uploaded_at": manifest.get("uploaded_at", ""),
     }
+    detected = manifest.get("detected") or {}
+    if cfg.artifact_kind == "code_zip":
+        # server-owned like the rest of provenance; re-judged from the current
+        # upload on every publish, and persisted so a resumed deploy reads it
+        provenance["adot_launcher"] = byoc_uploads.adot_launcher(
+            detected, cfg.install_requirements
+        )
     _stamp_provenance(ctx, agent, provenance)
     if spec.protocol == "mcp":
         _stamp_mcp_inbound(ctx, agent)
-    detected = manifest.get("detected") or {}
     if (
         spec.protocol != "mcp"
         and cfg.artifact_kind == "code_zip"
@@ -174,6 +180,11 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
         ctx.log(
             "note: no BedrockAgentCoreApp/@app.entrypoint marker found — the "
             "entrypoint must serve POST /invocations + GET /ping on :8080 itself"
+        )
+    if detected.get("adot_detected") and not provenance.get("adot_launcher"):
+        ctx.log(
+            "note: aws-opentelemetry-distro is only listed in requirements.txt and "
+            "install_requirements=false — no ADOT launcher, no spans"
         )
     ctx.log(
         f"{cfg.artifact_kind} · {provenance['original_filename']} · "
@@ -388,6 +399,13 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
     return StageResult(detail=detail)
 
 
+def _adot_launcher(row: Agent) -> bool:
+    """The generate stage's ADOT decision, read from the persisted spec (the
+    raw dict: the field is server-owned and absent from the schema)."""
+    provenance = ((row.spec or {}).get("byoc") or {}).get("provenance") or {}
+    return bool(provenance.get("adot_launcher"))
+
+
 def _container_uri(ctx: StageContext, agent: Agent, cfg: ByocConfig) -> str:
     if cfg.artifact_kind == "container_image":
         return cfg.image_uri or ""
@@ -428,6 +446,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         protocol = spec.protocol
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
+        instrument = cfg.artifact_kind == "code_zip" and _adot_launcher(row)
+        if cfg.artifact_kind == "code_zip":
+            ctx.log(f"telemetry: ADOT launcher {'on' if instrument else 'off'}")
 
         def _kwargs() -> dict:
             if cfg.artifact_kind == "code_zip":
@@ -440,9 +461,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     "environment": environment,
                     "python_version": cfg.python_version,
                     "entrypoint": cfg.entrypoint,
-                    # user zips don't necessarily vendor the ADOT distro; an
-                    # absent opentelemetry-instrument launcher fails at start
-                    "instrument": False,
+                    # only when the upload carries the ADOT distro: an absent
+                    # opentelemetry-instrument launcher fails at start
+                    "instrument": instrument,
                     # echoed on every update; omitted (None) = IAM/SigV4
                     "authorizer_configuration": authorizer,
                     "protocol": protocol,
@@ -496,9 +517,18 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 f"inbound auth {resolved_auth.mode}"
             )
 
-        ready = rt.wait_runtime_ready(
-            client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
-        )
+        try:
+            ready = rt.wait_runtime_ready(
+                client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
+            )
+        except Exception:
+            if instrument:
+                ctx.log(
+                    "hint: the runtime started under opentelemetry-instrument — if "
+                    "the ADOT distro did not install, remove aws-opentelemetry-distro "
+                    "from requirements.txt or build from a Dockerfile instead"
+                )
+            raise
         row.arn = ready["agentRuntimeArn"]
         # The inbound-auth snapshot lands only once the runtime is READY on the
         # version that carries it: a Create/Update that is accepted and then

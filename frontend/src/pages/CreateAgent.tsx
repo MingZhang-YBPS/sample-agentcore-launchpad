@@ -46,6 +46,7 @@ import type {
 } from "../lib/api";
 import { api, ApiError, HARNESS_NATIVE_TOOLS } from "../lib/api";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
+import { adotLauncher } from "../lib/byocTelemetry";
 import {
   A2A_MODEL_SOURCE,
   A2A_SKILL_SEEDS,
@@ -2168,6 +2169,26 @@ const deployLock = !canDeploy
                           <span>{t("create.configure.byocNoSdkWarn")}</span>
                         </div>
                       )}
+                    {byocUpload && byocKind === "code_zip" &&
+                      (adotLauncher(byocUpload.detected, byocInstallReqs) ? (
+                        <div
+                          className="note"
+                          style={{ borderColor: "var(--good)" }}
+                          data-testid="byoc-adot-on"
+                        >
+                          <span className="i" style={{ color: "var(--good)" }}>✓</span>
+                          <span>{t("byocTelemetry.adotOn")}</span>
+                        </div>
+                      ) : (
+                        <div
+                          className="note"
+                          style={{ borderColor: "var(--amber)" }}
+                          data-testid="byoc-no-adot"
+                        >
+                          <span className="i" style={{ color: "var(--amber)" }}>[!]</span>
+                          <span>{t("byocTelemetry.noAdotWarn")}</span>
+                        </div>
+                      ))}
                     {byocUpload && byocKind === "container_source" &&
                       !byocUpload.detected.has_dockerfile && (
                         <div className="note" style={{ borderColor: "var(--amber)" }}>

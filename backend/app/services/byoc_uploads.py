@@ -56,6 +56,11 @@ _REQUIREMENTS_MAX_BYTES = 256 * 1024
 _SDK_SCAN_MAX_BYTES = 1024 * 1024
 _SDK_SCAN_MAX_FILES = 400
 _SDK_MARKERS = (b"BedrockAgentCoreApp", b"@app.entrypoint")
+# The ADOT distro carries the `opentelemetry-instrument` launcher a code zip
+# needs to emit spans; without it the agent never shows up in Observability.
+ADOT_DISTRIBUTION = "aws-opentelemetry-distro"
+_ADOT_MODULE = "aws_opentelemetry_distro"
+_REQ_NAME_RE = re.compile(r"^\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
 
 
 def _error(code: str, message: str, status: int = 422) -> AppError:
@@ -174,12 +179,63 @@ def validate_and_detect(path: Path) -> dict[str, Any]:
             "has_dockerfile": "Dockerfile" in rel,
             "agentcore_sdk_detected": _scan_for_sdk(zf, root, rel),
         }
+        detected.update(_detect_adot(zf, root, rel))
         return {
             "entries_count": len(infos),
             "uncompressed_bytes": total,
             "root_prefix": root,
             "detected": detected,
         }
+
+
+def _normalize_dist(name: str) -> str:
+    """PEP 503 name normalization: AWS_OpenTelemetry.Distro → aws-opentelemetry-distro."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def requirements_mention_adot(text: str) -> bool:
+    """True when a requirement line names the ADOT distro — any version
+    specifier, extras or marker; comment lines and option lines don't count."""
+    for line in text.splitlines():
+        line = line.split(" #", 1)[0].strip()
+        if not line or line.startswith(("#", "-")):
+            continue
+        match = _REQ_NAME_RE.match(line)
+        if match and _normalize_dist(match.group(1)) == ADOT_DISTRIBUTION:
+            return True
+    return False
+
+
+def _detect_adot(zf: zipfile.ZipFile, root: str, rel_names: list[str]) -> dict[str, Any]:
+    """``{adot_detected, adot_source}`` — the distro is either vendored at the
+    zip root (its package or dist-info directory) or listed in the root
+    requirements.txt. Vendored wins: it ships the launcher even when the
+    deploy skips the requirements install."""
+    for rel in rel_names:
+        if "/" not in rel:
+            continue
+        top = rel.split("/", 1)[0]
+        # aws_opentelemetry_distro-0.19.0.dist-info → aws-opentelemetry-distro
+        dist = _normalize_dist(top.split("-", 1)[0]) if top.endswith(".dist-info") else None
+        if top == _ADOT_MODULE or dist == ADOT_DISTRIBUTION:
+            return {"adot_detected": True, "adot_source": "vendored"}
+    if "requirements.txt" in rel_names:
+        info = zf.getinfo(f"{root}requirements.txt")
+        if info.file_size <= _REQUIREMENTS_MAX_BYTES and requirements_mention_adot(
+            zf.read(info).decode("utf-8", errors="replace")
+        ):
+            return {"adot_detected": True, "adot_source": "requirements"}
+    return {"adot_detected": False, "adot_source": None}
+
+
+def adot_launcher(detected: dict[str, Any] | None, install_requirements: bool) -> bool:
+    """Whether a code_zip deploy wraps the entrypoint in `opentelemetry-instrument`:
+    the distro must end up in the bundle — vendored, or installed from the
+    requirements. Manifests staged before the check existed read as False."""
+    detected = detected or {}
+    if not detected.get("adot_detected"):
+        return False
+    return detected.get("adot_source") == "vendored" or install_requirements
 
 
 def _requirements_text(path: Path, root: str) -> str | None:
