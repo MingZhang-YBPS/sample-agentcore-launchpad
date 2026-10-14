@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { api, errorMessage, type EvaluatorRow, type OnlineEvalConfigRow, type OnlineEvalMode } from "../../../lib/api";
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { api, type EvaluatorRow, type OnlineEvalConfigRow, type OnlineEvalMode } from "../../../lib/api";
 import { EvaluatorPicker } from "../../../v2/EvaluatorPicker";
 import {
   createBody,
@@ -96,7 +97,8 @@ export function OnlineEditor({ id }: { id: string | null }) {
   const [draft, setDraft] = useState<OnlineDraft>(newDraft);
   const [agentId, setAgentId] = useState("");
   const [enable, setEnable] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // a validation string, or the ApiError itself so the notice can show AWS details
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<OnlineDraft>) => setDraft((prev) => ({ ...prev, ...patch }));
 
@@ -131,7 +133,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
         navigate(onlineHref({ view: "detail", id: created.config_id }));
       }
     } catch (err) {
-      setError(errorMessage(err));
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -169,7 +171,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
         }
       />
       {!can("eval.run") && <Notice s="wait">{t("v2.tasks.noPermission")}</Notice>}
-      {error && <Notice s="act">{error}</Notice>}
+      {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
 
       <Panel title={t("v3.online.what")}>
         <div className="v3-grid c2" style={{ alignItems: "start" }}>

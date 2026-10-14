@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { api, ApiError, errorMessage, v2KnowledgeApi } from "../../lib/api";
 import {
   type DataSource,
@@ -210,7 +211,7 @@ function Documents({ kbId, ds }: { kbId: string; ds: DataSource }) {
   const [docs, setDocs] = useState<KBDocument[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const load = useCallback(
     async (token: string | null) => {
       setLoading(true);
@@ -220,7 +221,7 @@ function Documents({ kbId, ds }: { kbId: string; ds: DataSource }) {
         setDocs((prev) => (token ? [...(prev ?? []), ...page.documents] : page.documents));
         setNext(page.next_token ?? null);
       } catch (err) {
-        setError(errorMessage(err));
+        setError(err);
       } finally {
         setLoading(false);
       }
@@ -233,8 +234,8 @@ function Documents({ kbId, ds }: { kbId: string; ds: DataSource }) {
 
   return (
     <Panel title={t("v3.kb.documentsOf", { name: ds.name })} flush end={docs ? <span className="mono">{docs.length}{next ? "+" : ""}</span> : undefined}>
-      {error ? (
-        <div style={{ padding: 20 }}><Notice s="act">{error}</Notice></div>
+      {error != null ? (
+        <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={error} /></Notice></div>
       ) : !docs ? (
         <div style={{ padding: 20 }}><Skeleton rows={3} /></div>
       ) : docs.length === 0 ? (
@@ -280,7 +281,7 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
   const [n, setN] = useState(5);
   const [hits, setHits] = useState<QueryResultItem[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const ready = String(kb.status).toUpperCase() === "ACTIVE";
   const run = async () => {
     if (!q.trim()) return;
@@ -289,7 +290,7 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
     try {
       setHits((await v2KnowledgeApi.query(kb.kb_id, q.trim(), n)).results);
     } catch (err) {
-      setError(errorMessage(err));
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -313,7 +314,7 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
         <Btn kind="primary" type="submit" disabled={!ready || busy || !q.trim()}><Search size={14} /> {t("v3.kb.search2")}</Btn>
       </form>
       {!ready && <div style={{ marginTop: 12 }}><Notice s="wait">{t("v3.kb.retrieveNotReady")}</Notice></div>}
-      {error && <div style={{ marginTop: 12 }}><Notice s="act">{error}</Notice></div>}
+      {error != null && <div style={{ marginTop: 12 }}><Notice s="act"><ApiErrorDetail error={error} /></Notice></div>}
       {hits && (
         <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
           {hits.length === 0 ? (
@@ -345,7 +346,8 @@ function AddSource({ kbId, onClose, onDone }: { kbId: string; onClose: () => voi
   const [bucket, setBucket] = useState("");
   const [prefix, setPrefix] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // a validation string, or the ApiError itself so the notice can show AWS details
+  const [error, setError] = useState<unknown>(null);
   const submit = async () => {
     if (mode === "upload" && files.length === 0) return setError(t("knowledge.detail.sources.uploadEmpty"));
     if (mode === "existing" && !bucket.trim()) return setError(t("knowledge.detail.sources.bucketEmpty"));
@@ -362,7 +364,7 @@ function AddSource({ kbId, onClose, onDone }: { kbId: string; onClose: () => voi
       }
       onDone();
     } catch (err) {
-      setError(errorMessage(err));
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -411,7 +413,7 @@ function AddSource({ kbId, onClose, onDone }: { kbId: string; onClose: () => voi
             <Notice>{t("v3.kb.existingHint")}</Notice>
           </>
         )}
-        {error && <Notice s="act">{error}</Notice>}
+        {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
       </div>
     </Dialog>
   );
@@ -422,14 +424,16 @@ function EditDescription({ kb, onClose, onSaved }: { kb: KnowledgeBaseDetail; on
   const toast = useToast();
   const [draft, setDraft] = useState(kb.description);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
   const save = async () => {
     setBusy(true);
+    setError(null);
     try {
       await v2KnowledgeApi.updateDescription(kb.kb_id, draft);
       toast("ok", t("v2.knowledge.descSaved"));
       onSaved();
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }));
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -450,6 +454,7 @@ function EditDescription({ kb, onClose, onSaved }: { kb: KnowledgeBaseDetail; on
       <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--v3-text-3)" }}>
         {t("knowledge.create.descriptionHint")} ({draft.length}/{KB_DESCRIPTION_MAX})
       </p>
+      {error != null && <div style={{ marginTop: 12 }}><Notice s="act"><ApiErrorDetail error={error} /></Notice></div>}
     </Dialog>
   );
 }
@@ -488,7 +493,7 @@ function KbDetail({ id }: { id: string }) {
   const statusLabel = useKbStatus();
   const [params, setParams] = useSearchParams();
   const [kb, setKb] = useState<KnowledgeBaseDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [gone, setGone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
@@ -509,7 +514,7 @@ function KbDetail({ id }: { id: string }) {
       setError(null);
       return fresh;
     } catch (err) {
-      setError(errorMessage(err));
+      setError(err);
       if (err instanceof ApiError && GONE_CODES.has(err.code)) setGone(true);
       return null;
     }
@@ -573,7 +578,7 @@ function KbDetail({ id }: { id: string }) {
       </Notice>
     );
   }
-  if (error && !kb) return <Notice s="act">{t("knowledge.detail.loadFailedTitle")}: {error}</Notice>;
+  if (error != null && !kb) return <Notice s="act">{t("knowledge.detail.loadFailedTitle")}: <ApiErrorDetail error={error} /></Notice>;
   if (!kb) return <Skeleton rows={6} />;
 
   const sources = kb.data_sources;
@@ -658,7 +663,7 @@ function KbDetail({ id }: { id: string }) {
       />
 
       {kb.failure_reasons && kb.failure_reasons.length > 0 && <Notice s="act">{kb.failure_reasons.join("; ")}</Notice>}
-      {error && <Notice s="wait">{error}</Notice>}
+      {error != null && <Notice s="wait"><ApiErrorDetail error={error} /></Notice>}
       {provisioning && <Notice s="wait">{t("knowledge.detail.sources.provisioning")}</Notice>}
       {missingSource && (
         <Notice s="wait">

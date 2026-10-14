@@ -1,7 +1,7 @@
 import "./governance.css";
 
 import { ArrowRight, Play, RefreshCw, Search, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -11,6 +11,7 @@ import {
   type GovernanceGatewaySummary,
   type GovernanceToolInfo,
 } from "../../lib/api";
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { governanceError, governanceStatusLevel } from "../../lib/governance";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
@@ -19,6 +20,30 @@ import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type 
 
 type Tab = "gateways" | "tools";
 type EngineFilter = "all" | "attached" | "enforce" | "logOnly" | "none";
+
+/**
+ * `useLoad` keeps only the failure's text; `track` also keeps the error itself so
+ * the notice can show its AWS details (projects §19). The rejection still carries
+ * the `code: message` text the page showed before.
+ */
+function useFailure() {
+  const [failure, setFailure] = useState<unknown>(null);
+  const track = useCallback(
+    <T,>(p: Promise<T>): Promise<T> =>
+      p.then(
+        (value) => {
+          setFailure(null);
+          return value;
+        },
+        (err: unknown) => {
+          setFailure(err);
+          return Promise.reject(new Error(governanceError(err)));
+        },
+      ),
+    [],
+  );
+  return [failure, track] as const;
+}
 
 const CODE_DEMO = "import math\nprint('sqrt(1764) =', math.isqrt(1764))";
 
@@ -134,7 +159,8 @@ function DecisionRow({ gateway }: { gateway: GovernanceGatewaySummary }) {
 function GatewaysTab({ data, loading, error }: {
   data: { gateways: GovernanceGatewaySummary[]; account_id?: string | null; region?: string } | null;
   loading: boolean;
-  error: string | null;
+  /** The failure (an ApiError or its text); null ⇒ the load did not fail. */
+  error: unknown;
 }) {
   const { t } = useTranslation();
   const [managed, setManaged] = useState<"all" | "managed" | "unmanaged">("all");
@@ -157,7 +183,7 @@ function GatewaysTab({ data, loading, error }: {
   const source = [data?.account_id, data?.region].filter(Boolean).join(" / ");
 
   if (loading && !data) return <Panel><Skeleton rows={6} /></Panel>;
-  if (error && !data) return <Notice s="act">{error}</Notice>;
+  if (error != null && !data) return <Notice s="act"><ApiErrorDetail error={error} /></Notice>;
 
   return (
     <>
@@ -327,7 +353,7 @@ function CodeInterpreterDemo() {
   const { t } = useTranslation();
   const [code, setCode] = useState(CODE_DEMO);
   const [busy, setBusy] = useState(false);
-  const [out, setOut] = useState<{ ok: boolean; text: string } | null>(null);
+  const [out, setOut] = useState<{ ok: true; text: string } | { ok: false; error: unknown } | null>(null);
   const run = async () => {
     setBusy(true);
     setOut(null);
@@ -335,7 +361,7 @@ function CodeInterpreterDemo() {
       const r = await api.runCodeInterpreterDemo(code);
       setOut({ ok: true, text: `${r.stdout}\n— session ${r.session_id} · ${r.latency_ms}ms` });
     } catch (error) {
-      setOut({ ok: false, text: governanceError(error) });
+      setOut({ ok: false, error });
     } finally {
       setBusy(false);
     }
@@ -348,17 +374,16 @@ function CodeInterpreterDemo() {
     }>
       <textarea className="v3-input mono" rows={7} value={code} maxLength={4000} disabled={busy} spellCheck={false}
         aria-label={t("v3.governance.tools.pythonCode")} onChange={(e) => setCode(e.target.value)} />
-      {out && <pre className="v3-pre" style={{ marginTop: 12, color: out.ok ? "var(--v3-ok)" : "var(--v3-act)" }}>{out.text}</pre>}
+      {out?.ok && <pre className="v3-pre" style={{ marginTop: 12, color: "var(--v3-ok)" }}>{out.text}</pre>}
+      {out && !out.ok && <div style={{ marginTop: 12 }}><Notice s="act"><ApiErrorDetail error={out.error} /></Notice></div>}
     </Panel>
   );
 }
 
 function ToolsTab() {
   const { t } = useTranslation();
-  const catalog = useLoad(
-    () => api.governanceToolCatalog().catch((err: unknown) => Promise.reject(new Error(governanceError(err)))),
-    "v3-gov-tools",
-  );
+  const [catalogFailure, trackCatalog] = useFailure();
+  const catalog = useLoad(() => trackCatalog(api.governanceToolCatalog()), "v3-gov-tools");
   const [source, setSource] = useState<"all" | "gateway" | "builtin">("all");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<GovernanceToolInfo | null>(null);
@@ -404,7 +429,7 @@ function ToolsTab() {
         {catalog.loading && !catalog.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={5} /></div>
         ) : catalog.error ? (
-          <div style={{ padding: 20 }}><Notice s="act">{catalog.error}</Notice></div>
+          <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={catalogFailure ?? catalog.error} /></Notice></div>
         ) : rows.length === 0 ? (
           <Empty title={t("v3.governance.tools.empty")} />
         ) : (
@@ -470,8 +495,9 @@ export function V3Governance() {
   const tab: Tab = params.get("tab") === "tools" ? "tools" : "gateways";
   const [force, setForce] = useState(0);
   // the first load may come from the backend cache; refresh bypasses it
+  const [gatewaysFailure, trackGateways] = useFailure();
   const gateways = useLoad(
-    () => api.listGovernanceGateways(force > 0).catch((err: unknown) => Promise.reject(new Error(governanceError(err)))),
+    () => trackGateways(api.listGovernanceGateways(force > 0)),
     `v3-gov-gateways:${current?.id ?? ""}:${force}`,
   );
 
@@ -499,7 +525,7 @@ export function V3Governance() {
           </>
         }
       />
-      {tab === "gateways" ? <GatewaysTab data={gateways.data} loading={gateways.loading} error={gateways.error} /> : <ToolsTab />}
+      {tab === "gateways" ? <GatewaysTab data={gateways.data} loading={gateways.loading} error={gateways.error ? gatewaysFailure ?? gateways.error : null} /> : <ToolsTab />}
     </div>
   );
 }

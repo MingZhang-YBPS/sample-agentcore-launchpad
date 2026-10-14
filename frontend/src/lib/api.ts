@@ -999,11 +999,66 @@ export interface AttachedSkill {
 export class ApiError extends Error {
   code: string;
   detail: unknown;
-  constructor(code: string, message: string, detail: unknown) {
+  /** The backend's `message` as sent, before console copy replaced it (projects §19). */
+  rawMessage: string;
+  /** The localized headline alone — `message` may have the AWS text appended. */
+  title: string;
+  /** The console envelope's `request_id` (or `X-Request-Id`): greps to the backend log line. */
+  requestId: string | null;
+  /** When the console received the error — shown and copied with the details. */
+  at: Date;
+  constructor(
+    code: string,
+    message: string,
+    detail: unknown,
+    extra: { rawMessage?: string; title?: string; requestId?: string | null } = {},
+  ) {
     super(message);
     this.code = code;
     this.detail = detail;
+    this.rawMessage = extra.rawMessage ?? message;
+    this.title = extra.title ?? message;
+    this.requestId = extra.requestId ?? null;
+    this.at = new Date();
   }
+}
+
+/** The AWS facts of a console error envelope (`detail` of an `aws.*` code), when present. */
+export interface ApiErrorFacts {
+  operation: string | null;
+  awsErrorCode: string | null;
+  awsRequestId: string | null;
+  /** The backend masked account ids for a non-admin caller. */
+  masked: boolean;
+}
+
+/** What the collapsible error detail can show; null ⇒ nothing beyond the headline. */
+export function apiErrorFacts(err: ApiError): ApiErrorFacts | null {
+  const d = (err.detail && typeof err.detail === "object" && !Array.isArray(err.detail) ? err.detail : {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const facts: ApiErrorFacts = {
+    operation: str(d.operation),
+    awsErrorCode: str(d.aws_error_code),
+    awsRequestId: str(d.aws_request_id),
+    masked: d.masked === true,
+  };
+  if (!facts.awsErrorCode && !err.requestId) return null;
+  return facts;
+}
+
+/** Plain-text block for "copy details" — one `key: value` per line, empties left out. */
+export function apiErrorDetailText(err: ApiError): string {
+  const facts = apiErrorFacts(err);
+  const rows: [string, string | null][] = [
+    ["code", err.code],
+    ["operation", facts?.operation ?? null],
+    ["aws_error_code", facts?.awsErrorCode ?? null],
+    ["request_id", err.requestId],
+    ["aws_request_id", facts?.awsRequestId ?? null],
+    ["time", err.at.toISOString()],
+    ["message", err.rawMessage || null],
+  ];
+  return rows.filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("\n");
 }
 
 export const AUTH_UNAUTHORIZED_EVENT = "launchpad-unauthorized";
@@ -1022,6 +1077,18 @@ export function localizedMessage(code: string, fallback: string): string {
   return i18n.exists(key) ? i18n.t(key) : fallback;
 }
 
+/**
+ * `localizedMessage` plus, for the `aws.*` family, the AWS text after it: the
+ * console copy says what kind of failure it was, only AWS's own words say which
+ * parameter (projects §19). Other translated codes keep the copy alone — their
+ * backend message is log text — and untranslated ones already are the raw text.
+ */
+export function messageWithRaw(code: string, raw: string): string {
+  const title = localizedMessage(code, raw);
+  if (!code.startsWith("aws.") || !raw || title === raw) return title;
+  return i18n.t("apiErrors.detail.withRaw", { title, raw });
+}
+
 async function parseResponse<T>(path: string, res: Response): Promise<T> {
   // Cloned before the body is consumed, so a parse failure can still show what
   // the wire actually carried — the error is undiagnosable without it.
@@ -1032,9 +1099,14 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
     if (res.status === 401 && !path.startsWith("/api/auth/")) {
       window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
     }
-    const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
+    const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown; request_id?: string };
     const code = env.code ?? `http.${res.status}`;
-    throw new ApiError(code, localizedMessage(code, env.message ?? res.statusText), env.detail);
+    const raw = env.message ?? res.statusText;
+    throw new ApiError(code, messageWithRaw(code, raw), env.detail, {
+      rawMessage: raw,
+      title: localizedMessage(code, raw),
+      requestId: env.request_id ?? res.headers.get("X-Request-Id") ?? null,
+    });
   }
   if (body === undefined) {
     // A 200 whose body isn't JSON (backend mid-restart behind the dev proxy,

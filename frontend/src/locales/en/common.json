@@ -2208,6 +2208,18 @@
     }
   },
   "apiErrors": {
+    "detail.withRaw": "{{title}} AWS said: {{raw}}",
+    "detail.summary": "Details",
+    "detail.summaryAws": "AWS details",
+    "detail.operation": "Operation",
+    "detail.awsErrorCode": "AWS error code",
+    "detail.message": "AWS message",
+    "detail.requestId": "Request ID",
+    "detail.awsRequestId": "AWS request ID",
+    "detail.time": "Time",
+    "detail.copy": "Copy details",
+    "detail.copied": "Copied",
+    "detail.masked": "Account IDs are masked. An admin sees the full text; quote the request ID when asking.",
     "harness.execution_timeout": "The Harness execution timed out before completing.",
     "harness.execution_cancelled": "The Harness execution was cancelled before completing.",
     "harness.execution_limit": "The Harness execution stopped after reaching an execution limit.",

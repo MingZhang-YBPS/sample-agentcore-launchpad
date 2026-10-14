@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { api, errorMessage, type OnlineEvalConfigRow, type OnlineEvalReportRow, type V2Range } from "../../../lib/api";
+import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { api, type OnlineEvalConfigRow, type OnlineEvalReportRow, type V2Range } from "../../../lib/api";
 import { hasInsightTrees } from "../../../lib/evaluation";
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { normalizedScore, RANGES, rangeLabel } from "../../../v2/format";
@@ -206,6 +207,8 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
   const reports = useLoad(() => api.onlineEvalReports(row.config_id), `v3-online-reports:${row.config_id}:${tick}`);
   const [range, setRange] = useState<V2Range>("24h");
   const [busy, setBusy] = useState(false);
+  // a failed "run report" stays on the panel with its AWS details (projects §19)
+  const [runError, setRunError] = useState<unknown>(null);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [showUnattributed, setShowUnattributed] = useState(false);
   const [limit, setLimit] = useState(10);
@@ -223,12 +226,13 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
 
   const run = async () => {
     setBusy(true);
+    setRunError(null);
     try {
       await api.onlineEvalRunReport(row.config_id, range);
       toast("ok", t("v2.online.reportStarted"));
       setTick((n) => n + 1);
     } catch (err) {
-      toast("act", errorMessage(err));
+      setRunError(err);
     } finally {
       setBusy(false);
     }
@@ -258,6 +262,7 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
     >
       <div style={{ padding: "0 20px 12px", display: "grid", gap: 10 }}>
         <p style={{ margin: 0, color: "var(--v3-text-3)", fontSize: 13 }}>{t("v2.online.reportsSub")}</p>
+        {runError != null && <Notice s="act"><ApiErrorDetail error={runError} /></Notice>}
         {reports.data?.aws_unavailable && <Notice s="wait">{t("v2.online.awsUnavailable")}</Notice>}
         {unattributed.length > 0 && (
           <label className="v3-onl-check">
