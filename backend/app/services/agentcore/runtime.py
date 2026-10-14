@@ -138,11 +138,13 @@ def create_container_runtime(
     vpc: dict[str, Any] | None = None,
     lifecycle: dict[str, int] | None = None,
     authorizer_configuration: dict[str, Any] | None = None,
+    protocol: str | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from an ECR image (Claude SDK container path).
 
     ``lifecycle`` = {idleRuntimeSessionTimeout, maxLifetime} seconds (the Skill
-    Lab exec worker caps sessions at 8h and reaps idle ones at 5min)."""
+    Lab exec worker caps sessions at 8h and reaps idle ones at 5min).
+    ``protocol`` as ``create_code_runtime`` (None / "http" = the HTTP default)."""
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
         "agentRuntimeArtifact": {
@@ -157,6 +159,9 @@ def create_container_runtime(
         params["filesystemConfigurations"] = filesystem_configurations
     if lifecycle:
         params["lifecycleConfiguration"] = dict(lifecycle)
+    proto = _protocol_configuration(protocol)
+    if proto:
+        params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
     return client.create_agent_runtime(**params)
@@ -241,11 +246,13 @@ def update_container_runtime(
     vpc: dict[str, Any] | None = None,
     lifecycle: dict[str, int] | None = None,
     authorizer_configuration: dict[str, Any] | None = None,
+    protocol: str | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new container image — new version, same ARN.
     NB: a version bump resets managed session storage (documented UI note).
     Authorizer semantics as ``update_code_runtime``: echo to keep, omit to
-    return the runtime to IAM/SigV4."""
+    return the runtime to IAM/SigV4. ``protocol`` must be echoed too: an omitted
+    protocolConfiguration resets the runtime to HTTP."""
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": {"containerConfiguration": {"containerUri": container_uri}},
@@ -258,6 +265,9 @@ def update_container_runtime(
         params["filesystemConfigurations"] = filesystem_configurations
     if lifecycle:
         params["lifecycleConfiguration"] = dict(lifecycle)
+    proto = _protocol_configuration(protocol)
+    if proto:
+        params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
     return client.update_agent_runtime(**params)

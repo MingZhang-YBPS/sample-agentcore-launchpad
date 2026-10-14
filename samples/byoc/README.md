@@ -28,6 +28,12 @@ Selections accept literal IDs, foundation-model ARNs and system inference-profil
 ARNs. Wildcards, IAM variables and application inference-profile ARNs are refused;
 an unknown ID never grants access to all foundation models.
 
+## hello-mcp — an MCP server (protocol `mcp`)
+
+Not an agent: an MCP server that Launchpad hosts on AgentCore Runtime and puts
+behind the workspace Gateway (streamable HTTP on `0.0.0.0:8000/mcp`, no
+`/invocations`). See [hello-mcp/README.md](hello-mcp/README.md).
+
 ## hello-http — artifact kind `code_zip`
 
 Python source + `requirements.txt`; Launchpad resolves the requirements for

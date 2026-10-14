@@ -24,18 +24,19 @@ import sys
 import tempfile
 import time
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
-from app.core.errors import cleanup_error, is_not_found
+from app.core.errors import AppError, cleanup_error, is_not_found
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec, ByocConfig, parse_ecr_image_uri
-from app.services import agent_iam, byoc_uploads
+from app.services import agent_iam, byoc_uploads, mcp_servers
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -100,6 +101,35 @@ def _stamp_provenance(ctx: StageContext, agent: Agent, provenance: dict[str, Any
         db.close()
 
 
+def _stamp_spec(ctx: StageContext, agent: Agent, update: Callable[[dict], None]) -> None:
+    """Apply a server-owned edit to the row's spec (and the in-memory agent)."""
+    db = ctx.session()
+    try:
+        row = db.get(Agent, agent.id)
+        spec = dict(row.spec)
+        update(spec)
+        row.spec = spec
+        db.commit()
+        agent.spec = spec
+    finally:
+        db.close()
+
+
+def _stamp_mcp_inbound(ctx: StageContext, agent: Agent) -> None:
+    """MCP server: its own Cognito client, and the JWT authorizer allowing only it.
+
+    Stamped before provision and deploy so both read a JWT-mode spec — the role
+    gets the inbound workload-token grant, the runtime the authorizer."""
+    client_id = mcp_servers.ensure_inbound_client(ctx.workspace, agent, ctx.log)
+
+    def update(spec: dict) -> None:
+        spec["mcp"] = {**(spec.get("mcp") or {}), "client_id": client_id}
+        spec["inbound_auth"] = mcp_servers.inbound_auth(ctx.workspace, client_id)
+
+    _stamp_spec(ctx, agent, update)
+    ctx.log(f"MCP inbound · JWT (workspace pool) · allowed client {client_id}")
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     """No code to generate — verify the artifact reference and stamp provenance."""
     spec = AgentSpec(**agent.spec)
@@ -115,6 +145,8 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
             "uploaded_at": pushed_at,
         }
         _stamp_provenance(ctx, agent, provenance)
+        if spec.protocol == "mcp":
+            _stamp_mcp_inbound(ctx, agent)
         ctx.log(f"ECR image verified · {cfg.image_uri} · {digest}")
         return StageResult(detail=f"container_image · {digest[:19]}…")
 
@@ -127,8 +159,14 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
         "uploaded_at": manifest.get("uploaded_at", ""),
     }
     _stamp_provenance(ctx, agent, provenance)
+    if spec.protocol == "mcp":
+        _stamp_mcp_inbound(ctx, agent)
     detected = manifest.get("detected") or {}
-    if cfg.artifact_kind == "code_zip" and not detected.get("agentcore_sdk_detected"):
+    if (
+        spec.protocol != "mcp"
+        and cfg.artifact_kind == "code_zip"
+        and not detected.get("agentcore_sdk_detected")
+    ):
         ctx.log(
             "note: no BedrockAgentCoreApp/@app.entrypoint marker found — the "
             "entrypoint must serve POST /invocations + GET /ping on :8080 itself"
@@ -379,8 +417,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # permitted ids to the user code: MODEL_ID is the primary (= model_id),
         # ALLOWED_MODEL_IDS the full comma-separated list. Explicit spec.env
         # values win for both.
-        environment.setdefault("MODEL_ID", spec.model_id)
-        environment.setdefault("ALLOWED_MODEL_IDS", ",".join(spec.allowed_model_ids))
+        if spec.protocol != "mcp":  # an MCP server is granted no model
+            environment.setdefault("MODEL_ID", spec.model_id)
+            environment.setdefault("ALLOWED_MODEL_IDS", ",".join(spec.allowed_model_ids))
+        # echoed on every update: an omitted protocolConfiguration resets to HTTP
+        protocol = spec.protocol
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
 
@@ -400,12 +441,14 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     "instrument": False,
                     # echoed on every update; omitted (None) = IAM/SigV4
                     "authorizer_configuration": authorizer,
+                    "protocol": protocol,
                 }
             return {
                 "container_uri": _container_uri(ctx, row, cfg),
                 "role_arn": role_arn,
                 "environment": environment,
                 "authorizer_configuration": authorizer,
+                "protocol": protocol,
             }
 
         create_fn = (
@@ -472,9 +515,59 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_register(ctx: StageContext, agent: Agent) -> StageResult:
+    if (agent.spec or {}).get("protocol") == "mcp":
+        return _register_mcp_server(ctx, agent)
     from app.deployer.registration import register_stage
 
     return register_stage(ctx, agent)
+
+
+def _register_mcp_server(ctx: StageContext, agent: Agent) -> StageResult:
+    """An MCP server registers on the Gateway (not as an A2A record): its OAuth2
+    provider, then the MCP-server target, whose creation / re-sync lists its tools."""
+    db = ctx.session()
+    try:
+        row = db.get(Agent, agent.id)
+        spec = AgentSpec(**row.spec)
+        mcp = spec.mcp
+        if mcp is None or not mcp.client_id:  # generate always stamps it
+            raise RuntimeError("MCP server has no inbound client — re-run the deploy")
+        provider_arn = mcp_servers.ensure_provider(ctx.workspace, row, mcp.client_id, ctx.log)
+        target_id, outcome = mcp_servers.ensure_target(
+            ctx.workspace,
+            row,
+            target_name=mcp.target_name,
+            provider_arn=provider_arn,
+            previous_target_id=mcp.target_id,
+            log=ctx.log,
+        )
+    finally:
+        db.close()
+
+    def update(stored: dict) -> None:
+        stored["mcp"] = {
+            **(stored.get("mcp") or {}),
+            "provider_arn": provider_arn,
+            "target_id": target_id,
+        }
+
+    _stamp_spec(ctx, agent, update)
+    detail = f"gateway target {mcp.target_name} {outcome} · READY"
+    try:
+        tools = mcp_servers.gateway_tools(ctx.workspace, mcp.target_name)
+        ctx.log(
+            f"{len(tools)} tool(s) on the Gateway: "
+            + (", ".join(t["name"] for t in tools[:20]) or "none")
+        )
+        detail += f" · {len(tools)} tool(s)"
+    except AppError as exc:  # the target is READY; listing is a read-back only
+        ctx.log(f"tools/list through the Gateway skipped: {exc.message}")
+    ctx.log(
+        "Registry: the Gateway-level record is not rewritten here (an update sends "
+        "an approved record back to DRAFT) — refresh it from Governance → Gateway → "
+        "Registry import when the catalog should list these tools"
+    )
+    return StageResult(detail=detail)
 
 
 STAGES = {
@@ -495,6 +588,10 @@ def delete_agent_resources(
 
     Everything after the runtime delete is best-effort: an orphan S3 object or
     ECR tag must never block deleting the agent."""
+    is_mcp = (agent.spec or {}).get("protocol") == "mcp"
+    if is_mcp:
+        # the Gateway target first: it points at the runtime about to go
+        mcp_servers.teardown_target(workspace, agent)
     if agent.resource_id:
         client = control_client(workspace)
         # a gated agent serves through named endpoints; AgentCore refuses to delete a
@@ -506,6 +603,10 @@ def delete_agent_resources(
             rt.delete_runtime(client, agent.resource_id)
         except client.exceptions.ResourceNotFoundException:
             pass
+    if is_mcp:
+        mcp_servers.release_identity(
+            workspace, agent, lambda msg: logger.warning("agent %s: %s", agent.id, msg)
+        )
     cfg = (agent.spec or {}).get("byoc") or {}
     upload_id = cfg.get("upload_id")
     if upload_id:

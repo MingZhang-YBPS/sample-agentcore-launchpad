@@ -1257,6 +1257,8 @@ const deployLock = !canDeploy
     vpcSubnets,
     vpcSgs,
     protocol,
+    // the classic wizard has no MCP-server mode
+    mcpTargetName: "",
     a2aSkills,
     byocKind,
     byocUploadId: byocUpload?.upload_id ?? null,

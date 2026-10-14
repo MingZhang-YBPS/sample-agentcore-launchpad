@@ -45,6 +45,7 @@ from app.services import (
     byoc_uploads,
     creators,
     identity_providers,
+    mcp_servers,
     memory_ownership,
     oauth_sessions,
     registry_console,
@@ -257,6 +258,7 @@ def create_agent(
     # every KB / memory the spec pins must be visible to the caller (isolation)
     agent_access.check_pins(db, viewer, ws.context, spec.model_dump())
     _validate_tool_auth(spec, ws)
+    spec = _server_owned_mcp(spec, None)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
     # the deploy job re-checks before any stage, this answers before any row
     memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
@@ -559,6 +561,25 @@ def get_agent_versions(
     return list_agent_versions(control_client(ws.context), agent)
 
 
+@router.get("/agents/{agent_id}/mcp")
+def get_agent_mcp(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """An MCP server's Gateway wiring read back live: target status and the tools
+    agents see through the Gateway (``<target>___<tool>``)."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None or agent.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    if (agent.spec or {}).get("protocol") != "mcp":
+        raise AppError(
+            "agent.not_mcp_server", "this agent is not an MCP server", status_code=409
+        )
+    return mcp_servers.server_status(ws.context, agent)
+
+
 @router.get("/agents/{agent_id}/identity")
 def get_agent_identity(
     agent_id: str,
@@ -631,6 +652,16 @@ def republish_agent(
             {"name": agent.name, "method": agent.method},
             status_code=400,
         )
+    was_mcp = (agent.spec or {}).get("protocol") == "mcp"
+    if was_mcp != (spec.protocol == "mcp"):
+        raise AppError(
+            "agent.redeploy_immutable",
+            "an MCP server and an agent are different things — the protocol cannot "
+            "switch to or from 'mcp' on re-publish",
+            {"protocol": (agent.spec or {}).get("protocol") or "http"},
+            status_code=400,
+        )
+    spec = _server_owned_mcp(spec, agent.spec or {})
     # A converted agent's exported code bakes its system prompt and model: an edit of
     # either would be silently ignored, and a model change would re-scope the execution
     # role away from the model the code actually calls.
@@ -650,6 +681,18 @@ def republish_agent(
             )
 
     return _start_redeploy(db, ws, agent, spec, actor=actor, note=note, viewer=viewer)
+
+
+def _server_owned_mcp(spec: AgentSpec, stored: dict[str, Any] | None) -> AgentSpec:
+    """An MCP server's client / provider / target ids are stamped by the deploy
+    pipeline only: whatever the request carries is replaced by the stored values
+    (or cleared on create), so no caller can point the pipeline at a Gateway
+    target — or Cognito client — that is not this server's own."""
+    if spec.mcp is None:
+        return spec
+    prior = (stored or {}).get("mcp") or {}
+    owned = {key: prior.get(key) for key in ("client_id", "provider_arn", "target_id")}
+    return spec.model_copy(update={"mcp": spec.mcp.model_copy(update=owned)})
 
 
 def _redeployable(
@@ -839,6 +882,14 @@ def switch_inbound_auth(
     """
     agent = _redeployable(db, ws, agent_id, viewer)
     stored = agent.spec or {}
+    if stored.get("protocol") == "mcp":
+        raise AppError(
+            "agent.inbound_auth_unsupported",
+            "an MCP server's inbound auth is managed by the platform — the Gateway "
+            "calls it with the server's own Cognito client",
+            {"method": agent.method, "protocol": "mcp"},
+            status_code=422,
+        )
     if body.inbound_auth is not None and body.inbound_auth.mode == "jwt" and (
         agent.method not in JWT_CAPABLE_METHODS or stored.get("protocol") == "a2a"
     ):

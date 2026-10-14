@@ -521,6 +521,34 @@ export function ByocBasicCard(props: Omit<SectionProps, "cat">) {
   );
 }
 
+/** byoc + protocol "mcp": where the server's tools appear on the Gateway. */
+export function McpServerCard({ form, set, err }: Omit<SectionProps, "cat">) {
+  const { t } = useTranslation();
+  const target = form.mcpTargetName.trim();
+  return (
+    <Card title={t("v2.agents.wizard.mcp.cardTitle")} sub={t("v2.agents.wizard.mcp.cardSub")} testId="v2-agent-mcp">
+      <div className="v2-form">
+        <Field
+          label={t("v2.agents.wizard.mcp.targetName")}
+          required
+          error={err("mcpTarget")}
+          hint={t("v2.agents.wizard.mcp.targetHint", { example: `${target || "crm-lookup"}___find_order` })}
+        >
+          <input
+            className="v2-input mono"
+            value={form.mcpTargetName}
+            maxLength={100}
+            placeholder="crm-lookup"
+            onChange={(e) => set({ mcpTargetName: e.target.value })}
+            data-testid="v2-agent-mcp-target"
+          />
+        </Field>
+        <Alert>{t("v2.agents.wizard.mcp.wiring")}</Alert>
+      </div>
+    </Card>
+  );
+}
+
 export function ByocArtifactCard({
   form,
   set,
@@ -666,17 +694,19 @@ export function ByocArtifactCard({
                 {t("create.configure.byocInstallReqs")}
               </label>
             </Field>
-            <Field label={t("v2.agents.wizard.byocContractKind")} hint={t("create.configure.byocRawHint")}>
-              <label className="v2-check">
-                <input
-                  type="checkbox"
-                  checked={form.byocRawContract}
-                  onChange={(e) => set({ byocRawContract: e.target.checked })}
-                  data-testid="v2-agent-byoc-raw"
-                />
-                {t("create.configure.byocRaw")}
-              </label>
-            </Field>
+            {form.protocol !== "mcp" && (
+              <Field label={t("v2.agents.wizard.byocContractKind")} hint={t("create.configure.byocRawHint")}>
+                <label className="v2-check">
+                  <input
+                    type="checkbox"
+                    checked={form.byocRawContract}
+                    onChange={(e) => set({ byocRawContract: e.target.checked })}
+                    data-testid="v2-agent-byoc-raw"
+                  />
+                  {t("create.configure.byocRaw")}
+                </label>
+              </Field>
+            )}
           </div>
         )}
       </div>
@@ -812,8 +842,12 @@ export function ByocEnvCard({ form, set }: Omit<SectionProps, "cat" | "err">) {
     >
       {contractOpen && (
         <div className="v2-agents-contract" data-testid="v2-agent-byoc-contract">
-          <h3 className="v2-sub-title">{t("create.configure.byocContract")}</h3>
-          <pre className="v2-pre">{t("create.configure.byocContractBody")}</pre>
+          <h3 className="v2-sub-title">
+            {t(form.protocol === "mcp" ? "v2.agents.wizard.mcp.contract" : "create.configure.byocContract")}
+          </h3>
+          <pre className="v2-pre">
+            {t(form.protocol === "mcp" ? "v2.agents.wizard.mcp.contractBody" : "create.configure.byocContractBody")}
+          </pre>
         </div>
       )}
       {form.byocEnvRows.length === 0 ? (

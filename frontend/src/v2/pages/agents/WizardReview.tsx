@@ -81,7 +81,31 @@ export function WizardReview({
   ];
 
   let items: { label: string; value: React.ReactNode }[];
-  if (method === "byoc") {
+  const mcpServer = method === "byoc" && form.protocol === "mcp";
+  if (mcpServer) {
+    const env = Object.keys(byocEnv(form.byocEnvRows));
+    const upload = ui.byocUpload;
+    items = [
+      ...head,
+      { label: t("v2.agents.wizard.mcp.kind"), value: t("v2.agents.wizard.mcp.kindValue") },
+      { label: t("v2.agents.wizard.mcp.targetName"), value: mono(form.mcpTargetName.trim()) },
+      { label: t("v2.agents.wizard.artifactTitle"), value: t(`create.configure.byocKindName.${form.byocKind}`) },
+      form.byocKind === "container_image"
+        ? { label: t("create.configure.byocImageUri"), value: mono(form.byocImageUri.trim()) }
+        : {
+            label: t("create.configure.byocUpload"),
+            value: upload ? mono(`${upload.original_filename} · sha256 ${upload.sha256.slice(0, 12)}…`) : none,
+          },
+      ...(form.byocKind === "code_zip"
+        ? [{
+            label: t("v2.agents.wizard.entryPython"),
+            value: mono(`${form.byocEntrypoint.trim() || "main.py"} · ${pythonLabel(form.byocPython)}`),
+          }]
+        : []),
+      { label: t("create.configure.byocEnv"), value: env.length ? mono(env.join(", ")) : none },
+      { label: t("create.configure.byocDescription"), value: form.byocDescription || none },
+    ];
+  } else if (method === "byoc") {
     const models = byocModelList(form.byocModels);
     const env = Object.keys(byocEnv(form.byocEnvRows));
     const upload = ui.byocUpload;
@@ -218,7 +242,11 @@ export function WizardReview({
   }
 
   return (
-    <Card title={t("v2.agents.wizard.reviewTitle")} sub={t(`v2.agents.wizard.reviewSubBy.${method}`)} testId="v2-agent-review">
+    <Card
+      title={t("v2.agents.wizard.reviewTitle")}
+      sub={t(mcpServer ? "v2.agents.wizard.mcp.reviewSub" : `v2.agents.wizard.reviewSubBy.${method}`)}
+      testId="v2-agent-review"
+    >
       <Descriptions items={items} />
       {mismatch && <ReachabilityWarning mismatch={mismatch} testId="v2-agent-review-issuer-warning" />}
       {method !== "byoc" && (

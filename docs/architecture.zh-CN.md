@@ -317,12 +317,25 @@ requirements 文件不能扩大"仅平台索引"这一供应链边界:`-r`/`-c` 
 CodeBuild 源码包,**覆盖上传中自带的任何 buildspec**——成员只控制 Dockerfile,
 永远不控制构建配方。
 
-**v1 范围。** 仅 HTTP 协议(不支持 A2A);spec 上不支持
+**v1 范围。** HTTP 或 MCP 协议(不支持 A2A);spec 上不支持
 toolkits/skills/knowledge_bases/tools(平台不生成这份代码,无法接线——请在你自己的
 代码里配置能力);`system_prompt` 可选,作为描述使用。配置包实验与金丝雀候选按
 `custom-source-unverified` 降级,与其他自带源码的运行时一致。示例见
 [`samples/byoc/`](../samples/byoc/README.md);实验手册见
 [docs/lab/13-byoc.md](lab/13-byoc.md)。
+
+### 托管 MCP 服务器（`protocol: "mcp"`）
+
+V3 的 **MCP 服务器** 入口（`/v2/agents?view=new&method=byoc&protocol=mcp`）部署一个 BYOC 制品（三种来源均可），它在 `0.0.0.0:8000/mcp` 以 streamable HTTP 提供 MCP；平台让工作区网关成为它唯一的调用方（`app/services/mcp_servers.py`；设计见 `docs/design` §15 的最小版）。spec 带 `mcp: {target_name}`；`client_id`、`provider_arn`、`target_id` 由服务端写入——创建与重新发布接口会覆盖请求里的这些值，任何调用方都无法让流水线指向别人的网关目标。
+
+| 阶段 | MCP 服务器的工作 |
+|---|---|
+| generate | 在工作区 Cognito 池为它创建专属应用客户端（`lp-mcp-<agent id 前 12 位>`，client_credentials，scope `launchpad-gw/invoke`）；把 `inbound_auth` 写为该池的 JWT，只允许这个客户端 |
+| provision | 每 Agent 执行角色，**不含** `BedrockModels` / Mantle 授权（工具不调用模型）；记忆强制关闭 |
+| deploy | `CreateAgentRuntime` / `UpdateAgentRuntime` 带 `protocolConfiguration.serverProtocol = MCP`，每次更新都回传（省略会把 Runtime 重置为 HTTP）；不注入 `MODEL_ID` 环境变量 |
+| register | 不建 A2A 记录，改为：同名 OAuth2 凭证提供方（持有该客户端），再建 MCP 服务器网关目标，端点为 Runtime 在 `DEFAULT` 上的数据面 URL；创建目标、或重新发布后执行 `SynchronizeGatewayTargets`，都会列出工具；同名但指向别处的目标被拒绝（`409 mcp.target_name_taken`），改名后旧目标会被删除 |
+
+网关级注册中心记录**不会**被改写（更新会让已批准的记录回到 DRAFT，影响所有挂载它的 Agent）；register 阶段在日志里提示到「治理 → 注册中心导入」刷新。MCP 服务器不可调用（`invoke_capability.reason_code = not-agent-protocol`，对话、`/v1`、评估都会跳过它），不参与放行门，入站认证不能切换（`422 agent.inbound_auth_unsupported`），重新发布也不能在 `mcp` 与其他协议之间切换。`GET /api/agents/{id}/mcp` 实时读回目标状态，以及智能体经网关看到的工具（`<target>___<tool>`）——V3 智能体页用它替换生命周期、对话和试用面板。删除按反向顺序进行：网关目标 → Runtime → OAuth2 提供方 → Cognito 客户端，可重复执行。示例：[`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md)（`mcp>=1.10,<2`）。本版不含：工具审阅、Cedar 脚手架、stdio 桥接、定时健康检查、Lambda 目标、VPC 模式。
 
 ### 推荐的 trace 来源
 

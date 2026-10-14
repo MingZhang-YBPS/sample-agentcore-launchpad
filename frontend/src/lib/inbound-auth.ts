@@ -35,7 +35,9 @@ export type InboundChoice = "inherit" | InboundAuthMode;
 export const JWT_CAPABLE_METHODS = ["zip_runtime", "studio", "container", "byoc"] as const;
 
 export const inboundCapable = (method: string, protocol?: string) =>
-  (JWT_CAPABLE_METHODS as readonly string[]).includes(method) && protocol !== "a2a";
+  (JWT_CAPABLE_METHODS as readonly string[]).includes(method) &&
+  // A2A peers call over SigV4; an MCP server's JWT authorizer is platform-managed
+  protocol !== "a2a" && protocol !== "mcp";
 
 export const splitList = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 

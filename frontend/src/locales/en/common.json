@@ -5699,7 +5699,21 @@
           "block": "Refuse the message",
           "bufferedNote": "Answers arrive in one piece instead of streaming word by word: a phone number can straddle two chunks, so the whole answer is screened before it is shown."
         },
-        "templateNeeds": "This starts from a shared template. Supply your own: {{items}}"
+        "templateNeeds": "This starts from a shared template. Supply your own: {{items}}",
+        "mcp": {
+          "title": "New MCP server",
+          "cardTitle": "MCP server",
+          "cardSub": "Agents call this server's tools through the workspace Gateway.",
+          "targetName": "Gateway target name",
+          "targetHint": "Letters, digits and single hyphens. Each tool appears to agents as {{example}}.",
+          "wiring": "The platform wires this server for you: its own Cognito client for inbound JWT auth, an OAuth2 credential provider and a target on the workspace Gateway. Only the Gateway can call it. The server gets no model or memory permissions.",
+          "errTarget": "Use 1–100 letters, digits or single hyphens; no hyphen at the start or end.",
+          "contract": "MCP server contract",
+          "contractBody": "Serve MCP over streamable HTTP at 0.0.0.0:8000/mcp (the AgentCore Runtime MCP contract).\n\nPython (official MCP SDK):\n  from mcp.server.fastmcp import FastMCP\n  mcp = FastMCP(host=\"0.0.0.0\", stateless_http=True)\n\n  @mcp.tool()\n  def find_order(order_id: str) -> str:\n      \"\"\"Look up one order.\"\"\"\n      ...\n\n  if __name__ == \"__main__\":\n      mcp.run(transport=\"streamable-http\")\n\nPin mcp>=1.10,<2 in requirements.txt (mcp 2.x renamed FastMCP to MCPServer). A stdio-only server must be switched to streamable HTTP first.",
+          "kind": "Type",
+          "kindValue": "MCP server (tool, not an agent)",
+          "reviewSub": "Deploying creates the runtime, a Cognito client, an OAuth2 provider and the Gateway target, then lists the server's tools."
+        }
       },
       "identity": {
         "open": "Identity",
@@ -10209,7 +10223,9 @@
       "wayImport": "Import a runtime",
       "wayImportSub": "Adopt a Runtime or Harness already running in this account",
       "wayPresets": "System presets",
-      "wayPresetsSub": "Platform-managed agents an administrator installs"
+      "wayPresetsSub": "Platform-managed agents an administrator installs",
+      "wayMcp": "MCP server",
+      "wayMcpSub": "Host your MCP server on AgentCore Runtime and put its tools on the Gateway"
     },
     "assistant": {
       "eyebrow": "Design",
@@ -11403,6 +11419,22 @@
     "noWorkspace": {
       "eyebrow": "Access · workspace",
       "waiting": "Waiting for a workspace grant"
+    },
+    "mcp": {
+      "title": "MCP server · Gateway",
+      "target": "Gateway target",
+      "status": "Target status",
+      "notWired": "not wired yet",
+      "tools": "Tools",
+      "endpoint": "Runtime MCP endpoint (only the Gateway can call it)",
+      "toolsError": "Could not list the tools through the Gateway:",
+      "toolName": "Tool (as agents call it)",
+      "toolDesc": "Description",
+      "noTools": "The server lists no tools",
+      "howToUse": "Agents attach these tools as Gateway tools ({{target}}___*). The Gateway-level Registry record is not updated automatically; refresh it from Governance when the catalog should list them.",
+      "openGovernance": "Open Governance",
+      "kind": "Type",
+      "kindValue": "MCP server"
     }
   },
   "models": {

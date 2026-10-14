@@ -173,7 +173,7 @@ export const defaultModelForMethod = (method: AgentMethod, source: ModelSource =
 
 /** The source a method switch lands on: protocol survives a method switch, so
  *  re-entering zip_runtime with A2A still selected lands back on the pinned source. */
-export const sourceOnMethodSwitch = (next: AgentMethod, protocol: "http" | "a2a") =>
+export const sourceOnMethodSwitch = (next: AgentMethod, protocol: AgentForm["protocol"]) =>
   next === "zip_runtime" && protocol === "a2a" ? A2A_MODEL_SOURCE : sourceForMethod(next);
 
 // byoc allowed-models cap — mirrors `BYOC_ALLOWED_MODELS_MAX` (backend
@@ -477,8 +477,10 @@ export interface AgentForm {
   efsMounts: MountRow[];
   vpcSubnets: string;
   vpcSgs: string;
-  // zip_runtime service protocol
-  protocol: "http" | "a2a";
+  // zip_runtime service protocol; byoc can also host an MCP server ("mcp")
+  protocol: "http" | "a2a" | "mcp";
+  /** byoc + protocol "mcp": the Gateway target its tools appear under */
+  mcpTargetName: string;
   a2aSkills: A2aSkillRow[];
   // byoc
   byocKind: ByocArtifactKind;
@@ -536,6 +538,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   vpcSubnets: "",
   vpcSgs: "",
   protocol: "http",
+  mcpTargetName: "",
   a2aSkills: [],
   byocKind: "code_zip",
   byocUploadId: null,
@@ -574,7 +577,8 @@ export interface StoredAgentSpec {
   native_tools?: HarnessNativeTool[];
   knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean; memory_id?: string | null };
-  protocol?: "http" | "a2a";
+  protocol?: "http" | "a2a" | "mcp";
+  mcp?: { target_name?: string } | null;
   a2a_skills?: { id?: string; name?: string; description?: string; tags?: string[] }[];
   env?: Record<string, string>;
   filesystem?: {
@@ -646,6 +650,7 @@ export function formFromStoredSpec(
     vpcSubnets: (spec.network?.subnets ?? []).join(", "),
     vpcSgs: (spec.network?.security_groups ?? []).join(", "),
     protocol: spec.protocol ?? "http",
+    mcpTargetName: spec.mcp?.target_name ?? "",
     a2aSkills: (spec.a2a_skills ?? []).map((s) => ({
       name: s.name ?? "",
       description: s.description ?? "",
@@ -756,7 +761,46 @@ export const inboundValid = (form: AgentForm) =>
   !inboundCapable(form.method, form.protocol) ||
   jwtFormProblem(form.inboundJwt ?? EMPTY_JWT_FORM) === null;
 
+/** The byoc artifact block both byoc flavours (agent, MCP server) send. */
+const byocArtifact = (form: AgentForm) => {
+  const kind = form.byocKind;
+  return {
+    artifact_kind: kind,
+    ...(kind === "container_image"
+      ? { image_uri: form.byocImageUri.trim() }
+      : { upload_id: form.byocUploadId ?? "" }),
+    ...(kind === "code_zip"
+      ? {
+          entrypoint: form.byocEntrypoint.trim() || BYOC_DEFAULT_ENTRYPOINT,
+          python_version: form.byocPython,
+          install_requirements: form.byocInstallReqs,
+        }
+      : {}),
+  };
+};
+
+/**
+ * A byoc artifact hosted as an MCP server: no model, memory, tools or inbound
+ * choice — the platform grants it none and wires its JWT inbound and Gateway
+ * target itself (`backend/app/services/mcp_servers.py`).
+ */
+export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
+  const env = byocEnv(form.byocEnvRows);
+  return {
+    name: form.name,
+    ...displayNameField(form),
+    method: "byoc",
+    protocol: "mcp",
+    // optional for byoc; doubles as the server's description
+    system_prompt: form.byocDescription,
+    ...(Object.keys(env).length ? { env } : {}),
+    mcp: { target_name: form.mcpTargetName.trim() },
+    byoc: byocArtifact(form) as ByocConfigInput,
+  };
+}
+
 export function buildByocSpec(form: AgentForm): AgentSpecInput {
+  if (form.protocol === "mcp") return buildMcpServerSpec(form);
   const env = byocEnv(form.byocEnvRows);
   const models = byocModelList(form.byocModels);
   const kind = form.byocKind;
@@ -1042,12 +1086,20 @@ export interface ByocIssues {
   imageUri: boolean;
   upload: boolean;
   entrypoint: boolean;
+  /** protocol "mcp": the Gateway target name (`MCP_TARGET_NAME_RE`) */
+  mcpTarget: boolean;
 }
+
+/** A Gateway target name, as the backend's `MCP_TARGET_NAME_RE` (no trailing hyphen). */
+export const MCP_TARGET_NAME_RE = /^[a-zA-Z0-9](?:-?[a-zA-Z0-9]){0,99}$/;
 
 export function byocIssues(form: AgentForm): ByocIssues {
   const image = form.byocKind === "container_image";
+  const mcp = form.protocol === "mcp";
   return {
-    models: !form.byocModels.some((m) => m.trim().length > 0),
+    // an MCP server is granted no model
+    models: !mcp && !form.byocModels.some((m) => m.trim().length > 0),
+    mcpTarget: mcp && !MCP_TARGET_NAME_RE.test(form.mcpTargetName.trim()),
     imageUri: image && !ECR_IMAGE_RE.test(form.byocImageUri.trim()),
     upload: !image && form.byocUploadId == null,
     entrypoint: form.byocKind === "code_zip" && !form.byocEntrypoint.trim().endsWith(".py"),

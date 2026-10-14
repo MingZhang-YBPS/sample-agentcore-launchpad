@@ -48,6 +48,7 @@ import {
   ByocModelsCard,
   ContainerToolsCard,
   FilesystemCard,
+  McpServerCard,
   HarnessToolsCard,
   NameField,
   ProtocolCard,
@@ -78,6 +79,9 @@ function initialDraft(params: URLSearchParams): Draft {
   const gateway = params.get("gateway");
   const skill = params.get("skill");
   const form = emptyAgentForm(isMethod(method) ? method : "harness");
+  // `method=byoc&protocol=mcp` — the "MCP server" entry: a byoc artifact hosted as
+  // an MCP server and wired to the workspace Gateway
+  if (method === "byoc" && params.get("protocol") === "mcp") form.protocol = "mcp";
   if (gateway) form.selectedGateway = [gateway];
   if (skill) form.skills = [skill];
   return { form, step: isMethod(method) || gateway || skill ? 1 : 0, extras: null };
@@ -321,6 +325,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       if (b.imageUri) out.byocImage = t("v2.agents.wizard.errByocImage");
       if (b.upload) out.byocUpload = t("v2.agents.wizard.errByocUpload");
       if (b.entrypoint) out.byocEntrypoint = t("v2.agents.wizard.errByocEntrypoint");
+      if (b.mcpTarget) out.mcpTarget = t("v2.agents.wizard.mcp.errTarget");
       return out;
     }
     if (!form.systemPrompt.trim()) out.prompt = t("v2.agents.wizard.errPrompt");
@@ -418,7 +423,11 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   return (
     <>
       <FlowHeader
-        title={edit ? t("v2.agents.wizard.editTitle", { name: edit.display_name || edit.name }) : t("v2.agents.new")}
+        title={
+          edit
+            ? t("v2.agents.wizard.editTitle", { name: edit.display_name || edit.name })
+            : t(form.protocol === "mcp" ? "v2.agents.wizard.mcp.title" : "v2.agents.new")
+        }
         onBack={() => setParams(edit ? { view: "detail", id: edit.id } : {})}
         steps={<Steps steps={stepLabels} current={step - firstStep} onSelect={(i) => select(i + firstStep)} />}
         end={
@@ -616,7 +625,23 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
         </>
       )}
 
-      {step === 1 && method === "byoc" && (
+      {step === 1 && method === "byoc" && form.protocol === "mcp" && (
+        <>
+          <ByocBasicCard form={form} set={set} err={err} nameLocked={Boolean(edit)} />
+          <McpServerCard form={form} set={set} err={err} />
+          <ByocArtifactCard
+            form={form}
+            set={set}
+            err={err}
+            ui={{ ...ui, customSkills }}
+            onUpload={(file) => void uploadZip(file)}
+            onPython={changePython}
+          />
+          <ByocEnvCard form={form} set={set} />
+        </>
+      )}
+
+      {step === 1 && method === "byoc" && form.protocol !== "mcp" && (
         <>
           <ByocBasicCard form={form} set={set} err={err} nameLocked={Boolean(edit)} />
           <ByocArtifactCard

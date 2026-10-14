@@ -129,6 +129,67 @@ function TryIt({ agent }: { agent: AgentInfo }) {
   );
 }
 
+const TARGET_SIGNAL = (status: string | null): Signal =>
+  status === "READY" ? "ok" : status === "FAILED" || status === "MISSING" || status?.endsWith("UNSUCCESSFUL") ? "act" : status ? "wait" : "off";
+
+/**
+ * An MCP server is a tool, not an agent: no chat, no gate. What matters is its
+ * Gateway target and the tools agents see through it (`<target>___<tool>`).
+ */
+function McpServerPanel({ agent }: { agent: AgentInfo }) {
+  const { t } = useTranslation();
+  const status = useLoad(() => api.agentMcp(agent.id), `v3-agent-mcp:${agent.id}:${agent.status}:${agent.version}`);
+  const d = status.data;
+  return (
+    <Panel
+      title={t("v3.mcp.title")}
+      signal={TARGET_SIGNAL(d?.target_status ?? null)}
+      end={<button type="button" className="v3-btn ghost sm" onClick={status.reload} disabled={status.loading}><RefreshCw size={13} /> {t("v3.ux.refresh")}</button>}
+    >
+      {status.error ? (
+        <Notice s="act">{status.error}</Notice>
+      ) : !d ? (
+        <Skeleton rows={3} />
+      ) : (
+        <div style={{ display: "grid", gap: 14 }} data-testid="v3-mcp-panel">
+          <div className="v3-grid c3">
+            <Stat label={t("v3.mcp.target")} value={<span className="mono" style={{ fontSize: 15 }}>{d.target_name || "—"}</span>} />
+            <Stat
+              label={t("v3.mcp.status")}
+              value={<Chip s={TARGET_SIGNAL(d.target_status)}>{d.target_status ?? t("v3.mcp.notWired")}</Chip>}
+              foot={d.status_reasons.join("; ") || undefined}
+            />
+            <Stat label={t("v3.mcp.tools")} value={d.tools.length} />
+          </div>
+          {d.endpoint && (
+            <div>
+              <div className="v3-hint">{t("v3.mcp.endpoint")}</div>
+              <code className="mono" style={{ wordBreak: "break-all", fontSize: 12 }}>{d.endpoint}</code>
+            </div>
+          )}
+          {d.tools_error && <Notice s="wait">{t("v3.mcp.toolsError")} {d.tools_error}</Notice>}
+          {d.tools.length > 0 ? (
+            <table className="v3-table">
+              <thead><tr><th>{t("v3.mcp.toolName")}</th><th>{t("v3.mcp.toolDesc")}</th></tr></thead>
+              <tbody>
+                {d.tools.map((tool) => (
+                  <tr key={tool.name}><td className="mono">{tool.name}</td><td style={{ color: "var(--v3-text-2)" }}>{tool.description || "—"}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          ) : d.target_status === "READY" && !d.tools_error ? (
+            <Empty title={t("v3.mcp.noTools")} />
+          ) : null}
+          <Notice s="info">
+            {t("v3.mcp.howToUse", { target: d.target_name })}{" "}
+            <Link to="/v3/governance" style={{ textDecoration: "underline" }}>{t("v3.mcp.openGovernance")}</Link>
+          </Notice>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function AgentDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -163,8 +224,9 @@ function AgentDetail({ id }: { id: string }) {
 
   const name = a.display_name || a.name;
   const deploy = a.deployments?.[0] ?? a.deployment;
-  const spec = a.spec as { model_id?: string; model?: string; system_prompt?: string; tools?: unknown[] };
+  const spec = a.spec as { model_id?: string; model?: string; system_prompt?: string; tools?: unknown[]; protocol?: string };
   const pending = release.data?.pending ?? null;
+  const mcpServer = spec.protocol === "mcp";
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
@@ -186,8 +248,8 @@ function AgentDetail({ id }: { id: string }) {
           <>
             <button type="button" className="v3-btn" disabled={agent.loading || release.loading || versions.loading}
               onClick={() => { agent.reload(); release.reload(); versions.reload(); }}><RefreshCw size={14} /> {t("v3.ux.refresh")}</button>
-            <Link to={`/v3/chat?agent=${a.id}`} className="v3-btn"><MessagesSquare size={14} /> {t("v3.agent.chat")}</Link>
-            <Link to={`/v3/gate?agent=${a.id}`} className="v3-btn"><Scale size={14} /> {t("v3.agent.gate")}</Link>
+            {!mcpServer && <Link to={`/v3/chat?agent=${a.id}`} className="v3-btn"><MessagesSquare size={14} /> {t("v3.agent.chat")}</Link>}
+            {!mcpServer && <Link to={`/v3/gate?agent=${a.id}`} className="v3-btn"><Scale size={14} /> {t("v3.agent.gate")}</Link>}
             <Link to={`/v2/agents?view=detail&id=${a.id}`} className="v3-btn ghost">
               <Settings2 size={14} /> {t("v3.agent.edit")}
             </Link>
@@ -199,7 +261,7 @@ function AgentDetail({ id }: { id: string }) {
         <span className="v3-hint">{t("v3.ux.runtimeStatus")}</span>
       </div>
 
-      <Panel title={t("v3.agent.lifecycle")} signal={agentSignal(a)}>
+      {mcpServer ? <McpServerPanel agent={a} /> : <Panel title={t("v3.agent.lifecycle")} signal={agentSignal(a)}>
         {release.error ? <Notice s="wait">{t("v3.ux.releaseFailed")} {release.error}
           <button type="button" className="v3-btn sm" onClick={release.reload}>{t("v3.ux.retry")}</button>
         </Notice> : !release.data ? <Skeleton rows={2} /> : <Lifecycle agent={a} release={release.data} />}
@@ -211,12 +273,20 @@ function AgentDetail({ id }: { id: string }) {
             </Notice>
           </div>
         )}
-      </Panel>
+      </Panel>}
 
       <div className="v3-grid c4">
         <Panel><Stat label={t("v3.agents.version")} value={`v${a.version ?? "—"}`} /></Panel>
-        <Panel><Stat label={t("v3.agent.model")} value={<span className="mono" style={{ fontSize: 13, lineHeight: 1.45, wordBreak: "break-all", display: "block" }}>{spec.model_id ?? spec.model ?? "—"}</span>} /></Panel>
-        <Panel><Stat label={t("v3.agent.tools")} value={Array.isArray(spec.tools) ? spec.tools.length : 0} /></Panel>
+        {mcpServer ? (
+          <Panel><Stat label={t("v3.mcp.kind")} value={<span style={{ fontSize: 15 }}>{t("v3.mcp.kindValue")}</span>} /></Panel>
+        ) : (
+          <Panel><Stat label={t("v3.agent.model")} value={<span className="mono" style={{ fontSize: 13, lineHeight: 1.45, wordBreak: "break-all", display: "block" }}>{spec.model_id ?? spec.model ?? "—"}</span>} /></Panel>
+        )}
+        {mcpServer ? (
+          <Panel><Stat label={t("v3.mcp.target")} value={<span className="mono" style={{ fontSize: 15 }}>{(a.spec as { mcp?: { target_name?: string } }).mcp?.target_name ?? "—"}</span>} /></Panel>
+        ) : (
+          <Panel><Stat label={t("v3.agent.tools")} value={Array.isArray(spec.tools) ? spec.tools.length : 0} /></Panel>
+        )}
         <Panel><Stat label={t("v3.agents.updated")} value={ago(a.updated_at)} /></Panel>
       </div>
 
@@ -266,7 +336,7 @@ function AgentDetail({ id }: { id: string }) {
         </Panel>
       </div>
 
-      <TryIt agent={a} />
+      {!mcpServer && <TryIt agent={a} />}
     </div>
   );
 }

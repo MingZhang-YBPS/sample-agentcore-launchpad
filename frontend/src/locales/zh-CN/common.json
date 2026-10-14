@@ -5699,7 +5699,21 @@
           "block": "拒绝该消息",
           "bufferedNote": "回答会一次性返回，不再逐字流式输出：一个手机号可能横跨两段增量，因此需要在展示前对完整回答做检查。"
         },
-        "templateNeeds": "这是从共享模板开始的。请自行提供：{{items}}"
+        "templateNeeds": "这是从共享模板开始的。请自行提供：{{items}}",
+        "mcp": {
+          "title": "新建 MCP 服务器",
+          "cardTitle": "MCP 服务器",
+          "cardSub": "智能体通过工作区网关调用这个服务器的工具。",
+          "targetName": "网关目标名称",
+          "targetHint": "字母、数字和单个连字符。每个工具在智能体那里显示为 {{example}}。",
+          "wiring": "平台会自动完成接入：为它创建专属的 Cognito 客户端用于入站 JWT 认证、一个 OAuth2 凭证提供方，以及工作区网关上的目标。只有网关能调用它。服务器不会获得任何模型或记忆权限。",
+          "errTarget": "请使用 1–100 个字母、数字或单个连字符，开头和结尾不能是连字符。",
+          "contract": "MCP 服务器约定",
+          "contractBody": "在 0.0.0.0:8000/mcp 以 streamable HTTP 提供 MCP（AgentCore Runtime 的 MCP 约定）。\n\nPython（官方 MCP SDK）：\n  from mcp.server.fastmcp import FastMCP\n  mcp = FastMCP(host=\"0.0.0.0\", stateless_http=True)\n\n  @mcp.tool()\n  def find_order(order_id: str) -> str:\n      \"\"\"查询一个订单。\"\"\"\n      ...\n\n  if __name__ == \"__main__\":\n      mcp.run(transport=\"streamable-http\")\n\n在 requirements.txt 里固定 mcp>=1.10,<2（mcp 2.x 已把 FastMCP 改名为 MCPServer）。只支持 stdio 的服务器需要先改成 streamable HTTP。",
+          "kind": "类型",
+          "kindValue": "MCP 服务器（工具，不是智能体）",
+          "reviewSub": "部署会创建 Runtime、Cognito 客户端、OAuth2 提供方和网关目标，然后列出服务器的工具。"
+        }
       },
       "identity": {
         "open": "身份",
@@ -10209,7 +10223,9 @@
       "wayImport": "导入现有 Runtime",
       "wayImportSub": "接管这个账号里已经在运行的 Runtime 或 Harness",
       "wayPresets": "系统预置",
-      "wayPresetsSub": "由管理员安装的平台托管智能体"
+      "wayPresetsSub": "由管理员安装的平台托管智能体",
+      "wayMcp": "MCP 服务器",
+      "wayMcpSub": "把你的 MCP 服务器托管到 AgentCore Runtime，并把工具接入网关"
     },
     "assistant": {
       "eyebrow": "设计",
@@ -11403,6 +11419,22 @@
     "noWorkspace": {
       "eyebrow": "访问 · 工作区",
       "waiting": "等待分配工作区"
+    },
+    "mcp": {
+      "title": "MCP 服务器 · 网关",
+      "target": "网关目标",
+      "status": "目标状态",
+      "notWired": "尚未接入",
+      "tools": "工具",
+      "endpoint": "Runtime 的 MCP 端点（只有网关能调用）",
+      "toolsError": "无法通过网关列出工具：",
+      "toolName": "工具（智能体调用时的名称）",
+      "toolDesc": "说明",
+      "noTools": "服务器没有列出任何工具",
+      "howToUse": "智能体以网关工具的方式挂载这些工具（{{target}}___*）。网关级的注册中心记录不会自动更新；需要在目录里列出它们时，请到治理页刷新。",
+      "openGovernance": "打开治理页",
+      "kind": "类型",
+      "kindValue": "MCP 服务器"
     }
   },
   "models": {

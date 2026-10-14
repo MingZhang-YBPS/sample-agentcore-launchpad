@@ -1,4 +1,4 @@
-import { ArrowRight, Boxes, Code2, Download, Layers, Rocket, Sparkles, Workflow } from "lucide-react";
+import { ArrowRight, Boxes, Code2, Download, Layers, Plug, Rocket, Sparkles, Workflow } from "lucide-react";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
@@ -268,6 +268,7 @@ export function V3Create() {
             <WayCard to="/v2/agents?view=new&method=zip_runtime" icon={<Workflow size={16} />} title={t("v3.create.wayStrands")} desc={t("v3.create.wayStrandsSub")} />
             <WayCard to="/v2/agents?view=new&method=container" icon={<Boxes size={16} />} title={t("v3.create.waySdk")} desc={t("v3.create.waySdkSub")} />
             <WayCard to="/v2/agents?view=new&method=byoc" icon={<Code2 size={16} />} title={t("v3.create.wayByoc")} desc={t("v3.create.wayByocSub")} />
+            <WayCard to="/v2/agents?view=new&method=byoc&protocol=mcp" icon={<Plug size={16} />} title={t("v3.create.wayMcp")} desc={t("v3.create.wayMcpSub")} />
             <div style={{ height: 1, background: "var(--v3-line)", margin: "6px 0" }} aria-hidden="true" />
             <WayCard to="/v3/assistant" icon={<Sparkles size={16} />} title={t("v3.create.wayAssistant")} desc={t("v3.create.wayAssistantSub")} />
             <WayCard to="/create/studio" icon={<Workflow size={16} />} title={t("v3.create.wayStudio")} desc={t("v3.create.wayStudioSub")} />

@@ -952,6 +952,25 @@ export interface AgentSpecInput {
   /** Inbound auth of this agent's Runtime. Omitted ⇒ inherit the workspace
    * default at deploy time; an explicit value pins the agent. */
   inbound_auth?: InboundAuth | null;
+  /** Runtime protocol; "mcp" hosts a byoc artifact as an MCP server. Omitted ⇒ "http". */
+  protocol?: "http" | "a2a" | "mcp";
+  /** required iff protocol="mcp": the Gateway target the server's tools appear under */
+  mcp?: { target_name: string };
+}
+
+/** `GET /api/agents/{id}/mcp` — an MCP server's Gateway wiring, read back live. */
+export interface McpServerStatus {
+  target_name: string;
+  target_id: string | null;
+  client_id: string | null;
+  gateway_id: string | null;
+  endpoint: string | null;
+  /** READY / CREATING / SYNCHRONIZING / FAILED…, MISSING (deleted on AWS), UNKNOWN */
+  target_status: string | null;
+  status_reasons: string[];
+  /** as agents see them through the Gateway: `<target>___<tool>` */
+  tools: { name: string; description: string }[];
+  tools_error: string | null;
 }
 
 /** One skill discovered by /api/registry/skills/inspect (zip or git source). */
@@ -5545,6 +5564,7 @@ export const api = {
   getAgent: (id: string, workspaceId?: string | null) =>
     request<AgentInfo>(`/api/agents/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
+  agentMcp: (id: string) => request<McpServerStatus>(`/api/agents/${id}/mcp`),
   // T20/T21 — release bundles and promotions
   createReleaseBundle: (id: string, body: { snapshot_seq?: number; note?: string } = {}) =>
     request<ReleaseBundleInfo>(`/api/agents/${encodeURIComponent(id)}/release-bundles`, {

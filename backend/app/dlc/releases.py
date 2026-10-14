@@ -78,6 +78,8 @@ def gateable(agent: Agent) -> tuple[bool, str | None]:
         return False, f"method '{agent.method}' has no named endpoints the platform manages"
     if (agent.spec or {}).get("protocol") == "a2a":
         return False, "A2A runtimes do not accept an endpoint qualifier"
+    if (agent.spec or {}).get("protocol") == "mcp":
+        return False, "MCP servers are served to agents through their Gateway target"
     if agent.system_key:
         return False, "system-managed presets are released by the platform"
     if not agent.resource_id or not agent.version:

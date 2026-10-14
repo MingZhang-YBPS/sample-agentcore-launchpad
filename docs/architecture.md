@@ -429,13 +429,44 @@ into the bundle directory. For `container_source`, the platform's own
 any buildspec the upload carries** — the member controls the Dockerfile only,
 never the build recipe.
 
-**v1 scope.** HTTP protocol only (no A2A); no toolkits/skills/knowledge
+**v1 scope.** HTTP or MCP protocol (no A2A); no toolkits/skills/knowledge
 bases/tools on the spec (the platform does not generate this code, so it cannot
 wire them — configure capabilities inside your own code); `system_prompt` is
 optional and serves as a description. Config-bundle experiments and canary
 candidates degrade with `custom-source-unverified`, exactly like other
 custom-source runtimes. Samples: [`samples/byoc/`](../samples/byoc/README.md);
 lab walkthrough: [docs/lab/13-byoc.md](lab/13-byoc.md).
+
+### Hosted MCP servers (`protocol: "mcp"`)
+
+The V3 **MCP server** entry (`/v2/agents?view=new&method=byoc&protocol=mcp`) deploys a
+BYOC artifact (any of the three kinds) that serves MCP over streamable HTTP on
+`0.0.0.0:8000/mcp`, and makes the workspace Gateway its only caller
+(`app/services/mcp_servers.py`; design: `docs/design` §15, minimal version). The
+spec carries `mcp: {target_name}`; `client_id`, `provider_arn` and `target_id` are
+server-owned — the create / redeploy routes replace whatever the request sends, so
+no caller can point the pipeline at another Gateway target.
+
+| Stage | MCP-server work |
+|---|---|
+| generate | a Cognito app client of its own (`lp-mcp-<agent id12>`, client_credentials, scope `launchpad-gw/invoke`) in the workspace pool; stamps `inbound_auth` = JWT on that pool allowing only that client |
+| provision | per-agent role **without** `BedrockModels` / Mantle grants (a tool calls no model); memory is forced off |
+| deploy | `CreateAgentRuntime` / `UpdateAgentRuntime` with `protocolConfiguration.serverProtocol = MCP` — echoed on every update (an omitted one resets the runtime to HTTP); no `MODEL_ID` env |
+| register | instead of an A2A record: an OAuth2 credential provider (same name) holding the client, then an MCP-server Gateway target whose endpoint is the runtime's data-plane URL on `DEFAULT`; creating it — or `SynchronizeGatewayTargets` after a re-publish — lists the tools; a same-named target pointing elsewhere is refused (`409 mcp.target_name_taken`), a renamed server's old target is deleted |
+
+The Gateway-level Registry record is **not** rewritten (an update sends an approved
+record back to DRAFT for every attaching agent); the register stage logs that
+Governance → Registry import refreshes it. An MCP server is not invocable
+(`invoke_capability.reason_code = not-agent-protocol`, so Chat, `/v1` and evaluation
+skip it), not gateable, and its inbound auth cannot be switched (`422
+agent.inbound_auth_unsupported`); a redeploy cannot switch the protocol to or from
+`mcp`. `GET /api/agents/{id}/mcp` reads the target status and the tools agents see
+through the Gateway (`<target>___<tool>`) back live — the V3 agent page renders it in
+place of the lifecycle, chat and try-it panels. Delete runs in reverse: Gateway target →
+runtime → OAuth2 provider → Cognito client, idempotent. Sample:
+[`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md) (`mcp>=1.10,<2`).
+Not in this version: tool review, Cedar scaffolding, the stdio bridge, health
+schedules, Lambda targets, VPC mode.
 
 ### Recommendation trace source
 

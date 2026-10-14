@@ -488,15 +488,17 @@ def policy_document(
     """
     statements: list[dict[str, Any]] = []
 
-    # ---- models: always needed, scoped to the configured id(s) ----
-    statements.append({
-        "Sid": "BedrockModels",
-        "Effect": "Allow",
-        "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-        "Resource": allowed_model_resources(spec, ctx),
-    })
+    # ---- models: scoped to the configured id(s); an MCP server is a tool that
+    # calls no model, so it gets none ----
+    if spec.protocol != "mcp":
+        statements.append({
+            "Sid": "BedrockModels",
+            "Effect": "Allow",
+            "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+            "Resource": allowed_model_resources(spec, ctx),
+        })
 
-    if uses_mantle(spec):
+    if spec.protocol != "mcp" and uses_mantle(spec):
         # Bedrock Mantle is a SEPARATE IAM service from bedrock — bedrock:InvokeModel
         # does not cover it. Without these a Mantle agent reaches ACTIVE and then
         # fails its first invoke with 401 bedrock-mantle:CreateInference.

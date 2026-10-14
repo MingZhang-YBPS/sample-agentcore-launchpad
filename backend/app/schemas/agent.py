@@ -500,6 +500,28 @@ class ByocConfig(BaseModel):
         return self
 
 
+# A Gateway target name (AWS: `([0-9a-zA-Z][-]?){1,100}`), without a trailing
+# hyphen: it prefixes every tool the target exposes (`<target>___<tool>`).
+MCP_TARGET_NAME_RE = r"^[a-zA-Z0-9](?:-?[a-zA-Z0-9]){0,99}$"
+
+
+class McpServerConfig(BaseModel):
+    """A BYOC artifact hosted as an MCP server (``protocol="mcp"``).
+
+    The artifact serves streamable HTTP on ``0.0.0.0:8000/mcp``. The deploy
+    pipeline gives the runtime its own inbound Cognito client (JWT), an OAuth2
+    provider for that client and a target on the workspace Gateway, so agents
+    reach the tools through the Gateway as ``<target_name>___<tool>``.
+    """
+
+    target_name: str = Field(min_length=1, max_length=100, pattern=MCP_TARGET_NAME_RE)
+    # Server-owned: stamped by the deploy pipeline (services/mcp_servers.py),
+    # never taken from the client — the console only renders them back.
+    client_id: str | None = Field(default=None, max_length=128)
+    provider_arn: str | None = Field(default=None, max_length=512)
+    target_id: str | None = Field(default=None, max_length=64)
+
+
 class AgentSpec(BaseModel):
     # The immutable slug — it names every AWS resource the agent owns.
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,47}$")
@@ -588,8 +610,12 @@ class AgentSpec(BaseModel):
     # See app/templates/kb_support.py and .trellis/spec/launchpad/managed-kb.md.
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list, max_length=10)
     # Runtime service protocol. "a2a" deploys a standard A2A JSON-RPC server
-    # (port 9000, serverProtocol=A2A) — zip_runtime only in v1.
-    protocol: Literal["http", "a2a"] = "http"
+    # (port 9000, serverProtocol=A2A) — zip_runtime only in v1. "mcp" hosts a
+    # BYOC artifact as an MCP server (port 8000 /mcp, serverProtocol=MCP) wired
+    # to the workspace Gateway — byoc only, settings in ``mcp``.
+    protocol: Literal["http", "a2a", "mcp"] = "http"
+    # MCP server settings — required iff protocol="mcp"
+    mcp: McpServerConfig | None = None
     # AgentCard skills served by the A2A server and published to the Registry
     a2a_skills: list[A2ASkill] = Field(default_factory=list, max_length=20)
     # Bring-your-own-code settings — required iff method="byoc"
@@ -660,8 +686,8 @@ class AgentSpec(BaseModel):
             return self
         if self.byoc is None:
             raise ValueError("method='byoc' requires the byoc settings block")
-        if self.protocol != "http":
-            raise ValueError("byoc agents speak the HTTP runtime contract only in v1")
+        if self.protocol == "a2a":
+            raise ValueError("byoc agents speak the HTTP or MCP runtime contract only")
         for field_name in ("toolkits", "skills", "knowledge_bases"):
             if getattr(self, field_name):
                 raise ValueError(
@@ -740,7 +766,8 @@ class AgentSpec(BaseModel):
             )
         if self.protocol != "http":
             raise ValueError(
-                "rest tools / tool auth are not supported by protocol=a2a runtimes"
+                f"rest tools / tool auth are not supported by protocol={self.protocol} "
+                "runtimes"
             )
         if self.code or self.code_bundle:
             raise ValueError(
@@ -768,6 +795,40 @@ class AgentSpec(BaseModel):
                     f"tool '{tool.name}': auth applies to rest and mcp tools only — "
                     "gateway tools are authenticated by the gateway's own targets"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _mcp_constraints(self) -> "AgentSpec":
+        """An MCP server is a tool, not an agent.
+
+        It is reached only through the Gateway, which presents a token of the
+        server's own Cognito client — so its inbound auth is platform-owned JWT
+        (stamped at deploy), and it carries no tools, memory or outbound-auth
+        declarations of its own.
+        """
+        if self.protocol != "mcp":
+            if self.mcp is not None:
+                raise ValueError("mcp settings require protocol='mcp'")
+            return self
+        if self.method != "byoc":
+            raise ValueError(
+                "protocol='mcp' is supported by the byoc method only — upload the "
+                "server as a code zip, a Dockerfile context or an ECR image"
+            )
+        if self.mcp is None:
+            raise ValueError("protocol='mcp' requires the mcp settings block")
+        if self.tools:
+            raise ValueError(
+                "an MCP server declares no tools of its own — its tools are what it "
+                "serves on /mcp"
+            )
+        if self.inbound_auth is not None and self.inbound_auth.mode != "jwt":
+            raise ValueError(
+                "an MCP server's inbound auth is the platform-managed JWT authorizer "
+                "for its Gateway client — omit inbound_auth"
+            )
+        # never wired into an MCP server: it has no memory session of its own
+        self.memory = MemoryConfig(short_term=False, long_term=False)
         return self
 
     @model_validator(mode="after")

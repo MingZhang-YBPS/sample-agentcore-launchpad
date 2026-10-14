@@ -211,6 +211,12 @@ def invoke_capability(agent: Agent) -> dict[str, Any]:
             "reason": "The agent is not active.",
         }
     if agent.method != DISCOVERED_METHOD:
+        if (agent.spec or {}).get("protocol") == "mcp":
+            return {
+                "eligible": False,
+                "reason_code": "not-agent-protocol",
+                "reason": "MCP servers are tools: agents call them through the Gateway.",
+            }
         return {"eligible": True, "reason_code": None, "reason": None}
 
     spec = agent.spec or {}
