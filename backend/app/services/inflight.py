@@ -110,12 +110,13 @@ def resumable_job_types() -> frozenset[str]:
     # Lazy, as in resume_pending_jobs: the uninstall worker's import chain reaches
     # the deployer pipeline.
     from app.assistant import purge as assistant_purge
-    from app.services import promotion_exec, workspace_bootstrap
+    from app.services import project_isolation, promotion_exec, workspace_bootstrap
     from app.system_agents import uninstall as system_uninstall
 
     return frozenset({
         "deploy_agent",
         workspace_bootstrap.JOB_TYPE,
+        project_isolation.JOB_TYPE,
         system_uninstall.JOB_TYPE,
         promotion_exec.JOB_TYPE,
         assistant_purge.JOB_TYPE,

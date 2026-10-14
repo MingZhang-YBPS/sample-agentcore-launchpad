@@ -217,6 +217,7 @@ def init_db(bind=None) -> None:
     from app.models import mcp_review as _mcp_review_models  # noqa: F401 — projects §15.6
     from app.models import network as _network_models  # noqa: F401 — projects §12
     from app.models import platform_settings as _platform_settings  # noqa: F401
+    from app.models import project_isolation as _isolation_models  # noqa: F401 — projects §10.2
     from app.models import projects as _project_models  # noqa: F401 — design §2.2
     from app.models import resource_mapping as _mapping_models  # noqa: F401
     from app.models import selfservice as _selfservice_models  # noqa: F401 — T35/T36
@@ -480,6 +481,20 @@ def _migrate(bind) -> None:
     _migrate_project_columns(bind)
     _migrate_template_project_column(bind)
     _migrate_actor_user_id_columns(bind)
+    _migrate_isolation_columns(bind)
+
+
+def _migrate_isolation_columns(bind) -> None:
+    """`agents.isolation_applied` (projects design §10.2): the boundary version an
+    agent's role carries; NULL on every existing row (no boundary attached yet)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "agents" not in inspector.get_table_names():
+        return
+    if "isolation_applied" not in {c["name"] for c in inspector.get_columns("agents")}:
+        with bind.begin() as conn:
+            conn.execute(text("ALTER TABLE agents ADD COLUMN isolation_applied VARCHAR(16)"))
 
 
 def _migrate_actor_user_id_columns(bind) -> None:

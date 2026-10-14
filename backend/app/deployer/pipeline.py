@@ -504,7 +504,7 @@ def resume_pending_jobs() -> list[str]:
     # Lazy: the uninstall worker imports the agents router (teardown helper), which
     # imports the system-agents service, which imports this module.
     from app.assistant import purge as assistant_purge
-    from app.services import promotion_exec
+    from app.services import project_isolation, promotion_exec
     from app.system_agents import uninstall as system_uninstall
 
     starters: dict[str, Callable[[str], threading.Thread]] = {
@@ -517,6 +517,9 @@ def resume_pending_jobs() -> list[str]:
         promotion_exec.JOB_TYPE: promotion_exec.start_resume,
         # an architect-conversation CLEAR resumes from its verified checkpoints
         assistant_purge.JOB_TYPE: assistant_purge.start_purge_resume,
+        # projects §10.2: an isolated project's provisioning continues from its first
+        # unfinished stage, inside the job's project
+        project_isolation.JOB_TYPE: project_isolation.start_provision_async,
     }
     db = SessionLocal()
     try:
