@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
-import { api, type AgentTemplateInfo, ApiError, errorMessage } from "../../lib/api";
+import { ApiErrorDetail } from "../../components/ApiErrorDetail";
+import { api, type AgentTemplateInfo } from "../../lib/api";
 import {
   AGENT_NAME_RE,
   type AgentForm,
@@ -64,7 +65,8 @@ export function V3Create() {
   const [form, setForm] = useState<AgentForm>(() => emptyAgentForm("harness"));
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // what the create call threw; the notice shows its AWS details (projects §19)
+  const [error, setError] = useState<unknown>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
   const rows = useMemo(() => templates.data?.templates ?? [], [templates.data]);
@@ -115,7 +117,7 @@ export function V3Create() {
       toast("ok", t("v2.agents.wizard.started", { name: res.agent.display_name || res.agent.name }));
       navigate(`/v3/agents?id=${encodeURIComponent(res.agent.id)}`);
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.message}` : errorMessage(err));
+      setError(err);
       setBusy(false);
     }
   };
@@ -129,7 +131,7 @@ export function V3Create() {
       <div className="v3-grid v3-split" style={{ alignItems: "start" }}>
         <div style={{ display: "grid", gap: 16 }}>
           <Panel title={t("v3.create.startFrom")}>
-            {templates.error ? <Notice s="act">{templates.error} <button type="button" className="v3-btn sm" onClick={templates.reload}>{t("v3.ux.retry")}</button></Notice> : templates.loading && !templates.data ? (
+            {templates.error ? <Notice s="act"><ApiErrorDetail error={templates.failure} /> <button type="button" className="v3-btn sm" onClick={templates.reload}>{t("v3.ux.retry")}</button></Notice> : templates.loading && !templates.data ? (
               <Skeleton rows={2} />
             ) : (
               <div className="v3-scenarios" role="radiogroup" aria-label={t("v3.create.startFrom")}
@@ -220,7 +222,7 @@ export function V3Create() {
                 <div className="v3-field" role="group" aria-label={t("v3.create.knowledge")} tabIndex={-1}
                   aria-invalid={touched && !!kbError} aria-describedby={touched && kbError ? "v3-kb-error" : undefined}>
                   <span>{t("v3.create.knowledge")}{needsKb ? ` · ${t("v3.create.required")}` : ""}</span>
-                  {kbs.error ? <Notice s="act">{kbs.error} <button type="button" className="v3-btn sm" onClick={kbs.reload}>{t("v3.ux.retry")}</button></Notice> : kbs.loading && !kbs.data ? (
+                  {kbs.error ? <Notice s="act"><ApiErrorDetail error={kbs.failure} /> <button type="button" className="v3-btn sm" onClick={kbs.reload}>{t("v3.ux.retry")}</button></Notice> : kbs.loading && !kbs.data ? (
                     <Skeleton rows={1} />
                   ) : activeKbs.length === 0 ? (
                     <small className="v3-hint">
@@ -252,7 +254,7 @@ export function V3Create() {
                   {form.guardrail !== "off" && <Chip s="ok">{t("templates.piiOn")}</Chip>}
                   <span>· {t("v3.create.carriesHint")}</span>
                 </div>
-                {error && <Notice s="act">{error}</Notice>}
+                {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                   <Btn kind="primary" type="submit" disabled={busy || !canDeploy}><Rocket size={14} /> {busy ? t("v3.create.deploying") : t("v3.create.deploy")}</Btn>
                   <span style={{ color: "var(--v3-text-3)", fontSize: 13 }}>{t("v3.create.deployHint")}</span>

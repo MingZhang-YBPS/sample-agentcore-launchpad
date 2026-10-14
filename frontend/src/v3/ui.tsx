@@ -3,10 +3,14 @@
 // The vocabulary is deliberately small: a Signal is one of ok / wait / act / info /
 // off, and every status in the console — an agent, a gate, a release, a run — is
 // mapped onto it once, here, so the same colour always means the same thing.
-import { AlertTriangle, CheckCircle2, Inbox, Info, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Inbox, Info, X, XCircle } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
+import { ApiErrorDetail } from "../components/ApiErrorDetail";
+import type { ApiError } from "../lib/api";
 import { ToastContext, type ToastFn } from "./hooks";
+import { toastDetail } from "./toast";
 
 export type Signal = "ok" | "wait" | "act" | "info" | "off";
 
@@ -190,23 +194,38 @@ export function Spark({ values, s = "ok" }: { values: number[]; s?: "ok" | "act"
 /* ── toasts ────────────────────────────────────────────────────────────── */
 
 
+type ToastItem = { id: number; s: "ok" | "act"; text: string; detail: ApiError | null };
+
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [items, setItems] = useState<{ id: number; s: "ok" | "act"; text: string }[]>([]);
+  const { t } = useTranslation();
+  const [items, setItems] = useState<ToastItem[]>([]);
   const seq = useRef(0);
-  const push = useCallback<ToastFn>((s, text) => {
+  const dismiss = useCallback((id: number) => setItems((prev) => prev.filter((x) => x.id !== id)), []);
+  const push = useCallback<ToastFn>((s, text, err) => {
     const id = ++seq.current;
-    setItems((prev) => [...prev, { id, s, text }]);
-    window.setTimeout(() => setItems((prev) => prev.filter((t) => t.id !== id)), 4200);
-  }, []);
+    const detail = toastDetail(s, text, err);
+    setItems((prev) => [...prev, { id, s, text, detail }]);
+    // one with a request id stays until dismissed: the id is what support asks for
+    if (!detail) window.setTimeout(() => dismiss(id), 4200);
+  }, [dismiss]);
   const value = useMemo(() => push, [push]);
   return (
     <ToastContext.Provider value={value}>
       {children}
       <div className="v3-toasts" aria-live="polite">
-        {items.map((t) => (
-          <div key={t.id} className="v3-toast">
-            <Lamp s={t.s} />
-            <span>{t.text}</span>
+        {items.map((item) => item.detail ? (
+          <div key={item.id} className="v3-toast" data-testid="v3-toast" style={{ alignItems: "flex-start" }}>
+            <span style={{ marginTop: 4 }}><Lamp s={item.s} /></span>
+            <div style={{ flex: 1, minWidth: 0 }}><ApiErrorDetail error={item.detail} data-testid="v3-toast-error" /></div>
+            <button type="button" className="v3-btn ghost sm" aria-label={t("common.close")} title={t("common.close")}
+              onClick={() => dismiss(item.id)}>
+              <X size={13} aria-hidden="true" />
+            </button>
+          </div>
+        ) : (
+          <div key={item.id} className="v3-toast" data-testid="v3-toast">
+            <Lamp s={item.s} />
+            <span>{item.text}</span>
           </div>
         ))}
       </div>
