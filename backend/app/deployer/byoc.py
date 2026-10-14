@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
-from app.core.errors import AppError, cleanup_error, is_not_found
+from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -151,6 +151,10 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
         return StageResult(detail=f"container_image · {digest[:19]}…")
 
     manifest = byoc_uploads.get_manifest(ctx.workspace, cfg.upload_id or "")
+    staged_in = manifest.get("project_id")
+    if staged_in and agent.project_id and staged_in != agent.project_id:
+        # checked here, not at create: the request path would pay an S3 read per create
+        raise NotFoundError("byoc.upload_not_found", "upload not found")
     provenance = {
         "sha256": manifest.get("sha256", ""),
         "size_bytes": manifest.get("size_bytes", 0),

@@ -28,6 +28,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
+from app.core.project_scope import current_project
 from app.core.runtime_target import TARGET_PYTHON
 from app.services import requirements_txt
 from app.services.workspace import WorkspaceContext
@@ -264,6 +265,8 @@ def stage_upload(
     manifest = {
         "upload_id": upload_id,
         "workspace_id": workspace.id,
+        # the project it was staged in: a spec of another project may not deploy it
+        "project_id": current_project(),
         "sha256": sha256,
         "size_bytes": size_bytes,
         "original_filename": filename,

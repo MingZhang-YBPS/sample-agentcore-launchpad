@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.models.ledger import Agent, Promotion, ReleaseBundle, Workspace
+from app.models.ledger import Promotion, ReleaseBundle, Workspace
 from app.services import promotion as promotion_service
 
 # Gates that inform but never refuse an execution.
@@ -420,17 +420,27 @@ def build_plan(
     No AWS mutation and no ledger write: the one live read is the Policy Engine mode (via
     the gates), which is a `GetGateway`.
     """
+    from app.services import promotion as promotion_service
     from app.services import resource_mapping
 
-    existing = db.query(Agent).filter(
-        Agent.workspace_id == target.id,
-        Agent.name == bundle.agent_name,
-        Agent.status != "deleted",
-    ).first()
+    # names are unique per workspace: another project's holder blocks the promotion,
+    # and its spec / version are never read into this plan
+    existing, foreign = promotion_service.target_holder(
+        db, target.id, bundle.agent_name, bundle.project_id,
+    )
     artifact = bundle.artifact or {}
     needs_copy = any(artifact.get(k) for k in ("image_digest", "upload_id", "image_uri"))
     items: list[dict[str, Any]] = []
-    if existing is not None:
+    if foreign:
+        items.append(
+            {
+                "key": "agent",
+                "action": "blocked",
+                "detail": f"the name '{bundle.agent_name}' is taken by another project in "
+                f"{target.id}",
+            }
+        )
+    elif existing is not None:
         items.append(
             {
                 "key": "agent",

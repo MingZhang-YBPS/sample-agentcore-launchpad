@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from app.core.errors import AppError
+from app.core.project_scope import current_project
 from app.evaluation import agentcore_eval as ac
 
 if TYPE_CHECKING:
@@ -103,8 +104,8 @@ def refuse_hidden_evaluators(
     """Workspace isolation: a custom evaluator the viewer cannot see is refused
     exactly like one that does not exist (`{code_prefix}.evaluator_unsupported`,
     "unknown evaluator"). Built-in and third-party ids are always visible."""
-    if not viewer.filters:
-        return
+    if not viewer.filters and current_project() is None:
+        return  # (hidden_aws_ids also hides another project's evaluators)
     from app.services import creators, visibility
 
     custom = [str(e).strip() for e in ids or () if not str(e).startswith(_MANAGED)]
@@ -129,8 +130,8 @@ def require_visible_evaluators(
     (`GET/PUT/DELETE /api/eval/evaluators/{id}`, the session SCORE NOW): a hidden
     custom evaluator answers exactly what a missing one does — AWS's own
     `ResourceNotFoundException`, through the global ClientError handler."""
-    if not viewer.filters:
-        return
+    if not viewer.filters and current_project() is None:
+        return  # (hidden_aws_ids also hides another project's evaluators)
     from botocore.exceptions import ClientError
 
     from app.services import creators, visibility

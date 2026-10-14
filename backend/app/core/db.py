@@ -452,6 +452,21 @@ def _migrate(bind) -> None:
     _migrate_creator_columns(bind)
     _migrate_resource_creators_index(bind)
     _migrate_project_columns(bind)
+    _migrate_template_project_column(bind)
+
+
+def _migrate_template_project_column(bind) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "shared_templates" not in inspector.get_table_names():
+        return
+    if "source_project_id" not in {c["name"] for c in inspector.get_columns("shared_templates")}:
+        with bind.begin() as conn:
+            # NULL = published before projects; unpublishing reads the source agent anyway
+            conn.execute(
+                text("ALTER TABLE shared_templates ADD COLUMN source_project_id VARCHAR(32)")
+            )
 
 
 def _migrate_creator_columns(bind) -> None:

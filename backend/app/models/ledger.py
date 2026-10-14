@@ -573,6 +573,8 @@ class SharedTemplate(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     # the publishing environment, NOT a scope — reads are deliberately cross-workspace
     source_workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    # the publishing project (design §4.2), provenance like the workspace above
+    source_project_id: Mapped[str | None] = mapped_column(String(32), default=None)
     agent_id: Mapped[str] = mapped_column(String(32), index=True)
     source_agent_name: Mapped[str] = mapped_column(String(64), default="")
     title: Mapped[str] = mapped_column(String(80), default="")
@@ -986,6 +988,9 @@ class AuditEvent(ProjectShared, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+_PLATFORM_JOB_TYPES = frozenset({"bootstrap_workspace", "uninstall_system_agent"})
+
+
 class Job(ProjectShared, Base):
     __tablename__ = "jobs"
 
@@ -1002,3 +1007,9 @@ class Job(ProjectShared, Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+
+    def project_platform_row(self) -> bool:
+        """Bootstrap and preset uninstall jobs serve the workspace, and a deploy of a
+        system preset (`payload.platform`, set by create_deployment) serves the
+        platform: none of them belongs to a project."""
+        return self.type in _PLATFORM_JOB_TYPES or (self.payload or {}).get("platform") is True

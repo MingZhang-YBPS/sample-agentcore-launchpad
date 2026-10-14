@@ -19,10 +19,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import text, update
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
+from app.core.project_scope import project_context
 from app.models.ledger import Agent, Deployment, Job
 from app.services import memory_ownership, workspace_bootstrap
 from app.services.workspace import WorkspaceContext, context_for_workspace
@@ -150,8 +151,12 @@ def create_deployment(
     db.flush()
     job = Job(
         workspace_id=agent.workspace_id,
+        # the agent's project, also when the deploy starts off a request (a promotion
+        # worker, a resumed job); a system preset's deploy is platform-level
+        project_id=agent.project_id,
         type="deploy_agent",
         payload={
+            **({"platform": True} if agent.project_id is None else {}),
             "agent_id": agent.id,
             "deployment_id": deployment.id,
             "mode": mode,
@@ -181,6 +186,20 @@ _RESUMING: set[str] = set()
 
 
 def execute_deploy_job(job_id: str, *, resume: bool | None = None) -> None:
+    """Run the job as its project (rows it writes — releases, audit — are stamped and
+    read like the request that started it); see ``_execute_deploy_job``."""
+    db = SessionLocal()
+    try:
+        found = db.execute(
+            text("SELECT project_id FROM jobs WHERE id = :id"), {"id": job_id},
+        ).first()
+    finally:
+        db.close()
+    with project_context(found[0] if found else None):
+        _execute_deploy_job(job_id, resume=resume)
+
+
+def _execute_deploy_job(job_id: str, *, resume: bool | None = None) -> None:
     """Run (or resume) one deploy job to completion. Never raises.
 
     Durable eligibility claim: a fresh launch (``start_deploy_async``) takes

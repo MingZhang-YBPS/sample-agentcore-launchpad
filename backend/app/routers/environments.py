@@ -16,7 +16,7 @@ from app.core.db import get_db
 from app.models.ledger import Workspace
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import environments
+from app.services import access, environments
 from app.services.agentcore.client import control_client
 from app.services.workspace import granted_workspace_ids
 
@@ -35,6 +35,15 @@ def compare(
     if not identity.is_admin:
         granted = set(granted_workspace_ids(db, identity.user_id or ""))
         rows = [row for row in rows if row.id in granted]
+    project = getattr(request.state, "project", None)
+    if project is not None:
+        # only where this project runs too: in another workspace the same name may be
+        # another project's agent (design §5.6)
+        rows = [
+            row for row in rows
+            if row.id == ws.id
+            or any(b.project_id == project.id for b in access.workspace_bindings(db, row.id))
+        ]
     return environments.compare_agent(db, name=agent, workspaces=rows, current_id=ws.id)
 
 

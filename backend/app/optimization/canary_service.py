@@ -9,6 +9,7 @@ from typing import Any
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError, cleanup_error, is_not_found
+from app.core.project_scope import project_context
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.online_evaluators import ONLINE_EVAL_DEFAULT
 from app.models.ledger import Agent
@@ -75,11 +76,14 @@ def run_action(
     def progress(message: str) -> None:
         _update(canary_id, progress=message[:300])
 
-    _refuse_system_subject(_get(canary_id), action)  # before any write or thread
+    canary = _get(canary_id)
+    _refuse_system_subject(canary, action)  # before any write or thread
+    project_id = canary.project_id  # a thread starts with an empty context
 
     def runner() -> None:
         try:
-            fn(progress)
+            with project_context(project_id):
+                fn(progress)
             _update(canary_id, running_action=None, progress=None)
         except Exception as exc:
             _update(

@@ -14,8 +14,9 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session, object_session
 
 from app.assistant import proposal
-from app.assistant.principal import principal_of
+from app.assistant.principal import principal_of, project_can
 from app.core.errors import AppError
+from app.core.project_scope import current_project
 from app.models.assistant import AssistantConversation, AssistantProposal
 from app.routers.auth import Identity
 from app.services.workspace import WorkspaceContext
@@ -307,7 +308,7 @@ def import_skills(
     from app.assistant import service
     from app.routers import agent_skills, registry
 
-    if not identity.can(service.PERMISSION_DEPLOY):
+    if not project_can(db, identity, row.workspace_id, service.PERMISSION_DEPLOY):
         raise AppError("auth.permission_required", "Skill import requires agents.deploy",
                        {"permission": service.PERMISSION_DEPLOY}, status_code=403)
     require_unlocked(db, row.id)
@@ -340,6 +341,7 @@ def import_skills(
         if new_count and (
             entry is None or entry.get("owner_principal") != principal
             or entry.get("workspace_id") != workspace.id
+            or entry.get("project_id") != current_project()
         ):
             raise AppError("registry.staging_expired", "staging session expired or unknown",
                            status_code=410)

@@ -156,6 +156,7 @@ def publish(
     row.spec = publishable_spec(spec)
     row.requirements = _requirements(spec)
     row.source_agent_name = agent.name
+    row.source_project_id = agent.project_id
     row.updated_at = datetime.now(UTC)
     if existing is None:
         db.add(row)

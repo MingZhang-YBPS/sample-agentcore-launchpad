@@ -149,11 +149,17 @@ def list_templates() -> dict[str, Any]:
 
 
 @router.get("/connections/oidc-sources")
-def list_oidc_sources(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
+def list_oidc_sources(
+    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """OAuth2 Connections with a derivable OIDC discovery URL — the inbound JWT
     form's "Choose from a Connection" picker. The Connection's own client id is
-    deliberately not returned: it is the agent's outbound client, not a caller."""
-    return {"sources": connections.list_oidc_sources(control_client(ws.context))}
+    deliberately not returned: it is the agent's outbound client, not a caller.
+    Another project's Connections are left out."""
+    return {"sources": connections.list_oidc_sources(
+        control_client(ws.context),
+        exclude=connections.foreign_names(db, ws.id, connections.KIND_OAUTH2),
+    )}
 
 
 @router.get("/connections/{kind}/{name}")
@@ -271,6 +277,7 @@ def create_gateway_target(
         api_key_location=req.api_key.location,
         api_key_parameter=req.api_key.parameter_name,
         api_key_prefix=req.api_key.prefix or None,
+        workspace_id=ws.id,  # turns on the other-project Connection refusal
     )
 
 

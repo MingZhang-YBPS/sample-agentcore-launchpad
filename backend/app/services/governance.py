@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context
 from app.models.ledger import PolicyChange
 from app.routers.auth import enabled as auth_enabled
 from app.services import registry_console
@@ -1406,14 +1407,15 @@ def _new_change(
     policy: dict[str, Any] | None = None,
     override_reason: str | None = None,
 ) -> PolicyChange:
-    running = (
-        db.query(PolicyChange)
-        .filter(
-            PolicyChange.gateway_id == gateway["gatewayId"],
-            PolicyChange.status.in_(("pending", "running")),
+    with project_context(None):  # the lock is the shared gateway's, not a project's
+        running = (
+            db.query(PolicyChange)
+            .filter(
+                PolicyChange.gateway_id == gateway["gatewayId"],
+                PolicyChange.status.in_(("pending", "running")),
+            )
+            .first()
         )
-        .first()
-    )
     if running is not None:
         raise AppError(
             "governance.operation_in_flight",
