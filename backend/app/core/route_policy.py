@@ -221,6 +221,11 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # delete parity), so a plain transcript stays the member's to delete ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/footprint"): MEMBER,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}"): PERM_PROJECT_USE,
+    # AC-3 (assistant-context C2, D-4): the owner rebuilds the conversation's
+    # confirmed-items digest — one model call and a ledger write, no AWS resource;
+    # owner-bound in the handler (a shared conversation's collaborators get 403)
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/digest/regenerate"):
+        PERM_PROJECT_USE,
     # ---- credential minting ----
     ("GET", "/api/apikeys"): MEMBER,
     ("POST", "/api/apikeys"): PERM_PROJECT_WRITE,

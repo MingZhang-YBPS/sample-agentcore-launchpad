@@ -137,3 +137,6 @@
 .v2 .v2-assistant-context { margin: 4px 0 14px; display: grid; gap: 4px; justify-items: center; text-align: center; font-size: 12.5px; }
 .v2 .v2-assistant-context .line { width: 100%; display: flex; align-items: center; gap: 10px; color: var(--v2-ink-3); font-weight: 600; }
 .v2 .v2-assistant-context .line::before, .v2 .v2-assistant-context .line::after { content: ""; flex: 1; border-top: 1px dashed var(--v2-line); }
+.v2 .v2-assistant-digest { width: 100%; max-width: 720px; text-align: left; border: 1px dashed var(--v2-line); border-radius: 6px; padding: 6px 10px; }
+.v2 .v2-assistant-digest > summary { cursor: pointer; color: var(--v2-ink-3); font-weight: 600; text-align: center; }
+.v2 .v2-assistant-digest[open] { display: grid; gap: 6px; }

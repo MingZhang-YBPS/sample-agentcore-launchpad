@@ -5,6 +5,7 @@ import { Markdown } from "../../../components";
 import { JumpToLatest } from "../../../components/JumpToLatest";
 import type { AssistantCatalog, AssistantConversationDetail } from "../../../lib/api";
 import {
+  type AssistantContextDigest,
   type AssistantContextWindow,
   type AssistantLiveMessage,
   contextDividerIndex,
@@ -21,7 +22,7 @@ export const COMPOSER_ID = "v2-assistant-input";
 /** The streaming transcript, the composer and the workspace catalog summary. */
 export function DiscussionCard({
   conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog,
-  retryOf, onRetry, context, onSummarize,
+  retryOf, onRetry, context, onSummarize, digest, onRegenerateDigest, regeneratingDigest,
 }: {
   conversation: AssistantConversationDetail;
   messages: AssistantLiveMessage[];
@@ -39,6 +40,11 @@ export function DiscussionCard({
   context?: AssistantContextWindow | null;
   /** send the preset "summarize what is confirmed into the proposal" message */
   onSummarize?: () => void;
+  /** the summary of the omitted turns the assistant sees instead (C2) */
+  digest?: AssistantContextDigest | null;
+  /** the owner's "wrong, regenerate" (absent for everyone else) */
+  onRegenerateDigest?: () => void;
+  regeneratingDigest?: boolean;
 }) {
   const { t } = useTranslation();
   const { username } = useAuth();
@@ -68,6 +74,28 @@ export function DiscussionCard({
           {t("v3.assistant.context.summarize")}
         </button>
       )}
+      {digest?.text ? (
+        <details className="v2-assistant-digest" data-testid="v2-assistant-digest">
+          <summary>{t("v3.assistant.digest.show", { n: digest.through_turn ?? 0 })}</summary>
+          <div className="v2-muted">{t("v3.assistant.digest.note")}</div>
+          <Markdown text={digest.text} />
+          {!readOnly && onRegenerateDigest && (
+            <button
+              type="button"
+              className="v2-link"
+              disabled={regeneratingDigest || digest.generating}
+              onClick={onRegenerateDigest}
+              data-testid="v2-assistant-digest-regenerate"
+            >
+              {regeneratingDigest || digest.generating
+                ? t("v3.assistant.digest.regenerating")
+                : t("v3.assistant.digest.regenerate")}
+            </button>
+          )}
+        </details>
+      ) : digest?.generating ? (
+        <div className="v2-muted" data-testid="v2-assistant-digest-generating">{t("v3.assistant.digest.generating")}</div>
+      ) : null}
     </div>
   );
   let lastErrorIndex = -1;

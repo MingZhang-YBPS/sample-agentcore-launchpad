@@ -16,8 +16,9 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
   detail, evaluation plan and operation status) but writes only where it
   collaborates — an unshared one is read-only until the admin shares it.
 * **Discussion never writes AWS.** A turn makes exactly one data-plane call
-  (``InvokeHarness`` on the preset) and ledger writes. No proposal, valid or not,
-  creates anything until a separate approval.
+  (``InvokeHarness`` on the preset) and ledger writes; afterwards the confirmed-items
+  digest may make one background Bedrock ``Converse`` call (``assistant.digest``). No
+  proposal, valid or not, creates anything until a separate approval.
 * **One in-flight turn per conversation.** A turn is an atomic conditional claim on
   the conversation row (``active_turn``); a concurrent turn is refused (409), a
   claim left behind by a dead process is reclaimed after ``claim_ttl_s`` of the
@@ -29,7 +30,8 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
   and every turn uses a fresh runtime session id, so the transcript is replayed
   through ``InvokeHarness.messages``, paired by turn, within one FINAL budget that
   includes the protocol preamble and the current message; omitted older turns are
-  disclosed, the current message is never truncated (too large → 413).
+  disclosed and summarized into the preamble's confirmed-items digest
+  (``assistant.digest``), the current message is never truncated (too large → 413).
 * **Monotonic, unique revisions.** Model emissions and member edits both allocate
   their revision from the conversation's ``revision_seq`` inside the same short
   write transaction that stores the row (unique index), so two concurrent writers
@@ -71,7 +73,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
-from app.assistant import preparation, submission
+from app.assistant import digest, preparation, submission
 from app.assistant import proposal as proposal_contract
 from app.assistant.principal import (
     may_collaborate,
@@ -438,6 +440,12 @@ Hard rules of this environment:
    natural-language Skill generation are unavailable. Evaluators and
    datasets are NOT created by this conversation either: the member later reviews a
    separate evaluation-assets plan and may create them from it.
+5. Older turns drop out of what you are shown; a summary of them is only a fallback.
+   When the member confirms a constraint that affects the architecture, risk or cost,
+   write it into the proposal's `requirements_baseline` (or `assumptions`) in the same
+   reply — as a change against the current stored proposal when one exists. Before
+   the first proposal, restate it in the reply and carry it into `requirements_baseline`
+   when you propose. The proposal is the reviewable record that is never lost.
 """
 
 
@@ -1176,6 +1184,7 @@ def conversation_detail(
         ],
         "proposals": [proposal_out(db, p) for p in _proposals(db, row.id)],
         "context": context_window(db, row),
+        "context_digest": digest.view(row),
     }
 
 
@@ -1509,6 +1518,7 @@ def _preamble(conversation: AssistantConversation, *, inline: bool = False) -> s
     return (protocol_preamble() + "\n"
             + catalog_section(owner_catalog(object_session(conversation), conversation))
             + preparation.context(conversation)
+            + digest.preamble_section(conversation)
             + (submit_tool_section() if inline else "")
             + current_proposal_section(_base_of(conversation), inline=inline))
 
@@ -1697,25 +1707,15 @@ def compose_messages(
     return messages, window.omitted_turns
 
 
-def compose_replay(
-    conversation: AssistantConversation, history: list[AssistantMessage], prompt: str,
-    *, inline: bool = False, history_cap: int | None = None,
-) -> tuple[list[dict[str, Any]], ReplayWindow]:
-    """The bounded ``InvokeHarness.messages`` replay and the window it keeps.
-
-    Turns are paired by their turn number (never by insert order): each replayed
-    turn is the member's text plus the assistant's reply when there was one; a
-    failed/interrupted turn is replayed with an explicit marker instead of a reply
-    and counts against the budget like any other. The newest turns that fit the
-    FINAL budget (preamble + catalog + turns + current message) are kept, the count
-    of omitted older turns is disclosed in the preamble, and the current message is
-    always sent whole (``check_prompt`` refuses one that cannot fit). The budget and
-    the turn count follow the architect model (``replay_budget``); ``history_cap``
-    further bounds the replayed turns (the overflow replay of C4).
-    """
-    budget_spec = _budget_of(conversation)
+def replay_turns(
+    conversation: AssistantConversation, history: list[AssistantMessage],
+) -> tuple[list[tuple[int, str, str | None]], list[str]]:
+    """The replayable turns of ``history`` as ``(turn, member text, reply or None)``,
+    oldest first, and the verdicts that ride on the NEXT member message. Paired by
+    turn number; retried turns and empty rows are left out; once a proposal is stored
+    its blocks in old replies are replaced by ``REPLAY_PROPOSAL_MARKER``. Shared by the
+    replay (``compose_replay``) and the confirmed-items digest (``assistant.digest``)."""
     by_turn: dict[int, dict[str, list[str]]] = {}
-    preamble = _preamble(conversation, inline=inline)
     strip = _base_of(conversation) is not None
     retried = {m.turn for m in history if m.role == "error" and m.name == TURN_RETRIED_NAME}
     for m in history:
@@ -1741,6 +1741,28 @@ def compose_replay(
                           "\n\n".join(slot["assistant"]) or None))
             carried = []
         carried += slot["verdict"]
+    return turns, carried
+
+
+def compose_replay(
+    conversation: AssistantConversation, history: list[AssistantMessage], prompt: str,
+    *, inline: bool = False, history_cap: int | None = None,
+) -> tuple[list[dict[str, Any]], ReplayWindow]:
+    """The bounded ``InvokeHarness.messages`` replay and the window it keeps.
+
+    Turns are paired by their turn number (never by insert order): each replayed
+    turn is the member's text plus the assistant's reply when there was one; a
+    failed/interrupted turn is replayed with an explicit marker instead of a reply
+    and counts against the budget like any other. The newest turns that fit the
+    FINAL budget (preamble + catalog + turns + current message) are kept, the count
+    of omitted older turns is disclosed in the preamble, and the current message is
+    always sent whole (``check_prompt`` refuses one that cannot fit). The budget and
+    the turn count follow the architect model (``replay_budget``); ``history_cap``
+    further bounds the replayed turns (the overflow replay of C4).
+    """
+    budget_spec = _budget_of(conversation)
+    preamble = _preamble(conversation, inline=inline)
+    turns, carried = replay_turns(conversation, history)
     if carried:
         prompt = "\n\n".join(carried + [prompt])
     measure = budget_spec.measure
@@ -1765,9 +1787,15 @@ def compose_replay(
         budget=budget_spec, history_used=used,
     )
     if omitted:
+        covered = digest.covered_through(conversation)
+        summarized = (
+            f" Turns up to {covered} are summarized under \"Summary of earlier turns\" "
+            "above; that summary may be incomplete." if covered else ""
+        )
         preamble += (
             f"\n\n> Replay note: {omitted} earlier turn(s) of this conversation were omitted "
-            "to fit the request; ask the member to restate anything you need from them."
+            f"to fit the request.{summarized} Ask the member to restate anything you need "
+            "from them."
         )
     messages: list[dict[str, Any]] = []
     pending_user: list[str] = []
@@ -2710,6 +2738,14 @@ def run_turn(
             producer.join(timeout=HEARTBEAT_S * 3)
             if producer.is_alive():  # pragma: no cover — logged, never hidden
                 logger.warning("assistant: turn %s producer still alive after cleanup", turn)
+        try:
+            # the next turn's window may now omit turns the digest does not cover yet:
+            # summarize them in the background (assistant-context C2), never waited on
+            db.rollback()
+            digest.after_turn(db, conversation_id, workspace)
+        except Exception:  # noqa: BLE001 — the digest is best effort
+            logger.warning("assistant: could not schedule the digest of %s", conversation_id,
+                           exc_info=True)
         run.finished = True
 
 
