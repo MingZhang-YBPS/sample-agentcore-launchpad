@@ -6,12 +6,17 @@ The console chat (`routers/chat.py`) and the external share page
 conversation is replayable, observable and rateable exactly like a console one.
 """
 
-from collections.abc import Iterable, Iterator
+import logging
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
 from app.core.db import SessionLocal
 from app.models.ledger import ChatMessage, ChatSession
+
+log = logging.getLogger(__name__)
+
+INTERRUPTED_PREFIX = "interrupted: "
 
 
 def save_message(
@@ -112,54 +117,92 @@ def persist_events(
             data["answered_by"] = answered_by
         return {"event": "saved", "data": data}
 
-    for event in events:
-        kind, data = event["event"], event["data"]
-        if kind == "meta":
-            session_id = data["session_id"]
-            track_session(workspace_id, agent_id, session_id, actor_id,
-                          runtime_version=runtime_version)
-            save_message(workspace_id, agent_id, session_id, "user", prompt,
-                         attachments=attachments)
-        elif kind == "rule":
-            answered_by = f"rule:{data.get('rule_id', '')}"[:48]
-        elif kind == "tool" and session_id:
-            # a tool call splits the answer bubble live — mirror it
-            saved = flush_answer()
-            if saved:
-                yield saved
-            save_message(workspace_id, agent_id, session_id, "tool", "",
-                         name=data.get("name"))
-        elif kind == "auth_required" and session_id:
-            # as_user consent ask: the Connection name and tool only — the
-            # authorization URL is single-use and is never persisted, so a
-            # restored card re-asks by retrying the previous user message.
-            # The card does not close an open answer bubble live, so it is
-            # saved after that bubble's text, not between its halves.
-            ask = (str(data.get("provider") or ""), data.get("tool"))
-            if answer_parts:
-                pending_asks.append(ask)
-            else:
-                save_message(workspace_id, agent_id, session_id, "auth", ask[0], name=ask[1])
-        elif kind == "policy_denied" and session_id:
-            # a Gateway tool call a Cedar policy denied: the tool event already
-            # closed the open bubble, so the card follows its tool row; the
-            # reason carries the policy id, which a restored card is rebuilt from
-            save_message(workspace_id, agent_id, session_id, "policy",
-                         data.get("reason", ""), name=data.get("tool"))
-        elif kind == "delta":
-            answer_parts.append(data.get("text", ""))
-        elif kind == "error" and session_id:
-            saved = flush_answer()  # keep the partial answer the user saw
-            if saved:
-                yield saved
-            save_message(workspace_id, agent_id, session_id, "error",
-                         data.get("message", ""))
-        elif kind == "done" and session_id:
-            saved = flush_answer()
-            if saved:
-                yield saved
-        yield event
+    source = iter(events)
+    closed = False  # `done` or `error` passed: the turn has its ending recorded
+    try:
+        for event in source:
+            kind, data = event["event"], event["data"]
+            if kind == "meta":
+                session_id = data["session_id"]
+                track_session(workspace_id, agent_id, session_id, actor_id,
+                              runtime_version=runtime_version)
+                save_message(workspace_id, agent_id, session_id, "user", prompt,
+                             attachments=attachments)
+            elif kind == "rule":
+                answered_by = f"rule:{data.get('rule_id', '')}"[:48]
+            elif kind == "tool" and session_id:
+                # a tool call splits the answer bubble live — mirror it
+                saved = flush_answer()
+                if saved:
+                    yield saved
+                save_message(workspace_id, agent_id, session_id, "tool", "",
+                             name=data.get("name"))
+            elif kind == "auth_required" and session_id:
+                # as_user consent ask: the Connection name and tool only — the
+                # authorization URL is single-use and is never persisted, so a
+                # restored card re-asks by retrying the previous user message.
+                # The card does not close an open answer bubble live, so it is
+                # saved after that bubble's text, not between its halves.
+                ask = (str(data.get("provider") or ""), data.get("tool"))
+                if answer_parts:
+                    pending_asks.append(ask)
+                else:
+                    save_message(workspace_id, agent_id, session_id, "auth", ask[0], name=ask[1])
+            elif kind == "policy_denied" and session_id:
+                # a Gateway tool call a Cedar policy denied: the tool event already
+                # closed the open bubble, so the card follows its tool row; the
+                # reason carries the policy id, which a restored card is rebuilt from
+                save_message(workspace_id, agent_id, session_id, "policy",
+                             data.get("reason", ""), name=data.get("tool"))
+            elif kind == "delta":
+                answer_parts.append(data.get("text", ""))
+            elif kind == "error" and session_id:
+                closed = True
+                saved = flush_answer()  # keep the partial answer the user saw
+                if saved:
+                    yield saved
+                save_message(workspace_id, agent_id, session_id, "error",
+                             data.get("message", ""))
+            elif kind == "done" and session_id:
+                closed = True
+                saved = flush_answer()
+                if saved:
+                    yield saved
+            yield event
+    except BaseException as exc:
+        # §5.1: the client went away (GeneratorExit at a yield) or the stream broke —
+        # keep the partial answer the user already saw, and say why it stops there,
+        # so a reload replays it and the turn can be retried from its user message
+        if not closed:
+            reason = (
+                "client disconnected" if isinstance(exc, GeneratorExit)
+                else f"{type(exc).__name__}: {exc}"
+            )
+            _record_interruption(flush_answer, workspace_id, agent_id, session_id, reason)
+        raise
+    finally:
+        close = getattr(source, "close", None)
+        if close is not None:
+            close()  # closing the chat stream closes the upstream invocation
     # a stream that ended without `done` still keeps its answer and asks
     saved = flush_answer()
     if saved:
         yield saved
+
+
+def _record_interruption(
+    flush_answer: Callable[[], dict[str, Any] | None],
+    workspace_id: str, agent_id: str, session_id: str | None, reason: str,
+) -> None:
+    """Save the open answer and an ``error`` item ``interrupted: <reason>``.
+
+    Runs while the stream is being torn down, so it never raises: a failed write
+    is logged and the original exit (disconnect or stream error) goes on."""
+    if not session_id:
+        return  # nothing reached the ledger yet (no `meta`)
+    try:
+        flush_answer()
+        save_message(workspace_id, agent_id, session_id, "error",
+                     f"{INTERRUPTED_PREFIX}{reason}"[:2000])
+    except Exception:
+        log.exception("chat: could not save the interrupted turn of %s", session_id)

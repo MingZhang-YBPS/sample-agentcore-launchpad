@@ -43,6 +43,9 @@ def chat_stream(
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
 
+    ``heartbeat`` (``{"elapsed_ms": n}``) fills every quiet stretch of the turn
+    (``with_keepalive``); ``sse_encode`` decides how it is written on the wire.
+
     ``policy_denied`` (Harness only) marks a Gateway tool call a Cedar policy denied.
 
     Never raises mid-stream; errors surface as an `error` event. ``workspace``
@@ -140,13 +143,11 @@ def chat_stream(
                 workspace=workspace,
                 **invoke_kwargs,
             )
-        for event in with_keepalive(source):
-            # while screening, text is withheld until the whole answer can be
-            # screened; tool and heartbeat events still flow so the UI stays alive
-            if screen and event.get("event") == "delta":
-                buffered.append(str(event["data"].get("text", "")))
-                continue
-            yield event
+        if screen:
+            source = _withhold_deltas(source, buffered)
+        # withheld deltas never reach the keepalive, so a guardrail turn that streams
+        # text upstream but sends nothing down still gets its heartbeats
+        yield from with_keepalive(source, started=started)
     except AppError as exc:
         yield {"event": "error", "data": envelope(exc.code, exc.message, exc.detail)}
         return
@@ -167,6 +168,24 @@ def chat_stream(
         "event": "done",
         "data": {"latency_ms": int((time.monotonic() - started) * 1000)},
     }
+
+
+def _withhold_deltas(
+    events: Iterator[dict[str, Any]], buffered: list[str],
+) -> Iterator[dict[str, Any]]:
+    """While screening, text is withheld until the whole answer can be screened;
+    tool and heartbeat events still flow so the UI stays alive."""
+    try:
+        for event in events:
+            if event.get("event") == "delta":
+                buffered.append(str(event["data"].get("text", "")))
+                continue
+            yield event
+    finally:
+        # closing this wrapper (client gone) closes the upstream stream too
+        close = getattr(events, "close", None)
+        if close is not None:
+            close()
 
 
 def _harness_events(
@@ -261,43 +280,76 @@ def _policy_denied(
     return {"tool": tool, "tool_use_id": result["id"], **denial, "gateway_id": gateway_id}
 
 
-def sse_encode(event: dict[str, Any]) -> str:
-    if event["event"] == "heartbeat":
+def sse_encode(event: dict[str, Any], *, named_heartbeat: bool = False) -> str:
+    """One SSE frame. A ``heartbeat`` is an SSE comment unless ``named_heartbeat``:
+    the console chat sends it as a named ``event: heartbeat`` (``{"elapsed_ms": n}``)
+    so the page can time the turn and tell a live connection from a dead one; the
+    public /v1 stream keeps the ``: keep-alive`` comment its contract documents."""
+    if event["event"] == "heartbeat" and not named_heartbeat:
         return ": keep-alive\n\n"
     return f"event: {event['event']}\ndata: {json.dumps(event['data'], ensure_ascii=False)}\n\n"
 
-# CloudFront drops a response that sends no byte for 60 s. Once the runtime starts
-# answering it heartbeats on its own, but while the invocation is still starting (or
-# stalled and about to be invoked once more) nothing comes back, so until the first
-# event the console stream sends its own heartbeats.
+# CloudFront drops a response that sends no byte for 60 s. Only platform-template
+# runtimes heartbeat on their own; a Harness reasoning for a long time, a slow tool
+# call, or a guardrail holding the answer back for one final screen are all silent,
+# so the stream heartbeats for the whole turn whenever the upstream goes quiet.
 KEEPALIVE_SECONDS = 15.0
 
 
+def _heartbeat(started: float) -> dict[str, Any]:
+    return {"event": "heartbeat",
+            "data": {"elapsed_ms": int((time.monotonic() - started) * 1000)}}
+
+
 def with_keepalive(
-    events: Iterator[dict[str, Any]], interval: float = KEEPALIVE_SECONDS,
+    events: Iterator[dict[str, Any]],
+    interval: float | None = None,
+    started: float | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Re-yield ``events``, adding a ``heartbeat`` every ``interval`` seconds until the
-    first event arrives. Only that first step runs on a worker thread; the rest is
-    iterated here, so closing this generator still closes the upstream stream."""
+    """Re-yield ``events``, adding a ``heartbeat`` whenever ``interval`` seconds pass
+    with nothing to send — before the first event and after it alike. A heartbeat the
+    runtime sends itself is passed on (it resets the silence, so the two never stack).
+    Every heartbeat carries ``elapsed_ms`` since ``started`` (default: now).
+
+    Each step of the source runs on one worker thread while this generator waits for
+    it with a timeout. Closing this generator still closes the upstream stream: at
+    once when no step is in flight, else as soon as the in-flight step returns (a
+    generator cannot be closed while another thread is running it)."""
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
     from concurrent.futures import TimeoutError as FutureTimeout
 
+    interval = KEEPALIVE_SECONDS if interval is None else interval
+    started = time.monotonic() if started is None else started
     source = iter(events)
     _missing = object()
+    # the source reads request-scoped context (workspace, identity): every step runs
+    # in one copy of it, so what one step sets the next one sees
+    ctx = contextvars.copy_context()
+
+    def close_source(_future: Any = None) -> None:
+        close = getattr(source, "close", None)
+        if close is not None:
+            ctx.run(close)
+
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chat-keepalive")
+    future = None
     try:
-        # the source reads request-scoped context (workspace, identity): run it in a copy
-        future = pool.submit(contextvars.copy_context().run, next, source, _missing)
         while True:
-            try:
-                first = future.result(timeout=interval)
-                break
-            except FutureTimeout:
-                yield {"event": "heartbeat", "data": {}}
+            future = pool.submit(ctx.run, next, source, _missing)
+            while True:
+                try:
+                    event = future.result(timeout=interval)
+                    break
+                except FutureTimeout:
+                    yield _heartbeat(started)
+            future = None
+            if event is _missing:
+                return
+            yield _heartbeat(started) if event.get("event") == "heartbeat" else event
     finally:
+        if future is not None and not future.done():
+            future.add_done_callback(close_source)
+        else:
+            close_source()
         pool.shutdown(wait=False)
-    if first is _missing:
-        return
-    yield first
-    yield from source
