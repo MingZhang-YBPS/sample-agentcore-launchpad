@@ -2208,6 +2208,18 @@
     }
   },
   "apiErrors": {
+    "detail.withRaw": "{{title}}AWS 原文：{{raw}}",
+    "detail.summary": "详情",
+    "detail.summaryAws": "AWS 详情",
+    "detail.operation": "操作",
+    "detail.awsErrorCode": "AWS 错误码",
+    "detail.message": "AWS 原文",
+    "detail.requestId": "请求 ID",
+    "detail.awsRequestId": "AWS 请求 ID",
+    "detail.time": "时间",
+    "detail.copy": "复制详情",
+    "detail.copied": "已复制",
+    "detail.masked": "账号 ID 已打码。管理员可看到全文；求助时请提供请求 ID。",
     "harness.execution_timeout": "Harness 执行超时，未能完成。",
     "harness.execution_cancelled": "Harness 执行已取消，未能完成。",
     "harness.execution_limit": "Harness 执行达到限制，已停止。",

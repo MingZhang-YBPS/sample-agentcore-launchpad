@@ -77,7 +77,10 @@ def test_mapped_client_errors_become_4xx_envelopes(aws_code, status, code):
         f"/aws/{aws_code}", params={"message": "Value at 'recordId' failed to satisfy constraint"}
     )
     assert res.status_code == status
-    assert res.json() == {
+    body = res.json()
+    # console envelopes carry a request id (projects §19); its own tests below
+    assert body.pop("request_id") == res.headers["X-Request-Id"]
+    assert body == {
         "code": code,
         "message": "Value at 'recordId' failed to satisfy constraint",
         "detail": {"aws_error_code": aws_code, "operation": "GetRegistryRecord"},
@@ -156,7 +159,8 @@ def test_public_api_gets_a_generic_message_and_no_operation():
 
     console = client.get("/aws/AccessDeniedException", params=params)
     assert console.status_code == 403
-    assert console.json() == {
+    assert console.json().pop("request_id")
+    assert {k: v for k, v in console.json().items() if k != "request_id"} == {
         "code": "aws.access_denied",
         "message": RAW_DENIED,
         "detail": {"aws_error_code": "AccessDeniedException", "operation": "InvokeAgentRuntime"},
