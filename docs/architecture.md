@@ -336,12 +336,56 @@ The two update APIs behave differently on a re-publish (probed live 2026-10-04):
 Every stored spec already carries the default, because it is written with
 `model_dump()`. So an existing harness or Strands agent gains `/mnt/workspace`
 on its next re-publish unless the member turns it off. Session storage needs no
-IAM grant. Its VPC-mode egress to the `acr-storage-*` S3 buckets does not apply
-here, because harness and zip runtimes stay `PUBLIC`. The generated agents are
+IAM grant. In a VPC network profile (see *Agent network* below) the runtime reaches
+the `acr-storage-*` S3 buckets through the profile's S3 gateway endpoint, which the
+profile preflight requires of every agent. The generated agents are
 not told about the mount (the container template is not either). A Harness
 reaches it through its native `shell` / `file_operations` tools. Only the V2
 wizard (`FilesystemCard`) edits the setting for harness / Strands agents; the
 classic console round-trips the stored value unchanged.
+
+### Agent network (`AgentSpec.network`)
+
+Every deploy method deploys into the network profile `spec.network` names: harness,
+`zip_runtime` / `studio` (HTTP and A2A), `container` and BYOC (code zip and image,
+agents and hosted MCP servers alike). `deployer/network.spec_vpc` is the one resolver:
+`{profile_id}` (or a pre-profile inline `{subnets, security_groups}`, matched to its
+`legacy-<hash8>` profile) becomes the `{subnets, security_groups}` each deployer hands
+to `networkConfiguration` in VPC mode; an omitted network is `PUBLIC`. The Runtime paths
+send it on create and on every update. `UpdateHarness` keeps the live network unless the
+spec names a profile; a re-publish that moves a harness *off* its profile carries the old
+network in the job payload (`network_from`), so the deploy sets `PUBLIC` instead of
+keeping it. A network change is an ordinary re-publish: a new version on the same
+resource.
+
+**Deploy-time network gate.** `pipeline.network_gate` runs in `POST /api/agents`,
+`POST /api/agents/{id}/redeploy` and `POST /api/agents/{id}/convert` before any job
+exists:
+
+- no network while the workspace forbids PUBLIC (`network_public_allowed: false`) →
+  `400 network.public_not_allowed`;
+- a profile → its preflight is re-run for *this* agent's features
+  (`network_preflight.features_of_spec`: container image pulls, Bedrock models, memory,
+  Gateway tools, Identity, A2A, knowledge bases), so the endpoints the agent needs are
+  checked, not only the ones every agent needs. Any blocking item →
+  `409 network.preflight_failed`, with the blocking items in `detail.results`. A
+  `legacy-<hash8>` profile is not preflighted: its deploys behave as before profiles.
+
+**Where an agent runs.** `GET /api/agents/{agent_id}/network`
+(`services/agent_network.py`) returns `mode` (`PUBLIC` / `VPC`), the resolved profile
+with its last preflight (status, `checked_at`, blocking / warning counts; `missing`
+when the workspace no longer has it), the placement (`vpc`) and the ENIs AgentCore holds
+there (`ec2:DescribeNetworkInterfaces` filtered by the profile's subnets and security
+groups). ENIs are listed per profile, since every agent placed in the same subnets and
+security groups shares them; an older spoke role without the read reports
+`status: unavailable` instead of failing the route.
+
+**Console.** The V2 wizard's network step (`NetworkSection`) is on every method,
+including the harness quick setup's advanced options. A new agent starts in the
+project's default profile when `GET /api/network-profiles` marks a choosable one
+`is_default`, and the review step shows the network for every method (`Public`, or the
+profile). The Studio publish dialog offers the same choice and carries the stored
+network on a re-publish (the spec is replaced as a whole).
 
 ### BYOC — bring your own code
 
@@ -477,8 +521,8 @@ through the Gateway (`<target>___<tool>`) back live — the V3 agent page render
 place of the lifecycle, chat and try-it panels. Delete runs in reverse: Gateway target →
 runtime → OAuth2 provider → Cognito client, idempotent. Sample:
 [`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md) (`mcp>=1.10,<2`).
-Not in this version: Cedar scaffolding, health schedules, Lambda targets, VPC
-mode.
+A hosted server deploys into `spec.network`'s profile like any other BYOC agent (see
+*Agent network*).
 
 **Tool-review gate (§15.6).** A hosted server's tools are not served until a person
 other than its deployer has approved the list. Creating the target, or re-syncing it
@@ -500,9 +544,61 @@ server that changed its tools without a re-deploy: a difference opens a `drift`
 review and withholds the target. A server whose target predates the gate gets its
 live list recorded as an approved `baseline` on its next deploy. Approving or
 publishing the Registry record of a hosted server also requires `mcp.approve` and an
-approved tool review (`409 mcp.review_pending`). Until Cedar scaffolding lands
-(§15.7), withholding the whole target is the gate. Routes:
+approved tool review (`409 mcp.review_pending`). Withholding the whole target stays
+the gate; the Cedar scaffold below adds per-tool policies on request. Routes:
 [api.md](api.md#console-mcp-tool-review-api).
+
+**Endpoint, health and rollback (§15.8).** The `mcp_servers` table
+(`models/lambda_tools.McpServerState`) keeps one row per hosted server: the endpoint
+the target calls (`qualifier`), `live_version`, the last `health` and the last
+background `operation`. The target calls the runtime's `DEFAULT` endpoint, which follows
+every new version. The hourly scheduler task `mcp.health` (`dlc/scheduler.py`,
+`mcp_servers.check_health`) checks every live server of an active project: it re-points
+the target if it calls another endpoint than the server's current one, re-syncs it,
+and compares the list with the approved one (`check_drift`: a drift opens a review and
+withholds the target). The outcome is recorded as `health {status: healthy | drift |
+failing | withheld, checked_at, tool_count, error, consecutive_failures, alert,
+review_id, repointed}`; three failures in a row set `alert` and log a warning.
+`POST /api/mcp-servers/{agent_id}/health` runs one check now. A rollback
+(`POST …/rollback`) points the named endpoint `live` at an earlier version that has an
+approved tool list, records that list as the current approved one (a `rollback`
+review), and re-points the target there, through the gate again. The next deploy
+un-pins the server back to `DEFAULT`. Moving a gated agent's live endpoint takes
+`release.sign`; otherwise `agents.deploy`.
+
+**Cedar scaffold (§15.7).** `POST /api/mcp-servers/{agent_id}/policies/scaffold` plans
+(`dry_run`) or applies two Cedar policies on the policy engine attached to the
+workspace Gateway (`governance.mcp_scaffold_plan`): `lp_mcp_<target>_unreviewed`
+forbids the tools of an open review, and `lp_mcp_<target>_project` permits the approved
+tools, conditioned on the project when the workspace binds several projects. Each one
+is a `create`, `update`, `delete` or `keep` step. The apply runs in the background, one
+governance operation at a time, and is recorded in `operation`. An optional mode switch
+(`LOG_ONLY` / `ENFORCE`) in the same request changes shared infrastructure, so it takes
+`infra+perm:mcp.approve`, and `ENFORCE` takes the evidence or override that Governance
+requires.
+
+**Lambda tool targets (§15.12).** `POST /api/gateway-tools/lambda` records a Lambda
+function as a Gateway tool target (`lambda_tool_targets` table). The function must be in
+the workspace's account and region, and the inline tool schema is recorded as a tool
+review before anything exists on the Gateway, so the creator cannot wave it through. An
+approval by a member holding `mcp.approve` other than the creator publishes it in the
+background: `workspace_iam.sync_lambda_tools_policy` writes the `launchpad-lambda-tools`
+inline policy on the Gateway role (`lambda:InvokeFunction` on exactly the functions of
+the workspace's Lambda targets, the function and its `:*` versions and aliases; the
+policy is deleted when none remain), then the `mcp.lambda` target is created with the
+approved schema. Status: `reviewing` → `publishing` → `live` (or `failed`, `rejected`).
+A delete runs in reverse. A Lambda can run in a VPC, which reaches private backends
+without the Gateway reaching private endpoints.
+
+**Externally hosted targets (§15.15).** MCP-server targets made by hand on the
+workspace Gateway (through Connections) that no hosted server owns are listed by
+`GET /api/gateway-tools/external` with `hosting: external`. Adopting one
+(`external_mcp_targets` table) records what it lists today as the approved baseline, so
+agents already calling it are not cut off; the hourly `mcp.health` task then compares
+later lists with it. A drift opens a review, but the target is the customer's and is
+never withheld or re-pointed. The V3 page `/v3/tools/gateway` (rail: *Gateway tools*)
+lists both kinds, creates Lambda targets and adopts external ones. Routes:
+[api.md](api.md#console-gateway-tool-targets-api).
 
 **stdio bridge (§15.5).** A stdio-only server ships as a code zip with
 `mcp.stdio_wrapper = {command, args, base}` (code_zip only — a Dockerfile context or
@@ -4731,7 +4827,10 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `deployments` | One row per deploy run — the five-stage array with per-stage status/detail/timestamps |
 | `jobs` | Async work (type `deploy_agent`) — status + a JSONL `log` of stage events |
 | `chat_sessions` | Chat playground sessions — turns, actor, last-seen, `ended_at` once the runtime session was explicitly ended |
-| `mcp_tool_reviews` | Tool reviews of hosted MCP servers — the tool-list snapshot and its hash, the diff against the approved list, hints, status (`reviewing`/`approved`/`rejected`/`superseded`), source (`deploy`/`drift`/`baseline`), requester, decider, note, and the re-publish status after an approval |
+| `mcp_tool_reviews` | Tool reviews of hosted MCP servers, Lambda tool targets and adopted external targets — the tool-list snapshot and its hash, the diff against the approved list, hints, status (`reviewing`/`approved`/`rejected`/`superseded`), source (`deploy`/`drift`/`baseline`/`rollback`), requester, decider, note, and the re-publish status after an approval |
+| `mcp_servers` | One row per hosted MCP server — the endpoint its Gateway target calls (`DEFAULT` / `live`), the pinned `live_version`, the last health check and the last background operation (rollback, Cedar scaffold) |
+| `lambda_tool_targets` | Console-created Lambda Gateway targets — Lambda ARN, target name and id, inline tool schema, status (`reviewing`/`publishing`/`live`/`failed`/`rejected`), creator |
+| `external_mcp_targets` | Hand-made MCP-server Gateway targets brought under tool review — target id and name, endpoint, adopter, last drift check |
 | `users` | Console accounts created by registration — username/email, pbkdf2 password hash, role, status (`pending`/`active`/`disabled`), `expires_at` (null until approval), last sign-in + sign-in count (the built-in admin is config-only and has no row) |
 | `api_keys` | Public-API keys — sha256 hash + prefix (plaintext never stored), creator (`created_by` user id + `created_by_name`, NULL on legacy keys), `last_used_at` |
 | `policy_decisions` | Governance decision log — principal, tool, ALLOW/DENY, reason |

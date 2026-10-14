@@ -6,7 +6,6 @@ import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type AgentInfo } from "../../../lib/api";
 import { useLoad } from "../../hooks";
 import { Chip, Empty, Notice, Panel, type Signal, Skeleton, Stat } from "../../ui";
-import type { McpServerOps } from "../../../lib/api/mcpReviews";
 import { McpReviewSection } from "./McpReviewSection";
 import { McpServerOpsSection } from "./McpServerOps";
 
@@ -25,7 +24,7 @@ export function McpServerPanel({ agent }: { agent: AgentInfo }) {
     () => api.agentMcp(agent.id),
     `v3-agent-mcp:${agent.id}:${agent.status}:${agent.version}`,
   );
-  const d = status.data as (typeof status.data & McpServerOps) | null;
+  const d = status.data;
   return (
     <Panel
       title={t("v3.mcp.title")}

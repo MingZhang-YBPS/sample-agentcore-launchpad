@@ -2535,7 +2535,22 @@
     "network.public_not_allowed": "This workspace requires every agent to run in a network profile — choose one.",
     "network_profile.check_failed": "The workspace's VPC could not be read for this check. Confirm the workspace role can describe VPCs, subnets and security groups, then try again.",
     "network_profile.nothing_to_probe": "Declare reachable targets on the profile before probing it.",
-    "network_profile.probe_running": "A probe of this profile is already running — wait for it to finish."
+    "network_profile.probe_running": "A probe of this profile is already running — wait for it to finish.",
+    "network.preflight_failed": "The network profile cannot host this agent — fix the blocking preflight items or choose another network.",
+    "gateway.not_bootstrapped": "This workspace's Gateway is not set up yet — run the workspace bootstrap first.",
+    "gateway_tool.not_found": "Tool target not found.",
+    "gateway_tool.not_external": "Only an MCP-server target added by hand on the Gateway can be brought under tool review.",
+    "gateway_tool.already_adopted": "This target is already under tool review.",
+    "lambda_tool.invalid_arn": "That is not a Lambda function ARN.",
+    "lambda_tool.wrong_environment": "The function must be in this workspace's account and region, where the Gateway role can be allowed to invoke it.",
+    "lambda_tool.function_missing": "No such Lambda function in this workspace's account.",
+    "lambda_tool.invalid_schema": "The tool schema is invalid — it must be a non-empty list of tool definitions, each with a name, description and input schema.",
+    "lambda_tool.target_name_taken": "The Gateway already has a target with this name — choose another.",
+    "lambda_tool.publishing": "The target is still being published — delete it once that finishes.",
+    "mcp.operation_in_flight": "Another operation on this MCP server is still running — wait for it to finish.",
+    "mcp.rollback_noop": "The Gateway target already serves this version.",
+    "mcp.rollback_unavailable": "No earlier version of this MCP server has an approved tool list to roll back to.",
+    "mcp.scaffold_nothing_reviewed": "This MCP server has no tool list yet — deploy it so its tools can be reviewed."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -10116,7 +10131,9 @@
       "chat": "Chat",
       "gate": "Release gate",
       "more": "Modules",
-      "create": "New agent"
+      "create": "New agent",
+      "gatewayTools": "Gateway tools",
+      "projectSettings": "Project settings"
     },
     "cmdk": {
       "label": "Command palette",
@@ -12355,7 +12372,6 @@
     },
     "admins": {
       "nav": "Administrators",
-      "navProjects": "Projects",
       "eyebrow": "Accounts · administrators",
       "title": "Administrators",
       "sub": "Platform administrators hold every permission and can enter every project. Keep at least one administrator who can sign in.",

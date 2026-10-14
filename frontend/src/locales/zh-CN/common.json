@@ -2535,7 +2535,22 @@
     "network.public_not_allowed": "该工作区要求所有 Agent 都运行在网络配置中，请选择一个。",
     "network_profile.check_failed": "本次检查无法读取工作区的 VPC。请确认工作区角色有权查看 VPC、子网和安全组后重试。",
     "network_profile.nothing_to_probe": "请先在网络配置中声明可达目标，再进行探测。",
-    "network_profile.probe_running": "该网络配置已有探测在运行，请等待完成。"
+    "network_profile.probe_running": "该网络配置已有探测在运行，请等待完成。",
+    "network.preflight_failed": "该网络配置档无法承载此 Agent——请修复预检阻断项或选择其他网络。",
+    "gateway.not_bootstrapped": "本工作区的 Gateway 尚未初始化——请先运行工作区初始化。",
+    "gateway_tool.not_found": "未找到该工具目标。",
+    "gateway_tool.not_external": "只有在 Gateway 上手动添加的 MCP 服务器目标才能纳入工具审核。",
+    "gateway_tool.already_adopted": "该目标已在工具审核中。",
+    "lambda_tool.invalid_arn": "这不是 Lambda 函数 ARN。",
+    "lambda_tool.wrong_environment": "函数必须位于本工作区的账号和区域内，才能授权 Gateway 角色调用它。",
+    "lambda_tool.function_missing": "本工作区的账号中没有该 Lambda 函数。",
+    "lambda_tool.invalid_schema": "工具 Schema 无效——必须是非空的工具定义列表，每项包含名称、描述和输入 Schema。",
+    "lambda_tool.target_name_taken": "Gateway 上已有同名目标——请换一个名称。",
+    "lambda_tool.publishing": "该目标仍在发布中——请在发布完成后再删除。",
+    "mcp.operation_in_flight": "此 MCP 服务器的另一项操作仍在进行——请等待其完成。",
+    "mcp.rollback_noop": "Gateway 目标已在使用该版本。",
+    "mcp.rollback_unavailable": "此 MCP 服务器没有已批准工具清单的更早版本可供回滚。",
+    "mcp.scaffold_nothing_reviewed": "此 MCP 服务器尚无工具清单——请先部署，以便审核其工具。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -10116,7 +10131,9 @@
       "chat": "对话",
       "gate": "放行门",
       "more": "功能模块",
-      "create": "新建智能体"
+      "create": "新建智能体",
+      "gatewayTools": "Gateway 工具",
+      "projectSettings": "项目设置"
     },
     "cmdk": {
       "label": "命令面板",
@@ -12355,7 +12372,6 @@
     },
     "admins": {
       "nav": "管理员管理",
-      "navProjects": "项目",
       "eyebrow": "账号 · 管理员",
       "title": "管理员管理",
       "sub": "平台管理员拥有全部权限，可进入所有项目。至少保留一个可登录的管理员。",

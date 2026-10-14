@@ -255,10 +255,41 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 
 所有已存储的 spec 都是 `model_dump()` 写入的，本身就带着默认值。所以现有的 Harness 或 Strands
 Agent 下次重新发布时会挂上 `/mnt/workspace`，除非用户把它关掉。会话存储不需要 IAM 授权。
-VPC 模式下访问 `acr-storage-*` S3 桶的出网要求在这里不适用，因为 Harness 和 zip runtime
-都保持 `PUBLIC`。生成的 Agent 不会被告知挂载路径（container 模板同样没有）；Harness 通过
+在 VPC 网络配置档中（见下文「Agent 网络」），运行时经配置档的 S3 网关端点访问
+`acr-storage-*` S3 桶，配置档预检对每个 Agent 都要求该端点。生成的 Agent 不会被告知挂载路径（container 模板同样没有）；Harness 通过
 原生 `shell` / `file_operations` 工具访问它。Harness / Strands Agent 的这一设置只有 V2 向导
 （`FilesystemCard`）可以编辑，经典控制台会原样回传已存储的值。
+
+### Agent 网络（`AgentSpec.network`）
+
+每种部署方式都部署到 `spec.network` 所引用的网络配置档中：Harness、`zip_runtime` / `studio`
+（HTTP 与 A2A）、`container` 以及 BYOC（代码 zip 与镜像，Agent 与托管 MCP 服务器都一样）。
+`deployer/network.spec_vpc` 是唯一的解析器：`{profile_id}`（或配置档出现之前的内联
+`{subnets, security_groups}`，匹配到对应的 `legacy-<hash8>` 配置）被解析为各部署器以 VPC 模式交给
+`networkConfiguration` 的 `{subnets, security_groups}`；省略网络即为 `PUBLIC`。Runtime 路径在创建与每次
+更新时都发送它。`UpdateHarness` 在 spec 未引用配置档时保留实时网络；把 Harness 移出配置档的重新发布
+会在任务载荷中带上旧网络（`network_from`），于是部署设为 `PUBLIC` 而不是保留原值。修改网络就是一次
+普通的重新发布：同一资源上的新版本。
+
+**部署时的网络闸门。** `pipeline.network_gate` 在 `POST /api/agents`、
+`POST /api/agents/{id}/redeploy` 与 `POST /api/agents/{id}/convert` 中、任何任务创建之前运行：
+
+- Workspace 禁止 PUBLIC（`network_public_allowed: false`）而没有网络 → `400 network.public_not_allowed`；
+- 引用了配置档时，按**此** Agent 用到的功能（`network_preflight.features_of_spec`：容器镜像拉取、
+  Bedrock 模型、记忆、网关工具、Identity、A2A、知识库）重新预检，因此检查的是这个 Agent 需要的端点，
+  而不只是每个 Agent 都需要的端点。有任何阻断项 → `409 network.preflight_failed`，阻断项在
+  `detail.results` 中。`legacy-<hash8>` 配置不做预检：其部署行为与配置档出现之前相同。
+
+**Agent 运行在哪里。** `GET /api/agents/{agent_id}/network`（`services/agent_network.py`）返回
+`mode`（`PUBLIC` / `VPC`）、解析后的配置档及其上次预检（状态、`checked_at`、阻断 / 警告数；Workspace
+已没有该配置时为 `missing`）、放置位置（`vpc`），以及 AgentCore 在其中持有的 ENI（按配置档的子网与安全组
+过滤 `ec2:DescribeNetworkInterfaces`）。ENI 按配置档列出，因为同一组子网与安全组中的所有 Agent 共享它们；
+没有该读取权限的旧版 spoke 角色返回 `status: unavailable`，路由本身不失败。
+
+**控制台。** V2 向导的网络步骤（`NetworkSection`）覆盖每种方式，包括 Harness 快速创建的高级选项。
+`GET /api/network-profiles` 标记了可选的 `is_default` 配置时，新 Agent 默认使用项目的默认配置档；审阅步骤
+对每种方式都显示网络（「公网」或配置档）。Studio 发布对话框提供同样的选择，重新发布时带上已存储的网络
+（spec 会被整体替换）。
 
 ### BYOC —— 自带代码
 
@@ -335,9 +366,17 @@ V3 的 **MCP 服务器** 入口（`/v2/agents?view=new&method=byoc&protocol=mcp`
 | deploy | `CreateAgentRuntime` / `UpdateAgentRuntime` 带 `protocolConfiguration.serverProtocol = MCP`，每次更新都回传（省略会把 Runtime 重置为 HTTP）；不注入 `MODEL_ID` 环境变量 |
 | register | 不建 A2A 记录，改为：同名 OAuth2 凭证提供方（持有该客户端），再建 MCP 服务器网关目标，端点为 Runtime 在 `DEFAULT` 上的数据面 URL；创建目标、或重新发布后执行 `SynchronizeGatewayTargets`，都会列出工具；同名但指向别处的目标被拒绝（`409 mcp.target_name_taken`），改名后旧目标会被删除 |
 
-网关级注册中心记录**不会**被改写（更新会让已批准的记录回到 DRAFT，影响所有挂载它的 Agent）；register 阶段在日志里提示到「治理 → 注册中心导入」刷新。MCP 服务器不可调用（`invoke_capability.reason_code = not-agent-protocol`，对话、`/v1`、评估都会跳过它），不参与放行门，入站认证不能切换（`422 agent.inbound_auth_unsupported`），重新发布也不能在 `mcp` 与其他协议之间切换。`GET /api/agents/{id}/mcp` 实时读回目标状态，以及智能体经网关看到的工具（`<target>___<tool>`）——V3 智能体页用它替换生命周期、对话和试用面板。删除按反向顺序进行：网关目标 → Runtime → OAuth2 提供方 → Cognito 客户端，可重复执行。示例：[`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md)（`mcp>=1.10,<2`）。本版不含：Cedar 脚手架、定时健康检查、Lambda 目标、VPC 模式。
+网关级注册中心记录**不会**被改写（更新会让已批准的记录回到 DRAFT，影响所有挂载它的 Agent）；register 阶段在日志里提示到「治理 → 注册中心导入」刷新。MCP 服务器不可调用（`invoke_capability.reason_code = not-agent-protocol`，对话、`/v1`、评估都会跳过它），不参与放行门，入站认证不能切换（`422 agent.inbound_auth_unsupported`），重新发布也不能在 `mcp` 与其他协议之间切换。`GET /api/agents/{id}/mcp` 实时读回目标状态，以及智能体经网关看到的工具（`<target>___<tool>`）——V3 智能体页用它替换生命周期、对话和试用面板。删除按反向顺序进行：网关目标 → Runtime → OAuth2 提供方 → Cognito 客户端，可重复执行。示例：[`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md)（`mcp>=1.10,<2`）。托管服务器与其他 BYOC Agent 一样部署到 `spec.network` 的配置档中（见「Agent 网络」）。
 
-**工具审批闸门（§15.6）。** 托管服务器的工具在部署者以外的人批准其清单之前不会对外提供。创建目标、或重新发布后重新同步目标时，会经网关列出工具；`services/mcp_reviews.py` 把它们快照为 `[{name, description, input_schema}]`（去掉前缀并排序），并把快照的 SHA-256 与最近一次已批准的清单比较。一致则目标保持在线；否则在 `mcp_tool_reviews` 表中打开一条审批，带上相对已批准清单的差异与给审批人的提示（注入式措辞、URL、指向其他工具的指令、破坏性或写入类动词、缺失或过长的描述），并再次删除目标。register 阶段在日志中注明目标已被扣下，因此 Agent 既不能调用也看不到新工具。无法读取的清单同样被扣下（失败即关闭）。审批需要项目级权限键 `mcp.approve`，由 `release_ops` 与 `tool_steward` 模板持有（持有 `promotion.approve` 的 `inherit` 成员也持有）。部署者永远不能审批自己的审批单，管理员也不例外。批准后在后台重新创建目标（再次经过闸门），并在审批单上记录 `publish_status`。`POST /api/mcp-servers/{agent_id}/reviews/check` 会重新同步在线目标，以发现不经重新部署就改变了工具的服务器：一旦不同，就打开一条 `drift` 审批并扣下目标。目标早于闸门存在的服务器，会在下一次部署时把实时清单记为已批准的 `baseline`。批准或发布托管服务器的注册中心记录同样需要 `mcp.approve`，且工具审批须已通过（`409 mcp.review_pending`）。在 Cedar 脚手架（§15.7）落地之前，扣下整个目标就是闸门。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台 MCP 工具审批 API」。
+**工具审批闸门（§15.6）。** 托管服务器的工具在部署者以外的人批准其清单之前不会对外提供。创建目标、或重新发布后重新同步目标时，会经网关列出工具；`services/mcp_reviews.py` 把它们快照为 `[{name, description, input_schema}]`（去掉前缀并排序），并把快照的 SHA-256 与最近一次已批准的清单比较。一致则目标保持在线；否则在 `mcp_tool_reviews` 表中打开一条审批，带上相对已批准清单的差异与给审批人的提示（注入式措辞、URL、指向其他工具的指令、破坏性或写入类动词、缺失或过长的描述），并再次删除目标。register 阶段在日志中注明目标已被扣下，因此 Agent 既不能调用也看不到新工具。无法读取的清单同样被扣下（失败即关闭）。审批需要项目级权限键 `mcp.approve`，由 `release_ops` 与 `tool_steward` 模板持有（持有 `promotion.approve` 的 `inherit` 成员也持有）。部署者永远不能审批自己的审批单，管理员也不例外。批准后在后台重新创建目标（再次经过闸门），并在审批单上记录 `publish_status`。`POST /api/mcp-servers/{agent_id}/reviews/check` 会重新同步在线目标，以发现不经重新部署就改变了工具的服务器：一旦不同，就打开一条 `drift` 审批并扣下目标。目标早于闸门存在的服务器，会在下一次部署时把实时清单记为已批准的 `baseline`。批准或发布托管服务器的注册中心记录同样需要 `mcp.approve`，且工具审批须已通过（`409 mcp.review_pending`）。扣下整个目标仍然是闸门；下文的 Cedar 脚手架按需再加上按工具的策略。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台 MCP 工具审批 API」。
+
+**端点、健康检查与回滚（§15.8）。** `mcp_servers` 表（`models/lambda_tools.McpServerState`）为每个托管服务器保存一行：目标调用的端点（`qualifier`）、`live_version`、最近一次 `health` 以及最近一次后台 `operation`。目标调用运行时的 `DEFAULT` 端点，它跟随每个新版本。每小时的调度任务 `mcp.health`（`dlc/scheduler.py`，`mcp_servers.check_health`）检查每个处于活跃项目中的在线服务器：目标调用的端点不是服务器当前端点时改指过去，重新同步，并与已批准清单比较（`check_drift`：漂移会打开审批并扣下目标）。结果记为 `health {status: healthy | drift | failing | withheld, checked_at, tool_count, error, consecutive_failures, alert, review_id, repointed}`；连续三次失败置 `alert` 并记录警告日志。`POST /api/mcp-servers/{agent_id}/health` 立即执行一次检查。回滚（`POST …/rollback`）把命名端点 `live` 指向一个拥有已批准工具清单的更早版本，把该清单记为当前的已批准清单（一条 `rollback` 审批），并把目标改指过去，再次经过闸门。下一次部署解除固定，回到 `DEFAULT`。移动受放行门管控的 Agent 的 live 端点需要 `release.sign`，否则需要 `agents.deploy`。
+
+**Cedar 脚手架（§15.7）。** `POST /api/mcp-servers/{agent_id}/policies/scaffold` 在挂接到 Workspace 网关的策略引擎上规划（`dry_run`）或应用两条 Cedar 策略（`governance.mcp_scaffold_plan`）：`lp_mcp_<target>_unreviewed` 禁止待审批单中的工具，`lp_mcp_<target>_project` 允许已批准的工具，Workspace 绑定多个项目时附带项目条件。每条策略是一个 `create`、`update`、`delete` 或 `keep` 步骤。应用在后台进行，同一时间只有一个治理操作，并记录在 `operation` 中。同一请求中可选的模式切换（`LOG_ONLY` / `ENFORCE`）改动共享基础设施，因此需要 `infra+perm:mcp.approve`，`ENFORCE` 还需要治理页同样要求的证据或覆盖理由。
+
+**Lambda 工具目标（§15.12）。** `POST /api/gateway-tools/lambda` 把一个 Lambda 函数登记为网关工具目标（`lambda_tool_targets` 表）。函数必须位于本 Workspace 的账号和区域内；内联的工具 Schema 在网关上出现任何东西之前就被记为一条工具审批，创建者无法自行放行。由创建者以外、持有 `mcp.approve` 的成员批准后在后台发布：`workspace_iam.sync_lambda_tools_policy` 在网关角色上写入内联策略 `launchpad-lambda-tools`（只对本 Workspace 各 Lambda 目标的函数授予 `lambda:InvokeFunction`，即函数本身及其 `:*` 版本与别名；没有 Lambda 目标时删除该策略），再用已批准的 Schema 创建 `mcp.lambda` 目标。状态：`reviewing` → `publishing` → `live`（或 `failed`、`rejected`）。删除按反向顺序进行。Lambda 可以运行在 VPC 中，因此无需网关访问私有端点也能触达私有后端。
+
+**外部托管目标（§15.15）。** 在 Workspace 网关上手动创建（经「连接」页）、且不属于任何托管服务器的 MCP 服务器目标，由 `GET /api/gateway-tools/external` 以 `hosting: external` 列出。纳管一个目标（`external_mcp_targets` 表）会把它当前列出的清单记为已批准基线，已在调用它的 Agent 不会被切断；之后每小时的 `mcp.health` 任务用它比较新的清单。漂移会打开审批，但目标属于客户，永远不会被扣下或改指。V3 页面 `/v3/tools/gateway`（导航栏：「Gateway 工具」）列出两类目标，可创建 Lambda 目标并纳管外部目标。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台网关工具目标 API」。
 
 **stdio 桥接（§15.5）。** 只支持 stdio 的服务器以代码 zip 发布，并带 `mcp.stdio_wrapper = {command, args, base}`（仅限 code_zip——Dockerfile 上下文或镜像需自行内置桥接）。部署器加入 [`samples/mcp_stdio_bridge/`](../samples/mcp_stdio_bridge/README.md)，由它在 `0.0.0.0:8000/mcp` 提供服务，并把命令作为子进程启动（不经 shell，从包根目录运行；argv 放在环境变量 `MCP_STDIO_COMMAND` 中）：`python` 底座留在托管 Python 运行时上，以桥接为入口；`node` 底座在桥接的 Node 基础镜像上构建镜像（CodeBuild，arm64），部署为容器运行时。每个容器只有一个子进程，因此保存会话状态的服务器会把所有调用方视为同一个会话；响应是普通 JSON（服务器的通知被丢弃，它反向发出的请求一律答复为不支持）。V2 向导的 MCP 服务器卡片提供该开关，开启时隐藏入口文件选择。
 
@@ -2103,7 +2142,10 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 | `deployments` | 每次部署一行——五阶段数组,含各阶段 status/detail/时间戳 |
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
 | `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间、显式结束 runtime 会话后的 `ended_at` |
-| `mcp_tool_reviews` | 托管 MCP 服务器的工具审批——工具清单快照及其哈希、相对已批准清单的差异、提示、状态（`reviewing`/`approved`/`rejected`/`superseded`）、来源（`deploy`/`drift`/`baseline`）、申请人、审批人、备注，以及批准后的重新发布状态 |
+| `mcp_tool_reviews` | 托管 MCP 服务器、Lambda 工具目标与已纳管外部目标的工具审批——工具清单快照及其哈希、相对已批准清单的差异、提示、状态（`reviewing`/`approved`/`rejected`/`superseded`）、来源（`deploy`/`drift`/`baseline`/`rollback`）、申请人、审批人、备注，以及批准后的重新发布状态 |
+| `mcp_servers` | 每个托管 MCP 服务器一行——其网关目标调用的端点（`DEFAULT` / `live`）、固定的 `live_version`、最近一次健康检查与最近一次后台操作（回滚、Cedar 脚手架） |
+| `lambda_tool_targets` | 控制台创建的 Lambda 网关目标——Lambda ARN、目标名与 id、内联工具 Schema、状态（`reviewing`/`publishing`/`live`/`failed`/`rejected`）、创建者 |
+| `external_mcp_targets` | 纳入工具审批的手动创建 MCP 服务器网关目标——目标 id 与名称、端点、纳管人、最近一次漂移检查 |
 | `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态(`pending`/`active`/`disabled`)、`expires_at`(审批前为空)、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
 | `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文)、创建者(`created_by` 用户 id + `created_by_name`,旧密钥为 NULL)、`last_used_at` |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |

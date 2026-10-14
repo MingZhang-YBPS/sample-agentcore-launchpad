@@ -3024,6 +3024,11 @@ def approve_proposal(
             db, fresh_row.id, spec.name, agent.id,
             viewer=visibility.viewer_for_principal(db, fresh_row, principal_of(approver)),
         )
+        # PUBLIC allowed here / the network profile passes its preflight (§12.6)
+        from app.deployer.pipeline import network_gate
+        from app.services.workspace import context_for_workspace
+
+        network_gate(db, context_for_workspace(agent.workspace_id), spec.model_dump())
         deployment, job = create_deployment(
             db, agent, commit=False,
             payload_extra={"assistant": {

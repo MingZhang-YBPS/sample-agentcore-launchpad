@@ -357,6 +357,7 @@ PARAMS: dict[str, Any] = {
     "job_id": lambda i: i["jobs"],
     "kb_id": lambda i: i["kb"],
     "review_id": lambda i: i["mcp_tool_reviews"],
+    "tool_id": lambda i: i["lambda_tool_targets"],
     "memory_id": lambda i: i["memory"],
     "profile_id": lambda i: i["profile"],
     "promotion_id": lambda i: i["promotions"],
@@ -492,11 +493,7 @@ ADMIN_SEES_ALL = {
 }
 
 # Routes that cannot be exercised today, with why (see the report of P1H-iso).
-BROKEN: dict[str, str] = {
-    "/api/governance/gateways/{gateway_id}/generations/{generation_id}":
-        "governance.py:404 reuses the RESOURCE_ID Path() instance, so FastAPI "
-        "aliases generation_id to policy_id and the route always answers 422",
-}
+BROKEN: dict[str, str] = {}
 
 
 def _scan(world, client: TestClient, headers: dict, *, admin: bool = False) -> list[str]:

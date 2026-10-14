@@ -494,10 +494,18 @@ def _stage_provision(run: Run) -> pipeline.StageResult:
             if run.action == ACTION_EXECUTE
             else f"rollback of promotion {run.promotion_id}"
         )
+        # the target workspace's network rules apply to the promoted spec (§12.6)
+        from app.services.workspace import context_for_workspace
+
+        network_extras = pipeline.network_gate(
+            db, context_for_workspace(agent.workspace_id), agent.spec or {},
+            previous_spec=previous_spec if mode == "update" else None,
+        )
         deployment, deploy_job = pipeline.create_deployment(
             db,
             agent,
             mode=mode,
+            payload_extra=network_extras or None,
             # an in-place update keeps the registry identity it already has
             skip_register=bool(mode == "update" and agent.registry_record_id),
             actor=(promotion.reviewed_by if promotion else None) or "promotion",

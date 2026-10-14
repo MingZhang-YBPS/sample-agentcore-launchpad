@@ -34,6 +34,18 @@ describe("hostedGroups", () => {
     expect(member.filter((to) => V3_AFTER["/v2/users"].some((i) => i.to === to))).toEqual([]);
   });
 
+  it("shows Project settings to administrators and project.members holders only", () => {
+    const tos = (admin: boolean, perms: string[] = []) => hostedGroups(admin, perms).flatMap((g) => g.items.map((i) => i.to));
+    expect(tos(true)).toContain("/v3/project-settings");
+    expect(tos(false, ["project.members"])).toContain("/v3/project-settings");
+    expect(tos(false, ["project.use"])).not.toContain("/v3/project-settings");
+    expect(tos(false, ["project.members"])).not.toContain("/v3/projects");
+  });
+
+  it("lists the Gateway tools page for every member", () => {
+    expect(hostedGroups(false).flatMap((g) => g.items.map((i) => i.to))).toContain("/v3/tools/gateway");
+  });
+
   it("hides administrator pages from members", () => {
     const admin = V2_NAV.flatMap((g) => g.items).filter((i) => i.admin).map((i) => i.to);
     const member = hostedGroups(false).flatMap((g) => g.items.map((i) => i.to));

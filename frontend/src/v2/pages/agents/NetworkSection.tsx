@@ -46,6 +46,9 @@ export function NetworkSection({ form, set }: Omit<SectionProps, "cat" | "err">)
   const { t } = useTranslation();
   const { profiles, error } = useNetworkProfiles();
   const [mode, setMode] = useState<Mode>(() => initialMode(form));
+  // a profile set from outside (the wizard preselects the project's default once the
+  // list lands) shows the VPC side, as a pick here would
+  if (mode === "PUBLIC" && form.networkProfileId) setMode("VPC");
   const choices: NetworkChoice[] = profiles ? networkChoices(profiles, form.networkProfileId) : [];
   const current = choices.find((c) => c.profile.id === form.networkProfileId) ?? null;
   // a container's legacy inline ids (BYO mounts, no profile) stay in the storage card

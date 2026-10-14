@@ -128,6 +128,18 @@ const V3Projects = lazy(() => import("./v3/pages/projects/Projects").then((m) =>
 const V3ProjectSettings = lazy(() =>
   import("./v3/pages/projects/Projects").then((m) => ({ default: m.V3ProjectSettings })),
 );
+// Configure → Administrators / Project groups / Departments (projects §7.9)
+const V3Admins = lazy(() => import("./v3/pages/admins/Admins").then((m) => ({ default: m.V3Admins })));
+const V3ProjectGroups = lazy(() =>
+  import("./v3/pages/groups/ProjectGroups").then((m) => ({ default: m.V3ProjectGroups })),
+);
+const V3Departments = lazy(() =>
+  import("./v3/pages/departments/Departments").then((m) => ({ default: m.V3Departments })),
+);
+// Gateway tool targets: Lambda tools and externally hosted MCP servers
+const V3GatewayTools = lazy(() =>
+  import("./v3/pages/tools/GatewayToolTargets").then((m) => ({ default: m.GatewayToolTargets })),
+);
 const V3Knowledge = lazy(() => import("./v3/pages/Knowledge").then((m) => ({ default: m.V3Knowledge })));
 const V2Home = lazy(() => import("./v2/pages/Home").then((m) => ({ default: m.V2Home })));
 const V2DataCenter = lazy(() =>
@@ -370,6 +382,9 @@ export default function App() {
                 <Route path="standards" element={<V3Standards />} />
                 <Route path="skill-lab" element={<V3SkillLab />} />
                 <Route path="users" element={<V3Users />} />
+                <Route path="admins" element={<V3Admins />} />
+                <Route path="project-groups" element={<V3ProjectGroups />} />
+                <Route path="departments" element={<V3Departments />} />
                 <Route path="workspaces" element={<V3Workspaces />} />
                 <Route path="projects" element={<V3Projects />} />
                 <Route path="project-settings" element={<V3ProjectSettings />} />
@@ -386,6 +401,7 @@ export default function App() {
                 <Route path="memory" element={<V3Memory />} />
                 <Route path="governance" element={<V3Governance />} />
                 <Route path="connections" element={<V3Connections />} />
+                <Route path="tools/gateway" element={<V3GatewayTools />} />
                 <Route path="costs" element={<V3Costs />} />
                 <Route path="*" element={<Navigate to="/v3" replace />} />
               </Route>

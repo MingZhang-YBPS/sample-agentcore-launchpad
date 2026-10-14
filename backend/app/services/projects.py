@@ -806,6 +806,11 @@ def delete_role(db: Session, identity: Any, row: Project, role_key: str) -> None
 # ── moving an agent to another project (design §7.10, §11.5) ──────────────────
 
 
+def _row_key(table: Any) -> Any:
+    """The row's single-column key (`id` on most tables, `agent_id` on per-agent ones)."""
+    return table.c.id if "id" in table.c else next(iter(table.primary_key.columns))
+
+
 def _derived_ids(db: Session, agent_id: str, source: str) -> dict[Any, set[str]]:
     """The agent and every row derived from it, transitively along each model's
     `__project_parent__` (eval run → criterion results, annotation task → labels and
@@ -822,7 +827,7 @@ def _derived_ids(db: Session, agent_id: str, source: str) -> dict[Any, set[str]]
             if not parent_ids:
                 continue
             table = model.__table__
-            found = set(db.execute(select(table.c.id).where(
+            found = set(db.execute(select(_row_key(table)).where(
                 table.c[attr].in_(sorted(parent_ids)), table.c.project_id == source,
             )).scalars())
             fresh = found - moved.get(table.name, set())
@@ -885,7 +890,7 @@ def transfer_agent(
         for model, ids in moved.items():
             table = model.__table__
             result = db.execute(update(table).where(
-                table.c.id.in_(sorted(ids)), table.c.project_id == source.id,
+                _row_key(table).in_(sorted(ids)), table.c.project_id == source.id,
             ).values(project_id=to_project_id))
             counts[table.name] = int(result.rowcount or 0)
         # keys of the source project scoped to the agent lose it; a key left with no

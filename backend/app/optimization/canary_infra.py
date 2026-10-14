@@ -25,6 +25,7 @@ from typing import Any
 
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.network import spec_vpc
 from app.deployer.zip_runtime import (
     _generate_code,
     _method_requirements,
@@ -195,6 +196,8 @@ def mint_candidate_version(
         protocol=edited_spec.protocol,
         # an omitted list detaches the mounts — the candidate keeps production's
         filesystem_configurations=filesystem_configurations(edited_spec) or None,
+        # every update sends the network: a VPC agent's candidate must stay in its VPC
+        vpc=spec_vpc(edited_spec, agent.workspace_id),
     )
     v_candidate = str(resp["agentRuntimeVersion"])
     log(f"UpdateAgentRuntime published candidate version {v_candidate}")

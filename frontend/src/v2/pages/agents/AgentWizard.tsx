@@ -31,6 +31,8 @@ import {
   sourceOnMethodSwitch,
 } from "../../../lib/agent-spec";
 import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage, type SharedTemplateInfo } from "../../../lib/api";
+import { networkChoices } from "../../../lib/api/agent-network";
+import { networkProfilesApi } from "../../../lib/api/projects";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { defaultModelFor, isCustomModelId, type ModelSource } from "../../../lib/models";
@@ -57,6 +59,7 @@ import {
   SdkCard,
   StrandsToolsCard,
 } from "./MethodSections";
+import { NetworkSection } from "./NetworkSection";
 import { TemplateGallery } from "./TemplateGallery";
 import { formFromSharedTemplate, formFromTemplate } from "./templateForms";
 import { GuardrailCard, MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
@@ -87,6 +90,13 @@ function initialDraft(params: URLSearchParams): Draft {
   if (gateway) form.selectedGateway = [gateway];
   if (skill) form.skills = [skill];
   return { form, step: isMethod(method) || gateway || skill ? 1 : 0, extras: null };
+}
+
+/** A template's form, still in the network the draft had (the preselected default
+ *  profile) unless the template names one itself. */
+function keepNetwork(cur: AgentForm, next: AgentForm): AgentForm {
+  if (next.networkProfileId || next.networkVpc) return next;
+  return { ...next, networkProfileId: cur.networkProfileId, networkVpc: cur.networkVpc };
 }
 
 /** An existing agent loaded for a re-publish: straight to the configure step. */
@@ -183,7 +193,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       .then(({ templates }) => {
         const entry = templates.find((row) => row.id === sharedTemplateId);
         if (cancelled || !entry) return;
-        setForm(formFromSharedTemplate(entry));
+        setForm((cur) => keepNetwork(cur, formFromSharedTemplate(entry)));
         setTemplateNeeds(entry.requirements);
         setStep(1);
       })
@@ -207,7 +217,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       .then(({ templates }) => {
         const entry = templates.find((row) => row.key === scenarioKey);
         if (cancelled || !entry) return;
-        setForm(formFromTemplate(entry));
+        setForm((cur) => keepNetwork(cur, formFromTemplate(entry)));
         setFullForm(true);
         setStep(1);
       })
@@ -218,6 +228,33 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       cancelled = true;
     };
   }, [scenarioKey]);
+
+  // A new agent starts in the project's default network profile (projects §12.6),
+  // when `GET /api/network-profiles` marks a choosable one default; a template picked
+  // afterwards keeps it (`keepNetwork`), and the member can still switch to PUBLIC.
+  const [defaultNetwork, setDefaultNetwork] = useState<string | null>(null);
+  useEffect(() => {
+    if (edit) return;
+    let live = true;
+    networkProfilesApi
+      .list()
+      .then(({ profiles }) => {
+        const pick = networkChoices(profiles).find((c) => c.profile.is_default && !c.disabled);
+        if (live && pick) setDefaultNetwork(pick.profile.id);
+      })
+      .catch(() => {
+        /* no list: the form starts PUBLIC and the network step shows the error */
+      });
+    return () => {
+      live = false;
+    };
+  }, [edit]);
+  useEffect(() => {
+    if (!defaultNetwork) return;
+    setForm((cur) =>
+      cur.networkProfileId || cur.networkVpc ? cur : { ...cur, networkProfileId: defaultNetwork, networkVpc: true },
+    );
+  }, [defaultNetwork]);
 
   const set: SectionProps["set"] = (patch) =>
     setForm((prev) => ({ ...prev, ...(typeof patch === "function" ? patch(prev) : patch) }));
@@ -491,7 +528,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
             onPick={(template) => {
               // a template chooses the method and the defaults; the member still
               // sees and can edit every field on the configure step
-              setForm(formFromTemplate(template));
+              setForm((cur) => keepNetwork(cur, formFromTemplate(template)));
               setFullForm(false);
               setStep(1);
             }}
@@ -573,6 +610,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
               {skillsKb()}
               <MemoryCard {...section} loop />
               <GuardrailCard form={form} set={set} />
+              <NetworkSection form={form} set={set} />
             </>
           )}
         </>

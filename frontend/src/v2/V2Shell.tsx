@@ -11,6 +11,7 @@ import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
 import { getUiVersion, setUiVersion } from "../lib/ui-version";
 import { useNavMode } from "../lib/nav-mode";
+import { NoBoundProjectBanner } from "../workspace/NoProjectAssigned";
 import { scopeKey, useProject } from "../workspace/project-context";
 import { useWorkspace } from "../workspace/workspace-context";
 import { V2Lang } from "./Lang";
@@ -221,6 +222,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
                     : scopeKey(current?.id, project?.id)
                 }
               >
+                <NoBoundProjectBanner />
                 <RouteChunk key={location.pathname}>
                   <Outlet />
                 </RouteChunk>

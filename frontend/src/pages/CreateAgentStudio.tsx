@@ -16,6 +16,8 @@ import {
 } from "../components";
 import type { AgentInfo, AgentSpecInput, DeploymentInfo, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
+import { networkChoices } from "../lib/api/agent-network";
+import { type NetworkProfile, networkProfilesApi } from "../lib/api/projects";
 import { ChatDrawer } from "../studio/ChatDrawer";
 import { CodePanel } from "../studio/CodePanel";
 import { FlowEditor } from "../studio/FlowEditor";
@@ -107,6 +109,11 @@ export function CreateAgentStudio() {
   const [publishErr, setPublishErr] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [launch, setLaunch] = useState<{ agentId: string; jobId: string } | null>(null);
+  // spec.network (projects §12.6): a profile id, "" for PUBLIC; null = untouched —
+  // a re-publish then carries the stored network as it was (the spec is replaced)
+  const [networkId, setNetworkId] = useState<string | null>(null);
+  const [storedNetwork, setStoredNetwork] = useState<AgentSpecInput["network"]>(null);
+  const [networkProfiles, setNetworkProfiles] = useState<NetworkProfile[] | null>(null);
   const [deployment, setDeployment] = useState<DeploymentInfo | null>(null);
   const [job, setJob] = useState<JobInfo | null>(null);
   const [agentStatus, setAgentStatus] = useState("deploying");
@@ -216,6 +223,23 @@ export function CreateAgentStudio() {
     [publishEnv],
   );
 
+  // the profiles this project may pick; a new agent starts in the default one
+  useEffect(() => {
+    let live = true;
+    networkProfilesApi
+      .list()
+      .then(({ profiles }) => {
+        if (!live) return;
+        setNetworkProfiles(profiles);
+        const pick = networkChoices(profiles).find((c) => c.profile.is_default && !c.disabled);
+        if (!editing && pick) setNetworkId((cur) => cur ?? pick.profile.id);
+      })
+      .catch(() => live && setNetworkProfiles([]));
+    return () => {
+      live = false;
+    };
+  }, [editing]);
+
   // ── edit mode: load the stored flow (or fall back for external-app agents) ──
   useEffect(() => {
     if (!editAgentId) return;
@@ -231,7 +255,10 @@ export function CreateAgentStudio() {
         }
         setEditAgent(agent);
         setPublishName(agent.name);
-        const spec = (agent.spec ?? {}) as { studio_flow?: StudioFlow; code?: string };
+        const spec = (agent.spec ?? {}) as { studio_flow?: StudioFlow; code?: string; network?: AgentSpecInput["network"] };
+        const net = spec.network ?? null;
+        setStoredNetwork(net);
+        if (net && "profile_id" in net) setNetworkId(net.profile_id);
         const flow = spec.studio_flow;
         if (flow && Array.isArray(flow.nodes) && flow.nodes.length > 0) {
           setNodes(flow.nodes);
@@ -397,6 +424,9 @@ export function CreateAgentStudio() {
       studio_flow: { nodes, edges, graphMode },
       ...(extraReqs.length ? { requirements: extraReqs } : {}),
       ...(Object.keys(publishEnv).length ? { env: publishEnv } : {}),
+      ...(networkId === null
+        ? storedNetwork ? { network: storedNetwork } : {}
+        : networkId ? { network: { profile_id: networkId } } : {}),
     };
     try {
       const res =
@@ -685,6 +715,26 @@ export function CreateAgentStudio() {
             <div className="kv">
               <span className="k">{t("studio.publish.memory")}</span>
               <span className="v">{t("studio.publish.memoryValue")}</span>
+            </div>
+            <div className="field" style={{ marginTop: 12 }}>
+              <label htmlFor="studio-network">{t("network.title")}</label>
+              <select
+                id="studio-network"
+                className="input"
+                value={networkId ?? (storedNetwork && "profile_id" in storedNetwork ? storedNetwork.profile_id : "")}
+                onChange={(e) => setNetworkId(e.target.value)}
+                data-testid="studio-network"
+              >
+                <option value="">{t("network.public")}</option>
+                {networkChoices(networkProfiles ?? [], networkId ?? "").map((c) => (
+                  <option key={c.profile.id} value={c.profile.id} disabled={c.disabled}>
+                    {c.profile.name}
+                    {c.profile.is_default ? ` · ${t("network.default")}` : ""}
+                    {` · ${t(`network.status.${c.profile.status}`, { defaultValue: c.profile.status })}`}
+                  </option>
+                ))}
+              </select>
+              {editing && <div className="studio-warn">{t("network.republishNote")}</div>}
             </div>
 
             {codeState.source === "ai" && (

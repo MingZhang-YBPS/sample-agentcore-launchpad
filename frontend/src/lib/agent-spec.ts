@@ -808,10 +808,8 @@ const byocArtifact = (form: AgentForm) => {
  */
 export function networkSpec(form: AgentForm): Pick<AgentSpecInput, "network"> {
   if (form.networkProfileId) {
-    // `AgentSpecInput.network` (lib/api.ts) still types the legacy inline shape only;
-    // the backend's `AgentNetwork` is `{profile_id}` | `{subnets, security_groups}`
     const ref: NetworkProfileRefInput = { profile_id: form.networkProfileId };
-    return { network: ref as unknown as AgentSpecInput["network"] };
+    return { network: ref };
   }
   if (form.method === "container" && hasByoMounts(form)) {
     return { network: { subnets: splitIds(form.vpcSubnets), security_groups: splitIds(form.vpcSgs) } };

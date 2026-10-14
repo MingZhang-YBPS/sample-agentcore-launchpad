@@ -401,7 +401,7 @@ def start_gateway_generation(
 )
 def get_gateway_generation(
     gateway_id: str = GATEWAY_ID,
-    generation_id: str = RESOURCE_ID,
+    generation_id: str = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return governance_service.generation_view(

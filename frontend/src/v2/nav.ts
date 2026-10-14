@@ -44,6 +44,9 @@ export interface V2NavItem {
   v2?: boolean;
   /** only rendered for administrators */
   admin?: boolean;
+  /** rendered for administrators and for callers holding this project permission
+   *  (e.g. `project.members`) in some project of the current workspace */
+  perm?: string;
   /** shown in the pared-down `business` sidebar mode too (see lib/nav-mode.ts) */
   business?: boolean;
   /** exact-match active state (the /v2 index) */

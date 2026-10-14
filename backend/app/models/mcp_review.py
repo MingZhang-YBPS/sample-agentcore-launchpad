@@ -27,7 +27,8 @@ STATUSES = ("reviewing", "approved", "rejected", "superseded")
 # deploy: a deploy / re-publish listed the tools; drift: a later read found them
 # changed without one; baseline: a server deployed before tool review existed,
 # recorded as approved on its first re-sync so its live target is not pulled
-SOURCES = ("deploy", "drift", "baseline")
+# rollback: an earlier version's approved list restored as the current one (§15.8)
+SOURCES = ("deploy", "drift", "baseline", "rollback")
 # after an approval the target is re-created in the background (`publish_approved`)
 PUBLISH_STATUSES = ("publishing", "published", "failed")
 

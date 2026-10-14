@@ -11,8 +11,10 @@ import {
   toolkitToolNames,
 } from "../../../lib/agent-spec";
 import type { InboundAuth } from "../../../lib/api";
+import { networkProfilesApi } from "../../../lib/api/projects";
 import { mcpStdioArgs } from "../../../lib/mcp-stdio";
 import { inboundCapable, issuerMismatch, jwtSummary, wizardDeployedJwt } from "../../../lib/inbound-auth";
+import { useLoad } from "../../hooks";
 import { Alert, Card, Descriptions } from "../../ui";
 import { InlineKbState } from "./InlineKb";
 import { type InlineKb, inlineKbBlock } from "./useInlineKb";
@@ -42,6 +44,8 @@ export function WizardReview({
   cognitoIssuer?: string | null;
 }) {
   const { t } = useTranslation();
+  // the picked profile's name; a failed read shows its id
+  const profiles = useLoad(() => networkProfilesApi.list(), "v2-agent-review-network-profiles");
   const none = t("v2.agents.wizard.none");
   const list = (items: string[]) => (items.length ? items.join(", ") : none);
   const method = form.method;
@@ -227,14 +231,26 @@ export function WizardReview({
             efs: form.efsMounts.length,
           }),
         },
-        ...(form.networkProfileId
-          ? [{ label: "VPC", value: t("v2.agents.wizard.networkProfile", { id: form.networkProfileId }) }]
-          : hasByoMounts(form)
-            ? [{ label: "VPC", value: mono(`${form.vpcSubnets} · ${form.vpcSgs}`) }]
-            : []),
       ];
     }
   }
+
+  // every method deploys into the chosen network profile (projects §12.6); none ⇒ PUBLIC,
+  // except a container's legacy inline subnets (BYO mounts, no profile)
+  const profile = form.networkProfileId ? profiles.data?.profiles.find((p) => p.id === form.networkProfileId) : null;
+  items = [
+    ...items,
+    {
+      label: t("network.title"),
+      value: form.networkProfileId
+        ? profile
+          ? <>{profile.name} · {mono(profile.id)}</>
+          : t("v2.agents.wizard.networkProfile", { id: form.networkProfileId })
+        : method === "container" && hasByoMounts(form)
+          ? mono(`${form.vpcSubnets} · ${form.vpcSgs}`)
+          : t("network.public"),
+    },
+  ];
 
   const inboundShown = inboundCapable(method, form.protocol) && !!form.inbound;
   const deployedJwt = inboundShown ? wizardDeployedJwt(form.inbound, form.inboundJwt, workspaceDefault) : null;

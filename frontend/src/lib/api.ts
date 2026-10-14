@@ -14,6 +14,7 @@ import type {
   RunRecommendationSource,
 } from "./evaluation";
 import type { ExperimentInfo } from "./experiments";
+import type { McpServerOps } from "./api/mcpReviews";
 import type { ModelSource, ReasoningEffort } from "./models";
 import type { UserGroup, UserProject } from "./api/users";
 import type { ManagedVideo, ManagedVideoCatalog, VideoCatalog, VideoContent } from "./videos";
@@ -963,7 +964,9 @@ export interface AgentSpecInput {
   env?: Record<string, string>;
   studio_flow?: { nodes: unknown[]; edges: unknown[]; graphMode: boolean };
   filesystem?: FilesystemInput;
-  network?: VpcNetworkInput;
+  /** a workspace network profile (`{profile_id}`, every method) or the legacy inline
+   *  ids (a container with BYO mounts); omitted / null ⇒ PUBLIC */
+  network?: VpcNetworkInput | { profile_id: string } | null;
   /** required iff method="byoc" */
   byoc?: ByocConfigInput;
   /** Inbound auth of this agent's Runtime. Omitted ⇒ inherit the workspace
@@ -976,7 +979,9 @@ export interface AgentSpecInput {
 }
 
 /** `GET /api/agents/{id}/mcp` — an MCP server's Gateway wiring, read back live. */
-export interface McpServerStatus {
+/** `GET /api/agents/{id}/mcp`: the Gateway wiring plus the server's operations
+ *  (endpoint qualifier, health, last rollback / scaffold, rollback targets). */
+export interface McpServerStatus extends McpServerOps {
   target_name: string;
   target_id: string | null;
   client_id: string | null;

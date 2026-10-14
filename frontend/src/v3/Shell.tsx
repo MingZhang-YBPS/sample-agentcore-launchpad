@@ -38,6 +38,7 @@ import { GLOSSARY_TERMS } from "../v2/Glossary";
 import { ModuleDemoProvider } from "../v2/pages/videos/ModuleDemo";
 import { V2ToastProvider } from "../v2/ui";
 import { groupByDepartment, projectRole, scopeKey, showsProjectChip, splitByAccess, useProject } from "../workspace/project-context";
+import { NoBoundProjectBanner } from "../workspace/NoProjectAssigned";
 import { useWorkspace } from "../workspace/workspace-context";
 import { v2CounterpartOf } from "./backToV2";
 import { ChangePasswordDialog } from "./ChangePassword";
@@ -259,7 +260,9 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   // business mode shows the build → run essentials; expert shows every module.
   // A view filter only: every page stays reachable by URL and by ⌘K.
   const [navMode, setNavMode] = useNavMode(isAdmin);
-  const allGroups = useMemo(() => hostedGroups(isAdmin), [isAdmin]);
+  // a `perm` rail entry (Project settings) shows for a holder in any project here
+  const perms = useMemo(() => [...new Set(project.projects.flatMap((p) => p.permissions))], [project.projects]);
+  const allGroups = useMemo(() => hostedGroups(isAdmin, perms), [isAdmin, perms]);
   const groups = useMemo(
     () =>
       navMode === "expert"
@@ -478,6 +481,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
                   className="v2 v3-host"
                   key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}
                 >
+                  <NoBoundProjectBanner />
                   <RouteChunk key={location.pathname}>
                     <Outlet />
                   </RouteChunk>
@@ -489,12 +493,14 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
               className="view v3-classic"
               key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}
             >
+              <NoBoundProjectBanner />
               <RouteChunk key={location.pathname}>
                 <Outlet />
               </RouteChunk>
             </div>
           ) : (
             <div key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}>
+              <NoBoundProjectBanner />
               <RouteChunk>
                 <Outlet />
               </RouteChunk>

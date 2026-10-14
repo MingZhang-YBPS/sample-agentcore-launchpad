@@ -271,10 +271,34 @@ lacks expected_response`）；所选自定义评估器读取失败时返回 `422
 | `POST` | `/api/mcp-servers/{agent_id}/reviews/{review_id}/approve` | `perm:mcp.approve` | 请求体 `{note?（≤ 2000）}` → 审批单详情。批准后在后台重新创建被扣下的网关目标，并再次经过闸门：服务器列出的工具必须仍与批准的完全一致。结果见 `publish_status`。审批单已有结论时返回 `409 mcp_review.not_open` |
 | `POST` | `/api/mcp-servers/{agent_id}/reviews/{review_id}/reject` | `perm:mcp.approve` | 请求体 `{note?}` → 审批单详情。目标保持扣下，直到新的部署获得批准 |
 | `POST` | `/api/mcp-servers/{agent_id}/reviews/check` | `perm:project.write` | 重新同步实时目标，并把其工具与已批准清单比较，返回 `{checked, drift, review_id?, reason?}` 并合并上面的闸门状态。服务器可以不经重新部署就改变工具；一旦不同，就打开一条 `drift` 审批并扣下目标。无法读取清单时同样扣下（失败即关闭）。没有存活目标时为 `checked: false, reason: "no_target"` |
+| `POST` | `/api/mcp-servers/{agent_id}/health` | `perm:project.write` | 立即执行一次健康检查，与每小时的 `mcp.health` 任务相同：目标调用的端点不是服务器当前端点时改指过去，重新同步，并与已批准清单比较（漂移会打开审批并扣下目标）→ `{health, …闸门状态}`。AWS 或网关故障记为 `failing` 结果而不是报错；连续三次即置 `alert` |
+| `POST` | `/api/mcp-servers/{agent_id}/rollback` | 服务器的 live 端点已固定（受放行门管控的 Agent）时需 `perm:release.sign`，否则 `perm:agents.deploy`；受生产保护 | 请求体 `{version?（≤ 16）}`，默认为当前所服务版本之外最新的已批准版本 → `202 {version, review_id, qualifier, live_version, health, operation}`。后台把命名端点 `live` 指向该版本，把该版本的已批准工具清单设为当前清单（一条 `rollback` 审批），并把目标改指过去，再次经过闸门；进度见 `operation`。下一次部署会解除固定，回到 `DEFAULT`。`409 mcp.rollback_unavailable`（没有其他版本拥有已批准清单；`detail.approved_versions`）、`409 mcp.rollback_noop`（已在服务该版本）、`409 mcp.operation_in_flight`（回滚或脚手架仍在进行） |
+| `POST` | `/api/mcp-servers/{agent_id}/policies/scaffold` | `perm:mcp.approve`；带 `mode` 时为 `infra+perm:mcp.approve` | 请求体 `{dry_run?, mode?: LOG_ONLY\|ENFORCE, confirmation_name?, override_reason?, evidence_range?: 1h\|6h\|24h\|7d, acknowledged_gateway_ids[]?}`。在挂接到 Workspace 网关的策略引擎上规划该服务器的一对 Cedar 策略：`lp_mcp_<target>_unreviewed` 禁止待审批单中的工具，`lp_mcp_<target>_project` 允许已批准的工具（Workspace 绑定多个项目时附带项目条件）。`dry_run` → `{plan}`，包含 `create`/`update`/`delete`/`keep` 步骤；否则 `202 {plan, …运维状态}`，在后台应用。策略之后的 `mode` 切换属于共享基础设施；`ENFORCE` 与治理页的模式切换一样需要证据或输入确认的覆盖理由。`409 mcp.scaffold_nothing_reviewed`（尚无工具清单）、`503 gateway.not_bootstrapped` |
 
 打开审批单记入审计事件 `mcp.review.deploy` / `.drift`，决定记入 `mcp.review.approve` / `.reject`。V3 Agent 页的 MCP 服务器面板展示闸门状态、待审批单及其差异与提示，以及批准、驳回操作。
 
 **MCP 服务器的注册记录。** 对 `descriptorType` 为 `MCP` 的记录执行 `POST /api/registry/records/{record_id}/action` 的 `approve` 或 `publish`，还需要 `perm:mcp.approve`（`403 auth.permission_required`）。若该记录对应本 Workspace 的一个托管 MCP 服务器（同一 `target_name`），则该服务器的工具审批必须先为 `approved`，否则返回 `409 mcp.review_pending`（`detail.agent_id`）。其他记录类型与操作的生命周期不变。
+
+## 控制台网关工具目标 API / Console Gateway tool targets API
+
+托管 MCP 服务器之外的网关工具目标（projects §15.12、§15.13、§15.15，`routers/gateway_lambda.py`、`services/gateway_tools.py`）。这些路由属于 Workspace + 项目范围；其他项目的行与不存在的行一样返回 404。它们的工具清单与托管 MCP 服务器经过同样的工具审批（审批单形状见上文）：审批需要 `perm:mcp.approve`，且创建者本人永远不能审批（`409 mcp_review.self_decide`）。
+
+- **Lambda 目标**由控制台创建。创建或删除会改动所有项目共享的 Workspace 网关，因此两者都是 `infra+perm:agents.deploy`：Workspace 只绑定一个项目时为该项目的 `agents.deploy`，绑定多个项目后仅限管理员。两者都受生产保护。
+- **外部托管目标**是在网关上手动创建、且不属于任何托管服务器的 MCP 服务器目标。纳管时把它当前的清单记为已批准基线（已在调用它的 Agent 不会被切断），之后每小时的 `mcp.health` 任务用它比较新的清单。漂移会打开审批，但目标属于客户，永远不会被扣下或改指。
+
+Lambda 目标为 `{id, kind: "lambda", gateway_id, target_id, target_name, lambda_arn, description, tool_names[], status: reviewing|publishing|live|failed|rejected, error, created_by, created_at, review{…闸门状态}}`，创建时另带 `tool_schema[]`。
+
+| 方法 | 路径 | 权限 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/gateway-tools/lambda` | `perm:project.use` | `{targets[Lambda 目标]}`，最新在前 |
+| `POST` | `/api/gateway-tools/lambda` | `infra+perm:agents.deploy` | 请求体（`extra="forbid"`）`{lambda_arn, target_name（MCP 目标名格式，≤ 100）, tool_schema[{name, description, inputSchema}]（1–100 项）, description?（≤ 500）}` → `201` 目标，带 `tool_schema` 与 `review_id`。此时网关尚无任何变化：Schema 等待审批。批准后在后台先改写网关角色的内联策略 `launchpad-lambda-tools`，只对本 Workspace 各 Lambda 目标的函数（函数本身及其 `:*` 版本与别名）授予 `lambda:InvokeFunction`，再用已批准的 Schema 内联创建 `mcp.lambda` 目标。`422 lambda_tool.invalid_arn`、`422 lambda_tool.wrong_environment`（账号或区域不是本 Workspace 的）、`422 lambda_tool.function_missing`、`422 lambda_tool.invalid_schema`、`409 lambda_tool.target_name_taken`、`503 gateway.not_bootstrapped` |
+| `DELETE` | `/api/gateway-tools/lambda/{target_id}` | `infra+perm:agents.deploy` | `{deleted}`。`target_id` 为控制台 id（网关目标 id 也可）。先删除网关目标，再把该函数移出角色策略（没有 Lambda 目标时删除整条策略），最后删除该行。发布中返回 `409 lambda_tool.publishing`，不存在返回 `404 gateway_tool.not_found` |
+| `GET` | `/api/gateway-tools/external` | `perm:project.use` | `{targets[{target_id, target_name, endpoint, status, hosting: "external", tool_id, adopted_elsewhere, review, health}]}`，按名称排序。本项目纳管后才有 `tool_id`、`review` 与 `health`；其他项目已纳管时 `adopted_elsewhere` 为 true |
+| `POST` | `/api/gateway-tools/external/{target_id}/adopt` | `perm:mcp.approve`；处理函数内另需 `infra+perm:mcp.approve` | → `201 {tool_id, target_id, target_name, review}`，当前工具清单记为已批准基线。`404 gateway_tool.not_found`、`409 gateway_tool.not_external`（托管服务器的目标或非 MCP 目标）、`409 gateway_tool.already_adopted` |
+| `GET` | `/api/gateway-tools/{tool_id}/reviews` | `perm:project.use` | Lambda 目标或已纳管目标的 `{agent_id, …闸门状态, reviews[审批单]}` |
+| `GET` | `/api/gateway-tools/{tool_id}/reviews/{review_id}` | `perm:project.use` | 审批单，带 `tools[]` 与 `base_tools[]`。`404 mcp_review.not_found` |
+| `POST` | `/api/gateway-tools/{tool_id}/reviews/{review_id}/approve` | `perm:mcp.approve` | 请求体 `{note?}` → 审批单详情。处于 `reviewing` 或 `failed` 的 Lambda 目标转为 `publishing`，并在后台发布；已纳管目标的漂移则被接受（`publish_status: published`） |
+| `POST` | `/api/gateway-tools/{tool_id}/reviews/{review_id}/reject` | `perm:mcp.approve` | 请求体 `{note?}` → 审批单详情。Lambda 目标变为 `rejected` |
 
 ## 控制台 Registry API——实时名片 / Console Registry API: live agent card
 
@@ -675,7 +699,8 @@ tools/toolkits/skills/knowledge_bases 与 `a2a` 协议。部署时服务端会�
 | 方法 | 路径 | 结果 |
 |---|---|---|
 | `GET` | `/api/agents/{agent_id}/versions` | `{kind: runtime\|harness, resource_id, versions[{version, status, description, last_updated_at}], endpoints[{name, live_version, target_version, status, description, created_at, last_updated_at, failure_reason}], latest_version, ledger_version, canary_endpoints[]}`——`versions` 最新在前;`endpoints` 先 `DEFAULT` 再按名称;`latest_version` 是 AWS 报告的最高版本,`ledger_version` 是最近一次 Launchpad 部署记录的版本(`Agent.version`),带外更新或金丝雀候选版本铸造后二者可能不同;`canary_endpoints` 列出仍然存在的 `stable`/`treatment` 端点名。资源族:`zip_runtime`/`studio`/`container` 以及 `spec.discovery.resource_type` 缺省或为 `runtime` 的导入行 → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`;`harness` 以及 `resource_type == "harness"` 的导入行 → `ListHarnessVersions` + `ListHarnessEndpoints`(harness 版本没有描述字段)。不改变任何状态 |
-| `GET` | `/api/agents/{agent_id}/mcp` | member——仅限 MCP 服务器（`spec.protocol == "mcp"`），否则 `409 agent.not_mcp_server`：`{target_name, target_id, client_id, gateway_id, endpoint, target_status, status_reasons[], tools[{name, description}], tools_error}`——实时读回网关目标（AWS 上已不存在时为 `MISSING`），以及智能体经网关看到的工具（`<target>___<tool>`）；不返回任何密钥。另带工具审批闸门 `review {state: none\|reviewing\|approved\|rejected, open_review_id, approved_review_id, approved_hash, live_hash, drift}`（见下文“控制台 MCP 工具审批 API”）：`live_hash` 是实时列出的工具清单的哈希（目标不是 `READY` 时为 null），与 `approved_hash` 不同时 `drift` 为 true。此读取不记录任何东西，记录由 `POST /api/mcp-servers/{agent_id}/reviews/check` 完成 |
+| `GET` | `/api/agents/{agent_id}/mcp` | member——仅限 MCP 服务器（`spec.protocol == "mcp"`），否则 `409 agent.not_mcp_server`：`{target_name, target_id, client_id, gateway_id, endpoint, target_status, status_reasons[], tools[{name, description}], tools_error}`——实时读回网关目标（AWS 上已不存在时为 `MISSING`），以及智能体经网关看到的工具（`<target>___<tool>`）；不返回任何密钥。另带工具审批闸门 `review {state: none\|reviewing\|approved\|rejected, open_review_id, approved_review_id, approved_hash, live_hash, drift}`（见下文“控制台 MCP 工具审批 API”）：`live_hash` 是实时列出的工具清单的哈希（目标不是 `READY` 时为 null），与 `approved_hash` 不同时 `drift` 为 true。此读取不记录任何东西，记录由 `POST /api/mcp-servers/{agent_id}/reviews/check` 完成。另带服务器运维状态（§15.7、§15.8）：`qualifier`（`DEFAULT` 跟随每个新版本，回滚后为固定的 `live`）、`live_version`、`health {status: healthy\|drift\|failing\|withheld, checked_at, tool_count, error, consecutive_failures, alert, review_id, repointed}`（最近一次每小时 `mcp.health` 检查或 `POST …/health` 的结果）、`operation {kind: rollback\|scaffold, status: running\|succeeded\|failed, version?, actor, error, started_at, completed_at, results?}`，以及 `rollback_versions[{version, review_id, decided_at}]`（各运行时版本的已批准工具清单，最新在前）。`endpoint` 带当前的 qualifier |
+| `GET` | `/api/agents/{agent_id}/network` | 成员——Agent 的运行网络（projects §12.11）：`{agent_id, mode: PUBLIC\|VPC, profile, vpc, enis}`。PUBLIC 以及配置档出现之前的内联网络 `profile` 为 `null`；否则为 `{id, name, vpc_id, subnet_ids[], security_group_ids[], internet, status, checked_at, archived, blocking, warnings}`（上次预检的阻断项 / 警告数），Workspace 已没有该配置时为 `{id, missing: true}`。`vpc` 是解析后的 `{subnets[], security_groups[]}`。`enis` 为 `{status: ok, scope: "profile", count, in_use, interfaces[{id, subnet_id, availability_zone, status, private_ip, description}]}`，按配置档列出（同一组子网与安全组中的所有 Agent 共享这些 ENI）；Workspace 角色无法读取 ENI 时（较旧的 spoke 模板）为 `{status: unavailable, error}`。其他项目的 Agent 返回 `404 agent.not_found` |
 | `GET` | `/api/agents/{agent_id}/conversions` | 成员——`{source: {id, name, method, status}, conversions: [agent…]}`：由该 Agent 转换出的 **Runtime 孪生**（`POST …/convert` 会在新的 `-rt` Agent 上标记 `spec.source_harness.agent_id`），最新在前，每行是普通的 Agent 投影加上它最近一次的 `deployment`。纯账本读取（不调用 AWS）；已删除的孪生不列出；来源不存在或已删除 → 404 `agent.not_found`。助手的 NEXT STEPS 用它在孪生 `active` 后切换目标，并在刷新页面后重新找到孪生 |
 
 错误码:`agent.not_found`(404,未知 id 或其他 workspace 的 Agent)、`agent.no_resource`(409,该行没有可查询的
@@ -1205,7 +1230,7 @@ created_at, updated_at, archived_at, allowed, is_default}`。各字段含义如�
 | `POST` | `/api/network-profiles/{profile_id}/check` | 管理员 | 预检（设计 projects §12.4）→ 管理员视图，带 `check_results[{check, severity: ok\|warn\|block, message, details}]`、`checked_at` 与 `status`（`blocked` > `warn` > `ok`）。通过 Workspace 自己的只读 `ec2:Describe*` 调用读取 VPC：子网存在、属于该 VPC 且位于至少两个受支持的可用区、有空闲 IP；安全组存在且允许 443 出站；VPC DNS；`internet: nat` 时的 NAT 路由；网络 ACL；AgentCore 需要的接口 / 网关端点（只对每个 Agent 都需要的端点阻止，其余为警告）；以及到声明的 `reachable` 目标的路由（只检查存在与下一跳类型，对端标注为“平台未验证”）。上一次探测结果会保留。无法读取 AWS 时返回 `502 network_profile.check_failed`（`detail.aws_code`）；访问被拒时会提示更新授予这些调用的 spoke 模板 |
 | `POST` | `/api/network-profiles/{profile_id}/probe` | 管理员 | `202` → 管理员视图，`check_results` 中带一条 `{status: running}` 的 `probe` 记录。后台在该配置的子网与安全组中启动一个临时运行时，对每个 `reachable` 目标尝试 DNS、TCP 与 TLS（§12.7）。之后记录变为 `status: done`（有目标不可达时 `severity: warn`，`details.targets[]`）或 `failed`。运行期间修改网络会丢弃迟到的结果。`400 network_profile.nothing_to_probe`（没有 `reachable` 目标）、`409 network_profile.blocked`（上次预检为阻止）、`409 network_profile.probe_running`（30 分钟内启动的探测仍在运行） |
 | `GET` | `/api/network-profiles/settings` | 管理员 | 该 Workspace 的 `{network_enforcement, network_public_allowed}`（默认 `false` / `true`） |
-| `PUT` | `/api/network-profiles/settings` | 管理员 | 请求体（`extra="forbid"`）`{network_enforcement?, network_public_allowed?}` → 同 GET 形状；省略或为 `null` 的键保持原值。`network_public_allowed: false` 表示每个 Agent 都必须引用网络配置。只有平台能执行这一点，因为没有 IAM 条件键能表达网络模式；部署路径上的拒绝（`400 network.public_not_allowed`）随网络部署向导（V12-deploy）一起提供，目前该开关只被保存与展示。`network_enforcement` 记录该 Workspace 打算在 IAM 层把 AgentCore 限制在已批准的子网与安全组内；平台不会自己写入该策略（见下一条路由） |
+| `PUT` | `/api/network-profiles/settings` | 管理员 | 请求体（`extra="forbid"`）`{network_enforcement?, network_public_allowed?}` → 同 GET 形状；省略或为 `null` 的键保持原值。`network_public_allowed: false` 表示每个 Agent 都必须引用网络配置。只有平台能执行这一点，因为没有 IAM 条件键能表达网络模式；部署时的网络闸门会拒绝没有网络配置的 Agent（`400 network.public_not_allowed`）。`network_enforcement` 记录该 Workspace 打算在 IAM 层把 AgentCore 限制在已批准的子网与安全组内；平台不会自己写入该策略（见下一条路由） |
 | `GET` | `/api/network-profiles/enforcement` | 管理员 | `{settings, approved_subnet_ids[], approved_security_group_ids[], stack_parameters{ApprovedSubnetIds, ApprovedSecurityGroupIds}, policy, actions[], not_enforceable[]}`。已批准集合是所有未被上次预检阻止的存活配置的子网与安全组。`stack_parameters` 是供 spoke 栈（`infra/spoke/launchpad-workspace-role.yaml`）使用的逗号连接值：`ApprovedSubnetIds` 非空时，栈的 `EnforceNetwork` 条件会给 Workspace 角色加上一条 `launchpad-network-enforcement` Deny。`policy` 是可改作 SCP 使用的等效文档：当 `bedrock-agentcore:subnets` / `bedrock-agentcore:securityGroups` 满足 `ForAnyValue:StringNotEquals` 时，拒绝 `bedrock-agentcore:CreateAgentRuntime`、`UpdateAgentRuntime`、`CreateCodeInterpreter` 与 `CreateBrowser`（已批准集合为空时拒绝所有 VPC 放置）。`not_enforceable` 说明缺口：Harness 操作不带这两个键，也没有表达 `networkMode` 的键，因此 PUBLIC 请求在 IAM 层仍会通过 |
 
 `POST /api/agents` 与 `POST /api/agents/{id}/redeploy` 会规范化 `spec.network`：
@@ -1214,9 +1239,16 @@ created_at, updated_at, archived_at, allowed, is_default}`。各字段含义如�
 - 旧版客户端的内联 `{subnets, security_groups}` 只接受管理员提交（否则 `400 network.inline_not_allowed`）。管理员的内联网络会匹配到或归档为 `legacy-<hash8>` 配置，并加入项目的允许集合。
 - 重新部署时，无论配置处于何种状态，都会继续解析该 Agent 已引用的配置。
 
+随后在任何任务创建之前，部署时的网络闸门（`pipeline.network_gate`，`POST /api/agents/{id}/convert` 同样适用）拒绝无法工作的部署。每种部署方式都部署到所引用的配置档中，因此对所有方式都适用：
+
+- Workspace 设置了 `network_public_allowed: false` 而 Agent 没有网络配置 → `400 network.public_not_allowed`；
+- 引用了配置档时，按此 Agent 用到的功能（容器镜像拉取、Bedrock 模型、记忆、网关工具、Identity、A2A、知识库）重新预检。有任何阻断项 → `409 network.preflight_failed`，`detail {profile_id, results[阻断项]}`。`legacy-<hash8>` 配置不做预检。
+
+`GET /api/agents/{agent_id}/network` 读取 Agent 的运行网络（见「控制台 Agent API——版本与端点」）。
+
 错误码：`network_profile.not_found`（404，不存在、已归档、属于其他 Workspace，或不在允许集合中）、
 `network_profile.name_exists`（409，`detail.profile_id`）、`network_profile.in_use`（409，`detail.agents`）、
 `network_profile.default_not_allowed`（400，默认值不在 `profile_ids` 中）、`network_profile.check_failed`（502）、
-`network_profile.nothing_to_probe`（400）、`network_profile.probe_running`（409）、`network.public_not_allowed`（400）、`project.not_found`（404，该项目
+`network_profile.nothing_to_probe`（400）、`network_profile.probe_running`（409）、`network.public_not_allowed`（400）、`network.preflight_failed`（409）、`project.not_found`（404，该项目
 未绑定到此 Workspace），以及 `validation.invalid_request`（422，请求体不符合 schema，或 VPC / 子网 /
 安全组 id 格式错误）。
