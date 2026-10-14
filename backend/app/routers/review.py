@@ -107,7 +107,11 @@ def create_review_link(
 
 # ── public ──────────────────────────────────────────────────────────────────
 
-router = APIRouter(prefix="/share/review", tags=["share-review"])
+# runs as the link's project, like the chat side (`share_links.bind_link_project`)
+router = APIRouter(
+    prefix="/share/review", tags=["share-review"],
+    dependencies=[Depends(share_links.bind_link_project)],
+)
 
 
 class ReviewRating(BaseModel):

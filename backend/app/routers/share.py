@@ -176,7 +176,12 @@ def revoke_share_link(
 
 # ── public (no session, no X-Workspace) ─────────────────────────────────────
 
-router = APIRouter(prefix="/share", tags=["share"])
+# the link's project is the request's (design §5.8): the visitor's session, messages
+# and feedback are stamped with it, and every read is confined to it
+router = APIRouter(
+    prefix="/share", tags=["share"],
+    dependencies=[Depends(share_links.bind_link_project)],
+)
 
 _GENERIC_ERROR = "The assistant could not answer right now. Please try again."
 

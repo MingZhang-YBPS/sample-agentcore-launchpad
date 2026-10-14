@@ -20,7 +20,11 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.services import annotation_links, share_links
 
-router = APIRouter(prefix="/share/annotate", tags=["share-annotate"])
+# runs as the link's (= the task's) project (`share_links.bind_link_project`)
+router = APIRouter(
+    prefix="/share/annotate", tags=["share-annotate"],
+    dependencies=[Depends(share_links.bind_link_project)],
+)
 
 
 class LabelIn(BaseModel):
