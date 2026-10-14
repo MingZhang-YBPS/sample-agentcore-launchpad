@@ -1,11 +1,13 @@
 """Error-code envelope.
 
 The backend returns machine-readable error codes; the frontend translates
-them into the active locale. Envelope shape: {code, message, detail}.
+them into the active locale. Envelope shape: {code, message, detail}; the
+console's AWS-error envelopes add ``request_id`` (projects §19).
 """
 
 import logging
 import re
+import uuid
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -44,8 +46,13 @@ class NotFoundError(AppError):
     status_code = 404
 
 
-def envelope(code: str, message: str, detail: Any = None) -> dict[str, Any]:
-    return {"code": code, "message": message, "detail": detail}
+def envelope(
+    code: str, message: str, detail: Any = None, request_id: str | None = None
+) -> dict[str, Any]:
+    body: dict[str, Any] = {"code": code, "message": message, "detail": detail}
+    if request_id is not None:
+        body["request_id"] = request_id
+    return body
 
 
 async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
@@ -224,6 +231,51 @@ def cleanup_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+REQUEST_ID_HEADER = "X-Request-Id"
+# what a proxy in front of the backend may already have stamped on the request;
+# anything longer or with other characters is not reused (it is echoed into logs)
+_REQUEST_ID_SHAPE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
+def request_id_for(request: Request) -> str:
+    """The id that ties a console error to its log line.
+
+    Reuses an inbound ``X-Request-Id`` when a proxy set one, else mints a short
+    random id; ``journalctl -u launchpad-backend | grep <id>`` finds the line."""
+    inbound = request.headers.get(REQUEST_ID_HEADER, "")
+    if _REQUEST_ID_SHAPE.fullmatch(inbound):
+        return inbound
+    return uuid.uuid4().hex[:16]
+
+
+def aws_request_id(exc: ClientError) -> str | None:
+    """AWS's own request id for the failed call — what AWS Support asks for."""
+    meta = exc.response.get("ResponseMetadata", {}) if isinstance(exc.response, dict) else {}
+    value = meta.get("RequestId") if isinstance(meta, dict) else None
+    return str(value) if value else None
+
+
+# 12-digit account ids, standalone or inside an ARN (`arn:aws:iam::<acct>:role/…`).
+_ACCOUNT_ID = re.compile(r"(?<!\d)\d{12}(?!\d)")
+
+
+def mask_account_ids(text: str) -> str:
+    """``123456789012`` → ``********9012`` wherever it appears — enough to tell two
+    accounts apart, not enough to name one."""
+    return _ACCOUNT_ID.sub(lambda m: "*" * 8 + m.group(0)[-4:], text)
+
+
+def _caller_is_admin(request: Request) -> bool:
+    """Admins see AWS text in full, members get account ids masked (projects §19.3.5).
+
+    No identity on the request means the auth gate is off — the console is the
+    local operator's, treated as the built-in admin everywhere else too."""
+    identity = getattr(request.state, "identity", None)
+    if identity is None:
+        return True
+    return bool(getattr(identity, "is_admin", False))
+
+
 def public_aws_message(code: str) -> str:
     """The generic sentence for a mapped `aws.*` code — no ARN, account id or operation."""
     return _PUBLIC_AWS_MESSAGES.get(code, "AWS request failed")
@@ -249,47 +301,69 @@ async def client_error_handler(request: Request, exc: ClientError) -> JSONRespon
     On the public `/v1` API the status and code are kept but the message is a
     generic per-code sentence and `detail` carries only `aws_error_code`: the raw
     AWS text names the deployment's role ARN, instance id and operation, which an
-    API-key holder has no business seeing.
+    API-key holder has no business seeing. That envelope is unchanged by §19.
+
+    Console envelopes carry ``request_id`` (also in the log line and the
+    ``X-Request-Id`` response header) and, when AWS returned one, the call's
+    ``aws_request_id`` in ``detail``. A member's copy has account ids masked and
+    ``detail.masked`` set; an admin's is the AWS text verbatim.
     """
     # Imported here: `core` must not take a startup dependency on `services`.
     from app.services.aws_clients import assume_role_diagnostic, is_assume_role_failure
 
     if is_assume_role_failure(exc):
+        request_id = request_id_for(request)
+        logger.info(
+            "aws %s on AssumeRole → 502 workspace.assume_role_failed [request %s]",
+            aws_error_code(exc),
+            request_id,
+        )
         return JSONResponse(
             status_code=502,
             content=envelope(
                 "workspace.assume_role_failed",
                 assume_role_diagnostic(exc),
                 {"aws_error_code": aws_error_code(exc)},
+                request_id,
             ),
+            headers={REQUEST_ID_HEADER: request_id},
         )
     mapped = mapped_aws_error(exc)
     if mapped is None:
         raise exc
     status, code = mapped
     operation = exc.operation_name or ""
+    public = request.url.path.startswith((PUBLIC_API_PREFIX, PUBLIC_SHARE_PREFIX))
+    request_id = None if public else request_id_for(request)
     logger.info(
-        "aws %s on %s → %s %s: %s",
+        "aws %s on %s → %s %s: %s%s",
         aws_error_code(exc),
         operation,
         status,
         code,
         aws_error_message(exc),
+        f" [request {request_id}]" if request_id else "",
     )
-    if request.url.path.startswith((PUBLIC_API_PREFIX, PUBLIC_SHARE_PREFIX)):
+    if public:
         return JSONResponse(
             status_code=status,
             content=envelope(
                 code, _PUBLIC_AWS_MESSAGES[code], {"aws_error_code": aws_error_code(exc)}
             ),
         )
+    message = aws_error_message(exc)
+    detail: dict[str, Any] = {"aws_error_code": aws_error_code(exc), "operation": operation}
+    if aws_id := aws_request_id(exc):
+        detail["aws_request_id"] = aws_id
+    if not _caller_is_admin(request):
+        masked = mask_account_ids(message)
+        if masked != message:
+            message = masked
+            detail["masked"] = True
     return JSONResponse(
         status_code=status,
-        content=envelope(
-            code,
-            aws_error_message(exc),
-            {"aws_error_code": aws_error_code(exc), "operation": operation},
-        ),
+        content=envelope(code, message, detail, request_id),
+        headers={REQUEST_ID_HEADER: request_id} if request_id else None,
     )
 
 
