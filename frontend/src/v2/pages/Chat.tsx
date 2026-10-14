@@ -39,6 +39,7 @@ import {
   failureText,
   isHarnessAgent,
   isOutputEvent,
+  isStoppedRow,
   lastUserIndex,
   latestTurnRetryable,
   requestFailure,
@@ -47,6 +48,7 @@ import {
   shouldAutoRetry,
   sseEvents,
   STALL_ABORT_MS,
+  stopChatTurn,
   streamChat,
   toolRunById,
   type TurnFailure,
@@ -143,6 +145,8 @@ export function V2Chat() {
   const [retryOffer, setRetryOffer] = useState<RetryOffer | null>(null);
   const [retrying, setRetrying] = useState<number | null>(null);
   const retryWait = useRef<AbortController | null>(null);
+  // chat-streaming §5.2: the background turn the stream follows — the stop button ends it
+  const liveTurn = useRef<string | undefined>(undefined);
 
   // Resolve the deep link once, when the agent list first answers.
   useEffect(() => {
@@ -218,7 +222,9 @@ export function V2Chat() {
                     }
                   : r.role === "policy"
                     ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
-                    : { kind: "error", text: failureText(t, restoredFailure(r.text)) },
+                    : isStoppedRow(r.text)
+                      ? { kind: "error", text: t("v3.chat.status.stopped") }
+                      : { kind: "error", text: failureText(t, restoredFailure(r.text)) },
         );
       setMessages(restored);
       // a latest turn that failed can be retried from here (one with files only says so)
@@ -301,6 +307,7 @@ export function V2Chat() {
       let completed = false;
       let produced = false; // a replay could repeat something the user saw
       const signal = turn.begin();
+      liveTurn.current = undefined;
       const key = ++turnSeq.current;
       // a tool row follows its run in the turn status (ids repeat across turns)
       const syncRuns = (status: TurnStatus | null) =>
@@ -336,6 +343,7 @@ export function V2Chat() {
           if (event === "tool_end") {
             syncRuns(status);
           } else if (event === "meta") {
+            liveTurn.current = payload.turn_id;
             if (payload.session_id) {
               activeSessionId = payload.session_id;
               setSessionId(payload.session_id);
@@ -568,11 +576,13 @@ export function V2Chat() {
               : undefined;
   const currentEndReason = endReason(sessionId, currentEnded);
   const userLabel = authRequired && username ? username : t("v2.chat.you");
-  // Stop: close the stream (the server then stops reading the runtime); a code
-  // runtime's session is stopped too — a Harness has no stop operation.
+  // Stop: close the stream and end the background turn on the server (it no longer
+  // ends with the connection, §5.2); a code runtime's session is stopped too — a
+  // Harness has no session-stop operation.
   const stopTurn = () => {
     retryWait.current?.abort(); // a pending automatic retry is not made
     turn.stop("stop");
+    if (agentId && liveTurn.current) void stopChatTurn(agentId, liveTurn.current).catch(() => undefined);
     if (agentId && sessionId && !harness) void api.stopChatSession(agentId, sessionId).catch(() => undefined);
   };
 

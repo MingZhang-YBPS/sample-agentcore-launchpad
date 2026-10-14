@@ -50,6 +50,7 @@ def chat_stream(
     bearer_token: str | None = None,
     console_user: bool = True,
     status_events: bool = False,
+    stop: "StopSignal | None" = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
 
@@ -72,6 +73,10 @@ def chat_stream(
     reasoning, status only — never the reasoning text) and ``tool_end``
     (``{id, status: success|error|denied, duration_ms}``). Off, the stream is
     exactly what /v1 and the share page document.
+
+    ``stop`` (a console turn running in the background, chat-streaming §5.2): once
+    set, the stream raises ``TurnStopped`` within ``STOP_POLL_SECONDS`` even while
+    the upstream is silent, and the upstream is closed.
     """
     session_id = session_id or new_session_id()
     workspace = workspace if workspace is not None else context_for_workspace(
@@ -169,7 +174,7 @@ def chat_stream(
             source = _status_events(source, reports_tool_end=harness)
         # withheld deltas never reach the keepalive, so a guardrail turn that streams
         # text upstream but sends nothing down still gets its heartbeats
-        yield from with_keepalive(source, started=started)
+        yield from with_keepalive(source, started=started, stop=stop)
     except AppError as exc:
         yield {"event": "error", "data": _with_transient(
             envelope(exc.code, exc.message, exc.detail), exc, status_events)}
@@ -409,6 +414,51 @@ def sse_encode(event: dict[str, Any], *, named_heartbeat: bool = False) -> str:
 KEEPALIVE_SECONDS = 15.0
 
 
+# How often a stoppable stream (``with_keepalive(stop=...)``) looks at its stop signal
+# while the upstream is silent: the console's stop button and a turn's time limit act
+# within this, not at the next heartbeat.
+STOP_POLL_SECONDS = 0.25
+
+
+class TurnStopped(BaseException):  # noqa: N818 — a control-flow signal, like GeneratorExit
+    """A background chat turn was stopped (the stop button, its time limit).
+
+    A ``BaseException`` on purpose: it must pass through ``chat_stream``'s
+    ``except Exception`` (which would turn it into an ``error`` event) up to the
+    turn's worker. ``interruption`` is what the ledger's ``interrupted: …`` row says."""
+
+    def __init__(self, interruption: str, kind: str = "stopped") -> None:
+        super().__init__(interruption)
+        self.interruption = interruption
+        self.kind = kind
+
+
+class StopSignal:
+    """A thread-safe, set-once stop request with its reason."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self._event = threading.Event()
+        self.reason = ""
+        self.kind = ""
+
+    def set(self, reason: str, kind: str = "stopped") -> bool:
+        """Request the stop; False when it was already requested (the first reason wins)."""
+        if self._event.is_set():
+            return False
+        self.reason, self.kind = reason, kind
+        self._event.set()
+        return True
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def raise_if_set(self) -> None:
+        if self._event.is_set():
+            raise TurnStopped(self.reason, self.kind)
+
+
 def _heartbeat(started: float) -> dict[str, Any]:
     return {"event": "heartbeat",
             "data": {"elapsed_ms": int((time.monotonic() - started) * 1000)}}
@@ -418,6 +468,7 @@ def with_keepalive(
     events: Iterator[dict[str, Any]],
     interval: float | None = None,
     started: float | None = None,
+    stop: StopSignal | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Re-yield ``events``, adding a ``heartbeat`` whenever ``interval`` seconds pass
     with nothing to send — before the first event and after it alike. A heartbeat the
@@ -427,7 +478,10 @@ def with_keepalive(
     Each step of the source runs on one worker thread while this generator waits for
     it with a timeout. Closing this generator still closes the upstream stream: at
     once when no step is in flight, else as soon as the in-flight step returns (a
-    generator cannot be closed while another thread is running it)."""
+    generator cannot be closed while another thread is running it).
+
+    ``stop``: checked between steps and every ``STOP_POLL_SECONDS`` while one is in
+    flight; once set, ``TurnStopped`` is raised and the upstream closed as above."""
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
     from concurrent.futures import TimeoutError as FutureTimeout
@@ -447,15 +501,23 @@ def with_keepalive(
 
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chat-keepalive")
     future = None
+    wait = interval if stop is None else min(interval, STOP_POLL_SECONDS)
     try:
         while True:
+            if stop is not None:
+                stop.raise_if_set()
             future = pool.submit(ctx.run, next, source, _missing)
+            beat_at = time.monotonic() + interval
             while True:
                 try:
-                    event = future.result(timeout=interval)
+                    event = future.result(timeout=wait)
                     break
                 except FutureTimeout:
-                    yield _heartbeat(started)
+                    if stop is not None:
+                        stop.raise_if_set()
+                    if stop is None or time.monotonic() >= beat_at:
+                        beat_at = time.monotonic() + interval
+                        yield _heartbeat(started)
             future = None
             if event is _missing:
                 return
