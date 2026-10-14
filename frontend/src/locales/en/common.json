@@ -12752,6 +12752,121 @@
         "telemetry": "This profile cannot reach {{services}}: traces and logs of the agent may be lost silently — check the endpoint(s) and the security group's outbound 443.",
         "change": "Change network…"
       }
+    },
+    "storage": {
+      "nav": "Storage",
+      "eyebrow": "Configure",
+      "title": "Storage",
+      "sub": "S3 Files and EFS access points agents in {{workspace}} ({{region}}) may mount",
+      "create": "Register storage",
+      "empty": "No storage registered",
+      "emptyBody": "Register an S3 Files or EFS access point; agents then mount it by id.",
+      "created": "Registered {{name}}",
+      "saved": "Saved {{name}}",
+      "archived": "Archived {{name}}",
+      "checked": "Checked {{name}}",
+      "check": "Check",
+      "inUse": "{{count}} agent(s) mount it",
+      "never": "never checked",
+      "counts": "{{block}} blocking · {{warn}} warnings",
+      "usage": "{{projects}} project(s) · {{agents}} agent(s)",
+      "multiWriterChip": "several writers",
+      "archiveTitle": "Archive {{name}}?",
+      "archiveBody": "Agents can no longer mount {{name}}, and it leaves every project's allowed set. The file system and its data are not touched.",
+      "col": {
+        "name": "Name",
+        "kind": "Kind",
+        "azs": "Mount target AZs",
+        "mode": "Max mode · data",
+        "check": "Check",
+        "users": "Used by"
+      },
+      "kind": {
+        "s3files": "S3 Files",
+        "efs": "EFS"
+      },
+      "mode": {
+        "ro": "read-only",
+        "rw": "read-write"
+      },
+      "dataClass": {
+        "reference": "reference data",
+        "shared_state": "shared state",
+        "scratch": "scratch"
+      },
+      "status": {
+        "unchecked": "unchecked",
+        "ok": "passed",
+        "warn": "warnings",
+        "blocked": "blocked"
+      },
+      "form": {
+        "createTitle": "Register storage",
+        "editTitle": "Edit storage",
+        "create": "Register",
+        "save": "Save",
+        "id": "ID",
+        "idHint": "Agents name this id; 2–32 lowercase letters, digits or '-'. It cannot change later.",
+        "name": "Name",
+        "arn": "Access point ARN",
+        "arnHint": "An S3 Files or EFS access point. The check reads its file system, POSIX identity and mount targets.",
+        "maxMode": "Highest mode",
+        "dataClass": "Data class",
+        "profile": "Default network profile",
+        "noProfile": "none",
+        "profileHint": "The check also verifies this network reaches the mount targets (same VPC, every AZ, TCP 2049).",
+        "rwHint": "Agents may mount this storage read-write. Agents sharing it need their own locking or separate directories.",
+        "errId": "2–32 lowercase letters, digits or '-'",
+        "errArn": "Not an S3 Files or EFS access point ARN",
+        "errName": "At most 64 characters"
+      },
+      "detail": {
+        "basic": "Storage",
+        "fileSystem": "File system",
+        "bucket": "Bucket",
+        "posix": "POSIX identity",
+        "mountTargets": "Mount targets",
+        "checkedAt": "Last check",
+        "checks": "Check results",
+        "noChecks": "Not checked yet.",
+        "shared": "Shared view",
+        "projects": "Allowed for: {{projects}}",
+        "noAgents": "No agent mounts it.",
+        "multiWriter": "{{count}} agents mount this storage read-write. S3 Files keeps NFS clients consistent only on close-to-open, so writers need their own locking or directories.",
+        "agent": "Agent",
+        "project": "Project",
+        "version": "Version",
+        "endpoint": "Endpoint",
+        "path": "Path",
+        "mode": "Mode"
+      },
+      "access": {
+        "title": "Project access",
+        "sub": "Which storage each project's agents may mount in this workspace. Members of other projects do not see it.",
+        "project": "Project",
+        "allowed": "Allowed",
+        "save": "Save access",
+        "saved": "Saved storage access for {{project}}"
+      },
+      "card": {
+        "title": "Storage",
+        "change": "Change storage…",
+        "unavailable": "Storage could not be read",
+        "storage": "Storage",
+        "missing": "not in the catalog",
+        "archived": "archived",
+        "inline": "inline",
+        "inlineHint": "Inline access points are read-write and cannot be promoted. Register them in the storage catalog and mount them by id."
+      },
+      "picker": {
+        "title": "Storage from the catalog",
+        "hint": "Up to {{max}} S3 Files / EFS mounts in total. Read-only unless the storage allows read-write.",
+        "choose": "Choose storage…",
+        "add": "Add mount",
+        "none": "No storage is available to this project. Ask an administrator to register it.",
+        "modeTooWide": "This storage can only be mounted read-only",
+        "preflightOk": "Storage preflight passed"
+      }
     }
   },
   "models": {
