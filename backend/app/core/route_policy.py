@@ -1142,3 +1142,17 @@ def require_infra(request: Request, role: str) -> None:
             )
         return
     require_permission(request, infra_key(role))
+
+
+# ---- P1F-admin: administrator management (design projects §7.3, §7.4, §7.10) ----
+# Hub-global like the rest of account management: the forced logout writes the
+# account row, the admin list reads accounts — neither operates inside a workspace.
+ROUTE_POLICY.update({
+    ("POST", "/api/users/{user_id}/sessions/revoke"): ADMIN,
+    ("GET", "/api/admins"): ADMIN,
+})
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/admins")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {
+    ("POST", "/api/users/{user_id}/sessions/revoke"),
+    ("GET", "/api/admins"),
+}

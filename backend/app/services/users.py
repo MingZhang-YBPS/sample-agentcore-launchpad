@@ -139,13 +139,16 @@ def _burn_verify(password: str) -> None:
     verify_password(password, hash_password(_DUMMY_HASH_PASSWORD))
 
 
-def credential_stamp(password_hash: str) -> str:
-    """Short, non-reversible tag of the current password hash.
+def credential_stamp(password_hash: str, epoch: int = 0) -> str:
+    """Short, non-reversible tag of the current password hash and session epoch.
 
-    A session cookie carries it, so changing the password (an admin reset)
-    ends every session that was opened with the previous one.
+    A session cookie carries it, so changing the password (an admin reset) or
+    bumping `users.session_epoch` (a forced logout, design §7.4) ends every session
+    that was opened before. Epoch 0 stamps the hash alone, exactly as before the
+    column existed, so a deploy ends no session.
     """
-    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:16]
+    material = password_hash if epoch <= 0 else f"{password_hash}:{epoch}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 def generate_password(length: int = 14) -> str:
@@ -784,6 +787,38 @@ def apply_patch(
     db.commit()
     db.refresh(user)
     return generated
+
+
+def revoke_sessions(db: Session, user: User) -> int:
+    """Force a logout (design §7.4): bump the account's session epoch, which changes
+    its credential stamp, so every cookie issued before answers 401 on its next
+    request. Returns the new epoch."""
+    user.session_epoch = int(user.session_epoch or 0) + 1
+    db.commit()
+    db.refresh(user)
+    return user.session_epoch
+
+
+def list_admins(db: Session, settings: Settings | None = None) -> list[dict[str, Any]]:
+    """Every admin-role account (design §7.3), oldest first, each marked with
+    `can_sign_in` and `last_signable` — the one whose demotion, disable or expiry
+    `users.last_admin` would refuse. The built-in admin is the router's to add."""
+    current = settings or get_settings()
+    now = datetime.now(UTC)
+    rows = list(
+        db.scalars(select(User).where(User.role == ROLE_ADMIN).order_by(User.created_at))
+    )
+    signable = admins_who_can_sign_in(db, current)
+    grants = workspace_grants(db, [row.id for row in rows])
+    items = []
+    for row in rows:
+        payload = serialize(row, now, grants.get(row.id, []))
+        can_sign_in = _signable_admin(row)
+        payload["builtin"] = False
+        payload["can_sign_in"] = can_sign_in
+        payload["last_signable"] = can_sign_in and signable <= 1
+        items.append(payload)
+    return items
 
 
 def _signable_admin(user: User) -> bool:
