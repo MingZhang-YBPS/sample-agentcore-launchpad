@@ -4,10 +4,10 @@
  * (`routers/users.py`) and network profiles (`routers/network_profiles.py`).
  *
  * The project routes are hub-global — the project is the one in the path, no
- * `X-Project` is read. Network profiles are workspace infrastructure: they follow
+ * `X-Project` is read (the project audit view of §11.6 too). Network profiles are workspace infrastructure: they follow
  * the shared workspace selection (`X-Workspace`) like every other workspace route.
  */
-import { type ConsoleUser, getJson, sendJson } from "../api";
+import { type ConsoleUser, getJson, responseMessage, sendJson } from "../api";
 
 const enc = encodeURIComponent;
 
@@ -431,4 +431,57 @@ export const networkProfilesApi = {
     getJson<ProjectNetworkProfiles>(`${networkProfilePath()}/projects/${enc(projectId)}`),
   setForProject: (projectId: string, body: ProjectNetworkProfilesPut) =>
     sendJson<ProjectNetworkProfiles>(`${networkProfilePath()}/projects/${enc(projectId)}`, "PUT", body),
+};
+
+/* ── project audit (projects design §11.6) ────────────────────────────────── */
+
+export type AuditOutcome = "success" | "refused" | "failed";
+export const AUDIT_OUTCOMES: readonly AuditOutcome[] = ["success", "refused", "failed"];
+
+export interface ProjectAuditEvent {
+  id: string;
+  at: string | null;
+  actor: string;
+  actor_user_id: string | null;
+  /** `release.sign`, `project.members.update`, or a route (`DELETE /api/agents/{agent_id}`) */
+  action: string;
+  target: string;
+  outcome: AuditOutcome;
+  /** null on a structure event that names the project in its target */
+  project_id: string | null;
+  workspace_id: string | null;
+}
+
+/** The filters of the view and the export (`from` / `to` ISO instants, `action` a prefix). */
+export interface ProjectAuditFilter {
+  actor?: string;
+  action?: string;
+  outcome?: AuditOutcome;
+  from?: string;
+  to?: string;
+}
+
+export interface ProjectAuditPage {
+  events: ProjectAuditEvent[];
+  /** null on the last page */
+  next_cursor: string | null;
+  /** first page only: the actors and actions present (the filter lists) */
+  facets?: { actors: string[]; actions: string[] };
+}
+
+export type AuditExportFormat = "csv" | "jsonl";
+
+export const projectAuditApi = {
+  list: (projectId: string, filter: ProjectAuditFilter = {}, page: { limit?: number; cursor?: string | null } = {}) =>
+    getJson<ProjectAuditPage>(`${projectPath(projectId, "audit")}${queryString({ ...filter, ...page })}`),
+  exportUrl: (projectId: string, filter: ProjectAuditFilter = {}, format: AuditExportFormat = "csv") =>
+    `${projectPath(projectId, "audit", "export")}${queryString({ ...filter, format })}`,
+  /** The filtered journal as a file (fetched, so a refusal shows as console copy). */
+  export: async (projectId: string, filter: ProjectAuditFilter = {}, format: AuditExportFormat = "csv") => {
+    const res = await fetch(projectAuditApi.exportUrl(projectId, filter, format));
+    if (!res.ok) throw new Error(await responseMessage(res));
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `audit-${projectId}.${format}`;
+    return { blob: await res.blob(), name };
+  },
 };

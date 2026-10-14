@@ -82,7 +82,7 @@ from sqlalchemy import text
 from app.core.errors import AppError
 from app.routers.auth import require_admin, require_identity, require_permission
 from app.routers.workspaces import TIER_PROD, resolve_workspace
-from app.services.audit import record_audit_event
+from app.services.audit import record_audit_event, record_refusal
 
 ADMIN = "admin"
 MEMBER = "member"
@@ -900,9 +900,12 @@ def require_path_project_permission(request: Request, key: str) -> None:
         db.close()
     if not access.has_data_bypass(identity):
         if status is None or membership is None:
+            if status is not None:  # a real project's: its audit view shows the attempt
+                _journal_refusal(request, "project.not_found", project_id=project_id)
             raise NotFoundError("project.not_found", f"project '{project_id}' not found",
                                 {"project_id": project_id})
         if key not in membership.permissions:
+            _journal_refusal(request, "auth.permission_required", project_id=project_id)
             raise AppError(
                 "auth.permission_required",
                 f"This action requires the '{key}' permission in project '{project_id}'",
@@ -1026,6 +1029,9 @@ def _guard_prod(request: Request, scope: Any, method: str, path_format: str) -> 
         return
     identity = require_identity(request)
     if not identity.is_admin:
+        project = getattr(request.state, "project", None)
+        _journal_refusal(request, "workspace.prod_protected", workspace_id=scope.id,
+                         project_id=project.id if project is not None else None)
         raise AppError(
             "workspace.prod_protected",
             f"workspace '{scope.id}' is a prod workspace — agent changes must arrive "
@@ -1184,12 +1190,21 @@ def enforce_route_policy(request: Request) -> None:
                 require_permission(request, key)
             raise
         _guard_prod(request, scope, request.method, path_format)
-    if role.startswith(_PERM_PREFIX):
-        require_permission(request, role.removeprefix(_PERM_PREFIX))
-    elif role.startswith(PPERM_PREFIX):
+    if role.startswith(PPERM_PREFIX):  # journals its own refusals
         require_path_project_permission(request, role.removeprefix(PPERM_PREFIX))
-    elif role.startswith(INFRA):
-        require_infra(request, role)
+        return
+    try:
+        if role.startswith(_PERM_PREFIX):
+            require_permission(request, role.removeprefix(_PERM_PREFIX))
+        elif role.startswith(INFRA):
+            require_infra(request, role)
+    except AppError as err:
+        project = getattr(request.state, "project", None)
+        if err.status_code == 403 and project is not None:
+            workspace = getattr(request.state, "workspace", None)
+            _journal_refusal(request, err.code, project_id=project.id,
+                             workspace_id=getattr(workspace, "id", None))
+        raise
 
 
 def infra_key(role: str) -> str:
@@ -1402,3 +1417,34 @@ PROJECT_ISOLATION_ROUTES: dict[tuple[str, str], str] = {
 }
 ROUTE_POLICY.update(PROJECT_ISOLATION_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_ISOLATION_ROUTES)
+
+
+# ---- project audit view and export (design projects §11.6, G11-audit) ----
+# Hub-global under /api/projects like the rest of project administration: the path's
+# project, the project key `project.audit` (a non-member 404, a member without it 403).
+PPERM_PROJECT_AUDIT = "pperm:project.audit"
+PROJECT_AUDIT_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/projects/{project_id}/audit"): PPERM_PROJECT_AUDIT,
+    ("GET", "/api/projects/{project_id}/audit/export"): PPERM_PROJECT_AUDIT,
+}
+ROUTE_POLICY.update(PROJECT_AUDIT_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_AUDIT_ROUTES)
+
+
+def _journal_refusal(
+    request: Request, code: str, *, project_id: str | None, workspace_id: str | None = None,
+) -> None:
+    """`outcome = refused` in the refused project's journal (§11.6): the route's
+    template as the action (like the prod break-glass rows), the concrete path and
+    the refusal code as the target. Best-effort (`record_refusal`)."""
+    try:
+        identity = require_identity(request)
+    except AppError:
+        return  # no caller to name
+    route: Any = request.scope.get("route")
+    path_format = getattr(route, "path_format", None) or request.url.path
+    record_refusal(
+        actor=identity.username, actor_user_id=getattr(identity, "user_id", None),
+        action=f"{request.method} {path_format}", target=f"{request.url.path} [{code}]",
+        project_id=project_id, workspace_id=workspace_id,
+    )

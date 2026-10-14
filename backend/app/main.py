@@ -63,6 +63,7 @@ from app.routers.model_defaults import workspace_router as model_catalog_router
 from app.routers.network_profiles import router as network_profiles_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
+from app.routers.project_audit import router as project_audit_router
 from app.routers.project_groups import router as project_groups_router
 from app.routers.project_isolation import router as project_isolation_router
 from app.routers.projects import me_router as my_access_router
@@ -245,6 +246,8 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(workspaces_router)  # environments + the request-boundary grants
     app.include_router(projects_router)  # projects, members, roles, bindings (projects §7.10)
     app.include_router(project_isolation_router)  # runtime isolation (projects §10.13)
+
+    app.include_router(project_audit_router)  # a project's audit view + export (§11.6)
     app.include_router(role_templates_router)
     app.include_router(my_access_router)  # GET /api/me/access: the caller's projects + keys
     app.include_router(project_groups_router)  # project groups: members + projects (§7.7)

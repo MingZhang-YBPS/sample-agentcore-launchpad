@@ -991,10 +991,12 @@ class AuditEvent(ProjectShared, Base):
     """One journaled privileged action (T05): an administrator's break-glass agent
     mutation on a `prod` workspace, or a workspace tier change.
 
-    Written at admission (before the handler runs), so a row records that the
-    action was attempted by that actor, not that it succeeded — the Job log /
-    Deployment row carries the outcome. Append-only by convention; nothing in the
-    app updates or deletes a row except a workspace purge.
+    Most rows are written at admission (before the handler runs), so `outcome`
+    `success` records that the action was let through for that actor, not that the
+    work it started succeeded — the Job log / Deployment row carries that. A request
+    the platform turned away is `refused`, an action that ran and failed `failed`
+    (design §11.6). Append-only by convention; nothing in the app updates or deletes a
+    row except a workspace purge.
     """
 
     __tablename__ = "audit_events"
@@ -1009,6 +1011,9 @@ class AuditEvent(ProjectShared, Base):
     action: Mapped[str] = mapped_column(String(160))
     # the concrete path, or "dev->prod" for a tier change
     target: Mapped[str] = mapped_column(String(256), default="")
+    # success | refused | failed (design §11.6); rows before the column are success
+    outcome: Mapped[str] = mapped_column(String(16), default="success",
+                                         server_default="success")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

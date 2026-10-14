@@ -496,6 +496,22 @@ def _migrate_isolation_columns(bind) -> None:
         with bind.begin() as conn:
             conn.execute(text("ALTER TABLE agents ADD COLUMN isolation_applied VARCHAR(16)"))
 
+    _migrate_audit_outcome(bind)
+
+
+def _migrate_audit_outcome(bind) -> None:
+    """`audit_events.outcome` (design §11.6): success | refused | failed. Rows written
+    before the column recorded admitted actions, so they read as `success`."""
+    from sqlalchemy import inspect, text
+
+    if "audit_events" not in inspect(bind).get_table_names():
+        return
+    existing = {c["name"] for c in inspect(bind).get_columns("audit_events")}
+    if "outcome" not in existing:
+        with bind.begin() as conn:
+            conn.execute(text("ALTER TABLE audit_events ADD COLUMN outcome "
+                              "VARCHAR(16) DEFAULT 'success' NOT NULL"))
+
 
 def _migrate_actor_user_id_columns(bind) -> None:
     """The immutable `users.id` beside the usernames that identify a person (design §8.2-4).
