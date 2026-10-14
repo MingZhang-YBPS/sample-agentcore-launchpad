@@ -9,12 +9,13 @@ import { ByocCard } from "./ByocCard";
 import { ConvertedCard } from "./ConvertedCard";
 import { LifecyclePanel } from "./LifecyclePanel";
 import { McpServerPanel } from "./McpServerPanel";
+import { NetworkCard } from "./NetworkCard";
 import { StatsRow } from "./StatsRow";
 import type { DetailSections } from "./tabs";
 import { ToolsCard } from "./ToolsCard";
 import { TryIt } from "./TryIt";
 
-/** 概览: runtime state, lifecycle, stats, the agent's facts, its tools, try-it. */
+/** 概览: runtime state, lifecycle, stats, the agent's facts, its network, its tools, try-it. */
 export function OverviewTab({
   agent,
   sections,
@@ -36,6 +37,7 @@ export function OverviewTab({
       {sections.lifecycle && <LifecyclePanel agent={agent} release={release} />}
       <StatsRow agent={agent} />
       <BasicInfoCard agent={agent} />
+      <NetworkCard agent={agent} />
       {/* an MCP server's tools are its Gateway target's, listed by its own panel */}
       {!sections.mcpPanel && <ToolsCard agent={agent} release={release.data} />}
       {sections.byoc && <ByocCard agent={agent} />}

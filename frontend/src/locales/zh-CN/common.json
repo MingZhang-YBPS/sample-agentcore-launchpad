@@ -12524,6 +12524,140 @@
       "archiveBody": "{{name}} 不再出现在新的选择中；已使用它的项目和项目组保留不变。",
       "deleteTitle": "删除 {{name}}？",
       "deleteBody": "{{name}} 将被永久删除。没有项目或项目组使用它。"
+    },
+    "network": {
+      "nav": "网络配置档",
+      "eyebrow": "配置 · 网络",
+      "title": "网络配置档",
+      "sub": "工作区 {{workspace}}（{{region}}）中 Agent 可以运行的 VPC 网络：子网、安全组、预检结果，以及各自允许哪些项目使用。",
+      "create": "新建配置档",
+      "empty": "还没有网络配置档",
+      "emptyBody": "新建一个配置档，Agent 就可以运行在你的 VPC 里，而不是 AgentCore 公网。",
+      "legacy": "迁移生成",
+      "never": "从未预检",
+      "counts": "{{block}} 项阻断 · {{warn}} 项警告",
+      "usage": "{{projects}} 个项目 · {{agents}} 个 Agent",
+      "sharedChip": "多项目共用",
+      "check": "预检",
+      "probe": "探针",
+      "probeHint": "在该网络中启动一个临时 runtime，逐个测试声明的目标",
+      "probeNeedsTargets": "请先在配置档上声明私网目标",
+      "probeRunning": "探针运行中",
+      "probeStarted": "已开始探测 {{name}}，完成后结果显示在这里",
+      "checked": "{{name}} 的预检已完成",
+      "created": "已创建网络配置档 {{name}}",
+      "saved": "已保存网络配置档 {{name}}",
+      "archived": "已归档网络配置档 {{name}}",
+      "inUse": "仍有 {{count}} 个 Agent 在使用，请先把它们换到其他网络",
+      "archiveTitle": "归档 {{name}}？",
+      "archiveBody": "各项目的允许集合会移除它，新建 Agent 不能再选择它。删除 VPC 的子网或安全组之前，请先删除使用过它的 Agent，并等待 AgentCore 释放其网络接口。",
+      "status": {
+        "unchecked": "未预检",
+        "ok": "通过",
+        "warn": "有警告",
+        "blocked": "阻断"
+      },
+      "purpose": {
+        "agents": "Agent",
+        "tools": "工具",
+        "both": "Agent + 工具"
+      },
+      "internet": {
+        "none": "不访问互联网（仅端点）",
+        "nat": "经 NAT 访问互联网"
+      },
+      "col": {
+        "name": "名称",
+        "subnets": "子网",
+        "purpose": "用途",
+        "preflight": "预检",
+        "users": "使用方"
+      },
+      "form": {
+        "createTitle": "新建网络配置档",
+        "editTitle": "编辑网络配置档",
+        "create": "创建",
+        "save": "保存",
+        "name": "名称",
+        "groups": "安全组",
+        "internet": "互联网访问",
+        "reachable": "私网目标",
+        "subnetsHint": "2–8 个私有子网，至少位于两个受支持的可用区；每行一个或用逗号分隔",
+        "groupsHint": "1–5 个安全组；每个项目一个安全组，安全组规则才能区分项目",
+        "reachableHint": "每行一个：<CIDR 或主机名>:<端口> [备注]。仅用于路由检查和探针。",
+        "staleHint": "修改 VPC、子网、安全组或互联网访问后，上一次预检结果会被清除。",
+        "err": {
+          "name": "1–64 个字符",
+          "vpc": "VPC ID，例如 vpc-0123456789abcdef0",
+          "subnets": "2–8 个子网 ID（subnet-…）",
+          "groups": "1–5 个安全组 ID（sg-…）",
+          "reachable": "每行格式为 <CIDR 或主机名>:<端口> [备注]"
+        }
+      },
+      "detail": {
+        "basic": "配置档",
+        "checkedAt": "最近预检",
+        "checks": "预检结果",
+        "notChecked": "尚未预检，点击“预检”读取 VPC。",
+        "endpoints": "端点需求",
+        "endpoint": "端点",
+        "neededBy": "需要它的功能",
+        "inbound": "入站端点（PrivateLink）",
+        "privateDnsOn": "私有 DNS 已开启",
+        "privateDnsOff": "私有 DNS 未开启",
+        "anyPrincipal": "端点策略允许任意主体",
+        "oauthNote": "端点策略只能限定 IAM 主体：OAuth 调用方在端点策略中表现为 Principal \"*\"，真正限制调用方的是 Agent 的入站 JWT 授权。",
+        "probe": "探针",
+        "target": "目标",
+        "notVerified": "平台只检查路由与下一跳；对等连接是否接受、TGW 路由传播、对端安全组、NACL、防火墙与 DNS 均未验证。",
+        "cost": "成本",
+        "costLine": "依赖 {{endpoints}} 个接口端点 × {{azs}} 个可用区（每小时 {{hours}} 个端点·可用区小时）以及 {{nat}} 个 NAT 网关。",
+        "costHint": "两者都按小时加处理流量计费，平台不自行估价，请参阅",
+        "pricing": {
+          "privatelink": "PrivateLink 价格",
+          "nat_gateway": "NAT 网关价格"
+        },
+        "projects": "允许的项目",
+        "noProjects": "还没有项目可以使用该配置档，请在下方把它加入项目的允许集合。",
+        "shared": "被 {{count}} 个项目共用：它们的 Agent 位于同一组安全组之后。建议每个项目使用单独的安全组。"
+      },
+      "access": {
+        "title": "各项目允许的配置档",
+        "sub": "项目的 Agent 只能选择允许集合中的配置档；默认配置档会在向导中预选。",
+        "project": "项目",
+        "allowed": "允许",
+        "default": "默认",
+        "noDefault": "不设默认",
+        "save": "保存允许集合",
+        "saved": "已保存 {{project}} 允许的配置档"
+      },
+      "enforce": {
+        "title": "本工作区的网络规则",
+        "publicAllowed": "允许 Agent 使用公网（PUBLIC）",
+        "publicHint": "关闭后，每个 Agent 都必须选择网络配置档（生产环境推荐）。仅由平台检查。",
+        "enforce": "本工作区在 IAM 层强制使用已批准的子网与安全组",
+        "enforceHint": "请把下面的已批准集合作为 spoke 栈参数或 SCP 落地；平台不会修改自己的角色。",
+        "actions": "覆盖的操作",
+        "policy": "策略文档（SCP 或内联策略）",
+        "saved": "网络规则已保存"
+      },
+      "card": {
+        "title": "网络",
+        "mode": "模式",
+        "public": "公网（PUBLIC）",
+        "profile": "配置档",
+        "inline": "内联子网（尚未迁移）",
+        "missing": "该工作区中已不存在",
+        "archived": "已归档",
+        "preflight": "最近预检",
+        "enis": "网络接口",
+        "enisCount": "配置档子网中 {{count}} 个（使用中 {{inUse}} 个）",
+        "enisScope": "按配置档列出：同一组子网与安全组上的 Agent 共用这些网络接口",
+        "enisUnavailable": "无法读取（{{code}}），请用最新的 spoke 模板更新工作区角色",
+        "unavailable": "无法获取网络信息",
+        "telemetry": "该配置档无法访问 {{services}}：该 Agent 的链路与日志可能会静默丢失，请检查相应端点及安全组的 443 出站规则。",
+        "change": "更改网络…"
+      }
     }
   },
   "models": {

@@ -12524,6 +12524,140 @@
       "archiveBody": "{{name}} is hidden from new choices; projects and groups that name it keep it.",
       "deleteTitle": "Delete {{name}}?",
       "deleteBody": "{{name}} is removed for good. No project or group names it."
+    },
+    "network": {
+      "nav": "Network profiles",
+      "eyebrow": "Configure · network",
+      "title": "Network profiles",
+      "sub": "VPC networks agents in workspace {{workspace}} ({{region}}) may run in — subnets, security groups, the preflight and who may use each.",
+      "create": "New profile",
+      "empty": "No network profiles yet",
+      "emptyBody": "Create one to let agents run in your VPC instead of the public AgentCore network.",
+      "legacy": "migrated",
+      "never": "never checked",
+      "counts": "{{block}} blocking · {{warn}} warnings",
+      "usage": "{{projects}} project(s) · {{agents}} agent(s)",
+      "sharedChip": "shared",
+      "check": "Check",
+      "probe": "Probe",
+      "probeHint": "Start a temporary runtime in this network and test each declared target",
+      "probeNeedsTargets": "Declare reachable targets on the profile first",
+      "probeRunning": "probe running",
+      "probeStarted": "Probe of {{name}} started — results appear here when it finishes",
+      "checked": "Preflight of {{name}} finished",
+      "created": "Network profile {{name}} created",
+      "saved": "Network profile {{name}} saved",
+      "archived": "Network profile {{name}} archived",
+      "inUse": "{{count}} agent(s) still use it — move them to another network first",
+      "archiveTitle": "Archive {{name}}?",
+      "archiveBody": "Projects lose it from their allowed sets and new agents can no longer choose it. Before deleting the VPC's subnets or security groups, delete the agents that used it and wait for AgentCore to release their network interfaces.",
+      "status": {
+        "unchecked": "unchecked",
+        "ok": "passed",
+        "warn": "warnings",
+        "blocked": "blocked"
+      },
+      "purpose": {
+        "agents": "agents",
+        "tools": "tools",
+        "both": "agents + tools"
+      },
+      "internet": {
+        "none": "no internet (endpoints only)",
+        "nat": "internet through NAT"
+      },
+      "col": {
+        "name": "Name",
+        "subnets": "Subnets",
+        "purpose": "Purpose",
+        "preflight": "Preflight",
+        "users": "Used by"
+      },
+      "form": {
+        "createTitle": "New network profile",
+        "editTitle": "Edit network profile",
+        "create": "Create",
+        "save": "Save",
+        "name": "Name",
+        "groups": "Security groups",
+        "internet": "Internet access",
+        "reachable": "Private targets",
+        "subnetsHint": "2-8 private subnets in at least two supported Availability Zones, one per line or comma-separated",
+        "groupsHint": "1-5 security groups; one per project lets security group rules tell projects apart",
+        "reachableHint": "One per line: <CIDR or host>:<port> [note]. Used by the route check and the probe only.",
+        "staleHint": "Changing the VPC, subnets, security groups or internet access clears the last preflight.",
+        "err": {
+          "name": "1-64 characters",
+          "vpc": "A VPC id such as vpc-0123456789abcdef0",
+          "subnets": "2-8 subnet ids (subnet-…)",
+          "groups": "1-5 security group ids (sg-…)",
+          "reachable": "Each line is <CIDR or host>:<port> [note]"
+        }
+      },
+      "detail": {
+        "basic": "Profile",
+        "checkedAt": "Last checked",
+        "checks": "Preflight results",
+        "notChecked": "Not checked yet — run Check to read the VPC.",
+        "endpoints": "Endpoint requirements",
+        "endpoint": "Endpoint",
+        "neededBy": "Needed by",
+        "inbound": "Inbound endpoint (PrivateLink)",
+        "privateDnsOn": "private DNS on",
+        "privateDnsOff": "private DNS off",
+        "anyPrincipal": "policy admits any principal",
+        "oauthNote": "An endpoint policy can only restrict IAM principals: OAuth callers appear as Principal \"*\", so the agent's inbound JWT authorizer is what limits them.",
+        "probe": "Probe",
+        "target": "Target",
+        "notVerified": "The platform checks routes and next hops only; peering acceptance, transit gateway propagation, remote security groups, NACLs, firewalls and DNS are not verified.",
+        "cost": "Cost",
+        "costLine": "Depends on {{endpoints}} interface endpoint(s) × {{azs}} Availability Zone(s) ({{hours}} endpoint-AZ hours per hour) and {{nat}} NAT gateway(s).",
+        "costHint": "Both are billed per hour plus data processed; the platform does not price them — see",
+        "pricing": {
+          "privatelink": "PrivateLink pricing",
+          "nat_gateway": "NAT gateway pricing"
+        },
+        "projects": "Allowed projects",
+        "noProjects": "No project may use this profile yet — add it to a project's allowed set below.",
+        "shared": "Shared by {{count}} projects: their agents sit behind the same security groups. Prefer one security group per project."
+      },
+      "access": {
+        "title": "Allowed profiles per project",
+        "sub": "A project's agents can only choose profiles in its allowed set; the default is preselected in the wizard.",
+        "project": "Project",
+        "allowed": "Allowed",
+        "default": "default",
+        "noDefault": "No default",
+        "save": "Save allowed set",
+        "saved": "Allowed profiles of {{project}} saved"
+      },
+      "enforce": {
+        "title": "Network rules of this workspace",
+        "publicAllowed": "Agents may run on the public network (PUBLIC)",
+        "publicHint": "Off: every agent must choose a network profile (recommended for production). Enforced by the platform only.",
+        "enforce": "This workspace enforces the approved subnets and security groups at the IAM layer",
+        "enforceHint": "Apply the approved sets below as the spoke stack parameters or as an SCP; the platform does not change its own role.",
+        "actions": "Actions covered",
+        "policy": "Policy document (SCP or inline)",
+        "saved": "Network rules saved"
+      },
+      "card": {
+        "title": "Network",
+        "mode": "Mode",
+        "public": "Public (PUBLIC)",
+        "profile": "Profile",
+        "inline": "inline subnets (not yet migrated)",
+        "missing": "no longer in this workspace",
+        "archived": "archived",
+        "preflight": "Last preflight",
+        "enis": "Network interfaces",
+        "enisCount": "{{count}} in the profile's subnets ({{inUse}} in use)",
+        "enisScope": "Listed per profile: agents in the same subnets and security groups share them",
+        "enisUnavailable": "cannot read ({{code}}) — update the workspace role from the current spoke template",
+        "unavailable": "Network information unavailable",
+        "telemetry": "This profile cannot reach {{services}}: traces and logs of the agent may be lost silently — check the endpoint(s) and the security group's outbound 443.",
+        "change": "Change network…"
+      }
     }
   },
   "models": {
