@@ -10114,7 +10114,7 @@
       "failed": "最近一次部署失败。",
       "chat": "对话",
       "gate": "放行门",
-      "edit": "管理",
+      "edit": "编辑",
       "lifecycle": "生命周期",
       "pending": "版本 v{{version}} 正在等待放行门。",
       "openGate": "打开放行门",
@@ -10127,7 +10127,183 @@
       "endpoints": "服务端点",
       "try": "试一下",
       "tryPlaceholder": "向智能体提个问题",
-      "run": "运行"
+      "run": "运行",
+      "observability": "可观测",
+      "identity": "身份",
+      "more": "更多",
+      "editMenu": {
+        "wizard": "编辑并重新发布",
+        "canvas": "在画布中编辑",
+        "preset": "配置预置",
+        "classic": "打开经典详情页"
+      },
+      "editBlocked": {
+        "presetAdminOnly": "只有管理员可以配置系统预置。",
+        "deploying": "这个智能体正在部署中。"
+      },
+      "convert": "转换为代码 Agent",
+      "rollback": "回滚到快照…",
+      "delete": "删除",
+      "remove": "移除",
+      "tabs": {
+        "label": "智能体分区",
+        "overview": "概览",
+        "deploy": "部署与版本",
+        "access": "访问与集成",
+        "release": "发布"
+      },
+      "action": {
+        "convertTitle": "转换为代码 Agent？",
+        "convertBody": "为 Harness Agent {{name}} 创建一个基于代码的 Runtime 副本。原 Harness Agent 会继续运行。",
+        "deleteTitle": "删除这个智能体？",
+        "deleteBody": "删除 {{name}} 及其 AgentCore 资源。此操作不可撤销。",
+        "removeTitle": "移除这个导入的 Runtime？",
+        "removeBody": "只删除 {{name}} 的平台记录，AWS 上的 Runtime 保留。",
+        "typeName": "输入 {{name}} 以确认",
+        "cancel": "取消",
+        "deleted": "已删除 {{name}}",
+        "removed": "已从平台移除 {{name}}",
+        "convertStarted": "已开始转换：{{name}}"
+      },
+      "basic": {
+        "title": "基本信息",
+        "displayName": "显示名",
+        "resourceName": "资源名",
+        "id": "ID",
+        "method": "方式",
+        "protocol": "协议",
+        "creator": "创建人",
+        "created": "创建时间",
+        "updated": "更新时间",
+        "registry": "注册中心记录",
+        "arn": "ARN",
+        "copy": "复制{{label}}",
+        "copied": "已复制{{label}}",
+        "copyFailed": "无法复制到剪贴板。"
+      },
+      "systemNote": "平台托管的预置 Agent {{label}}（Skill 版本 {{version}}）。只有管理员可以修改其设置，这里不能删除或转换。",
+      "byoc": {
+        "title": "上传的代码",
+        "kind": "制品类型",
+        "image": "镜像",
+        "entrypoint": "入口文件",
+        "models": "允许的模型"
+      },
+      "converted": {
+        "title": "由 Harness Agent 转换而来",
+        "from": "来源：{{name}}"
+      },
+      "kbs": "知识库",
+      "progress": {
+        "title": "部署进度",
+        "running": "部署中",
+        "elapsed": "已用时 {{time}}",
+        "done": "已就绪，用时 {{time}}",
+        "failed": "智能体部署失败。下方的技术日志显示了出错原因。",
+        "technical": "技术日志",
+        "log": "部署日志",
+        "logEmpty": "暂无日志",
+        "line": {
+          "harness": "正在准备你的智能体，约需 30 秒",
+          "zipPackage": "正在安装依赖并打包，约需 1 到 3 分钟",
+          "containerBuild": "正在构建容器镜像，约需 2 到 4 分钟",
+          "package": "正在打包你的智能体，约需 1 到 3 分钟",
+          "prepare": "正在准备你的智能体，仅需几秒",
+          "start": "正在启动你的智能体，约需 1 分钟",
+          "register": "即将完成，仅需几秒"
+        }
+      },
+      "snapshots": {
+        "title": "配置快照",
+        "sub": "每次发布时保存的完整配置。可任选两份对比，也可通过重新发布旧快照来回滚。",
+        "compare": "对比所选",
+        "current": "当前",
+        "rollback": "回滚",
+        "by": "发布人",
+        "at": "发布时间",
+        "note": "备注",
+        "pick": "选择快照 {{seq}} 用于对比",
+        "rollbackTitle": "回滚到快照 {{seq}}？",
+        "rollbackBody": "这会把快照 {{seq}} 的配置作为新版本重新发布。AWS 上不会回退任何内容，当前配置仍保留在快照列表中。",
+        "rolledBack": "正在重新发布快照 {{seq}}。",
+        "diffTitle": "快照 {{from}} → {{to}}",
+        "noChanges": "这两份快照完全相同。",
+        "empty": "还没有快照。",
+        "close": "关闭",
+        "blocked": "回滚会重新发布智能体，需要编辑权限，且当前没有正在进行的部署。",
+        "group": {
+          "prompt": "提示词",
+          "model": "模型",
+          "tools": "工具",
+          "skills": "技能",
+          "knowledge_bases": "知识库",
+          "memory": "记忆",
+          "guardrail": "护栏",
+          "other": "其他"
+        },
+        "kind": {
+          "added": "新增",
+          "removed": "移除",
+          "changed": "变更"
+        }
+      },
+      "inbound": {
+        "toJwtTitle": "切换为 JWT 认证",
+        "claimsKept": "{{count}} 条自定义声明规则原样保留。如需修改，请到经典页面编辑。",
+        "classic": "完整的 JWT 编辑器（经典页面）"
+      },
+      "integration": {
+        "title": "系统集成",
+        "sub": "通过公开的 /v1 API 从你自己的系统调用该智能体。请将 {{key}} 替换为 API 密钥。",
+        "language": "语言",
+        "mode": "调用方式",
+        "lang": {
+          "curl": "curl",
+          "python": "Python（httpx）",
+          "javascript": "JavaScript（fetch）"
+        },
+        "modes": {
+          "sync": "同步调用",
+          "stream": "流式调用（SSE）"
+        },
+        "copy": "复制",
+        "copied": "示例代码已复制。",
+        "copyFailed": "无法复制到剪贴板。",
+        "keyHint": "可在对话控制台的 API 密钥面板创建密钥，并可限定为仅限本智能体、设置有效期与速率限制。",
+        "unavailable": "这个智能体不能通过 /v1 API 调用。"
+      },
+      "identityEntry": {
+        "title": "身份",
+        "body": "工作负载身份、出站凭证，以及这个智能体用到的 Connections。",
+        "open": "打开身份页",
+        "imported": "导入的 Runtime 沿用它在 AWS 上的身份，平台不负责管理。"
+      },
+      "gateEntry": {
+        "title": "放行门",
+        "body": "候选版本承接流量之前，先用放行标准评估一遍。",
+        "open": "打开放行门"
+      },
+      "promotion": {
+        "title": "晋级到其他工作区",
+        "sub": "把这次发布冻结成发布包，然后申请发布到别的环境。",
+        "bundle": "创建发布包",
+        "bundled": "发布包 {{digest}} 已就绪",
+        "publish": "发布为共享模板",
+        "published": "已发布到共享模板",
+        "empty": "还没有发布包。",
+        "live": "当前配置",
+        "publishN": "第 {{n}} 次发布",
+        "request": "申请发布",
+        "requestTitle": "申请发布",
+        "requestConfirm": "提交申请",
+        "requested": "申请已提交",
+        "noTargets": "还没有注册其他工作区，暂时无处发布。",
+        "target": "目标工作区",
+        "changeNote": "变更说明",
+        "rollbackNote": "回滚方案",
+        "inactive": "只有运行中的智能体可以晋级。",
+        "system": "系统预置按工作区安装，不参与晋级。"
+      }
     },
     "life": {
       "build": "构建",

@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
-import { useProdLock } from "../../workspace/useProdLock";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { methodLabel } from "../../components/methodChipMeta";
 import {
@@ -17,12 +16,17 @@ import {
   type JobInfo,
   type StageInfo,
 } from "../../lib/api";
+import {
+  useAgentActions as useSharedAgentActions,
+  useAgentDetail,
+  useAgentPermissions,
+  useDeployProgress,
+} from "../../lib/agent-admin";
 import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
 import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { AgentWizard } from "./agents/AgentWizard";
-import { fmtElapsed, parseUtc, progressKey, runningStage } from "./agents/deployStatus";
 import { IntegrationCard } from "./agents/IntegrationCard";
 import { ReleaseCard } from "./agents/ReleaseCard";
 import { SnapshotsCard } from "./agents/SnapshotsCard";
@@ -128,53 +132,21 @@ function versionLabel(agent: AgentInfo): string {
   return revision ? String(revision) : "—";
 }
 
-/** Row permissions, mirroring the classic list: editing re-publishes; a system
- *  preset is edited by administrators only and never deleted or converted here. */
-function useAgentPermissions() {
-  const { can, isAdmin } = useAuth();
-  const canDeploy = can("agents.deploy");
-  const canDelete = can("agents.delete");
-  const canConvert = can("agents.convert");
-  // prod (T05): the controls stay visible but disabled, `lockTitle` saying why
-  const { locked, title: lockTitle } = useProdLock();
-  return {
-    locked,
-    lockTitle,
-    canEdit: (a: AgentInfo) =>
-      a.method !== "discovered_runtime" && canDeploy && a.status !== "deploying" && (!a.system || isAdmin),
-    canDelete: (a: AgentInfo) => canDelete && !a.system,
-    canConvert: (a: AgentInfo) =>
-      a.method === "harness" && a.status === "active" && canConvert && !a.system,
-  };
-}
-
 /** Delete / convert confirmations shared by the list and the detail page. */
 function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentInfo) => void) {
   const { t } = useTranslation();
   const toast = useV2Toast();
-  const [pending, setPending] = useState<{ kind: "delete" | "convert"; agent: AgentInfo } | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const run = async () => {
-    if (!pending) return;
-    setBusy(true);
-    try {
-      if (pending.kind === "delete") {
-        await api.deleteAgent(pending.agent.id);
-        toast("success", t("v2.agents.deleted", { name: pending.agent.display_name || pending.agent.name }));
-        onDone("deleted", pending.agent);
-      } else {
-        const res = await api.convertAgent(pending.agent.id);
-        toast("success", t("v2.agents.convertStarted", { name: res.agent.name }));
-        onDone("converted", res.agent);
-      }
-      setPending(null);
-    } catch (err) {
-      toast("error", errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { pending, busy, askDelete, askConvert, cancel, confirm } = useSharedAgentActions({
+    onDeleted: (agent) => {
+      toast("success", t("v2.agents.deleted", { name: agent.display_name || agent.name }));
+      onDone("deleted", agent);
+    },
+    onConverted: (agent) => {
+      toast("success", t("v2.agents.convertStarted", { name: agent.name }));
+      onDone("converted", agent);
+    },
+    onError: (err) => toast("error", errorMessage(err)),
+  });
 
   const external = pending?.agent.method === "discovered_runtime";
   const dialog = (
@@ -204,15 +176,11 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
       }
       danger={pending?.kind === "delete"}
       busy={busy}
-      onConfirm={() => void run()}
-      onClose={() => setPending(null)}
+      onConfirm={() => void confirm()}
+      onClose={cancel}
     />
   );
-  return {
-    askDelete: (agent: AgentInfo) => setPending({ kind: "delete", agent }),
-    askConvert: (agent: AgentInfo) => setPending({ kind: "convert", agent }),
-    dialog,
-  };
+  return { askDelete, askConvert, dialog };
 }
 
 // ─── list ──────────────────────────────────────────────────────────────────
@@ -408,17 +376,7 @@ function DeployProgress({
   method: string;
 }) {
   const { t } = useTranslation();
-  const failed = deployment.status === "failed" || deployment.stages.some((s) => s.status === "failed");
-  const inFlight = !failed && deployment.status === "running";
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!inFlight) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [inFlight]);
-  const started = parseUtc(deployment.started_at);
-  const ended = parseUtc(deployment.ended_at);
-  const elapsed = started != null ? fmtElapsed((inFlight ? now : (ended ?? now)) - started) : null;
+  const { failed, inFlight, elapsed, progressKey } = useDeployProgress(deployment, method);
   return (
     <Card
       title={t("v2.agents.deployTitle")}
@@ -427,7 +385,7 @@ function DeployProgress({
     >
       {inFlight && (
         <p className="v2-deploy-line" data-testid="v2-agent-progress-line">
-          <span>{t(`v2.agents.progress.${progressKey(method, runningStage(deployment))}`)}</span>
+          <span>{t(`v2.agents.progress.${progressKey}`)}</span>
           {elapsed && <span className="elapsed">{t("v2.agents.progress.elapsed", { time: elapsed })}</span>}
         </p>
       )}
@@ -537,43 +495,11 @@ function AgentDetail({ id }: { id: string }) {
   const navigate = useNavigate();
   const [, setParams] = useSearchParams();
   const perms = useAgentPermissions();
-  const [agent, setAgent] = useState<AgentInfo | null>(null);
-  const [job, setJob] = useState<JobInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
+  const { agent, job, error, deploying, reload } = useAgentDetail(id);
   const actions = useAgentActions((action, target) => {
     if (action === "deleted") setParams({});
     else setParams({ view: "detail", id: target.id });
   });
-
-  const jobId = agent?.deployments?.[0]?.job_id ?? null;
-  const deploying = agent?.status === "deploying";
-
-  useEffect(() => {
-    let live = true;
-    const load = async () => {
-      try {
-        const fresh = await api.getAgent(id);
-        if (!live) return;
-        setAgent(fresh);
-        setError(null);
-        const latestJob = fresh.deployments?.[0]?.job_id;
-        if (latestJob) {
-          const j = await api.getJob(latestJob).catch(() => null);
-          if (live) setJob(j);
-        }
-      } catch (err) {
-        if (live) setError(errorMessage(err));
-      }
-    };
-    void load();
-    // follow a deploy in flight until it settles
-    const timer = deploying ? window.setInterval(() => void load(), 2500) : undefined;
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [id, deploying, nonce]);
 
   if (error && !agent) {
     return (
@@ -612,7 +538,7 @@ function AgentDetail({ id }: { id: string }) {
         onBack={() => setParams({})}
         end={
           <>
-            <Button onClick={() => setNonce((n) => n + 1)}>{t("v2.common.refresh")}</Button>
+            <Button onClick={() => reload()}>{t("v2.common.refresh")}</Button>
             {agent.invoke_capability.eligible && (
               <Button onClick={() => navigate(`/v2/chat?agent=${agent.id}`)}>{t("v2.agents.chat")}</Button>
             )}
@@ -691,7 +617,7 @@ function AgentDetail({ id }: { id: string }) {
         />
       </Card>
       {agent.status === "active" && agent.invoke_capability?.eligible && <TryChat agentId={agent.id} />}
-      {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} method={agent.method} />}
+      {deployment && <DeployProgress deployment={deployment} job={job} method={agent.method} />}
       {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
         <InboundSwitchCard
           agentId={agent.id}
@@ -702,7 +628,7 @@ function AgentDetail({ id }: { id: string }) {
           busy={deploying}
           jwt={agent.inbound_auth_config?.jwt ?? null}
           invokeUrl={bearerInvokeUrl(agent.arn)}
-          onSwitched={() => setNonce((n) => n + 1)}
+          onSwitched={() => reload()}
         />
       )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
@@ -712,7 +638,7 @@ function AgentDetail({ id }: { id: string }) {
           refreshKey={`${agent.status}:${agent.deployments?.length ?? 0}`}
           canRollback={perms.canEdit(agent) && !perms.locked}
           lockTitle={perms.locked ? perms.lockTitle : undefined}
-          onRolledBack={() => setNonce((n) => n + 1)}
+          onRolledBack={() => reload()}
         />
       )}
       {agent.invoke_capability?.eligible && <IntegrationCard agentId={agent.id} />}

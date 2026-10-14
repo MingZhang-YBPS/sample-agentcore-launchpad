@@ -1,16 +1,10 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { api, errorMessage, type SnapshotDiff, type SpecChange, type SpecSnapshotInfo } from "../../../lib/api";
+import { showValue as show, useSnapshotDiff, useSnapshots } from "../../../lib/agent-admin/snapshots";
+import { errorMessage, type SpecChange } from "../../../lib/api";
 import { fmtTime } from "../../format";
-import { useLoad, useV2Toast } from "../../hooks";
+import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, Modal, Spin, Table } from "../../ui";
-
-function show(value: unknown): string {
-  if (value === null || value === undefined) return "—";
-  if (typeof value === "string") return value || "—";
-  return JSON.stringify(value, null, 2);
-}
 
 function ChangeRow({ change }: { change: SpecChange }) {
   const { t } = useTranslation();
@@ -42,10 +36,7 @@ function ChangeRow({ change }: { change: SpecChange }) {
 function DiffModal({ agentId, pair, onClose }: { agentId: string; pair: [number, number]; onClose: () => void }) {
   const { t } = useTranslation();
   const [from, to] = pair;
-  const { data, loading, error } = useLoad<SnapshotDiff>(
-    () => api.snapshotDiff(agentId, from, to),
-    `snapdiff:${agentId}:${from}:${to}`,
-  );
+  const { data, loading, error } = useSnapshotDiff(agentId, pair);
   return (
     <Modal open wide title={t("v2.agents.snapshots.diffTitle", { from, to })} onClose={onClose} testId="v2-snapshot-diff">
       {loading ? (
@@ -78,32 +69,15 @@ export function SnapshotsCard({
 }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
-  const { data, loading, error } = useLoad(() => api.agentSnapshots(agentId), `snapshots:${agentId}:${refreshKey}`);
-  const [picked, setPicked] = useState<number[]>([]);
-  const [diff, setDiff] = useState<[number, number] | null>(null);
-  const [rollback, setRollback] = useState<SpecSnapshotInfo | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const toggle = (seq: number) =>
-    setPicked((prev) => (prev.includes(seq) ? prev.filter((s) => s !== seq) : [...prev, seq].slice(-2)));
-
-  const run = async () => {
-    if (!rollback) return;
-    setBusy(true);
-    try {
-      await api.rollbackSnapshot(agentId, rollback.seq);
-      toast("success", t("v2.agents.snapshots.rolledBack", { seq: rollback.seq }));
-      setRollback(null);
-      setPicked([]);
+  const snaps = useSnapshots(agentId, refreshKey, {
+    onRolledBack: (seq) => {
+      toast("success", t("v2.agents.snapshots.rolledBack", { seq }));
       onRolledBack();
-    } catch (err) {
-      toast("error", errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+    },
+    onError: (err) => toast("error", errorMessage(err)),
+  });
+  const { data, loading, error, rows, picked, toggle, diff, rollback, busy } = snaps;
 
-  const rows = data?.snapshots ?? [];
   return (
     <Card
       title={t("v2.agents.snapshots.title")}
@@ -111,8 +85,8 @@ export function SnapshotsCard({
       end={
         <Button
           size="sm"
-          disabled={picked.length !== 2}
-          onClick={() => setDiff([Math.min(...picked), Math.max(...picked)])}
+          disabled={!snaps.canCompare}
+          onClick={snaps.openDiff}
           testId="v2-snapshot-compare"
         >
           {t("v2.agents.snapshots.compare")}
@@ -154,7 +128,7 @@ export function SnapshotsCard({
                   <LinkButton
                     disabled={!canRollback}
                     title={lockTitle}
-                    onClick={() => setRollback(r)}
+                    onClick={() => snaps.askRollback(r)}
                     testId={`v2-snapshot-rollback-${r.seq}`}
                   >
                     {t("v2.agents.snapshots.rollback")}
@@ -167,7 +141,7 @@ export function SnapshotsCard({
           density="dense"
         />
       )}
-      {diff && <DiffModal agentId={agentId} pair={diff} onClose={() => setDiff(null)} />}
+      {diff && <DiffModal agentId={agentId} pair={diff} onClose={snaps.closeDiff} />}
       <Confirm
         open={rollback !== null}
         title={t("v2.agents.snapshots.rollbackTitle", { seq: rollback?.seq ?? "" })}
@@ -175,8 +149,8 @@ export function SnapshotsCard({
         confirmLabel={t("v2.agents.snapshots.rollback")}
         danger
         busy={busy}
-        onConfirm={() => void run()}
-        onClose={() => setRollback(null)}
+        onConfirm={() => void snaps.confirmRollback()}
+        onClose={snaps.cancelRollback}
       />
     </Card>
   );

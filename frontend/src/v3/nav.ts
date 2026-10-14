@@ -103,6 +103,9 @@ export function v3TwinOf(pathname: string, search: string): string | null {
       // the bare wizard; a prefilled one (method, scenario, template, gateway,
       // skill) is the full form the launch page hands over to
       if (view === "new" && ![...params.keys()].some((k) => k !== "view")) return "/v3/create";
+      // the detail page is rebuilt (v3-agent-management §2.5); the editor and the
+      // identity page stay hosted until V3 has its own
+      if (view === "detail" && id) return `/v3/agents?id=${encodeURIComponent(id)}`;
       return null;
     case "/v2/promotions":
       if (view === "detail" && id) return `/v3/releases?id=${encodeURIComponent(id)}`;
