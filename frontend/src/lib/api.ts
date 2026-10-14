@@ -168,6 +168,8 @@ export interface ChatStreamPayload {
   name?: string;
   code?: string;
   message?: string;
+  /** `error` event: the envelope's detail (e.g. `runtime.unrecognized_reply` → `{sample}`) */
+  detail?: Record<string, unknown> | null;
   attachments?: ChatAttachmentMetadata[];
   /** `saved` event: the ledger id of the agent answer just persisted (thumbs target) */
   message_id?: number;

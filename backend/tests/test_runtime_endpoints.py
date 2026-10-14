@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.errors import AppError
 from app.services import aws_clients
 from app.services.agentcore import gateway as gw
 from app.services.agentcore import runtime as rt
@@ -328,11 +329,14 @@ def test_invoke_runtime_text_free_form_error_key_still_raises():
     ],
 )
 def test_stream_runtime_events_ignores_converse_bookkeeping_events(payload, wrapped):
-    # Converse stream events without text must not be dumped as JSON.
+    # Converse stream events without text must not be dumped as JSON — and a turn
+    # made of nothing else ends with a named error instead of a blank reply (§16).
     body = json.dumps({"event": payload} if wrapped else payload)
     stub = StubDataPlane(f"data: {body}\n\n".encode(), content_type="text/event-stream")
 
-    assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == []
+    with pytest.raises(AppError) as err:
+        list(rt.stream_runtime_events(stub, "arn:rt-1", "hi"))
+    assert err.value.code == "runtime.unrecognized_reply"
 
 
 @pytest.mark.parametrize("wrapped", [False, True])

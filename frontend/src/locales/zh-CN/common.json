@@ -2435,7 +2435,9 @@
     "auth.invalid_username": "用户名须为 3-32 个字母、数字、点、下划线或连字符。",
     "auth.invalid_email": "请输入有效的邮箱地址。",
     "auth.email_domain_blocked": "不接受这个邮箱域名，请使用公司邮箱。",
-    "criteria.invalid": "判据表有错误"
+    "criteria.invalid": "判据表有错误",
+    "runtime.empty_reply": "智能体的运行时返回了空响应。",
+    "runtime.unrecognized_reply": "智能体返回了控制台无法识别的格式。响应的开头是："
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",

@@ -1,5 +1,5 @@
 // Chat helpers shared by the classic `/chat` page and the native V2 page.
-import type { AgentInfo, ChatStreamPayload } from "./api";
+import { type AgentInfo, type ChatStreamPayload, localizedMessage } from "./api";
 
 /** Parse a `text/event-stream` body into `{event, data}` frames. */
 export async function* sseEvents(
@@ -75,4 +75,16 @@ export function asUserField(jwtAgent: boolean, choice: AsUserChoice): boolean | 
  *  (the member's own JWT exactly when signed in through the pool). */
 export function asUserChecked(choice: AsUserChoice, signedIn: boolean): boolean {
   return choice ?? signedIn;
+}
+
+/**
+ * The text of a chat `error` event: the console copy for its code, and — for a
+ * reply the console could not read (`runtime.unrecognized_reply`) — the start of
+ * what the runtime actually sent, so the operator sees the format instead of a
+ * blank turn.
+ */
+export function chatErrorText(data: ChatStreamPayload, fallback: string): string {
+  const text = localizedMessage(data.code ?? "", data.message ?? fallback);
+  const sample = data.detail?.sample;
+  return typeof sample === "string" && sample ? `${text}\n${sample}` : text;
 }

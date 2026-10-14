@@ -12,9 +12,8 @@ import {
   errorMessage,
   feedbackApi,
   type FeedbackVerdict,
-  localizedMessage,
 } from "../../lib/api";
-import { chatEligible, sseEvents } from "../../lib/chat";
+import { chatEligible, chatErrorText, sseEvents } from "../../lib/chat";
 import { useStickToBottom } from "../../lib/useStickToBottom";
 import { livePolicyDeny, type PolicyDeny, policyDenyHref, restoredPolicyDeny } from "../../lib/policy-deny";
 import { useAuth } from "../../auth/auth-context";
@@ -193,7 +192,7 @@ export function V3Chat() {
           });
         } else if (event === "error") {
           failed = true;
-          setMessages((m) => [...m, { kind: "error", text: localizedMessage(data.code ?? "", data.message ?? t("v3.chat.failed")) }]);
+          setMessages((m) => [...m, { kind: "error", text: chatErrorText(data, t("v3.chat.failed")) }]);
         } else if (event === "done") {
           completed = true;
         }

@@ -634,6 +634,12 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
             raise RuntimeError(str(payload.get("message", "runtime stream failed")))
         return
 
+    strands_text = _strands_loop_event(payload)
+    if strands_text is not None:
+        if strands_text:
+            yield {"event": "complete", "data": {"text": strands_text}}
+        return
+
     inner = kind if isinstance(kind, dict) else payload
     if "runtimeClientError" in inner or "internalServerException" in inner:
         detail = inner.get("runtimeClientError") or inner.get("internalServerException")
@@ -656,6 +662,44 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
         text = _free_form_payload_text(payload)
         if text:
             yield {"event": "complete", "data": {"text": text}}
+
+
+# Strands' agent loop also yields its own lifecycle events next to the Converse ones
+# when an entrypoint forwards every `stream_async` event (measured 2026-10-14 on an
+# AgentCore CLI Strands template that does): bookkeeping flags, and the finished
+# `message` / `result` the deltas already carried.
+_STRANDS_LOOP_FLAGS = frozenset(
+    {"init_event_loop", "start", "start_event_loop", "force_stop", "force_stop_reason"}
+)
+
+
+def _message_text(message: Any) -> str:
+    """The text blocks of an assistant Converse message (``{role, content[]}``)."""
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return ""
+    blocks = message.get("content")
+    if not isinstance(blocks, list):
+        return ""
+    return "".join(
+        str(block["text"]) for block in blocks
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    )
+
+
+def _strands_loop_event(payload: dict[str, Any]) -> str | None:
+    """``None`` when ``payload`` is not a Strands loop event; otherwise the final
+    text it carries ("" for pure bookkeeping). The text only matters when no
+    delta was streamed — `_normalized_runtime_events` drops it after deltas."""
+    keys = set(payload)
+    if keys and keys <= _STRANDS_LOOP_FLAGS:
+        return ""
+    message = payload.get("message")
+    if keys == {"message"} and isinstance(message, dict) and "role" in message:
+        return _message_text(message)
+    if keys == {"result"} and isinstance(payload["result"], dict):
+        # a serialized AgentResult: {stop_reason, message, metrics, state}
+        return _message_text(payload["result"].get("message"))
+    return None
 
 
 def _is_converse_stream_event(payload: dict[str, Any]) -> bool:
@@ -728,13 +772,28 @@ def _free_form_payload_text(payload: dict[str, Any]) -> str:
     return dumped
 
 
+_UNRECOGNIZED_SAMPLE_CHARS = 300
+
+
 def _normalized_runtime_events(
-    payloads: Iterable[Any], *, require_attachments: bool = False,
+    payloads: Iterable[Any], *, require_attachments: bool = False, require_text: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    """Suppress a final full result when real deltas were already emitted."""
+    """Suppress a final full result when real deltas were already emitted.
+
+    ``require_text`` (the invoke stream that Chat, ``/v1`` and evaluation share): a
+    stream that ends with no text, tool call or consent ask to show raises a named
+    error carrying the start of what the runtime sent, instead of a blank turn."""
     saw_delta = False
+    saw_other = False
     acknowledged = False
+    payload_count = 0
+    sample = ""
     for payload in payloads:
+        payload_count += 1
+        if not sample:
+            sample = (payload if isinstance(payload, str) else json.dumps(payload, default=str))[
+                :_UNRECOGNIZED_SAMPLE_CHARS
+            ]
         for event in _runtime_payload_events(payload):
             if event["event"] == "attachments":
                 acknowledged = event["data"].get("contract") == "v1"
@@ -749,9 +808,25 @@ def _normalized_runtime_events(
                     saw_delta = True
                     yield {"event": "delta", "data": event["data"]}
             else:
+                if event["event"] in ("tool", "auth_required"):
+                    saw_other = True
                 yield event
     if require_attachments and not acknowledged:
         raise _attachment_ack_error()
+    if require_text and not saw_delta and not saw_other:
+        if payload_count == 0:
+            raise AppError(
+                "runtime.empty_reply",
+                "the agent's runtime answered with an empty response",
+                status_code=502,
+            )
+        raise AppError(
+            "runtime.unrecognized_reply",
+            "the agent answered in a format the console cannot read — see docs: "
+            "accepted runtime response formats",
+            {"sample": sample},
+            status_code=502,
+        )
 
 
 def _attachment_ack_error() -> AppError:
@@ -863,7 +938,7 @@ def _runtime_body_events(
             else body.read().splitlines()
         )
         yield from _normalized_runtime_events(
-            _sse_payloads(lines), require_attachments=require_attachments,
+            _sse_payloads(lines), require_attachments=require_attachments, require_text=True,
         )
         return
 
@@ -874,14 +949,18 @@ def _runtime_body_events(
         decoded = raw.decode("utf-8", errors="replace") if raw else ""
         if decoded.lstrip().startswith("data:"):
             yield from _normalized_runtime_events(
-                _sse_payloads(decoded.splitlines()), require_attachments=require_attachments,
+                _sse_payloads(decoded.splitlines()),
+                require_attachments=require_attachments, require_text=True,
             )
         else:
             yield from _normalized_runtime_events(
-                [decoded] if decoded else [], require_attachments=require_attachments,
+                [decoded] if decoded else [],
+                require_attachments=require_attachments, require_text=True,
             )
     else:
-        yield from _normalized_runtime_events([payload], require_attachments=require_attachments)
+        yield from _normalized_runtime_events(
+            [payload], require_attachments=require_attachments, require_text=True,
+        )
 
 
 def invoke_runtime_text(

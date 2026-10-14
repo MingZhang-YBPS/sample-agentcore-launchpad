@@ -2435,7 +2435,9 @@
     "auth.invalid_username": "Username must be 3-32 characters of letters, digits, dot, underscore or hyphen.",
     "auth.invalid_email": "Enter a valid email address.",
     "auth.email_domain_blocked": "This email domain is not accepted — use a company email address.",
-    "criteria.invalid": "The criteria table has errors"
+    "criteria.invalid": "The criteria table has errors",
+    "runtime.empty_reply": "The agent's runtime answered with an empty response.",
+    "runtime.unrecognized_reply": "The agent answered in a format the console cannot read. The start of the response:"
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",

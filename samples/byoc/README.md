@@ -28,6 +28,23 @@ Selections accept literal IDs, foundation-model ARNs and system inference-profil
 ARNs. Wildcards, IAM variables and application inference-profile ARNs are refused;
 an unknown ID never grants access to all foundation models.
 
+## Response formats the console reads
+
+Chat, the public `/v1` API and evaluation replays share one reader
+(`backend/app/services/agentcore/runtime.py`), so any of these works unchanged:
+
+| Shape | Example |
+|---|---|
+| Launchpad events (SSE) | `{"event": "delta", "text": "…"}` … `{"event": "complete", "result": "…"}`; `{"event": "tool", "name": "…"}` |
+| Converse stream events (SSE) — what the AgentCore CLI Strands template emits | `{"event": {"contentBlockDelta": {"delta": {"text": "…"}}}}`, `contentBlockStart.start.toolUse` → a tool call |
+| Strands loop events forwarded next to them | `init_event_loop`, `start`, `start_event_loop`, `message`, `result: {AgentResult}` — ignored as text; a `result` / assistant `message` supplies the reply only when nothing streamed |
+| One JSON body | `{"result": "…"}`, or `response` / `answer` / `output` / `output_text` / `text` / `message` / `content` / `completion` / `reply` |
+| Plain text | `text/plain` (or any non-JSON body) is the reply |
+
+A response with nothing readable (an empty body, or only bookkeeping such as
+`metadata` usage) ends the turn with `runtime.empty_reply` /
+`runtime.unrecognized_reply`; the console shows the start of what the runtime sent.
+
 ## hello-mcp — an MCP server (protocol `mcp`)
 
 Not an agent: an MCP server that Launchpad hosts on AgentCore Runtime and puts

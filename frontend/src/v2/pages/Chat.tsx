@@ -24,9 +24,9 @@ import {
   errorMessage,
   feedbackApi,
   type FeedbackVerdict,
-  localizedMessage,
 } from "../../lib/api";
 import {
+  chatErrorText,
   agentMemoryState,
   type AsUserChoice,
   asUserChecked,
@@ -315,7 +315,7 @@ export function V2Chat() {
           });
         } else if (event === "error") {
           failed = true;
-          const message = localizedMessage(payload.code ?? "", payload.message ?? t("chatPage.sendFailed"));
+          const message = chatErrorText(payload, t("chatPage.sendFailed"));
           setMessages((m) => [...m, { kind: "error", text: message }]);
           if (files.length) setAttachmentError(message);
         } else if (event === "done") {

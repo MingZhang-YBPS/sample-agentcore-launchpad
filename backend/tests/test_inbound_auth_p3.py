@@ -108,7 +108,7 @@ def test_update_wrappers_forward_the_authorizer(wrapper):
 def test_bearer_body_carries_every_payload_field_and_no_user_id_header():
     captured: dict = {}
     response = FakeBearerResponse(
-        200, json.dumps({"event": "attachments", "contract": "v1"}).encode(),
+        200, json.dumps({"attachment_contract": "v1", "result": "ok"}).encode(),
     )
     rt.invoke_runtime_text_bearer(
         "us-west-2", "arn:aws:bedrock-agentcore:us-west-2:1:runtime/x", "tok", "hi",
