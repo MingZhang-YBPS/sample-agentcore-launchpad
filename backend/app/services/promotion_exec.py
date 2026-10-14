@@ -51,6 +51,7 @@ from sqlalchemy import select, update
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError
+from app.core.project_scope import project_context
 from app.deployer import pipeline
 from app.models.ledger import Agent, Job, Promotion, ReleaseBundle, Workspace
 from app.services import agent_names, release_gates
@@ -165,6 +166,8 @@ class Run:
         self.promotion_id = promotion.id
         self.action = (job.payload or {}).get("action", ACTION_EXECUTE)
         self.bundle_id = bundle.id
+        # the release's project: the worker runs every stage as it (design §5.12)
+        self.project_id = promotion.project_id
         self.source_id = promotion.workspace_id
         self.target_id = promotion.target_workspace_id
         # the TARGET context, rebuilt from the job's workspace_id, never ambient settings
@@ -326,15 +329,21 @@ def _stage_resolve(run: Run) -> pipeline.StageResult:
             AgentSpec.model_validate(resolution.spec)
         except Exception as exc:
             raise StageFailed(f"the mapped spec is not valid: {exc}") from exc
-        existing = db.scalars(
-            select(Agent).where(
-                Agent.workspace_id == target.id,
-                Agent.name == bundle.agent_name,
-                Agent.status != "deleted",
-            )
-        ).first()
+        # agent names are unique across the whole target workspace, so the holder is
+        # looked up in every project: one of another project must stop the run here, not
+        # be overwritten by the provision and deploy stages
+        with project_context(None):
+            existing = db.scalars(
+                select(Agent).where(
+                    Agent.workspace_id == target.id,
+                    Agent.name == bundle.agent_name,
+                    Agent.status != "deleted",
+                )
+            ).first()
         if existing is not None and existing.system_key:
             raise StageFailed("the target agent is a system-managed preset")
+        if existing is not None and run.project_id and existing.project_id != run.project_id:
+            raise StageFailed("the name is used by another project in the target")
         if existing is not None and existing.method != bundle.method:
             raise StageFailed(
                 f"the target's '{existing.name}' is a {existing.method} agent; "
@@ -463,10 +472,12 @@ def _stage_provision(run: Run) -> pipeline.StageResult:
                 status="deploying",
                 spec=spec,
                 owner=(promotion.requested_by if promotion else None) or "promotion",
+                project_id=run.project_id,
             )
             db.add(agent)
             db.flush()
-            agent_names.claim_agent_name(db, run.target_id, agent.name, agent.id)
+            with project_context(None):  # the name is reserved workspace-wide
+                agent_names.claim_agent_name(db, run.target_id, agent.name, agent.id)
             mode = "create"
         else:
             agent = existing
@@ -580,10 +591,12 @@ def _smoke_prompts(run: Run) -> list[str]:
 
 
 def _probe_into(
-    outcome: dict[str, Any], agent_id: str, prompt: str, workspace: WorkspaceContext
+    outcome: dict[str, Any], agent_id: str, prompt: str, workspace: WorkspaceContext,
+    project_id: str | None = None,
 ) -> None:
     try:
-        outcome["answer"] = _invoke(agent_id, prompt, workspace)
+        with project_context(project_id):  # a new thread does not inherit the run's
+            outcome["answer"] = _invoke(agent_id, prompt, workspace)
     except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
         outcome["error"] = exc
 
@@ -606,7 +619,7 @@ def _bounded_invoke(run: Run, label: str, index: int, agent_id: str, prompt: str
         # into ITS OWN result, never into the attempt that replaced it
         outcome: dict[str, Any] = {}
         worker = threading.Thread(
-            target=_probe_into, args=(outcome, agent_id, prompt, run.target),
+            target=_probe_into, args=(outcome, agent_id, prompt, run.target, run.project_id),
             name="promotion-probe", daemon=True,
         )
         worker.start()
@@ -934,6 +947,13 @@ def execute_job(job_id: str, *, resume: bool = True) -> None:
     finally:
         db.close()
 
+    # a worker thread starts with no project: every stage reads the target's ledger and
+    # stamps what it creates (the agent, its deploy job, the canary) as the release's own
+    with project_context(run.project_id):
+        _run_stages(run, done)
+
+
+def _run_stages(run: Run, done: set[str]) -> None:
     for name in STAGE_ORDER:
         if name in done:
             continue
@@ -1038,22 +1058,27 @@ def previous_bundle_id(db, promotion: Promotion, bundle: ReleaseBundle) -> str |
 
 
 def assert_target_free(db, promotion: Promotion, bundle: ReleaseBundle) -> None:
-    others = db.execute(
-        select(Promotion)
-        .join(ReleaseBundle, ReleaseBundle.id == Promotion.bundle_id)
-        .where(
-            Promotion.target_workspace_id == promotion.target_workspace_id,
-            Promotion.status == STATUS_EXECUTING,
-            Promotion.id != promotion.id,
-            ReleaseBundle.agent_name == bundle.agent_name,
-        )
-    ).scalars().first()
+    # the target agent name is a workspace-wide resource: a release of another project
+    # into the same name is just as busy, though only one of this project is named
+    with project_context(None):
+        others = db.execute(
+            select(Promotion)
+            .join(ReleaseBundle, ReleaseBundle.id == Promotion.bundle_id)
+            .where(
+                Promotion.target_workspace_id == promotion.target_workspace_id,
+                Promotion.status == STATUS_EXECUTING,
+                Promotion.id != promotion.id,
+                ReleaseBundle.agent_name == bundle.agent_name,
+            )
+        ).scalars().first()
     if others is not None:
+        mine = others.project_id == promotion.project_id
         raise AppError(
             "promotion.target_busy",
-            f"promotion {others.id} is already executing '{bundle.agent_name}' in "
+            (f"promotion {others.id}" if mine else "another project's release")
+            + f" is already executing '{bundle.agent_name}' in "
             f"{promotion.target_workspace_id}",
-            {"promotion_id": others.id},
+            {"promotion_id": others.id if mine else None},
             status_code=409,
         )
 

@@ -35,6 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import service as eval_service
 from app.evaluation.models import EvalRun, OnlineEvalConfig
@@ -103,13 +104,8 @@ def owner_of(name: str, config_id: str, ledger_ids: set[str]) -> Owner:
 def _parent_creators(db: Session, ws: WorkspaceScope, name: str) -> list[str | None]:
     """Creators of the experiment / canary an `exp_<id8>_…` / `can_<id8>_…` config
     belongs to (its name embeds the first 8 chars of the owner's 12-char id)."""
-    model = (
-        Experiment if name.startswith("exp_")
-        else RuntimeCanary if name.startswith("can_")
-        else None
-    )
-    id8 = name[4:].split("_", 1)[0] if model is not None else ""
-    if model is None or not id8:
+    model, id8 = _parent_model(name)
+    if model is None:
         return []
     return list(db.scalars(
         select(model.created_by).where(
@@ -131,6 +127,62 @@ def config_visible(
         return visibility.sees(viewer, db, row.created_by)
     parents = _parent_creators(db, ws, str(name or ""))
     return not parents or any(visibility.sees(viewer, db, c) for c in parents)
+
+
+class _ProjectConfigs:
+    """Which online configs the current project owns (design §5.5), for a workspace
+    holding several projects. ListOnlineEvaluationConfigs is account-wide and the
+    ledger is project-filtered, so another project's config would otherwise read as
+    `external` (or as an experiment arm whose owner is gone) and be shared.
+
+    A config belongs to the project of its ledger row, else of the experiment /
+    canary its name embeds; an external one (no owner at all) only to a project whose
+    agent its log groups match. Built across every project; None — no fence — with no
+    current project or a single-project workspace."""
+
+    def __init__(self, db: Session, ws: WorkspaceScope, project: str) -> None:
+        self._db, self._ws, self.project = db, ws, project
+        with project_context(None):
+            self.ledger: dict[str, str | None] = dict(db.execute(
+                select(OnlineEvalConfig.config_id, OnlineEvalConfig.project_id)
+                .where(OnlineEvalConfig.workspace_id == ws.id)
+            ).all())
+
+    @classmethod
+    def load(cls, db: Session, ws: WorkspaceScope) -> _ProjectConfigs | None:
+        project = current_project()
+        if project is None or not eval_service.several_projects(db, ws.id):
+            return None
+        return cls(db, ws, project)
+
+    def foreign_row(self, config_id: str) -> bool:
+        return config_id in self.ledger and self.ledger[config_id] != self.project
+
+    def decide(self, config_id: str, name: str) -> bool | None:
+        """True / False, or None: visible only if its log groups match this project's agent."""
+        if config_id in self.ledger:
+            return self.ledger[config_id] == self.project
+        model, id8 = _parent_model(str(name or ""))
+        if model is None:
+            return None
+        with project_context(None):
+            parents = set(self._db.scalars(
+                select(model.project_id).where(
+                    model.workspace_id == self._ws.id, model.id.startswith(id8, autoescape=True)
+                )
+            ))
+        return self.project in parents  # an arm whose owner is gone is no one's here
+
+
+def _parent_model(name: str) -> tuple[Any, str]:
+    """(Experiment | RuntimeCanary | None, id8) for an `exp_<id8>_…` / `can_<id8>_…` name."""
+    model = (
+        Experiment if name.startswith("exp_")
+        else RuntimeCanary if name.startswith("can_")
+        else None
+    )
+    id8 = name[4:].split("_", 1)[0] if model is not None else ""
+    return (model, id8) if id8 else (None, "")
 
 
 def _not_found(config_id: str) -> NotFoundError:
@@ -340,6 +392,7 @@ def list_configs(
     """
     control = control or control_client(ws.context)
     ledger = _ledger_rows(db, ws)
+    fence = _ProjectConfigs.load(db, ws)
     matchers: list[tuple[Agent, str, bool]] | None = None
     out: list[dict[str, Any]] = []
     for summary in ac.list_online_eval_configs(control):
@@ -347,7 +400,8 @@ def list_configs(
         name = summary.get("onlineEvaluationConfigName", "")
         owner = owner_of(name, config_id, set(ledger))
         row = ledger.get(config_id)
-        if not config_visible(db, ws, viewer, name=name, row=row):
+        verdict = fence.decide(config_id, name) if fence is not None else True
+        if verdict is False or not config_visible(db, ws, viewer, name=name, row=row):
             continue
         aws, detailed = summary, False
         if owner != "experiment":
@@ -361,6 +415,8 @@ def list_configs(
                 matchers = _agent_log_group_matchers(db, ws, viewer)
             ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
             matched = _match_agent(ds.get("logGroupNames") or [], matchers)
+        if verdict is None and matched is None:
+            continue  # several projects: an unmatched external config is no one's here
         out.append(_normalize(aws, owner=owner, row=row, matched_agent=matched,
                               detailed=detailed))
     enabled_by_agent: dict[str, int] = {}
@@ -385,7 +441,10 @@ def get_config(
     (a hidden ledger-backed config answers before any AWS call)."""
     control = control or control_client(ws.context)
     ledger = _ledger_rows(db, ws)
+    fence = _ProjectConfigs.load(db, ws)
     row = ledger.get(config_id)
+    if fence is not None and fence.foreign_row(config_id):
+        raise _not_found(config_id)  # another project's config: before any AWS call
     if row is not None and not config_visible(db, ws, viewer, name=row.name, row=row):
         raise _not_found(config_id)
     try:
@@ -395,6 +454,9 @@ def get_config(
             raise _not_found(config_id) from exc
         raise
     name = aws.get("onlineEvaluationConfigName", "")
+    verdict = fence.decide(config_id, name) if fence is not None else True
+    if verdict is False:
+        raise _not_found(config_id)
     if row is None and not config_visible(db, ws, viewer, name=name, row=None):
         raise _not_found(config_id)
     owner = owner_of(name, config_id, set(ledger))
@@ -404,6 +466,8 @@ def get_config(
         matched = _match_agent(
             ds.get("logGroupNames") or [], _agent_log_group_matchers(db, ws, viewer)
         )
+    if verdict is None and matched is None:
+        raise _not_found(config_id)
     return _normalize(aws, owner=owner, row=ledger.get(config_id), matched_agent=matched,
                       detailed=True)
 

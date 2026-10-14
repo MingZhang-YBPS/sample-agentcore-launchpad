@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 from botocore.exceptions import ClientError
 
+from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.schemas.inbound_auth import issuer_from_discovery_url
 from app.services import consent_portals
@@ -317,10 +318,26 @@ def create_target(
     api_key_location: str = "HEADER",
     api_key_parameter: str = "Authorization",
     api_key_prefix: str | None = None,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Create one target bound to a Connection. Returns without waiting for
-    READY — the list re-reads the status (MCP targets sync tools first)."""
+    READY — the list re-reads the status (MCP targets sync tools first).
+
+    The gateway is workspace-shared, so a target makes its Connection usable from
+    every project: with ``workspace_id`` given, a Connection another project
+    created answers ``identity.connection_not_found`` before any AWS call (only a
+    current-project or workspace-level one may be bound)."""
     gateway_id = _gateway_id(resources)
+    if workspace_id is not None:
+        db = SessionLocal()
+        try:
+            foreign = connection in connections.foreign_names(db, workspace_id, kind)
+        finally:
+            db.close()
+        if foreign:
+            raise NotFoundError(
+                "identity.connection_not_found", f"no {kind} connection named {connection!r}"
+            )
     if mode not in connections.TARGET_MODES:
         raise AppError(
             "identity.mode_unsupported",

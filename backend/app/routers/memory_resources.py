@@ -18,14 +18,17 @@ it, or when an administrator adopts it explicitly.
 """
 
 import re
+from contextlib import nullcontext
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError, mapped_aws_error
+from app.core.errors import AppError, NotFoundError, mapped_aws_error
+from app.core.project_scope import project_context
 from app.models.ledger import Agent, ManagedMemory
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import agent_access, creators, memory_admin, memory_ownership
@@ -125,22 +128,24 @@ def _guard(fn, *args, **kwargs):
 
 
 def _agents_by_memory(
-    db: Session, ws: WorkspaceScope, viewer: Viewer = Viewer.ALL
+    db: Session, ws: WorkspaceScope, viewer: Viewer = Viewer.ALL, *, every_project: bool = False
 ) -> dict[str, list[dict[str, str]]]:
     """Live agents grouped by the memory their spec pins (default users excluded).
 
     The reference lives inside the spec JSON, so this scans the workspace's
     agent rows in Python — bounded by the agent count, and only non-deleted rows.
-    Agents hidden from ``viewer`` (workspace isolation) are not named; callers
-    that need the true usage (the delete guard) count with ``Viewer.ALL``.
+    Agents hidden from ``viewer`` (workspace isolation) are not named, and only the
+    current project's agents are read; callers that need the true usage (the delete
+    guard) count with ``Viewer.ALL`` and ``every_project``.
     """
     hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
     usage: dict[str, list[dict[str, str]]] = {}
-    rows = (
-        db.query(Agent)
-        .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
-        .all()
-    )
+    with project_context(None) if every_project else nullcontext():
+        rows = (
+            db.query(Agent)
+            .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
+            .all()
+        )
     for agent in rows:
         mem_id = ((agent.spec or {}).get("memory") or {}).get("memory_id")
         if mem_id and agent.id not in hidden:
@@ -169,6 +174,8 @@ def list_resources(
     # workspace isolation drops a hidden managed memory entirely — it must not
     # resurface as a "detected" one
     hidden = memory_ownership.hidden_ids(db, ws.context, viewer)
+    # so does another project's managed memory (its row is filtered out of `managed`)
+    hidden |= memory_ownership.foreign_ids(db, ws.context)
     if hidden:
         page["items"] = [i for i in page["items"] if (i.get("id") or "") not in hidden]
     usage = _agents_by_memory(db, ws, viewer)
@@ -234,8 +241,15 @@ def adopt_resource(
     Administrator-only (route policy): adopting is the governance decision that
     lets members pin, edit and delete a resource the platform did not create —
     e.g. one created through the console before ownership was recorded. The id
-    must resolve with ``GetMemory`` first (an unknown id is ``404 aws.not_found``).
+    must resolve with ``GetMemory`` first (an unknown id is ``404 aws.not_found``);
+    one another project manages answers ``404 memory.not_managed`` before that.
     """
+    if memory_ownership.foreign_ids(db, ws.context, [memory_id]):
+        raise NotFoundError(
+            "memory.not_managed",
+            "this memory is not managed by the workspace",
+            {"memory_id": memory_id},
+        )
     detail = _guard(memory_admin.get_memory_resource, ws.context, memory_id)
     memory_ownership.register(
         db,
@@ -281,15 +295,19 @@ def delete_resource(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     memory_ownership.require_managed(db, ws.context, memory_id, viewer=viewer)
-    # the guard counts every agent; the 409 names only those the caller may see
-    agents = _agents_by_memory(db, ws).get(memory_id, [])
+    # the guard counts every agent, in every project; the 409 names only those the
+    # caller may see (not hidden, and of the current project or platform level)
+    agents = _agents_by_memory(db, ws, every_project=True).get(memory_id, [])
     if agents:
         hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
+        in_project = set(
+            db.scalars(select(Agent.id).where(Agent.id.in_([a["id"] for a in agents])))
+        )
         raise AppError(
             "memory.in_use",
             f"{len(agents)} agent(s) still reference this memory — "
             "delete or re-point them first",
-            {"agents": [a for a in agents if a["id"] not in hidden]},
+            {"agents": [a for a in agents if a["id"] not in hidden and a["id"] in in_project]},
             status_code=409,
         )
     deleted = _guard(memory_admin.delete_memory_resource, ws.context, memory_id)

@@ -16,6 +16,8 @@ Vendor shapes come from the botocore `bedrock-agentcore-control` service model
 """
 
 import logging
+from collections.abc import Collection
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -24,6 +26,7 @@ from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context
 from app.models.ledger import Agent, IdentityProvider
 from app.schemas.inbound_auth import (
     discovery_url_for_issuer,
@@ -185,17 +188,22 @@ def _tool_connection(tool: Any) -> str | None:
     return name if isinstance(name, str) else None
 
 
-def referencing_agents(db: Session, workspace_id: str, name: str) -> list[dict[str, str]]:
+def referencing_agents(
+    db: Session, workspace_id: str, name: str, *, every_project: bool = False
+) -> list[dict[str, str]]:
     """Agents in this workspace whose stored spec carries a tool auth'd by `name`.
 
     Read from the stored spec JSON, not AgentSpec — discovered/foreign rows may
-    not validate, and a reference check must still see them.
+    not validate, and a reference check must still see them. Only the current
+    project's agents unless ``every_project`` (the delete guard: a Connection is
+    in use whichever project's agent uses it).
     """
-    rows = (
-        db.query(Agent)
-        .filter(Agent.workspace_id == workspace_id, Agent.status != "deleted")
-        .all()
-    )
+    with project_context(None) if every_project else nullcontext():
+        rows = (
+            db.query(Agent)
+            .filter(Agent.workspace_id == workspace_id, Agent.status != "deleted")
+            .all()
+        )
     hits: list[dict[str, str]] = []
     for agent in rows:
         tools = (agent.spec or {}).get("tools") or []
@@ -209,14 +217,26 @@ def _references(
     workspace_id: str,
     name: str,
     bound_targets: list[dict[str, Any]],
+    *,
+    every_project: bool = False,
 ) -> list[dict[str, str]]:
-    refs = referencing_agents(db, workspace_id, name)
+    refs = referencing_agents(db, workspace_id, name, every_project=every_project)
     refs.extend(
         {"type": "gateway_target", "id": t["target_id"], "name": t["name"]}
         for t in bound_targets
         if t.get("connection") == name
     )
     return refs
+
+
+def _in_current_project(db: Session, refs: list[dict[str, str]]) -> list[dict[str, str]]:
+    """``refs`` without the agents outside the current project (project-filtered
+    read); gateway targets are workspace level and stay."""
+    agent_ids = [r["id"] for r in refs if r.get("type") == "agent"]
+    if not agent_ids or current_project() is None:
+        return refs
+    visible = {row_id for (row_id,) in db.query(Agent.id).filter(Agent.id.in_(agent_ids))}
+    return [r for r in refs if r.get("type") != "agent" or r["id"] in visible]
 
 
 def _item(
@@ -305,17 +325,18 @@ def oidc_discovery(aws: dict[str, Any] | None) -> dict[str, str] | None:
     return None
 
 
-def list_oidc_sources(control: Any) -> list[dict[str, str]]:
+def list_oidc_sources(control: Any, *, exclude: Collection[str] = ()) -> list[dict[str, str]]:
     """The OAuth2 Connections an inbound JWT config can take its discovery URL from.
 
     System providers are left out (the workspace Cognito pool has its own
-    preset). A provider that cannot be read is skipped, not fatal: this feeds
-    a picker, and the discovery URL stays typeable by hand.
+    preset), and so are the names in ``exclude`` (another project's Connections,
+    ``foreign_names``). A provider that cannot be read is skipped, not fatal:
+    this feeds a picker, and the discovery URL stays typeable by hand.
     """
     sources: list[dict[str, str]] = []
     for summary in _paginate(control.list_oauth2_credential_providers):
         name = summary.get("name") or ""
-        if not name or name in SYSTEM_PROVIDER_NAMES:
+        if not name or name in SYSTEM_PROVIDER_NAMES or name in exclude:
             continue
         try:
             aws = _get_aws(control, KIND_OAUTH2, name)
@@ -343,6 +364,35 @@ def _ledger_row(
     )
 
 
+def foreign_names(db: Session, workspace_id: str, kind: str | None = None) -> set[str]:
+    """Names of the Connections another project created (``identity_providers`` rows
+    whose project is neither the current one nor NULL = workspace level).
+
+    The vault is per workspace and lists every project's providers; the project-
+    filtered ledger misses these rows, so they would read as ``external``. Read
+    across projects; empty with no current project (workers, startup)."""
+    pid = current_project()
+    if pid is None:
+        return set()
+    query = db.query(IdentityProvider.name).filter(
+        IdentityProvider.workspace_id == workspace_id,
+        IdentityProvider.project_id.is_not(None),
+        IdentityProvider.project_id != pid,
+    )
+    if kind is not None:
+        query = query.filter(IdentityProvider.kind == kind)
+    with project_context(None):
+        return {name for (name,) in query}
+
+
+def _refuse_foreign(db: Session, workspace_id: str, kind: str, name: str) -> None:
+    """Another project's Connection answers like a missing one (before AWS)."""
+    if name in foreign_names(db, workspace_id, kind):
+        raise NotFoundError(
+            "identity.connection_not_found", f"no {kind} connection named {name!r}"
+        )
+
+
 def list_connections(
     control: Any,
     db: Session,
@@ -355,9 +405,13 @@ def list_connections(
     A ledger row with no AWS counterpart is returned with status="missing"
     (deleted out-of-band) rather than hidden — an operator should see that the
     audit trail and the vault disagree. An AWS provider with no row reads
-    source="external".
+    source="external"; one another project created is left out (§5.5).
     """
     targets = bound_targets or []
+    foreign = {
+        KIND_OAUTH2: foreign_names(db, workspace_id, KIND_OAUTH2),
+        KIND_API_KEY: foreign_names(db, workspace_id, KIND_API_KEY),
+    }
     ledger = {
         (row.kind, row.name): row
         for row in db.query(IdentityProvider)
@@ -373,6 +427,8 @@ def list_connections(
     for kind, providers in live:
         for aws in providers:
             name = aws["name"]
+            if name in foreign[kind]:
+                continue
             seen.add((kind, name))
             items.append(
                 _item(
@@ -426,6 +482,7 @@ def get_connection(
 ) -> dict[str, Any]:
     """One Connection, with the callback URL re-read from AWS (OAuth2)."""
     _require_kind(kind)
+    _refuse_foreign(db, workspace_id, kind, name)
     aws = _get_aws(control, kind, name)
     row = _ledger_row(db, workspace_id, kind, name)
     if aws is None and row is None:
@@ -659,14 +716,17 @@ def _refuse_duplicate(
 
     Checked against AWS, not only the ledger: the vault is shared with
     providers created outside Launchpad. A stale audit row for a provider
-    deleted out-of-band is dropped so the name can be reused.
+    deleted out-of-band is dropped so the name can be reused — whichever project
+    created it: names are unique per workspace (design §4.3), and the 409 names
+    no owner.
     """
     if name in provider_names(control, kind):
         raise _exists_error(kind, name)
-    existing = _ledger_row(db, workspace_id, kind, name)
-    if existing is not None:
-        db.delete(existing)
-        db.commit()
+    with project_context(None):
+        existing = _ledger_row(db, workspace_id, kind, name)
+        if existing is not None:
+            db.delete(existing)
+            db.commit()
 
 
 def _record(
@@ -841,13 +901,15 @@ def delete_connection(
             "deleted here",
             status_code=409,
         )
-    refs = _references(db, workspace_id, name, bound_targets or [])
+    _refuse_foreign(db, workspace_id, kind, name)
+    # the guard counts every project's agents; the detail names only this project's
+    refs = _references(db, workspace_id, name, bound_targets or [], every_project=True)
     if refs:
         raise AppError(
             "identity.connection_referenced",
             f"connection {name!r} is referenced by {len(refs)} agent(s) or gateway "
             "target(s); detach it first",
-            detail={"referenced_by": refs},
+            detail={"referenced_by": _in_current_project(db, refs)},
             status_code=409,
         )
     row = _ledger_row(db, workspace_id, kind, name)

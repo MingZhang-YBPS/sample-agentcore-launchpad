@@ -5,12 +5,14 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
 * **Principal + workspace bound.** Every read and write filters on
   ``(workspace_id, owner_principal)``; another principal's, another workspace's or
   an unowned (NULL principal) conversation is a 404 — a recycled username inherits
-  nothing. The one exception is an admin **share**: a ``shared`` conversation of
-  the same workspace is open to every member for every action (``may_collaborate``
-  — discussion, preparation, proposal review and approval, evaluation assets) under
-  that action's usual permission, re-checked at each write; deleting it (and its
-  footprint preview) stays with the owner. Unsharing closes it again at once. An
-  administrator *reads* every conversation of the workspace (``may_view``: list,
+  nothing. Conversations are project-owned (design §5.5): every read is also
+  confined to the request's project. The one exception is an admin **share**: a
+  ``shared`` conversation of the same project is open to every member for every
+  action (``may_collaborate`` — discussion, preparation, proposal review and
+  approval, evaluation assets) under that action's usual permission (the project's
+  key), re-checked at each write; deleting it (and its footprint preview) stays
+  with the owner. Unsharing closes it again at once. An
+  administrator *reads* every conversation of the project (``may_view``: list,
   detail, evaluation plan and operation status) but writes only where it
   collaborates — an unshared one is read-only until the admin shares it.
 * **Discussion never writes AWS.** A turn makes exactly one data-plane call
@@ -70,9 +72,16 @@ from sqlalchemy.orm import Session, object_session
 
 from app.assistant import preparation, submission
 from app.assistant import proposal as proposal_contract
-from app.assistant.principal import may_collaborate, may_view, principal_of, viewer_clause
+from app.assistant.principal import (
+    may_collaborate,
+    may_view,
+    principal_of,
+    project_can,
+    viewer_clause,
+)
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project
 from app.deployer.pipeline import create_deployment
 from app.evaluation import agentcore_eval as ac
 from app.models.assistant import AssistantConversation, AssistantMessage, AssistantProposal
@@ -611,9 +620,11 @@ def restrict_catalog(
     db: Session, workspace_id: str, viewer: Viewer, catalog: dict[str, Any]
 ) -> dict[str, Any]:
     """The catalog as ``viewer`` (the conversation owner) may see it: the KBs
-    workspace isolation hides are dropped. Custom evaluators are never in the
-    catalog. The deploy-job re-validation reads the unrestricted catalog."""
-    if not viewer.filters or not catalog.get("knowledge_bases"):
+    workspace isolation hides are dropped, and so are another project's (AWS lists
+    every project's KBs — design §5.5), so an approval can never pin one. Custom
+    evaluators are never in the catalog. The deploy-job re-validation reads the
+    unrestricted catalog."""
+    if not catalog.get("knowledge_bases") or (not viewer.filters and current_project() is None):
         return catalog
     from app.routers.knowledge import visible_kbs
 
@@ -627,7 +638,8 @@ def owner_catalog(db: Session | None, conversation: AssistantConversation) -> di
 
     The snapshot is taken at create / refresh; a workspace switched to isolated
     afterwards must not keep showing (or prompting with) KBs the owner can no
-    longer see. Free unless the workspace is isolated and the owner a member."""
+    longer see. Free unless the workspace is isolated and the owner a member, or the
+    workspace holds several projects."""
     catalog = conversation.catalog or {}
     if db is None or not catalog.get("knowledge_bases"):
         return catalog
@@ -838,6 +850,7 @@ def deploy_requirements(row: Workspace) -> list[dict[str, str]]:
 
 def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, Any]:
     preset = system_agents.preset_status(db, row, PRESET, is_admin=identity.is_admin)
+    can_deploy = project_can(db, identity, row.id, PERMISSION_DEPLOY)  # the project's keys
     agent = preset_agent(db, row.id)
     res = row.resources or {}
     return {
@@ -854,7 +867,7 @@ def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, A
             "requirements": preset["requirements"],
             "can_install": preset["can_install"],
         },
-        "can_deploy": identity.can(PERMISSION_DEPLOY),
+        "can_deploy": can_deploy,
         "deploy_requirements": deploy_requirements(row),
         "capabilities": {
             "shared_memory": bool(res.get("memory_arn")),
@@ -863,7 +876,7 @@ def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, A
         "is_admin": identity.is_admin,
         # SE-047: materializing an evaluation plan (AWS evaluators + Lambda + IAM)
         # needs the deploy permission; every member prepares/edits plans
-        "can_materialize_evaluation_assets": identity.can(PERMISSION_DEPLOY),
+        "can_materialize_evaluation_assets": can_deploy,
         "owner": identity.username,
         "principal": principal_of(identity),
     }
@@ -908,7 +921,7 @@ def owned_conversation(
 def accessible_conversation(
     db: Session, workspace_id: str, principal: str, conversation_id: str
 ) -> AssistantConversation:
-    """The owner's conversation, or one an admin shared with the workspace — every
+    """The owner's conversation, or one an admin shared with the project — every
     route but delete (and its footprint) resolves through this. A conversation whose
     CLEAR is queued or running refuses every write (409): a turn, approval or new asset
     started now would race the teardown (``assistant.purge``)."""
@@ -930,7 +943,7 @@ def viewable_conversation(
     db: Session, workspace_id: str, identity: Identity, conversation_id: str
 ) -> AssistantConversation:
     """``accessible_conversation`` widened for reads: an administrator also resolves
-    any other member's conversation of the workspace (read-only). Only the read
+    any other member's conversation of the project (read-only). Only the read
     routes — detail, evaluation plan, operation status — and sharing use this."""
     row = db.get(AssistantConversation, conversation_id)
     if (
@@ -947,8 +960,8 @@ ADMIN_LIST_LIMIT = 200  # an administrator lists every member's conversations
 
 
 def list_conversations(db: Session, workspace_id: str, identity: Identity) -> list[dict[str, Any]]:
-    """The caller's own conversations plus the ones shared with the workspace; for an
-    administrator, every member's."""
+    """The caller's own conversations plus the ones shared with the project; for an
+    administrator, every member's in the selected project."""
     principal = principal_of(identity)
     rows = (
         db.query(AssistantConversation)
@@ -966,7 +979,7 @@ def list_conversations(db: Session, workspace_id: str, identity: Identity) -> li
 def set_shared(
     db: Session, workspace_id: str, identity: Identity, conversation_id: str, shared: bool
 ) -> AssistantConversation:
-    """Publish/unpublish a conversation to every workspace member — by its owner, or
+    """Publish/unpublish a conversation to every member of its project — by its owner, or
     by an administrator, who reads every conversation and so may share any of them
     (sharing is how an admin turns a read-only one into a collaboration); a
     collaborator on a shared one cannot toggle it."""
@@ -2452,7 +2465,7 @@ def approve_proposal(
     if latest is None or latest.revision != revision:
         raise _stale(latest, "that proposal revision is not the current one — review the latest")
     # 2. request-start snapshot checks (cheap refusals before any cloud read)
-    if not identity.can(PERMISSION_DEPLOY):
+    if not project_can(db, identity, row.id, PERMISSION_DEPLOY):
         raise AppError("auth.permission_required",
                        f"This action requires the '{PERMISSION_DEPLOY}' permission",
                        {"permission": PERMISSION_DEPLOY}, status_code=403)

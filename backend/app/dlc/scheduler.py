@@ -89,16 +89,30 @@ def release(db: Session, task: str) -> None:
 
 def run_due_watches(db: Session) -> dict[str, Any]:
     from app.core.errors import AppError
+    from app.core.project_scope import project_context
     from app.dlc import watch as watch_svc
+    from app.models.projects import Project
     from app.services.workspace import context_for_workspace
 
     started, skipped = [], []
+    # the scan is unscoped (every workspace, every project); each run is not
     for config in watch_svc.due_configs(db):
+        project = db.get(Project, config.project_id) if config.project_id else None
+        if project is not None and project.status != "active":
+            # an archived project serves reads only (design §5.12): nothing is queued
+            config.last_status = "skipped"
+            config.last_detail = "project archived"
+            config.last_checked_at = _now()
+            config.next_due_at = watch_svc.next_due(config)
+            skipped.append({"agent_id": config.agent_id, "reason": "project.archived"})
+            db.commit()
+            continue
         try:
-            run_id = watch_svc.run_now(
-                db, config, workspace_ctx=context_for_workspace(config.workspace_id),
-                actor="scheduler",
-            )
+            with project_context(config.project_id):
+                run_id = watch_svc.run_now(
+                    db, config, workspace_ctx=context_for_workspace(config.workspace_id),
+                    actor="scheduler",
+                )
             started.append({"agent_id": config.agent_id, "run_id": run_id})
         except AppError as exc:
             config.last_status = "skipped"

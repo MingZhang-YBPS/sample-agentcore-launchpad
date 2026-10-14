@@ -13,10 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project
 from app.models.ledger import AlertRule
 from app.routers.auth import Identity, current_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import access
 from app.services import alerts as alert_service
 from app.services import costs as cost_service
 
@@ -33,6 +35,11 @@ class RuleCreate(BaseModel):
     window: Literal["1h", "6h", "24h", "7d", "30d"] = "24h"
     enabled: bool = True
     webhook_url: str | None = Field(default=None, max_length=512)
+    # What the rule measures (design §5.9): the whole workspace (the default, and the
+    # only meaning a rule had before projects), or one project's agents — the
+    # request's project unless `project_id` names another one bound here.
+    scope: Literal["workspace", "project"] = "workspace"
+    project_id: str | None = Field(default=None, max_length=32)
 
 
 class RulePatch(BaseModel):
@@ -50,6 +57,15 @@ def _rule_in(db: Session, ws: WorkspaceScope, rule_id: str) -> AlertRule:
     if rule is None or rule.workspace_id != ws.id:
         raise AppError("alert.not_found", "alert rule not found", status_code=404)
     return rule
+
+
+def _bound_project(db: Session, ws: WorkspaceScope, project_id: str) -> str:
+    """A project id the caller named, when it is bound to this workspace — else the
+    404 an unknown project answers everywhere (`project.not_found`)."""
+    if project_id not in {b.project_id for b in access.workspace_bindings(db, ws.id)}:
+        raise NotFoundError("project.not_found", f"project '{project_id}' not found",
+                            {"project_id": project_id})
+    return project_id
 
 
 def _check_webhook(url: str | None) -> str | None:
@@ -74,6 +90,7 @@ def _check_webhook(url: str | None) -> str | None:
 @router.get("/costs")
 def get_costs(
     range: str = Query(default=cost_service.DEFAULT_RANGE),
+    project: str | None = Query(default=None, max_length=32),
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -82,7 +99,9 @@ def get_costs(
 
     Advisory by construction: prices come from the config map matched by substring, and a
     model missing from it contributes tokens but no dollars — those models are named in
-    `unpriced_models` so the total is never quietly short.
+    `unpriced_models` so the total is never quietly short. `project` narrows it to one
+    project's agents and sessions (the route runs outside any project: an
+    administrator's cross-project view).
     """
     if range not in cost_service.RANGES:
         raise AppError(
@@ -90,17 +109,29 @@ def get_costs(
             f"range must be one of {', '.join(cost_service.RANGES)}",
             status_code=422,
         )
-    return cost_service.cost_report(db, ws.context, range_key=range, force=force)
+    if project is not None:
+        _bound_project(db, ws, project)
+    return cost_service.cost_report(
+        db, ws.context, range_key=range, force=force, project=project
+    )
 
 
 @router.get("/costs/month-to-date")
 def get_month_to_date(
+    project: str | None = Query(default=None, max_length=32),
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """The figure a `cost_mtd_usd` alert compares against."""
-    return {"workspace_id": ws.id, "est_cost_usd": cost_service.month_to_date_usd(db, ws.context)}
+    """The figure a `cost_mtd_usd` alert compares against (one project's with `project`)."""
+    if project is not None:
+        _bound_project(db, ws, project)
+    usd = cost_service.month_to_date_usd(db, ws.context, force=force, project=project)
+    return {
+        "workspace_id": ws.id,
+        **({"project": project} if project is not None else {}),
+        "est_cost_usd": usd,
+    }
 
 
 # ── T29: alert rules ─────────────────────────────────────────────────────────────
@@ -133,6 +164,9 @@ def create_alert(
 ) -> dict[str, Any]:
     comparison = req.comparison or alert_service.NATURAL_COMPARISON[req.kind]
     alert_service.validate(req.kind, comparison, req.window, req.threshold)
+    project_id = None
+    if req.scope == "project":
+        project_id = _bound_project(db, ws, req.project_id or current_project() or "")
     rule = AlertRule(
         workspace_id=ws.id,
         kind=req.kind,
@@ -143,8 +177,15 @@ def create_alert(
         enabled=req.enabled,
         webhook_url=_check_webhook(req.webhook_url),
         created_by=identity.username,
+        project_id=project_id,
     )
     db.add(rule)
+    if project_id is None:
+        # Flush stamps a new row with the request's project; a workspace-level rule
+        # is NULL by choice, so it is written back once the row exists (an UPDATE is
+        # never restamped).
+        db.flush()
+        rule.project_id = None
     db.commit()
     return alert_service.rule_out(rule)
 

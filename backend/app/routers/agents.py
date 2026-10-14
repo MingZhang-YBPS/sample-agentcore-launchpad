@@ -19,13 +19,14 @@ from app.assistant import purge as assistant_purge
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context, visible_in_current_project
 from app.deployer import byoc as byoc_method
 from app.deployer import container as container_method
 from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import create_deployment, start_deploy_async
-from app.models.ledger import Agent, Deployment, Job
-from app.routers.auth import require_identity
+from app.models.ledger import Agent, Deployment, IdentityProvider, Job
+from app.routers.auth import require_identity, require_permission
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import (
     AgentSpec,
@@ -146,8 +147,9 @@ def _agent_in(
 
 
 def _holder_id(db: Session, viewer: Viewer, holder: Agent) -> str | None:
-    """The live name holder's id for the 409 detail — only when the caller may see it."""
-    return holder.id if agent_access.agent_visible(db, viewer, holder) else None
+    """The live name holder's id for the 409 detail — only when the caller may see it
+    (the holder may be another project's: names are unique across projects)."""
+    return agent_names.holder_id_for(db, viewer, holder)
 
 
 def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
@@ -213,17 +215,49 @@ def delete_agent_role(agent: Agent, workspace: WorkspaceContext) -> bool:
     )
 
 
-def _validate_tool_auth(spec: AgentSpec, ws: WorkspaceScope) -> None:
+def _validate_tool_auth(db: Session, spec: AgentSpec, ws: WorkspaceScope) -> None:
     """Every tool auth block names a live Connection of the declared kind.
 
     Only reaches AWS when some tool carries auth, so an ordinary deploy's
     request path is unchanged."""
     if any(tool.auth is not None for tool in spec.tools):
         identity_providers.validate_tool_auth(control_client(ws.context), spec)
+        _require_project_connections(db, spec, ws)
     if spec.inbound_auth is not None:
         # A spec-pinned JWT config gets the same save-time discovery probe as
         # the workspace default, so a bad URL fails the request, not the deploy.
         inbound_auth_service.validate_inbound_auth(spec.inbound_auth)
+
+
+def _require_project_connections(db: Session, spec: AgentSpec, ws: WorkspaceScope) -> None:
+    """A Connection the console recorded for another project reads as unknown, the
+    answer a name missing from the vault gets (design §5.4). One created outside the
+    console has no row and stays usable, as it is today."""
+    if current_project() is None:
+        return
+    wanted = {
+        (tool.auth.kind, tool.auth.connection): tool.name
+        for tool in spec.tools if tool.auth is not None
+    }
+    with project_context(None):
+        rows = (
+            db.query(IdentityProvider)
+            .filter(
+                IdentityProvider.workspace_id == ws.id,
+                IdentityProvider.name.in_({name for _, name in wanted}),
+            )
+            .all()
+        )
+    for row in sorted(rows, key=lambda r: r.name):
+        if (row.kind, row.name) in wanted and not visible_in_current_project(row):
+            tool_name = wanted[(row.kind, row.name)]
+            raise AppError(
+                "identity.connection_unknown",
+                f"tool {tool_name!r} references connection {row.name!r}, which does not "
+                "exist in this workspace — create it on the Connections page first",
+                detail={"tool": tool_name, "connection": row.name},
+                status_code=422,
+            )
 
 
 @router.post("/agents", status_code=202)
@@ -257,7 +291,7 @@ def create_agent(
         raise agent_names.name_exists_error(spec.name, _holder_id(db, viewer, existing))
     # every KB / memory the spec pins must be visible to the caller (isolation)
     agent_access.check_pins(db, viewer, ws.context, spec.model_dump())
-    _validate_tool_auth(spec, ws)
+    _validate_tool_auth(db, spec, ws)
     spec = _server_owned_mcp(spec, None)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
     # the deploy job re-checks before any stage, this answers before any row
@@ -321,6 +355,7 @@ def list_agent_templates() -> dict[str, Any]:
 
 @router.get("/agents/discovery")
 def discover_runtimes(
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -328,10 +363,12 @@ def discover_runtimes(
     control = control_client(ws.context)
     runtimes = scan_runtimes(control, db, workspace_id=ws.id)
     harnesses, harness_scan_error = scan_harnesses(control, db, workspace_id=ws.id)
-    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
-    if hidden:
-        for candidate in [*runtimes, *harnesses]:
-            _mask_managed(candidate, hidden)
+    _mask_foreign_managed([*runtimes, *harnesses], db, ws, viewer)
+    if not _can_import(request):
+        # design §5.5: a runtime no agent manages is offered to importers only; the
+        # rows this project manages still render for every member
+        runtimes = [c for c in runtimes if _managed(c)]
+        harnesses = [c for c in harnesses if _managed(c)]
     return {
         "region": ws.context.region,
         "runtimes": runtimes,
@@ -355,23 +392,49 @@ def import_discovered_runtimes(
     ).items():
         result[bucket].extend(rows)
     db.commit()
-    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
-    if hidden:
-        for rows in result.values():
-            for row in rows if isinstance(rows, list) else []:
-                if isinstance(row, dict):
-                    _mask_managed(row, hidden)
+    _mask_foreign_managed(
+        [row for rows in result.values() for row in (rows if isinstance(rows, list) else [])
+         if isinstance(row, dict)],
+        db, ws, viewer,
+    )
     return result
 
 
-def _mask_managed(row: dict[str, Any], hidden: set[str]) -> None:
-    """Under isolation a runtime managed by an agent the caller cannot see stays
+def _managed(candidate: dict[str, Any]) -> bool:
+    """A scan candidate some agent manages (``managed`` = masked, owner withheld)."""
+    return bool(candidate.get("managed_agent_id") or candidate.get("managed"))
+
+
+def _can_import(request: Request) -> bool:
+    """The caller holds ``agents.import`` (in the request's project, when there is one)."""
+    try:
+        require_permission(request, "agents.import")
+    except AppError:
+        return False
+    return True
+
+
+def _mask_foreign_managed(rows: list[dict[str, Any]], db: Session, ws: WorkspaceScope,
+                          viewer: Viewer) -> None:
+    """Mask every managing agent the caller may not see: hidden by isolation, or of
+    another project (an allow-set — a hidden-set built under the project filter never
+    holds another project's ids)."""
+    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
+    project = agent_access.ProjectAgents(db, ws.id)
+    if not hidden and not project:
+        return
+    for row in rows:
+        _mask_managed(row, lambda agent_id: agent_id in hidden or not project.allows(agent_id))
+
+
+def _mask_managed(row: dict[str, Any], hides: Any) -> None:
+    """A runtime managed by an agent the caller cannot see (``hides(agent_id)``) stays
     marked managed (``managed: true``; it is not importable either way) but names
     no owner — scan candidates (``managed_agent_*``) and import results
     (``already_managed`` → ``agent_id`` / ``agent_name``) alike."""
     for id_key, name_key in (("managed_agent_id", "managed_agent_name"),
                              ("agent_id", "agent_name")):
-        if row.get(id_key) and row[id_key] in hidden:
+        if row.get(id_key) and hides(row[id_key]):
             row[id_key] = None
             row[name_key] = None
             row["managed"] = True
@@ -459,7 +522,13 @@ def get_byoc_upload(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """The stored detection summary + provenance for one staged BYOC upload."""
-    return byoc_uploads.get_manifest(ws.context, upload_id)
+    manifest = byoc_uploads.get_manifest(ws.context, upload_id)
+    # an upload staged in another project reads as missing (manifests from before
+    # projects carry no project and stay readable)
+    staged_in = manifest.get("project_id") if isinstance(manifest, dict) else None
+    if staged_in and current_project() and staged_in != current_project():
+        raise NotFoundError("byoc.upload_not_found", "upload not found")
+    return manifest
 
 
 @router.get("/agents/{agent_id}")
@@ -740,7 +809,7 @@ def _start_redeploy(
         db, viewer, context_for_workspace(agent.workspace_id), spec.model_dump(),
         previous_spec=agent.spec or {},
     )
-    _validate_tool_auth(spec, ws)
+    _validate_tool_auth(db, spec, ws)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55) —
     # refused before the stored spec changes, so a refusal leaves the agent as is
     memory_ownership.require_spec_memory(
@@ -961,13 +1030,15 @@ def convert_agent(
     # the twin inherits the source's KB / memory pins — refuse before the export
     agent_access.check_pins(db, viewer, ws.context, source.spec or {})
 
-    # {name}-rt, suffixed -2/-3… until free (never overwrite, R5)
-    taken = {
-        a.name
-        for a in db.query(Agent)
-        .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
-        .all()
-    }
+    # {name}-rt, suffixed -2/-3… until free (never overwrite, R5) — free across every
+    # project of the workspace: AgentCore names are per account and region (§4.3)
+    with project_context(None):
+        taken = {
+            name
+            for (name,) in db.query(Agent.name)
+            .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
+            .all()
+        }
     new_name = f"{source.name}-rt"[:48]
     counter = 2
     while new_name in taken:
@@ -1108,10 +1179,16 @@ def get_job(
     job = db.get(Job, job_id)
     if job is None or job.workspace_id != ws.id:
         raise NotFoundError("job.not_found", "job not found")
-    # a deploy job of an agent hidden by workspace isolation reads as missing
+    # a deploy job of an agent hidden by workspace isolation — or of another project's
+    # agent (a platform-level job is readable from every project) — reads as missing
     payload = job.payload if isinstance(job.payload, dict) else {}
-    job_agent_id = payload.get("agent_id") if viewer.filters else None
-    if job_agent_id and job_agent_id in agent_access.hidden_agent_ids(db, viewer, ws.id):
+    job_agent_id = payload.get("agent_id")
+    if job_agent_id and not agent_access.ProjectAgents(db, ws.id).allows(job_agent_id):
+        raise NotFoundError("job.not_found", "job not found")
+    if (
+        job_agent_id and viewer.filters
+        and job_agent_id in agent_access.hidden_agent_ids(db, viewer, ws.id)
+    ):
         raise NotFoundError("job.not_found", "job not found")
     events = [json.loads(line) for line in job.log.splitlines() if line.strip()]
     return {

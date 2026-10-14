@@ -38,6 +38,7 @@ from app.core.db import (
     get_db,
 )
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context
 from app.core.regions import AGENTCORE_SUGGESTED_REGIONS
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
 from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
@@ -45,7 +46,7 @@ from app.services import api_keys as api_keys_service
 from app.services import aws_clients, visibility, workspace_bootstrap
 from app.services import promotion as promotion_service
 from app.services import users as users_service
-from app.services.access import sync_default_membership
+from app.services.access import bump_epoch, sync_default_membership
 from app.services.audit import record_audit_event
 from app.services.workspace import (
     WorkspaceContext,
@@ -651,11 +652,22 @@ def delete_workspace(
         )
     # Grants go with it: a re-registered id would otherwise inherit them.
     db.query(UserWorkspace).filter(UserWorkspace.workspace_id == row.id).delete()
+    _unbind_projects(db, row.id)
     # ...and so do release requests aimed at it, which could never be acted on again
     promotion_service.cancel_for_removed_target(db, row.id)
     db.delete(row)
     db.commit()
     return {"deleted": True, "workspace_id": workspace_id}
+
+
+def _unbind_projects(db: Session, workspace_id: str) -> None:
+    """Drop the workspace's project bindings in the caller's transaction (design
+    D-6): a re-registered id — possibly another account — would otherwise silently
+    inherit them, and every member of those projects would reach it."""
+    db.execute(
+        text("DELETE FROM project_workspaces WHERE workspace_id = :id"), {"id": workspace_id},
+    )
+    bump_epoch(db)
 
 
 # The two states a purge accepts: a registration that never became a usable
@@ -700,11 +712,12 @@ def _assert_purgeable(db: Session, row: Workspace) -> tuple[dict[str, int], list
             "registration that never became a usable environment",
             409,
         )
-    live_agents = (
-        db.query(Agent)
-        .filter(Agent.workspace_id == row.id, Agent.status != "deleted")
-        .count()
-    )
+    with project_context(None):  # every project's agents, whichever is current
+        live_agents = (
+            db.query(Agent)
+            .filter(Agent.workspace_id == row.id, Agent.status != "deleted")
+            .count()
+        )
     if live_agents:
         raise _purge_refused(
             row,
@@ -766,6 +779,7 @@ def purge_workspace(
             {"id": target},
         )
     db.query(UserWorkspace).filter(UserWorkspace.workspace_id == target).delete()
+    _unbind_projects(db, target)
     # The workspace row goes with a **conditional** DELETE, the mirror image of
     # `create_bootstrap_job`'s conditional claim: the guardrails above are a read,
     # and sync handlers run on a threadpool, so a bootstrap POST can claim this

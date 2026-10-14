@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.assistant import purge as assistant_purge
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context
 from app.evaluation.online_evaluators import refuse_hidden_evaluators
 from app.evaluation.routers import _dataset_in
 from app.models.ledger import Agent
@@ -161,17 +162,21 @@ def create_experiment(
     # experiments share one gateway (EXP_GATEWAY_NAME) and the AB service
     # allows a single active test per gateway — a concurrent loop would fail
     # at the abtest stage, so reject up front.
-    running = (
-        db.query(Experiment)
-        .filter(Experiment.workspace_id == ws.id, Experiment.status == "running")
-        .first()
-    )
+    pid = current_project()
+    with project_context(None):  # the gateway is shared by every project too
+        running = (
+            db.query(Experiment)
+            .filter(Experiment.workspace_id == ws.id, Experiment.status == "running")
+            .first()
+        )
     if running is not None:
         # the single-running slot is workspace-wide (one shared gateway), but a
-        # member of an isolated workspace is not told which hidden experiment holds it
+        # member of an isolated workspace — or of another project — is not told
+        # which hidden experiment holds it
         named = (
             f"experiment {running.name}"
-            if visibility.sees(viewer, db, running.created_by)
+            if (pid is None or running.project_id == pid)
+            and visibility.sees(viewer, db, running.created_by)
             else "another experiment in this workspace"
         )
         raise AppError(

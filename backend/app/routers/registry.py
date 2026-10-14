@@ -13,6 +13,7 @@ from starlette.datastructures import UploadFile
 
 from app.assistant.principal import principal_of
 from app.core.errors import AppError, NotFoundError, aws_error_message, mapped_aws_error
+from app.core.project_scope import current_project, project_context
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
@@ -36,23 +37,42 @@ class A2ADemoRequest(BaseModel):
 
 
 def _hidden_record_ids(ws: WorkspaceScope, viewer: Viewer) -> frozenset[str]:
-    """Registry record ids of agents hidden from ``viewer`` by workspace isolation
-    (an A2A record is the agent's: its deploy ``register`` stage created it). No
-    ledger read at all for a viewer who does not filter."""
-    if not viewer.filters:
+    """Registry record ids of agents hidden from ``viewer`` by workspace isolation,
+    or owned by another project's agent (an A2A record is the agent's: its deploy
+    ``register`` stage created it). MCP / skill records have no owning agent and
+    stay workspace level. One ledger read with a project current; none otherwise
+    for a viewer who does not filter."""
+    pid = current_project()
+    if not viewer.filters and pid is None:
         return frozenset()
     from app.core.db import SessionLocal
+    from app.models.ledger import Agent
     from app.services.agent_access import HiddenAgents
 
     db = SessionLocal()
     try:
-        return HiddenAgents(db, viewer, ws.id).record_ids
+        hidden = HiddenAgents(db, viewer, ws.id).record_ids if viewer.filters else frozenset()
+        if pid is None:
+            return hidden
+        # read across projects: the project-filtered read cannot see whose a record is
+        with project_context(None):
+            foreign = {
+                rid
+                for (rid,) in db.query(Agent.registry_record_id).filter(
+                    Agent.workspace_id == ws.id,
+                    Agent.registry_record_id.is_not(None),
+                    Agent.project_id.is_not(None),
+                    Agent.project_id != pid,
+                )
+            }
+        return frozenset(hidden | foreign)
     finally:
         db.close()
 
 
 def _require_record_visible(ws: WorkspaceScope, viewer: Viewer, record_id: str) -> None:
-    """A hidden agent's A2A record answers like a missing record — before AWS."""
+    """A hidden (or another project's) agent's A2A record answers like a missing
+    record — before AWS."""
     if record_id in _hidden_record_ids(ws, viewer):
         raise NotFoundError("aws.not_found", "registry record not found")
 
@@ -388,6 +408,20 @@ def _stage(bundles: list[SkillBundle]) -> str:
     return sid
 
 
+def _staged_for(sid: str, ws: WorkspaceScope) -> dict[str, Any] | None:
+    """The staging entry ``sid`` when it was inspected in this workspace and project
+    (an entry that recorded neither — staged by another route — is not bound)."""
+    _sweep_staging()
+    entry = _staging.get(sid)
+    if entry is None:
+        return None
+    if entry.get("workspace_id", ws.id) != ws.id:
+        return None
+    if entry.get("project_id", current_project()) != current_project():
+        return None
+    return entry
+
+
 def _drop_staging(sid: str) -> None:
     entry = _staging.pop(sid, None)
     if entry:
@@ -444,6 +478,7 @@ async def inspect_skill(
     # inspected the source. No client-supplied source paths cross this boundary.
     _staging[response["staging_id"]].update(
         owner_principal=principal_of(require_identity(request)), workspace_id=ws.id,
+        project_id=current_project(),
     )
     return response
 
@@ -535,8 +570,7 @@ def import_skills(
     """Register each selected staged bundle via the shared pipeline. A per-item
     failure (name conflict, validation) is reported inline and never aborts the
     other selections. Staging is consumed once the batch completes."""
-    _sweep_staging()
-    entry = _staging.get(req.staging_id)
+    entry = _staged_for(req.staging_id, ws)
     if entry is None:
         raise AppError(
             "registry.staging_expired",
@@ -682,8 +716,7 @@ def update_record(
 
     bundle: SkillBundle | None = None
     if req.staging_id is not None:
-        _sweep_staging()
-        entry = _staging.get(req.staging_id)
+        entry = _staged_for(req.staging_id, ws)
         if entry is None:
             raise AppError(
                 "registry.staging_expired",

@@ -4,11 +4,12 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Path
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError
-from app.models.ledger import PolicyDecision
+from app.core.errors import AppError, NotFoundError
+from app.models.ledger import ChatSession, PolicyDecision
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.governance import (
     EngineRequest,
@@ -25,8 +26,8 @@ from app.schemas.governance import (
 from app.schemas.governance import (
     GenerationRequest as ScopedGenerationRequest,
 )
+from app.services import access, governance_evidence, mcp_client
 from app.services import governance as governance_service
-from app.services import governance_evidence, mcp_client
 from app.services import guardrail as guardrail_service
 from app.services import traces as trace_service
 from app.services.agentcore import policy as policy_api
@@ -638,8 +639,21 @@ def decision_log(
 def get_trace(
     session_id: str,
     lookback_hours: int = 3,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    # CloudWatch answers for any session id in the account. Where the workspace
+    # holds several projects, a trace is readable only through a chat session of
+    # the current project (the query is auto-filtered): another project's reads
+    # as missing (design §5.9). A single-project workspace keeps reading any id.
+    if len(access.workspace_bindings(db, ws.id)) > 1 and db.scalar(
+        select(ChatSession.id)
+        .where(ChatSession.workspace_id == ws.id, ChatSession.session_id == session_id)
+        .limit(1)
+    ) is None:
+        raise NotFoundError(
+            "trace.not_found", f"session '{session_id}' not found", {"session_id": session_id}
+        )
     return trace_service.session_trace(
         session_id, ws.context, lookback_hours=lookback_hours
     )

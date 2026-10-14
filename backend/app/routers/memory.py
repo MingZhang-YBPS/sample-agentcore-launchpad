@@ -20,7 +20,7 @@ from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError, mapped_aws_error
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import memory_console
+from app.services import memory_console, memory_ownership
 from app.services.agent_access import HiddenAgents
 from app.services.visibility import Viewer, require_viewer
 
@@ -122,8 +122,19 @@ def _resolve_namespace(
 
 
 @router.get("/overview")
-def overview(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    return _guard(memory_console.memory_overview, ws.context)
+def overview(
+    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    out = _guard(memory_console.memory_overview, ws.context)
+    # AWS lists every memory of the account; one another project manages is not
+    # named here (it would read as an unmanaged sibling). `actor_count` stays the
+    # bootstrap memory's bounded, workspace-wide count — a number, no actor ids.
+    foreign = memory_ownership.foreign_ids(db, ws.context)
+    if foreign:
+        out["other_memories"] = [
+            m for m in out.get("other_memories") or [] if (m.get("id") or "") not in foreign
+        ]
+    return out
 
 
 @router.get("/actors")

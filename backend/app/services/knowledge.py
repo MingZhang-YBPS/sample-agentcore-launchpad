@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
+from app.core.project_scope import project_context
 from app.models.ledger import Agent
 from app.services import creators, kb_gateway
 from app.services.agentcore.client import (
@@ -204,11 +205,15 @@ def refuse_if_attached_to_system_agent(workspace: WorkspaceContext, kb_id: str) 
 
 
 def _workspace_agents(db: Session, workspace: WorkspaceContext) -> list[Agent]:
-    return (
-        db.query(Agent)
-        .filter(Agent.workspace_id == workspace.id, Agent.status != "deleted")
-        .all()
-    )
+    """Every project's agents: a KB is a workspace resource and its mounts are an
+    integrity question (the delete guard, the force strip, the in-use count), so the
+    read is unscoped; the router masks names of agents outside the current project."""
+    with project_context(None):
+        return (
+            db.query(Agent)
+            .filter(Agent.workspace_id == workspace.id, Agent.status != "deleted")
+            .all()
+        )
 
 
 def _strip_kb_from_agents(workspace: WorkspaceContext, kb_id: str) -> list[str]:
@@ -864,8 +869,7 @@ def sample_document_names(workspace: WorkspaceContext, kb_id: str, limit: int = 
 def _record_creator(
     workspace: WorkspaceContext, kb_id: str, creator: creators.Creator | None
 ) -> None:
-    if creator is None:
-        return
+    # also with no creator: the row is the KB's project ownership (creators.record)
     db = SessionLocal()
     try:
         creators.record(db, workspace.id, creators.KB, kb_id, creator)

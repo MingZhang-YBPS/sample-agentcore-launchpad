@@ -23,6 +23,7 @@ import math
 import threading
 import time
 from collections.abc import Callable
+from functools import cached_property
 from typing import Any
 
 import httpx
@@ -32,10 +33,12 @@ from botocore.exceptions import (
     EndpointConnectionError,
     ReadTimeoutError,
 )
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
+from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import simulation, telemetry
 from app.evaluation.models import EvalRun
@@ -194,6 +197,79 @@ def resolve_telemetry(
     return f"{runtime_name}.{endpoint}", (
         f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-{endpoint}"
     )
+
+
+RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
+
+
+def several_projects(db: Any, workspace_id: str) -> bool:
+    """Whether the workspace holds more than one active project (design §5.5) — the
+    only shape in which account-wide telemetry and console-made AWS objects with no
+    ledger row can belong to another project. One project keeps today's behaviour."""
+    from app.services import access
+
+    active = [b for b in access.workspace_bindings(db, workspace_id) if b.status == "active"]
+    return len(active) > 1
+
+
+class ProjectFence:
+    """What of a workspace account's CloudWatch telemetry the current project may
+    reach (design §5.5, §5.9). Log groups and span service names are account-wide, so
+    the automatic ORM criteria never see them; the fence resolves them against EVERY
+    agent of the workspace and names what belongs to another project's agent.
+
+    Open — every check passes — with no current project or a single-project
+    workspace. Platform agents (project NULL) belong to every project."""
+
+    def __init__(self, db: Any, workspace_id: str) -> None:
+        self._db = db
+        self._workspace_id = workspace_id
+        self.project = current_project()
+        self.closed = bool(self.project) and several_projects(db, workspace_id)
+
+    def _foreign(self, agent: Agent | None) -> bool:
+        return agent is not None and agent.project_id not in (None, self.project)
+
+    @cached_property
+    def _resolve(self) -> Callable[[str | None], Agent | None]:
+        from app.services.observability import build_agent_resolver
+
+        with project_context(None):  # the resolver loads its candidates eagerly
+            return build_agent_resolver(self._db, self._workspace_id)
+
+    @cached_property
+    def _foreign_prefixes(self) -> tuple[str, ...]:
+        with project_context(None):
+            rows = self._db.scalars(
+                select(Agent).where(
+                    Agent.workspace_id == self._workspace_id,
+                    Agent.resource_id.isnot(None),
+                    Agent.project_id.isnot(None),
+                    Agent.project_id != self.project,
+                )
+            ).all()
+        out: list[str] = []
+        for agent in rows:
+            base = agent.resource_id.rsplit("-", 1)[0]
+            out.append(f"{RUNTIME_LOG_GROUP_PREFIX}{agent.resource_id}-")
+            out.append(f"{RUNTIME_LOG_GROUP_PREFIX}harness_{base}-")
+        return tuple(out)
+
+    def foreign_service(self, service: str | None) -> bool:
+        """A span service.name that resolves to another project's agent."""
+        return self.closed and self._foreign(self._resolve(service))
+
+    def allows_service(self, service: str | None) -> bool:
+        """Fail closed (§5.9): with several projects, only a service resolving to this
+        project's agent (or a platform agent) — an unresolved one is not attributable."""
+        if not self.closed:
+            return True
+        agent = self._resolve(service)
+        return agent is not None and not self._foreign(agent)
+
+    def foreign_log_group(self, log_group: str) -> bool:
+        """An agent's own runtime log group (`runtimes/<id>-<endpoint>`) of another project."""
+        return self.closed and log_group.startswith(self._foreign_prefixes)
 
 
 def _run_agent_name(run_id: str) -> str:
@@ -1099,6 +1175,7 @@ def submit_run(
         db.add(run)
         db.commit()
         run_id = run.id
+        run_project = run.project_id
         agent_arn = agent.arn if agent else ""
         agent_ledger_id = agent.id if agent else None
         agent_method = agent.method if agent else ""
@@ -1116,34 +1193,37 @@ def submit_run(
     # edit that lands while the run waits in the queue must not change what
     # it replays, so the queued callable never touches the caller's list.
     items_snapshot = copy.deepcopy(dataset_items)
-    position = run_queue.submit(
-        run_id,
-        lambda: execute_run(
-            run_id,
-            workspace=workspace,
-            agent_arn=agent_arn,
-            method=agent_method,
-            protocol=agent_protocol,
-            service_name=service_name,
-            log_group=log_group,
-            log_groups=log_groups,
-            items=items_snapshot,
-            evaluators=evaluators,
-            mode=mode,
-            wait_seconds=wait_seconds,
-            existing_session_ids=session_ids,
-            time_range=time_range,
-            insights=insights,
-            session_metadata=session_metadata,
-            actor_model_id=actor_model_id,
-            runtime_user_id=agent_runtime_user,
-            online_config_arn=online_config_arn,
-            agent_id=agent_ledger_id,
-            inbound_jwt=agent_inbound_jwt,
-            repeats=max(1, int(repeats or 1)),
-            qualifier=qualifier,
-        ),
-    )
+
+    def queued() -> None:
+        # the queue's worker threads carry no context: run as the run's project
+        with project_context(run_project):
+            execute_run(
+                run_id,
+                workspace=workspace,
+                agent_arn=agent_arn,
+                method=agent_method,
+                protocol=agent_protocol,
+                service_name=service_name,
+                log_group=log_group,
+                log_groups=log_groups,
+                items=items_snapshot,
+                evaluators=evaluators,
+                mode=mode,
+                wait_seconds=wait_seconds,
+                existing_session_ids=session_ids,
+                time_range=time_range,
+                insights=insights,
+                session_metadata=session_metadata,
+                actor_model_id=actor_model_id,
+                runtime_user_id=agent_runtime_user,
+                online_config_arn=online_config_arn,
+                agent_id=agent_ledger_id,
+                inbound_jwt=agent_inbound_jwt,
+                repeats=max(1, int(repeats or 1)),
+                qualifier=qualifier,
+            )
+
+    position = run_queue.submit(run_id, queued)
     _update(run_id, queue_position=position)
     db = SessionLocal()
     try:

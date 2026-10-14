@@ -15,8 +15,10 @@ import json
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+from functools import cached_property
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -24,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.core.project_scope import current_project, project_context
 from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.optimization.models import Experiment
@@ -417,9 +420,9 @@ def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
 """
 
 
-def q_dashboard_series(range_key: str) -> str:
+def q_dashboard_series(range_key: str, scope: str = "") -> str:
     return f"""
-{SPANS_SOURCE}
+{SPANS_SOURCE}{scope}
 | filter ispresent(startTimeUnixNano) and {ROOT_SPAN_FILTER}
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as traces, sum(is_error) as errors,
@@ -430,9 +433,9 @@ def q_dashboard_series(range_key: str) -> str:
 """
 
 
-def q_dashboard_totals() -> str:
+def q_dashboard_totals(scope: str = "") -> str:
     return f"""
-{SPANS_SOURCE}
+{SPANS_SOURCE}{scope}
 | filter ispresent(startTimeUnixNano) and {ROOT_SPAN_FILTER}
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as traces, sum(is_error) as errors,
@@ -440,18 +443,18 @@ def q_dashboard_totals() -> str:
 """
 
 
-def q_dashboard_distincts() -> str:
+def q_dashboard_distincts(scope: str = "") -> str:
     return f"""
-{SPANS_SOURCE}
+{SPANS_SOURCE}{scope}
 | filter ispresent(startTimeUnixNano) and ispresent(attributes.session.id)
 | stats count_distinct(attributes.session.id) as sessions,
         count_distinct(resource.attributes.service.name) as agents
 """
 
 
-def q_top_tools(limit: int = 10) -> str:
+def q_top_tools(limit: int = 10, scope: str = "") -> str:
     return f"""
-{SPANS_SOURCE}
+{SPANS_SOURCE}{scope}
 | filter ispresent(startTimeUnixNano)
     and (ispresent(attributes.gen_ai.tool.name) or ispresent(attributes.tool.name))
 | fields coalesce(attributes.gen_ai.tool.name, attributes.tool.name) as tool,
@@ -463,7 +466,7 @@ def q_top_tools(limit: int = 10) -> str:
 """
 
 
-def q_tokens_by_model(limit: int = 25) -> str:
+def q_tokens_by_model(limit: int = 25, scope: str = "") -> str:
     """Per-model token sums from spans — the one source every agent kind feeds.
 
     Sums provider (non-wrapper) LLM spans, but also carries the Strands wrapper
@@ -473,7 +476,7 @@ def q_tokens_by_model(limit: int = 25) -> str:
     per-trace "prefer non-wrapper, fall back to wrapper" rollup rule.
     """
     return f"""
-{SPANS_SOURCE}
+{SPANS_SOURCE}{scope}
 | filter ispresent(startTimeUnixNano)
     and (ispresent(attributes.gen_ai.request.model) or ispresent(attributes.llm.model_name))
 | fields {_MODEL_FIELD} as telemetry_model,
@@ -676,7 +679,7 @@ def categorize_span(name: str, attributes: dict[str, Any] | None = None,
 
 
 def build_agent_resolver(
-    db: Session, workspace_id: str
+    db: Session, workspace_id: str, *, all_projects: bool = False
 ) -> Callable[[str | None], Agent | None]:
     """service.name (from a span) → the Agent row that owns that runtime.
 
@@ -687,13 +690,19 @@ def build_agent_resolver(
     Only this workspace's agents are candidates: the spans came from its region,
     and a resource-id match against another environment's row would label a trace
     with an agent that never produced it.
+
+    Display reads the current project's agents (plus platform presets). Attribution
+    — which project a span belongs to (`ProjectAgents`, costs) — passes
+    `all_projects`, so another project's span resolves to *its* agent instead of
+    falling to "unknown" or to a fuzzy match on one of ours.
     """
-    rows = (
-        db.query(Agent)
-        .filter(Agent.workspace_id == workspace_id, Agent.resource_id.isnot(None))
-        .order_by(Agent.updated_at.asc())
-        .all()
-    )
+    with project_context(None) if all_projects else nullcontext():
+        rows = (
+            db.query(Agent)
+            .filter(Agent.workspace_id == workspace_id, Agent.resource_id.isnot(None))
+            .order_by(Agent.updated_at.asc())
+            .all()
+        )
     # Later (fresher) rows win; active rows win over deleted ones.
     candidates: list[tuple[str, Agent]] = []
     for agent in sorted(rows, key=lambda a: a.status == "active"):
@@ -724,6 +733,223 @@ def build_agent_mapper(db: Session, workspace_id: str) -> Callable[[str | None],
         return agent.name if agent is not None else service
 
     return map_service
+
+
+# ── Project attribution (design §5.9) ─────────────────────────────────────
+
+
+# a runtime base name that is safe to embed in a Logs Insights regex literal
+_SERVICE_BASE_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+
+
+def several_projects(db: Session, workspace_id: str | None) -> bool:
+    """Whether the workspace is bound to more than one project — the only case in
+    which observability rows need a project allow-check at all."""
+    from app.services import access
+
+    return bool(workspace_id) and len(access.workspace_bindings(db, workspace_id)) > 1
+
+
+class ProjectAgents:
+    """What one project may see of the account-wide telemetry: an **allow-set**.
+
+    AWS spans carry no project, so a row is attributed through the ledger — its
+    session (a chat, eval-run, assistant or experiment session id → that row's
+    project), else its span `service.name` → the agent that owns the runtime
+    (`build_agent_resolver(all_projects=True)`) → `agents.project_id`. A row is kept
+    when it is attributed to the current project or to a platform preset (NULL);
+    one that cannot be attributed is kept only for an administrator (`bypass`).
+
+    Inert (``active`` False, no query) with no current project or in a workspace
+    bound to one project, so a single-project console keeps today's views exactly.
+    Applied after the per-(workspace, project) caches; workspace isolation inside the
+    project stays `HiddenAgents`.
+    """
+
+    def __init__(
+        self,
+        db: Session,
+        workspace_id: str | None,
+        project_id: str | None = None,
+        *,
+        bypass: bool = False,
+    ):
+        self._db = db
+        self.workspace_id = workspace_id
+        self.project_id = project_id if project_id is not None else current_project()
+        self.bypass = bypass
+        self.active = self.project_id is not None and several_projects(db, workspace_id)
+
+    def __bool__(self) -> bool:
+        return self.active
+
+    # ── agents ──────────────────────────────────────────────────────────────
+
+    @cached_property
+    def _agents(self) -> list[Agent]:
+        with project_context(None):
+            return list(
+                self._db.query(Agent).filter(Agent.workspace_id == self.workspace_id).all()
+            )
+
+    @cached_property
+    def _resolve(self) -> Callable[[str | None], Agent | None]:
+        return build_agent_resolver(self._db, self.workspace_id or "", all_projects=True)
+
+    def allows_agent(self, agent: Agent | None) -> bool:
+        return agent is not None and agent.project_id in (self.project_id, None)
+
+    def allows_agent_id(self, agent_id: str | None) -> bool:
+        if not self.active:
+            return True
+        return any(a.id == agent_id and self.allows_agent(a) for a in self._agents)
+
+    @cached_property
+    def record_ids(self) -> frozenset[str]:
+        """Registry record ids of this project's (and the presets') agents."""
+        return frozenset(
+            a.registry_record_id for a in self._agents
+            if a.registry_record_id and self.allows_agent(a)
+        )
+
+    @cached_property
+    def known_record_ids(self) -> frozenset[str]:
+        """Registry record ids of every agent in the workspace, any project."""
+        return frozenset(a.registry_record_id for a in self._agents if a.registry_record_id)
+
+    def service_bases(self) -> list[str]:
+        """Runtime base names of the allowed agents — the same `<runtime>-<suffix>`
+        split `build_agent_resolver` matches spans on."""
+        bases = {
+            (a.resource_id or "").rsplit("-", 1)[0]
+            for a in self._agents
+            if a.resource_id and self.allows_agent(a)
+        }
+        return sorted(b for b in bases if b and _SERVICE_BASE_RE.fullmatch(b))
+
+    def service_filter(self) -> str | None:
+        """A Logs Insights line keeping only the allowed agents' spans (symmetric with
+        the resolver: `<base>`, `harness_<base>` or any `…<base>` before the first
+        dot); "" when no filter is needed; None when the project has no runtime at
+        all, so the query can be skipped."""
+        if not self.active:
+            return ""
+        bases = self.service_bases()
+        if not bases:
+            return None
+        alternatives = "|".join(bases)
+        return f"\n| filter resource.attributes.service.name like /^[^.]*({alternatives})(\\.|$)/"
+
+    # ── sessions ────────────────────────────────────────────────────────────
+
+    def session_owners(self, session_ids: Iterable[str | None]) -> dict[str, str | None]:
+        """`session id → project id` for the ids some ledger row claims (any project)."""
+        wanted = sorted({s for s in session_ids if s})
+        if not wanted or not self.active:
+            return {}
+        from app.models.assistant import AssistantMessage
+
+        ws = self.workspace_id
+        owners: dict[str, str | None] = {}
+        with project_context(None):
+            for start in range(0, len(wanted), 500):
+                chunk = wanted[start:start + 500]
+                for sid, pid in self._db.query(
+                    ChatSession.session_id, ChatSession.project_id
+                ).filter(ChatSession.workspace_id == ws, ChatSession.session_id.in_(chunk)):
+                    owners[sid] = pid
+                for sid, pid in self._db.query(
+                    AssistantMessage.runtime_session_id, AssistantMessage.project_id
+                ).filter(
+                    AssistantMessage.workspace_id == ws,
+                    AssistantMessage.runtime_session_id.in_(chunk),
+                ):
+                    owners.setdefault(sid, pid)
+            rest = set(wanted) - set(owners)
+            if rest:
+                for pid, sids in self._db.query(EvalRun.project_id, EvalRun.session_ids).filter(
+                    EvalRun.workspace_id == ws
+                ):
+                    for sid in sids or []:
+                        if sid in rest:
+                            owners.setdefault(sid, pid)
+            rest = set(wanted) - set(owners)
+            if rest:
+                for pid, artifacts in (
+                    self._db.query(Experiment.project_id, Experiment.artifacts)
+                    .filter(Experiment.workspace_id == ws)
+                    .order_by(Experiment.created_at.desc())
+                    .limit(200)
+                ):
+                    traffic = (artifacts or {}).get("traffic")
+                    if isinstance(traffic, dict):
+                        for sid in traffic.get("session_ids") or []:
+                            if sid in rest:
+                                owners.setdefault(sid, pid)
+        return owners
+
+    def session_verdict(self, session_id: str | None) -> bool | None:
+        """True / False for a ledger-attributed session (ours / another project's),
+        None when no ledger row claims it."""
+        if not self.active:
+            return True
+        if not session_id:
+            return None
+        owners = self.session_owners([session_id])
+        if session_id not in owners:
+            return None
+        return owners[session_id] == self.project_id
+
+    def owns_session(self, session_id: str | None) -> bool:
+        """The before-any-query check of a session detail: another project's session
+        is refused; an unattributed one is decided later from its spans."""
+        return self.session_verdict(session_id) is not False
+
+    # ── rows and payloads ───────────────────────────────────────────────────
+
+    def _keeps(
+        self, service: str | None, session_ids: Iterable[str | None],
+        owners: dict[str, str | None],
+    ) -> bool:
+        claimed = [owners[s] for s in session_ids if s and s in owners]
+        if claimed:
+            return all(pid == self.project_id for pid in claimed)
+        agent = self._resolve(service) if service else None
+        if agent is not None:
+            return self.allows_agent(agent)
+        return self.bypass
+
+    def keep_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Trace / session list rows (`service`, `session_id`) this project may see."""
+        if not self.active:
+            return rows
+        owners = self.session_owners(r.get("session_id") for r in rows)
+        return [
+            r for r in rows
+            if self._keeps(r.get("service"), [r.get("session_id")], owners)
+        ]
+
+    def keeps_trace(self, payload: dict[str, Any]) -> bool:
+        """A trace detail: its sessions decide, else its runtime."""
+        if not self.active:
+            return True
+        meta = payload.get("meta") or {}
+        sids = [meta.get("session_id"), *(meta.get("session_ids") or [])]
+        return self._keeps(meta.get("service"), sids, self.session_owners(sids))
+
+    def keeps_session(self, session_id: str, payload: dict[str, Any]) -> bool:
+        """A session detail: the ledger decides; an unattributed session is ours when
+        a trace's runtime is ours (and none is another project's)."""
+        if not self.active:
+            return True
+        verdict = self.session_verdict(session_id)
+        if verdict is not None:
+            return verdict
+        agents = [self._resolve(t.get("service")) for t in payload.get("traces") or []]
+        agents = [a for a in agents if a is not None]
+        if agents:
+            return all(self.allows_agent(a) for a in agents)
+        return self.bypass
 
 
 # ── Span tree builder ───────────────────────────────────────────────────────
@@ -1097,23 +1323,44 @@ def _session_row(row: dict[str, str], map_agent: Callable[[str | None], str],
 # ── Public views ────────────────────────────────────────────────────────────
 
 
+def _dashboard_scope(db: Session | None, workspace: WorkspaceContext) -> str | None:
+    """The current project's span filter for the account-wide dashboard queries:
+    "" (no filter: no project, or a single-project workspace), a service filter
+    line, or None when the project runs no runtime yet (nothing to count)."""
+    if current_project() is None:
+        return ""
+    if db is not None:
+        return ProjectAgents(db, workspace.id).service_filter()
+    from app.core.db import SessionLocal
+
+    own = SessionLocal()
+    try:
+        return ProjectAgents(own, workspace.id).service_filter()
+    finally:
+        own.close()
+
+
 def get_dashboard(range_key: str, workspace: WorkspaceContext, force: bool = False,
-                  logs: Any = None, cw: Any = None) -> dict[str, Any]:
+                  logs: Any = None, cw: Any = None, *,
+                  db: Session | None = None) -> dict[str, Any]:
+    """The account's traffic tiles — or, in a workspace bound to several projects,
+    the current project's: every query is narrowed to its agents' runtimes
+    (`ProjectAgents.service_filter`) and the entry is cached per project."""
     hours = RANGE_HOURS[range_key]
+    scope = _dashboard_scope(db, workspace)
+    queries = {
+        "series": q_dashboard_series(range_key, scope or ""),
+        "totals": q_dashboard_totals(scope or ""),
+        "distincts": q_dashboard_distincts(scope or ""),
+        "tools": q_top_tools(scope=scope or ""),
+        "tokens_by_model": q_tokens_by_model(scope=scope or ""),
+    }
 
     def build() -> dict[str, Any]:
-        results = run_insights_queries(
-            {
-                "series": q_dashboard_series(range_key),
-                "totals": q_dashboard_totals(),
-                "distincts": q_dashboard_distincts(),
-                "tools": q_top_tools(),
-                "tokens_by_model": q_tokens_by_model(),
-            },
-            hours,
-            logs=logs,
-            workspace=workspace,
-        )
+        if scope is None:  # a project with no runtime: no span is its
+            results: dict[str, list[dict[str, str]]] = {key: [] for key in queries}
+        else:
+            results = run_insights_queries(queries, hours, logs=logs, workspace=workspace)
         totals = results["totals"][0] if results["totals"] else {}
         distincts = results["distincts"][0] if results["distincts"] else {}
         trace_total = int(_num(totals, "traces"))
@@ -1122,7 +1369,8 @@ def get_dashboard(range_key: str, workspace: WorkspaceContext, force: bool = Fal
         # CloudWatch metric only covers managed-Harness runtimes and remains a
         # fallback for windows where the span aggregation comes back empty.
         tokens_by_model = _tokens_by_model_rows(results.get("tokens_by_model") or [])
-        if not tokens_by_model:
+        # the CloudWatch metric cannot be narrowed to a project's runtimes
+        if not tokens_by_model and scope == "":
             try:
                 tokens_by_model = query_token_usage_metrics(hours, workspace, cw=cw)
             except ClientError:
@@ -1180,8 +1428,17 @@ def get_dashboard(range_key: str, workspace: WorkspaceContext, force: bool = Fal
         }
 
     # Every cache key carries the workspace: the same range in two environments
-    # is two different answers.
-    return cached(f"dashboard:{workspace.id}:{range_key}", force, build)
+    # is two different answers — and, once narrowed, the project.
+    narrowed = f"{current_project()}:" if scope != "" else ""
+    return cached(f"dashboard:{workspace.id}:{narrowed}{range_key}", force, build)
+
+
+def _project_key() -> str:
+    """The cache-key segment of the current project: the views below map services
+    to agent names and read ledger rows through the project filter, so one
+    project's entry must never answer another's. Empty with no project (workers)."""
+    pid = current_project()
+    return f"{pid}:" if pid else ""
 
 
 def list_traces(range_key: str, db: Session, workspace: WorkspaceContext,
@@ -1203,7 +1460,7 @@ def list_traces(range_key: str, db: Session, workspace: WorkspaceContext,
         ]
         return {"range": range_key, "traces": rows, "count": len(rows), "limit": TRACE_LIMIT}
 
-    return cached(f"traces:{workspace.id}:{range_key}", force, build)
+    return cached(f"traces:{workspace.id}:{_project_key()}{range_key}", force, build)
 
 
 def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceContext,
@@ -1305,7 +1562,7 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
             "spans": spans,
         }
 
-    return cached(f"trace:{workspace.id}:{trace_id}:{range_key}", force, build)
+    return cached(f"trace:{workspace.id}:{_project_key()}{trace_id}:{range_key}", force, build)
 
 
 def list_sessions(range_key: str, db: Session, workspace: WorkspaceContext,
@@ -1330,7 +1587,7 @@ def list_sessions(range_key: str, db: Session, workspace: WorkspaceContext,
         return {"range": range_key, "sessions": rows, "count": len(rows),
                 "limit": SESSION_LIMIT}
 
-    return cached(f"sessions:{workspace_id}:{range_key}", force, build)
+    return cached(f"sessions:{workspace_id}:{_project_key()}{range_key}", force, build)
 
 
 def _agent_from_traces(
@@ -1409,7 +1666,9 @@ def get_session(session_id: str, range_key: str, db: Session,
             "online_scores": online_scores,
         }
 
-    payload = cached(f"session:{workspace.id}:{session_id}:{range_key}", force, build)
+    payload = cached(
+        f"session:{workspace.id}:{_project_key()}{session_id}:{range_key}", force, build
+    )
     # Transcript is attached outside the cache: memory errors must degrade to
     # {available: false} on every request, never poison the cached span data.
     # It runs AFTER the trace query because sessions with no ledger row carry

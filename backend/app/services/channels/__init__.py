@@ -16,8 +16,11 @@ import threading
 from collections import OrderedDict
 from types import ModuleType
 
+from sqlalchemy.orm import Session
+
 from app.core.db import SessionLocal
 from app.core.errors import NotFoundError
+from app.core.project_scope import project_context
 from app.models.ledger import ShareLink
 from app.services import memory as memory_service
 from app.services import share_links
@@ -102,40 +105,49 @@ def handle_message(link_id: str, message: Inbound) -> None:
     it runs after the webhook has been acknowledged, so there is nobody to tell."""
     db = SessionLocal()
     try:
-        link = db.get(ShareLink, link_id)
+        with project_context(None):  # a background job: the id alone names the link
+            link = db.get(ShareLink, link_id)
         if link is None:
             return
-        adapter = adapter_for(link.kind)
-        agent = share_links.live_agent(db, link)
-        workspace_row = get_workspace_row(db, link.workspace_id or "")
-        if workspace_row is None:
-            return
-        workspace = workspace_context(workspace_row)
-        workspace_id, agent_id = link.workspace_id or "", agent.id
-        session_id = session_id_for(link.id, message.conversation_key)
-        actor_id = share_links.share_actor(link.id, session_id)
-        track_session(workspace_id, agent_id, session_id, actor_id,
-                      runtime_version=agent.version)
-        save_message(workspace_id, agent_id, session_id, "user", message.text)
-        try:
-            result = invoke_agent_text(
-                agent, message.text, session_id=session_id,
-                actor_id=memory_service.scoped_actor(agent.id, actor_id),
-                workspace=workspace,
-            )
-            answer = str(result.get("text") or "").strip() or GENERIC_ERROR
-            save_message(workspace_id, agent_id, session_id, "agent", answer)
-        except Exception as exc:  # the platform user only ever sees the generic text
-            logger.warning("channel turn failed for link %s: %s", link_id, exc)
-            answer = GENERIC_ERROR
-            save_message(workspace_id, agent_id, session_id, "error", f"{type(exc).__name__}")
-        if len(answer) > MAX_REPLY_CHARS:
-            answer = answer[: MAX_REPLY_CHARS - 1] + "…"
-        try:
-            adapter.reply(link, message, answer)
-        except Exception as exc:
-            logger.warning("channel reply failed for link %s: %s", link_id, exc)
+        # the turn runs as the link's project: the chain's reads and the ledger rows
+        # it writes (session, messages, any OAuth pending row) are that project's
+        with project_context(link.project_id):
+            _run_turn(db, link, message)
     except Exception as exc:
         logger.warning("channel message dropped for link %s: %s", link_id, exc)
     finally:
         db.close()
+
+
+def _run_turn(db: Session, link: ShareLink, message: Inbound) -> None:
+    link_id = link.id
+    adapter = adapter_for(link.kind)
+    agent = share_links.live_agent(db, link)
+    workspace_row = get_workspace_row(db, link.workspace_id or "")
+    if workspace_row is None:
+        return
+    workspace = workspace_context(workspace_row)
+    workspace_id, agent_id = link.workspace_id or "", agent.id
+    session_id = session_id_for(link.id, message.conversation_key)
+    actor_id = share_links.share_actor(link.id, session_id)
+    track_session(workspace_id, agent_id, session_id, actor_id,
+                  runtime_version=agent.version)
+    save_message(workspace_id, agent_id, session_id, "user", message.text)
+    try:
+        result = invoke_agent_text(
+            agent, message.text, session_id=session_id,
+            actor_id=memory_service.scoped_actor(agent.id, actor_id),
+            workspace=workspace,
+        )
+        answer = str(result.get("text") or "").strip() or GENERIC_ERROR
+        save_message(workspace_id, agent_id, session_id, "agent", answer)
+    except Exception as exc:  # the platform user only ever sees the generic text
+        logger.warning("channel turn failed for link %s: %s", link_id, exc)
+        answer = GENERIC_ERROR
+        save_message(workspace_id, agent_id, session_id, "error", f"{type(exc).__name__}")
+    if len(answer) > MAX_REPLY_CHARS:
+        answer = answer[: MAX_REPLY_CHARS - 1] + "…"
+    try:
+        adapter.reply(link, message, answer)
+    except Exception as exc:
+        logger.warning("channel reply failed for link %s: %s", link_id, exc)

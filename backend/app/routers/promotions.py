@@ -9,7 +9,7 @@ release was accepted, and the inbox is where the work waiting on a human shows u
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -74,10 +74,10 @@ def _bundle(db: Session, bundle_id: str, workspace_id: str) -> ReleaseBundle:
     return bundle
 
 
-def _granted_on(db: Session, identity: Identity, workspace_id: str) -> bool:
+def _granted_on(db: Session, identity: Identity, workspace_id: str, request: Request) -> bool:
     """Whether the caller may see the target's data (used to trim a read, not to refuse)."""
     try:
-        authorized_workspace(db, identity, workspace_id)
+        _target(db, workspace_id, identity, request)
     except AppError:
         return False
     return True
@@ -102,13 +102,19 @@ def _for_reader(payload: dict[str, Any], visible: bool) -> dict[str, Any]:
     return payload
 
 
-def _target(db: Session, workspace_id: str, identity: Identity) -> Workspace:
+def _target(db: Session, workspace_id: str, identity: Identity, request: Request) -> Workspace:
     """The target workspace — existing, and granted to the caller (admins by role).
 
     The route policy authorizes only the SOURCE workspace (`X-Workspace`); every route
-    here that reads or acts on the target must hold the caller to that one too.
+    here that reads or acts on the target must hold the caller to that one too — and,
+    inside a project, the target must be bound to that project and reached through it
+    (design §5.6; 404 `project.not_found` otherwise).
     """
-    return authorized_workspace(db, identity, workspace_id)
+    target = authorized_workspace(db, identity, workspace_id)
+    promotion_service.assert_project_reaches(
+        db, identity, workspace_id, getattr(request.state, "project", None), request.method
+    )
+    return target
 
 
 # ── release bundles ──────────────────────────────────────────────────────────────
@@ -165,6 +171,7 @@ def get_bundle(
 
 @router.post("/promotions", status_code=201)
 def create_promotion(
+    request: Request,
     req: PromotionRequest,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -172,7 +179,7 @@ def create_promotion(
 ) -> dict[str, Any]:
     """Ask for a bundle to be released into another environment."""
     bundle = _bundle(db, req.bundle_id, ws.id)
-    target = _target(db, req.target_workspace_id, identity)
+    target = _target(db, req.target_workspace_id, identity, request)
     row = promotion_service.request_promotion(
         db,
         bundle=bundle,
@@ -188,6 +195,7 @@ def create_promotion(
 
 @router.get("/promotions")
 def list_promotions(
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     identity: Identity = Depends(current_identity),
@@ -218,7 +226,7 @@ def list_promotions(
         "promotions": [
             _for_reader(
                 promotion_service.promotion_out(row, bundles.get(row.bundle_id)),
-                _granted_on(db, identity, row.target_workspace_id),
+                _granted_on(db, identity, row.target_workspace_id, request),
             )
             for row in rows
         ]
@@ -234,6 +242,7 @@ def _promotion(db: Session, promotion_id: str, workspace_id: str) -> Promotion:
 
 @router.get("/promotions/{promotion_id}")
 def get_promotion(
+    request: Request,
     promotion_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -251,24 +260,22 @@ def get_promotion(
     # see it. Anyone else in the source workspace still sees the request itself.
     payload = _for_reader(
         promotion_service.promotion_out(row, bundle),
-        _granted_on(db, identity, row.target_workspace_id),
+        _granted_on(db, identity, row.target_workspace_id, request),
     )
     if not payload["target_visible"]:
         payload["target_agent"] = None
         payload["diff"] = []
         return payload
-    current = db.scalars(
-        select(Agent).where(
-            Agent.workspace_id == row.target_workspace_id,
-            Agent.name == (bundle.agent_name if bundle else ""),
-            Agent.status != "deleted",
-        )
-    ).first()
+    # the name is workspace-wide: another project's holder is flagged, never shown
+    current, foreign = promotion_service.target_holder(
+        db, row.target_workspace_id, bundle.agent_name if bundle else "", row.project_id
+    )
     payload["target_agent"] = (
         {"id": current.id, "status": current.status, "version": current.version}
         if current
         else None
     )
+    payload["target_name_taken"] = foreign
     payload["diff"] = promotion_service.spec_diff(
         current.spec if current else None, (bundle.spec if bundle else {}) or {}
     )
@@ -277,6 +284,7 @@ def get_promotion(
 
 @router.post("/promotions/{promotion_id}/review")
 def review(
+    request: Request,
     promotion_id: str,
     req: ReviewRequest,
     db: Session = Depends(get_db),
@@ -290,7 +298,7 @@ def review(
     """
     row = _promotion(db, promotion_id, ws.id)
     # the approver must be granted on the environment the release goes INTO
-    target = _target(db, row.target_workspace_id, identity)
+    target = _target(db, row.target_workspace_id, identity, request)
     bundle = _bundle(db, row.bundle_id, ws.id)
     promotion_service.review_promotion(
         db,
@@ -335,12 +343,13 @@ class ReleasePolicyRequest(BaseModel):
 
 @router.get("/release-policies/{workspace_id}")
 def get_release_policy(
+    request: Request,
     workspace_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     identity: Identity = Depends(current_identity),
 ) -> dict[str, Any]:
-    target = _target(db, workspace_id, identity)
+    target = _target(db, workspace_id, identity, request)
     return {
         "workspace_id": target.id,
         "tier": target.tier,
@@ -351,6 +360,7 @@ def get_release_policy(
 
 @router.put("/release-policies/{workspace_id}")
 def put_release_policy(
+    request: Request,
     workspace_id: str,
     req: ReleasePolicyRequest,
     db: Session = Depends(get_db),
@@ -358,7 +368,7 @@ def put_release_policy(
     identity: Identity = Depends(current_identity),
 ) -> dict[str, Any]:
     """Replace the policy wholesale (administrator). Journaled: it decides what may ship."""
-    target = _target(db, workspace_id, identity)
+    target = _target(db, workspace_id, identity, request)
     target.release_policy = release_gates.normalize_policy(req.model_dump())
     record_audit_event(
         workspace_id=ws.id,
@@ -378,6 +388,7 @@ def put_release_policy(
 
 @router.get("/promotions/{promotion_id}/plan")
 def promotion_plan(
+    request: Request,
     promotion_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -386,12 +397,13 @@ def promotion_plan(
     """What executing this promotion would create or change. Read-only."""
     row = _promotion(db, promotion_id, ws.id)
     bundle = _bundle(db, row.bundle_id, ws.id)
-    target = _target(db, row.target_workspace_id, identity)
+    target = _target(db, row.target_workspace_id, identity, request)
     return release_gates.build_plan(db, row, bundle, target, db.get(Workspace, ws.id))
 
 
 @router.get("/promotions/{promotion_id}/execution")
 def promotion_execution(
+    request: Request,
     promotion_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -404,7 +416,7 @@ def promotion_execution(
     and, because that log is the target's, only for a caller granted on the target.
     """
     row = _promotion(db, promotion_id, ws.id)
-    _target(db, row.target_workspace_id, identity)
+    _target(db, row.target_workspace_id, identity, request)
     bundle = db.get(ReleaseBundle, row.bundle_id)
     return {
         "promotion": promotion_service.promotion_out(row, bundle),
@@ -418,6 +430,7 @@ def _start(job_id: str) -> None:
 
 @router.post("/promotions/{promotion_id}/execute", status_code=202)
 def execute(
+    request: Request,
     promotion_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -431,7 +444,7 @@ def execute(
     """
     row = _promotion(db, promotion_id, ws.id)
     # authorize before revealing anything about the request's state
-    target = _target(db, row.target_workspace_id, identity)
+    target = _target(db, row.target_workspace_id, identity, request)
     if row.status == promotion_exec.STATUS_EXECUTING:
         raise AppError(
             "promotion.already_executing", "this promotion is already executing", status_code=409
@@ -472,6 +485,7 @@ def execute(
 
 @router.post("/promotions/{promotion_id}/rollback", status_code=202)
 def rollback(
+    request: Request,
     promotion_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -484,7 +498,7 @@ def rollback(
     gated by the deploy window: a rollback is the way out of a bad release.
     """
     row = _promotion(db, promotion_id, ws.id)
-    _target(db, row.target_workspace_id, identity)
+    _target(db, row.target_workspace_id, identity, request)
     if row.status == promotion_exec.STATUS_EXECUTING:
         raise AppError(
             "promotion.already_executing", "this promotion is still executing", status_code=409
@@ -534,6 +548,24 @@ def rollback(
 
 
 # ── the administrator inbox (T22) ────────────────────────────────────────────────
+
+
+def _projects_of(db: Session, rows: list[Any]) -> list[dict[str, Any] | None]:
+    """Each sample's project, aligned with `sample`: the inbox is cross-project (route
+    policy PROJECT_EXEMPT) while each `to` opens a project-scoped page, so the console
+    switches project first. None for a workspace-level row (a bootstrap job)."""
+    from app.models.projects import Project
+
+    ids = {row.project_id for row in rows if row.project_id}
+    names = {
+        p.id: p.name for p in db.scalars(select(Project).where(Project.id.in_(ids or [""])))
+    }
+    return [
+        {"id": row.project_id, "name": names.get(row.project_id, row.project_id)}
+        if row.project_id
+        else None
+        for row in rows
+    ]
 
 
 @router.get("/inbox")
@@ -613,6 +645,7 @@ def inbox(
                 "count": len(failed_jobs),
                 "to": "/v2/agents",
                 "sample": [f"{job.type}: {(job.error or '')[:80]}" for job in failed_jobs[:5]],
+                "sample_projects": _projects_of(db, failed_jobs[:5]),
             }
         )
 
@@ -632,6 +665,7 @@ def inbox(
                     f"→ {row.target_workspace_id}: {row.change_note[:60]}"
                     for row in pending_promotions[:5]
                 ],
+                "sample_projects": _projects_of(db, pending_promotions[:5]),
             }
         )
 

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -866,6 +866,11 @@ def delete_user(db: Session, user: User, settings: Settings | None = None) -> No
     # grants first: SQLite does not enforce the FK, so the rows would linger and
     # a recycled user id would inherit them
     db.query(UserWorkspace).filter(UserWorkspace.user_id == user.id).delete()
+    # ...and so do project and group memberships (the user's after_delete listener
+    # bumps the access epoch), which would otherwise linger in member lists and counts
+    for table in ("project_members", "group_members"):
+        db.execute(text(f"DELETE FROM {table} WHERE user_id = :id"),  # noqa: S608
+                   {"id": user.id})
     db.delete(user)
     # The keys it minted are disabled, never deleted: they stay listed for audit,
     # and their dangling `created_by` keeps them from being re-enabled.

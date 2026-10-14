@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.project_scope import project_context
 from app.models.ledger import Agent, ChatSession
 from app.services.observability import (
     _IS_LLM_FIELDS,
@@ -102,11 +103,16 @@ def cost_report(
     *,
     range_key: str = DEFAULT_RANGE,
     force: bool = False,
+    project: str | None = None,
 ) -> dict[str, Any]:
     """Estimated spend for the window, broken down by agent, by person and by model.
 
     Cached on the same terms as the observability views (Logs Insights is billed per
-    scan), keyed by workspace and range.
+    scan), keyed by workspace and range. The cached entry is workspace-wide — built
+    across projects, every per-agent and per-session row carrying its project — and
+    `project` (design §5.9) narrows it after the cache: that project's agents, and
+    the people of that project's sessions. The unattributed rows (a service no agent
+    claims, the `—` bucket) belong to no project and appear only without one.
     """
     hours = RANGES.get(range_key, RANGES[DEFAULT_RANGE])
 
@@ -121,23 +127,21 @@ def cost_report(
 
         from app.services.observability import build_agent_resolver
 
-        agents_by_name = {
-            row.name: row
-            for row in db.scalars(
-                select(Agent).where(Agent.workspace_id == workspace.id)
-            ).all()
-        }
+        with project_context(None):  # attribution sees every project's rows
+            agents_by_name = {
+                row.name: row
+                for row in db.scalars(
+                    select(Agent).where(Agent.workspace_id == workspace.id)
+                ).all()
+            }
         # service.name carries the endpoint suffix (`<runtime>.DEFAULT`) and the runtime
         # id, not the ledger name — resolve it the way the observability views do, and
         # keep the exact-name match for log sources registered under their own name.
-        resolve = build_agent_resolver(db, workspace.id)
+        resolve = build_agent_resolver(db, workspace.id, all_projects=True)
         by_agent: list[dict[str, Any]] = []
-        unpriced: set[str] = set()
         for row in results.get("by_service") or []:
             service = row.get("service") or "—"
             tokens, usd = _priced(row, prices)
-            if usd is None and row.get("model"):
-                unpriced.add(str(row["model"]))
             agent = agents_by_name.get(service) or resolve(service)
             by_agent.append(
                 {
@@ -145,84 +149,127 @@ def cost_report(
                     "agent_id": agent.id if agent else None,
                     "display_name": (agent.spec or {}).get("display_name") if agent else None,
                     "known": agent is not None,
+                    "project_id": agent.project_id if agent else None,
                     "tokens": int(tokens),
                     "llm_calls": int(_num(row, "llm_calls")),
                     "sessions": int(_num(row, "sessions")),
                     "est_cost_usd": usd,
+                    "_unpriced": str(row["model"]) if usd is None and row.get("model") else None,
                 }
             )
 
-        # session → actor, for the rows the console opened
+        # session → (actor, project), for the rows the console opened
         session_rows = results.get("by_session") or []
         ids = [str(row.get("session_id")) for row in session_rows if row.get("session_id")]
-        actors: dict[str, str] = {}
+        chats: dict[str, tuple[str, str | None]] = {}
         if ids:
-            for chat in db.scalars(
-                select(ChatSession).where(
-                    ChatSession.workspace_id == workspace.id,
-                    ChatSession.session_id.in_(ids),
-                )
-            ).all():
-                actors[chat.session_id] = chat.actor_id
-        per_actor: dict[str, dict[str, Any]] = {}
+            with project_context(None):
+                for chat in db.scalars(
+                    select(ChatSession).where(
+                        ChatSession.workspace_id == workspace.id,
+                        ChatSession.session_id.in_(ids),
+                    )
+                ).all():
+                    chats[chat.session_id] = (chat.actor_id, chat.project_id)
+        sessions: list[dict[str, Any]] = []
         for row in session_rows:
             tokens, usd = _priced(row, prices)
-            if usd is None and row.get("model"):
-                unpriced.add(str(row["model"]))
             # An unmatched session is real traffic with no console identity (/v1, an
             # evaluation replay). It gets its own bucket rather than vanishing.
-            actor = actors.get(str(row.get("session_id")), "—")
-            bucket = per_actor.setdefault(
-                actor, {"actor": actor, "sessions": 0, "tokens": 0, "est_cost_usd": 0.0}
-            )
-            bucket["sessions"] += 1
-            bucket["tokens"] += int(tokens)
-            if usd is not None:
-                bucket["est_cost_usd"] = round(bucket["est_cost_usd"] + usd, 6)
-
-        total_usd = round(
-            sum(row["est_cost_usd"] or 0.0 for row in by_agent), 6
-        )
+            actor, pid = chats.get(str(row.get("session_id")), ("—", None))
+            sessions.append({
+                "actor": actor, "project_id": pid, "tokens": int(tokens), "usd": usd,
+                "_unpriced": str(row["model"]) if usd is None and row.get("model") else None,
+            })
         return {
             "range": range_key,
             "hours": hours,
             "generated_at": datetime.now(UTC).isoformat(),
-            "total_est_cost_usd": total_usd,
-            "total_tokens": sum(row["tokens"] for row in by_agent),
-            "by_agent": sorted(
-                by_agent, key=lambda row: row["est_cost_usd"] or 0.0, reverse=True
-            ),
-            "by_actor": sorted(
-                per_actor.values(), key=lambda row: row["est_cost_usd"], reverse=True
-            ),
-            # Stated, never implied: these models burned tokens the price map cannot value.
-            "unpriced_models": sorted(unpriced),
-            "estimate": True,
+            "by_agent": by_agent,
+            "sessions": sessions,
         }
 
-    return cached(f"costs:{workspace.id}:{range_key}", force, build)
+    return _report(cached(f"costs:{workspace.id}:{range_key}", force, build), project)
 
 
-def month_to_date_usd(db: Session, workspace: WorkspaceContext, *, force: bool = False) -> float:
+def _report(raw: dict[str, Any], project: str | None) -> dict[str, Any]:
+    """The response for one project (None = the whole workspace) from the cached rows."""
+    agents = [
+        row for row in raw["by_agent"]
+        if project is None or (row["known"] and row["project_id"] == project)
+    ]
+    sessions = [
+        row for row in raw["sessions"] if project is None or row["project_id"] == project
+    ]
+    unpriced = {row["_unpriced"] for row in (*agents, *sessions) if row["_unpriced"]}
+    per_actor: dict[str, dict[str, Any]] = {}
+    for row in sessions:
+        bucket = per_actor.setdefault(
+            row["actor"], {"actor": row["actor"], "sessions": 0, "tokens": 0, "est_cost_usd": 0.0}
+        )
+        bucket["sessions"] += 1
+        bucket["tokens"] += row["tokens"]
+        if row["usd"] is not None:
+            bucket["est_cost_usd"] = round(bucket["est_cost_usd"] + row["usd"], 6)
+    by_agent = [{k: v for k, v in row.items() if k != "_unpriced"} for row in agents]
+    return {
+        "range": raw["range"],
+        "hours": raw["hours"],
+        "generated_at": raw["generated_at"],
+        **({"project": project} if project is not None else {}),
+        "total_est_cost_usd": round(sum(row["est_cost_usd"] or 0.0 for row in by_agent), 6),
+        "total_tokens": sum(row["tokens"] for row in by_agent),
+        "by_agent": sorted(by_agent, key=lambda row: row["est_cost_usd"] or 0.0, reverse=True),
+        "by_actor": sorted(
+            per_actor.values(), key=lambda row: row["est_cost_usd"], reverse=True
+        ),
+        # Stated, never implied: these models burned tokens the price map cannot value.
+        "unpriced_models": sorted(unpriced),
+        "estimate": True,
+        **({"cache": raw["cache"]} if "cache" in raw else {}),
+    }
+
+
+def month_to_date_usd(
+    db: Session, workspace: WorkspaceContext, *, force: bool = False,
+    project: str | None = None,
+) -> float:
     """Spend since the first of the month, for the budget comparison.
 
     Logs Insights ranges are relative, so this uses the hours elapsed this month capped
     at the 30-day window the console offers — a budget check at 02:00 on the 1st looks at
     two hours, which is correct, not a bug.
+
+    `project` counts only the services resolved to that project's agents; the cached
+    entry is workspace-wide (each service's dollars with its agent's project).
     """
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     hours = max(1, min(720, int((now - month_start).total_seconds() // 3600) or 1))
 
     def build() -> dict[str, Any]:
+        from app.services.observability import build_agent_resolver
+
         prices = get_settings().model_prices or {}
         results = run_insights_queries(
             {"by_service": q_cost_by_service()}, hours=hours, logs=logs_client(workspace)
         )
+        resolve = build_agent_resolver(db, workspace.id, all_projects=True)
         total = 0.0
+        by_project: dict[str, float] = {}
         for row in results.get("by_service") or []:
             _, usd = _priced(row, prices)
             total += usd or 0.0
-        return {"usd": round(total, 6), "hours": hours}
+            agent = resolve(row.get("service"))
+            if agent is not None and agent.project_id:
+                by_project[agent.project_id] = by_project.get(agent.project_id, 0.0) + (usd or 0.0)
+        return {
+            "usd": round(total, 6),
+            "hours": hours,
+            "by_project": {pid: round(usd, 6) for pid, usd in by_project.items()},
+        }
 
-    return float(cached(f"costs-mtd:{workspace.id}:{hours}", force, build)["usd"])
+    raw = cached(f"costs-mtd:{workspace.id}:{hours}", force, build)
+    if project is None:
+        return float(raw["usd"])
+    return float((raw.get("by_project") or {}).get(project, 0.0))

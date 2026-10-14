@@ -11,7 +11,7 @@ evaluation over CloudWatch spans: minutes of latency, billed per run, and keyed 
 trace sessions rather than the ledger's rows. It cannot back an interactive table of
 "the last week of conversations", so this view groups with **one Bedrock Converse call**
 (through the client funnel, like `services/suggestions`) over the first turns, cached
-per (workspace, agent, window, language, content) for ten minutes.
+per (workspace, project, agent, window, language, content) for ten minutes.
 
 **Fallback.** When the model call fails or returns something unusable the view still
 answers: identical questions (after `answer_rules.normalize`) that recur form a cluster
@@ -37,6 +37,7 @@ from botocore.config import Config
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.project_scope import current_project
 from app.models.ledger import Agent, ChatFeedback, ChatMessage, ChatSession
 from app.services.answer_rules import normalize
 from app.services.workspace import WorkspaceContext
@@ -350,7 +351,10 @@ def intent_view(
     if not turns:
         return {**build_view([], [], set(), source="model", other_label=other),
                 "generated_at": datetime.now(UTC).isoformat()}
-    key = f"{workspace_id}|{agent_id or '*'}|{days}|{lang}|{_fingerprint(turns)}"
+    # the project is in the key explicitly (design §5.9): the turns are already
+    # confined to it, but two projects' identical windows must never share an entry
+    key = (f"{workspace_id}|{current_project() or '*'}|{agent_id or '*'}|{days}|{lang}"
+           f"|{_fingerprint(turns)}")
     with _LOCK:
         hit = _CACHE.get(key)
         if hit and not refresh:

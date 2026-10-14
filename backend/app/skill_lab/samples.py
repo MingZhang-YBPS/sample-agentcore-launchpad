@@ -10,9 +10,10 @@ Only the self-authored demo class is vendored — no paper checkpoints, no
 benchmark subsets (see vendor/skillopt/LAUNCHPAD_DEVIATIONS.md for why).
 
 Seeding runs inside the ``skill-lab`` bootstrap stage: idempotent by name per
-workspace, per-item degrade (one broken sample must not cost the stage), and
-NO validator subprocess — the venv may not exist yet, and the vendored files
-are covered by a hermetic test that runs the real validator over them.
+workspace and project (each project holds its own copy), per-item degrade (one
+broken sample must not cost the stage), and NO validator subprocess — the venv
+may not exist yet, and the vendored files are covered by a hermetic test that
+runs the real validator over them.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.errors import AppError
+from app.core.project_scope import project_context
 from app.skill_lab.models import SkillLabTaskset
 from app.skill_lab.worker_build import VENDOR_ROOT
 
@@ -177,12 +179,37 @@ def _seed_skills(workspace: Any, log: Callable[[str], None]) -> int:
     return seeded
 
 
+def _workspace_projects(db: Any, workspace_id: str) -> list[str | None]:
+    """The active projects bound to the workspace (design §5.5). A task set belongs to
+    exactly one project, so every project gets its own read-only copy of the samples;
+    an unbound workspace (an older build) seeds once and is stamped as before."""
+    from app.services import access
+
+    bound = [
+        b.project_id for b in access.workspace_bindings(db, workspace_id)
+        if b.status == "active"
+    ]
+    return bound or [None]
+
+
 def _seed_tasksets(db: Any, workspace_id: str, log: Callable[[str], None]) -> int:
+    seeded = 0
+    for project_id in _workspace_projects(db, workspace_id):
+        with project_context(project_id):
+            seeded += _seed_project_tasksets(db, workspace_id, project_id, log)
+    return seeded
+
+
+def _seed_project_tasksets(
+    db: Any, workspace_id: str, project_id: str | None, log: Callable[[str], None]
+) -> int:
     from app.skill_lab import tasksets as taskset_svc
 
+    where = f" · project {project_id}" if project_id else ""
     seeded = 0
     for sample in SAMPLE_TASKSETS:
         try:
+            # the current project's own copy (the criteria confine the query to it)
             exists = db.scalars(
                 select(SkillLabTaskset).where(
                     SkillLabTaskset.workspace_id == workspace_id,
@@ -190,7 +217,7 @@ def _seed_tasksets(db: Any, workspace_id: str, log: Callable[[str], None]) -> in
                 )
             ).first()
             if exists is not None:
-                log(f"sample task set exists · {sample.name}")
+                log(f"sample task set exists · {sample.name}{where}")
                 continue
             tasks_by_split = {
                 split: json.loads((DEMO_ROOT / rel).read_text(encoding="utf-8"))
@@ -207,7 +234,7 @@ def _seed_tasksets(db: Any, workspace_id: str, log: Callable[[str], None]) -> in
                 run_validator=False,
             )
             seeded += 1
-            log(f"sample task set created · {sample.name}")
+            log(f"sample task set created · {sample.name}{where}")
         except Exception as exc:  # noqa: BLE001 — per-item degrade by design
             logger.warning("sample task set %r skipped: %s", sample.name, exc)
             log(f"sample task set {sample.name!r} skipped · {type(exc).__name__}")

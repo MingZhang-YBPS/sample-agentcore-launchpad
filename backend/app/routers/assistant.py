@@ -8,12 +8,16 @@ re-asserted inside the approval, where the caller's account, permission and
 workspace grant are ALSO re-resolved from the database inside the write
 transaction. Every route is workspace-scoped; conversations are additionally bound
 to the caller's immutable principal (``app.assistant.principal``), except that an
-admin may share one with the whole workspace: every member may then work on it
+admin may share one with its whole project: every member may then work on it
 (each action under its usual permission), and only its owner may delete it.
+
+Conversations are project-owned (design §5.5), and every permission re-checked here
+— at the claim boundary, for CLEAR, for materialization — is the request project's
+key, not the account's (``ProjectScope.can`` / ``principal.project_can``).
 """
 
 import json as _json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from typing import Any
 
@@ -24,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.assistant import evaluation_repair, preparation, service
 from app.assistant import proposal as proposal_contract
-from app.assistant.principal import principal_of
+from app.assistant.principal import principal_of, project_can
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError
 from app.models.ledger import Job, Workspace
@@ -142,6 +146,13 @@ def _caller(request: Request) -> Identity:
     return identity if auth_enabled() else replace(identity, username="river")
 
 
+def _can(request: Request, identity: Identity) -> Callable[[str], bool]:
+    """The caller's keys: the request project's (resolved by the route policy), else —
+    hub-global, never here in practice — the account's."""
+    project = getattr(request.state, "project", None)
+    return project.can if project is not None else identity.can
+
+
 def _recheck_factory(request: Request, ws: WorkspaceScope) -> service.Recheck:
     """Re-resolve the principal and the workspace from the database at the claim
     boundary: an account disabled/expired, a permission revoked or a grant removed
@@ -155,7 +166,7 @@ def _recheck_factory(request: Request, ws: WorkspaceScope) -> service.Recheck:
                 raise AppError("auth.required", "Authentication required", status_code=401)
         else:
             identity = _caller(request)
-        if not identity.can(service.PERMISSION_DEPLOY):
+        if not project_can(db, identity, ws.id, service.PERMISSION_DEPLOY):
             raise AppError("auth.permission_required",
                            f"This action requires the '{service.PERMISSION_DEPLOY}' permission",
                            {"permission": service.PERMISSION_DEPLOY}, status_code=403)
@@ -261,7 +272,7 @@ def set_sharing(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """The owner or an administrator opens (or closes) one conversation to every
-    member of the workspace. Deleting it stays with the owner."""
+    member of its project. Deleting it stays with the owner."""
     identity = _caller(request)
     row = service.set_shared(db, ws.id, identity, conversation_id, req.shared)
     return service.conversation_summary(db, row, viewer=principal_of(identity))
@@ -488,7 +499,7 @@ def _plan_state(db: Session, row) -> dict[str, Any]:
         "disclosure": (
             "Creating assets publishes the SELECTED golden-test inputs, expected responses, "
             "assertions and evaluator rubrics of this plan to the workspace Evaluation console "
-            "(Datasets / Evaluators), where every member of the workspace can read them. The "
+            "(Datasets / Evaluators), where every member of the project can read them. The "
             "conversation transcript itself stays private. Nothing is deployed, run, synced to "
             "AWS Datasets or invoked; created assets are registered — they have not passed."
         ),
@@ -565,7 +576,7 @@ def materialize_evaluation_plan(
         fresh = resolve_identity(request, db=db)
         if fresh is None or principal_of(fresh) != principal_of(identity):
             raise AppError("auth.required", "Authentication required", status_code=401)
-        if not assets.may_materialize(fresh):
+        if not assets.may_materialize(fresh, db, ws.id):
             raise assets.permission_error()
     ws_row = db.get(Workspace, ws.id)
     if ws_row is None:
@@ -578,7 +589,7 @@ def materialize_evaluation_plan(
         fresh = resolve_identity(request, db=session) if auth_enabled() else _caller(request)
         if fresh is None:
             raise AppError("auth.required", "Authentication required", status_code=401)
-        if not assets.may_materialize(fresh):
+        if not assets.may_materialize(fresh, session, ws.id):
             raise assets.permission_error()
         fresh_ws = session.get(Workspace, ws.id)
         if fresh_ws is None:
@@ -665,7 +676,7 @@ def review_lambda_revision(
             raise AppError("auth.required", "Authentication required", status_code=401)
         if principal_of(fresh) != principal_of(identity):
             raise AppError("auth.required", "Authentication required", status_code=401)
-        if not assets.may_materialize(fresh):
+        if not assets.may_materialize(fresh, session, ws.id):
             raise assets.permission_error()
         fresh_ws = session.get(Workspace, ws.id)
         if fresh_ws is None:
@@ -724,7 +735,8 @@ def conversation_footprint(
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
     fp = purge_mod.footprint(db, row)
-    return {**fp, "can_clear": all(identity.can(p) for p in fp["required_permissions"])}
+    can = _can(request, identity)
+    return {**fp, "can_clear": all(can(p) for p in fp["required_permissions"])}
 
 
 @router.delete("/conversations/{conversation_id}")
@@ -748,7 +760,7 @@ def delete_conversation(
     starts a new attempt that resumes from the verified checkpoints."""
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
-    job, done = purge_mod.request_purge(db, row, can=identity.can)
+    job, done = purge_mod.request_purge(db, row, can=_can(request, identity))
     if done is not None:
         return done
     purge_mod.start_purge_async(job.id)

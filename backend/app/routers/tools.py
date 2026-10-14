@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.core.errors import AppError
+from app.core.project_scope import current_project
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import mcp_client
 from app.services.agentcore.client import control_client
@@ -60,6 +61,9 @@ class _BrowserDemoSession:
     # The environment that started it: the browser lives in that account/region,
     # so only that workspace may stop it (the dict itself is process-global).
     workspace_id: str
+    # ... and within it, the project that started it: another project's member must
+    # not stop it (and trigger its profile save). None = not bound to a project.
+    project_id: str | None = None
 
 
 _browser_demo_sessions: dict[str, _BrowserDemoSession] = {}
@@ -345,20 +349,23 @@ def _resolve_browser_demo_configuration(
 
 
 def _stop_browser_demo_session(
-    session_id: str, workspace_id: str | None = None
+    session_id: str, workspace_id: str | None = None, project_id: str | None = None
 ) -> dict[str, bool | None]:
     """Stop and forget one demo session.
 
-    `workspace_id` is the caller's environment; `None` is the expiry timer, which
-    owns every session. A session another workspace started is left running and
-    answers exactly like an expired one — the console stops a possibly-expired
-    previous session before starting the next, so "already gone" has to remain a
-    success, and a 404 here would be the one place a foreign id is
-    distinguishable from a missing one.
+    `workspace_id` / `project_id` are the caller's environment and project; `None`
+    is the expiry timer, which owns every session. A session another workspace (or
+    another project of this one) started is left running and answers exactly like
+    an expired one — the console stops a possibly-expired previous session before
+    starting the next, so "already gone" has to remain a success, and a 404 here
+    would be the one place a foreign id is distinguishable from a missing one.
     """
     with _browser_demo_lock:
         session = _browser_demo_sessions.get(session_id)
-        if session is not None and workspace_id not in (None, session.workspace_id):
+        if session is not None and workspace_id is not None and (
+            workspace_id != session.workspace_id
+            or session.project_id not in (None, project_id)
+        ):
             return {"stopped": False, "profile_saved": None}
         _browser_demo_sessions.pop(session_id, None)
         timer = _browser_demo_timers.pop(session_id, None)
@@ -396,6 +403,7 @@ def _retain_browser_demo_session(
     profile_identifier: str | None,
     save_profile: bool,
     workspace_id: str,
+    project_id: str | None = None,
 ) -> None:
     session_id = client.session_id
     if not session_id:
@@ -413,6 +421,7 @@ def _retain_browser_demo_session(
             profile_identifier=profile_identifier,
             save_profile=save_profile,
             workspace_id=workspace_id,
+            project_id=project_id,
         )
         _browser_demo_timers[session_id] = timer
     timer.start()
@@ -464,6 +473,7 @@ def demo_browser(
             profile_identifier=profile_identifier,
             save_profile=req.save_profile,
             workspace_id=ws.id,
+            project_id=current_project(),
         )
         retained = True
         return {
@@ -493,7 +503,7 @@ def stop_demo_browser(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     try:
-        result = _stop_browser_demo_session(session_id, ws.id)
+        result = _stop_browser_demo_session(session_id, ws.id, current_project())
     except Exception as exc:
         raise AppError(
             "tools.browser_stop_failed",

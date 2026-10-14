@@ -10,6 +10,7 @@ Violations return the standard {code, message, detail} envelope (422).
 
 from typing import Annotated, Any, Literal
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -22,8 +23,9 @@ from app.core.errors import NotFoundError
 from app.evaluation.online_evaluators import require_visible_evaluators
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import model_prices, observability
+from app.services import creators, model_prices, observability, visibility
 from app.services.agent_access import HiddenAgents
+from app.services.observability import ProjectAgents
 from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/observability", tags=["observability"])
@@ -60,6 +62,18 @@ def _hidden(db: Session, ws: WorkspaceScope, viewer: Viewer) -> HiddenAgents:
     return HiddenAgents(db, viewer, ws.id)
 
 
+def _project(request: Request, db: Session, ws: WorkspaceScope) -> ProjectAgents:
+    """The current project's allow-set over the account-wide telemetry (design §5.9):
+    another project's rows are dropped and its details answer 404, an unattributed
+    one is kept for administrators only. Inert in a single-project workspace."""
+    scope = getattr(request.state, "project", None)
+    return ProjectAgents(db, ws.id, bypass=bool(scope is not None and scope.bypass))
+
+
+def _session_not_found() -> NotFoundError:
+    return NotFoundError("observability.session_not_found", "session not found")
+
+
 def _drop_hidden(rows: list[dict[str, Any]], hidden: HiddenAgents) -> list[dict[str, Any]]:
     if not hidden:
         return rows
@@ -74,9 +88,10 @@ def _drop_hidden(rows: list[dict[str, Any]], hidden: HiddenAgents) -> list[dict[
 def dashboard(
     range: RangeParam = "24h",
     force: bool = False,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return observability.get_dashboard(range, ws.context, force=force)
+    return observability.get_dashboard(range, ws.context, force=force, db=db)
 
 
 @router.get("/prices")
@@ -112,7 +127,8 @@ def traces(
 ) -> dict[str, Any]:
     private = _private(request, ws, db)
     payload = observability.list_traces(range, db, ws.context, force=force)
-    rows = [r for r in payload["traces"] if private.visible(r.get("session_id"))]
+    rows = _project(request, db, ws).keep_rows(payload["traces"])
+    rows = [r for r in rows if private.visible(r.get("session_id"))]
     rows = _drop_hidden(rows, _hidden(db, ws, viewer))
     if agent:
         rows = [r for r in rows if r["agent"] == agent or r["service"] == agent]
@@ -138,6 +154,8 @@ def trace_detail(
 ) -> dict[str, Any]:
     private = _private(request, ws, db)
     payload = observability.get_trace(trace_id, range, db, ws.context, force=force)
+    if not _project(request, db, ws).keeps_trace(payload):
+        raise NotFoundError("observability.trace_not_found", "trace not found")
     if private.mentions_hidden(payload) or _hidden(db, ws, viewer).mentions(payload):
         raise NotFoundError("observability.trace_not_found", "trace not found")
     return payload
@@ -154,7 +172,8 @@ def sessions(
 ) -> dict[str, Any]:
     private = _private(request, ws, db)
     payload = observability.list_sessions(range, db, ws.context, force=force)
-    rows = [r for r in payload["sessions"] if private.visible(r.get("session_id"))]
+    rows = _project(request, db, ws).keep_rows(payload["sessions"])
+    rows = [r for r in rows if private.visible(r.get("session_id"))]
     rows = _drop_hidden(rows, _hidden(db, ws, viewer))
     return {**payload, "sessions": rows, "count": len(rows)}
 
@@ -171,10 +190,15 @@ def session_detail(
 ) -> dict[str, Any]:
     private = _private(request, ws, db)
     private.require_visible(session_id)  # before any query, cached or not
+    project = _project(request, db, ws)
+    if not project.owns_session(session_id):  # another project's ledger session
+        raise _session_not_found()
     hidden = _hidden(db, ws, viewer)
     if hidden.hides_session(session_id):  # a hidden agent's ledger session
-        raise NotFoundError("observability.session_not_found", "session not found")
+        raise _session_not_found()
     payload = observability.get_session(session_id, range, db, ws.context, force=force)
+    if not project.keeps_session(session_id, payload):  # unattributed: its spans decide
+        raise _session_not_found()
     if private.mentions_hidden(payload) or hidden.mentions(payload):
         raise NotFoundError("observability.session_not_found", "session not found")
     return payload
@@ -193,6 +217,16 @@ def session_transcript(
     `agent_id` attributes a session no ledger row claims."""
     private = _private(request, ws, db)
     private.require_visible(session_id)
+    # No span query here, so an unattributed session is ours only through an
+    # `agent_id` of this project — never another project's memory turns.
+    project = _project(request, db, ws)
+    verdict = project.session_verdict(session_id)
+    if verdict is False or (
+        verdict is None
+        and not (agent_id and project.allows_agent_id(agent_id))
+        and not project.bypass
+    ):
+        raise _session_not_found()
     hidden = _hidden(db, ws, viewer)
     if hidden.hides_session(session_id) or hidden.hides(agent_id):
         raise NotFoundError("observability.session_not_found", "session not found")
@@ -212,6 +246,20 @@ class SessionEvaluateBody(BaseModel):
     range: Literal["1h", "6h", "24h", "7d"] = "24h"
 
 
+def _refuse_foreign_evaluators(db: Session, workspace_id: str, ids: list[str]) -> None:
+    """A custom evaluator owned by another project answers exactly what a missing
+    one does — AWS's `ResourceNotFoundException`, like `require_visible_evaluators`.
+    Built-in and third-party ids belong to every project."""
+    foreign = visibility.hidden_aws_ids(Viewer.ALL, db, workspace_id, creators.EVALUATOR, ids)
+    for evaluator in ids:
+        if evaluator in foreign:
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException",
+                           "Message": f"Evaluator {evaluator} not found"}},
+                "GetEvaluator",
+            )
+
+
 @router.post("/sessions/{session_id}/evaluate")
 def session_evaluate(
     session_id: SessionIdParam,
@@ -224,18 +272,26 @@ def session_evaluate(
 
     Synchronous (one judge inference per evaluator), results are returned
     inline and never written to the ledger; 409
-    `observability.session_spans_missing` when no spans have landed yet. A custom
-    evaluator hidden by workspace isolation answers like a missing one."""
+    `observability.session_spans_missing` when no spans have landed yet. Another
+    project's session (or, for a non-administrator in a workspace of several
+    projects, one no ledger row attributes) answers like a missing one; so does a
+    custom evaluator of another project or hidden by workspace isolation."""
     _private(request, ws).require_visible(session_id)  # another principal's turn: 404
-    if viewer.filters:
-        db = SessionLocal()
-        try:
+    db = SessionLocal()
+    try:
+        project = _project(request, db, ws)
+        verdict = project.session_verdict(session_id)
+        if verdict is False or (verdict is None and not project.bypass):
+            raise _session_not_found()
+        # another project's custom evaluator is a missing one (AWS's own answer)
+        _refuse_foreign_evaluators(db, ws.id, body.evaluator_ids)
+        if viewer.filters:
             # a ledger-attributed session of a hidden agent answers like a missing one
             if HiddenAgents(db, viewer, ws.id).hides_session(session_id):
-                raise NotFoundError("observability.session_not_found", "session not found")
+                raise _session_not_found()
             require_visible_evaluators(db, ws.id, viewer, body.evaluator_ids)
-        finally:
-            db.close()
+    finally:
+        db.close()
     return observability.evaluate_session(
         session_id, body.range, body.evaluator_ids, ws.context
     )

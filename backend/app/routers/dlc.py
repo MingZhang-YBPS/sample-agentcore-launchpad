@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import owned_get
 from app.dlc import admission as admission_svc
 from app.dlc import calibration as cal_svc
 from app.dlc import compare as compare_svc
@@ -30,7 +31,7 @@ from app.models.dlc import CriteriaSet, Waiver
 from app.models.ledger import Agent, AuditEvent
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import agent_access, visibility
+from app.services import access, agent_access, visibility
 from app.services.agentcore.client import control_client
 from app.services.visibility import Viewer, require_viewer
 
@@ -40,7 +41,6 @@ router = APIRouter(
     # workspace isolation: a hidden `{agent_id}` / `{run_id}` reads as missing
     dependencies=[Depends(agent_access.require_path_ids_visible)],
 )
-ADMIN = "admin"
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -50,8 +50,27 @@ def _actor(request: Request) -> str:
     return require_identity(request).username
 
 
-def _is_admin(request: Request) -> bool:
-    return require_identity(request).role == ADMIN
+def _bypasses(request: Request) -> bool:
+    """The separation-of-duties and cost-guard exemption (design §3.6): phase 1, admins."""
+    return access.has_data_bypass(require_identity(request))
+
+
+def _can(request: Request, key: str) -> bool:
+    """A permission as `require_permission` reads it: the project's keys inside one."""
+    project = getattr(request.state, "project", None)
+    return project.can(key) if project is not None else require_identity(request).can(key)
+
+
+def _sees_verdicts(request: Request) -> bool:
+    """Blind labelling: only a calibrator (or an administrator) sees the judge's verdicts."""
+    return _bypasses(request) or _can(request, "judge.calibrate")
+
+
+def _writable(request: Request) -> bool:
+    """Whether a GET may persist what it computes (a refresh, a backfill). An archived
+    project serves reads only, so those writes are skipped there."""
+    project = getattr(request.state, "project", None)
+    return project is None or project.status == "active"
 
 
 def _agent(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
@@ -285,7 +304,7 @@ def sign_criteria_set(
 ) -> dict[str, Any]:
     row = criteria_svc.get_version(db, ws.id, lineage_id, version)
     criteria_svc.sign(db, row, actor=_actor(request), note=req.note,
-                      is_admin=_is_admin(request))
+                      is_admin=_bypasses(request))
     from app.services.audit import record_audit_event
 
     record_audit_event(workspace_id=ws.id, actor=_actor(request), action="criteria.sign",
@@ -603,7 +622,7 @@ def list_annotation_tasks(
     # the same test as the detail route: hardcoding `privileged` here handed every
     # annotator the judge's verdicts in the list, which is exactly what blind labelling
     # exists to withhold — an annotator who sees them first makes κ meaningless
-    privileged = identity.role == ADMIN or "judge.calibrate" in identity.permissions
+    privileged = _sees_verdicts(request)
     return {"tasks": [
         cal_svc.task_view(db, t, viewer=identity.username, privileged=privileged)
         for t in rows
@@ -617,6 +636,14 @@ def create_annotation_task(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    # the task is stamped from its agent: an unchecked id would file it into another
+    # project — written where its creator cannot see it
+    if req.agent_id:
+        _agent(db, ws, req.agent_id)
+    if req.dataset_id:
+        dataset = owned_get(db, EvalDataset, req.dataset_id)
+        if dataset is None or dataset.workspace_id != ws.id:
+            raise NotFoundError("dataset.not_found", "dataset not found")
     items = req.items
     if items is None:
         if not req.run_id:
@@ -625,6 +652,9 @@ def create_annotation_task(
         run = db.get(EvalRun, req.run_id)
         if run is None or run.workspace_id != ws.id:
             raise NotFoundError("run.not_found", "run not found")
+        if req.agent_id and run.agent_id != req.agent_id:
+            raise AppError("annotation.run_mismatch",
+                           "that run evaluated a different agent", status_code=422)
         items = _items_from_run(db, ws, run, req.criterion_key)
         if not items:
             raise AppError("annotation.no_items",
@@ -652,9 +682,10 @@ def get_annotation_task(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     task = cal_svc.get_task(db, ws.id, task_id)
-    _backfill_answers(db, ws, task)
+    if _writable(request):
+        _backfill_answers(db, ws, task)
     identity = require_identity(request)
-    privileged = identity.role == ADMIN or "judge.calibrate" in identity.permissions
+    privileged = _sees_verdicts(request)
     return cal_svc.task_view(db, task, viewer=identity.username, privileged=privileged)
 
 
@@ -874,13 +905,14 @@ def evaluate_release(
                        status_code=409)
     release_svc.start_evaluation(db, record, agent, ws.context, actor=_actor(request),
                                  repeats=req.repeats, confirm_cost=req.confirm_cost,
-                                 is_admin=_is_admin(request))
+                                 is_admin=_bypasses(request))
     db.commit()
     return _release_payload(db, ws, agent)
 
 
 @router.get("/agents/{agent_id}/release/gate")
 def release_gate(
+    request: Request,
     agent_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -890,7 +922,10 @@ def release_gate(
     if record is None:
         raise NotFoundError("release.nothing_pending", "no release is open for this agent")
     out = release_svc.evaluate(db, record)
-    db.commit()
+    if _writable(request):
+        db.commit()
+    else:
+        db.rollback()  # the report is still answered; an archived project keeps its row
     return {**out, "record": release_svc.record_out(record)}
 
 
@@ -1052,13 +1087,15 @@ class DuplicateIn(BaseModel):
 
 @router.get("/admission")
 def admission_queue(
+    request: Request,
     agent_id: str | None = Query(default=None, max_length=32),
     status: str | None = "new",
     refresh: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    if refresh and agent_id:
+    if refresh and agent_id and _writable(request):
+        _agent(db, ws, agent_id)  # candidates are stamped from it
         admission_svc.collect(db, ws.id, agent_id=agent_id)
         db.commit()
     return admission_svc.queue(db, ws.id, agent_id=agent_id, status=status)
@@ -1066,6 +1103,7 @@ def admission_queue(
 
 @router.get("/admission/{candidate_id}")
 def admission_candidate(
+    request: Request,
     candidate_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -1073,10 +1111,18 @@ def admission_candidate(
     candidate = admission_svc.get_candidate(db, ws.id, candidate_id)
     agent = db.get(Agent, candidate.agent_id)
     if not candidate.redaction:
-        candidate.redaction = admission_svc.redaction_preview(
+        redaction = admission_svc.redaction_preview(
             candidate.question, candidate.answer, agent, ws.context
         )
-        db.commit()
+        if _writable(request):
+            candidate.redaction = redaction
+            db.commit()
+        else:
+            return {
+                **admission_svc.candidate_out(candidate), "redaction": redaction,
+                "nearest": admission_svc.nearest_items(db, ws.id, candidate.question,
+                                                       agent_id=candidate.agent_id),
+            }
     return {
         **admission_svc.candidate_out(candidate),
         "nearest": admission_svc.nearest_items(db, ws.id, candidate.question,
@@ -1384,20 +1430,32 @@ def estimate_run(
 def audit_trail(
     target: str | None = Query(default=None, max_length=256),
     action: str | None = Query(default=None, max_length=160),
+    project: str | None = Query(default=None, max_length=32),
+    actor: str | None = Query(default=None, max_length=64),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """The decision history every workbench shows (append-only `audit_events`)."""
+    """The decision history every workbench shows (append-only `audit_events`).
+
+    Cross-project (the route is PROJECT_EXEMPT, design §5.10): `project` narrows to one
+    project's events, `project=workspace` to the workspace-level ones (no project)."""
     query = select(AuditEvent).where(AuditEvent.workspace_id == ws.id)
     if target:
         query = query.where(AuditEvent.target == target)
     if action:
         query = query.where(AuditEvent.action.like(f"{action}%"))
+    if project == "workspace":
+        query = query.where(AuditEvent.project_id.is_(None))
+    elif project:
+        query = query.where(AuditEvent.project_id == project)
+    if actor:
+        query = query.where(AuditEvent.actor == actor)
     rows = db.scalars(query.order_by(AuditEvent.created_at.desc()).limit(limit)).all()
     return {
         "events": [
             {"id": r.id, "actor": r.actor, "action": r.action, "target": r.target,
+             "project_id": r.project_id,
              "at": r.created_at.isoformat() if r.created_at else None}
             for r in rows
         ]

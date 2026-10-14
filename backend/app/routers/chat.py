@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.assistant.sessions import refuse_assistant_session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError, envelope, mapped_aws_error
+from app.core.project_scope import current_project, project_context
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
@@ -60,6 +61,31 @@ def _session_actor(
         .first()
     )
     return existing[0] if existing and existing[0] else requested_actor
+
+
+def _refuse_foreign_session(
+    db: Session, workspace_id: str, agent_id: str, session_id: str | None,
+) -> None:
+    """A session id another project already holds for this agent is not continued
+    here. Only a system preset (shared by every project) can reach this: without the
+    check the turn would open a second ledger row in this project on the other
+    project's AgentCore runtime session. It answers like a missing session."""
+    pid = current_project()
+    if not session_id or pid is None:
+        return
+    with project_context(None):
+        foreign = (
+            db.query(ChatSession.id)
+            .filter(
+                ChatSession.workspace_id == workspace_id,
+                ChatSession.agent_id == agent_id,
+                ChatSession.session_id == session_id,
+                ChatSession.project_id != pid,
+            )
+            .first()
+        )
+    if foreign is not None:
+        raise NotFoundError("chat.session_not_found", "chat session not found")
 
 
 def _agent_in(
@@ -144,6 +170,7 @@ def chat(
     agent = _get_active_agent(db, ws, agent_id, viewer)
     # An assistant-owned session of the preset is private to the assistant page.
     refuse_assistant_session(agent, req.session_id)
+    _refuse_foreign_session(db, ws.id, agent.id, req.session_id)
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )

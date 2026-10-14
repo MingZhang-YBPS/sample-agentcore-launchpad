@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
+from app.core.project_scope import project_context
 from app.models.ledger import AlertRule
 from app.services import costs
 from app.services.workspace import WorkspaceContext
@@ -133,9 +134,11 @@ def _quality_value(db: Session, workspace: WorkspaceContext) -> tuple[float | No
     )
 
 
-def _cost_value(db: Session, workspace: WorkspaceContext) -> tuple[float | None, str]:
+def _cost_value(
+    db: Session, workspace: WorkspaceContext, project: str | None = None
+) -> tuple[float | None, str]:
     try:
-        usd = costs.month_to_date_usd(db, workspace)
+        usd = costs.month_to_date_usd(db, workspace, project=project)
     except Exception as exc:  # noqa: BLE001
         return None, f"could not estimate spend: {type(exc).__name__}"
     return usd, "month-to-date estimate from the price map"
@@ -144,13 +147,26 @@ def _cost_value(db: Session, workspace: WorkspaceContext) -> tuple[float | None,
 def read_value(
     rule: AlertRule, db: Session, workspace: WorkspaceContext
 ) -> tuple[float | None, str]:
-    if rule.kind in ("error_rate", "latency_p95_ms"):
-        return _dashboard_value(rule.kind, rule.window or "24h", db, workspace)
-    if rule.kind == "online_quality":
-        return _quality_value(db, workspace)
-    if rule.kind == "cost_mtd_usd":
-        return _cost_value(db, workspace)
+    """The rule's value, measured as the rule's own project (design §5.12): a project
+    rule reads that project's dashboard, online configs and spend; a workspace rule
+    (NULL) reads the whole workspace — whichever project the caller is in, and the
+    same from the scheduler, which has none."""
+    with project_context(rule.project_id):
+        if rule.kind in ("error_rate", "latency_p95_ms"):
+            return _dashboard_value(rule.kind, rule.window or "24h", db, workspace)
+        if rule.kind == "online_quality":
+            return _quality_value(db, workspace)
+        if rule.kind == "cost_mtd_usd":
+            # a single-project workspace's spend is all that project's, attributed or not
+            several = rule.project_id is not None and _several_projects(db, workspace.id)
+            return _cost_value(db, workspace, rule.project_id if several else None)
     return None, f"unknown kind '{rule.kind}'"
+
+
+def _several_projects(db: Session, workspace_id: str) -> bool:
+    from app.services.observability import several_projects
+
+    return several_projects(db, workspace_id)
 
 
 def breached(rule: AlertRule, value: float) -> bool:
@@ -284,6 +300,9 @@ def rule_out(rule: AlertRule, skipped: str | None = None) -> dict[str, Any]:
         "last_notified_at": (
             rule.last_notified_at.isoformat() if rule.last_notified_at else None
         ),
+        # NULL = a workspace-level rule, measured across every project
+        "scope": "project" if rule.project_id else "workspace",
+        "project_id": rule.project_id,
         "created_by": rule.created_by,
         "created_at": rule.created_at.isoformat() if rule.created_at else None,
         **({"skipped": skipped} if skipped else {}),

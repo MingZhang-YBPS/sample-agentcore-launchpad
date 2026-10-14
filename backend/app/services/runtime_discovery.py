@@ -16,6 +16,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
+from app.core.project_scope import project_context
 from app.models.ledger import Agent
 from app.services.agentcore import harness as harness_api
 from app.services.agentcore import runtime as runtime_api
@@ -263,14 +264,19 @@ def _managed_match(
     Scoped to the workspace the scan ran against: the same resource name/id can
     exist in two environments, and matching ledger-wide would report an agent
     from a region this scan never looked at.
+
+    Across every project of the workspace, though: a resource another project
+    manages is managed, never importable here (design §5.5). The caller masks
+    which agent that is.
     """
     arns = {value for value in (runtime_arn, (harness or {}).get("arn")) if value}
     ids = {value for value in (runtime_id, (harness or {}).get("harnessId")) if value}
-    rows = (
-        db.query(Agent)
-        .filter(Agent.workspace_id == workspace_id, Agent.status != "deleted")
-        .all()
-    )
+    with project_context(None):
+        rows = (
+            db.query(Agent)
+            .filter(Agent.workspace_id == workspace_id, Agent.status != "deleted")
+            .all()
+        )
     matches = [row for row in rows if row.arn in arns] or [
         row for row in rows if row.resource_id in ids
     ]
@@ -464,15 +470,16 @@ def _display_name(
 ) -> str:
     from app.system_agents.presets import is_reserved_name
 
-    conflict = (
-        db.query(Agent)
-        .filter(
-            Agent.workspace_id == workspace_id,
-            Agent.name == resource_name,
-            Agent.status != "deleted",
+    with project_context(None):  # live names are unique across projects (§4.3)
+        conflict = (
+            db.query(Agent)
+            .filter(
+                Agent.workspace_id == workspace_id,
+                Agent.name == resource_name,
+                Agent.status != "deleted",
+            )
+            .first()
         )
-        .first()
-    )
     if is_reserved_name(resource_name):
         conflict = conflict or existing or object()  # reserved for a system preset
     if conflict is None or (existing is not None and conflict.id == existing.id):
@@ -543,11 +550,16 @@ def import_runtimes(
             )
             continue
 
+        existing = (
+            db.get(Agent, candidate["managed_agent_id"])  # None for another project's
+            if candidate["managed_agent_id"] is not None
+            else None
+        )
         # Ownership first: a launchpad-managed resource (including the harness
-        # owning a backing runtime) must never be duplicated as a new import.
-        if (
-            candidate["managed_agent_id"] is not None
-            and candidate["managed_agent_method"] != DISCOVERED_METHOD
+        # owning a backing runtime) must never be duplicated as a new import — nor
+        # one another project already imported.
+        if candidate["managed_agent_id"] is not None and (
+            candidate["managed_agent_method"] != DISCOVERED_METHOD or existing is None
         ):
             result["already_managed"].append(
                 {
@@ -567,12 +579,6 @@ def import_runtimes(
                 }
             )
             continue
-
-        existing = (
-            db.get(Agent, candidate["managed_agent_id"])
-            if candidate["managed_agent_id"] is not None
-            else None
-        )
 
         now = datetime.now(UTC)
         created = existing is None
@@ -627,11 +633,16 @@ def import_harnesses(
             continue
         candidate = _harness_candidate(detail, db, workspace_id=workspace_id)
 
+        existing = (
+            db.get(Agent, candidate["managed_agent_id"])  # None for another project's
+            if candidate["managed_agent_id"] is not None
+            else None
+        )
         # Ownership first: a harness deployed by launchpad (method="harness")
-        # must never be duplicated as an externally-owned import.
-        if (
-            candidate["managed_agent_id"] is not None
-            and candidate["managed_agent_method"] != DISCOVERED_METHOD
+        # must never be duplicated as an externally-owned import — nor one another
+        # project already imported.
+        if candidate["managed_agent_id"] is not None and (
+            candidate["managed_agent_method"] != DISCOVERED_METHOD or existing is None
         ):
             result["already_managed"].append(
                 {
@@ -642,11 +653,6 @@ def import_harnesses(
             )
             continue
 
-        existing = (
-            db.get(Agent, candidate["managed_agent_id"])
-            if candidate["managed_agent_id"] is not None
-            else None
-        )
         # Status gates the FIRST import only. Refreshing an existing import is how
         # the ledger learns the external harness broke — refusing would leave a
         # stale "active" row whose invoke attempts keep reaching a dead harness.

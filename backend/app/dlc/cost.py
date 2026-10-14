@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.core.project_scope import project_context
 from app.evaluation.models import EvalRun
 from app.models.dlc import Criterion
 from app.models.ledger import Agent, Workspace
@@ -108,12 +109,16 @@ def _judge_evaluators(evaluators: list[str], rows: list[Criterion]) -> list[dict
 
 
 def _judge_tokens(db: Session, evaluator_id: str) -> float | None:
-    """Median judge tokens per item, from what previous runs recorded."""
-    rows = db.scalars(
-        select(EvalRun.cost_actual).where(
-            EvalRun.cost_actual.isnot(None)
-        ).order_by(EvalRun.created_at.desc()).limit(20)
-    ).all()
+    """Median judge tokens per item, from what previous runs recorded.
+
+    Sampled across every project (a token count is not project data), so a project's
+    estimate does not shrink to its own few runs."""
+    with project_context(None):
+        rows = db.scalars(
+            select(EvalRun.cost_actual).where(
+                EvalRun.cost_actual.isnot(None)
+            ).order_by(EvalRun.created_at.desc()).limit(20)
+        ).all()
     samples = []
     for actual in rows:
         per_evaluator = ((actual or {}).get("judge_tokens") or {}).get(evaluator_id)

@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import DATA_DIR
 from app.core.errors import AppError
+from app.core.project_scope import current_project
 
 STAGING_DIR = DATA_DIR / "skill-lab" / "task-asset-staging"
 ASSETS_DIRNAME = "assets"
@@ -69,6 +70,29 @@ def _error(code: str, message: str, status: int = 422) -> AppError:
 
 def workspace_key(workspace_id: str) -> str:
     return hashlib.sha256(workspace_id.encode()).hexdigest()[:32]
+
+
+def _staging_root(workspace_id: str) -> Path:
+    """Staged uploads are keyed by workspace — and, in a workspace holding several
+    projects, by the current project too (design §5.5): a token staged in one project
+    never resolves in another. Same depth either way, so the sweep's
+    `*/*/metadata.json` still finds every stage."""
+    project_id = current_project()
+    if project_id and _several_projects(workspace_id):
+        return STAGING_DIR / workspace_key(f"{workspace_id}:{project_id}")
+    return STAGING_DIR / workspace_key(workspace_id)
+
+
+def _several_projects(workspace_id: str) -> bool:
+    from app.core.db import SessionLocal
+    from app.services import access
+
+    db = SessionLocal()
+    try:
+        bindings = access.workspace_bindings(db, workspace_id)
+    finally:
+        db.close()
+    return sum(1 for b in bindings if b.status == "active") > 1
 
 
 def validate_destination(path: str) -> str:
@@ -232,7 +256,7 @@ async def stage_uploads(workspace_id: str, uploads: list[UploadFile]) -> list[di
         raise _error("asset_duplicate_name", "duplicate task asset filenames are not allowed")
 
     stage_id = secrets.token_urlsafe(18)
-    stage_dir = STAGING_DIR / workspace_key(workspace_id) / stage_id
+    stage_dir = _staging_root(workspace_id) / stage_id
     blobs = stage_dir / "blobs"
     blobs.mkdir(parents=True)
     created = _now()
@@ -286,7 +310,7 @@ async def stage_uploads(workspace_id: str, uploads: list[UploadFile]) -> list[di
 def resolve_staged(workspace_id: str, token: str) -> tuple[dict[str, Any], Path, Path]:
     if not isinstance(token, str) or not token.startswith("ta_") or "/" in token or "\\" in token:
         raise _error("asset_token_invalid", "invalid staged task asset token")
-    root = STAGING_DIR / workspace_key(workspace_id)
+    root = _staging_root(workspace_id)
     for metadata_path in root.glob("*/metadata.json") if root.exists() else ():
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))

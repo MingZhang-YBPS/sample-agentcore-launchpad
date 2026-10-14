@@ -5,10 +5,11 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.project_scope import project_context
 from app.evaluation import online as online_eval
 from app.evaluation.models import EvalRun
 from app.models.ledger import ChatSession
@@ -17,6 +18,7 @@ from app.services import visibility
 from app.services.agent_access import HiddenAgents, hidden_agent_ids
 from app.services.agentcore.client import control_client
 from app.services.governance import attached_policy_engine_id
+from app.services.observability import ProjectAgents
 from app.services.registry_console import console_list
 from app.services.ttfa import compute_ttfa
 from app.services.visibility import Viewer, require_viewer
@@ -32,7 +34,8 @@ _cache: dict[str, dict[str, Any]] = {}
 # Single-flight per (workspace, viewer): a slow Logs Insights poll for one account
 # must not hold up another workspace's tile. Under workspace isolation a member's
 # tile covers only their visible configs, so the quality value is cached per
-# `Viewer.principal_key()` ("all" for every viewer who sees everything).
+# `Viewer.principal_key()` ("all" for every viewer who sees everything, prefixed
+# with the project: online configs are project rows).
 _quality_locks: dict[tuple[str, str], threading.Lock] = {}
 _quality_locks_guard = threading.Lock()
 
@@ -72,14 +75,27 @@ def _registry_assets(workspace: WorkspaceContext) -> dict[str, int]:
 
 
 def _viewer_assets(
-    db: Session, workspace: WorkspaceContext, viewer: Viewer, assets: dict[str, int]
+    db: Session,
+    workspace: WorkspaceContext,
+    viewer: Viewer,
+    assets: dict[str, int],
+    project: ProjectAgents | None = None,
 ) -> dict[str, int]:
-    """The cached counts as `viewer` sees them: under workspace isolation the A2A
+    """The cached counts as `viewer` sees them. In a workspace of several projects
+    the A2A records counted are the current project's agents' (and the presets'),
+    plus — for an administrator — records no agent claims; MCP and skill records are
+    workspace-level and stay whole (design §5.5). Under workspace isolation the A2A
     records of agents hidden from a member are not counted."""
+    listed = set(_slot(workspace.id).get("a2a_ids") or [])
+    if project:
+        mine = listed & project.record_ids
+        if project.bypass:
+            mine |= listed - project.known_record_ids
+        listed = mine
+        assets = {**assets, "agents": len(listed)}
     if not viewer.filters:
         return assets
     hidden = HiddenAgents(db, viewer, workspace.id).record_ids
-    listed = set(_slot(workspace.id).get("a2a_ids") or [])
     drop = len(hidden & listed)
     return {**assets, "agents": max(0, assets.get("agents", 0) - drop)} if drop else assets
 
@@ -104,12 +120,15 @@ def _traces_active(workspace: WorkspaceContext) -> bool:
 
 @router.get("/overview")
 def overview(
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     resources = ws.context.resources
-    assets = _viewer_assets(db, ws.context, viewer, _registry_assets(ws.context))
+    scope = getattr(request.state, "project", None)
+    project = ProjectAgents(db, ws.id, bypass=bool(scope is not None and scope.bypass))
+    assets = _viewer_assets(db, ws.context, viewer, _registry_assets(ws.context), project)
     policy_engine_id = attached_policy_engine_id(control_client(ws.context), ws.context)
 
     day_ago = datetime.now(UTC) - timedelta(hours=24)
@@ -174,8 +193,13 @@ def overview_ttfa(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Time to First Agent for this workspace's registered accounts (admin-only in
-    `route_policy`: it lists per-user activity). Ledger read only, no AWS call."""
-    return compute_ttfa(db, ws.id)
+    `route_policy`: it lists per-user activity). Ledger read only, no AWS call.
+
+    Workspace-wide, whichever project the console is in: a user whose first agent
+    lives in another project still has one (an administrator's cross-project view,
+    like `/api/costs`)."""
+    with project_context(None):
+        return compute_ttfa(db, ws.id)
 
 
 @router.get("/overview/online-quality")
@@ -190,7 +214,8 @@ def overview_online_quality(
     24 h. Served from a 120 s per-workspace cache with single-flight (one Logs
     Insights scan per window, however many tabs poll); a workspace with no agent
     config short-circuits without any AWS call. Under workspace isolation a member
-    sees only their visible configs, cached under their own key."""
+    sees only their visible configs, cached under their own key — and every key
+    carries the project (`Viewer.principal_key`): the configs are project rows."""
     key = viewer.principal_key()
     by_viewer = _slot(ws.id).setdefault("quality", {})
 

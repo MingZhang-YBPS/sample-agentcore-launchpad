@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.assistant import purge as assistant_purge
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import owned_get, project_context, visible_in_current_project
 from app.evaluation.online_evaluators import (
     normalize_online_evaluators,
     refuse_hidden_evaluators,
@@ -313,7 +314,8 @@ def create_runtime_canary(
             status_code=400,
         )
     if req.source_experiment_id:
-        source = db.get(Experiment, req.source_experiment_id)
+        # another project's experiment reads as missing (owned_get), so invalid
+        source = owned_get(db, Experiment, req.source_experiment_id)
         if source is not None and (
             source.workspace_id != ws.id or not visibility.sees(viewer, db, source.created_by)
         ):
@@ -372,6 +374,13 @@ def runtime_canary_action(
             db.get(Agent, row.champion_agent_id) if row.champion_agent_id else None,
             NotFoundError("agent.not_found", "agent not found"),
         )
+        # a legacy canary's separate challenger must be in the same project (§5.5)
+        challenger = row.challenger_agent_id
+        if challenger and challenger != row.champion_agent_id:
+            with project_context(None):
+                other = db.get(Agent, challenger)
+            if other is not None and not visible_in_current_project(other):
+                raise NotFoundError("agent.not_found", "agent not found")
     system_agents.assert_not_system_agent(db, row.champion_agent_id, "canary")
     system_agents.assert_not_system_agent(db, row.challenger_agent_id, "canary")
     # a conversation CLEAR owns this canary's cleanup while it runs

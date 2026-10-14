@@ -800,6 +800,11 @@ class UserTokenRevocation(ProjectShared, Base):
     user_id: Mapped[str] = mapped_column(String(128))
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
+    def project_platform_row(self) -> bool:
+        """Per (user, Connection), not per project: one row, unique per workspace, that
+        every project's invoke path honours (design §4.2) — always NULL."""
+        return True
+
 
 class OauthPendingSession(ProjectOwned, Base):
     """One in-flight 3LO consent session awaiting ``CompleteResourceTokenAuth``
@@ -887,6 +892,11 @@ class PolicyDecision(ProjectShared, Base):
     reason: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
+    def project_platform_row(self) -> bool:
+        """Governance of the shared gateway is workspace level (design §4.2): one
+        decision log for every project."""
+        return True
+
 
 class PolicyChange(ProjectShared, Base):
     """Immutable request/snapshot fields plus mutable AWS operation outcome."""
@@ -919,6 +929,11 @@ class PolicyChange(ProjectShared, Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+
+    def project_platform_row(self) -> bool:
+        """A change to the workspace-shared gateway is workspace level (design §4.2):
+        every project reads the same audit trail and the same in-flight lock."""
+        return True
 
 
 _POLICY_CHANGE_IMMUTABLE = {

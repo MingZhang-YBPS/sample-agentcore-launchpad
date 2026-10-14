@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context
 from app.models.ledger import ManagedMemory
 from app.services import creators, visibility
 from app.services.agentcore.client import control_client
@@ -53,6 +54,10 @@ def managed_rows(db: Session, workspace: WorkspaceContext) -> dict[str, ManagedM
 
 
 def is_managed(db: Session, workspace: WorkspaceContext, memory_id: str | None) -> bool:
+    """Managed by this workspace *and visible in the current project*: on a request
+    path the ``ManagedMemory`` read is project-filtered, so another project's memory
+    reads as unmanaged — an agent may pin only a current-project or workspace-level
+    (NULL) memory (design §5.4). The bootstrap memory has no row: platform level."""
     if not memory_id:
         return False
     if memory_id == memory_id_or_none(workspace):
@@ -73,8 +78,8 @@ def require_managed(
 ) -> None:
     """404 for an id this workspace does not manage — the same answer an id from
     another workspace gets, so the lifecycle API discloses nothing about it. A
-    managed memory hidden from ``viewer`` by workspace isolation answers the same.
-    ``is_managed`` itself stays unfiltered: agent pins, deploy and chat use it."""
+    managed memory hidden from ``viewer`` by workspace isolation, or of another
+    project (``is_managed`` is project-filtered), answers the same."""
     if not is_managed(db, workspace, memory_id) or memory_id in hidden_ids(
         db, workspace, viewer
     ):
@@ -100,6 +105,28 @@ def hidden_ids(db: Session, workspace: WorkspaceContext, viewer: Viewer) -> set[
     }
 
 
+def foreign_ids(
+    db: Session, workspace: WorkspaceContext, memory_ids: list[str] | None = None
+) -> set[str]:
+    """Managed memory ids that belong to another project than the current one.
+
+    AWS lists every project's memories, and the project-filtered ``managed_ids``
+    misses those rows, so they would read as *detected, not managed* — listed, and
+    adoptable. Read across projects; empty with no current project (workers)."""
+    pid = current_project()
+    if pid is None:
+        return set()
+    query = db.query(ManagedMemory.memory_id).filter(
+        ManagedMemory.workspace_id == workspace.id,
+        ManagedMemory.project_id.is_not(None),
+        ManagedMemory.project_id != pid,
+    )
+    if memory_ids is not None:
+        query = query.filter(ManagedMemory.memory_id.in_(memory_ids))
+    with project_context(None):
+        return {memory_id for (memory_id,) in query}
+
+
 def register(
     db: Session,
     workspace: WorkspaceContext,
@@ -113,9 +140,17 @@ def register(
 
     A created memory records its full creator. An adopted one pre-existed in AWS,
     so it records no owner id — only the adopting administrator's name, for display.
+    An id another project already manages answers 404 ``memory.not_managed`` (the
+    unique index is workspace-wide), naming no project.
     """
     if not memory_id or is_managed(db, workspace, memory_id):
         return
+    if foreign_ids(db, workspace, [memory_id]):
+        raise NotFoundError(
+            "memory.not_managed",
+            "this memory is not managed by the workspace",
+            {"memory_id": memory_id},
+        )
     row = ManagedMemory(workspace_id=workspace.id, memory_id=memory_id, origin=origin)
     if creator is not None and origin == "adopted":
         creator = Creator(user_id=None, name=creator.name)

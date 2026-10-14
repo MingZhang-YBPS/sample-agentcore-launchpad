@@ -76,21 +76,28 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import unquote
 
 from botocore.exceptions import ClientError
 from botocore.loaders import Loader
 from botocore.model import ServiceModel, Shape
-from sqlalchemy import func, or_, select, true, update
+from sqlalchemy import false, func, or_, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.assistant import evaluation_plan as plan_contract
-from app.assistant.principal import collaborator_clause, may_collaborate, principal_of
+from app.assistant.principal import (
+    collaborator_clause,
+    may_collaborate,
+    principal_of,
+    project_can,
+)
 from app.core.config import DATA_DIR
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
 from app.evaluation.models import EvalDataset
@@ -115,8 +122,14 @@ logger = logging.getLogger(__name__)
 PERMISSION = "agents.deploy"
 
 
-def may_materialize(identity: Identity) -> bool:
-    return identity.can(PERMISSION)
+def may_materialize(
+    identity: Identity, db: Session | None = None, workspace_id: str | None = None,
+) -> bool:
+    """With ``db``: the caller's keys in the current project, re-read from the
+    database (design §3.4); without: the identity's own (account) keys."""
+    if db is None or workspace_id is None:
+        return identity.can(PERMISSION)
+    return project_can(db, identity, workspace_id, PERMISSION)
 
 
 def permission_error() -> AppError:
@@ -125,16 +138,31 @@ def permission_error() -> AppError:
                     {"permission": PERMISSION}, status_code=403)
 
 
-def _authorized_user(user_id: str) -> Any:
+def _authorized_user(db: Session, user_id: str, workspace_id: str) -> Any:
     """SQL predicate: the account is active, unexpired and holds ``PERMISSION`` — an
     administrator, or a member without a stored denial (``users.permissions`` records
-    only explicit ``false`` entries)."""
-    return select(User.id).where(
-        User.id == user_id, User.status == "active",
-        (User.expires_at.is_(None)) | (User.expires_at > _now()),
-        or_(User.role == ROLE_ADMIN,
-            func.coalesce(User.permissions[PERMISSION].as_boolean(), true()) == true()),
-    ).exists()
+    only explicit ``false`` entries).
+
+    Inside a project the key is the project's (a project role is not the account's
+    keys): it is re-resolved here, in the claim's transaction, and the predicate keeps
+    the account state (active, unexpired) atomic with the write."""
+    account_ok = (User.id == user_id, User.status == "active",
+                  (User.expires_at.is_(None)) | (User.expires_at > _now()))
+    if current_project() is None:
+        return select(User.id).where(
+            *account_ok,
+            or_(User.role == ROLE_ADMIN,
+                func.coalesce(User.permissions[PERMISSION].as_boolean(), true()) == true()),
+        ).exists()
+    user = db.get(User, user_id)
+    if user is None or not _user_project_can(db, user, workspace_id, current_project()):
+        return false()
+    return select(User.id).where(*account_ok).exists()
+
+
+def _user_project_can(db: Session, user: User, workspace_id: str, project_id: str) -> bool:
+    who = SimpleNamespace(user_id=user.id, role=user.role)
+    return project_can(db, who, workspace_id, PERMISSION, project_id)
 
 HANDLER_PATH = Path(__file__).resolve().parent / "lambda_runtime" / "handler.py"
 LOCK_DIR = DATA_DIR / "locks" / "eval-assets"
@@ -524,12 +552,16 @@ _NAME_FREE_STATES = ("deleted", "skipped")
 
 def ledger_evaluator_names(db: Session, workspace_id: str) -> set[str]:
     """Names of evaluators the workspace's asset operations created or may have created
-    (an uncertain create); never-dispatched and definitely rejected creates hold none."""
+    (an uncertain create); never-dispatched and definitely rejected creates hold none.
+
+    Workspace-wide across projects: the names are unique per account and Region, and
+    only names come out, never whose operation holds them."""
     taken: set[str] = set()
-    ops = db.query(EvaluationAssetOperation).filter(
-        EvaluationAssetOperation.workspace_id == workspace_id).all()
-    for op in ops:
-        for res in op.resources or []:
+    with project_context(None):
+        resource_lists = db.scalars(select(EvaluationAssetOperation.resources).where(
+            EvaluationAssetOperation.workspace_id == workspace_id)).all()
+    for resources in resource_lists:
+        for res in resources or []:
             if res.get("kind") != "evaluator" or not res.get("name") \
                     or res.get("status") in _NAME_FREE_STATES:
                 continue
@@ -645,7 +677,11 @@ def approver_authorized(db: Session, op: EvaluationAssetOperation) -> str | None
         return "the approving account no longer exists"
     if user.status != "active" or users_service.is_expired(user):
         return "the approving account is disabled or expired"
-    if user.role != ROLE_ADMIN and PERMISSION not in granted_permissions(user.permissions):
+    if op.project_id is not None:  # the approver's keys in the operation's project
+        held = _user_project_can(db, user, op.workspace_id, op.project_id)
+    else:
+        held = user.role == ROLE_ADMIN or PERMISSION in granted_permissions(user.permissions)
+    if not held:
         return f"the approving account no longer holds the {PERMISSION} permission"
     return None
 
@@ -798,7 +834,8 @@ def approve_plan(
     if recheck is not None:
         identity = recheck(db)
         current = db.get(AssistantConversation, conversation.id)
-        if not may_materialize(identity) or not may_collaborate(current, principal_of(identity)):
+        if not may_materialize(identity, db, conversation.workspace_id) \
+                or not may_collaborate(current, principal_of(identity)):
             db.rollback()
             raise NotFoundError("assistant.conversation_not_found", "conversation not found")
         op.approved_by = identity.username
@@ -821,7 +858,7 @@ def approve_plan(
         owner_ok,
     ]
     if op.approver_user_id is not None:
-        conditions.append(_authorized_user(op.approver_user_id))
+        conditions.append(_authorized_user(db, op.approver_user_id, op.workspace_id))
     claimed = db.execute(
         update(AssistantEvaluationPlan).where(*conditions).values(status="approved")
     ).rowcount
@@ -2342,18 +2379,25 @@ def run_operation(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> bool:
     """Run (or resume) one operation synchronously. False when another worker holds
-    the operation's host lock or nothing is left to run."""
+    the operation's host lock or nothing is left to run.
+
+    The worker runs as the operation's project (a thread starts with no current
+    project): the Dataset and resource-creator rows it writes are filed there."""
     with _flock(op_id) as held:
         if not held:
             return False
         db = SessionLocal()
         try:
-            token = claim_lease(db, op_id)
+            with project_context(None):
+                project_id = db.scalar(select(EvaluationAssetOperation.project_id)
+                                       .where(EvaluationAssetOperation.id == op_id))
+                token = claim_lease(db, op_id)
         finally:
             db.close()
         if token is None:
             return False
-        _Runner(op_id, clients, sleeper, token).run()
+        with project_context(project_id):
+            _Runner(op_id, clients, sleeper, token).run()
         return True
 
 
@@ -3098,7 +3142,8 @@ def review_lambda_initial_revision(
         db.expire_all()  # BEFORE the recheck: its reads must not hit cached rows
         fresh_identity = recheck(db) if recheck else None
         principal = principal_of(fresh_identity) if fresh_identity else None
-        if fresh_identity is not None and not may_materialize(fresh_identity):
+        if fresh_identity is not None and not may_materialize(fresh_identity, db,
+                                                              op.workspace_id):
             raise permission_error()
         db.expire_all()
         op = db.get(EvaluationAssetOperation, op.id)
@@ -3211,7 +3256,7 @@ def review_lambda_initial_revision(
             owner_ok, plan_ok, workspace_ok,
         ]
         for user_id in {op.approver_user_id, review["reviewer_user_id"]} - {None}:
-            conditions.append(_authorized_user(user_id))
+            conditions.append(_authorized_user(db, user_id, op.workspace_id))
         rows = db.execute(
             update(EvaluationAssetOperation)
             .where(*conditions)

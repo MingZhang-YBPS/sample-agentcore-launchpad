@@ -22,9 +22,12 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func, select
+
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
+from app.core.project_scope import current_project, project_context
 from app.deployer.pipeline import create_deployment, execute_deploy_job
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.models import EvalRun
@@ -36,7 +39,7 @@ from app.evaluation.online_evaluators import (  # noqa: F401 — re-exported
 from app.evaluation.scenarios import scenario_prompts
 from app.models.ledger import Agent, Deployment, Job
 from app.optimization import providers as rec_providers
-from app.optimization.models import Experiment
+from app.optimization.models import Experiment, RuntimeCanary
 from app.optimization.providers import evidence as rec_evidence
 from app.optimization.providers.base import OptimizeRequest
 from app.schemas.agent import AgentSpec
@@ -151,16 +154,21 @@ def run_action(exp_id: str, action: str, fn: Callable[[Progress], Any]) -> None:
 
     # Refuse before running_action is written and before the thread exists: a
     # system-managed preset is never the subject of an experiment action.
-    _refuse_system_agent(_get(exp_id).agent_id, action)
+    exp = _get(exp_id)
+    _refuse_system_agent(exp.agent_id, action)
+    # a thread inherits no context: the action reads and writes as the experiment's
+    # project (a promote's deploy job is stamped there, not platform-wide)
+    project_id = exp.project_id
 
     def runner() -> None:
-        try:
-            fn(progress)
-            _update(exp_id, running_action=None, progress=None)
-        except Exception as exc:
-            # the action prefix lets the UI pin the failure to its button
-            _update(exp_id, running_action=None, progress=None,
-                    error=f"{action}: {type(exc).__name__}: {exc}"[:500])
+        with project_context(project_id):
+            try:
+                fn(progress)
+                _update(exp_id, running_action=None, progress=None)
+            except Exception as exc:
+                # the action prefix lets the UI pin the failure to its button
+                _update(exp_id, running_action=None, progress=None,
+                        error=f"{action}: {type(exc).__name__}: {exc}"[:500])
 
     _update(exp_id, running_action=action, error=None)
     _spawn(runner)
@@ -1126,6 +1134,31 @@ def list_ab_tests(data: Any) -> list[dict[str, Any]]:
             return tests
 
 
+_ARM_NAME_RE = re.compile(r"^(exp|can)_([A-Za-z0-9]+)_", re.IGNORECASE)
+
+
+def _other_project_test(name: str) -> bool:
+    """An `exp_<id8>_…` / `can_<id8>_…` A/B test whose experiment or canary belongs
+    to another project than the current one (the shared gateway is workspace-wide)."""
+    m = _ARM_NAME_RE.match(name)
+    if m is None or current_project() is None:
+        return False
+    model = Experiment if m.group(1).lower() == "exp" else RuntimeCanary
+    id8 = m.group(2)
+    db = SessionLocal()
+    try:
+        def owner() -> str | None:
+            return db.scalar(select(model.id).where(
+                func.lower(model.id).startswith(id8.lower(), autoescape=True)).limit(1))
+
+        if owner() is not None:
+            return False  # the current project's own
+        with project_context(None):
+            return owner() is not None
+    finally:
+        db.close()
+
+
 def assert_gateway_available(
     gateway_arn: str,
     data: Any,
@@ -1155,6 +1188,10 @@ def assert_gateway_available(
                         "name": test.get("name"),
                         "execution_status": test.get("executionStatus"),
                     }
+                    if not _other_project_test(str(test.get("name") or ""))
+                    # another project's test: busy, but not named
+                    else {"id": None, "name": None,
+                          "execution_status": test.get("executionStatus")}
                     for test in active
                 ],
             },

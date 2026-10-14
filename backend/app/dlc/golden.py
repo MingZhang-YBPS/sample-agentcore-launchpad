@@ -70,6 +70,12 @@ def create(
     actor: str,
     description: str = "",
 ) -> EvalDataset:
+    if criteria_lineage_id:
+        # resolved through the project filter: another project's lineage reads as missing
+        # (it could never be resolved here, and would pollute `for_criteria` matching)
+        from app.dlc import criteria as criteria_svc
+
+        criteria_svc.get_version(db, workspace_id, criteria_lineage_id)
     parent = EvalDataset(
         workspace_id=workspace_id, name=name[:64], kind="predefined", role="golden",
         criteria_set_id=criteria_lineage_id, description=description, items=[],

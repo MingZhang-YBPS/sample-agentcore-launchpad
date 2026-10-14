@@ -35,10 +35,12 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.errors import AppError
+from app.core.project_scope import current_project
 from app.models.resource_mapping import ResourceMapping
 
 KIND_KB = "kb"
@@ -47,6 +49,12 @@ KIND_GATEWAY = "gateway"
 KIND_MCP_RECORD = "mcp_record"
 KIND_SKILL = "skill"
 KINDS = (KIND_KB, KIND_MEMORY, KIND_GATEWAY, KIND_MCP_RECORD, KIND_SKILL)
+
+# Who a mapping row is for (design §5.6): a project's own override, or the workspace
+# default (project_id NULL) every project of the workspace falls back to.
+SCOPE_PROJECT = "project"
+SCOPE_WORKSPACE = "workspace"
+SCOPES = (SCOPE_PROJECT, SCOPE_WORKSPACE)
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # The same shapes the AgentSpec fields enforce, so a mapping can never produce a spec the
@@ -175,6 +183,8 @@ def mapping_out(row: ResourceMapping) -> dict[str, Any]:
         "name": row.name,
         "key": key_of(row.kind, row.name),
         "resource_id": row.resource_id,
+        "scope": SCOPE_WORKSPACE if row.project_id is None else SCOPE_PROJECT,
+        "project_id": row.project_id,
         "note": row.note,
         "updated_by": row.updated_by,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -191,6 +201,26 @@ def list_mappings(db: Session, workspace_id: str) -> list[ResourceMapping]:
     )
 
 
+def _find(
+    db: Session, workspace_id: str, kind: str, name: str, scope: str
+) -> ResourceMapping | None:
+    """The one row a write addresses. Inside a project the read criteria show its own
+    rows plus the workspace defaults, so the scope must pick one explicitly — never an
+    arbitrary `.first()` that would let any project rewrite the default. Unscoped (no
+    current project) the old single lookup applies."""
+    query = select(ResourceMapping).where(
+        ResourceMapping.workspace_id == workspace_id,
+        ResourceMapping.kind == kind,
+        ResourceMapping.name == name,
+    )
+    pid = current_project()
+    if scope == SCOPE_WORKSPACE:
+        query = query.where(ResourceMapping.project_id.is_(None))
+    elif pid is not None:
+        query = query.where(ResourceMapping.project_id == pid)
+    return db.scalars(query).first()
+
+
 def upsert_mapping(
     db: Session,
     *,
@@ -200,16 +230,12 @@ def upsert_mapping(
     resource_id: str,
     note: str | None,
     updated_by: str | None,
+    scope: str = SCOPE_PROJECT,
 ) -> ResourceMapping:
     resource_id = resource_id.strip()
     validate_mapping(kind, name, resource_id)
-    row = db.scalars(
-        select(ResourceMapping).where(
-            ResourceMapping.workspace_id == workspace_id,
-            ResourceMapping.kind == kind,
-            ResourceMapping.name == name,
-        )
-    ).first()
+    row = _find(db, workspace_id, kind, name, scope)
+    created = row is None
     if row is None:
         row = ResourceMapping(workspace_id=workspace_id, kind=kind, name=name, resource_id="")
         db.add(row)
@@ -217,17 +243,19 @@ def upsert_mapping(
     row.note = (note or "").strip() or None
     row.updated_by = updated_by
     db.flush()
+    if created and scope == SCOPE_WORKSPACE and row.project_id is not None:
+        # the flush stamped the new row with the current (or sole) project; a workspace
+        # default is project-less by definition
+        db.execute(text("UPDATE resource_mappings SET project_id = NULL WHERE id = :id"),
+                   {"id": row.id})
+        set_committed_value(row, "project_id", None)
     return row
 
 
-def delete_mapping(db: Session, *, workspace_id: str, kind: str, name: str) -> bool:
-    row = db.scalars(
-        select(ResourceMapping).where(
-            ResourceMapping.workspace_id == workspace_id,
-            ResourceMapping.kind == kind,
-            ResourceMapping.name == name,
-        )
-    ).first()
+def delete_mapping(
+    db: Session, *, workspace_id: str, kind: str, name: str, scope: str = SCOPE_PROJECT
+) -> bool:
+    row = _find(db, workspace_id, kind, name, scope)
     if row is None:
         return False
     db.delete(row)
@@ -257,6 +285,10 @@ def _logical_name(ref: Reference, source_by_id: dict[tuple[str, str], str]) -> s
     return derived or "unnamed"
 
 
+def _defaults_first(rows: list[ResourceMapping]) -> list[ResourceMapping]:
+    return sorted(rows, key=lambda row: row.project_id is not None)
+
+
 def resolve_spec(
     db: Session,
     spec: dict[str, Any],
@@ -276,12 +308,15 @@ def resolve_spec(
     out = copy.deepcopy(spec)
     if not refs:
         return Resolution(out, [], [])
+    # a project's own mapping overrides the workspace default (§5.6): defaults first,
+    # so the project's row is the one left in each dict
     source_by_id: dict[tuple[str, str], str] = {}
     if source_workspace_id:
-        for row in list_mappings(db, source_workspace_id):
+        for row in _defaults_first(list_mappings(db, source_workspace_id)):
             source_by_id[(row.kind, row.resource_id)] = row.name
     target_by_key = {
-        (row.kind, row.name): row for row in list_mappings(db, target_workspace_id)
+        (row.kind, row.name): row
+        for row in _defaults_first(list_mappings(db, target_workspace_id))
     }
     src_res, tgt_res = source_resources or {}, target_resources or {}
     resolved: list[dict[str, Any]] = []

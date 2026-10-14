@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.project_scope import project_context
 from app.models.ledger import (
     Agent,
     AlertRule,
@@ -34,6 +35,7 @@ from app.models.ledger import (
     Promotion,
     Workspace,
 )
+from app.models.projects import Project, ProjectWorkspace
 from app.services import alerts as alert_service
 
 # A bootstrap state that means the environment cannot serve anything yet.
@@ -41,25 +43,71 @@ UNUSABLE_STATES = ("registered", "bootstrapping", "failed")
 STALE_DEPLOY_DAYS = 90
 
 
-def _counts_by_workspace(db: Session, model: Any, **filters: Any) -> dict[str, int]:
-    query = select(model.workspace_id, func.count()).group_by(model.workspace_id)
+def _counts_by_workspace_project(
+    db: Session, model: Any, **filters: Any
+) -> dict[tuple[str, str | None], int]:
+    """`(workspace, project) → rows`; project None = workspace / platform-level rows."""
+    query = select(model.workspace_id, model.project_id, func.count()).group_by(
+        model.workspace_id, model.project_id
+    )
     for column, value in filters.items():
         query = query.where(getattr(model, column) == value)
-    return {row[0]: int(row[1]) for row in db.execute(query).all() if row[0]}
+    return {(row[0], row[1]): int(row[2]) for row in db.execute(query).all() if row[0]}
 
 
-def fleet_overview(db: Session) -> dict[str, Any]:
-    """One row per workspace: what it runs, what is failing, what is waiting.
+def _per_workspace(
+    counts: dict[tuple[str, str | None], int], project: str | None
+) -> dict[str, int]:
+    """Fold the per-project counts into per-workspace ones — one project's only when
+    the view is filtered to it."""
+    out: dict[str, int] = {}
+    for (workspace_id, project_id), n in counts.items():
+        if project is None or project_id == project:
+            out[workspace_id] = out.get(workspace_id, 0) + n
+    return out
 
-    Admin-only by classification — it spans environments a member may not be granted.
+
+def fleet_overview(db: Session, project: str | None = None) -> dict[str, Any]:
+    """One row per workspace: what it runs, what is failing, what is waiting — and,
+    per workspace, the same numbers per bound project (design §6.6).
+
+    Admin-only by classification — it spans environments a member may not be granted,
+    and the projects in them: the one business view that reads across projects, so it
+    runs unscoped whatever project the caller's console is in. `project` keeps the
+    workspaces that project is bound to and counts only its rows.
     """
+    with project_context(None):
+        return _fleet_overview(db, project)
+
+
+def _fleet_overview(db: Session, project: str | None) -> dict[str, Any]:
     workspaces = list(db.scalars(select(Workspace).order_by(Workspace.id)))
-    active = _counts_by_workspace(db, Agent, status="active")
-    deploying = _counts_by_workspace(db, Agent, status="deploying")
-    failed_agents = _counts_by_workspace(db, Agent, status="failed")
-    failed_jobs = _counts_by_workspace(db, Job, status="failed")
-    pending_promotions = _counts_by_workspace(db, Promotion, status="pending")
-    firing = _counts_by_workspace(db, AlertRule, state=alert_service.STATE_FIRING)
+    names = {row.id: row.name for row in db.scalars(select(Project))}
+    bound: dict[str, list[str]] = {}
+    for binding in db.scalars(
+        select(ProjectWorkspace).order_by(
+            ProjectWorkspace.is_workspace_default.desc(), ProjectWorkspace.project_id
+        )
+    ):
+        bound.setdefault(binding.workspace_id, []).append(binding.project_id)
+    if project is not None:
+        workspaces = [row for row in workspaces if project in bound.get(row.id, [])]
+    counts = {
+        "agents_active": _counts_by_workspace_project(db, Agent, status="active"),
+        "agents_deploying": _counts_by_workspace_project(db, Agent, status="deploying"),
+        "agents_failed": _counts_by_workspace_project(db, Agent, status="failed"),
+        "jobs_failed": _counts_by_workspace_project(db, Job, status="failed"),
+        "promotions_pending": _counts_by_workspace_project(db, Promotion, status="pending"),
+        "alerts_firing": _counts_by_workspace_project(
+            db, AlertRule, state=alert_service.STATE_FIRING
+        ),
+    }
+    active = _per_workspace(counts["agents_active"], project)
+    deploying = _per_workspace(counts["agents_deploying"], project)
+    failed_agents = _per_workspace(counts["agents_failed"], project)
+    failed_jobs = _per_workspace(counts["jobs_failed"], project)
+    pending_promotions = _per_workspace(counts["promotions_pending"], project)
+    firing = _per_workspace(counts["alerts_firing"], project)
 
     rows: list[dict[str, Any]] = []
     for row in workspaces:
@@ -82,6 +130,18 @@ def fleet_overview(db: Session) -> dict[str, Any]:
                 "jobs_failed": failed_jobs.get(row.id, 0) if usable else None,
                 "promotions_pending": pending_promotions.get(row.id, 0) if usable else None,
                 "alerts_firing": firing.get(row.id, 0) if usable else None,
+                "projects": [
+                    {
+                        "id": pid,
+                        "name": names.get(pid, pid),
+                        **{
+                            key: (by.get((row.id, pid), 0) if usable else None)
+                            for key, by in counts.items()
+                        },
+                    }
+                    for pid in bound.get(row.id, [])
+                    if project is None or pid == project
+                ],
             }
         )
 
@@ -104,6 +164,7 @@ def fleet_overview(db: Session) -> dict[str, Any]:
             "promotions_pending": sum(row["promotions_pending"] or 0 for row in rows),
             "needs_attention": len(attention),
         },
+        **({"project": project} if project is not None else {}),
         "source": "ledger",
     }
 

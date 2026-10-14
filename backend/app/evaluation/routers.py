@@ -6,6 +6,7 @@ Adapted from agentcore_eva_opt routers (datasets/evaluators/runs/insights).
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
@@ -23,6 +24,7 @@ from app.core.errors import (
     mapped_aws_error,
     public_aws_message,
 )
+from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import recommendations, service
 from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
@@ -32,7 +34,7 @@ from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import agent_access, creators, visibility
+from app.services import access, agent_access, creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.aws_clients import is_assume_role_failure
 from app.services.creators import Creator
@@ -717,9 +719,9 @@ def list_cloud_datasets(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     out = []
-    hidden = _hidden_cloud_ids(db, ws, viewer)
+    hidden = _cloud_hidden(db, ws, viewer)
     for ds in ac.list_datasets(control_client(ws.context)):
-        if ds.get("datasetId") in hidden:
+        if hidden(ds.get("datasetId") or ""):
             continue
         out.append(
             {
@@ -827,30 +829,57 @@ def _rows_with_cloud(db: Session, ws: WorkspaceScope, cloud_id: str) -> list[Eva
     ]
 
 
-def _hidden_cloud_ids(db: Session, ws: WorkspaceScope, viewer: Viewer) -> set[str]:
-    """Cloud dataset ids hidden from `viewer`: a cloud dataset follows the local
-    rows linked to it — visible when ANY of them is — and one with no local row
-    (made outside the console) has no known creator, so it stays shared."""
-    if not viewer.filters:
-        return set()
+def _cloud_hidden(db: Session, ws: WorkspaceScope, viewer: Viewer) -> Callable[[str], bool]:
+    """Whether a cloud dataset id is hidden from `viewer` in the current project: a
+    cloud dataset follows the local rows linked to it — visible when ANY of them is.
+
+    The links are read across every project (design §5.5): ListDatasets is
+    account-wide, so a dataset synced by another project must not pass for an unlinked
+    one. One with no local row (made outside the console) has no known creator and
+    stays shared — with several projects in the workspace, shared by the workspace's
+    default project only."""
+    pid = current_project()
+    if not viewer.filters and pid is None:
+        return lambda _cloud_id: False
+    with project_context(None):
+        rows = (
+            db.query(EvalDataset)
+            .filter(EvalDataset.workspace_id == ws.id, EvalDataset.cloud.isnot(None))
+            .all()
+        )
     linked: dict[str, bool] = {}
-    for row in (
-        db.query(EvalDataset)
-        .filter(EvalDataset.workspace_id == ws.id, EvalDataset.cloud.isnot(None))
-        .all()
-    ):
+    for row in rows:
         cloud_id = (row.cloud or {}).get("dataset_id")
         if cloud_id:
-            linked[cloud_id] = linked.get(cloud_id, False) or visibility.sees(
-                viewer, db, row.created_by
+            seen = (pid is None or row.project_id == pid) and (
+                not viewer.filters or visibility.sees(viewer, db, row.created_by)
             )
-    return {cloud_id for cloud_id, seen in linked.items() if not seen}
+            linked[cloud_id] = linked.get(cloud_id, False) or seen
+    unlinked_hidden = pid is not None and not _workspace_default_project(db, ws, pid)
+
+    def hidden(cloud_id: str) -> bool:
+        if cloud_id in linked:
+            return not linked[cloud_id]
+        return unlinked_hidden
+
+    return hidden
+
+
+def _workspace_default_project(db: Session, ws: WorkspaceScope, pid: str) -> bool:
+    """True when `pid` holds the workspace's unattributed AWS objects: always in a
+    single-project workspace, else only the workspace's default project."""
+    if not service.several_projects(db, ws.id):
+        return True
+    return any(
+        b.project_id == pid and b.is_workspace_default
+        for b in access.workspace_bindings(db, ws.id)
+    )
 
 
 def _require_cloud_visible(
     db: Session, ws: WorkspaceScope, cloud_id: str, viewer: Viewer
 ) -> None:
-    if cloud_id in _hidden_cloud_ids(db, ws, viewer):
+    if _cloud_hidden(db, ws, viewer)(cloud_id):
         raise NotFoundError("dataset.not_found", "dataset not found")
 
 
@@ -1297,8 +1326,22 @@ def delete_evaluator(
     _reject_managed(evaluator_id)
     _require_visible_evaluator(db, ws, viewer, evaluator_id)
     from app.assistant.evaluation_assets import managed_evaluator
+    from app.models.assistant import EvaluationAssetOperation
 
-    owner = managed_evaluator(db, ws.id, evaluator_id)
+    # the owning operation is looked up in every project: one of another project
+    # still guards its Lambda / IAM footprint, and the evaluator answers as missing
+    pid = current_project()
+    with project_context(None):
+        owner = managed_evaluator(db, ws.id, evaluator_id)
+        operation = (
+            db.get(EvaluationAssetOperation, owner["operation_id"]) if owner else None
+        )
+    if pid is not None and operation is not None and operation.project_id != pid:
+        raise ClientError(
+            {"Error": {"Code": "ResourceNotFoundException",
+                       "Message": f"Evaluator {evaluator_id} not found"}},
+            "GetEvaluator",
+        )
     if owner is not None:
         # an evaluator created by an evaluation-assets operation has a Lambda / IAM
         # footprint that only the operation's cleanup removes — deleting the record
@@ -1575,6 +1618,7 @@ def create_run(
     log_source = None
     if req.log_source:
         groups = list(dict.fromkeys(req.log_source.log_group_names))
+        _assert_log_source_in_project(db, ws, req.log_source.service_name, groups)
         _assert_log_groups_exist(ws, groups)
         log_source = {"service_name": req.log_source.service_name, "log_group_names": groups}
 
@@ -1660,6 +1704,30 @@ def _golden_lineage(db: Session, ws: WorkspaceScope, dataset_id: str) -> dict[st
         return {"split": dataset.split}
     return {"split": dataset.split, "criteria_set_id": cset.id,
             "criteria_set_version": cset.version}
+
+
+def _assert_log_source_in_project(
+    db: Session, ws: WorkspaceScope, service_name: str, groups: list[str]
+) -> None:
+    """An agent-less run reads account-wide telemetry: with several projects in the
+    workspace, another project's agent — named by its service or its runtime log
+    group — answers like a missing one (design §5.5)."""
+    fence = service.ProjectFence(db, ws.id)
+    if not fence.closed:
+        return
+    foreign = [g for g in groups if fence.foreign_log_group(g)]
+    if foreign:
+        raise AppError(
+            "run.log_group_missing",
+            f"log group(s) not found in this workspace: {', '.join(foreign)}",
+            {"missing": foreign},
+            status_code=422,
+        )
+    if fence.foreign_service(service_name):
+        raise NotFoundError(
+            "run.service_not_found", f"service '{service_name}' not found",
+            {"service_name": service_name},
+        )
 
 
 def _assert_log_groups_exist(ws: WorkspaceScope, groups: list[str]) -> None:

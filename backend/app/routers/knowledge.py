@@ -6,13 +6,16 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context
+from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import agent_access, creators, kb_gateway, knowledge, visibility
+from app.services import access, agent_access, creators, kb_gateway, knowledge, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.visibility import Viewer, require_viewer
@@ -47,17 +50,30 @@ class QueryRequest(BaseModel):
 def visible_kbs(
     db: Session, workspace_id: str, viewer: Viewer, items: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Drop the KBs workspace isolation hides from `viewer` (list + pickers +
-    the architect catalog)."""
-    hidden = visibility.hidden_aws_ids(
-        viewer, db, workspace_id, creators.KB, (i.get("kb_id") or "" for i in items)
-    )
+    """Drop the KBs workspace isolation hides from `viewer` and those of another
+    project (AWS lists them all — design §5.5) — list + pickers + the architect
+    catalog."""
+    ids = [i.get("kb_id") or "" for i in items]
+    hidden = visibility.hidden_aws_ids(viewer, db, workspace_id, creators.KB, ids)
+    hidden |= creators.outside_current_project(db, workspace_id, creators.KB, ids)
     return [i for i in items if (i.get("kb_id") or "") not in hidden]
 
 
+def _hidden_names(db: Session, viewer: Viewer, workspace_id: str) -> set[str]:
+    """Names of mounting agents the caller may not see: hidden by workspace
+    isolation, or of another project (the mount scan is workspace-wide)."""
+    hidden = agent_access.hidden_agent_names(db, viewer, workspace_id)
+    if current_project() is None or len(access.workspace_bindings(db, workspace_id)) <= 1:
+        return hidden
+    live = select(Agent.name).where(Agent.workspace_id == workspace_id, Agent.status != "deleted")
+    with project_context(None):
+        everyone = set(db.scalars(live))
+    return hidden | (everyone - set(db.scalars(live)))
+
+
 def _mask_attached(item: dict[str, Any], hidden_names: set[str]) -> dict[str, Any]:
-    """Drop the names of agents workspace isolation hides from the caller; the
-    count of every mounting agent stays, so "in use" remains truthful."""
+    """Drop the names of agents the caller may not see; the count of every
+    mounting agent stays, so "in use" remains truthful."""
     names = list(item.get("attached_agents") or [])
     item["attached_agent_count"] = len(names)
     if hidden_names:
@@ -66,9 +82,11 @@ def _mask_attached(item: dict[str, Any], hidden_names: set[str]) -> dict[str, An
 
 
 def _require_visible(db: Session, ws: WorkspaceScope, viewer: Viewer, kb_id: str) -> None:
-    """A KB hidden by workspace isolation answers like a missing one — before any
-    AWS call."""
-    if not visibility.aws_id_visible(viewer, db, ws.id, creators.KB, kb_id):
+    """A KB hidden by workspace isolation, or of another project, answers like a
+    missing one — before any AWS call."""
+    if not visibility.aws_id_visible(viewer, db, ws.id, creators.KB, kb_id) or (
+        creators.outside_current_project(db, ws.id, creators.KB, [kb_id])
+    ):
         raise NotFoundError("kb.not_found", "knowledge base not found")
 
 
@@ -86,7 +104,7 @@ def list_knowledge_bases(
     # the creator lives in the ledger (AWS has none); a KB made outside the
     # console reads null
     known = creators.lookup(db, ws.id, creators.KB, (i.get("kb_id") or "" for i in items))
-    hidden_names = agent_access.hidden_agent_names(db, viewer, ws.id)
+    hidden_names = _hidden_names(db, viewer, ws.id)
     for item in items:
         item.update(known.get(item.get("kb_id") or "") or creators.empty())
         _mask_attached(item, hidden_names)
@@ -125,7 +143,7 @@ def get_knowledge_base(
 ) -> dict[str, Any]:
     _require_visible(db, ws, viewer, kb_id)
     detail = _with_creator(db, ws, knowledge.get_kb_detail(ws.context, kb_id))
-    return _mask_attached(detail, agent_access.hidden_agent_names(db, viewer, ws.id))
+    return _mask_attached(detail, _hidden_names(db, viewer, ws.id))
 
 
 @router.patch("/{kb_id}")
@@ -154,7 +172,7 @@ def delete_knowledge_base(
         # (integrity: no agent may keep a dangling KB id)
         return knowledge.delete_kb(ws.context, kb_id, force=force)
     except knowledge.KBAttachedError as exc:
-        hidden_names = agent_access.hidden_agent_names(db, viewer, ws.id)
+        hidden_names = _hidden_names(db, viewer, ws.id)
         if hidden_names:  # the message keeps the true count; detail names only visible
             exc.detail = {"agents": [n for n in exc.agents if n not in hidden_names]}
         raise

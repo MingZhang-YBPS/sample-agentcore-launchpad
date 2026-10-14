@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError
+from app.core.project_scope import current_project
 from app.evaluation import online
 from app.evaluation.online_evaluators import ONLINE_EVAL_MAX, refuse_hidden_evaluators
+from app.evaluation.service import several_projects
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import agent_access
@@ -244,7 +246,10 @@ def config_results(
 ) -> dict[str, Any]:
     # An insights-mode config never writes score records, so this is simply empty
     # for it; the console reads `mode` from the detail and shows REPORTS instead.
-    if viewer.filters:
-        # workspace isolation: a hidden config's results are as absent as the config
+    if viewer.filters or (
+        current_project() is not None and several_projects(db, ws.id)
+    ):
+        # workspace isolation / another project's config: its results are as
+        # absent as the config
         online.get_config(db, ws, config_id, viewer=viewer)
     return online.results(ws, config_id, range)

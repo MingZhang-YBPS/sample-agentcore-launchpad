@@ -29,7 +29,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context
 from app.models.ledger import (
     Agent,
     Deployment,
@@ -233,6 +234,54 @@ def bundle_out(bundle: ReleaseBundle) -> dict[str, Any]:
 # ── gates ────────────────────────────────────────────────────────────────────────
 
 
+def target_holder(
+    db: Session, target_id: str, agent_name: str, project_id: str | None
+) -> tuple[Agent | None, bool]:
+    """The live agent holding ``agent_name`` in the target, and whether it is another
+    project's. Agent names are unique across a whole workspace, so the lookup ignores
+    the current project; a foreign holder is never returned (its spec is not ours to
+    show), only flagged. A system preset is platform level, not foreign."""
+    with project_context(None):
+        holder = db.scalars(
+            select(Agent).where(
+                Agent.workspace_id == target_id,
+                Agent.name == agent_name,
+                Agent.status != "deleted",
+            )
+        ).first()
+    if (
+        holder is not None
+        and project_id
+        and not holder.system_key
+        and holder.project_id != project_id
+    ):
+        return None, True
+    return holder, False
+
+
+def assert_project_reaches(
+    db: Session, identity: Any, workspace_id: str, project: Any, method: str
+) -> None:
+    """A second workspace a project-scoped request names (a promotion's target, a
+    mapping's workspace) must be bound to the request's project, and reached by the
+    caller through it (design §5.6) — else 404 ``project.not_found``, as for a project
+    the caller cannot see. ``project`` is ``request.state.project`` (None on an exempt
+    route: the workspace grant alone applies)."""
+    from app.services import access
+
+    if project is None or workspace_id == project.workspace_id:
+        return
+    with project_context(None):
+        if not access.workspace_bindings(db, workspace_id):
+            # registered after the startup backfill bound every workspace: it files its
+            # rows into the default project (project_scope._sole_workspace_project)
+            if project.is_default:
+                return
+            raise NotFoundError("project.not_found", f"project '{project.id}' not found",
+                                {"project_id": project.id})
+        access.resolve_project(db, identity, workspace_id, project.id, method)
+
+
 def evaluate_gates(db: Session, bundle: ReleaseBundle, target: Workspace) -> dict[str, Any]:
     """The checks an approver sees, each with a verdict and a reason.
 
@@ -295,19 +344,16 @@ def evaluate_gates(db: Session, bundle: ReleaseBundle, target: Workspace) -> dic
         }
     )
 
-    name_clash = db.scalars(
-        select(Agent).where(
-            Agent.workspace_id == target.id,
-            Agent.name == bundle.agent_name,
-            Agent.status != "deleted",
-        )
-    ).first()
+    name_clash, foreign = target_holder(db, target.id, bundle.agent_name, bundle.project_id)
     checks.append(
         {
             "key": "target_agent",
-            "ok": True,
+            # the execution would collide with (or overwrite) another project's agent
+            "ok": not foreign,
             "detail": (
-                f"replaces the existing '{bundle.agent_name}' ({name_clash.status})"
+                f"the name '{bundle.agent_name}' is taken by another project in {target.id}"
+                if foreign
+                else f"replaces the existing '{bundle.agent_name}' ({name_clash.status})"
                 if name_clash
                 else f"creates '{bundle.agent_name}' in {target.id}"
             ),
