@@ -101,8 +101,8 @@ describe("toolsModel per method", () => {
   });
 
   it("counts every item for the stats row", () => {
-    expect(toolsCount({ method: "zip_runtime", spec: ZIP } as AgentInfo)).toBe(6);
-    expect(toolsCount({ method: "byoc", spec: {} } as AgentInfo)).toBe(0);
+    expect(toolsCount({ method: "zip_runtime", spec: ZIP } as unknown as AgentInfo)).toBe(6);
+    expect(toolsCount({ method: "byoc", spec: {} } as unknown as AgentInfo)).toBe(0);
   });
 });
 
