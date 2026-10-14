@@ -140,6 +140,10 @@ const V3Departments = lazy(() =>
 const V3GatewayTools = lazy(() =>
   import("./v3/pages/tools/GatewayToolTargets").then((m) => ({ default: m.GatewayToolTargets })),
 );
+// Configure → Network profiles (projects §12.12)
+const V3NetworkProfiles = lazy(() =>
+  import("./v3/pages/network/NetworkProfiles").then((m) => ({ default: m.V3NetworkProfiles })),
+);
 const V3Knowledge = lazy(() => import("./v3/pages/Knowledge").then((m) => ({ default: m.V3Knowledge })));
 const V2Home = lazy(() => import("./v2/pages/Home").then((m) => ({ default: m.V2Home })));
 const V2DataCenter = lazy(() =>
@@ -386,6 +390,7 @@ export default function App() {
                 <Route path="project-groups" element={<V3ProjectGroups />} />
                 <Route path="departments" element={<V3Departments />} />
                 <Route path="workspaces" element={<V3Workspaces />} />
+                <Route path="network" element={<V3NetworkProfiles />} />
                 <Route path="projects" element={<V3Projects />} />
                 <Route path="project-settings" element={<V3ProjectSettings />} />
                 <Route path="models" element={<V3Models />} />

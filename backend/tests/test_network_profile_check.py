@@ -171,7 +171,9 @@ def test_the_az_table_knows_the_documented_regions_only():
 
 def test_a_complete_vpc_passes_every_check():
     results = _check(_vpc())
-    assert set(_sev(results).values()) == {"ok"}, _sev(results)
+    # the inbound-endpoint and cost entries are informational (§12.8, §12.9)
+    assert set(_sev(results).values()) == {"ok", "info"}, _sev(results)
+    assert {k for k, v in _sev(results).items() if v == "info"} == {"inbound.endpoint", "cost"}
     assert preflight.status_of(list(results.values())) == "ok"
     for svc in ("ecr.api", "ecr.dkr", "s3", "logs", "bedrock-runtime", "bedrock-agentcore"):
         assert results[f"endpoint.{svc}"]["severity"] == "ok"

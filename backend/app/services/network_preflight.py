@@ -21,9 +21,16 @@ or through NAT when every subnet's default route goes to an available NAT gatewa
 Routes to the declared private targets (`reachable`, §12.7) are checked for presence
 and next-hop type only; the far side (peering acceptance, TGW propagation, remote SGs,
 DNS) is the customer's network and reported as "not verified by the platform".
+
+Two entries are informational (severity ``info``, never part of the status, §12.8 /
+§12.9): ``inbound.endpoint`` — whether private callers can reach AgentCore through a
+PrivateLink endpoint in this VPC, and what its endpoint policy admits — and ``cost`` —
+how many interface endpoints × Availability Zones and NAT gateways the profile leans on
+(the platform links the regional price lists; it does not price them itself).
 """
 
 import ipaddress
+import json
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -81,6 +88,10 @@ def features_of_spec(spec: dict[str, Any]) -> set[str]:
         features.add("a2a")
     if spec.get("knowledge_bases"):
         features.add("knowledge_bases")
+    if spec.get("inbound_auth"):
+        # not an endpoint need: tells the inbound-endpoint entry that OAuth callers
+        # reach this agent (an endpoint policy cannot restrict them, §12.2)
+        features.add("inbound_oauth")
     return features
 
 
@@ -394,7 +405,99 @@ def evaluate(
                        else "network ACLs allow 443 out and replies in", subnets=acl_bad))
     if reachable:
         out.append(_reachable_result(reachable, table_of))
+    out.append(_inbound_result(facts, region=region, features=features))
+    out.append(_cost_result(facts, found=found, table_of=table_of, nats=nats))
     return out
+
+
+# ── informational entries (§12.8, §12.9) ──────────────────────────────────────
+
+# the data plane (InvokeAgentRuntime …) and the control plane
+INBOUND_SERVICES = ("bedrock-agentcore", "bedrock-agentcore-control")
+PRICING_LINKS = {
+    "privatelink": "https://aws.amazon.com/privatelink/pricing/",
+    "nat_gateway": "https://aws.amazon.com/vpc/pricing/",
+}
+
+
+def _policy_principals(document: Any) -> tuple[list[str], bool]:
+    """The principals an endpoint policy's Allow statements name, and whether any of
+    them is everyone (`*` — also how an OAuth caller appears to the policy)."""
+    if not document:
+        return [], True  # no policy = the default full-access policy
+    try:
+        policy = json.loads(document) if isinstance(document, str) else dict(document)
+    except (TypeError, ValueError):
+        return [], False
+    statements = policy.get("Statement") or []
+    if isinstance(statements, dict):
+        statements = [statements]
+    names: list[str] = []
+    for statement in statements:
+        if not isinstance(statement, dict) or statement.get("Effect") != "Allow":
+            continue
+        principal = statement.get("Principal", "*")
+        if principal == "*":
+            names.append("*")
+            continue
+        if isinstance(principal, dict):
+            for value in principal.values():
+                names.extend([value] if isinstance(value, str) else list(value or []))
+    ordered = sorted(set(names))
+    return ordered, "*" in ordered
+
+
+def _inbound_result(facts: dict[str, Any], *, region: str,
+                    features: Iterable[str] | None) -> dict[str, Any]:
+    endpoints = []
+    for svc in INBOUND_SERVICES:
+        name = f"com.amazonaws.{region}.{svc}"
+        for ep in facts.get("endpoints") or []:
+            if ep.get("ServiceName") != name or \
+                    str(ep.get("VpcEndpointType", "")).lower() != "interface":
+                continue
+            principals, anyone = _policy_principals(ep.get("PolicyDocument"))
+            endpoints.append({"service": svc, "endpoint_id": ep.get("VpcEndpointId"),
+                              "private_dns": bool(ep.get("PrivateDnsEnabled")),
+                              "subnets": list(ep.get("SubnetIds") or []),
+                              "principals": principals, "any_principal": anyone})
+    data_plane = [e for e in endpoints if e["service"] == "bedrock-agentcore"]
+    oauth = features is not None and "inbound_oauth" in set(features)
+    note = ("callers authenticating with OAuth appear as Principal \"*\" to an endpoint "
+            "policy, so the agent's inbound JWT authorizer is what restricts them")
+    if not data_plane:
+        message = (f"no PrivateLink endpoint com.amazonaws.{region}.bedrock-agentcore in "
+                   "this VPC — private callers invoke agents over the public endpoint")
+    elif any(e["any_principal"] for e in data_plane):
+        message = ("private callers can invoke agents through "
+                   f"{data_plane[0]['endpoint_id']}; its policy admits any principal")
+    else:
+        message = (f"private callers can invoke agents through {data_plane[0]['endpoint_id']}; "
+                   f"its policy admits {', '.join(data_plane[0]['principals']) or 'nobody'}")
+    if oauth:
+        message += f" — {note}"
+    return _result("inbound.endpoint", "info", message, endpoints=endpoints,
+                   private_inbound=bool(data_plane), oauth_note=note)
+
+
+def _cost_result(facts: dict[str, Any], *, found: dict[str, dict], table_of: dict[str, Any],
+                 nats: set[str]) -> dict[str, Any]:
+    endpoints = facts.get("endpoints") or []
+    interface = sorted({str(e.get("ServiceName", "")) for e in endpoints
+                        if str(e.get("VpcEndpointType", "")).lower() == "interface"})
+    gateway = sorted({str(e.get("ServiceName", "")) for e in endpoints
+                      if str(e.get("VpcEndpointType", "")).lower() == "gateway"})
+    azs = sorted({s.get("AvailabilityZoneId") for s in found.values()
+                  if s.get("AvailabilityZoneId")})
+    used_nats = sorted({nat for t in table_of.values()
+                        if (nat := (_default_route(t) or {}).get("NatGatewayId")) in nats})
+    message = (f"this profile depends on {len(interface)} interface endpoint(s) × "
+               f"{len(azs)} Availability Zone(s) and {len(used_nats)} NAT gateway(s) — "
+               "both are billed per hour plus data processed; see the regional price lists")
+    return _result("cost", "info", message, interface_endpoints=interface,
+                   gateway_endpoints=gateway, availability_zones=len(azs),
+                   endpoint_az_hours=len(interface) * len(azs), nat_gateways=used_nats,
+                   pricing=PRICING_LINKS)
 
 
 def _endpoint_results(

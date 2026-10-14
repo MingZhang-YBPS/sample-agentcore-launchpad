@@ -1,4 +1,4 @@
-import { Building2, Cpu, FolderCog, FolderKanban, Network, UserCog, Wrench } from "lucide-react";
+import { Building2, Cpu, FolderCog, FolderKanban, Network, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -73,6 +73,8 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
   // Gateway tool targets (Lambda tools, externally hosted MCP servers) sit with
   // the agent's connections and governance
   "/v2/my-connections": [{ to: "/v3/tools/gateway", labelKey: "v3.nav.gatewayTools", icon: Wrench }],
+  // the workspace's VPC network profiles (projects §12.12), administrator-only
+  "/v2/workspaces": [{ to: "/v3/network", labelKey: "v3.network.nav", icon: Waypoints, admin: true }],
 };
 
 export interface V3ModuleGroup {
