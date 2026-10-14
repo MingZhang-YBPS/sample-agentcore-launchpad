@@ -39,6 +39,7 @@ import { useModelCatalog } from "../../../lib/model-catalog";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
 import { HintLabel } from "../../Glossary";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
+import { NetworkSection } from "./NetworkSection";
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
 
 /** Next slug while it still follows the display name: the ASCII-derived slug, or a
@@ -407,6 +408,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
   const patchRow = (field: "s3Mounts" | "efsMounts", i: number, patch: Partial<MountRow>) =>
     set((prev) => ({ [field]: prev[field].map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   return (
+    <>
     <Card
       title={t("v2.agents.wizard.fsTitle")}
       sub={t(byo ? "create.configure.fsNoteByo" : byoAllowed ? "create.configure.fsNote" : "v2.agents.wizard.fsNoteSession")}
@@ -512,6 +514,9 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
         )}
       </div>
     </Card>
+    {/* the network step (projects §12.6) — harness, Strands / A2A and container */}
+    <NetworkSection form={form} set={set} />
+    </>
   );
 }
 
@@ -653,6 +658,7 @@ export function ByocArtifactCard({
   const candidates = upload?.detected.entrypoint_candidates ?? [];
   const stdioBridge = form.protocol === "mcp" && !!form.mcpStdio?.on;
   return (
+    <>
     <Card title={t("v2.agents.wizard.artifactTitle")}>
       <div className="v2-options">
         {BYOC_KINDS.map((k) => (
@@ -809,6 +815,9 @@ export function ByocArtifactCard({
         )}
       </div>
     </Card>
+    {/* the network step (projects §12.6) — both BYOC artifact kinds, agents and MCP servers */}
+    <NetworkSection form={form} set={set} />
+    </>
   );
 }
 

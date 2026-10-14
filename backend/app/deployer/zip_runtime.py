@@ -27,6 +27,8 @@ from app.core.config import get_settings
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.network import describe as describe_network
+from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
@@ -545,6 +547,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # the console badge) read the snapshot, never re-resolve.
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
+        # the network rides every create AND update (design §12.6): a re-publish with
+        # a changed profile moves the runtime, an unchanged one keeps it
+        vpc = spec_vpc(AgentSpec(**row.spec), row.workspace_id)
+        ctx.log(f"network: {describe_network(vpc)}")
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
@@ -566,6 +572,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "authorizer_configuration": authorizer,
                 # managed session storage — likewise reset when omitted on update
                 "filesystem_configurations": filesystem_configurations(spec) or None,
+                "vpc": vpc,
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)

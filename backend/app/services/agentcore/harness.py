@@ -51,8 +51,39 @@ def wrap_params_for_update(params: dict[str, Any]) -> dict[str, Any]:
 _ENVIRONMENT_REQUEST_FIELDS = ("lifecycleConfiguration", "networkConfiguration")
 
 
+# a sentinel for "the platform says nothing about the network": keep the live one
+KEEP_NETWORK: Any = object()
+
+
+def network_configuration(vpc: Mapping[str, Any] | None) -> dict[str, Any]:
+    """``agentCoreRuntimeEnvironment.networkConfiguration`` for a resolved network
+    profile (design §12.6), None = PUBLIC.
+
+    UNVERIFIED: the harness's backing-runtime environment is assumed to take the
+    runtime's ``NetworkConfiguration`` shape (``networkMode`` +
+    ``networkModeConfig{subnets, securityGroups}``) — GetHarness echoes the member
+    under that name, but no VPC harness has been created live yet."""
+    from app.services.agentcore.runtime import _network_configuration
+
+    return _network_configuration(dict(vpc) if vpc else None)
+
+
+def environment_for_create(
+    session_storage: list[dict[str, Any]], vpc: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """CreateHarness ``environment``: the session storage plus, for a VPC agent, its
+    network. A PUBLIC agent with no storage omits the member (the service default)."""
+    request: dict[str, Any] = {}
+    if session_storage:
+        request["filesystemConfigurations"] = list(session_storage)
+    if vpc:
+        request["networkConfiguration"] = network_configuration(vpc)
+    return {"agentCoreRuntimeEnvironment": request} if request else None
+
+
 def environment_for_update(
-    live: Mapping[str, Any], session_storage: list[dict[str, Any]]
+    live: Mapping[str, Any], session_storage: list[dict[str, Any]],
+    network: Any = KEEP_NETWORK,
 ) -> dict[str, Any]:
     """UpdateHarness ``environment`` that sets the platform-owned session storage and
     keeps everything else the live harness carries.
@@ -61,11 +92,17 @@ def environment_for_update(
     every mount; an omitted ``environment`` keeps the old one — probed live), so the
     live list is read back and only its ``sessionStorage`` entry is swapped: EFS /
     S3 Files mounts and network/lifecycle settings made outside the platform (an
-    imported harness) survive a re-publish."""
+    imported harness) survive a re-publish.
+
+    ``network`` is the resolved VPC (`deployer/network.spec_vpc`) when the platform
+    owns it: a dict sets VPC mode, None sets PUBLIC (a re-publish that moved the agent
+    off its profile); ``KEEP_NETWORK`` (the default) keeps the live value."""
     env = (live.get("environment") or {}).get("agentCoreRuntimeEnvironment") or {}
     request = {k: env[k] for k in _ENVIRONMENT_REQUEST_FIELDS if env.get(k)}
     kept = [fs for fs in env.get("filesystemConfigurations") or [] if "sessionStorage" not in fs]
     request["filesystemConfigurations"] = [*session_storage, *kept]
+    if network is not KEEP_NETWORK:
+        request["networkConfiguration"] = network_configuration(network)
     return {"agentCoreRuntimeEnvironment": request}
 
 

@@ -183,6 +183,74 @@ def create_deployment(
     return deployment, job
 
 
+# ── network gate (design projects §12.4–§12.6) ─────────────────────────────────
+
+def _workspace_ec2(workspace: WorkspaceContext) -> Any:
+    return workspace.client("ec2")
+
+
+# ec2 client factory for the deploy-time preflight; tests swap it (`set_preflight_ec2`)
+_preflight_ec2: Callable[[WorkspaceContext], Any] = _workspace_ec2
+
+
+def set_preflight_ec2(
+    factory: Callable[[WorkspaceContext], Any],
+) -> Callable[[WorkspaceContext], Any]:
+    """Swap the EC2 client the deploy-time preflight reads (tests); returns the old one."""
+    global _preflight_ec2
+    previous, _preflight_ec2 = _preflight_ec2, factory
+    return previous
+
+
+def network_gate(
+    db: Session, workspace: WorkspaceContext, spec: dict[str, Any], *,
+    previous_spec: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Refuse a deploy before its job exists when its network cannot work; returns the
+    job payload extras the network needs (empty for most deploys).
+
+    * no network while the workspace forbids PUBLIC → `network.public_not_allowed`
+      (`network_enforcement.assert_public_allowed`);
+    * a network profile → the preflight re-run for THIS agent's features
+      (`network_preflight.features_of_spec`): any blocking item → 409
+      `network.preflight_failed` with the blocking items as `details`. A
+      `legacy-<hash8>` profile (migrated from an inline BYO network, §12.10) is not
+      preflighted — its deploys behave as they did before profiles existed.
+
+    A re-publish that moves the agent OFF a profile carries the old network
+    (`network_from`), so the harness deployer sets PUBLIC instead of keeping the
+    live value."""
+    from app.core.errors import AppError
+    from app.deployer.network import NETWORK_FROM_KEY, network_of
+    from app.models.network import LEGACY_PREFIX
+    from app.services import network_enforcement, network_profiles
+    from app.services import network_preflight as preflight
+
+    network = network_of(spec)
+    network_enforcement.assert_public_allowed(db, workspace.id, network)
+    extras: dict[str, Any] = {}
+    previous = network_of(previous_spec) if previous_spec is not None else None
+    if previous and previous != network:
+        extras[NETWORK_FROM_KEY] = previous
+    profile_id = network_profiles.network_profile_id(network)
+    if profile_id is None or profile_id.startswith(LEGACY_PREFIX):
+        return extras
+    report = network_profiles.run_check(
+        db, workspace, profile_id, features=preflight.features_of_spec(spec),
+        ec2=_preflight_ec2(workspace),
+    )
+    blocking = [r for r in report["results"] if r.get("severity") == "block"]
+    if blocking:
+        raise AppError(
+            "network.preflight_failed",
+            f"network profile '{profile_id}' cannot host this agent: "
+            + "; ".join(str(r.get("message") or r.get("check")) for r in blocking),
+            {"profile_id": profile_id, "results": blocking},
+            status_code=409,
+        )
+    return extras
+
+
 # Jobs the startup resume is about to adopt: the only launches allowed to take a job a
 # dead process left `running`. Filled by `resume_pending_jobs` before it starts them.
 _RESUMING: set[str] = set()
@@ -269,6 +337,9 @@ def _execute_deploy_job(job_id: str, *, resume: bool | None = None) -> None:
             # memory ARN, KB gateway, skill content identity) instead of re-resolving.
             ctx.scratch["assistant_pin"] = job.payload["assistant"]
         ctx.scratch["mode"] = job.payload.get("mode", "create")
+        if (job.payload or {}).get("network_from"):
+            # a re-publish that moved the agent off a network profile (network_gate)
+            ctx.scratch["network_from"] = job.payload["network_from"]
 
         done = {s["name"] for s in deployment.stages if s["status"] in ("succeeded", "skipped")}
         for stage_name in STAGE_ORDER:

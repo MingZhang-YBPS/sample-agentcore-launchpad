@@ -478,9 +478,13 @@ export interface AgentForm {
   efsMounts: MountRow[];
   vpcSubnets: string;
   vpcSgs: string;
-  /** a stored spec's `network: {profile_id}` (a workspace network profile): shown
-   *  read-only and carried into the re-published spec instead of inline ids */
+  /** `network: {profile_id}` — the workspace network profile the agent runs in
+   *  (projects §12.6, every method); "" ⇒ PUBLIC (or, on a container with BYO
+   *  mounts, the legacy inline ids above) */
   networkProfileId: string;
+  /** the V2 network step chose "VPC profile" but no profile yet (blocks launch);
+   *  absent on forms without a network step */
+  networkVpc?: boolean;
   // zip_runtime service protocol; byoc can also host an MCP server ("mcp")
   protocol: "http" | "a2a" | "mcp";
   /** byoc + protocol "mcp": the Gateway target its tools appear under */
@@ -796,6 +800,33 @@ const byocArtifact = (form: AgentForm) => {
  * choice — the platform grants it none and wires its JWT inbound and Gateway
  * target itself (`backend/app/services/mcp_servers.py`).
  */
+/**
+ * `network` for every method (projects §12.6): the chosen profile reference (the
+ * backend resolves it to subnets + security groups at deploy time); for a container
+ * with BYO mounts and no profile, the legacy inline ids; otherwise omitted ⇒ PUBLIC.
+ * A re-publish replaces the stored spec, so leaving a profile is just omitting it.
+ */
+export function networkSpec(form: AgentForm): Pick<AgentSpecInput, "network"> {
+  if (form.networkProfileId) {
+    // `AgentSpecInput.network` (lib/api.ts) still types the legacy inline shape only;
+    // the backend's `AgentNetwork` is `{profile_id}` | `{subnets, security_groups}`
+    const ref: NetworkProfileRefInput = { profile_id: form.networkProfileId };
+    return { network: ref as unknown as AgentSpecInput["network"] };
+  }
+  if (form.method === "container" && hasByoMounts(form)) {
+    return { network: { subnets: splitIds(form.vpcSubnets), security_groups: splitIds(form.vpcSgs) } };
+  }
+  return {};
+}
+
+/** `network: {profile_id}` — a workspace network profile reference. */
+export interface NetworkProfileRefInput {
+  profile_id: string;
+}
+
+/** The network step is complete: "VPC profile" needs a profile picked. */
+export const networkValid = (form: AgentForm) => !(form.networkVpc && !form.networkProfileId);
+
 export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
   const env = byocEnv(form.byocEnvRows);
   // code_zip + stdio on only (mcpStdioSpec returns null otherwise)
@@ -810,6 +841,7 @@ export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
     ...(Object.keys(env).length ? { env } : {}),
     mcp: { target_name: form.mcpTargetName.trim(), ...(stdio ? { stdio_wrapper: stdio } : {}) },
     byoc: byocArtifact(form) as ByocConfigInput,
+    ...networkSpec(form),
   };
 }
 
@@ -850,6 +882,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
       invoke_contract: form.byocRawContract ? "raw" : "launchpad_prompt",
       allowed_models: models,
     },
+    ...networkSpec(form),
   };
 }
 
@@ -945,19 +978,9 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
             s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
             efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
           },
-          // a stored profile reference is kept as it is (the backend resolves it)
-          ...(form.networkProfileId
-            ? { network: { profile_id: form.networkProfileId } }
-            : hasByoMounts(form)
-              ? {
-                  network: {
-                    subnets: splitIds(form.vpcSubnets),
-                    security_groups: splitIds(form.vpcSgs),
-                  },
-                }
-              : {}),
         }
       : {}),
+    ...networkSpec(form),
   } as AgentSpecInput;
 }
 
@@ -1217,6 +1240,7 @@ export function agentFormValid(
 ): boolean {
   if (!authToolsValid(form, opts.connections)) return false;
   if (!inboundValid(form)) return false;
+  if (!networkValid(form)) return false;
   if (form.method === "byoc") {
     return AGENT_NAME_RE.test(form.name) && byocValid(form) && !opts.byocUploading;
   }

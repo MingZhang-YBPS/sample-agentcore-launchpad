@@ -85,6 +85,7 @@ def create_code_runtime(
     instrument: bool = True,
     authorizer_configuration: dict[str, Any] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
+    vpc: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
 
@@ -92,13 +93,15 @@ def create_code_runtime(
     (PYTHON_3_13, main.py); BYOC passes the user's choices through and disables
     the ADOT launcher (user zips don't necessarily vendor the distro).
     ``authorizer_configuration`` is the inbound JWT authorizer
-    ({"customJWTAuthorizer": ...}); None means IAM/SigV4 (the field is omitted)."""
+    ({"customJWTAuthorizer": ...}); None means IAM/SigV4 (the field is omitted).
+    ``vpc`` = the spec's resolved network profile ``{subnets, security_groups}``
+    (`network_profiles.resolve_vpc`); None = PUBLIC."""
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
         "agentRuntimeArtifact": _code_artifact(
             s3_bucket, s3_key, python_version, entrypoint, instrument
         ),
-        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "networkConfiguration": _network_configuration(vpc),
         "roleArn": role_arn,
     }
     if environment:
@@ -114,8 +117,10 @@ def create_code_runtime(
 
 
 def _network_configuration(vpc: dict[str, Any] | None) -> dict[str, Any]:
-    """PUBLIC by default; VPC mode when a networkModeConfig is supplied
-    (required for BYO file systems — S3 Files / EFS access points)."""
+    """The one place a runtime's networkConfiguration is built (design §12.6,
+    §12.13): PUBLIC when the spec names no network; VPC mode with the resolved
+    profile's subnets / security groups otherwise (also what BYO file systems —
+    S3 Files / EFS access points — require)."""
     if not vpc:
         return {"networkMode": "PUBLIC"}
     return {
@@ -203,6 +208,7 @@ def update_code_runtime(
     instrument: bool = True,
     authorizer_configuration: dict[str, Any] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
+    vpc: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
     place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it).
@@ -214,13 +220,18 @@ def update_code_runtime(
     authorizer rides the same call: every update passes the RESOLVED inbound
     auth — echoing the JWT config keeps (or sets) it, omitting it switches the
     runtime back to IAM/SigV4, which is also how JWT→IAM transitions are
-    performed (CloudFormation marks authorizer updates "No interruption")."""
+    performed (CloudFormation marks authorizer updates "No interruption").
+    The network rides it too (design §12.6): every update sends the spec's
+    resolved ``vpc`` (None = PUBLIC), so a changed network profile republishes
+    in place. Whether the service accepts PUBLIC→VPC (or a subnet change) on
+    UpdateAgentRuntime is unverified live; a refusal surfaces as the update's
+    error."""
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": _code_artifact(
             s3_bucket, s3_key, python_version, entrypoint, instrument
         ),
-        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "networkConfiguration": _network_configuration(vpc),
         "roleArn": role_arn,
     }
     if environment is not None:

@@ -1346,3 +1346,10 @@ ROUTE_POLICY.update({
     ("POST", "/api/mcp-servers/{agent_id}/reviews/{review_id}/reject"): PERM_MCP_APPROVE,
     ("POST", "/api/mcp-servers/{agent_id}/reviews/check"): PERM_PROJECT_WRITE,
 })
+
+# ---- agent network (design projects §12.11, V12-deploy) ----
+# A read of the agent like /identity and /mcp: plain member, inside the agent's project
+# (another project's agent answers 404 through the project-scoped agent lookup).
+ROUTE_POLICY.update({
+    ("GET", "/api/agents/{agent_id}/network"): MEMBER,
+})

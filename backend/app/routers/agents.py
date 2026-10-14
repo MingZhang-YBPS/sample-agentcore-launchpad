@@ -24,7 +24,7 @@ from app.deployer import byoc as byoc_method
 from app.deployer import container as container_method
 from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
-from app.deployer.pipeline import create_deployment, start_deploy_async
+from app.deployer.pipeline import create_deployment, network_gate, start_deploy_async
 from app.models.ledger import Agent, Deployment, IdentityProvider, Job
 from app.routers.auth import require_identity, require_permission
 from app.routers.workspaces import WorkspaceScope, require_workspace
@@ -316,6 +316,9 @@ def create_agent(
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
     # the deploy job re-checks before any stage, this answers before any row
     memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
+    # PUBLIC allowed here / the network profile passes its preflight for this agent
+    # (design §12.4-§12.6) — refused before any row, so no job starts
+    network_gate(db, ws.context, spec.model_dump())
     agent = Agent(
         workspace_id=ws.id,
         name=spec.name,
@@ -686,6 +689,24 @@ def get_agent_identity(
     )
 
 
+@router.get("/agents/{agent_id}/network")
+def get_agent_network(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """The agent's network (design §12.11): PUBLIC or VPC, the resolved profile with its
+    last preflight, and the ENIs in the profile's subnets (per profile — see
+    `services/agent_network`). Another project's agent answers 404."""
+    from app.services import agent_network
+
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None or agent.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    return agent_network.agent_network(db, ws.context, agent)
+
+
 @router.post("/agents/{agent_id}/redeploy", status_code=202)
 def redeploy_agent(
     agent_id: str,
@@ -836,13 +857,20 @@ def _start_redeploy(
     memory_ownership.require_spec_memory(
         db, context_for_workspace(agent.workspace_id), spec.model_dump()
     )
+    # the network gate (design §12.6): a changed network is an ordinary re-publish —
+    # the deploy stage sends the new networkConfiguration on the update
+    network_extras = network_gate(
+        db, context_for_workspace(agent.workspace_id), spec.model_dump(),
+        previous_spec=agent.spec or {},
+    )
     agent.spec = spec.model_dump()
     agent.status = "deploying"
     agent.error = None
     agent.updated_at = datetime.now(UTC)
     db.flush()
     deployment, job = create_deployment(
-        db, agent, mode="update", actor=actor, note=note
+        db, agent, mode="update", actor=actor, note=note,
+        payload_extra=network_extras or None,
     )
     start_deploy_async(job.id)
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
@@ -1091,6 +1119,7 @@ def convert_agent(
     agent_access.check_pins(db, viewer, ws.context, spec.model_dump())
     # the twin inherits the source's memory pin — same ownership rule (issue #55)
     memory_ownership.require_spec_memory(db, ws.context, spec.model_dump())
+    network_gate(db, ws.context, spec.model_dump())
 
     agent = Agent(
         workspace_id=ws.id, name=spec.name, method=spec.method, status="deploying",

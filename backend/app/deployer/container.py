@@ -19,6 +19,8 @@ from app.core.config import get_settings
 from app.core.errors import cleanup_error, is_not_found
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.network import describe as describe_network
+from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
@@ -205,18 +207,9 @@ def _run_scan_gate(
 
 
 def _vpc(spec: AgentSpec, workspace_id: str | None = None) -> dict | None:
-    """networkModeConfig input — only when BYO mounts force VPC mode. The spec holds
-    a network profile reference (or, before migration, inline ids): resolve it."""
-    if not (spec.filesystem.byo and spec.network):
-        return None
-    from app.core.db import SessionLocal
-    from app.services import network_profiles
-
-    db = SessionLocal()
-    try:
-        return network_profiles.resolve_vpc(db, workspace_id or "", spec.network)
-    finally:
-        db.close()
+    """networkModeConfig input: the spec's network profile resolved (design §12.6),
+    None = PUBLIC. BYO mounts require a network (the spec refuses them without)."""
+    return spec_vpc(spec, workspace_id)
 
 
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
@@ -251,6 +244,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         row = db.get(Agent, agent.id)
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
+        vpc = _vpc(AgentSpec(**row.spec), row.workspace_id)
+        ctx.log(f"network: {describe_network(vpc)}")
 
         def _kwargs() -> dict:
             registry, repo, tag = _image_ref(workspace, row)
@@ -266,7 +261,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 or workspace.resources.get("execution_role_arn", ""),
                 "environment": runtime_environment(spec, workspace.resources),
                 "filesystem_configurations": filesystem_configurations(spec) or None,
-                "vpc": _vpc(spec, agent.workspace_id),
+                "vpc": vpc,
                 # Echoed on every update; omitting (None = IAM) resets a JWT
                 # runtime back to SigV4 — that IS the JWT→IAM transition.
                 "authorizer_configuration": authorizer,

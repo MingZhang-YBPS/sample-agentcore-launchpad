@@ -12659,5 +12659,33 @@
     "checkNoTarget": "没有可检查的线上网关目标",
     "checkFailed": "漂移检查失败",
     "history": "历史（{{count}}）"
+  },
+  "network": {
+    "title": "网络",
+    "sub": "Agent 的运行时放在哪里：AgentCore 公网，或通过网络配置档放进你的 VPC。",
+    "public": "公网",
+    "vpc": "VPC 配置档",
+    "publicNote": "AgentCore 托管网络——可访问互联网与 AWS 公共端点。",
+    "inlineNote": "该容器 Agent 运行在存储设置中填写的子网与安全组里（旧的内联网络）。选择一个 VPC 配置档即可替换。",
+    "profile": "网络配置档",
+    "pick": "选择网络配置档",
+    "default": "默认",
+    "none": "本项目没有可用的网络配置档——请管理员为本项目开放一个。",
+    "errPick": "请选择网络配置档，或切回公网。",
+    "stored": "运行在网络配置档 {{id}} 中，本项目已无法再选择它。",
+    "checkedAt": "检查于 {{at}}",
+    "subnets": "子网：{{ids}}",
+    "groups": "安全组：{{ids}}",
+    "blocked": "该配置档预检未通过——在管理员修复并重新检查之前，部署会被拒绝。",
+    "warn": "该配置档最近一次预检有警告——请在网络页面查看。",
+    "unchecked": "该配置档尚未检查；部署前会先运行预检。",
+    "preflightNote": "部署开始前，平台会按本 Agent 用到的功能（端点、路由、安全组）检查该配置档；有阻断项时部署不会启动。",
+    "republishNote": "更改已有 Agent 的网络会为它发布一个新版本。",
+    "status": {
+      "ok": "预检通过",
+      "warn": "有警告",
+      "blocked": "已阻断",
+      "unchecked": "未检查"
+    }
   }
 }
