@@ -329,10 +329,24 @@ class NetworkProfileRef(BaseModel):
 AgentNetwork = NetworkProfileRef | VpcNetwork
 
 
+# Methods whose runtime mounts BYO file systems (S3 Files / EFS; design
+# storage-mounts §3). Every method is listed: the request shapes are in the service
+# model for CreateAgentRuntime (zip / studio / container / BYOC) and for
+# CreateHarness's backing-runtime environment (storage-mounts §1.5), while the live
+# behaviour probes (§3.1 P1–P5, `scripts/probe_storage_mounts.py`) are still to run.
+# A method a probe refutes leaves this set, with its reason in
+# `BYO_MOUNT_UNSUPPORTED`, and is refused with that reason again.
+BYO_MOUNT_METHODS = frozenset({"container", "zip_runtime", "studio", "byoc", "harness"})
+# method → why a BYO mount is refused there (the probe conclusion); empty today
+BYO_MOUNT_UNSUPPORTED: dict[str, str] = {}
+
+
 class FilesystemConfig(BaseModel):
     """AgentCore Runtime filesystemConfigurations (≤1 session, ≤2 s3, ≤2 efs).
 
-    session_storage defaults ON; an explicit JSON null disables it.
+    session_storage defaults ON; an explicit JSON null disables it. BYO mounts need
+    the agent in a VPC (its network profile, `AgentSpec.network`) and a method of
+    `BYO_MOUNT_METHODS`.
     """
 
     session_storage: SessionStorageFs | None = Field(default_factory=SessionStorageFs)
@@ -342,6 +356,10 @@ class FilesystemConfig(BaseModel):
     @property
     def byo(self) -> bool:
         return bool(self.s3_files or self.efs)
+
+    def byo_mounts(self) -> list[tuple[str, ByoMount]]:
+        """``(kind, mount)`` for every BYO mount, ``kind`` ∈ {s3files, efs}."""
+        return [*(("s3files", m) for m in self.s3_files), *(("efs", m) for m in self.efs)]
 
     @model_validator(mode="after")
     def _check(self) -> "FilesystemConfig":
@@ -999,17 +1017,22 @@ class AgentSpec(BaseModel):
 
     @model_validator(mode="after")
     def _byo_needs_vpc(self) -> "AgentSpec":
-        # Only the container method wires VPC networking; the harness and Strands
-        # zip runtimes mount managed session storage alone. Refused, not dropped,
-        # so a spec never shows a mount its runtime does not have.
-        if self.filesystem.byo and self.method != "container":
+        # BYO mounts ride the agent's own network (design storage-mounts §3.2): the
+        # mount targets are reached from the runtime's ENIs, so a PUBLIC agent cannot
+        # mount them. Refused, not dropped, so a spec never shows a mount its runtime
+        # does not have.
+        if not self.filesystem.byo:
+            return self
+        if self.method not in BYO_MOUNT_METHODS:
+            reason = BYO_MOUNT_UNSUPPORTED.get(self.method, "not probed yet")
             raise ValueError(
-                "BYO file systems (S3 Files / EFS) are supported by the container "
-                "method only; harness and Strands agents mount session storage"
+                f"BYO file systems (S3 Files / EFS) are not supported by the "
+                f"{self.method} method ({reason}); it mounts session storage only"
             )
-        if self.filesystem.byo and self.network is None:
+        if self.network is None:
             raise ValueError(
-                "BYO file systems (S3 Files / EFS) require VPC network configuration"
+                "BYO file systems (S3 Files / EFS) require VPC network configuration "
+                "— choose a network profile for this agent"
             )
         return self
 

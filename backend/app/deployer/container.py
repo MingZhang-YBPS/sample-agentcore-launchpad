@@ -19,6 +19,8 @@ from app.core.config import get_settings
 from app.core.errors import cleanup_error, is_not_found
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.mounts import describe as describe_mounts
+from app.deployer.mounts import with_mounts_env, with_prompt_note
 from app.deployer.network import describe as describe_network
 from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -61,7 +63,10 @@ def _build_context(
 ) -> Path:
     """Template files + rendered main.py, then spec.skills S3 prefixes into
     .claude/skills/{name}/ so the claude CLI discovers them next to agents/."""
-    context_dir = assemble_build_context(spec, Path(f"/tmp/launchpad_ctx_{agent.name}"))
+    # the rendered prompt names the BYO mounts (storage-mounts §3.2)
+    context_dir = assemble_build_context(
+        with_prompt_note(spec), Path(f"/tmp/launchpad_ctx_{agent.name}")
+    )
     if spec.skills:
         bundle_skill_paths_into(spec.skills, context_dir / ".claude", log, workspace)
     return context_dir
@@ -208,7 +213,8 @@ def _run_scan_gate(
 
 def _vpc(spec: AgentSpec, workspace_id: str | None = None) -> dict | None:
     """networkModeConfig input: the spec's network profile resolved (design §12.6),
-    None = PUBLIC. BYO mounts require a network (the spec refuses them without)."""
+    None = PUBLIC. BYO mounts require a network (the spec refuses them without), on
+    this method as on every other (storage-mounts §3.2)."""
     return spec_vpc(spec, workspace_id)
 
 
@@ -246,6 +252,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
         vpc = _vpc(AgentSpec(**row.spec), row.workspace_id)
         ctx.log(f"network: {describe_network(vpc)}")
+        if mounts := describe_mounts(AgentSpec(**row.spec)):
+            ctx.log(mounts)
 
         def _kwargs() -> dict:
             registry, repo, tag = _image_ref(workspace, row)
@@ -259,7 +267,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 or f"{registry}/{repo}:{tag}",
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or workspace.resources.get("execution_role_arn", ""),
-                "environment": runtime_environment(spec, workspace.resources),
+                "environment": with_mounts_env(
+                    runtime_environment(spec, workspace.resources), spec
+                ),
                 "filesystem_configurations": filesystem_configurations(spec) or None,
                 "vpc": vpc,
                 # Echoed on every update; omitting (None = IAM) resets a JWT

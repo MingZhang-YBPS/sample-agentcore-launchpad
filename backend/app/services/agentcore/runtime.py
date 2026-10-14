@@ -95,7 +95,10 @@ def create_code_runtime(
     ``authorizer_configuration`` is the inbound JWT authorizer
     ({"customJWTAuthorizer": ...}); None means IAM/SigV4 (the field is omitted).
     ``vpc`` = the spec's resolved network profile ``{subnets, security_groups}``
-    (`network_profiles.resolve_vpc`); None = PUBLIC."""
+    (`network_profiles.resolve_vpc`); None = PUBLIC. ``filesystem_configurations``
+    (`deployer/filesystem.py`) is the session storage plus any S3 Files / EFS
+    mounts; the latter need ``vpc`` (storage-mounts §3.2)."""
+    _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
         "agentRuntimeArtifact": _code_artifact(
@@ -114,6 +117,23 @@ def create_code_runtime(
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
     return client.create_agent_runtime(**params)
+
+
+def _byo_entries(filesystem_configurations: list[dict[str, Any]] | None) -> bool:
+    return any("sessionStorage" not in fs for fs in filesystem_configurations or [])
+
+
+def _check_mounts_network(
+    filesystem_configurations: list[dict[str, Any]] | None, vpc: dict[str, Any] | None
+) -> None:
+    """S3 Files / EFS mounts are reached from the runtime's ENIs, so they need VPC
+    mode (design storage-mounts §3.2). `AgentSpec` already refuses the combination;
+    this keeps any other caller from sending a request the service rejects late."""
+    if _byo_entries(filesystem_configurations) and not vpc:
+        raise ValueError(
+            "S3 Files / EFS mounts need the runtime in a VPC — give the agent a "
+            "network profile"
+        )
 
 
 def _network_configuration(vpc: dict[str, Any] | None) -> dict[str, Any]:
@@ -150,6 +170,7 @@ def create_container_runtime(
     ``lifecycle`` = {idleRuntimeSessionTimeout, maxLifetime} seconds (the Skill
     Lab exec worker caps sessions at 8h and reaps idle ones at 5min).
     ``protocol`` as ``create_code_runtime`` (None / "http" = the HTTP default)."""
+    _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
         "agentRuntimeArtifact": {
@@ -226,6 +247,7 @@ def update_code_runtime(
     in place. Whether the service accepts PUBLIC→VPC (or a subnet change) on
     UpdateAgentRuntime is unverified live; a refusal surfaces as the update's
     error."""
+    _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": _code_artifact(
@@ -264,6 +286,7 @@ def update_container_runtime(
     Authorizer semantics as ``update_code_runtime``: echo to keep, omit to
     return the runtime to IAM/SigV4. ``protocol`` must be echoed too: an omitted
     protocolConfiguration resets the runtime to HTTP."""
+    _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": {"containerConfiguration": {"containerUri": container_uri}},

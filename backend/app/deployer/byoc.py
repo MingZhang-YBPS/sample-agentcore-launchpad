@@ -40,6 +40,9 @@ from app.core.config import REPO_ROOT, get_settings
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
+from app.deployer.filesystem import filesystem_configurations
+from app.deployer.mounts import describe as describe_mounts
+from app.deployer.mounts import with_mounts_env
 from app.deployer.network import describe as describe_network
 from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -570,6 +573,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         if spec.protocol != "mcp":  # an MCP server is granted no model
             environment.setdefault("MODEL_ID", spec.model_id)
             environment.setdefault("ALLOWED_MODEL_IDS", ",".join(spec.allowed_model_ids))
+        # the BYO mounts' manifest (storage-mounts §3.2) — platform-owned, wins over spec.env
+        with_mounts_env(environment, spec)
         wrapper = stdio_wrapper(spec)
         if wrapper is not None:
             # the bridge's subprocess argv — platform-owned, so it wins over spec.env
@@ -586,6 +591,12 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # on every update
         vpc = spec_vpc(spec, row.workspace_id)
         ctx.log(f"network: {describe_network(vpc)}")
+        # session storage + BYO mounts (storage-mounts §1.5, §3.2), on create and on
+        # every update — UpdateAgentRuntime detaches an omitted list. An MCP server
+        # mounts them too: its tools may serve files.
+        mounts = filesystem_configurations(spec) or None
+        if detail := describe_mounts(spec):
+            ctx.log(detail)
 
         def _kwargs() -> dict:
             if code_runtime:
@@ -604,6 +615,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     # echoed on every update; omitted (None) = IAM/SigV4
                     "authorizer_configuration": authorizer,
                     "protocol": protocol,
+                    "filesystem_configurations": mounts,
                     "vpc": vpc,
                 }
             return {
@@ -612,6 +624,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "environment": environment,
                 "authorizer_configuration": authorizer,
                 "protocol": protocol,
+                "filesystem_configurations": mounts,
                 "vpc": vpc,
             }
 

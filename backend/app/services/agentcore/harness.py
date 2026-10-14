@@ -6,7 +6,7 @@ kwargs. Payload shapes follow bedrock-agentcore-control 1.43.x.
 
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import closing
 from typing import Any
 
@@ -81,26 +81,56 @@ def environment_for_create(
     return {"agentCoreRuntimeEnvironment": request} if request else None
 
 
+def _mount_path(entry: Mapping[str, Any]) -> str:
+    """The ``mountPath`` of one filesystemConfigurations union member ('' if none)."""
+    for member in entry.values():
+        if isinstance(member, Mapping) and member.get("mountPath"):
+            return str(member["mountPath"]).rstrip("/")
+    return ""
+
+
 def environment_for_update(
-    live: Mapping[str, Any], session_storage: list[dict[str, Any]],
-    network: Any = KEEP_NETWORK,
+    live: Mapping[str, Any], platform_entries: list[dict[str, Any]],
+    network: Any = KEEP_NETWORK, *, managed_paths: Iterable[str] = (),
+    on_conflict: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """UpdateHarness ``environment`` that sets the platform-owned session storage and
-    keeps everything else the live harness carries.
+    """UpdateHarness ``environment`` that sets the platform-owned mounts and keeps
+    everything else the live harness carries.
 
     UpdateHarness replaces ``filesystemConfigurations`` wholesale (``[]`` detaches
     every mount; an omitted ``environment`` keeps the old one — probed live), so the
-    live list is read back and only its ``sessionStorage`` entry is swapped: EFS /
-    S3 Files mounts and network/lifecycle settings made outside the platform (an
-    imported harness) survive a re-publish.
+    live list is read back and merged by ownership (design storage-mounts §3.2):
+    ``platform_entries`` (the spec's session storage + S3 Files / EFS mounts,
+    `deployer/filesystem.py`) are sent as they are; a live entry is the platform's —
+    and dropped — when it is session storage, sits at one of the spec's mount paths,
+    or at one of ``managed_paths`` (mount paths an earlier publish of this agent
+    set, so a mount removed from the spec is detached). Any other live entry — an
+    EFS / S3 Files mount made outside the platform (an imported harness) — survives
+    a re-publish, as do the network/lifecycle settings. A live entry at a spec path
+    that the platform never set but that differs from the spec's is a conflict: the
+    spec wins and ``on_conflict`` gets one line for the deploy log.
 
     ``network`` is the resolved VPC (`deployer/network.spec_vpc`) when the platform
     owns it: a dict sets VPC mode, None sets PUBLIC (a re-publish that moved the agent
     off its profile); ``KEEP_NETWORK`` (the default) keeps the live value."""
     env = (live.get("environment") or {}).get("agentCoreRuntimeEnvironment") or {}
     request = {k: env[k] for k in _ENVIRONMENT_REQUEST_FIELDS if env.get(k)}
-    kept = [fs for fs in env.get("filesystemConfigurations") or [] if "sessionStorage" not in fs]
-    request["filesystemConfigurations"] = [*session_storage, *kept]
+    spec_paths = {_mount_path(fs): fs for fs in platform_entries}
+    managed = {str(p).rstrip("/") for p in managed_paths}
+    kept = []
+    for fs in env.get("filesystemConfigurations") or []:
+        if "sessionStorage" in fs:
+            continue
+        path = _mount_path(fs)
+        if path in spec_paths:
+            if path not in managed and fs != spec_paths[path] and on_conflict is not None:
+                on_conflict(f"mount {path}: the live harness's entry (set outside the "
+                            "platform) is replaced by the spec's")
+            continue
+        if path in managed:
+            continue
+        kept.append(fs)
+    request["filesystemConfigurations"] = [*platform_entries, *kept]
     if network is not KEEP_NETWORK:
         request["networkConfiguration"] = network_configuration(network)
     return {"agentCoreRuntimeEnvironment": request}

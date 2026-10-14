@@ -27,6 +27,8 @@ from app.core.config import get_settings
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.mounts import describe as describe_mounts
+from app.deployer.mounts import with_mounts_env, with_prompt_note
 from app.deployer.network import describe as describe_network
 from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -388,8 +390,11 @@ def _generate_code(spec: AgentSpec) -> tuple[str, str]:
     if spec.protocol == "a2a":
         from app.templates.strands_a2a_agent import render_a2a_main_py
 
+        # the A2A card's description is cut from the prompt's head, so its BYO
+        # mounts reach it through LAUNCHPAD_MOUNTS only
         return render_a2a_main_py(spec), "strands A2A template"
-    return render_main_py(spec), "strands template"
+    # the generated agent is told its BYO mounts (storage-mounts §3.2)
+    return render_main_py(with_prompt_note(spec)), "strands template"
 
 
 def write_bundle_files(spec: AgentSpec, pkg_dir: Path) -> int:
@@ -551,10 +556,14 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # a changed profile moves the runtime, an unchanged one keeps it
         vpc = spec_vpc(AgentSpec(**row.spec), row.workspace_id)
         ctx.log(f"network: {describe_network(vpc)}")
+        if mounts := describe_mounts(AgentSpec(**row.spec)):
+            ctx.log(mounts)
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
-            environment = runtime_environment(spec, resources, agent_id=row.id)
+            environment = with_mounts_env(
+                runtime_environment(spec, resources, agent_id=row.id), spec
+            )
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
                 or resources.get("artifacts_bucket", ""),
@@ -570,7 +579,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # omits the field, which resets a JWT runtime back to SigV4 —
                 # that IS the JWT→IAM transition.
                 "authorizer_configuration": authorizer,
-                # managed session storage — likewise reset when omitted on update
+                # session storage + BYO mounts — likewise reset when omitted on update
                 "filesystem_configurations": filesystem_configurations(spec) or None,
                 "vpc": vpc,
             }

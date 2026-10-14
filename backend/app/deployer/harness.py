@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from app.core.config import get_settings
+from app.deployer import mounts
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.network import NETWORK_FROM_KEY, spec_vpc
 from app.deployer.network import describe as describe_network
@@ -112,13 +113,18 @@ _KB_END = "Ground answers on retrieved content and cite sources when you use the
 
 
 def strip_generated_prompt(spec: AgentSpec, text: str) -> str:
-    """Remove the platform-appended KB section from a prompt read back from AWS.
+    """Remove the platform-appended KB and mount sections from a prompt read back
+    from AWS.
 
-    The deployed ``systemPrompt`` is ``spec.system_prompt + _kb_prompt(spec)``, so a
-    prompt revised from the LIVE Harness (an AI recommendation) carries that section
-    too; storing it as the spec prompt would make the next deploy append it twice
-    (measured live 2026-09-30). Exact block first; otherwise the marker through the
-    section's closing line, in case the revision reflowed the KB bullet lines."""
+    The deployed ``systemPrompt`` is ``spec.system_prompt + _kb_prompt(spec) +
+    mounts.prompt_note(spec)``, so a prompt revised from the LIVE Harness (an AI
+    recommendation) carries those sections too; storing it as the spec prompt would
+    make the next deploy append them twice (measured live 2026-09-30). Exact block
+    first; otherwise (KB only) the marker through the section's closing line, in
+    case the revision reflowed the KB bullet lines."""
+    note = mounts.prompt_note(spec)
+    if note and note in text:
+        text = text.replace(note, "").rstrip()
     if not spec.knowledge_bases:
         return text
     block = _kb_prompt(spec)
@@ -156,6 +162,8 @@ def build_create_params(
     system_prompt = spec.system_prompt
     if spec.knowledge_bases:
         system_prompt += _kb_prompt(spec)
+    # the BYO mounts the agent can use (storage-mounts §3.2)
+    system_prompt += mounts.prompt_note(spec)
     params: dict[str, Any] = {
         "harnessName": spec.name.replace("-", "_"),
         "executionRoleArn": execution_role_arn,
@@ -292,12 +300,13 @@ def build_create_params(
             if spec.knowledge_bases and f"@{name}" not in allowed:
                 allowed.append(f"@{name}")
     params["allowedTools"] = allowed
-    if spec.env:
-        params["environmentVariables"] = dict(spec.env)
-    # managed session storage on the backing runtime (BYO mounts are container-only)
-    # and, for a VPC agent, its network (``vpc`` = the resolved profile, design
-    # §12.6); omitted on create means none / PUBLIC. Re-publish rebuilds this from
-    # GetHarness.
+    environment_variables = mounts.with_mounts_env(dict(spec.env), spec)
+    if environment_variables:
+        params["environmentVariables"] = environment_variables
+    # session storage + S3 Files / EFS mounts on the backing runtime (storage-mounts
+    # §3.2) and, for a VPC agent, its network (``vpc`` = the resolved profile, design
+    # §12.6; BYO mounts require one); omitted on create means none / PUBLIC.
+    # Re-publish merges this with GetHarness (`hc.environment_for_update`).
     environment = hc.environment_for_create(filesystem_configurations(spec), vpc)
     if environment:
         params["environment"] = environment
@@ -644,6 +653,18 @@ def _update_network(ctx: StageContext, spec: AgentSpec, workspace_id: str | None
     return hc.KEEP_NETWORK
 
 
+def _published_mount_paths(db: Any, agent_id: str) -> set[str]:
+    """The BYO mount paths any publish of this agent set (its spec snapshots): the
+    entries the platform owns on the live harness even after the spec dropped them,
+    so a re-publish detaches a removed mount (storage-mounts §3.2)."""
+    from app.models.ledger import SpecSnapshot
+
+    paths: set[str] = set()
+    for (spec,) in db.query(SpecSnapshot.spec).filter(SpecSnapshot.agent_id == agent_id):
+        paths |= mounts.manifest_paths(spec)
+    return paths
+
+
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     client = control_client(ctx.workspace)
     mode = ctx.scratch.get("mode", "create")
@@ -677,6 +698,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 hc.get_harness(client, harness_id),
                 filesystem_configurations(AgentSpec(**row.spec)),
                 _update_network(ctx, AgentSpec(**row.spec), row.workspace_id),
+                managed_paths=_published_mount_paths(db, row.id),
+                on_conflict=ctx.log,
             )
             harness = agent_iam.retry_iam_propagation(
                 lambda: hc.update_harness(client, update_params), ctx.log
