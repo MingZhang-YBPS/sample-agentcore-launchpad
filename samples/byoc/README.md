@@ -45,6 +45,24 @@ A response with nothing readable (an empty body, or only bookkeeping such as
 `metadata` usage) ends the turn with `runtime.empty_reply` /
 `runtime.unrecognized_reply`; the console shows the start of what the runtime sent.
 
+## Telemetry — what makes an agent show up in Observability and Evaluation
+
+Observability (sessions, traces, the agent drop-down) and evaluation read the
+OpenTelemetry spans an agent exports to CloudWatch (`aws/spans`). AgentCore
+Runtime exports them only when the process runs under the ADOT
+`opentelemetry-instrument` launcher with the distro installed:
+
+| Artifact kind | Spans |
+|---|---|
+| `code_zip` | Launchpad adds the launcher when the upload carries **aws-opentelemetry-distro** — listed in `requirements.txt` (with *install requirements* on) or vendored in the zip. The upload response says so (`detected.adot_detected` / `adot_source`) and the deploy log prints `telemetry: ADOT launcher on\|off`. Without it the agent chats normally but writes no span. |
+| `container_source` / `container_image` | Your image decides: install `aws-opentelemetry-distro` (plus `strands-agents[otel]` for a Strands agent) and start with `CMD ["opentelemetry-instrument", "python", "main.py"]`. |
+
+A code zip without ADOT stays in the Observability agent drop-down, greyed
+with the reason, and `POST /api/eval/runs` refuses it up front with
+`eval.no_telemetry` (400) instead of failing after a full replay with
+"No evaluable agent spans found". Code that instruments itself and does export
+spans is not refused.
+
 ## hello-mcp — an MCP server (protocol `mcp`)
 
 Not an agent: an MCP server that Launchpad hosts on AgentCore Runtime and puts

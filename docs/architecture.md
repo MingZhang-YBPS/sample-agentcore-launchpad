@@ -370,6 +370,18 @@ artifact kinds, one `spec.byoc` block (`backend/app/schemas/agent.py::ByocConfig
 | `container_source` | zip carrying a Dockerfile | the shared `launchpad-agent-builder` CodeBuild project (ARM64) → ECR `launchpad-agents:{name}-v{version}` → `containerConfiguration`, including the digest pin and image-scan gate the container method uses |
 | `container_image` | an existing image URI | verified with `ecr.describe_images` — must live in this workspace's account+region; public registries and other accounts are refused — then deployed as-is |
 
+**Telemetry.** Observability and evaluation read the spans an agent exports to
+`aws/spans`, which AgentCore Runtime does only under the ADOT
+`opentelemetry-instrument` launcher. A `code_zip` gets the launcher when the
+upload carries `aws-opentelemetry-distro` (vendored, or in `requirements.txt`
+with `install_requirements`) — `spec.byoc.provenance.adot_launcher`, re-judged on
+every publish; container kinds decide in their own image. A code zip without it
+stays in the Observability agent drop-down, greyed with the reason
+(`v3/pages/observability/agentOptions.ts`), and `POST /api/eval/runs` refuses it
+with `eval.no_telemetry` while its endpoint has written no span in 14 days
+(`evaluation/service.py::require_span_telemetry`, one bounded `FilterLogEvents`
+on `aws/spans`; an inconclusive probe lets the run start).
+
 **Security model.** Developers need no IAM: they hand a zip to whoever holds the
 `perm:agents.deploy` console permission (uploads carry the same permission).
 Each agent gets its own least-privilege execution role (`services/agent_iam.py`);

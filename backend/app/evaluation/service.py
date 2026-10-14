@@ -199,6 +199,54 @@ def resolve_telemetry(
     )
 
 
+# How far back the no-telemetry pre-check looks for a span (the run API's
+# longest lookback window).
+NO_TELEMETRY_LOOKBACK_HOURS = 336
+
+
+def byoc_code_zip_without_adot(agent: Agent | None) -> bool:
+    """A BYOC code zip deployed without the ``opentelemetry-instrument`` launcher
+    (no ADOT in the bundle, projects §17): AgentCore Runtime exports no span for
+    it, so a batch evaluation finds nothing to score. Read from the raw spec —
+    ``provenance.adot_launcher`` is server-owned; rows deployed before the
+    detection existed carry none and ran without the launcher too."""
+    if agent is None or agent.method != "byoc":
+        return False
+    byoc = (agent.spec or {}).get("byoc") or {}
+    if byoc.get("artifact_kind") != "code_zip":
+        return False
+    return not (byoc.get("provenance") or {}).get("adot_launcher")
+
+
+def require_span_telemetry(
+    agent: Agent, workspace: WorkspaceContext, service_name: str, logs_client: Any = None,
+) -> None:
+    """Refuse a run before its row exists when the agent cannot have spans to
+    score (projects §17.3-5): a BYOC code zip without the ADOT launcher whose
+    endpoint (``service_name``) has written no span in the last
+    `NO_TELEMETRY_LOOKBACK_HOURS`. Code that instruments itself does write spans
+    and passes; an inconclusive probe lets the run start, as before. Any other
+    agent is not probed — a fresh one's first replay is what creates its spans."""
+    if not byoc_code_zip_without_adot(agent):
+        return
+    from app.evaluation import log_streams
+
+    logs = logs_client or workspace.client("logs")
+    since_ms = int(time.time() * 1000) - NO_TELEMETRY_LOOKBACK_HOURS * 3_600_000
+    if log_streams.service_has_spans(logs, service_name, since_ms=since_ms) is not False:
+        return
+    raise AppError(
+        "eval.no_telemetry",
+        f"agent '{agent.name}' has written no spans ({service_name}) in the last "
+        f"{NO_TELEMETRY_LOOKBACK_HOURS // 24} days: a BYOC code zip emits spans only "
+        "with the ADOT launcher — add aws-opentelemetry-distro to requirements.txt "
+        "(with install requirements on) or build from a Dockerfile, republish, "
+        "then start the evaluation",
+        {"service_name": service_name, "reason": "byoc_code_zip_no_adot"},
+        status_code=400,
+    )
+
+
 RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
 
 
@@ -1112,12 +1160,15 @@ def submit_run(
     cost_estimate: dict[str, Any] | None = None,
     agent_version: str | None = None,
     creator: creators.Creator | None = None,
+    precheck_telemetry: bool = False,
 ) -> EvalRun:
     """Queue one run. The telemetry comes from the platform ``agent`` — or, with
     ``agent=None``, from ``log_source`` {service_name, log_group_names}: an agent
     that is not a platform agent (off-runtime, or no ledger row) whose spans and
     content logs are already in CloudWatch. Such a run is passive only (session
-    ids or a time window); there is nothing to invoke."""
+    ids or a time window); there is nothing to invoke. ``precheck_telemetry``
+    refuses an agent with no spans to score (`require_span_telemetry`) before
+    the run row is created."""
     if agent is None:
         if not log_source or dataset_items:
             raise ValueError("an agent-less run needs a log_source and a passive scope")
@@ -1138,6 +1189,8 @@ def submit_run(
 
             qualifier = production_endpoint(agent).get("qualifier")
         service_name, log_group = resolve_telemetry(agent, workspace, qualifier=qualifier)
+        if precheck_telemetry:
+            require_span_telemetry(agent, workspace, service_name)
         log_groups = ["aws/spans", log_group]
     # Window runs have no dataset; encode the scope in dataset_name so the
     # runs list can render "window · Nh" without a schema change.

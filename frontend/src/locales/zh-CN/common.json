@@ -2453,7 +2453,8 @@
     "golden.empty_expected": "有样本缺少期望答案：每一轮都要先写好期望答案再添加。",
     "golden.unknown_criteria": "有样本引用了该黄金集判据表中没有的判据编号。",
     "runtime.empty_reply": "智能体的运行时返回了空响应。",
-    "runtime.unrecognized_reply": "智能体返回了控制台无法识别的格式。响应的开头是："
+    "runtime.unrecognized_reply": "智能体返回了控制台无法识别的格式。响应的开头是：",
+    "eval.no_telemetry": "这个 Agent 没有产生任何 Span，评估找不到可打分的内容。BYOC 代码 zip 只有带 ADOT 启动器才会产生 Span：在 requirements.txt 里加 aws-opentelemetry-distro（并打开“安装依赖”），或改用 Dockerfile 构建，重新发布后再开始评估。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -11870,6 +11871,15 @@
       "openGovernance": "打开治理页",
       "kind": "类型",
       "kindValue": "MCP 服务器"
+    },
+    "observability": {
+      "telemetry": {
+        "noSpans": "{{name}} · 无链路",
+        "hint": {
+          "range": "所选时间范围内没有这个 Agent 的 Span。先和它对话，再刷新——Span 要几分钟才会到达。",
+          "byocNoAdot": "这个 BYOC 代码 zip 部署时没有 ADOT 启动器，不会产生 Span，评估也无法打分。在 requirements.txt 里加 aws-opentelemetry-distro（并打开“安装依赖”），或改用 Dockerfile 构建，然后重新发布。"
+        }
+      }
     }
   },
   "models": {

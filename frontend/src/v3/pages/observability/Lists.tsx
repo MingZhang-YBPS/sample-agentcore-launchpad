@@ -2,14 +2,25 @@ import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ObsSessionRow, ObsTraceRow } from "../../../lib/api";
+import { api, type ObsSessionRow, type ObsTraceRow } from "../../../lib/api";
 import { fmtNumber } from "../../../v2/format";
 import { approxCost, isSystemTrace, shortId } from "../../../v2/pages/observability/common";
+import { useWorkspace } from "../../../workspace/workspace-context";
 import { ago, ms } from "../../format";
+import { useLoad } from "../../hooks";
 import { Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton } from "../../ui";
+import { type AgentOption, agentOptions } from "./agentOptions";
 import { CopyId, TraceStatus } from "./shared";
 
 const PAGE = 50;
+
+/** The drop-down's options: the viewer's agents merged with the range's span rows. */
+function useAgentOptions(rows: { agent: string }[]): AgentOption[] {
+  const { current } = useWorkspace();
+  const agents = useLoad(() => api.listAgents(), `v3-obs-agents:${current?.id ?? ""}`);
+  const list = agents.data?.agents;
+  return useMemo(() => agentOptions(rows.map((r) => r.agent), list), [rows, list]);
+}
 
 function Toolbar({
   agents,
@@ -21,7 +32,7 @@ function Toolbar({
   count,
   children,
 }: {
-  agents: string[];
+  agents: AgentOption[];
   agent: string;
   onAgent: (v: string) => void;
   q: string;
@@ -35,7 +46,15 @@ function Toolbar({
     <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
       <select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => onAgent(e.target.value)} aria-label={t("v3.obs.agent")}>
         <option value="">{t("v3.obs.allAgents")}</option>
-        {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+        {agents.map((a) =>
+          a.noSpans ? (
+            <option key={a.value} value={a.value} disabled title={t(`v3.observability.telemetry.hint.${a.noSpans}`)}>
+              {t("v3.observability.telemetry.noSpans", { name: a.label })}
+            </option>
+          ) : (
+            <option key={a.value} value={a.value}>{a.label}</option>
+          ),
+        )}
       </select>
       {children}
       <div style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "center", flex: "1 1 260px", justifyContent: "flex-end" }}>
@@ -78,7 +97,7 @@ export function SessionsView({
   const [q, setQ] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const all = useMemo(() => sessions ?? [], [sessions]);
-  const agents = useMemo(() => [...new Set(all.map((r) => r.agent).filter(Boolean))].sort(), [all]);
+  const agents = useAgentOptions(all);
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return all.filter((r) => {
@@ -175,7 +194,7 @@ export function TracesView({
   const [showSystem, setShowSystem] = useState(false);
   const [limit, setLimit] = useState(PAGE);
   const all = useMemo(() => traces ?? [], [traces]);
-  const agents = useMemo(() => [...new Set(all.map((r) => r.agent).filter(Boolean))].sort(), [all]);
+  const agents = useAgentOptions(all);
   // Harness health-check traces are noise for humans: hidden unless asked for
   const visible = useMemo(() => all.filter((r) => showSystem || !isSystemTrace(r)), [all, showSystem]);
   const systemCount = all.length - all.filter((r) => !isSystemTrace(r)).length;

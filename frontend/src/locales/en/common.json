@@ -2453,7 +2453,8 @@
     "golden.empty_expected": "Some items have no expected answer — write one for every turn before adding them.",
     "golden.unknown_criteria": "Some items name criteria that are not in this golden set's criteria table.",
     "runtime.empty_reply": "The agent's runtime answered with an empty response.",
-    "runtime.unrecognized_reply": "The agent answered in a format the console cannot read. The start of the response:"
+    "runtime.unrecognized_reply": "The agent answered in a format the console cannot read. The start of the response:",
+    "eval.no_telemetry": "This agent has written no spans, so the evaluation would find nothing to score. A BYOC code zip emits spans only with the ADOT launcher: add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, republish, then start the evaluation."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -11870,6 +11871,15 @@
       "openGovernance": "Open Governance",
       "kind": "Type",
       "kindValue": "MCP server"
+    },
+    "observability": {
+      "telemetry": {
+        "noSpans": "{{name}} · no spans",
+        "hint": {
+          "range": "No spans from this agent in the selected time range. Talk to it, then refresh — spans take a few minutes to arrive.",
+          "byocNoAdot": "This BYOC code zip was deployed without the ADOT launcher, so it emits no spans and evaluation cannot score it. Add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, then republish."
+        }
+      }
     }
   },
   "models": {
