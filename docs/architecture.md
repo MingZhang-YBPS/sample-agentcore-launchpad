@@ -4639,7 +4639,7 @@ so a re-registered username is not the old actor. In addition:
 Administrators manage structure from **Configure** in the V3 console: **Users**
 (project and group memberships, bulk "add to project", forced logout through
 `users.session_epoch`), **Administrators** (`/v3/admins`), **Projects** (members,
-roles, workspace bindings, settings, transfer), **Project groups** and
+roles, workspace bindings, settings, moving an agent), **Project groups** and
 **Departments**. A project owner (`project.members`) reaches **Project settings** for
 the current project. Account management, project structure and group / department
 routes are hub-global; `access.can_manage_structure` is the single check (phase 3's
@@ -4703,7 +4703,7 @@ binding of a second project to a workspace turns it multi-project: `infra` write
 become administrator-only there and unattributed telemetry is hidden from members.
 Add members on the project's **Members** tab (or from **Users**, one account or in
 bulk); members with several projects pick one in the top-bar switcher. Move existing
-agents out of `default` with **Transfer** (`POST /api/projects/{id}/transfer`): a
+agents out of `default` with **Move agent** (`POST /api/projects/{id}/transfer`): a
 ledger-only move of the agent, every derived row and its jobs, in one transaction;
 source-project keys scoped to it lose it. The default project cannot be archived or
 unbound from its workspaces; another project's **Archive** makes it read-only,
