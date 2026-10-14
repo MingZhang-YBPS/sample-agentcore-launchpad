@@ -40,6 +40,8 @@ from app.core.config import REPO_ROOT, get_settings
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
+from app.deployer.network import describe as describe_network
+from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
@@ -580,6 +582,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         instrument = code_runtime and _adot_launcher(row)
         if code_runtime:
             ctx.log(f"telemetry: ADOT launcher {'on' if instrument else 'off'}")
+        # both artifact kinds carry the spec's network (design §12.6), on create and
+        # on every update
+        vpc = spec_vpc(spec, row.workspace_id)
+        ctx.log(f"network: {describe_network(vpc)}")
 
         def _kwargs() -> dict:
             if code_runtime:
@@ -598,6 +604,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     # echoed on every update; omitted (None) = IAM/SigV4
                     "authorizer_configuration": authorizer,
                     "protocol": protocol,
+                    "vpc": vpc,
                 }
             return {
                 "container_uri": _container_uri(ctx, row, cfg),
@@ -605,6 +612,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "environment": environment,
                 "authorizer_configuration": authorizer,
                 "protocol": protocol,
+                "vpc": vpc,
             }
 
         create_fn = rt.create_code_runtime if code_runtime else rt.create_container_runtime

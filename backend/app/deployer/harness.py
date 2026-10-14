@@ -14,6 +14,8 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.network import NETWORK_FROM_KEY, spec_vpc
+from app.deployer.network import describe as describe_network
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.harness_tool_access import gateway_target_selectors, selected_tool_patterns
 from app.models.ledger import Agent
@@ -138,6 +140,7 @@ def build_create_params(
     kb_gateway: dict[str, str] | None = None,
     gateway_attachments: list[dict[str, Any]] | None = None,
     shared_gateway_arn: str | None = None,
+    vpc: dict[str, list[str]] | None = None,
 ) -> dict:
     """AgentSpec → CreateHarness kwargs. Harness names disallow hyphens.
 
@@ -291,13 +294,13 @@ def build_create_params(
     params["allowedTools"] = allowed
     if spec.env:
         params["environmentVariables"] = dict(spec.env)
-    # managed session storage on the backing runtime (BYO mounts are container-only);
-    # omitted on create means none. Re-publish rebuilds this from GetHarness.
-    filesystem = filesystem_configurations(spec)
-    if filesystem:
-        params["environment"] = {
-            "agentCoreRuntimeEnvironment": {"filesystemConfigurations": filesystem}
-        }
+    # managed session storage on the backing runtime (BYO mounts are container-only)
+    # and, for a VPC agent, its network (``vpc`` = the resolved profile, design
+    # §12.6); omitted on create means none / PUBLIC. Re-publish rebuilds this from
+    # GetHarness.
+    environment = hc.environment_for_create(filesystem_configurations(spec), vpc)
+    if environment:
+        params["environment"] = environment
     if (spec.memory.short_term or spec.memory.long_term) and memory_arn:
         params["memory"] = {"agentCoreMemoryConfiguration": {"arn": memory_arn}}
     elif not (spec.memory.short_term or spec.memory.long_term):
@@ -386,6 +389,7 @@ def _pinned_params(
         kb_gateway=kb_gateway,
         gateway_attachments=attachments,
         shared_gateway_arn=workspace.resources.get("gateway_arn"),
+        vpc=spec_vpc(spec, workspace.id),
     )
 
 
@@ -452,6 +456,7 @@ def _build_live_params(
             spec.tools, workspace
         ),
         shared_gateway_arn=resources.get("gateway_arn"),
+        vpc=spec_vpc(spec, workspace.id),
     )
 
 
@@ -624,6 +629,21 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
     return StageResult(detail=role_detail)
 
 
+def _update_network(ctx: StageContext, spec: AgentSpec, workspace_id: str | None) -> Any:
+    """The network an UpdateHarness sends (design §12.6): the spec's profile when it
+    names one; PUBLIC when this re-publish moved the agent off its profile (the job
+    carries the old network); otherwise the live value is kept, so a harness whose
+    network was set outside the platform keeps it."""
+    vpc = spec_vpc(spec, workspace_id)
+    if vpc is not None:
+        ctx.log(f"network: {describe_network(vpc)}")
+        return vpc
+    if ctx.scratch.get(NETWORK_FROM_KEY):
+        ctx.log("network: PUBLIC (moved off its network profile)")
+        return None
+    return hc.KEEP_NETWORK
+
+
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     client = control_client(ctx.workspace)
     mode = ctx.scratch.get("mode", "create")
@@ -656,6 +676,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             update_params["environment"] = hc.environment_for_update(
                 hc.get_harness(client, harness_id),
                 filesystem_configurations(AgentSpec(**row.spec)),
+                _update_network(ctx, AgentSpec(**row.spec), row.workspace_id),
             )
             harness = agent_iam.retry_iam_propagation(
                 lambda: hc.update_harness(client, update_params), ctx.log
