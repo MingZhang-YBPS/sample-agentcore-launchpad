@@ -210,7 +210,7 @@ authorizer configuration.
 | Method | Path | Result |
 |---|---|---|
 | `GET` | `/api/agents/{agent_id}/versions` | `{kind: runtime\|harness, resource_id, versions[{version, status, description, last_updated_at}], endpoints[{name, live_version, target_version, status, description, created_at, last_updated_at, failure_reason}], latest_version, ledger_version, canary_endpoints[]}` — `versions` newest first; `endpoints` with `DEFAULT` first then by name; `latest_version` is the highest version AWS reports and `ledger_version` the one the last Launchpad deploy recorded (`Agent.version`) — they may differ after an out-of-band update or a canary candidate mint; `canary_endpoints` lists the `stable`/`treatment` names still present. Resource family: `zip_runtime`/`studio`/`container` and imported rows whose `spec.discovery.resource_type` is absent or `runtime` → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`; `harness` and imported rows with `resource_type == "harness"` → `ListHarnessVersions` + `ListHarnessEndpoints` (harness versions carry no description). Never mutates anything |
-| `GET` | `/api/agents/{agent_id}/mcp` | member — MCP servers (`spec.protocol == "mcp"`) only, else `409 agent.not_mcp_server`: `{target_name, target_id, client_id, gateway_id, endpoint, target_status, status_reasons[], tools[{name, description}], tools_error}` — the Gateway target read back live (`MISSING` when AWS no longer has it) and the tools agents see through the Gateway (`<target>___<tool>`); never secrets |
+| `GET` | `/api/agents/{agent_id}/mcp` | member — MCP servers (`spec.protocol == "mcp"`) only, else `409 agent.not_mcp_server`: `{target_name, target_id, client_id, gateway_id, endpoint, target_status, status_reasons[], tools[{name, description}], tools_error}` — the Gateway target read back live (`MISSING` when AWS no longer has it) and the tools agents see through the Gateway (`<target>___<tool>`); never secrets. Plus `review {state: none\|reviewing\|approved\|rejected, open_review_id, approved_review_id, approved_hash, live_hash, drift}`, the tool-review gate (see *Console MCP tool review API* below): `live_hash` is the hash of the tools listed live (null unless the target is `READY`), and `drift` is true when it differs from `approved_hash`. This read records nothing; `POST /api/mcp-servers/{agent_id}/reviews/check` does |
 | `GET` | `/api/agents/{agent_id}/conversions` | member — `{source: {id, name, method, status}, conversions: [agent…]}`: the **Runtime twins** converted from this agent (`POST …/convert` stamps `spec.source_harness.agent_id` on the new `-rt` agent), newest first, each in the ordinary agent projection plus its latest `deployment`. Pure ledger read (no AWS call); deleted twins are omitted; unknown or deleted source → 404 `agent.not_found`. The assistant's NEXT STEPS reads it to switch to the twin once it is `active` and to find it again after a reload |
 
 Error codes: `agent.not_found` (404, unknown id or another workspace's agent),
@@ -537,6 +537,55 @@ deep link (`/evaluation?view=datasets&ds=…` / `?view=evaluators&ev=…`). The 
 `DELETE /api/eval/evaluators/{id}` answers `409 evaluator.managed_by_operation`
 (`detail.operation_id`) for an evaluator an operation owns. `GET /api/assistant/architect`
 gained `can_materialize_evaluation_assets` (= the caller holds `agents.deploy`).
+
+## Console MCP tool review API
+
+A hosted MCP server (`spec.protocol == "mcp"`) is not served until its tool list
+has been reviewed (design projects §15.6). Every time the deploy pipeline creates or
+re-syncs the server's Gateway target, it lists the tools through the Gateway and
+snapshots them as `[{name, description, input_schema}]`, sorted by name with the
+`<target>___` prefix stripped. The snapshot's SHA-256 is compared with the last
+**approved** list. A match opens the gate. A first deploy, a re-publish that changed
+a tool, or a drift opens a review instead, and the target is deleted again, so agents
+can neither call nor list the new tools. A server whose target predates tool review
+gets its live list recorded as an approved `baseline` (by `system:baseline`) on its
+next deploy, so only a later change needs a review.
+
+The routes are workspace + project scoped, like every agent route. Reads take
+`perm:project.use`, deciding takes the project key `perm:mcp.approve`, and the drift
+check takes `perm:project.write`. The deployer of the server (the actor of its latest
+deployment, else its creator) never decides its own review, administrators included:
+`409 mcp_review.self_decide`. A server of another project, or one the viewer may not
+see, answers `404 agent.not_found`. An agent that is not an MCP server answers
+`409 agent.not_mcp_server`.
+
+A review is `{id, agent_id, version, target_name, tools_hash, tool_count,
+base_review_id, diff{added[], removed[], description_changed[], schema_changed[]},
+hints[{tool, kind, detail}], status: reviewing|approved|rejected|superseded, source:
+deploy|drift|baseline, requested_by, decided_by, decided_at, note, publish_status:
+publishing|published|failed|null, publish_error, created_at}`. Fields to note:
+
+- `diff` is against the last approved list, which is what agents saw.
+- `hints` flag what a reviewer should read twice. `kind` is `dangerous_verb`, `write_name`, `missing_description`, `injection_phrase`, `url`, `cross_tool_reference` or `long_description`. Hints never reject anything by themselves.
+- A newer list supersedes an older open review, so at most one is `reviewing`.
+
+| Method | Path | Permission | Result |
+|---|---|---|---|
+| `GET` | `/api/mcp-servers/{agent_id}/reviews` | `perm:project.use` | `{agent_id, state: none\|reviewing\|approved\|rejected, open_review_id, approved_review_id, approved_hash, reviews[review]}`, newest first, without the tool lists. `state` is `reviewing` while a list waits, else the latest decision, and `none` before the first list |
+| `GET` | `/api/mcp-servers/{agent_id}/reviews/{review_id}` | `perm:project.use` | The review plus `tools[]` and `base_tools[]` (the approved list it is compared with, `null` for a first review), for a side-by-side reading. `404 mcp_review.not_found` for a review of another server |
+| `POST` | `/api/mcp-servers/{agent_id}/reviews/{review_id}/approve` | `perm:mcp.approve` | Body `{note? (≤ 2000)}` → the review detail. Approving re-creates the withheld Gateway target in the background, through the gate again: the server must still list exactly the approved tools. `publish_status` reports how that went. `409 mcp_review.not_open` when the review is already decided |
+| `POST` | `/api/mcp-servers/{agent_id}/reviews/{review_id}/reject` | `perm:mcp.approve` | Body `{note?}` → the review detail. The target stays withheld until a new deploy is approved |
+| `POST` | `/api/mcp-servers/{agent_id}/reviews/check` | `perm:project.write` | Re-syncs the live target and compares its tools with the approved list. Returns `{checked, drift, review_id?, reason?}` merged with the gate state above. A server can change its tools without a re-deploy. A difference opens a `drift` review and withholds the target. A list that cannot be read also withholds it (fail closed). `checked: false, reason: "no_target"` when no target is live |
+
+Opening a review journals `mcp.review.deploy` / `.drift`, and a decision `mcp.review.approve` / `.reject`. The V3 agent page's MCP server panel shows
+the gate, the open review with its diff and hints, and the approve and reject actions.
+
+**Registry records of MCP servers.** `POST /api/registry/records/{record_id}/action`
+with `approve` or `publish` on a record whose `descriptorType` is `MCP` also requires
+`perm:mcp.approve` (`403 auth.permission_required`). When the record names a hosted
+MCP server of the workspace (its `target_name`), that server's tool review must be
+`approved` first: otherwise `409 mcp.review_pending` (`detail.agent_id`). Other
+record types and actions keep their lifecycle unchanged.
 
 ## Console Registry API — live agent card
 
@@ -883,9 +932,27 @@ console sends as `runtimeSessionId` is the one the ledger tracks.
 | Method | Path | Result |
 |---|---|---|
 | `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`); `{prompt?, attachments?, session_id?, retry_of?}` (`retry_of`: see *Retrying a failed turn* below), a missing id starts a new session; message text or at least one attachment is required. `as_user?: bool` (JWT-inbound agents only): `true` sends the signed-in user's Cognito JWT, `false` the workspace M2M token, omitted = the user JWT when a pool sign-in exists, else M2M; `409 chat.as_user_unavailable` when `true` without a pool sign-in. `meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`; the Memory actor is `scoped_actor` in both cases. `auth_required` `{provider, tool, scopes[], url, agent_id}` is an as_user (3LO) consent ask from a tool: `url` is the single-use authorization URL (the console links it only when it is `https:`), the `sessionUri` stays server-side, and the answer keeps streaming around it. History keeps the ask as a `role: "auth"` row (`text` = the Connection, `name` = the tool) **without** the URL, so a restored ask can only be retried; poll `GET /api/identity/grants/{connection}/status` to see when consent completes. `policy_denied` (Harness; payload under *Streaming invoke*) is kept as a `role: "policy"` row (`text` = the reason, `name` = the tool) and restored as the V2 Chat policy-deny card, which then links to the Governance landing page rather than a specific gateway. Console-only status events (chat-streaming S2; the public `/v1` stream and the share page never send them): `meta.started_at` and `tool.started_at` (epoch ms), `phase {phase: starting\|waiting_model\|streaming}`, `thinking {}` (a Harness is reasoning; throttled, never the reasoning text), `tool_end {id, status: success\|error\|denied, duration_ms}` (a code runtime's open tool is ended by the next event), a named `heartbeat {elapsed_ms}` in every quiet stretch (`/v1` keeps the `: keep-alive` comment), and `usage {input_tokens, output_tokens, total_tokens, model_calls}` once at the end when the runtime reports it |
+| `GET` | `/api/chat/{agent_id}/turns/{turn_id}/events?after=` | Resume a running console turn (see *Disconnect-safe turns* below): the turn's events after SSE id `after` (`0` = the whole turn), then the live ones, closing when the turn has ended. A `gap {after, first_seq}` comes first when some of those events already left the buffer. `404 chat.turn_not_found` once the turn is gone from this process, or for a turn of another agent, workspace or project; `GET …/history` then has what the ledger saved |
+| `POST` | `/api/chat/{agent_id}/turns/{turn_id}/stop` | The stop button: ends a running turn. The upstream is closed, and the partial answer and an `interrupted: stopped by the user` row are saved. Answers `{turn_id, stopped}` once the worker has recorded the stop (at most about 5 s), so the session's next turn is accepted at once. `stopped: false` when the turn had already ended |
 | `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
 | `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |
+
+**Disconnect-safe turns.** A console chat turn runs on a background worker, not in
+the HTTP response (`app/services/chat_turns.py`, chat-streaming §5.2). The worker reads
+the upstream, persists the thread items and publishes every event into the turn's
+in-memory buffer, numbered by `seq`. The `POST /api/chat/{agent_id}` response is only
+the first subscriber of that buffer. When the browser goes away, the turn keeps
+running and keeps saving.
+
+- `meta.turn_id` names the turn. Every frame but a heartbeat carries its `seq` as the SSE `id:` line, which is what `…/turns/{turn_id}/events?after=` continues after. The console uses it to reconnect after a dropped connection, and its stop button calls `…/turns/{turn_id}/stop` as well as closing the stream.
+- `GET …/history` adds `running_turn {turn_id, user_message_id} | null`, so a reopened session shows the thread up to that user row and follows the running turn from its first event. END SESSION stops a running turn of the session first.
+- One running turn per session: a new turn on a session whose turn is still running answers `409 chat.turn_in_progress` (`detail.turn_id`, `detail.session_id`) before the stream opens.
+- A turn runs at most its agent's `timeout_seconds` + 60 s (3600 s + 60 s when the spec sets none). Past that, the upstream is closed and the stream ends with `error` `chat.turn_timeout` (`detail.limit_s`, `retry.category: timeout`, no retry button). A turn ended by the stop button ends with `chat.turn_stopped`.
+- The buffer keeps at most 2000 events or 600 s of them, and a finished turn stays resumable for 60 s. After that, only the ledger has it.
+- Single process (v1): the registry is the serving process's memory. A deployment with several workers must route a resume to the process running the turn, and a restart loses the running turns. Their partial answers stay in the ledger up to the last item flushed.
+
+`/v1` and the share page are unchanged: their streams still end with the connection.
 
 Ending is explicit: NEW SESSION in the console only forgets the id locally, so the
 runtime session it leaves behind idles out on its own. END SESSION is what to press
@@ -1404,10 +1471,13 @@ it. Neither surface touches AWS. See
 | `POST` | `/api/auth/register` | open | `201` — creates a `member` account; by default `status=pending` with `expires_at=null` until an admin approves it, then valid for `auth_registration_valid_days` (default 7) |
 | `POST` | `/api/auth/logout` | session | Clears the cookie |
 | `POST` | `/api/auth/password` | session | `{current_password, new_password}` — the signed-in account changes its own password (register's policy). For the built-in admin the new password is stored as a hash override that replaces the configured `auth_password`. Every other session of the account ends; the caller's cookie is re-issued. `auth.invalid_current_password` (400), `auth.not_enabled` (400, no gate) |
-| `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&limit=&offset=` | admin | Paged account list with derived `state` / `days_remaining`, plus `builtin` — the built-in admin (id `builtin-admin`, `password_source: config\|console`) when it matches the search and state filter; it is outside `items` / `total` |
-| `POST` | `/api/users` | admin | `201` — creates an account that is **active at once** (no approval): `username`, `email` (register's rules, incl. the reserved built-in name and email domains), `password` (omitted = generated and returned once as `generated_password`), `role` (`member` default, `operator`, `admin`), `permissions`, `workspaces` (default `["default"]`; must be empty for `admin`), and at most one of `valid_days` (1-3650), a future `expires_at`, `never_expires: true` (none = `auth_registration_valid_days`). `users.invalid_workspaces` / `users.admin_no_grants` / `users.invalid_role` (400), `users.invalid_expiry` (422), `auth.username_taken` / `auth.email_taken` (409) |
+| `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&role=&project=&group=&limit=&offset=` | admin | Paged account list with derived `state` / `days_remaining`, plus `builtin` — the built-in admin (id `builtin-admin`, `password_source: config\|console`) when it matches the search and state filter; it is outside `items` / `total`. Each item carries `projects[{id, name, status, is_default, role, sources[{source, role_key}]}]` (direct and group memberships; `role` is the direct role, else the group's) and `groups[{id, name, role, archived}]`. `role` filters the global role (`422 users.invalid_role` for an unknown one). `project` keeps the accounts that are members of that project, directly or through its group (not the admin bypass). `group` keeps the group's members. `project_id` / `group_id` are accepted as aliases. An unknown project or group is 404. A `project` or `group` filter leaves the built-in admin out, since it holds no membership |
+| `POST` | `/api/users` | admin | `201` — creates an account that is **active at once** (no approval): `username`, `email` (register's rules, incl. the reserved built-in name and email domains), `password` (omitted = generated and returned once as `generated_password`), `role` (`member` default, `operator`, `admin`), `permissions`, `workspaces` (default `["default"]`; must be empty for `admin`), and at most one of `valid_days` (1-3650), a future `expires_at`, `never_expires: true` (none = `auth_registration_valid_days`). Optional `projects[{project_id, role_key, overrides?}]` (direct memberships: a built-in template, a custom role of that project, or `inherit` in the default project) and `groups[{group_id, role_key}]` (built-in templates only, no overrides). Returns the item shape of `GET /api/users`. `users.invalid_workspaces` / `users.admin_no_grants` / `users.invalid_role` (400), `users.invalid_expiry` (422), `auth.username_taken` / `auth.email_taken` (409) |
 | `GET` | `/api/users/stats` | admin | Totals including the `pending` approval queue, `expiring_soon` (≤3 days), 7-day registration/sign-in counts, a 14-day registration series, top email domains |
-| `PATCH` | `/api/users/{id}` | admin | Any of `status` (`pending`\|`active`\|`disabled`; `active` on a pending account approves it and starts its window), `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once), `permissions` (`{permission_key: bool}`, `null` = all granted), `workspaces` (full replacement of the account's workspace grants, `null` clears them) |
+| `PATCH` | `/api/users/{id}` | admin | Any of `status` (`pending`\|`active`\|`disabled`; `active` on a pending account approves it and starts its window), `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once), `permissions` (`{permission_key: bool}`, `null` = all granted), `workspaces` (full replacement of the account's workspace grants, `null` clears them), `projects` / `groups` (full replacement of the direct project and group memberships, same item shapes as on create; `null` clears them; the default project's `inherit` rows keep following `workspaces`; an item without `overrides` keeps the existing row's) |
+| `GET` | `/api/users/{id}` | admin | One account in the `GET /api/users` item shape (grants, projects, groups), for the user detail page. `builtin-admin` returns its built-in projection |
+| `GET` | `/api/users/{id}/access` | admin | The account's effective access: the `GET /api/me/access` shape as that account would see it, plus `state`. An administrator's access is every project by bypass; `state` says whether the account can sign in to use any of it |
+| `POST` | `/api/users/bulk/projects` | admin | The user list's "add to project": body `{user_ids[1–200], project_id, role_key, overrides?}` → `{project_id, role_key, added[], updated[], unchanged[], skipped[{user_id, reason: "admin"}]}`. Every listed account gets a direct membership with `role_key`; an existing member's role is replaced (and its overrides, when sent). Nobody is removed and no workspace grant changes. Administrators are skipped, since they reach every project by role. An unknown id refuses the whole batch (`404 users.not_found`, `detail.unknown`). Each change is journaled as `project.members.add` / `.update`. `users.invalid_bulk` for an empty or oversized list, and the `PUT /api/projects/{id}/members` errors (`project.role_unknown`, `project.sod_conflict`, …) |
 | `DELETE` | `/api/users/{id}` | admin | Removes the account |
 | `POST` | `/api/users/{id}/sessions/revoke` | admin | Forced logout → `{ok: true, user_id, session_epoch}`. Cookies are stateless, so this bumps the account's `session_epoch`, which is part of the stamp every cookie carries; every session issued before answers `401 auth.required` on its next request. Journaled as the structure event `user.sessions.revoke`. On `builtin-admin` → `users.builtin_immutable` (400): its sessions end when its password changes |
 | `GET` | `/api/admins` | admin | The administrator page's list: `{items[…], total, can_sign_in}`. `items` starts with the built-in admin while the login gate is on (`builtin: true`, `can_sign_in: true`, `can_demote: false`), then every admin-role account oldest first in the `GET /api/users` item shape plus `builtin: false`, `can_sign_in` (active and unexpired), `last_signable` (the only admin left who can sign in) and `can_demote` (false for the caller themselves and for `last_signable`). The top-level `can_sign_in` counts the administrators able to sign in right now, built-in included |
@@ -1433,6 +1503,8 @@ registration disabled), `auth.invalid_username` / `auth.invalid_email` /
 Sign-in error codes: `auth.invalid_credentials` (401), plus
 `auth.account_pending` / `auth.account_disabled` / `auth.account_expired` (401)
 once the submitted credentials themselves are correct.
+
+Membership errors on create / `PATCH`: `users.invalid_groups` (400, a group item carrying `overrides`), `group.role_unknown` (400, not a built-in template), `group.not_found` (404), `group.archived` (409), plus the project membership errors of `PUT /api/projects/{id}/members`.
 
 Session and role errors: `auth.required` (401 — missing, tampered, or expired
 cookie, and also an account that has since been disabled, expired, or deleted),
@@ -1485,19 +1557,31 @@ see `GET /api/role-templates`):
 | `project_owner` | `project.members`, `project.audit`, `project.share`, `project.use`, `project.write` and the build keys (`agents.*`, `eval.run`, `promotion.request`, `identity.manage`, `identity.grant`, `memory.manage`, `criteria.manage`). It deliberately has no approve or sign keys |
 | `developer` | `project.use`, `project.write` and a member's default keys |
 | `biz_owner` | `project.use`, `project.write`, `eval.run`, `criteria.manage`, `criteria.sign`, `golden.admit`, `judge.calibrate`, `identity.grant` |
-| `release_ops` | `project.use`, `project.write` and an operator's default keys (including `promotion.approve`, `waiver.approve`, `release.sign`) |
+| `release_ops` | `project.use`, `project.write`, `mcp.approve` and an operator's default keys (including `promotion.approve`, `waiver.approve`, `release.sign`) |
 | `sme` | `project.use`, `identity.grant` |
+| `tool_steward` | `project.use`, `mcp.approve`: reviews MCP servers' tool lists, and holds nothing it could approve for itself |
 | `viewer` | none (read only) |
-| `inherit` | the account's own global keys plus `project.use` / `project.write`; it exists in the default project only |
+| `inherit` | the account's own global keys plus `project.use` / `project.write`, and `mcp.approve` when the account holds `promotion.approve`; it exists in the default project only |
 
 The project keys are `project.use` (chat / invoke, feedback, labels, own sessions),
 `project.write` (ordinary writes in the project), `project.members` (the project's
-members and custom roles), and `project.audit` / `project.share` (reserved for
-phase 3).
+members and custom roles), `project.audit` / `project.share` (reserved for
+phase 3), and `mcp.approve` (decide a hosted MCP server's tool review, never the
+deployer's own; see *Console MCP tool review API*). `mcp.approve` is a project key, not
+an agent key, so `/api/auth/status` and `users.permissions` never list it.
+
+**Combined duties.** A member who holds both sides of a separation-of-duty pair in one
+project (`agents.deploy` + `release.sign`, `criteria.manage` + `criteria.sign`) is
+flagged in the member views (`sod_conflicts`). Under the admin-only setting
+`settings.sod_strict`, a write that would leave someone holding such a pair is refused
+instead with `409 project.sod_conflict` (`detail.conflicts[{user_id, username,
+pairs}]`). This covers member and role writes, group membership and group project
+changes, and turning `sod_strict` on. The object-level checks (no approving or signing
+your own request) stay the backstop.
 
 | Method | Path | Role | Result |
 |---|---|---|---|
-| `GET` | `/api/me/access` | member | The caller's access map, the data source of the project switcher and of the console's `can()`: `{username, user_id, role, is_admin, can_manage_structure, workspaces[{workspace_id, name, default_project_id, projects[{id, name, status, is_default, is_workspace_default, permissions[], role_sources[{source: direct\|group:<id>, role_key}], bypass}]}]}`. An administrator sees every workspace and every bound project with all keys (`bypass: true` where they are not a member). `default_project_id` is the project a header-less request would use |
+| `GET` | `/api/me/access` | member | The caller's access map, the data source of the project switcher and of the console's `can()`: `{username, user_id, role, is_admin, can_manage_structure, workspaces[{workspace_id, name, default_project_id, bound_projects, projects[{id, name, status, is_default, is_workspace_default, permissions[], role_sources[{source: direct\|group:<id>, role_key}], bypass, department_id, department_name}]}]}`. An administrator sees every workspace and every bound project with all keys (`bypass: true` where they are not a member). `default_project_id` is the project a header-less request would use. `department_id` / `department_name` (null when the project has none) group the switcher's options. `bound_projects` counts the workspace's active bound projects, reachable or not: when the switcher is hidden (one reachable project) but `bound_projects > 1`, the V3 top bar shows the current project as a read-only chip |
 | `GET` | `/api/role-templates` | member | Static: `{templates[{key, permissions[]}], inherit: "inherit", agent_keys[], project_keys[]}` |
 | `GET` | `/api/projects?department_id=&group_id=&status=&workspace_id=&q=` | member | `{projects[project]}`, every project for an administrator and the caller's own for anyone else; the default project first, then by name. `status` is `active`, `archived` or `all`. `q` matches the id or the name |
 | `POST` | `/api/projects` | admin | Body `{id, name (1–64), description? (≤ 2000), department_id?, group_id?, workspaces[1–50], owners?[users.id] (≤ 50, added as `project_owner`), settings?{resource_visibility: shared\|isolated, sod_strict: bool}}` → `201` project detail. `id` matches `^[a-z0-9][a-z0-9-]{1,31}$`. Each newly bound workspace gets the project's own Skill Lab sample task sets, best effort after the commit |
@@ -1507,7 +1591,7 @@ phase 3).
 | `POST` | `/api/projects/{project_id}/unarchive` | admin | → detail; writable again. Revoked links and disabled keys stay so |
 | `GET` | `/api/projects/{project_id}/workspaces` | member (404 to non-members) | `{workspaces[{workspace_id, name, region, tier, is_workspace_default, enabled_by, enabled_at}]}` |
 | `PUT` | `/api/projects/{project_id}/workspaces` | admin | Body `{bind[], unbind[], make_default[]}` (each ≤ 50) → `{workspaces[binding], bound[]}`, where `bound` lists the newly bound workspaces, which get their Skill Lab samples. `make_default` makes this project the workspace's default (the project a header-less request means; one per workspace). An unbind is refused for the default project, for the workspace-default binding, and while the workspace still holds any of the project's rows (`detail.rows` = `{table: count}`) |
-| `GET` | `/api/projects/{project_id}/members` | member (404 to non-members) | `{members[{user_id, username, email, account_role, status, direct{role_key, overrides, added_by, added_at} \| null, group{group_id, role_key} \| null, sources[{source, role_key}], bypass, permissions[]}]}`: direct and group members with their effective keys. `email` is in full for an administrator and masked (`z***@corp.com`) otherwise. `bypass` marks an admin-role account, which holds every key anyway |
+| `GET` | `/api/projects/{project_id}/members` | member (404 to non-members) | `{members[{user_id, username, email, account_role, status, direct{role_key, overrides, added_by, added_at} \| null, group{group_id, role_key} \| null, sources[{source, role_key}], bypass, permissions[], sod_conflicts[[key, key]]}], sod_strict}`: direct and group members with their effective keys. `sod_conflicts` lists the separation-of-duty pairs the member holds both sides of; `sod_strict` is the project's setting. The `PUT` below returns the same two fields. `email` is in full for an administrator and masked (`z***@corp.com`) otherwise. `bypass` marks an admin-role account, which holds every key anyway |
 | `PUT` | `/api/projects/{project_id}/members` | `pperm:project.members` | Body `{upsert[{user_id, role_key, overrides?{key: bool}}] (≤ 500), remove[user_id] (≤ 500)}` → `{added[], updated[], removed[], members[…]}`. `role_key` is a built-in template, one of the project's custom roles, or `inherit` (default project only). Only direct rows are written; group-sourced access is managed on the group. Nobody but an administrator edits their own membership. A removed or narrowed member's API keys in the project are disabled |
 | `DELETE` | `/api/projects/{project_id}/members/{user_id}` | `pperm:project.members` | `204`, the single-member form of `remove` |
 | `GET` | `/api/projects/{project_id}/candidates?q=` | `pperm:project.members` | `{candidates[{user_id, username, email (masked), is_member}]}`: at most 20 active, non-admin accounts whose username or email matches `q` |
@@ -1522,7 +1606,40 @@ Error codes (`project.*` unless noted):
 - 400 or 403: `setting_forbidden` (`detail.keys`). It is 403 for an admin-only setting changed by an owner and 400 for an unknown setting.
 - 403: `self_membership`, `auth.forbidden`, `auth.permission_required`.
 - 404: `not_found`, `member_not_found` (no direct row), `role_not_found`, `department.not_found`, `group.not_found`, `workspace.not_found`, `user.not_found` (an unknown `user_id` in `upsert`), `agent.not_found` (transfer: not in the source project, or deleted).
-- 409: `exists`, `archived`, `default_locked`, `workspace_default`, `workspace_in_use`, `not_bound`, `member_from_group` (`detail.group_id`), `role_in_use` (`detail.members`), `transfer_platform` (a system preset), `transfer_busy` (a job of the agent is queued or running), `transfer_linked` (a running canary pairs it with another agent; `detail.canary_id`).
+- 409: `exists`, `archived`, `default_locked`, `workspace_default`, `workspace_in_use`, `not_bound`, `member_from_group` (`detail.group_id`), `role_in_use` (`detail.members`), `sod_conflict` (`detail.conflicts`), `department.archived`, `group.archived`, `transfer_platform` (a system preset), `transfer_busy` (a job of the agent is queued or running), `transfer_linked` (a running canary pairs it with another agent; `detail.canary_id`).
+
+### Project groups and departments
+
+A **department** is an organizational label on projects and groups: it grants no
+access, and the V3 project switcher groups its options by it. A **project group**
+bundles projects across workspaces and grants its members a built-in role template in
+every project of the group (a project is in at most one group). A member's effective
+keys in a project unite the group's role with any direct role, and the direct row's
+`overrides` apply on top. Both surfaces are hub-global (`/api/project-groups*`,
+`/api/departments*` read neither `X-Workspace` nor `X-Project`). Every route is admin,
+except `GET /api/departments`, which members may read. Group and department ids
+follow the project id rule (`^[a-z0-9][a-z0-9-]{1,31}$`, `400 group.invalid_id` /
+`department.invalid_id`). A group write that changes who reaches what bumps
+`access_epoch` and disables the API keys whose creators lost a project. Writes are
+journaled as structure events: `department.create` / `.update` / `.archive` /
+`.unarchive` / `.delete`, `group.create` / `.update` / `.archive` / `.unarchive`,
+`group.members.add` / `.update` / `.remove`, `group.projects.add` / `.remove`.
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/departments?status=active\|archived\|all` | member | `{departments[{id, name, description, archived, archived_at, created_by, created_at, updated_at, project_count, group_count}]}`; `status` defaults to `active` (`400 structure.invalid_status` otherwise) |
+| `POST` | `/api/departments` | admin | Body `{id, name (1–64), description? (≤ 2000)}` → `201` department. `409 department.exists` |
+| `PATCH` | `/api/departments/{department_id}` | admin | Any of `{name, description}` → department |
+| `POST` | `/api/departments/{department_id}/archive` / `…/unarchive` | admin | → department. An archived department cannot be given to a project or group (`409 department.archived`) |
+| `DELETE` | `/api/departments/{department_id}` | admin | `204`, only while no project and no group names it: `409 department.in_use` (`detail.projects`, `detail.groups`) |
+| `GET` | `/api/project-groups?status=&department_id=` | admin | `{groups[{id, name, description, department_id, archived, archived_at, created_by, created_at, updated_at, projects[{id, name, status}], member_count}]}`, by name |
+| `POST` | `/api/project-groups` | admin | Body `{id, name (1–64), description?, department_id?}` → `201` group detail. `409 group.exists` |
+| `GET` | `/api/project-groups/{group_id}` | admin | Group detail: the list shape plus `members[{user_id, username, email, account_role, status, role_key, added_by, added_at, sod_conflicts[{project_id, pairs, strict}]}]`, where `sod_conflicts` lists the group's projects in which that member combines duties |
+| `PATCH` | `/api/project-groups/{group_id}` | admin | Any of `{name, description, department_id}` → detail; none of it changes access |
+| `DELETE` | `/api/project-groups/{group_id}` | admin | Archives the group → detail + `{keys_disabled}`. The access the group gave stops now; direct members keep theirs, and the projects keep their `group_id`, so an unarchive gives the same access back |
+| `POST` | `/api/project-groups/{group_id}/unarchive` | admin | → detail. Under `sod_strict` it is refused if a member would regain a combined duty |
+| `PUT` | `/api/project-groups/{group_id}/members` | admin | Body `{upsert[{user_id, role_key}] (≤ 500), remove[user_id] (≤ 500)}` → `{added[], updated[], removed[]}` + detail. `role_key` is a built-in template only: custom roles are per project (`400 group.role_invalid`, `detail.templates`). `400 group.member_conflict` (upserted and removed in one request), `404 group.member_not_found`, `404 user.not_found`, `409 group.archived` |
+| `PUT` | `/api/project-groups/{group_id}/projects` | admin | Body `{add[] (≤ 200), remove[] (≤ 200)}` → `{added[], removed[]}` + detail. A project in another active group must leave it first (`409 group.project_in_other_group`, `detail.group_id`). Taking a project out revokes the access the group gave there. `400 group.project_conflict`, `404 group.project_not_found` (not in this group), `404 project.not_found`, `409 group.archived` (adding to an archived group) |
 
 ## Console Network Profiles API
 
@@ -1532,13 +1649,15 @@ the deployer resolves it to the profile's subnets and security groups. Each proj
 has an **allowed set** of profiles per workspace, with at most one default. A
 profile outside the request project's allowed set reads as missing
 (`404 network_profile.not_found`), exactly like an id that does not exist.
-Administrators see every profile of the workspace. Nothing here calls AWS. A new
-profile is `status: unchecked`; the preflight route (`POST …/{profile_id}/check`),
-which fills `check_results` / `checked_at` / `status`, ships separately. The routes
+Administrators see every profile of the workspace. A new profile is
+`status: unchecked` until the preflight (`POST …/{profile_id}/check`) fills
+`check_results` / `checked_at` / `status`. Only the preflight and the probe call AWS.
+The routes
 are workspace-scoped (`X-Workspace`). Reads run inside the request's project. Writes
 and the per-project allowed set are admin and project-exempt, so the allowed-set
 routes name their project in the path. Writes are journaled as workspace-level audit
-events: `network_profile.create`, `.update`, `.archive` and `.project_set`.
+events: `network_profile.create`, `.update`, `.archive`, `.project_set`, `.check`,
+`.probe` and `.settings`.
 
 A profile is `{id, workspace_id, name, vpc_id, subnet_ids[], security_group_ids[],
 purpose: agents|tools|both, internet: none|nat, reachable[{cidr|host, port, note?}],
@@ -1558,6 +1677,11 @@ archived_at, allowed, is_default}`. The fields mean the following:
 | `DELETE` | `/api/network-profiles/{profile_id}` | admin | `204`. Archives the profile (the row stays because snapshots may still name it) and removes it from every project's allowed set. Refused while a live agent names it, because its runtime's ENIs sit in these subnets |
 | `GET` | `/api/network-profiles/projects/{project_id}` | admin | `{project_id, workspace_id, profiles[…], default_profile_id}`: the project's allowed set in the request's workspace |
 | `PUT` | `/api/network-profiles/projects/{project_id}` | admin | Body `{profile_ids[] (≤ 50), default_profile_id?}` → the GET shape. Replaces the project's allowed set and its default in this workspace |
+| `POST` | `/api/network-profiles/{profile_id}/check` | admin | Preflight (design projects §12.4) → the administrator view with `check_results[{check, severity: ok\|warn\|block, message, details}]`, `checked_at` and `status` (`blocked` > `warn` > `ok`). It reads the VPC through the workspace's own read-only `ec2:Describe*` calls: subnets exist, sit in the VPC and in at least two supported AZs, have free IPs; security groups exist and allow egress on 443; VPC DNS; NAT routes when `internet: nat`; network ACLs; the interface / gateway endpoints AgentCore needs (blocking only on what every agent needs, warning on the rest); and routes to the declared `reachable` targets (presence and next-hop type only; the far side is reported as not verified by the platform). The last probe result is kept. `502 network_profile.check_failed` (`detail.aws_code`) when AWS cannot be read; an access denial names the spoke template update that grants the calls |
+| `POST` | `/api/network-profiles/{profile_id}/probe` | admin | `202` → the administrator view with a `probe` entry `{status: running}` in `check_results`. In the background, a temporary runtime starts in the profile's subnets and security groups and tries DNS, TCP and TLS to every `reachable` target (§12.7). The entry then becomes `status: done` (`severity: warn` when a target is unreachable, `details.targets[]`) or `failed`. A network edit while it runs drops the late answer. `400 network_profile.nothing_to_probe` (no `reachable` targets), `409 network_profile.blocked` (the last preflight blocks), `409 network_profile.probe_running` (a probe started less than 30 minutes ago is still running) |
+| `GET` | `/api/network-profiles/settings` | admin | `{network_enforcement, network_public_allowed}` of the workspace (defaults `false` / `true`) |
+| `PUT` | `/api/network-profiles/settings` | admin | Body (`extra="forbid"`) `{network_enforcement?, network_public_allowed?}` → the GET shape; an omitted or `null` key keeps its value. `network_public_allowed: false` means every agent must name a profile. Only the platform can enforce it, since no IAM condition key expresses the network mode; its deploy-path refusal (`400 network.public_not_allowed`) ships with the network deploy wizard (V12-deploy), so today the switch is stored and reported only. `network_enforcement` records that the workspace means to hold AgentCore to the approved subnets and security groups at the IAM layer; the platform does not write that policy itself (see the next route) |
+| `GET` | `/api/network-profiles/enforcement` | admin | `{settings, approved_subnet_ids[], approved_security_group_ids[], stack_parameters{ApprovedSubnetIds, ApprovedSecurityGroupIds}, policy, actions[], not_enforceable[]}`. The approved sets are the subnets and security groups of every live profile not blocked by its last preflight. `stack_parameters` are the comma-joined values for the spoke stack (`infra/spoke/launchpad-workspace-role.yaml`), whose `EnforceNetwork` condition adds a `launchpad-network-enforcement` Deny to the workspace role once `ApprovedSubnetIds` is non-empty. `policy` is the equivalent document to apply as an SCP instead: Deny `bedrock-agentcore:CreateAgentRuntime`, `UpdateAgentRuntime`, `CreateCodeInterpreter` and `CreateBrowser` when `ForAnyValue:StringNotEquals` on `bedrock-agentcore:subnets` / `bedrock-agentcore:securityGroups` (an empty approved set denies every VPC placement). `not_enforceable` names the gaps: the Harness actions carry neither key, and no key expresses `networkMode`, so a PUBLIC request still passes at the IAM layer |
 
 `POST /api/agents` and `POST /api/agents/{id}/redeploy` normalize `spec.network`:
 
@@ -1569,6 +1693,8 @@ Error codes: `network_profile.not_found` (404, unknown, archived, another worksp
 profile, or outside the allowed set), `network_profile.name_exists` (409,
 `detail.profile_id`), `network_profile.in_use` (409, `detail.agents`),
 `network_profile.default_not_allowed` (400, the default is not among `profile_ids`),
+`network_profile.check_failed` (502), `network_profile.nothing_to_probe` (400),
+`network_profile.probe_running` (409), `network.public_not_allowed` (400),
 `project.not_found` (404, the project is not bound to the workspace), and
 `validation.invalid_request` (422, a body outside the schema or a malformed
 VPC / subnet / security-group id).

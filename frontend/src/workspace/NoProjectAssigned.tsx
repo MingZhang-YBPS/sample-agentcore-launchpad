@@ -7,6 +7,7 @@ import { AnnouncementFeed } from "../components/AnnouncementFeed";
 import { useUiVersion } from "../lib/ui-version";
 import { V2AuthFrame } from "../v2/AuthFrame";
 import { V3AuthFrame } from "../v3/AuthFrame";
+import { V3Announcements } from "../v3/NoWorkspace";
 import { Lamp, PageHead, Panel } from "../v3/ui";
 import { useWorkspace } from "./workspace-context";
 
@@ -34,8 +35,7 @@ function WorkspacePicker({ skin }: { skin: "v2" | "v3" }) {
  * belongs to none of its projects — every project-scoped route would answer 403
  * `project.none`, so the console says who can fix it instead. Modelled on
  * `NoWorkspaceGranted`: the sign-in chrome, signing out, switching to another
- * workspace, and (V2) the installation-wide announcements — V3's announcement list
- * is private to `v3/NoWorkspace.tsx` for now.
+ * workspace, and the installation-wide announcements.
  */
 export function NoProjectAssigned({ workspaceName }: { workspaceName: string }) {
   const { t } = useTranslation();
@@ -65,6 +65,7 @@ export function NoProjectAssigned({ workspaceName }: { workspaceName: string }) 
               </div>
             </div>
           </Panel>
+          <V3Announcements />
         </div>
       </V3AuthFrame>
     );

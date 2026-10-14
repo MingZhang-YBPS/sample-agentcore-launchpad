@@ -477,8 +477,32 @@ through the Gateway (`<target>___<tool>`) back live — the V3 agent page render
 place of the lifecycle, chat and try-it panels. Delete runs in reverse: Gateway target →
 runtime → OAuth2 provider → Cognito client, idempotent. Sample:
 [`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md) (`mcp>=1.10,<2`).
-Not in this version: tool review, Cedar scaffolding, health schedules, Lambda
-targets, VPC mode.
+Not in this version: Cedar scaffolding, health schedules, Lambda targets, VPC
+mode.
+
+**Tool-review gate (§15.6).** A hosted server's tools are not served until a person
+other than its deployer has approved the list. Creating the target, or re-syncing it
+after a re-publish, lists the tools through the Gateway; `services/mcp_reviews.py`
+snapshots them (`[{name, description, input_schema}]`, prefix stripped, sorted) and
+compares the snapshot's SHA-256 with the last approved list. A match leaves the target
+live. Otherwise a review row is opened in the `mcp_tool_reviews` table, with the diff
+against the approved list and reviewer hints (injection-style phrases, URLs,
+cross-tool instructions, destructive or write verbs, missing or very long
+descriptions), and the target is deleted again. The register stage logs that the
+target is withheld, so agents can neither call nor list the new tools. A list that
+cannot be read is withheld too (fail closed). Deciding takes the project key
+`mcp.approve`, held by the `release_ops` and `tool_steward` templates (and by an
+`inherit` member who holds `promotion.approve`). The deployer never decides their own
+review, administrators included. An approval re-creates the target in the background,
+through the gate again, and records `publish_status` on the review.
+`POST /api/mcp-servers/{agent_id}/reviews/check` re-syncs a live target to catch a
+server that changed its tools without a re-deploy: a difference opens a `drift`
+review and withholds the target. A server whose target predates the gate gets its
+live list recorded as an approved `baseline` on its next deploy. Approving or
+publishing the Registry record of a hosted server also requires `mcp.approve` and an
+approved tool review (`409 mcp.review_pending`). Until Cedar scaffolding lands
+(§15.7), withholding the whole target is the gate. Routes:
+[api.md](api.md#console-mcp-tool-review-api).
 
 **stdio bridge (§15.5).** A stdio-only server ships as a code zip with
 `mcp.stdio_wrapper = {command, args, base}` (code_zip only — a Dockerfile context or
@@ -2209,6 +2233,26 @@ public  /v1  ──┘        │
                         ├─ Policy        (Cedar ENFORCE at the gateway)
                         └─ Observability (spans → CloudWatch Transaction Search)
 ```
+
+### Disconnect-safe console chat turns
+
+A console chat turn (`POST /api/chat/{id}`) runs on a background worker thread, not in
+the HTTP response (`app/services/chat_turns.py`, chat-streaming §5.2). The worker runs
+the invoke chain above inside the turn's project context, persists the thread items
+and publishes every event into the turn's in-memory buffer, numbered by `seq`. The
+response is only the buffer's first subscriber. A closed tab, a reload or a dropped
+proxy connection therefore no longer ends the turn: it keeps running and saving.
+
+- `meta.turn_id` names the turn, and every non-heartbeat frame carries its `seq` as the SSE `id`. `GET /api/chat/{id}/turns/{turn_id}/events?after=<seq>` subscribes again: first the buffered events after `seq` (a `gap` event when some already left the buffer), then the live ones. The console reconnects with it after a drop, and `GET …/history` returns `running_turn` so a reopened session follows the turn still running.
+- The stop button closes the stream and calls `POST …/turns/{turn_id}/stop`, which closes the upstream, saves the partial answer with an `interrupted` row and waits briefly for the worker so the next turn is accepted at once.
+- One running turn per session (`409 chat.turn_in_progress`), so a resumed page cannot interleave two turns. A turn runs at most the agent's `timeout_seconds` + 60 s, then ends with `chat.turn_timeout`.
+- The buffer is bounded (2000 events or 600 s), and a finished turn stays resumable for 60 s; after that, the ledger is all there is.
+- **Single process (v1).** The turn registry is the serving process's memory. A deployment with several workers must route a resume to the process running the turn, and a restart loses the running turns; their partial answers stay in the ledger up to the last item flushed. Multi-process resume from the ledger is not built.
+
+Not verified live: whether AgentCore keeps executing a turn after `InvokeHarness` /
+`InvokeAgentRuntime`'s stream is closed (the `interrupted` row assumes it ends there).
+`/v1` and the share page do not use the worker: their streams still end with the
+connection. Routes: [api.md](api.md#console-chat-api).
 
 ### Playground file attachments
 
@@ -4687,6 +4731,7 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `deployments` | One row per deploy run — the five-stage array with per-stage status/detail/timestamps |
 | `jobs` | Async work (type `deploy_agent`) — status + a JSONL `log` of stage events |
 | `chat_sessions` | Chat playground sessions — turns, actor, last-seen, `ended_at` once the runtime session was explicitly ended |
+| `mcp_tool_reviews` | Tool reviews of hosted MCP servers — the tool-list snapshot and its hash, the diff against the approved list, hints, status (`reviewing`/`approved`/`rejected`/`superseded`), source (`deploy`/`drift`/`baseline`), requester, decider, note, and the re-publish status after an approval |
 | `users` | Console accounts created by registration — username/email, pbkdf2 password hash, role, status (`pending`/`active`/`disabled`), `expires_at` (null until approval), last sign-in + sign-in count (the built-in admin is config-only and has no row) |
 | `api_keys` | Public-API keys — sha256 hash + prefix (plaintext never stored), creator (`created_by` user id + `created_by_name`, NULL on legacy keys), `last_used_at` |
 | `policy_decisions` | Governance decision log — principal, tool, ALLOW/DENY, reason |

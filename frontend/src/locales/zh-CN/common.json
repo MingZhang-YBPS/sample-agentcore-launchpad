@@ -2503,7 +2503,39 @@
     "network_profile.name_exists": "此工作区中已存在同名的网络配置。",
     "network_profile.in_use": "仍有智能体使用该网络配置，请先将它们迁移到其他网络。",
     "network_profile.blocked": "该网络配置未通过预检，请修复后重新检查，或选择其他网络。",
-    "network_profile.default_not_allowed": "默认网络配置必须是允许的网络配置之一。"
+    "network_profile.default_not_allowed": "默认网络配置必须是允许的网络配置之一。",
+    "chat.turn_in_progress": "该会话仍在回答上一条消息，请等待完成或先停止。",
+    "chat.turn_not_found": "该回答已不在生成中，请重新加载会话。",
+    "chat.turn_timeout": "该回答超出了单轮对话的时间上限，已被终止。请缩小问题范围，或把任务拆成更小的步骤。",
+    "chat.turn_stopped": "该回答在完成前已被停止。",
+    "chat.as_user_unavailable": "以本人身份调用需要通过工作区用户池登录控制台；请关闭“以我的身份调用”，改用工作区机器令牌调用。",
+    "memory.unavailable": "暂时无法读取该 Agent 的记忆，请稍后重试。",
+    "agent.not_mcp_server": "该 Agent 不是 MCP 服务器。",
+    "mcp.review_pending": "请先审批该 MCP 服务器的工具清单。",
+    "mcp.target_name_taken": "网关中已有同名目标指向另一台服务器，请换一个目标名称。",
+    "mcp_review.not_found": "该 MCP 服务器没有这条工具审批记录。",
+    "mcp_review.not_open": "该工具审批已有结论。",
+    "mcp_review.self_decide": "你是该 MCP 服务器的部署者，不能审批它的工具清单；请让另一位拥有“审批 MCP 工具”权限的成员处理。",
+    "project.sod_conflict": "该项目要求职责分离：此变更会让同一成员同时持有一对需分离的权限。请把这些职责分给不同的成员。",
+    "department.exists": "已存在该 ID 的部门。",
+    "department.archived": "该部门已归档，请先恢复或选择其他部门。",
+    "department.in_use": "该部门下仍有项目或项目组，请先移走或归档它们。",
+    "group.exists": "已存在该 ID 的项目组。",
+    "group.archived": "该项目组已归档，请先恢复或选择其他项目组。",
+    "group.member_conflict": "同一请求中不能同时添加和移除同一用户。",
+    "group.member_not_found": "该用户不是此项目组的成员。",
+    "group.project_conflict": "同一请求中不能同时添加和移除同一项目。",
+    "group.project_in_other_group": "该项目已属于另一个项目组，请先从那里移除（一个项目最多属于一个项目组）。",
+    "group.project_not_found": "该项目不在此项目组中。",
+    "group.role_invalid": "项目组只能授予内置角色模板；自定义角色仅限单个项目。",
+    "group.role_unknown": "这不是内置角色；项目组成员只能使用内置模板。",
+    "structure.invalid_status": "未知的状态筛选，请使用 active 或 archived。",
+    "users.invalid_groups": "项目组成员设置无效：每条成员关系只需指定项目组和内置角色，不带权限覆盖。",
+    "users.invalid_bulk": "请至少选择一个账号，且单次不超过批量上限。",
+    "network.public_not_allowed": "该工作区要求所有 Agent 都运行在网络配置中，请选择一个。",
+    "network_profile.check_failed": "本次检查无法读取工作区的 VPC。请确认工作区角色有权查看 VPC、子网和安全组后重试。",
+    "network_profile.nothing_to_probe": "请先在网络配置中声明可达目标，再进行探测。",
+    "network_profile.probe_running": "该网络配置已有探测在运行，请等待完成。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -4286,7 +4318,8 @@
       "golden_admit": "准入黄金集",
       "judge_calibrate": "判定校准",
       "waiver_approve": "批准豁免",
-      "release_sign": "签署放行"
+      "release_sign": "签署放行",
+      "mcp_approve": "审批 MCP 工具"
     },
     "extendTitle": "延长有效期",
     "extendBody": "为 {{username}} 增加多少天？",
@@ -8677,7 +8710,8 @@
         "golden_admit": "准入黄金集",
         "judge_calibrate": "判定校准",
         "waiver_approve": "批准豁免",
-        "release_sign": "签署放行"
+        "release_sign": "签署放行",
+        "mcp_approve": "审批 MCP 工具"
       }
     },
     "workspaces": {
@@ -11981,6 +12015,7 @@
       "adminAccess": "管理员访问",
       "memberGroup": "我的项目",
       "adminGroup": "管理员访问（未加入）",
+      "noDepartment": "未分配部门",
       "cmdkGroup": "项目",
       "switchTo": "切换到项目 {{name}}",
       "roles": {
@@ -11989,6 +12024,7 @@
         "biz_owner": "业务负责人",
         "release_ops": "发布运维",
         "sme": "领域专家",
+        "tool_steward": "工具审核员",
         "viewer": "只读",
         "inherit": "继承全局"
       },

@@ -15,6 +15,7 @@ import type {
 } from "./evaluation";
 import type { ExperimentInfo } from "./experiments";
 import type { ModelSource, ReasoningEffort } from "./models";
+import type { UserGroup, UserProject } from "./api/users";
 import type { ManagedVideo, ManagedVideoCatalog, VideoCatalog, VideoContent } from "./videos";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
@@ -987,6 +988,17 @@ export interface McpServerStatus {
   /** as agents see them through the Gateway: `<target>___<tool>` */
   tools: { name: string; description: string }[];
   tools_error: string | null;
+  /** the tool-review gate (projects §15.6): the Gateway target stays withheld until a
+   *  member holding `mcp.approve` — never the deployer — approves the live tool list */
+  review?: {
+    state: string;
+    open_review_id: string | null;
+    approved_review_id: string | null;
+    approved_hash: string | null;
+    live_hash: string | null;
+    /** the live tool list no longer matches the approved one */
+    drift: boolean;
+  } | null;
 }
 
 /** One skill discovered by /api/registry/skills/inspect (zip or git source). */
@@ -3792,6 +3804,10 @@ export interface ConsoleUser {
   /** built-in admin: "config" (auth_password) or "console" (a password set here) */
   password_source?: "config" | "console";
   password_changed_at?: string | null;
+  /** project memberships, on the routes that list them (`GET /api/users`, `/api/users/{id}`) */
+  projects?: UserProject[];
+  /** user-group memberships, on the same routes */
+  groups?: UserGroup[];
 }
 
 export interface UserListResult {

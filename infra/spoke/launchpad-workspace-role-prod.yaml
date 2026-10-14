@@ -537,6 +537,24 @@ Resources:
                   - kms:ListKeys
                 Resource: "*"
 
+              # ── EC2 (read-only) ─────────────────────────────────────────────
+              # Network profile preflight (design projects §12.4): describe the
+              # subnets, security groups, routes and endpoints an Agent would use.
+              - Sid: Ec2DescribeForNetworkPreflight
+                Effect: Allow
+                Action:
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeNatGateways
+                  - ec2:DescribeNetworkAcls
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcAttribute
+                  - ec2:DescribeVpcEndpoints
+                  - ec2:DescribeVpcs
+                Resource: "*"
+
               # ── STS ────────────────────────────────────────────────────────
               # The first call of every bootstrap run: validate-access asserts the
               # assumed identity really lives in the account the workspace

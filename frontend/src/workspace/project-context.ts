@@ -10,6 +10,8 @@ export interface ProjectContextValue {
   current: AccessProject | null;
   /** more than one project to choose from here: the switcher is shown (§2.7) */
   switchable: boolean;
+  /** active projects the current workspace binds, reachable or not (0 when unknown) */
+  boundProjects: number;
   /** switch projects: persists the choice and remounts the routed subtree */
   select: (id: string) => void;
   /** re-read `GET /api/me/access` (after a membership or binding change) */
@@ -20,6 +22,7 @@ export const ProjectContext = createContext<ProjectContextValue>({
   projects: [],
   current: null,
   switchable: false,
+  boundProjects: 0,
   select: () => undefined,
   refresh: async () => undefined,
 });
@@ -84,6 +87,36 @@ export function splitByAccess(projects: readonly AccessProject[]): {
     member: projects.filter((p) => !p.bypass),
     adminAccess: projects.filter((p) => p.bypass),
   };
+}
+
+/** Hidden switcher, but the workspace binds several projects: the current one shows
+ *  as a read-only chip (§2.7), so a single-project workspace looks as before. */
+export function showsProjectChip(switchable: boolean, boundProjects: number, current: AccessProject | null): boolean {
+  return !switchable && current !== null && boundProjects > 1;
+}
+
+/**
+ * The switcher's `<optgroup>`s by department (§2.7), in first-seen order; projects
+ * without one come last under `label: null`. A single `null` group means no
+ * project has a department: the caller renders a flat list.
+ */
+export function groupByDepartment(
+  projects: readonly AccessProject[],
+): { id: string | null; label: string | null; projects: AccessProject[] }[] {
+  const groups = new Map<string, { id: string | null; label: string | null; projects: AccessProject[] }>();
+  const none: AccessProject[] = [];
+  for (const p of projects) {
+    if (!p.department_id) {
+      none.push(p);
+      continue;
+    }
+    const group = groups.get(p.department_id) ?? { id: p.department_id, label: p.department_name || p.department_id, projects: [] };
+    group.projects.push(p);
+    groups.set(p.department_id, group);
+  }
+  const out = [...groups.values()];
+  if (none.length > 0) out.push({ id: null, label: null, projects: none });
+  return out;
 }
 
 /** Remount key of the routed subtree: a page's data belongs to one workspace and one project. */

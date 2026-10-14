@@ -140,8 +140,15 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ projects, current, switchable: isSwitchable(projects), select, refresh }),
-    [current, projects, refresh, select],
+    () => ({
+      projects,
+      current,
+      switchable: isSwitchable(projects),
+      boundProjects: entry?.bound_projects ?? 0,
+      select,
+      refresh,
+    }),
+    [current, entry?.bound_projects, projects, refresh, select],
   );
 
   const authValue = useMemo(

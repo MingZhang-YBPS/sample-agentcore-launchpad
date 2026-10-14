@@ -35,7 +35,7 @@ STRUCTURE_ACTIONS = frozenset({
     "project.members.add", "project.members.update", "project.members.remove",
     "project.roles.upsert", "project.roles.delete",
     "project.workspaces.bind", "project.workspaces.unbind",
-    "group.create", "group.update", "group.archive",
+    "group.create", "group.update", "group.archive", "group.unarchive",
     "admin.grant", "admin.revoke",
     "user.sessions.revoke",
     "project.transfer",

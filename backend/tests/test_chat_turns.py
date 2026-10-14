@@ -244,6 +244,7 @@ def test_another_projects_turn_is_not_found(gated):
     client = TestClient(create_app())
     _start_in_background(client, agent_id, **{"X-Project": "alpha"})
     turn = _running_turn(agent_id)
+    _wait(lambda: bool(seen))  # the worker reaches the runtime after the turn is registered
     assert turn.project_id == "alpha" and seen == ["alpha"]  # the worker's project
     for path in (f"/api/chat/{agent_id}/turns/{turn.id}/events",):
         res = client.get(path, headers={"X-Project": "beta"})

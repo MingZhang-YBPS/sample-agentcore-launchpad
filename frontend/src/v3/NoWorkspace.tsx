@@ -11,8 +11,9 @@ import { Btn, Lamp, Notice, PageHead, Panel, Skeleton } from "./ui";
 
 const PAGE_SIZE = 3;
 
-/** Installation-wide announcements: they need no workspace, so a member without one still reads them. */
-function Announcements() {
+/** Installation-wide announcements: they need no workspace (or project), so a member
+ *  without one still reads them — here and on `NoProjectAssigned`. */
+export function V3Announcements() {
   const { t, i18n } = useTranslation();
   const [offset, setOffset] = useState(0);
   const page = useLoad(() => api.listAnnouncements(PAGE_SIZE, offset), `v3-nows-ann:${offset}`);
@@ -91,7 +92,7 @@ export function V3NoWorkspace() {
             </div>
           </div>
         </Panel>
-        <Announcements />
+        <V3Announcements />
       </div>
     </V3AuthFrame>
   );

@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import { projectCan } from "../auth/auth-context";
 import type { AccessProject, AccessWorkspace } from "../lib/api/projects";
 import {
+  groupByDepartment,
   isSwitchable,
   projectRole,
   readProjectLink,
   resolveProject,
   scopeKey,
+  showsProjectChip,
   splitByAccess,
 } from "./project-context";
 
@@ -20,6 +22,8 @@ const project = (id: string, over: Partial<AccessProject> = {}): AccessProject =
   permissions: [],
   role_sources: [{ source: "direct", role_key: "developer" }],
   bypass: false,
+  department_id: null,
+  department_name: null,
   ...over,
 });
 
@@ -27,6 +31,7 @@ const ws = (projects: AccessProject[], defaultId: string | null = null): AccessW
   workspace_id: "dev",
   name: "Dev",
   default_project_id: defaultId,
+  bound_projects: projects.length,
   projects,
 });
 
@@ -120,5 +125,36 @@ describe("projectCan", () => {
 
   it("keeps the global check outside a project", () => {
     expect(projectCan(false, null, globalCan)).toBe(globalCan);
+  });
+});
+
+describe("groupByDepartment", () => {
+  it("groups in first-seen order, projects without a department last", () => {
+    const groups = groupByDepartment([
+      project("a", { department_id: "risk", department_name: "Risk" }),
+      project("b"),
+      project("c", { department_id: "ops", department_name: null }),
+      project("d", { department_id: "risk", department_name: "Risk" }),
+    ]);
+    expect(groups.map((g) => [g.id, g.label, g.projects.map((p) => p.id)])).toEqual([
+      ["risk", "Risk", ["a", "d"]],
+      ["ops", "ops", ["c"]],
+      [null, null, ["b"]],
+    ]);
+  });
+
+  it("is one unlabeled group when no project has a department", () => {
+    const groups = groupByDepartment([project("a"), project("b")]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].id).toBeNull();
+  });
+});
+
+describe("showsProjectChip", () => {
+  it("shows only for a hidden switcher in a workspace binding several projects", () => {
+    expect(showsProjectChip(false, 3, project("a"))).toBe(true);
+    expect(showsProjectChip(false, 1, project("a"))).toBe(false);
+    expect(showsProjectChip(true, 3, project("a"))).toBe(false);
+    expect(showsProjectChip(false, 3, null)).toBe(false);
   });
 });

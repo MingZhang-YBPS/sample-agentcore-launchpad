@@ -37,7 +37,7 @@ import { setUiVersion } from "../lib/ui-version";
 import { GLOSSARY_TERMS } from "../v2/Glossary";
 import { ModuleDemoProvider } from "../v2/pages/videos/ModuleDemo";
 import { V2ToastProvider } from "../v2/ui";
-import { projectRole, scopeKey, splitByAccess, useProject } from "../workspace/project-context";
+import { groupByDepartment, projectRole, scopeKey, showsProjectChip, splitByAccess, useProject } from "../workspace/project-context";
 import { useWorkspace } from "../workspace/workspace-context";
 import { v2CounterpartOf } from "./backToV2";
 import { ChangePasswordDialog } from "./ChangePassword";
@@ -143,18 +143,35 @@ function useProjectLabel() {
 /** Right of the workspace switch (projects §2.7); absent while there is no choice to make. */
 function ProjectSwitch() {
   const { t } = useTranslation();
-  const { projects, current, switchable, select } = useProject();
+  const { projects, current, switchable, boundProjects, select } = useProject();
   const label = useProjectLabel();
-  if (!switchable) return null;
+  if (!switchable) {
+    // hidden, yet the workspace binds several: the current project as a read-only chip
+    if (!current || !showsProjectChip(switchable, boundProjects, current)) return null;
+    return (
+      <span className="v3-ws" title={t("v3.project.label")} data-testid="v3-project-chip">
+        <span className="v3-ws-label">{t("v3.project.label")}</span>
+        <span className="v3-chip">{label(current)}</span>
+      </span>
+    );
+  }
   const { member, adminAccess } = splitByAccess(projects);
   const option = (p: AccessProject) => (
     <option key={p.id} value={p.id}>{label(p)}</option>
   );
+  // §2.7: grouped by department once any project has one; members' projects first
+  // inside each group, an administrator's non-member ones read "admin access"
+  const departments = groupByDepartment([...member, ...adminAccess]);
+  const byDepartment = departments.some((g) => g.id !== null);
   return (
     <label className="v3-ws" title={t("v3.project.label")} data-testid="v3-project-switch">
       <span className="v3-ws-label">{t("v3.project.label")}</span>
       <select value={current?.id ?? ""} onChange={(e) => select(e.target.value)} aria-label={t("v3.project.label")}>
-        {adminAccess.length === 0 ? (
+        {byDepartment ? (
+          departments.map((g) => (
+            <optgroup key={g.id ?? "-"} label={g.label ?? t("v3.project.noDepartment")}>{g.projects.map(option)}</optgroup>
+          ))
+        ) : adminAccess.length === 0 ? (
           member.map(option)
         ) : (
           <>

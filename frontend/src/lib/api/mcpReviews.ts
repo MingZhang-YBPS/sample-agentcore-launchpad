@@ -5,7 +5,7 @@
  * it, the server's Gateway target is withheld. Workspace + project routes: they follow
  * the shared `X-Workspace` / `X-Project` selection like every other agent route.
  */
-import { getJson, type McpServerStatus, sendJson } from "../api";
+import { getJson, sendJson } from "../api";
 
 const enc = encodeURIComponent;
 
@@ -79,11 +79,6 @@ export interface McpGate {
 export interface McpReviewList extends McpGate {
   agent_id: string;
   reviews: McpReview[];
-}
-
-/** `GET /api/agents/{id}/mcp` with the review block the backend adds (§15.6). */
-export interface McpServerStatusWithReview extends McpServerStatus {
-  review?: (McpGate & { live_hash: string | null; drift: boolean }) | null;
 }
 
 export interface McpDriftCheck extends McpGate {

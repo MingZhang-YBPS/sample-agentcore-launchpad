@@ -711,16 +711,19 @@ def _register_mcp_server(ctx: StageContext, agent: Agent) -> StageResult:
         }
 
     _stamp_spec(ctx, agent, update)
-    detail = f"gateway target {mcp.target_name} {outcome} · READY"
-    try:
-        tools = mcp_servers.gateway_tools(ctx.workspace, mcp.target_name)
-        ctx.log(
-            f"{len(tools)} tool(s) on the Gateway: "
-            + (", ".join(t["name"] for t in tools[:20]) or "none")
-        )
-        detail += f" · {len(tools)} tool(s)"
-    except AppError as exc:  # the target is READY; listing is a read-back only
-        ctx.log(f"tools/list through the Gateway skipped: {exc.message}")
+    if target_id is None:  # withheld until the tool list is approved (§15.6)
+        detail = f"gateway target {mcp.target_name} {outcome} · awaiting tool review"
+    else:
+        detail = f"gateway target {mcp.target_name} {outcome} · READY"
+        try:
+            tools = mcp_servers.gateway_tools(ctx.workspace, mcp.target_name)
+            ctx.log(
+                f"{len(tools)} tool(s) on the Gateway: "
+                + (", ".join(t["name"] for t in tools[:20]) or "none")
+            )
+            detail += f" · {len(tools)} tool(s)"
+        except AppError as exc:  # the target is READY; listing is a read-back only
+            ctx.log(f"tools/list through the Gateway skipped: {exc.message}")
     ctx.log(
         "Registry: the Gateway-level record is not rewritten here (an update sends "
         "an approved record back to DRAFT) — refresh it from Governance → Gateway → "

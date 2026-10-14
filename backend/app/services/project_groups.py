@@ -397,7 +397,7 @@ def unarchive_group(db: Session, identity: Any, row: ProjectGroup) -> None:
     for project in projects:
         projects_service.enforce_sod(db, project, member_ids)
     access.bump_epoch(db)
-    _journal(db, identity, "group.update", f"group:{row.id} unarchived")
+    _journal(db, identity, "group.unarchive", f"group:{row.id}")
 
 
 def _check_group_role(role_key: str) -> None:

@@ -14,7 +14,7 @@ from starlette.datastructures import UploadFile
 from app.assistant.principal import principal_of
 from app.core.errors import AppError, NotFoundError, aws_error_message, mapped_aws_error
 from app.core.project_scope import current_project, project_context
-from app.routers.auth import require_identity
+from app.routers.auth import require_identity, require_permission
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
 from app.services import skill_ingest as si
@@ -330,6 +330,39 @@ def live_agent_card(
         ) from exc
 
 
+def _require_mcp_record_approvable(request: Request, ws: WorkspaceScope, record_id: str) -> None:
+    """Design §15.13: approving an MCP record takes `mcp.approve`, and a hosted MCP
+    server's record only after its tool list passed review (§15.6). Other record
+    types keep their lifecycle unchanged."""
+    record = console.console_get(ws.context, record_id)
+    if str(record.get("descriptorType") or "").upper() != "MCP":
+        return
+    require_permission(request, "mcp.approve")
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+    from app.services import mcp_reviews
+
+    name = str(record.get("name") or "")
+    db = SessionLocal()
+    try:
+        hosted = [
+            a for a in db.query(Agent).filter(
+                Agent.workspace_id == ws.id, Agent.status != "deleted",
+            ).all()
+            if (a.spec or {}).get("protocol") == "mcp"
+            and ((a.spec or {}).get("mcp") or {}).get("target_name") == name
+        ]
+        for agent in hosted:
+            if mcp_reviews.state(db, agent.id).get("state") != "approved":
+                raise AppError(
+                    "mcp.review_pending",
+                    "approve this MCP server's tool list first (MCP server → Tool review)",
+                    {"agent_id": agent.id}, status_code=409,
+                )
+    finally:
+        db.close()
+
+
 class ActionRequest(BaseModel):
     action: str  # submit | approve | publish | reject | disable
 
@@ -346,6 +379,8 @@ def record_action(
     # The caller's role reaches the service explicitly: a system-managed Skill's
     # lifecycle is administrator-only, ordinary records stay member-operable.
     identity = require_identity(request)
+    if req.action in ("approve", "publish"):
+        _require_mcp_record_approvable(request, ws, record_id)
     try:
         console.console_action(ws.context, record_id, req.action, is_admin=identity.is_admin)
     except ValueError as exc:

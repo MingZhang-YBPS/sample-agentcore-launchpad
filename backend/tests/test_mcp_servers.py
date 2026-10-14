@@ -310,7 +310,7 @@ def _registered(aws, *, approved: bool = True) -> str:
     ctx = _stage_ctx(agent_id, dep_id, ws_ctx(RESOURCES))
     result = byoc_dep._stage_register(ctx, _get_agent(agent_id))
     assert "crm-lookup created" in result.detail
-    assert ("1 tool(s)" if approved else "0 tool(s)") in result.detail
+    assert ("1 tool(s)" if approved else "awaiting tool review") in result.detail
     return agent_id
 
 

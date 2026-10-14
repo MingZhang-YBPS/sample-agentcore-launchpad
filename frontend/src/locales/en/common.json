@@ -2503,7 +2503,39 @@
     "network_profile.name_exists": "A network profile with that name already exists in this workspace.",
     "network_profile.in_use": "Agents still use this network profile — move them to another network first.",
     "network_profile.blocked": "This network profile failed its preflight — fix it, re-run the check, or choose another network.",
-    "network_profile.default_not_allowed": "The default network profile must be one of the allowed profiles."
+    "network_profile.default_not_allowed": "The default network profile must be one of the allowed profiles.",
+    "chat.turn_in_progress": "This conversation is still answering the previous message — wait for it to finish, or stop it.",
+    "chat.turn_not_found": "That reply is no longer being generated — reload the conversation.",
+    "chat.turn_timeout": "The reply ran past the platform's time limit for one turn and was ended. Ask a narrower question, or split the task into smaller steps.",
+    "chat.turn_stopped": "This reply was stopped before it finished.",
+    "chat.as_user_unavailable": "Invoking as yourself needs a console sign-in through the workspace user pool — turn off “invoke as me” to call with the workspace machine token.",
+    "memory.unavailable": "The agent's memory could not be read right now. Try again shortly.",
+    "agent.not_mcp_server": "This agent is not an MCP server.",
+    "mcp.review_pending": "Approve this MCP server's tool list first.",
+    "mcp.target_name_taken": "The Gateway already has a target with this name that points at another server — pick another target name.",
+    "mcp_review.not_found": "That tool review does not exist for this MCP server.",
+    "mcp_review.not_open": "This tool review has already been decided.",
+    "mcp_review.self_decide": "You deployed this MCP server, so you cannot decide its tool review — ask another member holding the approve-MCP-tools permission.",
+    "project.sod_conflict": "This project separates duties: the change would give one member both sides of a separated pair of permissions. Split the duties between different members.",
+    "department.exists": "A department with this ID already exists.",
+    "department.archived": "That department is archived — unarchive it or choose another.",
+    "department.in_use": "This department still owns projects or groups — move or archive them first.",
+    "group.exists": "A project group with this ID already exists.",
+    "group.archived": "That project group is archived — unarchive it or choose another.",
+    "group.member_conflict": "A user cannot be added and removed in the same request.",
+    "group.member_not_found": "That user is not a member of this group.",
+    "group.project_conflict": "A project cannot be added and removed in the same request.",
+    "group.project_in_other_group": "That project is already in another group — remove it there first (a project is in at most one group).",
+    "group.project_not_found": "That project is not in this group.",
+    "group.role_invalid": "A group grants built-in role templates only — custom roles are per project.",
+    "group.role_unknown": "That is not a built-in role — a group membership takes a built-in template only.",
+    "structure.invalid_status": "Unknown status filter — use active or archived.",
+    "users.invalid_groups": "The group memberships are invalid — a group membership names a group and a built-in role, with no permission overrides.",
+    "users.invalid_bulk": "Choose at least one account, and no more than the bulk limit per request.",
+    "network.public_not_allowed": "This workspace requires every agent to run in a network profile — choose one.",
+    "network_profile.check_failed": "The workspace's VPC could not be read for this check. Confirm the workspace role can describe VPCs, subnets and security groups, then try again.",
+    "network_profile.nothing_to_probe": "Declare reachable targets on the profile before probing it.",
+    "network_profile.probe_running": "A probe of this profile is already running — wait for it to finish."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -4286,7 +4318,8 @@
       "golden_admit": "ADMIT TO GOLDEN SET",
       "judge_calibrate": "DECIDE CALIBRATION",
       "waiver_approve": "APPROVE WAIVERS",
-      "release_sign": "SIGN RELEASES"
+      "release_sign": "SIGN RELEASES",
+      "mcp_approve": "APPROVE MCP TOOLS"
     },
     "extendTitle": "Extend validity",
     "extendBody": "Add how many days to {{username}}'s account?",
@@ -8677,7 +8710,8 @@
         "golden_admit": "Admit to golden set",
         "judge_calibrate": "Decide calibration",
         "waiver_approve": "Approve waivers",
-        "release_sign": "Sign releases"
+        "release_sign": "Sign releases",
+        "mcp_approve": "Approve MCP tools"
       }
     },
     "workspaces": {
@@ -11981,6 +12015,7 @@
       "adminAccess": "admin access",
       "memberGroup": "My projects",
       "adminGroup": "Admin access (not a member)",
+      "noDepartment": "No department",
       "cmdkGroup": "Projects",
       "switchTo": "Switch to project {{name}}",
       "roles": {
@@ -11989,6 +12024,7 @@
         "biz_owner": "Business owner",
         "release_ops": "Release ops",
         "sme": "Domain expert",
+        "tool_steward": "Tool steward",
         "viewer": "Viewer",
         "inherit": "Inherits global role"
       },

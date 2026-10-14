@@ -335,7 +335,9 @@ V3 的 **MCP 服务器** 入口（`/v2/agents?view=new&method=byoc&protocol=mcp`
 | deploy | `CreateAgentRuntime` / `UpdateAgentRuntime` 带 `protocolConfiguration.serverProtocol = MCP`，每次更新都回传（省略会把 Runtime 重置为 HTTP）；不注入 `MODEL_ID` 环境变量 |
 | register | 不建 A2A 记录，改为：同名 OAuth2 凭证提供方（持有该客户端），再建 MCP 服务器网关目标，端点为 Runtime 在 `DEFAULT` 上的数据面 URL；创建目标、或重新发布后执行 `SynchronizeGatewayTargets`，都会列出工具；同名但指向别处的目标被拒绝（`409 mcp.target_name_taken`），改名后旧目标会被删除 |
 
-网关级注册中心记录**不会**被改写（更新会让已批准的记录回到 DRAFT，影响所有挂载它的 Agent）；register 阶段在日志里提示到「治理 → 注册中心导入」刷新。MCP 服务器不可调用（`invoke_capability.reason_code = not-agent-protocol`，对话、`/v1`、评估都会跳过它），不参与放行门，入站认证不能切换（`422 agent.inbound_auth_unsupported`），重新发布也不能在 `mcp` 与其他协议之间切换。`GET /api/agents/{id}/mcp` 实时读回目标状态，以及智能体经网关看到的工具（`<target>___<tool>`）——V3 智能体页用它替换生命周期、对话和试用面板。删除按反向顺序进行：网关目标 → Runtime → OAuth2 提供方 → Cognito 客户端，可重复执行。示例：[`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md)（`mcp>=1.10,<2`）。本版不含：工具审阅、Cedar 脚手架、定时健康检查、Lambda 目标、VPC 模式。
+网关级注册中心记录**不会**被改写（更新会让已批准的记录回到 DRAFT，影响所有挂载它的 Agent）；register 阶段在日志里提示到「治理 → 注册中心导入」刷新。MCP 服务器不可调用（`invoke_capability.reason_code = not-agent-protocol`，对话、`/v1`、评估都会跳过它），不参与放行门，入站认证不能切换（`422 agent.inbound_auth_unsupported`），重新发布也不能在 `mcp` 与其他协议之间切换。`GET /api/agents/{id}/mcp` 实时读回目标状态，以及智能体经网关看到的工具（`<target>___<tool>`）——V3 智能体页用它替换生命周期、对话和试用面板。删除按反向顺序进行：网关目标 → Runtime → OAuth2 提供方 → Cognito 客户端，可重复执行。示例：[`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md)（`mcp>=1.10,<2`）。本版不含：Cedar 脚手架、定时健康检查、Lambda 目标、VPC 模式。
+
+**工具审批闸门（§15.6）。** 托管服务器的工具在部署者以外的人批准其清单之前不会对外提供。创建目标、或重新发布后重新同步目标时，会经网关列出工具；`services/mcp_reviews.py` 把它们快照为 `[{name, description, input_schema}]`（去掉前缀并排序），并把快照的 SHA-256 与最近一次已批准的清单比较。一致则目标保持在线；否则在 `mcp_tool_reviews` 表中打开一条审批，带上相对已批准清单的差异与给审批人的提示（注入式措辞、URL、指向其他工具的指令、破坏性或写入类动词、缺失或过长的描述），并再次删除目标。register 阶段在日志中注明目标已被扣下，因此 Agent 既不能调用也看不到新工具。无法读取的清单同样被扣下（失败即关闭）。审批需要项目级权限键 `mcp.approve`，由 `release_ops` 与 `tool_steward` 模板持有（持有 `promotion.approve` 的 `inherit` 成员也持有）。部署者永远不能审批自己的审批单，管理员也不例外。批准后在后台重新创建目标（再次经过闸门），并在审批单上记录 `publish_status`。`POST /api/mcp-servers/{agent_id}/reviews/check` 会重新同步在线目标，以发现不经重新部署就改变了工具的服务器：一旦不同，就打开一条 `drift` 审批并扣下目标。目标早于闸门存在的服务器，会在下一次部署时把实时清单记为已批准的 `baseline`。批准或发布托管服务器的注册中心记录同样需要 `mcp.approve`，且工具审批须已通过（`409 mcp.review_pending`）。在 Cedar 脚手架（§15.7）落地之前，扣下整个目标就是闸门。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台 MCP 工具审批 API」。
 
 **stdio 桥接（§15.5）。** 只支持 stdio 的服务器以代码 zip 发布，并带 `mcp.stdio_wrapper = {command, args, base}`（仅限 code_zip——Dockerfile 上下文或镜像需自行内置桥接）。部署器加入 [`samples/mcp_stdio_bridge/`](../samples/mcp_stdio_bridge/README.md)，由它在 `0.0.0.0:8000/mcp` 提供服务，并把命令作为子进程启动（不经 shell，从包根目录运行；argv 放在环境变量 `MCP_STDIO_COMMAND` 中）：`python` 底座留在托管 Python 运行时上，以桥接为入口；`node` 底座在桥接的 Node 基础镜像上构建镜像（CodeBuild，arm64），部署为容器运行时。每个容器只有一个子进程，因此保存会话状态的服务器会把所有调用方视为同一个会话；响应是普通 JSON（服务器的通知被丢弃，它反向发出的请求一律答复为不支持）。V2 向导的 MCP 服务器卡片提供该开关，开启时隐藏入口文件选择。
 
@@ -1233,6 +1235,18 @@ public  /v1  ──┘        │
                         └─ Observability (spans → CloudWatch Transaction Search)
 ```
 
+### 断线不丢的控制台对话轮次
+
+控制台的一轮对话（`POST /api/chat/{id}`）运行在后台工作线程上，而不在 HTTP 响应里（`app/services/chat_turns.py`，chat-streaming §5.2）。工作线程在该轮的项目上下文中运行上面的调用链，持久化对话条目，并把每个事件按 `seq` 编号发布到该轮的内存缓冲区；响应只是缓冲区的第一个订阅者。因此关闭标签页、刷新页面或代理断开连接都不再结束这一轮：它会继续运行并继续保存。
+
+- `meta.turn_id` 标识该轮，每个非心跳帧都以 SSE `id` 携带其 `seq`。`GET /api/chat/{id}/turns/{turn_id}/events?after=<seq>` 重新订阅：先返回缓冲区中 `seq` 之后的事件（部分事件已离开缓冲区时先发 `gap`），再返回实时事件。控制台在断线后用它重连；`GET …/history` 返回 `running_turn`，使重新打开的会话能跟随仍在运行的轮次。
+- 停止按钮关闭流并调用 `POST …/turns/{turn_id}/stop`：关闭上游，保存部分回答与一条 `interrupted` 行，并短暂等待工作线程，使下一轮能被立即接受。
+- 每个会话同一时间只运行一轮（`409 chat.turn_in_progress`），因此恢复的页面不会交错两轮。一轮最多运行 Agent 的 `timeout_seconds` + 60 秒，之后以 `chat.turn_timeout` 结束。
+- 缓冲区有上限（2000 个事件或 600 秒），已结束的轮次在 60 秒内仍可恢复；之后只剩台账。
+- **单进程（v1）。** 轮次登记表就是服务进程的内存。多工作进程部署必须把恢复请求路由到运行该轮的进程；重启会丢失运行中的轮次，其部分回答在台账中保留到最后一次写入的条目。尚未实现从台账进行多进程恢复。
+
+尚未实测验证：`InvokeHarness` / `InvokeAgentRuntime` 的流被关闭后 AgentCore 是否继续执行该轮（`interrupted` 行假设执行在此结束）。`/v1` 与分享页不使用工作线程：它们的流仍随连接结束。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台 Chat API」。
+
 ### Gateway（MCP）工具同时可达 Harness 与 zip runtime
 
 Gateway `ToolRef` 过去是 harness 独有的能力，这在实验课上划出了一条没有参与者会预期的分界
@@ -2089,6 +2103,7 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 | `deployments` | 每次部署一行——五阶段数组,含各阶段 status/detail/时间戳 |
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
 | `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间、显式结束 runtime 会话后的 `ended_at` |
+| `mcp_tool_reviews` | 托管 MCP 服务器的工具审批——工具清单快照及其哈希、相对已批准清单的差异、提示、状态（`reviewing`/`approved`/`rejected`/`superseded`）、来源（`deploy`/`drift`/`baseline`）、申请人、审批人、备注，以及批准后的重新发布状态 |
 | `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态(`pending`/`active`/`disabled`)、`expires_at`(审批前为空)、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
 | `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文)、创建者(`created_by` 用户 id + `created_by_name`,旧密钥为 NULL)、`last_used_at` |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |

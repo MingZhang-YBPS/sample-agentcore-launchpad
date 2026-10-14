@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { api, chatApi, errorMessage, localizedMessage } from "../../../lib/api";
-import { seconds, sseEvents, STALL_ABORT_MS, turnStopReason, useChatTurn } from "../../../lib/chat";
+import { seconds, sseEvents, STALL_ABORT_MS, stopChatTurn, turnStopReason, useChatTurn } from "../../../lib/chat";
 import { TurnStatusLine } from "../../../components/chat/TurnStatus";
 import { Alert, Button, Card } from "../../ui";
 import "./tryChat.css";
@@ -31,6 +31,9 @@ export function TryChat({ agentId }: { agentId: string }) {
   const [busy, setBusy] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const sessionRef = useRef<string | null>(null);
+  // the background turn the stream follows (meta.turn_id): closing the stream alone
+  // leaves it running server-side (chat-streaming §5.2), so Stop names it too
+  const turnIdRef = useRef<string | null>(null);
   // chat-streaming S2: what the running turn is doing, its timer and its stop
   const turn = useChatTurn();
   // follows the stream only while the reader is at the bottom
@@ -64,14 +67,17 @@ export function TryChat({ agentId }: { agentId: string }) {
     body.toBottom();
     let completed = false;
     let failed = false;
+    turnIdRef.current = null;
     const signal = turn.begin();
     try {
       const res = await chatApi.stream(agentId, { prompt, session_id: sessionRef.current }, signal);
       if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
       for await (const { event, data } of sseEvents(res, { heartbeats: true, signal })) {
         turn.feed(event, data);
-        if (event === "meta" && data.session_id) sessionRef.current = data.session_id;
-        else if (event === "delta") appendToAgent(data.text ?? "");
+        if (event === "meta") {
+          if (data.session_id) sessionRef.current = data.session_id;
+          if (data.turn_id) turnIdRef.current = data.turn_id;
+        } else if (event === "delta") appendToAgent(data.text ?? "");
         else if (event === "error") {
           failed = true;
           push({ role: "error", text: localizedMessage(data.code ?? "", data.message ?? t("chatPage.sendFailed")) });
@@ -88,14 +94,17 @@ export function TryChat({ agentId }: { agentId: string }) {
       else push({ role: "error", text: reason === "stalled" ? t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }) : errorMessage(err) });
     } finally {
       turn.end();
+      turnIdRef.current = null;
       setBusy(false);
     }
   };
 
-  // Stop: close the stream; a code runtime's session is stopped too (a Harness
-  // refuses the stop by name, which is harmless here — closing is all it has).
+  // Stop: close the stream and stop the background turn; a code runtime's session is
+  // stopped too (a Harness refuses the stop by name, which is harmless here).
   const stopTurn = () => {
+    const turnId = turnIdRef.current;
     turn.stop("stop");
+    if (turnId) void stopChatTurn(agentId, turnId).catch(() => undefined);
     if (sessionRef.current) void api.stopChatSession(agentId, sessionRef.current).catch(() => undefined);
   };
 

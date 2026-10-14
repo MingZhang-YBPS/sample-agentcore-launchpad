@@ -177,7 +177,7 @@ class TestNoDrift:
         permission_roles = {
             f"perm:{key}" for key in users_service.AGENT_PERMISSIONS
         }
-        project_roles = {"perm:project.use", "perm:project.write"}
+        project_roles = {"perm:project.use", "perm:project.write", "perm:mcp.approve"}
         infra_roles = {INFRA} | {f"{INFRA}+{role}" for role in permission_roles}
         from app.services.access import ALL_PROJECT_KEYS
 

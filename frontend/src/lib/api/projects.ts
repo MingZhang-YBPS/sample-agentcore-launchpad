@@ -150,6 +150,15 @@ export interface ProjectMember {
   /** an administrator holds every key anyway */
   bypass: boolean;
   permissions: string[];
+  /** separation-of-duty pairs this member's keys hold together (`[key, key]`) */
+  sod_conflicts: [string, string][];
+}
+
+/** `GET /api/projects/{id}/members`. */
+export interface ProjectMembers {
+  members: ProjectMember[];
+  /** the project refuses (rather than warns about) a separation-of-duty conflict */
+  sod_strict: boolean;
 }
 
 export interface MemberUpsert {
@@ -248,11 +257,17 @@ export interface AccessProject {
   role_sources: ProjectRoleSource[];
   /** an administrator reaching it without a membership */
   bypass: boolean;
+  /** the switcher groups by department (§2.7); null when the project has none */
+  department_id: string | null;
+  department_name: string | null;
 }
 
 export interface AccessWorkspace {
   workspace_id: string;
   name: string;
+  /** active projects the workspace binds, reachable or not: the read-only project
+   *  chip shows when the caller reaches one of several (§2.7) */
+  bound_projects: number;
   /** what a request without `X-Project` resolves to; null ⇒ the header is required */
   default_project_id: string | null;
   projects: AccessProject[];
@@ -374,7 +389,7 @@ export const projectsApi = {
   putWorkspaces: (projectId: string, body: BindingsPut) =>
     sendJson<BindingsResult>(projectPath(projectId, "workspaces"), "PUT", body),
 
-  members: (projectId: string) => getJson<{ members: ProjectMember[] }>(projectPath(projectId, "members")),
+  members: (projectId: string) => getJson<ProjectMembers>(projectPath(projectId, "members")),
   putMembers: (projectId: string, body: MembersPut) =>
     sendJson<MembersResult>(projectPath(projectId, "members"), "PUT", body),
   removeMember: (projectId: string, userId: string) =>

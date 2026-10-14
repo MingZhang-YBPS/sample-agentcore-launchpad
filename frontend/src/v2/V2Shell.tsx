@@ -11,6 +11,7 @@ import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
 import { getUiVersion, setUiVersion } from "../lib/ui-version";
 import { useNavMode } from "../lib/nav-mode";
+import { scopeKey, useProject } from "../workspace/project-context";
 import { useWorkspace } from "../workspace/workspace-context";
 import { V2Lang } from "./Lang";
 import { V2Logo } from "./Logo";
@@ -71,6 +72,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
   const navigate = useNavigate();
   const { isAdmin, authRequired, username, logout } = useAuth();
   const { current } = useWorkspace();
+  const { current: project } = useProject();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
   // T11: members land on the pared-down sidebar, admins on the full one; either
   // can switch. A filter only — every route stays reachable by URL.
@@ -207,7 +209,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
               </button>
             </aside>
             <div className="v2-main">
-              {/* Workspace-bound pages refetch on selection; hub-global content
+              {/* Workspace-bound pages refetch on a workspace or project switch; hub-global content
                   and admin drafts survive a workspace switch. */}
               <div
                 className={classic ? "v2-main-inner view v2-classic" : "v2-main-inner"}
@@ -216,7 +218,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
                   location.pathname === "/videos" || location.pathname === "/v2/videos" ||
                   location.pathname === "/v2/video-management"
                     ? "hub-global-content"
-                    : current?.id ?? "none"
+                    : scopeKey(current?.id, project?.id)
                 }
               >
                 <RouteChunk key={location.pathname}>

@@ -17,7 +17,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.db import Base
@@ -938,6 +938,12 @@ def access_view(db: Session, identity: Any) -> dict[str, Any]:
             set(granted_workspace_ids(db, identity.user_id) if identity.user_id else [])
             | {ws for m in snapshot.memberships.values() for ws in m.workspaces}
         )
+    departments = {
+        pid: (did, dname) for pid, did, dname in db.execute(text(
+            "SELECT p.id, d.id, d.name FROM projects p"
+            " JOIN departments d ON d.id = p.department_id"
+        )).fetchall()
+    }
     out = []
     for ws in reach:
         projects: list[dict[str, Any]] = []
@@ -970,8 +976,16 @@ def access_view(db: Session, identity: Any) -> dict[str, Any]:
                 default_id = next(
                     (m.project_id for m in reachable if ws in m.workspace_defaults), None,
                 )
+        for entry in projects:  # the switcher groups by department (§6.1)
+            dept = departments.get(entry["id"])
+            entry["department_id"], entry["department_name"] = dept or (None, None)
         row = workspaces.get(ws)
         out.append({
+            # how many active projects the workspace binds: the read-only project chip
+            # shows when the caller reaches one of several (§2.7)
+            "bound_projects": sum(
+                1 for b in access.workspace_bindings(db, ws) if b.status == "active"
+            ),
             "workspace_id": ws, "name": row.name if row else ws,
             "default_project_id": default_id, "projects": projects,
         })
