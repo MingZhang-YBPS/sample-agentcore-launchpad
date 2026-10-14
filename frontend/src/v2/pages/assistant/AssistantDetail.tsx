@@ -17,7 +17,10 @@ import {
 } from "../../../lib/api";
 import {
   ASSISTANT_JOB_POLL_MS,
+  type AssistantContextWindow,
   type AssistantLiveMessage,
+  contextFromMeta,
+  conversationContext,
   isAssistantUnauthorized,
   openAssistantTurn,
   proposalContentFromDraft,
@@ -70,6 +73,8 @@ export function AssistantDetail({
   const [conversation, setConversation] = useState<AssistantConversationDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<AssistantLiveMessage[]>([]);
+  // the replay window: the next turn's from GET, the streaming turn's from `meta`
+  const [contextWindow, setContextWindow] = useState<AssistantContextWindow | null>(null);
   const [input, setInput] = useState("");
   // edit-and-retry: the failed turn the next send replaces in the model replay
   const [retryOf, setRetryOf] = useState<number | null>(null);
@@ -112,6 +117,7 @@ export function AssistantDetail({
         if (!live || !alive.current) return;
         setConversation(detail);
         setMessages(toLiveMessages(detail.messages));
+        setContextWindow(conversationContext(detail));
       },
       (err: unknown) => {
         if (!live || !alive.current) return;
@@ -195,6 +201,7 @@ export function AssistantDetail({
     if (!alive.current || detail.id !== conversationId) return null;
     setConversation(detail);
     setMessages(toLiveMessages(detail.messages));
+    setContextWindow(conversationContext(detail));
     return detail;
   };
 
@@ -255,7 +262,10 @@ export function AssistantDetail({
       for await (const evt of sseEvents(res)) {
         if (!alive.current) return null;
         const data = evt.data as Record<string, unknown>;
-        if (evt.event === "delta") append(String(data.text ?? ""));
+        if (evt.event === "meta") {
+          const window = contextFromMeta(data);
+          if (window) setContextWindow(window);
+        } else if (evt.event === "delta") append(String(data.text ?? ""));
         else if (evt.event === "tool") {
           setMessages((m) => {
             const copy = [...m];
@@ -532,6 +542,8 @@ export function AssistantDetail({
           }}
           onRefreshCatalog={() => void refreshCatalog()}
           retryOf={retryOf}
+          context={contextWindow}
+          onSummarize={() => void send({ prompt: t("v3.assistant.context.summarizePrompt") })}
           onRetry={(target) => {
             setRetryOf(target?.turn ?? null);
             if (target) {

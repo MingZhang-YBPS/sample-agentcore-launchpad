@@ -131,6 +131,67 @@ export function retryableTurn(messages: AssistantLiveMessage[]): { turn: number;
   return failed && !retried && prompt ? { turn: latest, prompt } : null;
 }
 
+// ─── context window (assistant-context C1) ────────────────────────────────
+
+/**
+ * What the assistant's request replays of the transcript: `GET` detail reports the
+ * NEXT turn's window, the turn stream's `meta` event the streaming turn's. Turns
+ * before `first_replayed_turn` are kept in the ledger and shown, but the model no
+ * longer sees them.
+ */
+export interface AssistantContextWindow {
+  replayed_turns: number;
+  omitted_turns: number;
+  /** the stored turn number of the oldest replayed turn; null when none is replayed */
+  first_replayed_turn: number | null;
+  /** share of the request budget the composed request uses (0–1) */
+  budget_used_ratio?: number;
+}
+
+/** The `context` member of a conversation detail (absent on an older backend). */
+export function conversationContext(detail: object | null | undefined): AssistantContextWindow | null {
+  const ctx = (detail as { context?: unknown } | null | undefined)?.context;
+  return ctx && typeof ctx === "object" && typeof (ctx as AssistantContextWindow).omitted_turns === "number"
+    ? (ctx as AssistantContextWindow)
+    : null;
+}
+
+/** The window a turn stream's `meta` event announces, or null. */
+export function contextFromMeta(data: Record<string, unknown>): AssistantContextWindow | null {
+  const omitted = data.omitted_turns;
+  if (typeof omitted !== "number") return null;
+  const first = data.first_replayed_turn;
+  const nested = conversationContext(data);
+  return nested ?? {
+    replayed_turns: 0,
+    omitted_turns: omitted,
+    first_replayed_turn: typeof first === "number" ? first : null,
+  };
+}
+
+/** A conversation-list row the backend marked as surely past the replay window. */
+export const isContextTrimmed = (summary: object) =>
+  (summary as { context_trimmed?: unknown }).context_trimmed === true;
+
+/**
+ * Where the "earlier N turns are no longer in context" divider goes: before the
+ * first row of the oldest replayed turn. With no replayed turn, after the last stored
+ * row (rows streamed in this tab carry no turn number yet). -1 = no divider.
+ */
+export function contextDividerIndex(
+  messages: AssistantLiveMessage[],
+  ctx: AssistantContextWindow | null,
+): number {
+  if (!ctx || ctx.omitted_turns <= 0) return -1;
+  const first = ctx.first_replayed_turn;
+  if (first !== null) {
+    const index = messages.findIndex((m) => typeof m.turn === "number" && m.turn >= first);
+    if (index >= 0) return index;
+  }
+  const stored = messages.findIndex((m) => typeof m.turn !== "number");
+  return stored >= 0 ? stored : messages.length;
+}
+
 /** The typed proposal pane shows the block; the transcript shows a pointer instead. */
 export function stripProposalBlock(text: string, marker: string): string {
   return text.replace(PROPOSAL_FENCE_RE, `> ${marker}`).replace(PREPARATION_FENCE_RE, "");

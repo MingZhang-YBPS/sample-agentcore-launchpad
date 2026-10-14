@@ -11,6 +11,7 @@ import {
   type AssistantConversationSummary,
   errorMessage,
 } from "../../lib/api";
+import { isContextTrimmed } from "../../lib/assistant";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
@@ -264,7 +265,14 @@ export function V3Assistant() {
                         <span style={{ color: "var(--v3-text-3)" }}>{c.turn_in_progress !== null ? t("assistantPage.streaming") : t("v2.assistant.noProposal")}</span>
                       )}
                     </td>
-                    <td className="num">{c.turns}</td>
+                    <td className="num">
+                      {isContextTrimmed(c) && (
+                        <span style={{ marginRight: 6 }}>
+                          <Chip s="wait" title={t("v3.assistant.context.trimmedTip")}>{t("v3.assistant.context.trimmed")}</Chip>
+                        </span>
+                      )}
+                      {c.turns}
+                    </td>
                     <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(c.updated_at)}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>

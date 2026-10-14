@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, ApiError, type AssistantConversationSummary, type AssistantStatus } from "../../../lib/api";
+import { isContextTrimmed } from "../../../lib/assistant";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
@@ -146,6 +147,11 @@ export function AssistantList({
         <span className="v2-row">
           <span className="mono">{c.turns}</span>
           {c.turn_in_progress !== null && <Tag tone="blue">{t("assistantPage.streaming")}</Tag>}
+          {isContextTrimmed(c) && (
+            <span data-testid={`v2-assistant-context-trimmed-${c.id}`}>
+              <Tag tone="orange" title={t("v3.assistant.context.trimmedTip")}>{t("v3.assistant.context.trimmed")}</Tag>
+            </span>
+          )}
         </span>
       ),
     },

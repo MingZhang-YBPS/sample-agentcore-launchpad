@@ -4,7 +4,14 @@ import { useAuth } from "../../../auth/auth-context";
 import { Markdown } from "../../../components";
 import { JumpToLatest } from "../../../components/JumpToLatest";
 import type { AssistantCatalog, AssistantConversationDetail } from "../../../lib/api";
-import { type AssistantLiveMessage, retryableTurn, stripProposalBlock, TURN_RETRIED_NAME } from "../../../lib/assistant";
+import {
+  type AssistantContextWindow,
+  type AssistantLiveMessage,
+  contextDividerIndex,
+  retryableTurn,
+  stripProposalBlock,
+  TURN_RETRIED_NAME,
+} from "../../../lib/assistant";
 import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
 import { Alert, Button, Descriptions, LinkButton, Tag } from "../../ui";
 import { SECTION_IDS, useReadOnly } from "./common";
@@ -14,7 +21,7 @@ export const COMPOSER_ID = "v2-assistant-input";
 /** The streaming transcript, the composer and the workspace catalog summary. */
 export function DiscussionCard({
   conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog,
-  retryOf, onRetry,
+  retryOf, onRetry, context, onSummarize,
 }: {
   conversation: AssistantConversationDetail;
   messages: AssistantLiveMessage[];
@@ -28,6 +35,10 @@ export function DiscussionCard({
   retryOf: number | null;
   /** start (turn, prompt) or cancel (null) an edit-and-retry */
   onRetry: (target: { turn: number; prompt: string } | null) => void;
+  /** the replay window the assistant sees (null = unknown, no divider) */
+  context?: AssistantContextWindow | null;
+  /** send the preset "summarize what is confirmed into the proposal" message */
+  onSummarize?: () => void;
 }) {
   const { t } = useTranslation();
   const { username } = useAuth();
@@ -41,6 +52,24 @@ export function DiscussionCard({
   const marker = t("assistantPage.proposalInText");
   const sendDisabled = busy || preparing || !input.trim() || conversation.turn_in_progress !== null;
   const retryable = busy ? null : retryableTurn(messages);
+  const dividerAt = contextDividerIndex(messages, context ?? null);
+  const divider = dividerAt < 0 || !context ? null : (
+    <div key="context-divider" className="v2-assistant-context" role="separator" data-testid="v2-assistant-context-divider">
+      <div className="line"><span>{t("v3.assistant.context.divider", { n: context.omitted_turns })}</span></div>
+      <div className="v2-muted">{t("v3.assistant.context.hint")}</div>
+      {!readOnly && onSummarize && (
+        <button
+          type="button"
+          className="v2-link"
+          disabled={busy || preparing || conversation.turn_in_progress !== null}
+          onClick={onSummarize}
+          data-testid="v2-assistant-context-summarize"
+        >
+          {t("v3.assistant.context.summarize")}
+        </button>
+      )}
+    </div>
+  );
   let lastErrorIndex = -1;
   if (retryable) {
     messages.forEach((m, i) => {
@@ -61,7 +90,7 @@ export function DiscussionCard({
           data-conversation={conversation.id}
         >
           {messages.length === 0 && <div className="v2-muted" style={{ padding: "24px 0" }}>{t("assistantPage.emptyThread")}</div>}
-          {messages.map((msg, i) =>
+          {messages.map((msg, i) => [i === dividerAt ? divider : null,
             msg.role === "user" ? (
               <div key={i} className="v2-turn user">
                 <div className="who">{sender(msg.author)}</div>
@@ -114,8 +143,9 @@ export function DiscussionCard({
                   )}
                 </Alert>
               </div>
-            ),
+            )],
           )}
+          {dividerAt === messages.length && divider}
           <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
         </div>
         {!readOnly && <div className="v2-assistant-composer">

@@ -132,3 +132,8 @@
   .v2 .v2-assistant-adlc-flow .v2-flow-step::after { display: none; }
   .v2 .v2-assistant-tool { margin-left: 0; }
 }
+
+/* assistant-context C1: turns above this line are no longer in the assistant's replay */
+.v2 .v2-assistant-context { margin: 4px 0 14px; display: grid; gap: 4px; justify-items: center; text-align: center; font-size: 12.5px; }
+.v2 .v2-assistant-context .line { width: 100%; display: flex; align-items: center; gap: 10px; color: var(--v2-ink-3); font-weight: 600; }
+.v2 .v2-assistant-context .line::before, .v2 .v2-assistant-context .line::after { content: ""; flex: 1; border-top: 1px dashed var(--v2-line); }
