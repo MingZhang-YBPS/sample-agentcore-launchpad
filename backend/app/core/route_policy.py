@@ -595,6 +595,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/annotation-tasks/{task_id}/agreement"): MEMBER,
     ("POST", "/api/annotation-tasks/{task_id}/decide"): PERM_JUDGE_CALIBRATE,
     ("GET", "/api/calibration/{criterion_key}"): MEMBER,
+    # CR-2 (calibration-run-picker §4.3): the run picker of the new-task dialog — the
+    # same key as creating the task it feeds; it counts verdicts, shows no sample
+    ("GET", "/api/calibration/candidate-runs"): PERM_CRITERIA_MANAGE,
     ("GET", "/api/annotation-tasks/{task_id}/links"): MEMBER,
     ("POST", "/api/annotation-tasks/{task_id}/links"): PERM_JUDGE_CALIBRATE,
     ("DELETE", "/api/annotation-tasks/{task_id}/links/{link_id}"): PERM_JUDGE_CALIBRATE,

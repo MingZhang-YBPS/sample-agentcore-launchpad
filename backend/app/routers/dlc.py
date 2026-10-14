@@ -561,6 +561,21 @@ def _agent_reply(db: Session, ws: WorkspaceScope, run: EvalRun, session_id: str)
                      if str(t.get("role")).upper() == "ASSISTANT").strip()
 
 
+def _session_units(rows: list[Any]) -> dict[tuple[str, int], list[Any]]:
+    """Verdict rows grouped into calibration items: one per replayed session.
+
+    A session is scenario + attempt. A trace-level judge scores every trace, and a
+    session can hold more than one (live 2026-10-13: a replay the runtime answered
+    twice gave kg-… two S2 verdicts, two items with one ref, and the task was refused
+    with "every item needs a unique ref"); the session's verdict collapses its traces
+    the way the gate does (`engine.collapse`). The run picker counts with this too, so
+    the count it shows is the number of samples the task gets."""
+    grouped: dict[tuple[str, int], list[Any]] = {}
+    for row in rows:
+        grouped.setdefault((row.scenario_id, row.attempt), []).append(row)
+    return grouped
+
+
 def _items_from_run(
     db: Session, ws: WorkspaceScope, run: EvalRun, criterion_key: str,
 ) -> list[dict[str, Any]]:
@@ -574,14 +589,7 @@ def _items_from_run(
     """
     rows = engine_svc.results_for(db, run.id, criterion_key)
     texts = _scenario_texts(db, run)
-    # One item per replayed session (scenario + attempt): a trace-level judge scores
-    # every trace, and a session can hold more than one (live 2026-10-13: a replay
-    # the runtime answered twice gave kg-… two S2 verdicts, two items with one ref,
-    # and the task was refused with "every item needs a unique ref"). The session's
-    # verdict collapses its traces the way the gate does (`engine.collapse`).
-    grouped: dict[tuple[str, int], list[Any]] = {}
-    for row in rows:
-        grouped.setdefault((row.scenario_id, row.attempt), []).append(row)
+    grouped = _session_units(rows)
     replies: dict[str, str] = {}
     out = []
     for (scenario_id, attempt), group in grouped.items():
@@ -810,6 +818,104 @@ def decide_calibration(
                        action=f"calibration.{record.verdict}", target=task.id, db=db)
     db.commit()
     return cal_svc.record_out(record)
+
+
+# ── calibration: the run picker (calibration-run-picker §4.3) ───────────────────
+# Registered before `/calibration/{criterion_key}`, which would otherwise read
+# `candidate-runs` as a criterion key.
+
+
+@router.get("/calibration/candidate-runs")
+def calibration_candidate_runs(
+    agent_id: str = Query(min_length=1, max_length=32),
+    criterion_key: str = Query(min_length=1, max_length=32),
+    q: str | None = Query(default=None, max_length=128),
+    since: datetime | None = None,
+    source: Literal["gate", "manual"] | None = None,
+    only_eligible: bool = True,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """The runs a calibration task can be taken from: one agent's batch evaluator runs,
+    newest finished first, as `/api/eval/runs` shows them to this viewer.
+
+    `items` is the number of samples a task taken from the run would get — the
+    `_items_from_run` grouping, counted, no sample read. A holdout run never appears:
+    labelling it shows people what the holdout exists to keep unseen (design D-2).
+    `only_eligible=false` also returns the runs that cannot be picked, eligible ones
+    first, each with its `reason` (`not_completed` / `no_results`)."""
+    from sqlalchemy import case, exists, func, or_
+
+    from app.models.dlc import CriterionResult, ReleaseRecord
+
+    _agent(db, ws, agent_id)
+    has_results = exists().where(CriterionResult.run_id == EvalRun.id,
+                                 CriterionResult.criterion_key == criterion_key)
+    eligible = (EvalRun.status == "completed") & has_results
+    query = select(EvalRun).where(
+        EvalRun.workspace_id == ws.id,
+        EvalRun.agent_id == agent_id,
+        EvalRun.mode == "evaluators",
+        or_(EvalRun.split.is_(None), EvalRun.split != "holdout"),
+        visibility.clause(viewer, EvalRun.created_by),
+    )
+    needle = (q or "").strip().lower()
+    if needle:
+        # people hold the run's name (the task list shows it) as often as its id
+        query = query.where(or_(func.lower(EvalRun.name).contains(needle, autoescape=True),
+                                func.lower(EvalRun.id).contains(needle, autoescape=True)))
+    if since is not None:
+        query = query.where(EvalRun.updated_at >= since)
+    # a gate run is one a release record evaluated; the newest record names it
+    release_of: dict[str, str] = {}
+    for record in db.scalars(
+        select(ReleaseRecord)
+        .where(ReleaseRecord.workspace_id == ws.id, ReleaseRecord.agent_id == agent_id)
+        .order_by(ReleaseRecord.created_at)
+    ).all():
+        for run_id in record.run_ids or []:
+            release_of[run_id] = record.id
+    if source == "gate":
+        query = query.where(EvalRun.id.in_(list(release_of)))
+    elif source == "manual" and release_of:
+        query = query.where(EvalRun.id.not_in(list(release_of)))
+    if only_eligible:
+        query = query.where(eligible)
+    total = db.scalar(query.with_only_columns(func.count(EvalRun.id))) or 0
+    order = [EvalRun.updated_at.desc(), EvalRun.created_at.desc()]
+    if not only_eligible:
+        order.insert(0, case((eligible, 0), else_=1))
+    runs = db.scalars(query.order_by(*order).offset(offset).limit(limit)).all()
+    by_run: dict[str, list[Any]] = {}
+    if runs:
+        for row in db.execute(
+            select(CriterionResult.run_id, CriterionResult.scenario_id, CriterionResult.attempt)
+            .where(CriterionResult.run_id.in_([r.id for r in runs]),
+                   CriterionResult.criterion_key == criterion_key)
+        ).all():
+            by_run.setdefault(row.run_id, []).append(row)
+    out = []
+    for run in runs:
+        items = len(_session_units(by_run.get(run.id, [])))
+        completed = run.status == "completed"
+        reason = None if completed and items else "not_completed" if not completed else "no_results"
+        out.append({
+            "id": run.id,
+            "name": run.name,
+            "dataset_name": run.dataset_name,
+            "status": run.status,
+            "split": run.split,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "finished_at": run.updated_at.isoformat() if completed and run.updated_at else None,
+            "release_id": release_of.get(run.id),
+            "items": items,
+            "eligible": reason is None,
+            "reason": reason,
+        })
+    return {"total": total, "runs": out}
 
 
 @router.get("/calibration/{criterion_key}")
