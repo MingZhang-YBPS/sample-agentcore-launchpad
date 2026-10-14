@@ -17,6 +17,13 @@ two can be diffed statement by statement during review.
 
 The IAM client is injected by the caller: `container.py::_stage_provision` already
 takes one for exactly this reason, and it keeps the derivation testable.
+
+Phase 2 isolation (projects design §10.3, R10-iam): the role of an agent in an
+*isolated* project additionally carries the project's permissions boundary
+(`services/project_iam.py`) and the tags `launchpad:project` / `launchpad:workspace` /
+`launchpad:isolation=isolated`, and such an agent never falls back to the shared
+execution role. Agents of shared projects — every single-project workspace — are
+untouched.
 """
 
 import json
@@ -28,7 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import get_settings
-from app.core.errors import cleanup_error, is_not_found
+from app.core.errors import AppError, cleanup_error, is_not_found
 from app.core.regions import partition_for_region
 from app.models.ledger import Agent
 from app.schemas.agent import (
@@ -52,6 +59,14 @@ _ID_SUFFIX_LEN = 8
 _SANITISE_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 MANAGED_TAG_KEY = "launchpad:agent-id"
+
+# Other modules add the statements their features need to every per-agent policy
+# without editing this file: each builder is called as `build(spec, resources)` with
+# the agent's spec and its `RoleContext`, and returns statements to append (or none).
+# A builder whose grant must also hold inside isolated projects registers the matching
+# ceiling in `project_iam.EXTRA_BOUNDARY_STATEMENT_BUILDERS`.
+StatementBuilder = Callable[[AgentSpec, "RoleContext"], list[dict[str, Any]] | None]
+EXTRA_STATEMENT_BUILDERS: list[StatementBuilder] = []
 
 BUILTIN_CODE_INTERPRETER = "code-interpreter"
 BUILTIN_BROWSER = "browser"
@@ -99,7 +114,9 @@ def oauth_provider_name(provider_arn: str) -> str:
 
 
 def live_runtime_role_arn(
-    runtime_detail: dict[str, Any] | None, workspace: WorkspaceContext
+    runtime_detail: dict[str, Any] | None,
+    workspace: WorkspaceContext,
+    project_id: str | None = None,
 ) -> str:
     """The role the running runtime is already using, else the shared role.
 
@@ -112,8 +129,13 @@ def live_runtime_role_arn(
     deriving it would guess wrong for any agent deployed before per-agent roles
     existed: the name would resolve to a role that does not exist and
     UpdateAgentRuntime would fail. The live value needs no migration state.
+
+    A candidate of an agent in an isolated project (`project_id`) never falls back to
+    the shared role (§10.3): 409 `project.isolation_requires_per_agent_role`.
     """
     live = (runtime_detail or {}).get("roleArn") or ""
+    if not live:
+        _refuse_shared_role_if_isolated(project_id)
     return live or shared_role_arn(workspace)
 
 
@@ -811,6 +833,9 @@ def policy_document(
         "Resource": "*",
     })
 
+    for build in EXTRA_STATEMENT_BUILDERS:
+        statements.extend(build(spec, ctx) or [])
+
     return {"Version": "2012-10-17", "Statement": statements}
 
 
@@ -883,6 +908,30 @@ def fs_policy_document(spec: AgentSpec) -> dict | None:
 # lifecycle
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class ProjectBoundary:
+    """What an isolated project's agent role carries on top of its policies (§10.3)."""
+
+    project_id: str
+    workspace_id: str
+    policy_arn: str
+    label: str = ""  # `boundary-v<N>`, recorded as `agents.isolation_applied`
+
+    def tags(self) -> list[dict[str, str]]:
+        from app.services.project_iam import (
+            ISOLATED_TAG_VALUE,
+            ISOLATION_TAG_KEY,
+            PROJECT_TAG_KEY,
+        )
+        from app.services.workspace_iam import WORKSPACE_TAG_KEY
+
+        return [
+            {"Key": PROJECT_TAG_KEY, "Value": self.project_id},
+            {"Key": WORKSPACE_TAG_KEY, "Value": self.workspace_id},
+            {"Key": ISOLATION_TAG_KEY, "Value": ISOLATED_TAG_VALUE},
+        ]
+
+
 def ensure_role(
     iam: Any,
     agent: Agent,
@@ -890,6 +939,7 @@ def ensure_role(
     ctx: RoleContext,
     log: Callable[[str], None] = lambda _m: None,
     runtime_arn: str | None = None,
+    boundary: ProjectBoundary | None = None,
 ) -> str:
     """Create or reconcile the agent's role; return its ARN.
 
@@ -897,18 +947,28 @@ def ensure_role(
     existing role of the same name is **adopted** rather than treated as an error: a
     previous delete may have half-failed, and failing here would wedge re-creating an
     agent under a name that was used before.
+
+    `boundary` (isolated projects only) is set at create — the spoke role refuses an
+    `isolated`-tagged CreateRole without one — and re-applied with the tags on adopt,
+    so a role made before its project was isolated gets it too.
     """
     name = role_name_for(agent.name, agent.id)
     trust = json.dumps(trust_policy(ctx, runtime_arn))
+    tags = [
+        {"Key": MANAGED_TAG_KEY, "Value": agent.id},
+        {"Key": "launchpad:managed", "Value": "true"},
+    ]
+    extra: dict[str, Any] = {}
+    if boundary is not None:
+        tags += boundary.tags()
+        extra["PermissionsBoundary"] = boundary.policy_arn
     try:
         created = iam.create_role(
             RoleName=name,
             AssumeRolePolicyDocument=trust,
             Description=f"Launchpad execution role for agent {agent.name} ({agent.id})",
-            Tags=[
-                {"Key": MANAGED_TAG_KEY, "Value": agent.id},
-                {"Key": "launchpad:managed", "Value": "true"},
-            ],
+            Tags=tags,
+            **extra,
         )
         role_arn = created["Role"]["Arn"]
         log(f"created execution role {name}")
@@ -919,6 +979,16 @@ def ensure_role(
         # Adopting: refresh the trust policy so a tightened condition still lands.
         iam.update_assume_role_policy(RoleName=name, PolicyDocument=trust)
         log(f"reusing existing execution role {name}")
+        if boundary is not None:
+            # tags first: they are what marks the role isolated for the spoke's
+            # conditions and for drift detection
+            iam.tag_role(RoleName=name, Tags=boundary.tags())
+            iam.put_role_permissions_boundary(
+                RoleName=name, PermissionsBoundary=boundary.policy_arn
+            )
+    if boundary is not None:
+        log(f"permissions boundary {boundary.policy_arn.rsplit('/', 1)[-1]}"
+            f"{' ' + boundary.label if boundary.label else ''} on {name}")
 
     iam.put_role_policy(
         RoleName=name,
@@ -996,6 +1066,7 @@ def provision_execution_role(
     the role is created in.
     """
     if not settings.per_agent_execution_roles:
+        _refuse_shared_role_if_isolated(getattr(agent, "project_id", None))
         arn = shared_role_arn(workspace)
         if not arn:
             raise RuntimeError(
@@ -1008,12 +1079,66 @@ def provision_execution_role(
     if iam is None:
         iam = workspace.client("iam")
     ctx = role_context(workspace)
-    arn = ensure_role(iam, agent, spec, ctx, log)
+    boundary = _project_boundary(agent, spec, workspace, iam, log)
+    arn = ensure_role(iam, agent, spec, ctx, log, boundary=boundary)
     name = role_name_for(agent.name, agent.id)
     detail = f"iam role · {name}"
     if fs_policy_document(spec):
         detail += f" (+ {fs_policy_name(agent.name)})"
+    if boundary is not None:
+        detail += f" · boundary {boundary.label}"
+        _record_isolation_applied(agent, boundary.label)
     return arn, detail
+
+
+def _refuse_shared_role_if_isolated(project_id: str | None) -> None:
+    """§10.3: the shared execution role is never used by an isolated project's agent
+    (it carries no boundary). Late import: project_iam imports the ledger models."""
+    from app.services.project_iam import isolated_project
+
+    if isolated_project(project_id):
+        raise AppError(
+            "project.isolation_requires_per_agent_role",
+            f"project '{project_id}' is isolated: its agents need their own execution "
+            "role (per-agent roles are switched off, or the runtime reports no role)",
+            {"project_id": project_id},
+            status_code=409,
+        )
+
+
+def _project_boundary(
+    agent: Agent, spec: AgentSpec, workspace: WorkspaceContext, iam: Any,
+    log: Callable[[str], None],
+) -> ProjectBoundary | None:
+    """The boundary for an isolated project's agent, made current for this spec;
+    None for every other agent (no IAM call, no change)."""
+    from app.services import project_iam
+
+    state = project_iam.boundary_for_agent(agent, spec, workspace, iam, log)
+    if state is None:
+        return None
+    return ProjectBoundary(
+        project_id=agent.project_id, workspace_id=workspace.id,
+        policy_arn=state.arn, label=state.label,
+    )
+
+
+def _record_isolation_applied(agent: Agent, label: str) -> None:
+    """`agents.isolation_applied` — on the caller's object and in the ledger, since the
+    deployer's session may not flush the agent row after this stage."""
+    from sqlalchemy import update
+
+    from app.core.db import SessionLocal
+
+    agent.isolation_applied = label
+    if not getattr(agent, "id", None):
+        return
+    db = SessionLocal()
+    try:
+        db.execute(update(Agent).where(Agent.id == agent.id).values(isolation_applied=label))
+        db.commit()
+    finally:
+        db.close()
 
 
 def delete_execution_role(

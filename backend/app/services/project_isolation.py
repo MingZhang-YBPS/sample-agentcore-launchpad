@@ -147,8 +147,9 @@ class ResourceNames:
 
 def resource_names(project_id: str) -> ResourceNames:
     return ResourceNames(
-        # one ABAC boundary per workspace (§10.3), shared by every isolated project there
-        boundary_policy="launchpad-project-boundary",
+        # one boundary policy per (project, workspace), §10.3 (R10-iam); the workspace's
+        # region is appended outside us-west-2 (`workspace_iam.project_boundary_policy_name`)
+        boundary_policy=f"launchpad-project-{project_id}",
         memory=f"launchpad_mem_{project_id.replace('-', '_')}",
         kb_role=f"launchpad-kb-role-{project_id}",
         m2m_client=f"launchpad-agent-m2m-{project_id}",
@@ -235,7 +236,8 @@ class ProvisionContext:
 
 
 class IamProvisioner(Protocol):
-    """§10.3 (R10-iam): the workspace's ABAC permissions boundary (`boundary_policy`)."""
+    """§10.3 (R10-iam): the project's permissions-boundary policy in the workspace
+    (`boundary_policy`); the real one is `project_iam.IamBoundaryProvisioner`."""
 
     def ensure_boundary(self, ctx: ProvisionContext) -> str: ...
 
@@ -348,7 +350,9 @@ class ServiceQuotasChecker:
     shown, never blocking."""
 
     def __init__(self, shared_boundary_exists: Callable[[ProvisionContext], bool] | None = None):
-        self._shared_boundary_exists = shared_boundary_exists or _workspace_has_boundary
+        # The boundary is one policy per (project, workspace) (R10-iam), so another
+        # project's never covers this one; the hook stays for callers that inject it.
+        self._shared_boundary_exists = shared_boundary_exists or (lambda _ctx: False)
 
     def check(self, ctx: ProvisionContext) -> list[QuotaFinding]:
         out = [*self._iam(ctx), self._agentcore(
@@ -423,19 +427,6 @@ def _count_pages(client: Any, operation: str, items_key: str) -> int:
         token = page.get("nextToken")
         if not token:
             return total
-
-
-def _workspace_has_boundary(ctx: ProvisionContext) -> bool:
-    db = SessionLocal()
-    try:
-        return db.scalar(
-            select(ProjectResource.project_id).where(
-                ProjectResource.workspace_id == ctx.workspace_id,
-                ProjectResource.kind == KIND_BOUNDARY_POLICY,
-            ).limit(1)
-        ) is not None
-    finally:
-        db.close()
 
 
 @dataclass(frozen=True)
@@ -967,3 +958,8 @@ def retry_provision(db: Session, identity: Any, row: Project, workspace_id: str,
                            actor_user_id=actor_user_id, action="project.provision.retry",
                            target=f"project:{row.id} job:{job.id}", project_id=row.id)
     return job, created
+
+
+# The real provisioners register themselves on import (`set_provisioners`); imported
+# last so they can import this module.
+from app.services import project_iam as _project_iam  # noqa: E402,F401 — registers iam
