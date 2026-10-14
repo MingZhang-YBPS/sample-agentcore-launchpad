@@ -177,17 +177,23 @@ def _list_targets(control: Any, gateway_id: str) -> dict[str, dict[str, Any]]:
     return {t["name"]: t for t in items}
 
 
-def ensure_lambda_target(
-    control: Any, gateway_id: str, lambda_arn: str
-) -> tuple[str, bool]:
-    existing = _list_targets(control, gateway_id)
-    if HR_TARGET_NAME in existing:
-        return existing[HR_TARGET_NAME]["targetId"], False
-    tools = json.loads((SAMPLES / "hr_database_lambda" / "tool_schema.json").read_text())
+def create_lambda_target(
+    control: Any,
+    gateway_id: str,
+    *,
+    name: str,
+    lambda_arn: str,
+    tools: list[dict[str, Any]],
+    description: str,
+    wait: bool = True,
+) -> str:
+    """One Lambda → MCP-tools target, invoked with the Gateway's own role (the role
+    needs `lambda:InvokeFunction` on the function — `workspace_iam.lambda_tools_policy`
+    for console-created ones). Returns the target id once READY."""
     created = control.create_gateway_target(
         gatewayIdentifier=gateway_id,
-        name=HR_TARGET_NAME,
-        description="HR database Lambda → MCP tools",
+        name=name,
+        description=description,
         targetConfiguration={
             "mcp": {"lambda": {"lambdaArn": lambda_arn, "toolSchema": {"inlinePayload": tools}}}
         },
@@ -195,8 +201,23 @@ def ensure_lambda_target(
             {"credentialProviderType": "GATEWAY_IAM_ROLE"}
         ],
     )
-    _wait_target_ready(control, gateway_id, created["targetId"])
-    return created["targetId"], True
+    if wait:
+        _wait_target_ready(control, gateway_id, created["targetId"])
+    return str(created["targetId"])
+
+
+def ensure_lambda_target(
+    control: Any, gateway_id: str, lambda_arn: str
+) -> tuple[str, bool]:
+    existing = _list_targets(control, gateway_id)
+    if HR_TARGET_NAME in existing:
+        return existing[HR_TARGET_NAME]["targetId"], False
+    tools = json.loads((SAMPLES / "hr_database_lambda" / "tool_schema.json").read_text())
+    target_id = create_lambda_target(
+        control, gateway_id, name=HR_TARGET_NAME, lambda_arn=lambda_arn, tools=tools,
+        description="HR database Lambda → MCP tools",
+    )
+    return target_id, True
 
 
 def ensure_openapi_target(

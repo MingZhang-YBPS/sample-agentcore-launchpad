@@ -12148,7 +12148,8 @@
     "source": {
       "deploy": "部署",
       "drift": "漂移",
-      "baseline": "基线"
+      "baseline": "基线",
+      "rollback": "回滚"
     },
     "withheld": "网关目标已暂扣：在持有 mcp.approve 的成员（不能是部署者）批准此清单之前，Agent 无法调用这些工具。",
     "rejectedNotice": "上一份工具清单已被拒绝。在新的部署获批之前，目标保持暂扣。",
@@ -12187,6 +12188,110 @@
     "checkDrift": "工具有变化：已开启审阅并暂扣目标",
     "checkNoTarget": "没有可检查的线上网关目标",
     "checkFailed": "漂移检查失败",
-    "history": "历史（{{count}}）"
+    "history": "历史（{{count}}）",
+    "ops": {
+      "health": "健康",
+      "healthState": {
+        "healthy": "健康",
+        "drift": "工具已漂移",
+        "failing": "失败",
+        "withheld": "已暂扣（审阅中）",
+        "unknown": "尚未检查"
+      },
+      "checkedAgo": "{{ago}}前检查",
+      "toolCount": "{{count}} 个工具",
+      "check": "立即检查",
+      "checkHint": "跟随 live 端点、重新同步网关目标，并与已批准清单比对工具（每小时自动执行）",
+      "checked": "健康检查完成",
+      "checkFailed": "健康检查失败",
+      "alert": "最近 {{count}} 次健康检查连续失败。",
+      "endpoint": "端点",
+      "followsDefault": "DEFAULT · 跟随每个新版本",
+      "pinned": "live · 固定在 v{{version}}",
+      "pinnedHint": "回滚已把目标固定到较早的版本。下一次部署会把它切回 DEFAULT。",
+      "rollbackTo": "回滚到 v{{version}}",
+      "noRollback": "没有带已批准工具清单的较早版本可回滚。",
+      "rollbackTitle": "回滚到版本 {{version}}？",
+      "rollbackBody": "网关目标将调用固定在版本 {{version}} 的 `live` 端点，该版本已批准的工具清单成为当前清单。若服务器现在列出的工具不同，目标会被暂扣并开启审阅。",
+      "rollback": "回滚",
+      "cancel": "取消",
+      "rollbackStarted": "已开始回滚",
+      "rollbackFailed": "未能开始回滚",
+      "operation": {
+        "rollback": "回滚到 v{{version}}",
+        "scaffold": "Cedar 脚手架"
+      },
+      "opStatus": {
+        "running": "进行中",
+        "succeeded": "已完成",
+        "failed": "失败"
+      },
+      "cedar": "Cedar 策略",
+      "cedarHint": "forbid 覆盖待审阅清单中的工具；permit 覆盖已批准清单（工作区有多个项目时仅限本项目成员）。策略经治理服务逐个写入；网关处于 LOG_ONLY 时，其决策日志会显示 ENFORCE 将拒绝的调用。",
+      "mode": "写入策略后的网关模式",
+      "modeKeep": "保持网关模式",
+      "confirmName": "输入网关名称以切换到 ENFORCE",
+      "overrideReason": "原因（尚无 LOG_ONLY 证据时必填）",
+      "preview": "预览",
+      "planMeta": "网关 {{gateway}} · 当前模式 {{mode}}",
+      "action": {
+        "create": "新建",
+        "update": "更新",
+        "delete": "删除",
+        "keep": "不变"
+      },
+      "apply": "应用",
+      "scaffoldStarted": "正在写入 Cedar 策略……",
+      "scaffoldFailed": "Cedar 脚手架失败"
+    }
+  },
+  "lambdaTool": {
+    "status": {
+      "reviewing": "待审阅",
+      "publishing": "发布中",
+      "live": "已上线",
+      "rejected": "已拒绝",
+      "failed": "失败"
+    },
+    "form": {
+      "title": "新建 Lambda 工具目标",
+      "intro": "把一个 Lambda 函数作为 MCP 工具接入工作区网关。工具 schema 先经审阅：由持有 mcp.approve 的成员（不能是你）批准后，平台为网关角色授予调用该函数的权限并创建目标。部署在 VPC 中的 Lambda 可以访问私网后端。",
+      "arn": "Lambda 函数 ARN（本工作区的账号与区域）",
+      "targetName": "目标名",
+      "targetNameHint": "Agent 以 {{name}}___<工具> 调用这些工具。",
+      "description": "描述（可选）",
+      "schema": "工具 schema（JSON）",
+      "schemaHint": "MCP 工具定义列表：name、description、inputSchema（type 为 \"object\"）。",
+      "submit": "创建并提交审阅",
+      "created": "已记录 Lambda 目标，其工具 schema 等待审阅",
+      "failed": "未能创建 Lambda 目标",
+      "badArn": "不是 Lambda 函数 ARN",
+      "badName": "字母和数字，中间可用单个连字符",
+      "badJson": "不是合法的 JSON",
+      "badShape": "需要非空的工具列表，每个工具都有 name 和 inputSchema 对象"
+    },
+    "list": {
+      "title": "Lambda 工具目标",
+      "empty": "尚无 Lambda 工具目标",
+      "tools": "{{count}} 个工具",
+      "showReview": "审阅",
+      "hideReview": "收起审阅",
+      "delete": "删除",
+      "deleteTitle": "删除 Lambda 目标 {{name}}？",
+      "deleteBody": "网关目标将被删除，网关角色也不再能调用该函数。使用这些工具的 Agent 将失去它们。审阅记录保留为历史。",
+      "deleted": "已删除 {{name}}",
+      "deleteFailed": "未能删除 Lambda 目标"
+    },
+    "external": {
+      "title": "外部托管的 MCP 目标",
+      "intro": "经 Connections 手工创建的 MCP 服务器目标。平台不部署、不管理版本也不回滚它们；可以审阅其工具、每小时检查漂移，并用 Cedar 治理。",
+      "empty": "此网关上没有手工创建的 MCP 目标",
+      "hosted": "外部托管",
+      "adopt": "纳入审阅",
+      "adoptHint": "把它当前列出的工具记录为已批准基线（不会暂扣任何工具）；之后的变化会开启审阅",
+      "adopted": "{{name}} 已纳入工具审阅",
+      "adoptFailed": "未能将目标纳入审阅",
+      "elsewhere": "已在其他项目中审阅"
+    }
   }
 }

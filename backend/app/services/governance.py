@@ -2569,3 +2569,223 @@ def _change_is_conservative_partial(control: Any, change: PolicyChange) -> bool:
         candidate.get("enforcementMode") == "ACTIVE"
         and original.get("enforcementMode") == "ACTIVE"
     )
+
+
+# ---- Cedar scaffold for hosted MCP servers and console tool targets (projects §15.7) ----
+#
+# Two policies per target, named from it so a re-run finds and updates its own:
+# `lp_mcp_<target>_unreviewed` forbids every tool of a list nobody approved yet (no
+# `unless`: a forbid overrides any permit), and `lp_mcp_<target>_project` permits the
+# approved tools — to every OAuth principal while the workspace holds one project, else
+# to members of the owning project (`cognito:groups` carries `lp-project-<pid>`, §10.6;
+# the per-project M2M client joins the condition with R10-gw). They are created while the
+# Gateway runs LOG_ONLY, so the decision log shows what ENFORCE would refuse before the
+# mode switch, which goes through the same `gateway_mode` operation as the Governance page.
+
+MCP_POLICY_PREFIX = "lp_mcp_"
+_MCP_POLICY_SUFFIXES = {"unreviewed": "_unreviewed", "project": "_project"}
+
+
+def mcp_policy_names(target_name: str) -> dict[str, str]:
+    slug = re.sub(r"[^A-Za-z0-9_]", "_", target_name)
+    room = 48 - len(MCP_POLICY_PREFIX) - max(len(s) for s in _MCP_POLICY_SUFFIXES.values())
+    return {
+        role: f"{MCP_POLICY_PREFIX}{slug[:room]}{suffix}"
+        for role, suffix in _MCP_POLICY_SUFFIXES.items()
+    }
+
+
+def _cedar_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _cedar_principal(gateway: dict[str, Any]) -> str:
+    return (
+        "AgentCore::IamEntity" if gateway.get("authorizerType") == "AWS_IAM"
+        else "AgentCore::OAuthUser"
+    )
+
+
+def _cedar_actions(target_name: str, tools: list[str]) -> str:
+    actions = [
+        f'AgentCore::Action::"{_cedar_string(f"{target_name}___{tool}")}"'
+        for tool in sorted(set(tools))
+    ]
+    if len(actions) == 1:
+        return f"action == {actions[0]}"
+    return "action in [" + ", ".join(actions) + "]"
+
+
+def mcp_unreviewed_statement(
+    gateway: dict[str, Any], target_name: str, tools: list[str]
+) -> str:
+    return (
+        "forbid(\n"
+        f"  principal is {_cedar_principal(gateway)},\n"
+        f"  {_cedar_actions(target_name, tools)},\n"
+        f'  resource == AgentCore::Gateway::"{_cedar_string(gateway["gatewayArn"])}"\n'
+        ");"
+    )
+
+
+def mcp_project_statement(
+    gateway: dict[str, Any], target_name: str, tools: list[str], *, project_id: str | None,
+) -> str:
+    head = (
+        "permit(\n"
+        f"  principal is {_cedar_principal(gateway)},\n"
+        f"  {_cedar_actions(target_name, tools)},\n"
+        f'  resource == AgentCore::Gateway::"{_cedar_string(gateway["gatewayArn"])}"\n'
+        ")"
+    )
+    if project_id is None:
+        return head + ";"
+    return (
+        head + " when {\n"
+        '  principal.hasTag("cognito:groups") &&\n'
+        f'  principal.getTag("cognito:groups") like "*lp-project-{_cedar_string(project_id)}*"\n'
+        "};"
+    )
+
+
+def mcp_scaffold_plan(
+    control: Any,
+    gateway_id: str,
+    *,
+    target_name: str,
+    approved_tools: list[str] | None,
+    open_tools: list[str] | None,
+    project_id: str | None,
+) -> dict[str, Any]:
+    """What the scaffold would change on the Gateway's engine (no writes).
+
+    ``open_tools`` is the list of an open review (forbidden until decided), else None
+    (the forbid is removed); ``approved_tools`` the approved list (permitted), else None.
+    Steps are ``create`` / ``update`` / ``delete`` / ``keep`` per policy name."""
+    gateway = _require_managed(control, gateway_id)
+    _assert_gateway_ready(gateway)
+    attachment, engine = _attached_engine(control, gateway)
+    names = mcp_policy_names(target_name)
+    existing: dict[str, dict[str, Any]] = {}
+    for summary in policy_api.list_policies(control, engine["policyEngineId"]):
+        if summary.get("name") in names.values():
+            existing[summary["name"]] = policy_api.get_policy(
+                control, engine["policyEngineId"], summary["policyId"]
+            )
+    wanted = {
+        names["unreviewed"]: (
+            mcp_unreviewed_statement(gateway, target_name, open_tools) if open_tools else None
+        ),
+        names["project"]: (
+            mcp_project_statement(gateway, target_name, approved_tools, project_id=project_id)
+            if approved_tools else None
+        ),
+    }
+    steps: list[dict[str, Any]] = []
+    for name, statement in wanted.items():
+        live = existing.get(name)
+        if statement is None:
+            if live is not None:
+                steps.append({"name": name, "action": "delete", "policy_id": live["policyId"]})
+            continue
+        if live is None:
+            steps.append({"name": name, "action": "create", "statement": statement})
+        elif _statement(live) != statement:
+            steps.append({"name": name, "action": "update", "statement": statement,
+                          "policy_id": live["policyId"]})
+        else:
+            steps.append({"name": name, "action": "keep", "policy_id": live["policyId"]})
+    return {
+        "gateway_id": gateway_id,
+        "gateway_name": gateway.get("name"),
+        "engine_id": engine.get("policyEngineId"),
+        "mode": attachment.get("mode"),
+        "steps": steps,
+    }
+
+
+def apply_mcp_scaffold(
+    workspace: WorkspaceContext,
+    gateway_id: str,
+    steps: list[dict[str, Any]],
+    *,
+    target_name: str,
+    acknowledged_gateway_ids: list[str],
+    mode: dict[str, Any] | None = None,
+    evidence_count: int = 0,
+    control: Any | None = None,
+    iam: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Run the plan one governance operation at a time (the Gateway holds one in-flight
+    operation), each queued and audited exactly like a Governance-page change, then the
+    optional mode switch (``{mode, confirmation_name, override_reason}``). Stops at the
+    first failed step. Returns ``[{name, action, operation_id, status, error}]``."""
+    from app.schemas.governance import (
+        GatewayModeRequest,
+        PolicyCreateRequest,
+        PolicyDeleteRequest,
+        PolicyUpdateRequest,
+    )
+
+    control = control or control_client(workspace)
+    iam = iam or iam_client(workspace)
+    description = f"Launchpad tool review scaffold for {target_name} (projects §15.7)"
+    out: list[dict[str, Any]] = []
+    todo = [s for s in steps if s.get("action") != "keep"]
+    if mode is not None:
+        todo.append({"name": "gateway_mode", "action": "mode"})
+    for step in todo:
+        db = SessionLocal()
+        try:
+            gateway = _require_gateway(control, gateway_id)
+            envelope = {
+                "expected_gateway_updated_at": gateway.get("updatedAt"),
+                "acknowledged_gateway_ids": acknowledged_gateway_ids,
+            }
+            action = step["action"]
+            if action == "create":
+                queued = queue_policy_create(db, control, workspace, gateway_id,
+                                             PolicyCreateRequest(
+                                                 **envelope, name=step["name"],
+                                                 statement=step["statement"],
+                                                 description=description,
+                                                 authorization_model="custom"))
+            elif action in ("update", "delete"):
+                _, engine = _attached_engine(control, gateway)
+                detail = policy_api.get_policy(control, engine["policyEngineId"],
+                                               step["policy_id"])
+                envelope["expected_policy_updated_at"] = detail.get("updatedAt")
+                if action == "update":
+                    queued = queue_policy_update(
+                        db, control, workspace, gateway_id, step["policy_id"],
+                        PolicyUpdateRequest(**envelope, statement=step["statement"],
+                                            description=description))
+                else:
+                    queued = queue_policy_delete(db, control, workspace, gateway_id,
+                                                 step["policy_id"],
+                                                 PolicyDeleteRequest(**envelope))
+            else:
+                queued = queue_gateway_mode(
+                    db, control, workspace, iam, gateway_id,
+                    GatewayModeRequest(**envelope, **(mode or {})),
+                    evidence_count=evidence_count,
+                )
+        except AppError as exc:
+            out.append({"name": step["name"], "action": step["action"], "operation_id": None,
+                        "status": "failed", "error": f"{exc.code}: {exc.message}"})
+            return out
+        finally:
+            db.close()
+        run_policy_change(queued["id"], control=control, iam=iam)
+        db = SessionLocal()
+        try:
+            change = db.get(PolicyChange, queued["id"])
+            status = change.status if change is not None else "failed"
+            error = change.error if change is not None else "operation vanished"
+        finally:
+            db.close()
+        out.append({"name": step["name"], "action": step["action"],
+                    "operation_id": queued["id"], "status": status, "error": error})
+        if status != "succeeded":
+            return out
+    return out

@@ -1,19 +1,16 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import {
-  approveMcpReview,
   changeMark,
-  checkMcpDrift,
-  getMcpReview,
-  listMcpReviews,
   type McpGateState,
   type McpHint,
   type McpReviewDetail,
   type McpReviewList,
   type McpReviewStatus,
-  rejectMcpReview,
+  type ReviewApi,
+  serverReviewApi,
 } from "../../../lib/api/mcpReviews";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
@@ -31,20 +28,33 @@ const GATE_SIGNAL: Record<McpGateState | McpReviewStatus, Signal> = {
  * Tool review (projects §15.6): every tool list the server presents is read by a
  * person before agents can call it. The open review shows the full list against the
  * last approved one, with hints; approve / reject need `mcp.approve`, and the
- * deployer can do neither (the server answers 409, shown as a toast).
+ * deployer can do neither (the server answers 409, shown as a toast). The same section
+ * reviews a console-created Lambda target or an adopted hand-made target (`api` =
+ * `toolReviewApi(toolId)`, §15.12 / §15.15): there is no drift check button for those.
  */
-export function McpReviewSection({ agentId, drift, onChanged }: { agentId: string; drift: boolean; onChanged: () => void }) {
+export function McpReviewSection({
+  agentId,
+  drift,
+  onChanged,
+  api,
+}: {
+  agentId: string;
+  drift: boolean;
+  onChanged: () => void;
+  api?: ReviewApi;
+}) {
   const { t } = useTranslation();
   const toast = useToast();
   const [nonce, setNonce] = useState(0);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  const list = useLoad(() => listMcpReviews(agentId), `v3-mcp-reviews:${agentId}:${nonce}`);
+  const reviews = useMemo(() => api ?? serverReviewApi(agentId), [api, agentId]);
+  const list = useLoad(() => reviews.list(), `v3-mcp-reviews:${agentId}:${nonce}`);
   const openId = list.data?.open_review_id ?? null;
   const latestId = list.data?.reviews[0]?.id ?? null;
   const shownId = openId ?? latestId;
   const detail = useLoad<McpReviewDetail | null>(
-    () => (shownId ? getMcpReview(agentId, shownId) : Promise.resolve(null)),
+    () => (shownId ? reviews.get(shownId) : Promise.resolve(null)),
     `v3-mcp-review:${agentId}:${shownId ?? "-"}:${nonce}`,
   );
   const refresh = () => {
@@ -56,7 +66,7 @@ export function McpReviewSection({ agentId, drift, onChanged }: { agentId: strin
     if (!openId) return;
     setBusy(true);
     try {
-      await (approve ? approveMcpReview : rejectMcpReview)(agentId, openId, note.trim());
+      await (approve ? reviews.approve : reviews.reject)(openId, note.trim());
       toast("ok", t(approve ? "mcpReview.approved" : "mcpReview.rejected"));
       setNote("");
       refresh();
@@ -68,9 +78,10 @@ export function McpReviewSection({ agentId, drift, onChanged }: { agentId: strin
   };
 
   const check = async () => {
+    if (!reviews.check) return;
     setBusy(true);
     try {
-      const res = await checkMcpDrift(agentId);
+      const res = await reviews.check();
       toast("ok", t(!res.checked ? "mcpReview.checkNoTarget" : res.drift ? "mcpReview.checkDrift" : "mcpReview.checkClean"));
       refresh();
     } catch (err) {
@@ -92,7 +103,7 @@ export function McpReviewSection({ agentId, drift, onChanged }: { agentId: strin
       note={note}
       onNote={setNote}
       onDecide={decide}
-      onCheck={check}
+      onCheck={reviews.check ? check : undefined}
     />
   );
 }
@@ -117,7 +128,8 @@ export function McpReviewView({
   note: string;
   onNote: (value: string) => void;
   onDecide: (approve: boolean) => void;
-  onCheck: () => void;
+  /** absent: no drift check (a Lambda / adopted target) */
+  onCheck?: () => void;
 }) {
   const { t } = useTranslation();
   const state = list.state;
@@ -132,7 +144,7 @@ export function McpReviewView({
         <strong>{t("mcpReview.title")}</strong>
         <Chip s={GATE_SIGNAL[state]}>{t(`mcpReview.state.${state}`)}</Chip>
         <span style={{ flex: 1 }} />
-        <Btn size="sm" kind="ghost" disabled={busy} onClick={onCheck} title={t("mcpReview.checkHint")}>{t("mcpReview.check")}</Btn>
+        {onCheck && <Btn size="sm" kind="ghost" disabled={busy} onClick={onCheck} title={t("mcpReview.checkHint")}>{t("mcpReview.check")}</Btn>}
       </div>
       {drift && state === "approved" && <Notice s="wait">{t("mcpReview.driftNotice")}</Notice>}
       {state === "reviewing" && <Notice s="wait">{t("mcpReview.withheld")}</Notice>}

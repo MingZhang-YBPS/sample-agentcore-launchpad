@@ -426,6 +426,48 @@ def gateway_role_policy(account_id: str, region: str) -> dict[str, Any]:
     }
 
 
+# Console-created Lambda tool targets (design projects §15.12): the Gateway invokes
+# them with its own role (GATEWAY_IAM_ROLE), so each one adds its function to this
+# inline policy on the Gateway role, and deleting the target takes it out again.
+LAMBDA_TOOLS_POLICY_NAME = "launchpad-lambda-tools"
+
+
+def lambda_tools_policy(lambda_arns: list[str]) -> dict[str, Any]:
+    """`lambda:InvokeFunction` on exactly these functions (and their versions /
+    aliases), one statement per function so a review can read them one by one."""
+    functions: set[str] = set()
+    for arn in lambda_arns:
+        base = arn.split(":function:", 1)
+        # a qualified ARN (version / alias) grants its function, like the bare one
+        functions.add(f"{base[0]}:function:{base[1].split(':', 1)[0]}" if len(base) == 2 else arn)
+    statements = []
+    for index, function_arn in enumerate(sorted(functions)):
+        statements.append({
+            "Sid": f"InvokeLambdaTool{index}",
+            "Effect": "Allow",
+            "Action": "lambda:InvokeFunction",
+            "Resource": [function_arn, f"{function_arn}:*"],
+        })
+    return {"Version": "2012-10-17", "Statement": statements}
+
+
+def sync_lambda_tools_policy(iam: Any, role_name: str, lambda_arns: list[str]) -> None:
+    """Make the Gateway role's Lambda-tools inline policy name exactly ``lambda_arns``
+    (deleted when none remain). Idempotent."""
+    if lambda_arns:
+        iam.put_role_policy(
+            RoleName=role_name,
+            PolicyName=LAMBDA_TOOLS_POLICY_NAME,
+            PolicyDocument=json.dumps(lambda_tools_policy(lambda_arns)),
+        )
+        return
+    try:
+        iam.delete_role_policy(RoleName=role_name, PolicyName=LAMBDA_TOOLS_POLICY_NAME)
+    except Exception as exc:  # noqa: BLE001 — the SDK's typed error is client-specific
+        if "NoSuchEntity" not in f"{type(exc).__name__}{exc}":
+            raise
+
+
 def kb_role_policy(artifacts_bucket: str) -> dict[str, Any]:
     """The Bedrock Managed KB ingestion role — base_stack.py:571-585. Per-KB
     inline policies (`launchpad-kb-{id}`) extend it to external buckets."""

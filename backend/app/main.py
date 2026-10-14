@@ -50,6 +50,7 @@ from app.routers.environments import router as environments_router
 from app.routers.execution import router as execution_router
 from app.routers.feedback import router as feedback_router
 from app.routers.fleet import router as fleet_router
+from app.routers.gateway_lambda import router as gateway_lambda_router
 from app.routers.governance import router as governance_router
 from app.routers.identity import router as identity_router
 from app.routers.issues import router as issues_router
@@ -248,6 +249,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(departments_router)  # departments (projects §2.1, §7.10)
     app.include_router(network_profiles_router)  # VPC network profiles (projects §12)
     app.include_router(mcp_reviews_router)  # MCP server tool reviews (projects §15.6)
+    app.include_router(gateway_lambda_router)  # Lambda / adopted tool targets (§15.12)
     app.include_router(fleet_router)  # fleet overview, governance health, marketplace (T37-T39)
     app.include_router(alerts_router)  # spend attribution + threshold alerts (T28/T29)
     app.include_router(promotions_router)  # release bundles, promotions, inbox (T20-T22)
