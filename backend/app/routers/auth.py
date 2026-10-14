@@ -209,9 +209,7 @@ def account_stamp(user: User) -> str:
     `session_epoch` (design §7.4): epoch 0 stamps exactly as before the column
     existed, so a deploy ends no session; any bump ends every open one.
     """
-    epoch = int(user.session_epoch or 0)
-    material = user.password_hash if epoch <= 0 else f"{user.password_hash}:{epoch}"
-    return users_service.credential_stamp(material)
+    return users_service.credential_stamp(user.password_hash, int(user.session_epoch or 0))
 
 
 def resolve_identity(
