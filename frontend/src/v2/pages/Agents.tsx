@@ -30,6 +30,7 @@ import { AgentWizard } from "./agents/AgentWizard";
 import { IntegrationCard } from "./agents/IntegrationCard";
 import { ReleaseCard } from "./agents/ReleaseCard";
 import { SnapshotsCard } from "./agents/SnapshotsCard";
+import { ToolsCard } from "./agents/ToolsCard";
 import { TryChat } from "./agents/TryChat";
 import { v2EditPath } from "./agents/classicUrl";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
@@ -513,7 +514,6 @@ function AgentDetail({ id }: { id: string }) {
 
   const spec = (agent.spec ?? {}) as Record<string, unknown>;
   const deployment = agent.deployments?.[0] ?? agent.deployment ?? null;
-  const kbs = (spec.knowledge_bases as { kb_id: string; name: string }[] | undefined) ?? [];
   const source = spec.source_harness as { agent_name?: string } | undefined;
   const notes = (spec.conversion_notes as Record<string, string> | undefined) ?? {};
   const byoc = agent.method === "byoc" ? ((spec.byoc as ByocSummary | undefined) ?? null) : null;
@@ -616,6 +616,8 @@ function AgentDetail({ id }: { id: string }) {
           ]}
         />
       </Card>
+      {/* tools, MCP, KBs, skills (projects §18.3-4); an MCP server has none of its own */}
+      {spec.protocol !== "mcp" && <ToolsCard agent={agent} />}
       {agent.status === "active" && agent.invoke_capability?.eligible && <TryChat agentId={agent.id} />}
       {deployment && <DeployProgress deployment={deployment} job={job} method={agent.method} />}
       {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
@@ -671,17 +673,6 @@ function AgentDetail({ id }: { id: string }) {
           ) : (
             <span className="v2-muted">—</span>
           )}
-        </Card>
-      )}
-      {kbs.length > 0 && (
-        <Card title={t("v2.agents.kbTitle")}>
-          <div className="v2-tags">
-            {kbs.map((kb) => (
-              <Tag key={kb.kb_id} tone="outline">
-                {kb.name}
-              </Tag>
-            ))}
-          </div>
         </Card>
       )}
       {actions.dialog}

@@ -11919,5 +11919,68 @@
       "errArgs": "At most {{max}} arguments of up to 1024 characters each.",
       "limits": "One server process per container: fine for a stateless server or a single session. A server that keeps per-session state sees every caller as one session. Responses are plain JSON — the server's progress and logging notifications are dropped, and requests it sends back (sampling, elicitation, roots) are answered as unsupported."
     }
+  },
+  "agentTools": {
+    "title": "Tools & capabilities",
+    "refresh": "Refresh",
+    "empty": "No tools or capabilities are registered for this agent.",
+    "group": {
+      "gateway": "Gateway tools",
+      "mcp": "Remote MCP servers",
+      "builtin": "Built-in tools",
+      "rest": "REST tools",
+      "kb": "Knowledge bases",
+      "skill": "Skills",
+      "toolkit": "Demo toolkits",
+      "native": "Native execution",
+      "template": "Template tools",
+      "allowed": "Allowed tools",
+      "code": "Tools in code"
+    },
+    "gatewayVia": "via gateway {{gateway}}",
+    "gatewayAll": "every tool of the record",
+    "mcpAuth": "outbound auth: {{kind}} · {{mode}}",
+    "mcpAuthRegistry": "outbound auth: {{kind}}",
+    "mcpAuthNone": "no outbound auth",
+    "kbTools": "the model calls them through {{tools}}",
+    "templateHint": "calculator and current_utc_time ship with the Strands template; a selected toolkit replaces them with its own tools.",
+    "native": {
+      "shell": "Shell",
+      "file_operations": "File operations"
+    },
+    "allowedFrom": {
+      "kb": "knowledge base gateway",
+      "mcp": "remote MCP server"
+    },
+    "allowedNone": "an empty list: the model may call no tool",
+    "allowedDerived": "Not set: derived from the attachments, skills and native execution.",
+    "code": "The tools are written in the agent's code, so the platform does not record them. When the agent sends telemetry, Observability shows the tools it actually called.",
+    "openObservability": "Open Observability",
+    "openPolicies": "Open the gateway's policies",
+    "enforce": "Gateway {{gateway}} enforces its policies (ENFORCE), but no active permit policy covers {{tools}} — those calls are denied by default.",
+    "recordInactive": "Registry record {{name}} is {{status}}: it is no longer approved, so new attachments are refused and calls may fail.",
+    "diff": {
+      "title": "Candidate v{{candidate}} is not live yet (live: v{{live}}).",
+      "added": "The candidate adds: {{items}}.",
+      "removed": "The candidate removes: {{items}}.",
+      "hint": "Real users keep the live version's tools until the release gate passes.",
+      "new": "candidate only"
+    },
+    "telemetry": {
+      "label": "Telemetry",
+      "receiving": "last span within {{window}}",
+      "none": "no telemetry received in the last {{days}} days",
+      "unknown": "telemetry could not be checked right now",
+      "unsupported": "telemetry status is not available for this agent type",
+      "not_deployed": "not deployed yet",
+      "window": {
+        "1h": "the last hour",
+        "24h": "the last 24 hours",
+        "7d": "the last 7 days",
+        "14d": "the last 14 days"
+      },
+      "byocNoAdot": "This BYOC code zip has no ADOT launcher, so it emits no spans and is missing from Observability and evaluation: add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, then republish.",
+      "noLogGroup": "The agent has not been invoked on this endpoint yet."
+    }
   }
 }
