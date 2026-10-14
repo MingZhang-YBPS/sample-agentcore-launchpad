@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { useProdLock } from "../../../workspace/useProdLock";
@@ -34,10 +34,12 @@ import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage, ty
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { defaultModelFor, isCustomModelId, type ModelSource } from "../../../lib/models";
+import { useUiVersion } from "../../../lib/ui-version";
 import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../../../pages/create/presetSettings";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, OptionCard, Steps, Tag } from "../../ui";
 import "./agents.css";
+import { wizardBackTarget, wizardDoneTarget } from "./wizardReturn";
 import { KnowledgeField } from "./InlineKb";
 import { inlineKbBlock, useInlineKb } from "./useInlineKb";
 import {
@@ -108,6 +110,9 @@ function editDraft(agent: AgentInfo): Draft {
 export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const uiVersion = useUiVersion();
   const toast = useV2Toast();
   const { can } = useAuth();
   const prodLock = useProdLock();
@@ -374,7 +379,11 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
         ? await api.redeployAgent(edit.id, republishSpec(built, edit.spec))
         : await api.createAgent(built);
       toast("success", t(edit ? "v2.agents.wizard.redeployStarted" : "v2.agents.wizard.started", { name: res.agent.display_name || res.agent.name }));
-      setParams({ view: "detail", id: res.agent.id });
+      // in V3 the agent's V3 detail page, replacing the wizard so "back" from
+      // there returns to the page that started it (§4)
+      const done = wizardDoneTarget(uiVersion, res.agent.id);
+      if (done) navigate(done, { replace: true });
+      else setParams({ view: "detail", id: res.agent.id });
     } catch (e) {
       if (!alive.current) return;
       setError({ text: errorMessage(e), rows: e instanceof ApiError ? apiErrorRows(e.detail) : [] });
@@ -428,7 +437,12 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
             ? t("v2.agents.wizard.editTitle", { name: edit.display_name || edit.name })
             : t(form.protocol === "mcp" ? "v2.agents.wizard.mcp.title" : "v2.agents.new")
         }
-        onBack={() => setParams(edit ? { view: "detail", id: edit.id } : {})}
+        onBack={() => {
+          const back = wizardBackTarget(uiVersion, location.key, edit?.id);
+          if (back === -1) navigate(-1);
+          else if (back) navigate(back);
+          else setParams(edit ? { view: "detail", id: edit.id } : {});
+        }}
         steps={<Steps steps={stepLabels} current={step - firstStep} onSelect={(i) => select(i + firstStep)} />}
         end={
           <>
