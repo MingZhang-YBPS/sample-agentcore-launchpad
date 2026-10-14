@@ -11399,6 +11399,10 @@
           "review": "an SME's correction — strong label, narrow coverage"
         }
       }
+    },
+    "noWorkspace": {
+      "eyebrow": "Access · workspace",
+      "waiting": "Waiting for a workspace grant"
     }
   },
   "models": {

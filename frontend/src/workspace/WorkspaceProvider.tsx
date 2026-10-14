@@ -11,7 +11,10 @@ import { loadModelDefaults } from "../lib/model-defaults";
 import { setActiveRegion } from "../lib/regions";
 import { api, AUTH_UNAUTHORIZED_EVENT, type Workspace } from "../lib/api";
 import { storedWorkspaceId, storeWorkspaceId } from "../lib/workspace-header";
+import { useUiVersion } from "../lib/ui-version";
 import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
+import { V3AuthLoading } from "../v3/AuthFrame";
+import { V3NoWorkspace } from "../v3/NoWorkspace";
 import { WorkspaceContext } from "./workspace-context";
 
 interface ListState {
@@ -157,19 +160,24 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
 function WorkspaceLoading() {
   const { t } = useTranslation();
-  return <V2AuthLoading label={t("workspacesPage.resolving")} />;
+  // the same ground as the sign-in page and the console about to open
+  const Loading = useUiVersion() === "v3" ? V3AuthLoading : V2AuthLoading;
+  return <Loading label={t("workspacesPage.resolving")} />;
 }
 
 /**
  * A member whose account has no grant yet. Every workspace-scoped route would
  * answer 403, so the console says who can fix it instead of rendering pages that
- * all fail. Wearing the sign-in page's V2 chrome, because it is the same kind of
- * dead end for workspace operations: signing out stays reachable, while
- * installation-wide announcements can still be read below the access message.
+ * all fail. Wearing the sign-in page's chrome (V3's own page, `V3NoWorkspace`, or
+ * this V2 one), because it is the same kind of dead end for workspace operations:
+ * signing out stays reachable, while installation-wide announcements can still be
+ * read below the access message.
  */
 function NoWorkspaceGranted() {
   const { t } = useTranslation();
   const { authRequired, username, logout } = useAuth();
+  // V3 (the default) has its own native page; V2 and classic keep this one
+  if (useUiVersion() === "v3") return <V3NoWorkspace />;
   return (
     <V2AuthFrame
       testId="no-workspace-page"

@@ -28,7 +28,10 @@ import {
   type AuthStatus,
   type RegisterResult,
 } from "../lib/api";
+import { useUiVersion } from "../lib/ui-version";
 import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
+import { V3AuthFrame, V3AuthLoading } from "../v3/AuthFrame";
+import { Lamp } from "../v3/ui";
 import { AuthContext } from "./auth-context";
 
 const AUTH_DISABLED: AuthStatus = {
@@ -161,9 +164,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={context}>{children}</AuthContext.Provider>;
 }
 
+/**
+ * The sign-in page wears the chrome of the console the browser will open: V3 (the
+ * default) or V2 — the classic console's operators land in V2's light frame, as
+ * before. The forms are shared; their class names carry the console's prefix.
+ */
+function useSkin(): "v2" | "v3" {
+  return useUiVersion() === "v3" ? "v3" : "v2";
+}
+
 function AuthLoading() {
   const { t } = useTranslation();
-  return <V2AuthLoading label={t("auth.checking")} />;
+  const Loading = useSkin() === "v3" ? V3AuthLoading : V2AuthLoading;
+  return <Loading label={t("auth.checking")} />;
 }
 
 /** The console's create → deploy → invoke → observe loop, beside the form. */
@@ -184,6 +197,7 @@ function LoginPage({
   requiresApproval: boolean;
 }) {
   const { t } = useTranslation();
+  const skin = useSkin();
   const [mode, setMode] = useState<"signin" | "register">("signin");
   const [prefill, setPrefill] = useState("");
 
@@ -191,6 +205,72 @@ function LoginPage({
     setPrefill(result.username);
     setMode("signin");
   };
+
+  const body = (
+    <>
+      {registrationEnabled ? (
+        <div className={`${skin}-auth-tabs`} role="tablist" data-testid="auth-tabs">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "signin"}
+            className={mode === "signin" ? "on" : ""}
+            onClick={() => setMode("signin")}
+            data-testid="auth-tab-signin"
+          >
+            {t("auth.v2.signIn")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "register"}
+            className={mode === "register" ? "on" : ""}
+            onClick={() => setMode("register")}
+            data-testid="auth-tab-register"
+          >
+            {t("auth.v2.register")}
+          </button>
+        </div>
+      ) : null}
+      {mode === "signin" ? (
+        <SignInForm onLogin={onLogin} prefill={prefill} />
+      ) : (
+        <RegisterForm onRegistered={onRegistered} requiresApproval={requiresApproval} />
+      )}
+    </>
+  );
+
+  if (skin === "v3") {
+    return (
+      <V3AuthFrame testId="auth-page">
+        <div className="v3-auth-split">
+          <section className="v3-auth-hero">
+            <span className="v3-auth-kicker">
+              <Lamp s="ok" />
+              Amazon Bedrock AgentCore
+            </span>
+            <h1>{t("auth.v2.heroTitle")}</h1>
+            <p>{t("auth.v2.heroBody")}</p>
+            <ol className="v3-auth-steps">
+              {HERO_STEPS.map(({ key, icon: Icon }, index) => (
+                <li key={key}>
+                  <span className="ico"><Icon size={17} aria-hidden="true" /></span>
+                  <div>
+                    <b>
+                      <span className="idx">{String(index + 1).padStart(2, "0")}</span>
+                      {t(`auth.v2.steps.${key}.title`)}
+                    </b>
+                    <span className="body">{t(`auth.v2.steps.${key}.body`)}</span>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+          <div className="v3-auth-card">{body}</div>
+        </div>
+      </V3AuthFrame>
+    );
+  }
 
   return (
     <V2AuthFrame testId="auth-page">
@@ -211,37 +291,7 @@ function LoginPage({
           </ol>
         </section>
         <div className="v2-card v2-auth-card">
-          <div className="v2-card-body">
-            {registrationEnabled ? (
-              <div className="v2-auth-tabs" role="tablist" data-testid="auth-tabs">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === "signin"}
-                  className={mode === "signin" ? "on" : ""}
-                  onClick={() => setMode("signin")}
-                  data-testid="auth-tab-signin"
-                >
-                  {t("auth.v2.signIn")}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === "register"}
-                  className={mode === "register" ? "on" : ""}
-                  onClick={() => setMode("register")}
-                  data-testid="auth-tab-register"
-                >
-                  {t("auth.v2.register")}
-                </button>
-              </div>
-            ) : null}
-            {mode === "signin" ? (
-              <SignInForm onLogin={onLogin} prefill={prefill} />
-            ) : (
-              <RegisterForm onRegistered={onRegistered} requiresApproval={requiresApproval} />
-            )}
-          </div>
+          <div className="v2-card-body">{body}</div>
         </div>
       </div>
     </V2AuthFrame>
@@ -254,8 +304,9 @@ function Field({ id, label, hint, children }: {
   hint?: string;
   children: ReactNode;
 }) {
+  const skin = useSkin();
   return (
-    <div className="v2-field">
+    <div className={`${skin}-field`}>
       <label htmlFor={id}>{label}</label>
       {children}
       {hint ? <span className="hint">{hint}</span> : null}
@@ -269,8 +320,9 @@ function Submit({ busy, icon, label, busyLabel }: {
   label: string;
   busyLabel: string;
 }) {
+  const skin = useSkin();
   return (
-    <button className="v2-btn primary v2-auth-submit" type="submit" disabled={busy}>
+    <button className={`${skin}-btn primary ${skin}-auth-submit`} type="submit" disabled={busy}>
       {busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : icon}
       {busy ? busyLabel : label}
     </button>
@@ -285,6 +337,7 @@ function SignInForm({
   prefill: string;
 }) {
   const { t } = useTranslation();
+  const skin = useSkin();
   const [username, setUsername] = useState(prefill);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -316,11 +369,11 @@ function SignInForm({
       <h2>{t("auth.title")}</h2>
       <p className="sub">{t("auth.v2.subtitle")}</p>
 
-      <div className="v2-auth-fields">
+      <div className={`${skin}-auth-fields`}>
         <Field id="auth-username" label={t("auth.v2.username")}>
           <input
             id="auth-username"
-            className="v2-input"
+            className={`${skin}-input`}
             autoComplete="username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
@@ -331,7 +384,7 @@ function SignInForm({
         <Field id="auth-password" label={t("auth.v2.password")}>
           <input
             id="auth-password"
-            className="v2-input"
+            className={`${skin}-input`}
             type="password"
             autoComplete="current-password"
             value={password}
@@ -341,7 +394,7 @@ function SignInForm({
         </Field>
       </div>
 
-      <div className="v2-auth-error" role="alert" aria-live="polite">
+      <div className={`${skin}-auth-error`} role="alert" aria-live="polite">
         {error}
       </div>
       <Submit
@@ -362,6 +415,7 @@ function RegisterForm({
   requiresApproval: boolean;
 }) {
   const { t } = useTranslation();
+  const skin = useSkin();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -399,7 +453,7 @@ function RegisterForm({
     const pending = done.requires_approval;
     return (
       <div data-testid="register-success">
-        <div className={`v2-auth-icon${pending ? " wait" : " ok"}`} aria-hidden="true">
+        <div className={`${skin}-auth-icon${pending ? " wait" : " ok"}`} aria-hidden="true">
           {pending ? (
             <Hourglass size={22} strokeWidth={1.8} />
           ) : (
@@ -418,7 +472,7 @@ function RegisterForm({
                 days: done.valid_days,
               })}
         </p>
-        <div className="v2-auth-facts">
+        <div className={`${skin}-auth-facts`}>
           <div>
             <span>{t("auth.v2.email")}</span>
             <b>{done.email}</b>
@@ -434,7 +488,7 @@ function RegisterForm({
             </b>
           </div>
         </div>
-        <button className="v2-btn primary v2-auth-submit" type="button" onClick={() => onRegistered(done)}>
+        <button className={`${skin}-btn primary ${skin}-auth-submit`} type="button" onClick={() => onRegistered(done)}>
           <LogIn size={16} aria-hidden="true" />
           {t("auth.v2.goToSignIn")}
         </button>
@@ -449,11 +503,11 @@ function RegisterForm({
         {t(requiresApproval ? "auth.registerSubtitleApproval" : "auth.registerSubtitle")}
       </p>
 
-      <div className="v2-auth-fields">
+      <div className={`${skin}-auth-fields`}>
         <Field id="reg-username" label={t("auth.v2.username")} hint={t("auth.usernameHint")}>
           <input
             id="reg-username"
-            className="v2-input"
+            className={`${skin}-input`}
             autoComplete="username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
@@ -464,7 +518,7 @@ function RegisterForm({
         <Field id="reg-email" label={t("auth.v2.companyEmail")} hint={t("auth.companyEmailHint")}>
           <input
             id="reg-email"
-            className="v2-input"
+            className={`${skin}-input`}
             type="email"
             autoComplete="email"
             value={email}
@@ -475,7 +529,7 @@ function RegisterForm({
         <Field id="reg-password" label={t("auth.v2.password")} hint={t("auth.passwordHint")}>
           <input
             id="reg-password"
-            className="v2-input"
+            className={`${skin}-input`}
             type="password"
             autoComplete="new-password"
             value={password}
@@ -486,7 +540,7 @@ function RegisterForm({
         <Field id="reg-confirm" label={t("auth.v2.confirmPassword")}>
           <input
             id="reg-confirm"
-            className="v2-input"
+            className={`${skin}-input`}
             type="password"
             autoComplete="new-password"
             value={confirm}
@@ -496,7 +550,7 @@ function RegisterForm({
         </Field>
       </div>
 
-      <div className="v2-auth-error" role="alert" aria-live="polite">
+      <div className={`${skin}-auth-error`} role="alert" aria-live="polite">
         {error}
       </div>
       <Submit

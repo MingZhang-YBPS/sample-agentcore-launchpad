@@ -88,7 +88,7 @@ const Workspaces = lazy(() =>
 // every classic route keeps its URL and, once the operator chose V2, renders
 // inside the V2 shell instead of the classic one (see ConsoleShell).
 const V2Shell = lazy(() => import("./v2/V2Shell").then((m) => ({ default: m.V2Shell })));
-// Console V3 — the redesigned console, opt-in and switchable with V2 (src/v3/)
+// Console V3 — the redesigned console, the default and switchable with V2 (src/v3/)
 const V3Shell = lazy(() => import("./v3/Shell").then((m) => ({ default: m.V3Shell })));
 const V3Home = lazy(() => import("./v3/pages/Home").then((m) => ({ default: m.V3Home })));
 const V3Agents = lazy(() => import("./v3/pages/Agents").then((m) => ({ default: m.V3Agents })));

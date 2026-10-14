@@ -2570,15 +2570,21 @@ through the same backend routes and permission checks as the classic pages.
 - **Switching.** The classic topbar has a "Try V2" chip; V2's top bar has
   "Classic console". The choice is a per-browser convenience in `localStorage`
   (`lib/ui-version.ts`, key `launchpad_ui_version`, exposed reactively through
-  `useUiVersion()`). **V2 is the default**: only a stored `v1` (an explicit
-  "Classic console" click) keeps a browser on the classic console; otherwise the
-  index route `/` redirects to `/v2`. Opening any `/v2` page also selects V2.
-  Storage that is blocked or empty means V2 (the switch still applies to the open
-  tab).
+  `useUiVersion()`). **V3 is the default** (see [Console V3](#console-v3-preview)):
+  only a stored `v2` (an explicit "Back to V2") keeps a browser on V2 and a stored
+  `v1` (an explicit "Classic console" click) on the classic console; otherwise the
+  index route `/` redirects to `/v3`. Opening a `/v2` page from the classic console
+  selects V2. Storage that is blocked or empty means V3 (the switch still applies
+  to the open tab).
 - **Pre-shell pages.** Sign-in / register (`auth/AuthGate.tsx`), the
   session/workspace spinners and the "no workspace granted" notice
-  (`workspace/WorkspaceProvider.tsx`) always wear the V2 chrome
-  (`v2/AuthFrame.tsx` + `v2/auth.css`), whichever console is chosen.
+  (`workspace/WorkspaceProvider.tsx`) wear the chosen console's chrome: V3
+  (`v3/AuthFrame.tsx` + `v3/auth.css`, dark command-center ground) by default, V2
+  (`v2/AuthFrame.tsx` + `v2/auth.css`) once V2 or classic is chosen. The sign-in and
+  register forms are shared; their class names carry the console prefix. The "no
+  workspace granted" notice has a native V3 page (`v3/NoWorkspace.tsx`: the
+  waiting state, sign-out and the public announcements feed on V3 panels); V2 and
+  classic keep the V2 one, which embeds the classic feed.
 - **Classic modules inside V2.** The classic route group renders through
   `ConsoleShell` in `App.tsx`: the classic `<Shell />`, or — once V2 is chosen —
   `<V2Shell classic />`. So `/chat`, `/agents/…`, `/registry` keep their URLs in both
@@ -2893,15 +2899,15 @@ fallback so a failing model is not retried on every poll.
 
 ## Console V3 (preview)
 
-An opt-in, dark "command center" console under `/v3/*` (`frontend/src/v3/`), built
+The default, dark "command center" console under `/v3/*` (`frontend/src/v3/`), built
 beside V2 rather than replacing it. It reads and writes through the same `api` /
 `dlcApi` clients, backend routes and permission checks as V2 — there is no V3-only
 backend surface.
 
 - **Switching.** V2's top bar has **Try V3** (`data-testid="v2-switch-v3"`); V3's has
-  **Back to V2**. The choice is stored as `v3` in `launchpad_ui_version`
-  (`lib/ui-version.ts`); `/` then lands on `/v3`. Opening any `/v3` page counts as
-  choosing V3.
+  **Back to V2**. A browser with no stored choice lands on `/v3`; **Back to V2**
+  stores `v2` in `launchpad_ui_version` (`lib/ui-version.ts`) and **Try V3** stores
+  `v3`. Opening any `/v3` page counts as choosing V3.
 - **Native pages.** Command center (`/v3`: a ranked "needs you" queue built from
   failed deploys, releases awaiting signature and gates that stopped —
   `v3/signals.ts`), Agents (`/v3/agents`, `?id=` for one agent: lifecycle line,

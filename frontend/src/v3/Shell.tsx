@@ -40,6 +40,7 @@ import { ChangePasswordDialog } from "./ChangePassword";
 import { type Command, CommandPalette } from "./CommandPalette";
 import { ToastProvider } from "./ui";
 import { useLoad } from "./hooks";
+import { Lang } from "./Lang";
 import { hostedGroups, isActive } from "./nav";
 import { GlossaryDialog } from "./onboarding/Glossary";
 import { openGlossary, requestTour, tourDone, useLaunchHidden, useTourRequest } from "./onboarding/state";
@@ -119,21 +120,6 @@ function WorkspaceSwitch() {
         ))}
       </select>
     </label>
-  );
-}
-
-function Lang() {
-  const { i18n } = useTranslation();
-  const zh = (i18n.resolvedLanguage ?? "en").startsWith("zh");
-  return (
-    <button
-      type="button"
-      className="v3-btn ghost sm mono"
-      onClick={() => void i18n.changeLanguage(zh ? "en" : "zh-CN")}
-      aria-label={zh ? "English" : "中文"}
-    >
-      {zh ? "EN" : "中"}
-    </button>
   );
 }
 
