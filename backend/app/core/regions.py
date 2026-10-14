@@ -2,9 +2,10 @@
 
 Everything here is a pure function or a constant: nothing calls AWS. The platform is
 region-parametric by construction (a workspace is one ``(account, region)`` pair and
-every client is built from it), so this module exists only for the three places where
-a *name* depends on the region: the inference-profile geography prefix, the IAM
-partition, and the suggestions the registration form offers.
+every client is built from it), so this module exists only for the places where a
+*name* depends on the region: the inference-profile geography prefix, the IAM
+partition, the suggestions the registration form offers, and the Availability Zones
+AgentCore accepts VPC subnets in.
 """
 
 import re
@@ -99,3 +100,42 @@ def localize_model_id(model_id: str, region: str) -> str:
     if not rest.startswith(_LOCALISED_FAMILIES):
         return model_id
     return f"{prefix}.{rest}"
+
+
+# Availability Zone ids (not names: names are shuffled per account) in which AgentCore
+# places VPC-mode runtimes and built-in tools. A subnet elsewhere fails at resource
+# creation, so network-profile preflight blocks on it (design projects §12.4).
+# KEEP IN STEP with the "Supported Availability Zones" table of
+# https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html —
+# copied from it on 2026-10-15. A region missing here is "unknown", not "unsupported":
+# preflight warns instead of blocking.
+AGENTCORE_VPC_AZ_IDS: dict[str, tuple[str, ...]] = {
+    "us-east-1": ("use1-az1", "use1-az2", "use1-az4"),
+    "us-east-2": ("use2-az1", "use2-az2", "use2-az3"),
+    "us-west-1": ("usw1-az1", "usw1-az3"),
+    "us-west-2": ("usw2-az1", "usw2-az2", "usw2-az3"),
+    "ap-southeast-5": ("apse5-az1", "apse5-az2", "apse5-az3"),
+    "ap-south-1": ("aps1-az1", "aps1-az2", "aps1-az3"),
+    "ap-south-2": ("aps2-az1", "aps2-az2", "aps2-az3"),
+    "ap-northeast-2": ("apne2-az1", "apne2-az2", "apne2-az3"),
+    "ap-southeast-1": ("apse1-az1", "apse1-az2", "apse1-az3"),
+    "ap-southeast-2": ("apse2-az1", "apse2-az2", "apse2-az3"),
+    "ap-southeast-7": ("apse7-az1", "apse7-az2", "apse7-az3"),
+    "ap-northeast-1": ("apne1-az1", "apne1-az2", "apne1-az4"),
+    "ca-central-1": ("cac1-az1", "cac1-az2", "cac1-az4"),
+    "eu-central-1": ("euc1-az1", "euc1-az2", "euc1-az3"),
+    "eu-west-1": ("euw1-az1", "euw1-az2", "euw1-az3"),
+    "eu-west-2": ("euw2-az1", "euw2-az2", "euw2-az3"),
+    "eu-south-1": ("eus1-az1", "eus1-az2", "eus1-az3"),
+    "eu-west-3": ("euw3-az1", "euw3-az2", "euw3-az3"),
+    "eu-south-2": ("eus2-az1", "eus2-az2", "eus2-az3"),
+    "eu-north-1": ("eun1-az1", "eun1-az2", "eun1-az3"),
+    "sa-east-1": ("sae1-az1", "sae1-az2", "sae1-az3"),
+    "us-gov-west-1": ("usgw1-az1", "usgw1-az2", "usgw1-az3"),
+}
+
+
+def agentcore_vpc_az_ids(region: str) -> tuple[str, ...] | None:
+    """The AZ ids AgentCore supports VPC mode in for ``region``; None when this
+    table does not know the region (callers warn rather than refuse)."""
+    return AGENTCORE_VPC_AZ_IDS.get(region or "")

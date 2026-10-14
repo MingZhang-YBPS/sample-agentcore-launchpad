@@ -1312,3 +1312,23 @@ ROUTE_POLICY.update({
     ("GET", "/api/chat/{agent_id}/turns/{turn_id}/events"): PERM_PROJECT_USE,
     ("POST", "/api/chat/{agent_id}/turns/{turn_id}/stop"): PERM_PROJECT_USE,
 })
+
+# ---- network preflight / probe / settings (design projects §12.4, §12.5, §12.7, V12-check) ----
+# All administrator routes on workspace infrastructure, project-exempt like the other
+# profile writes: the check and the probe read and write one profile of the request's
+# workspace (another workspace's id answers 404); settings / enforcement are the
+# workspace's network switches.
+ROUTE_POLICY.update({
+    ("POST", "/api/network-profiles/{profile_id}/check"): ADMIN,
+    ("POST", "/api/network-profiles/{profile_id}/probe"): ADMIN,
+    ("GET", "/api/network-profiles/settings"): ADMIN,
+    ("PUT", "/api/network-profiles/settings"): ADMIN,
+    ("GET", "/api/network-profiles/enforcement"): ADMIN,
+})
+PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
+    ("POST", "/api/network-profiles/{profile_id}/check"),
+    ("POST", "/api/network-profiles/{profile_id}/probe"),
+    ("GET", "/api/network-profiles/settings"),
+    ("PUT", "/api/network-profiles/settings"),
+    ("GET", "/api/network-profiles/enforcement"),
+})

@@ -6,8 +6,9 @@ AWSTemplateFormatVersion: "2010-09-09"
 # Deliberately plain CloudFormation rather than CDK: an Organization admin has to
 # be able to deploy it by console upload, `aws cloudformation deploy`, or a
 # StackSet targeting an OU — none of which want a CDK app or a bootstrapped
-# environment. It creates one IAM role and nothing else, and deleting the stack
-# revokes the hub's access.
+# environment. It creates one IAM role (plus, only when the network enforcement
+# parameters are set, one Deny-only inline policy on it) and nothing else, and
+# deleting the stack revokes the hub's access.
 #
 # The permission set is DERIVED from the hub's code: every AWS call Launchpad
 # makes through its workspace client funnel (`backend/app/services/aws_clients.py`)
@@ -36,6 +37,11 @@ Metadata:
           default: Naming
         Parameters:
           - RoleName
+      - Label:
+          default: Network enforcement (optional)
+        Parameters:
+          - ApprovedSubnetIds
+          - ApprovedSecurityGroupIds
     ParameterLabels:
       HubRoleArn:
         default: Hub role ARN (shown by the Launchpad console)
@@ -43,6 +49,10 @@ Metadata:
         default: ExternalId (must match the workspace registration)
       RoleName:
         default: Role name
+      ApprovedSubnetIds:
+        default: Approved subnet ids (from the console's network enforcement panel)
+      ApprovedSecurityGroupIds:
+        default: Approved security group ids (from the same panel)
 
 Parameters:
   HubRoleArn:
@@ -74,6 +84,39 @@ Parameters:
     Description: Name of the role this stack creates in this account.
     Default: LaunchpadWorkspaceRole
     AllowedPattern: "^[\\w+=,.@-]{1,64}$"
+
+  # Network enforcement (design projects §12.5), off while empty. The console's
+  # "network → enforcement" panel lists the subnets / security groups of the
+  # workspace's approved network profiles; pasting them here adds a Deny that holds
+  # AgentCore runtimes, code interpreters and browsers to them even if the hub
+  # misbehaves. The hub never writes this policy itself: a role allowed to edit its
+  # own inline policies could grant itself anything.
+  ApprovedSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      Subnets AgentCore resources may be placed in. Empty = no enforcement.
+  ApprovedSecurityGroupIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      Security groups AgentCore resources may use. Only read when subnets are set.
+
+Conditions:
+  EnforceNetwork:
+    Fn::Not:
+      - Fn::Equals:
+          - Fn::Join:
+              - ","
+              - Ref: ApprovedSubnetIds
+          - ""
+  HasApprovedSecurityGroups:
+    Fn::Not:
+      - Fn::Equals:
+          - Fn::Join:
+              - ","
+              - Ref: ApprovedSecurityGroupIds
+          - ""
 
 Resources:
   WorkspaceRole:
@@ -554,6 +597,28 @@ Resources:
                   - kms:ListKeys
                 Resource: "*"
 
+              # ── EC2 (read-only) ────────────────────────────────────────────
+              # Network-profile preflight (design projects §12.4) reads the VPC
+              # an agent would run in: subnets and their AZs, security groups,
+              # DNS attributes, endpoints, route tables, NAT gateways and network
+              # ACLs; DescribeNetworkInterfaces is the teardown check for the
+              # ENIs AgentCore leaves behind. Describe* takes no resource ARN, and
+              # none of these calls can create, change or delete anything.
+              - Sid: Ec2DescribeForNetworkPreflight
+                Effect: Allow
+                Action:
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeNatGateways
+                  - ec2:DescribeNetworkAcls
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcAttribute
+                  - ec2:DescribeVpcEndpoints
+                  - ec2:DescribeVpcs
+                Resource: "*"
+
               # ── STS ────────────────────────────────────────────────────────
               # The first call of every bootstrap run: validate-access asserts the
               # assumed identity really lives in the account the workspace
@@ -566,6 +631,49 @@ Resources:
                 Action:
                   - sts:GetCallerIdentity
                 Resource: "*"
+
+  # The optional network enforcement Deny (see the ApprovedSubnetIds parameter).
+  # Condition keys per the Service Authorization Reference for bedrock-agentcore:
+  # `subnets` / `securityGroups` exist on CreateAgentRuntime, UpdateAgentRuntime,
+  # CreateCodeInterpreter and CreateBrowser only (the Harness actions carry
+  # neither); ForAnyValue is false when the key is absent, so PUBLIC still passes.
+  NetworkEnforcementPolicy:
+    Type: AWS::IAM::RolePolicy
+    Condition: EnforceNetwork
+    Properties:
+      RoleName:
+        Ref: WorkspaceRole
+      PolicyName: launchpad-network-enforcement
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LaunchpadApprovedSubnetsOnly
+            Effect: Deny
+            Action:
+              - bedrock-agentcore:CreateAgentRuntime
+              - bedrock-agentcore:CreateBrowser
+              - bedrock-agentcore:CreateCodeInterpreter
+              - bedrock-agentcore:UpdateAgentRuntime
+            Resource: "*"
+            Condition:
+              ForAnyValue:StringNotEquals:
+                bedrock-agentcore:subnets:
+                  Ref: ApprovedSubnetIds
+          - Fn::If:
+              - HasApprovedSecurityGroups
+              - Sid: LaunchpadApprovedSecurityGroupsOnly
+                Effect: Deny
+                Action:
+                  - bedrock-agentcore:CreateAgentRuntime
+                  - bedrock-agentcore:CreateBrowser
+                  - bedrock-agentcore:CreateCodeInterpreter
+                  - bedrock-agentcore:UpdateAgentRuntime
+                Resource: "*"
+                Condition:
+                  ForAnyValue:StringNotEquals:
+                    bedrock-agentcore:securityGroups:
+                      Ref: ApprovedSecurityGroupIds
+              - Ref: AWS::NoValue
 
 Outputs:
   RoleArn:

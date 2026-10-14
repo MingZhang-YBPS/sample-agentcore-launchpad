@@ -5,14 +5,22 @@ Visibility follows design §5.4: a profile outside the current project's allowed
 reads as missing (`network_profile.not_found`), exactly like an id that does not exist.
 Administrators see every profile of the workspace (the "configure → network" page).
 
-Nothing here calls AWS: preflight (`POST …/check`, V12-check) fills `check_results` /
-`status`; until then a profile is `unchecked`.
+Preflight (`POST …/check`, design §12.4) reads the VPC through the workspace's EC2
+API (`services/network_preflight`) and stores its per-check results on the profile
+(`check_results`, `status`, `checked_at`); until then a profile is `unchecked`. The
+probe (`POST …/probe`, §12.7) runs in the background through an injectable runner
+(`services/network_probe`) and lands as one more entry (`check = "probe"`) of the
+same list — a preflight re-run keeps it, a network edit clears both.
 """
 
+import logging
+import threading
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,6 +33,10 @@ from app.models.network import (
     ProjectNetworkProfile,
     legacy_profile_id,
 )
+from app.services import network_preflight as preflight
+from app.services import network_probe
+
+logger = logging.getLogger(__name__)
 
 # edits to these move the profile back to `unchecked`: the last preflight no longer
 # describes it
@@ -405,3 +417,166 @@ def normalize_spec_network(
                                      workspace_id=workspace_id, is_default=False))
     db.commit()
     return {**spec, "network": {"profile_id": pid}}
+
+
+# ── preflight (§12.4) ─────────────────────────────────────────────────────────
+
+PROBE_CHECK = "probe"
+# a probe still "running" after this long died with its process: may be re-run
+PROBE_STALE_AFTER = timedelta(minutes=30)
+
+
+def _ec2_client(ctx: Any) -> Any:
+    """The workspace's EC2 client (the spoke role's read-only `ec2:Describe*`)."""
+    return ctx.client("ec2")
+
+
+def _aws_failure(exc: Exception, action: str) -> AppError:
+    code = (exc.response.get("Error", {}).get("Code") if isinstance(exc, ClientError)
+            else type(exc).__name__)
+    hint = (" — update the workspace role from the current infra/spoke template (it "
+            "grants the read-only ec2:Describe* calls preflight makes)"
+            if code in ("AccessDenied", "AccessDeniedException", "UnauthorizedOperation")
+            else "")
+    return AppError("network_profile.check_failed",
+                    f"could not {action} this workspace's VPC ({code}){hint}",
+                    {"aws_code": code}, status_code=502)
+
+
+def _probe_entry(row: NetworkProfile) -> dict[str, Any] | None:
+    return next((r for r in row.check_results or [] if r.get("check") == PROBE_CHECK), None)
+
+
+def run_check(
+    db: Session, ctx: Any, profile_id: str, *, features: set[str] | None = None,
+    ec2: Any = None,
+) -> dict[str, Any]:
+    """Run the preflight and store it on the profile (an administrator route; the
+    deploy path passes one agent's `features` and reads the results instead)."""
+    row = _live(db, ctx.id, profile_id)
+    if row is None:
+        raise _not_found(profile_id)
+    client = ec2 if ec2 is not None else _ec2_client(ctx)
+    try:
+        facts = preflight.gather(client, vpc_id=row.vpc_id, subnet_ids=list(row.subnet_ids or []),
+                                 security_group_ids=list(row.security_group_ids or []))
+    except (ClientError, BotoCoreError) as exc:
+        raise _aws_failure(exc, "read") from exc
+    results = preflight.evaluate(
+        facts, region=ctx.region, subnet_ids=list(row.subnet_ids or []),
+        security_group_ids=list(row.security_group_ids or []), vpc_id=row.vpc_id,
+        internet=row.internet, reachable=row.reachable or [], features=features,
+    )
+    if features is not None:  # a deploy-time check: report, do not overwrite the profile
+        return {"profile_id": row.id, "status": preflight.status_of(results),
+                "results": results}
+    probe = _probe_entry(row)
+    if probe is not None:
+        results.append(probe)
+    row.check_results = results
+    row.status = preflight.status_of(results)
+    row.checked_at = _now()
+    row.updated_at = row.checked_at
+    db.commit()
+    return get_profile(db, ctx.id, profile_id, None, see_all=True)
+
+
+# ── probe (§12.7) ─────────────────────────────────────────────────────────────
+
+_probe_runner: network_probe.ProbeRunner = network_probe.AgentCoreProbeRunner()
+
+
+def set_probe_runner(runner: network_probe.ProbeRunner) -> network_probe.ProbeRunner:
+    """Swap the runner (tests); returns the previous one."""
+    global _probe_runner
+    previous, _probe_runner = _probe_runner, runner
+    return previous
+
+
+def _spawn(work: Callable[[], None], name: str) -> None:
+    threading.Thread(target=work, daemon=True, name=name).start()
+
+
+def _write_probe(profile_id: str, entry: dict[str, Any]) -> None:
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.get(NetworkProfile, profile_id)
+        if row is None:
+            return
+        current = _probe_entry(row)
+        # a network edit while the probe ran cleared the results: they describe
+        # the old network, so the late answer is dropped
+        if current is None or current.get("started_at") != entry.get("started_at"):
+            return
+        others = [r for r in row.check_results or [] if r.get("check") != PROBE_CHECK]
+        results = [*others, entry]
+        row.check_results = results
+        if row.status != "unchecked":
+            row.status = preflight.status_of(results)
+        row.updated_at = _now()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _probe_result(started: str, outcomes: list[dict[str, Any]]) -> dict[str, Any]:
+    failed = [o for o in outcomes
+              if "failed" in (o.get("dns"), o.get("tcp"), o.get("tls"))]
+    message = (f"{len(failed)} of {len(outcomes)} target(s) unreachable from the profile's "
+               "network" if failed else f"every target ({len(outcomes)}) reachable")
+    return {"check": PROBE_CHECK, "severity": "warn" if failed else "ok", "message": message,
+            "status": "done", "started_at": started, "finished_at": _now().isoformat(),
+            "details": {"targets": outcomes}}
+
+
+def start_probe(db: Session, ctx: Any, profile_id: str) -> dict[str, Any]:
+    """Start the probe in the background; the profile shows it as running."""
+    row = _live(db, ctx.id, profile_id)
+    if row is None:
+        raise _not_found(profile_id)
+    targets = list(row.reachable or [])
+    if not targets:
+        raise AppError("network_profile.nothing_to_probe",
+                       "declare reachable targets on the profile before probing it",
+                       {"profile_id": profile_id}, status_code=400)
+    if row.status == "blocked":
+        raise AppError("network_profile.blocked",
+                       f"network profile '{row.name}' failed its preflight — a probe runtime "
+                       "cannot start in it until the blocking checks are fixed",
+                       {"profile_id": profile_id}, status_code=409)
+    current = _probe_entry(row)
+    if current is not None and current.get("status") == "running":
+        started_at = datetime.fromisoformat(current["started_at"])
+        if _now() - started_at < PROBE_STALE_AFTER:
+            raise AppError("network_profile.probe_running",
+                           "a probe of this profile is already running",
+                           {"profile_id": profile_id}, status_code=409)
+    started = _now().isoformat()
+    entry = {"check": PROBE_CHECK, "severity": "ok", "status": "running",
+             "message": "probe running — a temporary runtime is starting in this network",
+             "started_at": started}
+    row.check_results = [*(r for r in row.check_results or [] if r.get("check") != PROBE_CHECK),
+                         entry]
+    row.updated_at = _now()
+    db.commit()
+    profile = {"id": row.id, "subnet_ids": list(row.subnet_ids or []),
+               "security_group_ids": list(row.security_group_ids or [])}
+    runner = _probe_runner
+
+    def work() -> None:
+        # a profile is workspace infrastructure with no project of its own
+        with project_context(None):
+            try:
+                outcomes = runner.run(ctx, profile, targets)
+                done = _probe_result(started, outcomes)
+            except Exception as exc:  # noqa: BLE001 — recorded on the profile
+                logger.warning("network probe of %s failed", profile_id, exc_info=True)
+                done = {"check": PROBE_CHECK, "severity": "warn", "status": "failed",
+                        "message": f"the probe could not run: {exc}", "started_at": started,
+                        "finished_at": _now().isoformat()}
+            _write_probe(profile_id, done)
+
+    _spawn(work, f"network-probe-{profile_id}")
+    return get_profile(db, ctx.id, profile_id, None, see_all=True)
