@@ -1,14 +1,20 @@
 import { FolderX, LogOut } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import { Panel as V2Panel, ViewHead } from "../components";
 import { AnnouncementFeed } from "../components/AnnouncementFeed";
+import { projectsApi } from "../lib/api/projects";
 import { useUiVersion } from "../lib/ui-version";
+import { Alert as V2Alert } from "../v2/ui";
 import { V2AuthFrame } from "../v2/AuthFrame";
 import { V3AuthFrame } from "../v3/AuthFrame";
 import { V3Announcements } from "../v3/NoWorkspace";
-import { Lamp, PageHead, Panel } from "../v3/ui";
+import { bindHref, showsBindBanner } from "../v3/pages/projects/model";
+import { Lamp, Notice, PageHead, Panel } from "../v3/ui";
+import { useProject } from "./project-context";
 import { useWorkspace } from "./workspace-context";
 
 /** Another reachable workspace may have projects: the way out besides signing out. */
@@ -83,5 +89,56 @@ export function NoProjectAssigned({ workspaceName }: { workspaceName: string }) 
         <AnnouncementFeed />
       </div>
     </V2AuthFrame>
+  );
+}
+
+/**
+ * Projects design §6.2, the administrator's side: the current workspace binds no
+ * active project, so every business page is empty — say so above the page, with
+ * the way to fix it (bind an existing project, or create one there). The access
+ * list's "nothing here" is confirmed against `GET /api/projects?workspace_id=`
+ * first, so a failed access read never shows the banner. Renders nothing otherwise.
+ */
+export function NoBoundProjectBanner() {
+  const { t } = useTranslation();
+  const { isAdmin } = useAuth();
+  const { current: workspace } = useWorkspace();
+  const project = useProject();
+  const skin = useUiVersion() === "v3" ? "v3" : "v2";
+  const workspaceId = workspace?.id ?? null;
+  const suspect = showsBindBanner(isAdmin, workspaceId, project);
+  const [confirmed, setConfirmed] = useState<string | null>(null);
+  useEffect(() => {
+    if (!suspect || !workspaceId) return;
+    let live = true;
+    projectsApi
+      .list({ workspace_id: workspaceId, status: "active" })
+      .then((res) => live && setConfirmed(res.projects.length === 0 ? workspaceId : null))
+      .catch(() => live && setConfirmed(null));
+    return () => {
+      live = false;
+    };
+  }, [suspect, workspaceId]);
+  if (!suspect || !workspaceId || confirmed !== workspaceId) return null;
+
+  const text = t("v3.projects.banner.text", { workspace: workspace?.name ?? workspaceId });
+  const link = (
+    <Link to={bindHref(workspaceId)} className={`${skin}-btn sm`} data-testid="no-bound-project-link">
+      {t("v3.projects.banner.link")}
+    </Link>
+  );
+  if (skin === "v3") {
+    return (
+      <div data-testid="no-bound-project" style={{ marginBottom: 16 }}>
+        <Notice s="wait">
+          <span style={{ display: "inline-flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>{text} {link}</span>
+        </Notice>
+      </div>
+    );
+  }
+  return (
+    <div data-testid="no-bound-project" style={{ marginBottom: 16 }}>
+      <V2Alert tone="warn" action={link}>{text}</V2Alert>
+    </div>
   );
 }

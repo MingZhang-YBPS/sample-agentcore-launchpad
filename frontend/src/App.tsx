@@ -123,6 +123,11 @@ const V3Videos = lazy(() => import("./v3/pages/Videos").then((m) => ({ default: 
 const V3VideoManagement = lazy(() => import("./v3/pages/VideoManagement").then((m) => ({ default: m.V3VideoManagement })));
 const V3Assistant = lazy(() => import("./v3/pages/Assistant").then((m) => ({ default: m.V3Assistant })));
 const V3Create = lazy(() => import("./v3/pages/Create").then((m) => ({ default: m.V3Create })));
+// Configure → Projects (projects design §6.3) and the §6.4 project-owner entry
+const V3Projects = lazy(() => import("./v3/pages/projects/Projects").then((m) => ({ default: m.V3Projects })));
+const V3ProjectSettings = lazy(() =>
+  import("./v3/pages/projects/Projects").then((m) => ({ default: m.V3ProjectSettings })),
+);
 const V3Knowledge = lazy(() => import("./v3/pages/Knowledge").then((m) => ({ default: m.V3Knowledge })));
 const V2Home = lazy(() => import("./v2/pages/Home").then((m) => ({ default: m.V2Home })));
 const V2DataCenter = lazy(() =>
@@ -366,6 +371,8 @@ export default function App() {
                 <Route path="skill-lab" element={<V3SkillLab />} />
                 <Route path="users" element={<V3Users />} />
                 <Route path="workspaces" element={<V3Workspaces />} />
+                <Route path="projects" element={<V3Projects />} />
+                <Route path="project-settings" element={<V3ProjectSettings />} />
                 <Route path="models" element={<V3Models />} />
                 <Route path="identity" element={<V3Identity />} />
                 <Route path="fleet" element={<V3Fleet />} />
