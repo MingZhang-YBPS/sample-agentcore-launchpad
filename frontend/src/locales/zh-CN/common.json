@@ -12368,6 +12368,40 @@
         "sodStrictHint": "拒绝让一个人同时持有一对职责两端的成员资格和角色，而不只是提示。",
         "sodStrictAdmin": "仅平台管理员可以修改。",
         "saved": "已保存 {{name}}"
+      },
+      "audit": {
+        "tab": "审计",
+        "actor": "行为人",
+        "action": "动作",
+        "range": "时间",
+        "outcome": "结果",
+        "allActors": "全部行为人",
+        "allActions": "全部动作",
+        "allOutcomes": "全部结果",
+        "ranges": {
+          "1d": "近 24 小时",
+          "7d": "近 7 天",
+          "30d": "近 30 天",
+          "90d": "近 90 天",
+          "all": "全部时间"
+        },
+        "outcomes": {
+          "success": "成功",
+          "refused": "被拒绝",
+          "failed": "失败"
+        },
+        "col": {
+          "at": "时间",
+          "actor": "行为人",
+          "action": "动作",
+          "target": "对象",
+          "outcome": "结果"
+        },
+        "exportCsv": "导出 CSV",
+        "exportJsonl": "JSONL",
+        "more": "加载更多",
+        "empty": "没有符合筛选条件的审计记录。",
+        "hint": "{{project}} 在所绑定的每个工作区里发生的操作，以及项目本身的变更（成员、角色、绑定）。被拒绝的请求也会记录；导出操作本身同样会记录。"
       }
     },
     "admins": {

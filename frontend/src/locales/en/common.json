@@ -12368,6 +12368,40 @@
         "sodStrictHint": "Refuse memberships and roles that give one person both sides of a pair, instead of only flagging them.",
         "sodStrictAdmin": "Only a platform administrator changes this.",
         "saved": "{{name}} saved"
+      },
+      "audit": {
+        "tab": "Audit",
+        "actor": "Actor",
+        "action": "Action",
+        "range": "Time",
+        "outcome": "Outcome",
+        "allActors": "All actors",
+        "allActions": "All actions",
+        "allOutcomes": "All outcomes",
+        "ranges": {
+          "1d": "Last 24 hours",
+          "7d": "Last 7 days",
+          "30d": "Last 30 days",
+          "90d": "Last 90 days",
+          "all": "All time"
+        },
+        "outcomes": {
+          "success": "Succeeded",
+          "refused": "Refused",
+          "failed": "Failed"
+        },
+        "col": {
+          "at": "Time",
+          "actor": "Actor",
+          "action": "Action",
+          "target": "Target",
+          "outcome": "Outcome"
+        },
+        "exportCsv": "Export CSV",
+        "exportJsonl": "JSONL",
+        "more": "Load more",
+        "empty": "No audit events match these filters.",
+        "hint": "What happened in {{project}} in every workspace it is bound to, plus changes to the project itself (members, roles, bindings). Refused requests are recorded too; an export is recorded as well."
       }
     },
     "admins": {

@@ -10,6 +10,7 @@ import { type ProjectDetail, projectsApi } from "../../../lib/api/projects";
 import { useProject } from "../../../workspace/project-context";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
+import { AuditTab } from "./AuditTab";
 import { MembersTab } from "./MembersTab";
 import { PROJECT_TABS, type ProjectTab } from "./model";
 import { OverviewTab } from "./OverviewTab";
@@ -26,12 +27,16 @@ export interface ProjectAbilities {
   manage: boolean;
 }
 
-export function ProjectDetailPage({ projectId, tab }: { projectId: string; tab: ProjectTab }) {
+/** §11.6: the audit tab, read from `?tab=` here until `model.PROJECT_TABS` lists it. */
+type DetailTab = ProjectTab | "audit";
+
+export function ProjectDetailPage({ projectId, tab: listedTab }: { projectId: string; tab: ProjectTab }) {
   const { t } = useTranslation();
   const toast = useToast();
   const { isAdmin } = useAuth();
   const { refresh: refreshAccess } = useProject();
   const [params, setParams] = useSearchParams();
+  const tab: DetailTab = params.get("tab") === "audit" ? "audit" : listedTab;
   const [tick, setTick] = useState(0);
   const loaded = useLoad(() => projectsApi.get(projectId), `v3-project:${projectId}:${tick}`);
   const [confirm, setConfirm] = useState<"archive" | "unarchive" | null>(null);
@@ -42,7 +47,7 @@ export function ProjectDetailPage({ projectId, tab }: { projectId: string; tab: 
   if (loaded.data) last.current = loaded.data;
   const project = loaded.data ?? (loaded.error ? null : last.current);
   const reload = () => setTick((n) => n + 1);
-  const pick = (next: ProjectTab) => {
+  const pick = (next: DetailTab) => {
     const q = new URLSearchParams(params);
     if (next === "overview") q.delete("tab");
     else q.set("tab", next);
@@ -64,6 +69,7 @@ export function ProjectDetailPage({ projectId, tab }: { projectId: string; tab: 
     admin: isAdmin,
     manage: isAdmin || project.my_permissions.includes("project.members"),
   };
+  const canAudit = isAdmin || project.my_permissions.includes("project.audit");
   const archived = project.status === "archived";
 
   const changeStatus = async (action: "archive" | "unarchive") => {
@@ -127,7 +133,10 @@ export function ProjectDetailPage({ projectId, tab }: { projectId: string; tab: 
       <Filters
         value={tab}
         onChange={pick}
-        options={PROJECT_TABS.map((key) => ({ value: key, label: t(`v3.projects.tab.${key}`) }))}
+        options={[
+          ...PROJECT_TABS.map((key) => ({ value: key as DetailTab, label: t(`v3.projects.tab.${key}`) })),
+          ...(canAudit ? [{ value: "audit" as const, label: t("v3.projects.audit.tab") }] : []),
+        ]}
       />
 
       {tab === "overview" && <OverviewTab project={project} />}
@@ -135,6 +144,7 @@ export function ProjectDetailPage({ projectId, tab }: { projectId: string; tab: 
       {tab === "roles" && <RolesTab project={project} abilities={abilities} onChanged={changed} />}
       {tab === "workspaces" && <WorkspacesTab project={project} abilities={abilities} onChanged={changed} />}
       {tab === "settings" && <SettingsTab project={project} abilities={abilities} onChanged={changed} />}
+      {tab === "audit" && <AuditTab project={project} />}
 
       {confirm && (
         <Confirm
