@@ -11971,6 +11971,32 @@
           "byocNoAdot": "这个 BYOC 代码 zip 部署时没有 ADOT 启动器，不会产生 Span，评估也无法打分。在 requirements.txt 里加 aws-opentelemetry-distro（并打开“安装依赖”），或改用 Dockerfile 构建，然后重新发布。"
         }
       }
+    },
+    "project": {
+      "resolving": "正在解析项目…",
+      "label": "项目",
+      "adminAccess": "管理员访问",
+      "memberGroup": "我的项目",
+      "adminGroup": "管理员访问（未加入）",
+      "cmdkGroup": "项目",
+      "switchTo": "切换到项目 {{name}}",
+      "roles": {
+        "project_owner": "项目负责人",
+        "developer": "开发者",
+        "biz_owner": "业务负责人",
+        "release_ops": "发布运维",
+        "sme": "领域专家",
+        "viewer": "只读",
+        "inherit": "继承全局"
+      },
+      "none": {
+        "eyebrow": "访问 · 项目",
+        "title": "还没有加入任何项目",
+        "meta": "已登录：{{username}}",
+        "waiting": "等待加入项目",
+        "body": "你的账号可以进入工作区「{{workspace}}」，但还不是其中任何项目的成员。请联系项目负责人或平台管理员把你加入项目。",
+        "switchWorkspace": "切换工作区"
+      }
     }
   },
   "models": {
