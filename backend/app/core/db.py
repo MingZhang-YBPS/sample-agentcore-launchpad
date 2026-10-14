@@ -1656,21 +1656,20 @@ def unprojected_row_counts(bind) -> dict[str, int]:
     return counts
 
 
-def assert_every_row_has_a_project(bind) -> None:
-    """Fail startup on a strict row with no project — unless its workspace is bound
-    to a single project, which then adopts it unambiguously (a WARNING): the case of
-    rows an older build wrote after a rollback (design §8.3/§8.4)."""
-    import logging
+def claim_sole_project_rows(bind) -> dict[str, int]:
+    """Give each unprojected strict row its workspace's only project; claimed rows per table.
 
+    Unambiguous by construction: a workspace bound to exactly one project, or to
+    none (then `default`, the same rule as project_scope._sole_workspace_project).
+    Rows in a workspace holding several projects are left NULL. Shared by startup
+    (`assert_every_row_has_a_project`) and scripts/backfill_projects.py.
+    """
     from sqlalchemy import inspect, text
 
     counts = unprojected_row_counts(bind)
     if not counts:
-        return
-    log = logging.getLogger(__name__)
+        return {}
     live_tables = set(inspect(bind).get_table_names())
-    # the workspace's one bound project; a workspace bound to none takes `default`
-    # (the same unambiguous rule as project_scope._sole_workspace_project)
     sole = (
         "COALESCE((SELECT MIN(pw.project_id) FROM project_workspaces pw"
         " WHERE pw.workspace_id = {table}.workspace_id HAVING COUNT(*) = 1),"
@@ -1678,21 +1677,36 @@ def assert_every_row_has_a_project(bind) -> None:
         "  (SELECT 1 FROM project_workspaces pw2"
         "   WHERE pw2.workspace_id = {table}.workspace_id)))"
     )
+    claimed_per_table: dict[str, int] = {}
     with bind.begin() as conn:
         for table in counts:
             if table not in live_tables:
                 continue
             extra = " AND system_key IS NULL" if table == "agents" else ""
+            owner = sole.format(table=table)
+            # `owner IS NOT NULL` keeps the rowcount honest: an ambiguous row would
+            # otherwise be "updated" to NULL and counted as adopted
             claimed = conn.execute(
                 text(
-                    f"UPDATE {table} SET project_id = "  # noqa: S608
-                    + sole.format(table=table)
-                    + f" WHERE project_id IS NULL{extra}"
+                    f"UPDATE {table} SET project_id = {owner}"  # noqa: S608
+                    f" WHERE project_id IS NULL{extra} AND {owner} IS NOT NULL"
                 )
             ).rowcount
             if claimed:
-                log.warning("adopted %d %s rows with no project into their workspace's "
-                            "only project", claimed, table)
+                claimed_per_table[table] = int(claimed)
+    return claimed_per_table
+
+
+def assert_every_row_has_a_project(bind) -> None:
+    """Fail startup on a strict row with no project — unless its workspace is bound
+    to a single project, which then adopts it unambiguously (a WARNING): the case of
+    rows an older build wrote after a rollback (design §8.3/§8.4)."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    for table, claimed in claim_sole_project_rows(bind).items():
+        log.warning("adopted %d %s rows with no project into their workspace's "
+                    "only project", claimed, table)
     left = unprojected_row_counts(bind)
     if not left:
         return

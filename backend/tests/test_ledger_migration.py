@@ -222,3 +222,228 @@ def test_the_actor_id_columns_are_declared_to_migrate():
     for table, columns in _ACTOR_ID_COLUMNS.items():
         for column in columns:
             assert (table, column) in pairs, f"{table}.{column}"
+
+
+# ── P1A-mig: the projects upgrade (design §8.2-§8.4, §9.4-4) ─────────────────────
+
+PROJECT_TABLES = (
+    "departments", "projects", "project_workspaces", "project_roles", "project_members",
+    "project_groups", "group_members", "access_epoch",
+)
+M1, M_ORPHAN, M_OLD = 101, 102, 103  # chat_messages ids are integers
+
+
+def _insert(conn, table, **values):
+    """Core insert: the model's Python-side defaults fill the columns not named."""
+    conn.execute(Base.metadata.tables[table].insert(), values)
+
+
+def _project_columned(engine) -> list[str]:
+    inspector = sa.inspect(engine)
+    live = set(inspector.get_table_names())
+    return [
+        table for table in (*db_module.PROJECT_STRICT_TABLES, *db_module.PROJECT_SHARED_TABLES)
+        if table in live and "project_id" in {c["name"] for c in inspector.get_columns(table)}
+    ]
+
+
+def strip_projects(engine) -> None:
+    """Give an upgraded ledger the shape a pre-projects build has: no project tables,
+    no `project_id` columns (nor their indexes), no migration marker."""
+    columned = _project_columned(engine)
+    dropped: set[str] = set()
+    with engine.begin() as conn:
+        for table in PROJECT_TABLES:
+            conn.execute(sa.text(f"DROP TABLE IF EXISTS {table}"))
+        for table in columned:
+            for index in _indexes_on(engine, table, "project_id"):
+                if index not in dropped:
+                    conn.execute(sa.text(f"DROP INDEX {index}"))
+                    dropped.add(index)
+            conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN project_id"))
+        conn.execute(sa.text("DELETE FROM platform_settings WHERE key = :k"),
+                     {"k": db_module.PROJECTS_MIGRATION_MARKER})
+
+
+def seed_history(engine) -> None:
+    """Two workspaces of history, written before projects existed.
+
+    `default`: agent a1 with a session + message, a system preset, a key and a job;
+    `prod`: agent a2, and a chat message whose agent is gone (an orphan). `alice`
+    (member) is granted both workspaces; `root` is an admin account.
+    """
+    with engine.begin() as conn:
+        _insert(conn, "workspaces", id="prod", name="Prod", account_id="444455556666",
+                region="us-east-1")
+        for uid, role in (("u-alice", "member"), ("u-root", "admin")):
+            _insert(conn, "users", id=uid, username=uid[2:], username_key=uid[2:],
+                    email=f"{uid}@x.io", password_hash="h", role=role)
+        for uid, ws in (("u-alice", "default"), ("u-alice", "prod"), ("u-root", "default")):
+            _insert(conn, "user_workspaces", user_id=uid, workspace_id=ws)
+        _insert(conn, "agents", id="a1", workspace_id="default", name="a1", method="harness")
+        _insert(conn, "agents", id="a2", workspace_id="prod", name="a2", method="harness")
+        _insert(conn, "agents", id="preset", workspace_id="default", name="preset",
+                method="harness", system_key="frontdesk")
+        _insert(conn, "chat_sessions", id="s1", workspace_id="default", agent_id="a1",
+                session_id="rt-s1")
+        _insert(conn, "chat_messages", id=M1, workspace_id="default", agent_id="a1",
+                session_id="rt-s1", role="user")
+        _insert(conn, "chat_messages", id=M_ORPHAN, workspace_id="prod", agent_id="gone",
+                session_id="rt-x", role="user")
+        _insert(conn, "api_keys", id="k1", workspace_id="default", name="k", prefix="lp_k1",
+                key_hash="h1")
+        _insert(conn, "jobs", id="j1", workspace_id="default", type="deploy")
+
+
+def pre_projects_ledger(tmp_path, name="ledger.db"):
+    """A ledger as a deployed pre-projects box has it, holding history to file."""
+    engine = _engine(tmp_path, name)
+    db_module.init_db(engine)
+    seed_history(engine)
+    strip_projects(engine)
+    return engine
+
+
+def _project_of(engine, table, row_id):
+    with engine.connect() as conn:
+        return conn.execute(sa.text(f"SELECT project_id FROM {table} WHERE id = :id"),
+                            {"id": row_id}).scalar_one()
+
+
+def _project_snapshot(engine) -> dict:
+    """Every row's project, every binding, membership and the epoch."""
+    snapshot: dict = {}
+    with engine.connect() as conn:
+        for table in _project_columned(engine):
+            snapshot[table] = sorted(
+                (str(r[0]), r[1]) for r in conn.execute(
+                    sa.text(f"SELECT id, project_id FROM {table}")).all()
+            ) if "id" in {c["name"] for c in sa.inspect(engine).get_columns(table)} else None
+        for table in ("project_workspaces", "project_members", "projects", "access_epoch"):
+            snapshot[table] = sorted(
+                tuple(str(v) for v in row) for row in conn.execute(
+                    sa.text(f"SELECT * FROM {table}")).all()
+            )
+    return snapshot
+
+
+def test_a_pre_projects_ledger_upgrades(tmp_path):
+    engine = pre_projects_ledger(tmp_path)
+    assert not set(PROJECT_TABLES) & set(sa.inspect(engine).get_table_names())
+    assert _project_columned(engine) == []
+
+    db_module.init_db(engine)
+
+    assert schema_drift(engine) == {}
+    live = set(sa.inspect(engine).get_table_names())
+    assert set(PROJECT_TABLES) <= live
+    every = {*db_module.PROJECT_STRICT_TABLES, *db_module.PROJECT_SHARED_TABLES} & live
+    assert set(_project_columned(engine)) == every
+    assert "ix_agents_ws_project" in _indexes_on(engine, "agents", "project_id")
+    assert "ix_chat_messages_ws_project" in _indexes_on(engine, "chat_messages", "project_id")
+    assert "ix_criteria_project_id" in _indexes_on(engine, "criteria", "project_id")
+    with engine.connect() as conn:
+        # D-9: one `default` project, every workspace's default
+        assert conn.execute(sa.text("SELECT id, is_default FROM projects")).all() == [
+            ("default", 1)]
+        assert sorted(conn.execute(sa.text(
+            "SELECT workspace_id, project_id, is_workspace_default FROM project_workspaces"
+        )).all()) == [("default", "default", 1), ("prod", "default", 1)]
+        # an `inherit` member once (granted two workspaces of one project); admins none
+        assert conn.execute(sa.text(
+            "SELECT project_id, user_id, role_key FROM project_members")).all() == [
+            ("default", "u-alice", "inherit")]
+        assert conn.execute(sa.text("SELECT value FROM access_epoch")).scalar() == 1
+        assert conn.execute(sa.text("SELECT value FROM platform_settings WHERE key = :k"),
+                            {"k": db_module.PROJECTS_MIGRATION_MARKER}).scalar() == "done"
+    for table, row_id in (("agents", "a1"), ("agents", "a2"), ("chat_sessions", "s1"),
+                          ("chat_messages", M1), ("chat_messages", M_ORPHAN),
+                          ("api_keys", "k1"), ("jobs", "j1")):
+        assert _project_of(engine, table, row_id) == "default", (table, row_id)
+    assert _project_of(engine, "agents", "preset") is None  # platform rows stay NULL
+    assert db_module.unprojected_row_counts(engine) == {}
+
+
+def test_a_second_upgrade_changes_nothing(tmp_path):
+    engine = pre_projects_ledger(tmp_path)
+    db_module.init_db(engine)
+    with engine.begin() as conn:
+        # an administrator removes alice from the default project after the upgrade
+        conn.execute(sa.text("DELETE FROM project_members WHERE user_id = 'u-alice'"))
+    snapshot = _project_snapshot(engine)
+
+    db_module.init_db(engine)
+    db_module.init_db(engine)
+
+    # the membership stays removed, no row re-filed, the epoch not bumped again
+    assert _project_snapshot(engine) == snapshot
+    assert schema_drift(engine) == {}
+
+
+def test_rows_an_older_build_wrote_after_a_rollback_are_adopted_when_unambiguous(
+        tmp_path, caplog):
+    """Rolled back: the old binary ignores `project_id`, so its new rows carry NULL."""
+    engine = pre_projects_ledger(tmp_path)
+    db_module.init_db(engine)
+    with engine.begin() as conn:
+        _insert(conn, "agents", id="a-old", workspace_id="prod", name="a-old",
+                method="harness", project_id=None)
+        _insert(conn, "chat_messages", id=M_OLD, workspace_id="default", agent_id="a1",
+                session_id="rt-s1", role="user", project_id=None)
+
+    with caplog.at_level("WARNING", logger="app.core.db"):
+        db_module.init_db(engine)
+
+    assert _project_of(engine, "agents", "a-old") == "default"
+    assert _project_of(engine, "chat_messages", M_OLD) == "default"
+    assert "adopted 1 agents rows" in caplog.text
+
+
+def test_rows_an_older_build_wrote_in_a_multi_project_workspace_stop_startup(
+        tmp_path, caplog):
+    engine = pre_projects_ledger(tmp_path)
+    db_module.init_db(engine)
+    with engine.begin() as conn:
+        _insert(conn, "projects", id="payments", name="Payments")
+        _insert(conn, "project_workspaces", project_id="payments", workspace_id="prod",
+                is_workspace_default=False)
+        _insert(conn, "agents", id="a-old", workspace_id="prod", name="a-old",
+                method="harness", project_id=None)
+
+    assert db_module.claim_sole_project_rows(engine) == {}  # nothing unambiguous
+    try:
+        with caplog.at_level("WARNING", logger="app.core.db"):
+            db_module.init_db(engine)
+    except RuntimeError as exc:
+        assert "agents=1" in str(exc) and "scripts/backfill_projects.py" in str(exc)
+        assert "adopted" not in caplog.text  # a row left NULL is not reported adopted
+    else:  # pragma: no cover - the guard must fire
+        raise AssertionError("an ambiguous unprojected row did not stop startup")
+    assert _project_of(engine, "agents", "a-old") is None  # nothing guessed
+
+
+def test_a_ledger_rolled_back_to_the_pre_projects_shape_upgrades_again(tmp_path):
+    """Drop the project tables and columns as an older ledger lacks them, add history
+    written meanwhile, and upgrade again: the same result as the first upgrade."""
+    engine = pre_projects_ledger(tmp_path)
+    db_module.init_db(engine)
+    first = _project_snapshot(engine)
+    strip_projects(engine)
+    with engine.begin() as conn:
+        _insert(conn, "agents", id="a-new", workspace_id="prod", name="a-new",
+                method="harness")
+
+    db_module.init_db(engine)
+
+    assert schema_drift(engine) == {}
+    assert _project_of(engine, "agents", "a-new") == "default"
+    again = _project_snapshot(engine)
+    again["agents"] = [row for row in again["agents"] if row[0] != "a-new"]
+    # timestamps differ (rows re-seeded); compare the shapes that carry meaning
+    for table in _project_columned(engine):
+        assert again[table] == first[table], table
+    with engine.connect() as conn:
+        assert conn.execute(sa.text(
+            "SELECT project_id, user_id, role_key FROM project_members")).all() == [
+            ("default", "u-alice", "inherit")]
+        assert conn.execute(sa.text("SELECT value FROM access_epoch")).scalar() == 1
