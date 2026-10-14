@@ -2053,6 +2053,175 @@ namespaces / search / 抽取任务返回 `memory.actor_not_found`，共享的 `d
 且不是 `default`。一次失败的运行已经开通出来的东西会留在目标账号里——响应中的
 `resource_keys` 会说明那是哪些资源种类。
 
+## 项目（Projects）——工作区内的数据与权限边界
+
+工作区是一个 `(account, region)` 环境；**项目**是它内部的团队边界。每个 Agent 以及由 Agent
+派生的每一行都只属于一个项目；成员通过项目角色进入项目；一个项目的数据对同一工作区里的其他项目
+不可见。工作区的含义不变（每个账号和区域一个，用于 DEV / PROD，或用于需要账号级隔离的团队）；一个
+项目可以绑定到多个工作区，所以 DEV → PROD 发布保持项目不变。设计见
+`docs/design/projects.zh-CN.md`（阶段 1），路由见 [api.zh-CN.md](api.zh-CN.md)「控制台项目 API」。
+
+阶段 1 隔离的是**控制台与 API 数据**，不是运行时凭据：同一工作区里所有项目的 Agent 仍共用工作区的
+执行角色、网关角色和知识库角色、`launchpad-gw` / `launchpad-kb-gw` 的 M2M 客户端，以及只按 actor
+分区的 bootstrap 记忆。今天需要运行时隔离的团队请使用独立的工作区（阶段 2 再加入按项目的 IAM 边界、
+记忆与网关授权）。
+
+### 模型
+
+| 实体 | 表 | 含义 |
+|---|---|---|
+| 项目 | `projects` | 数据与权限边界。`id` 是 slug（`^[a-z0-9][a-z0-9-]{1,31}$`），`status` 为 `active` 或 `archived`，`settings`（`resource_visibility`、`sod_strict`）。保留的 `default` 项目（`is_default`）由迁移创建 |
+| 项目 ↔ 工作区 | `project_workspaces` | 管理员允许项目在某个工作区运行。每个工作区有一条 `is_workspace_default` 绑定：不带 `X-Project` 的请求即指这个项目 |
+| 成员 | `project_members` | 用户在项目中的直接角色（`role_key`）与按键的 `overrides` |
+| 自定义角色 | `project_roles` | 基于内置模板、按项目定义的权限键集合 |
+| 项目组 | `project_groups`、`group_members` | 访问捆绑：组成员在组内每个项目中获得一个内置模板。一个项目至多属于一个组 |
+| 部门 | `departments` | 项目与项目组上的组织标签，不授予任何访问（阶段 3 才有部门管理员） |
+| 访问纪元 | `access_epoch` | 单行计数器，任何影响访问的写入都会加一（见「缓存」） |
+
+这些都是平台级表（不带 `workspace_id`）。用户在项目中的有效权限是直接角色与项目组角色的权限键
+并集，再叠加直接成员行的 `overrides`（`false` 删除、`true` 添加）。内置模板是
+`app/services/access.py` 中的代码常量（`ROLE_TEMPLATES`：`project_owner`、`developer`、`biz_owner`、
+`release_ops`、`sme`、`tool_steward`、`viewer`）。项目级权限键为 `project.use`、`project.write`、
+`project.members`、`project.audit`、`project.share` 与 `mcp.approve`；它们不会出现在
+`users.permissions` 或 `/api/auth/status` 中，那份 16 键列表的含义保持不变。平台管理员绕过成员资格
+（`access.has_data_bypass`）并持有全部权限键，但仍被过滤到所选项目：除了多环境总览、成本、TTFA 与
+审计这些在项目之外运行的路由，没有混合视图。
+
+**`inherit` 与默认项目。** `inherit` 角色只存在于默认项目中，读取账号的全局权限（今天的 16 键计算）
+再加上 `project.use` / `project.write`（账号持有 `promotion.approve` 时还有 `mcp.approve`）。它是
+兼容层：迁移把每个持有工作区授权的非管理员账号以 `inherit` 加入该工作区的默认项目；之后每一次授权
+写入（`POST` / `PATCH /api/users`、审批、`PUT /api/workspaces/{id}/grants`）都在同一事务里同步
+`inherit` 行（`access.sync_default_membership`）；撤销授权会删除 `inherit` 行，显式角色不受影响。
+`inherit` 行只能进入账号本身被授权的工作区。因此修改账号的全局权限芯片仍会改变它在默认项目中能做的
+事，单项目部署的行为与以前完全相同。
+
+### 数据行：`ProjectOwned`、`ProjectShared`、自动条件与盖章
+
+`app/core/project_scope.py` 把边界放进 ORM，每一部分都失败即关闭：
+
+- **Mixin。** 模型继承 `ProjectOwned`（总是属于一个项目：数据集、对话会话与消息、评估运行、判据、放行记录、API Key……）或 `ProjectShared`（`project_id` 可为 NULL，表示工作区级或平台级、所有项目可读：Agent（系统预置为 NULL）、Job、托管记忆、治理变更、审计事件、告警规则、资源映射、Connections）。`core/db.py` 把它们列为 `PROJECT_STRICT_TABLES` / `PROJECT_SHARED_TABLES`；每张表都有带索引的 `project_id` 列，热点列表另有 `(workspace_id, project_id)` 索引。
+- **自动条件。** 当前有项目时，`do_orm_execute` 监听器给每一条 ORM SELECT、UPDATE、DELETE 追加 `project_id = :current`（共享表为 `OR project_id IS NULL`，`with_loader_criteria`，含别名）。列表因此在任何 count、offset、limit 之前就在 SQL 里过滤，总数不会泄露。
+- **`ProjectSession`。** `Session.get` 命中身份映射时不发 SQL，监听器看不到。`db.SessionLocal` 构造的是 `ProjectSession`，它的 `get` 会复查返回的行，其他项目的行返回 `None`；`owned_get` 在任意会话上做同样的事。原始 `text()` SQL 不经过过滤，请求路径上的原始 SQL 自己加项目条件。
+- **盖章。** `before_flush` 监听器为新行填写 `project_id`：先取父行（`__project_parent__`：评估运行取其 Agent，消息取其会话，分享链接取其 Agent 或标注任务……），再取当前项目，再取该行所在工作区——仅当该工作区恰好绑定一个项目时。否则 flush 抛出 `ProjectStampError`：没有项目的 owned 行在任何地方都不可见，而随便归入某个项目会造成泄露。已有行的项目只能通过 `POST /api/projects/{id}/transfer` 改变。
+- **当前项目。** 一个上下文变量。`route_policy.bind_request_project`（异步的应用级依赖，所以同步处理函数和流式生成器都能继承）按请求的项目设置它；`/v1` 按 Key 设置，`/share/*` 按链接设置。后台线程起始时没有当前项目，因此 worker 能看到所有行，除非它进入 `project_context(<该行的 project_id>)`；部署流水线、Job 恢复、对话轮次、评估与调度器都用它们所处理的行的项目这样做。跨项目读取（名字唯一性、多环境总览、pperm 检查）显式进入 `project_context(None)`。
+
+启动时 `assert_every_row_has_a_project` 与工作区检查并列执行：派生行取父行的项目，单项目工作区的行
+被认领并记一条 WARNING；在绑定了多个项目的工作区里出现没有项目的严格行时拒绝启动（见「运维」）。
+
+名字唯一性仍是工作区级：S3 键、ECR tag、网关目标与注册记录都用 Agent 名，所以同一工作区的两个项目不能
+有同名 Agent。`agent.name_exists` 只在调用者能看到占用者时才给出它。
+
+### 请求：路由策略与 `X-Project`
+
+`ROUTE_POLICY`（`app/core/route_policy.py`）为每条路由分类。除 `public` / `member` / `admin` /
+`perm:<key>` 外：
+
+- `perm:project.use`（对话、调用、反馈、标注、本人的会话）与 `perm:project.write`（其他一般写入）是项目级权限键。所有成员写路由都已重新分类，所以普通的 `member` 条目只剩读路由和中枢全局路由。
+- 项目作用域路由上的 `perm:<key>` 按请求所在项目的有效权限检查（`require_permission` 读 `request.state.project`），而不是账号的权限。
+- `infra` / `infra+perm:<key>` 标记对工作区共享基础设施的写入（治理策略、注册中心的 MCP / 技能记录、网关 Lambda 与工具目标、模板市场发布、价格刷新）。工作区只有一个活跃项目时，`require_infra` 按 `project.write`（或 `<key>`）放行；有多个时只允许管理员（`403 auth.infra_admin_required`）：一个项目不能改变另一个项目所依赖的东西。
+- `pperm:<key>` 用于中枢全局的 `/api/projects/{project_id}/…` 路由：在路径所指项目中持有 `<key>`（非成员得到 404）。
+- `PROJECT_EXEMPT` 列出不需要项目的工作区作用域路由（目录、工作区设置、放行策略、`/api/costs`、`/api/inbox`、网络配置档写入……）。`HUB_GLOBAL_PREFIXES` 新增 `/api/projects`、`/api/role-templates`、`/api/me`、`/api/admins`、`/api/project-groups`、`/api/departments`。
+
+`tests/test_route_policy.py` 保留漂移检查（每条实际路由都已分类且没有多余条目、没有工作区写路由留给
+普通成员、每条 `infra` 路由都在项目作用域内、每个 `PROJECT_EXEMPT` 条目都是实际的工作区路由），
+`scripts/check_api_docs.py` 列出 api.md 没有提到的路由。
+
+`enforce_route_policy` 先解析工作区，对项目作用域路由再解析项目，然后**才**检查权限（权限键取决于
+项目）：
+
+1. `X-Project`（前端 fetch 包装器在 `X-Workspace` 旁一并加上，`lib/workspace-header.ts`；每个工作区在 `localStorage` 的 `launchpad_project:<workspace_id>` 记住上次的项目）。
+2. 不带该头时：管理员得到工作区的默认项目；只有一个可达项目的成员得到该项目；有多个项目的成员在能进入工作区默认项目时得到它，否则 `400 project.header_required`（`detail.available`）。没有任何项目的成员得到 `403 project.none`。
+3. 未绑定到该工作区或调用者无法进入的项目一律回答 **404 `project.not_found`**，而不是 403：项目的名字和存在本身可能是敏感的。其他项目的任何资源 id 同样回答该类资源自己的 not-found。在自己的项目里缺少权限键仍是 `403 auth.permission_required`。
+4. 已归档项目中的非读请求回答 `409 project.archived`。
+
+旧客户端、curl 和 workshop 种子脚本不带该头，落在默认项目里。`/api/auth/status` 与
+`GET /api/me/access` 为前端提供数据：只有调用者在该工作区有多个项目时，V3 顶栏才在工作区切换器旁显示
+项目切换器；只有工作区绑定了多个项目时才显示只读的项目标签；命令面板在同样的条件下增加“切换项目”命令。
+
+### 缓存：访问纪元
+
+每个请求都需要调用者可达的项目与权限键。`access.snapshot_for` 用一次查询加载用户的全部成员资格
+（项目 × 绑定 × 直接成员行 × 项目组行，外加引用到的自定义角色），按用户缓存在进程内（LRU 上限 5,000，
+兜底 TTL 60 秒）。每个请求先读 `access_epoch.value`（一次主键读）；纪元变化即丢弃缓存。每一次改变
+“谁能进入什么”的写入——成员、组成员、组 ↔ 项目、绑定、项目状态、自定义角色、账号角色 / 权限 / 状态、
+工作区授权——都在**同一事务**里递增纪元（`access.bump_epoch`），所以撤销在每个进程、每个共享台账的
+实例上于下一个请求生效。工作区绑定以同样方式缓存（`workspace_bindings`）。
+
+### API Key、链接、可观测、审计
+
+- **`/v1` API Key** 带 `api_keys.project_id`（回填为默认项目）。每次 `/v1` 调用都以 Key 的项目运行并忽略任何请求头，所以 `/v1/agents` 与调用只能看到该项目的 Agent。Key 的项目被归档或从 Key 的工作区解绑、或其创建者不再能进入该项目时，Key 失效（`401`，并被永久停用）；成员资格写入在同一事务里停用这些 Key（`api_keys.disable_offboarded_keys*`）。签发 Key 需要 `project.write`。
+- **分享、评审、标注与渠道链接**从目标对象取项目。`/share/*` 以链接的项目运行；目标移到其他项目或项目已归档的链接回答与已撤销令牌相同的 404，归档项目会撤销它的链接。
+- **可观测。** CloudWatch span 不带项目，所以 `observability.ProjectAgents` 是一个允许集合：一行的会话或 `service.name` 经台账解析到当前项目的 Agent 或平台预置时才保留。在绑定多个项目的工作区里，无法归属的行只对管理员显示；单项目工作区里这个过滤不起作用。仪表盘与意图缓存按项目区分。`/api/costs` 仍只限管理员、豁免项目，带 `?project=` 过滤。
+- **审计。** `audit_events` 增加 `project_id`（当前项目；工作区级动作为 NULL）与 `actor_user_id`。结构类事件（`project.*`、`project.members.*`、`group.*`、`department.*`、`admin.grant` / `.revoke`、`user.sessions.revoke`、`project.transfer`）是中枢全局的行。`GET /api/audit`（管理员）可按 `project` 与 `actor` 跨项目过滤。
+- **后台任务。** `jobs.project_id` 从 Agent 盖章；流水线、恢复与发布执行都在该项目内运行。调度器以 Agent 的项目执行每个漂移监测、告警与 MCP 健康检查，并跳过已归档项目。
+- **可见性。** 工作区的 `shared` / `isolated` 设置（见「成员资源可见性」）在项目过滤之内生效：按创建人的规则进一步收窄成员在自己项目里看到的内容。项目的 `settings.resource_visibility` 会被保存，负责人也可修改，但过滤仍读取工作区的设置（`visibility.Viewer.of_request`）。
+
+### 职责分离
+
+对象级检查不变——无论持有哪些角色，没有人能审批自己申请的发布（`promotion.self_approval`）、签发自己
+申请的放行、批准自己的豁免或签署自己的判据。新的 SoD 列（`requested_by`、`reviewed_by`、`signed_by`……
+旁的 `*_user_id`）优先比较，所以重新注册的同名账号不会被当成原来的行为人。另外：
+
+- 除管理员外，没有人能修改自己的项目成员资格（`403 project.self_membership`），负责人因此不能给自己加签字权限；
+- 成员视图会标出在同一项目里同时持有一对职责两端的人（`agents.deploy` + `release.sign`、`criteria.manage` + `criteria.sign`）；管理员专属设置 `settings.sod_strict` 打开时，这类写入被拒绝（`409 project.sod_conflict`）。
+
+### 管理
+
+管理员在 V3 控制台的 **配置** 分组中管理结构：**用户管理**（项目与项目组成员资格、批量“加入项目”、通过
+`users.session_epoch` 强制下线）、**管理员管理**（`/v3/admins`）、**项目**（成员、角色、工作区绑定、
+设置、移动 Agent）、**项目组** 与 **部门**。项目负责人（`project.members`）可进入当前项目的 **项目设置**。
+账号管理、项目结构以及项目组 / 部门路由都是中枢全局的；`access.can_manage_structure` 是唯一的判断
+（阶段 3 的 steward 只需修改它）。
+
+### 运维
+
+**已有部署无需任何操作。** 本版本首次启动时 `init_db` 依次执行：`create_all`（新表）、`_migrate`
+（为每张 owned 与 shared 表增量添加 `project_id` 列和索引、`users.session_epoch`、SoD 的
+`*_user_id` 列）、`_seed_default_projects` 与启动检查。种子步骤是幂等的；一次性部分只在
+`platform_settings` 标记 `migration.projects_v1` 不存在时执行：
+
+1. 创建 `default` 项目并绑定到每个工作区（工作区还没有默认绑定时设为默认）；
+2. 把 `agents`（系统预置除外）、`jobs`、`managed_memories`、`api_keys`、`resource_creators`、`eval_datasets`、`eval_pipelines`、`skill_lab_tasksets`、`assistant_conversations` 的行归入其工作区的默认项目，每个派生行归入父行的项目（孤儿行归入其工作区的默认项目）；
+3. 把每个持有工作区授权的非管理员账号以 `inherit` 加入该工作区的默认项目，回填 SoD 用户 id，递增纪元，写入标记。
+
+可空的行（治理、审计、告警、映射、Connections）保持 NULL，含义与以前一样是工作区级。没有
+`resource_creators` 行的知识库属于其工作区的默认项目。每个工作区只有一个项目时，可见的东西都不变：
+没有切换器，`/api/auth/status` 相同，页面相同，`infra` 路由的行为与 `project.write` 一样。首次启动前请
+复制 `data/launchpad.db`（升级是增量的；旧版本二进制仍能在迁移后的台账上启动，因为漂移检查只看缺失的列）。
+
+**演练升级**：在真实升级前，先在生产台账的副本上运行：
+
+```bash
+cd backend
+uv run python scripts/rehearse_projects_migration.py /path/to/copy-of-launchpad.db [--keep] [--out /tmp/rehearsal.db]
+```
+
+源文件只读（SQLite 在线备份，只读打开）；`init_db` 在副本上运行且拒绝 AWS 客户端；脚本按表打印行数、
+升级前后没有项目的行数、孤儿行数、`init_db` 耗时以及各项检查（无 schema 漂移、每行都有工作区、每个严格
+行都有项目、标记已写入）。退出码 0 表示升级会成功；1 表示有检查失败（副本保留）。
+
+**回滚后的遗留行。** 降级后旧版本写入的行没有 `project_id`。单项目工作区在启动时认领它们并记 WARNING。
+绑定了多个项目的工作区会拒绝启动，并列出表与行数；停止后端后归档这些行：
+
+```bash
+cd backend
+uv run python scripts/backfill_projects.py --dry-run                    # 只报告，在一次性副本上运行
+uv run python scripts/backfill_projects.py --workspace prod --project payments
+uv run python scripts/backfill_projects.py --db /path/to/launchpad.db   # 另一个台账文件
+```
+
+它执行与启动相同的结构步骤，把派生行归入父行，认领单项目工作区的行；带 `--workspace W --project P` 时
+把 W 中其余的严格行归入 P（P 必须绑定到 W）。它不写审计行、不递增纪元、不调用任何 AWS API。退出码 0
+表示启动会接受该台账。
+
+**创建与拆分项目。** 以管理员身份：如有需要先建部门与项目组（**配置 → 部门 / 项目组**），然后在
+**配置 → 项目 → 新建项目** 中填写 id、名称、要绑定的工作区和负责人（`POST /api/projects`）。第二个项目
+首次绑定到某个工作区时，该工作区进入多项目模式：那里的 `infra` 写入变为仅管理员，无法归属的遥测对成员
+隐藏。在项目的 **成员** 标签中添加成员（或在 **用户管理** 中逐个或批量添加）；有多个项目的成员在顶栏切换器
+中选择项目。用 **移动 Agent**（`POST /api/projects/{id}/transfer`）把已有 Agent 移出 `default`：只改台账，在
+一个事务里移动 Agent、所有派生行及其 Job；源项目中限定到它的 Key 会失去它。默认项目不能归档，也不能
+从其工作区解绑；其他项目 **归档** 后变为只读，撤销其链接，并停用创建者已无法进入该项目的 Key。
+
 ## Agent-DLC —— 判据、黄金集、校准与放行门
 
 完整设计见 [agent-dlc-design.zh-CN.md](agent-dlc-design.zh-CN.md)，英文版本节列出了逐个模块的实现细节。要点：
