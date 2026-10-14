@@ -19,6 +19,23 @@ log = logging.getLogger(__name__)
 INTERRUPTED_PREFIX = "interrupted: "
 
 
+def visible_rows(rows: list[ChatMessage]) -> list[ChatMessage]:
+    """A session's thread without the turns a retry replaced (chat-streaming §4.1).
+
+    A turn runs from its user row to the next one; a later user row whose
+    ``retry_of`` names it means the failed turn was retried, so a restored session
+    shows the retry only — the user's message once, not twice."""
+    retried = {r.retry_of for r in rows if r.role == "user" and r.retry_of is not None}
+    shown: list[ChatMessage] = []
+    hidden = False
+    for row in rows:
+        if row.role == "user":
+            hidden = row.id in retried
+        if not hidden:
+            shown.append(row)
+    return shown
+
+
 def save_message(
     workspace_id: str,
     agent_id: str,
@@ -28,6 +45,7 @@ def save_message(
     name: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
     answered_by: str | None = None,
+    retry_of: int | None = None,
 ) -> int:
     """Append one thread item; returns its id (the replay order and feedback key)."""
     db = SessionLocal()
@@ -35,7 +53,7 @@ def save_message(
         row = ChatMessage(
             workspace_id=workspace_id, agent_id=agent_id, session_id=session_id,
             role=role, text=text[:100000], name=name, attachments=attachments,
-            answered_by=answered_by,
+            answered_by=answered_by, retry_of=retry_of,
         )
         db.add(row)
         db.commit()
@@ -108,6 +126,7 @@ def persist_events(
     session_id: str | None,
     runtime_version: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    retry_of: int | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Pass a `chat_stream` through, persisting thread items in event order
     (int-pk = replay order) so a session's history replays exactly as rendered.
@@ -115,6 +134,10 @@ def persist_events(
     Every persisted agent answer is announced with a `saved` event
     (`{"message_id": n}`) placed just before the event that closed the bubble, so
     a client can attach thumbs feedback to the message it just watched stream.
+
+    chat-streaming §4.1: `meta` gains `user_message_id` (the turn's user row, what a
+    retry names) and a persisted `error` its row's `message_id`. ``retry_of`` (the
+    failed turn's user row) is recorded on this turn's user row.
     """
     answer_parts: list[str] = []
     answered_by: str | None = None  # T35: `rule:<id>` when a curated answer replied
@@ -139,6 +162,7 @@ def persist_events(
             data["answered_by"] = answered_by
         return {"event": "saved", "data": data}
 
+    user_id: int | None = None  # this turn's user row, once `meta` saved it
     source = iter(events)
     closed = False  # `done` or `error` passed: the turn has its ending recorded
     try:
@@ -148,8 +172,9 @@ def persist_events(
                 session_id = data["session_id"]
                 track_session(workspace_id, agent_id, session_id, actor_id,
                               runtime_version=runtime_version)
-                save_message(workspace_id, agent_id, session_id, "user", prompt,
-                             attachments=attachments)
+                user_id = save_message(workspace_id, agent_id, session_id, "user", prompt,
+                                       attachments=attachments, retry_of=retry_of)
+                event = {"event": "meta", "data": {**data, "user_message_id": user_id}}
             elif kind == "rule":
                 answered_by = f"rule:{data.get('rule_id', '')}"[:48]
             elif kind == "usage" and session_id:
@@ -185,8 +210,9 @@ def persist_events(
                 saved = flush_answer()  # keep the partial answer the user saw
                 if saved:
                     yield saved
-                save_message(workspace_id, agent_id, session_id, "error",
-                             data.get("message", ""))
+                error_id = save_message(workspace_id, agent_id, session_id, "error",
+                                        data.get("message", ""))
+                event = {"event": "error", "data": {**data, "message_id": error_id}}
             elif kind == "done" and session_id:
                 closed = True
                 saved = flush_answer()
@@ -202,7 +228,8 @@ def persist_events(
                 "client disconnected" if isinstance(exc, GeneratorExit)
                 else f"{type(exc).__name__}: {exc}"
             )
-            _record_interruption(flush_answer, workspace_id, agent_id, session_id, reason)
+            _record_interruption(flush_answer, workspace_id, agent_id, session_id, reason,
+                                 user_id=user_id)
         raise
     finally:
         close = getattr(source, "close", None)
@@ -214,17 +241,38 @@ def persist_events(
         yield saved
 
 
+def _retried(workspace_id: str, session_id: str, user_id: int | None) -> bool:
+    """A retry already replaced this turn (chat-streaming §4.1)."""
+    if user_id is None:
+        return False
+    db = SessionLocal()
+    try:
+        return db.query(ChatMessage.id).filter(
+            ChatMessage.workspace_id == workspace_id,
+            ChatMessage.session_id == session_id,
+            ChatMessage.retry_of == user_id,
+        ).first() is not None
+    finally:
+        db.close()
+
+
 def _record_interruption(
     flush_answer: Callable[[], dict[str, Any] | None],
     workspace_id: str, agent_id: str, session_id: str | None, reason: str,
+    *, user_id: int | None = None,
 ) -> None:
     """Save the open answer and an ``error`` item ``interrupted: <reason>``.
 
-    Runs while the stream is being torn down, so it never raises: a failed write
-    is logged and the original exit (disconnect or stream error) goes on."""
+    Not when a retry already replaced the turn: the browser gave up on a silent
+    stream and retried before this one noticed the disconnect, so its rows would
+    land inside the retry's turn. Runs while the stream is being torn down, so it
+    never raises: a failed write is logged and the original exit (disconnect or
+    stream error) goes on."""
     if not session_id:
         return  # nothing reached the ledger yet (no `meta`)
     try:
+        if _retried(workspace_id, session_id, user_id):
+            return
         flush_answer()
         save_message(workspace_id, agent_id, session_id, "error",
                      f"{INTERRUPTED_PREFIX}{reason}"[:2000])

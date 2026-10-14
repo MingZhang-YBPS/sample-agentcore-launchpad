@@ -528,6 +528,10 @@ def _migrate_actor_user_id_columns(bind) -> None:
                 "ALTER TABLE criteria_sets ADD COLUMN signed_by_user_id VARCHAR(32)"
             ),
         },
+        "chat_messages": {
+            # chat-streaming §4.1: a retry turn names the failed turn it replaces
+            "retry_of": "ALTER TABLE chat_messages ADD COLUMN retry_of INTEGER",
+        },
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())
