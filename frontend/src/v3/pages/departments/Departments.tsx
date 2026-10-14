@@ -1,6 +1,6 @@
 import "../users.css";
 
-import { Archive, ArchiveRestore, Pencil, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, UserPlus, Users } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -12,26 +12,34 @@ import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { emptyStructureForm } from "../groups/model";
 import { StructureDialog } from "../groups/StructureDialog";
+import { DepartmentDetail } from "./DepartmentDetail";
+import { InviteDialog } from "./InviteDialog";
 import { deletable } from "./model";
 
 /**
- * Departments (projects §7.7, §7.9; platform administrators only): phase 1 has a
- * name and a description only — they label projects and groups and group the
- * project switcher. Create, edit, archive / unarchive, and delete an unused one.
+ * Departments (projects §7.7, §7.9, §11.1): they label projects and groups and group
+ * the project switcher. A platform administrator creates, edits, archives / unarchives
+ * and deletes them, and per department appoints its administrators, opens workspaces
+ * to it and sets its limits (`DepartmentDetail`). A department administrator sees the
+ * departments they administer and, where allowed, invites accounts into them.
  * Hub-global.
  */
 export function V3Departments() {
-  const { t } = useTranslation();
   const { isAdmin } = useAuth();
-  const toast = useToast();
-  const [params, setParams] = useSearchParams();
-  const status = (["active", "archived", "all"].includes(params.get("status") ?? "") ? params.get("status") : "active") as StructureStatus;
-  const list = useLoad(async () => (isAdmin ? departmentsApi.list(status) : { departments: [] }), `v3-departments:${status}:${isAdmin}`);
-  const [editing, setEditing] = useState<Department | "new" | null>(null);
-  const [confirm, setConfirm] = useState<{ kind: "archive" | "delete"; dept: Department } | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  return isAdmin ? <AdminDepartments /> : <MyDepartments />;
+}
 
-  if (!isAdmin) {
+/** What a department administrator sees: their departments (§11.1). */
+function MyDepartments() {
+  const { t } = useTranslation();
+  const mine = useLoad(() => departmentsApi.mine(), "v3-departments-mine");
+  const all = useLoad(() => departmentsApi.list("active"), "v3-departments:active:member");
+  const [inviting, setInviting] = useState<Department | null>(null);
+  const managed = mine.data ?? [];
+  const byId = new Map((all.data?.departments ?? []).map((d) => [d.id, d]));
+
+  if (mine.loading && !mine.data) return <div style={{ padding: 20 }}><Skeleton rows={3} /></div>;
+  if (managed.length === 0) {
     return (
       <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
         <PageHead eyebrow={t("v3.departments.eyebrow")} title={t("v3.departments.title")} sub={t("auth.adminRequired.meta")} />
@@ -43,6 +51,58 @@ export function V3Departments() {
       </div>
     );
   }
+  return (
+    <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
+      <PageHead eyebrow={t("v3.departments.eyebrow")} title={t("v3.departments.mine.title")} sub={t("v3.departments.mine.sub")} />
+      <Panel flush>
+        <table className="v3-table" data-testid="v3-departments-mine">
+          <thead>
+            <tr>
+              <th>{t("v3.departments.col.department")}</th>
+              <th>{t("v3.departments.col.workspaces")}</th>
+              <th className="num">{t("v3.departments.col.projects")}</th>
+              <th className="num">{t("v3.departments.col.groups")}</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {managed.map((m) => {
+              const d = byId.get(m.id);
+              return (
+                <tr key={m.id}>
+                  <td><div className="v3-name"><div><b>{m.name}</b><small className="mono">{m.id}</small></div></div></td>
+                  <td className="mono">{m.workspaces.length ? m.workspaces.join(", ") : <span className="v3-usr-muted">{t("v3.departments.mine.noWorkspace")}</span>}</td>
+                  <td className="num">{d?.project_count ?? "—"}</td>
+                  <td className="num">{d?.group_count ?? "—"}</td>
+                  <td style={{ width: 1, whiteSpace: "nowrap" }}>
+                    <Btn size="sm" kind="ghost" disabled={!d?.settings.can_create_users}
+                      title={d?.settings.can_create_users ? undefined : t("v3.departments.invite.disabled")}
+                      onClick={() => d && setInviting(d)}>
+                      <UserPlus size={13} /> {t("v3.departments.invite.open")}
+                    </Btn>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Panel>
+      {inviting && <InviteDialog dept={inviting} onClose={() => setInviting(null)} />}
+    </div>
+  );
+}
+
+/** The platform administrator's table. */
+function AdminDepartments() {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const [params, setParams] = useSearchParams();
+  const status = (["active", "archived", "all"].includes(params.get("status") ?? "") ? params.get("status") : "active") as StructureStatus;
+  const list = useLoad(() => departmentsApi.list(status), `v3-departments:${status}`);
+  const [editing, setEditing] = useState<Department | "new" | null>(null);
+  const [confirm, setConfirm] = useState<{ kind: "archive" | "delete"; dept: Department } | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [managing, setManaging] = useState<Department | null>(null);
 
   const run = async (dept: Department, call: () => Promise<unknown>, okKey: string) => {
     setBusyId(dept.id);
@@ -110,6 +170,7 @@ export function V3Departments() {
                     <td className="num">{d.group_count}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                        <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setManaging(d)}><Users size={13} /> {t("v3.departments.manage")}</Btn>
                         <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setEditing(d)}><Pencil size={13} /> {t("v3.groups.edit")}</Btn>
                         {d.archived ? (
                           <Btn size="sm" kind="ghost" disabled={busy} onClick={() => void run(d, () => departmentsApi.unarchive(d.id), "v3.departments.unarchived")}>
@@ -135,6 +196,7 @@ export function V3Departments() {
         )}
       </Panel>
 
+      {managing && <DepartmentDetail dept={managing} onClose={() => setManaging(null)} onChanged={list.reload} />}
       {editing && (
         <StructureDialog
           kind="department"

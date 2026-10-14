@@ -46,4 +46,23 @@ describe("project groups and departments API", () => {
     await expect(departmentsApi.remove("d1")).resolves.toBeUndefined();
     expect(calls()[0][1]?.method).toBe("DELETE");
   });
+
+  it("department administrators, open workspaces and invitations (§11.1)", async () => {
+    const calls = stubFetch(200, { managed_departments: [{ id: "retail", name: "Retail", workspaces: ["default"] }] });
+    await departmentsApi.putAdmins("retail", { add: ["u1"] });
+    await departmentsApi.putWorkspaces("retail", { remove: ["lab"] });
+    await departmentsApi.invite("retail", { username: "n", email: "n@x.com", project_id: "shop" });
+    await departmentsApi.update("retail", { settings: { can_create_users: true, max_projects: null } });
+    const mine = await departmentsApi.mine();
+    const [admins, workspaces, invite, settings, access] = calls();
+    expect(admins[0]).toBe("/api/departments/retail/admins");
+    expect(admins[1]?.method).toBe("PUT");
+    expect(JSON.parse(String(admins[1]?.body))).toEqual({ add: ["u1"] });
+    expect(workspaces[0]).toBe("/api/departments/retail/workspaces");
+    expect(invite[0]).toBe("/api/departments/retail/invitations");
+    expect(invite[1]?.method).toBe("POST");
+    expect(JSON.parse(String(settings[1]?.body))).toEqual({ settings: { can_create_users: true, max_projects: null } });
+    expect(access[0]).toBe("/api/me/access");
+    expect(mine.map((d) => d.id)).toEqual(["retail"]);
+  });
 });
