@@ -7,6 +7,7 @@ import { RouteChunk } from "./layout/RouteChunk";
 import { Shell } from "./layout/Shell";
 import { NotFound } from "./pages/NotFound";
 import { Overview } from "./pages/Overview";
+import { ProjectProvider } from "./workspace/ProjectProvider";
 import { WorkspaceProvider } from "./workspace/WorkspaceProvider";
 import { api } from "./lib/api";
 import { classicAgentNewToV2, v2EditPath } from "./v2/pages/agents/classicUrl";
@@ -328,161 +329,163 @@ export default function App() {
     <BrowserRouter>
       <ToastProvider>
         <WorkspaceProvider>
-          <Routes>
-            <Route
-              path="auth/return"
-              element={
-                <RouteChunk>
-                  <AuthReturn />
-                </RouteChunk>
-              }
-            />
-            <Route
-              path="v3"
-              element={
-                <RouteChunk>
-                  <V3Shell />
-                </RouteChunk>
-              }
-            >
-              <Route index element={<V3Home />} />
-              <Route path="agents" element={<V3Agents />} />
-              <Route path="chat" element={<V3Chat />} />
-              <Route path="gate" element={<V3Gate />} />
-              <Route path="registry" element={<V3Registry />} />
-              <Route path="knowledge" element={<V3Knowledge />} />
-              <Route path="create" element={<V3Create />} />
-              <Route path="assistant" element={<V3Assistant />} />
-              <Route path="insights" element={<V3Insights />} />
-              <Route path="intents" element={<V3Intents />} />
-              <Route path="data" element={<V3Data />} />
-              <Route path="evaluators" element={<V3Evaluators />} />
-              <Route path="tasks" element={<V3Tasks />} />
-              <Route path="online" element={<V3Online />} />
-              <Route path="experiments" element={<V3Experiments />} />
-              <Route path="standards" element={<V3Standards />} />
-              <Route path="skill-lab" element={<V3SkillLab />} />
-              <Route path="users" element={<V3Users />} />
-              <Route path="workspaces" element={<V3Workspaces />} />
-              <Route path="models" element={<V3Models />} />
-              <Route path="identity" element={<V3Identity />} />
-              <Route path="fleet" element={<V3Fleet />} />
-              <Route path="announcements" element={<V3Announcements />} />
-              <Route path="videos" element={<V3Videos />} />
-              <Route path="video-management" element={<V3VideoManagement />} />
-              <Route path="releases" element={<V3Releases />} />
-              <Route path="issues" element={<V3Issues />} />
-              <Route path="environments" element={<V3Environments />} />
-              <Route path="observability" element={<V3Observability />} />
-              <Route path="memory" element={<V3Memory />} />
-              <Route path="governance" element={<V3Governance />} />
-              <Route path="connections" element={<V3Connections />} />
-              <Route path="costs" element={<V3Costs />} />
-              <Route path="*" element={<Navigate to="/v3" replace />} />
-            </Route>
-            <Route
-              path="v2"
-              element={
-                <RouteChunk>
-                  <V2Frame />
-                </RouteChunk>
-              }
-            >
-              <Route index element={<V2Home />} />
-              <Route path="agents" element={<V2Agents />} />
-              <Route path="eval/data" element={<V2DataCenter />} />
-              <Route path="eval/tasks" element={<V2Tasks />} />
-              <Route path="eval/insights" element={<V2Insights />} />
-              <Route path="eval/intents" element={<V2Intents />} />
-              <Route path="eval/evaluators" element={<V2Evaluators />} />
-              <Route path="eval/online" element={<V2Online />} />
-              <Route path="eval/experiments" element={<V2Experiments />} />
-              <Route path="eval/standards" element={<V2Standards />} />
-              <Route path="assistant" element={<V2Assistant />} />
-              <Route path="registry" element={<V2Registry />} />
-              <Route path="knowledge-bases" element={<V2KnowledgeBases />} />
-              <Route path="skill-lab" element={<V2SkillLab />} />
-              <Route path="chat" element={<V2Chat />} />
-              <Route path="observability" element={<V2Observability />} />
-              <Route path="memory" element={<V2Memory />} />
-              <Route path="governance" element={<V2Governance />} />
-              <Route path="users" element={<V2Users />} />
-              <Route path="costs" element={<V2Costs />} />
-              <Route path="issues" element={<V2Issues />} />
-              <Route path="fleet" element={<V2Fleet />} />
-              <Route path="promotions" element={<V2Promotions />} />
-              <Route path="environments" element={<V2Environments />} />
-              <Route path="workspaces" element={<V2Workspaces />} />
-              <Route path="connections" element={<V2Connections />} />
-              <Route path="my-connections" element={<V2MyConnections />} />
-              <Route path="announcements" element={<V2Announcements />} />
-              <Route path="videos" element={<V2Videos />} />
-              <Route path="video-management" element={<V2VideoManagement />} />
-              <Route path="*" element={<V2NotFound />} />
-            </Route>
-            <Route element={<ConsoleShell />}>
-            <Route index element={<IndexRoute />} />
-            <Route path="agents" element={<AgentsRoute mode="list" />} />
-            <Route path="agents/new" element={<AgentsNewRoute />} />
-            <Route path="agents/import" element={<CreateAgent mode="import" />} />
-            <Route path="agents/:agentId" element={<AgentsRoute mode="detail" />} />
-            <Route path="agents/:agentId/edit" element={<AgentsEditRoute />} />
-            <Route path="create" element={<LegacyCreateRedirect />} />
-            <Route path="create/studio" element={<CreateAgentStudio />} />
+          <ProjectProvider>
+            <Routes>
               <Route
-                path="create/assistant"
-                element={<V2OrClassic classic={<CreateAgentAssistant />} toV2={classicAssistantToV2} />}
+                path="auth/return"
+                element={
+                  <RouteChunk>
+                    <AuthReturn />
+                  </RouteChunk>
+                }
               />
               <Route
-                path="registry"
-                element={<V2OrClassic classic={<Registry />} toV2={classicRegistryToV2} />}
-              />
+                path="v3"
+                element={
+                  <RouteChunk>
+                    <V3Shell />
+                  </RouteChunk>
+                }
+              >
+                <Route index element={<V3Home />} />
+                <Route path="agents" element={<V3Agents />} />
+                <Route path="chat" element={<V3Chat />} />
+                <Route path="gate" element={<V3Gate />} />
+                <Route path="registry" element={<V3Registry />} />
+                <Route path="knowledge" element={<V3Knowledge />} />
+                <Route path="create" element={<V3Create />} />
+                <Route path="assistant" element={<V3Assistant />} />
+                <Route path="insights" element={<V3Insights />} />
+                <Route path="intents" element={<V3Intents />} />
+                <Route path="data" element={<V3Data />} />
+                <Route path="evaluators" element={<V3Evaluators />} />
+                <Route path="tasks" element={<V3Tasks />} />
+                <Route path="online" element={<V3Online />} />
+                <Route path="experiments" element={<V3Experiments />} />
+                <Route path="standards" element={<V3Standards />} />
+                <Route path="skill-lab" element={<V3SkillLab />} />
+                <Route path="users" element={<V3Users />} />
+                <Route path="workspaces" element={<V3Workspaces />} />
+                <Route path="models" element={<V3Models />} />
+                <Route path="identity" element={<V3Identity />} />
+                <Route path="fleet" element={<V3Fleet />} />
+                <Route path="announcements" element={<V3Announcements />} />
+                <Route path="videos" element={<V3Videos />} />
+                <Route path="video-management" element={<V3VideoManagement />} />
+                <Route path="releases" element={<V3Releases />} />
+                <Route path="issues" element={<V3Issues />} />
+                <Route path="environments" element={<V3Environments />} />
+                <Route path="observability" element={<V3Observability />} />
+                <Route path="memory" element={<V3Memory />} />
+                <Route path="governance" element={<V3Governance />} />
+                <Route path="connections" element={<V3Connections />} />
+                <Route path="costs" element={<V3Costs />} />
+                <Route path="*" element={<Navigate to="/v3" replace />} />
+              </Route>
               <Route
-                path="knowledge-bases"
-                element={<V2OrClassic classic={<KnowledgeBases />} toV2={classicKnowledgeBasesToV2} />}
-              />
-              <Route
-                path="memory"
-                element={<V2OrClassic classic={<Memory />} toV2={classicMemoryToV2} />}
-              />
-              <Route
-                path="chat"
-                element={<V2OrClassic classic={<Chat />} toV2={classicChatToV2} />}
-              />
-              <Route
-                path="observability"
-                element={<V2OrClassic classic={<Observability />} toV2={classicObservabilityToV2} />}
-              />
-              <Route path="evaluation" element={<EvaluationRoute />} />
-              <Route
-                path="skill-lab"
-                element={<V2OrClassic classic={<SkillLab />} toV2={classicSkillLabToV2} />}
-              />
-              <Route
-                path="governance"
-                element={<V2OrClassic classic={<Governance />} toV2={classicGovernanceToV2} />}
-              />
-              <Route
-                path="users"
-                element={<V2OrClassic classic={<Users />} toV2={classicUsersToV2} />}
-              />
-              <Route
-                path="announcements"
-                element={<V2OrClassic classic={<Announcements />} toV2={classicAnnouncementsToV2} />}
-              />
-              <Route
-                path="videos"
-                element={<V2OrClassic classic={<Videos />} toV2={classicVideosToV2} />}
-              />
-              <Route
-                path="workspaces"
-                element={<V2OrClassic classic={<Workspaces />} toV2={classicWorkspacesToV2} />}
-              />
-              {/* Catch-all stays INSIDE the Shell group so an unknown URL keeps
-                  the sidebar/topbar/footer instead of a bare background grid. */}
-              <Route path="*" element={<NotFound />} />
-            </Route>
-          </Routes>
+                path="v2"
+                element={
+                  <RouteChunk>
+                    <V2Frame />
+                  </RouteChunk>
+                }
+              >
+                <Route index element={<V2Home />} />
+                <Route path="agents" element={<V2Agents />} />
+                <Route path="eval/data" element={<V2DataCenter />} />
+                <Route path="eval/tasks" element={<V2Tasks />} />
+                <Route path="eval/insights" element={<V2Insights />} />
+                <Route path="eval/intents" element={<V2Intents />} />
+                <Route path="eval/evaluators" element={<V2Evaluators />} />
+                <Route path="eval/online" element={<V2Online />} />
+                <Route path="eval/experiments" element={<V2Experiments />} />
+                <Route path="eval/standards" element={<V2Standards />} />
+                <Route path="assistant" element={<V2Assistant />} />
+                <Route path="registry" element={<V2Registry />} />
+                <Route path="knowledge-bases" element={<V2KnowledgeBases />} />
+                <Route path="skill-lab" element={<V2SkillLab />} />
+                <Route path="chat" element={<V2Chat />} />
+                <Route path="observability" element={<V2Observability />} />
+                <Route path="memory" element={<V2Memory />} />
+                <Route path="governance" element={<V2Governance />} />
+                <Route path="users" element={<V2Users />} />
+                <Route path="costs" element={<V2Costs />} />
+                <Route path="issues" element={<V2Issues />} />
+                <Route path="fleet" element={<V2Fleet />} />
+                <Route path="promotions" element={<V2Promotions />} />
+                <Route path="environments" element={<V2Environments />} />
+                <Route path="workspaces" element={<V2Workspaces />} />
+                <Route path="connections" element={<V2Connections />} />
+                <Route path="my-connections" element={<V2MyConnections />} />
+                <Route path="announcements" element={<V2Announcements />} />
+                <Route path="videos" element={<V2Videos />} />
+                <Route path="video-management" element={<V2VideoManagement />} />
+                <Route path="*" element={<V2NotFound />} />
+              </Route>
+              <Route element={<ConsoleShell />}>
+              <Route index element={<IndexRoute />} />
+              <Route path="agents" element={<AgentsRoute mode="list" />} />
+              <Route path="agents/new" element={<AgentsNewRoute />} />
+              <Route path="agents/import" element={<CreateAgent mode="import" />} />
+              <Route path="agents/:agentId" element={<AgentsRoute mode="detail" />} />
+              <Route path="agents/:agentId/edit" element={<AgentsEditRoute />} />
+              <Route path="create" element={<LegacyCreateRedirect />} />
+              <Route path="create/studio" element={<CreateAgentStudio />} />
+                <Route
+                  path="create/assistant"
+                  element={<V2OrClassic classic={<CreateAgentAssistant />} toV2={classicAssistantToV2} />}
+                />
+                <Route
+                  path="registry"
+                  element={<V2OrClassic classic={<Registry />} toV2={classicRegistryToV2} />}
+                />
+                <Route
+                  path="knowledge-bases"
+                  element={<V2OrClassic classic={<KnowledgeBases />} toV2={classicKnowledgeBasesToV2} />}
+                />
+                <Route
+                  path="memory"
+                  element={<V2OrClassic classic={<Memory />} toV2={classicMemoryToV2} />}
+                />
+                <Route
+                  path="chat"
+                  element={<V2OrClassic classic={<Chat />} toV2={classicChatToV2} />}
+                />
+                <Route
+                  path="observability"
+                  element={<V2OrClassic classic={<Observability />} toV2={classicObservabilityToV2} />}
+                />
+                <Route path="evaluation" element={<EvaluationRoute />} />
+                <Route
+                  path="skill-lab"
+                  element={<V2OrClassic classic={<SkillLab />} toV2={classicSkillLabToV2} />}
+                />
+                <Route
+                  path="governance"
+                  element={<V2OrClassic classic={<Governance />} toV2={classicGovernanceToV2} />}
+                />
+                <Route
+                  path="users"
+                  element={<V2OrClassic classic={<Users />} toV2={classicUsersToV2} />}
+                />
+                <Route
+                  path="announcements"
+                  element={<V2OrClassic classic={<Announcements />} toV2={classicAnnouncementsToV2} />}
+                />
+                <Route
+                  path="videos"
+                  element={<V2OrClassic classic={<Videos />} toV2={classicVideosToV2} />}
+                />
+                <Route
+                  path="workspaces"
+                  element={<V2OrClassic classic={<Workspaces />} toV2={classicWorkspacesToV2} />}
+                />
+                {/* Catch-all stays INSIDE the Shell group so an unknown URL keeps
+                    the sidebar/topbar/footer instead of a bare background grid. */}
+                <Route path="*" element={<NotFound />} />
+              </Route>
+            </Routes>
+          </ProjectProvider>
         </WorkspaceProvider>
       </ToastProvider>
     </BrowserRouter>

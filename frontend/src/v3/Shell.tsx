@@ -11,6 +11,7 @@ import {
   Bot,
   ChevronRight,
   CircleHelp,
+  FolderKanban,
   Compass,
   LayoutDashboard,
   KeyRound,
@@ -30,11 +31,13 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
 import { api } from "../lib/api";
+import type { AccessProject } from "../lib/api/projects";
 import { useNavMode } from "../lib/nav-mode";
 import { setUiVersion } from "../lib/ui-version";
 import { GLOSSARY_TERMS } from "../v2/Glossary";
 import { ModuleDemoProvider } from "../v2/pages/videos/ModuleDemo";
 import { V2ToastProvider } from "../v2/ui";
+import { projectRole, scopeKey, splitByAccess, useProject } from "../workspace/project-context";
 import { useWorkspace } from "../workspace/workspace-context";
 import { v2CounterpartOf } from "./backToV2";
 import { ChangePasswordDialog } from "./ChangePassword";
@@ -124,6 +127,46 @@ function WorkspaceSwitch() {
   );
 }
 
+/** "name · role" of a project option; an administrator outside it reads "admin access". */
+function useProjectLabel() {
+  const { t } = useTranslation();
+  return useCallback(
+    (project: AccessProject) => {
+      const role = projectRole(project);
+      const roleName = role ? t(`v3.project.roles.${role}`, { defaultValue: role }) : t("v3.project.adminAccess");
+      return `${project.name} · ${roleName}`;
+    },
+    [t],
+  );
+}
+
+/** Right of the workspace switch (projects §2.7); absent while there is no choice to make. */
+function ProjectSwitch() {
+  const { t } = useTranslation();
+  const { projects, current, switchable, select } = useProject();
+  const label = useProjectLabel();
+  if (!switchable) return null;
+  const { member, adminAccess } = splitByAccess(projects);
+  const option = (p: AccessProject) => (
+    <option key={p.id} value={p.id}>{label(p)}</option>
+  );
+  return (
+    <label className="v3-ws" title={t("v3.project.label")} data-testid="v3-project-switch">
+      <span className="v3-ws-label">{t("v3.project.label")}</span>
+      <select value={current?.id ?? ""} onChange={(e) => select(e.target.value)} aria-label={t("v3.project.label")}>
+        {adminAccess.length === 0 ? (
+          member.map(option)
+        ) : (
+          <>
+            {member.length > 0 && <optgroup label={t("v3.project.memberGroup")}>{member.map(option)}</optgroup>}
+            <optgroup label={t("v3.project.adminGroup")}>{adminAccess.map(option)}</optgroup>
+          </>
+        )}
+      </select>
+    </label>
+  );
+}
+
 /**
  * Console V3 — the command center. A fixed top bar (brand, ⌘K, workspace,
  * language, V2 switch, account) over a rail and the page. Pages V3 has not
@@ -141,6 +184,10 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const { isAdmin, authRequired, username, builtin, logout } = useAuth();
   const [changingPassword, setChangingPassword] = useState(false);
   const { current } = useWorkspace();
+  const project = useProject();
+  const projectLabel = useProjectLabel();
+  // workspace-bound pages remount (and refetch) on a workspace or project switch
+  const scope = scopeKey(current?.id, project.current?.id);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const railToggle = useRef<HTMLButtonElement>(null);
@@ -156,7 +203,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [railOpen]);
-  const agents = useLoad(() => api.listAgents(), `v3-shell-agents:${current?.id ?? ""}`);
+  const agents = useLoad(() => api.listAgents(), `v3-shell-agents:${scope}`);
 
   // Opening a /v3 page is choosing V3 — reloads and "/" land back here.
   useEffect(() => {
@@ -267,6 +314,23 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
     ];
   }, [t]);
 
+  // ⌘K "switch project": one entry per other project, only when the switcher shows
+  const projectCommands = useMemo<Command[]>(() => {
+    if (!project.switchable) return [];
+    const group = t("v3.project.cmdkGroup");
+    return project.projects
+      .filter((p) => p.id !== project.current?.id)
+      .map((p) => ({
+        id: `prj:${p.id}`,
+        group,
+        label: t("v3.project.switchTo", { name: p.name }),
+        hint: projectLabel(p),
+        icon: <FolderKanban size={16} />,
+        keywords: `${p.id} ${t("v3.project.switchTo", { name: p.name, lng: "en" })} switch project 切换项目`,
+        run: () => project.select(p.id),
+      }));
+  }, [project, projectLabel, t]);
+
   const managingAgent =
     location.pathname === "/v2/agents" && new URLSearchParams(location.search).get("view") !== "new";
   const closePalette = useCallback(() => setPaletteOpen(false), []);
@@ -294,6 +358,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
           </button>
           <div className="v3-top-right">
             <WorkspaceSwitch />
+            <ProjectSwitch />
             <Lang />
             <HelpMenu />
             <button type="button" className="v3-btn sm v3-version-switch" onClick={backToV2} data-testid="v3-switch-v2" aria-label={t("v3.switch.back")} title={t("v3.switch.back")}>
@@ -390,7 +455,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
               <ModuleDemoProvider>
                 <div
                   className="v2 v3-host"
-                  key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : current?.id ?? "none"}
+                  key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}
                 >
                   <RouteChunk key={location.pathname}>
                     <Outlet />
@@ -401,14 +466,14 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
           ) : hosted === "classic" ? (
             <div
               className="view v3-classic"
-              key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : current?.id ?? "none"}
+              key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}
             >
               <RouteChunk key={location.pathname}>
                 <Outlet />
               </RouteChunk>
             </div>
           ) : (
-            <div key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : current?.id ?? "none"}>
+            <div key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}>
               <RouteChunk>
                 <Outlet />
               </RouteChunk>
@@ -419,7 +484,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
         {changingPassword && username && (
           <ChangePasswordDialog username={username} builtin={builtin} onClose={() => setChangingPassword(false)} />
         )}
-        <CommandPalette open={paletteOpen} onClose={closePalette} agents={agents.data?.agents ?? []} pages={[...pages, ...help]} />
+        <CommandPalette open={paletteOpen} onClose={closePalette} agents={agents.data?.agents ?? []} pages={[...pages, ...projectCommands, ...help]} />
         <GlossaryDialog />
         {touring && <Tour onClose={() => setTouring(false)} />}
       </ToastProvider>

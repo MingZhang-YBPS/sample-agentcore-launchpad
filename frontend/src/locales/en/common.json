@@ -11971,6 +11971,32 @@
           "byocNoAdot": "This BYOC code zip was deployed without the ADOT launcher, so it emits no spans and evaluation cannot score it. Add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, then republish."
         }
       }
+    },
+    "project": {
+      "resolving": "Resolving project…",
+      "label": "Project",
+      "adminAccess": "admin access",
+      "memberGroup": "My projects",
+      "adminGroup": "Admin access (not a member)",
+      "cmdkGroup": "Projects",
+      "switchTo": "Switch to project {{name}}",
+      "roles": {
+        "project_owner": "Project owner",
+        "developer": "Developer",
+        "biz_owner": "Business owner",
+        "release_ops": "Release ops",
+        "sme": "Domain expert",
+        "viewer": "Viewer",
+        "inherit": "Inherits global role"
+      },
+      "none": {
+        "eyebrow": "Access · project",
+        "title": "Not in any project yet",
+        "meta": "Signed in as {{username}}",
+        "waiting": "Waiting for a project membership",
+        "body": "Your account can enter the workspace “{{workspace}}” but is not a member of any of its projects. Ask a project owner or a platform administrator to add you to one.",
+        "switchWorkspace": "Switch workspace"
+      }
     }
   },
   "models": {
