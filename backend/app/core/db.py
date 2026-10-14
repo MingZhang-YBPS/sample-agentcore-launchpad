@@ -77,6 +77,8 @@ WORKSPACE_SCOPED_TABLES = (
     # VPC network profiles + each project's allowed set (models/network.py, §12.3)
     "network_profiles",
     "project_network_profiles",
+    # hosted MCP servers' tool reviews (models/mcp_review.py, §15.6)
+    "mcp_tool_reviews",
 )
 
 # Project boundary (design §4). STRICT rows always belong to one project; SHARED rows
@@ -94,6 +96,7 @@ PROJECT_STRICT_TABLES = (
     "share_links", "promotions", "eval_recommendations", "assistant_messages",
     "assistant_proposals", "assistant_evaluation_plans", "evaluation_asset_operations",
     "criteria", "criterion_results", "annotations", "skill_lab_jobs",
+    "mcp_tool_reviews",
 )
 PROJECT_SHARED_TABLES = (
     # a system preset's deployments and spec snapshots belong to no project, like it
@@ -145,6 +148,7 @@ _PROJECT_BACKFILL_DERIVED = (
     ("criterion_results", "run_id", "eval_runs"),
     ("annotations", "task_id", "annotation_tasks"),
     ("skill_lab_jobs", "taskset_id", "skill_lab_tasksets"),
+    ("mcp_tool_reviews", "agent_id", "agents"),
 )
 PROJECTS_MIGRATION_MARKER = "migration.projects_v1"
 # The one-time username -> users.id backfill of the SoD columns (design §8.3-7).
@@ -203,6 +207,7 @@ def init_db(bind=None) -> None:
     from app.models import announcement as _announcement_models  # noqa: F401
     from app.models import assistant as _assistant_models  # noqa: F401
     from app.models import dlc as _dlc_models  # noqa: F401 — Agent-DLC tables
+    from app.models import mcp_review as _mcp_review_models  # noqa: F401 — projects §15.6
     from app.models import network as _network_models  # noqa: F401 — projects §12
     from app.models import platform_settings as _platform_settings  # noqa: F401
     from app.models import projects as _project_models  # noqa: F401 — design §2.2
@@ -1281,6 +1286,8 @@ def _migrate_workspace_columns(bind) -> None:
         "project_network_profiles": (
             "ALTER TABLE project_network_profiles ADD COLUMN workspace_id VARCHAR(32)"
         ),
+        # born with the column (projects §15.6); listed so the scoped-tables drift test holds
+        "mcp_tool_reviews": "ALTER TABLE mcp_tool_reviews ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())
@@ -1524,6 +1531,8 @@ def _migrate_project_columns(bind) -> None:
         "user_token_revocations": (
             "ALTER TABLE user_token_revocations ADD COLUMN project_id VARCHAR(32)"
         ),
+        # born with the column (projects §15.6)
+        "mcp_tool_reviews": "ALTER TABLE mcp_tool_reviews ADD COLUMN project_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

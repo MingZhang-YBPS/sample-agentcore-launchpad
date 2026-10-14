@@ -38,6 +38,9 @@ PROJECT_PERMISSIONS = (
     "project.members",  # manage this project's members and custom roles
     "project.audit",    # phase 3: the project's audit and cost views
     "project.share",    # phase 3: share this project's resources with another
+    # §15.6/§15.9: approve a hosted MCP server's tool list (never the deployer's own).
+    # A project key, not an AGENT_PERMISSIONS one, so /api/auth/status keeps its list.
+    "mcp.approve",
 )
 ALL_PROJECT_KEYS = frozenset((*AGENT_PERMISSIONS, *PROJECT_PERMISSIONS))
 INHERIT_ROLE = "inherit"
@@ -75,9 +78,12 @@ ROLE_TEMPLATES: dict[str, RoleTemplate] = {
             "golden.admit", "judge.calibrate", "identity.grant",
         })),
         RoleTemplate(
-            "release_ops", frozenset({"project.use", "project.write", *_OPERATOR_DEFAULT}),
+            "release_ops",
+            frozenset({"project.use", "project.write", "mcp.approve", *_OPERATOR_DEFAULT}),
         ),
         RoleTemplate("sme", frozenset({"project.use", "identity.grant"})),
+        # §15.9: reviews MCP servers' tool lists (and nothing it could approve for itself)
+        RoleTemplate("tool_steward", frozenset({"project.use", "mcp.approve"})),
         RoleTemplate("viewer", frozenset()),
     )
 }
@@ -88,11 +94,18 @@ SUGGESTED_TEMPLATE = {"member": "developer", "operator": "release_ops"}
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
+# §15.9: the global key an `inherit` member must hold to approve MCP tool lists — the
+# approver's key (operators by default), mirroring `release_ops` holding mcp.approve
+_INHERIT_MCP_APPROVE_FROM = "promotion.approve"
+
+
 def inherit_keys(role: str, overrides: dict[str, bool] | None) -> frozenset[str]:
-    """§3.5: the account's global keys (today's 16-key computation) + use/write."""
+    """§3.5: the account's global keys (today's 16-key computation) + use/write, and
+    mcp.approve for an account holding the approver key."""
     defaults = default_permissions(role)
     granted = {k for k in AGENT_PERMISSIONS if (overrides or {}).get(k, k in defaults)}
-    return frozenset(granted | {"project.use", "project.write"})
+    extra = {"mcp.approve"} if _INHERIT_MCP_APPROVE_FROM in granted else set()
+    return frozenset(granted | extra | {"project.use", "project.write"})
 
 
 def template_keys(

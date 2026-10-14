@@ -12099,5 +12099,58 @@
       "byocNoAdot": "This BYOC code zip has no ADOT launcher, so it emits no spans and is missing from Observability and evaluation: add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, then republish.",
       "noLogGroup": "The agent has not been invoked on this endpoint yet."
     }
+  },
+  "mcpReview": {
+    "title": "Tool review",
+    "state": {
+      "none": "no tool list yet",
+      "reviewing": "awaiting review",
+      "approved": "approved",
+      "rejected": "rejected",
+      "superseded": "superseded"
+    },
+    "source": {
+      "deploy": "deploy",
+      "drift": "drift",
+      "baseline": "baseline"
+    },
+    "withheld": "The Gateway target is withheld: agents cannot call these tools until a member holding mcp.approve (not the deployer) approves this list.",
+    "rejectedNotice": "The last tool list was rejected. The target stays withheld until a new deploy is approved.",
+    "none": "No tool list has been reviewed yet. The first deploy opens a review.",
+    "driftNotice": "The tools the Gateway lists differ from the approved list. Check for drift to record the change and withhold the target until it is reviewed.",
+    "publishing": "Approved. Re-creating the Gateway target…",
+    "publishFailed": "Approved, but the Gateway target could not be re-created:",
+    "meta": "v{{version}} · {{source}} · deployed by {{by}} · {{ago}} ago",
+    "decidedBy": "{{status}} by {{by}}",
+    "diff": "vs the approved list: +{{added}} −{{removed}} · {{described}} description(s) and {{schema}} schema(s) changed · {{hints}} hint(s)",
+    "tool": "Tool",
+    "description": "Description (verbatim, as models will read it)",
+    "hints": "Hints",
+    "schema": "Input schema",
+    "schemaChanged": "Input schema changed",
+    "removed": "removed in this list",
+    "hint": {
+      "dangerous_verb": "destructive verb",
+      "write_name": "writes data",
+      "missing_description": "no description",
+      "injection_phrase": "instruction-like phrase",
+      "url": "contains a URL",
+      "cross_tool_reference": "names another tool",
+      "long_description": "very long text"
+    },
+    "note": "Note (optional)",
+    "approve": "Approve",
+    "reject": "Reject",
+    "sod": "Needs mcp.approve; the deployer cannot decide their own server's review.",
+    "approved": "Tool list approved; the Gateway target is being re-created",
+    "rejected": "Tool list rejected",
+    "decideFailed": "Could not record the decision",
+    "check": "Check for drift",
+    "checkHint": "Re-sync the Gateway target and compare its tools with the approved list",
+    "checkClean": "The live tools match the approved list",
+    "checkDrift": "The tools changed: a review is open and the target is withheld",
+    "checkNoTarget": "No live Gateway target to check",
+    "checkFailed": "Drift check failed",
+    "history": "History ({{count}})"
   }
 }

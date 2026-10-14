@@ -1332,3 +1332,17 @@ PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
     ("PUT", "/api/network-profiles/settings"),
     ("GET", "/api/network-profiles/enforcement"),
 })
+
+# ---- MCP server tool reviews (design projects §15.6, §15.13, M15-review) ----
+# Inside the server's project: reading reviews is participation, deciding one is the
+# project key `mcp.approve` (the deployer never decides their own — object-level SoD
+# in services/mcp_reviews.py), and re-syncing the live target to look for drift is an
+# ordinary project write.
+PERM_MCP_APPROVE = "perm:mcp.approve"
+ROUTE_POLICY.update({
+    ("GET", "/api/mcp-servers/{agent_id}/reviews"): PERM_PROJECT_USE,
+    ("GET", "/api/mcp-servers/{agent_id}/reviews/{review_id}"): PERM_PROJECT_USE,
+    ("POST", "/api/mcp-servers/{agent_id}/reviews/{review_id}/approve"): PERM_MCP_APPROVE,
+    ("POST", "/api/mcp-servers/{agent_id}/reviews/{review_id}/reject"): PERM_MCP_APPROVE,
+    ("POST", "/api/mcp-servers/{agent_id}/reviews/check"): PERM_PROJECT_WRITE,
+})
