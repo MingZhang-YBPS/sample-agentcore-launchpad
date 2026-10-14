@@ -123,6 +123,18 @@ def resumable_job_types() -> frozenset[str]:
     })
 
 
+def retry_job_types() -> dict[str, str]:
+    """Job types an administrator's retry takes over (from the job's checkpoints)
+    instead of `resume_pending_jobs` — a restart leaves them for that retry."""
+    from app.services import project_purge
+
+    return {
+        # G11-life: moves to resumable_job_types() once pipeline.resume_pending_jobs
+        # registers `project_purge.start_purge_resume`
+        project_purge.JOB_TYPE: "POST /api/projects/{project_id}/purge",
+    }
+
+
 @dataclass(frozen=True)
 class InflightItem:
     kind: str
@@ -210,11 +222,16 @@ def collect_inflight(
                                   handled_by))
 
     resumable = resumable_job_types()
+    retried = retry_job_types()
     for r in reader.rows(Job, ["id", "workspace_id", "type", "status", "updated_at"],
                          lambda m: m.status.in_(_JOB_ACTIVE)):
         if r.type in resumable:
             add(JOB, r.id, r.workspace_id, r.status, r.type, r.updated_at, RESUMES,
                 "resume_pending_jobs")
+        elif r.type in retried:
+            add(JOB, r.id, r.workspace_id, r.status,
+                f"{r.type} — stops; retrying it continues from its checkpoints",
+                r.updated_at, CLEARED_RETRY, retried[r.type])
         else:
             add(JOB, r.id, r.workspace_id, r.status,
                 f"{r.type} — no resume starter: the row stays {r.status} forever",

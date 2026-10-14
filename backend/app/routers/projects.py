@@ -11,14 +11,15 @@ The logic lives in `services/projects.py`; this module is request shapes only.
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.routers.auth import require_identity
-from app.services import access
+from app.services import access, project_purge
 from app.services import projects as svc
 
 logger = logging.getLogger(__name__)
@@ -303,3 +304,71 @@ def transfer(
     result = svc.transfer_agent(db, identity, row, body.resource_id, body.to_project_id)
     db.commit()
     return result
+
+
+# ── lifecycle: export, deletion request, cooling-off, purge (design §11.5) ────
+
+
+@router.get("/{project_id}/lifecycle")
+def get_lifecycle(project_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return svc.lifecycle_view(db, svc.get_project(db, project_id))
+
+
+@router.post("/{project_id}/export", status_code=201)
+def export_project(
+    project_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    identity = require_identity(request)
+    row = svc.get_project(db, project_id)
+    record = project_purge.build_export(db, identity, row)
+    db.commit()
+    return record
+
+
+@router.get("/{project_id}/exports/{export_id}")
+def download_export(
+    project_id: str, export_id: str, db: Session = Depends(get_db),
+) -> FileResponse:
+    path = project_purge.export_file(svc.get_project(db, project_id), export_id)
+    return FileResponse(path, media_type="application/zip",
+                        filename=f"project-{project_id}-{export_id[:12]}.zip",
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.post("/{project_id}/delete-request")
+def request_deletion(
+    project_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    identity = require_identity(request)
+    result = svc.request_deletion(db, identity, svc.get_project(db, project_id))
+    db.commit()
+    return result
+
+
+@router.post("/{project_id}/delete-request/cancel")
+def cancel_deletion(
+    project_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    identity = require_identity(request)
+    result = svc.cancel_deletion(db, identity, svc.get_project(db, project_id))
+    db.commit()
+    return result
+
+
+@router.post("/{project_id}/purge")
+def purge_project(
+    project_id: str, request: Request, response: Response, dry_run: bool = False,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """`?dry_run=true` lists what the purge would delete; otherwise the purge job
+    starts (202) once the cooling-off has run out."""
+    identity = require_identity(request)
+    row = svc.get_project(db, project_id)
+    if dry_run:
+        return {"dry_run": True, **project_purge.purge_plan(db, row)}
+    job = project_purge.start_purge(db, identity, row)
+    plan = project_purge.purge_plan(db, row)
+    db.commit()
+    project_purge.start_async(job.id)
+    response.status_code = 202
+    return {"dry_run": False, "job_id": job.id, **plan}
