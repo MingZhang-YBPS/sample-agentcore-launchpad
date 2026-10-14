@@ -17,6 +17,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,7 @@ from app.models.projects import (
     ProjectRole,
     ProjectWorkspace,
 )
+from app.schemas.inbound_auth import InboundAuth
 from app.services import access
 from app.services import api_keys as api_keys_service
 from app.services import share_links as share_links_service
@@ -47,8 +49,12 @@ ROLE_KEY_PATTERN = r"^[a-z][a-z0-9_]{1,31}$"
 _ROLE_KEY = re.compile(ROLE_KEY_PATTERN)
 # project settings (design §6.3): an owner (`project.members`) may change these…
 OWNER_SETTINGS = frozenset({"resource_visibility"})
-# …an administrator also these (sod_strict loosened by the owner would defeat it)
-ADMIN_SETTINGS = OWNER_SETTINGS | {"sod_strict"}
+# …an administrator also these (sod_strict loosened by the owner would defeat it;
+# the /v1 project window and the project's own inbound JWT default, design §10.7, are
+# infrastructure decisions like the workspace default they stand in for)
+ADMIN_SETTINGS = OWNER_SETTINGS | {"sod_strict", "quotas", "inbound_auth_default"}
+# `settings.quotas` keys accepted so far (§11.3 adds the rest with its own route)
+QUOTA_KEYS = frozenset({api_keys_service.PROJECT_RATE_KEY})
 _VISIBILITY = ("shared", "isolated")
 CANDIDATE_LIMIT = 20
 TRANSFER_KINDS = ("agent",)
@@ -249,8 +255,54 @@ def _check_settings(settings: dict[str, Any], allowed: frozenset[str]) -> dict[s
         elif key == "sod_strict" and not isinstance(value, bool):
             raise AppError("project.setting_invalid", "sod_strict must be true or false",
                            {"key": key})
+        elif key == "quotas" and value is not None:
+            value = _check_quotas(value)
+        elif key == "inbound_auth_default" and value is not None:
+            value = _check_inbound_auth(value)
         out[key] = value
     return out
+
+
+def _check_quotas(value: Any) -> dict[str, Any]:
+    """`settings.quotas`: a partial object; a None entry clears that quota."""
+    if not isinstance(value, dict):
+        raise AppError("project.setting_invalid", "quotas must be an object", {"key": "quotas"})
+    unknown = sorted(set(value) - QUOTA_KEYS)
+    if unknown:
+        raise AppError("project.setting_invalid", f"unknown quotas: {unknown}",
+                       {"key": "quotas", "quotas": unknown})
+    rate = value.get(api_keys_service.PROJECT_RATE_KEY)
+    if rate is not None and (isinstance(rate, bool) or not isinstance(rate, int)
+                             or not 1 <= rate <= api_keys_service.MAX_RATE_PER_MINUTE):
+        raise AppError(
+            "project.setting_invalid",
+            f"quotas.{api_keys_service.PROJECT_RATE_KEY} must be a whole number from 1 to "
+            f"{api_keys_service.MAX_RATE_PER_MINUTE}",
+            {"key": "quotas", "quota": api_keys_service.PROJECT_RATE_KEY})
+    return dict(value)
+
+
+def _check_inbound_auth(value: Any) -> dict[str, Any]:
+    """`settings.inbound_auth_default`: the workspace default's shape (`InboundAuth`),
+    stored normalized. Shape only: the discovery document is probed where an agent's
+    own inbound auth is saved, and a redeploy is what applies it (§10.7)."""
+    try:
+        return InboundAuth.model_validate(value).model_dump()
+    except ValidationError as exc:
+        reason = "; ".join(str(err.get("msg") or "") for err in exc.errors()[:3])
+        raise AppError("project.setting_invalid",
+                       f"inbound_auth_default is not a valid inbound auth config: {reason}",
+                       {"key": "inbound_auth_default"}) from exc
+
+
+def _merge_settings(current: dict[str, Any], clean: dict[str, Any]) -> dict[str, Any]:
+    """Shallow merge, None removing a key — except `quotas`, merged one level deeper
+    so setting one quota keeps the others (an emptied `quotas` is removed)."""
+    merged = {**current, **clean}
+    if isinstance(clean.get("quotas"), dict):
+        quotas = {**(current.get("quotas") or {}), **clean["quotas"]}
+        merged["quotas"] = {k: v for k, v in quotas.items() if v is not None} or None
+    return {k: v for k, v in merged.items() if v is not None}
 
 
 def _workspace(db: Session, workspace_id: str) -> Workspace:
@@ -284,7 +336,8 @@ def create_project(
     row = Project(
         id=project_id, name=name.strip(), description=description or "",
         department_id=department_id or None, group_id=group_id or None,
-        status=STATUS_ACTIVE_PROJECT, is_default=False, settings=clean or None,
+        status=STATUS_ACTIVE_PROJECT, is_default=False,
+        settings=_merge_settings({}, clean) or None,
         created_by=getattr(identity, "user_id", None), created_by_name=identity.username,
     )
     db.add(row)
@@ -332,8 +385,7 @@ def update_project(
     if "settings" in fields and fields["settings"] is not None:
         clean = _check_settings(fields["settings"], ADMIN_SETTINGS if structure
                                 else OWNER_SETTINGS)
-        merged = {**(row.settings or {}), **clean}
-        merged = {k: v for k, v in merged.items() if v is not None}
+        merged = _merge_settings(row.settings or {}, clean)
         if merged != (row.settings or {}):
             row.settings = merged or None
             changed.append("settings")

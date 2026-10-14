@@ -7,6 +7,11 @@ Design notes (T16):
   the backend is a single process (same assumption as the deploy-worker registry),
   the check must not add a ledger write per *rejected* call, and a restart merely
   forgives one window. It is a guard against runaway integrations, not billing.
+* **A project window too** (projects §10.7 / §11.3): `settings.quotas.v1_rate_per_minute`
+  on the key's project caps all of that project's keys together, beside each key's
+  own limit. Same window, same 429; a call is admitted only when both have room and
+  then counts against both. No project limit (the default project, every project
+  today) leaves the per-key behaviour exactly as before.
 * **Usage is in the ledger.** `api_keys.last_used_at`/`use_count` plus one
   `api_key_usage` row per (key, UTC day) so the console can chart it and a restart
   loses nothing. Only *admitted* calls are counted.
@@ -45,6 +50,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.core.project_scope import project_context
 from app.models.ledger import ApiKey, ApiKeyUsage, User, UserWorkspace
+from app.models.projects import Project
 from app.services import users as users_service
 
 WINDOW_SECONDS = 60.0
@@ -52,13 +58,18 @@ MAX_RATE_PER_MINUTE = 100_000
 # A hot key writes `last_used_at` at most this often.
 LAST_USED_RESOLUTION = timedelta(minutes=1)
 
+# `projects.settings.quotas` key of the project-wide /v1 window (design §11.3 names)
+PROJECT_RATE_KEY = "v1_rate_per_minute"
+
 _hits: dict[str, deque[float]] = {}
+_project_hits: dict[str, deque[float]] = {}
 _lock = threading.Lock()
 
 
 def reset_rate_limits() -> None:
     with _lock:
         _hits.clear()
+        _project_hits.clear()
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -80,26 +91,70 @@ def allows_agent(key: ApiKey, agent_id: str) -> bool:
     return not key.agent_ids or agent_id in key.agent_ids
 
 
-def check_rate(key: ApiKey, *, now: float | None = None) -> None:
-    """Admit or refuse one call; refusal is 429 with `Retry-After` (whole seconds)."""
+def project_rate_limit(db: Session, key: ApiKey) -> int | None:
+    """The key's project's `/v1` calls-per-minute cap, or None (no project window).
+
+    Read per call, so a changed setting applies on the next request; a project
+    with no `quotas` (every project unless an administrator set one) has none."""
+    if key.project_id is None:
+        return None
+    row = db.get(Project, key.project_id)
+    quotas = (row.settings or {}).get("quotas") if row is not None else None
+    value = quotas.get(PROJECT_RATE_KEY) if isinstance(quotas, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _prune(window: deque[float], moment: float) -> None:
+    while window and moment - window[0] >= WINDOW_SECONDS:
+        window.popleft()
+
+
+def _refuse(limit: int, window: deque[float], moment: float, *, project: str | None) -> None:
+    retry = max(1, int(WINDOW_SECONDS - (moment - window[0])) + 1)
+    details: dict[str, object] = {"limit_per_minute": limit, "retry_after_seconds": retry}
+    what = "rate limit"
+    if project is not None:
+        details["scope"] = "project"
+        what = "project rate limit"
+    raise AppError(
+        "auth.rate_limited",
+        f"{what} of {limit} requests per minute exceeded",
+        details,
+        status_code=429,
+        headers={"Retry-After": str(retry)},
+    )
+
+
+def check_rate(
+    key: ApiKey, *, project_limit: int | None = None, now: float | None = None
+) -> None:
+    """Admit or refuse one call; refusal is 429 with `Retry-After` (whole seconds).
+
+    `project_limit` (from `project_rate_limit`) adds the key's project window. Both
+    are checked before either records the call, so a refusal by one never uses up
+    the other's room."""
     limit = key.rate_per_minute
-    if not limit:
+    project = key.project_id if project_limit else None
+    if not limit and project is None:
         return
     moment = time.monotonic() if now is None else now
     with _lock:
-        window = _hits.setdefault(key.id, deque())
-        while window and moment - window[0] >= WINDOW_SECONDS:
-            window.popleft()
-        if len(window) >= limit:
-            retry = max(1, int(WINDOW_SECONDS - (moment - window[0])) + 1)
-            raise AppError(
-                "auth.rate_limited",
-                f"rate limit of {limit} requests per minute exceeded",
-                {"limit_per_minute": limit, "retry_after_seconds": retry},
-                status_code=429,
-                headers={"Retry-After": str(retry)},
-            )
-        window.append(moment)
+        window = _hits.setdefault(key.id, deque()) if limit else None
+        shared = _project_hits.setdefault(project, deque()) if project else None
+        if window is not None:
+            _prune(window, moment)
+            if len(window) >= limit:
+                _refuse(limit, window, moment, project=None)
+        if shared is not None and project_limit:
+            _prune(shared, moment)
+            if len(shared) >= project_limit:
+                _refuse(project_limit, shared, moment, project=project)
+        if window is not None:
+            window.append(moment)
+        if shared is not None:
+            shared.append(moment)
 
 
 def record_use(db: Session, key: ApiKey) -> None:
