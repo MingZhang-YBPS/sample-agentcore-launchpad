@@ -918,6 +918,38 @@ def calibration_candidate_runs(
     return {"total": total, "runs": out}
 
 
+@router.get("/calibration/run-criteria/{run_id}")
+def calibration_run_criteria(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The criteria a run can seed an annotation task for, with the sample count each
+    would give — what the evaluation task's "build an annotation task from this run"
+    button needs (design §3.1). Only evaluator criteria: a metric is measured, not
+    judged, so there is nothing to calibrate."""
+    from app.models.dlc import CriterionResult
+
+    run = db.get(EvalRun, run_id)
+    if run is None or run.workspace_id != ws.id:
+        raise NotFoundError("run.not_found", "run not found", detail={"run_id": run_id})
+    summary = (run.criteria_summary or {}).get("criteria") or {}
+    rows = db.execute(
+        select(CriterionResult.criterion_key, CriterionResult.scenario_id,
+               CriterionResult.attempt).where(CriterionResult.run_id == run.id)
+    ).all()
+    by_key: dict[str, list[Any]] = {}
+    for row in rows:
+        by_key.setdefault(row.criterion_key, []).append(row)
+    criteria = [
+        {"key": key, "items": len(_session_units(units))}
+        for key, units in sorted(by_key.items())
+        if (summary.get(key) or {}).get("kind") in (None, "evaluator")
+    ]
+    return {"run_id": run.id, "status": run.status, "mode": run.mode,
+            "agent_id": run.agent_id or None, "criteria": criteria}
+
+
 @router.get("/calibration/{criterion_key}")
 def calibration_history(
     criterion_key: str,

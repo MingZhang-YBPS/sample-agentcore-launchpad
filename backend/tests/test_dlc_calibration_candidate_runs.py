@@ -186,3 +186,24 @@ def test_the_count_shown_is_the_tasks_sample_count(engineer: TestClient, monkeyp
         "annotators": [ENG["username"], "root"]})
     assert res.status_code == 201, res.text
     assert res.json()["total"] == picked["items"] == 3
+
+
+def test_a_runs_calibratable_criteria_leave_metrics_out(engineer: TestClient):  # noqa: F811
+    ids = _seed()
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, ids["manual"])
+        run.criteria_summary = {"criteria": {"R1": {"key": "R1", "kind": "evaluator"},
+                                             "R2": {"key": "R2", "kind": "metric"}}}
+        db.commit()
+    finally:
+        db.close()
+    res = engineer.get(f"/api/calibration/run-criteria/{ids['manual']}")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["criteria"] == [{"key": "R1", "items": 3}]
+    assert body["agent_id"] == ids["agent"] and body["status"] == "completed"
+    # no summary (an older run): every criterion with verdicts is offered
+    res = engineer.get(f"/api/calibration/run-criteria/{ids['no_r1']}")
+    assert res.json()["criteria"] == [{"key": "R2", "items": 1}]
+    assert engineer.get("/api/calibration/run-criteria/nope").status_code == 404
