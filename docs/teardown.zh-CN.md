@@ -75,6 +75,10 @@ uv run python ../scripts/teardown.py --yes        # 删除（网关层 → 凭�
   你的演示 Agent 可让共享基础设施的清理保持干净。X-Ray Transaction Search 是账号级的
   共享可观测性设施，不在清理范围内。
 
+## 删除 VPC 前先删除使用它的 Agent
+
+使用 VPC 网络配置的 Agent（以及托管 MCP 服务器）会在其子网中占用 ENI，运行时删除后还要过一段时间 AgentCore 才会释放。请先删除这些 Agent，等它们的 ENI 释放任务完成，再归档网络配置，最后才删除子网、安全组和 VPC。详见 [private-networking.zh-CN.md §4](private-networking.zh-CN.md#4-拆除先删除-agent再删除-vpc)。
+
 ## 建议的操作顺序
 
 1. 删除演示 **Agent**（控制台或 `DELETE /api/agents/{id}`）。

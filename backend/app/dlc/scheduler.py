@@ -328,6 +328,18 @@ def run_mcp_health(db: Session) -> dict[str, Any]:
     return {"servers": servers, "external": external}
 
 
+def _sweep_eni_releases(db: Session) -> Any:
+    from app.deployer import pipeline
+
+    return pipeline.sweep_eni_releases(db)
+
+
+def _start_due_purges(db: Session) -> Any:
+    from app.services import project_purge
+
+    return project_purge.start_due_purges(db)
+
+
 TASKS = (
     ("dlc.watch", run_due_watches, TICK_SECONDS),
     ("dlc.alerts", evaluate_alerts, int(ALERT_EVERY.total_seconds())),
@@ -336,7 +348,12 @@ TASKS = (
     ("dlc.teardown", sweep_deleted_resources, TICK_SECONDS),
     # hosted MCP servers: health, tool-list drift, live endpoint (projects §15.8)
     ("mcp.health", run_mcp_health, int(MCP_HEALTH_EVERY.total_seconds())),
+    # a deleted VPC agent's ENIs no live waiter is polling (projects §12.9)
+    ("dlc.eni_release", _sweep_eni_releases, TICK_SECONDS),
+    # projects past their deletion cooling-off start their purge (§11.5)
+    ("project.purge", _start_due_purges, TICK_SECONDS),
 )
+
 
 
 def tick(*, worker: str = "local") -> dict[str, Any]:

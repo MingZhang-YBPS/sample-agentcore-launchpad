@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { type AgentForm, hasByoMounts } from "../../../lib/agent-spec";
-import { type NetworkChoice, networkChoices } from "../../../lib/api/agent-network";
+import { type NetworkChoice, networkChoices, RUNTIME_NETWORK_PURPOSES } from "../../../lib/api/agent-network";
 import { type NetworkProfile, networkProfilesApi } from "../../../lib/api/projects";
 import { errorMessage } from "../../../lib/api";
 import { Alert, Card, Field, Segmented, Select, Spin, Tag, type TagTone } from "../../ui";
@@ -49,7 +49,7 @@ export function NetworkSection({ form, set }: Omit<SectionProps, "cat" | "err">)
   // a profile set from outside (the wizard preselects the project's default once the
   // list lands) shows the VPC side, as a pick here would
   if (mode === "PUBLIC" && form.networkProfileId) setMode("VPC");
-  const choices: NetworkChoice[] = profiles ? networkChoices(profiles, form.networkProfileId) : [];
+  const choices: NetworkChoice[] = profiles ? networkChoices(profiles, form.networkProfileId, RUNTIME_NETWORK_PURPOSES) : [];
   const current = choices.find((c) => c.profile.id === form.networkProfileId) ?? null;
   // a container's legacy inline ids (BYO mounts, no profile) stay in the storage card
   const inline = form.method === "container" && !form.networkProfileId && hasByoMounts(form);

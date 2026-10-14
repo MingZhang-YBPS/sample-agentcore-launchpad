@@ -460,6 +460,13 @@ def execute(
             status_code=409,
         )
     bundle = _bundle(db, row.bundle_id, ws.id)
+    # a network profile needs its mapping in the target (409 network_profile.unmapped)
+    from app.services import resource_mapping as mapping_service
+
+    mapping_service.assert_network_mapped(
+        db, bundle.spec or {}, source_workspace_id=bundle.workspace_id,
+        target_workspace_id=target.id, project_id=row.project_id,
+    )
     gates = release_gates.execution_gates(db, bundle, target)
     release_gates.assert_executable(gates)
     promotion_exec.assert_target_free(db, row, bundle)

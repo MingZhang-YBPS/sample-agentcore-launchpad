@@ -54,6 +54,31 @@ def mode(row: Workspace | None) -> str:
     return ISOLATED if value == ISOLATED else SHARED
 
 
+def project_mode(project_id: str) -> str | None:
+    """A project's `settings.resource_visibility`, or None to follow its workspace."""
+    from sqlalchemy import text
+
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text("SELECT settings FROM projects WHERE id = :id"), {"id": project_id},
+        ).first()
+    finally:
+        db.close()
+    raw = row[0] if row else None
+    if isinstance(raw, str):
+        import json
+
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = None
+    value = (raw or {}).get(SETTINGS_KEY) if isinstance(raw, dict) else None
+    return value if value in MODES else None
+
+
 def set_mode(db: Session, row: Workspace, value: str) -> None:
     """Persist the mode. Reassigned, not mutated — SQLAlchemy does not track
     in-place JSON edits. Changes no resource: it only decides what members see."""
@@ -93,9 +118,12 @@ class Viewer:
         identity = require_identity(request)
         scope = require_workspace(request)
         project = getattr(request.state, "project", None)
+        effective = mode(scope.row)
+        if project is not None:  # a project's own setting wins (design §5.13)
+            effective = project_mode(project.id) or effective
         viewer = cls(
             user_id=identity.user_id,
-            filters=mode(scope.row) == ISOLATED and not identity.is_admin,
+            filters=effective == ISOLATED and not identity.is_admin,
             project_id=project.id if project is not None else None,
         )
         request.state.viewer = viewer

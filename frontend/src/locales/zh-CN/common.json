@@ -12199,7 +12199,8 @@
         "members": "成员",
         "roles": "角色",
         "workspaces": "工作区",
-        "settings": "设置"
+        "settings": "设置",
+        "audit": "审计"
       },
       "overview": {
         "members": "成员",
@@ -12402,6 +12403,65 @@
         "more": "加载更多",
         "empty": "没有符合筛选条件的审计记录。",
         "hint": "{{project}} 在所绑定的每个工作区里发生的操作，以及项目本身的变更（成员、角色、绑定）。被拒绝的请求也会记录；导出操作本身同样会记录。"
+      },
+      "lifecycle": {
+        "title": "生命周期",
+        "sub": "先归档项目、导出数据包，再申请删除：{{days}} 天冷静期结束后，清除会删除其 Agent 和数据行。审计日志保留。",
+        "defaultLocked": "默认项目不能归档或删除；仍可导出。",
+        "archiveFirst": "申请删除前请先归档项目。",
+        "requestDeletion": "申请删除",
+        "countdown": "{{d}} 天 {{h}} 小时 {{m}} 分 {{s}} 秒后可清除（{{at}}）。",
+        "purgeReady": "冷静期已结束：可以清除该项目。",
+        "requestedBy": "{{who}} 于 {{at}} 申请删除。",
+        "cancel": "撤销删除",
+        "purge": "清除…",
+        "job": "清除任务 {{id}}：{{status}}（阶段 {{stage}}）",
+        "deleted": "该项目已于 {{at}} 清除。",
+        "exports": "导出包",
+        "export": "立即导出",
+        "noExports": "尚无导出包。",
+        "exportMeta": "{{who}} · {{kb}} KB",
+        "exported": "已写入 {{name}} 的导出包",
+        "requested": "已申请删除 {{name}}；{{days}} 天后可清除",
+        "cancelled": "已撤销 {{name}} 的删除申请",
+        "purgeStarted": "已开始清除 {{name}}（任务 {{job}}）",
+        "planAgents": "将删除的 Agent：{{count}} 个",
+        "planRows": "将删除的数据行",
+        "planRetained": "保留：{{list}}",
+        "typeId": "输入项目 ID {{id}} 以确认",
+        "status": {
+          "active": "活跃",
+          "archived": "已归档",
+          "deleting": "待删除",
+          "deleted": "已删除"
+        },
+        "confirm": {
+          "archive": {
+            "title": "归档 {{name}}",
+            "action": "归档",
+            "body": "归档 {{name}}？数据保留，但其中的一切都不能再修改，分享链接被撤销，API Key 被停用。之后可以取消归档。"
+          },
+          "unarchive": {
+            "title": "取消归档 {{name}}",
+            "action": "取消归档",
+            "body": "取消归档 {{name}}？成员可以重新在其中工作；已撤销的链接和停用的 Key 保持原状。"
+          },
+          "delete": {
+            "title": "申请删除 {{name}}",
+            "action": "申请删除",
+            "body": "申请删除 {{name}}？现在会写入一个导出包，并开始 {{days}} 天冷静期；清除执行前都可以撤销。"
+          },
+          "cancel": {
+            "title": "撤销 {{name}} 的删除",
+            "action": "撤销删除",
+            "body": "撤销 {{name}} 的删除申请？项目保持归档状态。"
+          },
+          "purge": {
+            "title": "清除 {{name}}",
+            "action": "清除",
+            "body": "清除 {{name}} 会永久删除其 Agent 和数据，无法恢复。"
+          }
+        }
       }
     },
     "admins": {

@@ -543,6 +543,9 @@ BYOC artifact (any of the three kinds) that serves MCP over streamable HTTP on
 spec carries `mcp: {target_name}`; `client_id`, `provider_arn` and `target_id` are
 server-owned — the create / redeploy routes replace whatever the request sends, so
 no caller can point the pipeline at another Gateway target.
+An MCP server may name a VPC network profile like any agent (§15.10): the profile
+changes only the runtime's outbound path, and the Gateway still reaches it through the
+AgentCore data plane.
 
 | Stage | MCP-server work |
 |---|---|

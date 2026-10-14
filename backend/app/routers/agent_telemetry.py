@@ -36,7 +36,7 @@ from app.evaluation.service import (
 )
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import agent_access
+from app.services import agent_access, network_profiles
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.visibility import Viewer, require_viewer
@@ -177,7 +177,7 @@ def get_agent_telemetry(
         with _cache_lock:
             hit = _cache.get(key)
         if hit and hit[0] > now:
-            return {**hit[1], "cached": True}
+            return {**hit[1], "hint": _hint(db, ws.id, agent, hit[1]), "cached": True}
     result = probe_telemetry(agent, ws.context)
     ttl = _SHORT_TTL_SECONDS if result["status"] == "unknown" else CACHE_TTL_SECONDS
     with _cache_lock:
@@ -185,4 +185,14 @@ def get_agent_telemetry(
         for stale in [k for k in _cache if k[:2] == key[:2] and k != key]:
             del _cache[stale]
         _cache[key] = (now + ttl, result)
-    return {**result, "cached": False}
+    return {**result, "hint": _hint(db, ws.id, agent, result), "cached": False}
+
+
+def _hint(db: Session, workspace_id: str, agent: Agent, result: dict[str, Any]) -> Any:
+    """A VPC agent with no spans: why its telemetry may be lost on the way out (its
+    network profile has no usable logs / X-Ray endpoint, or was never checked). Read
+    from the ledger on every request, outside the cache, so a re-run preflight shows
+    at once. None for PUBLIC agents, for profiles that passed, and while spans arrive."""
+    if result.get("status") != "none":
+        return None
+    return network_profiles.telemetry_hint(db, workspace_id, agent.spec or {})

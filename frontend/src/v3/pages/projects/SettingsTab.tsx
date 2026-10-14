@@ -6,6 +6,7 @@ import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { type ProjectDetail, projectsApi } from "../../../lib/api/projects";
 import { useToast } from "../../hooks";
 import { Btn, Notice, Panel } from "../../ui";
+import { LifecycleSection } from "./LifecycleSection";
 import { type SettingsDraft, settingsDraft, settingsPatch } from "./model";
 import type { ProjectAbilities } from "./ProjectDetail";
 import { useStructureNames } from "./useStructureNames";
@@ -111,6 +112,7 @@ export function SettingsTab({
           <Btn kind="primary" onClick={() => void save()} disabled={busy || !patch}><Save size={14} /> {t("v3.projects.save")}</Btn>
         </div>
       )}
+      {abilities.admin && <LifecycleSection project={project} onChanged={onChanged} />}
     </div>
   );
 }

@@ -131,6 +131,17 @@ describe("V3 Tools & capabilities card", () => {
     expect(html).not.toContain("No tools or capabilities");
   });
 
+  it("a silent VPC agent shows its network profile's telemetry hint", () => {
+    const message = "agents on network profile 'vpc-a' cannot reach logs";
+    const html = v3(
+      agent("zip_runtime", {}),
+      FACTS,
+      tel({ status: "none", last_span_within: null, hint: { code: "network.telemetry_endpoint_missing", profile_id: "np-1", missing: ["logs"], message } }),
+    );
+    expect(html).toContain("no telemetry received in the last 14 days");
+    expect(html).toContain("cannot reach logs");
+  });
+
   it("telemetry: the window, or an unknown status on error", () => {
     expect(v3(agent("zip_runtime", {}), FACTS, tel({ last_span_within: "1h" }))).toContain("last span within the last hour");
     expect(v3(agent("zip_runtime", {}), FACTS, "error")).toContain("telemetry could not be checked right now");

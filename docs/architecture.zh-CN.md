@@ -384,7 +384,7 @@ toolkits/skills/knowledge_bases/tools(平台不生成这份代码,无法接线�
 
 ### 托管 MCP 服务器（`protocol: "mcp"`）
 
-V3 的 **MCP 服务器** 入口（`/v2/agents?view=new&method=byoc&protocol=mcp`）部署一个 BYOC 制品（三种来源均可），它在 `0.0.0.0:8000/mcp` 以 streamable HTTP 提供 MCP；平台让工作区网关成为它唯一的调用方（`app/services/mcp_servers.py`；设计见 `docs/design` §15 的最小版）。spec 带 `mcp: {target_name}`；`client_id`、`provider_arn`、`target_id` 由服务端写入——创建与重新发布接口会覆盖请求里的这些值，任何调用方都无法让流水线指向别人的网关目标。
+V3 的 **MCP 服务器** 入口（`/v2/agents?view=new&method=byoc&protocol=mcp`）部署一个 BYOC 制品（三种来源均可），它在 `0.0.0.0:8000/mcp` 以 streamable HTTP 提供 MCP；平台让工作区网关成为它唯一的调用方（`app/services/mcp_servers.py`；设计见 `docs/design` §15 的最小版）。spec 带 `mcp: {target_name}`；`client_id`、`provider_arn`、`target_id` 由服务端写入——创建与重新发布接口会覆盖请求里的这些值，任何调用方都无法让流水线指向别人的网关目标。MCP 服务器也可以像其他 Agent 一样指定 VPC 网络配置（§15.10）：该配置只改变运行时的出站路径，网关仍经 AgentCore 数据面调用它。
 
 | 阶段 | MCP 服务器的工作 |
 |---|---|

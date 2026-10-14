@@ -78,7 +78,10 @@ def features_of_spec(spec: dict[str, Any]) -> set[str]:
     if (spec.get("model_source") or "bedrock") == "bedrock" and method != "byoc":
         features.add("bedrock_models")
     memory = spec.get("memory") or {}
-    if memory.get("short_term", True) or memory.get("long_term") or memory.get("memory_id"):
+    # an MCP server never uses memory (the spec forces it off): no endpoint needed (§15.10)
+    if spec.get("protocol") != "mcp" and (
+        memory.get("short_term", True) or memory.get("long_term") or memory.get("memory_id")
+    ):
         features.add("memory")
     if spec.get("tools") or spec.get("toolkits"):
         features.add("gateway")

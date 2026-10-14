@@ -23,6 +23,9 @@ export interface AgentTelemetry {
   /** byoc_code_zip_no_adot | no_log_group | probe_failed | method_unsupported | not_deployed | … */
   reason: string | null;
   byoc_no_adot: boolean;
+  /** a VPC agent with no spans: its network profile lacks a usable logs / X-Ray
+   * endpoint or was never checked (`network_profiles.telemetry_hint`); else null */
+  hint?: { code: string; profile_id: string; missing: string[]; message: string } | null;
   checked_at: string;
   cached: boolean;
 }

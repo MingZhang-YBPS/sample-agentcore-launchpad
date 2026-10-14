@@ -14,7 +14,9 @@ import {
   filterMembers,
   inUseRows,
   isProjectId,
+  countdownParts,
   isProjectTab,
+  visibleProjectTabs,
   keySlug,
   memberRowState,
   overridesFor,
@@ -90,7 +92,12 @@ describe("project ids and role keys", () => {
 
   it("reads tabs from the URL", () => {
     expect(isProjectTab("members")).toBe(true);
-    expect(isProjectTab("audit")).toBe(false);
+    expect(isProjectTab("audit")).toBe(true);
+    expect(isProjectTab("lifecycle")).toBe(false);
+    expect(visibleProjectTabs(false)).not.toContain("audit");
+    expect(visibleProjectTabs(true)).toContain("audit");
+    expect(countdownParts(90061)).toEqual({ d: 1, h: 1, m: 1, s: 1 });
+    expect(countdownParts(-5)).toEqual({ d: 0, h: 0, m: 0, s: 0 });
     expect(isProjectTab(null)).toBe(false);
     expect(projectHref("risk")).toBe("/v3/projects?id=risk");
     expect(projectHref("risk", "members")).toBe("/v3/projects?id=risk&tab=members");

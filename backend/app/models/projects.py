@@ -59,7 +59,8 @@ class Project(Base):
     # active | archived (phase 1); deleting arrives with phase 3's lifecycle
     status: Mapped[str] = mapped_column(String(16), default="active")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
-    # P1: resource_visibility; P2: isolation{...}; P3: quotas{...}, sod_strict
+    # P1: resource_visibility; P2: isolation{...}, inbound_auth_default (isolated
+    # projects); P3: quotas{...} (incl. quotas.v1_rate_per_minute), sod_strict
     settings: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_by: Mapped[str | None] = mapped_column(String(32), default=None)
     created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)

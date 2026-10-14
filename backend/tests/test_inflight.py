@@ -400,6 +400,9 @@ def starter_job_types(source: str) -> set[str]:
         if isinstance(key, ast.Constant):
             keys.add(key.value)
             continue
+        if isinstance(key, ast.Name):  # a constant of the pipeline module itself
+            keys.add(getattr(pipeline, key.id))
+            continue
         assert isinstance(key, ast.Attribute) and isinstance(key.value, ast.Name), (
             f"unrecognised starters key {ast.unparse(key)} — teach this guard to read it")
         owner = (importlib.import_module(aliases[key.value.id]) if key.value.id in aliases

@@ -24,11 +24,16 @@ export const SOD_PAIRS: readonly (readonly [string, string])[] = [
   ["agents.deploy", "release.sign"],
   ["criteria.manage", "criteria.sign"],
 ];
-export const PROJECT_TABS = ["overview", "members", "roles", "workspaces", "settings"] as const;
+export const PROJECT_TABS = ["overview", "members", "roles", "workspaces", "settings", "audit"] as const;
 export type ProjectTab = (typeof PROJECT_TABS)[number];
 export const INHERIT_ROLE = "inherit";
 /** the template a project's owners hold (the Overview lists them) */
 export const OWNER_ROLE = "project_owner";
+
+/** The tabs the caller sees: `audit` needs `project.audit` here (or an administrator). */
+export function visibleProjectTabs(canAudit: boolean): ProjectTab[] {
+  return PROJECT_TABS.filter((tab) => tab !== "audit" || canAudit);
+}
 
 export function isProjectTab(raw: string | null): raw is ProjectTab {
   return raw !== null && (PROJECT_TABS as readonly string[]).includes(raw);
@@ -231,4 +236,15 @@ export function projectHref(projectId: string, tab?: ProjectTab): string {
 /** The list's "bind a project to this workspace" entry the §6.2 banner links to. */
 export function bindHref(workspaceId: string): string {
   return `/v3/projects?${new URLSearchParams({ bind: workspaceId }).toString()}`;
+}
+
+/** A cooling-off countdown (`deletion.seconds_left`) as days / hours / minutes / seconds. */
+export function countdownParts(seconds: number): { d: number; h: number; m: number; s: number } {
+  const total = Math.max(0, Math.floor(seconds));
+  return {
+    d: Math.floor(total / 86400),
+    h: Math.floor((total % 86400) / 3600),
+    m: Math.floor((total % 3600) / 60),
+    s: total % 60,
+  };
 }

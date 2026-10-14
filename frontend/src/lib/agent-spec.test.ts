@@ -9,6 +9,7 @@ import {
   byocIssues,
   type ConnectionRef,
   emptyAgentForm,
+  filesystemIssues,
   formFromStoredSpec,
   republishSpec,
 } from "./agent-spec";
@@ -222,5 +223,36 @@ describe("network for every method (projects §12.6)", () => {
     expect(agentFormValid(form, CATALOGS, opts)).toBe(true);
     expect(agentFormValid({ ...form, networkVpc: true }, CATALOGS, opts)).toBe(false);
     expect(agentFormValid({ ...form, networkVpc: true, networkProfileId: "np-1" }, CATALOGS, opts)).toBe(true);
+  });
+});
+
+describe("BYO mounts on every method (storage-mounts §3)", () => {
+  const s3 = [{ arn: "arn:aws:s3files:us-east-1:1:ap/x", path: "/mnt/data" }];
+  const efs = [{ arn: "arn:aws:elasticfilesystem:us-east-1:1:access-point/fsap-1", path: "/mnt/shared" }];
+  const sent = {
+    session_storage: { mount_path: "/mnt/workspace" },
+    s3_files: [{ access_point_arn: s3[0].arn, mount_path: "/mnt/data" }],
+    efs: [{ access_point_arn: efs[0].arn, mount_path: "/mnt/shared" }],
+  };
+
+  it("harness, zip_runtime, container, byoc and MCP servers send the same filesystem block", () => {
+    for (const method of ["harness", "zip_runtime", "container"] as const) {
+      const form = { ...emptyAgentForm(method), name: "fs-a", systemPrompt: "hi", s3Mounts: s3, efsMounts: efs, networkProfileId: "np-1" };
+      expect(buildAgentSpec(form, CATALOGS).filesystem).toEqual(sent);
+    }
+    const byoc = { ...emptyAgentForm("byoc"), name: "fs-b", byocUploadId: "u1", s3Mounts: s3, efsMounts: efs, networkProfileId: "np-1" };
+    expect(buildAgentSpec(byoc, CATALOGS).filesystem).toEqual(sent);
+    expect(buildMcpServerSpec({ ...byoc, protocol: "mcp" as const, mcpTargetName: "crm" }).filesystem).toEqual(sent);
+  });
+
+  it("a mount without a profile needs one; only a container may use inline subnets", () => {
+    for (const method of ["harness", "zip_runtime", "byoc"] as const) {
+      const form = { ...emptyAgentForm(method), s3Mounts: s3, vpcSubnets: "subnet-1", vpcSgs: "sg-1" };
+      expect(filesystemIssues(form).vpc).toBe(true);
+      expect(filesystemIssues({ ...form, networkProfileId: "np-1" }).vpc).toBe(false);
+    }
+    const container = { ...emptyAgentForm("container"), s3Mounts: s3 };
+    expect(filesystemIssues(container).vpc).toBe(true);
+    expect(filesystemIssues({ ...container, vpcSubnets: "subnet-1", vpcSgs: "sg-1" }).vpc).toBe(false);
   });
 });

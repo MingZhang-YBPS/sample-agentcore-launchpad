@@ -482,6 +482,7 @@ def _migrate(bind) -> None:
     _migrate_template_project_column(bind)
     _migrate_actor_user_id_columns(bind)
     _migrate_isolation_columns(bind)
+    _migrate_audit_outcome(bind)
 
 
 def _migrate_isolation_columns(bind) -> None:
@@ -495,8 +496,6 @@ def _migrate_isolation_columns(bind) -> None:
     if "isolation_applied" not in {c["name"] for c in inspector.get_columns("agents")}:
         with bind.begin() as conn:
             conn.execute(text("ALTER TABLE agents ADD COLUMN isolation_applied VARCHAR(16)"))
-
-    _migrate_audit_outcome(bind)
 
 
 def _migrate_audit_outcome(bind) -> None:

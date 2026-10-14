@@ -37,9 +37,10 @@ hourly scheduler task ``mcp.health`` (``check_health``) re-syncs each live
 target, compares the list with the approved one (``check_drift``) and records
 the outcome in ``mcp_servers.health`` (`models/lambda_tools.McpServerState`).
 
-Design: docs/design/projects.zh-CN.md §15 (public network). Teardown runs in
-reverse and is idempotent (``teardown_target`` before the runtime,
-``release_identity`` after it).
+Design: docs/design/projects.zh-CN.md §15 (PUBLIC or a VPC network profile, §15.10:
+the profile changes the runtime's outbound path only; the Gateway reaches it through
+the AgentCore data plane). Teardown runs in reverse and is idempotent
+(``teardown_target`` before the runtime, ``release_identity`` after it).
 """
 
 import logging

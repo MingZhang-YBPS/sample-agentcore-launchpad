@@ -31,7 +31,7 @@ import {
   sourceOnMethodSwitch,
 } from "../../../lib/agent-spec";
 import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage, type SharedTemplateInfo } from "../../../lib/api";
-import { networkChoices } from "../../../lib/api/agent-network";
+import { networkChoices, RUNTIME_NETWORK_PURPOSES } from "../../../lib/api/agent-network";
 import { networkProfilesApi } from "../../../lib/api/projects";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
@@ -239,7 +239,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     networkProfilesApi
       .list()
       .then(({ profiles }) => {
-        const pick = networkChoices(profiles).find((c) => c.profile.is_default && !c.disabled);
+        const pick = networkChoices(profiles, "", RUNTIME_NETWORK_PURPOSES).find((c) => c.profile.is_default && !c.disabled);
         if (live && pick) setDefaultNetwork(pick.profile.id);
       })
       .catch(() => {
@@ -689,6 +689,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
             onUpload={(file) => void uploadZip(file)}
             onPython={changePython}
           />
+          <FilesystemCard form={form} set={set} touched={touched} network={false} />
           <ByocEnvCard form={form} set={set} />
         </>
       )}
@@ -704,6 +705,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
             onUpload={(file) => void uploadZip(file)}
             onPython={changePython}
           />
+          <FilesystemCard form={form} set={set} touched={touched} network={false} />
           <ByocModelsCard form={form} set={set} err={err} applySource={applySource} />
           <ByocEnvCard form={form} set={set} />
           <IdentityCard

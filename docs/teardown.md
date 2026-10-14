@@ -85,6 +85,14 @@ Notes:
   shared-infra teardown clean. X-Ray Transaction Search is account-wide shared
   observability and stays out of scope.
 
+## Delete the agents before the VPC
+
+Agents (and hosted MCP servers) on a VPC network profile hold ENIs in its subnets
+until AgentCore releases them, some time after the runtime is deleted. Delete those
+agents first, wait for their ENI-release jobs, archive the profile, and only then
+delete the subnets, security groups and the VPC. See
+[private-networking.md §4](private-networking.md#4-teardown-delete-the-agents-before-the-vpc).
+
 ## Order of operations (recommended)
 
 1. Delete demo **agents** (console or `DELETE /api/agents/{id}`).

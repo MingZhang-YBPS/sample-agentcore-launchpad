@@ -23,9 +23,11 @@ export function telemetryText(
       ? null
       : tel.byoc_no_adot
         ? t("agentTools.telemetry.byocNoAdot")
-        : tel.reason === "no_log_group"
-          ? t("agentTools.telemetry.noLogGroup")
-          : null;
+        : tel.hint?.message
+          ? tel.hint.message
+          : tel.reason === "no_log_group"
+            ? t("agentTools.telemetry.noLogGroup")
+            : null;
   const ok = tel.status === "receiving";
   return { line, hint, ok, tone: ok ? "ok" : tel.status === "none" ? "wait" : "off" };
 }

@@ -1,10 +1,11 @@
 """spec.filesystem → the AgentCore ``filesystemConfigurations`` union list.
 
 One mapping for every method that mounts storage: the container runtime, the
-Strands zip runtime and the managed Harness (inside its
+Strands zip runtime, BYOC and the managed Harness (inside its
 ``environment.agentCoreRuntimeEnvironment``). BYO mounts (S3 Files / EFS) are
-container-only — ``AgentSpec`` refuses them elsewhere — so for the other two the
-list is at most the managed session storage entry.
+accepted on every method of ``schemas/agent.BYO_MOUNT_METHODS``, inside the agent's
+network profile (storage-mounts §3) — ``AgentSpec`` refuses them on any other method
+and without a VPC network — next to the managed session storage entry.
 
 Update semantics differ per API (probed live 2026-10-04, us-west-2):
 UpdateAgentRuntime *clears* an omitted ``filesystemConfigurations``, while

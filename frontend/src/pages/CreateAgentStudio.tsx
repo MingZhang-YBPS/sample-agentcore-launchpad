@@ -16,7 +16,7 @@ import {
 } from "../components";
 import type { AgentInfo, AgentSpecInput, DeploymentInfo, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
-import { networkChoices } from "../lib/api/agent-network";
+import { networkChoices, RUNTIME_NETWORK_PURPOSES } from "../lib/api/agent-network";
 import { type NetworkProfile, networkProfilesApi } from "../lib/api/projects";
 import { ChatDrawer } from "../studio/ChatDrawer";
 import { CodePanel } from "../studio/CodePanel";
@@ -231,7 +231,7 @@ export function CreateAgentStudio() {
       .then(({ profiles }) => {
         if (!live) return;
         setNetworkProfiles(profiles);
-        const pick = networkChoices(profiles).find((c) => c.profile.is_default && !c.disabled);
+        const pick = networkChoices(profiles, "", RUNTIME_NETWORK_PURPOSES).find((c) => c.profile.is_default && !c.disabled);
         if (!editing && pick) setNetworkId((cur) => cur ?? pick.profile.id);
       })
       .catch(() => live && setNetworkProfiles([]));
@@ -726,7 +726,7 @@ export function CreateAgentStudio() {
                 data-testid="studio-network"
               >
                 <option value="">{t("network.public")}</option>
-                {networkChoices(networkProfiles ?? [], networkId ?? "").map((c) => (
+                {networkChoices(networkProfiles ?? [], networkId ?? "", RUNTIME_NETWORK_PURPOSES).map((c) => (
                   <option key={c.profile.id} value={c.profile.id} disabled={c.disabled}>
                     {c.profile.name}
                     {c.profile.is_default ? ` · ${t("network.default")}` : ""}

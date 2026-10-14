@@ -180,3 +180,47 @@ def test_another_workspace_or_project_answers_404_without_probing(client, probe)
     assert res.status_code == 200
     assert client.get("/api/agents/nope/telemetry", headers=DEFAULT).status_code == 404
     assert probe["resolved"] == 1  # only the alpha read probed
+
+
+def _profile(*, status: str = "ok", check_results: list | None = None) -> str:
+    import uuid
+
+    from app.models.network import NetworkProfile
+
+    db = SessionLocal()
+    try:
+        row = NetworkProfile(id=f"np-{uuid.uuid4().hex[:8]}", workspace_id=DEFAULT_WORKSPACE_ID,
+                             name="vpc-a", status=status, check_results=check_results)
+        db.add(row)
+        db.commit()
+        return row.id
+    finally:
+        db.close()
+
+
+def test_a_silent_vpc_agent_names_its_missing_telemetry_endpoint(client, probe):
+    pid = _profile(check_results=[{"check": "endpoint.logs", "severity": "error"},
+                                  {"check": "endpoint.xray", "severity": "ok"}])
+    agent_id = _seed(spec={"network": {"profile_id": pid}})
+    body = client.get(f"/api/agents/{agent_id}/telemetry", headers=DEFAULT).json()
+    assert body["status"] == "none"
+    assert body["hint"]["code"] == "network.telemetry_endpoint_missing"
+    assert body["hint"]["missing"] == ["logs"]
+    assert "vpc-a" in body["hint"]["message"]
+    # the hint is read outside the cache too
+    again = client.get(f"/api/agents/{agent_id}/telemetry", headers=DEFAULT).json()
+    assert again["cached"] is True
+    assert again["hint"]["code"] == "network.telemetry_endpoint_missing"
+
+
+def test_no_hint_while_spans_arrive_or_for_public_agents(client, probe):
+    pid = _profile(status="unchecked")
+    probe["answers"] = {"1h": True}
+    body = client.get(f"/api/agents/{_seed(spec={'network': {'profile_id': pid}})}/telemetry",
+                      headers=DEFAULT).json()
+    assert body["status"] == "receiving"
+    assert body["hint"] is None
+    probe["answers"] = {}
+    public = client.get(f"/api/agents/{_seed(version='3')}/telemetry", headers=DEFAULT).json()
+    assert public["status"] == "none"
+    assert public["hint"] is None

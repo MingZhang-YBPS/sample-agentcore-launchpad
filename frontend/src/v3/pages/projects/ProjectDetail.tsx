@@ -12,7 +12,7 @@ import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { AuditTab } from "./AuditTab";
 import { MembersTab } from "./MembersTab";
-import { PROJECT_TABS, type ProjectTab } from "./model";
+import { type ProjectTab, visibleProjectTabs } from "./model";
 import { OverviewTab } from "./OverviewTab";
 import { RolesTab } from "./RolesTab";
 import { SettingsTab } from "./SettingsTab";
@@ -27,16 +27,12 @@ export interface ProjectAbilities {
   manage: boolean;
 }
 
-/** §11.6: the audit tab, read from `?tab=` here until `model.PROJECT_TABS` lists it. */
-type DetailTab = ProjectTab | "audit";
-
-export function ProjectDetailPage({ projectId, tab: listedTab }: { projectId: string; tab: ProjectTab }) {
+export function ProjectDetailPage({ projectId, tab: requested }: { projectId: string; tab: ProjectTab }) {
   const { t } = useTranslation();
   const toast = useToast();
   const { isAdmin } = useAuth();
   const { refresh: refreshAccess } = useProject();
   const [params, setParams] = useSearchParams();
-  const tab: DetailTab = params.get("tab") === "audit" ? "audit" : listedTab;
   const [tick, setTick] = useState(0);
   const loaded = useLoad(() => projectsApi.get(projectId), `v3-project:${projectId}:${tick}`);
   const [confirm, setConfirm] = useState<"archive" | "unarchive" | null>(null);
@@ -47,7 +43,7 @@ export function ProjectDetailPage({ projectId, tab: listedTab }: { projectId: st
   if (loaded.data) last.current = loaded.data;
   const project = loaded.data ?? (loaded.error ? null : last.current);
   const reload = () => setTick((n) => n + 1);
-  const pick = (next: DetailTab) => {
+  const pick = (next: ProjectTab) => {
     const q = new URLSearchParams(params);
     if (next === "overview") q.delete("tab");
     else q.set("tab", next);
@@ -69,7 +65,10 @@ export function ProjectDetailPage({ projectId, tab: listedTab }: { projectId: st
     admin: isAdmin,
     manage: isAdmin || project.my_permissions.includes("project.members"),
   };
+  // §11.6: the audit tab needs `project.audit` here (or an administrator)
   const canAudit = isAdmin || project.my_permissions.includes("project.audit");
+  const tabs = visibleProjectTabs(canAudit);
+  const tab: ProjectTab = tabs.includes(requested) ? requested : "overview";
   const archived = project.status === "archived";
 
   const changeStatus = async (action: "archive" | "unarchive") => {
@@ -133,10 +132,7 @@ export function ProjectDetailPage({ projectId, tab: listedTab }: { projectId: st
       <Filters
         value={tab}
         onChange={pick}
-        options={[
-          ...PROJECT_TABS.map((key) => ({ value: key as DetailTab, label: t(`v3.projects.tab.${key}`) })),
-          ...(canAudit ? [{ value: "audit" as const, label: t("v3.projects.audit.tab") }] : []),
-        ]}
+        options={tabs.map((key) => ({ value: key, label: t(`v3.projects.tab.${key}`) }))}
       />
 
       {tab === "overview" && <OverviewTab project={project} />}

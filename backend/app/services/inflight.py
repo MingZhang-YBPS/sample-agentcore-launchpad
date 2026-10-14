@@ -110,13 +110,20 @@ def resumable_job_types() -> frozenset[str]:
     # Lazy, as in resume_pending_jobs: the uninstall worker's import chain reaches
     # the deployer pipeline.
     from app.assistant import purge as assistant_purge
-    from app.services import project_isolation, promotion_exec, workspace_bootstrap
+    from app.services import (
+        project_isolation,
+        project_purge,
+        promotion_exec,
+        workspace_bootstrap,
+    )
     from app.system_agents import uninstall as system_uninstall
 
     return frozenset({
         "deploy_agent",
         workspace_bootstrap.JOB_TYPE,
         project_isolation.JOB_TYPE,
+        project_purge.JOB_TYPE,
+        "agent_eni_release",  # pipeline.ENI_JOB_TYPE (a VPC agent's ENI wait, §12.9)
         system_uninstall.JOB_TYPE,
         promotion_exec.JOB_TYPE,
         assistant_purge.JOB_TYPE,
@@ -126,13 +133,7 @@ def resumable_job_types() -> frozenset[str]:
 def retry_job_types() -> dict[str, str]:
     """Job types an administrator's retry takes over (from the job's checkpoints)
     instead of `resume_pending_jobs` — a restart leaves them for that retry."""
-    from app.services import project_purge
-
-    return {
-        # G11-life: moves to resumable_job_types() once pipeline.resume_pending_jobs
-        # registers `project_purge.start_purge_resume`
-        project_purge.JOB_TYPE: "POST /api/projects/{project_id}/purge",
-    }
+    return {}
 
 
 @dataclass(frozen=True)

@@ -12199,7 +12199,8 @@
         "members": "Members",
         "roles": "Roles",
         "workspaces": "Workspaces",
-        "settings": "Settings"
+        "settings": "Settings",
+        "audit": "Audit"
       },
       "overview": {
         "members": "Members",
@@ -12402,6 +12403,65 @@
         "more": "Load more",
         "empty": "No audit events match these filters.",
         "hint": "What happened in {{project}} in every workspace it is bound to, plus changes to the project itself (members, roles, bindings). Refused requests are recorded too; an export is recorded as well."
+      },
+      "lifecycle": {
+        "title": "Lifecycle",
+        "sub": "Archive the project, export a bundle of its data, then request deletion: after a {{days}}-day cooling-off the purge removes its agents and rows. Audit journals are kept.",
+        "defaultLocked": "The default project cannot be archived or deleted; exports still work.",
+        "archiveFirst": "Archive the project before requesting its deletion.",
+        "requestDeletion": "Request deletion",
+        "countdown": "Purge allowed in {{d}}d {{h}}h {{m}}m {{s}}s (at {{at}}).",
+        "purgeReady": "The cooling-off has ended: the project can be purged.",
+        "requestedBy": "Deletion requested by {{who}} at {{at}}.",
+        "cancel": "Cancel deletion",
+        "purge": "Purge…",
+        "job": "Purge job {{id}}: {{status}} (stage {{stage}})",
+        "deleted": "This project was purged at {{at}}.",
+        "exports": "Export bundles",
+        "export": "Export now",
+        "noExports": "No export bundle yet.",
+        "exportMeta": "by {{who}} · {{kb}} KB",
+        "exported": "Export bundle of {{name}} written",
+        "requested": "Deletion of {{name}} requested; purge allowed after {{days}} day(s)",
+        "cancelled": "Deletion of {{name}} cancelled",
+        "purgeStarted": "Purge of {{name}} started (job {{job}})",
+        "planAgents": "Agents to delete: {{count}}",
+        "planRows": "Rows to delete",
+        "planRetained": "Kept: {{list}}",
+        "typeId": "Type the project id {{id}} to confirm",
+        "status": {
+          "active": "Active",
+          "archived": "Archived",
+          "deleting": "Deletion pending",
+          "deleted": "Deleted"
+        },
+        "confirm": {
+          "archive": {
+            "title": "Archive {{name}}",
+            "action": "Archive",
+            "body": "Archive {{name}}? Its data stays, but nothing in it can be changed, its share links are revoked and its API keys disabled. You can unarchive it later."
+          },
+          "unarchive": {
+            "title": "Unarchive {{name}}",
+            "action": "Unarchive",
+            "body": "Unarchive {{name}}? Its members can work in it again; revoked links and disabled keys stay so."
+          },
+          "delete": {
+            "title": "Request deletion of {{name}}",
+            "action": "Request deletion",
+            "body": "Request deletion of {{name}}? An export bundle is written now and the {{days}}-day cooling-off starts; you can cancel until the purge runs."
+          },
+          "cancel": {
+            "title": "Cancel deletion of {{name}}",
+            "action": "Cancel deletion",
+            "body": "Cancel the deletion request of {{name}}? It stays archived."
+          },
+          "purge": {
+            "title": "Purge {{name}}",
+            "action": "Purge",
+            "body": "Purging {{name}} deletes its agents and data for good. This cannot be undone."
+          }
+        }
       }
     },
     "admins": {

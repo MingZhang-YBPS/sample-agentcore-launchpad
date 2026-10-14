@@ -24,6 +24,7 @@ import {
   specDefaultModelId,
 } from "./models";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
+import { BYO_MOUNT_METHODS } from "./storage-mounts";
 import {
   choiceFromSpec,
   EMPTY_JWT_FORM,
@@ -140,8 +141,10 @@ export const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
 export const MAX_MOUNTS_PER_KIND = 2;
 /** Methods whose spec carries `filesystem`: managed session storage on all three,
  *  BYO mounts (S3 Files / EFS — they need VPC networking) on the container only. */
-export const FILESYSTEM_METHODS: readonly AgentMethod[] = ["harness", "zip_runtime", "container"];
-export const byoMountsAllowed = (method: AgentMethod) => method === "container";
+export const FILESYSTEM_METHODS: readonly AgentMethod[] = ["harness", "zip_runtime", "container", "byoc"];
+/** Every wizard method mounts BYO S3 Files / EFS (storage-mounts §3) — kept equal to
+ *  the backend's `BYO_MOUNT_METHODS`. */
+export const byoMountsAllowed = (method: AgentMethod) => BYO_MOUNT_METHODS.includes(method);
 
 export const splitIds = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 export const skillNameFromPath = (path: string) =>
@@ -800,6 +803,18 @@ const byocArtifact = (form: AgentForm) => {
  * choice — the platform grants it none and wires its JWT inbound and Gateway
  * target itself (`backend/app/services/mcp_servers.py`).
  */
+/** `filesystem` — the session storage plus the BYO S3 Files / EFS mounts (every
+ *  method, storage-mounts §3); shared by the ordinary, BYOC and MCP server specs. */
+export function filesystemSpec(form: AgentForm): Pick<AgentSpecInput, "filesystem"> {
+  return {
+    filesystem: {
+      session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null,
+      s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
+      efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
+    },
+  };
+}
+
 /**
  * `network` for every method (projects §12.6): the chosen profile reference (the
  * backend resolves it to subnets + security groups at deploy time); for a container
@@ -839,6 +854,7 @@ export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
     ...(Object.keys(env).length ? { env } : {}),
     mcp: { target_name: form.mcpTargetName.trim(), ...(stdio ? { stdio_wrapper: stdio } : {}) },
     byoc: byocArtifact(form) as ByocConfigInput,
+    ...filesystemSpec(form),
     ...networkSpec(form),
   };
 }
@@ -880,6 +896,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
       invoke_contract: form.byocRawContract ? "raw" : "launchpad_prompt",
       allowed_models: models,
     },
+    ...filesystemSpec(form),
     ...networkSpec(form),
   };
 }
@@ -966,17 +983,8 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
     ...(method === "container" && form.mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: form.mcpServers.trim() } }
       : {}),
-    ...(method === "harness" || method === "zip_runtime"
-      ? { filesystem: { session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null } }
-      : {}),
-    ...(method === "container"
-      ? {
-          filesystem: {
-            session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null,
-            s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
-            efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
-          },
-        }
+    ...(method === "harness" || method === "zip_runtime" || method === "container"
+      ? filesystemSpec(form)
       : {}),
     ...networkSpec(form),
   } as AgentSpecInput;
@@ -1093,7 +1101,9 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
     vpc:
       hasByoMounts({ s3Mounts, efsMounts }) &&
       !form.networkProfileId &&
-      (splitIds(form.vpcSubnets).length === 0 || splitIds(form.vpcSgs).length === 0),
+      (form.method !== "container" ||
+        splitIds(form.vpcSubnets).length === 0 ||
+        splitIds(form.vpcSgs).length === 0),
   };
 }
 

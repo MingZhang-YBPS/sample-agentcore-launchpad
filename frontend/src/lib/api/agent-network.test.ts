@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { agentNetworkPath, getAgentNetwork, networkChoices } from "./agent-network";
+import { agentNetworkPath, getAgentNetwork, networkChoices, RUNTIME_NETWORK_PURPOSES } from "./agent-network";
 import type { NetworkProfile } from "./projects";
 
 const profile = (id: string, over: Partial<NetworkProfile> = {}): NetworkProfile => ({
@@ -58,5 +58,16 @@ describe("networkChoices", () => {
     const choices = networkChoices([profile("np-x", { allowed: false, status: "blocked" })], "np-x");
     expect(choices).toHaveLength(1);
     expect(choices[0].disabled).toBe(false);
+  });
+
+  it("offers runtimes only agents / both profiles, keeping the current one", () => {
+    const list = [
+      profile("np-a", { purpose: "agents" }),
+      profile("np-t", { purpose: "tools" }),
+      profile("np-b", { purpose: "both" }),
+    ];
+    expect(networkChoices(list, "", RUNTIME_NETWORK_PURPOSES).map((c) => c.profile.id)).toEqual(["np-a", "np-b"]);
+    expect(networkChoices(list, "np-t", RUNTIME_NETWORK_PURPOSES).map((c) => c.profile.id)).toEqual(["np-a", "np-b", "np-t"]);
+    expect(networkChoices(list).map((c) => c.profile.id)).toEqual(["np-a", "np-b", "np-t"]);
   });
 });

@@ -48,6 +48,7 @@ from app.services import (
     identity_providers,
     mcp_servers,
     memory_ownership,
+    mount_policy,
     oauth_sessions,
     registry_console,
     snapshots,
@@ -288,6 +289,10 @@ def create_agent(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     spec = _stored_network(db, ws, request, spec)
+    # inline S3 Files / EFS mounts are an administrator's (storage-mounts D-2)
+    mount_policy.assert_inline_mounts_allowed(
+        spec, None, is_admin=require_identity(request).is_admin,
+    )
     if spec.method not in SUPPORTED_METHODS:
         raise AppError(
             "agent.method_not_available",
@@ -732,6 +737,10 @@ def redeploy_agent(
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
     spec = _stored_network(db, ws, request, spec)
+    # inline S3 Files / EFS mounts are an administrator's (storage-mounts D-2)
+    mount_policy.assert_inline_mounts_allowed(
+        spec, agent.spec, is_admin=require_identity(request).is_admin,
+    )
     return republish_agent(
         db, agent, spec, ws, actor=require_identity(request).username, viewer=viewer
     )
@@ -1206,6 +1215,13 @@ def delete_agent_row(db: Session, agent: Agent, workspace: WorkspaceContext) -> 
         logger.info("agent %s: AWS teardown deferred — %s", agent.id, exc.message)
         aws_resource_deleted = False
     mark_agent_deleted(db, agent)
+    try:  # a VPC agent's ENIs linger after the delete; wait them out (§12.9)
+        from app.deployer import pipeline as deploy_pipeline
+
+        deploy_pipeline.start_eni_release_wait(db, agent, workspace)
+    except Exception:  # noqa: BLE001 — the delete itself succeeded
+        logger.warning("agent %s: could not start the ENI release wait", agent.id,
+                       exc_info=True)
     return aws_resource_deleted
 
 

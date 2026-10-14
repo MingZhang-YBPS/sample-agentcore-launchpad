@@ -5,7 +5,7 @@
  * from `networkProfilesApi` (`./projects`).
  */
 import { getJson } from "../api";
-import type { NetworkProfile } from "./projects";
+import type { NetworkProfile, NetworkPurpose } from "./projects";
 
 const enc = encodeURIComponent;
 
@@ -69,15 +69,28 @@ export interface NetworkChoice {
   caution: boolean;
 }
 
+/** The purposes a runtime (an agent or a hosted MCP server) may use — a `tools`
+ *  profile is for Gateway targets only. */
+export const RUNTIME_NETWORK_PURPOSES: readonly NetworkPurpose[] = ["agents", "both"];
+
 /**
  * The profiles the wizard offers: the project's allowed set (an administrator's list
  * carries the whole workspace — only `allowed` ones are usable by this project's
- * agents), live only, the default first. The stored `currentId` stays listed even if
- * it is blocked, so a re-publish shows where the agent runs.
+ * agents), live only, of one of `purposes` when given, the default first. The stored
+ * `currentId` stays listed even if it is blocked or of another purpose (archived
+ * ones never are), so a re-publish shows where the agent runs.
  */
-export function networkChoices(profiles: NetworkProfile[], currentId = ""): NetworkChoice[] {
+export function networkChoices(
+  profiles: NetworkProfile[],
+  currentId = "",
+  purposes?: readonly NetworkPurpose[],
+): NetworkChoice[] {
   return profiles
-    .filter((p) => !p.archived_at && (p.allowed || p.id === currentId))
+    .filter(
+      (p) =>
+        !p.archived_at &&
+        (p.id === currentId || (p.allowed && (!purposes || purposes.includes(p.purpose ?? "both")))),
+    )
     .sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.name.localeCompare(b.name))
     .map((profile) => ({
       profile,

@@ -71,4 +71,7 @@ def runtime_environment(
         environment[ENV_OAUTH_RETURN_URL] = get_settings().resolved_oauth_return_url()
         if agent_id:
             environment[ENV_AGENT_ID] = agent_id
+    from app.deployer.mounts import mounts_env
+
+    environment.update(mounts_env(spec))  # LAUNCHPAD_MOUNTS, also for canary candidates
     return environment

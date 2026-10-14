@@ -191,6 +191,13 @@ def put_bindings(
     added = svc.update_bindings(db, identity, row, bind=body.bind, unbind=body.unbind,
                                 make_default=body.make_default)
     db.commit()
+    from app.services import project_isolation
+
+    # an isolated project starts provisioning in each newly bound workspace (§10.2)
+    project_isolation.on_workspaces_bound(
+        db, project_id, added, actor=identity.username,
+        actor_user_id=getattr(identity, "user_id", None),
+    )
     for ws in added:
         _seed_samples(db, ws, project_id)
     return {"workspaces": svc.bindings_view(db, project_id), "bound": added}

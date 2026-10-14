@@ -361,7 +361,7 @@ def test_due_purges_start_after_the_cooling_off(world):
     assert _row(Project, "alpha").status == "deleted"
 
 
-def test_a_restart_leaves_a_live_purge_to_the_retry(world):
+def test_a_restart_resumes_a_live_purge(world):
     db = SessionLocal()
     try:
         with project_context(None):
@@ -372,8 +372,8 @@ def test_a_restart_leaves_a_live_purge_to_the_retry(world):
                  if i.label.startswith(project_purge.JOB_TYPE)]
     finally:
         db.close()
-    assert len(items) == 1 and items[0].restart_outcome == inflight.CLEARED_RETRY
-    assert items[0].handled_by == "POST /api/projects/{project_id}/purge"
+    assert len(items) == 1 and items[0].restart_outcome == inflight.RESUMES
+    assert items[0].handled_by == "resume_pending_jobs"
 
 
 def test_the_default_teardown_is_the_agent_delete_pipeline(monkeypatch):
