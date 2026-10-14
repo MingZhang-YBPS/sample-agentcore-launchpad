@@ -52,8 +52,10 @@ def require_api_key(
     filters on `key.workspace_id`.
 
     A key whose creator has been offboarded is refused (and disabled) here — see
-    `services.api_keys`. Then expiry and the per-key rate limit (T16); an admitted
-    call is counted (`use_count`, the per-day usage row) and stamps `last_used_at`.
+    `services.api_keys`. Then expiry and the per-key rate limit (T16) together with
+    the key's project window (`settings.quotas.v1_rate_per_minute`, projects §10.7)
+    when the project sets one; an admitted call is counted (`use_count`, the
+    per-day usage row) and stamps `last_used_at`.
     """
     if not x_api_key:
         raise AppError("auth.missing_api_key", "X-Api-Key header required", status_code=401)
@@ -77,7 +79,9 @@ def require_api_key(
         raise AppError("auth.invalid_api_key", "invalid or disabled API key", status_code=401)
     if api_keys_service.is_expired(key):
         raise AppError("auth.expired_api_key", "API key has expired", status_code=401)
-    api_keys_service.check_rate(key)
+    api_keys_service.check_rate(
+        key, project_limit=api_keys_service.project_rate_limit(db, key)
+    )
     # Stamps `last_used_at` and `use_count` on every admitted call (T16), so the
     # throttled `touch_last_used` stamp has nothing left to add here.
     api_keys_service.record_use(db, key)
