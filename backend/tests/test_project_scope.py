@@ -144,6 +144,20 @@ def test_owned_get_also_guards_an_identity_map_hit():
         db.close()
 
 
+def test_the_app_session_get_is_guarded_too():
+    """`db.get` in request code needs no owned_get: SessionLocal's class re-checks it."""
+    _project("alpha")
+    d = _agent("default-agent", "default")
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            assert db.get(Agent, d) is not None
+        with project_context("alpha"):
+            assert db.get(Agent, d) is None
+    finally:
+        db.close()
+
+
 def test_bulk_update_and_delete_are_confined_too():
     _project("alpha")
     a = _agent("alpha-agent", "alpha")

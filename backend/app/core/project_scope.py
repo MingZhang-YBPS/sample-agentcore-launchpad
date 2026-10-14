@@ -19,7 +19,8 @@ Three pieces, each failing closed:
   into some project would leak it.
 
 ``Session.get`` answers from the identity map without SQL, so the listener cannot
-see it: request code loads owned rows by id through ``owned_get``.
+see it: ``ProjectSession`` (the app's session class) re-checks what ``get`` returns,
+and ``owned_get`` does the same for any other session.
 """
 
 import logging
@@ -120,9 +121,22 @@ def visible_in_current_project(row: Any) -> bool:
     return isinstance(row, ProjectShared) and row.project_id is None
 
 
+class ProjectSession(Session):
+    """The application's session class (``db.SessionLocal``): ``get`` honours the
+    current project too. An identity-map hit runs no SQL, so the automatic criteria
+    never see it; without this, every ``db.get(<owned model>, id)`` in request code
+    would read — and, through parent stamping, write into — another project."""
+
+    def get(self, entity: Any, ident: Any, **kwargs: Any) -> Any:
+        row = super().get(entity, ident, **kwargs)
+        if row is not None and not visible_in_current_project(row):
+            return None
+        return row
+
+
 def owned_get[ModelT](db: Session, model: type[ModelT], ident: Any) -> ModelT | None:
-    """``db.get`` that honours the current project (an identity-map hit runs no SQL,
-    so the automatic criteria never see it). A row of another project reads as missing."""
+    """``db.get`` that honours the current project on any session (``ProjectSession``
+    already does). A row of another project reads as missing."""
     row = db.get(model, ident)
     if row is None or not visible_in_current_project(row):
         return None

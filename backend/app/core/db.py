@@ -10,6 +10,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.core.config import DATA_DIR, get_settings
+from app.core.project_scope import ProjectSession
 
 
 class Base(DeclarativeBase):
@@ -172,7 +173,9 @@ def _make_engine():
 
 
 engine = _make_engine()
-SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+SessionLocal = sessionmaker(
+    bind=engine, class_=ProjectSession, autoflush=False, expire_on_commit=False,
+)
 
 
 def get_db() -> Generator[Session, None, None]:
