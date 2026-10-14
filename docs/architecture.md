@@ -4494,6 +4494,221 @@ agent's own session memory does not contain it; a `rule` event is not forwarded 
 visitors; and rule matching runs on the whole prompt, so it is unsuited to multi-turn
 context.
 
+## Projects — the data and permission boundary inside a workspace
+
+A workspace is one `(account, region)` environment; a **project** is the team
+boundary inside it. Every agent and every row derived from an agent belongs to
+exactly one project, members reach a project through a project role, and a project's
+rows are invisible from every other project of the same workspace. Workspaces keep
+their meaning (one per account and Region, used for DEV / PROD or for teams that need
+account-level isolation); a project may be bound to several workspaces, so a
+DEV → PROD promotion keeps its project. The design is
+`docs/design/projects.zh-CN.md` (phase 1); the routes are in
+[api.md](api.md#console-projects-api).
+
+Phase 1 isolates **console and API data**, not runtime credentials: agents of every
+project in a workspace still share the workspace's execution, gateway and knowledge
+base roles, the M2M client of `launchpad-gw` / `launchpad-kb-gw` and the bootstrap
+memory (partitioned only by actor). A team that needs runtime isolation today uses
+its own workspace (phase 2 adds per-project IAM boundaries, memory and gateway
+authorization).
+
+### Model
+
+| Entity | Table | What it is |
+|---|---|---|
+| Project | `projects` | The data and permission boundary. `id` is a slug (`^[a-z0-9][a-z0-9-]{1,31}$`), `status` `active` or `archived`, `settings` (`resource_visibility`, `sod_strict`). The reserved `default` project (`is_default`) is created by the migration |
+| Project ↔ workspace | `project_workspaces` | An administrator allows a project to run in a workspace. One binding per workspace is `is_workspace_default`: the project a request without `X-Project` means |
+| Member | `project_members` | A user's direct role in a project (`role_key`) plus per-key `overrides` |
+| Custom role | `project_roles` | A per-project key set based on a built-in template |
+| Project group | `project_groups`, `group_members` | An access bundle: its members get a built-in template in every project of the group. A project is in at most one group |
+| Department | `departments` | An organizational label on projects and groups; grants nothing (phase 3 adds department administrators) |
+| Access epoch | `access_epoch` | A one-row counter bumped by every access-affecting write (see *Caching*) |
+
+All of these are platform tables (no `workspace_id`). A user's effective keys in a
+project are the union of the direct role's and the group role's keys, then the direct
+row's `overrides` (`false` removes, `true` adds). Built-in templates are code
+constants in `app/services/access.py` (`ROLE_TEMPLATES`: `project_owner`, `developer`,
+`biz_owner`, `release_ops`, `sme`, `tool_steward`, `viewer`). The project keys are
+`project.use`, `project.write`, `project.members`, `project.audit`, `project.share`
+and `mcp.approve`; they never appear in `users.permissions` or in
+`/api/auth/status`, whose 16-key list keeps its meaning. A platform administrator
+bypasses membership (`access.has_data_bypass`) and holds every key, but is still
+filtered to the selected project: there is no mixed view except the fleet, costs,
+TTFA and audit routes, which run outside any project.
+
+**`inherit` and the default project.** The `inherit` role exists in the default
+project only and reads the account's global keys (today's 16-key computation) plus
+`project.use` / `project.write` (and `mcp.approve` when the account holds
+`promotion.approve`). It is the compatibility layer: the migration adds every
+non-admin account that holds a workspace grant to that workspace's default project as
+`inherit`, and every later grant write (`POST` / `PATCH /api/users`, approval,
+`PUT /api/workspaces/{id}/grants`) keeps the `inherit` rows in step in the same
+transaction (`access.sync_default_membership`); revoking the grant removes the
+`inherit` row, an explicit role is left alone. An `inherit` row reaches only the
+workspaces the account itself is granted. So changing an account's global permission
+chips still changes what it may do in the default project, and a single-project
+install behaves exactly as before.
+
+### Rows: `ProjectOwned`, `ProjectShared`, criteria and stamping
+
+`app/core/project_scope.py` puts the boundary into the ORM, and each piece fails
+closed:
+
+- **Mixins.** A model inherits `ProjectOwned` (always one project: datasets, chat sessions and messages, eval runs, criteria, releases, API keys, …) or `ProjectShared` (`project_id` may be NULL, meaning workspace- or platform-level and readable from every project: agents — a system preset is NULL —, jobs, managed memories, governance changes, audit events, alert rules, resource mappings, Connections). `core/db.py` lists them as `PROJECT_STRICT_TABLES` / `PROJECT_SHARED_TABLES`; each has an indexed `project_id` column, plus a `(workspace_id, project_id)` index on the hot lists.
+- **Automatic criteria.** A `do_orm_execute` listener adds `project_id = :current` (shared tables: `OR project_id IS NULL`) to every ORM SELECT, UPDATE and DELETE while a project is current (`with_loader_criteria`, aliases included). Lists are therefore filtered in SQL before any count, offset or limit, so totals do not leak.
+- **`ProjectSession`.** `Session.get` answers from the identity map without SQL, which the listener never sees. `db.SessionLocal` builds `ProjectSession`, whose `get` re-checks the row and returns `None` for another project's; `owned_get` does the same on any session. Raw `text()` SQL is not filtered, so request-path raw SQL adds its own project condition.
+- **Stamping.** A `before_flush` listener fills a new row's `project_id`: from its parent row (`__project_parent__`: an eval run from its agent, a message from its conversation, a share link from its agent or annotation task, …), else the current project, else the project of the row's workspace when that workspace is bound to exactly one. Otherwise the flush raises `ProjectStampError`: an owned row with no project would be invisible everywhere, and filing it under some guess would leak it. An existing row's project changes only through `POST /api/projects/{id}/transfer`.
+- **Current project.** A context variable. `route_policy.bind_request_project` (an async app-level dependency, so sync handlers and streaming generators inherit it) sets it from the request's project; `/v1` sets it from the key, `/share/*` from the link. Background threads start with none, so a worker sees every row unless it enters `project_context(<row's project_id>)`, which the deploy pipeline, job resume, chat turns, evaluation and the scheduler all do with the project of the row they work on. Cross-project reads (name uniqueness, the fleet, a pperm check) enter `project_context(None)` explicitly.
+
+Startup runs `assert_every_row_has_a_project` beside the workspace check: derived
+rows take their parent's project, rows of a single-project workspace are adopted with
+a WARNING, and a strict row with no project in a workspace bound to several projects
+refuses to start (see *Operating projects*).
+
+Name uniqueness stays workspace-wide: S3 keys, ECR tags, gateway targets and registry
+records use the agent name, so two projects of one workspace cannot hold the same
+agent name. `agent.name_exists` names the holder only when the caller can see it.
+
+### Requests: route roles and `X-Project`
+
+`ROUTE_POLICY` (`app/core/route_policy.py`) classifies every route. Besides
+`public` / `member` / `admin` / `perm:<key>`:
+
+- `perm:project.use` (chat, invoke, feedback, labels, the caller's own sessions) and `perm:project.write` (every other ordinary write) are project keys. Every member write route has been reclassified, so a plain `member` entry is a read or a hub-global route.
+- `perm:<key>` on a project-scoped route is checked against the effective keys of the request's project (`require_permission` reads `request.state.project`), not the account's.
+- `infra` / `infra+perm:<key>` marks a write to workspace-shared infrastructure (governance policies, registry MCP / skill records, gateway Lambda and tool targets, marketplace publishing, price refresh). `require_infra` lets it through on `project.write` (or `<key>`) while the workspace holds one active project and requires an administrator once it holds several (`403 auth.infra_admin_required`): one project must not reshape what another runs on.
+- `pperm:<key>` is for the hub-global `/api/projects/{project_id}/…` routes: `<key>` in the project named by the path (a non-member gets 404).
+- `PROJECT_EXEMPT` lists the workspace-scoped routes that need no project (catalogues, workspace settings, release policies, `/api/costs`, `/api/inbox`, network profile writes, …). `HUB_GLOBAL_PREFIXES` gained `/api/projects`, `/api/role-templates`, `/api/me`, `/api/admins`, `/api/project-groups`, `/api/departments`.
+
+`tests/test_route_policy.py` keeps the drift checks (every live route classified and
+no stale entry, no workspace write left to a plain member, every `infra` route
+project-scoped, every `PROJECT_EXEMPT` entry a live workspace route), and `scripts/check_api_docs.py` reports routes
+api.md does not mention.
+
+`enforce_route_policy` resolves the workspace, then — for a project-scoped route —
+the project, **before** the permission check (the keys depend on the project):
+
+1. `X-Project` (stamped by the frontend fetch wrapper next to `X-Workspace`, `lib/workspace-header.ts`; remembered per workspace in `localStorage` `launchpad_project:<workspace_id>`).
+2. Without the header: an administrator gets the workspace's default project; a member with one reachable project gets it; a member with several gets the workspace default if they reach it, else `400 project.header_required` (`detail.available`). A member with none gets `403 project.none`.
+3. A project that is not bound to the workspace or that the caller cannot reach answers **404 `project.not_found`**, never 403: a project's name and existence can be sensitive. The same holds for any resource id of another project (the kind's own not-found). Inside one's own project a missing key is still `403 auth.permission_required`.
+4. A non-read request in an archived project answers `409 project.archived`.
+
+Old clients, curl and the workshop seed scripts send no header and land in the
+default project. `/api/auth/status` and `GET /api/me/access` feed the frontend: the
+V3 top bar shows a project switcher next to the workspace switcher only when the
+caller has more than one project there, and a read-only chip only when the workspace
+is bound to more than one; the command palette gains "switch project" entries in the
+same case.
+
+### Caching: the access epoch
+
+Each request needs the caller's reachable projects and keys. `access.snapshot_for`
+loads all of a user's memberships in one query (projects × bindings × direct row ×
+group row, plus referenced custom roles) and caches it in-process per user (LRU of
+5,000, 60 s TTL as a backstop). Every request first reads `access_epoch.value` (one
+primary-key read); a changed epoch drops the cache. Every write that changes who
+reaches what — members, group members, group ↔ project, bindings, project status,
+custom roles, account role / permissions / status, workspace grants — bumps the
+epoch **in the same transaction** (`access.bump_epoch`), so a revocation applies to
+the next request in every process and every instance sharing the ledger. Workspace
+bindings are cached the same way (`workspace_bindings`).
+
+### API keys, links, observability, audit
+
+- **`/v1` API keys** carry `api_keys.project_id` (backfilled to the default project). Every `/v1` call runs as the key's project and ignores any header, so `/v1/agents` and invoke see only that project's agents. A key stops working (`401`, and is disabled for good) when its project is archived or unbound from the key's workspace, or when its creator no longer reaches that project; membership writes disable such keys in the same transaction (`api_keys.disable_offboarded_keys*`). Minting a key needs `project.write`.
+- **Share, review, annotation and channel links** take their project from their target. `/share/*` runs as the link's project; a link whose target moved to another project or whose project is archived answers the same 404 as a revoked token, and archiving revokes the project's links.
+- **Observability.** CloudWatch spans carry no project, so `observability.ProjectAgents` is an allow-set: a row is kept when its session or `service.name` resolves through the ledger to an agent of the current project or a platform preset. In a workspace bound to several projects an unattributed row is shown to administrators only; in a single-project workspace the filter is inert. Dashboard and intent caches are keyed by project. `/api/costs` stays admin-only and project-exempt, with a `?project=` filter.
+- **Audit.** `audit_events` gains `project_id` (the current project, NULL for workspace-level actions) and `actor_user_id`. Structure events (`project.*`, `project.members.*`, `group.*`, `department.*`, `admin.grant` / `.revoke`, `user.sessions.revoke`, `project.transfer`) are hub-global rows. `GET /api/audit` (admin) filters by `project` and `actor` across projects.
+- **Background work.** `jobs.project_id` is stamped from the agent; the pipeline, resume and promotion execution run inside that project. The scheduler runs each watch, alert and MCP health check as its agent's project and skips archived projects.
+- **Visibility.** The workspace's `shared` / `isolated` setting (see *Member resource visibility*) applies inside the project filter: the per-creator rule narrows what a member sees of their own project. A project's `settings.resource_visibility` is stored and owner-editable, but the filter still reads the workspace's setting (`visibility.Viewer.of_request`).
+
+### Separation of duties
+
+The object-level checks are unchanged — nobody approves a promotion they requested
+(`promotion.self_approval`), signs a release they requested, approves their own
+waiver or signs their own criteria — whatever roles they hold. New SoD columns
+(`*_user_id` beside `requested_by`, `reviewed_by`, `signed_by`, …) are compared first,
+so a re-registered username is not the old actor. In addition:
+
+- nobody but an administrator edits their own project membership (`403 project.self_membership`), so an owner cannot hand themselves a sign key;
+- the member views flag a person who holds both sides of a pair in one project (`agents.deploy` + `release.sign`, `criteria.manage` + `criteria.sign`), and with the admin-only setting `settings.sod_strict` such writes are refused (`409 project.sod_conflict`).
+
+### Administration
+
+Administrators manage structure from **Configure** in the V3 console: **Users**
+(project and group memberships, bulk "add to project", forced logout through
+`users.session_epoch`), **Administrators** (`/v3/admins`), **Projects** (members,
+roles, workspace bindings, settings, transfer), **Project groups** and
+**Departments**. A project owner (`project.members`) reaches **Project settings** for
+the current project. Account management, project structure and group / department
+routes are hub-global; `access.can_manage_structure` is the single check (phase 3's
+steward changes only it).
+
+### Operating projects
+
+**Existing installs need no action.** On the first start of this version `init_db`
+runs, in order: `create_all` (the new tables), `_migrate` (additive `project_id`
+columns and indexes on every owned and shared table, `users.session_epoch`, the SoD
+`*_user_id` columns), `_seed_default_projects` and the startup checks. The seed is
+idempotent; its one-time part runs while the `platform_settings` marker
+`migration.projects_v1` is absent:
+
+1. create the `default` project and bind it to every workspace (default binding where the workspace has none);
+2. file the rows of `agents` (except system presets), `jobs`, `managed_memories`, `api_keys`, `resource_creators`, `eval_datasets`, `eval_pipelines`, `skill_lab_tasksets`, `assistant_conversations` into their workspace's default project, and every derived row into its parent's project (an orphan into its workspace's default);
+3. add every non-admin account with a workspace grant as `inherit` member of that workspace's default project, backfill the SoD user ids, bump the epoch, set the marker.
+
+Nullable rows (governance, audit, alerts, mappings, Connections) stay NULL, meaning
+workspace-level as before. A knowledge base with no `resource_creators` row belongs to
+the workspace's default project. With one project per workspace nothing visible
+changes: no switcher, the same `/api/auth/status`, the same pages, `infra` routes
+behave like `project.write`. Copy `data/launchpad.db` before the first start (the
+upgrade is additive; an older binary still starts on the migrated ledger because
+drift checks look only for missing columns).
+
+**Rehearse an upgrade** on a copy of a production ledger before the real one:
+
+```bash
+cd backend
+uv run python scripts/rehearse_projects_migration.py /path/to/copy-of-launchpad.db [--keep] [--out /tmp/rehearsal.db]
+```
+
+The source file is only read (SQLite online backup, read-only); `init_db` runs on a
+copy with AWS clients refused, and the script prints per table the rows, rows without
+a project before and after, the orphans, the `init_db` time and the checks (no schema
+drift, every row has a workspace, every strict row has a project, the marker set).
+Exit 0 = the upgrade would succeed; 1 = a check failed (the copy is kept).
+
+**Leftover rows after a rollback.** Rows written by an older binary after a downgrade
+have no `project_id`. In a single-project workspace startup adopts them with a
+WARNING. In a workspace bound to several projects startup refuses, naming the tables
+and counts; stop the backend and file them:
+
+```bash
+cd backend
+uv run python scripts/backfill_projects.py --dry-run                    # report only, on a throwaway copy
+uv run python scripts/backfill_projects.py --workspace prod --project payments
+uv run python scripts/backfill_projects.py --db /path/to/launchpad.db   # another ledger file
+```
+
+It applies the same schema steps as startup, files derived rows under their parents,
+adopts single-project workspaces' rows, and with `--workspace W --project P` files
+the rest of W's strict rows into P (which must be bound to W). It writes no audit
+row, bumps no epoch and calls no AWS API. Exit 0 = startup will accept the ledger.
+
+**Create and split projects.** As an administrator: create departments and groups if
+wanted (**Configure → Departments / Project groups**), then **Configure → Projects →
+New project** (id, name, workspaces to bind, owners; `POST /api/projects`). The first
+binding of a second project to a workspace turns it multi-project: `infra` writes
+become administrator-only there and unattributed telemetry is hidden from members.
+Add members on the project's **Members** tab (or from **Users**, one account or in
+bulk); members with several projects pick one in the top-bar switcher. Move existing
+agents out of `default` with **Transfer** (`POST /api/projects/{id}/transfer`): a
+ledger-only move of the agent, every derived row and its jobs, in one transaction;
+source-project keys scoped to it lose it. The default project cannot be archived or
+unbound from its workspaces; another project's **Archive** makes it read-only,
+revokes its links and disables keys whose creators no longer reach it.
+
 ## Agent-DLC — criteria, golden sets, calibration and the release gate
 
 The design is [docs/agent-dlc-design.md](agent-dlc-design.md); this section is the map
