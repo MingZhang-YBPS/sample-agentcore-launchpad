@@ -1455,24 +1455,34 @@ def audit_trail(
 ) -> dict[str, Any]:
     """The decision history every workbench shows (append-only `audit_events`).
 
-    Cross-project (the route is PROJECT_EXEMPT, design §5.10): `project` narrows to one
-    project's events, `project=workspace` to the workspace-level ones (no project)."""
-    query = select(AuditEvent).where(AuditEvent.workspace_id == ws.id)
+    Cross-project (the route is PROJECT_EXEMPT, design §5.10): `project=<id>` is that
+    project's events in every workspace it is bound to, `project=workspace` this
+    workspace's events of no project (workspace-level; in `default`, also the
+    structure and account journal). `actor` is a username or a `users.id`."""
+    from sqlalchemy import or_
+
+    from app.core.project_scope import project_context
+
+    if project and project != "workspace":
+        # a project spans workspaces; the admin's view of it does too
+        query = select(AuditEvent).where(AuditEvent.project_id == project)
+    else:
+        query = select(AuditEvent).where(AuditEvent.workspace_id == ws.id)
+        if project == "workspace":
+            query = query.where(AuditEvent.project_id.is_(None))
     if target:
         query = query.where(AuditEvent.target == target)
     if action:
         query = query.where(AuditEvent.action.like(f"{action}%"))
-    if project == "workspace":
-        query = query.where(AuditEvent.project_id.is_(None))
-    elif project:
-        query = query.where(AuditEvent.project_id == project)
     if actor:
-        query = query.where(AuditEvent.actor == actor)
-    rows = db.scalars(query.order_by(AuditEvent.created_at.desc()).limit(limit)).all()
+        query = query.where(or_(AuditEvent.actor == actor, AuditEvent.actor_user_id == actor))
+    with project_context(None):  # every project's rows, whatever the request bound
+        rows = db.scalars(query.order_by(AuditEvent.created_at.desc()).limit(limit)).all()
     return {
         "events": [
-            {"id": r.id, "actor": r.actor, "action": r.action, "target": r.target,
-             "project_id": r.project_id,
+            {"id": r.id, "actor": r.actor, "actor_user_id": r.actor_user_id,
+             "action": r.action, "target": r.target, "project_id": r.project_id,
+             "workspace_id": r.workspace_id,
              "at": r.created_at.isoformat() if r.created_at else None}
             for r in rows
         ]
