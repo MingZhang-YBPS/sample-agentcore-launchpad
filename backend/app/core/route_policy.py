@@ -1386,3 +1386,19 @@ PROD_PROTECTED = PROD_PROTECTED | frozenset({
     ("POST", "/api/gateway-tools/lambda"),
     ("DELETE", "/api/gateway-tools/lambda/{target_id}"),
 })
+
+# ---- project runtime isolation (design projects §10.2, §10.13, R10-model) ----
+# Hub-global under /api/projects like the rest of project administration: the project
+# is the path's, the workspace a query / body field the project must be bound to. Reads
+# are MEMBER and answer 404 to non-members in the handler (a member sees only the
+# workspaces they reach the project in); switching isolation and re-running a
+# provisioning job change AWS state for the project: administrators.
+PROJECT_ISOLATION_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/projects/{project_id}/isolation"): MEMBER,
+    ("PUT", "/api/projects/{project_id}/isolation"): ADMIN,
+    ("GET", "/api/projects/{project_id}/resources"): MEMBER,
+    ("GET", "/api/projects/{project_id}/provisioning"): MEMBER,
+    ("POST", "/api/projects/{project_id}/provision"): ADMIN,
+}
+ROUTE_POLICY.update(PROJECT_ISOLATION_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_ISOLATION_ROUTES)

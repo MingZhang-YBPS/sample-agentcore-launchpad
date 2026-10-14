@@ -145,6 +145,11 @@ class Agent(ProjectShared, Base):
     # The resolved InboundAuth dict when mode is jwt (discovery url, allowed
     # clients/audience/scopes, custom claims — no secrets live here).
     inbound_auth_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # Phase 2 isolation (projects design §10.2): the project permissions-boundary
+    # version the agent's execution role carries now (`boundary-v<N>`), for drift
+    # detection against the project's current boundary. NULL = no boundary attached
+    # (a shared-mode project, or an isolated one not yet migrated).
+    isolation_applied: Mapped[str | None] = mapped_column(String(16), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
