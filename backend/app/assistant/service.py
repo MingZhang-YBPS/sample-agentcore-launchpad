@@ -20,10 +20,11 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
   creates anything until a separate approval.
 * **One in-flight turn per conversation.** A turn is an atomic conditional claim on
   the conversation row (``active_turn``); a concurrent turn is refused (409), a
-  claim left behind by a dead process is reclaimed after ``TURN_CLAIM_TTL_S`` and on
-  startup. The private runtime session id is written to the ledger *before* the
-  data-plane call. A stream that is cut off persists the partial answer as an
-  interrupted turn and never yields a proposal from incomplete output.
+  claim left behind by a dead process is reclaimed after ``claim_ttl_s`` of the
+  preset's turn budget and on startup. The private runtime session id is written to
+  the ledger *before* the data-plane call. A stream that is cut off persists the
+  partial answer as an interrupted turn and never yields a proposal from incomplete
+  output.
 * **Server-owned bounded replay.** The preset runs with persistent memory disabled
   and every turn uses a fresh runtime session id, so the transcript is replayed
   through ``InvokeHarness.messages``, paired by turn, within one FINAL budget that
@@ -66,7 +67,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from botocore.exceptions import ClientError
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
@@ -115,9 +116,12 @@ CATALOG_MAX_ENTRIES = 60
 # Explicit state bounds: a conversation is a requirement-intake session, not a log.
 MAX_TURNS = 200
 MAX_REVISIONS = 50
-# A turn claim older than this belongs to a dead process (the harness itself times
-# out at ≤ 3600 s; the preset uses 900 s) and may be reclaimed.
+# A turn claim older than its TTL belongs to a dead process and may be reclaimed. The
+# TTL follows the preset's turn budget (``claim_ttl_s``); this is the fallback for a
+# conversation whose preset agent (or its stored ``timeout_seconds``) cannot be read.
 TURN_CLAIM_TTL_S = 1800
+# Margin on top of the attempts' budgets: stream setup, ledger writes, the finalizer.
+TURN_CLAIM_MARGIN_S = 300
 # SSE keep-alive cadence while the upstream is silent; also the longest the turn's
 # consumer ever blocks, so cancellation is observed within one interval.
 HEARTBEAT_S = 1.0
@@ -132,12 +136,26 @@ TURN_RETRIED_NAME = "turn_retried"
 # with nothing at all, a mid-stream runtimeClientError / internalServerException,
 # throttling, a 5xx — ``evaluation.service.transient_invoke_error``) replays the whole
 # turn this many times in a fresh Harness session before the member sees an error
-# (live 2026-10-04: about one architect turn in five on prod and dev). One replay keeps
-# two attempts inside ``TURN_CLAIM_TTL_S``; an execution timeout is never replayed —
+# (live 2026-10-04: about one architect turn in five on prod and dev). ``claim_ttl_s``
+# keeps every attempt inside the claim TTL; an execution timeout is never replayed —
 # the member already waited the preset's whole budget.
 TURN_TRANSIENT_RETRIES = 1
 # How long a replay waits for the consumer to record its fresh session on the ledger.
 RETRY_RECORD_WAIT_S = 30.0
+# Harness ``timeout_seconds`` upper bound (``AgentSpec``).
+MAX_TURN_TIMEOUT_S = 3600
+
+
+def claim_ttl_s(timeout_seconds: int) -> int:
+    """How long a turn claim may live before it counts as a dead process's orphan:
+    every attempt of the turn (first + transient replays) running its whole Harness
+    budget, the replay's session-record wait, and a margin. 1500 s → 3330 s."""
+    return int((1 + TURN_TRANSIENT_RETRIES) * timeout_seconds + RETRY_RECORD_WAIT_S
+               + TURN_CLAIM_MARGIN_S)
+
+
+# The longest any claim can live (the TTL of the largest allowed turn budget).
+MAX_TURN_CLAIM_TTL_S = claim_ttl_s(MAX_TURN_TIMEOUT_S)
 # Ledger-only row reserving a replay's Harness session (``sessions.is_assistant_session``
 # reads every row's session id): never shown in the transcript, never replayed.
 SESSION_ROLE = "session"
@@ -973,7 +991,9 @@ def list_conversations(db: Session, workspace_id: str, identity: Identity) -> li
         .limit(ADMIN_LIST_LIMIT if identity.is_admin else LIST_LIMIT)
         .all()
     )
-    return [conversation_summary(db, r, viewer=principal) for r in rows]
+    trimmed = context_trimmed(db, [r.id for r in rows])
+    return [{**conversation_summary(db, r, viewer=principal), "context_trimmed": r.id in trimmed}
+            for r in rows]
 
 
 def set_shared(
@@ -1142,6 +1162,7 @@ def conversation_detail(
             if m.role != SESSION_ROLE
         ],
         "proposals": [proposal_out(db, p) for p in _proposals(db, row.id)],
+        "context": context_window(db, row),
     }
 
 
@@ -1214,13 +1235,30 @@ def _turn_limit_error() -> AppError:
     )
 
 
-def _claim_is_stale(row: AssistantConversation, now: datetime) -> bool:
+def _turn_claim_ttl(db: Session | None, row: AssistantConversation) -> int:
+    """The claim TTL for this conversation's turns, from the turn budget its preset
+    agent runs with (the agent of its latest turn, else the workspace's installed
+    preset). ``TURN_CLAIM_TTL_S`` when neither — nor its stored budget — is readable."""
+    if db is None:
+        return TURN_CLAIM_TTL_S
+    agent = db.get(Agent, row.preset_agent_id) if row.preset_agent_id else None
+    if agent is None and row.workspace_id:
+        agent = system_agents.find_installed(db, row.workspace_id, PRESET)
+    budget = (agent.spec or {}).get("timeout_seconds") if agent is not None else None
+    if not isinstance(budget, int) or isinstance(budget, bool) or budget <= 0:
+        return TURN_CLAIM_TTL_S
+    return claim_ttl_s(min(budget, MAX_TURN_TIMEOUT_S))
+
+
+def _claim_is_stale(row: AssistantConversation, now: datetime,
+                    db: Session | None = None) -> bool:
     if row.active_turn is None or row.active_turn_started_at is None:
         return False
     started = row.active_turn_started_at
     if started.tzinfo is None:
         started = started.replace(tzinfo=UTC)
-    return now - started > timedelta(seconds=TURN_CLAIM_TTL_S)
+    ttl = _turn_claim_ttl(db if db is not None else object_session(row), row)
+    return now - started > timedelta(seconds=ttl)
 
 
 # Single-host live ownership: turns streaming in THIS process. A claim whose owner is
@@ -1238,8 +1276,9 @@ def _turn_live_here(conversation_id: str) -> bool:
 def claim_turn(db: Session, conversation_id: str) -> tuple[int, str]:
     """Atomically reserve the next turn number, refusing while another turn is in
     flight (`409 assistant.turn_in_progress`) or the conversation is full. A claim
-    older than ``TURN_CLAIM_TTL_S`` is taken over; the previous holder's token is
-    invalidated so it can never publish (fail-safe, no result stealing)."""
+    older than its TTL (``claim_ttl_s`` of the preset's turn budget) is taken over;
+    the previous holder's token is invalidated so it can never publish (fail-safe, no
+    result stealing)."""
     now = datetime.now(UTC)
     token = uuid.uuid4().hex
     # ONE ownership acquisition: the process-level registry lock is held across the
@@ -1267,7 +1306,7 @@ def _claim_turn_locked(
     ).rowcount
     if claimed != 1:
         row = db.get(AssistantConversation, conversation_id)
-        if (row is not None and _claim_is_stale(row, now) and row.turns < MAX_TURNS
+        if (row is not None and _claim_is_stale(row, now, db) and row.turns < MAX_TURNS
                 and conversation_id not in _LIVE_TURNS):  # registry lock is held
             claimed = db.execute(
                 update(AssistantConversation)
@@ -1507,12 +1546,39 @@ def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
         )
 
 
+@dataclass(frozen=True)
+class ReplayWindow:
+    """What one composed request carries of the transcript (assistant-context C1)."""
+
+    replayed_turns: int
+    omitted_turns: int
+    # the stored turn number of the oldest replayed turn (None when none is replayed)
+    first_replayed_turn: int | None
+    # share of ``MAX_REPLAY_CHARS`` the FINAL request uses
+    budget_used_ratio: float
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"replayed_turns": self.replayed_turns, "omitted_turns": self.omitted_turns,
+                "first_replayed_turn": self.first_replayed_turn,
+                "budget_used_ratio": self.budget_used_ratio}
+
+
 def compose_messages(
     conversation: AssistantConversation, history: list[AssistantMessage], prompt: str,
     *, inline: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """The bounded ``InvokeHarness.messages`` replay and how many older turns were
-    omitted from it.
+    omitted from it (``compose_replay`` also reports the window).
+    """
+    messages, window = compose_replay(conversation, history, prompt, inline=inline)
+    return messages, window.omitted_turns
+
+
+def compose_replay(
+    conversation: AssistantConversation, history: list[AssistantMessage], prompt: str,
+    *, inline: bool = False,
+) -> tuple[list[dict[str, Any]], ReplayWindow]:
+    """The bounded ``InvokeHarness.messages`` replay and the window it keeps.
 
     Turns are paired by their turn number (never by insert order): each replayed
     turn is the member's text plus the assistant's reply when there was one; a
@@ -1541,26 +1607,32 @@ def compose_messages(
         # a stored proposal is shown once, as stored, in the preamble; replaying every
         # earlier 20–60k-char block too would crowd the turns themselves out of budget
         slot[m.role].append(_strip_proposal_blocks(m.text) if strip else m.text)
-    turns: list[tuple[str, str | None]] = []
+    turns: list[tuple[int, str, str | None]] = []
     carried: list[str] = []
-    for _, slot in sorted(by_turn.items()):
+    for number, slot in sorted(by_turn.items()):
         if slot["user"]:
-            turns.append(("\n\n".join(carried + slot["user"]),
+            turns.append((number, "\n\n".join(carried + slot["user"]),
                           "\n\n".join(slot["assistant"]) or None))
             carried = []
         carried += slot["verdict"]
     if carried:
         prompt = "\n\n".join(carried + [prompt])
     budget = MAX_REPLAY_CHARS - len(preamble) - len(prompt) - 200
-    kept: list[tuple[str, str | None]] = []
+    kept: list[tuple[int, str, str | None]] = []
     used = 0
-    for user_text, reply in reversed(turns):
+    for number, user_text, reply in reversed(turns):
         size = len(user_text) + len(reply or "") + 80
         if len(kept) >= MAX_REPLAY_TURNS or used + size > budget:
             break
-        kept.insert(0, (user_text, reply))
+        kept.insert(0, (number, user_text, reply))
         used += size
     omitted = len(turns) - len(kept)
+    window = ReplayWindow(
+        replayed_turns=len(kept), omitted_turns=omitted,
+        first_replayed_turn=kept[0][0] if kept else None,
+        budget_used_ratio=round(
+            min(1.0, (len(preamble) + len(prompt) + 200 + used) / MAX_REPLAY_CHARS), 3),
+    )
     if omitted:
         preamble += (
             f"\n\n> Replay note: {omitted} earlier turn(s) of this conversation were omitted "
@@ -1568,7 +1640,7 @@ def compose_messages(
         )
     messages: list[dict[str, Any]] = []
     pending_user: list[str] = []
-    for user_text, reply in kept:
+    for _number, user_text, reply in kept:
         pending_user.append(user_text)
         if reply is None:
             pending_user.append("(no assistant reply was produced for the message above)")
@@ -1580,7 +1652,46 @@ def compose_messages(
     messages.append({"role": "user", "content": [{"text": "\n\n".join(pending_user)}]})
     first = messages[0]["content"][0]["text"]
     messages[0]["content"][0]["text"] = preamble + "\n\n---\n\n## Member message\n\n" + first
-    return messages, omitted
+    return messages, window
+
+
+def context_window(db: Session, row: AssistantConversation) -> dict[str, Any]:
+    """The window the NEXT turn's request would replay (``GET`` detail: the console
+    draws its "no longer in context" divider after a reload too). The same
+    ``compose_replay`` as a turn, with an empty message and the larger inline
+    preamble; never calls the model. A turn in flight is not part of its own replay."""
+    history = [m for m in _messages(db, row.id)
+               if row.active_turn is None or m.turn != row.active_turn]
+    _replay, window = compose_replay(row, history, "", inline=True)
+    return window.as_dict()
+
+
+def context_trimmed(db: Session, conversation_ids: list[str]) -> set[str]:
+    """The listed conversations whose next turn surely omits older turns: more
+    replayable turns than ``MAX_REPLAY_TURNS``, or more replayable text than the whole
+    request budget. One cheap query (lengths, never text); a lower bound of
+    ``context_window`` — a conversation it misses still shows its divider on open."""
+    if not conversation_ids:
+        return set()
+    rows = db.execute(
+        select(AssistantMessage.conversation_id, AssistantMessage.turn,
+               AssistantMessage.role, AssistantMessage.name,
+               func.length(AssistantMessage.text))
+        .where(AssistantMessage.conversation_id.in_(conversation_ids),
+               AssistantMessage.role.in_(("user", "assistant", "error")))
+    ).all()
+    retried = {(cid, turn) for cid, turn, role, name, _n in rows
+               if role == "error" and name == TURN_RETRIED_NAME}
+    turns: dict[str, set[int]] = {}
+    chars: dict[str, int] = {}
+    for cid, turn, role, _name, size in rows:
+        if role == "error" or (cid, turn) in retried or not size:
+            continue
+        if role == "user":
+            turns.setdefault(cid, set()).add(turn)
+        chars[cid] = chars.get(cid, 0) + size
+    return {cid for cid in conversation_ids
+            if len(turns.get(cid, ())) > MAX_REPLAY_TURNS or chars.get(cid, 0) > MAX_REPLAY_CHARS}
 
 
 # ---------------------------------------------------------------------------
@@ -1997,8 +2108,8 @@ def run_turn(
         history = [m for m in _messages(db, conversation_id) if m.turn != turn]
         if retry_of is not None:  # the retried exchange is not replayed (see TURN_RETRIED_NAME)
             history = [m for m in history if m.turn != retry_of]
-        messages, omitted = compose_messages(conversation, history, prompt,
-                                             inline=overrides is not None)
+        messages, window = compose_replay(conversation, history, prompt,
+                                          inline=overrides is not None)
         # the FIRST write is fenced like every other one: composing the replay took
         # time, and ownership may have been replaced meanwhile
         _lock_conversation(db, conversation_id)
@@ -2023,7 +2134,9 @@ def run_turn(
         db.commit()
         yield {"event": "meta", "data": {"conversation_id": conversation_id, "turn": turn,
                                          "session_id": session_id, "agent": agent.name,
-                                         "omitted_turns": omitted}}
+                                         "omitted_turns": window.omitted_turns,
+                                         "first_replayed_turn": window.first_replayed_turn,
+                                         "context": window.as_dict()}}
         try:
             actor = scoped_actor(agent.id, identity.username)
             # Upstream production runs in its own thread; this generator only ever

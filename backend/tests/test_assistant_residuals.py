@@ -402,7 +402,7 @@ def test_expired_claim_is_taken_over_and_the_old_worker_cannot_publish(client, r
         row = db.get(AssistantConversation, cid)
         row.active_turn, row.turns, row.active_turn_token = 1, 1, "oldtoken"
         row.active_turn_started_at = datetime.now(UTC) - timedelta(
-            seconds=service.TURN_CLAIM_TTL_S + 5)
+            seconds=service.MAX_TURN_CLAIM_TTL_S + 5)
         db.commit()
     finally:
         db.close()
@@ -868,7 +868,7 @@ def test_live_local_turn_is_never_taken_over_and_tool_writes_are_fenced(client, 
     try:  # age the LIVE claim in the ledger as if the TTL had passed
         row = db.get(AssistantConversation, cid)
         row.active_turn_started_at = datetime.now(UTC) - timedelta(
-            seconds=service.TURN_CLAIM_TTL_S + 5)
+            seconds=service.MAX_TURN_CLAIM_TTL_S + 5)
         db.commit()
     finally:
         db.close()
@@ -887,7 +887,7 @@ def test_live_local_turn_is_never_taken_over_and_tool_writes_are_fenced(client, 
         row = db.get(AssistantConversation, cid)
         row.active_turn, row.active_turn_token = 9, "dead-process-token"
         row.active_turn_started_at = datetime.now(UTC) - timedelta(
-            seconds=service.TURN_CLAIM_TTL_S + 5)
+            seconds=service.MAX_TURN_CLAIM_TTL_S + 5)
         row.turns = 9
         db.commit()
     finally:
@@ -1178,7 +1178,7 @@ def test_live_publication_is_atomic_with_the_durable_claim(client, ready, harnes
         row = db.get(AssistantConversation, cid)
         assert row.active_turn == 1 and row.active_turn_token  # committed claim …
         row.active_turn_started_at = datetime.now(UTC) - timedelta(
-            seconds=service.TURN_CLAIM_TTL_S + 5)  # … aged as if the TTL had passed
+            seconds=service.MAX_TURN_CLAIM_TTL_S + 5)  # … aged as if the TTL had passed
         db.commit()
     finally:
         db.close()
@@ -1210,7 +1210,7 @@ def test_failed_claim_never_publishes_and_orphan_recovery_still_works(client, re
     try:  # now an orphan (dead process): recovered through the ordinary route
         row = db.get(AssistantConversation, cid)
         row.active_turn_started_at = datetime.now(UTC) - timedelta(
-            seconds=service.TURN_CLAIM_TTL_S + 5)
+            seconds=service.MAX_TURN_CLAIM_TTL_S + 5)
         db.commit()
     finally:
         db.close()
@@ -1227,9 +1227,9 @@ def test_initial_writes_and_invocation_are_fenced_when_ownership_was_replaced(
     (as another process's orphan takeover would), resume: no user row is committed,
     no data-plane call is made, the stream reports the loss."""
     gate, release = threading.Event(), threading.Event()
-    _pause_then(monkeypatch, service, "compose_messages", gate, release)
     harness.reply("never")
     cid = _open(client)
+    _pause_then(monkeypatch, service, "compose_replay", gate, release)
     results: list = []
     t = threading.Thread(target=lambda: results.append(
         client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "first"})))
