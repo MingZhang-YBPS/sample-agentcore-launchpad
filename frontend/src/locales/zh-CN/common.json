@@ -10111,6 +10111,26 @@
         "wait": "部署中",
         "act": "失败",
         "off": "其他"
+      },
+      "import": "导入已有 Runtime",
+      "actions": "操作",
+      "rowMenu": "{{name}} 的操作",
+      "bulk": {
+        "select": "选择 {{name}}",
+        "selectAll": "选择所有可删除的智能体",
+        "selected": "已选 {{count}} 个",
+        "clear": "清除选择",
+        "delete": "删除 {{count}} 个",
+        "title_one": "删除这个智能体？",
+        "title_other": "删除 {{count}} 个智能体？",
+        "body_one": "将删除以下智能体及其 AgentCore 资源，无法撤销。",
+        "body_other": "将删除以下 {{count}} 个智能体及其 AgentCore 资源，无法撤销。",
+        "failedBody": "有 {{count}} 个未能删除。排除原因后重试，或取消。",
+        "recordOnly": "（导入的 runtime：只删除平台记录）",
+        "confirm": "删除 {{count}} 个",
+        "retry": "重试",
+        "deleted_one": "已删除 1 个智能体",
+        "deleted_other": "已删除 {{count}} 个智能体"
       }
     },
     "agent": {

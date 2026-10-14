@@ -1,15 +1,21 @@
-import { ArrowUpDown, RefreshCw, Search } from "lucide-react";
-import { useMemo } from "react";
+import { ArrowUpDown, Download, RefreshCw, Search, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-import { api } from "../../lib/api";
+import { isImported, useAgentActions } from "../../lib/agent-admin/actions";
+import { useAgentPermissions } from "../../lib/agent-admin/permissions";
+import { api, type AgentInfo } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { agentSignal } from "../signals";
 import { Chip, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton } from "../ui";
-import { useLoad } from "../hooks";
+import { useLoad, useToast } from "../hooks";
 import { ago } from "../format";
+import { ActionDialog } from "./agent/ActionDialog";
 import { AgentDetail } from "./agent/AgentDetail";
+import { BulkDeleteDialog } from "./agents-list/BulkDeleteDialog";
+import { RowMenu } from "./agents-list/RowMenu";
+import { bulkDeletable, liveSelection, toggleSelection } from "./agents-list/rows";
 
 function AgentList() {
   const { t } = useTranslation();
@@ -36,6 +42,29 @@ function AgentList() {
   const all = (agents.data?.agents ?? []).filter((a) => a.status !== "deleted");
   const count = (s: Signal) => all.filter((a) => agentSignal(a) === s).length;
 
+  // row actions and bulk delete (v3-agent-management §3), on the detail page's rules
+  const perms = useAgentPermissions();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const actions = useAgentActions({
+    onDeleted: (agent) => {
+      const name = agent.display_name || agent.name;
+      toast("ok", t(isImported(agent) ? "v3.agent.action.removed" : "v3.agent.action.deleted", { name }));
+      agents.reload();
+    },
+    onConverted: (agent) => {
+      toast("ok", t("v3.agent.action.convertStarted", { name: agent.name }));
+      navigate(`/v3/agents?id=${encodeURIComponent(agent.id)}`);
+    },
+  });
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulk, setBulk] = useState<AgentInfo[] | null>(null);
+  // the checkbox column shows when the member may delete some row at all
+  const picking = all.some((a) => perms.canDelete(a));
+  const pickable = rows.filter((a) => bulkDeletable(a, perms)).map((a) => a.id);
+  const picked = liveSelection(selected, rows, perms);
+  const allPicked = pickable.length > 0 && pickable.every((id) => selected.has(id));
+
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
       <PageHead
@@ -43,6 +72,10 @@ function AgentList() {
         title={t("v3.agents.title")}
         sub={t("v3.agents.sub")}
         end={<><button type="button" className="v3-btn" onClick={agents.reload} disabled={agents.loading}><RefreshCw size={14} /> {t("v3.ux.refresh")}</button>
+          {/* the classic import page until V3 has its own (§3) */}
+          <button type="button" className="v3-btn" onClick={() => navigate("/agents/import")} disabled={perms.locked} title={perms.lockTitle} data-testid="v3-agents-import">
+            <Download size={14} /> {t("v3.agents.import")}
+          </button>
           <Link to="/v3/create" className="v3-btn primary">{t("v3.nav.create")}</Link></>}
       />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -59,6 +92,15 @@ function AgentList() {
             placeholder={t("v3.agents.search")} aria-label={t("v3.agents.search")} />
         </div>
       </div>
+      {picked.length > 0 && (
+        <div className="v3-agents-bulk" data-testid="v3-agents-bulk">
+          <span aria-live="polite">{t("v3.agents.bulk.selected", { count: picked.length })}</span>
+          <button type="button" className="v3-btn sm danger" onClick={() => setBulk(picked)} data-testid="v3-agents-bulk-delete">
+            <Trash2 size={14} /> {t("v3.agents.bulk.delete", { count: picked.length })}
+          </button>
+          <button type="button" className="v3-btn sm ghost" onClick={() => setSelected(new Set())}>{t("v3.agents.bulk.clear")}</button>
+        </div>
+      )}
       <div className="v3-list-summary">
         <span aria-live="polite">{agents.data ? t("v3.ux.results", { count: rows.length, total: all.length }) : t("v3.home.loading")}</span>
         <label><ArrowUpDown size={14} /> <span>{t("v3.ux.sort")}</span>
@@ -82,17 +124,36 @@ function AgentList() {
           <table className="v3-table">
             <thead>
               <tr>
+                {picking && (
+                  <th className="pick">
+                    <input type="checkbox" checked={allPicked} disabled={pickable.length === 0}
+                      title={perms.locked ? perms.lockTitle : undefined}
+                      onChange={() => setSelected((prev) => toggleSelection(prev, pickable))}
+                      aria-label={t("v3.agents.bulk.selectAll")} data-testid="v3-agents-pick-all" />
+                  </th>
+                )}
                 <th>{t("v3.ux.status")}</th>
                 <th>{t("v3.agents.name")}</th>
                 <th>{t("v3.agents.method")}</th>
                 <th className="num">{t("v3.agents.version")}</th>
                 <th>{t("v3.agents.owner")}</th>
                 <th className="num">{t("v3.agents.updated")}</th>
+                <th className="end" aria-label={t("v3.agents.actions")} />
               </tr>
             </thead>
             <tbody>
               {rows.map((a) => (
                 <tr key={a.id}>
+                  {picking && (
+                    <td className="pick">
+                      {perms.canDelete(a) && (
+                        <input type="checkbox" checked={selected.has(a.id) && bulkDeletable(a, perms)} disabled={!bulkDeletable(a, perms)}
+                          title={perms.locked ? perms.lockTitle : a.status === "deploying" ? t("v3.agent.editBlocked.deploying") : undefined}
+                          onChange={() => setSelected((prev) => toggleSelection(prev, a.id))}
+                          aria-label={t("v3.agents.bulk.select", { name: a.display_name || a.name })} data-testid={`v3-agents-pick-${a.id}`} />
+                      )}
+                    </td>
+                  )}
                   <td><Chip s={agentSignal(a)}><Lamp s={agentSignal(a)} live={a.status === "active"} /> {t(`v3.agents.filter.${agentSignal(a)}`)}</Chip></td>
                   <td>
                     <div className="v3-name">
@@ -106,6 +167,7 @@ function AgentList() {
                   <td className="num">v{a.version ?? "—"}</td>
                   <td className="mono" style={{ color: "var(--v3-text-2)" }}>{a.created_by_name || a.owner || "—"}</td>
                   <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(a.updated_at)}</td>
+                  <td className="end"><RowMenu agent={a} perms={perms} actions={actions} /></td>
                 </tr>
               ))}
             </tbody>
@@ -113,6 +175,19 @@ function AgentList() {
           </div>
         )}
       </Panel>
+      <ActionDialog actions={actions} />
+      {bulk && (
+        <BulkDeleteDialog
+          agents={bulk}
+          onCancel={() => setBulk(null)}
+          onDone={({ deleted, failed }) => {
+            if (deleted.length) toast("ok", t("v3.agents.bulk.deleted", { count: deleted.length }));
+            setSelected((prev) => new Set([...prev].filter((id) => failed.some((f) => f.agent.id === id))));
+            if (!failed.length) setBulk(null);
+            agents.reload();
+          }}
+        />
+      )}
     </div>
   );
 }
