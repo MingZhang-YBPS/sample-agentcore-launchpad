@@ -3,22 +3,48 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, type ConsoleRole, type ConsoleUser, errorMessage, type UserPatchBody } from "../../../lib/api";
-import { clampDays, DEFAULT_GRANT, MAX_EXTEND_DAYS } from "../../../v2/pages/users/common";
+import { adminsApi } from "../../../lib/api/projects";
+import { type ProjectUser, type UserMembershipPatch, usersApi } from "../../../lib/api/users";
+import { clampDays, MAX_EXTEND_DAYS } from "../../../v2/pages/users/common";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useToast } from "../../hooks";
 import { Btn, Confirm, Dialog, Notice } from "../../ui";
-import { createBody, type CreateErrors, type CreateForm, emptyCreateForm, oneTimePassword, validateCreate } from "./forms";
+import {
+  type ApproveForm,
+  approveBody,
+  createBody,
+  type CreateErrors,
+  type CreateForm,
+  directProjectRows,
+  emptyApproveForm,
+  emptyCreateForm,
+  groupItems,
+  groupRows,
+  type MembershipRow,
+  oneTimePassword,
+  projectItems,
+  validateApprove,
+  validateCreate,
+  validateMemberships,
+} from "./forms";
 import { GrantChip } from "./GrantChip";
+import { LegacyGrants, MembershipRows } from "./Memberships";
+import { type Structure, useProjectRoleOptions, useStructure } from "./structure";
 
 /** Account actions that change access, so each one asks first. */
-export type ConfirmKind = "delete" | "disable" | "reject" | "reset" | "role";
+export type ConfirmKind = "delete" | "disable" | "reject" | "reset" | "role" | "sessions";
 
 /**
  * Every account write of the page — the same PATCH / DELETE calls, bodies and
  * confirmations as V2's `useUserActions`, with V3 dialogs: approve with workspace
- * grants, custom extension, the confirmations, and the one-time generated password.
+ * grants and (projects §7.5) projects and groups, create with projects (§7.4),
+ * edit one account's projects and groups, forced logout, custom extension, the
+ * confirmations, and the one-time generated password.
+ *
+ * `structure` (projects, groups, templates) is the page's when it has one loaded;
+ * otherwise it is fetched while a dialog that needs it is open.
  */
-export function useUserActions(onChanged: () => void, validDays = 7) {
+export function useUserActions(onChanged: () => void, validDays = 7, structure?: Structure) {
   const { t } = useTranslation();
   const toast = useToast();
   const { workspaces } = useWorkspace();
@@ -27,18 +53,35 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
   const [extendTarget, setExtendTarget] = useState<ConsoleUser | null>(null);
   const [extendDays, setExtendDays] = useState("14");
   const [approveTarget, setApproveTarget] = useState<ConsoleUser | null>(null);
-  const [approveGrants, setApproveGrants] = useState<string[]>([]);
+  const [approving, setApproving] = useState<ApproveForm | null>(null);
+  const [approveTouched, setApproveTouched] = useState(false);
+  const [memberTarget, setMemberTarget] = useState<ProjectUser | null>(null);
+  const [memberProjects, setMemberProjects] = useState<MembershipRow[]>([]);
+  const [memberGroups, setMemberGroups] = useState<MembershipRow[]>([]);
   const [reset, setReset] = useState<{ username: string; password: string; kind: "created" | "reset" } | null>(null);
   const [creating, setCreating] = useState<CreateForm | null>(null);
   const [createTouched, setCreateTouched] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [wsTarget, setWsTarget] = useState<ConsoleUser | null>(null);
   const [wsDraft, setWsDraft] = useState<string[]>([]);
+  const needsStructure = !structure && (creating !== null || approveTarget !== null || memberTarget !== null);
+  const own = useStructure(needsStructure);
+  const shape = structure ?? own;
+  const roleOptions = useProjectRoleOptions(
+    [...(creating?.projects ?? []), ...(approving?.projects ?? []), ...memberProjects].map((row) => row.id),
+    shape.templates,
+  );
+  const groupRoleOptions = () => shape.templates.map((key) => ({ key, label: t(`v3.project.roles.${key}`, { defaultValue: key }) }));
+  const projectTargets = shape.projects.map((p) => ({ id: p.id, name: p.name }));
+  const groupTargets = shape.groups.filter((g) => !g.archived).map((g) => ({ id: g.id, name: g.name }));
+  const showMemberships = shape.multiProject || groupTargets.length > 0;
 
-  const patch = async (user: ConsoleUser, body: UserPatchBody, successKey: string) => {
+  const patch = async (user: ConsoleUser, body: UserPatchBody | UserMembershipPatch, successKey: string) => {
     setBusyId(user.id);
     try {
-      const updated = await api.updateUser(user.id, body);
+      const updated = await (Object.keys(body).some((k) => k === "projects" || k === "groups")
+        ? usersApi.update(user.id, body as UserMembershipPatch)
+        : api.updateUser(user.id, body as UserPatchBody));
       const once = oneTimePassword(updated, "reset");
       if (once) setReset(once);
       toast("ok", t(successKey, { username: user.username }));
@@ -78,8 +121,60 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
   // approval decides the account's environments too, so it asks instead of
   // granting the hub silently
   const openApprove = (user: ConsoleUser) => {
-    setApproveGrants(user.workspaces.length > 0 ? user.workspaces : [DEFAULT_GRANT]);
+    setApproving(emptyApproveForm(user));
+    setApproveTouched(false);
     setApproveTarget(user);
+  };
+  const closeApprove = () => {
+    setApproveTarget(null);
+    setApproving(null);
+  };
+  const submitApprove = () => {
+    if (!approveTarget || !approving) return;
+    setApproveTouched(true);
+    if (Object.keys(validateApprove(approving)).length > 0) return;
+    const target = approveTarget;
+    const body = approveBody(approving, target.role);
+    closeApprove();
+    void patch(target, body, "usersPage.approved");
+  };
+
+  /** Edit one account's direct project rows and its groups (full replacement, §7.10). */
+  const openMemberships = (user: ProjectUser) => {
+    setMemberProjects(directProjectRows(user));
+    setMemberGroups(groupRows(user));
+    setMemberTarget(user);
+  };
+  const closeMemberships = () => {
+    setMemberTarget(null);
+    setMemberProjects([]);
+    setMemberGroups([]);
+  };
+  const memberErrors = {
+    projects: validateMemberships(memberProjects, "projects"),
+    groups: validateMemberships(memberGroups, "groups"),
+  };
+  const submitMemberships = () => {
+    if (!memberTarget || memberErrors.projects || memberErrors.groups) return;
+    const target = memberTarget;
+    void patch(target, { projects: projectItems(memberProjects), groups: groupItems(memberGroups) }, "v3.users.memberships.saved")
+      .then((ok) => ok && closeMemberships());
+  };
+
+  /** Forced logout (`POST /api/users/{id}/sessions/revoke`): every session ends on its next request. */
+  const revokeSessions = async (user: ConsoleUser) => {
+    setBusyId(user.id);
+    try {
+      await adminsApi.revokeSessions(user.id);
+      toast("ok", t("v3.users.sessions.revoked", { username: user.username }));
+      onChanged();
+      return true;
+    } catch (err) {
+      toast("act", t("usersPage.actionFailed", { msg: errorMessage(err) }), err);
+      return false;
+    } finally {
+      setBusyId(null);
+    }
   };
 
   const ask = (kind: ConfirmKind, user: ConsoleUser) => setConfirm({ kind, user });
@@ -97,7 +192,9 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
     setBusyId("create");
     setCreateError(null);
     try {
-      const created = await api.createUser(createBody(creating));
+      const body = createBody(creating);
+      // the base call unless memberships ride along: the same request as before projects
+      const created = body.projects || body.groups ? await usersApi.create(body) : await api.createUser(body);
       setCreating(null);
       toast("ok", t("v3.users.create.created", { username: created.username }));
       setReset(oneTimePassword(created, "created"));
@@ -125,6 +222,7 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
     } else if (kind === "disable") ok = await patch(user, { status: "disabled" }, "usersPage.disabled");
     else if (kind === "reject") ok = await patch(user, { status: "disabled" }, "usersPage.rejected");
     else if (kind === "reset") ok = await patch(user, { password: null }, "usersPage.passwordReset");
+    else if (kind === "sessions") ok = await revokeSessions(user);
     else ok = await patch(user, { role: user.role === "admin" ? "member" : "admin" }, "v2.users.roleUpdated");
     if (ok) setConfirm(null);
   };
@@ -140,6 +238,8 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
         return { title: t("v2.users.confirm.rejectTitle"), body: t("v2.users.confirm.rejectBody", { username }), label: t("v2.users.action.reject"), danger: true };
       case "reset":
         return { title: t("v2.users.confirm.resetTitle"), body: t("v2.users.confirm.resetBody", { username }), label: t("v2.users.action.resetPassword"), danger: false };
+      case "sessions":
+        return { title: t("v3.users.sessions.title"), body: t("v3.users.sessions.body", { username }), label: t("v3.users.sessions.action"), danger: true };
       default:
         return user.role === "admin"
           ? { title: t("v2.users.confirm.demoteTitle"), body: t("v2.users.confirm.demoteBody", { username }), label: t("v2.users.action.makeMember"), danger: true }
@@ -226,6 +326,17 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
                 )}
                 {createErrors.password ? <small className="v3-err">{t(createErrors.password)}</small> : <small className="v3-hint">{t("v3.users.create.passwordHint")}</small>}
               </div>
+              {showMemberships && creating.role !== "admin" && (
+                <>
+                  <MembershipRows kind="projects" rows={creating.projects} onChange={(rows) => setField("projects", rows)}
+                    targets={projectTargets} rolesFor={roleOptions} error={createErrors.projects} />
+                  {groupTargets.length > 0 && (
+                    <MembershipRows kind="groups" rows={creating.groups} onChange={(rows) => setField("groups", rows)}
+                      targets={groupTargets} rolesFor={groupRoleOptions} error={createErrors.groups} />
+                  )}
+                </>
+              )}
+              <LegacyGrants multiProject={showMemberships && creating.role !== "admin"}>
               <div className="v3-field">
                 <span>{t("v2.users.col.workspaces")}</span>
                 {creating.role === "admin" ? (
@@ -243,10 +354,11 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
                         );
                       })}
                     </div>
-                    {creating.workspaces.length === 0 && <Notice s="wait">{t("v3.users.create.noGrant")}</Notice>}
+                    {creating.workspaces.length === 0 && creating.projects.length === 0 && <Notice s="wait">{t("v3.users.create.noGrant")}</Notice>}
                   </>
                 )}
               </div>
+              </LegacyGrants>
               {createError && <Notice s="act">{createError}</Notice>}
               <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
             </form>
@@ -324,43 +436,84 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
           </Dialog>
         )}
 
-        {approveTarget && (
+        {approveTarget && approving && (
           <Dialog
             wide
             title={t("usersPage.approveTitle")}
-            onClose={() => setApproveTarget(null)}
+            onClose={closeApprove}
             foot={
               <>
-                <Btn kind="ghost" onClick={() => setApproveTarget(null)}>{t("v3.common.cancel")}</Btn>
-                <Btn kind="primary" disabled={busyId !== null}
-                  onClick={() => {
-                    const target = approveTarget;
-                    setApproveTarget(null);
-                    void patch(target, { status: "active", workspaces: approveGrants }, "usersPage.approved");
-                  }}>
-                  {t("v2.users.action.approve")}
+                <Btn kind="ghost" onClick={closeApprove}>{t("v3.common.cancel")}</Btn>
+                <Btn kind="primary" disabled={busyId !== null} onClick={submitApprove}>{t("v2.users.action.approve")}</Btn>
+              </>
+            }
+          >
+            <div style={{ display: "grid", gap: 12 }} data-testid="v3-user-approve">
+              <p style={{ margin: 0 }}>{t("usersPage.approveBody", { username: approveTarget.username })}</p>
+              {showMemberships && (
+                <>
+                  <label className="v3-field">
+                    <span>{t("v2.users.col.role")}</span>
+                    <select className="v3-select" value={approving.role}
+                      onChange={(e) => setApproving({ ...approving, role: e.target.value as ApproveForm["role"] })}>
+                      {(["member", "operator"] as const).map((role) => <option key={role} value={role}>{t(`v2.users.role.${role}`)}</option>)}
+                    </select>
+                  </label>
+                  <MembershipRows kind="projects" rows={approving.projects} onChange={(rows) => setApproving({ ...approving, projects: rows })}
+                    targets={projectTargets} rolesFor={roleOptions} error={approveTouched ? validateApprove(approving).projects : null} />
+                  {groupTargets.length > 0 && (
+                    <MembershipRows kind="groups" rows={approving.groups} onChange={(rows) => setApproving({ ...approving, groups: rows })}
+                      targets={groupTargets} rolesFor={groupRoleOptions} error={approveTouched ? validateApprove(approving).groups : null} />
+                  )}
+                </>
+              )}
+              <LegacyGrants multiProject={showMemberships}>
+                <div className="v3-field">
+                  <span>{t("v2.users.col.workspaces")}</span>
+                  <div className="v3-usr-chips">
+                    {workspaces.map((ws) => {
+                      const on = approving.workspaces.includes(ws.id);
+                      return (
+                        <GrantChip key={ws.id} on={on} title={ws.name}
+                          onClick={() => setApproving({ ...approving, workspaces: on ? approving.workspaces.filter((id) => id !== ws.id) : [...approving.workspaces, ws.id] })}>
+                          {ws.id}
+                        </GrantChip>
+                      );
+                    })}
+                    {workspaces.length === 0 && <span className="v3-hint">—</span>}
+                  </div>
+                  <small className="v3-hint">{t("v2.users.approveHint")}</small>
+                </div>
+              </LegacyGrants>
+              {approving.workspaces.length === 0 && approving.projects.length === 0 && approving.groups.length === 0 && (
+                <Notice s="wait">{t("v2.users.approveNoGrant")}</Notice>
+              )}
+            </div>
+          </Dialog>
+        )}
+
+        {memberTarget && (
+          <Dialog
+            wide
+            title={t("v3.users.memberships.title", { username: memberTarget.username })}
+            onClose={() => busyId === null && closeMemberships()}
+            foot={
+              <>
+                <Btn kind="ghost" disabled={busyId !== null} onClick={closeMemberships}>{t("v3.common.cancel")}</Btn>
+                <Btn kind="primary" disabled={busyId !== null || Boolean(memberErrors.projects || memberErrors.groups)} onClick={submitMemberships}>
+                  {t("v3.users.memberships.save")}
                 </Btn>
               </>
             }
           >
-            <p style={{ marginTop: 0 }}>{t("usersPage.approveBody", { username: approveTarget.username })}</p>
-            <div className="v3-field">
-              <span>{t("v2.users.col.workspaces")}</span>
-              <div className="v3-usr-chips">
-                {workspaces.map((ws) => {
-                  const on = approveGrants.includes(ws.id);
-                  return (
-                    <GrantChip key={ws.id} on={on} title={ws.name}
-                      onClick={() => setApproveGrants((prev) => (on ? prev.filter((id) => id !== ws.id) : [...prev, ws.id]))}>
-                      {ws.id}
-                    </GrantChip>
-                  );
-                })}
-                {workspaces.length === 0 && <span className="v3-hint">—</span>}
-              </div>
-              <small className="v3-hint">{t("v2.users.approveHint")}</small>
+            <div style={{ display: "grid", gap: 12 }} data-testid="v3-user-memberships">
+              <p style={{ margin: 0 }}>{t("v3.users.memberships.body")}</p>
+              <MembershipRows kind="projects" rows={memberProjects} onChange={setMemberProjects}
+                targets={projectTargets} rolesFor={roleOptions} error={memberErrors.projects} disabled={busyId !== null} />
+              <MembershipRows kind="groups" rows={memberGroups} onChange={setMemberGroups}
+                targets={groupTargets} rolesFor={groupRoleOptions} error={memberErrors.groups} disabled={busyId !== null} />
+              <small className="v3-hint">{t("v3.users.memberships.inheritHint")}</small>
             </div>
-            {approveGrants.length === 0 && <div style={{ marginTop: 12 }}><Notice s="wait">{t("v2.users.approveNoGrant")}</Notice></div>}
           </Dialog>
         )}
 
@@ -388,5 +541,9 @@ export function useUserActions(onChanged: () => void, validDays = 7) {
     );
   };
 
-  return { busyId, patch, ask, toggleStatus, openExtend, openApprove, openCreate, openWorkspaces, renderDialogs };
+  return {
+    busyId, patch, ask, toggleStatus, openExtend, openApprove, openCreate, openWorkspaces, openMemberships, renderDialogs,
+    /** show a response's one-time password (another page's create) in this dialog */
+    showOneTime: setReset,
+  };
 }

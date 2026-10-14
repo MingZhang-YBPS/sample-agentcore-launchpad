@@ -1,20 +1,25 @@
 import "./users.css";
 
-import { ArrowLeft, KeyRound, Pencil, RefreshCw, Search, ShieldAlert, ShieldCheck, Trash2, UserCheck, UserPlus, UserX } from "lucide-react";
+import { ArrowLeft, FolderPlus, KeyRound, LogOut, Pencil, RefreshCw, Search, ShieldAlert, ShieldCheck, Trash2, UserCheck, UserPlus, UserX } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { AGENT_PERMISSIONS, togglePermission, api, type ConsoleUser, type UserState } from "../../lib/api";
-import { isStatusFilter, PAGE_SIZE, USER_STATES } from "../../v2/pages/users/common";
+import { type ProjectUser, usersApi } from "../../lib/api/users";
+import { PAGE_SIZE, USER_STATES } from "../../v2/pages/users/common";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad } from "../hooks";
 import { ChangePasswordDialog } from "../ChangePassword";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
+import { AccessPanel } from "./users/AccessPanel";
 import { useUserActions } from "./users/actions";
+import { BulkAddDialog } from "./users/BulkAdd";
+import { listFilterFrom } from "./users/forms";
 import { GrantChip } from "./users/GrantChip";
+import { useRoleLabel, useStructure } from "./users/structure";
 
 const STATE_SIGNAL: Record<UserState, Signal> = { pending: "wait", active: "ok", expired: "act", disabled: "off" };
 
@@ -49,6 +54,21 @@ function Validity({ user }: { user: ConsoleUser }) {
   );
 }
 
+/** "Project (role) +n" of a list row; an administrator reaches all of them by role. */
+function ProjectsCell({ user }: { user: ProjectUser }) {
+  const { t } = useTranslation();
+  const label = useRoleLabel();
+  if (user.role === "admin") return <span className="v3-usr-muted">{t("v3.users.access.allProjects")}</span>;
+  const projects = user.projects ?? [];
+  if (projects.length === 0) return <span className="v3-usr-muted">—</span>;
+  return (
+    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }} title={projects.map((p) => `${p.name} (${label(p.role)})`).join(", ")}>
+      {projects.slice(0, 2).map((p) => <Chip key={p.id}>{p.name} · {label(p.role)}</Chip>)}
+      {projects.length > 2 && <span className="v3-usr-muted">+{projects.length - 2}</span>}
+    </span>
+  );
+}
+
 function Forbidden() {
   const { t } = useTranslation();
   return (
@@ -68,20 +88,25 @@ function Forbidden() {
 function UserList() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
-  const statusParam = params.get("status");
-  const status = isStatusFilter(statusParam) ? statusParam : "all";
-  const query = params.get("q") ?? "";
-  const page = Math.max(1, Number(params.get("page") ?? "1") || 1);
+  const { page, ...filter } = listFilterFrom(params, PAGE_SIZE);
+  const status = filter.status ?? "all";
+  const query = filter.q ?? "";
   const list = useLoad(
-    () => api.listUsers({ q: query || undefined, status, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
-    `v3-users:${status}:${query}:${page}`,
+    () => usersApi.list(filter),
+    `v3-users:${status}:${query}:${filter.role ?? ""}:${filter.project ?? ""}:${filter.group ?? ""}:${page}`,
   );
   const stats = useLoad(() => api.userStats(), "v3-users-stats");
+  const structure = useStructure();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
   const reload = () => {
     list.reload();
     stats.reload();
   };
-  const actions = useUserActions(reload, stats.data?.valid_days ?? 7);
+  const actions = useUserActions(reload, stats.data?.valid_days ?? 7, structure);
+  // the project columns, filters and bulk action once the platform has more than the default project
+  const multi = structure.multiProject;
+  const liveGroups = structure.groups.filter((g) => !g.archived);
   const setParam = (key: string, value: string | null) =>
     setParams(
       (prev) => {
@@ -95,7 +120,20 @@ function UserList() {
     );
   // the built-in admin has no row to page over: pinned first on page 1 when it matches
   const builtin = list.data?.builtin ?? null;
-  const rows = useMemo(() => [...(builtin && page === 1 ? [builtin] : []), ...(list.data?.items ?? [])], [list.data, builtin, page]);
+  const rows = useMemo<ProjectUser[]>(
+    () => [...(builtin && page === 1 ? [builtin as ProjectUser] : []), ...(list.data?.items ?? [])],
+    [list.data, builtin, page],
+  );
+  const selectable = rows.filter((u) => !u.builtin);
+  const chosen = selectable.filter((u) => selected.has(u.id));
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const allChosen = selectable.length > 0 && chosen.length === selectable.length;
   const total = list.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const s = stats.data;
@@ -112,6 +150,11 @@ function UserList() {
         end={
           <>
             <Btn kind="ghost" onClick={reload} disabled={list.loading}><RefreshCw size={14} /> {t("v3.users.refresh")}</Btn>
+            {multi && (
+              <Btn disabled={chosen.length === 0} onClick={() => setBulkOpen(true)} title={t("v3.users.bulk.hint")}>
+                <FolderPlus size={14} /> {t("v3.users.bulk.open", { count: chosen.length })}
+              </Btn>
+            )}
             <Btn kind="primary" onClick={actions.openCreate}><UserPlus size={14} /> {t("v3.users.create.open")}</Btn>
           </>
         }
@@ -164,6 +207,27 @@ function UserList() {
             ...USER_STATES.map((v) => ({ value: v, label: t(`v2.users.state.${v}`), s: STATE_SIGNAL[v] })),
           ]}
         />
+        <select className="v3-select" style={{ width: "auto" }} value={filter.role ?? ""} aria-label={t("v3.users.filter.role")}
+          onChange={(e) => setParam("role", e.target.value || null)}>
+          <option value="">{t("v3.users.filter.anyRole")}</option>
+          {(["admin", "operator", "member"] as const).map((r) => <option key={r} value={r}>{t(`v2.users.role.${r}`)}</option>)}
+        </select>
+        {(multi || filter.project) && (
+          <select className="v3-select" style={{ width: "auto" }} value={filter.project ?? ""} aria-label={t("v3.users.filter.project")}
+            onChange={(e) => setParam("project", e.target.value || null)}>
+            <option value="">{t("v3.users.filter.anyProject")}</option>
+            {structure.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {filter.project && !structure.projects.some((p) => p.id === filter.project) && <option value={filter.project}>{filter.project}</option>}
+          </select>
+        )}
+        {(liveGroups.length > 0 || filter.group) && (
+          <select className="v3-select" style={{ width: "auto" }} value={filter.group ?? ""} aria-label={t("v3.users.filter.group")}
+            onChange={(e) => setParam("group", e.target.value || null)}>
+            <option value="">{t("v3.users.filter.anyGroup")}</option>
+            {liveGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            {filter.group && !liveGroups.some((g) => g.id === filter.group) && <option value={filter.group}>{filter.group}</option>}
+          </select>
+        )}
         <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 300 }}>
           <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />
           <input className="v3-input" style={{ paddingLeft: 34 }} value={query} onChange={(e) => setParam("q", e.target.value || null)}
@@ -185,11 +249,17 @@ function UserList() {
           <table className="v3-table">
             <thead>
               <tr>
+                {multi && (
+                  <th style={{ width: 30 }}>
+                    <input type="checkbox" checked={allChosen} aria-label={t("v3.users.bulk.selectAll")}
+                      onChange={() => setSelected(allChosen ? new Set() : new Set(selectable.map((u) => u.id)))} />
+                  </th>
+                )}
                 <th />
                 <th>{t("v2.users.col.user")}</th>
                 <th>{t("v2.users.col.role")}</th>
                 <th>{t("v2.users.col.state")}</th>
-                <th>{t("v2.users.col.workspaces")}</th>
+                <th>{t(multi ? "v3.users.col.projects" : "v2.users.col.workspaces")}</th>
                 <th>{t("v2.users.col.validity")}</th>
                 <th className="num">{t("v2.users.col.lastLogin")}</th>
                 <th />
@@ -200,12 +270,22 @@ function UserList() {
                 const busy = actions.busyId === u.id;
                 return (
                   <tr key={u.id} className="click" onClick={() => open(u)}>
+                    {multi && (
+                      <td style={{ width: 30 }} onClick={(e) => e.stopPropagation()}>
+                        {!u.builtin && (
+                          <input type="checkbox" checked={selected.has(u.id)} aria-label={t("v3.users.bulk.select", { username: u.username })}
+                            onChange={() => toggleOne(u.id)} />
+                        )}
+                      </td>
+                    )}
                     <td style={{ width: 30 }}><Lamp s={STATE_SIGNAL[u.state]} /></td>
                     <td><div className="v3-name"><div><b>{u.username}</b><small>{u.email}</small></div></div></td>
                     <td><RoleChip role={u.role} builtin={u.builtin} /></td>
                     <td><StateChip state={u.state} /></td>
                     <td>
-                      {u.role === "admin" ? (
+                      {multi ? (
+                        <ProjectsCell user={u} />
+                      ) : u.role === "admin" ? (
                         <span className="v3-usr-muted">{t("v2.users.allByRole")}</span>
                       ) : u.workspaces.length === 0 ? (
                         <span className="v3-usr-muted">—</span>
@@ -258,6 +338,14 @@ function UserList() {
         )}
       </Panel>
       {actions.renderDialogs({ reservedName: builtin?.username ?? null })}
+      {bulkOpen && (
+        <BulkAddDialog users={chosen} structure={structure} onClose={() => setBulkOpen(false)}
+          onDone={() => {
+            setBulkOpen(false);
+            setSelected(new Set());
+            reload();
+          }} />
+      )}
     </div>
   );
 }
@@ -271,12 +359,21 @@ function UserDetail({ username }: { username: string }) {
   const auth = useAuth();
   const [changingOwn, setChangingOwn] = useState(false);
   // there is no GET-by-id route: read it back through the list search, matched exactly
-  const loaded = useLoad(async () => {
-    const page = await api.listUsers({ q: username, limit: 200 });
-    if (page.builtin && page.builtin.username === username) return page.builtin;
+  const loaded = useLoad<ProjectUser | null>(async () => {
+    const page = await usersApi.list({ q: username, limit: 200 });
+    if (page.builtin && page.builtin.username === username) return page.builtin as ProjectUser;
     return page.items.find((u) => u.username === username) ?? null;
   }, `v3-user:${username}`);
-  const actions = useUserActions(loaded.reload);
+  const structure = useStructure();
+  const access = useLoad(
+    async () => (loaded.data && !loaded.data.builtin ? usersApi.access(loaded.data.id) : null),
+    `v3-user-access:${loaded.data?.builtin ? "" : (loaded.data?.id ?? "")}`,
+  );
+  const reload = () => {
+    loaded.reload();
+    access.reload();
+  };
+  const actions = useUserActions(reload, 7, structure);
   const back = () => setParams({});
   const user = loaded.data;
 
@@ -361,6 +458,11 @@ function UserDetail({ username }: { username: string }) {
               </Btn>
             )}
             {passwordAction}
+            {!isSelf && (
+              <Btn disabled={busy || user.state === "pending"} title={t("v3.users.sessions.hint")} onClick={() => actions.ask("sessions", user)}>
+                <LogOut size={14} /> {t("v3.users.sessions.action")}
+              </Btn>
+            )}
             <Btn kind="danger" disabled={busy} onClick={() => actions.ask("delete", user)}><Trash2 size={14} /> {t("v2.users.action.delete")}</Btn>
           </>
         }
@@ -410,7 +512,15 @@ function UserDetail({ username }: { username: string }) {
         </div>
       </div>
 
-      <Panel title={t("v2.users.permTitle")} end={<span>{t("v2.users.permSub")}</span>}>
+      {(structure.multiProject || (user.groups ?? []).length > 0 || (user.projects ?? []).some((p) => !p.is_default)) && (
+        <AccessPanel user={user} access={access.data} loading={access.loading} error={access.error} busy={busy}
+          onEdit={() => actions.openMemberships(user)} />
+      )}
+
+      <Panel
+        title={t(structure.multiProject ? "v3.users.access.globalPermTitle" : "v2.users.permTitle")}
+        end={<span>{t(structure.multiProject ? "v3.users.access.globalPermSub" : "v2.users.permSub")}</span>}
+      >
         {isAdminRole ? (
           <span className="v3-usr-muted">{t("v2.users.allByRole")}</span>
         ) : (
@@ -466,6 +576,13 @@ function UserDetail({ username }: { username: string }) {
  * approvals first, and one account at `?view=detail&user=` — validity, role,
  * agent permissions and workspace grants. Same calls and confirmations as V2;
  * members never fire the admin-only requests.
+ *
+ * Projects (§7.4–§7.6): the list filters by `?role=`, `?project=`, `?group=`; once
+ * the platform has a project besides the default one, rows show their projects
+ * (role), can be selected for "add to project…", and create / approve choose
+ * projects and groups. The detail adds the account's projects with their sources,
+ * its groups and reachable workspaces (`GET /api/users/{id}/access`), and a forced
+ * sign-out. A single-project hub keeps the dialogs and columns it had.
  */
 export function V3Users() {
   const { isAdmin } = useAuth();
