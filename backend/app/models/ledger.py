@@ -423,6 +423,9 @@ class ChatMessage(ProjectOwned, Base):
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
     # T35: `rule:<rule id>` when a curated answer (not the model) produced this row
     answered_by: Mapped[str | None] = mapped_column(String(48), default=None)
+    # chat-streaming §4.1: on a retry turn's user row, the id of the failed turn's user
+    # row it replaces — that turn stays in the ledger but is not replayed by /history
+    retry_of: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

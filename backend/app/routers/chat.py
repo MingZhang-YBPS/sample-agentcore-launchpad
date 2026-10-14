@@ -1,5 +1,6 @@
 """Chat playground endpoints — SSE streaming over the shared invoke chain."""
 
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -24,7 +25,7 @@ from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
 from app.services.attachments import prepare_attachments
 from app.services.chat import chat_stream, sse_encode
-from app.services.chat_ledger import persist_events
+from app.services.chat_ledger import persist_events, visible_rows
 from app.services.invoke import stop_agent_session
 from app.services.runtime_discovery import require_invoke_capability
 from app.services.visibility import Viewer, require_viewer
@@ -40,6 +41,11 @@ class ChatRequest(AttachmentRequest):
     # (older clients) the user JWT when one can be minted, else M2M. Ignored
     # by IAM agents, whose caller is always the platform's SigV4 role.
     as_user: bool | None = None
+    # chat-streaming §4.1: this turn retries a failed one — any ledger id of that
+    # turn (its user row, as `meta.user_message_id` names it, or its error row). It
+    # must be the session's latest turn and have failed or answered nothing; the
+    # failed turn then stays in the ledger but /history no longer replays it.
+    retry_of: int | None = None
 
 
 def _session_actor(
@@ -158,6 +164,148 @@ def _console_events(events: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]
         yield event
 
 
+def _retry_turn(
+    db: Session, workspace_id: str, agent_id: str, session_id: str | None,
+    retry_of: int | None,
+) -> int | None:
+    """The user row of the turn a retry replaces (chat-streaming §4.1), or None.
+
+    ``retry_of`` may name any row of that turn. A row outside this session — another
+    session's, agent's, workspace's or project's — answers 404 like a missing one;
+    a turn that is not the latest, or that answered without an error, is 409."""
+    if retry_of is None:
+        return None
+    scope = (
+        ChatMessage.workspace_id == workspace_id,
+        ChatMessage.agent_id == agent_id,
+        ChatMessage.session_id == session_id,
+    )
+    target = (
+        db.query(ChatMessage.id).filter(*scope, ChatMessage.id == retry_of).first()
+        if session_id else None
+    )
+    if target is None:
+        raise NotFoundError("chat.message_not_found", "chat message not found")
+    user = (
+        db.query(ChatMessage.id)
+        .filter(*scope, ChatMessage.role == "user", ChatMessage.id <= retry_of)
+        .order_by(ChatMessage.id.desc())
+        .first()
+    )
+    roles = set() if user is None else {
+        role for (role,) in db.query(ChatMessage.role).filter(*scope, ChatMessage.id > user[0])
+    }
+    # an empty turn (no answer) is as retryable as a failed one; a later user row
+    # means the turn is no longer the latest
+    if user is None or "user" in roles or ("error" not in roles and "agent" in roles):
+        raise AppError(
+            "chat.retry_not_allowed",
+            "only the latest turn, and only a failed or empty one, can be retried",
+            {"retry_of": retry_of}, status_code=409,
+        )
+    return user[0]
+
+
+# chat-streaming §4.2: events after which a replay could repeat what the user saw or
+# a tool's side effect — once one passed, a failure is retried only by the user
+OUTPUT_EVENTS = frozenset({"delta", "tool", "auth_required", "policy_denied"})
+# the type names of transport failures (botocore's and httpx's): the connection to
+# the runtime dropped or timed out, rather than the runtime answering an error
+_TRANSPORT_ERRORS = frozenset({
+    "ReadTimeoutError", "ConnectTimeoutError", "ConnectionClosedError",
+    "EndpointConnectionError", "TransportError", "NetworkError", "TimeoutException",
+    "ConnectError", "ConnectTimeout", "ReadError", "ReadTimeout", "WriteError",
+    "WriteTimeout", "PoolTimeout", "RemoteProtocolError",
+})
+
+
+def _rebuilt_error(data: dict[str, Any]) -> BaseException:
+    """The exception an ``error`` event was made from, rebuilt from its payload, so
+    the evaluation runner's ``transient_invoke_error`` decides for chat too.
+    ``chat_stream`` writes an ``AppError`` as its envelope and anything else as
+    ``"<TypeName>: <message>"``."""
+    import httpx
+    from botocore.exceptions import ClientError
+
+    from app.services.agentcore import runtime as rt
+
+    message = str(data.get("message") or "")
+    if data.get("code"):
+        return AppError(str(data["code"]), message, data.get("detail"))
+    name, _, text = message.partition(": ")
+    if name in _TRANSPORT_ERRORS:
+        return httpx.TransportError(text)
+    if name in ("ClientError", "EventStreamError"):
+        found = re.search(r"An error occurred \((\w+)\)", text)
+        code = found.group(1) if found else ""
+        return ClientError({"Error": {"Code": code, "Message": text}}, "invoke")
+    if name == "RuntimeBearerHttpError":
+        found = re.search(r"HTTP (\d{3})", text)
+        return rt.RuntimeBearerHttpError(int(found.group(1)) if found else 0, text)
+    if name == "RuntimeError":
+        return RuntimeError(text)
+    return Exception(message)
+
+
+def retry_hint(
+    data: dict[str, Any], *, produced: bool, timeout_s: Any = None,
+) -> dict[str, Any]:
+    """How the console offers to retry a failed turn (chat-streaming §4.2-4.3).
+
+    ``category``: ``timeout`` (the agent used its whole budget), ``connection``
+    (the transport to the runtime dropped), ``busy`` (throttling, 5xx, an upstream
+    hiccup ``transient_invoke_error`` recognises), ``config`` (any other named
+    error — permissions, parameters, limits, a policy) or ``other``. ``manual``: the
+    retry button is offered (never for ``config`` / ``timeout``, which a replay
+    cannot fix). ``auto``: retried once without asking — only a transient failure of
+    a turn that produced no output, so a replay repeats nothing."""
+    from botocore.exceptions import ClientError
+
+    from app.evaluation.service import transient_invoke_error
+    from app.services.agentcore import runtime as rt
+
+    error = _rebuilt_error(data)
+    flagged = data.get("transient")
+    transient = flagged if isinstance(flagged, bool) else transient_invoke_error(error)
+    if data.get("code") == "harness.execution_timeout":
+        category = "timeout"
+    elif transient:
+        transport = str(data.get("message") or "").partition(": ")[0] in _TRANSPORT_ERRORS
+        category = "connection" if transport else "busy"
+    elif isinstance(error, (AppError, ClientError, rt.RuntimeBearerHttpError)):
+        category = "config"  # the upstream named a final error: a 4xx, a limit, a policy
+    else:
+        category = "other"
+    hint: dict[str, Any] = {
+        "category": category,
+        "manual": category in ("connection", "busy", "other"),
+        "auto": category in ("connection", "busy") and not produced,
+    }
+    if category == "timeout" and isinstance(timeout_s, int):
+        hint["timeout_s"] = timeout_s
+    return hint
+
+
+def _retry_hints(
+    events: Iterator[dict[str, Any]], *, timeout_s: Any = None,
+) -> Iterator[dict[str, Any]]:
+    """Add ``retry`` (``retry_hint``) to the console's ``error`` events."""
+    produced = False
+    try:
+        for event in events:
+            kind = event["event"]
+            if kind in OUTPUT_EVENTS:
+                produced = True
+            elif kind == "error":
+                hint = retry_hint(event["data"], produced=produced, timeout_s=timeout_s)
+                event = {"event": "error", "data": {**event["data"], "retry": hint}}
+            yield event
+    finally:
+        close = getattr(events, "close", None)
+        if close is not None:
+            close()  # closing the chat stream closes the upstream invocation
+
+
 @router.post("/chat/{agent_id}")
 def chat(
     agent_id: str,
@@ -171,6 +319,7 @@ def chat(
     # An assistant-owned session of the preset is private to the assistant page.
     refuse_assistant_session(agent, req.session_id)
     _refuse_foreign_session(db, ws.id, agent.id, req.session_id)
+    retry_of = _retry_turn(db, ws.id, agent.id, req.session_id, req.retry_of)
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
@@ -203,6 +352,7 @@ def chat(
     # already-built context rather than reaching back for the resolved scope.
     workspace_id = ws.id
     workspace = ws.context
+    timeout_s = (agent.spec or {}).get("timeout_seconds")
 
     def generate():
         stream_kwargs: dict[str, Any] = {}
@@ -214,7 +364,7 @@ def chat(
             stream_kwargs["gateway_access_token"] = gateway_access_token
         if bearer_token:
             stream_kwargs["bearer_token"] = bearer_token
-        events = _console_events(chat_stream(
+        events = _retry_hints(_console_events(chat_stream(
             agent,
             req.prompt,
             session_id=req.session_id,
@@ -222,7 +372,7 @@ def chat(
             workspace=workspace,
             status_events=True,  # console only: phase / thinking / tool_end (chat-streaming S2)
             **stream_kwargs,
-        ))
+        )), timeout_s=timeout_s)
         # Thread items are persisted in event order (int-pk = replay order) so
         # the playground can restore a session's history exactly as rendered.
         for event in persist_events(
@@ -234,6 +384,7 @@ def chat(
             session_id=req.session_id,
             runtime_version=agent.version,
             attachments=prepared.metadata if prepared else None,
+            retry_of=retry_of,
         ):
             # a named heartbeat (with `elapsed_ms`) lets the page time the turn and
             # tell a live connection from a dead one; /v1 keeps the comment
@@ -371,6 +522,7 @@ def session_history(
         .limit(500)
         .all()
     )
+    rows = visible_rows(rows)  # a retried turn is shown once, as its retry
     mine = feedback_service.verdicts_for(
         db, ws.id,
         require_identity(request).username if auth_enabled() else "river",
