@@ -346,6 +346,9 @@ class User(Base):
     first_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    # Forced logout (design §7.4): part of the session cookie's credential stamp, so a
+    # bump ends every open session. 0 stamps exactly as before the column existed.
+    session_epoch: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -504,6 +507,8 @@ class ShareLink(ProjectOwned, Base):
     prefix: Mapped[str] = mapped_column(String(16), default="")  # display only, e.g. shr_ab12
     label: Mapped[str] = mapped_column(String(64), default="")
     created_by: Mapped[str] = mapped_column(String(64), default="")
+    # `users.id` of the creator (design §5.8); NULL for the built-in admin and older rows
+    created_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     enabled: Mapped[bool] = mapped_column(default=True)
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
@@ -700,9 +705,13 @@ class Promotion(ProjectOwned, Base):
     # pending | approved | rejected | executing | succeeded | failed | rolled_back
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     requested_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # SoD (design §3.6): the immutable `users.id` beside each username, so a
+    # re-registered username is never mistaken for the original requester
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     change_note: Mapped[str] = mapped_column(Text, default="")
     rollback_note: Mapped[str] = mapped_column(Text, default="")
     reviewed_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    reviewed_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     review_note: Mapped[str | None] = mapped_column(Text, default=None)
     reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
@@ -981,6 +990,9 @@ class AuditEvent(ProjectShared, Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     actor: Mapped[str] = mapped_column(String(64))
+    # `users.id` of the actor (design §5.10); NULL for the built-in admin, a system
+    # actor and rows written before the column existed
+    actor_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     # e.g. "POST /api/agents/{agent_id}/redeploy" or "workspace.tier_change"
     action: Mapped[str] = mapped_column(String(160))
     # the concrete path, or "dev->prod" for a tier change

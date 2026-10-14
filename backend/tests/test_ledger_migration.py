@@ -120,3 +120,105 @@ def test_migrate_is_idempotent(tmp_path):
     db_module._migrate(engine)
     db_module._migrate(engine)
     assert_no_schema_drift(engine)
+
+
+# ── P1A-cols: actor ids (design §8.2-4, §8.3-7) ─────────────────────────────────
+
+_ACTOR_ID_COLUMNS = {
+    "users": ["session_epoch"],
+    "audit_events": ["actor_user_id"],
+    "share_links": ["created_by_user_id"],
+    "promotions": ["requested_by_user_id", "reviewed_by_user_id"],
+    "release_records": ["requested_by_user_id", "decided_by_user_id"],
+    "waivers": ["requested_by_user_id", "approved_by_user_id"],
+    "criteria_sets": ["created_by_user_id", "updated_by_user_id", "signed_by_user_id"],
+}
+
+
+def _old_ledger_with_actors(tmp_path):
+    """A ledger from before the actor-id columns, holding history to backfill.
+
+    `alice` existed when she acted; the `bob` account was registered after the rows
+    naming "bob" were written (the original was deleted), so it must not inherit them;
+    `admin` is the built-in admin, which has no `users` row.
+    """
+    engine = _engine(tmp_path)
+    db_module.init_db(engine)
+    ts = "2026-03-01 00:00:00.000000"
+    with engine.begin() as conn:
+        conn.execute(sa.text(
+            "INSERT INTO users (id, username, username_key, email, password_hash, role,"
+            " status, created_by, login_count, session_epoch, created_at, updated_at)"
+            " VALUES (:id, :name, :key, :email, 'h', 'member', 'active', 'test', 0, 0,"
+            " :at, :at)"),
+            [
+                {"id": "u-alice", "name": "Alice", "key": "alice", "email": "a@x.io",
+                 "at": "2026-01-01 00:00:00.000000"},
+                {"id": "u-bob", "name": "bob", "key": "bob", "email": "b@x.io",
+                 "at": "2026-09-01 00:00:00.000000"},
+            ],
+        )
+        conn.execute(sa.text(
+            "INSERT INTO waivers (id, workspace_id, project_id, agent_id, criterion_key,"
+            " reason, risk_owner, compensating_control, expires_on, status, requested_by,"
+            " approved_by, approved_at, note, created_at) VALUES ('w1', 'default',"
+            " 'default', 'a1', 'G1', 'r', 'o', '', :at, 'approved', 'alice', 'bob', :at,"
+            " '', :at)"), {"at": ts})
+        conn.execute(sa.text(
+            "INSERT INTO criteria_sets (id, workspace_id, project_id, lineage_id, kind,"
+            " name, description, scenario, version, status, source, signed_by, signed_at,"
+            " sign_note, removals, created_by, updated_by, created_at, updated_at)"
+            " VALUES ('c1', 'default', 'default', 'l1', 'template', 'n', '', '', 1,"
+            " 'published', 'manual', 'admin', :at, '', '[]', 'alice', 'ALICE', :at, :at)"),
+            {"at": ts})
+        for table, columns in _ACTOR_ID_COLUMNS.items():
+            for column in columns:
+                conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN {column}"))
+        conn.execute(sa.text("DELETE FROM platform_settings WHERE key = :k"),
+                     {"k": db_module.SOD_USER_IDS_MARKER})
+    return engine
+
+
+def test_an_old_ledger_gains_the_actor_id_columns_and_backfills_sod_once(tmp_path):
+    engine = _old_ledger_with_actors(tmp_path)
+    stale = schema_drift(engine)
+    for table, columns in _ACTOR_ID_COLUMNS.items():
+        assert set(columns) <= set(stale.get(table, [])), table
+
+    db_module.init_db(engine)
+    assert schema_drift(engine) == {}
+    with engine.begin() as conn:
+        # every existing session keeps its stamp: epoch 0
+        assert conn.execute(sa.text(
+            "SELECT DISTINCT session_epoch FROM users")).scalars().all() == [0]
+        waiver = conn.execute(sa.text(
+            "SELECT requested_by_user_id, approved_by_user_id FROM waivers")).one()
+        # alice matched case-insensitively; "bob" was someone else at the time
+        assert tuple(waiver) == ("u-alice", None)
+        cset = conn.execute(sa.text(
+            "SELECT created_by_user_id, updated_by_user_id, signed_by_user_id"
+            " FROM criteria_sets")).one()
+        assert tuple(cset) == ("u-alice", "u-alice", None)  # the built-in admin: no row
+        marker = conn.execute(sa.text(
+            "SELECT value FROM platform_settings WHERE key = :k"),
+            {"k": db_module.SOD_USER_IDS_MARKER}).scalar()
+        assert marker == "done"
+        # a row a write path leaves without an id after the backfill keeps NULL
+        conn.execute(sa.text("UPDATE criteria_sets SET created_by_user_id = NULL"))
+
+    db_module.init_db(engine)  # idempotent: no re-guessing, nothing re-added
+    assert schema_drift(engine) == {}
+    with engine.begin() as conn:
+        assert conn.execute(sa.text(
+            "SELECT created_by_user_id, updated_by_user_id FROM criteria_sets")).one() == (
+            None, "u-alice")
+        assert tuple(conn.execute(sa.text(
+            "SELECT requested_by_user_id, approved_by_user_id FROM waivers")).one()) == (
+            "u-alice", None)
+
+
+def test_the_actor_id_columns_are_declared_to_migrate():
+    pairs = _added_columns()
+    for table, columns in _ACTOR_ID_COLUMNS.items():
+        for column in columns:
+            assert (table, column) in pairs, f"{table}.{column}"

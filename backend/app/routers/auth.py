@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.actor import set_current_actor
 from app.core.config import Settings, get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError, envelope
@@ -201,6 +202,18 @@ def _decode(
     return subject, user_id or None, stamp or None, expiry
 
 
+def account_stamp(user: User) -> str:
+    """The credential stamp a registered account's session cookie carries.
+
+    The password hash, plus — once a forced logout has bumped it — the account's
+    `session_epoch` (design §7.4): epoch 0 stamps exactly as before the column
+    existed, so a deploy ends no session; any bump ends every open one.
+    """
+    epoch = int(user.session_epoch or 0)
+    material = user.password_hash if epoch <= 0 else f"{user.password_hash}:{epoch}"
+    return users_service.credential_stamp(material)
+
+
 def resolve_identity(
     request: Request,
     settings: Settings | None = None,
@@ -247,10 +260,10 @@ def resolve_identity(
             or user.username_key != users_service.normalize_username(subject).lower()
             or user.status != "active"
             or users_service.is_expired(user)
-            # a password change (admin reset) ends the sessions of the old password
+            # a password change (admin reset) or a forced logout (session_epoch
+            # bump) ends the sessions opened before it
             or not hmac.compare_digest(
-                (stamp or "").encode("utf-8"),
-                users_service.credential_stamp(user.password_hash).encode("utf-8"),
+                (stamp or "").encode("utf-8"), account_stamp(user).encode("utf-8")
             )
         ):
             return None
@@ -314,6 +327,7 @@ async def auth_middleware(request: Request, call_next: Any) -> Any:
     startup-only check is bypassable by launching uvicorn directly.
     """
     settings = get_settings()
+    set_current_actor(None, None)
     if request.method != "OPTIONS":
         path = request.url.path
         if _is_guarded_api_path(path):
@@ -334,6 +348,8 @@ async def auth_middleware(request: Request, call_next: Any) -> Any:
                 # the same live identity. Reuse it instead of opening a second
                 # ledger session for every authenticated request.
                 request.state.identity = identity
+                # the id recorded beside the username by audit / SoD writers
+                set_current_actor(identity.username, identity.user_id)
     return await call_next(request)
 
 
@@ -489,7 +505,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         try:
             user = users_service.authenticate(db, req.username, req.password)
             users_service.record_login(db, user)
-            stamp = users_service.credential_stamp(user.password_hash)
+            stamp = account_stamp(user)
             identity = Identity(
                 username=user.username,
                 role=user.role,
@@ -609,13 +625,14 @@ def change_password(
             users_service.validate_password(req.new_password)
             user.password_hash = users_service.hash_password(req.new_password)
             db.commit()
-            stamp = users_service.credential_stamp(user.password_hash)
+            stamp = account_stamp(user)
             target = f"{user.username} ({user.id})"
     finally:
         db.close()
     record_audit_event(
         workspace_id=DEFAULT_WORKSPACE_ID,
         actor=identity.username,
+        actor_user_id=identity.user_id,
         action="auth.password_change",
         target=f"{target} self-service",
     )

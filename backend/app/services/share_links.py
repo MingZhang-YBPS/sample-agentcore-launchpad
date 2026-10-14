@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.core.actor import user_id_for
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ShareLink
@@ -101,9 +102,13 @@ def create_link(
     channel_config: dict | None = None,
     channel_secrets: dict | None = None,
     target_id: str | None = None,
+    created_by_user_id: str | None = None,
 ) -> tuple[ShareLink, str]:
     """`target_id` overrides the agent id: what a link points at is kind-dependent
-    (an agent for `chat` / `review`, an annotation task for `annotate`)."""
+    (an agent for `chat` / `review`, an annotation task for `annotate`).
+
+    `created_by_user_id` is the creator's `users.id` (design §5.8); omitted, it is
+    the request caller's when `created_by` is the caller (`app.core.actor`)."""
     target = target_id or (agent.id if agent is not None else "")
     if not target:
         raise AppError("share.no_target", "a share link must point at something")
@@ -119,6 +124,7 @@ def create_link(
         prefix=raw[: len(TOKEN_PREFIX) + 4] + "…",
         label=label.strip(),
         created_by=created_by,
+        created_by_user_id=user_id_for(created_by, created_by_user_id),
         expires_at=expires_at,
         channel_config=channel_config,
         channel_secrets=channel_secrets,
@@ -154,6 +160,7 @@ def create_channel_link(
     expires_in_days: int | None,
     config: dict,
     secrets_: dict,
+    created_by_user_id: str | None = None,
 ) -> tuple[ShareLink, str]:
     """A webhook link for one IM platform. Same token/hash/expiry mechanics as a
     chat link; the secrets ride on the row and are never returned by any route."""
@@ -167,6 +174,7 @@ def create_channel_link(
         kind=platform,
         channel_config=config,
         channel_secrets=secrets_,
+        created_by_user_id=created_by_user_id,
     )
     return link, raw
 

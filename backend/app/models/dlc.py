@@ -62,6 +62,8 @@ class CriteriaSet(ProjectOwned, Base):
     parent_version: Mapped[int | None] = mapped_column(Integer, default=None)
     source: Mapped[str] = mapped_column(String(24), default="manual")
     signed_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # SoD (design §3.6): `users.id` beside each username; NULL = compare by name
+    signed_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     sign_note: Mapped[str] = mapped_column(Text, default="")
     # agent sets only: template criteria this set drops, each with its written reason
@@ -69,6 +71,8 @@ class CriteriaSet(ProjectOwned, Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_by: Mapped[str] = mapped_column(String(64), default="")
     updated_by: Mapped[str] = mapped_column(String(64), default="")
+    created_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    updated_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -221,6 +225,9 @@ class ReleaseRecord(ProjectOwned, Base):
     decision: Mapped[str] = mapped_column(String(16), default="pending")
     requested_by: Mapped[str] = mapped_column(String(64), default="")
     decided_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # SoD (design §3.6): `users.id` beside each username; NULL = compare by name
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    decided_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     note: Mapped[str] = mapped_column(Text, default="")
     waiver_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -249,6 +256,9 @@ class Waiver(ProjectOwned, Base):
     status: Mapped[str] = mapped_column(String(16), default="requested")
     requested_by: Mapped[str] = mapped_column(String(64), default="")
     approved_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # SoD (design §3.6): `users.id` beside each username; NULL = compare by name
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    approved_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

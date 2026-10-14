@@ -144,6 +144,8 @@ _PROJECT_BACKFILL_DERIVED = (
     ("skill_lab_jobs", "taskset_id", "skill_lab_tasksets"),
 )
 PROJECTS_MIGRATION_MARKER = "migration.projects_v1"
+# The one-time username -> users.id backfill of the SoD columns (design §8.3-7).
+SOD_USER_IDS_MARKER = "migration.sod_user_ids_v1"
 
 
 def _make_engine():
@@ -212,6 +214,7 @@ def init_db(bind=None) -> None:
     _adopt_unscoped_account_audit_rows(bind)
     assert_every_row_has_a_workspace(bind)
     _seed_default_projects(bind)
+    _backfill_sod_user_ids(bind)
     assert_every_row_has_a_project(bind)
 
 
@@ -453,6 +456,140 @@ def _migrate(bind) -> None:
     _migrate_resource_creators_index(bind)
     _migrate_project_columns(bind)
     _migrate_template_project_column(bind)
+    _migrate_actor_user_id_columns(bind)
+
+
+def _migrate_actor_user_id_columns(bind) -> None:
+    """The immutable `users.id` beside the usernames that identify a person (design §8.2-4).
+
+    `users.session_epoch` (forced logout, §7.4: 0 = the cookie stamp of today);
+    `audit_events.actor_user_id` and `share_links.created_by_user_id` (§5.8, §5.10);
+    and the separation-of-duties columns (§3.6) — a username can be re-registered after
+    the account is deleted, an id cannot. Every new column is nullable (NULL = compare
+    by name, as before); `_backfill_sod_user_ids` fills the SoD ones once.
+    """
+    from sqlalchemy import inspect, text
+
+    additions = {
+        "users": {
+            "session_epoch": "ALTER TABLE users ADD COLUMN session_epoch INTEGER DEFAULT 0",
+        },
+        "audit_events": {
+            "actor_user_id": "ALTER TABLE audit_events ADD COLUMN actor_user_id VARCHAR(32)",
+        },
+        "share_links": {
+            "created_by_user_id": (
+                "ALTER TABLE share_links ADD COLUMN created_by_user_id VARCHAR(32)"
+            ),
+        },
+        "promotions": {
+            "requested_by_user_id": (
+                "ALTER TABLE promotions ADD COLUMN requested_by_user_id VARCHAR(32)"
+            ),
+            "reviewed_by_user_id": (
+                "ALTER TABLE promotions ADD COLUMN reviewed_by_user_id VARCHAR(32)"
+            ),
+        },
+        "release_records": {
+            "requested_by_user_id": (
+                "ALTER TABLE release_records ADD COLUMN requested_by_user_id VARCHAR(32)"
+            ),
+            "decided_by_user_id": (
+                "ALTER TABLE release_records ADD COLUMN decided_by_user_id VARCHAR(32)"
+            ),
+        },
+        "waivers": {
+            "requested_by_user_id": (
+                "ALTER TABLE waivers ADD COLUMN requested_by_user_id VARCHAR(32)"
+            ),
+            "approved_by_user_id": (
+                "ALTER TABLE waivers ADD COLUMN approved_by_user_id VARCHAR(32)"
+            ),
+        },
+        "criteria_sets": {
+            "created_by_user_id": (
+                "ALTER TABLE criteria_sets ADD COLUMN created_by_user_id VARCHAR(32)"
+            ),
+            "updated_by_user_id": (
+                "ALTER TABLE criteria_sets ADD COLUMN updated_by_user_id VARCHAR(32)"
+            ),
+            "signed_by_user_id": (
+                "ALTER TABLE criteria_sets ADD COLUMN signed_by_user_id VARCHAR(32)"
+            ),
+        },
+    }
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    for table, columns in additions.items():
+        if table not in live_tables:
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        for column, ddl in columns.items():
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))
+    if "users" in live_tables:
+        with bind.begin() as conn:
+            # `ADD COLUMN ... DEFAULT 0` fills existing rows on SQLite; a NULL can still
+            # come from a ledger whose column predates the default
+            conn.execute(text("UPDATE users SET session_epoch = 0 WHERE session_epoch IS NULL"))
+
+
+# (table, username column, its *_user_id column, when the person acted). The time
+# bounds the match: only an account created no later than the action can be its actor.
+_SOD_USER_ID_BACKFILL = (
+    ("promotions", "requested_by", "requested_by_user_id", "created_at"),
+    ("promotions", "reviewed_by", "reviewed_by_user_id", "reviewed_at"),
+    ("release_records", "requested_by", "requested_by_user_id", "created_at"),
+    ("release_records", "decided_by", "decided_by_user_id", "decided_at"),
+    ("waivers", "requested_by", "requested_by_user_id", "created_at"),
+    ("waivers", "approved_by", "approved_by_user_id", "approved_at"),
+    ("criteria_sets", "created_by", "created_by_user_id", "created_at"),
+    ("criteria_sets", "updated_by", "updated_by_user_id", "updated_at"),
+    ("criteria_sets", "signed_by", "signed_by_user_id", "signed_at"),
+)
+
+
+def _backfill_sod_user_ids(bind) -> None:
+    """Once: give each historical SoD username the id of the account that held it then.
+
+    The account currently holding the username (case-insensitively, `username_key`)
+    is taken only when it was created no later than the action — a username
+    re-registered after the original account was deleted is a different person, and
+    that row keeps NULL (compared by name, exactly as before). The built-in admin has
+    no `users` row, so its rows keep NULL too. Guarded by a marker rather than re-run
+    every startup: a row a new write path left NULL must not be filled by a guess.
+    """
+    from sqlalchemy import inspect, text
+
+    live_tables = set(inspect(bind).get_table_names())
+    if "users" not in live_tables or "platform_settings" not in live_tables:
+        return
+    with bind.begin() as conn:
+        done = conn.execute(
+            text("SELECT 1 FROM platform_settings WHERE key = :k"),
+            {"k": SOD_USER_IDS_MARKER},
+        ).first()
+        if done is not None:
+            return
+        for table, name_col, id_col, at_col in _SOD_USER_ID_BACKFILL:
+            if table not in live_tables:
+                continue
+            conn.execute(
+                text(
+                    f"UPDATE {table} SET {id_col} = (SELECT u.id FROM users u"  # noqa: S608
+                    f" WHERE u.username_key = lower({table}.{name_col})"
+                    f" AND u.created_at <= COALESCE({table}.{at_col}, {table}.created_at))"
+                    f" WHERE {id_col} IS NULL AND {name_col} IS NOT NULL AND {name_col} <> ''"
+                )
+            )
+        conn.execute(
+            text(
+                "INSERT INTO platform_settings (key, value, updated_by, updated_at)"
+                " VALUES (:k, 'done', 'migration', :now)"
+            ),
+            {"k": SOD_USER_IDS_MARKER, "now": _now_sql()},
+        )
 
 
 def _migrate_template_project_column(bind) -> None:

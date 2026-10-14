@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.actor import same_actor, user_id_for
 from app.core.errors import AppError, NotFoundError
 from app.evaluation import stats
 from app.models.dlc import (
@@ -518,6 +519,7 @@ def create_set(
     template_version: int | None = None,
     source: str = "manual",
     rows: list[dict[str, Any]] | None = None,
+    actor_user_id: str | None = None,
 ) -> CriteriaSet:
     """A new lineage at draft v1; inheriting a template copies its criteria in."""
     if kind not in ("template", "agent"):
@@ -553,6 +555,8 @@ def create_set(
         source=source,
         created_by=actor,
         updated_by=actor,
+        created_by_user_id=user_id_for(actor, actor_user_id),
+        updated_by_user_id=user_id_for(actor, actor_user_id),
     )
     db.add(row)
     db.flush()
@@ -576,6 +580,7 @@ def save_draft(
     name: str | None = None,
     description: str | None = None,
     scenario: str | None = None,
+    actor_user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Replace a draft's criteria; returns the validation findings (warnings allowed)."""
     if row.status != "draft":
@@ -600,6 +605,7 @@ def save_draft(
     if scenario is not None:
         row.scenario = scenario[:96]
     row.updated_by = actor
+    row.updated_by_user_id = user_id_for(actor, actor_user_id)
     row.updated_at = _now()
     db.flush()
     return findings
@@ -610,7 +616,8 @@ def _rows_as_dicts(rows: list[Criterion]) -> list[dict[str, Any]]:
              "notes": r.notes} for r in rows]
 
 
-def publish(db: Session, row: CriteriaSet, *, actor: str) -> CriteriaSet:
+def publish(db: Session, row: CriteriaSet, *, actor: str,
+            actor_user_id: str | None = None) -> CriteriaSet:
     if row.status != "draft":
         raise AppError("criteria.not_draft", "only a draft can be published", status_code=409)
     rows = _rows_as_dicts(criteria_of(db, row.id))
@@ -634,30 +641,41 @@ def publish(db: Session, row: CriteriaSet, *, actor: str) -> CriteriaSet:
     row.status = "published"
     row.published_at = _now()
     row.updated_by = actor
+    row.updated_by_user_id = user_id_for(actor, actor_user_id)
     db.flush()
     return row
 
 
-def sign(db: Session, row: CriteriaSet, *, actor: str, note: str, is_admin: bool) -> CriteriaSet:
-    """The business owner's signature on a published version (signer ≠ last editor)."""
+def sign(db: Session, row: CriteriaSet, *, actor: str, note: str, is_admin: bool,
+         actor_user_id: str | None = None) -> CriteriaSet:
+    """The business owner's signature on a published version (signer ≠ last editor).
+
+    "The same person" is by account id when both sides carry one (design §3.6), else
+    by username."""
     if row.status not in ("published", "superseded"):
         raise AppError("criteria.sign_unpublished", "publish the version before signing it",
                        status_code=409)
     if row.signed_by:
         raise AppError("criteria.already_signed", "this version is already signed",
                        status_code=409)
-    if not is_admin and actor in {row.updated_by, row.created_by} and actor:
+    actor_user_id = user_id_for(actor, actor_user_id)
+    if not is_admin and (
+        same_actor(row.updated_by, row.updated_by_user_id, actor, actor_user_id)
+        or same_actor(row.created_by, row.created_by_user_id, actor, actor_user_id)
+    ):
         raise AppError("criteria.self_sign",
                        "the person who edited the criteria cannot also sign them",
                        status_code=409)
     row.signed_by = actor
+    row.signed_by_user_id = actor_user_id
     row.signed_at = _now()
     row.sign_note = note[:2000]
     db.flush()
     return row
 
 
-def new_version(db: Session, workspace_id: str, lineage_id: str, *, actor: str) -> CriteriaSet:
+def new_version(db: Session, workspace_id: str, lineage_id: str, *, actor: str,
+                actor_user_id: str | None = None) -> CriteriaSet:
     """A draft vN+1 copied from the newest version (refused while a draft exists)."""
     newest = get_version(db, workspace_id, lineage_id)
     if newest.status == "draft":
@@ -680,6 +698,8 @@ def new_version(db: Session, workspace_id: str, lineage_id: str, *, actor: str) 
         removals=copy.deepcopy(newest.removals or []),
         created_by=actor,
         updated_by=actor,
+        created_by_user_id=user_id_for(actor, actor_user_id),
+        updated_by_user_id=user_id_for(actor, actor_user_id),
     )
     db.add(draft)
     db.flush()
@@ -689,7 +709,8 @@ def new_version(db: Session, workspace_id: str, lineage_id: str, *, actor: str) 
 
 
 def adopt_template(
-    db: Session, workspace_id: str, lineage_id: str, *, template_version: int, actor: str
+    db: Session, workspace_id: str, lineage_id: str, *, template_version: int, actor: str,
+    actor_user_id: str | None = None,
 ) -> CriteriaSet:
     """A new agent-set draft on a newer template version, keeping overrides and additions."""
     newest = get_version(db, workspace_id, lineage_id)
@@ -715,9 +736,10 @@ def adopt_template(
     for extra in kept.values():
         rows.append({"key": extra.key, **_content(extra), "owner": extra.owner,
                      "examples": extra.examples, "notes": extra.notes})
-    draft = new_version(db, workspace_id, lineage_id, actor=actor)
+    draft = new_version(db, workspace_id, lineage_id, actor=actor, actor_user_id=actor_user_id)
     draft.template_version = template_version
     draft.signed_by = None
+    draft.signed_by_user_id = None
     db.flush()
     _write_rows(db, draft, rows, criteria_of(db, target.id))
     return draft

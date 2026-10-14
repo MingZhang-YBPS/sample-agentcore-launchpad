@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.actor import same_actor, user_id_for
 from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import project_context
 from app.models.ledger import (
@@ -384,6 +385,7 @@ def request_promotion(
     requested_by: str | None,
     change_note: str,
     rollback_note: str,
+    requested_by_user_id: str | None = None,
 ) -> Promotion:
     if target.id == source_workspace_id:
         raise AppError(
@@ -411,6 +413,7 @@ def request_promotion(
         target_workspace_id=target.id,
         status=STATUS_PENDING,
         requested_by=requested_by,
+        requested_by_user_id=user_id_for(requested_by, requested_by_user_id),
         change_note=change_note.strip(),
         rollback_note=rollback_note.strip(),
         gates=evaluate_gates(db, bundle, target),
@@ -429,12 +432,14 @@ def review_promotion(
     note: str | None,
     target: Workspace,
     bundle: ReleaseBundle,
+    reviewer_user_id: str | None = None,
 ) -> Promotion:
     """Approve or reject a pending request.
 
     Refuses a self-approval: the whole point of the hand-off is that a second person
     accepts the release. An administrator is not exempt — they can grant themselves the
-    permission, but not the second pair of eyes.
+    permission, but not the second pair of eyes. "The same person" is by account id
+    when both sides carry one (design §3.6), else by username.
     """
     if promotion.status != STATUS_PENDING:
         raise AppError(
@@ -442,7 +447,10 @@ def review_promotion(
             f"this promotion is already {promotion.status}",
             status_code=409,
         )
-    if approve and reviewer and promotion.requested_by == reviewer:
+    reviewer_user_id = user_id_for(reviewer, reviewer_user_id)
+    if approve and same_actor(
+        promotion.requested_by, promotion.requested_by_user_id, reviewer, reviewer_user_id
+    ):
         raise AppError(
             "promotion.self_approval",
             "a promotion must be approved by someone other than the requester",
@@ -451,6 +459,7 @@ def review_promotion(
     promotion.gates = evaluate_gates(db, bundle, target)
     promotion.status = STATUS_APPROVED if approve else STATUS_REJECTED
     promotion.reviewed_by = reviewer
+    promotion.reviewed_by_user_id = reviewer_user_id
     promotion.review_note = (note or "").strip() or None
     promotion.reviewed_at = datetime.now(UTC)
     db.flush()

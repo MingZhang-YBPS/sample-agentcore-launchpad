@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.actor import same_actor, user_id_for
 from app.core.errors import AppError, NotFoundError
 from app.dlc import calibration as calibration_svc
 from app.dlc import criteria as criteria_svc
@@ -142,7 +143,8 @@ def migrate_agent(db: Session, agent: Agent, control: Any, *, actor: str) -> Age
     return agent
 
 
-def after_deploy(db: Session, agent: Agent, *, note: str | None, actor: str | None) -> None:
+def after_deploy(db: Session, agent: Agent, *, note: str | None, actor: str | None,
+                 actor_user_id: str | None = None) -> None:
     """Called when a deploy job succeeds. Never raises (the deploy itself succeeded)."""
     if getattr(agent, "endpoint_mode", None) != "live" or not agent.version:
         return
@@ -179,6 +181,11 @@ def after_deploy(db: Session, agent: Agent, *, note: str | None, actor: str | No
             criteria_set_version=criteria_set.version if criteria_set else None,
             decision="pending",
             requested_by=actor or agent.created_by_name or agent.owner or "",
+            # with no actor the requester is the agent's creator, whose id is on the row
+            requested_by_user_id=(
+                user_id_for(actor, actor_user_id) if actor
+                else agent.created_by if agent.created_by_name else None
+            ),
             note=note or "",
         ))
         db.flush()
@@ -462,7 +469,7 @@ def evaluate(db: Session, record: ReleaseRecord) -> dict[str, Any]:
 
 
 def sign(db: Session, record: ReleaseRecord, agent: Agent, control: Any, *, actor: str,
-         note: str = "") -> ReleaseRecord:
+         note: str = "", actor_user_id: str | None = None) -> ReleaseRecord:
     report = record.gate_report or {}
     if report.get("verdict") != "PASS":
         raise AppError("release.gate_not_passed",
@@ -470,12 +477,15 @@ def sign(db: Session, record: ReleaseRecord, agent: Agent, control: Any, *, acto
                        {"verdict": report.get("verdict")}, status_code=409)
     if record.decision != "pending":
         raise AppError("release.not_open", "this release is already decided", status_code=409)
-    if actor and actor == record.requested_by:
+    actor_user_id = user_id_for(actor, actor_user_id)
+    # the same person by account id when both sides carry one (design §3.6), else by name
+    if same_actor(record.requested_by, record.requested_by_user_id, actor, actor_user_id):
         raise AppError("release.self_sign", "the requester cannot sign their own release",
                        status_code=409)
     point_endpoint(control, agent, LIVE, record.candidate_version)
     record.decision = "released"
     record.decided_by = actor
+    record.decided_by_user_id = actor_user_id
     record.decided_at = _now()
     record.note = note[:2000] or record.note
     record.rollback_target = {"version": record.previous_live_version}
@@ -485,11 +495,13 @@ def sign(db: Session, record: ReleaseRecord, agent: Agent, control: Any, *, acto
     return record
 
 
-def block(db: Session, record: ReleaseRecord, *, actor: str, note: str) -> ReleaseRecord:
+def block(db: Session, record: ReleaseRecord, *, actor: str, note: str,
+          actor_user_id: str | None = None) -> ReleaseRecord:
     if record.decision in ("released", "rolled_back", "superseded"):
         raise AppError("release.not_open", "this release is already decided", status_code=409)
     record.decision = "blocked"
     record.decided_by = actor
+    record.decided_by_user_id = user_id_for(actor, actor_user_id)
     record.decided_at = _now()
     record.note = note[:2000]
     record_audit_event(workspace_id=record.workspace_id, actor=actor,
@@ -498,7 +510,8 @@ def block(db: Session, record: ReleaseRecord, *, actor: str, note: str) -> Relea
     return record
 
 
-def rollback(db: Session, agent: Agent, control: Any, *, actor: str, note: str = "") -> dict:
+def rollback(db: Session, agent: Agent, control: Any, *, actor: str, note: str = "",
+             actor_user_id: str | None = None) -> dict:
     """Re-point `live` at the version it served before the last release."""
     if getattr(agent, "endpoint_mode", None) != "live":
         raise AppError("release.not_live", "this agent does not serve through a live endpoint",
@@ -520,6 +533,8 @@ def rollback(db: Session, agent: Agent, control: Any, *, actor: str, note: str =
         previous_live_version=current, criteria_set_id=last.criteria_set_id,
         criteria_set_version=last.criteria_set_version, decision="rolled_back",
         requested_by=actor, decided_by=actor, decided_at=_now(),
+        requested_by_user_id=user_id_for(actor, actor_user_id),
+        decided_by_user_id=user_id_for(actor, actor_user_id),
         note=note[:2000] or f"rollback of release {last.id}",
         rollback_target={"from_release": last.id},
     )
@@ -560,6 +575,7 @@ def request_waiver(
     compensating_control: str,
     expires_on: datetime,
     actor: str,
+    actor_user_id: str | None = None,
 ) -> Waiver:
     cset = criteria_svc.agent_set(db, workspace_id, agent_id)
     if cset is None:
@@ -585,6 +601,7 @@ def request_waiver(
         actual=actual, threshold=threshold, reason=reason[:2000], risk_owner=risk_owner[:64],
         compensating_control=compensating_control[:2000], expires_on=expires,
         status="requested", requested_by=actor,
+        requested_by_user_id=user_id_for(actor, actor_user_id),
     )
     db.add(waiver)
     record_audit_event(workspace_id=workspace_id, actor=actor, action="waiver.request",
@@ -594,14 +611,17 @@ def request_waiver(
 
 
 def decide_waiver(db: Session, waiver: Waiver, *, actor: str, approve: bool,
-                  note: str = "") -> Waiver:
+                  note: str = "", actor_user_id: str | None = None) -> Waiver:
     if waiver.status != "requested":
         raise AppError("waiver.not_open", "this waiver is already decided", status_code=409)
-    if approve and actor == waiver.requested_by:
+    actor_user_id = user_id_for(actor, actor_user_id)
+    if approve and same_actor(waiver.requested_by, waiver.requested_by_user_id,
+                              actor, actor_user_id):
         raise AppError("waiver.self_approve", "the requester cannot approve their own waiver",
                        status_code=409)
     waiver.status = "approved" if approve else "rejected"
     waiver.approved_by = actor
+    waiver.approved_by_user_id = actor_user_id
     waiver.approved_at = _now()
     waiver.note = note[:2000]
     record_audit_event(workspace_id=waiver.workspace_id, actor=actor,
