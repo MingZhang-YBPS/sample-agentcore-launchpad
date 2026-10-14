@@ -18,11 +18,19 @@ telemetry path:
   than being silently dropped, because an unattributed total that looks like zero is
   worse than one that says "unattributed".
 
+* **by project** (design §10.8) — each agent row's project comes from, in order: the
+  `launchpad.project` span resource attribute an isolated project's agents carry; the
+  project's application inference profile when the span's model id is one (its
+  `project_resources` row); the ledger agent's `project_id`. Cost Explorer's view of
+  the `launchpad:project` tag (runtimes, harnesses, inference profiles) is the
+  independent check of the same split.
+
 Every figure is an **estimate** and says so: prices are a config map matched by
 substring, a model missing from it contributes tokens but no dollars, and the response
 names those models so the number is never quietly wrong.
 """
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,8 +40,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.project_scope import project_context
 from app.models.ledger import Agent, ChatSession
+from app.models.projects import PROJECT_ID_PATTERN
+from app.services import inference_profiles
 from app.services.observability import (
     _IS_LLM_FIELDS,
+    SPAN_PROJECT_ATTR,
     SPANS_SOURCE,
     cached,
     estimate_cost,
@@ -46,19 +57,22 @@ from app.services.workspace import WorkspaceContext
 # budget is expressed against.
 RANGES: dict[str, int] = {"1h": 1, "6h": 6, "24h": 24, "7d": 168, "30d": 720}
 DEFAULT_RANGE = "24h"
+_PROJECT_RE = re.compile(PROJECT_ID_PATTERN)
 
 
 def q_cost_by_service() -> str:
-    """Tokens per runtime service name — the per-agent dimension."""
+    """Tokens per runtime service name and span project — the per-agent dimension
+    (`span_project` is "" for the spans that name no project)."""
     return f"""
 {SPANS_SOURCE}
 | filter ispresent(startTimeUnixNano)
 | {_IS_LLM_FIELDS}
+| fields coalesce(resource.attributes.{SPAN_PROJECT_ATTR}, "") as span_project
 | stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
         sum(llm_cache_read) as cache_read, sum(llm_cache_write) as cache_write,
         sum(is_llm) as llm_calls, latest(telemetry_model) as model,
         count_distinct(attributes.session.id) as sessions
-  by resource.attributes.service.name as service
+  by resource.attributes.service.name as service, span_project
 | sort tokens_out desc
 | limit 200
 """
@@ -72,7 +86,8 @@ def q_cost_by_session() -> str:
 | {_IS_LLM_FIELDS}
 | stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
         sum(llm_cache_read) as cache_read, sum(llm_cache_write) as cache_write,
-        latest(telemetry_model) as model
+        latest(telemetry_model) as model,
+        latest(resource.attributes.{SPAN_PROJECT_ATTR}) as span_project
   by attributes.session.id as session_id
 | limit 1000
 """
@@ -83,6 +98,20 @@ def _num(row: dict[str, Any], key: str) -> float:
         return float(row.get(key) or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _row_project(row: dict[str, Any], agent: Agent | None) -> tuple[str | None, str | None]:
+    """(project id, how it was known) for one aggregate row: the span attribute, else
+    the project's inference profile the model id names, else the ledger agent."""
+    span = row.get("span_project")
+    if isinstance(span, str) and _PROJECT_RE.fullmatch(span):
+        return span, "span"
+    profile = inference_profiles.profile_for_model(row.get("model"))
+    if profile is not None:
+        return profile.project_id, "inference_profile"
+    if agent is not None and agent.project_id:
+        return agent.project_id, "agent"
+    return None, None
 
 
 def _priced(row: dict[str, Any], prices: dict[str, Any]) -> tuple[float, float | None]:
@@ -138,25 +167,38 @@ def cost_report(
         # id, not the ledger name — resolve it the way the observability views do, and
         # keep the exact-name match for log sources registered under their own name.
         resolve = build_agent_resolver(db, workspace.id, all_projects=True)
-        by_agent: list[dict[str, Any]] = []
+        # one row per (service, project): a runtime's stamped and unstamped spans (a
+        # publish before and after its project was isolated) group apart in the query
+        merged: dict[tuple[str, str | None], dict[str, Any]] = {}
         for row in results.get("by_service") or []:
             service = row.get("service") or "—"
             tokens, usd = _priced(row, prices)
             agent = agents_by_name.get(service) or resolve(service)
-            by_agent.append(
-                {
+            project_id, source = _row_project(row, agent)
+            entry = merged.get((service, project_id))
+            if entry is None:
+                merged[(service, project_id)] = {
                     "service": service,
                     "agent_id": agent.id if agent else None,
                     "display_name": (agent.spec or {}).get("display_name") if agent else None,
                     "known": agent is not None,
-                    "project_id": agent.project_id if agent else None,
+                    "project_id": project_id,
+                    "project_source": source,
                     "tokens": int(tokens),
                     "llm_calls": int(_num(row, "llm_calls")),
                     "sessions": int(_num(row, "sessions")),
                     "est_cost_usd": usd,
                     "_unpriced": str(row["model"]) if usd is None and row.get("model") else None,
                 }
-            )
+                continue
+            entry["tokens"] += int(tokens)
+            entry["llm_calls"] += int(_num(row, "llm_calls"))
+            entry["sessions"] += int(_num(row, "sessions"))
+            if usd is not None:
+                entry["est_cost_usd"] = round((entry["est_cost_usd"] or 0.0) + usd, 6)
+            elif row.get("model") and not entry["_unpriced"]:
+                entry["_unpriced"] = str(row["model"])
+        by_agent = list(merged.values())
 
         # session → (actor, project), for the rows the console opened
         session_rows = results.get("by_session") or []
@@ -177,6 +219,8 @@ def cost_report(
             # An unmatched session is real traffic with no console identity (/v1, an
             # evaluation replay). It gets its own bucket rather than vanishing.
             actor, pid = chats.get(str(row.get("session_id")), ("—", None))
+            if pid is None:  # no console identity, but the spans may name the project
+                pid, _ = _row_project(row, None)
             sessions.append({
                 "actor": actor, "project_id": pid, "tokens": int(tokens), "usd": usd,
                 "_unpriced": str(row["model"]) if usd is None and row.get("model") else None,
@@ -195,8 +239,7 @@ def cost_report(
 def _report(raw: dict[str, Any], project: str | None) -> dict[str, Any]:
     """The response for one project (None = the whole workspace) from the cached rows."""
     agents = [
-        row for row in raw["by_agent"]
-        if project is None or (row["known"] and row["project_id"] == project)
+        row for row in raw["by_agent"] if project is None or row["project_id"] == project
     ]
     sessions = [
         row for row in raw["sessions"] if project is None or row["project_id"] == project
@@ -212,6 +255,14 @@ def _report(raw: dict[str, Any], project: str | None) -> dict[str, Any]:
         if row["usd"] is not None:
             bucket["est_cost_usd"] = round(bucket["est_cost_usd"] + row["usd"], 6)
     by_agent = [{k: v for k, v in row.items() if k != "_unpriced"} for row in agents]
+    per_project: dict[str | None, dict[str, Any]] = {}
+    for row in by_agent:
+        bucket = per_project.setdefault(row["project_id"], {
+            "project_id": row["project_id"], "agents": 0, "tokens": 0, "est_cost_usd": 0.0,
+        })
+        bucket["agents"] += 1
+        bucket["tokens"] += row["tokens"]
+        bucket["est_cost_usd"] = round(bucket["est_cost_usd"] + (row["est_cost_usd"] or 0.0), 6)
     return {
         "range": raw["range"],
         "hours": raw["hours"],
@@ -222,6 +273,10 @@ def _report(raw: dict[str, Any], project: str | None) -> dict[str, Any]:
         "by_agent": sorted(by_agent, key=lambda row: row["est_cost_usd"] or 0.0, reverse=True),
         "by_actor": sorted(
             per_actor.values(), key=lambda row: row["est_cost_usd"], reverse=True
+        ),
+        # the project dimension (§10.8); `project_id` None = attributed to no project
+        "by_project": sorted(
+            per_project.values(), key=lambda row: row["est_cost_usd"], reverse=True
         ),
         # Stated, never implied: these models burned tokens the price map cannot value.
         "unpriced_models": sorted(unpriced),
@@ -240,8 +295,9 @@ def month_to_date_usd(
     at the 30-day window the console offers — a budget check at 02:00 on the 1st looks at
     two hours, which is correct, not a bug.
 
-    `project` counts only the services resolved to that project's agents; the cached
-    entry is workspace-wide (each service's dollars with its agent's project).
+    `project` counts only the spend attributed to that project (span attribute,
+    inference profile, else the resolved agent — `_row_project`); the cached entry is
+    workspace-wide.
     """
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -260,9 +316,9 @@ def month_to_date_usd(
         for row in results.get("by_service") or []:
             _, usd = _priced(row, prices)
             total += usd or 0.0
-            agent = resolve(row.get("service"))
-            if agent is not None and agent.project_id:
-                by_project[agent.project_id] = by_project.get(agent.project_id, 0.0) + (usd or 0.0)
+            project_id, _ = _row_project(row, resolve(row.get("service")))
+            if project_id:
+                by_project[project_id] = by_project.get(project_id, 0.0) + (usd or 0.0)
         return {
             "usd": round(total, 6),
             "hours": hours,

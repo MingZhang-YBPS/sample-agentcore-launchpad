@@ -4,8 +4,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.project_scope import current_project
 from app.schemas.agent import AgentSpec
 from app.services.gateway_bootstrap import GATEWAY_SCOPE
+from app.services.project_telemetry import with_project_attributes
 from app.templates.gateway_support import (
     ENV_PROVIDER,
     ENV_SCOPE,
@@ -35,6 +37,7 @@ def runtime_environment(
     resources: Mapping[str, Any],
     workload_name: str = "",
     agent_id: str = "",
+    workspace_id: str = "",
 ) -> dict[str, str]:
     """Merge user environment with platform-owned runtime values.
 
@@ -42,6 +45,12 @@ def runtime_environment(
     does not exist until the runtime does — so it is empty on create and supplied
     on later updates. The rendered Gateway client treats a missing value as "no
     self-minted token", not as an error.
+
+    An agent of an isolated project also gets its span resource attributes
+    (`OTEL_RESOURCE_ATTRIBUTES`, projects design §10.8); the project is the one the
+    deploy runs as (`project_context(<job's project>)`), and ``agent_id`` /
+    ``workspace_id`` are added when the caller knows them. The runtime create
+    wrappers turn the same attributes into the `launchpad:*` resource tags.
     """
     environment = dict(spec.env)
     # a spec-pinned memory overrides the workspace's shared bootstrap memory
@@ -74,4 +83,7 @@ def runtime_environment(
     from app.deployer.mounts import mounts_env
 
     environment.update(mounts_env(spec))  # LAUNCHPAD_MOUNTS, also for canary candidates
-    return environment
+    return with_project_attributes(
+        environment, project_id=current_project(), agent_id=agent_id or None,
+        workspace_id=workspace_id or None,
+    )
