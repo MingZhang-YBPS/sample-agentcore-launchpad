@@ -195,3 +195,32 @@ describe("container network profile", () => {
     expect(buildAgentSpec(form, CATALOGS).network).toEqual({ subnets: ["subnet-0a", "subnet-0b"], security_groups: ["sg-0a"] });
   });
 });
+
+describe("network for every method (projects §12.6)", () => {
+  it("every method carries a chosen profile; no profile is PUBLIC (omitted)", () => {
+    for (const method of ["harness", "zip_runtime", "container"] as const) {
+      const form = { ...emptyAgentForm(method), name: "net-a", systemPrompt: "hi" };
+      expect(buildAgentSpec(form, CATALOGS).network).toBeUndefined();
+      expect(buildAgentSpec({ ...form, networkProfileId: "np-1" }, CATALOGS).network).toEqual({ profile_id: "np-1" });
+    }
+    const byoc = { ...emptyAgentForm("byoc"), name: "net-b", byocUploadId: "u1", networkProfileId: "np-2" };
+    expect(buildAgentSpec(byoc, CATALOGS).network).toEqual({ profile_id: "np-2" });
+    const server = { ...byoc, protocol: "mcp" as const, mcpTargetName: "crm" };
+    expect(buildMcpServerSpec(server).network).toEqual({ profile_id: "np-2" });
+  });
+
+  it("a stored profile round-trips on a harness re-publish, and leaving it drops the field", () => {
+    const form = formFromStoredSpec("harness", "h1", { model_id: "m", network: { profile_id: "np-9" } }).form;
+    expect(form.networkProfileId).toBe("np-9");
+    expect(buildAgentSpec(form, CATALOGS).network).toEqual({ profile_id: "np-9" });
+    expect(buildAgentSpec({ ...form, networkProfileId: "" }, CATALOGS).network).toBeUndefined();
+  });
+
+  it("VPC chosen without a profile blocks launch", () => {
+    const form = { ...emptyAgentForm("harness"), name: "net-c", systemPrompt: "hi" };
+    const opts = { knobIssues: [], byocUploading: false };
+    expect(agentFormValid(form, CATALOGS, opts)).toBe(true);
+    expect(agentFormValid({ ...form, networkVpc: true }, CATALOGS, opts)).toBe(false);
+    expect(agentFormValid({ ...form, networkVpc: true, networkProfileId: "np-1" }, CATALOGS, opts)).toBe(true);
+  });
+});
