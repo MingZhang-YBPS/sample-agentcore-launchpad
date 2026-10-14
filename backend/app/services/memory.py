@@ -1,6 +1,7 @@
 """AgentCore Memory helpers — session events (short-term) + records (long-term)."""
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -44,6 +45,63 @@ def memory_arn_for(workspace: WorkspaceContext, memory_id: str) -> str:
 
 
 SCOPE_SEP = "__"
+
+# AgentCore Memory's actorId constraint (CreateEvent / ListEvents ValidationException).
+# Console usernames may carry "." (users._USERNAME_RE) and /v1 callers send free-form
+# actor ids, so a compound id that breaks this pattern is escaped (encode_actor_part).
+ACTOR_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_/]*(?::[a-zA-Z0-9\-_/]+)*[a-zA-Z0-9\-_/]*$")
+ACTOR_ESCAPE = "_"
+_ESCAPES = {".": "d", "-": "h", "_": "u"}
+_UNESCAPES = {v: k for k, v in _ESCAPES.items()}
+
+
+def encode_actor_part(human: str) -> str:
+    """A reversible, Memory-safe form of a human actor id: ``_`` then each
+    character — letters and digits as they are, ``.`` ``-`` ``_`` as ``_d`` ``_h``
+    ``_u``, anything else as ``_x<hex>_``. Prefix-free escapes make it injective,
+    and the leading ``_`` (a console username never starts with one) keeps it
+    apart from every id that needed no escaping."""
+    out = [ACTOR_ESCAPE]
+    for ch in human:
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+        elif ch in _ESCAPES:
+            out.append(f"_{_ESCAPES[ch]}")
+        else:
+            out.append(f"_x{ord(ch):x}_")
+    return "".join(out)
+
+
+def decode_actor_part(part: str) -> str:
+    """Inverse of ``encode_actor_part``; anything that is not one comes back as is."""
+    if not part.startswith(ACTOR_ESCAPE) or len(part) < 2:
+        return part
+    out: list[str] = []
+    i = 1
+    while i < len(part):
+        ch = part[i]
+        if ch != "_":
+            if not (ch.isascii() and ch.isalnum()):
+                return part
+            out.append(ch)
+            i += 1
+            continue
+        tag = part[i + 1 : i + 2]
+        if tag in _UNESCAPES:
+            out.append(_UNESCAPES[tag])
+            i += 2
+        elif tag == "x":
+            end = part.find("_", i + 2)
+            if end < 0:
+                return part
+            try:
+                out.append(chr(int(part[i + 2 : end], 16)))
+            except ValueError:
+                return part
+            i = end + 1
+        else:
+            return part
+    return "".join(out)
 
 # Strategies do not agree on a record payload shape: SEMANTIC stores prose in
 # content.text, while USER_PREFERENCE (and SUMMARIZATION) store a structured
@@ -96,10 +154,14 @@ def scoped_actor(agent_id: str, base_actor: str = "river") -> str:
     under the same compound actor, so one agent's memory never bleeds into
     another's for the same human.
 
-    Agent ids are uuid4 hex (``[0-9a-f]{32}``), so the compound id stays within
-    the actorId charset and is safe as a namespace path segment.
+    Agent ids are uuid4 hex (``[0-9a-f]{32}``). A human actor outside the actorId
+    charset (``blank.tan``) is escaped (``_blank_dtan``) — it would otherwise fail
+    every Memory call (ListEvents ValidationException) for that user.
     """
-    return f"{agent_id}{SCOPE_SEP}{base_actor}"
+    actor = f"{agent_id}{SCOPE_SEP}{base_actor}"
+    if ACTOR_ID_RE.match(actor):
+        return actor  # every id that was valid keeps its existing memory partition
+    return f"{agent_id}{SCOPE_SEP}{encode_actor_part(base_actor)}"
 
 
 def create_turn_event(

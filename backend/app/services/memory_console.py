@@ -20,7 +20,12 @@ from typing import Any
 
 from app.core.errors import AppError
 from app.services.agentcore.client import control_client, data_client
-from app.services.memory import SCOPE_SEP, decode_record_text, memory_id_or_none
+from app.services.memory import (
+    SCOPE_SEP,
+    decode_actor_part,
+    decode_record_text,
+    memory_id_or_none,
+)
 from app.services.workspace import WorkspaceContext
 
 # AWS caps most memory list operations at 100 items per page — but
@@ -180,7 +185,8 @@ def decode_actor(actor_id: str) -> dict[str, Any]:
     return {
         "actor_id": actor_id,
         "agent_id": agent_id,
-        "human_actor": human,
+        # an escaped human part (memory.encode_actor_part) is shown as the user typed it
+        "human_actor": decode_actor_part(human),
         "scoped": True,
     }
 

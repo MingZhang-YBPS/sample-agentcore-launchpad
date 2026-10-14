@@ -42,6 +42,41 @@ def test_scoped_actor_folds_agent_id():
     assert "/" not in compound and " " not in compound
 
 
+AGENT = "0123456789abcdef0123456789abcdef"
+
+
+def test_ids_memory_already_accepts_are_unchanged():
+    # existing partitions must not move: every valid compound id stays as it was
+    for human in ("river", "admin", "release-ops", "developer_2", "tenant:1", "a/b"):
+        assert scoped_actor(AGENT, human) == f"{AGENT}__{human}"
+
+
+def test_usernames_with_a_dot_are_escaped_into_the_actor_id_charset():
+    # the customer case: "blank.tan" made every Memory call fail (ListEvents
+    # ValidationException on actorId) for that user only
+    for human in ("blank.tan", "a..b", "trail.", "用户", "x y"):
+        compound = scoped_actor(AGENT, human)
+        assert memory_service.ACTOR_ID_RE.match(compound), compound
+        part = compound.split("__", 1)[1]
+        assert part.startswith("_")
+        assert memory_service.decode_actor_part(part) == human
+    assert scoped_actor(AGENT, "blank.tan") == f"{AGENT}___blank_dtan"
+
+
+def test_escaping_is_injective():
+    humans = ["a.b-c", "a-b.c", "a_b.c", "a.b_c", "ab.c", "a.bc", "a.b", "a..b"]
+    assert len({scoped_actor(AGENT, h) for h in humans}) == len(humans)
+    # an escaped id never equals one that needed no escaping
+    assert scoped_actor(AGENT, "a.b") != scoped_actor(AGENT, "a-b")
+
+
+def test_memory_console_shows_the_username_as_typed():
+    from app.services.memory_console import decode_actor
+
+    assert decode_actor(scoped_actor(AGENT, "blank.tan"))["human_actor"] == "blank.tan"
+    assert decode_actor(scoped_actor(AGENT, "river"))["human_actor"] == "river"
+
+
 def test_chat_write_passes_scoped_actor_but_ledger_keeps_human(client, monkeypatch):
     agent_id = make_active_agent(name="mem-write")
     captured: dict[str, str] = {}
