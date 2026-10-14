@@ -967,6 +967,48 @@ def is_workspace_scoped(method: str, path_format: str) -> bool:
     return (lookup, path_format) not in WORKSPACE_EXEMPT
 
 
+# Workspace-scoped routes that need no project (design §5.3 PROJECT_EXEMPT): workspace
+# configuration and catalogs, not project data. Extended as routers are reviewed.
+PROJECT_EXEMPT: frozenset[tuple[str, str]] = frozenset()
+
+
+def is_project_scoped(method: str, path_format: str) -> bool:
+    """Whether a workspace-scoped route runs inside one project."""
+    lookup = "GET" if method == "HEAD" else method
+    return (lookup, path_format) not in PROJECT_EXEMPT
+
+
+def _resolve_request_project(request: Request, workspace_id: str) -> None:
+    """Resolve the request's project once and leave it on ``request.state.project``
+    for ``require_permission`` / ``require_project`` and the ORM context
+    (``bind_request_project``)."""
+    from app.core.db import SessionLocal
+    from app.core.project_scope import project_context
+    from app.services import access
+
+    identity = require_identity(request)
+    requested = (request.headers.get(access.PROJECT_HEADER) or "").strip()
+    db = SessionLocal()
+    try:
+        with project_context(None):  # access tables are not project-owned anyway
+            request.state.project = access.resolve_project(
+                db, identity, workspace_id, requested, request.method,
+            )
+    finally:
+        db.close()
+
+
+async def bind_request_project(request: Request) -> None:
+    """App-level dependency, after ``enforce_route_policy``: publish the resolved project
+    to the ORM context. Async on purpose — it runs in the request's own task, so the
+    sync handler and a streaming response's generator (both run in the threadpool with
+    a copy of this context) inherit it; the sync policy dependency could not set it."""
+    from app.core.project_scope import set_current_project
+
+    scope = getattr(request.state, "project", None)
+    set_current_project(scope.id if scope is not None else None)
+
+
 def enforce_route_policy(request: Request) -> None:
     """App-level dependency enforcing ROUTE_POLICY.
 
@@ -992,11 +1034,22 @@ def enforce_route_policy(request: Request) -> None:
         )
     if role == ADMIN:
         require_admin(request)
-    elif role.startswith(_PERM_PREFIX):
-        require_permission(request, role.removeprefix(_PERM_PREFIX))
     if is_workspace_scoped(request.method, path_format):
         # Resolved here rather than per handler: enforcement must not depend on a
         # router remembering to declare the dependency. Handlers read the result
         # back through `require_workspace`.
-        scope = resolve_workspace(request)
+        try:
+            scope = resolve_workspace(request)
+            if is_project_scoped(request.method, path_format):
+                # before the permission check: inside a project the keys are the
+                # project's (design §5.1), not the account's
+                _resolve_request_project(request, scope.id)
+        except AppError:
+            # Keep the old precedence for a caller who lacks the key outright: they
+            # learn "you may not do this", not which workspaces or projects exist.
+            if role.startswith(_PERM_PREFIX):
+                require_permission(request, role.removeprefix(_PERM_PREFIX))
+            raise
         _guard_prod(request, scope, request.method, path_format)
+    if role.startswith(_PERM_PREFIX):
+        require_permission(request, role.removeprefix(_PERM_PREFIX))

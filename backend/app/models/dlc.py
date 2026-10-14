@@ -18,6 +18,7 @@ from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, UniqueConst
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned
 from app.models.ledger import _id, _now
 
 DIMENSIONS = ("cognition", "quality", "responsibility", "cost", "performance")
@@ -32,7 +33,7 @@ SET_STATUSES = ("draft", "published", "superseded")
 ROW_ORIGINS = ("own", "template", "override", "added")
 
 
-class CriteriaSet(Base):
+class CriteriaSet(ProjectOwned, Base):
     """One version of a criteria set (判据表). `lineage_id` ties the versions together.
 
     `kind="template"` is a scenario template shared by agents; `kind="agent"` belongs to
@@ -41,6 +42,7 @@ class CriteriaSet(Base):
     """
 
     __tablename__ = "criteria_sets"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (
         UniqueConstraint("lineage_id", "version", name="uq_criteria_set_version"),
     )
@@ -73,10 +75,11 @@ class CriteriaSet(Base):
     )
 
 
-class Criterion(Base):
+class Criterion(ProjectOwned, Base):
     """One row of a criteria-set version. `key` is stable across versions (lineage)."""
 
     __tablename__ = "criteria"
+    __project_parent__ = ("set_id", ("criteria_sets",))
     __table_args__ = (UniqueConstraint("set_id", "key", name="uq_criterion_key"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -106,10 +109,11 @@ class Criterion(Base):
     removal_reason: Mapped[str] = mapped_column(Text, default="")
 
 
-class CriterionResult(Base):
+class CriterionResult(ProjectOwned, Base):
     """One verdict: criterion × scenario × attempt, snapshotted when a run completes."""
 
     __tablename__ = "criterion_results"
+    __project_parent__ = ("run_id", ("eval_runs",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -129,8 +133,9 @@ class CriterionResult(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class AnnotationTask(Base):
+class AnnotationTask(ProjectOwned, Base):
     __tablename__ = "annotation_tasks"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -150,8 +155,9 @@ class AnnotationTask(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
-class Annotation(Base):
+class Annotation(ProjectOwned, Base):
     __tablename__ = "annotations"
+    __project_parent__ = ("task_id", ("annotation_tasks",))
     __table_args__ = (
         UniqueConstraint("task_id", "item_ref", "annotator", name="uq_annotation"),
     )
@@ -168,8 +174,9 @@ class Annotation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class CalibrationRecord(Base):
+class CalibrationRecord(ProjectOwned, Base):
     __tablename__ = "calibration_records"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -193,8 +200,9 @@ class CalibrationRecord(Base):
     note: Mapped[str] = mapped_column(Text, default="")
 
 
-class ReleaseRecord(Base):
+class ReleaseRecord(ProjectOwned, Base):
     __tablename__ = "release_records"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -221,8 +229,9 @@ class ReleaseRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class Waiver(Base):
+class Waiver(ProjectOwned, Base):
     __tablename__ = "waivers"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -245,8 +254,9 @@ class Waiver(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class AdmissionCandidate(Base):
+class AdmissionCandidate(ProjectOwned, Base):
     __tablename__ = "admission_candidates"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (
         UniqueConstraint("agent_id", "source", "source_ref", name="uq_admission_source"),
     )
@@ -277,8 +287,9 @@ class AdmissionCandidate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class WatchConfig(Base):
+class WatchConfig(ProjectOwned, Base):
     __tablename__ = "watch_configs"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)

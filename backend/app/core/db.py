@@ -75,6 +75,73 @@ WORKSPACE_SCOPED_TABLES = (
     "resource_creators",
 )
 
+# Project boundary (design §4). STRICT rows always belong to one project; SHARED rows
+# may carry NULL (workspace / platform level, readable from every project). The
+# parent map drives the one-time backfill, in dependency order: a derived table
+# takes its parent's project, an orphan its workspace's default project.
+PROJECT_STRICT_TABLES = (
+    "api_keys", "resource_creators", "eval_datasets", "eval_pipelines",
+    "skill_lab_tasksets", "assistant_conversations", "criteria_sets",
+    "deployments", "spec_snapshots", "chat_sessions", "chat_messages", "chat_feedback",
+    "issues", "answer_rules", "answer_rule_sets", "oauth_pending_sessions", "user_grants",
+    "release_bundles", "eval_runs", "online_eval_configs", "experiments",
+    "annotation_tasks", "calibration_records", "release_records", "waivers",
+    "admission_candidates", "watch_configs", "runtime_canaries", "api_key_usage",
+    "share_links", "promotions", "eval_recommendations", "assistant_messages",
+    "assistant_proposals", "assistant_evaluation_plans", "evaluation_asset_operations",
+    "criteria", "criterion_results", "annotations", "skill_lab_jobs",
+)
+PROJECT_SHARED_TABLES = (
+    "agents", "jobs", "managed_memories", "policy_decisions", "policy_changes",
+    "audit_events", "alert_rules", "resource_mappings", "identity_providers",
+    "user_token_revocations",
+)
+# yes-tables stamped from the workspace default at the migration moment (shared
+# ones only these three: governance/audit/alert/mapping/connection rows stay NULL)
+_PROJECT_BACKFILL_DIRECT = (
+    "agents", "jobs", "managed_memories", "api_keys", "resource_creators", "eval_datasets",
+    "eval_pipelines", "skill_lab_tasksets", "assistant_conversations",
+)
+# (table, parent column, parent table) — parents always listed before children
+_PROJECT_BACKFILL_DERIVED = (
+    ("criteria_sets", "agent_id", "agents"),
+    ("deployments", "agent_id", "agents"),
+    ("spec_snapshots", "agent_id", "agents"),
+    ("chat_sessions", "agent_id", "agents"),
+    ("chat_messages", "agent_id", "agents"),
+    ("chat_feedback", "agent_id", "agents"),
+    ("issues", "agent_id", "agents"),
+    ("answer_rules", "agent_id", "agents"),
+    ("answer_rule_sets", "agent_id", "agents"),
+    ("oauth_pending_sessions", "agent_id", "agents"),
+    ("user_grants", "agent_id", "agents"),
+    ("release_bundles", "agent_id", "agents"),
+    ("eval_runs", "agent_id", "agents"),
+    ("online_eval_configs", "agent_id", "agents"),
+    ("experiments", "agent_id", "agents"),
+    ("annotation_tasks", "agent_id", "agents"),
+    ("calibration_records", "agent_id", "agents"),
+    ("release_records", "agent_id", "agents"),
+    ("waivers", "agent_id", "agents"),
+    ("admission_candidates", "agent_id", "agents"),
+    ("watch_configs", "agent_id", "agents"),
+    ("runtime_canaries", "champion_agent_id", "agents"),
+    ("api_key_usage", "key_id", "api_keys"),
+    ("share_links", "target_id", "agents"),
+    ("share_links", "target_id", "annotation_tasks"),
+    ("promotions", "bundle_id", "release_bundles"),
+    ("eval_recommendations", "run_id", "eval_runs"),
+    ("assistant_messages", "conversation_id", "assistant_conversations"),
+    ("assistant_proposals", "conversation_id", "assistant_conversations"),
+    ("assistant_evaluation_plans", "conversation_id", "assistant_conversations"),
+    ("evaluation_asset_operations", "conversation_id", "assistant_conversations"),
+    ("criteria", "set_id", "criteria_sets"),
+    ("criterion_results", "run_id", "eval_runs"),
+    ("annotations", "task_id", "annotation_tasks"),
+    ("skill_lab_jobs", "taskset_id", "skill_lab_tasksets"),
+)
+PROJECTS_MIGRATION_MARKER = "migration.projects_v1"
+
 
 def _make_engine():
     settings = get_settings()
@@ -123,6 +190,7 @@ def init_db(bind=None) -> None:
     bind = bind if bind is not None else engine
     from app.models import dlc as _dlc_models  # noqa: F401 — Agent-DLC tables
     from app.models import platform_settings as _platform_settings  # noqa: F401
+    from app.models import projects as _project_models  # noqa: F401 — design §2.2
     from app.models import resource_mapping as _mapping_models  # noqa: F401
     from app.models import selfservice as _selfservice_models  # noqa: F401 — T35/T36
     from app.models import video as _video_models  # noqa: F401 — register tables before create_all
@@ -138,6 +206,8 @@ def init_db(bind=None) -> None:
     seed_legacy_catalog(bind)
     _adopt_unscoped_account_audit_rows(bind)
     assert_every_row_has_a_workspace(bind)
+    _seed_default_projects(bind)
+    assert_every_row_has_a_project(bind)
 
 
 # Console-account journal actions (routers/users.py, routers/auth.py,
@@ -376,6 +446,7 @@ def _migrate(bind) -> None:
     _migrate_api_key_lifecycle_columns(bind)
     _migrate_creator_columns(bind)
     _migrate_resource_creators_index(bind)
+    _migrate_project_columns(bind)
 
 
 def _migrate_creator_columns(bind) -> None:
@@ -1178,3 +1249,294 @@ def _seed_default_workspace(bind) -> None:
                 ),
                 values,
             )
+
+
+# Tables whose (workspace_id, project_id) pair is the hot list filter (design §8.2).
+_PROJECT_COMPOSITE_INDEXED = (
+    "agents", "chat_sessions", "chat_messages", "chat_feedback", "eval_runs", "eval_datasets",
+    "jobs", "issues", "audit_events", "api_keys", "share_links", "release_records",
+    "admission_candidates",
+)
+
+
+def _migrate_project_columns(bind) -> None:
+    """Add `project_id` (+ indexes) to every project-owned and project-shared table.
+
+    Spelled out per table, like `_migrate_workspace_columns`, because
+    `tests/test_ledger_migration.py` reads the (table, column) pairs off this source.
+    """
+    from sqlalchemy import inspect, text
+
+    additions = {
+        "api_keys": "ALTER TABLE api_keys ADD COLUMN project_id VARCHAR(32)",
+        "resource_creators": "ALTER TABLE resource_creators ADD COLUMN project_id VARCHAR(32)",
+        "eval_datasets": "ALTER TABLE eval_datasets ADD COLUMN project_id VARCHAR(32)",
+        "eval_pipelines": "ALTER TABLE eval_pipelines ADD COLUMN project_id VARCHAR(32)",
+        "skill_lab_tasksets": "ALTER TABLE skill_lab_tasksets ADD COLUMN project_id VARCHAR(32)",
+        "assistant_conversations": (
+            "ALTER TABLE assistant_conversations ADD COLUMN project_id VARCHAR(32)"
+        ),
+        "criteria_sets": "ALTER TABLE criteria_sets ADD COLUMN project_id VARCHAR(32)",
+        "deployments": "ALTER TABLE deployments ADD COLUMN project_id VARCHAR(32)",
+        "spec_snapshots": "ALTER TABLE spec_snapshots ADD COLUMN project_id VARCHAR(32)",
+        "chat_sessions": "ALTER TABLE chat_sessions ADD COLUMN project_id VARCHAR(32)",
+        "chat_messages": "ALTER TABLE chat_messages ADD COLUMN project_id VARCHAR(32)",
+        "chat_feedback": "ALTER TABLE chat_feedback ADD COLUMN project_id VARCHAR(32)",
+        "issues": "ALTER TABLE issues ADD COLUMN project_id VARCHAR(32)",
+        "answer_rules": "ALTER TABLE answer_rules ADD COLUMN project_id VARCHAR(32)",
+        "answer_rule_sets": "ALTER TABLE answer_rule_sets ADD COLUMN project_id VARCHAR(32)",
+        "oauth_pending_sessions": (
+            "ALTER TABLE oauth_pending_sessions ADD COLUMN project_id VARCHAR(32)"
+        ),
+        "user_grants": "ALTER TABLE user_grants ADD COLUMN project_id VARCHAR(32)",
+        "release_bundles": "ALTER TABLE release_bundles ADD COLUMN project_id VARCHAR(32)",
+        "eval_runs": "ALTER TABLE eval_runs ADD COLUMN project_id VARCHAR(32)",
+        "online_eval_configs": "ALTER TABLE online_eval_configs ADD COLUMN project_id VARCHAR(32)",
+        "experiments": "ALTER TABLE experiments ADD COLUMN project_id VARCHAR(32)",
+        "annotation_tasks": "ALTER TABLE annotation_tasks ADD COLUMN project_id VARCHAR(32)",
+        "calibration_records": "ALTER TABLE calibration_records ADD COLUMN project_id VARCHAR(32)",
+        "release_records": "ALTER TABLE release_records ADD COLUMN project_id VARCHAR(32)",
+        "waivers": "ALTER TABLE waivers ADD COLUMN project_id VARCHAR(32)",
+        "admission_candidates": (
+            "ALTER TABLE admission_candidates ADD COLUMN project_id VARCHAR(32)"
+        ),
+        "watch_configs": "ALTER TABLE watch_configs ADD COLUMN project_id VARCHAR(32)",
+        "runtime_canaries": "ALTER TABLE runtime_canaries ADD COLUMN project_id VARCHAR(32)",
+        "api_key_usage": "ALTER TABLE api_key_usage ADD COLUMN project_id VARCHAR(32)",
+        "share_links": "ALTER TABLE share_links ADD COLUMN project_id VARCHAR(32)",
+        "promotions": "ALTER TABLE promotions ADD COLUMN project_id VARCHAR(32)",
+        "eval_recommendations": (
+            "ALTER TABLE eval_recommendations ADD COLUMN project_id VARCHAR(32)"
+        ),
+        "assistant_messages": "ALTER TABLE assistant_messages ADD COLUMN project_id VARCHAR(32)",
+        "assistant_proposals": "ALTER TABLE assistant_proposals ADD COLUMN project_id VARCHAR(32)",
+        "assistant_evaluation_plans": (
+            "ALTER TABLE assistant_evaluation_plans ADD COLUMN project_id VARCHAR(32)"
+        ),
+        "evaluation_asset_operations": (
+            "ALTER TABLE evaluation_asset_operations ADD COLUMN project_id VARCHAR(32)"
+        ),
+        "criteria": "ALTER TABLE criteria ADD COLUMN project_id VARCHAR(32)",
+        "criterion_results": "ALTER TABLE criterion_results ADD COLUMN project_id VARCHAR(32)",
+        "annotations": "ALTER TABLE annotations ADD COLUMN project_id VARCHAR(32)",
+        "skill_lab_jobs": "ALTER TABLE skill_lab_jobs ADD COLUMN project_id VARCHAR(32)",
+        "agents": "ALTER TABLE agents ADD COLUMN project_id VARCHAR(32)",
+        "jobs": "ALTER TABLE jobs ADD COLUMN project_id VARCHAR(32)",
+        "managed_memories": "ALTER TABLE managed_memories ADD COLUMN project_id VARCHAR(32)",
+        "policy_decisions": "ALTER TABLE policy_decisions ADD COLUMN project_id VARCHAR(32)",
+        "policy_changes": "ALTER TABLE policy_changes ADD COLUMN project_id VARCHAR(32)",
+        "audit_events": "ALTER TABLE audit_events ADD COLUMN project_id VARCHAR(32)",
+        "alert_rules": "ALTER TABLE alert_rules ADD COLUMN project_id VARCHAR(32)",
+        "resource_mappings": "ALTER TABLE resource_mappings ADD COLUMN project_id VARCHAR(32)",
+        "identity_providers": "ALTER TABLE identity_providers ADD COLUMN project_id VARCHAR(32)",
+        "user_token_revocations": (
+            "ALTER TABLE user_token_revocations ADD COLUMN project_id VARCHAR(32)"
+        ),
+    }
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    # one transaction for the whole pass: on a file ledger every separate commit is
+    # its own fsync, and this runs at every startup (and for every test app)
+    with bind.begin() as conn:
+        for table, statement in additions.items():
+            if table not in live_tables:
+                continue
+            if "project_id" not in {c["name"] for c in inspector.get_columns(table)}:
+                conn.execute(text(statement))
+            conn.execute(
+                text(f"CREATE INDEX IF NOT EXISTS ix_{table}_project_id ON {table} (project_id)")
+            )
+            if table in _PROJECT_COMPOSITE_INDEXED:
+                conn.execute(
+                    text(
+                        f"CREATE INDEX IF NOT EXISTS ix_{table}_ws_project "
+                        f"ON {table} (workspace_id, project_id)"
+                    )
+                )
+
+
+def _now_sql() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def bind_default_project_everywhere(conn) -> None:
+    """Every workspace with no project yet gets `default`, as its workspace default.
+
+    Idempotent and run on every startup, so a workspace registered by an older
+    build (or restored from a backup) is never left with no project to resolve."""
+    from sqlalchemy import text
+
+    conn.execute(
+        text(
+            "INSERT INTO project_workspaces (project_id, workspace_id, is_workspace_default,"
+            " enabled_by, enabled_at)"
+            " SELECT 'default', w.id, 1, NULL, :now FROM workspaces w"
+            " WHERE NOT EXISTS (SELECT 1 FROM project_workspaces pw WHERE pw.workspace_id = w.id)"
+        ),
+        {"now": _now_sql()},
+    )
+
+
+_WORKSPACE_DEFAULT_PROJECT = (
+    "(SELECT pw.project_id FROM project_workspaces pw"
+    " WHERE pw.workspace_id = {table}.workspace_id AND pw.is_workspace_default = 1)"
+)
+
+
+def _seed_default_projects(bind) -> None:
+    """Seed the `default` project and, once, file every existing row into it (design §8.3).
+
+    The one-time part (backfill + `inherit` memberships) runs while the marker
+    `migration.projects_v1` is absent: repeating it would re-add a membership an
+    administrator removed and silently absorb rows a new write path forgot to stamp.
+    Raw SQL for the same reasons as `_seed_default_workspace`.
+    """
+    from sqlalchemy import inspect, text
+
+    live_tables = set(inspect(bind).get_table_names())
+    now = _now_sql()
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO projects (id, name, description, status, is_default, settings,"
+                " created_by, created_by_name, created_at, updated_at)"
+                " SELECT 'default', 'Default', '', 'active', 1, NULL, NULL, NULL, :now, :now"
+                " WHERE NOT EXISTS (SELECT 1 FROM projects WHERE id = 'default')"
+            ),
+            {"now": now},
+        )
+        bind_default_project_everywhere(conn)
+        conn.execute(
+            text(
+                "INSERT INTO access_epoch (id, value) SELECT 1, 0"
+                " WHERE NOT EXISTS (SELECT 1 FROM access_epoch WHERE id = 1)"
+            )
+        )
+        done = conn.execute(
+            text("SELECT 1 FROM platform_settings WHERE key = :k"),
+            {"k": PROJECTS_MIGRATION_MARKER},
+        ).first()
+        if done is not None:
+            return
+        for table in _PROJECT_BACKFILL_DIRECT:
+            if table not in live_tables:
+                continue
+            platform = " AND system_key IS NULL" if table == "agents" else ""
+            conn.execute(
+                text(
+                    f"UPDATE {table} SET project_id = "  # noqa: S608 — fixed names
+                    + _WORKSPACE_DEFAULT_PROJECT.format(table=table)
+                    + f" WHERE project_id IS NULL{platform}"
+                )
+            )
+        for table, column, parent in _PROJECT_BACKFILL_DERIVED:
+            if table not in live_tables or parent not in live_tables:
+                continue
+            conn.execute(
+                text(
+                    f"UPDATE {table} SET project_id = (SELECT p.project_id FROM {parent} p"  # noqa: S608
+                    f" WHERE p.id = {table}.{column}) WHERE project_id IS NULL"
+                )
+            )
+        for table in PROJECT_STRICT_TABLES:
+            if table not in live_tables:
+                continue
+            # orphans, and children of a platform (system preset) agent
+            conn.execute(
+                text(
+                    f"UPDATE {table} SET project_id = "  # noqa: S608
+                    + _WORKSPACE_DEFAULT_PROJECT.format(table=table)
+                    + " WHERE project_id IS NULL"
+                )
+            )
+        # every non-admin account already granted a workspace keeps reaching its
+        # data: an `inherit` member of that workspace's default project (design §3.5)
+        conn.execute(
+            text(
+                "INSERT INTO project_members (project_id, user_id, role_key, overrides,"
+                " added_by, added_at)"
+                " SELECT DISTINCT pw.project_id, uw.user_id, 'inherit', NULL, NULL, :now"
+                " FROM user_workspaces uw"
+                " JOIN users u ON u.id = uw.user_id AND u.role <> 'admin'"
+                " JOIN project_workspaces pw ON pw.workspace_id = uw.workspace_id"
+                "  AND pw.is_workspace_default = 1"
+                " WHERE NOT EXISTS (SELECT 1 FROM project_members pm"
+                "  WHERE pm.project_id = pw.project_id AND pm.user_id = uw.user_id)"
+            ),
+            {"now": now},
+        )
+        conn.execute(text("UPDATE access_epoch SET value = value + 1 WHERE id = 1"))
+        conn.execute(
+            text(
+                "INSERT INTO platform_settings (key, value, updated_by, updated_at)"
+                " VALUES (:k, 'done', 'migration', :now)"
+            ),
+            {"k": PROJECTS_MIGRATION_MARKER, "now": now},
+        )
+
+
+def unprojected_row_counts(bind) -> dict[str, int]:
+    """Strict rows that name no project (agents: non-preset ones), per table."""
+    from sqlalchemy import inspect, text
+
+    live_tables = set(inspect(bind).get_table_names())
+    counts: dict[str, int] = {}
+    with bind.connect() as conn:
+        for table in (*PROJECT_STRICT_TABLES, "agents"):
+            if table not in live_tables:
+                continue
+            extra = " AND system_key IS NULL" if table == "agents" else ""
+            found = conn.execute(
+                text(f"SELECT COUNT(*) FROM {table} WHERE project_id IS NULL{extra}")  # noqa: S608
+            ).scalar_one()
+            if found:
+                counts[table] = int(found)
+    return counts
+
+
+def assert_every_row_has_a_project(bind) -> None:
+    """Fail startup on a strict row with no project — unless its workspace is bound
+    to a single project, which then adopts it unambiguously (a WARNING): the case of
+    rows an older build wrote after a rollback (design §8.3/§8.4)."""
+    import logging
+
+    from sqlalchemy import inspect, text
+
+    counts = unprojected_row_counts(bind)
+    if not counts:
+        return
+    log = logging.getLogger(__name__)
+    live_tables = set(inspect(bind).get_table_names())
+    # the workspace's one bound project; a workspace bound to none takes `default`
+    # (the same unambiguous rule as project_scope._sole_workspace_project)
+    sole = (
+        "COALESCE((SELECT MIN(pw.project_id) FROM project_workspaces pw"
+        " WHERE pw.workspace_id = {table}.workspace_id HAVING COUNT(*) = 1),"
+        " (SELECT p.id FROM projects p WHERE p.id = 'default' AND NOT EXISTS"
+        "  (SELECT 1 FROM project_workspaces pw2"
+        "   WHERE pw2.workspace_id = {table}.workspace_id)))"
+    )
+    with bind.begin() as conn:
+        for table in counts:
+            if table not in live_tables:
+                continue
+            extra = " AND system_key IS NULL" if table == "agents" else ""
+            claimed = conn.execute(
+                text(
+                    f"UPDATE {table} SET project_id = "  # noqa: S608
+                    + sole.format(table=table)
+                    + f" WHERE project_id IS NULL{extra}"
+                )
+            ).rowcount
+            if claimed:
+                log.warning("adopted %d %s rows with no project into their workspace's "
+                            "only project", claimed, table)
+    left = unprojected_row_counts(bind)
+    if not left:
+        return
+    listed = ", ".join(f"{table}={count}" for table, count in sorted(left.items()))
+    raise RuntimeError(
+        f"ledger rows with no project_id: {listed}. Their workspaces hold several "
+        "projects, so the owner is ambiguous — run scripts/backfill_projects.py "
+        "--workspace <id> --project <id>, or find the write path that did not stamp it."
+    )

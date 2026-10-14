@@ -168,15 +168,50 @@ def merge_workspace_resources(
             get_settings.cache_clear()
 
 
+def granted_workspace_ids_direct(db: Session, user_id: str) -> list[str]:
+    """Only the account's own `user_workspaces` grants (no project-derived reach)."""
+    return sorted(
+        db.execute(
+            select(UserWorkspace.workspace_id).where(UserWorkspace.user_id == user_id)
+        ).scalars()
+    )
+
+
 def granted_workspace_ids(db: Session, user_id: str) -> list[str]:
     """Workspace ids this member may operate in, sorted for a stable fallback.
 
     Admins are not represented here: the built-in admin has no ``users`` row and
     so can never own a grant — admin access is a bypass, not a grant.
     """
-    rows = db.execute(
+    rows = set(db.execute(
         select(UserWorkspace.workspace_id).where(UserWorkspace.user_id == user_id)
-    ).scalars()
+    ).scalars())
+    # A project membership reaches every workspace the project is bound to (design
+    # D-6): binding a project to a workspace is the administrator's grant for its
+    # members. Not an `inherit` membership: the default project is bound to every
+    # workspace, so letting it confer reach would turn a dev-only grant into prod
+    # access — `inherit` keeps the legacy per-workspace grant semantics exactly.
+    # Raw SQL: the access tables live in app.models.projects, which this
+    # module must not import at module load (models → services cycle).
+    from sqlalchemy import text
+
+    rows |= {
+        r[0]
+        for r in db.execute(
+            text(
+                "SELECT DISTINCT pw.workspace_id FROM project_workspaces pw"
+                " JOIN projects p ON p.id = pw.project_id AND p.status IN ('active', 'archived')"
+                # an `inherit` row is the compatibility member of a default project: it
+                # follows the account's own grants, so it reaches nothing by itself
+                " LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = :u"
+                "  AND pm.role_key <> 'inherit'"
+                " LEFT JOIN project_groups g ON g.id = p.group_id AND g.archived_at IS NULL"
+                " LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = :u"
+                " WHERE pm.user_id IS NOT NULL OR gm.user_id IS NOT NULL"
+            ),
+            {"u": user_id},
+        ).fetchall()
+    }
     return sorted(rows)
 
 

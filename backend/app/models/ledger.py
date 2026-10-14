@@ -24,6 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned, ProjectShared
 
 
 def _id() -> str:
@@ -94,7 +95,7 @@ class UserWorkspace(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class Agent(Base):
+class Agent(ProjectShared, Base):
     __tablename__ = "agents"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -162,6 +163,11 @@ class Agent(Base):
             sqlite_where=text("system_key IS NOT NULL AND status != 'deleted'"),
         ),
     )
+
+    def project_platform_row(self) -> bool:
+        """A system-managed preset is platform level: every project reads and invokes
+        it, only administrators change it (design §4.2)."""
+        return bool(self.system_key)
 
 
 class SystemSkillRecord(Base):
@@ -231,7 +237,7 @@ class SystemSkillRecord(Base):
     )
 
 
-class ManagedMemory(Base):
+class ManagedMemory(ProjectShared, Base):
     """An AgentCore Memory this workspace manages (issue #55).
 
     The workspace's AWS account can hold memories the platform never created
@@ -265,7 +271,7 @@ class ManagedMemory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class ResourceCreator(Base):
+class ResourceCreator(ProjectOwned, Base):
     """Who created an AWS-only resource through the console.
 
     Knowledge bases and custom evaluators have no ledger row of their own — AWS is
@@ -346,8 +352,9 @@ class User(Base):
     )
 
 
-class Deployment(Base):
+class Deployment(ProjectOwned, Base):
     __tablename__ = "deployments"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -366,8 +373,9 @@ class Deployment(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
-class ChatSession(Base):
+class ChatSession(ProjectOwned, Base):
     __tablename__ = "chat_sessions"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -388,12 +396,13 @@ class ChatSession(Base):
     )
 
 
-class ChatMessage(Base):
+class ChatMessage(ProjectOwned, Base):
     """One rendered thread item of a console chat session (user turn, agent
     answer, tool call, error) — the Chat playground's reload-safe history.
     Integer autoincrement pk doubles as the replay order."""
 
     __tablename__ = "chat_messages"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     # carried on the row itself, not only via the agent: two queries match on a
@@ -410,7 +419,7 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class ApiKey(Base):
+class ApiKey(ProjectOwned, Base):
     __tablename__ = "api_keys"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -441,10 +450,11 @@ class ApiKey(Base):
     created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
 
 
-class ApiKeyUsage(Base):
+class ApiKeyUsage(ProjectOwned, Base):
     """Admitted `/v1` calls per key per UTC day (T16) — the aggregable usage shape."""
 
     __tablename__ = "api_key_usage"
+    __project_parent__ = ("key_id", ("api_keys",))
     __table_args__ = (UniqueConstraint("key_id", "day", name="uq_api_key_usage_key_day"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -454,7 +464,7 @@ class ApiKeyUsage(Base):
     count: Mapped[int] = mapped_column(default=0)
 
 
-class SpecSnapshot(Base):
+class SpecSnapshot(ProjectOwned, Base):
     """The full agent spec as of one publish (T18): one row per create/redeploy.
 
     Rollback re-publishes a stored spec as a NEW snapshot; rows are never edited
@@ -462,6 +472,7 @@ class SpecSnapshot(Base):
     """
 
     __tablename__ = "spec_snapshots"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (UniqueConstraint("agent_id", "seq", name="uq_spec_snapshots_agent_seq"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -476,13 +487,14 @@ class SpecSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class ShareLink(Base):
+class ShareLink(ProjectOwned, Base):
     """A signed, revocable, account-free way for an outsider to reach exactly one
     thing (T13). The raw token is shown once at creation; only its sha256 is at
     rest, exactly like `ApiKey`. The row — not any request header — decides which
     workspace a visitor lands in."""
 
     __tablename__ = "share_links"
+    __project_parent__ = ("target_id", ("agents", "annotation_tasks"))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -512,7 +524,7 @@ class ShareLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class ChatFeedback(Base):
+class ChatFeedback(ProjectOwned, Base):
     """A thumbs verdict on one agent answer (T15), from the console or a share page.
 
     A table rather than columns on `ChatMessage`: one message can be rated by
@@ -522,6 +534,7 @@ class ChatFeedback(Base):
     """
 
     __tablename__ = "chat_feedback"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (UniqueConstraint("message_id", "actor", name="uq_chat_feedback_actor"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -575,7 +588,7 @@ class SharedTemplate(Base):
     )
 
 
-class AlertRule(Base):
+class AlertRule(ProjectShared, Base):
     """One threshold the platform watches, and what it last saw (roadmap T29).
 
     Deliberately a *rule*, not a subscription: the value is computed from data the
@@ -625,7 +638,7 @@ class AlertRule(Base):
     )
 
 
-class ReleaseBundle(Base):
+class ReleaseBundle(ProjectOwned, Base):
     """An immutable, verifiable record of exactly what was tested (T20).
 
     The unit of promotion: a frozen copy of one `SpecSnapshot`, the artifact
@@ -641,6 +654,7 @@ class ReleaseBundle(Base):
     """
 
     __tablename__ = "release_bundles"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -664,7 +678,7 @@ class ReleaseBundle(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class Promotion(Base):
+class Promotion(ProjectOwned, Base):
     """One request to release a bundle into another environment (T21).
 
     The hand-off between the member who built an agent and the operator who runs it:
@@ -675,6 +689,7 @@ class Promotion(Base):
     """
 
     __tablename__ = "promotions"
+    __project_parent__ = ("bundle_id", ("release_bundles",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -709,7 +724,7 @@ class Promotion(Base):
     )
 
 
-class IdentityProvider(Base):
+class IdentityProvider(ProjectShared, Base):
     """Ledger row for a Connection: an AgentCore Identity credential provider
     created through Launchpad.
 
@@ -754,7 +769,7 @@ class IdentityProvider(Base):
     description: Mapped[str | None] = mapped_column(String(200), default=None)
 
 
-class UserTokenRevocation(Base):
+class UserTokenRevocation(ProjectShared, Base):
     """A member's pending 3LO re-consent request for one Connection (identity P2).
 
     The service models no token-revocation operation, so "revoke" is deferred
@@ -786,13 +801,14 @@ class UserTokenRevocation(Base):
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class OauthPendingSession(Base):
+class OauthPendingSession(ProjectOwned, Base):
     """One in-flight 3LO consent session awaiting ``CompleteResourceTokenAuth``
     (identity P2). The user id comes from this row, never from the browser.
     Claimed isomorphically from the earlier identity fork's ledgers.
     """
 
     __tablename__ = "oauth_pending_sessions"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (
         Index(
             "uq_oauth_pending_sessions_session_uri",
@@ -818,7 +834,7 @@ class OauthPendingSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class UserGrant(Base):
+class UserGrant(ProjectOwned, Base):
     """One user's as_user (3LO) grant state for one Connection on one agent.
 
     The token itself lives in the AgentCore token vault, keyed by (workload
@@ -832,6 +848,7 @@ class UserGrant(Base):
     """
 
     __tablename__ = "user_grants"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (
         Index(
             "uq_user_grants_ws_user_provider_agent",
@@ -859,7 +876,7 @@ class UserGrant(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
-class PolicyDecision(Base):
+class PolicyDecision(ProjectShared, Base):
     __tablename__ = "policy_decisions"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -871,7 +888,7 @@ class PolicyDecision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class PolicyChange(Base):
+class PolicyChange(ProjectShared, Base):
     """Immutable request/snapshot fields plus mutable AWS operation outcome."""
 
     __tablename__ = "policy_changes"
@@ -932,7 +949,7 @@ def _prevent_policy_change_snapshot_mutation(_: Any, __: Any, target: PolicyChan
         raise ValueError(f"immutable policy audit fields changed: {', '.join(sorted(changed))}")
 
 
-class AuditEvent(Base):
+class AuditEvent(ProjectShared, Base):
     """One journaled privileged action (T05): an administrator's break-glass agent
     mutation on a `prod` workspace, or a workspace tier change.
 
@@ -954,7 +971,7 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class Job(Base):
+class Job(ProjectShared, Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)

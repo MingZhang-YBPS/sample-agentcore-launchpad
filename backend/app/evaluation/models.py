@@ -8,6 +8,7 @@ from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned
 
 
 def _id() -> str:
@@ -18,7 +19,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-class EvalDataset(Base):
+class EvalDataset(ProjectOwned, Base):
     __tablename__ = "eval_datasets"
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
@@ -53,8 +54,9 @@ class EvalDataset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class EvalRun(Base):
+class EvalRun(ProjectOwned, Base):
     __tablename__ = "eval_runs"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -120,7 +122,7 @@ class EvalRun(Base):
     )
 
 
-class EvalRecommendation(Base):
+class EvalRecommendation(ProjectOwned, Base):
     """One AgentCore StartRecommendation job pinned to an evaluation run's batch.
 
     The job itself (status, recommended text) lives on AWS; the row keeps the job id,
@@ -129,6 +131,7 @@ class EvalRecommendation(Base):
     """
 
     __tablename__ = "eval_recommendations"
+    __project_parent__ = ("run_id", ("eval_runs",))
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -159,7 +162,7 @@ class EvalRecommendation(Base):
     )
 
 
-class OnlineEvalConfig(Base):
+class OnlineEvalConfig(ProjectOwned, Base):
     """Ledger row linking an AWS online evaluation config to the agent it scores.
 
     Identifiers only — status, evaluators, rule and data source are read back from
@@ -169,6 +172,7 @@ class OnlineEvalConfig(Base):
     """
 
     __tablename__ = "online_eval_configs"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -187,7 +191,7 @@ class OnlineEvalConfig(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class EvalPipeline(Base):
+class EvalPipeline(ProjectOwned, Base):
     """A saved data-processing task (console V2 数据处理): which observed sessions
     to read, how to turn their transcripts into dataset items, and which local
     dataset receives them. Runs are on demand; the last outcome is kept on the row."""

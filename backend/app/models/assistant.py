@@ -26,10 +26,11 @@ from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueCo
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned
 from app.models.ledger import _id, _now
 
 
-class AssistantConversation(Base):
+class AssistantConversation(ProjectOwned, Base):
     __tablename__ = "assistant_conversations"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -86,8 +87,9 @@ class AssistantConversation(Base):
     )
 
 
-class AssistantMessage(Base):
+class AssistantMessage(ProjectOwned, Base):
     __tablename__ = "assistant_messages"
+    __project_parent__ = ("conversation_id", ("assistant_conversations",))
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -112,8 +114,9 @@ class AssistantMessage(Base):
     )
 
 
-class AssistantProposal(Base):
+class AssistantProposal(ProjectOwned, Base):
     __tablename__ = "assistant_proposals"
+    __project_parent__ = ("conversation_id", ("assistant_conversations",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -182,7 +185,7 @@ class AgentNameClaim(Base):
         return f"{workspace_id}:{name}"
 
 
-class AssistantEvaluationPlan(Base):
+class AssistantEvaluationPlan(ProjectOwned, Base):
     """One revision of the reviewed evaluation-assets plan of a conversation (SE-047).
 
     Separate from the proposal: a plan names the proposal revision + content hash it
@@ -195,6 +198,7 @@ class AssistantEvaluationPlan(Base):
     """
 
     __tablename__ = "assistant_evaluation_plans"
+    __project_parent__ = ("conversation_id", ("assistant_conversations",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -219,7 +223,7 @@ class AssistantEvaluationPlan(Base):
     )
 
 
-class EvaluationAssetOperation(Base):
+class EvaluationAssetOperation(ProjectOwned, Base):
     """The durable materialization of exactly one approved plan revision.
 
     Inserted (committed) BEFORE any AWS write with the exact plan hash, the approver
@@ -234,6 +238,7 @@ class EvaluationAssetOperation(Base):
     """
 
     __tablename__ = "evaluation_asset_operations"
+    __project_parent__ = ("conversation_id", ("assistant_conversations",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)

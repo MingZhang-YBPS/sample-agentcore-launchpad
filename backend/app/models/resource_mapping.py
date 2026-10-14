@@ -16,10 +16,11 @@ from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectShared
 from app.models.ledger import _id, _now
 
 
-class ResourceMapping(Base):
+class ResourceMapping(ProjectShared, Base):
     __tablename__ = "resource_mappings"
     # Uniqueness of (workspace_id, kind, name) is enforced by `upsert_mapping`, not by a
     # constraint: the ledger-migration tests drop `workspace_id` from every scoped table

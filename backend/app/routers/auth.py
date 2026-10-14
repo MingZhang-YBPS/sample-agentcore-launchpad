@@ -376,9 +376,15 @@ def require_admin(request: Request) -> Identity:
 
 
 def require_permission(request: Request, permission: str) -> Identity:
-    """Admin always passes; a member needs the (default-granted) permission."""
+    """Admin always passes; a member needs the (default-granted) permission.
+
+    Inside a project (``request.state.project``, set by the route policy) the keys are
+    that project's effective permissions (design §3.4); hub-global routes keep the
+    account's own."""
     identity = require_identity(request)
-    if not identity.can(permission):
+    project = getattr(request.state, "project", None)
+    allowed = project.can(permission) if project is not None else identity.can(permission)
+    if not allowed:
         raise AppError(
             "auth.permission_required",
             f"This action requires the '{permission}' permission",

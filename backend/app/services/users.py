@@ -476,6 +476,10 @@ def create_user(
     db.add(user)
     for workspace_id in sorted(set(requested)):
         db.add(UserWorkspace(user_id=user.id, workspace_id=workspace_id))
+    db.flush()
+    from app.services.access import sync_default_membership
+
+    sync_default_membership(db, user.id, set(requested), previous=set(), role=role)
     try:
         db.commit()
     except IntegrityError as exc:
@@ -817,6 +821,12 @@ def set_workspace_grants(db: Session, user: User, value: Any) -> None:
         ).delete()
     for workspace_id in requested - current:
         db.add(UserWorkspace(user_id=user.id, workspace_id=workspace_id))
+    db.flush()
+    # the default project follows the grants (design §8.5): granted → `inherit`
+    # member; revoked → the `inherit` row goes (an explicit project role stays)
+    from app.services.access import sync_default_membership
+
+    sync_default_membership(db, user.id, requested, previous=current, role=user.role)
 
 
 def _normalized_permissions(value: Any, role: str = ROLE_MEMBER) -> dict[str, bool] | None:

@@ -14,14 +14,16 @@ from sqlalchemy import JSON, DateTime, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned
 from app.models.ledger import _id, _now
 
 
-class AnswerRule(Base):
+class AnswerRule(ProjectOwned, Base):
     """One curated answer for one agent. Rules are evaluated in `position` order and
     the first enabled match wins, so a specific rule sits above a general one."""
 
     __tablename__ = "answer_rules"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -44,11 +46,12 @@ class AnswerRule(Base):
     )
 
 
-class AnswerRuleSet(Base):
+class AnswerRuleSet(ProjectOwned, Base):
     """The per-agent off switch. Absent row = rules on (they only exist if someone
     wrote them); the row is created the first time an owner flips the switch."""
 
     __tablename__ = "answer_rule_sets"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (UniqueConstraint("agent_id", name="uq_rule_set_agent"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -61,7 +64,7 @@ class AnswerRuleSet(Base):
     )
 
 
-class Issue(Base):
+class Issue(ProjectOwned, Base):
     """A problem the agent caused, worked from discovery to close (T36).
 
     `history` is the append-only who/when trail (`open`, `fixed`, `wont_fix`, reopen);
@@ -71,6 +74,7 @@ class Issue(Base):
     """
 
     __tablename__ = "issues"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (UniqueConstraint("agent_id", "message_id", name="uq_issue_answer"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)

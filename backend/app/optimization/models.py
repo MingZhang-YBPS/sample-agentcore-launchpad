@@ -8,6 +8,7 @@ from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned
 
 STAGES = [
     "recommend", "bundles", "gateway", "abtest", "traffic", "verdict",
@@ -27,8 +28,9 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-class Experiment(Base):
+class Experiment(ProjectOwned, Base):
     __tablename__ = "experiments"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -57,8 +59,9 @@ class Experiment(Base):
     )
 
 
-class RuntimeCanary(Base):
+class RuntimeCanary(ProjectOwned, Base):
     __tablename__ = "runtime_canaries"
+    __project_parent__ = ("champion_agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)

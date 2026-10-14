@@ -15,7 +15,7 @@ from app.assistant.service import clear_stale_turn_claims
 from app.core.config import get_settings
 from app.core.db import init_db
 from app.core.errors import register_error_handlers
-from app.core.route_policy import enforce_route_policy
+from app.core.route_policy import bind_request_project, enforce_route_policy
 from app.deployer.pipeline import resume_pending_jobs
 from app.evaluation.online_routers import router as online_eval_router
 from app.evaluation.pipeline_routers import router as eval_pipelines_router
@@ -176,7 +176,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         openapi_url="/api/openapi.json",
         # Console authorization for every /api route lives in one auditable,
         # default-deny table instead of per-route Depends(require_admin).
-        dependencies=[Depends(enforce_route_policy)],
+        dependencies=[Depends(enforce_route_policy), Depends(bind_request_project)],
     )
 
     if settings.run_mode == "prod":

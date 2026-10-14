@@ -45,12 +45,14 @@ from app.services import api_keys as api_keys_service
 from app.services import aws_clients, visibility, workspace_bootstrap
 from app.services import promotion as promotion_service
 from app.services import users as users_service
+from app.services.access import sync_default_membership
 from app.services.audit import record_audit_event
 from app.services.workspace import (
     WorkspaceContext,
     default_workspace_context,
     get_workspace_row,
     granted_workspace_ids,
+    granted_workspace_ids_direct,
     workspace_context,
 )
 from app.services.workspace_bootstrap import STATUS_BOOTSTRAPPING
@@ -193,13 +195,7 @@ def _authorize(db: Session, identity: Identity, row: Workspace) -> None:
     if identity.is_admin:
         return
     granted = identity.user_id is not None and (
-        db.execute(
-            select(UserWorkspace.workspace_id).where(
-                UserWorkspace.user_id == identity.user_id,
-                UserWorkspace.workspace_id == row.id,
-            )
-        ).first()
-        is not None
+        row.id in granted_workspace_ids(db, identity.user_id)
     )
     if not granted:
         raise AppError(
@@ -1093,6 +1089,9 @@ def replace_grants(
         for user_id in sorted(grant - held):
             db.add(UserWorkspace(user_id=user_id, workspace_id=row.id))
         added = len(grant - held)
+        db.flush()
+        for user_id in sorted(grant - held):
+            sync_default_membership(db, user_id, {row.id}, previous=set())
     removed = 0
     if revoke:
         removed = (
@@ -1103,6 +1102,9 @@ def replace_grants(
             )
             .delete(synchronize_session=False)
         )
+        for user_id in sorted(revoke):
+            remaining = set(granted_workspace_ids_direct(db, user_id))
+            sync_default_membership(db, user_id, remaining, previous=remaining | {row.id})
         # A revoked member's keys in THIS workspace stop working now; their keys
         # elsewhere are untouched (the predicate is per key workspace).
         for user_id in sorted(revoke):

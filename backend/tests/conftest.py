@@ -38,7 +38,7 @@ import pytest  # noqa: E402
 from botocore.exceptions import ClientError  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.core.db import Base, _seed_default_workspace, engine  # noqa: E402
+from app.core.db import Base, _seed_default_projects, _seed_default_workspace, engine  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.services.workspace import WorkspaceContext  # noqa: E402
 
@@ -103,6 +103,13 @@ def clean_tables():
     # (so never run init_db) would otherwise see a ledger with no workspace at
     # all, which a real process cannot have.
     _seed_default_workspace(engine)
+    # ...and the `default` project bound to it (design §8.3), with the process-local
+    # access cache dropped: the wiped `access_epoch` restarts at 0, so a snapshot
+    # cached by the previous test would otherwise look current.
+    _seed_default_projects(engine)
+    from app.services import access
+
+    access.reset_cache_for_tests()
 
 
 @pytest.fixture(autouse=True)
