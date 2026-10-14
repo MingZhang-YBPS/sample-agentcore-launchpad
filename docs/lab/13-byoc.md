@@ -78,6 +78,24 @@ zip -r hello-container.zip hello-container/  # container_source：Dockerfile 构
   在镜像里自行安装；或把依赖直接打进 zip 并关闭「解析 requirements.txt」
   （`install_requirements=false`）。
 
+### 遥测：让 Agent 出现在可观测与评估里
+
+可观测（会话、链路、智能体下拉框）和评估读的是 Agent 导出到 CloudWatch
+（`aws/spans`）的 OpenTelemetry Span。AgentCore Runtime 只有在进程由 ADOT 的
+`opentelemetry-instrument` 启动器拉起、且装了 distro 时才会导出 Span：
+
+- **代码 zip**：上传里带 **aws-opentelemetry-distro**（写在 `requirements.txt`
+  并打开「解析 requirements.txt」，或直接打进 zip）时，平台自动加启动器；上传
+  检测摘要会显示，部署日志有一行 `telemetry: ADOT launcher on|off`。没有它，
+  对话照常，但不产生任何 Span。
+- **Dockerfile 构建 / 现有镜像**：由镜像决定——装 `aws-opentelemetry-distro`
+  （Strands Agent 再加 `strands-agents[otel]`），以
+  `CMD ["opentelemetry-instrument", "python", "main.py"]` 启动。
+
+不带 ADOT 的代码 zip 仍会出现在可观测的智能体下拉框里，但置灰并说明原因；
+对它创建评估会直接返回 `eval.no_telemetry`，不再跑完一轮才以
+「No evaluable agent spans found」失败。代码自己插桩、确实导出了 Span 的不受影响。
+
 ## 13.3 Dockerfile 构建（container_source）
 
 同一向导，构件类型选 **Dockerfile 构建**，上传 `hello-container.zip`。

@@ -1681,6 +1681,9 @@ def create_run(
         agent_version=agent.version if agent is not None else None,
         **dlc_lineage,
         creator=Creator.of_request(request),
+        # a BYOC code zip without ADOT fails every session with no spans —
+        # say so now instead of after a full replay (projects §17.3-5)
+        precheck_telemetry=True,
     )
     return _run_out(run)
 

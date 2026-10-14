@@ -28,7 +28,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 SESSION_STREAM_RE = re.compile(r"\[runtime-logs-(?P<sid>[^\]]+)\]")
 MAX_STREAMS = 500
@@ -420,3 +420,40 @@ def sessions_from_rows(
             "traces": int(float(row.get("traces") or 0)),
         })
     return {"streams": out, "truncated": len(rows) >= MAX_LOG_SESSIONS}
+
+
+# ─── Span presence (evaluation pre-check, projects §17.3-5) ─────────────────
+MAX_SPAN_PROBE_PAGES = 5
+
+
+def service_has_spans(logs: Any, service_name: str, *, since_ms: int) -> bool | None:
+    """Whether ``aws/spans`` holds any span of ``service_name`` since ``since_ms``:
+    ``True`` on the first hit, ``False`` when the scan finished without one (or
+    the account has no ``aws/spans`` group at all), ``None`` when it could not
+    tell — the page cap ran out on a busy group, or CloudWatch refused the read.
+    The service name is matched as a quoted term, so a longer name containing it
+    can only make the answer ``True``: the probe errs towards letting a run start."""
+    token = None
+    try:
+        for _ in range(MAX_SPAN_PROBE_PAGES):
+            kwargs: dict[str, Any] = {
+                "logGroupName": SPANS_LOG_GROUP,
+                "startTime": since_ms,
+                "filterPattern": _term(service_name),
+                "limit": 1,
+            }
+            if token:
+                kwargs["nextToken"] = token
+            page = logs.filter_log_events(**kwargs)
+            if page.get("events"):
+                return True
+            token = page.get("nextToken")
+            if not token:
+                return False
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
+            return False
+        return None
+    except BotoCoreError:
+        return None
+    return None
