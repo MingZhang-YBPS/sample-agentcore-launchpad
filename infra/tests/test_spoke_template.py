@@ -37,6 +37,9 @@ TEMPLATE = Path(__file__).resolve().parents[1] / "spoke" / "launchpad-workspace-
 SCOPED_SIDS = frozenset(
     {
         "IamOnLaunchpadRoles",
+        "IamProjectBoundaryPolicies",
+        "IamProjectBoundaryOnAgentRoles",
+        "IamIsolatedAgentRolesNeedABoundary",
         "PassLaunchpadRoles",
         "S3Launchpad",
         "EcrLaunchpad",
@@ -270,3 +273,55 @@ def test_the_hub_can_call_models_and_guardrails(statements: list[dict[str, Any]]
     assert guard["Resource"]["Fn::Sub"].endswith(":${AWS::AccountId}:guardrail/*")
     create = set(by_sid["BedrockGuardrailsCreate"]["Action"])
     assert create == {"bedrock:CreateGuardrail", "bedrock:ListGuardrails"}
+
+
+def _sub(value: Any) -> str:
+    return value["Fn::Sub"] if isinstance(value, dict) else value
+
+
+def test_project_boundary_policies_are_scoped_to_their_prefix(statements: list[dict[str, Any]]):
+    """Projects design §10.3: the hub writes only `launchpad-project-*` policies — the
+    per-(project, workspace) boundaries — and never deletes one outright or edits
+    another customer managed policy."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    policies = by_sid["IamProjectBoundaryPolicies"]
+    assert policies["Effect"] == "Allow"
+    assert {"iam:CreatePolicy", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion"} <= set(
+        policies["Action"]
+    )
+    assert "iam:DeletePolicy" not in policies["Action"]
+    assert _sub(policies["Resource"]).endswith(":policy/launchpad-project-*")
+    # no other statement may touch managed policies
+    managed = {"iam:CreatePolicy", "iam:CreatePolicyVersion", "iam:DeletePolicy",
+               "iam:DeletePolicyVersion", "iam:SetDefaultPolicyVersion", "iam:TagPolicy"}
+    others = {a for s in statements if s["Sid"] != "IamProjectBoundaryPolicies"
+              for a in s["Action"] if a in managed}
+    assert others == set(), others
+
+
+def test_a_boundary_can_only_be_a_project_boundary(statements: list[dict[str, Any]]):
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    put = by_sid["IamProjectBoundaryOnAgentRoles"]
+    assert put["Action"] == ["iam:PutRolePermissionsBoundary"]
+    assert _sub(put["Resource"]).endswith(":role/launchpad-agent-*")
+    condition = put["Condition"]["StringLike"]["iam:PermissionsBoundary"]
+    assert _sub(condition).endswith(":policy/launchpad-project-*")
+    # removing a boundary is never granted
+    assert not any("iam:DeleteRolePermissionsBoundary" in s["Action"] for s in statements)
+
+
+def test_an_isolated_agent_role_cannot_be_created_without_a_boundary(
+    statements: list[dict[str, Any]],
+):
+    """The Deny pairs the request tag with a negated boundary match: both must hold, so
+    shared projects' roles (no isolation tag) are untouched, and an isolated one with
+    no boundary at all is refused (a negated operator is true for an absent key)."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    deny = by_sid["IamIsolatedAgentRolesNeedABoundary"]
+    assert deny["Effect"] == "Deny" and deny["Action"] == ["iam:CreateRole"]
+    assert _sub(deny["Resource"]).endswith(":role/launchpad-agent-*")
+    assert deny["Condition"]["StringEquals"] == {
+        "aws:RequestTag/launchpad:isolation": "isolated"
+    }
+    boundary = deny["Condition"]["StringNotLike"]["iam:PermissionsBoundary"]
+    assert _sub(boundary).endswith(":policy/launchpad-project-*")

@@ -167,6 +167,61 @@ Resources:
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-*"
 
+              # ── project permissions boundaries (projects design §10.3) ────
+              # An isolated project's agent roles carry a permissions boundary:
+              # one customer managed policy per (project, workspace) named
+              # launchpad-project-<pid>[-<region>], rewritten as a new version
+              # when the project's KBs or Connections change (IAM keeps five
+              # versions, so the oldest non-default one is deleted first).
+              # CreatePolicy is called with Tags=, hence TagPolicy.
+              - Sid: IamProjectBoundaryPolicies
+                Effect: Allow
+                Action:
+                  - iam:CreatePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicyVersion
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:ListPolicyTags
+                  - iam:ListPolicyVersions
+                  - iam:TagPolicy
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/launchpad-project-*"
+
+              # Attaching the boundary to an agent role that predates its
+              # project's isolation. The condition is what keeps this from
+              # being "set any boundary", which could swap in a wider policy.
+              - Sid: IamProjectBoundaryOnAgentRoles
+                Effect: Allow
+                Action:
+                  - iam:PutRolePermissionsBoundary
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-agent-*"
+                Condition:
+                  StringLike:
+                    iam:PermissionsBoundary:
+                      Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/launchpad-project-*"
+
+              # Makes "an isolated project's agent role without a boundary"
+              # impossible at the IAM layer, not only in code: a CreateRole
+              # tagged launchpad:isolation=isolated must name a
+              # launchpad-project-* boundary (StringNotLike is true when no
+              # boundary is passed at all). Shared projects' roles carry no such
+              # tag and are unaffected. DeleteRolePermissionsBoundary is never
+              # granted, so a boundary once set stays.
+              - Sid: IamIsolatedAgentRolesNeedABoundary
+                Effect: Deny
+                Action:
+                  - iam:CreateRole
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-agent-*"
+                Condition:
+                  StringEquals:
+                    "aws:RequestTag/launchpad:isolation": isolated
+                  StringNotLike:
+                    iam:PermissionsBoundary:
+                      Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/launchpad-project-*"
+
               # The bootstrap job's validate-access stage probes iam:ListRoles to
               # fail early on a missing role rather than mid-provisioning.
               # ListRoles takes no resource, so it cannot be scoped.

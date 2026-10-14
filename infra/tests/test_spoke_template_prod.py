@@ -94,3 +94,14 @@ def test_deploy_invoke_observe_and_evaluate_survive(prod):
     assert {"bedrock-agentcore:*", "agent-registry:*"} <= actions  # deploy, invoke, evaluate
     assert {"logs:StartQuery", "cloudwatch:GetMetricData"} <= actions  # observe
     assert {"iam:CreateRole", "iam:PassRole", "sts:GetCallerIdentity"} <= actions
+
+
+def test_project_boundary_statements_match_the_standard_template(standard, prod):
+    """Isolated projects (projects design §10.3) work the same in a prod workspace: the
+    boundary grants and the CreateRole Deny are copied verbatim."""
+    sids = ("IamProjectBoundaryPolicies", "IamProjectBoundaryOnAgentRoles",
+            "IamIsolatedAgentRolesNeedABoundary")
+    std = {s["Sid"]: s for s in _statements(standard)}
+    prd = {s["Sid"]: s for s in _statements(prod)}
+    for sid in sids:
+        assert prd[sid] == std[sid], sid
