@@ -46,7 +46,7 @@ export const copyUrl = (task: Pick<V2Task, "kind" | "id">) =>
 /** The run payload's own cost summary (`run.cost`, newer servers), when it carries one. */
 export function runCostOf(task: Pick<V2Task, "kind" | "run">): CostSummary | null {
   if (task.kind !== "run") return null;
-  const cost = (task.run as { cost?: CostSummary | null } | undefined)?.cost;
+  const cost = task.run?.cost;
   return cost && typeof cost === "object" && "kind" in cost ? cost : null;
 }
 

@@ -34,6 +34,7 @@ import {
   sseEvents,
   toLiveMessages,
 } from "../../../lib/assistant";
+import { envelopeText } from "../../../lib/errors";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, FlowHeader, Spin, Tag } from "../../ui";
@@ -359,7 +360,7 @@ export function AssistantDetail({
             ...m.filter((x) => !(x.role === "assistant" && x.streaming && !x.text)),
             {
               role: "error",
-              text: code ? tRef.current(`apiErrors.${code}`, String(data.message ?? "")) : String(data.message ?? ""),
+              text: envelopeText(code, String(data.message ?? "")),
             },
           ]);
         } else if (evt.event === "done") completed = true;

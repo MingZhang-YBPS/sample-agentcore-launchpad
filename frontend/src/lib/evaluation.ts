@@ -1,4 +1,5 @@
 import type { ModelDefaults } from "./api";
+import type { CostSummary } from "./api/evalCost";
 import { evaluatorPolarity } from "./evaluators";
 import { activeCatalogIds, toolCapable } from "./model-catalog";
 import { modelsForActiveRegion } from "./regions";
@@ -157,6 +158,8 @@ export interface EvaluationRunInfo {
   /** Creator's username at creation time (display only); null when unknown —
    *  legacy rows and resources created outside the console. */
   created_by_name?: string | null;
+  /** The run's own cost summary (eval-cost §1.3); absent on older backends. */
+  cost?: CostSummary | null;
 }
 
 export interface EvaluationScenarioFailure {

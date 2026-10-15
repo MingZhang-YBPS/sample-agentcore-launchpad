@@ -17,6 +17,7 @@ import {
   type OnlineSessionScores,
   type V2Range,
 } from "../../../lib/api";
+import { errorText } from "../../../lib/errors";
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
 import { fmtDuration, fmtNumber, fmtScore, fmtTime, normalizedScore, scoreTone } from "../../format";
@@ -166,8 +167,8 @@ function ScoreNow({ sessionId, range }: { sessionId: string; range: V2Range }) {
     } catch (err: unknown) {
       setError(
         err instanceof ApiError
-          ? { code: err.code, message: t(`apiErrors.${err.code}`, err.message) }
-          : { code: null, message: err instanceof Error ? err.message : String(err) },
+          ? { code: err.code, message: errorText(err) }
+          : { code: null, message: errorText(err) },
       );
     } finally {
       setRunning(false);

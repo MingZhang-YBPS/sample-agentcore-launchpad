@@ -2258,6 +2258,7 @@
   },
   "apiErrors": {
     "detail.withRaw": "{{title}}AWS 原文：{{raw}}",
+    "detail.withSpecifics": "{{title}}详情：{{raw}}",
     "detail.summary": "详情",
     "detail.summaryAws": "AWS 详情",
     "detail.operation": "操作",
