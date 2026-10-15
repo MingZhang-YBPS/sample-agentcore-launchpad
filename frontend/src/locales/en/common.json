@@ -13962,7 +13962,133 @@
     },
     "waiting": "Waiting on {{role}}",
     "copyLink": "Copy link for them",
-    "stepOf": "Step {{n}} / {{total}}"
+    "stepOf": "Step {{n}} / {{total}}",
+    "card": {
+      "go": "Go",
+      "then": "Then",
+      "end": "That was the last step on the line — the agent's story is complete.",
+      "copied": "Link copied — send it to them"
+    },
+    "done": {
+      "created": "{{name}} is live",
+      "candidate": "Candidate v{{version}} deployed",
+      "criteriaPublished": "Criteria table v{{version}} published",
+      "criteriaSigned": "Criteria table v{{version}} signed",
+      "goldenSealed": "Golden set sealed — the holdout is written once and locked",
+      "evalDone": "Evaluation finished",
+      "gateReport": "Release gate report ready: {{verdict}}",
+      "releaseSigned": "Release signed — the candidate is live",
+      "issueFixed": "Issue marked fixed",
+      "issueWontFix": "Issue closed as won't fix"
+    },
+    "journey": {
+      "title": "Journey",
+      "continue": "Continue: {{step}} ({{role}})",
+      "allDone": "Every required step is done"
+    },
+    "status": {
+      "done": "Done",
+      "current": "Current step",
+      "later": "Not yet",
+      "optional": "Optional"
+    },
+    "header": {
+      "label": "Where this page is on the storyline",
+      "prev": "Previous",
+      "next": "Next"
+    },
+    "turn": {
+      "title": "Your turn",
+      "mine": "Your turn",
+      "mineAs": "Your turn ({{roles}})",
+      "waiting": "Waiting on others",
+      "none": "Nothing waits on you right now.",
+      "more": "+{{count}} more"
+    },
+    "prereqs": {
+      "title": "Before this page: {{count}} to go",
+      "needs": "Needs {{role}}"
+    },
+    "term": {
+      "section": "Agent-DLC",
+      "usedIn": "Used in",
+      "owner": "Who",
+      "criteria": {
+        "name": "Criterion",
+        "short": "One checkable quality rule, such as \"never promise a refund outside the policy\".",
+        "owner": "developer drafts, biz-owner signs"
+      },
+      "criteriaSet": {
+        "name": "Criteria table",
+        "short": "An agent's criteria as one versioned table: frozen when published, then signed by someone other than its editor.",
+        "owner": "developer drafts, biz-owner signs"
+      },
+      "criteriaTier": {
+        "name": "Red line / gate / watch",
+        "short": "How much a criterion counts: a red line blocks any release, a gate needs its threshold, a watch is only observed.",
+        "owner": "developer proposes, biz-owner decides"
+      },
+      "goldenSet": {
+        "name": "Golden set",
+        "short": "The scenarios the agent is measured on, tied to one criteria table.",
+        "owner": "biz-owner admits, developer curates"
+      },
+      "goldenSplit": {
+        "name": "Dev / regression / holdout",
+        "short": "The golden set's three splits: dev to iterate on, regression to replay, holdout written once and sealed for the gate.",
+        "owner": "biz-owner seeds the holdout"
+      },
+      "caseTier": {
+        "name": "Case tier",
+        "short": "How hard or important a scenario is, so coverage shows where the set is thin.",
+        "owner": "developer"
+      },
+      "admission": {
+        "name": "Sample admission",
+        "short": "Reviewing a real conversation before it joins the golden set, so feedback becomes a test.",
+        "owner": "biz-owner"
+      },
+      "judgeCalibration": {
+        "name": "Judge calibration",
+        "short": "Comparing an LLM judge with human labels; an uncalibrated judge cannot hold a gate.",
+        "owner": "sme labels, biz-owner decides"
+      },
+      "gate": {
+        "name": "Release gate",
+        "short": "Runs the candidate against the criteria and says PASS, BLOCKED or INVALID, criterion by criterion.",
+        "owner": "release-ops"
+      },
+      "passK": {
+        "name": "pass^k",
+        "short": "A scenario passes only if it passes k runs in a row — for behaviour that must be reliable, not lucky.",
+        "owner": "developer"
+      },
+      "waiver": {
+        "name": "Waiver",
+        "short": "A time-limited exception for one blocked gate criterion, with a risk owner and a compensating control. Red lines are never waived.",
+        "owner": "developer requests, release-ops approves"
+      },
+      "releaseRecord": {
+        "name": "Decision record",
+        "short": "Who released, blocked or rolled back which version, on what evidence — the audit trail.",
+        "owner": "release-ops"
+      },
+      "driftWatch": {
+        "name": "Drift watch",
+        "short": "Keeps measuring the live version against its criteria and raises an alert when it slips.",
+        "owner": "release-ops"
+      },
+      "repairLadder": {
+        "name": "Fix ladder",
+        "short": "The cheapest fix first: a rule, then the knowledge base, then the prompt, then the model.",
+        "owner": "developer"
+      },
+      "scorecard": {
+        "name": "Scorecard",
+        "short": "An agent's standard on one page: last gate, criteria, coverage, open waivers and alerts.",
+        "owner": "everyone reads it"
+      }
+    }
   },
   "apiNext": {
     "agent.create": "Create an agent",
