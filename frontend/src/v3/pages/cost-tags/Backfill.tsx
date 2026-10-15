@@ -216,7 +216,7 @@ export function Backfill() {
       end={
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           {run && <Chip s={RUN_SIGNAL[run.status]}>{t(`v3.costTags.bf.status.${run.status}`)}</Chip>}
-          <Btn size="sm" kind={run ? undefined : "primary"} disabled={busy || active || !view} onClick={() => void start()}>
+          <Btn size="sm" kind={run ? undefined : "primary"} disabled={busy || active || !view} disabledReason={active ? t("v3.costTags.bf.runningReason") : undefined} onClick={() => void start()}>
             {run ? <RotateCw size={13} /> : <Play size={13} />} {run ? t("v3.costTags.bf.rerun") : t("v3.costTags.bf.start")}
           </Btn>
         </span>

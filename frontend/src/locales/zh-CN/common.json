@@ -15006,7 +15006,8 @@
           "resource": "资源",
           "detail": "原因"
         },
-        "more": "再显示 {{count}} 个"
+        "more": "再显示 {{count}} 个",
+        "runningReason": "补标正在运行。"
       }
     },
     "evalCost": {
