@@ -413,6 +413,19 @@ class Settings(BaseSettings):
     )
     model_prices_refresh_hours: int = 24  # 0 disables the periodic refresher
 
+    # Online update (docs/design online-update §2.1): where the console pulls new
+    # commits from. Deployment configuration, never a request parameter — the API
+    # takes no URL or branch, and only a fast-forward of the running commit is
+    # accepted. `update_enabled` None = on when the systemd updater is installed
+    # (backend/scripts/install_updater.sh); false turns the whole feature off.
+    update_repo: str = "https://github.com/aws-samples/sample-agentcore-launchpad"
+    update_branch: str = "console-v3"
+    update_enabled: bool | None = None
+    # Prepare refuses to start below this much free disk under DATA_DIR, and fails
+    # a stage that grows past the cap (`update.disk_low`).
+    update_min_free_gb: float = Field(default=3.0, ge=0)
+    update_stage_max_gb: float = Field(default=6.0, gt=0)
+
     @model_validator(mode="after")
     def _seed_model_prices(self) -> "Settings":
         # launchpad.yaml carries its own model_prices map (the refresher persists

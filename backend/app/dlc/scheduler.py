@@ -340,6 +340,12 @@ def _start_due_purges(db: Session) -> Any:
     return project_purge.start_due_purges(db)
 
 
+def _system_update(db: Session) -> Any:
+    from app.services import system_update
+
+    return system_update.tick(db)
+
+
 TASKS = (
     ("dlc.watch", run_due_watches, TICK_SECONDS),
     ("dlc.alerts", evaluate_alerts, int(ALERT_EVERY.total_seconds())),
@@ -352,6 +358,9 @@ TASKS = (
     ("dlc.eni_release", _sweep_eni_releases, TICK_SECONDS),
     # projects past their deletion cooling-off start their purge (§11.5)
     ("project.purge", _start_due_purges, TICK_SECONDS),
+    # online update (OU-1): a due restart writes apply.request; the updater's
+    # apply.result is read back
+    ("system.update", _system_update, TICK_SECONDS),
 )
 
 

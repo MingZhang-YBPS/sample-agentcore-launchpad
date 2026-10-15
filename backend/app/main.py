@@ -81,6 +81,7 @@ from app.routers.share import router as share_router
 from app.routers.share_annotate import router as share_annotate_router
 from app.routers.storage_mounts import router as storage_mounts_router
 from app.routers.system_agents import router as system_agents_router
+from app.routers.system_update import router as system_update_router
 from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
 from app.routers.videos import router as videos_router
@@ -220,6 +221,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(model_defaults_router)  # platform model settings (Models page)
     app.include_router(model_catalog_router)  # region model catalog + probe
     app.include_router(videos_router)
+    app.include_router(system_update_router)  # online update (OU-1), hub-global
     app.include_router(agents_router)
     app.include_router(agent_telemetry_router)  # detail-page telemetry status (§17.3-4)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources
@@ -329,6 +331,10 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
                 "reaped %d orphaned studio exec container(s)", reaped
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
+        # online update (OU-1): the updater's apply.result, interrupted prepare jobs
+        from app.services.system_update import resume_system_updates
+
+        resume_system_updates()
         # Agent-DLC: the one background tick — due watch re-evaluations, alert rules,
         # calibration and waiver expiry (docs/agent-dlc-design.md §10)
         from app.dlc.scheduler import start as start_dlc_scheduler
