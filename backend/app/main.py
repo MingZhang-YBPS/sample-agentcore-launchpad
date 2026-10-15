@@ -66,6 +66,7 @@ from app.routers.overview import router as overview_router
 from app.routers.project_audit import router as project_audit_router
 from app.routers.project_groups import router as project_groups_router
 from app.routers.project_isolation import router as project_isolation_router
+from app.routers.project_quotas import router as project_quotas_router
 from app.routers.projects import me_router as my_access_router
 from app.routers.projects import router as projects_router
 from app.routers.projects import templates_router as role_templates_router
@@ -251,6 +252,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(project_isolation_router)  # runtime isolation (projects §10.13)
 
     app.include_router(project_audit_router)  # a project's audit view + export (§11.6)
+    app.include_router(project_quotas_router)  # a project's quotas and budgets (§11.3)
     app.include_router(role_templates_router)
     app.include_router(my_access_router)  # GET /api/me/access: the caller's projects + keys
     app.include_router(project_groups_router)  # project groups: members + projects (§7.7)

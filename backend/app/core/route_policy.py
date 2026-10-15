@@ -1683,3 +1683,20 @@ SYSTEM_UPDATE_ROUTES: dict[tuple[str, str], str] = {
 ROUTE_POLICY.update(SYSTEM_UPDATE_ROUTES)
 HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/system")
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SYSTEM_UPDATE_ROUTES)
+
+
+# ---- project quotas and budgets (projects design §11.3, G11-quota) ----
+# Hub-global under /api/projects like the rest of project administration. The read
+# (usage against limits) is every member's — a non-member gets 404 in the handler; the
+# project's department administrator sees it too. Setting quotas is an administrator's,
+# or the project's department administrator's through the `dadmin` overlay (another
+# department's project 404), never above the department's caps (in the handler).
+PROJECT_QUOTA_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/projects/{project_id}/quotas"): MEMBER,
+    ("PUT", "/api/projects/{project_id}/quotas"): ADMIN,
+}
+ROUTE_POLICY.update(PROJECT_QUOTA_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_QUOTA_ROUTES)
+DEPARTMENT_ADMIN_ROUTES.update({
+    ("PUT", "/api/projects/{project_id}/quotas"): "project",
+})

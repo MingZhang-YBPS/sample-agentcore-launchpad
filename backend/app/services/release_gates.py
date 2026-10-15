@@ -32,8 +32,9 @@ from app.core.errors import AppError
 from app.models.ledger import Promotion, ReleaseBundle, Workspace
 from app.services import promotion as promotion_service
 
-# Gates that inform but never refuse an execution.
-ADVISORY_GATES = frozenset({"guardrail", "target_agent"})
+# Gates that inform but never refuse an execution. A project's budget (§11.3) is an
+# alert by design: the release still ships, the approver sees the spend.
+ADVISORY_GATES = frozenset({"guardrail", "target_agent", "project_budget"})
 
 TIER_DEFAULTS: dict[str, dict[str, Any]] = {
     "prod": {"require_policy_enforce": True, "observe_seconds": 300},
@@ -183,6 +184,64 @@ def effective_policy(target: Workspace) -> dict[str, Any]:
     }
     policy.update(getattr(target, "release_policy", None) or {})
     return policy
+
+
+def eval_cost_max_usd(
+    db: Session, workspace: Workspace | None, project_id: str | None,
+) -> float | None:
+    """The per-run evaluation cost limit: the workspace policy's `eval_cost_max_usd`
+    and the project's `quotas.eval_run_max_usd` (projects §11.3), the smaller one."""
+    from app.services.project_quotas import limit_of
+
+    policy = (workspace.release_policy if workspace is not None else None) or {}
+    values = [float(v) for v in (policy.get("eval_cost_max_usd"),
+                                 limit_of(db, project_id, "eval_run_max_usd"))
+              if v is not None]
+    return min(values) if values else None
+
+
+def assert_eval_budget(
+    db: Session, project_id: str | None, estimate: dict[str, Any] | None,
+) -> None:
+    """Refuse a gate (or any) evaluation the project's quotas do not allow: its
+    estimate over `eval_run_max_usd`, or this month's evaluation spend plus it over
+    `eval_monthly_usd_cap` (409 `project.quota_exceeded`). Nothing without quotas."""
+    from app.services.project_quotas import assert_eval_cost
+
+    total = (estimate or {}).get("total_usd")
+    assert_eval_cost(db, project_id, float(total) if total is not None else None)
+
+
+def project_budget_gate(db: Session, project_id: str | None) -> dict[str, Any] | None:
+    """Advisory: the project's month so far against its budgets — the spend its budget
+    alert last measured (no billed read here) and this month's evaluation spend. None
+    when the project sets neither, so a project without quotas shows no extra gate."""
+    from app.services import alerts
+    from app.services.project_quotas import eval_month_usd, limit_of
+
+    if not project_id:
+        return None
+    budget = limit_of(db, project_id, "monthly_cost_alert_usd")
+    eval_cap = limit_of(db, project_id, "eval_monthly_usd_cap")
+    if budget is None and eval_cap is None:
+        return None
+    ok, details = True, []
+    out: dict[str, Any] = {"key": "project_budget", "project_id": project_id}
+    if budget is not None:
+        rule = alerts.budget_rule(db, project_id)
+        spent = rule.last_value if rule is not None else None
+        out.update(budget_usd=budget, spent_usd=spent)
+        if spent is None:
+            details.append(f"monthly budget ${budget:g}: spend not measured yet")
+        else:
+            ok = ok and spent <= budget
+            details.append(f"${spent:.2f} of the ${budget:g} monthly budget spent")
+    if eval_cap is not None:
+        eval_spent = eval_month_usd(db, project_id)
+        out.update(eval_cap_usd=eval_cap, eval_spent_usd=eval_spent)
+        ok = ok and eval_spent <= eval_cap
+        details.append(f"evaluations ${eval_spent:.2f} of ${eval_cap:g} this month")
+    return {**out, "ok": ok, "detail": "; ".join(details)}
 
 
 # ── deploy window ────────────────────────────────────────────────────────────────
@@ -369,6 +428,9 @@ def execution_gates(
     checks.append(policy_enforce_gate(target, policy))
     window = deploy_window_check(policy, now)
     checks.append(window)
+    budget = project_budget_gate(db, getattr(bundle, "project_id", None))
+    if budget is not None:
+        checks.append(budget)
     for check in checks:
         check["blocking"] = check["key"] not in ADVISORY_GATES
         # A zip agent is built from its frozen spec (hashed lock), so "no stored artifact"

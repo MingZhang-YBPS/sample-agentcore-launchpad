@@ -50,6 +50,7 @@ from app.services import (
     memory_ownership,
     mount_policy,
     oauth_sessions,
+    project_quotas,
     registry_console,
     snapshots,
 )
@@ -305,6 +306,8 @@ def create_agent(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    # the project's agent quota (projects §11.3), before any AWS read
+    project_quotas.assert_capacity(db, current_project(), "max_agents")
     spec = _stored_network(db, ws, request, spec)
     # inline S3 Files / EFS mounts are an administrator's (storage-mounts D-2)
     mount_policy.assert_inline_mounts_allowed(
@@ -354,6 +357,8 @@ def create_agent(
     creators.stamp(agent, Creator.of_request(request))
     db.add(agent)
     db.flush()
+    # counted again with this row in: a concurrent creator of the last slot loses here
+    project_quotas.recheck_after_insert(db, agent.project_id, "max_agents")
     # Atomic reservation shared with the assistant approval path: a concurrent
     # creator of the same name loses here with the same 409, before any job.
     agent_names.claim_agent_name(db, ws.id, spec.name, agent.id, viewer=viewer)

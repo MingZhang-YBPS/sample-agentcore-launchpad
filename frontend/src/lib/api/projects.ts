@@ -491,3 +491,59 @@ export const projectAuditApi = {
     return { blob: await res.blob(), name };
   },
 };
+
+/* ── quotas and budgets (projects §11.3) ─────────────────────────────────────── */
+
+export type QuotaKey =
+  | "max_agents"
+  | "max_api_keys"
+  | "max_concurrent_eval_runs"
+  | "eval_run_max_usd"
+  | "eval_monthly_usd_cap"
+  | "monthly_cost_alert_usd"
+  | "v1_rate_per_minute";
+export const QUOTA_KEYS: readonly QuotaKey[] = [
+  "max_agents",
+  "max_api_keys",
+  "max_concurrent_eval_runs",
+  "eval_run_max_usd",
+  "eval_monthly_usd_cap",
+  "monthly_cost_alert_usd",
+  "v1_rate_per_minute",
+];
+/** block → 409 on create · queue → waits for a slot · alert → notifies only · throttle → 429 */
+export type QuotaEnforcement = "block" | "queue" | "alert" | "throttle";
+
+export interface QuotaItem {
+  key: QuotaKey;
+  unit: "count" | "usd";
+  enforcement: QuotaEnforcement;
+  /** what the project stored (null = unset) */
+  project_value: number | null;
+  /** the department's cap, which the project value may not exceed */
+  department_cap: number | null;
+  /** the smaller of the two: what is enforced (null = no limit) */
+  limit: number | null;
+  /** current usage; null where there is none to show (a per-run cap, the /v1 window) */
+  used: number | null;
+  /** the budget alert's last state and when it measured the spend */
+  state?: "ok" | "firing" | "unknown";
+  checked_at?: string | null;
+  workspace_id?: string;
+}
+
+export interface ProjectQuotas {
+  project_id: string;
+  department_id: string | null;
+  quotas: Partial<Record<QuotaKey, number>>;
+  department_caps: Partial<Record<QuotaKey, number>>;
+  items: QuotaItem[];
+  month_start: string;
+}
+
+export const projectQuotasApi = {
+  get: (projectId: string) => getJson<ProjectQuotas>(projectPath(projectId, "quotas")),
+  /** partial: a key set to null clears it; omitted keys stay */
+  put: (projectId: string, quotas: Partial<Record<QuotaKey, number | null>>) =>
+    sendJson<ProjectQuotas>(projectPath(projectId, "quotas"), "PUT", { quotas }),
+};
