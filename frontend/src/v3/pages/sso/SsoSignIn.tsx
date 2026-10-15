@@ -44,7 +44,8 @@ export function SsoSignIn({ skin, children }: {
   const [hideLocal, setHideLocal] = useState(false);
   const [error] = useState(() => readSsoError());
   const [localOpen, setLocalOpen] = useState(() => wantsLocalLogin());
-  const [leaving, setLeaving] = useState<string | null>(null);
+  // the provider being redirected to: every button locks while the browser leaves
+  const [redirectBusy, setRedirectBusy] = useState<string | null>(null);
   const panelId = useId();
 
   useEffect(clearSsoError, []);
@@ -74,7 +75,7 @@ export function SsoSignIn({ skin, children }: {
   }
 
   const go = (provider: SsoPublicProvider) => {
-    setLeaving(provider.id);
+    setRedirectBusy(provider.id);
     window.location.assign(signInUrl(provider, currentReturnTo()));
   };
 
@@ -90,9 +91,9 @@ export function SsoSignIn({ skin, children }: {
               type="button"
               className={`v3-sso-idp ${skin}-sso-idp`}
               onClick={() => go(provider)}
-              disabled={leaving !== null}
+              disabled={redirectBusy !== null}
               data-testid={`sso-idp-${provider.id}`}
-              aria-busy={leaving === provider.id}
+              aria-busy={redirectBusy === provider.id}
             >
               <Mark preset={provider.preset} />
               <span className="txt">

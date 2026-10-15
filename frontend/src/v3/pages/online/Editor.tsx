@@ -33,6 +33,8 @@ import { V2ToastProvider } from "../../../v2/ui";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { evalCostApi, type EvalCostEstimate } from "../../../lib/api/evalCost";
 import { useLoad, useToast } from "../../hooks";
+import { permReason } from "../../reasons";
+import { Reasoned } from "../../reason";
 import { Btn, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "../tasks/CostCard";
@@ -78,7 +80,7 @@ function FilterRows({ filters, onChange }: { filters: FilterDraft[]; onChange: (
         </div>
       ))}
       <div>
-        <Btn size="sm" disabled={filters.length >= MAX_FILTERS} onClick={() => onChange([...filters, emptyFilter()])}>
+        <Btn size="sm" disabled={filters.length >= MAX_FILTERS} disabledReason={t("story.reason.maxFilters", { count: MAX_FILTERS })} onClick={() => onChange([...filters, emptyFilter()])}>
           <Plus size={13} /> {t("v2.online.addFilter")}
         </Btn>
       </div>
@@ -196,7 +198,9 @@ export function OnlineEditor({ id }: { id: string | null }) {
         title={editing ? t("v2.online.editTitle") : t("v3.online.new")}
         sub={t("v3.online.editorSub")}
         end={
-          <Btn kind="primary" disabled={busy || !can("eval.run") || !dirty || (row ? isTransient(row) : false)} onClick={() => void submit()}>
+          <Btn kind="primary" busy={busy} disabled={!can("eval.run") || !dirty || (row ? isTransient(row) : false)}
+            disabledReason={!can("eval.run") ? permReason(t, "eval.run") : row && isTransient(row) ? t("story.reason.settling") : t("story.reason.noChanges")}
+            onClick={() => void submit()}>
             {editing ? t("v3.online.save") : t("v2.online.create")}
           </Btn>
         }
@@ -228,12 +232,14 @@ export function OnlineEditor({ id }: { id: string | null }) {
           <span>{t("v2.online.colMode")}</span>
           <div className="v3-onl-modes" role="radiogroup" aria-label={t("v2.online.colMode")}>
             {(["scores", "insights"] as OnlineEvalMode[]).map((m) => (
-              <button key={m} type="button" role="radio" aria-checked={mode === m} disabled={editing && mode !== m}
-                className={mode === m ? "v3-onl-mode on" : "v3-onl-mode"}
-                onClick={() => !editing && setDraft((prev) => withMode(prev, m))}>
-                <b>{t(`v2.online.mode.${m}`)}</b>
-                <small>{t(`v2.online.modeDesc.${m}`)}</small>
-              </button>
+              <Reasoned key={m} disabledReason={t("v2.online.modeFixed")}>
+                <button type="button" role="radio" aria-checked={mode === m} disabled={editing && mode !== m}
+                  className={mode === m ? "v3-onl-mode on" : "v3-onl-mode"}
+                  onClick={() => !editing && setDraft((prev) => withMode(prev, m))}>
+                  <b>{t(`v2.online.mode.${m}`)}</b>
+                  <small>{t(`v2.online.modeDesc.${m}`)}</small>
+                </button>
+              </Reasoned>
             ))}
           </div>
           {editing && <small className="v3-hint">{t("v2.online.modeFixed")}</small>}

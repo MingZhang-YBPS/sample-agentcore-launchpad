@@ -14,6 +14,7 @@ import {
 } from "../../../lib/api/projects";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Notice, Panel, Skeleton } from "../../ui";
 import { KeyPicker } from "./KeyPicker";
 import { useRoleLabel, useSourceLabel } from "./labels";
@@ -288,7 +289,7 @@ function MemberDialog({
       foot={
         <>
           <Btn kind="ghost" onClick={onClose} disabled={busy}>{t("v3.projects.cancel")}</Btn>
-          <Btn kind="primary" onClick={() => void save()} disabled={busy || !target}>{t("v3.projects.save")}</Btn>
+          <Btn kind="primary" onClick={() => void save()} busy={busy} disabled={!target} disabledReason={t("story.reason.pickUser")}>{t("v3.projects.save")}</Btn>
         </>
       }
     >
@@ -300,11 +301,13 @@ function MemberDialog({
               placeholder={t("v3.projects.members.candidatesHint")} aria-label={t("v3.projects.members.candidates")} />
             <div className="v3-prj-cands" data-testid="member-candidates">
               {(candidates.data?.candidates ?? []).map((c) => (
-                <button key={c.user_id} type="button" disabled={c.is_member} aria-pressed={target?.user_id === c.user_id}
-                  onClick={() => setTarget({ user_id: c.user_id, username: c.username })}>
-                  <b>{c.username}</b>
-                  <span className="v3-prj-muted mono">{c.is_member ? t("v3.projects.members.isMember") : c.email}</span>
-                </button>
+                <Reasoned key={c.user_id} disabledReason={t("story.reason.alreadyMember")}>
+                  <button type="button" disabled={c.is_member} aria-pressed={target?.user_id === c.user_id}
+                    onClick={() => setTarget({ user_id: c.user_id, username: c.username })}>
+                    <b>{c.username}</b>
+                    <span className="v3-prj-muted mono">{c.is_member ? t("v3.projects.members.isMember") : c.email}</span>
+                  </button>
+                </Reasoned>
               ))}
               {candidates.data && candidates.data.candidates.length === 0 && (
                 <span className="v3-prj-muted">{t("v3.projects.members.noCandidates")}</span>

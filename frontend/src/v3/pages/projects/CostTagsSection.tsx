@@ -17,7 +17,10 @@ import {
   tagsOf,
 } from "../../../lib/api/costTags";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
+import { permReason } from "../../reasons";
 import { Btn, Filters, Notice, Panel, Skeleton } from "../../ui";
+import { projectLock } from "./locks";
 import type { ProjectAbilities } from "./ProjectDetail";
 
 /** The platform's own keys, written on every resource of the project: shown, never edited. */
@@ -44,6 +47,7 @@ export function CostTagsSection({ project, abilities }: { project: ProjectDetail
   }, [view]);
   const active = project.status === "active";
   const editable = abilities.manage && active;
+  const lock = projectLock(t, project, abilities.manage, permReason(t, "project.members"));
   const basisEditable = abilities.structure && active;
 
   if (loaded.loading && !view) return <Panel title={t("v3.costTags.project.title")}><Skeleton rows={3} /></Panel>;
@@ -86,12 +90,16 @@ export function CostTagsSection({ project, abilities }: { project: ProjectDetail
         <div className="v3-ctag-rows">
           {rows.map((row, i) => (
             <div key={i} className="v3-ctag-row" data-testid={`cost-tag-row-${i}`}>
-              <input className="v3-input mono" value={row.key} maxLength={128} disabled={!editable}
-                placeholder={t("v3.costTags.project.keyPlaceholder")} aria-label={t("v3.costTags.col.key")}
-                aria-invalid={errors[i] !== null} onChange={(e) => set(i, { key: e.target.value })} />
-              <input className="v3-input mono" value={row.value} maxLength={256} disabled={!editable}
-                placeholder={t("v3.costTags.project.valuePlaceholder")} aria-label={t("v3.costTags.col.value")}
-                onChange={(e) => set(i, { value: e.target.value })} />
+              <Reasoned disabledReason={lock}>
+                <input className="v3-input mono" value={row.key} maxLength={128} disabled={!editable}
+                  placeholder={t("v3.costTags.project.keyPlaceholder")} aria-label={t("v3.costTags.col.key")}
+                  aria-invalid={errors[i] !== null} onChange={(e) => set(i, { key: e.target.value })} />
+              </Reasoned>
+              <Reasoned disabledReason={lock}>
+                <input className="v3-input mono" value={row.value} maxLength={256} disabled={!editable}
+                  placeholder={t("v3.costTags.project.valuePlaceholder")} aria-label={t("v3.costTags.col.value")}
+                  onChange={(e) => set(i, { value: e.target.value })} />
+              </Reasoned>
               {editable ? (
                 <Btn size="sm" kind="ghost" title={t("v3.costTags.project.remove")} onClick={() => setRows((prev) => prev.filter((_, j) => j !== i))}><X size={13} /></Btn>
               ) : <span />}
@@ -102,12 +110,13 @@ export function CostTagsSection({ project, abilities }: { project: ProjectDetail
         </div>
         {editable && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <Btn size="sm" disabled={rows.length >= MAX_CUSTOM_TAGS} onClick={() => setRows((prev) => [...prev, { key: "", value: "" }])}>
+            <Btn size="sm" disabled={rows.length >= MAX_CUSTOM_TAGS} disabledReason={t("story.reason.maxTags", { count: MAX_CUSTOM_TAGS })} onClick={() => setRows((prev) => [...prev, { key: "", value: "" }])}>
               <Plus size={13} /> {t("v3.costTags.project.add")}
             </Btn>
             <span className="v3-hint">{t("v3.costTags.project.count", { count: rows.length, max: MAX_CUSTOM_TAGS })}</span>
             <span style={{ marginLeft: "auto" }}>
-              <Btn kind="primary" disabled={busy || !dirty} onClick={() => next && void run(() => costTagsApi.putProject(project.id, next), "v3.costTags.project.saved")}>
+              <Btn kind="primary" busy={busy} disabled={!dirty}
+                disabledReason={next === null ? t("story.reason.fixErrors") : t("story.reason.noChanges")} onClick={() => next && void run(() => costTagsApi.putProject(project.id, next), "v3.costTags.project.saved")}>
                 <Save size={14} /> {t("v3.projects.save")}
               </Btn>
             </span>

@@ -191,7 +191,7 @@ function List({
                     <td className="num" style={{ color: "var(--v3-text-3)" }}>{row.published_at ? ago(row.published_at) : "—"}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                        <Btn size="sm" disabled={busy || Boolean(blocked)} title={blocked ? t(blocked) : undefined}
+                        <Btn size="sm" busy={busy} disabled={Boolean(blocked)} disabledReason={blocked ? t(blocked) : null}
                           onClick={() => setConfirm({ row, action: "publish" })}>
                           {t("v2.announcements.publish")}
                         </Btn>
@@ -213,9 +213,9 @@ function List({
         )}
         {total > PAGE_SIZE && (
           <div className="v3-ann-pager">
-            <Btn size="sm" kind="ghost" disabled={offset === 0} onClick={() => onOffset(Math.max(0, offset - PAGE_SIZE))}>‹</Btn>
+            <Btn size="sm" kind="ghost" disabled={offset === 0} disabledReason={t("story.reason.firstPage")} onClick={() => onOffset(Math.max(0, offset - PAGE_SIZE))}>‹</Btn>
             <span className="mono">{Math.floor(offset / PAGE_SIZE) + 1} / {Math.max(1, Math.ceil(total / PAGE_SIZE))}</span>
-            <Btn size="sm" kind="ghost" disabled={offset + PAGE_SIZE >= total} onClick={() => onOffset(offset + PAGE_SIZE)}>›</Btn>
+            <Btn size="sm" kind="ghost" disabled={offset + PAGE_SIZE >= total} disabledReason={t("story.reason.lastPage")} onClick={() => onOffset(offset + PAGE_SIZE)}>›</Btn>
           </div>
         )}
       </Panel>
@@ -340,14 +340,14 @@ function Editor({
                 {row.status === "published" && (
                   <Btn disabled={Boolean(busy)} onClick={() => setConfirm("unpublish")}>{t("announcements.actions.unpublish")}</Btn>
                 )}
-                <Btn kind={saveLeads ? undefined : "primary"} disabled={Boolean(busy || cantPublish)}
-                  title={!busy && cantPublish ? t(cantPublish) : undefined} onClick={() => setConfirm("publish")}>
+                <Btn kind={saveLeads ? undefined : "primary"} busy={Boolean(busy)} disabled={Boolean(cantPublish)}
+                  disabledReason={cantPublish ? t(cantPublish) : null} onClick={() => setConfirm("publish")}>
                   {t(busy === "publish" ? "announcements.publishing" : "announcements.actions.publish")}
                 </Btn>
               </>
             )}
-            <Btn kind={saveLeads ? "primary" : undefined} disabled={Boolean(busy || cantSave)}
-              title={!busy && cantSave ? t(cantSave) : undefined} onClick={() => void run("save")}>
+            <Btn kind={saveLeads ? "primary" : undefined} busy={Boolean(busy)} disabled={Boolean(cantSave)}
+              disabledReason={cantSave ? t(cantSave) : null} onClick={() => void run("save")}>
               {t(busy === "save" ? "announcements.saving" : "announcements.actions.save")}
             </Btn>
           </>

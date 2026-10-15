@@ -21,6 +21,7 @@ import {
 } from "../../../v2/tasks";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import { permReason } from "../../reasons";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../../ui";
 import { calibrateBlocker, calibrateUrl } from "../standards/calibrationLink";
 import { CopyId } from "./CopyId";
@@ -110,7 +111,8 @@ export function TaskList() {
     return (
       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
         {task.kind === "run" && active && (
-          <Btn size="sm" kind="ghost" disabled={!mayRun} title={t("v2.tasks.stop")} onClick={() => setPending({ task, action: "stop" })}>
+          <Btn size="sm" kind="ghost" disabled={!mayRun} disabledReason={permReason(t, "eval.run")}
+            title={t("v2.tasks.stop")} aria-label={t("v2.tasks.stop")} onClick={() => setPending({ task, action: "stop" })}>
             <Square size={13} />
           </Btn>
         )}
@@ -120,24 +122,28 @@ export function TaskList() {
           </Btn>
         )}
         {task.kind === "online" && task.status === "paused" && (
-          <Btn size="sm" kind="ghost" disabled={!mayRun} title={t("v2.tasks.resume")} onClick={() => setPending({ task, action: "resume" })}>
+          <Btn size="sm" kind="ghost" disabled={!mayRun} disabledReason={permReason(t, "eval.run")}
+            title={t("v2.tasks.resume")} aria-label={t("v2.tasks.resume")} onClick={() => setPending({ task, action: "resume" })}>
             <Play size={13} />
           </Btn>
         )}
         {task.kind === "run" && mayCalibrate && (() => {
           const why = calibrateBlocker(task);
           return (
-            <Btn size="sm" kind="ghost" disabled={why !== null}
-              title={why ? t(`v3.tasks.calibrateBlocked.${why}`) : t("v3.tasks.calibrateShort")}
+            <Btn size="sm" kind="ghost" disabled={why !== null} disabledReason={why ? t(`v3.tasks.calibrateBlocked.${why}`) : null}
+              title={t("v3.tasks.calibrateShort")} aria-label={t("v3.tasks.calibrateShort")}
               onClick={() => task.agentId && navigate(calibrateUrl(task.agentId, task.id))}>
               <Tag size={13} />
             </Btn>
           );
         })()}
-        <Btn size="sm" kind="ghost" disabled={!mayRun} title={t("v2.tasks.copy")} onClick={() => navigate(copyUrl(task))}>
+        <Btn size="sm" kind="ghost" disabled={!mayRun} disabledReason={permReason(t, "eval.run")}
+          title={t("v2.tasks.copy")} aria-label={t("v2.tasks.copy")} onClick={() => navigate(copyUrl(task))}>
           <Copy size={13} />
         </Btn>
-        <Btn size="sm" kind="ghost" disabled={task.kind === "run" && (!mayRun || active)} title={t("v3.tasks.delete")}
+        <Btn size="sm" kind="ghost" disabled={task.kind === "run" && (!mayRun || active)}
+          disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.stopFirst")}
+          title={t("v3.tasks.delete")} aria-label={t("v3.tasks.delete")}
           onClick={() => setPending({ task, action: "delete" })}>
           <Trash2 size={13} />
         </Btn>
@@ -154,7 +160,7 @@ export function TaskList() {
         end={
           <>
             <Btn kind="ghost" onClick={list.reload} title={t("v3.tasks.refresh")}><RefreshCw size={14} /></Btn>
-            <Btn kind="primary" disabled={!mayRun} title={mayRun ? undefined : t("v2.tasks.noPermission")} onClick={() => navigate("/v3/tasks?view=new")}>
+            <Btn kind="primary" disabled={!mayRun} disabledReason={permReason(t, "eval.run")} onClick={() => navigate("/v3/tasks?view=new")}>
               <Plus size={14} /> {t("v2.tasks.new")}
             </Btn>
           </>

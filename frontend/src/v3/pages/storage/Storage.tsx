@@ -230,8 +230,8 @@ export function StorageTable({
                 <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                   <Btn size="sm" kind="ghost" disabled={busy} onClick={() => onCheck(e)}><ShieldCheck size={13} /> {t("v3.storage.check")}</Btn>
                   <Btn size="sm" kind="ghost" disabled={busy} onClick={() => onEdit(e)}><Pencil size={13} /> {t("v3.groups.edit")}</Btn>
-                  <Btn size="sm" kind="ghost" disabled={busy || agents > 0}
-                    title={agents > 0 ? t("v3.storage.inUse", { count: agents }) : t("v3.groups.archive")}
+                  <Btn size="sm" kind="ghost" busy={busy} disabled={agents > 0} disabledReason={t("v3.storage.inUse", { count: agents })}
+                    title={t("v3.groups.archive")} aria-label={t("v3.groups.archive")}
                     onClick={() => onArchive(e)}>
                     <Archive size={13} />
                   </Btn>

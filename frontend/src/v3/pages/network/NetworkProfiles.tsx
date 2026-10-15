@@ -159,14 +159,17 @@ export function V3NetworkProfiles() {
                         <Btn size="sm" kind="ghost" disabled={busy} onClick={() => void run(p, () => networkApi.check(p.id), "v3.network.checked")}>
                           <ShieldCheck size={13} /> {t("v3.network.check")}
                         </Btn>
-                        <Btn size="sm" kind="ghost" disabled={busy || p.reachable.length === 0 || p.status === "blocked" || probe?.status === "running"}
-                          title={p.reachable.length === 0 ? t("v3.network.probeNeedsTargets") : t("v3.network.probeHint")}
+                        <Btn size="sm" kind="ghost" busy={busy} disabled={p.reachable.length === 0 || p.status === "blocked" || probe?.status === "running"}
+                          disabledReason={p.reachable.length === 0 ? t("v3.network.probeNeedsTargets")
+                            : p.status === "blocked" ? t("story.reason.networkBlocked") : t("story.reason.waitRunning")}
+                          title={t("v3.network.probeHint")}
                           onClick={() => void run(p, () => networkApi.probe(p.id), "v3.network.probeStarted")}>
                           <Radar size={13} /> {t("v3.network.probe")}
                         </Btn>
                         <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setEditing(p)}><Pencil size={13} /> {t("v3.groups.edit")}</Btn>
-                        <Btn size="sm" kind="ghost" disabled={busy || (p.agents ?? 0) > 0}
-                          title={(p.agents ?? 0) > 0 ? t("v3.network.inUse", { count: p.agents ?? 0 }) : t("v3.groups.archive")}
+                        <Btn size="sm" kind="ghost" busy={busy} disabled={(p.agents ?? 0) > 0}
+                          disabledReason={t("v3.network.inUse", { count: p.agents ?? 0 })}
+                          title={t("v3.groups.archive")} aria-label={t("v3.groups.archive")}
                           onClick={() => setArchiving(p)}>
                           <Archive size={13} />
                         </Btn>

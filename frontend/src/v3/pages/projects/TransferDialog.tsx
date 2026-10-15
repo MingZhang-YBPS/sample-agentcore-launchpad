@@ -7,6 +7,7 @@ import { type ProjectDetail, projectsApi } from "../../../lib/api/projects";
 import { formatRowCounts } from "../../../lib/workspaces";
 import { useProject } from "../../../workspace/project-context";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Dialog, Notice } from "../../ui";
 
 /**
@@ -75,7 +76,10 @@ export function TransferDialog({
       foot={
         <>
           <Btn kind="ghost" onClick={onClose} disabled={busy}>{t("v3.projects.cancel")}</Btn>
-          <Btn kind="primary" onClick={() => void submit()} disabled={busy || !agentId || !target}>{t("v3.projects.transfer.submit")}</Btn>
+          <Btn kind="primary" onClick={() => void submit()} busy={busy} disabled={!agentId || !target}
+            disabledReason={!agentId ? t("story.reason.pickAgent") : t("story.reason.pickProject")}>
+            {t("v3.projects.transfer.submit")}
+          </Btn>
         </>
       }
     >
@@ -89,17 +93,21 @@ export function TransferDialog({
         </label>
         <label className="v3-field">
           <span>{t("v3.projects.transfer.agent")}</span>
-          <select className="v3-input" value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={movable.length === 0}>
-            <option value="">{agents.loading ? "…" : movable.length === 0 ? t("v3.projects.transfer.noAgents") : "—"}</option>
-            {movable.map((a) => <option key={a.id} value={a.id}>{a.display_name || a.name} · {a.status}</option>)}
-          </select>
+          <Reasoned disabledReason={agents.loading ? null : t("v3.projects.transfer.noAgents")}>
+            <select className="v3-input" value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={movable.length === 0}>
+              <option value="">{agents.loading ? "…" : movable.length === 0 ? t("v3.projects.transfer.noAgents") : "—"}</option>
+              {movable.map((a) => <option key={a.id} value={a.id}>{a.display_name || a.name} · {a.status}</option>)}
+            </select>
+          </Reasoned>
         </label>
         <label className="v3-field">
           <span>{t("v3.projects.transfer.target")}</span>
-          <select className="v3-input" value={target} onChange={(e) => setTarget(e.target.value)} disabled={others.length === 0}>
-            <option value="">{targets.loading ? "…" : others.length === 0 ? t("v3.projects.transfer.noTargets") : "—"}</option>
-            {others.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
-          </select>
+          <Reasoned disabledReason={targets.loading ? null : t("v3.projects.transfer.noTargets")}>
+            <select className="v3-input" value={target} onChange={(e) => setTarget(e.target.value)} disabled={others.length === 0}>
+              <option value="">{targets.loading ? "…" : others.length === 0 ? t("v3.projects.transfer.noTargets") : "—"}</option>
+              {others.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
+            </select>
+          </Reasoned>
         </label>
         {agents.error && <Notice s="act"><ApiErrorDetail error={agents.failure ?? agents.error} /></Notice>}
         {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}

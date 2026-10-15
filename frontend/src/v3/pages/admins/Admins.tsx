@@ -14,6 +14,7 @@ import { MAX_EXTEND_DAYS } from "../../../v2/pages/users/common";
 import { ChangePasswordDialog } from "../../ChangePassword";
 import { ago } from "../../format";
 import { useLoad } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton } from "../../ui";
 import { useUserActions } from "../users/actions";
 import { type CreateForm, oneTimePassword } from "../users/forms";
@@ -131,7 +132,7 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
       foot={
         <>
           <Btn kind="ghost" disabled={busy} onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || (mode === "promote" && !pick)} onClick={() => void submit()}>{t("v3.admins.add.submit")}</Btn>
+          <Btn kind="primary" busy={busy} disabled={mode === "promote" && !pick} disabledReason={t("story.reason.pickUser")} onClick={() => void submit()}>{t("v3.admins.add.submit")}</Btn>
         </>
       }
     >
@@ -256,7 +257,9 @@ function TwoPersonPanel({ canManage }: { canManage: boolean }) {
     <Panel>
       <div style={{ display: "grid", gap: 8 }} data-testid="v3-steward-two-person">
         <label style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-          <input type="checkbox" checked={on} disabled={!canManage || busy || settings.loading} onChange={() => void toggle()} />
+          <Reasoned disabledReason={canManage ? null : t("v3.steward.readOnly")}>
+            <input type="checkbox" checked={on} disabled={!canManage || busy || settings.loading} onChange={() => void toggle()} />
+          </Reasoned>
           <b>{t("v3.steward.twoPerson.label")}</b>
         </label>
         <small className="v3-hint">{t("v3.steward.twoPerson.hint")}</small>
@@ -359,7 +362,7 @@ function AdminList() {
                           </Btn>
                         )}
                         {!a.builtin && (
-                          <Btn size="sm" kind="ghost" disabled={busy || block !== null} title={block ? t(`v3.admins.block.${block}`) : undefined}
+                          <Btn size="sm" kind="ghost" busy={busy} disabled={block !== null} disabledReason={block ? t(`v3.admins.block.${block}`) : null}
                             onClick={() => setDemoting(a)}>
                             <ShieldMinus size={13} /> {t("v3.admins.demote.action")}
                           </Btn>

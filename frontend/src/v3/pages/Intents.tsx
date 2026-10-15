@@ -147,7 +147,9 @@ export function V3Intents() {
                   <td>{r.cluster ? <Chip>{r.cluster}</Chip> : <span style={{ color: "var(--v3-text-3)" }}>—</span>}</td>
                   <td style={{ width: 1, whiteSpace: "nowrap" }}>
                     <span style={{ display: "inline-flex", gap: 6 }}>
-                      <Btn size="sm" disabled={r.message_id == null || sent.has(r.session_id)} onClick={() => void toIssueBox(r)}>
+                      <Btn size="sm" disabled={r.message_id == null || sent.has(r.session_id)}
+                        disabledReason={sent.has(r.session_id) ? t("story.reason.alreadyInIssueBox") : t("story.reason.noAnswerMessage")}
+                        onClick={() => void toIssueBox(r)}>
                         <Inbox size={13} /> {sent.has(r.session_id) ? t("selfService.intents.inBox") : t("selfService.intents.toIssueBox")}
                       </Btn>
                       <Link to={chatLink(r)} className="v3-btn sm ghost">{t("selfService.common.openSession")}</Link>

@@ -512,7 +512,8 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
             foot={
               <>
                 <Btn kind="ghost" disabled={busyId !== null} onClick={closeMemberships}>{t("v3.common.cancel")}</Btn>
-                <Btn kind="primary" disabled={busyId !== null || Boolean(memberErrors.projects || memberErrors.groups)} onClick={submitMemberships}>
+                <Btn kind="primary" busy={busyId !== null} disabled={Boolean(memberErrors.projects || memberErrors.groups)}
+                  disabledReason={t("story.reason.fixErrors")} onClick={submitMemberships}>
                   {t("v3.users.memberships.save")}
                 </Btn>
               </>
@@ -521,9 +522,9 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
             <div style={{ display: "grid", gap: 12 }} data-testid="v3-user-memberships">
               <p style={{ margin: 0 }}>{t("v3.users.memberships.body")}</p>
               <MembershipRows kind="projects" rows={memberProjects} onChange={setMemberProjects}
-                targets={projectTargets} rolesFor={roleOptions} error={memberErrors.projects} disabled={busyId !== null} />
+                targets={projectTargets} rolesFor={roleOptions} error={memberErrors.projects} busy={busyId !== null} />
               <MembershipRows kind="groups" rows={memberGroups} onChange={setMemberGroups}
-                targets={groupTargets} rolesFor={groupRoleOptions} error={memberErrors.groups} disabled={busyId !== null} />
+                targets={groupTargets} rolesFor={groupRoleOptions} error={memberErrors.groups} busy={busyId !== null} />
               <small className="v3-hint">{t("v3.users.memberships.inheritHint")}</small>
             </div>
           </Dialog>

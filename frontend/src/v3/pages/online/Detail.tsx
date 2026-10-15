@@ -28,6 +28,7 @@ import { taskFromOnline } from "../../../v2/tasks";
 import { V2ToastProvider } from "../../../v2/ui";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import { permReason } from "../../reasons";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, Skeleton, Spark, Stat } from "../../ui";
 import { onlineHref, useOnlineAction } from "./actions";
 import { configSignal, modeOf, reportSignal, scoreSignal } from "./common";
@@ -251,8 +252,9 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
           {isEditable(row) && (
             <>
               <RangePick value={range} onChange={setRange} />
-              <Btn size="sm" kind="primary" disabled={busy || consoleRunning || isTransient(row) || !canRun}
-                title={consoleRunning ? t("v2.online.reportPending") : undefined} onClick={() => void run()}>
+              <Btn size="sm" kind="primary" busy={busy} disabled={consoleRunning || isTransient(row) || !canRun}
+                disabledReason={!canRun ? permReason(t, "eval.run") : isTransient(row) ? t("story.reason.settling") : t("v2.online.reportPending")}
+                onClick={() => void run()}>
                 {t("v2.online.runReport")}
               </Btn>
             </>
@@ -368,18 +370,21 @@ export function OnlineDetail({ id }: { id: string }) {
           <>
             <Btn kind="ghost" onClick={() => setTick((n) => n + 1)}><RefreshCw size={14} /></Btn>
             {canToggle(row) && row.execution_status === "ENABLED" && (
-              <Btn disabled={action.busy || transient} onClick={() => action.ask({ row, action: "pause" })}><Pause size={14} /> {t("v2.tasks.pause")}</Btn>
+              <Btn busy={action.busy} disabled={transient} disabledReason={t("story.reason.settling")} onClick={() => action.ask({ row, action: "pause" })}><Pause size={14} /> {t("v2.tasks.pause")}</Btn>
             )}
             {canToggle(row) && row.execution_status === "DISABLED" && (
-              <Btn disabled={action.busy || transient || !mayRun} onClick={() => action.ask({ row, action: "resume" })}><Play size={14} /> {t("v2.tasks.resume")}</Btn>
+              <Btn busy={action.busy} disabled={transient || !mayRun}
+                disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.settling")} onClick={() => action.ask({ row, action: "resume" })}><Play size={14} /> {t("v2.tasks.resume")}</Btn>
             )}
             {canToggle(row) && (
-              <Btn kind="danger" disabled={action.busy || row.status === "DELETING" || !mayRun} onClick={() => action.ask({ row, action: "delete" })}>
+              <Btn kind="danger" busy={action.busy} disabled={row.status === "DELETING" || !mayRun}
+                disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.deleting")} onClick={() => action.ask({ row, action: "delete" })}>
                 <Trash2 size={14} /> {t("v2.common.delete")}
               </Btn>
             )}
             {isEditable(row) && (
-              <Btn kind="primary" disabled={action.busy || transient || !mayRun} onClick={() => navigate(onlineHref({ view: "edit", id: row.config_id }))}>
+              <Btn kind="primary" busy={action.busy} disabled={transient || !mayRun}
+                disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.settling")} onClick={() => navigate(onlineHref({ view: "edit", id: row.config_id }))}>
                 {t("v3.online.edit")}
               </Btn>
             )}

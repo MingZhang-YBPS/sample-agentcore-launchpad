@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "../../../lib/api";
 import type { Department } from "../../../lib/api/project-groups";
+import { Reasoned } from "../../reason";
 import { Btn, Dialog, Notice } from "../../ui";
 import { slugify, type StructureForm, validateStructure } from "./model";
 
@@ -78,12 +79,14 @@ export function StructureDialog({
         </label>
         <label className="v3-field">
           <span>{t("v3.groups.form.id")}</span>
-          <input className="v3-input mono" value={form.id} disabled={!creating} aria-invalid={errors.id ? true : undefined}
-            onChange={(e) => {
-              setIdTouched(true);
-              setError(null);
-              setForm((prev) => ({ ...prev, id: e.target.value }));
-            }} />
+          <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+            <input className="v3-input mono" value={form.id} disabled={!creating} aria-invalid={errors.id ? true : undefined}
+              onChange={(e) => {
+                setIdTouched(true);
+                setError(null);
+                setForm((prev) => ({ ...prev, id: e.target.value }));
+              }} />
+          </Reasoned>
           {errors.id ? <small className="v3-err">{t(errors.id)}</small> : <small className="v3-hint">{t(creating ? "v3.groups.form.idHint" : "v3.groups.form.idFixed")}</small>}
         </label>
         <label className="v3-field">

@@ -18,7 +18,8 @@
 .v3 .v3-prj-cands { display: grid; gap: 4px; max-height: 220px; overflow-y: auto; }
 .v3 .v3-prj-cands button { display: flex; justify-content: space-between; gap: 10px; text-align: left; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--v3-line); background: var(--v3-ink-1); color: var(--v3-text); font: inherit; cursor: pointer; }
 .v3 .v3-prj-cands button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); background: var(--v3-ok-dim); }
-.v3 .v3-prj-cands button:disabled { opacity: 0.55; cursor: default; }
+.v3 .v3-prj-cands > .v3-why { display: grid; }
+.v3 .v3-prj-cands button:disabled, .v3 .v3-prj-cands button[aria-disabled="true"] { opacity: 0.55; cursor: default; }
 .v3 .v3-prj-dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
 .v3 .v3-prj-dl dt { color: var(--v3-text-3); }
 .v3 .v3-prj-dl dd { margin: 0; }

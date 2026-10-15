@@ -398,7 +398,7 @@ export function FeedbackPanel({ range }: { range: V2Range }) {
             <span className="v3-ins-thumb" data-s={down ? "act" : "off"}>
               <ThumbsDown size={13} /> {data?.counts.down ?? "—"}
             </span>
-            <Btn size="sm" disabled={sessions.length === 0} onClick={() => setAdding(true)}>
+            <Btn size="sm" disabled={sessions.length === 0} disabledReason={t("story.reason.noDownSessions")} onClick={() => setAdding(true)}>
               <DatabaseZap size={13} /> {t("feedbackCard.toDataset", { count: sessions.length })}
             </Btn>
           </span>
@@ -512,7 +512,7 @@ function ResultDialog({
           <Btn kind="ghost" onClick={onClose}>
             {t("v3.insights.close")}
           </Btn>
-          <Btn kind="primary" disabled={!row.sessionId} onClick={onAdd}>
+          <Btn kind="primary" disabled={!row.sessionId} disabledReason={t("story.reason.noSessionLinked")} onClick={onAdd}>
             <DatabaseZap size={14} /> {t("v2.insights.addBadCase")}
           </Btn>
         </>
@@ -638,10 +638,10 @@ export function ResultsPanel({
             <span className="mono" style={{ color: "var(--v3-text-3)" }}>
               {t("v2.common.total", { count: rows.length })}
             </span>
-            <Btn size="sm" disabled={rows.length === 0} onClick={exportCsv}>
+            <Btn size="sm" disabled={rows.length === 0} disabledReason={t("story.reason.nothingToExport")} onClick={exportCsv}>
               <Download size={13} /> {t("v2.insights.export")}
             </Btn>
-            <Btn size="sm" disabled={badSessions.length === 0} onClick={() => setAdding(badSessions)}>
+            <Btn size="sm" disabled={badSessions.length === 0} disabledReason={t("story.reason.noBadCases")} onClick={() => setAdding(badSessions)}>
               <DatabaseZap size={13} /> {t("v2.insights.badToDataset", { count: badSessions.length })}
             </Btn>
           </span>
@@ -713,13 +713,13 @@ export function ResultsPanel({
             </table>
             {pages > 1 && (
               <div className="v3-ins-pager">
-                <Btn size="sm" kind="ghost" disabled={current <= 1} onClick={() => setPage(current - 1)}>
+                <Btn size="sm" kind="ghost" disabled={current <= 1} disabledReason={t("story.reason.firstPage")} onClick={() => setPage(current - 1)}>
                   ‹
                 </Btn>
                 <span className="mono">
                   {current} / {pages}
                 </span>
-                <Btn size="sm" kind="ghost" disabled={current >= pages} onClick={() => setPage(current + 1)}>
+                <Btn size="sm" kind="ghost" disabled={current >= pages} disabledReason={t("story.reason.lastPage")} onClick={() => setPage(current + 1)}>
                   ›
                 </Btn>
               </div>

@@ -69,6 +69,7 @@ import { AtShell, HostedV2, ScoreChip } from "./common";
 import { CopyId } from "./CopyId";
 import { OnlineCostCard, RunCostCard } from "./CostCard";
 import { copyUrl, outcomeSignal, scoreSignal, taskSignal } from "./model";
+import { permReason } from "../../reasons";
 
 const POLL_MS = 8000;
 const RESULTS_PAGE = 20;
@@ -188,6 +189,7 @@ function ResultDialog({
             <Btn
               kind="primary"
               disabled={!row.sessionId}
+              disabledReason={t("story.reason.noSessionLinked")}
               onClick={() => setAdding(true)}
             >
               <DatabaseZap size={14} /> {t("v2.insights.addBadCase")}
@@ -393,12 +395,13 @@ function Results({
           ]}
         />
         <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <Btn size="sm" disabled={rows.length === 0} onClick={exportCsv}>
+          <Btn size="sm" disabled={rows.length === 0} disabledReason={t("story.reason.nothingToExport")} onClick={exportCsv}>
             <Download size={13} /> {t("v2.insights.export")}
           </Btn>
           <Btn
             size="sm"
             disabled={badSessions.length === 0}
+            disabledReason={t("story.reason.noBadCases")}
             onClick={() => setAdding(true)}
           >
             <DatabaseZap size={13} />{" "}
@@ -683,6 +686,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
                   <Btn
                     kind="danger"
                     disabled={!mayRun}
+                    disabledReason={permReason(t, "eval.run")}
                     onClick={() => setConfirm("stop")}
                   >
                     <Square size={13} /> {t("v2.tasks.stop")}
@@ -692,7 +696,9 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
                 data.status === "failed" &&
                 data.run?.batch_eval_id && (
                   <Btn
-                    disabled={!mayRun || busy}
+                    busy={busy}
+                    disabled={!mayRun}
+                    disabledReason={permReason(t, "eval.run")}
                     title={t("v2.tasks.recheckHint")}
                     onClick={() => void recheck()}
                   >
@@ -705,24 +711,25 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
                 </Btn>
               )}
               {data.kind === "online" && data.status === "paused" && (
-                <Btn disabled={!mayRun} onClick={() => setConfirm("resume")}>
+                <Btn disabled={!mayRun} disabledReason={permReason(t, "eval.run")} onClick={() => setConfirm("resume")}>
                   <Play size={13} /> {t("v2.tasks.resume")}
                 </Btn>
               )}
               {data.kind === "run" && mayCalibrate && (
                 <Btn
-                  disabled={calibrationWhy !== null || calibration.loading}
-                  title={
+                  busy={calibration.loading}
+                  disabled={calibrationWhy !== null}
+                  disabledReason={
                     calibrationWhy
                       ? t(`v3.tasks.calibrateBlocked.${calibrationWhy}`)
-                      : undefined
+                      : null
                   }
                   onClick={() => calibrateTo(soleCriterion(calibrationKeys))}
                 >
                   <Tag size={13} /> {t("v3.tasks.calibrate")}
                 </Btn>
               )}
-              <Btn disabled={!mayRun} onClick={() => navigate(copyUrl(data))}>
+              <Btn disabled={!mayRun} disabledReason={permReason(t, "eval.run")} onClick={() => navigate(copyUrl(data))}>
                 <Copy size={13} /> {t("v2.tasks.copy")}
               </Btn>
               <Btn

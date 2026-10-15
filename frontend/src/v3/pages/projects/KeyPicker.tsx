@@ -13,14 +13,12 @@ export function KeyPicker({
   agentKeys,
   value,
   onChange,
-  disabled,
   strict,
 }: {
   projectKeys: readonly string[];
   agentKeys: readonly string[];
   value: readonly string[];
   onChange: (next: string[]) => void;
-  disabled?: boolean;
   /** the project refuses combined duties (`sod_strict`): the hint says so */
   strict?: boolean;
 }) {
@@ -34,7 +32,7 @@ export function KeyPicker({
   };
   const pairs = sodPairsIn(value);
   const group = (legend: string, keys: readonly string[]) => (
-    <fieldset disabled={disabled}>
+    <fieldset>
       <legend>{legend}</legend>
       <div className="grid">
         {keys.map((key) => (

@@ -66,7 +66,7 @@ export function AnswerRules() {
         )}
         <span style={{ color: "var(--v3-text-3)", fontSize: 13 }}>{t("selfService.answers.explain")}</span>
         <span style={{ marginLeft: "auto" }}>
-          <Btn kind="primary" disabled={!agentId} onClick={() => setEditing("new")}><Plus size={14} /> {t("selfService.answers.add")}</Btn>
+          <Btn kind="primary" disabled={!agentId} disabledReason={t("story.reason.pickAgent")} onClick={() => setEditing("new")}><Plus size={14} /> {t("selfService.answers.add")}</Btn>
         </span>
       </div>
       {data?.enabled === false && <Notice s="wait">{t("selfService.answers.agentDisabled")}</Notice>}
@@ -113,8 +113,10 @@ export function AnswerRules() {
                   <td className="num" title={r.last_hit_at ? ago(r.last_hit_at) : undefined}>{r.hit_count}</td>
                   <td style={{ width: 1, whiteSpace: "nowrap" }}>
                     <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
-                      <Btn size="sm" kind="ghost" disabled={index <= 0} title={t("selfService.answers.up")} onClick={() => move(index, -1)}><ArrowUp size={13} /></Btn>
-                      <Btn size="sm" kind="ghost" disabled={index >= rules.length - 1} title={t("selfService.answers.down")} onClick={() => move(index, 1)}><ArrowDown size={13} /></Btn>
+                      <Btn size="sm" kind="ghost" disabled={index <= 0} disabledReason={t("story.reason.alreadyTop")}
+                        title={t("selfService.answers.up")} aria-label={t("selfService.answers.up")} onClick={() => move(index, -1)}><ArrowUp size={13} /></Btn>
+                      <Btn size="sm" kind="ghost" disabled={index >= rules.length - 1} disabledReason={t("story.reason.alreadyBottom")}
+                        title={t("selfService.answers.down")} aria-label={t("selfService.answers.down")} onClick={() => move(index, 1)}><ArrowDown size={13} /></Btn>
                       <Btn size="sm" kind="ghost" title={t("v3.issues.edit")} onClick={() => setEditing(r)}><Pencil size={13} /></Btn>
                       <Btn size="sm" kind="ghost" title={t("v3.issues.delete")} onClick={() => setRemoving(r)}><Trash2 size={13} /></Btn>
                     </div>
@@ -149,7 +151,8 @@ export function AnswerRules() {
         >
           <input className="v3-input" value={probe} maxLength={500} placeholder={t("selfService.answers.testPlaceholder")}
             aria-label={t("selfService.answers.testTitle")} onChange={(e) => setProbe(e.target.value)} />
-          <Btn type="submit" disabled={!probe.trim() || !agentId}><FlaskConical size={14} /> {t("selfService.answers.test")}</Btn>
+          <Btn type="submit" disabled={!probe.trim() || !agentId}
+            disabledReason={!agentId ? t("story.reason.pickAgent") : t("story.reason.typeQuestion")}><FlaskConical size={14} /> {t("selfService.answers.test")}</Btn>
         </form>
         {probeResult && <div style={{ marginTop: 12 }}><Notice s={probeResult.s === "off" ? "wait" : probeResult.s === "ok" ? "ok" : "info"}>{probeResult.text}</Notice></div>}
       </Panel>
@@ -209,7 +212,8 @@ function RuleDialog({ agentId, rule, onClose, onSaved }: { agentId: string; rule
       foot={
         <>
           <Btn kind="ghost" onClick={onClose} disabled={busy}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || !pattern.trim() || !answer.trim()} onClick={() => void save()}>{t("v3.issues.save")}</Btn>
+          <Btn kind="primary" busy={busy} disabled={!pattern.trim() || !answer.trim()}
+            disabledReason={!pattern.trim() ? t("story.reason.fillPattern") : t("story.reason.fillAnswer")} onClick={() => void save()}>{t("v3.issues.save")}</Btn>
         </>
       }
     >

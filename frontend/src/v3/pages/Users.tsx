@@ -154,7 +154,7 @@ function UserList() {
           <>
             <Btn kind="ghost" onClick={reload} disabled={list.loading}><RefreshCw size={14} /> {t("v3.users.refresh")}</Btn>
             {multi && (
-              <Btn disabled={chosen.length === 0} onClick={() => setBulkOpen(true)} title={t("v3.users.bulk.hint")}>
+              <Btn disabled={chosen.length === 0} disabledReason={t("story.reason.selectRows")} onClick={() => setBulkOpen(true)} title={t("v3.users.bulk.hint")}>
                 <FolderPlus size={14} /> {t("v3.users.bulk.open", { count: chosen.length })}
               </Btn>
             )}
@@ -335,9 +335,9 @@ function UserList() {
         )}
         {total > PAGE_SIZE && (
           <div className="v3-usr-pager">
-            <Btn size="sm" kind="ghost" disabled={page <= 1} onClick={() => setParam("page", String(page - 1))}>←</Btn>
+            <Btn size="sm" kind="ghost" disabled={page <= 1} disabledReason={t("story.reason.firstPage")} onClick={() => setParam("page", String(page - 1))}>←</Btn>
             <span className="mono">{Math.min(page, pages)} / {pages}</span>
-            <Btn size="sm" kind="ghost" disabled={page >= pages} onClick={() => setParam("page", String(page + 1))}>→</Btn>
+            <Btn size="sm" kind="ghost" disabled={page >= pages} disabledReason={t("story.reason.lastPage")} onClick={() => setParam("page", String(page + 1))}>→</Btn>
           </div>
         )}
       </Panel>
@@ -471,7 +471,8 @@ function UserDetail({ username }: { username: string }) {
             )}
             {passwordAction}
             {!isSelf && (
-              <Btn disabled={busy || user.state === "pending"} title={t("v3.users.sessions.hint")} onClick={() => actions.ask("sessions", user)}>
+              <Btn busy={busy} disabled={user.state === "pending"} disabledReason={t("story.reason.pendingAccount")}
+                title={t("v3.users.sessions.hint")} onClick={() => actions.ask("sessions", user)}>
                 <LogOut size={14} /> {t("v3.users.sessions.action")}
               </Btn>
             )}
@@ -546,7 +547,7 @@ function UserDetail({ username }: { username: string }) {
             {AGENT_PERMISSIONS.map((key) => {
               const granted = user.permissions?.[key] !== false;
               return (
-                <GrantChip key={key} on={granted} disabled={busy} title={key}
+                <GrantChip key={key} on={granted} busy={busy} title={key}
                   onClick={() => void actions.patch(user, { permissions: togglePermission(user.permissions, key, !granted) }, "usersPage.permissionsUpdated")}>
                   {t(`v2.users.perm.${key.replace(".", "_")}`)}
                   <small className="mono">{key}</small>

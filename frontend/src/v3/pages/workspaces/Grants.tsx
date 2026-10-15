@@ -7,6 +7,7 @@ import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, ApiError, errorMessage, type WorkspaceGrantFilter, type WorkspaceGrants } from "../../../lib/api";
 import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Empty, Filters, Notice, Panel, Skeleton } from "../../ui";
 
 const PAGE_SIZE = 10;
@@ -129,8 +130,8 @@ export function Grants({ workspaceId, onTotal }: { workspaceId: string; onTotal:
           </div>
           <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
             <span className="mono" style={{ color: "var(--v3-text-3)" }}>{t("v2.workspaces.selected", { count: selected.size })}</span>
-            <Btn size="sm" kind="primary" disabled={selected.size === 0 || busy} onClick={() => void apply("grant")}>{t("v2.workspaces.grant")}</Btn>
-            <Btn size="sm" kind="danger" disabled={selected.size === 0 || busy} onClick={() => void apply("revoke")}>{t("v2.workspaces.revoke")}</Btn>
+            <Btn size="sm" kind="primary" busy={busy} disabled={selected.size === 0} disabledReason={t("story.reason.selectRows")} onClick={() => void apply("grant")}>{t("v2.workspaces.grant")}</Btn>
+            <Btn size="sm" kind="danger" busy={busy} disabled={selected.size === 0} disabledReason={t("story.reason.selectRows")} onClick={() => void apply("revoke")}>{t("v2.workspaces.revoke")}</Btn>
           </span>
         </div>
       </div>
@@ -145,8 +146,10 @@ export function Grants({ workspaceId, onTotal }: { workspaceId: string; onTotal:
           <thead>
             <tr>
               <th style={{ width: 40 }}>
-                <input type="checkbox" checked={allOnPage} disabled={pageIds.length === 0}
-                  onChange={() => setSelected(allOnPage ? new Set() : new Set(pageIds))} aria-label={t("workspacesPage.detail.selectPage")} />
+                <Reasoned disabledReason={t("story.reason.nothingToPick")}>
+                  <input type="checkbox" checked={allOnPage} disabled={pageIds.length === 0}
+                    onChange={() => setSelected(allOnPage ? new Set() : new Set(pageIds))} aria-label={t("workspacesPage.detail.selectPage")} />
+                </Reasoned>
               </th>
               <th>{t("v2.workspaces.grantCol.account")}</th>
               <th>{t("v2.workspaces.grantCol.email")}</th>
@@ -171,9 +174,9 @@ export function Grants({ workspaceId, onTotal }: { workspaceId: string; onTotal:
       )}
       {total > PAGE_SIZE && (
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "center", padding: "12px 16px" }}>
-          <Btn size="sm" kind="ghost" disabled={pageNo <= 1} onClick={() => setParam("gpage", pageNo - 1 > 1 ? String(pageNo - 1) : null)}>←</Btn>
+          <Btn size="sm" kind="ghost" disabled={pageNo <= 1} disabledReason={t("story.reason.firstPage")} onClick={() => setParam("gpage", pageNo - 1 > 1 ? String(pageNo - 1) : null)}>←</Btn>
           <span className="mono">{pageNo} / {pages}</span>
-          <Btn size="sm" kind="ghost" disabled={pageNo >= pages} onClick={() => setParam("gpage", String(pageNo + 1))}>→</Btn>
+          <Btn size="sm" kind="ghost" disabled={pageNo >= pages} disabledReason={t("story.reason.lastPage")} onClick={() => setParam("gpage", String(pageNo + 1))}>→</Btn>
         </div>
       )}
     </Panel>

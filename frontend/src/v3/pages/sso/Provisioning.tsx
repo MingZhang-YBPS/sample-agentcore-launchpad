@@ -7,6 +7,7 @@ import { type LoginSettings, type Provider, type ScimBlock, ssoAdminApi } from "
 import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Confirm, Lamp, Notice, Panel } from "../../ui";
 import { CopyPlate } from "./parts";
 
@@ -178,8 +179,10 @@ export function LoginPageSwitch({ settings, enabledCount, onChange }: {
         <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-sso-loginpage-error" />
       </div>
       <label className="v3-sso-toggle big" data-on={hidden}>
-        <input type="checkbox" role="switch" checked={hidden} disabled={busy || (!hidden && enabledCount === 0)}
-          onChange={() => void flip()} data-testid="sso-hide-local" />
+        <Reasoned disabledReason={!hidden && enabledCount === 0 ? t("v3.sso.loginPage.needsProvider") : null}>
+          <input type="checkbox" role="switch" checked={hidden} disabled={busy || (!hidden && enabledCount === 0)}
+            onChange={() => void flip()} data-testid="sso-hide-local" />
+        </Reasoned>
         <span className="track" aria-hidden="true" />
         <span className="txt">
           <b><EyeOff size={13} aria-hidden="true" /> {t("v3.sso.loginPage.toggle")}</b>

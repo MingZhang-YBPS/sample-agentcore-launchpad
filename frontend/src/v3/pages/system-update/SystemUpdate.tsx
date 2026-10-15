@@ -15,6 +15,8 @@ import {
 import { type Failure, useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
+import { firstReason } from "../../reasons";
 import { Btn, Chip, Empty, Notice, PageHead, Panel, type Signal, Skeleton } from "../../ui";
 
 const POLL_MS = 5000;
@@ -124,8 +126,10 @@ function SchedulePanel({ state, update, onDone, failed }: {
         <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <input type="radio" name="v3-sysupdate-when" checked={mode === "at"} onChange={() => setMode("at")} />
           {t("v3.systemUpdate.at")}
-          <input type="datetime-local" className="v3-input" value={at} disabled={mode !== "at"}
-            aria-label={t("v3.systemUpdate.at")} onChange={(e) => setAt(e.target.value)} />
+          <Reasoned disabledReason={t("story.reason.chooseAtFirst")}>
+            <input type="datetime-local" className="v3-input" value={at} disabled={mode !== "at"}
+              aria-label={t("v3.systemUpdate.at")} onChange={(e) => setAt(e.target.value)} />
+          </Reasoned>
         </label>
         {items.length > 0 && (
           <details>
@@ -151,7 +155,8 @@ function SchedulePanel({ state, update, onDone, failed }: {
           </label>
         )}
         <span>
-          <Btn kind="primary" disabled={busy || (interrupted > 0 && !ack) || (mode === "at" && !at)}
+          <Btn kind="primary" busy={busy} disabled={(interrupted > 0 && !ack) || (mode === "at" && !at)}
+            disabledReason={interrupted > 0 && !ack ? t("story.reason.confirmFirst") : t("story.reason.pickTime")}
             onClick={() => void run(() => systemUpdateApi.schedule(update.id, mode === "at" ? scheduleAt(at) : null, ack), "v3.systemUpdate.scheduled")}>
             {t("v3.systemUpdate.schedule")}
           </Btn>
@@ -240,7 +245,8 @@ export function V3SystemUpdate() {
         title={t("v3.systemUpdate.title")}
         sub={data ? t("v3.systemUpdate.sub", { repo: data.source.repo, branch: data.source.branch }) : undefined}
         end={
-          <Btn kind="ghost" disabled={busy || !data?.version.update_enabled} onClick={() => void act(systemUpdateApi.check, "v3.systemUpdate.checked")}>
+          <Btn kind="ghost" busy={busy} disabled={!data?.version.update_enabled}
+            disabledReason={data ? t("v3.systemUpdate.disabled") : t("story.reason.notLoaded")} onClick={() => void act(systemUpdateApi.check, "v3.systemUpdate.checked")}>
             <RefreshCw size={14} /> {t("v3.systemUpdate.check")}
           </Btn>
         }
@@ -303,10 +309,18 @@ export function V3SystemUpdate() {
             title={t("v3.systemUpdate.updateTitle")}
             end={
               <span style={{ display: "inline-flex", gap: 8 }}>
-                <Btn kind="primary" disabled={busy || !canPrepare} onClick={() => void act(systemUpdateApi.prepare, "v3.systemUpdate.preparing")}>
+                <Btn kind="primary" busy={busy} disabled={!canPrepare}
+                  disabledReason={firstReason(
+                    blocked && t("story.reason.updateInProgress"),
+                    (!remote || remote.error) && t("story.reason.checkSourceFirst"),
+                    remote?.fast_forward !== true && t("story.reason.notFastForward"),
+                    t("story.reason.upToDate"),
+                  )}
+                  onClick={() => void act(systemUpdateApi.prepare, "v3.systemUpdate.preparing")}>
                   {t("v3.systemUpdate.prepare")}
                 </Btn>
-                <Btn kind="ghost" disabled={busy || !canRollback} title={t("v3.systemUpdate.rollbackHint")}
+                <Btn kind="ghost" busy={busy} disabled={!canRollback} title={t("v3.systemUpdate.rollbackHint")}
+                  disabledReason={blocked ? t("story.reason.updateInProgress") : t("story.reason.nothingToRollBack")}
                   onClick={() => void act(systemUpdateApi.rollback, "v3.systemUpdate.rollbackPreparing")}>
                   <RotateCcw size={14} /> {t("v3.systemUpdate.rollback")}
                 </Btn>

@@ -68,8 +68,8 @@ export function IntegrationSection({ project }: { project: ProjectDetail }) {
       title={t("v3.invokeAccess.project.title")}
       end={
         <span style={{ display: "flex", gap: 6 }}>
-          <Btn size="sm" kind="ghost" onClick={() => void exportAs("csv")} disabled={!inventory.data}><Download size={13} /> CSV</Btn>
-          <Btn size="sm" kind="ghost" onClick={() => void exportAs("json")} disabled={!inventory.data}><Download size={13} /> JSON</Btn>
+          <Btn size="sm" kind="ghost" onClick={() => void exportAs("csv")} disabled={!inventory.data} disabledReason={t("story.reason.notLoaded")}><Download size={13} /> CSV</Btn>
+          <Btn size="sm" kind="ghost" onClick={() => void exportAs("json")} disabled={!inventory.data} disabledReason={t("story.reason.notLoaded")}><Download size={13} /> JSON</Btn>
         </span>
       }
     >

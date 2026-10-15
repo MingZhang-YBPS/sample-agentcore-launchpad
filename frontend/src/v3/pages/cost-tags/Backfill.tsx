@@ -18,7 +18,9 @@ import {
   costTagsApi,
   type ResourceTagStatus,
 } from "../../../lib/api/costTags";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { errorMessage } from "../../../lib/api";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useFailure } from "../../failure";
@@ -179,6 +181,7 @@ export function BackfillRunView({ run }: { run: BackfillRun }) {
 export function Backfill() {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [view, setView] = useState<BackfillView | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -220,7 +223,8 @@ export function Backfill() {
       end={
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           {run && <Chip s={RUN_SIGNAL[run.status]}>{t(`v3.costTags.bf.status.${run.status}`)}</Chip>}
-          <Btn size="sm" kind={run ? undefined : "primary"} disabled={busy || active || !view} disabledReason={active ? t("v3.costTags.bf.runningReason") : undefined} onClick={() => void start()}>
+          <Btn size="sm" kind={run ? undefined : "primary"} busy={busy} disabled={active || !view}
+            disabledReason={active ? t("v3.costTags.bf.runningReason") : t("story.reason.notLoaded")} onClick={() => void start()}>
             {run ? <RotateCw size={13} /> : <Play size={13} />} {run ? t("v3.costTags.bf.rerun") : t("v3.costTags.bf.start")}
           </Btn>
         </span>

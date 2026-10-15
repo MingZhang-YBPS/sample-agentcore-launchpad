@@ -70,7 +70,8 @@ function SwitchDialog({ preset, workspaceId, onClose, onSwitched }: {
       foot={
         <>
           <Btn kind="ghost" disabled={busy} onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || !next || unchanged} onClick={() => void submit()}>
+          <Btn kind="primary" busy={busy} disabled={!next || unchanged}
+            disabledReason={!next ? t("story.reason.typeModelId") : t("story.reason.noChanges")} onClick={() => void submit()}>
             {busy ? t("v3.assistant.model.switching") : t("v3.assistant.model.submit")}
           </Btn>
         </>
@@ -167,7 +168,7 @@ export function ArchitectModelPanel({ workspaceId }: { workspaceId: string }) {
           <button type="button" className="v3-btn ghost sm" onClick={() => { presets.reload(); budget.reload(); }} disabled={presets.loading}>
             <RefreshCw size={13} /> {t("v3.ux.refresh")}
           </button>
-          <Btn size="sm" disabled={!preset.can_configure} title={preset.can_configure ? undefined : t("v3.assistant.model.cannot")} onClick={() => setOpen(true)}>
+          <Btn size="sm" disabled={!preset.can_configure} disabledReason={t("v3.assistant.model.cannot")} onClick={() => setOpen(true)}>
             <Cpu size={13} /> {t("v3.assistant.model.switch")}
           </Btn>
         </span>

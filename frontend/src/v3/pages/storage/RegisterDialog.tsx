@@ -9,6 +9,7 @@ import {
   type StorageForm,
   validateStorage,
 } from "../../../lib/api/storage";
+import { Reasoned } from "../../reason";
 import { Btn, Dialog, Notice } from "../../ui";
 
 /**
@@ -74,15 +75,19 @@ export function RegisterDialog({
     >
       <form style={{ display: "grid", gap: 12 }} data-testid="v3-storage-form" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         {field("id", t("v3.storage.form.id"),
-          <input className="v3-input mono" placeholder="datasets" value={form.id} disabled={!creating}
-            aria-invalid={errors.id ? true : undefined} onChange={(e) => set("id", e.target.value)} />,
+          <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+            <input className="v3-input mono" placeholder="datasets" value={form.id} disabled={!creating}
+              aria-invalid={errors.id ? true : undefined} onChange={(e) => set("id", e.target.value)} />
+          </Reasoned>,
           t("v3.storage.form.idHint"))}
         {field("name", t("v3.storage.form.name"),
           <input className="v3-input" value={form.name} aria-invalid={errors.name ? true : undefined} onChange={(e) => set("name", e.target.value)} />)}
         {field("access_point_arn", t("v3.storage.form.arn"),
-          <input className="v3-input mono" disabled={!creating} value={form.access_point_arn}
-            placeholder="arn:aws:s3files:us-west-2:111122223333:file-system/fs-…/access-point/fsap-…"
-            aria-invalid={errors.access_point_arn ? true : undefined} onChange={(e) => set("access_point_arn", e.target.value)} />,
+          <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+            <input className="v3-input mono" disabled={!creating} value={form.access_point_arn}
+              placeholder="arn:aws:s3files:us-west-2:111122223333:file-system/fs-…/access-point/fsap-…"
+              aria-invalid={errors.access_point_arn ? true : undefined} onChange={(e) => set("access_point_arn", e.target.value)} />
+          </Reasoned>,
           t("v3.storage.form.arnHint"))}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <label className="v3-field">

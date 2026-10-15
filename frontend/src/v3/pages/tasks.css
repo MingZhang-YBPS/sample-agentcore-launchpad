@@ -27,8 +27,9 @@
 .v3 .v3-task-opts.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .v3 .v3-task-opts.c4 { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .v3 .v3-task-opt { min-height: 0; }
-.v3 .v3-task-opt:disabled { opacity: 0.45; cursor: not-allowed; }
-.v3 .v3-task-opt:disabled:hover { border-color: var(--v3-line); background: var(--v3-ink-1); }
+.v3 .v3-task-opts > .v3-why { display: grid; }
+.v3 .v3-task-opt:disabled, .v3 .v3-task-opt[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.v3 .v3-task-opt:disabled:hover, .v3 .v3-task-opt[aria-disabled="true"]:hover { border-color: var(--v3-line); background: var(--v3-ink-1); }
 .v3 .v3-task-check { display: flex; gap: 8px; align-items: center; color: var(--v3-text); font-size: 13px; cursor: pointer; }
 .v3 .v3-task-steps { display: flex; gap: 4px; padding: 3px; border-radius: 9px; background: var(--v3-ink-1); border: 1px solid var(--v3-line); }
 .v3 .v3-task-steps button {

@@ -53,7 +53,7 @@ export function InviteDialog({ dept, onClose }: { dept: Department; onClose: () 
       ) : (
         <>
           <Btn kind="ghost" disabled={busy} onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || !ready} onClick={() => void submit()}>{t("v3.departments.invite.submit")}</Btn>
+          <Btn kind="primary" busy={busy} disabled={!ready} disabledReason={t("story.reason.fillRequired")} onClick={() => void submit()}>{t("v3.departments.invite.submit")}</Btn>
         </>
       )}
     >

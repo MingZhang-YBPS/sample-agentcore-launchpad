@@ -11,6 +11,7 @@ import { fmtNumber, RANGES, rangeLabel } from "../../../v2/format";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { ago, ms } from "../../format";
 import { useLoad } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import { TraceView } from "../observability/TraceView";
 import { AddToDataset } from "./AddToDataset";
@@ -89,7 +90,7 @@ export function TracesTab() {
             <input className="v3-input" style={{ paddingLeft: 34 }} value={q} onChange={(e) => setQ(e.target.value)}
               placeholder={t("v2.traces.search")} aria-label={t("v2.traces.search")} />
           </div>
-          <Btn kind="primary" disabled={sessions.length === 0} onClick={() => setAdding(true)}>
+          <Btn kind="primary" disabled={sessions.length === 0} disabledReason={t("story.reason.selectRows")} onClick={() => setAdding(true)}>
             <DatabaseZap size={14} /> {t("v2.traces.addToDataset", { count: sessions.length })}
           </Btn>
         </div>
@@ -136,9 +137,10 @@ export function TracesTab() {
                   <tr key={r.trace_id} className="click"
                     onClick={() => setParams({ tab: "traces", view: "trace", id: r.trace_id, range })}>
                     <td onClick={(e) => e.stopPropagation()}>
-                      <input type="checkbox" aria-label={r.trace_id} disabled={!r.session_id}
-                        title={r.session_id ? undefined : t("v2.traces.noSession")}
-                        checked={selected.has(r.trace_id)} onChange={() => toggle(r.trace_id)} />
+                      <Reasoned disabledReason={t("v2.traces.noSession")}>
+                        <input type="checkbox" aria-label={r.trace_id} disabled={!r.session_id}
+                          checked={selected.has(r.trace_id)} onChange={() => toggle(r.trace_id)} />
+                      </Reasoned>
                     </td>
                     <td style={{ width: 24 }}><Lamp s={r.status === "ok" ? "ok" : "act"} /></td>
                     <td>
@@ -190,7 +192,7 @@ export function DataTrace({ traceId }: { traceId: string }) {
   return (
     <div className="v3-obs" style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <Btn kind="primary" disabled={!sessionId} title={sessionId ? undefined : t("v2.traces.noSession")} onClick={() => setAdding(true)}>
+        <Btn kind="primary" disabled={!sessionId} disabledReason={t("v2.traces.noSession")} onClick={() => setAdding(true)}>
           <DatabaseZap size={14} /> {t("v2.traces.addOne")}
         </Btn>
       </div>

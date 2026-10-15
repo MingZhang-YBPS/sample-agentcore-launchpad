@@ -162,7 +162,7 @@ function WorkspacesTab({ dept }: { dept: Department }) {
             {choices.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.id})</option>)}
           </select>
         </label>
-        <Btn kind="primary" disabled={busy || !pick}
+        <Btn kind="primary" busy={busy} disabled={!pick} disabledReason={t("story.reason.pickWorkspace")}
           onClick={() => void put({ add: [pick] }, "v3.departments.workspaces.opened", choices.find((w) => w.id === pick)?.name ?? pick)}>
           <Plus size={14} /> {t("v3.departments.workspaces.openSubmit")}
         </Btn>

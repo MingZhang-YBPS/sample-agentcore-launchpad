@@ -25,6 +25,7 @@ import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { LEVELS } from "./common";
 
@@ -209,12 +210,14 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
       <Panel title={t("v2.evaluators.definitionLabel")}>
         <div className="v3-ev-defs" role="radiogroup" aria-label={t("v2.evaluators.definitionLabel")}>
           {(["judge", "derived", "code"] as const).map((def) => (
-            <button key={def} type="button" role="radio" aria-checked={draft.definition === def}
-              className={draft.definition === def ? "v3-ev-def on" : "v3-ev-def"}
-              disabled={editing && draft.definition !== def} onClick={() => set({ definition: def })}>
-              <b>{t(`v2.evaluators.definition.${def}`)}</b>
-              <small>{t(`v2.evaluators.definitionDesc.${def}`)}</small>
-            </button>
+            <Reasoned key={def} disabledReason={t("story.reason.fixedOnceCreated")}>
+              <button type="button" role="radio" aria-checked={draft.definition === def}
+                className={draft.definition === def ? "v3-ev-def on" : "v3-ev-def"}
+                disabled={editing && draft.definition !== def} onClick={() => set({ definition: def })}>
+                <b>{t(`v2.evaluators.definition.${def}`)}</b>
+                <small>{t(`v2.evaluators.definitionDesc.${def}`)}</small>
+              </button>
+            </Reasoned>
           ))}
         </div>
       </Panel>
@@ -223,7 +226,9 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
         <div className="v3-grid c2" style={{ alignItems: "start" }}>
           <label className="v3-field">
             <span>{t("v2.evaluators.colName")}</span>
-            <input className="v3-input mono" value={draft.name} disabled={editing} placeholder="answer_faithfulness" onChange={(e) => set({ name: e.target.value })} />
+            <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+              <input className="v3-input mono" value={draft.name} disabled={editing} placeholder="answer_faithfulness" onChange={(e) => set({ name: e.target.value })} />
+            </Reasoned>
             <small className="v3-hint">{t("v2.evaluators.nameHint")}</small>
           </label>
           {draft.definition !== "derived" && (
@@ -257,10 +262,12 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
           {draft.definition === "derived" && (
             <label className="v3-field">
               <span>{t("v2.evaluators.base")}</span>
-              <select className="v3-select" value={draft.base_evaluator_id} disabled={editing} onChange={(e) => set({ base_evaluator_id: e.target.value })}>
-                <option value="">{t("v3.evaluators.choose")}</option>
-                {bases.map((b) => <option key={b.id} value={b.id}>{`${evaluatorLabel(t, b.id)} · ${b.id}`}</option>)}
-              </select>
+              <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+                <select className="v3-select" value={draft.base_evaluator_id} disabled={editing} onChange={(e) => set({ base_evaluator_id: e.target.value })}>
+                  <option value="">{t("v3.evaluators.choose")}</option>
+                  {bases.map((b) => <option key={b.id} value={b.id}>{`${evaluatorLabel(t, b.id)} · ${b.id}`}</option>)}
+                </select>
+              </Reasoned>
             </label>
           )}
           {draft.definition === "code" && (
@@ -329,7 +336,8 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
                     onChange={(e) => set({ rating_scale: draft.rating_scale.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} />
                   <input className="v3-input" value={p.definition} placeholder={t("v2.evaluators.scaleDefinition")} aria-label={t("v2.evaluators.scaleDefinition")}
                     onChange={(e) => set({ rating_scale: draft.rating_scale.map((x, j) => (j === i ? { ...x, definition: e.target.value } : x)) })} />
-                  <Btn size="sm" kind="ghost" disabled={draft.rating_scale.length <= 2} title={t("v3.evaluators.delete")}
+                  <Btn size="sm" kind="ghost" disabled={draft.rating_scale.length <= 2} disabledReason={t("story.reason.twoScalePoints")}
+                    title={t("v3.evaluators.delete")} aria-label={t("v3.evaluators.delete")}
                     onClick={() => set({ rating_scale: draft.rating_scale.filter((_, j) => j !== i) })}>
                     <Trash2 size={13} />
                   </Btn>

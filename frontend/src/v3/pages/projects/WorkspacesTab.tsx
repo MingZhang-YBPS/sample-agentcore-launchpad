@@ -82,7 +82,7 @@ export function WorkspacesTab({
             <option value="">{t("v3.projects.workspaces.pick")}</option>
             {free.map((w) => <option key={w.id} value={w.id}>{w.region ? `${w.name} · ${w.region}` : w.name}</option>)}
           </select>
-          <Btn kind="primary" disabled={!pick || busy}
+          <Btn kind="primary" busy={busy} disabled={!pick} disabledReason={t("story.reason.pickWorkspace")}
             onClick={() => void put({ bind: [pick] }, t("v3.projects.workspaces.bound", { workspace: free.find((w) => w.id === pick)?.name ?? pick }))}>
             <Link2 size={14} /> {t("v3.projects.workspaces.bind")}
           </Btn>
@@ -137,8 +137,8 @@ export function WorkspacesTab({
                           </Btn>
                         )}
                         {!project.is_default && (
-                          <Btn size="sm" kind="danger" disabled={busy || b.is_workspace_default}
-                            title={b.is_workspace_default ? t("v3.projects.workspaces.defaultFirst") : undefined}
+                          <Btn size="sm" kind="danger" busy={busy} disabled={b.is_workspace_default}
+                            disabledReason={t("v3.projects.workspaces.defaultFirst")}
                             onClick={() => setUnbinding(b)}>
                             <Unlink size={12} /> {t("v3.projects.workspaces.unbind")}
                           </Btn>

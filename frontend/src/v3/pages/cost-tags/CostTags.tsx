@@ -77,7 +77,7 @@ export function Activation({ status, onActivated }: { status: ActivationStatus; 
           </Notice>
         ) : todo.length > 0 ? (
           <div style={{ display: "grid", gap: 6 }}>
-            <Btn kind="primary" disabled={busy || !status.can_activate} onClick={() => void activate()}>
+            <Btn kind="primary" busy={busy} disabled={!status.can_activate} disabledReason={t("story.reason.managementAccountOnly")} onClick={() => void activate()}>
               <Zap size={14} /> {t("v3.costTags.activate", { count: todo.length })}
             </Btn>
             <small className="v3-hint">{t("v3.costTags.activateHint", { hours: status.activation_delay_hours })}</small>

@@ -196,7 +196,7 @@ export function V3Environments() {
         title={t("v3.environments.title")}
         sub={t("v3.environments.sub")}
         end={
-          <Btn kind="primary" disabled={checking || !ws} onClick={() => void check()}>
+          <Btn kind="primary" busy={checking} disabled={!ws} disabledReason={t("story.reason.pickWorkspace")} onClick={() => void check()}>
             <Radar size={14} /> {checking ? t("v2.environments.checking") : t("v2.environments.check")}
           </Btn>
         }
@@ -252,7 +252,7 @@ export function V3Environments() {
             <input className="v3-input" style={{ paddingLeft: 34 }} value={lookup} maxLength={64} onChange={(e) => setLookup(e.target.value)}
               placeholder={t("v2.environments.agentPlaceholder")} aria-label={t("v2.environments.agentLabel")} />
           </div>
-          <Btn type="submit" disabled={looking || !lookup.trim()}>{t("v2.environments.compare")}</Btn>
+          <Btn type="submit" busy={looking} disabled={!lookup.trim()} disabledReason={t("story.reason.typeAgentName")}>{t("v2.environments.compare")}</Btn>
         </form>
       </div>
 
