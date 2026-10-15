@@ -40,7 +40,7 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import simulation, telemetry
+from app.evaluation import run_cost, simulation, telemetry
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import (
@@ -624,6 +624,10 @@ def execute_run(
                     **pinned,
                 )
 
+            # eval-cost §1.2: every invoke's usage and wall time, for the live spend
+            live_spend = run_cost.LiveSpend.for_run(run_id)
+            invoke = live_spend.metered(invoke)
+
             budget_stops: list[dict[str, str]] = []
             attempts: list[dict[str, Any]] = []
             # A simulated persona that still fails after its retries is skipped,
@@ -713,7 +717,7 @@ def execute_run(
                 })
                 _update(run_id, session_ids=list(session_ids),
                         budget_stops=list(budget_stops) or None,
-                        attempts=list(attempts))
+                        attempts=list(attempts), cost_actual=live_spend.session_done())
             if not session_ids:
                 first = scenario_failures[0] if scenario_failures else {}
                 raise RuntimeError(
@@ -780,6 +784,9 @@ def execute_run(
         _update(run_id, status="failed", error=" · ".join(parts)[:500])
     finally:
         stop_flags.clear(run_id)
+        # a run the finish path did not price (failed / stopped mid-replay) still
+        # records what it had spent
+        _record_cost(run_id, workspace, only_if_missing=True)
 
 
 def _stop_batch_if_requested(run_id: str, data: Any, batch_id: str) -> None:
@@ -843,6 +850,7 @@ def _finish_from_result(
                 result, records_reader=_records_reader(workspace, result))}
         )
         _update(run_id, status="stopped", error=reason[:500], **parsed)
+        _record_cost(run_id, workspace)
         return
     if status not in ac.EVAL_TERMINAL:
         # Not a failure on AWS: the batch outlived the wait. Say so, and point at
@@ -868,6 +876,7 @@ def _finish_from_result(
     if mode == "insights":
         _update(run_id, status="completed", insights=ac.parse_insights(result),
                 error=error)
+        _record_cost(run_id, workspace)
     else:
         reader = _records_reader(workspace, result)
         scores = ac.parse_eval_scores(result, records_reader=reader)
@@ -882,6 +891,14 @@ def _finish_from_result(
             from app.dlc.engine import finalize_run
 
             finalize_run(run_id, workspace)
+        _record_cost(run_id, workspace, records_reader=getattr(reader, "peek", None))
+
+
+def _record_cost(run_id: str, workspace: WorkspaceContext | None, *,
+                 records_reader: Any = None, only_if_missing: bool = False) -> None:
+    """`cost_actual` at a terminal state (eval-cost §1.2) — never raises."""
+    run_cost.record(run_id, workspace, records_reader=records_reader,
+                    only_if_missing=only_if_missing)
 
 
 def _session_failures(run_id: str, result: dict[str, Any], reader: Any) -> dict[str, Any] | None:
@@ -914,6 +931,9 @@ def _records_reader(workspace: WorkspaceContext | None, result: dict[str, Any]) 
             cache.append(ac.read_result_records(workspace.client("logs"), *location))
         return cache[0]
 
+    # the records if something already read them, without a read of its own: the
+    # run's cost counts judge tokens from them only when they come for free
+    read.peek = lambda: cache[0] if cache else []  # type: ignore[attr-defined]
     return read
 
 
@@ -934,6 +954,7 @@ def reconcile_run(
         _finish_from_result(run_id, mode, result, workspace=workspace)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+        _record_cost(run_id, workspace, only_if_missing=True)
 
 
 def request_stop(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
@@ -972,6 +993,7 @@ def request_stop(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
         # the flag is not needed (no callable will ever read it).
         stop_flags.clear(run_id)
         _update(run_id, status="stopped", error=STOP_REASON)
+        _record_cost(run_id, workspace)
     db = SessionLocal()
     try:
         return db.get(EvalRun, run_id)
@@ -1022,6 +1044,7 @@ def recheck_run(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
             _finish_from_result(run_id, mode, result, workspace=workspace)
         except RuntimeError as exc:
             _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+            _record_cost(run_id, workspace, only_if_missing=True)
     else:
         _update(run_id, status="evaluating", error=None)
         # the row's project, not the caller's: its slot counts against that project's
@@ -1113,6 +1136,7 @@ def resume_interrupted_runs() -> list[str]:
     try:
         rows = db.query(EvalRun).filter(EvalRun.status.in_(INTERRUPTED_STATUSES)).all()
         resumed: list[str] = []
+        failed: list[str] = []
         for run in rows:
             if run.status == "evaluating" and run.batch_eval_id:
                 # The workspace is rebuilt from the row, not from ambient
@@ -1133,7 +1157,10 @@ def resume_interrupted_runs() -> list[str]:
                 run.status = "failed"
                 run.error = ("interrupted by a backend restart before the batch "
                              "evaluation started — submit the run again")
+                failed.append(run.id)
         db.commit()
+        for run_id in failed:  # what the replay had spent before the restart
+            _record_cost(run_id, None, only_if_missing=True)
         return resumed
     finally:
         db.close()

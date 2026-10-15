@@ -2041,3 +2041,13 @@ SHARE_NOTICE_ROUTES: dict[tuple[str, str], str] = {
 }
 ROUTE_POLICY.update(SHARE_NOTICE_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SHARE_NOTICE_ROUTES)
+
+# ---- EC-1/EC-2: evaluation cost — estimate every entry, record what a run cost
+# (eval-cost §1). Reads of the project's own runs and online configs: the run /
+# config of another project answers 404 in the handler, like the run detail.
+EVAL_COST_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/eval/run-costs"): PERM_PROJECT_USE,
+    ("GET", "/api/eval/runs/{run_id}/cost"): PERM_PROJECT_USE,
+    ("GET", "/api/eval/online/{config_id}/cost"): PERM_PROJECT_USE,
+}
+ROUTE_POLICY.update(EVAL_COST_ROUTES)

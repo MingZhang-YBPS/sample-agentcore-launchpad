@@ -1557,6 +1557,13 @@ class EstimateIn(BaseModel):
     # price the agent's open release's gate evaluation (both golden splits with the
     # criteria's evaluators) — what `release/evaluate` will run and enforce
     release: bool = False
+    # eval-cost §1.1: every entry. `replay` (a dataset, the default), `passive`
+    # (`sessions` picked sessions, or the agent's traffic over `lookback_hours`) or
+    # `online` (`sampling_percentage` of the agent's daily sessions, per day)
+    scope: Literal["replay", "passive", "online"] = "replay"
+    sessions: int | None = Field(default=None, ge=0, le=100_000)
+    lookback_hours: int | None = Field(default=None, ge=1, le=336)
+    sampling_percentage: float | None = Field(default=None, ge=0, le=100)
 
 
 @router.post("/eval/runs/estimate")
@@ -1579,26 +1586,96 @@ def estimate_run(
         else:
             gate_unavailable = "release.nothing_pending"
     items: list[dict[str, Any]] = []
-    if req.dataset_id:
+    if req.scope == "replay" and req.dataset_id:
         dataset = db.get(EvalDataset, req.dataset_id)
         if dataset is None or dataset.workspace_id != ws.id:
             raise NotFoundError("dataset.not_found", "dataset not found")
         items = golden_svc.active_items(dataset) if dataset.role == "golden" else (
             dataset.items or []
         )
-    elif req.items:
+    elif req.scope == "replay" and req.items:
         items = [{"scenario_id": f"n{n}", "turns": [{"input": ""}]} for n in range(req.items)]
     rows = []
     if agent is not None:
         cset = criteria_svc.agent_set(db, ws.id, agent.id)
         rows = criteria_svc.criteria_of(db, cset.id) if cset else []
+    sessions = req.sessions
+    if req.scope == "passive" and sessions is None:
+        sessions = cost_svc.window_sessions(db, agent, ws.context,
+                                            hours=req.lookback_hours or 24)
+    elif req.scope == "online" and sessions is None:
+        sessions = cost_svc.online_sessions_per_day(
+            db, agent, ws.context, sampling_percentage=(
+                req.sampling_percentage if req.sampling_percentage is not None else 10))
     out = cost_svc.estimate(
         db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=items,
-        evaluators=req.evaluators, repeats=req.repeats, criteria_rows=rows,
+        evaluators=req.evaluators, repeats=req.repeats if req.scope == "replay" else 1,
+        criteria_rows=rows, scope=req.scope, sessions=sessions,
+        period="day" if req.scope == "online" else "run",
     )
+    if req.scope != "replay":
+        # the session count is itself estimated from the agent's last 7 days
+        out["sessions_basis"] = "given" if req.sessions is not None else "history_7d"
     if gate_unavailable:
         out["gate_unavailable"] = gate_unavailable
     return out
+
+
+def _visible_run(db: Session, ws: WorkspaceScope, viewer: Viewer, run_id: str) -> EvalRun:
+    """The run, or 404 — also another project's or a workspace-isolated one."""
+    run = owned_get(db, EvalRun, run_id)
+    if (run is None or run.workspace_id != ws.id
+            or not visibility.sees(viewer, db, run.created_by)):
+        raise NotFoundError("run.not_found", "run not found")
+    return run
+
+
+@router.get("/eval/run-costs")
+def run_costs(
+    runs: str = Query(max_length=2000, description="comma-separated run ids"),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """The task list's cost column: per run the measured total, the live spend while
+    it runs, or the estimate — each marked. A run the caller cannot see is left out."""
+    from app.evaluation import run_cost
+
+    out: dict[str, Any] = {}
+    for run_id in [r.strip() for r in runs.split(",") if r.strip()][:200]:
+        run = owned_get(db, EvalRun, run_id)
+        if (run is None or run.workspace_id != ws.id
+                or not visibility.sees(viewer, db, run.created_by)):
+            continue
+        out[run_id] = run_cost.summary(run)
+    return {"costs": out}
+
+
+@router.get("/eval/runs/{run_id}/cost")
+def run_cost_card(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """The task detail's "This run's cost": measured vs estimate, live while running."""
+    from app.evaluation import run_cost
+
+    return run_cost.card(_visible_run(db, ws, viewer, run_id))
+
+
+@router.get("/eval/online/{config_id}/cost")
+def online_daily_cost(
+    config_id: str,
+    days: int = Query(default=7, ge=1, le=30),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """An online evaluation's cost per day (another project's config answers 404)."""
+    from app.evaluation import online
+
+    return online.daily_cost(db, ws, config_id, days=days, viewer=viewer)
 
 
 # ── audit ──────────────────────────────────────────────────────────────────────
