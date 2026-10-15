@@ -146,6 +146,10 @@ const V3NetworkProfiles = lazy(() =>
 );
 // Configure → Storage (storage-mounts §10)
 const V3Storage = lazy(() => import("./v3/pages/storage/Storage").then((m) => ({ default: m.V3Storage })));
+// Configure → System update (online-update §2.7)
+const V3SystemUpdate = lazy(() =>
+  import("./v3/pages/system-update/SystemUpdate").then((m) => ({ default: m.V3SystemUpdate })),
+);
 const V3Knowledge = lazy(() => import("./v3/pages/Knowledge").then((m) => ({ default: m.V3Knowledge })));
 const V2Home = lazy(() => import("./v2/pages/Home").then((m) => ({ default: m.V2Home })));
 const V2DataCenter = lazy(() =>
@@ -397,6 +401,7 @@ export default function App() {
                 <Route path="projects" element={<V3Projects />} />
                 <Route path="project-settings" element={<V3ProjectSettings />} />
                 <Route path="models" element={<V3Models />} />
+                <Route path="system-update" element={<V3SystemUpdate />} />
                 <Route path="identity" element={<V3Identity />} />
                 <Route path="fleet" element={<V3Fleet />} />
                 <Route path="announcements" element={<V3Announcements />} />

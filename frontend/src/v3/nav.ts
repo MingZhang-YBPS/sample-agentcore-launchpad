@@ -1,4 +1,4 @@
-import { Building2, Cpu, FolderCog, FolderKanban, HardDrive, Network, UserCog, Waypoints, Wrench } from "lucide-react";
+import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, Network, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -52,7 +52,11 @@ const RETARGET: Record<string, Pick<V2NavItem, "to" | "labelKey">> = {
 /** Pages only V3 has (no V2 twin), appended to their V2 group. */
 export const V3_ONLY: Record<string, V2NavItem[]> = {
   // the platform's model roles (judge, actor, defaults…) — hub-global, admin-only
-  admin: [{ to: "/v3/models", labelKey: "v3.models.nav", icon: Cpu, admin: true }],
+  // and the console's own online update (online-update §2.7) — hub-global, admin-only
+  admin: [
+    { to: "/v3/models", labelKey: "v3.models.nav", icon: Cpu, admin: true },
+    { to: "/v3/system-update", labelKey: "v3.systemUpdate.nav", icon: DownloadCloud, admin: true },
+  ],
 };
 
 /**

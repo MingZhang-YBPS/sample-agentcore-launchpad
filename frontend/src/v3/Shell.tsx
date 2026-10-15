@@ -31,6 +31,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
 import { api } from "../lib/api";
+import { systemUpdateApi } from "../lib/api/systemUpdate";
 import type { AccessProject } from "../lib/api/projects";
 import { useNavMode } from "../lib/nav-mode";
 import { setUiVersion } from "../lib/ui-version";
@@ -198,6 +199,20 @@ const HUB_GLOBAL = new Set([
   // people and structure (projects §7.9): never bound to the workspace or project in the switcher
   "/v3/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments",
 ]);
+
+/** The running commit (online-update §2.6), for whoever reports a problem. */
+function FooterVersion() {
+  const { t } = useTranslation();
+  const version = useLoad(() => systemUpdateApi.version(), "v3-footer-version");
+  const short = version.data?.short;
+  if (!short) return null;
+  return (
+    <span className="mono" data-testid="v3-footer-version" title={t("v3.systemUpdate.footer", { sha: version.data?.sha ?? short })}
+      style={{ color: "var(--v3-text-3)", fontSize: 11, marginLeft: 8 }}>
+      {short}
+    </span>
+  );
+}
 
 export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const { t } = useTranslation();
@@ -470,6 +485,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
             <span className="mono" style={{ color: "var(--v3-text-3)", fontSize: 11 }}>
               {current ? `${current.region}` : ""}
             </span>
+            <FooterVersion />
           </div>
         </nav>
 
