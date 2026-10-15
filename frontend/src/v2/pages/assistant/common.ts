@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext } from "react";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, type AssistantProposalStatus, errorMessage } from "../../../lib/api";
+import type { AssistantProposalStatus } from "../../../lib/api";
+import { errorText } from "../../../lib/errors";
 import type { TagTone } from "../../ui";
 
 /** True while an administrator reads another member's unshared conversation: the
@@ -48,13 +49,12 @@ export const STAGE_TONE: Record<string, TagTone> = {
   failed: "red",
 };
 
-/** API errors in the console's copy (`apiErrors.<code>`), else the raw message. */
+/** API errors in the console's copy (`apiErrors.<code>`, the shared `errorText`), else
+ *  the raw message. `t` re-creates the callback when the language changes. */
 export function useApiMessage() {
   const { t } = useTranslation();
-  return useCallback(
-    (err: unknown) => (err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err)),
-    [t],
-  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- t: re-word on a language change
+  return useCallback((err: unknown) => errorText(err), [t]);
 }
 
 export const shortId = (id: string | null | undefined, n = 8) => (id ?? "").slice(0, n);
