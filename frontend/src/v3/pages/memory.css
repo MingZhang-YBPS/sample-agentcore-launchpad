@@ -8,7 +8,7 @@
   background: none; color: var(--v3-text-2); font: inherit; text-align: left; cursor: pointer; min-width: 0;
 }
 .v3 .v3-mem-item:hover { background: var(--v3-ink-3); color: var(--v3-text); }
-.v3 .v3-mem-item.on { border-color: rgba(62, 240, 180, 0.35); background: var(--v3-ok-dim); color: var(--v3-text); }
+.v3 .v3-mem-item.on { border-color: color-mix(in srgb, var(--v3-ok) 35%, transparent); background: var(--v3-ok-dim); color: var(--v3-text); }
 .v3 .v3-mem-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3 .v3-mem-item small { font-size: 11.5px; color: var(--v3-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3 .v3-mem-empty { padding: 24px 8px; text-align: center; color: var(--v3-text-3); font-size: 13px; }

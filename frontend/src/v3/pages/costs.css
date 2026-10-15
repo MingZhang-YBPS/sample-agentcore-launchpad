@@ -9,7 +9,7 @@
 .v3 .v3-cost-gauge { position: relative; height: 6px; border-radius: 3px; background: var(--v3-line); margin-top: 8px; overflow: visible; }
 .v3 .v3-cost-gauge > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--v3-ok); }
 .v3 .v3-cost-gauge[data-s="wait"] > i { background: var(--v3-wait); }
-.v3 .v3-cost-gauge[data-s="act"] > i { background: var(--v3-act); box-shadow: 0 0 12px rgba(255, 92, 108, 0.5); }
+.v3 .v3-cost-gauge[data-s="act"] > i { background: var(--v3-act); box-shadow: 0 0 12px color-mix(in srgb, var(--v3-act) 50%, transparent); }
 .v3 .v3-cost-gauge[data-s="off"] > i { background: var(--v3-line-2); }
 .v3 .v3-cost-gauge .line { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--v3-text); border-radius: 1px; }
 

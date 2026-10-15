@@ -6,7 +6,7 @@
   font: inherit; cursor: pointer; transition: border-color 0.15s, background 0.15s;
 }
 .v3 .v3-ev-def:hover:not(:disabled) { border-color: var(--v3-line-2); background: var(--v3-ink-2); }
-.v3 .v3-ev-def.on { border-color: rgba(62, 240, 180, 0.55); background: var(--v3-ok-dim); }
+.v3 .v3-ev-def.on { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); background: var(--v3-ok-dim); }
 .v3 .v3-ev-def:disabled { opacity: 0.4; cursor: not-allowed; }
 .v3 .v3-ev-def small { color: var(--v3-text-2); font-size: 12.5px; line-height: 1.5; }
 @media (max-width: 980px) { .v3 .v3-ev-defs { grid-template-columns: minmax(0, 1fr); } }

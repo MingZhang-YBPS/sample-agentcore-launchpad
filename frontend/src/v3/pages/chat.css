@@ -15,7 +15,7 @@
   padding: 16px;
   border: 1px solid var(--v3-line);
   border-radius: var(--v3-r);
-  background: rgba(16, 26, 45, 0.6);
+  background: color-mix(in srgb, var(--v3-ink-2) 60%, transparent);
 }
 .v3 .v3-chat-sessions { display: grid; gap: 4px; overflow-y: auto; min-height: 0; align-content: start; }
 .v3 .v3-chat-session {
@@ -31,7 +31,7 @@
   cursor: pointer;
 }
 .v3 .v3-chat-session:hover { background: var(--v3-ink-3); color: var(--v3-text); }
-.v3 .v3-chat-session.on { border-color: rgba(62, 240, 180, 0.35); background: var(--v3-ok-dim); color: var(--v3-text); }
+.v3 .v3-chat-session.on { border-color: color-mix(in srgb, var(--v3-ok) 35%, transparent); background: var(--v3-ok-dim); color: var(--v3-text); }
 .v3 .v3-chat-session .preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .v3 .v3-chat-session .meta { font-size: 11px; color: var(--v3-text-3); }
 
@@ -41,7 +41,7 @@
   min-height: 0;
   border: 1px solid var(--v3-line);
   border-radius: var(--v3-r);
-  background: rgba(11, 18, 32, 0.72);
+  background: color-mix(in srgb, var(--v3-ink-1) 72%, transparent);
   overflow: hidden;
 }
 .v3 .v3-chat-head {
@@ -114,7 +114,7 @@
   cursor: pointer;
 }
 .v3 .v3-msg-actions button:hover { background: var(--v3-ink-3); color: var(--v3-text); }
-.v3 .v3-msg-actions button[aria-pressed="true"] { color: var(--v3-ok); border-color: rgba(62, 240, 180, 0.35); }
+.v3 .v3-msg-actions button[aria-pressed="true"] { color: var(--v3-ok); border-color: color-mix(in srgb, var(--v3-ok) 35%, transparent); }
 
 .v3 .v3-chat-composer {
   display: flex;
@@ -126,10 +126,10 @@
   border-radius: 14px;
   border: 1px solid var(--v3-line-2);
   background: var(--v3-ink-2);
-  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 10px 30px -12px color-mix(in srgb, var(--v3-shade) 60%, transparent);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-.v3 .v3-chat-composer:focus-within { border-color: rgba(62, 240, 180, 0.55); box-shadow: 0 0 0 3px var(--v3-ok-dim); }
+.v3 .v3-chat-composer:focus-within { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); box-shadow: 0 0 0 3px var(--v3-ok-dim); }
 .v3 .v3-chat-composer textarea {
   flex: 1;
   min-height: 24px;
@@ -154,7 +154,7 @@
 /* a Cedar policy denied a tool call: coral, because it needs a person to change a rule */
 .v3 .v3-deny {
   display: grid; gap: 10px; padding: 14px 16px; border-radius: 10px;
-  border: 1px solid rgba(255, 92, 108, 0.4); background: var(--v3-act-dim);
+  border: 1px solid color-mix(in srgb, var(--v3-act) 40%, transparent); background: var(--v3-act-dim);
 }
 .v3 .v3-deny .head { display: flex; align-items: center; gap: 10px; color: var(--v3-act); }
 .v3 .v3-deny .head b { color: var(--v3-text); }

@@ -13,20 +13,20 @@
 
 .v3 .v2.v3-host {
   --v2-primary: var(--v3-info);
-  --v2-primary-hover: #93bfff;
-  --v2-primary-active: #4d8cf0;
+  --v2-primary-hover: var(--v3-info-hover);
+  --v2-primary-active: var(--v3-info-active);
   --v2-primary-soft: var(--v3-info-dim);
-  --v2-primary-line: rgba(110, 168, 255, 0.4);
+  --v2-primary-line: color-mix(in srgb, var(--v3-info) 40%, transparent);
   --v2-bg: transparent;
   --v2-card: var(--v3-ink-2);
   --v2-fill: var(--v3-ink-1);
   --v2-fill-2: var(--v3-ink-3);
   --v2-line: var(--v3-line);
-  --v2-line-2: #17233a;
+  --v2-line-2: var(--v3-line-soft);
   --v2-ink: var(--v3-text);
   --v2-ink-2: var(--v3-text-2);
   --v2-ink-3: var(--v3-text-3);
-  --v2-ink-4: #46536c;
+  --v2-ink-4: var(--v3-text-4);
   --v2-success: var(--v3-ok);
   --v2-success-soft: var(--v3-ok-dim);
   --v2-warning: var(--v3-wait);
@@ -35,25 +35,26 @@
   --v2-danger-soft: var(--v3-act-dim);
   --v2-radius: var(--v3-r);
   --v2-radius-sm: var(--v3-r-sm);
-  --v2-shadow: 0 1px 0 rgba(255, 255, 255, 0.025) inset, 0 20px 40px -24px rgba(0, 0, 0, 0.6);
+  --v2-shadow: 0 1px 0 rgba(255, 255, 255, 0.025) inset, 0 20px 40px -24px color-mix(in srgb, var(--v3-shade) 60%, transparent);
   --v2-font: var(--v3-body);
   --v2-mono: var(--v3-mono);
 
-  --v2-on-primary: #04150e;
-  --v2-primary-disabled: rgba(62, 240, 180, 0.3);
-  --v2-danger-line: rgba(255, 92, 108, 0.45);
-  --v2-success-line: rgba(62, 240, 180, 0.3);
-  --v2-warning-line: rgba(255, 181, 71, 0.35);
+  --v2-on-primary: var(--v3-on-ok);
+  --v2-primary-disabled: color-mix(in srgb, var(--v3-ok) 30%, transparent);
+  --v2-danger-line: color-mix(in srgb, var(--v3-act) 45%, transparent);
+  --v2-success-line: color-mix(in srgb, var(--v3-ok) 30%, transparent);
+  --v2-warning-line: color-mix(in srgb, var(--v3-wait) 35%, transparent);
   --v2-success-ink: var(--v3-ok);
   --v2-success-ink-2: var(--v3-ok);
   --v2-warning-ink: var(--v3-wait);
   --v2-warning-ink-2: var(--v3-wait);
   --v2-danger-ink: var(--v3-act);
-  --v2-row-hover: rgba(110, 168, 255, 0.05);
+  --v2-row-hover: color-mix(in srgb, var(--v3-info) 5%, transparent);
+  /* data-series hues (tags, charts) that are not V3 signals */
   --v2-purple: #b48cff;
-  --v2-purple-soft: rgba(180, 140, 255, 0.14);
+  --v2-purple-soft: color-mix(in srgb, var(--v2-purple) 14%, transparent);
   --v2-cyan: #4fe3e3;
-  --v2-mask: rgba(3, 6, 12, 0.7);
+  --v2-mask: color-mix(in srgb, var(--v3-scrim) 70%, transparent);
 
   /* the V2 root is a full-page flex shell; here it is just the page body */
   display: block;
@@ -69,7 +70,7 @@
 .v3 .v3-host .v2-kpi,
 .v3 .v3-host .v2-flow-head {
   position: relative;
-  background: linear-gradient(180deg, rgba(22, 35, 59, 0.66), rgba(16, 26, 45, 0.66));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--v3-ink-3) 66%, transparent), color-mix(in srgb, var(--v3-ink-2) 66%, transparent));
   border: 1px solid var(--v3-line);
 }
 .v3 .v3-host .v2-card::after,
@@ -123,17 +124,17 @@
 
 /* ── controls ────────────────────────────────────────────────────────────── */
 .v3 .v3-host .v2-btn { border-radius: 8px; background: var(--v3-ink-3); border-color: var(--v3-line-2); }
-.v3 .v3-host .v2-btn:hover:not(:disabled) { color: var(--v3-text); border-color: var(--v3-text-3); background: #1b2a46; }
+.v3 .v3-host .v2-btn:hover:not(:disabled) { color: var(--v3-text); border-color: var(--v3-text-3); background: var(--v3-ink-hover); }
 .v3 .v3-host .v2-btn:disabled { background: var(--v3-ink-2); color: var(--v3-text-3); opacity: 0.6; }
 .v3 .v3-host .v2-btn.primary {
-  color: #04150e;
+  color: var(--v3-on-ok);
   background: var(--v3-ok);
   border-color: var(--v3-ok);
   font-weight: 650;
 }
-.v3 .v3-host .v2-btn.primary:hover:not(:disabled) { color: #04150e; background: #6af6c8; border-color: #6af6c8; box-shadow: 0 0 24px rgba(62, 240, 180, 0.3); }
-.v3 .v3-host .v2-btn.primary:disabled { color: rgba(4, 21, 14, 0.7); background: var(--v2-primary-disabled); border-color: transparent; }
-.v3 .v3-host .v2-btn.danger { color: var(--v3-act); border-color: rgba(255, 92, 108, 0.4); background: var(--v3-act-dim); }
+.v3 .v3-host .v2-btn.primary:hover:not(:disabled) { color: var(--v3-on-ok); background: var(--v3-ok-hover); border-color: var(--v3-ok-hover); box-shadow: 0 0 24px color-mix(in srgb, var(--v3-ok) 30%, transparent); }
+.v3 .v3-host .v2-btn.primary:disabled { color: color-mix(in srgb, var(--v3-on-ok) 70%, transparent); background: var(--v2-primary-disabled); border-color: transparent; }
+.v3 .v3-host .v2-btn.danger { color: var(--v3-act); border-color: color-mix(in srgb, var(--v3-act) 40%, transparent); background: var(--v3-act-dim); }
 .v3 .v3-host .v2-btn.soft { color: var(--v3-info); background: var(--v3-info-dim); border-color: transparent; }
 .v3 .v3-host .v2-input,
 .v3 .v3-host .v2-sel,
@@ -146,17 +147,17 @@
 .v3 .v3-host select option { background: var(--v3-ink-2); color: var(--v3-text); }
 .v3 .v3-host .v2-tag { font-family: var(--v3-mono); font-size: 11px; font-weight: 500; border-radius: 5px; }
 .v3 .v3-host .v2-alert { border: 1px solid var(--v3-line); }
-.v3 .v3-host .v2-alert.info { border-color: rgba(110, 168, 255, 0.3); color: var(--v3-text); }
-.v3 .v3-host .v2-alert.warn { border-color: rgba(255, 181, 71, 0.3); color: var(--v3-text); }
-.v3 .v3-host .v2-alert.error { border-color: rgba(255, 92, 108, 0.32); color: var(--v3-text); }
-.v3 .v3-host .v2-alert.success { border-color: rgba(62, 240, 180, 0.28); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.info { border-color: color-mix(in srgb, var(--v3-info) 30%, transparent); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.warn { border-color: color-mix(in srgb, var(--v3-wait) 30%, transparent); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.error { border-color: color-mix(in srgb, var(--v3-act) 32%, transparent); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.success { border-color: color-mix(in srgb, var(--v3-ok) 28%, transparent); color: var(--v3-text); }
 .v3 .v3-host .v2-steps button.on { background: var(--v3-ink-3); }
 
 /* ── overlays: modals, drawers, menus and toasts are portalled or fixed, and
      still inside .v3-host, so they pick the tokens up; give them depth ────── */
 .v3 .v3-host .v2-modal,
 .v3 .v3-host .v2-drawer,
-.v3 .v3-host .v2-toast { border: 1px solid var(--v3-line-2); box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8); }
+.v3 .v3-host .v2-toast { border: 1px solid var(--v3-line-2); box-shadow: 0 30px 80px -20px color-mix(in srgb, var(--v3-shade) 80%, transparent); }
 .v3 .v3-host .v2-mask { backdrop-filter: blur(3px); }
 
 /* the few page literals that are not tokens */
@@ -164,6 +165,21 @@
 .v3 .v3-host .v2-skilllab-md .hljs-string { color: var(--v3-ok); }
 .v3 .v3-host .v2-chat-thumb.on.up { color: var(--v3-ok); }
 .v3 .v3-host .v2-chat-thumb.on.down { color: var(--v3-act); }
+
+/* ── light theme: V2 pages were light to begin with, so most of this is the
+     V3 tokens doing their job; what is left are the series hues (back to V2's
+     own light values), flat white cards instead of the night gradient, and the
+     native controls ───────────────────────────────────────────────────────── */
+[data-theme="light"] .v3 .v2.v3-host {
+  --v2-purple: #722ed1;
+  --v2-purple-soft: #f5e8ff;
+  --v2-cyan: #0e8a8a;
+  --v2-shadow: 0 1px 2px color-mix(in srgb, var(--v3-shade) 40%, transparent), 0 16px 32px -24px var(--v3-shade);
+  color-scheme: light;
+}
+[data-theme="light"] .v3 .v3-host .v2-card,
+[data-theme="light"] .v3 .v3-host .v2-kpi,
+[data-theme="light"] .v3 .v3-host .v2-flow-head { background: var(--v3-ink-2); }
 
 /* ── classic module pages (`<V3Shell hosted="classic" />`) ───────────────────
    The classic pages are styled entirely through theme/tokens.css. Re-point those
@@ -195,3 +211,30 @@ body.v3-body {
   --bg-rgb: 11, 18, 32;
 }
 .v3 .v3-classic { font-family: var(--v3-body); }
+/* the classic pages by daylight: same mapping, the V3 light palette */
+[data-theme="light"] body.v3-body {
+  --bg: #f2f4f8;
+  --panel: #ffffff;
+  --panel-2: #e9edf4;
+  --line: #dce2ec;
+  --line-2: #bac4d4;
+  --grid: #e8ecf3;
+  --ink: #0e1829;
+  --ink-2: #424f67;
+  --ink-3: #56637b;
+  --amber: #026b4f;
+  --amber-soft: rgba(2, 107, 79, 0.1);
+  --amber-rgb: 2, 107, 79;
+  --amber-hover: #015a42;
+  --amber-active: #014a36;
+  --on-amber: #ffffff;
+  --good: #026b4f;
+  --warn: #925000;
+  --serious: #b4471b;
+  --crit: #b82133;
+  --crit-text: #951a2a;
+  --field: #fbfcfd;
+  --code-bg: #f2f4f8;
+  --tint-rgb: 0, 0, 0;
+  --bg-rgb: 242, 244, 248;
+}

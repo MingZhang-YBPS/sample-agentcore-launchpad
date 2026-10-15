@@ -13424,6 +13424,17 @@
         "acknowledge": "Mark as read",
         "acknowledged": "Marked as read"
       }
+    },
+    "theme": {
+      "label": "Theme",
+      "menu": "Colour theme",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System",
+      "lightHint": "White surfaces, deep signal colours",
+      "darkHint": "The control room — the default",
+      "systemHint": "Follows your device: {{theme}} now",
+      "current": "Theme: {{theme}}"
     }
   },
   "models": {

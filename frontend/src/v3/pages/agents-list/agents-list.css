@@ -3,7 +3,7 @@
 .v3 .v3-agent-list td.pick, .v3 .v3-agent-list th.pick { width: 36px; padding-right: 0; }
 .v3 .v3-agent-list td.end, .v3 .v3-agent-list th.end { width: 44px; text-align: right; white-space: nowrap; }
 .v3 .v3-agent-list tr.v3-agents-row { cursor: pointer; }
-.v3 .v3-agent-list tr.v3-agents-row:hover > td { background: rgba(110, 168, 255, 0.04); }
+.v3 .v3-agent-list tr.v3-agents-row:hover > td { background: color-mix(in srgb, var(--v3-info) 4%, transparent); }
 .v3 .v3-agents-row-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .v3 .v3-agents-bulk { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .v3 .v3-agents-bulk-list { display: grid; gap: 4px; max-height: 40vh; margin: 0; padding-left: 18px; overflow: auto; }

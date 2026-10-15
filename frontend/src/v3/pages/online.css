@@ -22,7 +22,7 @@
 }
 .v3 .v3-onl-mode small { color: var(--v3-text-2); font-size: 12.5px; line-height: 1.5; }
 .v3 .v3-onl-mode:hover:not(:disabled) { border-color: var(--v3-line-2); background: var(--v3-ink-2); }
-.v3 .v3-onl-mode.on { border-color: rgba(62, 240, 180, 0.55); background: var(--v3-ok-dim); }
+.v3 .v3-onl-mode.on { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); background: var(--v3-ok-dim); }
 .v3 .v3-onl-mode:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .v3 .v3-onl-filter { display: grid; grid-template-columns: 2fr 1.4fr 1fr 2fr auto; gap: 8px; align-items: center; }
