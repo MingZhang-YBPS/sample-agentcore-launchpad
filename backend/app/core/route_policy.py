@@ -2041,3 +2041,43 @@ SHARE_NOTICE_ROUTES: dict[tuple[str, str], str] = {
 }
 ROUTE_POLICY.update(SHARE_NOTICE_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SHARE_NOTICE_ROUTES)
+
+# ---- CT-2: cost allocation tags and the billing-basis cost view (cost-tags §1.4, §1.6) ----
+# The tag set and its activation state are the workspace account's billing
+# configuration: workspace-scoped, no project (PROJECT_EXEMPT), administrators' —
+# reading it is structure (it names no project's spend), activating it changes the
+# account's Billing settings: data, a steward does not. The billing view is cost
+# detail like `/api/costs`: administrators, data. A project's custom cost tags are
+# its owner's (`pperm:project.members`, like its other owner settings; the department
+# administrator through `dadmin`); its budget's basis qualifies the budget quota and is
+# set by the same people as `PUT .../quotas` (structure). Hub-global under
+# `/api/projects`: a non-member 404s.
+COST_TAG_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/cost-tags"): ADMIN,
+    ("POST", "/api/cost-tags/activate"): ADMIN,
+    ("GET", "/api/costs/billing"): ADMIN,
+    ("GET", "/api/projects/{project_id}/cost-tags"): MEMBER,
+    ("PUT", "/api/projects/{project_id}/cost-tags"): PPERM_PROJECT_MEMBERS,
+    ("PUT", "/api/projects/{project_id}/budget-basis"): ADMIN,
+}
+ROUTE_POLICY.update(COST_TAG_ROUTES)
+PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
+    ("GET", "/api/cost-tags"),
+    ("POST", "/api/cost-tags/activate"),
+    ("GET", "/api/costs/billing"),
+})
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {
+    ("GET", "/api/projects/{project_id}/cost-tags"),
+    ("PUT", "/api/projects/{project_id}/cost-tags"),
+    ("PUT", "/api/projects/{project_id}/budget-basis"),
+}
+DEPARTMENT_ADMIN_ROUTES.update({
+    ("PUT", "/api/projects/{project_id}/cost-tags"): "project",
+    ("PUT", "/api/projects/{project_id}/budget-basis"): "project",
+})
+ADMIN_SPLIT.update({
+    ("GET", "/api/cost-tags"): ADMIN,
+    ("POST", "/api/cost-tags/activate"): ADMIN_DATA,
+    ("GET", "/api/costs/billing"): ADMIN_DATA,
+    ("PUT", "/api/projects/{project_id}/budget-basis"): ADMIN,
+})
