@@ -45,6 +45,10 @@ describe("NEXT_ACTIONS", () => {
     expect(NEXT_ACTIONS["gate.open"].to({ agent_id: "a b" })).toBe("/v3/gate?agent=a+b");
     expect(NEXT_ACTIONS["eval.new"].to({ agent_id: "ag-1" })).toBe("/v3/tasks?view=new&agent=ag-1");
     expect(NEXT_ACTIONS["agent.create"].to({})).toBe("/v3/create");
+    // the feedback and observe steps carry the agent, so the page's position line shows
+    expect(NEXT_ACTIONS["issues.open"].to({ agent_id: "ag-1" })).toBe("/v3/issues?agent=ag-1");
+    expect(NEXT_ACTIONS["issues.open"].to({})).toBe("/v3/issues");
+    expect(NEXT_ACTIONS["traces.open"].to({ agent_id: "ag-1" })).toBe("/v3/observability?tab=traces&agent=ag-1");
   });
 
   it("drops an action the console does not know (frontend and backend ship apart)", () => {

@@ -55,6 +55,7 @@ import { hostedGroups, isActive } from "./nav";
 import { GlossaryDialog } from "./onboarding/Glossary";
 import { openGlossary, requestTour, tourDone, useLaunchHidden, useTourRequest } from "./onboarding/state";
 import { Tour } from "./onboarding/Tour";
+import { DLC_TERMS } from "./story/terms";
 
 const RAIL_KEY = "launchpad_v3_rail_open";
 
@@ -367,6 +368,15 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
         label: t("v3.onboard.glossary.explain", { term: t(`glossary.name.${term}`) }),
         icon: <BookOpen size={16} />,
         keywords: `${term} ${t(`glossary.name.${term}`, { lng: "en" })}`,
+        run: () => openGlossary(term),
+      })),
+      // the Agent-DLC words ("golden set", "waiver"): the dialog opens on the term's card
+      ...DLC_TERMS.map((term) => ({
+        id: `d:${term}`,
+        group,
+        label: t("v3.onboard.glossary.explain", { term: t(`story.term.${term}.name`) }),
+        icon: <BookOpen size={16} />,
+        keywords: `${term} ${t(`story.term.${term}.name`, { lng: "en" })} ${t(`story.term.${term}.short`)}`,
         run: () => openGlossary(term),
       })),
     ];

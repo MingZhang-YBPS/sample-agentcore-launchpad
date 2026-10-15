@@ -19,6 +19,7 @@ import {
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import type { ProjectAbilities } from "./ProjectDetail";
+import { ShareNotices } from "./ShareNotices";
 import {
   daysLeft,
   draftPayload,
@@ -95,6 +96,7 @@ export function SharesTab({
   return (
     <div className="v3-shr" data-testid="project-shares">
       <Notice s="info">{t("v3.projects.shares.intro")}</Notice>
+      <ShareNotices projectId={project.id} />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         {can.share && (
           <Btn kind="primary" onClick={() => setGranting(true)} disabled={project.workspaces.length === 0}>

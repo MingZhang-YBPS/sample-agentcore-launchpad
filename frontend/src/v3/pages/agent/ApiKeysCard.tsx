@@ -10,6 +10,7 @@ import { apiKeyMeta, apiKeyOffboardedNote } from "../../../v2/pages/chat/apiKeys
 import { useProject } from "../../../workspace/project-context";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useLoad, useToast } from "../../hooks";
+import { useNextStep } from "../../story/useNextStep";
 import { Btn, Chip, Confirm, Lamp, Notice, Panel, type Signal, Skeleton, Spark } from "../../ui";
 import "./invokeAccess.css";
 
@@ -46,6 +47,8 @@ export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName
   const [minted, setMinted] = useState<ApiKeyInfo | null>(null);
   const [confirm, setConfirm] = useState<ApiKeyInfo | null>(null);
   const [usage, setUsage] = useState<Record<string, ApiKeyUsage | "loading">>({});
+  // a key issued completes the storyline's release.api_key step (storyline-ux §3.1)
+  const nextStep = useNextStep();
 
   const copy = (text: string) =>
     navigator.clipboard
@@ -55,11 +58,13 @@ export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName
 
   const create = async () => {
     setBusy("create");
+    nextStep.clear();
     try {
       const fallback = `${agentName}-${(keys.data?.keys.length ?? 0) + 1}`.slice(0, 64);
       setMinted(await chatApi.createApiKey(name.trim() || fallback, { agent_ids: [agentId] }));
       setName("");
       keys.reload();
+      nextStep.show({ done: t("story.done.apiKey"), after: "release.api_key", agentId });
     } catch (err) {
       toast("act", t("v3.apiKeys.createFailed"), err);
     } finally {
@@ -132,6 +137,7 @@ export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName
             </div>
           </Notice>
         )}
+        {nextStep.card}
 
         {keys.loading && !keys.data && <Skeleton rows={2} />}
         {keys.error && <Notice s="act">{keys.error} <Btn size="sm" kind="ghost" onClick={keys.reload}>{t("v3.apiKeys.retry")}</Btn></Notice>}

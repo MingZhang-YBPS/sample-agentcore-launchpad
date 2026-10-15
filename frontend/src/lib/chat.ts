@@ -35,6 +35,8 @@ export type ChatStreamFrame = ChatStreamPayload & {
   turn_id?: string;
   /** `gap`: the first seq the turn's buffer still holds */
   first_seq?: number;
+  /** `structured` (SB-1): the agent's parsed answer under its output schema */
+  value?: unknown;
 };
 
 /**

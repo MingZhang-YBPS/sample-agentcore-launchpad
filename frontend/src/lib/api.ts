@@ -16,6 +16,7 @@ import type {
 import type { ExperimentInfo } from "./experiments";
 import type { McpServerOps } from "./api/mcpReviews";
 import type { ModelSource, ReasoningEffort } from "./models";
+import type { StrandsSpecFields } from "./strands-builder";
 import type { UserGroup, UserProject } from "./api/users";
 import type { ManagedVideo, ManagedVideoCatalog, VideoCatalog, VideoContent } from "./videos";
 import { WORKSPACE_HEADER } from "./workspace-header";
@@ -910,7 +911,10 @@ export interface ByocUploadInfo {
   };
 }
 
-export interface AgentSpecInput {
+/** SB-1: the Strands builder's optional fields (tools, model parameters, conversation,
+ *  output schema, prompt template) — `lib/strands-builder.ts` owns their shape and
+ *  sends only the ones set (zip_runtime only). */
+export interface AgentSpecInput extends StrandsSpecFields {
   name: string;
   /** Optional human label, 1–64 chars, trimmed; editable on redeploy (unlike `name`). */
   display_name?: string;
@@ -3350,6 +3354,8 @@ export interface AuthStatus {
   permissions: AgentPermission[];
   /** the config-driven built-in admin (no ledger row) */
   builtin?: boolean;
+  /** the enabled identity providers (sso §2.7); only present when at least one is */
+  sso_providers?: { id: string; name: string; kind: "oidc"; preset: string }[];
 }
 
 export interface AuthLoginResult extends AuthStatus {
@@ -3868,6 +3874,10 @@ export interface ConsoleUser {
   projects?: UserProject[];
   /** user-group memberships, on the same routes */
   groups?: UserGroup[];
+  /** where the account signs in (sso §2.7): the console's password, or an identity provider */
+  source?: "local" | "sso";
+  external_idp_id?: string | null;
+  external_subject?: string | null;
 }
 
 export interface UserListResult {
