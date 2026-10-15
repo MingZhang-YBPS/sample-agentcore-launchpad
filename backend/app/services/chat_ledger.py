@@ -6,6 +6,7 @@ The console chat (`routers/chat.py`) and the external share page
 conversation is replayable, observable and rateable exactly like a console one.
 """
 
+import json
 import logging
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
@@ -17,6 +18,30 @@ from app.models.ledger import ChatMessage, ChatSession
 log = logging.getLogger(__name__)
 
 INTERRUPTED_PREFIX = "interrupted: "
+# strands-builder SB-1: an ``output_schema`` agent's parsed answer, saved as its own
+# row (JSON text) right after the agent row it belongs to; ``fold_structured`` puts
+# it back on that message for the history
+ROLE_STRUCTURED = "structured"
+# strands-builder SB-2: a tool on the approval list paused for the user (tool name +
+# the runtime-masked input as JSON), so a restored thread shows the approval card
+ROLE_APPROVAL = "approval"
+STRUCTURED_MAX_CHARS = 100000
+
+
+def fold_structured(rows: list[ChatMessage]) -> list[tuple[ChatMessage, Any]]:
+    """``(row, structured)`` per thread item: a ``structured`` row is attached to the
+    agent row before it (and not listed itself); a stray one is dropped."""
+    out: list[tuple[ChatMessage, Any]] = []
+    for row in rows:
+        if row.role == ROLE_STRUCTURED:
+            if out and out[-1][0].role == "agent" and out[-1][1] is None:
+                try:
+                    out[-1] = (out[-1][0], json.loads(row.text))
+                except ValueError:
+                    log.warning("chat: unreadable structured answer row %s", row.id)
+            continue
+        out.append((row, None))
+    return out
 
 
 def visible_rows(rows: list[ChatMessage]) -> list[ChatMessage]:
@@ -143,6 +168,8 @@ def persist_events(
     answered_by: str | None = None  # T35: `rule:<id>` when a curated answer replied
     # as_user consent asks raised while an answer bubble is open; saved after it
     pending_asks: list[tuple[str, str | None]] = []
+    # the turn's structured answer (SB-1), saved with the answer it rides along
+    structured: list[Any] = []
 
     def flush_answer() -> dict[str, Any] | None:
         if not session_id:
@@ -152,6 +179,9 @@ def persist_events(
             message_id = save_message(workspace_id, agent_id, session_id, "agent",
                                       "".join(answer_parts), answered_by=answered_by)
             answer_parts.clear()
+            if structured:
+                _save_structured(workspace_id, agent_id, session_id, structured.pop())
+        structured.clear()
         for provider, tool in pending_asks:
             save_message(workspace_id, agent_id, session_id, "auth", provider, name=tool)
         pending_asks.clear()
@@ -203,6 +233,16 @@ def persist_events(
                 # reason carries the policy id, which a restored card is rebuilt from
                 save_message(workspace_id, agent_id, session_id, "policy",
                              data.get("reason", ""), name=data.get("tool"))
+            elif kind == "approval_required" and session_id:
+                # the agent stops after asking; the card follows the bubble so far
+                saved = flush_answer()
+                if saved:
+                    yield saved
+                save_message(workspace_id, agent_id, session_id, ROLE_APPROVAL,
+                             json.dumps(data.get("input") or {}, default=str),
+                             name=str(data.get("tool") or "")[:80] or None)
+            elif kind == "structured":
+                structured[:] = [data.get("value")]
             elif kind == "delta":
                 answer_parts.append(data.get("text", ""))
             elif kind == "error" and session_id:
@@ -242,6 +282,13 @@ def persist_events(
     saved = flush_answer()
     if saved:
         yield saved
+
+
+def _save_structured(workspace_id: str, agent_id: str, session_id: str, value: Any) -> None:
+    text = json.dumps(value, default=str)
+    if len(text) > STRUCTURED_MAX_CHARS:
+        return  # too large to replay; the text answer still is
+    save_message(workspace_id, agent_id, session_id, ROLE_STRUCTURED, text)
 
 
 def _retried(workspace_id: str, session_id: str, user_id: int | None) -> bool:

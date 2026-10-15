@@ -1295,7 +1295,12 @@ def get_evaluator(
     detail = _evaluator_out(
         ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
     )
-    return {**detail, **creators.lookup_one(db, ws.id, creators.EVALUATOR, evaluator_id)}
+    out = {**detail, **creators.lookup_one(db, ws.id, creators.EVALUATOR, evaluator_id)}
+    # a borrowed evaluator (§11.2) says whose it is, so the page hides Edit
+    lent = resource_shares.shared_from(db, creators.EVALUATOR, {evaluator_id})
+    if evaluator_id in lent:
+        out["shared_from"] = lent[evaluator_id]
+    return out
 
 
 class JudgeUpdate(BaseModel):

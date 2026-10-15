@@ -7,6 +7,7 @@ so both consumption paths behave identically.
 import json
 import logging
 from collections.abc import Iterator
+from contextvars import ContextVar
 from typing import Any
 
 from botocore.exceptions import ClientError, ReadTimeoutError
@@ -165,6 +166,64 @@ def _record_auth_sessions(
     return out
 
 
+TOOL_APPROVAL_REQUIRES_CONSOLE = "agent.tool_approval_requires_console"
+
+# The console chat turn's approvals (strands-builder SB-2 tool hooks), set by
+# ``routers/chat.py`` in the turn's worker context: the chat stream between the two
+# (``services/chat.chat_stream``) carries no approvals of its own. Read only for a
+# console caller that passed none explicitly, so /v1 and evaluations never send it.
+CONSOLE_TOOL_APPROVALS: ContextVar[dict[str, Any] | None] = ContextVar(
+    "launchpad_console_tool_approvals", default=None,
+)
+
+
+def console_tool_approvals(approved: list[str] | None) -> dict[str, Any]:
+    """The payload a console chat turn sends: the caller can approve, and the tools
+    the user approved on the card for this turn (one entry = one call)."""
+    return {"interactive": True, "approved": [str(n) for n in approved or [] if n]}
+
+
+def _turn_approvals(
+    tool_approvals: dict[str, Any] | None, console_user: bool
+) -> dict[str, Any] | None:
+    if not console_user:
+        return None
+    return tool_approvals if tool_approvals is not None else CONSOLE_TOOL_APPROVALS.get()
+
+
+def tool_approval_requires_console(*, tool: str = "", agent_id: str = "") -> AppError:
+    """The named refusal for an approval-list tool (strands-builder SB-2 tool hooks)
+    the agent tried on a /v1 turn — only a person in the console chat can approve
+    it, the same reasoning as ``oauth_sessions.as_user_requires_console``."""
+    return AppError(
+        TOOL_APPROVAL_REQUIRES_CONSOLE,
+        f"tool {tool!r} needs a person's approval in the Launchpad console chat; it "
+        "cannot run through /v1",
+        {"tool": tool, "agent_id": agent_id},
+        status_code=409,
+    )
+
+
+def _refuse_unapprovable(agent: Agent, result: dict[str, Any], console_user: bool) -> None:
+    """A non-console caller whose turn hit an approval-list tool gets the named
+    error instead of an answer the runtime had to refuse a tool for."""
+    if console_user:
+        return
+    asks = (result.get("approval_refused") or []) + (result.get("approval_required") or [])
+    if asks:
+        raise tool_approval_requires_console(
+            tool=str(asks[0].get("tool") or ""), agent_id=agent.id,
+        )
+
+
+def _refuse_unapprovable_event(agent: Agent, event: dict[str, Any], console_user: bool) -> None:
+    """The streaming twin of ``_refuse_unapprovable``: one event at a time."""
+    if not console_user and event.get("event") in rt.APPROVAL_EVENTS:
+        raise tool_approval_requires_console(
+            tool=str((event.get("data") or {}).get("tool") or ""), agent_id=agent.id,
+        )
+
+
 def _parse_gateway_text(raw_text: str, session_id: str) -> dict[str, Any]:
     """Parse a gateway HTTP response body the SAME way ``rt.invoke_runtime_text``
     parses ``invoke_agent_runtime``: JSON ``{"result": ...}`` or an SSE stream via
@@ -262,6 +321,7 @@ def _invoke_via_stable_endpoint(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Direct-invoke the runtime pinned to the stable endpoint (= v_current).
 
@@ -279,6 +339,8 @@ def _invoke_via_stable_endpoint(
         kwargs["gateway_access_token"] = gateway_access_token
     if context:
         kwargs["context"] = context
+    if tool_approvals is not None:
+        kwargs["tool_approvals"] = tool_approvals
     return rt.invoke_runtime_text(data_client(workspace), route["arn"], prompt, **kwargs)
 
 
@@ -291,6 +353,7 @@ def _invoke_via_canary(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Route a real invocation for an active canary.
 
@@ -313,6 +376,7 @@ def _invoke_via_canary(
             runtime_user_id,
             gateway_access_token,
             context,
+            tool_approvals,
         )
     # Runtime session ids must be ≥33 chars (spike); mint one when absent/short.
     sticky = session_id if (session_id and len(session_id) >= 33) else rt.new_session_id()
@@ -325,6 +389,8 @@ def _invoke_via_canary(
             body["gateway_access_token"] = gateway_access_token
         if context:
             body["context"] = context
+        if tool_approvals is not None:
+            body["tool_approvals"] = tool_approvals
         response = gateway.sigv4_post(
             url, body, workspace, session_id=sticky, user_id=runtime_user_id or actor_id,
         )
@@ -346,6 +412,7 @@ def _invoke_via_canary(
             runtime_user_id,
             gateway_access_token,
             context,
+            tool_approvals,
         )
 
 
@@ -431,6 +498,7 @@ def _bearer_kwargs(
     gateway_access_token: str | None,
     attachments: PreparedAttachments | None,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str | None]:
     """The optional payload fields of a bearer invoke, plus the ledger user the
     as_user bookkeeping keys on (the Launchpad user, as on the SigV4 path —
@@ -443,6 +511,8 @@ def _bearer_kwargs(
         kwargs["attachments"] = attachments.native
     if context:
         kwargs["context"] = context
+    if tool_approvals is not None:
+        kwargs["tool_approvals"] = tool_approvals
     force_reauth = _pending_force_reauth(agent, ledger_user)
     if force_reauth:
         kwargs["force_reauth_providers"] = force_reauth
@@ -495,6 +565,7 @@ def invoke_agent_text(
     bearer_token: str | None = None,
     console_user: bool = True,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The single entry point both entrances share (console chat and `/v1`).
 
@@ -505,12 +576,18 @@ def invoke_agent_text(
     ``context`` is this turn's ``{{variable}}`` values (strands-builder SB-1), sent
     in the runtime payload; the Harness and A2A paths have no variables and ignore it.
 
+    ``tool_approvals`` (``{interactive, approved[]}``, strands-builder SB-2) is sent
+    by console chat turns only. A non-console caller (``console_user=False``) whose
+    turn hits an approval-list tool gets ``agent.tool_approval_requires_console``.
+    Unset, a console turn sends what ``CONSOLE_TOOL_APPROVALS`` holds.
+
     T12: when the agent opted into PII protection, both ends of the turn are
     screened — the prompt before dispatch (so a `block` refusal costs no model call)
     and the answer before it is returned. The text is the answer that is screened:
     an ``output_schema`` agent's parsed ``structured`` object is dropped, never
     returned unscreened.
     """
+    tool_approvals = _turn_approvals(tool_approvals, console_user)
     screen = guardrail.guardrail_config(agent.spec)
     if screen:
         ctx = _agent_workspace(agent, workspace)
@@ -544,6 +621,7 @@ def invoke_agent_text(
         bearer_token=bearer_token,
         console_user=console_user,
         context=context,
+        tool_approvals=tool_approvals,
     )
     if screen:
         result.pop("structured", None)
@@ -570,6 +648,7 @@ def _dispatch_invoke(
     bearer_token: str | None = None,
     console_user: bool = True,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
@@ -584,6 +663,7 @@ def _dispatch_invoke(
         token, caller_kind = _bearer_token_for(agent, workspace, bearer_token)
         kwargs, ledger_user = _bearer_kwargs(
             agent, actor_id, runtime_user_id, gateway_access_token, attachments, context,
+            tool_approvals,
         )
         try:
             result = rt.invoke_runtime_text_bearer(
@@ -603,6 +683,7 @@ def _dispatch_invoke(
                 agent, ledger_user, result["auth_required"], caller_kind=caller_kind,
                 console_user=console_user,
             )
+        _refuse_unapprovable(agent, result, console_user)
         return result
     # An imported harness carries the harness ARN, so it invokes exactly like a
     # launchpad-deployed one — InvokeHarness, never InvokeAgentRuntime.
@@ -647,7 +728,7 @@ def _dispatch_invoke(
                     "chat.attachment_canary_unsupported",
                     "Native attachments are unavailable during a canary.", status_code=409,
                 )
-            return _invoke_via_canary(
+            result = _invoke_via_canary(
                 route,
                 prompt,
                 session_id,
@@ -656,7 +737,10 @@ def _dispatch_invoke(
                 runtime_user_id,
                 gateway_access_token,
                 context,
+                tool_approvals,
             )
+            _refuse_unapprovable(agent, result, console_user)
+            return result
         resolved_user = _runtime_user_id(agent, actor_id, runtime_user_id)
         kwargs: dict[str, Any] = {
             "session_id": session_id,
@@ -669,6 +753,8 @@ def _dispatch_invoke(
             kwargs["attachments"] = attachments.native
         if context:
             kwargs["context"] = context
+        if tool_approvals is not None:
+            kwargs["tool_approvals"] = tool_approvals
         force_reauth = _pending_force_reauth(agent, resolved_user)
         if force_reauth:
             kwargs["force_reauth_providers"] = force_reauth
@@ -679,6 +765,7 @@ def _dispatch_invoke(
             result["auth_required"] = _record_auth_sessions(
                 agent, resolved_user, result["auth_required"], console_user=console_user,
             )
+        _refuse_unapprovable(agent, result, console_user)
         return result
     raise AppError(
         "agent.method_not_available",
@@ -740,6 +827,7 @@ def invoke_agent_events(
     bearer_token: str | None = None,
     console_user: bool = True,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -748,10 +836,11 @@ def invoke_agent_events(
     parsed incrementally. A zip runtime deployed before its template streamed
     still answers a JSON ``{"result": ...}`` body, which the same parser turns
     into one delta — so the switch is safe for existing agents.
-    ``console_user`` and ``context`` as on ``invoke_agent_text``.
+    ``console_user``, ``context`` and ``tool_approvals`` as on ``invoke_agent_text``.
     """
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
+    tool_approvals = _turn_approvals(tool_approvals, console_user)
     workspace = _agent_workspace(agent, workspace)
     if inbound_auth_service.is_jwt_mode(agent):
         # Streaming parity with SigV4: the HTTPS response feeds the same body
@@ -762,6 +851,7 @@ def invoke_agent_events(
             prompt = attachments.prompt(prompt)
         kwargs, ledger_user = _bearer_kwargs(
             agent, actor_id, runtime_user_id, gateway_access_token, attachments, context,
+            tool_approvals,
         )
         try:
             for event in rt.stream_runtime_events_bearer(
@@ -782,6 +872,7 @@ def invoke_agent_events(
                             console_user=console_user,
                         )[0],
                     }
+                _refuse_unapprovable_event(agent, event, console_user)
                 yield event
         except rt.RuntimeBearerAuthError as exc:
             raise _bearer_auth_error(exc, agent) from exc
@@ -805,6 +896,8 @@ def invoke_agent_events(
                 kwargs["attachments"] = attachments.native
         if context:
             kwargs["context"] = context
+        if tool_approvals is not None:
+            kwargs["tool_approvals"] = tool_approvals
         force_reauth = _pending_force_reauth(agent, resolved_user)
         if force_reauth:
             kwargs["force_reauth_providers"] = force_reauth
@@ -829,6 +922,7 @@ def invoke_agent_events(
                                 agent, resolved_user, [event["data"]], console_user=console_user,
                             )[0],
                         }
+                    _refuse_unapprovable_event(agent, event, console_user)
                     yield event
                 return
             except ReadTimeoutError:
@@ -845,6 +939,8 @@ def invoke_agent_events(
         extra["console_user"] = False
     if context:
         extra["context"] = context
+    if tool_approvals is not None:
+        extra["tool_approvals"] = tool_approvals
     result = invoke_agent_text(
         agent,
         prompt,
@@ -857,6 +953,9 @@ def invoke_agent_events(
     )
     for ask in result.get("auth_required") or []:
         yield {"event": "auth_required", "data": ask}
+    for kind in rt.APPROVAL_EVENTS:
+        for ask in result.get(kind) or []:
+            yield {"event": kind, "data": ask}
     text = result["text"]
     for index in range(0, len(text), BUFFERED_CHUNK_CHARS):
         yield {

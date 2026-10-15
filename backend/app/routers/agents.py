@@ -43,6 +43,7 @@ from app.services import (
     agent_identity,
     agent_names,
     agent_templates,
+    agent_tools,
     byoc_uploads,
     creators,
     identity_providers,
@@ -224,11 +225,49 @@ def _validate_tool_auth(db: Session, spec: AgentSpec, ws: WorkspaceScope) -> Non
     request path is unchanged."""
     if any(tool.auth is not None for tool in spec.tools):
         identity_providers.validate_tool_auth(control_client(ws.context), spec)
+    if spec.model_provider is not None:
+        _validate_model_provider(control_client(ws.context), spec)
+    if any(tool.auth is not None for tool in spec.tools) or spec.model_provider is not None:
         _require_project_connections(db, spec, ws)
     if spec.inbound_auth is not None:
         # A spec-pinned JWT config gets the same save-time discovery probe as
         # the workspace default, so a bad URL fails the request, not the deploy.
         inbound_auth_service.validate_inbound_auth(spec.inbound_auth)
+
+
+def _validate_model_provider(control: Any, spec: AgentSpec) -> None:
+    """SB-2: the model provider's Connection is a live ``api_key`` Connection —
+    the same answers ``validate_tool_auth`` gives a tool's auth block."""
+    provider = spec.model_provider
+    assert provider is not None
+    name = provider.connection
+    if name in identity_providers.provider_names(control, identity_providers.KIND_API_KEY):
+        return
+    if name in identity_providers.provider_names(control, identity_providers.KIND_OAUTH2):
+        raise AppError(
+            "identity.kind_mismatch",
+            f"model_provider: connection {name!r} is an oauth2 connection, but a model "
+            "provider's key needs an api_key connection",
+            detail={"tool": "model_provider", "connection": name, "kind": "oauth2"},
+            status_code=422,
+        )
+    raise AppError(
+        "identity.connection_unknown",
+        f"model_provider references connection {name!r}, which does not exist in this "
+        "workspace — create it on the Connections page first",
+        detail={"tool": "model_provider", "connection": name},
+        status_code=422,
+    )
+
+
+def _resolve_agent_tools(
+    db: Session, spec: AgentSpec, ws: WorkspaceScope, agent_id: str | None
+) -> AgentSpec:
+    """SB-2: agents offered as tools resolved from the ledger at save time — a
+    foreign id answers 404, an ineligible one 422 (the deploy re-checks)."""
+    if not spec.agent_tools:
+        return spec
+    return agent_tools.resolved_spec(db, spec, agent_id=agent_id, workspace_id=ws.id)
 
 
 def _require_project_connections(db: Session, spec: AgentSpec, ws: WorkspaceScope) -> None:
@@ -241,6 +280,8 @@ def _require_project_connections(db: Session, spec: AgentSpec, ws: WorkspaceScop
         (tool.auth.kind, tool.auth.connection): tool.name
         for tool in spec.tools if tool.auth is not None
     }
+    if spec.model_provider is not None:
+        wanted.setdefault(("api_key", spec.model_provider.connection), "model_provider")
     with project_context(None):
         rows = (
             db.query(IdentityProvider)
@@ -338,6 +379,7 @@ def create_agent(
     # every KB / memory the spec pins must be visible to the caller (isolation)
     agent_access.check_pins(db, viewer, ws.context, spec.model_dump())
     _validate_tool_auth(db, spec, ws)
+    spec = _resolve_agent_tools(db, spec, ws, None)
     spec = _server_owned_mcp(spec, None)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
     # the deploy job re-checks before any stage, this answers before any row
@@ -890,6 +932,7 @@ def _start_redeploy(
         previous_spec=agent.spec or {},
     )
     _validate_tool_auth(db, spec, ws)
+    spec = _resolve_agent_tools(db, spec, ws, agent.id)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55) —
     # refused before the stored spec changes, so a refusal leaves the agent as is
     memory_ownership.require_spec_memory(
