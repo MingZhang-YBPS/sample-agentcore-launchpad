@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -32,9 +32,10 @@ from app.evaluation.online_evaluators import require_visible_evaluators
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
+from app.models.shares import KIND_EVAL_DATASET
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import access, agent_access, creators, visibility
+from app.services import access, agent_access, creators, resource_shares, visibility
 from app.services.agentcore.client import control_client
 from app.services.aws_clients import is_assume_role_failure
 from app.services.creators import Creator
@@ -183,10 +184,19 @@ def _assert_target_references(
     problems: dict[str, list[str]] = {}
     control = None
     hidden = visibility.hidden_aws_ids(viewer, db, ws.id, creators.EVALUATOR, evaluators)
+    # another project's evaluator scores here only when it is shared at `use` (§11.2)
+    read_only = resource_shares.refused_ids(db, creators.EVALUATOR, evaluators, "use")
     for evaluator in dict.fromkeys(evaluators):
         if evaluator in hidden:
             # workspace isolation: a hidden custom evaluator is a missing one
             raise _evaluator_missing(evaluator)
+        if evaluator in read_only:
+            raise AppError(
+                "run.evaluator_share_read_only",
+                f"evaluator {evaluator} is shared with this project read-only — ask its "
+                "project for use access, or drop it",
+                {"evaluator": evaluator}, status_code=422,
+            )
         if evaluator in coverage.KNOWN_BUILTINS:
             needs, level = coverage.builtin_needs(evaluator), coverage.KNOWN_BUILTINS[evaluator]
         elif evaluator.startswith(("Builtin.", "ThirdParty.")):
@@ -272,11 +282,12 @@ def _evaluator_missing(evaluator: str) -> AppError:
 
 
 def _require_visible_evaluator(
-    db: Session, ws: WorkspaceScope, viewer: Viewer, evaluator_id: str
+    db: Session, ws: WorkspaceScope, viewer: Viewer, evaluator_id: str, *, need: str
 ) -> None:
     """A custom evaluator hidden by workspace isolation answers like a missing one;
-    built-in / third-party ids carry no creator and are always visible."""
-    require_visible_evaluators(db, ws.id, viewer, [evaluator_id])
+    built-in / third-party ids carry no creator and are always visible. One another
+    project shared is read (`need="read"`) but never changed (`"own"`)."""
+    require_visible_evaluators(db, ws.id, viewer, [evaluator_id], need=need)
 
 
 def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
@@ -296,17 +307,55 @@ def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
 
 
 def _dataset_in(
-    db: Session, ws: WorkspaceScope, dataset_id: str, *, viewer: Viewer = Viewer.ALL
+    db: Session, ws: WorkspaceScope, dataset_id: str, *, viewer: Viewer = Viewer.ALL,
+    need: str = "read",
 ) -> EvalDataset:
     """The dataset, or 404 — another workspace's dataset, or one hidden from the
-    viewer by workspace isolation (`services/visibility.py`), is not visible here."""
+    viewer by workspace isolation (`services/visibility.py`), is not visible here.
+
+    A dataset another project shared with this one (projects §11.2) reads like its
+    own; its member visibility is the owner project's, not this one's. `need` is what
+    the caller does with it: `read`; `use` — an evaluation runs on it (a read-only
+    share answers `share.read_only`); `own` — any change, here or on AWS (every share
+    answers `share.read_only`, before the AWS call)."""
     dataset = db.get(EvalDataset, dataset_id)
     if dataset is None or dataset.workspace_id != ws.id:
         raise NotFoundError("dataset.not_found", "dataset not found")
-    visibility.require_seen(
-        viewer, db, dataset.created_by, NotFoundError("dataset.not_found", "dataset not found")
-    )
+    if _shared_root(dataset) is None:
+        visibility.require_seen(
+            viewer, db, dataset.created_by,
+            NotFoundError("dataset.not_found", "dataset not found"),
+        )
+    elif need != "read" and resource_shares.refused_ids(
+            db, KIND_EVAL_DATASET, [_shared_root(dataset)], need):
+        raise NotFoundError(
+            "share.read_only",
+            f"dataset '{dataset_id}' is shared with this project "
+            + ("read-only" if need == "use" else "— only its own project changes it"),
+            {"id": dataset_id, "need": need},
+        )
     return dataset
+
+
+def _shared_root(dataset: EvalDataset) -> str | None:
+    """The shared resource id (a golden set's parent) when `dataset` is another
+    project's row this one sees through a share; None for its own rows."""
+    pid = current_project()
+    if pid is None or dataset.project_id in (pid, None):
+        return None
+    return dataset.split_of or dataset.id
+
+
+def _with_shared_from(db: Session, rows: list[dict[str, Any]],
+                      datasets: list[EvalDataset]) -> list[dict[str, Any]]:
+    """Label the rows another project lent: `shared_from {project_id, name, access}`."""
+    roots = {d.id: _shared_root(d) for d in datasets}
+    lent = resource_shares.shared_from(db, KIND_EVAL_DATASET, {r for r in roots.values() if r})
+    for row in rows:
+        root = roots.get(row["id"])
+        if root and root in lent:
+            row["shared_from"] = lent[root]
+    return rows
 
 
 @router.get("/datasets")
@@ -315,14 +364,19 @@ def list_datasets(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    seen = visibility.clause(viewer, EvalDataset.created_by)
+    pid = current_project()
+    if pid is not None and viewer.filters:
+        # a shared row (§11.2) is another project's creation: its own rule applied
+        seen = or_(seen, EvalDataset.project_id != pid)
     rows = (
         db.query(EvalDataset)
         .filter(EvalDataset.workspace_id == ws.id)
-        .filter(visibility.clause(viewer, EvalDataset.created_by))
+        .filter(seen)
         .order_by(EvalDataset.created_at.desc())
         .all()
     )
-    return {"datasets": [_dataset_out(d) for d in rows]}
+    return {"datasets": _with_shared_from(db, [_dataset_out(d) for d in rows], rows)}
 
 
 @router.post("/datasets", status_code=201)
@@ -410,7 +464,7 @@ def update_dataset(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     if req.items is not None:
         _validate_items(req.items)
         if _infer_kind(req.items) != dataset.kind:
@@ -436,7 +490,7 @@ def delete_dataset(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     db.delete(dataset)
     db.commit()
     return {"deleted": True}
@@ -518,7 +572,7 @@ def sync_dataset_to_aws(
     published versions and any run pinned to them survive; the draft then reads
     MODIFIED until PUBLISH VERSION snapshots it. The recorded `cloud` blob caches
     id/arn/status plus draft_status, example_count and the version list."""
-    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     examples = normalize_scenarios(dataset.items)
     client = control_client(ws.context)
     synced_at = datetime.now(UTC).isoformat()
@@ -633,7 +687,7 @@ def publish_dataset_version(
     """Snapshot the cloud copy's DRAFT as the next immutable numbered version.
     The draft stays (draft_status flips to UNMODIFIED); the new version joins
     `cloud.versions`. 409 `dataset.not_synced` without a live cloud copy."""
-    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     client = control_client(ws.context)
     detail = _existing_cloud_draft(client, dataset)
     if detail is None:
@@ -719,7 +773,7 @@ def list_cloud_datasets(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     out = []
-    hidden = _cloud_hidden(db, ws, viewer)
+    hidden = _cloud_hidden(db, ws, viewer, shared="read")
     for ds in ac.list_datasets(control_client(ws.context)):
         if hidden(ds.get("datasetId") or ""):
             continue
@@ -747,7 +801,7 @@ def get_cloud_dataset(
     """Cloud dataset detail for the run form and the datasets page — whether it
     can drive a run, whether its scenarios carry ground truth (gates Trajectory*
     evaluators), the DRAFT status and the published versions."""
-    _require_cloud_visible(db, ws, cloud_id, viewer)
+    _require_cloud_visible(db, ws, cloud_id, viewer, shared="read")
     client = control_client(ws.context)
     detail = ac.get_dataset(client, dataset_id=cloud_id)
     return _cloud_detail_out(client, detail)
@@ -829,7 +883,8 @@ def _rows_with_cloud(db: Session, ws: WorkspaceScope, cloud_id: str) -> list[Eva
     ]
 
 
-def _cloud_hidden(db: Session, ws: WorkspaceScope, viewer: Viewer) -> Callable[[str], bool]:
+def _cloud_hidden(db: Session, ws: WorkspaceScope, viewer: Viewer, *,
+                  shared: str | None = None) -> Callable[[str], bool]:
     """Whether a cloud dataset id is hidden from `viewer` in the current project: a
     cloud dataset follows the local rows linked to it — visible when ANY of them is.
 
@@ -837,10 +892,16 @@ def _cloud_hidden(db: Session, ws: WorkspaceScope, viewer: Viewer) -> Callable[[
     account-wide, so a dataset synced by another project must not pass for an unlinked
     one. One with no local row (made outside the console) has no known creator and
     stays shared — with several projects in the workspace, shared by the workspace's
-    default project only."""
+    default project only.
+
+    `shared` (projects §11.2) lets the cloud copy of a dataset another project shared
+    with this one through: `read` (list, detail) or `use` (a run replays it). Without
+    it — every route that changes the cloud dataset — a shared copy stays hidden."""
     pid = current_project()
     if not viewer.filters and pid is None:
         return lambda _cloud_id: False
+    lent = (resource_shares.received_ids(db, KIND_EVAL_DATASET, use=shared == "use")
+            if shared else frozenset())
     with project_context(None):
         rows = (
             db.query(EvalDataset)
@@ -851,9 +912,12 @@ def _cloud_hidden(db: Session, ws: WorkspaceScope, viewer: Viewer) -> Callable[[
     for row in rows:
         cloud_id = (row.cloud or {}).get("dataset_id")
         if cloud_id:
-            seen = (pid is None or row.project_id == pid) and (
+            own = (pid is None or row.project_id == pid) and (
                 not viewer.filters or visibility.sees(viewer, db, row.created_by)
             )
+            lent_here = (pid is not None and row.project_id != pid
+                         and (row.split_of or row.id) in lent)
+            seen = own or lent_here
             linked[cloud_id] = linked.get(cloud_id, False) or seen
     unlinked_hidden = pid is not None and not _workspace_default_project(db, ws, pid)
 
@@ -877,9 +941,10 @@ def _workspace_default_project(db: Session, ws: WorkspaceScope, pid: str) -> boo
 
 
 def _require_cloud_visible(
-    db: Session, ws: WorkspaceScope, cloud_id: str, viewer: Viewer
+    db: Session, ws: WorkspaceScope, cloud_id: str, viewer: Viewer, *,
+    shared: str | None = None,
 ) -> None:
-    if _cloud_hidden(db, ws, viewer)(cloud_id):
+    if _cloud_hidden(db, ws, viewer, shared=shared)(cloud_id):
         raise NotFoundError("dataset.not_found", "dataset not found")
 
 
@@ -955,8 +1020,12 @@ def list_evaluators(
     )
     live = [row for row in live if row["id"] not in hidden]
     known = creators.lookup(db, ws.id, creators.EVALUATOR, (row["id"] for row in live))
+    # "from project X (read / use)" on the evaluators another project lent (§11.2)
+    lent = resource_shares.shared_from(db, creators.EVALUATOR, {row["id"] for row in live})
     for row in live:
         row.update(known.get(row["id"]) or creators.empty())
+        if row["id"] in lent:
+            row["shared_from"] = lent[row["id"]]
     return {"evaluators": builtin + live, "builtin_count": len(builtin)}
 
 
@@ -1222,7 +1291,7 @@ def get_evaluator(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_visible_evaluator(db, ws, viewer, evaluator_id)
+    _require_visible_evaluator(db, ws, viewer, evaluator_id, need="read")
     detail = _evaluator_out(
         ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
     )
@@ -1260,7 +1329,7 @@ def update_evaluator(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _reject_managed(evaluator_id)
-    _require_visible_evaluator(db, ws, viewer, evaluator_id)
+    _require_visible_evaluator(db, ws, viewer, evaluator_id, need="own")
     _require_one_definition(req)
     if req.instructions is not None:
         _require_placeholder(req.instructions)
@@ -1324,7 +1393,7 @@ def delete_evaluator(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _reject_managed(evaluator_id)
-    _require_visible_evaluator(db, ws, viewer, evaluator_id)
+    _require_visible_evaluator(db, ws, viewer, evaluator_id, need="own")
     from app.assistant.evaluation_assets import managed_evaluator
     from app.models.assistant import EvaluationAssetOperation
 
@@ -1580,11 +1649,11 @@ def create_run(
     dataset_name = None
     time_range = None
     if req.dataset_id:
-        dataset = _dataset_in(db, ws, req.dataset_id, viewer=viewer)
+        dataset = _dataset_in(db, ws, req.dataset_id, viewer=viewer, need="use")
         items = dataset.items
         dataset_name = dataset.name
     elif req.cloud_dataset_id:
-        _require_cloud_visible(db, ws, req.cloud_dataset_id, viewer)
+        _require_cloud_visible(db, ws, req.cloud_dataset_id, viewer, shared="use")
         cloud_name, items = _cloud_dataset_items(
             req.cloud_dataset_id, ws, version=req.dataset_version
         )

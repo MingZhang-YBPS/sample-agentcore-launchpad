@@ -23,9 +23,15 @@ What a share opens, per kind (`load_received` turns grants into row ids):
   `creators.outside_current_project`, which consults `received_ids`.
 
 Never a write: the ORM criteria widen reads only, and a flush that changes a shared
-row fails as a missing id (`project_scope`). Journal: `project.share.grant / request /
-approve / reject / revoke / expire`, filed under the owner project with the grantee in
-the target.
+row fails as a missing id (`project_scope`); routes that act on AWS before any flush ask
+`refused_ids` first. Journal: `project.share.grant / request / approve / reject / revoke /
+expire`, filed under the owner project with the grantee in the target.
+
+Lists label what another project lent (`shared_from`: `{project_id, name, access}`). When
+a share ends (`revoke`, the expiry sweep) the grantee's owners get a notice
+(`share.notice.<id>` documents in `platform_settings`, like the steward's), and an isolated
+grantee that used a shared KB gets a provisioning run once the change is committed, so its
+boundary is rendered again without the KB (`project_isolation.queue_provision`).
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import event, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
@@ -183,6 +189,46 @@ def received_ids(db: Session, kind: str, *, use: bool = False,
     if not pid:
         return frozenset()
     return access.shared_for(db, pid).ids(kind, use=use)
+
+
+def shared_from(db: Session, kind: str, ids: Any, *, project_id: str | None = None
+                ) -> dict[str, dict[str, str]]:
+    """`{resource_id: {project_id, name, access}}` for the ids of `kind` the (current)
+    project receives from another one — the "from project X (read / use)" label of
+    lists. Empty without a current project or when nothing is shared (no query)."""
+    from app.core.project_scope import current_project
+
+    pid = project_id or current_project()
+    if not pid:
+        return {}
+    shared = access.shared_for(db, pid)
+    granted = shared.by_kind.get(kind) or {}
+    hits = {i for i in ids if i in granted}
+    if not hits:
+        return {}
+    owners = shared.owners.get(kind) or {}
+    names = project_names(db, {owners[i] for i in hits if i in owners})
+    return {i: {"project_id": owners.get(i, ""),
+                "name": names.get(owners.get(i, ""), owners.get(i, "")),
+                "access": granted[i]} for i in hits}
+
+
+def refused_ids(db: Session, kind: str, ids: Any, need: str, *,
+                project_id: str | None = None) -> set[str]:
+    """Of `ids`, those the (current) project reaches only through a share that does not
+    allow `need`: `use` (an evaluation runs on it, an agent pins it) refuses read-only
+    shares; `own` (any write, any AWS change) refuses every share. A project's own ids
+    and ids it cannot see at all are not this function's to answer."""
+    from app.core.project_scope import current_project
+
+    pid = project_id or current_project()
+    wanted = {i for i in ids if i}
+    if not pid or not wanted:
+        return set()
+    shared = access.shared_for(db, pid)
+    if need == "own":
+        return wanted & shared.ids(kind)
+    return wanted & (shared.ids(kind) - shared.ids(kind, use=True))
 
 
 def revoked_ids(db: Session, kind: str, resource_ids: set[str], project_id: str) -> set[str]:
@@ -411,6 +457,7 @@ def revoke(db: Session, identity: Any, owner_project_id: str, share_id: str) -> 
         raise AppError("share.not_open", f"share '{share_id}' is {row.status}",
                        {"status": row.status}, status_code=409)
     actor, actor_user_id = _actor(identity)
+    was_active = row.status == STATUS_ACTIVE
     row.status = STATUS_REVOKED
     row.revoked_by, row.revoked_by_user_id, row.revoked_at = actor[:64], actor_user_id, _now()
     access.bump_epoch(db)
@@ -418,6 +465,8 @@ def revoke(db: Session, identity: Any, owner_project_id: str, share_id: str) -> 
     pinned = dependents(db, row)
     _journal(db, identity, row, "revoke",
              f" (pinned by {', '.join(pinned)})" if pinned else "")
+    if was_active:
+        _after_end(db, identity, row, NOTICE_REVOKED, pinned)
     return row
 
 
@@ -429,14 +478,168 @@ def expire_due(db: Session) -> dict[str, Any]:
         due = list(db.scalars(select(ResourceShare).where(
             ResourceShare.status.in_(OPEN_STATUSES), ResourceShare.expires_at.is_not(None),
             ResourceShare.expires_at <= now)))
+    ended: list[ResourceShare] = []
     for row in due:
+        if row.status == STATUS_ACTIVE:
+            ended.append(row)
         with project_context(row.owner_project_id):
             row.status = STATUS_EXPIRED
             _journal(db, None, row, "expire")
     if due:
         access.bump_epoch(db)
+        forget_shared_rows()
+    for row in ended:  # a request that expired unanswered never reached the grantee
+        _after_end(db, None, row, NOTICE_EXPIRED, dependents(db, row))
     db.commit()
     return {"expired": [row.id for row in due]}
+
+
+# ── when a share ends: the grantee's owners, the isolated grantee's boundary ──
+
+NOTICE_PREFIX = "share.notice."
+NOTICE_REVOKED, NOTICE_EXPIRED = "revoked", "expired"
+NOTICE_LIMIT = 50
+_RERENDER = "launchpad_share_boundary_rerender"  # Session.info key: committed → queued
+
+
+def _after_end(db: Session, identity: Any | None, row: ResourceShare, kind: str,
+               pinned: list[str]) -> None:
+    """An active share just ended (in the caller's transaction): tell the grantee's
+    owners, and re-render an isolated grantee's boundary once the change is committed."""
+    try:
+        notify_grantee(db, identity, row, kind, pinned)
+    except Exception:  # noqa: BLE001 — the revocation stands whatever the notice does
+        logger.warning("notice of share %s unwritten", row.id, exc_info=True)
+    if row.kind == KIND_KNOWLEDGE_BASE and row.access == ACCESS_USE and row.workspace_id:
+        actor, actor_user_id = _actor(identity) if identity is not None else ("scheduler", None)
+        db.info.setdefault(_RERENDER, set()).add(
+            (row.grantee_project_id, row.workspace_id, actor, actor_user_id))
+
+
+def rerender_boundary(project_id: str, workspace_id: str, *, actor: str,
+                      actor_user_id: str | None = None, start: bool = True) -> str | None:
+    """Queue (and start) a provisioning run of an active isolated project in one
+    workspace — its `boundary` stage renders the policy without the KBs whose share
+    ended (`boundary_statements`); the other stages are idempotent. None for a shared
+    project (no boundary of its own) or when nothing was queued."""
+    from app.core.db import SessionLocal
+    from app.services import project_isolation
+
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            project = db.get(Project, project_id)
+            if not project_isolation.is_isolated(project) or project.status != "active":
+                return None
+            if not _bound(db, project_id, workspace_id):
+                return None
+        job, created = project_isolation.queue_provision(
+            db, project_id, workspace_id, actor=actor, actor_user_id=actor_user_id)
+    finally:
+        db.close()
+    if not created:
+        return None  # a run already in flight reads the shares when its stage starts
+    if start:
+        project_isolation.start_jobs([job.id])
+    return job.id
+
+
+@event.listens_for(Session, "after_commit")
+def _rerender_after_commit(session: Session) -> None:
+    pending = session.info.pop(_RERENDER, None)
+    for project_id, workspace_id, actor, actor_user_id in sorted(pending or ()):
+        try:
+            rerender_boundary(project_id, workspace_id, actor=actor,
+                              actor_user_id=actor_user_id)
+        except Exception:  # noqa: BLE001 — the next deploy renders it anyway
+            logger.warning("boundary re-render of %s in %s not queued", project_id,
+                           workspace_id, exc_info=True)
+
+
+@event.listens_for(Session, "after_rollback")
+def _forget_rerender(session: Session) -> None:
+    session.info.pop(_RERENDER, None)
+
+
+def notify_grantee(db: Session, identity: Any | None, row: ResourceShare, kind: str,
+                   pinned: list[str]) -> str | None:
+    """Leave the grantee project's owners (`project.members` holders, as the steward's
+    notices) a notice that a share ended. Joins the caller's transaction. None when the
+    grantee has nobody to tell (the journal still has it)."""
+    import json
+
+    from app.models.platform_settings import PlatformSetting
+    from app.services import steward
+
+    with project_context(None):
+        grantee = db.get(Project, row.grantee_project_id)
+        if grantee is None:
+            return None
+        me = getattr(identity, "user_id", None) if identity is not None else None
+        recipients = [uid for uid in steward.owner_ids(db, grantee) if uid != me]
+    if not recipients:
+        return None
+    names = project_names(db, {row.owner_project_id})
+    actor = _actor(identity)[0] if identity is not None else "scheduler"
+    doc = {
+        "id": uuid.uuid4().hex, "kind": kind, "share_id": row.id,
+        "project_id": grantee.id, "project_name": grantee.name,
+        "owner_project_id": row.owner_project_id,
+        "owner_project_name": names.get(row.owner_project_id, row.owner_project_id),
+        "resource_kind": row.kind, "resource_id": row.resource_id,
+        "resource_name": row.resource_name or row.resource_id, "access": row.access,
+        "workspace_id": row.workspace_id, "pinned_by": list(pinned), "actor": actor,
+        "recipients": recipients, "read_by": [], "created_at": _now().isoformat(),
+    }
+    db.add(PlatformSetting(key=f"{NOTICE_PREFIX}{doc['id']}",
+                           value=json.dumps(doc, sort_keys=True), updated_by=actor[:64],
+                           updated_at=_now()))
+    return doc["id"]
+
+
+def notices_for(db: Session, identity: Any) -> dict[str, Any]:
+    """The caller's notices of ended shares, newest first (only the caller's)."""
+    import json
+
+    from app.models.platform_settings import PlatformSetting
+
+    me = getattr(identity, "user_id", None)
+    items: list[dict[str, Any]] = []
+    if me:
+        for row in db.scalars(select(PlatformSetting).where(
+                PlatformSetting.key.like(f"{NOTICE_PREFIX}%"))):
+            try:
+                doc = json.loads(row.value or "{}")
+            except ValueError:
+                continue
+            if not isinstance(doc, dict) or me not in (doc.get("recipients") or []):
+                continue
+            view = {k: v for k, v in doc.items() if k not in ("recipients", "read_by")}
+            view["read"] = me in (doc.get("read_by") or [])
+            items.append(view)
+    items.sort(key=lambda i: str(i.get("created_at") or ""), reverse=True)
+    return {"items": items[:NOTICE_LIMIT], "unread": sum(1 for i in items if not i["read"])}
+
+
+def acknowledge(db: Session, identity: Any, notice_id: str) -> None:
+    """Mark one of the caller's notices read; anyone else's answers 404."""
+    import json
+
+    from app.models.platform_settings import PlatformSetting
+
+    me = getattr(identity, "user_id", None)
+    row = db.get(PlatformSetting, f"{NOTICE_PREFIX}{notice_id}")
+    try:
+        doc = json.loads(row.value) if row is not None else {}
+    except ValueError:
+        doc = {}
+    if not me or me not in (doc.get("recipients") or []):
+        raise NotFoundError("share.notice_not_found", f"notice '{notice_id}' not found",
+                            {"notice_id": notice_id})
+    if me not in doc.setdefault("read_by", []):
+        doc["read_by"].append(me)
+        assert row is not None
+        row.value = json.dumps(doc, sort_keys=True)
 
 
 # ── views ─────────────────────────────────────────────────────────────────────

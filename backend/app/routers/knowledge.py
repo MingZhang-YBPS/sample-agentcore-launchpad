@@ -22,6 +22,7 @@ from app.services import (
     kb_gateway,
     knowledge,
     project_kb,
+    resource_shares,
     visibility,
 )
 from app.services.agentcore.client import control_client
@@ -89,13 +90,23 @@ def _mask_attached(item: dict[str, Any], hidden_names: set[str]) -> dict[str, An
     return item
 
 
-def _require_visible(db: Session, ws: WorkspaceScope, viewer: Viewer, kb_id: str) -> None:
+def _require_visible(db: Session, ws: WorkspaceScope, viewer: Viewer, kb_id: str,
+                     *, own: bool = False) -> None:
     """A KB hidden by workspace isolation, or of another project, answers like a
-    missing one — before any AWS call."""
+    missing one — before any AWS call. One another project shared with this one
+    (§11.2) is read here (metadata, documents, retrieval) but never changed: `own`
+    routes answer `share.read_only` (404) for it."""
     if not visibility.aws_id_visible(viewer, db, ws.id, creators.KB, kb_id) or (
         creators.outside_current_project(db, ws.id, creators.KB, [kb_id])
     ):
         raise NotFoundError("kb.not_found", "knowledge base not found")
+    if own and resource_shares.refused_ids(db, creators.KB, [kb_id], "own"):
+        raise NotFoundError(
+            "share.read_only",
+            f"knowledge base '{kb_id}' is shared with this project — only its own "
+            "project changes it",
+            {"id": kb_id},
+        )
 
 
 @router.get("")
@@ -113,9 +124,13 @@ def list_knowledge_bases(
     # console reads null
     known = creators.lookup(db, ws.id, creators.KB, (i.get("kb_id") or "" for i in items))
     hidden_names = _hidden_names(db, viewer, ws.id)
+    # "from project X (read / use)" on the KBs another project lent (§11.2)
+    lent = resource_shares.shared_from(db, creators.KB, {i.get("kb_id") or "" for i in items})
     for item in items:
         item.update(known.get(item.get("kb_id") or "") or creators.empty())
         _mask_attached(item, hidden_names)
+        if (item.get("kb_id") or "") in lent:
+            item["shared_from"] = lent[item.get("kb_id") or ""]
     return {"items": items}
 
 
@@ -162,7 +177,7 @@ def patch_knowledge_base(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_visible(db, ws, viewer, kb_id)
+    _require_visible(db, ws, viewer, kb_id, own=True)
     return _with_creator(db, ws, knowledge.update_description(ws.context, kb_id, req.description))
 
 
@@ -174,7 +189,7 @@ def delete_knowledge_base(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_visible(db, ws, viewer, kb_id)
+    _require_visible(db, ws, viewer, kb_id, own=True)
     try:
         # force still strips the KB from EVERY mounting agent, hidden ones included
         # (integrity: no agent may keep a dangling KB id)
@@ -194,7 +209,7 @@ async def upload_knowledge_base_files(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_visible(db, ws, viewer, kb_id)
+    _require_visible(db, ws, viewer, kb_id, own=True)
     form = await request.form()
     uploads = [
         f
@@ -217,7 +232,7 @@ def add_data_source(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_visible(db, ws, viewer, kb_id)
+    _require_visible(db, ws, viewer, kb_id, own=True)
     return knowledge.add_data_source(ws.context, kb_id, req.model_dump())
 
 
@@ -229,7 +244,7 @@ def delete_data_source(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_visible(db, ws, viewer, kb_id)
+    _require_visible(db, ws, viewer, kb_id, own=True)
     return knowledge.delete_data_source(ws.context, kb_id, ds_id)
 
 
@@ -241,7 +256,7 @@ def sync_data_source(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_visible(db, ws, viewer, kb_id)
+    _require_visible(db, ws, viewer, kb_id, own=True)
     return knowledge.start_sync(ws.context, kb_id, ds_id)
 
 
@@ -305,7 +320,7 @@ def migrate_knowledge_base(
     """Copy the KB's objects under the project prefix, add the project data source and
     switch the KB to the project role (additive; `…/finish` removes the old half).
     Another project's KB answers 404."""
-    _require_visible(db, ws, viewer, kb_id)
+    _require_visible(db, ws, viewer, kb_id, own=True)
     return project_kb.migrate_kb(ws.context, kb_id, current_project())
 
 
@@ -318,5 +333,5 @@ def finish_knowledge_base_migration(
 ) -> dict[str, Any]:
     """Once the project data source has synced: delete the old data source and the
     shared role's grant for the KB (409 while it syncs)."""
-    _require_visible(db, ws, viewer, kb_id)
+    _require_visible(db, ws, viewer, kb_id, own=True)
     return project_kb.finish_kb_migration(ws.context, kb_id, current_project())

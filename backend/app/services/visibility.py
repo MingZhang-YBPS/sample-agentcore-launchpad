@@ -242,7 +242,9 @@ def hidden_aws_ids(
     (`Builtin.*`, `ThirdParty.*`) belong to no project and are never hidden. Then,
     inside the project, workspace isolation: an id with no creator row — created
     outside the console, or before creators were recorded — has an unknown creator
-    and stays visible.
+    and stays visible. An id another project shared with this one (§11.2,
+    `resource_shares.received_ids`) is that project's creation: the member rule of
+    this one does not apply to it.
     """
     wanted = [i for i in set(ids) if i]
     if not wanted or (not viewer.filters and current_project() is None):
@@ -254,7 +256,10 @@ def hidden_aws_ids(
     )
     if not viewer.filters:
         return hidden
-    rest = [i for i in wanted if i not in hidden]
+    from app.services import resource_shares
+
+    shared = resource_shares.received_ids(db, kind)  # empty without a project
+    rest = [i for i in wanted if i not in hidden and i not in shared]
     if not rest:
         return hidden
     rows = db.execute(

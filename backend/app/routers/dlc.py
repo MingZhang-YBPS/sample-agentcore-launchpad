@@ -406,8 +406,22 @@ def _golden_payload(db: Session, ws: WorkspaceScope, parent: EvalDataset) -> dic
 def list_golden_sets(
     db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
-    return {"golden_sets": [golden_svc.parent_out(db, p)
-                            for p in golden_svc.list_parents(db, ws.id)]}
+    from app.core.project_scope import current_project
+    from app.models.shares import KIND_EVAL_DATASET
+    from app.services import resource_shares
+
+    parents = golden_svc.list_parents(db, ws.id)
+    pid = current_project()
+    # "from project X (read / use)" on the golden sets another project lent (§11.2)
+    lent = resource_shares.shared_from(
+        db, KIND_EVAL_DATASET, {p.id for p in parents if pid and p.project_id != pid})
+    out = []
+    for parent in parents:
+        row = golden_svc.parent_out(db, parent)
+        if parent.id in lent:
+            row["shared_from"] = lent[parent.id]
+        out.append(row)
+    return {"golden_sets": out}
 
 
 @router.post("/golden-sets", status_code=201)

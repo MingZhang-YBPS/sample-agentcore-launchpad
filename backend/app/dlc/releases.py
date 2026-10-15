@@ -384,6 +384,16 @@ def _gate_plan(
         if (r.executor or {}).get("kind") == "evaluator" and (r.executor or {}).get("evaluator_id")
     })
     parent = golden_svc.for_criteria(db, agent.workspace_id, cset.lineage_id)
+    if parent is not None and _lent_by(db, parent, agent.project_id):
+        # another project's golden set (§11.2): a gate runs on it only at `use` level
+        from app.models.shares import KIND_EVAL_DATASET
+        from app.services import resource_shares
+
+        if resource_shares.refused_ids(db, KIND_EVAL_DATASET, [parent.id], "use",
+                                       project_id=agent.project_id):
+            raise AppError("release.golden_share_read_only",
+                           f"golden set '{parent.name}' is shared with this project "
+                           "read-only — ask its project for use access", status_code=409)
     if parent is None:
         raise AppError("release.no_golden",
                        "create the golden set for these criteria before evaluating a release",
@@ -470,6 +480,9 @@ def start_evaluation(
         golden_versions[name] = {"dataset_id": split.id,
                                  "version": golden_svc._version_label(split),
                                  "items": len(items)}
+        lent = _lent_by(db, split, agent.project_id)
+        if lent:  # the evidence names the project whose golden set it was (§11.2)
+            golden_versions[name]["shared_from"] = lent
         run = submit(
             agent=agent,
             workspace=workspace_ctx,
@@ -513,6 +526,35 @@ def start_evaluation(
     return run_ids
 
 
+def _lent_by(db: Session, row: Any, project_id: str | None) -> dict[str, str] | None:
+    """`{project_id, name}` of the project that lent `row` (a criteria set, a golden
+    split) to `project_id` through a share (§11.2); None for the project's own row."""
+    owner = getattr(row, "project_id", None)
+    if not owner or not project_id or owner == project_id:
+        return None
+    from app.services import resource_shares
+
+    return {"project_id": owner,
+            "name": resource_shares.project_names(db, {owner}).get(owner, owner)}
+
+
+def shared_evidence(db: Session, record: ReleaseRecord, cset: Any | None) -> list[str]:
+    """The release evidence's notes on resources another project lent: "used project
+    X's criteria vN" / "used project X's golden set <split> vN" (§11.2)."""
+    notes: list[str] = []
+    lent = _lent_by(db, cset, record.project_id) if cset is not None else None
+    if lent:
+        notes.append(f"used project {lent['name']}'s criteria v{cset.version}")
+    for split, entry in (record.golden_versions or {}).items():
+        lent = (entry or {}).get("shared_from")
+        if lent:
+            version = entry.get("version")
+            label = f"v{version}" if version else "(unpublished)"
+            notes.append(f"used project {lent.get('name') or lent.get('project_id')}'s "
+                         f"golden set {split} {label}")
+    return notes
+
+
 def provenance(
     db: Session, record: ReleaseRecord, runs: list[EvalRun], workspace: Workspace | None
 ) -> dict[str, Any]:
@@ -541,6 +583,7 @@ def provenance(
         "evaluator_set_hash": record.evaluator_set_hash,
         "candidate_version": record.candidate_version,
         "previous_live_version": record.previous_live_version,
+        "shared": shared_evidence(db, record, cset),
         "issues": issues,
     }
 
