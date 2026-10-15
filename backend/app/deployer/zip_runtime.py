@@ -25,6 +25,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
+from app.deployer import model_profile
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.mounts import describe as describe_mounts
@@ -35,7 +36,7 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
-from app.services import agent_iam
+from app.services import agent_iam, project_storage
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -476,6 +477,14 @@ def _method_requirements(spec: AgentSpec) -> list[str]:
     )
 
 
+def package_key(agent: Agent) -> str:
+    """The deployment package's S3 key: `agents/<name>/…`, under `projects/<pid>/` for
+    an agent of an isolated project (projects design §10.10)."""
+    return project_storage.artifact_key(
+        agent.project_id, f"agents/{agent.name}/deployment_package.zip"
+    )
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
     code, source = _generate_code(spec)
@@ -520,7 +529,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     pip_secs = time.monotonic() - t0
     size_mb = zip_path.stat().st_size / 1e6
 
-    s3_key = f"agents/{agent.name}/deployment_package.zip"
+    s3_key = package_key(agent)
     ctx.workspace.client("s3").upload_file(str(zip_path), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
     record_input_contract(ctx, code)
@@ -558,6 +567,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         ctx.log(f"network: {describe_network(vpc)}")
         if mounts := describe_mounts(AgentSpec(**row.spec)):
             ctx.log(mounts)
+        # §10.8: an isolated project's model through its inference profile (once, not
+        # per retried call)
+        model_env = model_profile.model_environment(
+            row.project_id, AgentSpec(**row.spec), ctx.workspace, ctx.log
+        )
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
@@ -565,11 +579,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 runtime_environment(spec, resources, agent_id=row.id,
                                     workspace_id=row.workspace_id or ""), spec
             )
+            environment.update(model_env)
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
                 or resources.get("artifacts_bucket", ""),
-                "s3_key": ctx.scratch.get("s3_key")
-                or f"agents/{row.name}/deployment_package.zip",
+                "s3_key": ctx.scratch.get("s3_key") or package_key(row),
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or resources.get("execution_role_arn", ""),
                 "environment": environment,

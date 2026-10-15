@@ -93,6 +93,9 @@ def memory_session_manager(
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
+# An isolated project's application inference profile ARN, set by the platform
+# when per-project inference profiles are on (projects design §10.8).
+MODEL_ID = os.environ.get("LAUNCHPAD_MODEL_ID") or MODEL_ID
 # Which hosting surface MODEL_ID belongs to: "bedrock" (Converse API) or
 # "mantle" (Bedrock Mantle, OpenAI-compatible Responses API).
 MODEL_SOURCE = "__LAUNCHPAD_MODEL_SOURCE__"

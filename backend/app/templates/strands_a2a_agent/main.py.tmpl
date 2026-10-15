@@ -32,6 +32,9 @@ from strands.multiagent.a2a import A2AServer
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
+# An isolated project's application inference profile ARN, set by the platform
+# when per-project inference profiles are on (projects design §10.8).
+MODEL_ID = os.environ.get("LAUNCHPAD_MODEL_ID") or MODEL_ID
 SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 AGENT_DESCRIPTION = __LAUNCHPAD_AGENT_DESCRIPTION__
 CARD_SKILLS: list[dict] = __LAUNCHPAD_A2A_SKILLS__

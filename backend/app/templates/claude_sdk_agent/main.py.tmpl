@@ -44,6 +44,9 @@ from openinference.instrumentation import using_session
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
+# An isolated project's application inference profile ARN, set by the platform
+# when per-project inference profiles are on (projects design §10.8).
+MODEL_ID = os.environ.get("LAUNCHPAD_MODEL_ID") or MODEL_ID
 
 
 def _model_hint(result) -> str:

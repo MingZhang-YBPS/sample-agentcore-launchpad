@@ -17,6 +17,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.errors import cleanup_error, is_not_found
+from app.deployer import model_profile
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.mounts import describe as describe_mounts
@@ -26,7 +27,7 @@ from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
-from app.services import agent_iam, ecr
+from app.services import agent_iam, ecr, project_storage
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
@@ -52,8 +53,10 @@ def platform_buildspec_path() -> Path:
 
 
 def _image_ref(workspace: WorkspaceContext, agent: Agent) -> tuple[str, str, str]:
+    """`(registry, repository, tag)` of the agent's image: the shared repository, or
+    an isolated project's own once it is provisioned there (projects design §10.10)."""
     registry = f"{workspace.account_id}.dkr.ecr.{workspace.region}.amazonaws.com"
-    repo = workspace.resources.get("ecr_repo", "launchpad-agents")
+    repo = project_storage.ecr_repo(workspace, getattr(agent, "project_id", None))
     tag = f"{agent.name}-v{agent.version or '1'}"
     return registry, repo, tag
 
@@ -85,7 +88,8 @@ def build_and_push_image(ctx: StageContext, agent: Agent, archive: str) -> tuple
     """Upload one build-context archive → CodeBuild (ARM64) → ECR; pin + gate.
 
     The build/wait/digest/scan sequence shared by the container method and BYOC
-    ``container_source``: uploads ``archive`` to ``builds/{agent.name}/source.zip``,
+    ``container_source``: uploads ``archive`` to ``builds/{agent.name}/source.zip``
+    (under ``projects/<pid>/`` for an isolated project),
     runs the workspace's ``launchpad-agent-builder`` project, resolves the pushed
     tag to its immutable digest (recorded on the Deployment row so a resumed job
     re-uses the same image) and runs the scan gate. Returns
@@ -101,7 +105,9 @@ def build_and_push_image(ctx: StageContext, agent: Agent, archive: str) -> tuple
             "resource map — run its bootstrap"
         )
 
-    s3_key = f"builds/{agent.name}/source.zip"
+    s3_key = project_storage.artifact_key(
+        getattr(agent, "project_id", None), f"builds/{agent.name}/source.zip"
+    )
     workspace.client("s3").upload_file(archive, bucket, s3_key)
     ctx.log(f"source zip uploaded → s3://{bucket}/{s3_key}")
 
@@ -254,10 +260,19 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         ctx.log(f"network: {describe_network(vpc)}")
         if mounts := describe_mounts(AgentSpec(**row.spec)):
             ctx.log(mounts)
+        # §10.8: an isolated project's model through its inference profile
+        model_env = model_profile.model_environment(
+            row.project_id, AgentSpec(**row.spec), workspace, ctx.log
+        )
 
         def _kwargs() -> dict:
             registry, repo, tag = _image_ref(workspace, row)
             spec = AgentSpec(**row.spec)
+            environment = with_mounts_env(
+                runtime_environment(spec, workspace.resources, agent_id=agent.id,
+                                    workspace_id=agent.workspace_id or ""), spec
+            )
+            environment.update(model_env)
             return {
                 "container_uri": ctx.scratch.get("image_uri")
                 or _recorded_digest_uri(ctx, registry, repo)
@@ -267,10 +282,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 or f"{registry}/{repo}:{tag}",
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or workspace.resources.get("execution_role_arn", ""),
-                "environment": with_mounts_env(
-                    runtime_environment(spec, workspace.resources, agent_id=agent.id,
-                                        workspace_id=agent.workspace_id or ""), spec
-                ),
+                "environment": environment,
                 "filesystem_configurations": filesystem_configurations(spec) or None,
                 "vpc": vpc,
                 # Echoed on every update; omitting (None = IAM) resets a JWT
