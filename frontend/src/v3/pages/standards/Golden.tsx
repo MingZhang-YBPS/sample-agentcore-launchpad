@@ -18,6 +18,7 @@ import { useLoad, useToast } from "../../hooks";
 import type { NextStepNote } from "../../story/flow";
 import { useNextStep } from "../../story/useNextStep";
 import { StoryPrereqs } from "../../story/Prereqs";
+import { SharedFromTag } from "../../shares/SharedFromTag";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { CoverageMatrix } from "./charts";
 import { biasText } from "./common";
@@ -81,7 +82,7 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
                 return (
                   <tr key={row.id} className="click" onClick={() => onOpen(row.id)}>
                     <td style={{ width: 30 }}><Lamp s={sealed ? "ok" : "wait"} /></td>
-                    <td><b>{row.name}</b></td>
+                    <td><span className="v3-lent-row"><b>{row.name}</b><SharedFromTag row={row} /></span></td>
                     <td className="num">{row.splits.dev?.active_items ?? 0}</td>
                     <td className="num">{row.splits.regression?.active_items ?? 0}</td>
                     <td>

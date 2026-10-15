@@ -54,9 +54,12 @@ STRUCTURE_ACTIONS = frozenset({
     "project.quotas.update",
 })
 # `system.update.*` — the platform's online update (online-update §5); `steward.*` —
-# a structure-only administrator's membership changes and two-person requests (§11.4)
+# a structure-only administrator's membership changes and two-person requests (§11.4);
+# `project.share.*` — cross-project sharing grants (§11.2: grant / request / approve /
+# reject / revoke / expire, filed under the owner project with the grantee in the target)
 STRUCTURE_ACTION_PREFIXES = (
     "group.members.", "group.projects.", "department.", "system.update.", "steward.",
+    "project.share.",
 )
 
 

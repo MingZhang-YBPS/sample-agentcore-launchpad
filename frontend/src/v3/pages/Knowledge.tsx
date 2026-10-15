@@ -23,6 +23,7 @@ import {
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
+import { SharedFromTag } from "../shares/SharedFromTag";
 import { kbSignal, resourceSignal } from "../signals";
 import {
   Btn,
@@ -187,6 +188,7 @@ function KbShelf() {
                 <div className="top">
                   <Lamp s={s} live={s === "ok" || s === "wait"} />
                   <b>{kb.name}</b>
+                  <SharedFromTag row={kb} />
                   <span style={{ marginLeft: "auto" }}><Chip s={s === "off" ? undefined : s}>{statusLabel(kb.status)}</Chip></span>
                 </div>
                 <p>{kb.description || t("v3.kb.noDescription")}</p>
