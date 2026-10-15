@@ -24,7 +24,7 @@ export const SOD_PAIRS: readonly (readonly [string, string])[] = [
   ["agents.deploy", "release.sign"],
   ["criteria.manage", "criteria.sign"],
 ];
-export const PROJECT_TABS = ["overview", "members", "roles", "workspaces", "settings", "audit"] as const;
+export const PROJECT_TABS = ["overview", "members", "roles", "workspaces", "shares", "settings", "audit"] as const;
 export type ProjectTab = (typeof PROJECT_TABS)[number];
 export const INHERIT_ROLE = "inherit";
 /** the template a project's owners hold (the Overview lists them) */

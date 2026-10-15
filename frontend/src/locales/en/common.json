@@ -12292,6 +12292,7 @@
         "members": "Members",
         "roles": "Roles",
         "workspaces": "Workspaces",
+        "shares": "Shares",
         "settings": "Settings",
         "audit": "Audit"
       },
@@ -12589,6 +12590,78 @@
         "readOnly": "Only an administrator or this project's department administrator can change quotas.",
         "save": "Save quotas",
         "saved": "Quotas of {{name}} saved"
+      },
+      "shares": {
+        "intro": "Lend a resource of this project to another project of the same workspace — read-only, or for its agents and evaluations to use. A share never allows changes, cannot be passed on, and expires (90 days by default).",
+        "grant": "Share a resource",
+        "request": "Request share",
+        "showClosed": "Show ended shares",
+        "outgoing": "Lent out",
+        "incoming": "Received",
+        "dir": {
+          "outgoing": "out",
+          "incoming": "in"
+        },
+        "empty": {
+          "outgoing": "This project lends nothing yet.",
+          "incoming": "Nothing is shared with this project."
+        },
+        "kind": {
+          "knowledge_base": "Knowledge base",
+          "evaluator": "Evaluator",
+          "eval_dataset": "Golden set / dataset",
+          "criteria_set": "Criteria template",
+          "gateway_target": "Gateway tool"
+        },
+        "access": {
+          "read": "Read",
+          "use": "Use"
+        },
+        "accessHint": {
+          "read": "See it: metadata, items, tool list. Nothing runs on it.",
+          "use": "Its agents pin it and its evaluations run on it — still never a change."
+        },
+        "status": {
+          "requested": "Awaiting approval",
+          "active": "Active",
+          "revoked": "Revoked",
+          "expired": "Expired",
+          "rejected": "Rejected"
+        },
+        "flowLabel": "{{owner}} shares with {{grantee}} ({{access}})",
+        "daysLeft_one": "{{count}} day left",
+        "daysLeft_other": "{{count}} days left",
+        "noExpiry": "No expiry",
+        "endedBy": "Ended · {{who}}",
+        "grantedBy": "Granted by {{who}}",
+        "approvedBy": "approved by {{who}}",
+        "approve": "Approve",
+        "reject": "Reject",
+        "revoke": "Revoke",
+        "cancel": "Cancel",
+        "approved": "Share of {{name}} approved",
+        "rejected": "Share of {{name}} rejected",
+        "granted": "{{name}} is now shared with {{project}}",
+        "requested": "Share of {{name}} with {{project}} requested — the receiving department approves it",
+        "revoked": "Share of {{name}} revoked",
+        "revokedPinned": "Share of {{name}} revoked — still pinned by {{agents}}; their next publish fails until the pin is removed",
+        "revokeTitle": "Revoke the share of {{name}}?",
+        "revokeBody": "{{project}} loses access on its next request. Agents that pin the resource cannot be published again until the pin is removed.",
+        "grantTitle": "Share a resource of {{name}}",
+        "field": {
+          "workspace": "Workspace",
+          "days": "Days",
+          "kind": "Kind",
+          "resource": "Resource",
+          "grantee": "Share with",
+          "access": "Access",
+          "note": "Note (optional)"
+        },
+        "pick": "Choose…",
+        "typedId": "or type the AWS id",
+        "noResources": "This project has nothing of this kind in the workspace.",
+        "crossShort": "other department",
+        "crossDepartment": "That project belongs to another department: the share waits until its department administrator (or an administrator) approves it."
       }
     },
     "admins": {
