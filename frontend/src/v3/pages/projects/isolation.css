@@ -1,0 +1,187 @@
+/* Settings → Runtime isolation (projects design §10.14).
+ *
+ * The section reads like a switchboard: a two-position mode switch at the top, then
+ * one bay per bound workspace. Inside a bay each agent is a line of four contacts
+ * (grant-new → republish → verify → switch); a contact lights in the signal its step
+ * reached, so "how far is the migration" is the length of the lit line. Only the
+ * V3 tokens and signals — no colour of its own.
+ */
+
+.v3 .v3-iso { display: grid; gap: 14px; }
+
+/* ── the mode switch: two labelled positions, the live one lit ───────────── */
+.v3 .v3-iso-mode { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.v3 .v3-iso-switch {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--v3-line-2);
+  border-radius: var(--v3-r);
+  background: var(--v3-ink-0);
+  padding: 3px;
+  position: relative;
+}
+.v3 .v3-iso-switch button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 1px;
+  text-align: left;
+  min-width: 190px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: calc(var(--v3-r) - 3px);
+  background: transparent;
+  color: var(--v3-text-2);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.2s var(--v3-ease);
+}
+.v3 .v3-iso-switch button b {
+  font-family: var(--v3-display);
+  font-variation-settings: "wdth" 118;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.v3 .v3-iso-switch button small { font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-iso-switch button[aria-pressed="true"] { color: var(--v3-text); }
+.v3 .v3-iso-switch button:disabled { cursor: default; }
+.v3 .v3-iso-switch .thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: calc(var(--v3-r) - 3px);
+  background: var(--v3-ink-3);
+  box-shadow: inset 0 0 0 1px var(--v3-line-2);
+  transition: transform 0.28s var(--v3-ease), box-shadow 0.28s var(--v3-ease);
+}
+.v3 .v3-iso-switch[data-mode="isolated"] .thumb {
+  transform: translateX(100%);
+  box-shadow: inset 0 0 0 1px rgba(62, 240, 180, 0.45), 0 0 18px -6px var(--v3-ok);
+}
+.v3 .v3-iso-retired {
+  font-family: var(--v3-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+}
+
+/* ── a workspace bay ─────────────────────────────────────────────────────── */
+.v3 .v3-iso-bay {
+  border: 1px solid var(--v3-line);
+  border-radius: var(--v3-r);
+  background: var(--v3-ink-1);
+  overflow: hidden;
+}
+.v3 .v3-iso-bay[data-s="act"] { border-color: rgba(255, 92, 108, 0.45); }
+.v3 .v3-iso-bay-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--v3-line);
+  background: var(--v3-ink-2);
+}
+.v3 .v3-iso-bay-head .ws {
+  font-family: var(--v3-mono);
+  font-size: 13px;
+  color: var(--v3-text);
+}
+.v3 .v3-iso-bay-head .state { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--v3-text-2); }
+.v3 .v3-iso-bay-head .end { margin-left: auto; display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.v3 .v3-iso-bay-body { display: grid; gap: 14px; padding: 12px 14px 14px; }
+.v3 .v3-iso-label {
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+  margin-bottom: 6px;
+}
+.v3 .v3-iso-res { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* preflight quota meters: used + what this run adds, against the limit */
+.v3 .v3-iso-quotas { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.v3 .v3-iso-quota { display: grid; gap: 4px; font-size: 12.5px; }
+.v3 .v3-iso-quota .top { display: flex; justify-content: space-between; gap: 8px; }
+.v3 .v3-iso-quota .num { font-family: var(--v3-mono); font-size: 12px; color: var(--v3-text-2); }
+.v3 .v3-iso-quota .bar { height: 5px; border-radius: 3px; background: var(--v3-ink-3); overflow: hidden; }
+.v3 .v3-iso-quota .bar i { display: block; height: 100%; background: var(--v3-ok); transition: width 0.4s var(--v3-ease); }
+.v3 .v3-iso-quota .bar i[data-s="wait"] { background: var(--v3-wait); }
+.v3 .v3-iso-quota .bar i[data-s="act"] { background: var(--v3-act); }
+
+/* ── the migration board: one line of contacts per agent ─────────────────── */
+.v3 .v3-iso-board { display: grid; gap: 2px; }
+.v3 .v3-iso-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.1fr) minmax(0, 2.4fr) minmax(0, 1.5fr);
+  gap: 14px;
+  align-items: center;
+  padding: 7px 8px;
+  border-radius: var(--v3-r-sm);
+}
+.v3 .v3-iso-row:hover { background: var(--v3-ink-2); }
+.v3 .v3-iso-row.head { padding-top: 0; padding-bottom: 2px; }
+.v3 .v3-iso-row.head:hover { background: none; }
+.v3 .v3-iso-row .name { display: grid; gap: 1px; min-width: 0; }
+.v3 .v3-iso-row .name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3 .v3-iso-row .name small { font-family: var(--v3-mono); font-size: 11px; color: var(--v3-text-3); }
+.v3 .v3-iso-row .note { font-size: 12.5px; color: var(--v3-text-2); overflow-wrap: anywhere; }
+.v3 .v3-iso-row .note[data-s="act"] { color: var(--v3-act); }
+.v3 .v3-iso-row .note[data-s="wait"] { color: var(--v3-wait); }
+
+.v3 .v3-iso-steps { display: grid; gap: 4px; }
+.v3 .v3-iso-steps.heads span {
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+}
+.v3 .v3-iso-step {
+  position: relative;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--v3-ink-3);
+  overflow: hidden;
+}
+.v3 .v3-iso-step[data-s="ok"] { background: var(--v3-ok); }
+.v3 .v3-iso-step[data-s="wait"] { background: var(--v3-wait); }
+.v3 .v3-iso-step[data-s="act"] { background: var(--v3-act); }
+.v3 .v3-iso-step[data-s="info"] { background: var(--v3-info-dim); box-shadow: inset 0 0 0 1px rgba(110, 168, 255, 0.5); }
+/* the step in progress: a slow sweep across the contact */
+.v3 .v3-iso-step[data-s="info"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(110, 168, 255, 0.75), transparent);
+  animation: v3-iso-sweep 1.4s var(--v3-ease) infinite;
+}
+.v3 .v3-iso-row[data-skipped="true"] .v3-iso-step { background: repeating-linear-gradient(135deg, var(--v3-ink-3) 0 4px, transparent 4px 8px); }
+@keyframes v3-iso-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+.v3 .v3-iso-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.v3 .v3-iso-foot .grow { flex: 1; }
+
+/* ── agent detail: the boundary line on the identity card ──────────────── */
+.v3 .v3-boundary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.v3 .v3-boundary .policy { font-family: var(--v3-mono); font-size: 12.5px; color: var(--v3-text); }
+.v3 .v3-boundary .ver { font-family: var(--v3-mono); font-size: 12px; color: var(--v3-text-2); }
+
+@media (max-width: 760px) {
+  .v3 .v3-iso-row { grid-template-columns: 1fr; gap: 6px; }
+  .v3 .v3-iso-row.head { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-iso-step[data-s="info"]::after { animation: none; opacity: 0.6; transform: none; width: 100%; }
+  .v3 .v3-iso-switch .thumb, .v3 .v3-iso-quota .bar i { transition: none; }
+}

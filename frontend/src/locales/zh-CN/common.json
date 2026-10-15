@@ -12589,6 +12589,97 @@
         "readOnly": "只有平台管理员或本项目所属部门的管理员可以修改配额。",
         "save": "保存配额",
         "saved": "已保存 {{name}} 的配额"
+      },
+      "isolation": {
+        "title": "运行时隔离",
+        "sub": "共享：只隔离数据可见性。隔离：每个 Agent 的角色挂项目权限边界，使用项目自己的 memory、网关凭据和仓库。存量 Agent 迁移无停机——旧授权保留到你撤销为止。",
+        "live": "更新中",
+        "mode": "隔离模式",
+        "modes": {
+          "shared": "共享",
+          "sharedHint": "仅数据隔离",
+          "isolated": "隔离",
+          "isolatedHint": "IAM 边界、独立 memory 与凭据"
+        },
+        "retired": "共享授权已撤销",
+        "updatedBy": "最近由 {{who}} 修改",
+        "noWorkspaces": "项目尚未绑定任何工作区。",
+        "provision": {
+          "not_provisioned": "未创建资源",
+          "provisioning": "创建中",
+          "ready": "资源就绪",
+          "partial": "就绪（部分阶段待完成）",
+          "failed": "创建失败"
+        },
+        "run": {
+          "isolate": "迁移",
+          "revert": "回退",
+          "retire": "撤销"
+        },
+        "state": {
+          "not_started": "未开始",
+          "running": "进行中",
+          "succeeded": "完成",
+          "awaiting_release": "等待放行",
+          "failed": "失败"
+        },
+        "provisionAgain": "重新创建资源",
+        "retry": "重试",
+        "migrate": "迁移 Agent",
+        "migrateAgain": "再次迁移",
+        "skipped": "尚未创建：{{stages}}",
+        "resources": "项目资源",
+        "preflight": "配额预检",
+        "quotaUnknown": "未知",
+        "noAgents": "此工作区没有 Agent——新 Agent 直接部署到项目资源上。",
+        "readyToMigrate": "资源已就绪：迁移存量 Agent，让它们进入项目边界。",
+        "agent": "Agent",
+        "detail": "详情",
+        "step": {
+          "grant-new": "授权",
+          "republish": "再发布",
+          "verify": "验证",
+          "switch": "切换",
+          "retire": "撤销"
+        },
+        "agentStatus": {
+          "pending": "待处理",
+          "running": "进行中",
+          "succeeded": "完成",
+          "skipped": "跳过",
+          "failed": "失败",
+          "awaiting_release": "等待放行"
+        },
+        "awaiting": "live 端点：签署候选版本放行后，重试以完成切换",
+        "retireHint": "旧的共享授权保留在每个角色上，直到你撤销；撤销后项目不能再回到共享。",
+        "retiredHint": "共享授权已撤销：Agent 只能访问本项目的资源。",
+        "revert": "回退为共享",
+        "retire": "撤销旧授权",
+        "readOnly": "只有管理员可以修改运行时隔离。",
+        "enableTitle": "隔离此项目？",
+        "enableBody": "在每个已绑定工作区创建项目资源（边界、memory、M2M 客户端、Cedar 规则、仓库）。运行中的 Agent 在你迁移之前不受影响。",
+        "enable": "隔离",
+        "enabled": "{{name}} 已切换为隔离——开始创建资源",
+        "revertTitle": "回退为共享？",
+        "revertBody": "每个 Agent 再发布到工作区的共享资源上，然后移除其边界。运行中的 Agent 全程持续服务。",
+        "revertQueued": "已开始回退",
+        "retireTitle": "撤销旧的共享授权？",
+        "retireBody": "删除过渡策略，按不含共享 memory 与提供方的内容重写每个工作区的边界，并结束旧 memory 的 30 天双读。此操作不可撤回：项目将保持隔离。",
+        "retireQueued": "已开始撤销",
+        "provisionQueued": "已在 {{ws}} 排队创建资源",
+        "migrateQueued": "已在 {{ws}} 开始迁移",
+        "retryQueued": "已在 {{ws}} 继续运行",
+        "boundary": {
+          "title": "项目边界",
+          "noPolicy": "无边界策略",
+          "none": "未挂载",
+          "current": "最新",
+          "drift": "早于 {{current}}",
+          "missing": "角色未挂边界",
+          "migrating": "迁移中",
+          "leftover": "隔离遗留",
+          "driftHint": "项目已隔离，但此角色未挂当前边界——请迁移项目的 Agent，或再发布此 Agent。"
+        }
       }
     },
     "admins": {

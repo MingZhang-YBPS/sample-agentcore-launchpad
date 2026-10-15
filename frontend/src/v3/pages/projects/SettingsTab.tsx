@@ -7,6 +7,7 @@ import { type ProjectDetail, projectsApi } from "../../../lib/api/projects";
 import { useProject } from "../../../workspace/project-context";
 import { useToast } from "../../hooks";
 import { Btn, Notice, Panel } from "../../ui";
+import { IsolationSection } from "./IsolationSection";
 import { LifecycleSection } from "./LifecycleSection";
 import { type SettingsDraft, settingsDraft, settingsPatch } from "./model";
 import type { ProjectAbilities } from "./ProjectDetail";
@@ -119,6 +120,7 @@ export function SettingsTab({
         </div>
       )}
       <QuotasSection project={project} abilities={abilities} />
+      <IsolationSection project={project} abilities={abilities} />
       {abilities.admin && <LifecycleSection project={project} onChanged={onChanged} />}
     </div>
   );

@@ -547,3 +547,145 @@ export const projectQuotasApi = {
   put: (projectId: string, quotas: Partial<Record<QuotaKey, number | null>>) =>
     sendJson<ProjectQuotas>(projectPath(projectId, "quotas"), "PUT", { quotas }),
 };
+
+/* ── runtime isolation (§10.2, §10.11–§10.14) ─────────────────────────────── */
+
+export type IsolationMode = "shared" | "isolated";
+export type ProvisionState = "not_provisioned" | "provisioning" | "ready" | "partial" | "failed";
+
+export interface IsolationWorkspace {
+  workspace_id: string;
+  state: ProvisionState;
+  job_id: string | null;
+  job_status: string | null;
+  last_error: string | null;
+  /** stages whose provisioner reported nothing to do yet */
+  skipped_stages: string[];
+  /** resource kind → its row status */
+  resources: Record<string, string>;
+  updated_at: string | null;
+}
+
+export interface ProjectIsolation {
+  project_id: string;
+  mode: IsolationMode;
+  enabled: boolean;
+  gateway: "shared" | "dedicated";
+  updated_by: string | null;
+  updated_at: string | null;
+  /** §10.11 retire ran: no way back to shared */
+  legacy_retired: boolean;
+  workspaces: IsolationWorkspace[];
+  queued?: string[];
+}
+
+export interface PreflightFinding {
+  key: string;
+  label: string;
+  needed: number;
+  limit: number | null;
+  used: number | null;
+  note: string;
+  known: boolean;
+  blocked: boolean;
+}
+
+export interface JobStage {
+  name: string;
+  status: "pending" | "running" | "succeeded" | "skipped" | "failed";
+  detail: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface ProvisioningView extends IsolationWorkspace {
+  job: {
+    id: string;
+    status: string;
+    error: string | null;
+    stages: JobStage[];
+    preflight: PreflightFinding[];
+    actor: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+  } | null;
+}
+
+export type MigrationDirection = "isolate" | "revert" | "retire";
+export type MigrationAgentStatus = "pending" | "running" | "succeeded" | "skipped" | "failed" | "awaiting_release";
+export type MigrationState = "not_started" | "running" | "succeeded" | "awaiting_release" | "failed";
+
+export interface MigrationAgent {
+  agent_id: string;
+  name: string;
+  method: string;
+  endpoint_mode: string;
+  status: MigrationAgentStatus;
+  /** the step it is at (null when done) */
+  step: string | null;
+  detail: string;
+  error?: string | null;
+  deploy_job_id: string | null;
+  steps: Record<string, { status: MigrationAgentStatus | "pending"; detail?: string }>;
+  updated_at: string;
+}
+
+export interface MigrationRun {
+  id: string;
+  direction: MigrationDirection;
+  status: string;
+  state: MigrationState;
+  error: string | null;
+  actor: string | null;
+  stages: JobStage[];
+  preflight: PreflightFinding[];
+  agents: MigrationAgent[];
+  counts: Record<MigrationAgentStatus, number>;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ProjectMigration {
+  project_id: string;
+  mode: IsolationMode;
+  legacy_retired: boolean;
+  workspaces: { workspace_id: string; state: MigrationState; run: MigrationRun | null }[];
+  queued?: string[];
+}
+
+export interface AgentBoundary {
+  agent_id: string;
+  project_id: string;
+  workspace_id: string;
+  mode: IsolationMode;
+  legacy_retired: boolean;
+  policy_name: string | null;
+  policy_arn: string | null;
+  /** `boundary-v<N>` the role carries, null = none */
+  applied: string | null;
+  /** the project's current version in the workspace */
+  current: string | null;
+  drift: boolean;
+  migration: { run_id: string; direction: MigrationDirection; status: MigrationAgentStatus; step: string | null; detail: string } | null;
+}
+
+export const projectIsolationApi = {
+  get: (projectId: string) => getJson<ProjectIsolation>(projectPath(projectId, "isolation")),
+  /** administrators: switching on queues provisioning in every bound workspace */
+  put: (projectId: string, mode: IsolationMode) =>
+    sendJson<ProjectIsolation>(projectPath(projectId, "isolation"), "PUT", { mode }),
+  provisioning: (projectId: string, workspace: string) =>
+    getJson<ProvisioningView>(`${projectPath(projectId, "provisioning")}${queryString({ workspace })}`),
+  provision: (projectId: string, workspace: string) =>
+    sendJson<ProvisioningView & { created: boolean }>(projectPath(projectId, "provision"), "POST", { workspace }),
+  migration: (projectId: string) => getJson<ProjectMigration>(projectPath(projectId, "isolation", "migration")),
+  /** administrators: `isolate` needs a provisioned isolated project; `revert` switches it shared first */
+  migrate: (projectId: string, direction: "isolate" | "revert", workspace?: string) =>
+    sendJson<ProjectMigration>(projectPath(projectId, "isolation", "migrate"), "POST", { direction, workspace }),
+  retry: (projectId: string, runId: string) =>
+    sendJson<{ run: MigrationRun }>(projectPath(projectId, "isolation", "migration", runId, "retry"), "POST"),
+  /** administrators, irreversible: drops the old shared grants everywhere */
+  retire: (projectId: string) => sendJson<ProjectMigration>(projectPath(projectId, "isolation", "retire"), "POST"),
+  agentBoundary: (projectId: string, agentId: string) =>
+    getJson<AgentBoundary>(projectPath(projectId, "isolation", "agents", agentId)),
+};
