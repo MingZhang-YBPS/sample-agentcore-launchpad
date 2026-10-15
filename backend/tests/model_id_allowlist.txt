@@ -9,3 +9,4 @@ app/services/model_prices.py | anthropic.claude-x | docstring example of a price
 app/services/model_settings.py | global.anthropic.x | docstring example of model_family()
 app/services/model_settings.py | anthropic.x | docstring example of model_family()
 app/skill_lab/runner.py | us.openai.gpt-6-sol | docstring example of codex routing
+app/schemas/strands_builder.py | anthropic.claude | substring test of is_claude_model_id, not a default

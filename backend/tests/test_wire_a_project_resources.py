@@ -297,7 +297,7 @@ def test_kb_migration_routes_call_the_project_kb_service(monkeypatch):
     from app.routers import knowledge as router
 
     calls: list[tuple[str, str, str | None]] = []
-    monkeypatch.setattr(router, "_require_visible", lambda db, ws, viewer, kb_id: None)
+    monkeypatch.setattr(router, "_require_visible", lambda db, ws, viewer, kb_id, own=False: None)
     monkeypatch.setattr(router.project_kb, "migrate_kb",
                         lambda ctx, kb_id, pid: calls.append(("migrate", kb_id, pid)) or {"ok": 1})
     monkeypatch.setattr(router.project_kb, "finish_kb_migration",

@@ -134,6 +134,16 @@ def no_background_retag(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_traffic_history(monkeypatch):
+    # Pricing a passive run or an online config (eval-cost §1.1) sizes it from the
+    # agent's last 7 days — a Logs Insights scan. Hermetic tests see no traffic;
+    # tests of the sizing replace this themselves.
+    from app.dlc import cost
+
+    monkeypatch.setattr(cost, "window_sessions", lambda *a, **k: 0)
+
+
+@pytest.fixture(autouse=True)
 def reset_aws_client_cache():
     # Tests that stub aws_clients.get_session still populate the module-level
     # client cache; a fake cached under a real key must not leak across tests.
