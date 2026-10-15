@@ -9,6 +9,7 @@ import { api, dlcApi } from "../../lib/api";
 import type { CriteriaSetPayload } from "../../lib/dlc";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useLoad } from "../hooks";
+import { StoryHeader } from "../story/StoryHeader";
 import { Filters, Notice, PageHead, Skeleton } from "../ui";
 import { Admission } from "./standards/Admission";
 import { Calibration } from "./standards/Calibration";
@@ -85,6 +86,7 @@ export function V3Standards() {
 
   return (
     <div className="v3-reveal v3-std" style={{ display: "grid", gap: 16 }}>
+      <StoryHeader view={view} />
       <PageHead
         eyebrow={`${t("v3.standards.eyebrow")}${agent ? ` · ${agent.display_name || agent.name}` : ""}`}
         title={t("v3.standards.title")}

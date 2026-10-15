@@ -10,6 +10,8 @@ import { AddToDatasetModal } from "../../../v2/pages/data/AddToDataset";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import type { NextStepNote } from "../../story/flow";
+import { useNextStep } from "../../story/useNextStep";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { hours, issueSignal, useAgents } from "./common";
 
@@ -158,12 +160,18 @@ function IssueBench({ id, onChanged, onClose }: { id: string; onChanged: () => v
     setNonce((n) => n + 1);
     onChanged();
   };
-  const run = async (fn: () => Promise<unknown>, okText: string) => {
+  // closing an issue says what comes next on the agent's storyline (§3.1)
+  const nextStep = useNextStep();
+  const closed = (doneKey: string): NextStepNote | undefined =>
+    issue ? { done: t(doneKey), after: "feedback.triage", agentId: issue.agent_id } : undefined;
+  const run = async (fn: () => Promise<unknown>, okText: string, note?: NextStepNote) => {
     setBusy(true);
     setError(null);
+    nextStep.clear();
     try {
       await fn();
-      toast("ok", okText);
+      if (note) nextStep.show(note);
+      else toast("ok", okText);
       refresh();
     } catch (err) {
       setError(errorMessage(err));
@@ -330,16 +338,19 @@ function IssueBench({ id, onChanged, onClose }: { id: string; onChanged: () => v
       )}
 
       {error && <Notice s="act">{error}</Notice>}
+      {nextStep.card}
 
       {open ? (
         <Panel title={t("selfService.issues.closeTitle")}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <input className="v3-input" style={{ flex: "1 1 260px" }} maxLength={1000} value={note}
               placeholder={t("selfService.issues.note")} aria-label={t("selfService.issues.note")} onChange={(e) => setNote(e.target.value)} />
-            <Btn kind="primary" disabled={busy} onClick={() => void run(() => issueApi.resolve(issue.id, "fixed", note), t("selfService.issues.markedFixed"))}>
+            <Btn kind="primary" disabled={busy} onClick={() => void run(() => issueApi.resolve(issue.id, "fixed", note), t("selfService.issues.markedFixed"),
+              closed("story.done.issueFixed"))}>
               {t("selfService.issues.markFixed")}
             </Btn>
-            <Btn disabled={busy} onClick={() => void run(() => issueApi.resolve(issue.id, "wont_fix", note), t("selfService.issues.markedWontFix"))}>
+            <Btn disabled={busy} onClick={() => void run(() => issueApi.resolve(issue.id, "wont_fix", note), t("selfService.issues.markedWontFix"),
+              closed("story.done.issueWontFix"))}>
               {t("selfService.issues.markWontFix")}
             </Btn>
           </div>

@@ -10,7 +10,7 @@ import {
   Square,
   Tag,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -42,6 +42,7 @@ import {
 } from "../../../v2/tasks";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import { useNextStep } from "../../story/useNextStep";
 import {
   Btn,
   Chip,
@@ -526,6 +527,20 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
     ["completed", "failed", "stopped"].includes(data.status);
   const insightsRun = data?.kind === "run" && data.mode === "insights";
 
+  // a batch run this page watched finish: say what comes next on the storyline (§3.1)
+  const nextStep = useNextStep();
+  const showNext = nextStep.show;
+  const watching = useRef(false);
+  const runStatus = data?.kind === "run" ? data.status : null;
+  const runAgent = data?.agentId ?? null;
+  useEffect(() => {
+    if (runStatus === "running" || runStatus === "queued" || runStatus === "pending") watching.current = true;
+    else if (watching.current && runStatus === "completed") {
+      watching.current = false;
+      if (runAgent) showNext({ done: t("story.done.evalDone"), after: "evaluate.dev_run", agentId: runAgent });
+    } else if (runStatus) watching.current = false;
+  }, [runStatus, runAgent, showNext, t]);
+
   const results = useLoad(
     async () => {
       // an insights run carries its clusters on the run row — no judged records to read
@@ -726,6 +741,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
         />
         <ErrorCallout error={failure} params={{ agent_id: data.agentId ?? undefined }} onDismiss={() => setFailure(null)}
           data-testid="v3-task-error" />
+        {nextStep.card}
 
         {mayCalibrate && calibrationWhy === null && calibrationKeys.length > 1 && (
           <div

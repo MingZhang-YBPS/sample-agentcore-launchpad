@@ -1,5 +1,5 @@
 import { Play, RotateCcw, ShieldCheck, ShieldX, Tag } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -12,6 +12,10 @@ import { useWorkspace } from "../../workspace/workspace-context";
 import { gateSignal, releaseSignal } from "../signals";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { useLoad, useToast } from "../hooks";
+import type { NextStepNote } from "../story/flow";
+import { useNextStep } from "../story/useNextStep";
+import { StoryPrereqs } from "../story/Prereqs";
+import { StoryHeader } from "../story/StoryHeader";
 import { ago, pct } from "../format";
 import { calibrateUrl } from "./standards/calibrationLink";
 import { dlcText } from "./standards/common";
@@ -200,20 +204,45 @@ export function V3Gate() {
   const storage = releaseStorage(report) ?? releaseStorage(pending);
   const writes = pending && !evaluated ? (releaseStorage(pending)?.shared_state_writes ?? []) : [];
 
-  // a failed gate action stays on the page with its way out (storyline-ux §4)
+  // a failed gate action stays on the page with its way out (storyline-ux §4); a
+  // signed release says what comes next instead of a toast (§3.1)
   const [failure, setFailure] = useState<unknown>(null);
+  const nextStep = useNextStep();
   useEffect(() => setFailure(null), [agentId]);
-  const act = (fn: () => Promise<unknown>, ok: string) => {
+  const act = (fn: () => Promise<unknown>, ok: string, note?: NextStepNote) => {
     setBusy(true);
     setFailure(null);
+    nextStep.clear();
     fn()
       .then(() => {
-        toast("ok", t(ok));
+        if (note) nextStep.show(note);
+        else toast("ok", t(ok));
         setNonce((n) => n + 1);
       })
       .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
+
+  // a gate evaluation runs for minutes: while it does, ask for the report quietly and
+  // re-read the page once it is there, then say what comes next (§3.1)
+  const showNext = nextStep.show;
+  const watched = useRef(false);
+  useEffect(() => {
+    watched.current = false;
+  }, [agentId]);
+  useEffect(() => {
+    if (!evaluating || !agentId) return;
+    watched.current = true;
+    const id = window.setInterval(() => {
+      dlcApi.gate(agentId).then((g) => { if (g.report) setNonce((n) => n + 1); }).catch(() => undefined);
+    }, 10_000);
+    return () => window.clearInterval(id);
+  }, [evaluating, agentId]);
+  useEffect(() => {
+    if (!watched.current || evaluating || !report) return;
+    watched.current = false;
+    showNext({ done: t("story.done.gateReport", { verdict: report.verdict }), after: "evaluate.gate", agentId });
+  }, [evaluating, report, agentId, showNext, t]);
 
   const agent = active.find((a) => a.id === agentId);
   const state = release.data?.state;
@@ -221,6 +250,7 @@ export function V3Gate() {
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
+      <StoryHeader />
       <PageHead
         eyebrow={t("v3.gate.eyebrow")}
         title={report ? t(`v3.gate.headline.${report.verdict}`) : pending ? t("v3.gate.headline.waiting") : t("v3.gate.headline.none")}
@@ -254,6 +284,16 @@ export function V3Gate() {
 
           <ErrorCallout error={failure} params={{ agent_id: agent.id }} onDismiss={() => setFailure(null)}
             data-testid="v3-gate-error" />
+          {nextStep.card}
+
+          {/* nothing to gate yet: say which step before it is missing (§3.5) */}
+          {!pending && !report && !release.loading && release.data && !state?.live_version && (
+            <Panel>
+              <Empty title={t("v3.gate.noCandidate")}>
+                <StoryPrereqs agentId={agent.id} stepKey="evaluate.gate" />
+              </Empty>
+            </Panel>
+          )}
 
           {state?.endpoint_mode !== "live" && (
             <Notice s="wait">
@@ -443,7 +483,8 @@ export function V3Gate() {
                       setDeciding(null);
                       if (action === "sign") {
                         act(() => storage?.requires_ack ? storageDlcApi.signRelease(agent.id, note, storageAck)
-                          : dlcApi.signRelease(agent.id, note), "v3.gate.signed");
+                          : dlcApi.signRelease(agent.id, note), "v3.gate.signed",
+                        { done: t("story.done.releaseSigned"), after: "release.sign", agentId: agent.id });
                       }
                       else if (action === "block") act(() => dlcApi.blockRelease(agent.id, note), "v3.gate.blocked");
                       else act(() => dlcApi.rollback(agent.id, note), "v3.gate.rolledBack");

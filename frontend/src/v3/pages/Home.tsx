@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import { api, dlcApi } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { LaunchSequence } from "../onboarding/LaunchSequence";
+import { YourTurn } from "../story/YourTurn";
 import { type Attention, agentSignal, attentionFor, sortAttention } from "../signals";
 import { Chip, Empty, Lamp, Notice, PageHead, Panel, Skeleton, Spark, Stat } from "../ui";
 import { useLoad } from "../hooks";
@@ -105,6 +106,8 @@ export function V3Home() {
       </div>
 
       {agents.data && <LaunchSequence workspace={current ?? null} agents={list} releases={rel.data?.states ?? null} />}
+      {/* past the opening moves, the storyline's turns: mine and the ones I wait on (storyline-ux §3.4) */}
+      {list.length > 0 && <YourTurn refresh={releaseKey} />}
 
       <div className="v3-grid v3-split">
         <div data-tour="queue">
