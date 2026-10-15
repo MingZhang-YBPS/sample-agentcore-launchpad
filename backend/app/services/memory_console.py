@@ -11,6 +11,11 @@ Every function in this module is a **read**. There is intentionally no wrapper
 for ``CreateEvent``/``DeleteEvent``/``DeleteMemoryRecord``/``Batch*MemoryRecords``/
 ``StartMemoryExtractionJob``/``CreateMemory``/``UpdateMemory``/``DeleteMemory`` —
 the console cannot mutate memory because the code path does not exist.
+
+The memory read is the current project's (``memory.memory_id_or_none``: an isolated
+project's own memory once provisioned). Every read takes an optional ``memory_id`` so
+the router can also read the old shared memory during a project's dual-read window
+(``project_memory.DualRead``) — it decides which actors may be read there.
 """
 
 import json
@@ -151,11 +156,13 @@ def memory_overview(workspace: WorkspaceContext) -> dict[str, Any]:
     }
 
 
-def get_strategies(workspace: WorkspaceContext) -> list[dict[str, Any]]:
+def get_strategies(
+    workspace: WorkspaceContext, memory_id: str | None = None
+) -> list[dict[str, Any]]:
     """Strategies alone — used by namespace resolution without a full overview."""
     raw = (
         control_client(workspace)
-        .get_memory(memoryId=require_memory_id(workspace))
+        .get_memory(memoryId=memory_id or require_memory_id(workspace))
         .get("memory", {})
     )
     return [_strategy(s) for s in raw.get("strategies") or []]
@@ -195,8 +202,9 @@ def list_actors(
     workspace: WorkspaceContext,
     next_token: str | None = None,
     max_results: int | None = None,
+    memory_id: str | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id(workspace)
+    mem_id = memory_id or require_memory_id(workspace)
     page = data_client(workspace).list_actors(
         memoryId=mem_id, maxResults=_page_size(max_results), **_token(next_token)
     )
@@ -213,8 +221,9 @@ def list_sessions(
     actor_id: str,
     next_token: str | None = None,
     max_results: int | None = None,
+    memory_id: str | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id(workspace)
+    mem_id = memory_id or require_memory_id(workspace)
     page = data_client(workspace).list_sessions(
         memoryId=mem_id,
         actorId=actor_id,
@@ -325,8 +334,9 @@ def list_events(
     include_payloads: bool = True,
     next_token: str | None = None,
     max_results: int | None = None,
+    memory_id: str | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id(workspace)
+    mem_id = memory_id or require_memory_id(workspace)
     page = data_client(workspace).list_events(
         memoryId=mem_id,
         actorId=actor_id,
@@ -444,8 +454,9 @@ def list_records(
     strategy_id: str | None = None,
     next_token: str | None = None,
     max_results: int | None = None,
+    memory_id: str | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id(workspace)
+    mem_id = memory_id or require_memory_id(workspace)
     kwargs: dict[str, Any] = {
         "memoryId": mem_id,
         "namespacePath": namespace,
@@ -468,8 +479,9 @@ def search_records(
     query: str,
     top_k: int = 5,
     strategy_id: str | None = None,
+    memory_id: str | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id(workspace)
+    mem_id = memory_id or require_memory_id(workspace)
     criteria: dict[str, Any] = {"searchQuery": query, "topK": top_k}
     if strategy_id:
         criteria["memoryStrategyId"] = strategy_id
@@ -507,8 +519,9 @@ def list_extraction_jobs(
     status: str | None = None,
     next_token: str | None = None,
     max_results: int | None = None,
+    memory_id: str | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id(workspace)
+    mem_id = memory_id or require_memory_id(workspace)
     if status and status not in EXTRACTION_STATUS_FILTERS:
         # Fail as a typed 400 rather than letting AWS answer with a 502-shaped
         # ValidationException the caller cannot act on.

@@ -7,9 +7,20 @@ can inject stub clients.
 
 **Read-only by construction:** there is no handler here that mutates memory. See
 ``app/services/memory_console.py`` for the matching guarantee on the service side.
+
+**Per-project memory (projects design §10.4).** The memory read is the request
+project's (``project_memory.effective_memory_id``): an isolated project's own memory
+once provisioned, the workspace's bootstrap memory otherwise. During an isolated
+project's dual-read window the actors of its own agents in the old shared memory are
+read as well (``project_memory.DualRead``): the first page of actors / sessions /
+records / extraction jobs merges them in, every item then carrying ``source``
+(``project`` | ``shared``), an empty session falls back to the shared one, and
+``source=shared`` reads the shared memory explicitly. An actor of another project in
+the shared memory answers 404. A shared project — every single-project workspace —
+sees no ``source`` keys and exactly the responses it saw before.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -18,13 +29,20 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError, mapped_aws_error
+from app.core.project_scope import current_project
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import memory_console, memory_ownership
+from app.services import memory_console, memory_ownership, project_memory
 from app.services.agent_access import HiddenAgents
 from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
+
+SOURCE_PROJECT = "project"
+SOURCE_SHARED = "shared"
+Source = Literal["project", "shared"]
+# legacy actors merged into the first actors page: ListActors pages of 100
+_LEGACY_ACTOR_PAGES = 5
 
 
 class SearchRequest(BaseModel):
@@ -56,6 +74,70 @@ def _guard(fn, *args, **kwargs):
         raise AppError(
             "memory.unavailable", f"memory lookup failed: {exc}", status_code=502
         ) from exc
+
+
+def _dual(ws: WorkspaceScope) -> project_memory.DualRead | None:
+    return project_memory.dual_read(ws.context)
+
+
+def _actor_not_found() -> NotFoundError:
+    return NotFoundError("memory.actor_not_found", "memory actor not found")
+
+
+def _shared_for_actor(dual: project_memory.DualRead | None, actor_id: str | None) -> str:
+    """`source=shared`: the shared memory id, for an actor of the project's own agents."""
+    if dual is None or not dual.allows_actor(actor_id):
+        raise _actor_not_found()
+    return dual.memory_id
+
+
+def _shared_for_namespace(dual: project_memory.DualRead | None, namespace: str) -> str:
+    if dual is None or not dual.allows_namespace(namespace):
+        raise _actor_not_found()
+    return dual.memory_id
+
+
+def _aws_not_found(exc: Exception) -> bool:
+    code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+    return code == "ResourceNotFoundException"
+
+
+def _tolerant(fn, *args, **kwargs) -> dict[str, Any]:
+    """A dual-read primary read: an actor the project memory has never seen is an
+    empty page there (AWS answers ResourceNotFound), not an error."""
+    try:
+        return _guard(fn, *args, **kwargs)
+    except Exception as exc:
+        if _aws_not_found(exc):
+            return {"items": [], "next_token": None}
+        raise
+
+
+def _tag(items: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    for item in items:
+        item["source"] = source
+    return items
+
+
+def _merge(primary: list[dict[str, Any]], legacy: list[dict[str, Any]],
+           key: str) -> list[dict[str, Any]]:
+    seen = {item.get(key) for item in primary}
+    return _tag(primary, SOURCE_PROJECT) + _tag(
+        [item for item in legacy if item.get(key) not in seen], SOURCE_SHARED
+    )
+
+
+def _legacy_actors(ws: WorkspaceScope, dual: project_memory.DualRead) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    token: str | None = None
+    for _ in range(_LEGACY_ACTOR_PAGES):
+        page = _guard(memory_console.list_actors, ws.context, token, None,
+                      memory_id=dual.memory_id)
+        out += [a for a in page["items"] if dual.allows_actor(a["actor_id"])]
+        token = page.get("next_token")
+        if not token:
+            break
+    return out
 
 
 def _agent_names(db: Session, ws: WorkspaceScope, agent_ids: list[str]) -> dict[str, str]:
@@ -130,6 +212,21 @@ def overview(
     # named here (it would read as an unmanaged sibling). `actor_count` stays the
     # bootstrap memory's bounded, workspace-wide count — a number, no actor ids.
     foreign = memory_ownership.foreign_ids(db, ws.context)
+    # nor another isolated project's own memory (§10.4)
+    foreign = set(foreign or ()) | project_memory.project_memory_ids(
+        ws.id, exclude_project=current_project()
+    )
+    own = project_memory.project_memory(current_project(), ws.id)
+    if own is not None:
+        dual = _dual(ws)
+        out["project_memory"] = {
+            "project_id": own.project_id,
+            "memory_id": own.memory_id,
+            "shared_memory_id": dual.memory_id if dual else None,
+            "dual_read_until": (
+                own.dual_read_until.isoformat() if dual and own.dual_read_until else None
+            ),
+        }
     if foreign:
         out["other_memories"] = [
             m for m in out.get("other_memories") or [] if (m.get("id") or "") not in foreign
@@ -146,6 +243,11 @@ def actors(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     page = _guard(memory_console.list_actors, ws.context, next_token, max_results)
+    dual = _dual(ws)
+    if dual is not None:
+        # the first page also names the project's actors still in the shared memory
+        legacy = _legacy_actors(ws, dual) if not next_token else []
+        page["items"] = _merge(page["items"], legacy, "actor_id")
     hidden = _hidden(db, ws, viewer)
     if hidden:
         page["items"] = [a for a in page["items"] if not hidden.hides_actor(a["actor_id"])]
@@ -164,15 +266,30 @@ def sessions(
     actor_id: str = Query(min_length=1),
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    source: Source | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     hidden = _hidden(db, ws, viewer)
     _require_actor_visible(hidden, actor_id)
-    page = _guard(
-        memory_console.list_sessions, ws.context, actor_id, next_token, max_results
-    )
+    dual = _dual(ws)
+    if source == SOURCE_SHARED:
+        page = _guard(memory_console.list_sessions, ws.context, actor_id, next_token,
+                      max_results, memory_id=_shared_for_actor(dual, actor_id))
+        _tag(page["items"], SOURCE_SHARED)
+    elif dual is not None and dual.allows_actor(actor_id) and source is None:
+        page = _tolerant(memory_console.list_sessions, ws.context, actor_id,
+                         next_token, max_results)
+        legacy = [] if next_token else _tolerant(
+            memory_console.list_sessions, ws.context, actor_id, None, max_results,
+            memory_id=dual.memory_id,
+        )["items"]
+        page["items"] = _merge(page["items"], legacy, "session_id")
+    else:
+        page = _guard(
+            memory_console.list_sessions, ws.context, actor_id, next_token, max_results
+        )
     if hidden:
         # an unscoped actor ("default") is shared across agents: drop the sessions
         # the ledger attributes to a hidden agent (chat / eval run)
@@ -222,6 +339,7 @@ def events(
     include_payloads: bool = True,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    source: Source | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -230,15 +348,20 @@ def events(
     _require_actor_visible(hidden, actor_id)
     if hidden.hides_session(session_id):
         raise NotFoundError("memory.actor_not_found", "memory actor not found")
-    return _guard(
-        memory_console.list_events,
-        ws.context,
-        actor_id,
-        session_id,
-        include_payloads,
-        next_token,
-        max_results,
-    )
+    args = (ws.context, actor_id, session_id, include_payloads, next_token, max_results)
+    dual = _dual(ws)
+    if source == SOURCE_SHARED:
+        page = _guard(memory_console.list_events, *args,
+                      memory_id=_shared_for_actor(dual, actor_id))
+        return {**page, "source": SOURCE_SHARED}
+    if dual is None or not dual.allows_actor(actor_id) or source is not None:
+        return _guard(memory_console.list_events, *args)
+    page = _tolerant(memory_console.list_events, *args)
+    if page["items"] or page.get("next_token") or next_token:
+        return {**page, "source": SOURCE_PROJECT}
+    # a session from before the agent moved to the project memory
+    page = _tolerant(memory_console.list_events, *args, memory_id=dual.memory_id)
+    return {**page, "source": SOURCE_SHARED}
 
 
 @router.get("/namespaces")
@@ -259,6 +382,7 @@ def records(
     namespace: str | None = None,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    source: Source | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -268,14 +392,23 @@ def records(
     _require_namespace_visible(hidden, namespace)
     resolved = _resolve_namespace(ws, namespace, actor_id, strategy_id)
     _require_namespace_visible(hidden, resolved)
-    return _guard(
-        memory_console.list_records,
-        ws.context,
-        resolved,
-        strategy_id,
-        next_token,
-        max_results,
-    )
+    args = (ws.context, resolved, strategy_id, next_token, max_results)
+    dual = _dual(ws)
+    if source == SOURCE_SHARED:
+        page = _guard(memory_console.list_records, ws.context, resolved, None,
+                      next_token, max_results,
+                      memory_id=_shared_for_namespace(dual, resolved))
+        _tag(page["items"], SOURCE_SHARED)
+        return page
+    page = _guard(memory_console.list_records, *args)
+    if (dual is not None and source is None and not next_token
+            and dual.allows_namespace(resolved)):
+        # the shared memory's strategy ids differ from the project memory's: the
+        # namespace alone selects there
+        legacy = _tolerant(memory_console.list_records, ws.context, resolved, None, None,
+                           max_results, memory_id=dual.memory_id)
+        page["items"] = _merge(page["items"], legacy["items"], "record_id")
+    return page
 
 
 @router.post("/records/search")
@@ -290,7 +423,7 @@ def search_records(
     _require_namespace_visible(hidden, req.namespace)
     resolved = _resolve_namespace(ws, req.namespace, req.actor_id, req.strategy_id)
     _require_namespace_visible(hidden, resolved)
-    return _guard(
+    out = _guard(
         memory_console.search_records,
         ws.context,
         resolved,
@@ -298,6 +431,13 @@ def search_records(
         req.top_k,
         req.strategy_id,
     )
+    dual = _dual(ws)
+    if dual is not None and dual.allows_namespace(resolved):
+        legacy = _tolerant(memory_console.search_records, ws.context, resolved,
+                           req.query, req.top_k, None, memory_id=dual.memory_id)
+        merged = _merge(out["items"], legacy["items"], "record_id")
+        out["items"] = sorted(merged, key=lambda r: -(r.get("score") or 0))[: req.top_k]
+    return out
 
 
 @router.get("/extraction-jobs")
@@ -308,12 +448,21 @@ def extraction_jobs(
     status: str | None = None,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    source: Source | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     hidden = _hidden(db, ws, viewer)
     _require_actor_visible(hidden, actor_id)
+    dual = _dual(ws)
+    if source == SOURCE_SHARED:
+        # the shared memory holds every project's jobs: only one actor's are listed
+        page = _guard(memory_console.list_extraction_jobs, ws.context, actor_id,
+                      session_id, None, status, next_token, max_results,
+                      memory_id=_shared_for_actor(dual, actor_id))
+        _tag(page["items"], SOURCE_SHARED)
+        return page
     page = _guard(
         memory_console.list_extraction_jobs,
         ws.context,
@@ -324,6 +473,12 @@ def extraction_jobs(
         next_token,
         max_results,
     )
+    if (dual is not None and source is None and not next_token
+            and dual.allows_actor(actor_id)):
+        legacy = _guard(memory_console.list_extraction_jobs, ws.context, actor_id,
+                        session_id, None, status, None, max_results,
+                        memory_id=dual.memory_id)
+        page["items"] = _merge(page["items"], legacy["items"], "job_id")
     if hidden:
         page["items"] = [
             j for j in page["items"] if not hidden.hides_actor(j.get("actor_id"))

@@ -98,6 +98,8 @@ def ensure_memory(
     execution_role_arn: str | None = None,
     wait: bool = True,
     timeout_s: int = 300,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Return ({id, arn, strategies_added}, created).
 
@@ -108,6 +110,10 @@ def ensure_memory(
     place through ``UpdateMemory`` so a memory bootstrapped before a strategy
     joined the catalog converges on the same layout; ``strategies_added`` names
     what this run had to add (empty when nothing changed).
+
+    ``description`` / ``tags`` apply to a memory this call creates — an isolated
+    project's memory (``project_memory``) carries the ``launchpad:*`` tags; the
+    workspace memory sends none, exactly as before.
     """
     memories: list[dict[str, Any]] = []
     token: str | None = None
@@ -126,12 +132,15 @@ def ensure_memory(
 
     params: dict[str, Any] = {
         "name": name,
-        "description": "Launchpad shared memory — short-term events + long-term strategies",
+        "description": description
+        or "Launchpad shared memory — short-term events + long-term strategies",
         "eventExpiryDuration": MEMORY_EVENT_EXPIRY_DAYS,
         "memoryStrategies": [deepcopy(entry) for entry in DEFAULT_STRATEGIES],
     }
     if execution_role_arn:
         params["memoryExecutionRoleArn"] = execution_role_arn
+    if tags:
+        params["tags"] = dict(tags)
     created = control.create_memory(**params)["memory"]
     mem_id, arn = created["id"], created["arn"]
     if wait:

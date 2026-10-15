@@ -243,7 +243,8 @@ class IamProvisioner(Protocol):
 
 
 class MemoryProvisioner(Protocol):
-    """§10.4 (R10-mem): the project's memory `launchpad_mem_<pid>` (`memory`)."""
+    """§10.4 (R10-mem): the project's memory `launchpad_mem_<pid>` (`memory`); the
+    real one is `project_memory.ProjectMemoryProvisioner`."""
 
     def ensure_memory(self, ctx: ProvisionContext) -> str: ...
 
@@ -963,3 +964,4 @@ def retry_provision(db: Session, identity: Any, row: Project, workspace_id: str,
 # The real provisioners register themselves on import (`set_provisioners`); imported
 # last so they can import this module.
 from app.services import project_iam as _project_iam  # noqa: E402,F401 — registers iam
+from app.services import project_memory as _project_memory  # noqa: E402,F401 — registers memory
