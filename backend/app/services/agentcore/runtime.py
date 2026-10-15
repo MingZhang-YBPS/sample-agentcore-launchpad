@@ -127,24 +127,26 @@ def create_code_runtime(
 def _runtime_tags(
     environment: dict[str, str] | None, tags: dict[str, str] | None = None
 ) -> dict[str, str]:
-    """CreateAgentRuntime ``tags``: the `launchpad:project` / `launchpad:workspace` /
-    `launchpad:agent-id` tags matching the span attributes `runtime_environment`
-    set for an isolated project's agent (projects design §10.8), plus any explicit
-    ones. Empty for every other deploy, so its request is unchanged. The ``tags``
-    member is in the service model (botocore 1.43); unverified live."""
-    from app.services.project_telemetry import tags_from_environment
+    """CreateAgentRuntime / TagResource ``tags``: the unified cost-tag set of every
+    runtime (cost-tags design §1.1, `cost_tags.runtime_tags`) — the project the
+    environment's span attributes name (an isolated project's agent, projects design
+    §10.8) or else the deploy's current project (`shared` when none), then the
+    caller's explicit ``tags`` (the deployer's agent tags). The ``tags`` member is
+    in the service model (botocore 1.43); unverified live."""
+    from app.services.cost_tags import runtime_tags
 
-    return {**tags_from_environment(environment), **(tags or {})}
+    return runtime_tags(environment, tags)
 
 
 def _tag_updated_runtime(
-    client: Any, response: dict[str, Any], environment: dict[str, str] | None
+    client: Any, response: dict[str, Any], environment: dict[str, str] | None,
+    tags: dict[str, str] | None = None,
 ) -> None:
-    """UpdateAgentRuntime takes no tags, so a re-publish that now carries project
-    attributes tags the runtime with TagResource — the runtime created before its
-    project was isolated catches up on its next publish. Best-effort: a refusal is
-    logged, never fails the deploy (the span attributes already attribute it)."""
-    resource_tags = _runtime_tags(environment)
+    """UpdateAgentRuntime takes no tags, so a re-publish tags the runtime with
+    TagResource — a runtime created before cost tags (or before its project was
+    isolated, or transferred since) catches up on its next publish. Best-effort: a
+    refusal is logged, never fails the deploy."""
+    resource_tags = _runtime_tags(environment, tags)
     if not resource_tags:
         return
     arn = (response or {}).get("agentRuntimeArn")
@@ -271,6 +273,7 @@ def update_code_runtime(
     authorizer_configuration: dict[str, Any] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
     vpc: dict[str, Any] | None = None,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
     place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it).
@@ -307,7 +310,7 @@ def update_code_runtime(
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
     response = client.update_agent_runtime(**params)
-    _tag_updated_runtime(client, response, environment)
+    _tag_updated_runtime(client, response, environment, tags)
     return response
 
 
@@ -323,6 +326,7 @@ def update_container_runtime(
     lifecycle: dict[str, int] | None = None,
     authorizer_configuration: dict[str, Any] | None = None,
     protocol: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new container image — new version, same ARN.
     NB: a version bump resets managed session storage (documented UI note).
@@ -348,7 +352,7 @@ def update_container_runtime(
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
     response = client.update_agent_runtime(**params)
-    _tag_updated_runtime(client, response, environment)
+    _tag_updated_runtime(client, response, environment, tags)
     return response
 
 
@@ -409,13 +413,16 @@ def wait_runtime_ready(
 
 
 def create_runtime_endpoint(
-    client: Any, *, runtime_id: str, endpoint_name: str, version: int | str
+    client: Any, *, runtime_id: str, endpoint_name: str, version: int | str,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """CreateAgentRuntimeEndpoint — a named endpoint pinned to ``version``."""
+    """CreateAgentRuntimeEndpoint — a named endpoint pinned to ``version``, carrying
+    the cost tags of the current project (`_runtime_tags`) plus ``tags``."""
     return client.create_agent_runtime_endpoint(
         agentRuntimeId=runtime_id,
         name=endpoint_name,
         agentRuntimeVersion=str(version),
+        tags=_runtime_tags(None, tags),
     )
 
 

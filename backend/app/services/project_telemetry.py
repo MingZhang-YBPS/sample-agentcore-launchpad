@@ -18,6 +18,15 @@ requests exactly, and its spans are attributed through the ledger as before):
   the `tags` map is in the bedrock-agentcore-control service model (botocore 1.43),
   not yet exercised live. The tags are derived from the same attributes
   (`tags_from_environment`), so the two marks can never disagree.
+
+Cost tags (cost-tags design §1.1, CT-1) widen the *tags* — not the span attributes —
+to every project: `standard_tags` is the one tag set a platform-created resource
+carries, isolated or not, plus `launchpad:managed-by`, the project's department and
+its own `settings.cost_tags`. Workspace infrastructure no project owns is tagged
+`launchpad:project=shared`. A `launchpad:` or `aws:` key is never taken from a user —
+not from a spec's `OTEL_RESOURCE_ATTRIBUTES` (above) and not from `cost_tags`
+(`services/projects.py` refuses them; `standard_tags` drops them again). The lookups
+and the per-service tagging live in `services/cost_tags.py`.
 """
 
 from __future__ import annotations
@@ -36,6 +45,16 @@ _ATTR_PREFIX = "launchpad."
 TAG_PROJECT = "launchpad:project"
 TAG_WORKSPACE = "launchpad:workspace"
 TAG_AGENT = "launchpad:agent-id"
+TAG_MANAGED_BY = "launchpad:managed-by"
+TAG_DEPARTMENT = "launchpad:department"
+MANAGED_BY = "launchpad"
+# `launchpad:project` of workspace infrastructure no project owns (the shared gateway,
+# the workspace memory, the service roles, the shared ECR repository…)
+SHARED_PROJECT = "shared"
+# keys only the platform writes: a user's cost tag may not start with either (AWS
+# itself refuses `aws:`; `launchpad:` would let a project file its cost elsewhere)
+RESERVED_TAG_PREFIXES = ("aws:", "launchpad:")
+MAX_COST_TAGS = 10
 _TAG_FOR_ATTR = {ATTR_PROJECT: TAG_PROJECT, ATTR_AGENT: TAG_AGENT, ATTR_WORKSPACE: TAG_WORKSPACE}
 
 
@@ -121,3 +140,36 @@ def project_tags(project_id: str, *, workspace_id: str | None = None,
     """The tag map for a resource created for a project (memory, KB, profile, …)."""
     attrs = resource_attributes(project_id, agent_id, workspace_id)
     return {_TAG_FOR_ATTR[attr]: value for attr, value in attrs.items()}
+
+
+def is_reserved_tag_key(key: str) -> bool:
+    """A key only the platform may write (`aws:` / `launchpad:`, any case)."""
+    return str(key).strip().lower().startswith(RESERVED_TAG_PREFIXES)
+
+
+def standard_tags(project_id: str | None, *, workspace_id: str | None = None,
+                  agent_id: str | None = None, department_id: str | None = None,
+                  custom: Mapping[str, Any] | None = None) -> dict[str, str]:
+    """The unified tag set of a platform-created resource (cost-tags design §1.1):
+    `launchpad:project` (`shared` for workspace infrastructure — no project),
+    `launchpad:workspace` / `launchpad:agent-id` when known, `launchpad:managed-by`,
+    `launchpad:department` when the project has one, then the project's own cost tags
+    minus any reserved key — the platform's keys can never be overridden."""
+    out = {TAG_PROJECT: str(project_id or SHARED_PROJECT)}
+    if workspace_id:
+        out[TAG_WORKSPACE] = str(workspace_id)
+    if agent_id:
+        out[TAG_AGENT] = str(agent_id)
+    out[TAG_MANAGED_BY] = MANAGED_BY
+    if department_id:
+        out[TAG_DEPARTMENT] = str(department_id)
+    for key, value in (custom or {}).items():
+        if value is None or is_reserved_tag_key(key) or key in out:
+            continue
+        out[str(key)] = str(value)
+    return out
+
+
+def shared_tags(workspace_id: str | None = None) -> dict[str, str]:
+    """The tags of workspace infrastructure no project owns."""
+    return standard_tags(None, workspace_id=workspace_id)

@@ -49,7 +49,14 @@ from sqlalchemy.orm import Session
 from app.core.db import SessionLocal
 from app.core.regions import partition_for_region
 from app.models.ledger import Job, Workspace
-from app.services import aws_clients, gateway_bootstrap, policy_bootstrap, workspace_iam
+from app.services import (
+    aws_clients,
+    cost_tags,
+    gateway_bootstrap,
+    policy_bootstrap,
+    project_telemetry,
+    workspace_iam,
+)
 from app.services import bootstrap as hub_bootstrap
 from app.services.agent_iam import retry_iam_propagation
 from app.services.policy_identity import POLICY_GROUPS
@@ -676,6 +683,11 @@ def _ensure_repository(ctx: BootstrapContext, ecr: Any, name: str) -> str:
     try:
         repo = ecr.describe_repositories(repositoryNames=[name])["repositories"][0]
         ctx.log(f"reusing ECR repository {name}")
+        if repo.get("repositoryArn"):
+            cost_tags.tag_quietly(
+                ctx.workspace, cost_tags.entry(cost_tags.ECR_REPOSITORY,
+                                               arn=repo["repositoryArn"]),
+                _shared_tags(ctx), ctx.log)
     except ClientError as exc:
         if _error_code(exc) != "RepositoryNotFoundException":
             raise
@@ -684,9 +696,15 @@ def _ensure_repository(ctx: BootstrapContext, ecr: Any, name: str) -> str:
             # Scan on push so a deploy can be blocked on findings before the image
             # ever backs a runtime.
             imageScanningConfiguration={"scanOnPush": True},
+            tags=cost_tags.tag_list(_shared_tags(ctx)),
         )["repository"]
         ctx.log(f"created ECR repository {name}")
     return str(repo["repositoryUri"])
+
+
+def _shared_tags(ctx: BootstrapContext) -> dict[str, str]:
+    """Cost tags of the workspace's own infrastructure (cost-tags design §1.2)."""
+    return project_telemetry.shared_tags(ctx.workspace_id)
 
 
 def _stage_storage(ctx: BootstrapContext) -> str:
@@ -792,6 +810,10 @@ def _stage_codebuild(ctx: BootstrapContext) -> str:
     codebuild = ctx.workspace.client("codebuild")
     if _project_exists(codebuild, CODEBUILD_PROJECT_NAME):
         ctx.log(f"reusing CodeBuild project {CODEBUILD_PROJECT_NAME}")
+        cost_tags.tag_quietly(
+            ctx.workspace, cost_tags.entry(cost_tags.CODEBUILD_PROJECT,
+                                           name=CODEBUILD_PROJECT_NAME),
+            _shared_tags(ctx), ctx.log)
     else:
         # Every start_build overrides source and environment variables
         # (agentcore/codebuild.start_image_build), so the placeholder source here
@@ -810,6 +832,7 @@ def _stage_codebuild(ctx: BootstrapContext) -> str:
                 },
                 serviceRole=role_arn,
                 timeoutInMinutes=CODEBUILD_TIMEOUT_MINUTES,
+                tags=cost_tags.tag_list(_shared_tags(ctx), "key", "value"),
             ),
             ctx.log,
             attempts=ctx.timeouts.iam_attempts,
@@ -1008,6 +1031,10 @@ def _stage_gateway(ctx: BootstrapContext) -> str:
         }
     )
     ctx.log(f"gateway {gateway['id']} {'created' if created else 'reused'}")
+    # the shared gateway is workspace infrastructure (cost-tags design §1.2)
+    cost_tags.tag_quietly(ctx.workspace, cost_tags.entry(cost_tags.GATEWAY,
+                                                         arn=gateway["arn"]),
+                          _shared_tags(ctx), ctx.log)
     m2m_client_id = ctx.require("m2m_client_id")
     gateway_bootstrap.ensure_gateway_allows_client(
         control, gateway["id"], m2m_client_id, timeout_s=ctx.timeouts.gateway_s
@@ -1036,6 +1063,7 @@ def _stage_memory(ctx: BootstrapContext) -> str:
             control,
             execution_role_arn=ctx.require("execution_role_arn"),
             timeout_s=ctx.timeouts.memory_s,
+            tags=_shared_tags(ctx),
         ),
         ctx.log,
         attempts=ctx.timeouts.iam_attempts,

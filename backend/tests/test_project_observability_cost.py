@@ -163,9 +163,11 @@ def test_create_runtime_tags_from_the_span_attributes():
                            role_arn="r", environment={"A": "1"})
     first, second, plain = (kw for _, kw in control.calls)
     assert first["tags"] == {"launchpad:project": "alpha", "launchpad:agent-id": "a1",
-                             "launchpad:workspace": WS}
+                             "launchpad:workspace": WS, "launchpad:managed-by": "launchpad"}
     assert second["tags"]["cost-center"] == "42"
-    assert "tags" not in plain  # an unattributed deploy sends today's request
+    # cost tags (cost-tags D-1): every runtime is tagged — here no project is current
+    assert plain["tags"] == {"launchpad:project": "shared",
+                             "launchpad:managed-by": "launchpad"}
 
 
 def test_a_republish_tags_the_runtime_and_a_refusal_never_fails_it():
@@ -173,7 +175,8 @@ def test_a_republish_tags_the_runtime_and_a_refusal_never_fails_it():
     rt.update_code_runtime(control, runtime_id="rt-1", s3_bucket="b", s3_key="k",
                            role_arn="r", environment=_env())
     assert control.calls[-1] == ("tag", {"resourceArn": "arn:rt/rt-1", "tags": {
-        "launchpad:project": "alpha", "launchpad:agent-id": "a1", "launchpad:workspace": WS}})
+        "launchpad:project": "alpha", "launchpad:agent-id": "a1", "launchpad:workspace": WS,
+        "launchpad:managed-by": "launchpad"}})
     assert "tags" not in control.calls[0][1]  # UpdateAgentRuntime has no tags member
 
     denied = _Control(ClientError({"Error": {"Code": "AccessDenied"}}, "TagResource"))
@@ -181,10 +184,15 @@ def test_a_republish_tags_the_runtime_and_a_refusal_never_fails_it():
                                       role_arn="r", environment=_env())
     assert out["agentRuntimeVersion"] == "2"
 
-    quiet = _Control()
-    rt.update_code_runtime(quiet, runtime_id="rt-1", s3_bucket="b", s3_key="k",
-                           role_arn="r", environment={"A": "1"})
-    assert [name for name, _ in quiet.calls] == ["update"]
+    plain = _Control()
+    with project_context("alpha"):
+        rt.update_code_runtime(plain, runtime_id="rt-1", s3_bucket="b", s3_key="k",
+                               role_arn="r", environment={"A": "1"},
+                               tags={"launchpad:agent-id": "a1"})
+    # a shared project's runtime catches up on its cost tags too (cost-tags D-1)
+    assert plain.calls[-1] == ("tag", {"resourceArn": "arn:rt/rt-1", "tags": {
+        "launchpad:project": "alpha", "launchpad:managed-by": "launchpad",
+        "launchpad:agent-id": "a1"}})
 
 
 # ── application inference profiles ───────────────────────────────────────────
@@ -295,7 +303,7 @@ def test_the_harness_request_of_an_isolated_project(monkeypatch, ctx):
     logs: list[str] = []
     out = harness_deployer._attribute_to_project(_stage_ctx(ctx, logs), agent, params)
     assert out["tags"] == {"launchpad:project": "alpha", "launchpad:agent-id": agent.id,
-                           "launchpad:workspace": WS}
+                           "launchpad:workspace": WS, "launchpad:managed-by": "launchpad"}
     assert out["environmentVariables"]["A"] == "1"
     assert "launchpad.project=alpha" in out["environmentVariables"]["OTEL_RESOURCE_ATTRIBUTES"]
     assert out["model"]["bedrockModelConfig"] == {"modelId": PROFILE_ARN,
@@ -304,11 +312,15 @@ def test_the_harness_request_of_an_isolated_project(monkeypatch, ctx):
     assert any("inference profile" in line for line in logs)
 
 
-def test_a_shared_projects_harness_request_is_unchanged(ctx):
+def test_a_shared_projects_harness_request_only_gains_its_cost_tags(ctx):
     _project("alpha")
     agent = _runtime("plain", "alpha")
     params = {"harnessName": "plain", "model": {"bedrockModelConfig": {"modelId": MODEL}}}
-    assert harness_deployer._attribute_to_project(_stage_ctx(ctx, []), agent, params) is params
+    out = harness_deployer._attribute_to_project(_stage_ctx(ctx, []), agent, params)
+    assert {k: v for k, v in out.items() if k != "tags"} == params  # no span attributes
+    assert out["tags"] == {"launchpad:project": "alpha", "launchpad:workspace": WS,
+                           "launchpad:agent-id": agent.id,
+                           "launchpad:managed-by": "launchpad"}
 
 
 def test_the_harness_is_tagged_after_an_update_best_effort():

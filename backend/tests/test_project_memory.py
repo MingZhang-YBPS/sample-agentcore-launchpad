@@ -175,11 +175,13 @@ def test_provisioner_adopts_an_existing_memory_and_keeps_the_dual_read_deadline(
     assert row.detail["dual_read_until"] == "2026-12-01T00:00:00+00:00"
 
 
-def test_bootstrap_memory_sends_no_tags():
+def test_bootstrap_memory_is_tagged_shared():
     control = StubControl()
     bootstrap.ensure_memory(control, wait=False)
     create = next(kw for op, kw in control.calls if op == "create_memory")
-    assert "tags" not in create and create["name"] == bootstrap.MEMORY_NAME
+    # workspace infrastructure (cost-tags design §1.2), no project tag of its own
+    assert create["tags"] == {"launchpad:project": "shared", "launchpad:managed-by": "launchpad"}
+    assert create["name"] == bootstrap.MEMORY_NAME
     assert create["description"].startswith("Launchpad shared memory")
 
 

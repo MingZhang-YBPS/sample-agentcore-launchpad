@@ -51,6 +51,8 @@ def test_endpoint_wrappers_call_expected_methods_with_kwargs():
     assert [c[0] for c in stub.calls] == ["create", "update", "get", "delete"]
     assert stub.calls[0][1] == {
         "agentRuntimeId": "rt-1", "name": "stable", "agentRuntimeVersion": "3",
+        # cost tags of the current project — none here, so shared (cost-tags §1.1)
+        "tags": {"launchpad:project": "shared", "launchpad:managed-by": "launchpad"},
     }
     assert stub.calls[1][1] == {
         "agentRuntimeId": "rt-1", "endpointName": "stable", "agentRuntimeVersion": "4",
