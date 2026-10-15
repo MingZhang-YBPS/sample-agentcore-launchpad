@@ -1,0 +1,56 @@
+/* "From project X (read / use)" — a borrowed row's ticket stub (SharedFromTag.tsx). */
+
+.v3 .v3-lent {
+  --lent-tone: var(--v3-text-3);
+  display: inline-flex;
+  align-items: stretch;
+  height: 20px;
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px dashed color-mix(in srgb, var(--lent-tone) 55%, transparent);
+  border-radius: 5px;
+  color: var(--v3-text-2);
+  white-space: nowrap;
+  animation: v3-lent-in 180ms ease-out both;
+}
+.v3 .v3-lent[data-access="use"] {
+  --lent-tone: var(--v3-info);
+  background: color-mix(in srgb, var(--v3-info) 6%, transparent);
+}
+
+.v3 .v3-lent-from {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 7px 0 5px;
+  font-family: var(--v3-body);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.v3 .v3-lent-from svg { flex: none; color: var(--lent-tone); }
+
+/* the stub: torn off along a dashed seam, the access level in mono capitals */
+.v3 .v3-lent-stub {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-left: 1px dashed color-mix(in srgb, var(--lent-tone) 55%, transparent);
+  font-family: var(--v3-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lent-tone);
+}
+
+/* beside a name in a table cell */
+.v3 .v3-lent-row { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+@keyframes v3-lent-in {
+  from { opacity: 0; transform: translateX(-3px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-lent { animation: none; }
+}

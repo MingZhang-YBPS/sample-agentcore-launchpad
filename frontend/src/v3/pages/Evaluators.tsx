@@ -10,6 +10,7 @@ import { api, errorMessage, type EvaluatorRow } from "../../lib/api";
 import { evaluatorLabel } from "../../lib/evaluators";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useLoad, useToast } from "../hooks";
+import { SharedFromTag } from "../shares/SharedFromTag";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { evaluatorSignal, LEVELS } from "./evaluators/common";
 import { EvaluatorView } from "./evaluators/Detail";
@@ -122,7 +123,7 @@ function EvaluatorList() {
                 return (
                   <tr key={row.id} className="click" onClick={() => open(row)}>
                     <td style={{ width: 24 }}><Lamp s={s} /></td>
-                    <td><div className="v3-name"><div><b>{name(row)}</b><small>{row.id}</small></div></div></td>
+                    <td><div className="v3-name"><div><span className="v3-lent-row"><b>{name(row)}</b><SharedFromTag row={row} /></span><small>{row.id}</small></div></div></td>
                     <td><Chip s={row.source === "custom" ? "info" : undefined}>{t(`v2.evaluators.source.${row.source}`)}</Chip></td>
                     <td style={{ color: "var(--v3-text-2)" }}>{t(`v2.level.${row.level}`, { defaultValue: row.level })}</td>
                     <td style={{ color: "var(--v3-text-2)" }}>{row.definition ? t(`v2.evaluators.definition.${row.definition}`) : t("v2.evaluators.definition.managed")}</td>

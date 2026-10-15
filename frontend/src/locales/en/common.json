@@ -12839,6 +12839,13 @@
         "saved": "Quotas of {{name}} saved"
       },
       "shares": {
+        "label": {
+          "from": "from {{name}}",
+          "read": "read",
+          "use": "use",
+          "titleRead": "Shared by project {{name}}: read only. Only {{name}} can change it.",
+          "titleUse": "Shared by project {{name}}: you can use it in agents and evaluations. Only {{name}} can change it."
+        },
         "intro": "Lend a resource of this project to another project of the same workspace — read-only, or for its agents and evaluations to use. A share never allows changes, cannot be passed on, and expires (90 days by default).",
         "grant": "Share a resource",
         "request": "Request share",
