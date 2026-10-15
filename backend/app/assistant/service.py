@@ -91,7 +91,7 @@ from app.evaluation import agentcore_eval as ac
 from app.models.assistant import AssistantConversation, AssistantMessage, AssistantProposal
 from app.models.ledger import Agent, Job, Workspace
 from app.routers.auth import Identity
-from app.schemas.agent import ToolRef
+from app.schemas.agent import AgentSpec, ToolRef
 from app.services import agent_names, creators, knowledge, registry_console, visibility
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client, data_client
@@ -278,6 +278,12 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   comparisons); disclose it in the readable proposal. Default is empty.
 - `skills`: list of catalog **skill keys** from the list below (may be empty)
 - `knowledge_bases`: list of catalog **knowledge base ids** from the list below
+- `storage`: optional list of `{{"storage_id": "<catalog storage id>", "mode": "ro" | "rw"}}`
+  naming catalog **storage ids** from the list below (shared file storage mounted
+  into the agent). `mode` defaults to `"ro"` and never exceeds the entry's max mode;
+  never put ARNs, paths or mount points here. The network comes from the entries'
+  default network profile, so every chosen entry must share one. Omit it (or send
+  `[]`) when the agent needs no shared storage.
 - `memory`: `"disabled"` (no memory at all) or `"workspace"` (the workspace's
   existing shared AgentCore Memory with all of its configured strategies) — these
   are the only two choices the platform can enforce
@@ -500,6 +506,16 @@ def catalog_section(catalog: dict[str, Any]) -> str:
             "by a single hyphen (trim leading/trailing hyphens; maximum 60 characters)."
         )
     lines.append("")
+    if "storage" in catalog:  # the project's allowed storage (storage-mounts §8.3)
+        lines.append("Storage (`storage` ids; mode `ro` unless `rw` is needed and allowed):")
+        lines += [
+            f"- `{e['storage_id']}` — {e.get('name') or ''} · {e.get('kind') or ''}"
+            f" · max mode `{e.get('max_mode') or 'ro'}`"
+            + (f" · network `{e['network_profile_id']}`" if e.get("network_profile_id") else "")
+            for e in (catalog.get("storage") or [])[:CATALOG_MAX_ENTRIES]
+            if e.get("status") != "blocked"
+        ] or ["- (none)"]
+        lines.append("")
     evaluators = catalog.get("evaluators")
     if evaluators is not None:
         lines.append("Evaluators (`evaluator_id` for `kind: existing` — prefer these; a custom "
@@ -659,8 +675,12 @@ def restrict_catalog(
     """The catalog as ``viewer`` (the conversation owner) may see it: the KBs
     workspace isolation hides are dropped, and so are another project's (AWS lists
     every project's KBs — design §5.5), so an approval can never pin one. Custom
-    evaluators are never in the catalog. The deploy-job re-validation reads the
-    unrestricted catalog."""
+    evaluators are never in the catalog. The storage a proposal may mount is the
+    current project's allowed set (storage-mounts §8.3), read from the database on
+    every call. The deploy-job re-validation reads the unrestricted catalog."""
+    storage = proposal_contract.storage_catalog(db, workspace_id, current_project())
+    if storage or "storage" in catalog:
+        catalog = {**catalog, "storage": storage}
     if not catalog.get("knowledge_bases") or (not viewer.filters and current_project() is None):
         return catalog
     from app.routers.knowledge import visible_kbs
@@ -675,10 +695,9 @@ def owner_catalog(db: Session | None, conversation: AssistantConversation) -> di
 
     The snapshot is taken at create / refresh; a workspace switched to isolated
     afterwards must not keep showing (or prompting with) KBs the owner can no
-    longer see. Free unless the workspace is isolated and the owner a member, or the
-    workspace holds several projects."""
+    longer see; the project's storage entries are re-read too (storage-mounts §8.3)."""
     catalog = conversation.catalog or {}
-    if db is None or not catalog.get("knowledge_bases"):
+    if db is None:
         return catalog
     return restrict_catalog(
         db, conversation.workspace_id,
@@ -803,7 +822,7 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
                 })
     except (AppError, ClientError, KeyError, ValueError) as exc:
         warnings.append(f"knowledge base catalog unavailable: {_short(exc)}")
-    res = workspace.resources or {}
+    res = _agent_resources(workspace)
     kb_gateway: dict[str, Any] | None = None
     if res.get("kb_gateway_id"):
         try:  # the live configuration a KB mount would depend on (read-only)
@@ -827,6 +846,9 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
             "oauth_provider_arn": res.get("oauth_provider_arn"),
             "execution_role_arn": res.get("execution_role_arn"),
             "kb_gateway": kb_gateway,
+            # an isolated project's own scopes (§10.6); absent → the workspace scope
+            **({"gateway_scopes": list(res["gateway_scopes"])}
+               if res.get("gateway_scopes") else {}),
         },
         "target": {
             "workspace_id": workspace.id,
@@ -834,6 +856,17 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
             "region": workspace.region,
         },
     }
+
+
+def _agent_resources(workspace: WorkspaceContext) -> dict[str, Any]:
+    """The resource map as an agent of the current project sees it: an isolated,
+    provisioned project's gateway provider / scopes (§10.6) and default memory
+    (§10.4); the workspace map itself for every other project."""
+    from app.services import project_gateway, project_memory
+
+    res = project_gateway.effective_resources(
+        dict(workspace.resources or {}), current_project(), workspace.id)
+    return project_memory.memory_resources(res, workspace.id)
 
 
 def catalog_evaluators(workspace: WorkspaceContext, warnings: list[str]) -> list[dict[str, Any]]:
@@ -2965,6 +2998,15 @@ def approve_proposal(
                        f"'{content.name}' is reserved for a system-managed preset",
                        {"name": content.name}, status_code=409)
     spec = proposal_contract.to_agent_spec(content, live_catalog)
+    if spec.filesystem.mounts:
+        # catalog mounts in stored form + the storage × network preflight, exactly as
+        # the create route (routers/agents.py `_stored_storage`, storage-mounts §4.2)
+        from app.services import storage_mounts
+
+        stored = storage_mounts.normalize_spec_storage(
+            db, row.id, current_project(), spec.model_dump(mode="json"))
+        storage_mounts.assert_preflight(db, workspace, stored, current_project())
+        spec = AgentSpec.model_validate(stored)
     # 4. ONE short write transaction: lock → recheck principal/workspace → re-read
     #    revision → name claim → revision claim → agent + deployment + job → commit
     _lock_conversation(db, conversation_id)
@@ -3104,6 +3146,13 @@ def assert_job_bindings_pinned(
                 "bindings — refusing to deploy"
             )
     live_catalog = preparation.live_catalog(workspace, pin.get("preparation_sources") or [])
+    if content_raw.get("storage"):  # the agent's project's storage (storage-mounts §8.3)
+        db = SessionLocal()
+        try:
+            live_catalog = {**live_catalog, "storage": proposal_contract.storage_catalog(
+                db, workspace.id, agent.project_id)}
+        finally:
+            db.close()
     content, _display, errors = proposal_contract.validate(content_raw, live_catalog)
     if content is None or errors:
         raise RuntimeError("assistant job: approved proposal no longer validates in this "
@@ -3117,7 +3166,7 @@ def assert_job_bindings_pinned(
             "fresh revision"
         )
     if content.knowledge_bases:
-        res = workspace.resources or {}
+        res = _agent_resources(workspace)
         kb = (pinned.get("resources") or {}).get("kb_gateway") or {}
         if not (res.get("kb_gateway_id") == kb.get("gateway_id")
                 and res.get("kb_gateway_arn") == kb.get("gateway_arn")

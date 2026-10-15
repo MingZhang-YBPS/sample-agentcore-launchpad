@@ -17,7 +17,7 @@ from app.evaluation.online_evaluators import (
 )
 from app.evaluation.routers import _dataset_in
 from app.models.ledger import Agent
-from app.optimization import canary_harness, canary_service, service
+from app.optimization import canary_harness, canary_infra, canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
@@ -123,6 +123,9 @@ class RuntimeCanaryCreate(BaseModel):
     # when set, the verdict's winner / significance / sample size come from this one
     # evaluator (it must be among the selected); absent → the legacy aggregate verdict
     primary_evaluator: str | None = None
+    # the starter confirms the candidate's read-write shared-state storage mounts in a
+    # gated workspace (storage-mounts §8.2); without it such a start is a 409
+    confirm_storage: bool = False
 
 
 def _validate_evaluators(
@@ -278,6 +281,8 @@ def create_runtime_canary(
             )
         _validate_harness_versions(agent, req.harness_versions, ws)
         evaluators, primary = _validate_evaluators(req, ws, db, viewer)
+        canary_infra.storage_write_check(agent, None, confirmed=req.confirm_storage,
+                                         actor=creator.name)
         row = canary_service.start_harness_canary(
             agent,
             control_version=req.harness_versions.control,
@@ -336,6 +341,8 @@ def create_runtime_canary(
             )
     edited_spec = _resolve_edited_spec(agent, candidate)
     evaluators, primary = _validate_evaluators(req, ws, db, viewer)
+    canary_infra.storage_write_check(agent, edited_spec, confirmed=req.confirm_storage,
+                                     actor=creator.name)
     row = canary_service.start_canary(
         agent, edited_spec, ws.context, req.source_experiment_id,
         online_evaluators=evaluators, primary_evaluator=primary, creator=creator,

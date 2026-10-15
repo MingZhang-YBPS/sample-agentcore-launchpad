@@ -84,14 +84,19 @@ def _uploader_for(workspace: WorkspaceContext) -> Callable[[str, str, str], None
     return upload
 
 
-def candidate_s3_key(agent_name: str, canary_id: str, role: str) -> str:
+def candidate_s3_key(agent_name: str, canary_id: str, role: str,
+                     project_id: str | None = None) -> str:
     """Deterministic key for a canary's zip: one object per canary + role.
 
     A uuid per mint orphaned a ~37MB object on every attempt (ISSUE-011); keyed
     this way a retried mint overwrites its own object, and cleanup knows exactly
-    which keys the record owns.
+    which keys the record owns. An isolated project's zips sit under its
+    `projects/<pid>/` prefix (projects design §10.10).
     """
-    return f"agents/{agent_name}/canary/{canary_id}-{role}.zip"
+    from app.services import project_storage
+
+    return project_storage.artifact_key(
+        project_id, f"agents/{agent_name}/canary/{canary_id}-{role}.zip")
 
 
 def delete_object_quiet(key: str, workspace: WorkspaceContext, *,
@@ -180,11 +185,13 @@ def mint_candidate_version(
         code, requirements, build_dir, pip_runner=pip_runner,
         on_pkg_ready=_on_pkg_ready,
     )
-    s3_key = candidate_s3_key(agent.name, canary_id, role)
+    s3_key = candidate_s3_key(agent.name, canary_id, role,
+                              getattr(agent, "project_id", None))
     (uploader or _uploader_for(workspace))(str(zip_path), bucket, s3_key)
     log(f"candidate artifact → s3://{bucket}/{s3_key} · {source}")
 
-    environment = runtime_environment(edited_spec, workspace.resources)
+    environment = runtime_environment(edited_spec, workspace.resources,
+                                      workspace_id=agent.workspace_id or "")
 
     resp = rt.update_code_runtime(
         control_client,

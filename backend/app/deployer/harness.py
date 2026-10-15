@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.project_scope import current_project
 from app.deployer import mounts
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.network import NETWORK_FROM_KEY, spec_vpc
@@ -21,7 +22,14 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.harness_tool_access import gateway_target_selectors, selected_tool_patterns
 from app.models.ledger import Agent
 from app.schemas.agent import DEFAULT_GPT_MAX_TOKENS, AgentSpec, is_openai_model_id
-from app.services import agent_iam, inference_profiles, project_telemetry, registry_console
+from app.services import (
+    agent_iam,
+    inference_profiles,
+    project_gateway,
+    project_memory,
+    project_telemetry,
+    registry_console,
+)
 from app.services import kb_gateway as kbgw
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
@@ -150,7 +158,7 @@ def build_create_params(
 ) -> dict:
     """AgentSpec → CreateHarness kwargs. Harness names disallow hyphens.
 
-    ``gateway`` carries {arn, oauth_provider_arn} — any spec tool of type
+    ``gateway`` carries {arn, oauth_provider_arn[, scopes]} — any spec tool of type
     "gateway" attaches the shared gateway with CLIENT_CREDENTIALS outbound auth
     (legacy config-less ToolRefs). ``gateway_attachments`` is the server-side
     live Registry/Gateway resolution for new ToolRefs and takes precedence.
@@ -242,7 +250,7 @@ def build_create_params(
                             "oauth": {
                                 "providerArn": gateway["oauth_provider_arn"],
                                 "grantType": "CLIENT_CREDENTIALS",
-                                "scopes": [GATEWAY_SCOPE],
+                                "scopes": list(gateway.get("scopes") or [GATEWAY_SCOPE]),
                             }
                         },
                     }
@@ -270,7 +278,7 @@ def build_create_params(
                             "oauth": {
                                 "providerArn": kb_gateway["oauth_provider_arn"],
                                 "grantType": "CLIENT_CREDENTIALS",
-                                "scopes": [GATEWAY_SCOPE],
+                                "scopes": list(kb_gateway.get("scopes") or [GATEWAY_SCOPE]),
                             }
                         },
                     }
@@ -344,11 +352,14 @@ def _skill_source(path: str) -> dict[str, Any]:
     return {"path": path}
 
 
-def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
+def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, Any] | None:
+    """{arn, oauth_provider_arn, scopes} of launchpad-kb-gw from an agent's
+    (`project_gateway.effective_resources`) resource map."""
     if resources.get("kb_gateway_arn") and resources.get("oauth_provider_arn"):
         return {
             "arn": resources["kb_gateway_arn"],
             "oauth_provider_arn": resources["oauth_provider_arn"],
+            "scopes": project_gateway.gateway_scopes(resources),
         }
     return None
 
@@ -377,7 +388,8 @@ def _pinned_params(
     memory = res.get("memory") or {}
     kb = res.get("kb_gateway") or None
     kb_gateway = (
-        {"arn": kb["gateway_arn"], "oauth_provider_arn": kb["oauth_provider_arn"]}
+        {"arn": kb["gateway_arn"], "oauth_provider_arn": kb["oauth_provider_arn"],
+         "scopes": list(kb.get("scopes") or [GATEWAY_SCOPE])}
         if kb and kb.get("gateway_arn") and kb.get("oauth_provider_arn")
         else None
     )
@@ -389,7 +401,7 @@ def _pinned_params(
             "gateway_name": "launchpad_kb_gw",
             "outbound_auth": {"oauth": {"providerArn": kb_gateway["oauth_provider_arn"],
                                         "grantType": "CLIENT_CREDENTIALS",
-                                        "scopes": [GATEWAY_SCOPE]}},
+                                        "scopes": kb_gateway["scopes"]}},
         })
     return build_create_params(
         spec,
@@ -449,12 +461,16 @@ def _build_live_params(
 ) -> dict[str, Any]:
     if pin:
         return _pinned_params(spec, workspace, pin)
-    resources = workspace.resources
-    # a spec-pinned memory overrides the workspace's shared bootstrap memory
+    # the deploy runs as the agent's project: an isolated, provisioned project's
+    # gateway tokens come from its own provider and scopes (§10.6) and its default
+    # memory is its own (§10.4); every other project reads the workspace map as is
+    resources = project_gateway.effective_resources(
+        workspace.resources, current_project(), workspace.id)
+    # a spec-pinned memory overrides the project's / workspace's default memory
     memory_arn = (
         memory_arn_for(workspace, spec.memory.memory_id)
         if spec.memory.memory_id
-        else resources.get("memory_arn")
+        else project_memory.memory_resources(resources, workspace.id).get("memory_arn")
     )
     return build_create_params(
         spec,

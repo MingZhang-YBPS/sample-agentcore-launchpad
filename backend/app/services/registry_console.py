@@ -17,8 +17,9 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import REPO_ROOT
 from app.core.errors import AppError, cleanup_error, is_not_found
+from app.core.project_scope import current_project
 from app.models.ledger import Agent
-from app.services import mcp_client
+from app.services import mcp_client, project_gateway
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore import registry as reg
 from app.services.agentcore import runtime as rt
@@ -797,6 +798,14 @@ def _managed_launchpad_gateway(gateway: dict[str, Any], resources: dict[str, Any
     )
 
 
+def _agent_resources(workspace: WorkspaceContext) -> dict[str, Any]:
+    """The resource map as an agent of the current project sees it: an isolated,
+    provisioned project's agents take launchpad-gw tokens from the project's own
+    provider and scopes (projects design §10.6); unchanged for every other one."""
+    return project_gateway.effective_resources(
+        workspace.resources, current_project(), workspace.id)
+
+
 def _gateway_auth(
     gateway: dict[str, Any],
     resources: dict[str, Any],
@@ -815,7 +824,7 @@ def _gateway_auth(
                     "oauth": {
                         "providerArn": provider_arn,
                         "grantType": "CLIENT_CREDENTIALS",
-                        "scopes": [GATEWAY_SCOPE],
+                        "scopes": project_gateway.gateway_scopes(resources),
                     }
                 },
                 None,
@@ -854,7 +863,7 @@ def _legacy_gateway_attachment(resources: dict[str, Any]) -> dict[str, Any] | No
             "oauth": {
                 "providerArn": resources["oauth_provider_arn"],
                 "grantType": "CLIENT_CREDENTIALS",
-                "scopes": [GATEWAY_SCOPE],
+                "scopes": project_gateway.gateway_scopes(resources),
             }
         },
     }
@@ -877,7 +886,7 @@ def resolve_gateway_attachments(
     gateway_tools = [tool for tool in tools if getattr(tool, "type", None) == "gateway"]
     if not gateway_tools:
         return []
-    resources = workspace.resources
+    resources = _agent_resources(workspace)
     attachments: list[dict[str, Any]] = []
 
     if any(not getattr(tool, "config", None) for tool in gateway_tools):
@@ -961,7 +970,7 @@ def attachable_records(
     remote_mcp entries."""
     registry_client = registry_client or registry_control_client(workspace)
     registry_id = registry_id or _registry_id(workspace)
-    resources = workspace.resources
+    resources = _agent_resources(workspace)
     gateways = (
         gateways
         if gateways is not None

@@ -543,12 +543,17 @@ class ProjectGatewayProvisioner:
             detail={"client_id": client_id},
         ))
         ctx.log(f"provider {names.m2m_provider} {'created' if provider_created else 'reused'}")
-        gateways = [gateway_id] + ([str(resources["kb_gateway_id"])]
-                                   if resources.get("kb_gateway_id") else [])
-        for gid in gateways:
-            if gateway_bootstrap.ensure_gateway_allows_client(control, gid, client_id):
-                ctx.log(f"client allowed on gateway {gid}")
-        return f"{client_id} · {names.m2m_provider} · allowed on {len(gateways)} gateway(s)"
+        from app.services import kb_gateway
+
+        allowed = 1
+        if gateway_bootstrap.ensure_gateway_allows_client(control, gateway_id, client_id):
+            ctx.log(f"client allowed on gateway {gateway_id}")
+        # the shared KB gateway, when it exists (it is lazy: made later, it picks the
+        # recorded project clients up itself — `kb_gateway.project_client_ids`)
+        if kb_gateway.allow_project_client(control, ctx.workspace, client_id):
+            allowed += 1
+            ctx.log(f"client allowed on KB gateway {resources['kb_gateway_id']}")
+        return f"{client_id} · {names.m2m_provider} · allowed on {allowed} gateway(s)"
 
     def ensure_cedar(self, ctx: isolation.ProvisionContext) -> str:
         client = ctx.resources.get(KIND_M2M_CLIENT) or {}

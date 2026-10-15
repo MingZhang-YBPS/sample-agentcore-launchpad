@@ -370,7 +370,10 @@ Resources:
               # preview. Agentic retrieval is deliberately absent: agents reach it
               # through the gateway under their own execution role, and
               # AgenticRetrieveStream cannot be resource-scoped at all, so it does
-              # not belong in a knowledge-base-scoped statement.
+              # not belong in a knowledge-base-scoped statement. TagResource /
+              # ListTagsForResource: an isolated project's KBs carry its
+              # launchpad:project tags, also when an existing KB moves to the
+              # project (projects design §10.5).
               - Sid: BedrockKnowledgeBases
                 Effect: Allow
                 Action:
@@ -382,8 +385,10 @@ Resources:
                   - bedrock:ListDataSources
                   - bedrock:ListIngestionJobs
                   - bedrock:ListKnowledgeBaseDocuments
+                  - bedrock:ListTagsForResource
                   - bedrock:Retrieve
                   - bedrock:StartIngestionJob
+                  - bedrock:TagResource
                   - bedrock:UpdateKnowledgeBase
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:knowledge-base/*"
@@ -395,6 +400,7 @@ Resources:
                 Action:
                   - bedrock:CreateKnowledgeBase
                   - bedrock:ListKnowledgeBases
+                  - bedrock:TagResource
                 Resource: "*"
               # ── Bedrock (model inference) ──────────────────────────────────────────────
               # The hub itself calls models: intent clustering and answer suggestions
@@ -468,7 +474,9 @@ Resources:
               # account may hold user pools that have nothing to do with
               # Launchpad, and `cognito-idp:*` on `*` would let the hub delete
               # them. Pool + resource server + app clients + domain + groups come
-              # from the bootstrap's cognito stage; the Admin* calls and
+              # from the bootstrap's cognito stage, and an isolated project's
+              # scope, group and M2M client from project_provision's m2m stage
+              # (Update* adds the project scope; projects design §10.6); the Admin* calls and
               # InitiateAuth are the console's per-user Gateway policy identity.
               - Sid: CognitoIdp
                 Effect: Allow
@@ -491,6 +499,8 @@ Resources:
                   - cognito-idp:InitiateAuth
                   - cognito-idp:ListUserPoolClients
                   - cognito-idp:ListUserPools
+                  - cognito-idp:UpdateResourceServer
+                  - cognito-idp:UpdateUserPoolClient
                 Resource: "*"
 
               # ── Observability ──────────────────────────────────────────────

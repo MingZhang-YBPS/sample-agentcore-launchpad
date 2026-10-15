@@ -778,6 +778,10 @@ def resource_bindings(content: ProposalContent, catalog: dict[str, Any]) -> dict
             "url": live_kb.get("url"),
             "authorizer_type": live_kb.get("authorizer_type"),
             "authorizer": live_kb.get("authorizer"),
+            # an isolated project's token scopes (§10.6); absent for every other
+            # project, so earlier bindings keep comparing equal
+            **({"scopes": list(resources["gateway_scopes"])}
+               if resources.get("gateway_scopes") else {}),
         }
         if content.knowledge_bases
         else None

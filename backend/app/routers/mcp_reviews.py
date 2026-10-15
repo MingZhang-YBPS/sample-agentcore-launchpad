@@ -257,6 +257,7 @@ def scaffold_policies(
         approved_tools=inputs["approved_tools"], open_tools=inputs["open_tools"],
         # one project: every principal is that project's — no condition (today's shape)
         project_id=agent.project_id if len(active) > 1 else None,
+        workspace_id=ws.id,  # an isolated project's M2M client + scope join the permit
     )
     plan.update(approved_review_id=inputs["approved_review_id"],
                 open_review_id=inputs["open_review_id"])

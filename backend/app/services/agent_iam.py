@@ -101,8 +101,18 @@ class RoleContext:
 def role_context(workspace: WorkspaceContext, project_id: str | None = None) -> RoleContext:
     """Build a `RoleContext` from the workspace the agent is deployed into. With the
     agent's `project_id`, an isolated project's ECR repository comes first (a shared
-    project — every single-project workspace — reads exactly as without it)."""
-    resources = workspace.resources or {}
+    project — every single-project workspace — reads exactly as without it). The
+    memory and the gateway credential provider are the project's own once its
+    isolation is provisioned (`project_memory.memory_resources`,
+    `project_gateway.effective_resources`; default: the current project)."""
+    # imported here: project_memory imports project_isolation → project_iam → this
+    from app.core.project_scope import current_project
+    from app.services import project_gateway, project_memory
+
+    pid = project_id if project_id is not None else current_project()
+    resources = project_memory.memory_resources(
+        project_gateway.effective_resources(dict(workspace.resources or {}), pid, workspace.id),
+        workspace.id, pid)
     base = f"arn:{workspace.partition}:ecr:{workspace.region}:{workspace.account_id}:repository"
     if project_id:
         from app.services import project_storage

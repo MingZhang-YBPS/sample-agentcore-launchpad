@@ -39,11 +39,18 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError, is_not_found
-from app.core.project_scope import project_context
+from app.core.project_scope import current_project, project_context
 from app.models.lambda_tools import ExternalMcpTarget, LambdaToolTarget
 from app.models.ledger import Agent
 from app.models.mcp_review import McpToolReview
-from app.services import gateway_bootstrap, mcp_client, mcp_reviews, workspace_iam
+from app.services import (
+    creators,
+    gateway_bootstrap,
+    mcp_client,
+    mcp_reviews,
+    project_gateway,
+    workspace_iam,
+)
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client
 from app.services.audit import record_audit_event
@@ -301,8 +308,40 @@ def publish_lambda(workspace: WorkspaceContext, row_id: str) -> None:
             if approved is not None:
                 approved.publish_status, approved.publish_error = "failed", error
         db.commit()
+        if row.status == "live" and row.target_id:
+            _owned(row.workspace_id, row.target_id,
+                   creators.Creator(user_id=row.created_by_user_id, name=row.created_by))
     finally:
         db.close()
+
+
+def _owned(workspace_id: str, target_id: str, creator: creators.Creator | None) -> None:
+    """Record the published target as the current project's (its Gateway ownership,
+    projects design §5.5) and, in an isolated project, have its Cedar rule written
+    once the target is READY (§10.6) — as `identity_gateway_targets` does."""
+    db = SessionLocal()
+    try:
+        creators.record(db, workspace_id, project_gateway.TARGET_KIND, target_id, creator)
+    finally:
+        db.close()
+    project_id = current_project()
+    if project_id:
+        project_gateway.schedule_reconcile(project_id, workspace_id, wait_target=target_id)
+
+
+def _disowned(target_id: str) -> None:
+    """After a delete: drop the ownership row and the project's rule for the target."""
+    db = SessionLocal()
+    try:
+        owner = project_gateway.target_owner(db, target_id)
+        if owner is None:
+            return
+        workspace_id, project_id = owner
+        creators.forget(db, workspace_id, project_gateway.TARGET_KIND, target_id)
+    finally:
+        db.close()
+    if project_id:
+        project_gateway.schedule_reconcile(project_id, workspace_id)
 
 
 def start_publish_lambda(workspace: WorkspaceContext, row: LambdaToolTarget) -> None:
@@ -348,6 +387,7 @@ def delete_lambda(
     control = control_client(workspace)
     if row.target_id:
         _delete_target_and_wait(control, row.gateway_id, row.target_id)
+        _disowned(row.target_id)
     was_granted = row.status == "live"
     row_id, gateway_id = row.id, row.gateway_id
     db.delete(row)

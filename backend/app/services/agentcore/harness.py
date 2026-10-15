@@ -335,8 +335,12 @@ def user_authenticated_tools(
     access_token: str,
     *,
     configured_tools: list[dict[str, Any]] | None = None,
+    workspace_id: str = "",
 ) -> list[dict[str, Any]]:
     """Harness invocation tools with launchpad-gw authenticated as one user.
+
+    ``workspace_id`` (when given) lets launchpad-kb-gw take the current project's
+    provider and scopes (`project_gateway.effective_resources`, projects §10.6).
 
     ``InvokeHarness.tools`` replaces the configured tool list for that request,
     so every non-user tool declared by the stored spec is reconstructed too.
@@ -411,6 +415,11 @@ def user_authenticated_tools(
                 attached_user_gateway = True
 
     if spec.get("knowledge_bases") and resources.get("kb_gateway_arn"):
+        from app.core.project_scope import current_project
+        from app.services import project_gateway
+
+        kb_auth = project_gateway.effective_resources(
+            dict(resources), current_project(), workspace_id or None)
         result.append(
             {
                 "type": "agentcore_gateway",
@@ -420,9 +429,9 @@ def user_authenticated_tools(
                         "gatewayArn": str(resources["kb_gateway_arn"]),
                         "outboundAuth": {
                             "oauth": {
-                                "providerArn": str(resources["oauth_provider_arn"]),
+                                "providerArn": str(kb_auth["oauth_provider_arn"]),
                                 "grantType": "CLIENT_CREDENTIALS",
-                                "scopes": ["launchpad-gw/invoke"],
+                                "scopes": project_gateway.gateway_scopes(kb_auth),
                             }
                         },
                     }

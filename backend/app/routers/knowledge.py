@@ -15,7 +15,15 @@ from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import current_project, project_context
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import access, agent_access, creators, kb_gateway, knowledge, visibility
+from app.services import (
+    access,
+    agent_access,
+    creators,
+    kb_gateway,
+    knowledge,
+    project_kb,
+    visibility,
+)
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.visibility import Viewer, require_viewer
@@ -282,3 +290,33 @@ def query_knowledge_base(
 @router.post("/ensure-gateway")
 def ensure_gateway(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
     return kb_gateway.ensure_kb_gateway_persisted(control_client(ws.context), ws.context)
+
+
+# ── moving an existing KB onto its isolated project's role and prefix (§10.5) ──
+
+
+@router.post("/{kb_id}/migrate-to-project")
+def migrate_knowledge_base(
+    kb_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Copy the KB's objects under the project prefix, add the project data source and
+    switch the KB to the project role (additive; `…/finish` removes the old half).
+    Another project's KB answers 404."""
+    _require_visible(db, ws, viewer, kb_id)
+    return project_kb.migrate_kb(ws.context, kb_id, current_project())
+
+
+@router.post("/{kb_id}/migrate-to-project/finish")
+def finish_knowledge_base_migration(
+    kb_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Once the project data source has synced: delete the old data source and the
+    shared role's grant for the KB (409 while it syncs)."""
+    _require_visible(db, ws, viewer, kb_id)
+    return project_kb.finish_kb_migration(ws.context, kb_id, current_project())

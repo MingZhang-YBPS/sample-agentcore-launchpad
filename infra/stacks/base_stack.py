@@ -101,6 +101,24 @@ class LaunchpadBaseStack(Stack):
             timeout=Duration.minutes(30),
         )
         repo.grant_pull_push(build_project)
+        # an isolated project's images go to its own repository under the shared one
+        # (`launchpad-agents/<pid>`, projects design §10.10). The project_provision `ecr`
+        # stage cannot add this itself: the role is CDK-named, not `launchpad-*`.
+        build_project.add_to_role_policy(
+            iam.PolicyStatement(
+                sid="ProjectReposPullPush",
+                actions=[
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:BatchGetImage",
+                    "ecr:CompleteLayerUpload",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:InitiateLayerUpload",
+                    "ecr:PutImage",
+                    "ecr:UploadLayerPart",
+                ],
+                resources=[f"{repo.repository_arn}/*"],
+            )
+        )
         artifacts.grant_read(build_project)
 
         # ---- Cognito: users, roles for Cedar policy demos ----

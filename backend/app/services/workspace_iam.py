@@ -509,7 +509,9 @@ def codebuild_role_policy(
     account_id: str, region: str, artifacts_bucket: str, ecr_repo_arn: str, project: str
 ) -> dict[str, Any]:
     """What the CDK grants the build project implicitly (`repo.grant_pull_push`,
-    `artifacts.grant_read`) plus its log group, written out."""
+    `artifacts.grant_read`) plus its log group, written out. The push grant covers
+    the shared repository **and** the per-project repositories under it
+    (`launchpad-agents/<pid>`, projects design §10.10)."""
     bucket_arn = f"arn:aws:s3:::{artifacts_bucket}"
     return {
         "Version": "2012-10-17",
@@ -536,7 +538,7 @@ def codebuild_role_policy(
                     "ecr:CompleteLayerUpload",
                     "ecr:PutImage",
                 ],
-                "Resource": ecr_repo_arn,
+                "Resource": [ecr_repo_arn, f"{ecr_repo_arn}/*"],
             },
             {
                 "Sid": "SourceObjects",

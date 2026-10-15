@@ -967,3 +967,4 @@ from app.services import project_gateway as _project_gateway  # noqa: E402,F401 
 from app.services import project_iam as _project_iam  # noqa: E402,F401 — registers iam
 from app.services import project_kb as _project_kb  # noqa: E402,F401 — registers kb
 from app.services import project_memory as _project_memory  # noqa: E402,F401 — registers memory
+from app.services import project_storage as _project_storage  # noqa: E402,F401 — registers storage

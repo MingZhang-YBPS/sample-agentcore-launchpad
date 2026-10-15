@@ -26,6 +26,7 @@ from app.schemas.inbound_auth import InboundAuth
 from app.services import (
     agent_access,
     consent_portals,
+    creators,
     inbound_auth,
     oauth_sessions,
     policy_identity,
@@ -260,7 +261,8 @@ def list_gateway_targets(ws: WorkspaceScope = Depends(require_workspace)) -> dic
 
 @router.post("/gateway-targets", status_code=201)
 def create_gateway_target(
-    req: CreateTargetRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: CreateTargetRequest, request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return gateway_targets.create_target(
         control_client(ws.context),
@@ -278,6 +280,7 @@ def create_gateway_target(
         api_key_parameter=req.api_key.parameter_name,
         api_key_prefix=req.api_key.prefix or None,
         workspace_id=ws.id,  # turns on the other-project Connection refusal
+        creator=creators.Creator.of_request(request),  # the target's ownership row
     )
 
 
@@ -285,7 +288,8 @@ def create_gateway_target(
 def delete_gateway_target(
     target_id: str, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
-    gateway_targets.delete_target(control_client(ws.context), _resources(ws), target_id)
+    gateway_targets.delete_target(control_client(ws.context), _resources(ws), target_id,
+                                  workspace_id=ws.id)
     return {"deleted": True}
 
 
