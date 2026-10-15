@@ -57,8 +57,13 @@ _OPEN_API_PATHS = {
     "/api/auth/providers",
     "/api/health",
 }
-# the OIDC redirect leg (sso §2.2): the browser arrives without a session by design
-_OPEN_API_PATTERN = re.compile(r"^/api/auth/oidc/[A-Za-z0-9_-]{1,32}/(start|callback)$")
+# the OIDC and SAML redirect legs (sso §2.2): the browser arrives without a session by
+# design; SCIM (sso §2.4) carries its own bearer token, checked by its router
+_OPEN_API_PATTERN = re.compile(
+    r"^/api/auth/oidc/[A-Za-z0-9_-]{1,32}/(start|callback)$"
+    r"|^/api/auth/saml/[A-Za-z0-9_-]{1,32}/(start|acs|metadata|sls)$"
+    r"|^/api/scim/v2(/[^/]+){1,2}$"
+)
 
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
@@ -141,8 +146,22 @@ def registration_requires_approval(settings: Settings | None = None) -> bool:
 def registration_enabled(settings: Settings | None = None) -> bool:
     current = settings or get_settings()
     # With the gate disabled the console is already open, so there is nothing to
-    # register an account for.
-    return enabled(current) and current.auth_registration_enabled
+    # register an account for. With local login hidden (sso D-2) accounts come from
+    # the identity provider, so self-service registration is off too.
+    return (enabled(current) and current.auth_registration_enabled
+            and not _local_login_hidden())
+
+
+def _local_login_hidden() -> bool:
+    """The administrators' "hide local login" switch (sso D-2), in effect only while
+    an identity provider is enabled."""
+    from app.services.sso_mapping import local_login_hidden
+
+    db = SessionLocal()
+    try:
+        return local_login_hidden(db)
+    finally:
+        db.close()
 
 
 def _signing_key(settings: Settings | None = None) -> bytes:
@@ -537,6 +556,14 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
             db.close()
         identity = Identity(username=settings.auth_username, role=ROLE_ADMIN)
     else:
+        if _local_login_hidden():
+            # local login hidden (sso D-2): the IdP is the way in for every account but
+            # the built-in administrator (above), so a password is not even checked
+            raise AppError(
+                "auth.local_login_hidden",
+                "Sign in with your organization's single sign-on",
+                status_code=403,
+            )
         db = SessionLocal()
         try:
             user = users_service.authenticate(db, req.username, req.password)
@@ -705,13 +732,14 @@ def change_password(
 @router.post("/logout")
 def logout(request: Request, response: Response) -> dict[str, Any]:
     """End the console session. An SSO account's answer also carries the IdP's
-    `end_session_url` (OIDC RP-initiated logout, sso D-5) when the IdP has one; the
-    browser goes there next, so the IdP session ends too."""
+    `end_session_url` (OIDC RP-initiated logout, or a SAML SP-initiated LogoutRequest
+    to the IdP's SLO endpoint, sso D-5) when the IdP has one; the browser goes there
+    next, so the IdP session ends too."""
     settings = get_settings()
     end_session_url: str | None = None
     identity = getattr(request.state, "identity", None)
     if isinstance(identity, Identity) and identity.user_id is not None:
-        from app.services.sso_oidc import end_session_url as sso_end_session_url
+        from app.services.sso_saml import end_session_url as sso_end_session_url
 
         db = SessionLocal()
         try:

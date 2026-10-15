@@ -30,6 +30,10 @@
 .v3-sso-mark[data-preset="authentik"] { --tone: var(--v3-ok); }
 .v3-sso-mark[data-preset="oidc"] { --tone: var(--v3-text); }
 .v3-sso-mark[data-preset="okta"], .v3-sso-mark[data-preset="entra"], .v3-sso-mark[data-preset="google"] { --tone: var(--v3-wait); }
+/* SAML presets (SSO-2): the warm half of the palette, so a channel reads at a glance */
+.v3-sso-mark[data-preset="identity-center"] { --tone: var(--v3-wait); }
+.v3-sso-mark[data-preset="entra-saml"] { --tone: var(--v3-info); }
+.v3-sso-mark[data-preset="saml"] { --tone: var(--v3-text); }
 
 @keyframes v3-sso-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
@@ -257,8 +261,175 @@
 .v3 .v3-sso .spin { animation: v3-sso-spin 0.9s linear infinite; }
 @keyframes v3-sso-spin { to { transform: rotate(360deg); } }
 
+/* ===== SSO-2 / SSO-3 =====
+   Two motifs. The SAML handoff is an *exchange*: the console's values on the left,
+   the IdP's metadata coming in on the right, a seam between that lights once the
+   metadata is received. The SCIM token is a *slip*: shown once, with a hatched band
+   that says so. The sign-in switch is a miniature of the login card itself. */
+
+/* the login card: with local login hidden, one quiet line instead of the seam */
+.v3-sso-only {
+  margin: 20px 0 0; text-align: center; font-size: 12px; line-height: 1.55;
+  color: var(--v3-text-3, var(--v2-ink-3));
+}
+
+/* presets by channel */
+.v3 .v3-sso-channel { display: grid; gap: 8px; }
+.v3 .v3-sso-channel + .v3-sso-channel { margin-top: 4px; }
+.v3 .v3-sso-channel-label { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.v3 .v3-sso-channel-label small { font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-sso-channel[data-kind="saml"] .v3-sso-channel-label .v3-sso-kick { color: var(--v3-wait-text); }
+.v3 .v3-sso-channel[data-kind="oidc"] .v3-sso-channel-label .v3-sso-kick { color: var(--v3-info-text, var(--v3-info)); }
+
+/* the exchange */
+.v3 .v3-sso-exchange {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) 34px minmax(0, 1fr);
+  border-radius: var(--v3-r); border: 1px dashed color-mix(in srgb, var(--v3-wait) 45%, var(--v3-line-2));
+  background:
+    linear-gradient(100deg, color-mix(in srgb, var(--v3-ok) 5%, transparent), transparent 45%),
+    linear-gradient(260deg, color-mix(in srgb, var(--v3-wait) 6%, transparent), transparent 45%),
+    var(--v3-ink-1);
+}
+.v3 .v3-sso-exchange[data-received="true"] { border-style: solid; border-color: color-mix(in srgb, var(--v3-ok) 40%, var(--v3-line-2)); }
+.v3 .v3-sso-exchange .side { display: grid; gap: 10px; align-content: start; padding: 16px 18px; min-width: 0; }
+.v3 .v3-sso-exchange .side p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--v3-text-2); }
+.v3 .v3-sso-exchange .seam {
+  position: relative; display: grid; place-items: center; color: var(--v3-text-3);
+}
+.v3 .v3-sso-exchange .seam::before {
+  content: ""; position: absolute; top: 16px; bottom: 16px; left: 50%; width: 0;
+  border-left: 1px dashed var(--v3-line-2);
+}
+.v3 .v3-sso-exchange .seam svg {
+  position: relative; padding: 6px; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--v3-ink-2); border: 1px solid var(--v3-line-2);
+  transition: color 0.3s, border-color 0.3s;
+}
+.v3 .v3-sso-exchange[data-received="true"] .seam svg { color: var(--v3-ok); border-color: color-mix(in srgb, var(--v3-ok) 55%, var(--v3-line-2)); }
+.v3 .v3-sso-exchange .give .v3-sso-kick { color: var(--v3-ok-text); }
+.v3 .v3-sso-exchange .take .v3-sso-kick { color: var(--v3-wait-text); }
+
+.v3 .v3-sso-sp-cert {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 4px;
+  font-size: 12.5px; color: var(--v3-text-2);
+}
+.v3 .v3-sso-sp-cert code { font-family: var(--v3-mono); font-size: 11px; color: var(--v3-text-3); }
+.v3 .v3-sso-sp-cert .end { margin-left: auto; display: inline-flex; gap: 6px; }
+.v3 .v3-sso-sp-cert a.v3-btn { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+
+.v3 .v3-sso-intake { display: grid; gap: 10px; }
+.v3 .v3-sso-intake .row { display: flex; gap: 8px; }
+.v3 .v3-sso-intake .row input { flex: 1; min-width: 0; }
+.v3 .v3-sso-intake .or { display: flex; align-items: center; gap: 10px; }
+.v3 .v3-sso-intake .or::before, .v3 .v3-sso-intake .or::after { content: ""; flex: 1; border-top: 1px dashed var(--v3-line-2); }
+.v3 .v3-sso-intake .or span { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-sso-drop {
+  position: relative; display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer;
+  border-radius: 9px; border: 1px dashed var(--v3-line-2); background: var(--v3-ink-0); color: var(--v3-text-2);
+  transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-sso-drop:hover, .v3 .v3-sso-drop:focus-within { border-color: color-mix(in srgb, var(--v3-wait) 60%, var(--v3-line-2)); background: var(--v3-ink-1); }
+.v3 .v3-sso-drop[data-busy="true"] { cursor: progress; opacity: 0.7; }
+.v3 .v3-sso-drop span { display: grid; gap: 2px; }
+.v3 .v3-sso-drop b { font-size: 13px; font-weight: 600; color: var(--v3-text); }
+.v3 .v3-sso-drop small { font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-sso-drop input { position: absolute; inset: 0; opacity: 0; cursor: inherit; }
+
+/* what the metadata said: a stamped receipt */
+.v3 .v3-sso-received {
+  margin: 0; display: grid; gap: 8px; padding: 12px 14px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--v3-ok) 30%, var(--v3-line)); background: var(--v3-ok-dim);
+  animation: v3-sso-rise 0.32s var(--v3-ease) both;
+}
+.v3 .v3-sso-received > div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.v3 .v3-sso-received dt { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-sso-received dd { margin: 0; font-size: 12.5px; color: var(--v3-text); overflow-wrap: anywhere; display: flex; gap: 6px; flex-wrap: wrap; }
+.v3 .v3-sso-pem { font-size: 11px; line-height: 1.45; }
+
+/* switches: a track the thumb runs along, the label beside it */
+.v3 .v3-sso-toggles { display: grid; gap: 8px; }
+.v3 .v3-sso-toggle {
+  position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; align-items: start;
+  padding: 10px 12px; border-radius: 9px; border: 1px solid var(--v3-line); background: var(--v3-ink-1); cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-sso-toggle[data-on="true"] { border-color: color-mix(in srgb, var(--v3-ok) 45%, var(--v3-line-2)); }
+.v3 .v3-sso-toggle input { position: absolute; opacity: 0; width: 34px; height: 20px; margin: 0; cursor: pointer; }
+.v3 .v3-sso-toggle .track {
+  position: relative; width: 34px; height: 20px; margin-top: 1px; border-radius: 10px;
+  background: var(--v3-ink-3); border: 1px solid var(--v3-line-2); transition: background 0.18s, border-color 0.18s;
+}
+.v3 .v3-sso-toggle .track::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--v3-text-3); transition: transform 0.2s var(--v3-ease), background 0.18s;
+}
+.v3 .v3-sso-toggle[data-on="true"] .track { background: color-mix(in srgb, var(--v3-ok) 30%, var(--v3-ink-2)); border-color: var(--v3-ok); }
+.v3 .v3-sso-toggle[data-on="true"] .track::after { transform: translateX(14px); background: var(--v3-ok); }
+.v3 .v3-sso-toggle input:focus-visible + .track { outline: 2px solid var(--v3-ok); outline-offset: 2px; }
+.v3 .v3-sso-toggle input:disabled ~ * { opacity: 0.55; }
+.v3 .v3-sso-toggle .txt { display: grid; gap: 2px; }
+.v3 .v3-sso-toggle .txt b { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--v3-text); }
+.v3 .v3-sso-toggle .txt small { font-size: 12px; line-height: 1.5; color: var(--v3-text-3); }
+
+/* SCIM: the lane on the left, what the IdP pushed as two big numerals on the right */
+.v3 .v3-sso-scim-title { display: inline-flex; align-items: center; gap: 8px; }
+.v3 .v3-sso-scim-body { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 20px; align-items: start; }
+.v3 .v3-sso-scim-body .lane { display: grid; gap: 10px; min-width: 0; }
+.v3 .v3-sso-scim-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.v3 .v3-sso-counts { margin: 0; display: grid; gap: 10px; }
+.v3 .v3-sso-counts > div {
+  display: grid; gap: 2px; padding: 12px 14px; border-radius: 9px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+}
+.v3 .v3-sso-counts dt { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-sso-counts dd {
+  margin: 0; font-family: var(--v3-display); font-variation-settings: "wdth" 112;
+  font-size: 28px; font-weight: 700; line-height: 1.1; color: var(--v3-text); font-variant-numeric: tabular-nums;
+}
+.v3 .v3-sso-slip {
+  position: relative; display: grid; gap: 0; overflow: hidden; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--v3-wait) 55%, var(--v3-line-2));
+  animation: v3-sso-unseal 0.42s var(--v3-ease) both;
+}
+.v3 .v3-sso-slip .band {
+  padding: 4px 12px; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--v3-wait-text);
+  background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--v3-wait) 18%, transparent) 0 6px, transparent 6px 12px), var(--v3-ink-2);
+}
+.v3 .v3-sso-slip .v3-sso-plate { border: 0; border-radius: 0; }
+@keyframes v3-sso-unseal { from { opacity: 0; clip-path: inset(0 0 100% 0); } to { opacity: 1; clip-path: inset(0); } }
+
+/* the sign-in switch: the login card in miniature beside the words */
+.v3 .v3-sso-loginpage {
+  display: grid; grid-template-columns: 112px minmax(0, 1fr) minmax(240px, 320px); gap: 20px; align-items: center;
+  padding: 14px 18px; border-radius: var(--v3-r); border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+}
+.v3 .v3-sso-loginpage .txt { display: grid; gap: 4px; min-width: 0; }
+.v3 .v3-sso-loginpage .txt b { font-size: 14px; font-weight: 600; color: var(--v3-text); }
+.v3 .v3-sso-loginpage .mini {
+  display: grid; gap: 5px; padding: 10px; border-radius: 9px; border: 1px solid var(--v3-line-2);
+  background: var(--v3-ink-0); box-shadow: 0 10px 24px -16px color-mix(in srgb, var(--v3-shade) 80%, transparent);
+}
+.v3 .v3-sso-loginpage .mini .key {
+  height: 11px; border-radius: 3px; border: 1px solid color-mix(in srgb, var(--v3-ok) 45%, var(--v3-line-2));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--v3-ok) 18%, transparent), transparent);
+}
+.v3 .v3-sso-loginpage .mini .seam { position: relative; height: 9px; }
+.v3 .v3-sso-loginpage .mini .seam i { position: absolute; left: 0; right: 0; top: 4px; border-top: 1px dashed var(--v3-line-2); }
+.v3 .v3-sso-loginpage .mini .field {
+  height: 8px; border-radius: 2px; background: var(--v3-ink-3);
+  transition: opacity 0.3s, transform 0.3s var(--v3-ease), height 0.3s var(--v3-ease), margin 0.3s;
+}
+.v3 .v3-sso-loginpage[data-hidden="true"] .mini .field { opacity: 0; height: 0; margin-top: -5px; transform: scaleX(0.6); }
+.v3 .v3-sso-loginpage[data-hidden="true"] .mini .seam i { border-top-style: solid; border-color: color-mix(in srgb, var(--v3-ok) 40%, transparent); }
+
 @media (max-width: 1100px) {
   .v3 .v3-sso-grid { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-exchange { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-exchange .seam { height: 30px; }
+  .v3 .v3-sso-exchange .seam::before { top: 50%; bottom: auto; left: 18px; right: 18px; width: auto; border-left: 0; border-top: 1px dashed var(--v3-line-2); }
+  .v3 .v3-sso-exchange .seam svg { transform: rotate(90deg); }
+  .v3 .v3-sso-loginpage { grid-template-columns: 96px minmax(0, 1fr); }
+  .v3 .v3-sso-loginpage > .v3-sso-toggle { grid-column: 1 / -1; }
   .v3 .v3-sso-map { grid-template-columns: 24px minmax(0, 1fr) 30px; }
   .v3 .v3-sso-map .arrow, .v3 .v3-sso-map-gap { display: none; }
   .v3 .v3-sso-map > :is(.v3-sso-kind, select) { grid-column: 2; }
@@ -267,10 +438,16 @@
   .v3 .v3-sso-layout { grid-template-columns: minmax(0, 1fr); }
   .v3 .v3-sso-rail { position: static; }
   .v3 .v3-sso-preset-row { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-scim-body { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-loginpage { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-loginpage .mini { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .v3-sso-idps > li, .v3-sso-local-body:not([hidden]), .v3 .v3-sso-map, .v3 .v3-sso-preset { animation: none; }
   .v3-sso-idp, .v3-sso-idp .go, .v3-sso-local-toggle .chev, .v3 .v3-sso-preset, .v3 .v3-sso-savebar { transition: none; }
   .v3-sso-idp[aria-busy="true"] .go { animation: none; }
   .v3 .v3-sso .spin { animation-duration: 2.4s; }
+  .v3 .v3-sso-received, .v3 .v3-sso-slip { animation: none; }
+  .v3 .v3-sso-toggle .track, .v3 .v3-sso-toggle .track::after, .v3 .v3-sso-loginpage .mini .field,
+  .v3 .v3-sso-exchange .seam svg { transition: none; }
 }

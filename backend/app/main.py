@@ -80,6 +80,7 @@ from app.routers.resource_mappings import router as resource_mappings_router
 from app.routers.resource_shares import router as resource_shares_router
 from app.routers.review import console_router as review_links_router
 from app.routers.review import router as review_router
+from app.routers.scim import router as scim_router
 from app.routers.share import console_router as share_links_router
 from app.routers.share import router as share_router
 from app.routers.share_annotate import router as share_annotate_router
@@ -222,6 +223,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     _apply_model_overrides()
     app.include_router(auth_router)
     app.include_router(sso_router)  # console SSO: IdP buttons, OIDC leg, admin config
+    app.include_router(scim_router)  # SCIM 2.0 provisioning (sso §2.4), its own bearer token
     app.include_router(overview_router)
     app.include_router(announcements_router)
     app.include_router(model_defaults_router)  # platform model settings (Models page)

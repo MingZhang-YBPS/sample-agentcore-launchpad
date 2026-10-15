@@ -2030,3 +2030,43 @@ ROUTE_POLICY.update(SSO_ROUTES)
 HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/admin/sso")
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SSO_ROUTES)
 ADMIN_SPLIT.update({key: ADMIN_DATA for key, role in SSO_ROUTES.items() if role == ADMIN})
+
+# ---- SSO-23: SAML 2.0 channel, SCIM 2.0 provisioning, hide local login (sso §2.2,
+# §2.4, §2.6, D-2) ----
+# The SAML leg is PUBLIC like the OIDC one: the browser arrives at start / ACS / SLS
+# without a session by design, and the SP metadata is what the IdP imports.
+# SCIM is PUBLIC to the console (no session, no workspace) because it carries its own
+# credential — the provider's bearer token, checked by `sso_scim.authenticate` on
+# every route (the `/v1` API-key pattern). Both sit in `auth._OPEN_API_PATTERN`.
+# Loading metadata, rotating the SP key or the SCIM token and hiding local login are
+# the administrators', data side like the rest of SSO configuration.
+SSO_SAML_SCIM_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/auth/saml/{provider_id}/start"): PUBLIC,
+    ("POST", "/api/auth/saml/{provider_id}/acs"): PUBLIC,
+    ("GET", "/api/auth/saml/{provider_id}/metadata"): PUBLIC,
+    ("GET", "/api/auth/saml/{provider_id}/sls"): PUBLIC,
+    ("POST", "/api/admin/sso/providers/{provider_id}/saml/metadata"): ADMIN,
+    ("POST", "/api/admin/sso/providers/{provider_id}/saml/sp-key"): ADMIN,
+    ("POST", "/api/admin/sso/providers/{provider_id}/scim/token"): ADMIN,
+    ("DELETE", "/api/admin/sso/providers/{provider_id}/scim/token"): ADMIN,
+    ("GET", "/api/admin/sso/settings"): ADMIN,
+    ("PUT", "/api/admin/sso/settings"): ADMIN,
+    ("GET", "/api/scim/v2/ServiceProviderConfig"): PUBLIC,
+    ("GET", "/api/scim/v2/Users"): PUBLIC,
+    ("POST", "/api/scim/v2/Users"): PUBLIC,
+    ("GET", "/api/scim/v2/Users/{user_id}"): PUBLIC,
+    ("PUT", "/api/scim/v2/Users/{user_id}"): PUBLIC,
+    ("PATCH", "/api/scim/v2/Users/{user_id}"): PUBLIC,
+    ("DELETE", "/api/scim/v2/Users/{user_id}"): PUBLIC,
+    ("GET", "/api/scim/v2/Groups"): PUBLIC,
+    ("POST", "/api/scim/v2/Groups"): PUBLIC,
+    ("GET", "/api/scim/v2/Groups/{group_id}"): PUBLIC,
+    ("PUT", "/api/scim/v2/Groups/{group_id}"): PUBLIC,
+    ("PATCH", "/api/scim/v2/Groups/{group_id}"): PUBLIC,
+    ("DELETE", "/api/scim/v2/Groups/{group_id}"): PUBLIC,
+}
+ROUTE_POLICY.update(SSO_SAML_SCIM_ROUTES)
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/scim")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SSO_SAML_SCIM_ROUTES)
+ADMIN_SPLIT.update({key: ADMIN_DATA for key, role in SSO_SAML_SCIM_ROUTES.items()
+                    if role == ADMIN})

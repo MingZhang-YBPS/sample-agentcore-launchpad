@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "../../../lib/api";
-import { ssoApi, type SsoMapping, type SsoMappingKind, type SsoProvider, SSO_ROLES } from "../../../lib/api/sso";
+import { ssoApi, type SsoMapping, type SsoMappingKind, SSO_ROLES } from "../../../lib/api/sso";
 import { useToast } from "../../hooks";
 import { Btn, Panel } from "../../ui";
 import { blankMapping, mappingProblems } from "./model";
@@ -89,10 +89,11 @@ export function MappingRow({ row, index, targets, onChange, onRemove }: {
 }
 
 /** The provider's group mappings, saved as one list (`PUT …/mappings`). */
-export function MappingsEditor({ provider, targets, onSaved }: {
-  provider: SsoProvider;
+/** Any provider row (OIDC or SAML): its id, mappings, groups claim and default role. */
+export function MappingsEditor<P extends { id: string; mappings: SsoMapping[]; claims: { groups: string }; default_role: string }>({ provider, targets, onSaved }: {
+  provider: P;
   targets: MappingTargets;
-  onSaved: (next: SsoProvider) => void;
+  onSaved: (next: P) => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();

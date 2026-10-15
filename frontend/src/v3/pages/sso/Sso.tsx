@@ -1,6 +1,6 @@
 import "./sso.css";
 
-import { Check, Copy, Plus, Power, RefreshCw, Trash2 } from "lucide-react";
+import { Plus, Power, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -8,21 +8,22 @@ import { useAuth } from "../../../auth/auth-context";
 import { errorMessage } from "../../../lib/api";
 import { projectGroupsApi } from "../../../lib/api/project-groups";
 import { projectsApi } from "../../../lib/api/projects";
+import { PRIMARY_PRESETS, ssoApi, type SsoLogin, type SsoPreset, SSO_ROLES } from "../../../lib/api/sso";
 import {
-  PRIMARY_PRESETS,
-  ssoApi,
-  type SsoLogin,
-  type SsoPreset,
-  type SsoPresetTemplate,
-  type SsoProvider,
-  SSO_PRESETS,
-  SSO_ROLES,
-} from "../../../lib/api/sso";
+  type AnyPreset,
+  CHANNEL_PRESETS,
+  type LoginSettings,
+  type PresetTemplate,
+  type Provider,
+  ssoAdminApi,
+  TEMPLATE_PRESETS,
+} from "../../../lib/api/sso-saml";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { MappingsEditor, type MappingTargets } from "./MappingsEditor";
 import {
+  canEnable,
   createBody,
   draftOf,
   draftProblems,
@@ -32,59 +33,30 @@ import {
   providerSignal,
   testRows,
 } from "./model";
+import { CopyPlate, PresetMark } from "./parts";
+import { LoginPageSwitch, ScimPanel } from "./Provisioning";
+import { SamlConnection, SamlExchange, SamlTestPanel } from "./SamlParts";
 
-export function PresetMark({ preset, size = "md" }: { preset: string; size?: "md" | "lg" }) {
-  const { t } = useTranslation();
-  return (
-    <span className="v3-sso-mark" data-preset={preset} data-size={size} aria-hidden="true">
-      {t(`auth.sso.presetShort.${preset}`, { defaultValue: "ID" })}
-    </span>
-  );
-}
+export { CopyPlate, PresetMark } from "./parts";
 
-/** A value to paste on the IdP side, with a one-click copy. */
-export function CopyPlate({ label, value, testId }: { label: string; value: string; testId?: string }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 1600);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-  return (
-    <div className="v3-sso-plate" data-testid={testId}>
-      <span className="lbl">{label}</span>
-      <code>{value}</code>
-      <button
-        type="button"
-        className="v3-btn ghost sm"
-        onClick={() => {
-          void navigator.clipboard?.writeText(value);
-          setCopied(true);
-        }}
-        aria-label={t("v3.sso.copy")}
-        title={t("v3.sso.copy")}
-      >
-        {copied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
-        <span className="sr-only">{t("v3.sso.copy")}</span>
-      </button>
-    </div>
-  );
-}
+type Presets = Partial<Record<AnyPreset, PresetTemplate>>;
 
-/** The preset chooser: the three SSO-1 targets large, the attribute templates beneath. */
-export function PresetGrid({ value, onPick }: { value: SsoPreset | null; onPick: (preset: SsoPreset) => void }) {
+/**
+ * The preset chooser: one lane per channel — SAML 2.0 (Identity Center, Entra, any
+ * SAML IdP) and OpenID Connect (Keycloak, Authentik, any OIDC IdP) — as large tiles
+ * with configuration guides, the attribute templates in a row beneath.
+ */
+export function PresetGrid({ value, onPick }: { value: AnyPreset | null; onPick: (preset: AnyPreset) => void }) {
   const { t } = useTranslation();
-  const primary = SSO_PRESETS.filter((p) => PRIMARY_PRESETS.has(p));
-  const templates = SSO_PRESETS.filter((p) => !PRIMARY_PRESETS.has(p));
-  const tile = (preset: SsoPreset, index: number) => (
+  let index = 0;
+  const tile = (preset: AnyPreset) => (
     <button
       key={preset}
       type="button"
       className={`v3-sso-preset${value === preset ? " on" : ""}`}
       aria-pressed={value === preset}
       onClick={() => onPick(preset)}
-      style={{ ["--i" as string]: index }}
+      style={{ ["--i" as string]: index++ }}
       data-testid={`sso-preset-${preset}`}
     >
       <PresetMark preset={preset} size="lg" />
@@ -94,25 +66,33 @@ export function PresetGrid({ value, onPick }: { value: SsoPreset | null; onPick:
   );
   return (
     <div className="v3-sso-presets">
-      <div className="v3-sso-preset-row primary">{primary.map(tile)}</div>
+      {(["saml", "oidc"] as const).map((kind) => (
+        <div key={kind} className="v3-sso-channel" data-kind={kind}>
+          <div className="v3-sso-channel-label">
+            <span className="v3-sso-kick">{t(`v3.sso.channel.${kind}`)}</span>
+            <small>{t(`v3.sso.channelBody.${kind}`)}</small>
+          </div>
+          <div className="v3-sso-preset-row primary">{CHANNEL_PRESETS[kind].map(tile)}</div>
+        </div>
+      ))}
       <div className="v3-sso-preset-sep"><span>{t("v3.sso.templatesLabel")}</span></div>
-      <div className="v3-sso-preset-row">{templates.map((p, i) => tile(p, i + primary.length))}</div>
+      <div className="v3-sso-preset-row">{TEMPLATE_PRESETS.map(tile)}</div>
     </div>
   );
 }
 
 function CreateDialog({ presets, initial, onClose, onCreated }: {
-  presets: Record<SsoPreset, SsoPresetTemplate> | undefined;
-  initial: SsoPreset | null;
+  presets: Presets | undefined;
+  initial: AnyPreset | null;
   onClose: () => void;
-  onCreated: (provider: SsoProvider) => void;
+  onCreated: (provider: Provider) => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [preset, setPreset] = useState<SsoPreset | null>(initial);
+  const [preset, setPreset] = useState<AnyPreset | null>(initial);
   const [name, setName] = useState(initial ? t(`v3.sso.defaultName.${initial}`) : "");
   const [busy, setBusy] = useState(false);
-  const pick = (next: SsoPreset) => {
+  const pick = (next: AnyPreset) => {
     setPreset(next);
     setName((current) => current && preset && current !== t(`v3.sso.defaultName.${preset}`) ? current : t(`v3.sso.defaultName.${next}`));
   };
@@ -120,7 +100,7 @@ function CreateDialog({ presets, initial, onClose, onCreated }: {
     if (!preset || !name.trim()) return;
     setBusy(true);
     try {
-      const created = await ssoApi.create(createBody(preset, name, presets?.[preset]));
+      const created = await ssoAdminApi.create(createBody(preset, name, presets?.[preset]));
       toast("ok", t("v3.sso.created", { name: created.name }));
       onCreated(created);
     } catch (err) {
@@ -156,7 +136,7 @@ function CreateDialog({ presets, initial, onClose, onCreated }: {
 }
 
 function ProviderRail({ items, selected, onSelect }: {
-  items: SsoProvider[];
+  items: Provider[];
   selected: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -175,7 +155,7 @@ function ProviderRail({ items, selected, onSelect }: {
           <PresetMark preset={item.preset} />
           <span className="txt">
             <b>{item.name}</b>
-            <small className="mono">{item.id}</small>
+            <small className="mono">{item.kind.toUpperCase()} · {item.id}</small>
           </span>
           <span className="state">
             <Lamp s={providerSignal(item)} />
@@ -187,7 +167,7 @@ function ProviderRail({ items, selected, onSelect }: {
   );
 }
 
-function TestPanel({ provider, busy, onTest }: { provider: SsoProvider; busy: boolean; onTest: () => void }) {
+function TestPanel({ provider, busy, onTest }: { provider: Provider; busy: boolean; onTest: () => void }) {
   const { t } = useTranslation();
   const result = provider.last_test;
   return (
@@ -254,10 +234,10 @@ export function LoginsTable({ items }: { items: SsoLogin[] }) {
 }
 
 function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
-  provider: SsoProvider;
-  presets: Record<SsoPreset, SsoPresetTemplate> | undefined;
+  provider: Provider;
+  presets: Presets | undefined;
   targets: MappingTargets;
-  onChanged: (next: SsoProvider) => void;
+  onChanged: (next: Provider) => void;
   onDeleted: () => void;
 }) {
   const { t } = useTranslation();
@@ -269,11 +249,12 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
   useEffect(() => setDraft(draftOf(provider)), [provider]);
 
   const dirty = isDirty(provider, draft);
-  const problems = draftProblems(draft);
+  const problems = draftProblems(draft, provider.kind);
+  const saml = provider.kind === "saml";
   const set = <K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]) => setDraft((d) => ({ ...d, [key]: value }));
   const hint = presets?.[provider.preset];
 
-  const run = async (kind: NonNullable<typeof busy>, work: () => Promise<SsoProvider | void>, okKey?: string) => {
+  const run = async (kind: NonNullable<typeof busy>, work: () => Promise<Provider | void>, okKey?: string) => {
     setBusy(kind);
     try {
       const next = await work();
@@ -285,12 +266,12 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
       setBusy(null);
     }
   };
-  const save = () => run("save", () => ssoApi.update(provider.id, patchOf(provider, draft)), "v3.sso.saved");
-  const toggle = () => run("toggle", () => ssoApi.update(provider.id, { enabled: !provider.enabled }),
+  const save = () => run("save", () => ssoAdminApi.update(provider.id, patchOf(provider, draft)), "v3.sso.saved");
+  const toggle = () => run("toggle", () => ssoAdminApi.update(provider.id, { enabled: !provider.enabled }),
     provider.enabled ? "v3.sso.disabled" : "v3.sso.enabled");
   const test = () => run("test", async () => {
-    await ssoApi.test(provider.id);
-    return ssoApi.get(provider.id);
+    await ssoAdminApi.test(provider.id);
+    return ssoAdminApi.get(provider.id);
   });
 
   const secretPlaceholder = provider.client_secret_source === "secrets_manager"
@@ -302,7 +283,7 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
       <header className="v3-sso-detail-head">
         <PresetMark preset={provider.preset} size="lg" />
         <div className="txt">
-          <span className="v3-sso-kick">{t(`auth.sso.preset.${provider.preset}`)} · OIDC · <span className="mono">{provider.id}</span></span>
+          <span className="v3-sso-kick">{t(`auth.sso.preset.${provider.preset}`)} · {saml ? "SAML 2.0" : "OIDC"} · <span className="mono">{provider.id}</span></span>
           <h2>{provider.name}</h2>
           <span className="meta">
             <Chip s={provider.enabled ? "ok" : "off"}>{t(provider.enabled ? "v3.sso.onLogin" : "v3.sso.offLogin")}</Chip>
@@ -310,7 +291,7 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
           </span>
         </div>
         <div className="end">
-          <Btn kind={provider.enabled ? "ghost" : "primary"} onClick={() => void toggle()} disabled={busy !== null || (!provider.enabled && (!provider.issuer || !provider.client_id))}>
+          <Btn kind={provider.enabled ? "ghost" : "primary"} onClick={() => void toggle()} disabled={busy !== null || (!provider.enabled && !canEnable(provider))}>
             <Power size={14} aria-hidden="true" /> {t(provider.enabled ? "v3.sso.disable" : "v3.sso.enable")}
           </Btn>
           <Btn kind="ghost" onClick={() => setConfirmDelete(true)} disabled={busy !== null} title={t("v3.sso.delete")}>
@@ -320,18 +301,25 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
         </div>
       </header>
 
-      <section className="v3-sso-handoff" aria-label={t("v3.sso.section.handoff")}>
-        <div className="v3-sso-kick">{t("v3.sso.section.handoff")}</div>
-        <p>{t(`v3.sso.handoffBody.${PRIMARY_PRESETS.has(provider.preset) ? provider.preset : "template"}`)}</p>
-        <CopyPlate label={t("v3.sso.callbackUrl")} value={provider.callback_url} testId="sso-callback-url" />
-        <div className="v3-sso-facts">
-          <span><b>{t("v3.sso.fact.flow")}</b> {t("v3.sso.fact.flowValue")}</span>
-          <span><b>{t("v3.sso.fact.scopes")}</b> <code>{provider.scopes}</code></span>
-          {provider.claims.groups && <span><b>{t("v3.sso.fact.groups")}</b> <code>{provider.claims.groups}</code></span>}
-        </div>
-      </section>
+      {saml ? <SamlExchange provider={provider} onChanged={onChanged} /> : (
+    <section className="v3-sso-handoff" aria-label={t("v3.sso.section.handoff")}>
+          <div className="v3-sso-kick">{t("v3.sso.section.handoff")}</div>
+          <p>{t(`v3.sso.handoffBody.${PRIMARY_PRESETS.has(provider.preset as SsoPreset) ? provider.preset : "template"}`)}</p>
+          <CopyPlate label={t("v3.sso.callbackUrl")} value={provider.callback_url} testId="sso-callback-url" />
+          <div className="v3-sso-facts">
+            <span><b>{t("v3.sso.fact.flow")}</b> {t("v3.sso.fact.flowValue")}</span>
+            <span><b>{t("v3.sso.fact.scopes")}</b> <code>{provider.scopes}</code></span>
+            {provider.claims.groups && <span><b>{t("v3.sso.fact.groups")}</b> <code>{provider.claims.groups}</code></span>}
+          </div>
+        </section>
+      )}
 
       <div className="v3-sso-grid">
+        {saml ? (
+          <Panel title={t("v3.sso.section.connection")}>
+            <SamlConnection provider={provider} draft={draft} problems={problems} set={set} />
+          </Panel>
+        ) : (
         <Panel title={t("v3.sso.section.connection")}>
           <div className="v3-sso-form">
             <label className="v3-field">
@@ -372,8 +360,11 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
             </label>
           </div>
         </Panel>
+        )}
 
-        <TestPanel provider={provider} busy={busy === "test"} onTest={() => void test()} />
+        {saml
+          ? <SamlTestPanel provider={provider} busy={busy === "test"} onTest={() => void test()} />
+          : <TestPanel provider={provider} busy={busy === "test"} onTest={() => void test()} />}
 
         <Panel title={t("v3.sso.section.accounts")}>
           <div className="v3-sso-form">
@@ -413,7 +404,7 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
 
         <Panel title={t("v3.sso.section.claims")}>
           <div className="v3-sso-form">
-            <p className="v3-sso-muted">{t("v3.sso.claimsBody")}</p>
+            <p className="v3-sso-muted">{t(saml ? "v3.sso.claimsBodySaml" : "v3.sso.claimsBody")}</p>
             {(["username", "email", "name", "groups"] as const).map((key) => (
               <label key={key} className="v3-field v3-sso-claim">
                 <span>{t(`v3.sso.claim.${key}`)}</span>
@@ -427,6 +418,13 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
       </div>
 
       <MappingsEditor provider={provider} targets={targets} onSaved={onChanged} />
+
+      <ScimPanel
+        provider={provider}
+        onScim={(scim) => onChanged({ ...provider, scim })}
+        subject={draft.scim_subject}
+        onSubject={(value) => set("scim_subject", value)}
+      />
 
       <Panel title={t("v3.sso.section.logins")} end={<Btn size="sm" kind="ghost" onClick={logins.reload} title={t("v3.sso.refresh")}><RefreshCw size={13} aria-hidden="true" /><span className="sr-only">{t("v3.sso.refresh")}</span></Btn>}>
         {logins.loading && !logins.data ? <Skeleton rows={3} /> : logins.error ? <Notice s="act">{logins.error}</Notice> : (
@@ -470,13 +468,18 @@ export function V3Sso() {
   const { t } = useTranslation();
   const auth = useAuth();
   const [nonce, setNonce] = useState(0);
-  const loaded = useLoad(() => ssoApi.list(), `sso-${nonce}`);
+  const loaded = useLoad(() => ssoAdminApi.list(), `sso-${nonce}`);
   const [selected, setSelected] = useState<string | null>(null);
-  const [creating, setCreating] = useState<SsoPreset | null | false>(false);
-  const [items, setItems] = useState<SsoProvider[]>([]);
+  const [creating, setCreating] = useState<AnyPreset | null | false>(false);
+  const [items, setItems] = useState<Provider[]>([]);
+  const [settings, setSettings] = useState<LoginSettings | null>(null);
   useEffect(() => {
-    if (loaded.data) setItems(loaded.data.items);
+    if (loaded.data) {
+      setItems(loaded.data.items);
+      setSettings(loaded.data.settings);
+    }
   }, [loaded.data]);
+  const enabledCount = items.filter((item) => item.enabled).length;
   const projects = useLoad(() => projectsApi.list({ status: "active" }), "sso-projects");
   const groups = useLoad(() => projectGroupsApi.list({ status: "active" }), "sso-groups");
   const templates = useLoad(() => projectsApi.roleTemplates(), "sso-role-templates");
@@ -487,7 +490,14 @@ export function V3Sso() {
   }), [projects.data, groups.data, templates.data]);
 
   const current = items.find((item) => item.id === selected) ?? items[0] ?? null;
-  const replace = (next: SsoProvider) => setItems((list) => list.map((item) => (item.id === next.id ? next : item)));
+  const replace = (next: Provider) => {
+    setItems((list) => list.map((item) => (item.id === next.id ? next : item)));
+    // the switch is in effect only while a provider is enabled
+    if (settings) {
+      const enabled = items.some((item) => (item.id === next.id ? next.enabled : item.enabled));
+      setSettings({ ...settings, local_login_hidden: settings.hide_local_login && enabled });
+    }
+  };
 
   if (!auth.isAdmin) {
     return <Notice s="wait">{t("v3.sso.adminOnly")}</Notice>;
@@ -514,6 +524,8 @@ export function V3Sso() {
           <PresetGrid value={null} onPick={(preset) => setCreating(preset)} />
         </Panel>
       ) : (
+        <>
+        {settings && <LoginPageSwitch settings={settings} enabledCount={enabledCount} onChange={setSettings} />}
         <div className="v3-sso-layout">
           <ProviderRail items={items} selected={current?.id ?? null} onSelect={setSelected} />
           {current && (
@@ -530,6 +542,7 @@ export function V3Sso() {
             />
           )}
         </div>
+        </>
       )}
       {creating !== false && (
         <CreateDialog

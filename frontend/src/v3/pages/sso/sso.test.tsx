@@ -2,13 +2,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import i18n from "../../../i18n";
-import { SSO_PRESETS, type SsoProvider, ssoStartUrl } from "../../../lib/api/sso";
+import { SSO_PRESETS, ssoStartUrl } from "../../../lib/api/sso";
+import { ALL_PRESETS, kindOfPreset, type Provider as SsoProvider, signInUrl } from "../../../lib/api/sso-saml";
 import en from "../../../locales/en/common.json";
 import zh from "../../../locales/zh-CN/common.json";
 import { hostedGroups } from "../../nav";
 import { MappingRow } from "./MappingsEditor";
+import { LoginPageSwitch, ScimPanel } from "./Provisioning";
+import { SamlExchange } from "./SamlParts";
 import {
   blankMapping,
+  canEnable,
+  daysLeft,
+  samlTestRows,
+  splitCerts,
   draftOf,
   draftProblems,
   isDirty,
@@ -46,6 +53,39 @@ const provider: SsoProvider = {
   created_by: "admin",
   created_at: null,
   updated_at: null,
+  saml: null,
+  scim: { enabled: false, base_url: "https://console.test/api/scim/v2", token_hint: null, token_created_at: null, subject: "userName" },
+};
+
+const CERT = "MIIBszCCAVmgAwIBAgIUQ0VSVA==";
+const samlProvider: SsoProvider = {
+  ...provider,
+  id: "ic",
+  kind: "saml",
+  preset: "identity-center",
+  issuer: "",
+  client_id: "",
+  client_secret_set: false,
+  client_secret_source: null,
+  callback_url: "https://console.test/api/auth/saml/ic/acs",
+  saml: {
+    metadata_url: "https://portal.sso.us-east-1.amazonaws.com/saml/metadata/abc",
+    idp_entity_id: "https://portal.sso.us-east-1.amazonaws.com/saml/assertion/abc",
+    sso_url: "https://portal.sso.us-east-1.amazonaws.com/saml/assertion/abc",
+    slo_url: "",
+    idp_certs: [{ body: CERT, not_after: "2030-01-01T00:00:00+00:00", expired: false }],
+    name_id_format: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+    sign_requests: false,
+    want_encrypted: false,
+    allow_idp_initiated: true,
+    sp_entity_id: "https://console.test/api/auth/saml/ic/metadata",
+    acs_url: "https://console.test/api/auth/saml/ic/acs",
+    sls_url: "https://console.test/api/auth/saml/ic/sls",
+    metadata_endpoint: "https://console.test/api/auth/saml/ic/metadata",
+    sp_cert: "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+    sp_cert_facts: { not_after: "2036-01-01T00:00:00+00:00", sha256: "ab".repeat(32), expired: false },
+    sp_key_set: true,
+  },
 };
 
 beforeAll(async () => {
@@ -119,10 +159,11 @@ describe("states and checks", () => {
 });
 
 describe("rendering", () => {
-  it("shows the three SSO-1 presets first and the templates beneath", () => {
+  it("shows the SAML and OIDC lanes first and the templates beneath", () => {
     const html = renderToStaticMarkup(<PresetGrid value="authentik" onPick={() => undefined} />);
-    const order = SSO_PRESETS.map((p) => html.indexOf(`sso-preset-${p}`));
+    const order = ALL_PRESETS.map((p) => html.indexOf(`sso-preset-${p}`));
     expect(order.every((at) => at >= 0)).toBe(true);
+    expect(html.indexOf("sso-preset-identity-center")).toBeLessThan(html.indexOf("sso-preset-keycloak"));
     expect(html.indexOf("sso-preset-oidc")).toBeLessThan(html.indexOf("Attribute templates"));
     expect(html.indexOf("Attribute templates")).toBeLessThan(html.indexOf("sso-preset-okta"));
     expect(html).toContain('aria-pressed="true"');
@@ -156,6 +197,127 @@ describe("rendering", () => {
   });
 });
 
+describe("the SAML channel", () => {
+  it("sends only SAML fields for a SAML provider, certificates as bodies", () => {
+    const draft = draftOf(samlProvider);
+    expect(patchOf(samlProvider, draft)).toEqual({});
+    const changed = {
+      ...draft,
+      saml_slo_url: " https://idp.test/slo ",
+      saml_idp_certs: `-----BEGIN CERTIFICATE-----\n${CERT}\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nQkJC\n-----END CERTIFICATE-----`,
+      saml_allow_idp_initiated: false,
+      issuer: "https://ignored.test",
+    };
+    expect(patchOf(samlProvider, changed)).toEqual({
+      saml_slo_url: "https://idp.test/slo",
+      saml_idp_certs: [CERT, "QkJC"],
+      saml_allow_idp_initiated: false,
+    });
+  });
+
+  it("splits certificates from PEM blocks or blank-line separated bodies", () => {
+    expect(splitCerts("AAA\nBBB\n\nCCC")).toEqual(["AAABBB", "CCC"]);
+    expect(splitCerts("")).toEqual([]);
+  });
+
+  it("checks SAML URLs, not OIDC fields", () => {
+    const draft = { ...draftOf(samlProvider), saml_sso_url: "http://idp.example.com/sso" };
+    expect(draftProblems(draft, "saml")).toEqual(["saml_sso_url"]);
+    expect(draftProblems(draftOf(samlProvider), "saml")).toEqual([]);
+  });
+
+  it("enables only a complete provider of either channel", () => {
+    expect(canEnable(samlProvider)).toBe(true);
+    expect(canEnable({ ...samlProvider, saml: { ...samlProvider.saml!, idp_certs: [] } })).toBe(false);
+    expect(canEnable(provider)).toBe(true);
+    expect(canEnable({ ...provider, client_id: "" })).toBe(false);
+  });
+
+  it("turns a SAML test into a checklist", () => {
+    const rows = samlTestRows({
+      ok: true, checked_at: "", metadata_fetched: true, metadata_matches: true, entity_id: "e", sso_url: "s",
+      slo_url: null, cert_valid: true, sp_key: true, certs: [{ not_after: "2030-01-01T00:00:00+00:00", expired: false }],
+    });
+    expect(rows.map((r) => [r.key, r.s])).toEqual([
+      ["metadata", "ok"], ["entity", "ok"], ["cert", "ok"], ["slo", "info"], ["spkey", "ok"],
+    ]);
+    expect(rows[2].detail).toBe("2030-01-01");
+    expect(samlTestRows({ ok: false, checked_at: "" })[0].s).toBe("info");
+  });
+
+  it("counts certificate days", () => {
+    const now = Date.parse("2029-12-01T00:00:00Z");
+    expect(daysLeft("2030-01-01T00:00:00+00:00", now)).toBe(31);
+    expect(daysLeft("2029-11-30T00:00:00+00:00", now)).toBe(-1);
+    expect(daysLeft(undefined)).toBeNull();
+  });
+
+  it("starts each channel on its own leg", () => {
+    expect(signInUrl({ id: "ic", kind: "saml" }, "/v3/agents")).toBe("/api/auth/saml/ic/start?return_to=%2Fv3%2Fagents");
+    expect(signInUrl({ id: "kc", kind: "oidc" })).toBe("/api/auth/oidc/kc/start");
+    expect(kindOfPreset("entra-saml")).toBe("saml");
+    expect(kindOfPreset("entra")).toBe("oidc");
+  });
+
+  it("explains SAML refusals", () => {
+    expect(ssoErrorKey("auth.saml.replayed")).toBe("auth.sso.errors.samlReplayed");
+    expect(ssoErrorKey("auth.saml.unsigned")).toBe("auth.sso.errors.verifyFailed");
+    for (const code of ["auth.saml.expired", "auth.saml.unsolicited", "auth.saml.logout_invalid", "auth.local_login_hidden"]) {
+      expect(i18n.exists(ssoErrorKey(code))).toBe(true);
+    }
+  });
+
+  it("renders the exchange: what to give, and what was received", () => {
+    const html = renderToStaticMarkup(<SamlExchange provider={samlProvider} onChanged={() => undefined} />);
+    expect(html).toContain('data-received="true"');
+    expect(html).toContain("https://console.test/api/auth/saml/ic/acs");
+    expect(html).toContain("https://console.test/api/auth/saml/ic/metadata");
+    expect(html).toContain("sso-received");
+    const waiting = renderToStaticMarkup(
+      <SamlExchange provider={{ ...samlProvider, saml: { ...samlProvider.saml!, idp_entity_id: "", idp_certs: [] } }} onChanged={() => undefined} />,
+    );
+    expect(waiting).toContain('data-received="false"');
+    expect(waiting).not.toContain("sso-received");
+  });
+});
+
+describe("provisioning and the sign-in switch", () => {
+  it("shows the SCIM base URL and counts, never a stored token", () => {
+    const html = renderToStaticMarkup(
+      <ScimPanel
+        provider={{ ...samlProvider, preset: "saml", scim: { ...samlProvider.scim, enabled: true, token_hint: "wxyz", token_created_at: null, counts: { users: 12, groups: 3 } } }}
+        onScim={() => undefined}
+        subject="userName"
+        onSubject={() => undefined}
+      />,
+    );
+    expect(html).toContain("https://console.test/api/scim/v2");
+    expect(html).toContain(">12<");
+    expect(html).toContain("Rotate token");
+    expect(html).not.toContain("sso-scim-token");
+  });
+
+  it("explains that Identity Center does not push users", () => {
+    const html = renderToStaticMarkup(
+      <ScimPanel provider={samlProvider} onScim={() => undefined} subject="userName" onSubject={() => undefined} />,
+    );
+    expect(html).toContain("inbound only");
+  });
+
+  it("draws the switch and refuses to hide with no provider enabled", () => {
+    const off = renderToStaticMarkup(
+      <LoginPageSwitch settings={{ hide_local_login: false, local_login_hidden: false }} enabledCount={0} onChange={() => undefined} />,
+    );
+    expect(off).toContain('data-hidden="false"');
+    expect(off).toContain("disabled");
+    const on = renderToStaticMarkup(
+      <LoginPageSwitch settings={{ hide_local_login: true, local_login_hidden: false }} enabledCount={0} onChange={() => undefined} />,
+    );
+    expect(on).toContain('data-hidden="true"');
+    expect(on).toContain("No provider is enabled");
+  });
+});
+
 describe("navigation and copy", () => {
   it("is an administrator's Configure entry only", () => {
     const tos = (admin: boolean) => hostedGroups(admin).flatMap((g) => g.items.map((i) => i.to));
@@ -164,7 +326,7 @@ describe("navigation and copy", () => {
   });
 
   it("names every preset in both languages", () => {
-    for (const preset of SSO_PRESETS) {
+    for (const preset of [...SSO_PRESETS, ...ALL_PRESETS]) {
       for (const bundle of [en, zh]) {
         expect(bundle.auth.sso.preset[preset]).toBeTruthy();
         expect(bundle.auth.sso.presetShort[preset]).toBeTruthy();

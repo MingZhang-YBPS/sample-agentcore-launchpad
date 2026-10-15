@@ -103,7 +103,10 @@
         "okta": "Okta",
         "entra": "Microsoft Entra ID",
         "google": "Google Workspace",
-        "oidc": "OpenID Connect"
+        "oidc": "OpenID Connect",
+        "identity-center": "IAM Identity Center",
+        "entra-saml": "Microsoft Entra ID (SAML)",
+        "saml": "SAML 2.0"
       },
       "presetShort": {
         "keycloak": "KC",
@@ -111,7 +114,10 @@
         "okta": "OK",
         "entra": "EN",
         "google": "GO",
-        "oidc": "OI"
+        "oidc": "OI",
+        "identity-center": "IC",
+        "entra-saml": "ES",
+        "saml": "SA"
       },
       "errors": {
         "stateInvalid": "This sign-in link is no longer valid.",
@@ -126,8 +132,14 @@
         "providerGone": "This sign-in option is not available any more.",
         "providerUnreachable": "The identity provider could not be reached.",
         "generic": "Single sign-on did not complete.",
-        "contactAdmin": "Try again, or contact your console administrator and quote the code below."
-      }
+        "contactAdmin": "Try again, or contact your console administrator and quote the code below.",
+        "samlExpired": "The sign-in response from your identity provider has expired — check that the clocks agree, then try again.",
+        "samlReplayed": "This sign-in response was already used.",
+        "samlUnsolicited": "Signing in from the identity provider's portal is turned off — start from this page.",
+        "logoutFailed": "The identity provider's sign-out answer could not be verified. You are signed out of the console.",
+        "localHidden": "Sign in with your organization's single sign-on."
+      },
+      "localHidden": "Username and password sign-in is turned off on this console."
     }
   },
   "nav": {
@@ -13784,7 +13796,10 @@
         "oidc": "Any OpenID Connect provider with discovery: Authelia, Zitadel, Dex, Casdoor, GitLab…",
         "okta": "Claim names for an Okta authorization server (groups scope).",
         "entra": "Claim names for a Microsoft Entra ID app registration (v2.0 endpoint).",
-        "google": "Claim names for Google Workspace (no groups claim)."
+        "google": "Claim names for Google Workspace (no groups claim).",
+        "identity-center": "A customer-managed SAML 2.0 application in AWS IAM Identity Center; users sign in from the AWS access portal too.",
+        "entra-saml": "An Entra ID enterprise application with SAML single sign-on and the standard claim URIs.",
+        "saml": "Any SAML 2.0 IdP with metadata: ADFS, Okta, Keycloak, Authentik, Shibboleth…"
       },
       "defaultName": {
         "keycloak": "Company SSO (Keycloak)",
@@ -13792,7 +13807,10 @@
         "oidc": "Company SSO",
         "okta": "Okta",
         "entra": "Microsoft Entra ID",
-        "google": "Google Workspace"
+        "google": "Google Workspace",
+        "identity-center": "AWS IAM Identity Center",
+        "entra-saml": "Microsoft Entra ID",
+        "saml": "Company SSO (SAML)"
       },
       "createTitle": "New identity provider",
       "create": "Create",
@@ -13827,13 +13845,17 @@
         "accounts": "Accounts",
         "claims": "Claims",
         "mappings": "Group mappings",
-        "logins": "Recent sign-ins"
+        "logins": "Recent sign-ins",
+        "scim": "SCIM provisioning"
       },
       "handoffBody": {
         "keycloak": "Create a confidential OpenID Connect client in your realm with standard flow on, set its valid redirect URI to the callback below, and add a group-membership mapper named groups (full group path off).",
         "authentik": "Create an OAuth2/OpenID provider (confidential) with the callback below as its redirect URI, then an application that uses it. The issuer is the provider's OpenID configuration issuer.",
         "oidc": "Register a web application (authorization code flow) with the callback below as its redirect URI. Launchpad always sends PKCE (S256).",
-        "template": "Register a web application with the callback below as its redirect URI; the claim names were pre-filled from the template."
+        "template": "Register a web application with the callback below as its redirect URI; the claim names were pre-filled from the template.",
+        "identity-center": "In IAM Identity Center, add a customer managed SAML 2.0 application. Upload the console's metadata (or paste the ACS URL and SP entity ID), then under Attribute mappings set Subject to ${user:subject} (persistent) and add email → ${user:email}, name → ${user:name}, username → ${user:preferredUsername}. Assign users or groups, then bring the IdP metadata back here.",
+        "entra-saml": "In Entra ID, create an enterprise application, choose SAML single sign-on, set Identifier (Entity ID) and Reply URL (ACS) to the values below, add a groups claim if you map groups, then bring the federation metadata URL back here.",
+        "saml": "Register a SAML 2.0 service provider at your IdP with the entity ID and ACS URL below (HTTP-POST binding), or import the console's metadata; then load your IdP's metadata on the right."
       },
       "callbackUrl": "Redirect URI",
       "fact": {
@@ -13924,6 +13946,32 @@
           "act": "Logout not available",
           "info": "No end_session_endpoint — sign-out stays local",
           "off": "Logout not checked"
+        },
+        "metadata": {
+          "label": "IdP metadata",
+          "ok": "Metadata re-read and unchanged",
+          "act": "The IdP's metadata changed — load it again",
+          "info": "Entered by hand — no metadata URL to re-read"
+        },
+        "entity": {
+          "label": "Entity ID and SSO URL",
+          "ok": "Entity ID and SSO URL set",
+          "act": "Entity ID or SSO URL missing"
+        },
+        "cert": {
+          "label": "IdP signing certificate",
+          "ok": "A valid IdP signing certificate",
+          "act": "No valid IdP signing certificate"
+        },
+        "slo": {
+          "label": "Single logout",
+          "ok": "SP-initiated single logout available",
+          "info": "No SLO URL — sign-out stays local"
+        },
+        "spkey": {
+          "label": "SP key",
+          "ok": "SP key and certificate in place",
+          "act": "SP key missing or unreadable — rotate it"
         }
       },
       "loginsEmpty": "Nobody has signed in through this provider yet.",
@@ -13975,7 +14023,94 @@
         "lastLogin": "last SSO sign-in {{when}} ago",
         "conflict": "Differs from the SSO mapping ({{role}})"
       },
-      "refresh": "Refresh"
+      "refresh": "Refresh",
+      "channel": {
+        "saml": "SAML 2.0",
+        "oidc": "OpenID Connect"
+      },
+      "channelBody": {
+        "saml": "Signed assertions posted to the console — what Identity Center offers custom apps.",
+        "oidc": "Authorization code + PKCE — what most open-source IdPs speak."
+      },
+      "claimsBodySaml": "The SAML attribute each value is read from — the exact Name the IdP sends (URIs allowed). The NameID is the account's subject; an emailAddress NameID also serves as the email.",
+      "saml": {
+        "give": "The console gives the IdP",
+        "take": "The IdP gives the console",
+        "spEntityId": "SP entity ID",
+        "acsUrl": "ACS URL",
+        "slsUrl": "SLO URL",
+        "spCert": "SP signing certificate",
+        "downloadMetadata": "SP metadata",
+        "rotate": "Rotate key",
+        "rotateHint": "A new SP key and certificate — import the console's metadata at the IdP again afterwards",
+        "rotated": "A new SP key is in place — import the metadata at the IdP again",
+        "metadataUrl": "IdP metadata URL",
+        "fetch": "Load",
+        "or": "or",
+        "upload": "Upload a metadata file",
+        "uploadHint": "The XML your IdP lets you download",
+        "loaded": "IdP metadata loaded",
+        "awaiting": "Nothing received yet: load the IdP's metadata, or enter its entity ID, SSO URL and certificate under Connection.",
+        "idpEntityId": "IdP entity ID",
+        "ssoUrl": "SSO URL",
+        "sloUrl": "SLO URL",
+        "sloNone": "None — sign-out stays local",
+        "sloHint": "When set, signing out also ends the IdP session (HTTP-Redirect binding).",
+        "idpCerts_one": "{{count}} certificate",
+        "idpCerts_other": "{{count}} certificates",
+        "certsField": "IdP signing certificates",
+        "certsHint": "PEM, one per block; two while the IdP rotates its key.",
+        "certDays_one": "valid {{count}} more day",
+        "certDays_other": "valid {{count}} more days",
+        "certExpired": "expired",
+        "certBad": "unreadable",
+        "nameIdFormat": "NameID format",
+        "nameIdAny": "Any (unspecified)",
+        "idpInitiated": "Allow IdP-initiated sign-in",
+        "idpInitiatedBody": "Users can start from the IdP's portal (the Identity Center app tile). Off: only from the console.",
+        "signRequests": "Sign requests",
+        "signRequestsBody": "Sign AuthnRequests and LogoutRequests with the SP key — for IdPs that require it (Keycloak's default).",
+        "wantEncrypted": "Require encrypted assertions",
+        "wantEncryptedBody": "Refuse an assertion that is not encrypted to the SP certificate.",
+        "encryptedIcNote": "Identity Center does not encrypt assertions for custom applications by default — sign-in will be refused unless it does."
+      },
+      "scim": {
+        "on": "Provisioning",
+        "off": "Off",
+        "body": {
+          "default": "Your IdP pushes accounts and group membership here ahead of sign-in: a deactivated user loses access at once, and group membership drives the same mappings a sign-in applies.",
+          "identity-center": "IAM Identity Center provisions inbound only: it does not push users to custom SAML applications. Map groups through the groups attribute, or use SCIM from an IdP that offers it (Entra ID, Okta, Authentik)."
+        },
+        "baseUrl": "SCIM base URL",
+        "token": "Bearer token",
+        "once": "Shown once — copy it into your IdP now",
+        "mint": "Create token",
+        "rotate": "Rotate token",
+        "revoke": "Turn off",
+        "revoked": "SCIM is off for this provider",
+        "revokeTitle": "Turn off SCIM provisioning?",
+        "revokeBody": "The token stops working at once. What SCIM has provisioned — accounts and groups — stays.",
+        "hint": "token …{{hint}}, created {{when}}",
+        "subject": "Subject",
+        "subjectHint": "The SCIM attribute that equals the NameID / sub this IdP signs users in with — userName for most.",
+        "pushed": "Provisioned so far",
+        "users": "Users",
+        "groups": "Groups"
+      },
+      "loginPage": {
+        "title": "Sign-in page",
+        "kick": "Sign-in page",
+        "shownTitle": "Single sign-on, with username and password folded beneath",
+        "hiddenTitle": "Single sign-on only",
+        "shownBody": "Local accounts can still sign in with a password.",
+        "hiddenBody": "The page shows only the identity providers, and password sign-in and self-registration are refused — except for the built-in administrator.",
+        "inert": "No provider is enabled, so the switch has no effect until one is.",
+        "toggle": "Hide local login",
+        "breakGlass": "The built-in administrator can always sign in at ?local=1.",
+        "needsProvider": "Enable an identity provider first.",
+        "hiddenToast": "Local login is hidden",
+        "shownToast": "Local login is shown again"
+      }
     }
   },
   "models": {
