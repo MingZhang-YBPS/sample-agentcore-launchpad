@@ -10819,7 +10819,178 @@
       "wayPresets": "系统预置",
       "wayPresetsSub": "由管理员安装的平台托管智能体",
       "wayMcp": "MCP 服务器",
-      "wayMcpSub": "把你的 MCP 服务器托管到 AgentCore Runtime，并把工具接入网关"
+      "wayMcpSub": "把你的 MCP 服务器托管到 AgentCore Runtime，并把工具接入网关",
+      "chooser": {
+        "title": "用哪种方式创建？",
+        "sub": "回答三个问题，我们推荐一种方式，并说明它带来什么、代价是什么。各方式能力不等价，例如 A/B 实验只有 Strands 支持。",
+        "skip": "跳过，显示全部方式",
+        "reopen": "帮我选",
+        "reopenSub": "不确定用哪种方式？回答三个问题，给你推荐一种。",
+        "pending": "推荐",
+        "pendingSub": "回答左侧的问题，一旦能确定，推荐就显示在这里。",
+        "recommended": "推荐",
+        "why": "因为",
+        "cost": "代价",
+        "alternative": "备选",
+        "useThis": "用 {{way}} 创建",
+        "notNeeded": "不影响推荐",
+        "kbPreset": "已预选知识库：问答助手根据你的文档回答。",
+        "compare": "各方式能力对照",
+        "compareSub": "每种构建方式之后能用哪些能力",
+        "compareNone": "{{way}} 本身不是一种构建方式；表中是最终采用的构建方式支持的能力。",
+        "capHead": "能力",
+        "ready": "从现成的开始",
+        "readySub": "不参与三问：管理员安装的智能体，以及同事共享的模板。",
+        "presets": "系统预置",
+        "presetsSub": "由管理员安装、平台托管的智能体",
+        "market": "模板市场",
+        "marketSub": "其他成员共享的模板，作为向导默认值使用",
+        "sdk": "用 Claude Agent SDK 或其他 Agent SDK 编写",
+        "sdkSub": "平台把它构建成 ARM64 容器，并接好链路追踪",
+        "q": {
+          "have": "你现在手上有什么？",
+          "use": "你要它做什么？",
+          "dlc": "之后要不要做评估、A/B 实验、金丝雀发布？"
+        },
+        "have": {
+          "nothing": "什么都没有",
+          "nothingSub": "从空白智能体开始",
+          "brief": "一段需求描述",
+          "briefSub": "例如“回答人事政策问题，其余转人工”",
+          "code": "现成的代码",
+          "codeSub": "Python zip、Dockerfile 或 ECR 镜像",
+          "mcp": "一个 MCP 服务器",
+          "mcpSub": "要给别的智能体调用的工具",
+          "runtime": "已经在跑的 AgentCore Runtime",
+          "runtimeSub": "已部署在这个 AWS 账号里"
+        },
+        "use": {
+          "qa": "问答助手",
+          "qaSub": "查知识库回答",
+          "tools": "调用工具办事",
+          "toolsSub": "调用 API、Gateway 工具、代码",
+          "multi": "多智能体协作流程",
+          "multiSub": "多个智能体组成一个流程",
+          "tool": "给别的智能体当工具",
+          "toolSub": "被其他智能体调用（MCP / A2A）"
+        },
+        "dlc": {
+          "full": "要，走完整 Agent-DLC",
+          "fullSub": "判据、黄金集、门控发布、A/B、金丝雀",
+          "try": "先试试看",
+          "trySub": "先跑起来再说"
+        },
+        "row": {
+          "runtime": {
+            "why": "它已经在运行：导入会原样接管这个 Runtime，不重新构建。",
+            "cost": "平台不会重新生成它的代码；知识库、技能和 A/B 取决于这份代码本身做了什么。"
+          },
+          "mcp": {
+            "why": "AgentCore Runtime 托管你的 MCP 服务器，工具登记到工作区 Gateway；stdio 服务器可以桥接。",
+            "cost": "属于自带代码：不会生成链路追踪，需要时自己埋点。"
+          },
+          "codeSdk": {
+            "why": "用 Agent SDK 写的代码由 CodeBuild 构建成 ARM64 容器，平台生成的 Dockerfile 接好了链路追踪。",
+            "cost": "不支持配置包 A/B 实验，模型固定为 Bedrock Claude。"
+          },
+          "code": {
+            "why": "你的 zip、Dockerfile 或 ECR 镜像原样走同一条流水线部署。",
+            "cost": "知识库和注册中心技能不会自动挂载，A/B 实验降级；代码 zip 在你自己埋点之前没有链路。"
+          },
+          "brief": {
+            "why": "架构助手通过对话把需求整理成方案，审批后部署。",
+            "cost": "构建方式由方案决定，审批前请先看清楚。",
+            "alt": "自己动手，用平台生成的智能体"
+          },
+          "multi": {
+            "why": "Studio 画布画出多个智能体的流程，并生成 Strands 代码。",
+            "cost": "画布适合流程；单个智能体用向导更简单。",
+            "alt": "单个生成的智能体，或多个 A2A 智能体互相调用"
+          },
+          "tool": {
+            "why": "A2A 协议的 Strands 智能体可以被其他智能体调用，链路追踪和记忆都已接好。",
+            "cost": "A2A Runtime 不接受端点限定符，无法参与门控发布。",
+            "alt": "自己写 MCP 服务器，托管在这里"
+          },
+          "full": {
+            "why": "评估、A/B 实验和金丝雀都需要配置包契约——只有平台生成的 Strands 代码内置它；知识库、技能、可观测都自动接好。",
+            "cost": "代码由平台生成，深度定制要换“其他 Agent SDK”或“自带代码”。",
+            "alt": "最快、无代码，但不支持 A/B 实验"
+          },
+          "try": {
+            "why": "托管 Harness 智能体约 30 秒上线：无代码、无构建，知识库和技能声明式挂载。",
+            "cost": "不支持配置包 A/B 实验；开始走完整 Agent-DLC 时换成 Strands。",
+            "alt": "描述需求，生成方案"
+          }
+        },
+        "way": {
+          "harness": "托管 Harness",
+          "strands": "Strands",
+          "sdk": "其他 Agent SDK",
+          "byoc": "自带代码",
+          "mcp": "MCP 服务器",
+          "assistant": "架构助手",
+          "studio": "Studio 画布",
+          "import": "导入 Runtime"
+        },
+        "col": {
+          "harness": "托管 Harness",
+          "strands": "Strands（ZIP 通道）",
+          "sdk": "其他 Agent SDK（容器）",
+          "byoc": "自带代码（BYOC）"
+        },
+        "cap": {
+          "artifact": "构建产物",
+          "kb": "挂载托管知识库",
+          "skills": "注册中心技能",
+          "ab": "配置包 A/B 实验",
+          "model": "模型来源",
+          "observability": "可观测（链路、会话）"
+        },
+        "level": {
+          "yes": "支持",
+          "partial": "有限制",
+          "no": "不支持"
+        },
+        "cell": {
+          "artifact": {
+            "harness": "无，声明式",
+            "strands": "平台生成代码，arm64 依赖打成 zip 上传 S3",
+            "sdk": "CodeBuild 构建 ARM64 镜像推送 ECR",
+            "byoc": "你上传的 zip / Dockerfile / ECR 镜像"
+          },
+          "kb": {
+            "harness": "通过知识库网关（逐库检索 + 多步检索）",
+            "strands": "生成代码内置 kb_search / kb_deep_search",
+            "sdk": "生成代码内置 kb_search / kb_deep_search",
+            "byoc": "不支持——在你自己的代码里实现检索，或改用 Strands"
+          },
+          "skills": {
+            "harness": "声明式挂载",
+            "strands": "打包时放进 zip",
+            "sdk": "打进镜像 .claude/skills/",
+            "byoc": "不支持——改用托管 Harness、Strands 或其他 Agent SDK"
+          },
+          "ab": {
+            "harness": "不支持——做 A/B 实验请用 Strands",
+            "strands": "支持（内置配置包契约）",
+            "sdk": "不支持——做 A/B 实验请用 Strands",
+            "byoc": "降级——需要你的代码自己读取配置包；Strands 已内置"
+          },
+          "model": {
+            "harness": "有模型来源选择器",
+            "strands": "有（A2A 协议固定 Bedrock）",
+            "sdk": "无选择器，固定 Bedrock + Claude",
+            "byoc": "改为“允许的模型”列表"
+          },
+          "observability": {
+            "harness": "自动",
+            "strands": "自动（平台注入 ADOT）",
+            "sdk": "自动（平台生成的 Dockerfile）",
+            "byoc": "代码 zip 没有——在镜像里用 ADOT 埋点，或改用 Strands"
+          }
+        }
+      }
     },
     "assistant": {
       "eyebrow": "设计",

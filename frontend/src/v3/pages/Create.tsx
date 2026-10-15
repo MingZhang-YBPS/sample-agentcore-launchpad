@@ -1,7 +1,7 @@
-import { ArrowRight, Boxes, Code2, Download, Layers, Plug, Rocket, Sparkles, Workflow } from "lucide-react";
-import { type ReactNode, useMemo, useRef, useState } from "react";
+import { ArrowRight, Boxes, Code2, Compass, Download, Layers, Plug, Rocket, Sparkles, Workflow } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
@@ -23,8 +23,19 @@ import { useWorkspace } from "../../workspace/workspace-context";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Notice, PageHead, Panel, Skeleton } from "../ui";
 import { Term } from "../onboarding/Glossary";
+import { Chooser } from "./create/NewAgentChooser";
+import { readSkipped, writeSkipped } from "./create/chooser";
 
 const BLANK = "blank";
+
+/** localStorage, or null where reading it throws (sandboxed frames, some private modes). */
+function browserStore(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 /** The slug follows the display name until the member edits it by hand. */
 function followSlug(displayName: string, current: string): string {
@@ -50,6 +61,11 @@ function WayCard({ to, icon, title, desc }: { to: string; icon: ReactNode; title
  * (name, instructions, knowledge) that deploys from here; every other way to
  * build — another method, the full form, the assistant, the canvas, an import —
  * is one click away and opens where it is handled.
+ *
+ * A first visit opens on the chooser (storyline-ux §3.6): three questions that
+ * recommend one of those ways. "Skip, show all ways" is remembered on this
+ * browser; `?quick=1` (the chooser's managed Harness pick) opens the quick form
+ * directly, and `&kb=1` preselects a knowledge base for a Q&A assistant.
  */
 export function V3Create() {
   const { t } = useTranslation();
@@ -68,6 +84,11 @@ export function V3Create() {
   // what the create call threw; the notice shows its AWS details (projects §19)
   const [error, setError] = useState<unknown>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const [params, setParams] = useSearchParams();
+  const quickParam = params.get("quick") === "1";
+  const wantKb = params.get("kb") === "1";
+  const [choosing, setChoosing] = useState(() => !quickParam && !readSkipped(browserStore()));
+  const kbPreset = useRef(false);
 
   const rows = useMemo(() => templates.data?.templates ?? [], [templates.data]);
   const template: AgentTemplateInfo | null = rows.find((r) => r.key === pick) ?? null;
@@ -76,6 +97,31 @@ export function V3Create() {
   const quick = !template || template.method === "harness";
   const activeKbs = (kbs.data?.items ?? []).filter((kb) => String(kb.status ?? "ACTIVE").toUpperCase() === "ACTIVE");
   const needsKb = template?.knowledge === "required";
+
+  // the chooser recommended the quick form: leave the chooser (without
+  // remembering a skip) and bring the form into view
+  useEffect(() => {
+    if (!quickParam) return;
+    setChoosing(false);
+    window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  }, [quickParam]);
+  // a Q&A assistant answers from documents: preselect the first ready knowledge base, once
+  const firstKb = activeKbs[0]?.kb_id;
+  useEffect(() => {
+    if (!wantKb || kbPreset.current || !firstKb) return;
+    kbPreset.current = true;
+    setForm((prev) => (prev.selectedKbs.length ? prev : { ...prev, selectedKbs: [firstKb] }));
+  }, [wantKb, firstKb]);
+
+  const skipChooser = () => {
+    writeSkipped(browserStore(), true);
+    setChoosing(false);
+  };
+  const openChooser = () => {
+    writeSkipped(browserStore(), false);
+    setChoosing(true);
+    if (quickParam || wantKb) setParams({}, { replace: true });
+  };
 
   const choose = (key: string) => {
     setPick(key);
@@ -128,6 +174,12 @@ export function V3Create() {
       {current && <Notice s={current.tier === "prod" ? "wait" : "info"}>{t("v3.ux.deployTarget", { name: current.name, region: current.region })}</Notice>}
       {!canDeploy && <Notice s="wait">{prodLock.title ?? t("v2.agents.noPermission")}</Notice>}
 
+      {choosing ? <Chooser onSkip={skipChooser} /> : <>
+      <div className="v3-chooser-reopen">
+        <Compass size={15} aria-hidden="true" />
+        <span>{t("v3.create.chooser.reopenSub")}</span>
+        <button type="button" className="v3-btn ghost sm" onClick={openChooser}>{t("v3.create.chooser.reopen")}</button>
+      </div>
       <div className="v3-grid v3-split" style={{ alignItems: "start" }}>
         <div style={{ display: "grid", gap: 16 }}>
           <Panel title={t("v3.create.startFrom")}>
@@ -279,6 +331,7 @@ export function V3Create() {
           </div>
         </Panel>
       </div>
+      </>}
     </div>
   );
 }

@@ -1,0 +1,172 @@
+/* New-agent chooser (storyline-ux §3.6). The questions read like an instrument
+ * panel — numbered mono indices, options as switch tiles — and the
+ * recommendation is the one lit readout beside them: mint is the only colour
+ * that appears before the member has decided, and it marks what to press. */
+
+.v3 .v3-chooser { display: grid; gap: 16px; }
+.v3 .v3-chooser-main { padding: 22px 24px 18px; display: grid; gap: 20px; }
+
+.v3 .v3-chooser-head { display: flex; align-items: flex-start; gap: 16px; }
+.v3 .v3-chooser-head > div { flex: 1; min-width: 0; }
+.v3 .v3-chooser-head h2 {
+  margin: 0;
+  font-family: var(--v3-display);
+  font-variation-settings: "wdth" 112;
+  font-weight: 620;
+  font-size: 19px;
+  letter-spacing: -0.005em;
+}
+.v3 .v3-chooser-head p { margin: 6px 0 0; color: var(--v3-text-2); font-size: 13.5px; max-width: 62ch; }
+
+.v3 .v3-chooser-body { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr); gap: 24px; align-items: start; }
+.v3 .v3-chooser-side { position: sticky; top: calc(var(--v3-top) + 16px); }
+
+/* ── questions ─────────────────────────────────────────────────────────── */
+
+.v3 .v3-chooser-qs { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; }
+.v3 .v3-chooser-qs .q { display: grid; gap: 10px; transition: opacity 0.2s var(--v3-ease); }
+.v3 .v3-chooser-qs .q.muted { opacity: 0.55; }
+.v3 .v3-chooser-qs .q.muted:hover, .v3 .v3-chooser-qs .q.muted:focus-within { opacity: 1; }
+.v3 .v3-chooser-qs .q-head { display: flex; align-items: baseline; gap: 12px; }
+.v3 .v3-chooser-qs .n { font-family: var(--v3-mono); font-size: 11px; letter-spacing: 0.12em; color: var(--v3-ok); flex: none; }
+.v3 .v3-chooser-qs .q-text { font-weight: 600; font-size: 14.5px; }
+.v3 .v3-chooser-qs .q-note {
+  margin-left: auto; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--v3-text-3); white-space: nowrap;
+}
+.v3 .v3-chooser-qs .opts {
+  display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  padding-left: 30px;
+}
+.v3 .v3-chooser-qs .opt {
+  position: relative;
+  display: grid; gap: 4px; align-content: start; text-align: left;
+  padding: 11px 12px 11px 14px; min-height: 74px;
+  border-radius: 9px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+  color: var(--v3-text); font: inherit; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s var(--v3-ease);
+}
+/* the switch's indicator: a short bar on the left edge that lights when on */
+.v3 .v3-chooser-qs .opt::before {
+  content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px; border-radius: 2px;
+  background: var(--v3-line-2); transition: background 0.15s, top 0.2s var(--v3-ease), bottom 0.2s var(--v3-ease);
+}
+.v3 .v3-chooser-qs .opt:hover { border-color: var(--v3-line-2); background: var(--v3-ink-2); }
+.v3 .v3-chooser-qs .opt:active { transform: translateY(1px); }
+.v3 .v3-chooser-qs .opt:focus-visible { outline: 2px solid var(--v3-info); outline-offset: 2px; }
+.v3 .v3-chooser-qs .opt.on { border-color: rgba(62, 240, 180, 0.5); background: var(--v3-ok-dim); }
+.v3 .v3-chooser-qs .opt.on::before { background: var(--v3-ok); top: 8px; bottom: 8px; }
+.v3 .v3-chooser-qs .opt b { font-weight: 600; font-size: 13.5px; }
+.v3 .v3-chooser-qs .opt small { color: var(--v3-text-2); font-size: 12px; line-height: 1.45; }
+
+.v3 .v3-chooser-sdk {
+  margin-left: 30px; display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px;
+  border: 1px dashed var(--v3-line-2); border-radius: 8px; cursor: pointer;
+  animation: v3-rise 0.3s var(--v3-ease) backwards;
+}
+.v3 .v3-chooser-sdk input { margin-top: 3px; accent-color: var(--v3-ok); }
+.v3 .v3-chooser-sdk span { display: grid; gap: 2px; }
+.v3 .v3-chooser-sdk b { font-weight: 600; font-size: 13px; }
+.v3 .v3-chooser-sdk small { color: var(--v3-text-3); font-size: 12px; }
+
+/* ── readout ───────────────────────────────────────────────────────────── */
+
+.v3 .v3-chooser-readout {
+  position: relative; display: grid; gap: 12px; padding: 18px 18px 16px;
+  border-radius: var(--v3-r); border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+}
+.v3 .v3-chooser-readout[data-signal="ok"] {
+  border-color: rgba(62, 240, 180, 0.42);
+  background: linear-gradient(180deg, rgba(62, 240, 180, 0.07), rgba(62, 240, 180, 0) 55%), var(--v3-ink-1);
+  animation: v3-chooser-lit 0.45s var(--v3-ease) backwards;
+}
+/* a mint rule across the top: the readout is "on" */
+.v3 .v3-chooser-readout[data-signal="ok"]::before {
+  content: ""; position: absolute; left: 18px; right: 18px; top: -1px; height: 2px; border-radius: 0 0 2px 2px; background: var(--v3-ok);
+}
+@keyframes v3-chooser-lit {
+  from { opacity: 0; transform: translateY(6px); border-color: var(--v3-line); }
+  to { opacity: 1; transform: none; }
+}
+.v3 .v3-chooser-readout .tag { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--v3-ok); }
+.v3 .v3-chooser-readout.pending .tag { color: var(--v3-text-3); }
+.v3 .v3-chooser-readout.pending { border-style: dashed; }
+.v3 .v3-chooser-readout.pending p { margin: 0; color: var(--v3-text-2); font-size: 13px; }
+.v3 .v3-chooser-readout .lamps { display: flex; gap: 8px; }
+.v3 .v3-chooser-readout h2.way {
+  margin: 0; font-family: var(--v3-display); font-variation-settings: "wdth" 118;
+  font-weight: 650; font-size: 22px; line-height: 1.15; letter-spacing: -0.01em;
+}
+.v3 .v3-chooser-readout dl { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; }
+.v3 .v3-chooser-readout dt {
+  font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--v3-text-3); padding-top: 2px;
+}
+.v3 .v3-chooser-readout dd { margin: 0; font-size: 13px; line-height: 1.55; color: var(--v3-text); }
+.v3 .v3-chooser-readout .carry { margin: 0; display: flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--v3-info); }
+.v3 .v3-chooser-readout .go { justify-content: center; height: 38px; }
+.v3 .v3-chooser-readout .alt {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline;
+  padding: 10px 2px 0; border-top: 1px solid var(--v3-line); font-size: 12.5px; color: var(--v3-text-2);
+}
+.v3 .v3-chooser-readout .alt .k { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-chooser-readout .alt b { color: var(--v3-text); font-weight: 600; }
+.v3 .v3-chooser-readout .alt .arrow { color: var(--v3-text-3); transition: transform 0.15s var(--v3-ease), color 0.15s; }
+.v3 .v3-chooser-readout .alt:hover .arrow { color: var(--v3-text); transform: translateX(2px); }
+.v3 .v3-chooser-readout .alt:hover b { text-decoration: underline; text-underline-offset: 3px; }
+
+/* ── capability comparison ─────────────────────────────────────────────── */
+
+.v3 .v3-chooser-compare { border-top: 1px solid var(--v3-line); padding-top: 14px; }
+.v3 .v3-chooser-compare summary {
+  display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; color: var(--v3-text);
+  font-weight: 600; font-size: 13.5px; border-radius: 6px;
+}
+.v3 .v3-chooser-compare summary::-webkit-details-marker { display: none; }
+.v3 .v3-chooser-compare summary:focus-visible { outline: 2px solid var(--v3-info); outline-offset: 4px; }
+.v3 .v3-chooser-compare summary small { color: var(--v3-text-3); font-weight: 400; font-size: 12.5px; }
+.v3 .v3-chooser-compare summary .chev { margin-left: auto; color: var(--v3-text-3); transition: transform 0.2s var(--v3-ease); }
+.v3 .v3-chooser-compare[open] summary .chev { transform: rotate(180deg); }
+.v3 .v3-chooser-compare[open] > .v3-table-scroll { animation: v3-fade 0.25s var(--v3-ease) backwards; }
+.v3 .v3-chooser-compare .none { margin: 12px 0 0; font-size: 12.5px; color: var(--v3-text-2); }
+.v3 .v3-chooser-compare .v3-table-scroll { margin-top: 12px; }
+.v3 .v3-chooser-compare table { min-width: 760px; table-layout: fixed; }
+.v3 .v3-chooser-compare thead th:first-child, .v3 .v3-chooser-compare tbody th { width: 150px; }
+.v3 .v3-chooser-compare thead th { position: relative; vertical-align: bottom; }
+.v3 .v3-chooser-compare tbody th {
+  text-align: left; font-weight: 600; font-size: 12.5px; color: var(--v3-text-2);
+  padding: 11px 16px; border-bottom: 1px solid rgba(29, 43, 69, 0.6); vertical-align: top;
+}
+.v3 .v3-chooser-compare td { vertical-align: top; font-size: 12.5px; line-height: 1.5; color: var(--v3-text-2); padding: 11px 16px; }
+.v3 .v3-chooser-compare td .cell { display: flex; gap: 8px; align-items: baseline; }
+.v3 .v3-chooser-compare td .cell .v3-lamp { transform: translateY(-1px); }
+.v3 .v3-chooser-compare td[data-level="no"] { color: var(--v3-text); }
+/* the recommended column, lit top to bottom */
+.v3 .v3-chooser-compare .lit { background: var(--v3-ok-dim); color: var(--v3-text); }
+.v3 .v3-chooser-compare thead th.lit { color: var(--v3-ok); box-shadow: inset 0 2px 0 var(--v3-ok); }
+.v3 .v3-chooser-compare .pin {
+  display: block; margin-top: 4px; font-size: 9.5px; letter-spacing: 0.16em; color: var(--v3-ok); opacity: 0.85;
+}
+
+.v3 .v3-chooser-ready-sub { margin: -6px 0 12px; color: var(--v3-text-3); font-size: 12.5px; }
+
+/* the "help me choose" strip in the all-ways view */
+.v3 .v3-chooser-reopen {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 9px;
+  border: 1px dashed var(--v3-line-2); color: var(--v3-text-2); font-size: 13px;
+}
+.v3 .v3-chooser-reopen .v3-btn { margin-left: auto; }
+
+@media (max-width: 1180px) {
+  .v3 .v3-chooser-body { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-chooser-side { position: static; }
+}
+@media (max-width: 640px) {
+  .v3 .v3-chooser-main { padding: 16px; }
+  .v3 .v3-chooser-head { flex-direction: column; }
+  .v3 .v3-chooser-qs .opts, .v3 .v3-chooser-sdk { padding-left: 0; margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-chooser-readout[data-signal="ok"], .v3 .v3-chooser-sdk, .v3 .v3-chooser-compare[open] > .v3-table-scroll { animation: none; }
+  .v3 .v3-chooser-qs .opt, .v3 .v3-chooser-qs .opt::before, .v3 .v3-chooser-compare summary .chev, .v3 .v3-chooser-readout .alt .arrow { transition: none; }
+}

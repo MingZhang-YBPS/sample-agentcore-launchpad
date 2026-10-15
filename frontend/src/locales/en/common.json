@@ -10819,7 +10819,178 @@
       "wayPresets": "System presets",
       "wayPresetsSub": "Platform-managed agents an administrator installs",
       "wayMcp": "MCP server",
-      "wayMcpSub": "Host your MCP server on AgentCore Runtime and put its tools on the Gateway"
+      "wayMcpSub": "Host your MCP server on AgentCore Runtime and put its tools on the Gateway",
+      "chooser": {
+        "title": "Which way to build?",
+        "sub": "Answer three questions and we recommend one way, with what it gives you and what it costs. The ways are not equivalent: A/B experiments, for example, only work with Strands.",
+        "skip": "Skip, show all ways",
+        "reopen": "Help me choose",
+        "reopenSub": "Not sure which way fits? Three questions recommend one.",
+        "pending": "Recommendation",
+        "pendingSub": "Answer the questions on the left; the recommendation appears here as soon as it is decided.",
+        "recommended": "Recommended",
+        "why": "Why",
+        "cost": "Trade-off",
+        "alternative": "Or",
+        "useThis": "Create with {{way}}",
+        "notNeeded": "Does not change the pick",
+        "kbPreset": "A knowledge base is preselected — a Q&A assistant answers from your documents.",
+        "compare": "Compare the ways",
+        "compareSub": "What each build method supports later on",
+        "compareNone": "{{way}} is not a build method of its own; the table shows what the method you end up with supports.",
+        "capHead": "Capability",
+        "ready": "Start from something ready",
+        "readySub": "Not part of the questions: agents an administrator installs and templates teammates shared.",
+        "presets": "System presets",
+        "presetsSub": "Platform-managed agents an administrator installs",
+        "market": "Template marketplace",
+        "marketSub": "Templates shared by other members, applied as wizard defaults",
+        "sdk": "Written with the Claude Agent SDK or another agent SDK",
+        "sdkSub": "The platform builds it into an ARM64 container with tracing wired in",
+        "q": {
+          "have": "What do you have right now?",
+          "use": "What is it for?",
+          "dlc": "Will you evaluate it, run A/B experiments and canary releases later?"
+        },
+        "have": {
+          "nothing": "Nothing yet",
+          "nothingSub": "Start from a blank agent",
+          "brief": "A requirement description",
+          "briefSub": "e.g. “answer HR policy questions, escalate the rest”",
+          "code": "Existing code",
+          "codeSub": "A Python zip, a Dockerfile or an ECR image",
+          "mcp": "An MCP server",
+          "mcpSub": "Tools other agents should call",
+          "runtime": "A running AgentCore Runtime",
+          "runtimeSub": "Already deployed in this AWS account"
+        },
+        "use": {
+          "qa": "Q&A assistant",
+          "qaSub": "Answers from a knowledge base",
+          "tools": "Gets things done with tools",
+          "toolsSub": "Calls APIs, Gateway tools, code",
+          "multi": "Multi-agent workflow",
+          "multiSub": "Several agents in one flow",
+          "tool": "A tool for other agents",
+          "toolSub": "Other agents call it (MCP / A2A)"
+        },
+        "dlc": {
+          "full": "Yes — the full Agent-DLC",
+          "fullSub": "Criteria, golden set, gated release, A/B, canary",
+          "try": "Just trying it out",
+          "trySub": "Get something running first"
+        },
+        "row": {
+          "runtime": {
+            "why": "It is already running: import adopts the Runtime as it is, without rebuilding.",
+            "cost": "The platform does not regenerate its code; knowledge bases, skills and A/B depend on what that code already does."
+          },
+          "mcp": {
+            "why": "AgentCore Runtime hosts your MCP server and its tools land on the workspace Gateway; a stdio server can be bridged.",
+            "cost": "It is bring-your-own code: no generated tracing — instrument it yourself if you need traces."
+          },
+          "codeSdk": {
+            "why": "Code written with an agent SDK is built by CodeBuild into an ARM64 container whose generated Dockerfile wires tracing in.",
+            "cost": "No config-bundle A/B experiments and the model is fixed to Bedrock Claude."
+          },
+          "code": {
+            "why": "Your zip, Dockerfile or ECR image deploys as it is through the same pipeline.",
+            "cost": "Knowledge bases and registry skills are not mounted for you, A/B is degraded, and a code zip emits no traces until you instrument it."
+          },
+          "brief": {
+            "why": "The assistant talks the requirement through into a proposal; an approval deploys it.",
+            "cost": "The proposal decides the build method; review it before approving.",
+            "alt": "write it yourself as a platform-generated agent"
+          },
+          "multi": {
+            "why": "Studio draws the flow of several agents and generates the Strands code.",
+            "cost": "The canvas is for flows; a single agent is simpler in the wizard.",
+            "alt": "one generated agent, or A2A agents calling each other"
+          },
+          "tool": {
+            "why": "A generated Strands agent on the A2A protocol is callable by other agents, with tracing and memory wired in.",
+            "cost": "A2A runtimes take no endpoint qualifier, so they cannot join gated releases.",
+            "alt": "write an MCP server and host it here"
+          },
+          "full": {
+            "why": "Evaluation, A/B experiments and canaries need the config-bundle contract — only platform-generated Strands code has it. Knowledge bases, skills and observability are wired in.",
+            "cost": "The code is generated by the platform; deep customisation means other Agent SDK or your own code.",
+            "alt": "fastest, no code, but no A/B experiments"
+          },
+          "try": {
+            "why": "A managed Harness agent is live in about 30 seconds: no code, no build, knowledge bases and skills mount declaratively.",
+            "cost": "No config-bundle A/B experiments; move to Strands when you start the full Agent-DLC.",
+            "alt": "describe what you need and get a proposal"
+          }
+        },
+        "way": {
+          "harness": "Managed Harness",
+          "strands": "Strands",
+          "sdk": "Other Agent SDK",
+          "byoc": "Bring your own code",
+          "mcp": "MCP server",
+          "assistant": "Architecture assistant",
+          "studio": "Studio canvas",
+          "import": "Import a runtime"
+        },
+        "col": {
+          "harness": "Managed Harness",
+          "strands": "Strands (zip)",
+          "sdk": "Other Agent SDK (container)",
+          "byoc": "Bring your own code"
+        },
+        "cap": {
+          "artifact": "Build artifact",
+          "kb": "Managed knowledge base",
+          "skills": "Registry skills",
+          "ab": "Config-bundle A/B",
+          "model": "Model source",
+          "observability": "Observability (traces, sessions)"
+        },
+        "level": {
+          "yes": "Supported",
+          "partial": "With limits",
+          "no": "Not supported"
+        },
+        "cell": {
+          "artifact": {
+            "harness": "None — declarative",
+            "strands": "Generated code, arm64 dependencies zipped to S3",
+            "sdk": "CodeBuild builds an ARM64 image into ECR",
+            "byoc": "Your zip, Dockerfile or ECR image"
+          },
+          "kb": {
+            "harness": "Through the knowledge-base gateway (per-KB and multi-step retrieval)",
+            "strands": "Generated kb_search / kb_deep_search",
+            "sdk": "Generated kb_search / kb_deep_search",
+            "byoc": "Not supported — implement retrieval in your code, or use Strands"
+          },
+          "skills": {
+            "harness": "Mounted declaratively",
+            "strands": "Packed into the zip",
+            "sdk": "Built into the image's .claude/skills/",
+            "byoc": "Not supported — use Harness, Strands or other Agent SDK"
+          },
+          "ab": {
+            "harness": "Not supported — use Strands for A/B experiments",
+            "strands": "Supported (built-in config-bundle contract)",
+            "sdk": "Not supported — use Strands for A/B experiments",
+            "byoc": "Degraded — your code must read the config bundle itself; Strands has it built in"
+          },
+          "model": {
+            "harness": "Model source picker",
+            "strands": "Model source picker (A2A fixed to Bedrock)",
+            "sdk": "No picker — fixed to Bedrock Claude",
+            "byoc": "An allowed-models list instead"
+          },
+          "observability": {
+            "harness": "Automatic",
+            "strands": "Automatic (ADOT injected)",
+            "sdk": "Automatic (generated Dockerfile)",
+            "byoc": "Not for a code zip — instrument your image with ADOT, or use Strands"
+          }
+        }
+      }
     },
     "assistant": {
       "eyebrow": "Design",
