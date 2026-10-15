@@ -1676,6 +1676,82 @@ account), `idp_error`, plus `sso.idp_unreachable` / `idp_http_error` /
 `idp_bad_response` / `discovery_incomplete` / `issuer_mismatch` / `jwks_invalid` /
 `secret_unreadable`.
 
+## Console Single Sign-On API (SAML, SCIM, sign-out)
+
+The SAML 2.0 channel (sso §2.2; SSO-2), SCIM 2.0 provisioning, single logout and the
+"hide local login" switch (SSO-3). The SAML leg is public like the OIDC one; SCIM
+carries its own credential — the provider's bearer token, minted on the provider's
+page — and never reads a console session or a workspace. Everything is hub-global.
+Setup walk-throughs: [sso-identity-center.md](sso-identity-center.md),
+[sso-keycloak.md](sso-keycloak.md).
+
+| Method | Path | Auth | Result |
+|---|---|---|---|
+| `GET` | `/api/auth/saml/{provider_id}/start?return_to=` | open | `302` to the IdP's SSO URL with an AuthnRequest (HTTP-Redirect binding, signed with the SP key when `sign_requests` is on). The request id is kept 10 minutes for the `InResponseTo` check; `return_to` as for OIDC |
+| `POST` | `/api/auth/saml/{provider_id}/acs` | open | The Assertion Consumer Service (HTTP-POST form `SAMLResponse`, `RelayState`). Checked with `python3-saml` in strict mode: a signature (response or assertion) against the IdP certificates — unsigned is refused; issuer; audience = the SP entity ID; Destination / Recipient = this ACS; `NotBefore` / `NotOnOrAfter` with 2 minutes of skew; `InResponseTo` names a request this console sent to this IdP within 10 minutes (one-time); the assertion id is recorded for 10 minutes so a replay is refused. No `InResponseTo` is IdP-initiated (the Identity Center portal tile) and accepted only while `allow_idp_initiated` is on; `RelayState` is then the same-origin landing path. The NameID is the subject; then the same JIT / group-mapping path as OIDC and `303` into the console. Any failure is `302 /?sso_error=<code>&sso_provider=<id>` |
+| `GET` | `/api/auth/saml/{provider_id}/metadata` | open | The SP metadata (`application/samlmetadata+xml`): entityID (this URL), ACS, SLO, NameID format, the SP certificate. Served while the provider is still disabled; `404 sso.provider_not_found` for an unknown or OIDC provider |
+| `GET` | `/api/auth/saml/{provider_id}/sls?SAMLResponse=\|SAMLRequest=` | open | Single logout (HTTP-Redirect). The IdP's LogoutResponse to the console's LogoutRequest, or the IdP's own LogoutRequest — that one ends every session of the account (`session_epoch`) and answers the IdP. Then `302` to the console |
+| `POST` | `/api/admin/sso/providers/{provider_id}/saml/metadata` | admin | Body `{url?}` or `{xml}`: (re)load the IdP metadata — from the URL (the stored one when none is sent) or an uploaded document — into `idp_entity_id`, `sso_url`, `slo_url`, `idp_certs`. Answers the provider; `409 sso.not_saml` for an OIDC provider. Journaled `auth.sso.config.metadata` |
+| `POST` | `/api/admin/sso/providers/{provider_id}/saml/sp-key` | admin | A new SP signing key (RSA 2048) and self-signed certificate; the IdP must import the metadata again. The key is stored Fernet-encrypted like a client secret and never returned. Journaled `auth.sso.config.sp_key` |
+| `POST` | `/api/admin/sso/providers/{provider_id}/scim/token` | admin | Mint the provider's SCIM bearer token (`lpscim_…`), replacing any previous one: `{token, scim}` — the value is in this answer only (stored as a SHA-256 hash). Journaled `auth.sso.config.scim_token` |
+| `DELETE` | `/api/admin/sso/providers/{provider_id}/scim/token` | admin | Turn SCIM off: the token stops working at once; what it provisioned stays. `{scim}` |
+| `GET` | `/api/admin/sso/settings` | admin | `{hide_local_login, local_login_hidden}` — the switch, and whether it is in effect (on and at least one provider enabled) |
+| `PUT` | `/api/admin/sso/settings` | admin | Body `{hide_local_login}`. On: the login page shows the IdP buttons only, self-service registration is off, and `POST /api/auth/login` answers `403 auth.local_login_hidden` to every account but the built-in administrator (whose form `/?local=1` still opens). `409 sso.no_enabled_provider` while no provider is enabled. Journaled `auth.sso.config.settings` |
+| `GET` | `/api/scim/v2/ServiceProviderConfig` | SCIM token | What this SCIM service supports (PATCH, filter, no bulk / sort / ETag) |
+| `GET` | `/api/scim/v2/Users?filter=&startIndex=&count=` | SCIM token | `ListResponse` of the provider's SCIM users (at most 200 a page); `filter` is one `eq` on `userName`, `externalId`, `id` or `emails.value` |
+| `POST` | `/api/scim/v2/Users` | SCIM token | `201` — create the account (`userName`, `name`, `displayName`, `emails`, `externalId`, `active`), keyed `(provider, subject)` like a sign-in; an account the IdP already signed in by JIT is adopted, not duplicated. `409 uniqueness` for an existing user or an email another account uses |
+| `GET` | `/api/scim/v2/Users/{user_id}` | SCIM token | One user; `404` for another provider's user or a deleted one |
+| `PUT` | `/api/scim/v2/Users/{user_id}` | SCIM token | Replace the user |
+| `PATCH` | `/api/scim/v2/Users/{user_id}` | SCIM token | `PatchOp` (`add` / `replace` / `remove`). `active: false` disables the account and bumps its `session_epoch`, so its open sessions end on their next request; `active: true` enables it again |
+| `DELETE` | `/api/scim/v2/Users/{user_id}` | SCIM token | `204` — disable the account, end its sessions, drop its SCIM group memberships (and the access they mapped); `404` from then on |
+| `GET` | `/api/scim/v2/Groups?filter=&startIndex=&count=&excludedAttributes=members` | SCIM token | `ListResponse` of the provider's groups; `filter` is one `eq` on `displayName`, `externalId` or `id` |
+| `POST` | `/api/scim/v2/Groups` | SCIM token | `201` — `{displayName, externalId?, members[{value}]}`; a mapping matches the group's `displayName` or `externalId`. The members' access is recomputed at once |
+| `GET` | `/api/scim/v2/Groups/{group_id}` | SCIM token | One group (`excludedAttributes=members` drops the member list) |
+| `PUT` | `/api/scim/v2/Groups/{group_id}` | SCIM token | Replace name and members |
+| `PATCH` | `/api/scim/v2/Groups/{group_id}` | SCIM token | `PatchOp` on `displayName`, `externalId`, `members` (`members[value eq "…"]` removes one). Every member it touches has the provider's group mappings re-applied — only memberships a mapping produced change, manual ones win |
+| `DELETE` | `/api/scim/v2/Groups/{group_id}` | SCIM token | `204` — the group and the access it mapped go |
+
+A provider item (`GET /api/admin/sso/providers[/{id}]`) also carries `saml` (`null`
+for OIDC) — `{metadata_url, idp_entity_id, sso_url, slo_url, idp_certs[{body, subject,
+not_after, sha256, expired}], name_id_format, sign_requests, want_encrypted,
+allow_idp_initiated, sp_entity_id, acs_url, sls_url, metadata_endpoint, sp_cert,
+sp_cert_facts, sp_key_set}` — and `scim` `{enabled, base_url, token_hint,
+token_created_at, subject: userName|externalId, counts{users, groups}}`. The list adds
+`acs_url_template`, `scim_base_url` and `settings`; `presets` adds `identity-center`,
+`entra-saml` and `saml` (`kind: saml`). The create / `PATCH` body adds
+`saml_metadata_url` (fetched), `saml_metadata_xml` (parsed, not stored),
+`saml_idp_entity_id`, `saml_sso_url`, `saml_slo_url`, `saml_idp_certs[]`,
+`saml_name_id_format`, `saml_sign_requests`, `saml_want_encrypted`,
+`saml_allow_idp_initiated` and `scim_subject`; a SAML provider gets its SP key pair
+at creation and needs the IdP entity id, SSO URL and a certificate before it is
+enabled (`409 sso.incomplete`). `POST …/test` on a SAML provider re-reads the metadata URL
+(`metadata_matches`: still what is stored, else `sso.saml_metadata_changed`) and
+checks the IdP certificates and the SP key: `{ok, checked_at, kind: saml,
+entity_id, sso_url, slo_url, certs[], cert_valid, sp_cert, sp_key, metadata_fetched?,
+metadata_matches?, error?}`.
+
+`GET /api/auth/providers` items now include `kind: saml` providers and the answer
+carries `hide_local_login`. `GET /api/auth/status` (and the login answer) carries
+`account_source`: `sso` for a session that came from an identity provider, `local`
+otherwise, absent before sign-in — the top bar hides "change password" for `sso`.
+`POST /api/auth/logout` on a SAML session answers `end_session_url`, a LogoutRequest
+to the IdP's SLO URL naming the NameID / SessionIndex of that sign-in, when the IdP
+has an SLO URL.
+
+SAML sign-in reasons (in `?sso_error=` and `auth.sso.login` rows), on top of the
+shared `auth.sso.*` ones: `auth.saml.no_response`, `malformed`, `unsigned`,
+`bad_signature`, `bad_issuer`, `bad_audience`, `bad_destination`, `bad_subject`,
+`expired`, `in_response_to` (unknown, spent or older than 10 minutes), `replayed`,
+`unsolicited` (IdP-initiated while that is off), `not_encrypted`, `no_subject`,
+`idp_error`, `invalid`; `auth.saml.logout_invalid` for a refused logout message.
+Configuration errors: `sso.saml_metadata_invalid`, `sso.saml_cert_invalid`,
+`sso.saml_key_unreadable`, `sso.invalid_name_id_format`, `sso.invalid_field` (SAML
+fields on an OIDC provider), `sso.invalid_scim_subject`, `sso.not_saml` (409). SCIM
+refusals are SCIM error documents (`application/scim+json`, RFC 7644 §3.12): `401`
+without or with an unknown token, `400 invalidFilter` / `invalidSyntax` /
+`invalidValue` / `invalidPath`, `404`, `409 uniqueness`, `413` over 2 MB. SCIM changes
+are journaled `auth.scim.user.*` / `auth.scim.group.*` with actor `scim:<provider>`.
+
 ## Console Projects API
 
 A **project** groups people, agents and their derived rows inside one or more

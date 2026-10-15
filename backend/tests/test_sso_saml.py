@@ -238,6 +238,8 @@ class TestTheAcs:
         assert answer.headers["location"] == "/v3/agents"
         status = client.get("/api/auth/status").json()
         assert status["authenticated"] and status["username"] == "alice"
+        # an SSO session: the top bar hides "change password"
+        assert status["account_source"] == "sso"
         user = _user()
         assert user is not None and user.external_idp_id == "ic"
         assert user.email == "alice@acme-corp.com"
@@ -515,7 +517,11 @@ class TestHideLocalLogin:
         self._local_member()
         login = {"username": self.MEMBER["username"], "password": self.MEMBER["password"]}
         with TestClient(gated, client=("127.0.0.1", 4321)) as other:
-            assert other.post("/api/auth/login", json=login).status_code == 200
+            signed_in = other.post("/api/auth/login", json=login)
+            assert signed_in.status_code == 200
+            # a password session is a local one: "change password" stays
+            assert signed_in.json()["account_source"] == "local"
+            assert other.get("/api/auth/status").json()["account_source"] == "local"
         answer = admin.put("/api/admin/sso/settings", json={"hide_local_login": True})
         assert answer.status_code == 200 and answer.json()["local_login_hidden"]
         with TestClient(gated, client=("127.0.0.1", 4321)) as other:

@@ -102,6 +102,9 @@ class Identity:
     account_expires_at: datetime | None = None
     user_id: str | None = None  # None for the config-driven admin
     permissions: frozenset[str] = frozenset(AGENT_PERMISSIONS)
+    # "sso" for an account that signs in through a console identity provider (sso
+    # §2.2): no local password, so the top bar hides "change password"
+    account_source: str = "local"
 
     @property
     def is_admin(self) -> bool:
@@ -115,6 +118,10 @@ class Identity:
 
     def can(self, permission: str) -> bool:
         return self.is_admin or permission in self.permissions
+
+
+def _account_source(user: User) -> str:
+    return "sso" if users_service.is_sso_account(user) else "local"
 
 
 def _password(settings: Settings | None = None) -> str | None:
@@ -302,6 +309,7 @@ def resolve_identity(
             account_expires_at=users_service.as_utc(user.expires_at),
             user_id=user.id,
             permissions=granted_permissions(user.permissions, user.role),
+            account_source=_account_source(user),
         )
     finally:
         if owned:
@@ -476,6 +484,8 @@ def _identity_fields(identity: Identity | None) -> dict[str, Any]:
         # the config-driven admin (no `users` row): its password is changed through
         # the same /api/auth/password, but replaces the configured one
         "builtin": identity.user_id is None and identity.is_admin,
+        # `sso` — the session came from an identity provider (sso §2.7)
+        "account_source": identity.account_source,
     }
 
 
@@ -576,6 +586,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
                 account_expires_at=users_service.as_utc(user.expires_at),
                 user_id=user.id,
                 permissions=granted_permissions(user.permissions, user.role),
+                account_source=_account_source(user),
             )
         finally:
             db.close()
@@ -633,6 +644,7 @@ def user_identity(user: User) -> Identity:
         account_expires_at=users_service.as_utc(user.expires_at),
         user_id=user.id,
         permissions=granted_permissions(user.permissions, user.role),
+        account_source=_account_source(user),
     )
 
 
