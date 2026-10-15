@@ -17,6 +17,7 @@ import { SERVICE_NAME_RE, type TaskMode } from "../../../v2/tasks";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
+import { StoryHeader } from "../../story/StoryHeader";
 import { HostedV2 } from "./common";
 import { detailUrl } from "./model";
 
@@ -332,6 +333,7 @@ export function TaskWizard() {
           <ArrowLeft size={14} /> {t("v3.tasks.title")}
         </button>
       </div>
+      <StoryHeader />
       <PageHead
         eyebrow={t("v3.tasks.eyebrow")}
         title={t("v2.tasks.newTitle")}

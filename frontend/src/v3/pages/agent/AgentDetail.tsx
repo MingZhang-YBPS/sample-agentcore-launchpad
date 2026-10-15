@@ -9,6 +9,7 @@ import { useAgentPermissions } from "../../../lib/agent-admin/permissions";
 import { api, dlcApi } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useLoad, useToast } from "../../hooks";
+import { JourneyStrip } from "../../story/JourneyStrip";
 import { agentSignal } from "../../signals";
 import { Chip, Filters, Lamp, Notice, PageHead, Skeleton } from "../../ui";
 import { AccessTab } from "./AccessTab";
@@ -122,6 +123,7 @@ export function AgentDetail({ id }: { id: string }) {
           />
         }
       />
+      <JourneyStrip key={a.id} agentId={a.id} status={a.status} version={a.version} />
       {detail.error && (
         <Notice s="act">
           {detail.error} <button type="button" className="v3-btn sm" onClick={detail.reload}>{t("v3.ux.retry")}</button>

@@ -13962,7 +13962,133 @@
     },
     "waiting": "等待 {{role}}",
     "copyLink": "复制链接给 TA",
-    "stepOf": "第 {{n}} / {{total}} 步"
+    "stepOf": "第 {{n}} / {{total}} 步",
+    "card": {
+      "go": "前往",
+      "then": "之后",
+      "end": "这是故事线的最后一步——这个智能体已走完全程。",
+      "copied": "链接已复制，发给 TA 即可"
+    },
+    "done": {
+      "created": "{{name}} 已上线",
+      "candidate": "候选版本 v{{version}} 已部署",
+      "criteriaPublished": "判据表 v{{version}} 已发布",
+      "criteriaSigned": "判据表 v{{version}} 已签署",
+      "goldenSealed": "黄金集已封存——保留集只写一次并锁定",
+      "evalDone": "评估已完成",
+      "gateReport": "放行门报告已生成：{{verdict}}",
+      "releaseSigned": "已签署放行——候选版本已上线",
+      "issueFixed": "Issue 已标记为已修复",
+      "issueWontFix": "Issue 已关闭（不修复）"
+    },
+    "journey": {
+      "title": "旅程",
+      "continue": "继续：{{step}}（{{role}}）",
+      "allDone": "必做步骤已全部完成"
+    },
+    "status": {
+      "done": "已完成",
+      "current": "当前步骤",
+      "later": "未开始",
+      "optional": "可选"
+    },
+    "header": {
+      "label": "本页在故事线上的位置",
+      "prev": "上一步",
+      "next": "下一步"
+    },
+    "turn": {
+      "title": "轮到你",
+      "mine": "轮到你",
+      "mineAs": "轮到你（{{roles}}）",
+      "waiting": "等待别人",
+      "none": "目前没有等你处理的事。",
+      "more": "还有 {{count}} 项"
+    },
+    "prereqs": {
+      "title": "本页之前还差 {{count}} 步",
+      "needs": "需要 {{role}}"
+    },
+    "term": {
+      "section": "Agent-DLC",
+      "usedIn": "用在",
+      "owner": "谁负责",
+      "criteria": {
+        "name": "判据",
+        "short": "一条可以核对的质量标准，例如“不得承诺政策外的退款”。",
+        "owner": "developer 起草，biz-owner 签署"
+      },
+      "criteriaSet": {
+        "name": "判据表",
+        "short": "一个智能体的全部判据，按版本管理：发布即冻结，并由编辑者以外的人签署。",
+        "owner": "developer 起草，biz-owner 签署"
+      },
+      "criteriaTier": {
+        "name": "红线 / 门限 / 观察",
+        "short": "判据的分量：红线一票否决，门限要达到阈值，观察只记录不拦截。",
+        "owner": "developer 提议，biz-owner 决定"
+      },
+      "goldenSet": {
+        "name": "黄金集",
+        "short": "衡量智能体所用的场景集合，绑定一张判据表。",
+        "owner": "biz-owner 准入，developer 维护"
+      },
+      "goldenSplit": {
+        "name": "开发集 / 回归集 / 保留集",
+        "short": "黄金集的三个切分：开发集用于迭代，回归集用于回放，保留集只写一次并封存，留给放行门。",
+        "owner": "biz-owner 写入保留集"
+      },
+      "caseTier": {
+        "name": "用例档位",
+        "short": "场景的难度或重要程度，覆盖度据此显示哪里偏薄。",
+        "owner": "developer"
+      },
+      "admission": {
+        "name": "样本准入",
+        "short": "真实对话加入黄金集之前的审核，让反馈变成测试。",
+        "owner": "biz-owner"
+      },
+      "judgeCalibration": {
+        "name": "裁判校准",
+        "short": "把 LLM 裁判与人工标注对比；未校准的裁判不能把守门限。",
+        "owner": "sme 标注，biz-owner 判定"
+      },
+      "gate": {
+        "name": "放行门",
+        "short": "用判据逐条检验候选版本，给出 PASS、BLOCKED 或 INVALID。",
+        "owner": "release-ops"
+      },
+      "passK": {
+        "name": "pass^k",
+        "short": "同一场景连续 k 次都通过才算通过——针对必须稳定、不能靠运气的行为。",
+        "owner": "developer"
+      },
+      "waiver": {
+        "name": "豁免",
+        "short": "对一条被拦截的门限判据给出的限期例外，需写明风险负责人和补偿措施；红线永不豁免。",
+        "owner": "developer 申请，release-ops 批准"
+      },
+      "releaseRecord": {
+        "name": "决策记录",
+        "short": "谁基于什么证据放行、拦截或回滚了哪个版本——审计留痕。",
+        "owner": "release-ops"
+      },
+      "driftWatch": {
+        "name": "漂移监测",
+        "short": "持续用判据衡量线上版本，下滑时发出告警。",
+        "owner": "release-ops"
+      },
+      "repairLadder": {
+        "name": "修复阶梯",
+        "short": "先用最便宜的修法：规则，然后知识库，然后提示词，最后换模型。",
+        "owner": "developer"
+      },
+      "scorecard": {
+        "name": "记分卡",
+        "short": "一页看清智能体的标准：最近一次放行门、判据、覆盖度、未结豁免和告警。",
+        "owner": "所有人都可查看"
+      }
+    }
   },
   "apiNext": {
     "agent.create": "去创建智能体",

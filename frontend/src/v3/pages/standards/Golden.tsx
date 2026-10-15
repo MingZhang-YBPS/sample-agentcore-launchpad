@@ -7,6 +7,7 @@
 import { Lock, Plus, Sprout } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../../components/ErrorCallout";
@@ -14,6 +15,9 @@ import { useAuth } from "../../../auth/auth-context";
 import { dlcApi } from "../../../lib/api";
 import type { GoldenSet, GoldenSplit, WritableSplit } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
+import type { NextStepNote } from "../../story/flow";
+import { useNextStep } from "../../story/useNextStep";
+import { StoryPrereqs } from "../../story/Prereqs";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { CoverageMatrix } from "./charts";
 import { biasText } from "./common";
@@ -31,6 +35,7 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
   const [busy, setBusy] = useState(false);
   const rows = list.data?.golden_sets ?? [];
   const [failure, setFailure] = useState<unknown>(null);
+  const agentId = useSearchParams()[0].get("agent");
 
   const create = () => {
     setBusy(true);
@@ -55,7 +60,10 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
         ) : list.error ? (
           <div style={{ padding: 20 }}><Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice></div>
         ) : rows.length === 0 ? (
-          <Empty title={t("v2.dlc.golden.noSets")}>{t("v2.dlc.golden.indexSub")}</Empty>
+          <Empty title={t("v2.dlc.golden.noSets")}>
+            {t("v2.dlc.golden.indexSub")}
+            <StoryPrereqs agentId={agentId} stepKey="evaluate.golden.seal" />
+          </Empty>
         ) : (
           <table className="v3-table">
             <thead>
@@ -139,14 +147,19 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
   const mayEdit = can("criteria.manage");
   const maySeed = can("golden.admit");
 
-  // add / seed / retire fail in place, with the way out (storyline-ux §4)
+  // add / seed / retire fail in place, with the way out (storyline-ux §4); sealing
+  // the holdout says what comes next instead (§3.1)
   const [failure, setFailure] = useState<unknown>(null);
-  const run = async (fn: () => Promise<unknown>, okKey: string) => {
+  const nextStep = useNextStep();
+  const agentId = useSearchParams()[0].get("agent");
+  const run = async (fn: () => Promise<unknown>, okKey: string, note?: NextStepNote) => {
     setBusy(true);
     setFailure(null);
+    nextStep.clear();
     try {
       await fn();
-      toast("ok", t(okKey));
+      if (note) nextStep.show(note);
+      else toast("ok", t(okKey));
       onReload();
     } catch (err) {
       setFailure(err);
@@ -160,6 +173,7 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
       <div><button type="button" className="v3-btn ghost sm" onClick={onBack}>← {t("v2.dlc.golden.backToList")}</button></div>
       <ErrorCallout error={failure} params={{ dataset_id: goldenSet.id }} onDismiss={() => setFailure(null)}
         data-testid="v3-golden-error" />
+      {nextStep.card}
       <Panel
         title={t("v2.dlc.golden.title", { name: goldenSet.name })}
         signal={sealed ? "ok" : "wait"}
@@ -264,7 +278,8 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
           onClose={() => setSeeding(false)}
           onSubmit={(items) => {
             setSeeding(false);
-            void run(() => dlcApi.seedGolden(goldenSet.id, items), "v2.dlc.golden.seeded");
+            void run(() => dlcApi.seedGolden(goldenSet.id, items), "v2.dlc.golden.seeded",
+              { done: t("story.done.goldenSealed"), after: "evaluate.golden.seal", agentId, params: { dataset_id: goldenSet.id } });
           }}
         />
       )}

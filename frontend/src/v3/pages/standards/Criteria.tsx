@@ -24,6 +24,9 @@ import {
   type DlcTier,
 } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
+import type { NextStepNote } from "../../story/flow";
+import { useNextStep } from "../../story/useNextStep";
+import { StoryPrereqs } from "../../story/Prereqs";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { TierChip } from "./charts";
 import { findingText, stamp } from "./common";
@@ -138,7 +141,10 @@ export function CriteriaIndex({
         ) : error ? (
           <div style={{ padding: 20 }}><Notice s="act">{error}</Notice> <Btn size="sm" onClick={onReload}>{t("v3.standards.retry")}</Btn></div>
         ) : sets.length === 0 ? (
-          <Empty title={t("v2.dlc.criteria.noSets")}>{t("v2.dlc.criteria.indexSub")}</Empty>
+          <Empty title={t("v2.dlc.criteria.noSets")}>
+            {t("v2.dlc.criteria.indexSub")}
+            <StoryPrereqs agentId={agentId} stepKey="evaluate.criteria.draft" />
+          </Empty>
         ) : (
           <table className="v3-table">
             <thead>
@@ -341,14 +347,22 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
     (r) => typeof r.threshold === "number" && Math.abs((r.threshold as number) * 100 - Math.round((r.threshold as number) * 100)) > 1e-9,
   );
 
-  // publish / sign / save fail in place, with the way out (storyline-ux §4)
+  // publish / sign / save fail in place, with the way out (storyline-ux §4); a
+  // published or signed agent table says what comes next instead (§3.1)
   const [failure, setFailure] = useState<unknown>(null);
-  const run = async (fn: () => Promise<unknown>, okKey: string) => {
+  const nextStep = useNextStep();
+  const storyNote = (doneKey: string, after: string): NextStepNote | undefined =>
+    set.kind === "agent" && set.agent_id
+      ? { done: t(doneKey, { version: set.version }), after, agentId: set.agent_id, params: { lineage_id: set.lineage_id } }
+      : undefined;
+  const run = async (fn: () => Promise<unknown>, okKey: string, note?: NextStepNote) => {
     setBusy(true);
     setFailure(null);
+    nextStep.clear();
     try {
       await fn();
-      toast("ok", t(okKey));
+      if (note) nextStep.show(note);
+      else toast("ok", t(okKey));
       setDirty(false);
       onReload();
     } catch (err) {
@@ -365,6 +379,7 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
       </div>
       <ErrorCallout error={failure} params={{ agent_id: set.agent_id ?? undefined, lineage_id: set.lineage_id }}
         onDismiss={() => setFailure(null)} data-testid="v3-criteria-error" />
+      {nextStep.card}
       <Panel
         title={t("v2.dlc.criteria.tableTitle", { name: set.name, version: set.version })}
         signal={!frozen ? "info" : set.signed_by ? "ok" : "wait"}
@@ -526,7 +541,8 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
       {confirmPublish && (
         <Confirm title={t("v2.dlc.criteria.publishTitle")} confirmLabel={t("v2.dlc.criteria.publish")} cancelLabel={t("v3.common.cancel")}
           busy={busy} onCancel={() => setConfirmPublish(false)}
-          onConfirm={() => { setConfirmPublish(false); void run(() => dlcApi.publishSet(set.lineage_id), "v2.dlc.criteria.published"); }}>
+          onConfirm={() => { setConfirmPublish(false); void run(() => dlcApi.publishSet(set.lineage_id), "v2.dlc.criteria.published",
+            storyNote("story.done.criteriaPublished", "evaluate.criteria.draft")); }}>
           {t("v2.dlc.criteria.publishText", { version: set.version })}
         </Confirm>
       )}
@@ -540,7 +556,8 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
             <>
               <Btn kind="ghost" onClick={() => setSigning(false)}>{t("v3.common.cancel")}</Btn>
               <Btn kind="primary" disabled={busy}
-                onClick={() => { setSigning(false); void run(() => dlcApi.signSet(set.lineage_id, signNote), "v2.dlc.criteria.signed"); }}>
+                onClick={() => { setSigning(false); void run(() => dlcApi.signSet(set.lineage_id, signNote), "v2.dlc.criteria.signed",
+                  storyNote("story.done.criteriaSigned", "evaluate.criteria.sign")); }}>
                 {t("v2.dlc.criteria.sign")}
               </Btn>
             </>
