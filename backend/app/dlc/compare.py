@@ -107,7 +107,8 @@ def compare(
                 sum(e.get("rate") or 0 for e in gates) / len(gates) if gates else None
             ),
             "redline_violations": sum(e.get("fail") or 0 for e in redlines),
-            "cost_actual_usd": (run.cost_actual or {}).get("agent_usd"),
+            "cost_actual_usd": run_cost_usd(run),
+            "cost": run_cost_parts(run),
             "layers_changed": (
                 layers_changed((specs or {}).get(runs[index - 1].id, {}),
                                (specs or {}).get(run.id, {}))
@@ -167,6 +168,7 @@ def compare(
         "new_failures": new_failures,
         "still_failing": still_failing,
         "splits": sorted(s for s in splits if s),
+        "cost_delta": cost_delta(first, last),
     }
     if not comparable:
         out["incomparable_reason"] = (
@@ -184,6 +186,50 @@ def compare(
                 + " — a gain cannot be attributed to a single change"
             )
     return out
+
+
+COST_PARTS = ("agent_usd", "runtime_usd", "judge_usd", "managed_evaluations_usd")
+
+
+def run_cost_usd(run: EvalRun) -> float | None:
+    """The run's measured total (eval-cost §1.2); a record from before the runtime
+    and judge parts existed carries only `agent_usd`."""
+    actual = run.cost_actual or {}
+    if not actual.get("final") and "live" in actual:
+        return None  # still running: no measured total yet
+    value = actual.get("total_usd", actual.get("agent_usd"))
+    return float(value) if value is not None else None
+
+
+def run_cost_parts(run: EvalRun) -> dict[str, Any]:
+    actual = run.cost_actual or {}
+    measured = bool(actual.get("final"))
+    return {
+        "total_usd": run_cost_usd(run),
+        **{part: (actual.get(part) if measured else None) for part in COST_PARTS},
+        "estimate_usd": (run.cost_estimate or {}).get("total_usd"),
+        "source": actual.get("source") if measured else None,
+    }
+
+
+def cost_delta(before: EvalRun, after: EvalRun) -> dict[str, Any]:
+    """What the later run cost against the earlier one, in total and per part."""
+    b, a = run_cost_parts(before), run_cost_parts(after)
+
+    def diff(key: str) -> float | None:
+        if b.get(key) is None or a.get(key) is None:
+            return None
+        return round(float(a[key]) - float(b[key]), 6)
+
+    total = diff("total_usd")
+    return {
+        "before_usd": b["total_usd"],
+        "after_usd": a["total_usd"],
+        "delta_usd": total,
+        "delta_pct": (round(total / float(b["total_usd"]) * 100, 1)
+                      if total is not None and b["total_usd"] else None),
+        "parts": {part: diff(part) for part in COST_PARTS},
+    }
 
 
 def two_numbers(db: Session, old_run: EvalRun, new_run: EvalRun) -> dict[str, Any]:

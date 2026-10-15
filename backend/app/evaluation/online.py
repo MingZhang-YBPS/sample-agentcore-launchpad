@@ -814,6 +814,118 @@ def results(
     return {"range": range_key, "log_group": log_group, **parse_results(rows)}
 
 
+# ─── daily cost (eval-cost §1.3) ──────────────────────────────────────────────
+#
+# An online evaluation is billed as it judges: what it cost on a day is the
+# judgements its results group recorded that day × tokens per judgement × the
+# judge's price (cost.py's formula and basis), plus the measured cost of the
+# console-started reports run that day (their `cost_actual`).
+
+DAILY_COST_MAX_DAYS = 30
+
+
+def daily_cost_query() -> str:
+    return f"""
+{_FIELDS}
+| {_RESULT_FILTER}
+| stats count(*) as count by evaluator, bin(1d) as day
+| sort day asc
+| limit 1000
+"""
+
+
+def daily_cost(
+    db: Session,
+    ws: WorkspaceScope,
+    config_id: str,
+    *,
+    days: int = 7,
+    control: Any = None,
+    viewer: Viewer = Viewer.ALL,
+    run_queries: Callable[..., dict[str, list[dict[str, str]]]] | None = None,
+) -> dict[str, Any]:
+    """Per day: the config's judging cost and its reports' measured cost."""
+    from app.dlc import cost as cost_svc
+
+    if not 1 <= days <= DAILY_COST_MAX_DAYS:
+        raise AppError("online_eval.bad_range",
+                       f"days is 1..{DAILY_COST_MAX_DAYS}", status_code=422)
+    config = get_config(db, ws, config_id, control, viewer=viewer)
+    run = run_queries or run_insights_queries
+    rows = run({"daily": daily_cost_query()}, days * 24,
+               log_groups=[ac.online_eval_results_log_group(config_id)],
+               workspace=ws.context).get("daily") or []
+    judges = {j["evaluator_id"]: j for j in cost_svc._judge_evaluators(
+        list(config.get("evaluators") or []), [])}
+    judge_model = cost_svc._default_judge_model()
+    judge_price = cost_svc._price_of(judge_model)
+    prices = cost_svc.eval_prices()
+    tokens_of: dict[str, tuple[float, str]] = {}
+    unpriced: list[str] = []
+    by_day: dict[str, dict[str, Any]] = {}
+
+    def day_row(day: str) -> dict[str, Any]:
+        return by_day.setdefault(day, {"day": day, "judgements": 0, "judge_usd": 0.0,
+                                       "reports_usd": 0.0, "by_evaluator": {}})
+
+    for row in rows:
+        evaluator_id, day = row.get("evaluator"), str(row.get("day") or "")[:10]
+        count = _int(row.get("count"))
+        if not evaluator_id or not day or not count:
+            continue
+        if evaluator_id not in tokens_of:
+            measured = cost_svc._judge_tokens(db, evaluator_id)
+            tokens_of[evaluator_id] = ((measured, "measured") if measured
+                                       else (float(cost_svc.ROUGH_JUDGE_TOKENS), "rough"))
+        tin, tout = cost_svc.split_judge_tokens(tokens_of[evaluator_id][0] * count)
+        if cost_svc.is_managed(evaluator_id):
+            usd: float | None = cost_svc.managed_usd(tin, tout, prices)
+        elif judge_price:
+            usd = cost_svc.judge_usd(tin, tout, judge_price)
+        else:
+            usd = None
+            if judge_model and judge_model not in unpriced:
+                unpriced.append(judge_model)
+        entry = day_row(day)
+        entry["judgements"] += count
+        entry["judge_usd"] += usd or 0.0
+        entry["by_evaluator"][evaluator_id] = {
+            "judgements": count, "usd": round(usd, 6) if usd is not None else None,
+            "billed_by": (judges.get(evaluator_id) or {}).get("billed_by")
+            or ("agentcore_evaluations" if cost_svc.is_managed(evaluator_id) else "your_account"),
+        }
+    since = datetime.now(UTC) - timedelta(days=days)
+    for report in _console_runs(db, ws, config_id):
+        actual = report.cost_actual or {}
+        created = report.created_at
+        if created is not None and created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        if not actual.get("final") or created is None or created < since:
+            continue
+        day_row(created.date().isoformat())["reports_usd"] += float(actual.get("total_usd") or 0)
+    out_days = []
+    for day in sorted(by_day):
+        entry = by_day[day]
+        entry["judge_usd"] = round(entry["judge_usd"], 6)
+        entry["reports_usd"] = round(entry["reports_usd"], 6)
+        entry["usd"] = round(entry["judge_usd"] + entry["reports_usd"], 6)
+        out_days.append(entry)
+    return {
+        "config_id": config_id,
+        "days": out_days,
+        "range_days": days,
+        "total_usd": round(sum(d["usd"] for d in out_days), 6),
+        "judge_model": judge_model,
+        "unpriced_models": unpriced,
+        "basis": {
+            "tokens_per_judgement": {k: {"tokens": v[0], "basis": v[1]}
+                                     for k, v in tokens_of.items()},
+            "prices": {"source": prices.get("source"), "updated_at": prices.get("updated_at")},
+        },
+        "estimate": True,
+    }
+
+
 # ─── insights reports (batch evaluations sourced from a config) ──────────────
 #
 # A report is a batch evaluation whose data source is the config

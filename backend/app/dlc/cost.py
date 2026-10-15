@@ -1,19 +1,29 @@
-"""What an evaluation run will cost, before it is submitted (§5.3).
+"""What an evaluation run will cost, before it is submitted (§5.3, eval-cost §1.1).
 
 pass^k multiplies the bill by k, so the task wizard asks for it only with the number in
-view. The estimate is deliberately simple and always labelled with its basis:
+view. Every evaluation entry — dataset replay, passive session / look-back runs, an
+online evaluation (per day), the release gate — is priced with the same four parts,
+each labelled with its basis:
 
-    items × k × (agent cost per session + Σ judge evaluators × judge cost per item)
+    agent     invoked sessions × agent cost per session          (0 when nothing is invoked)
+    runtime   invoked sessions × seconds per session × Runtime vCPU / memory price
+    judge     Σ your-account LLM judges: judgements × tokens per judgement × judge price
+    managed   Σ Builtin / ThirdParty evaluators: judgements × tokens × Evaluations price
 
 * **agent cost per session** — this agent's mean spend per session over the last 7
-  days (span token usage × the price map). With no history: the model's price × the
-  dataset's average turn count × a default token budget, labelled `rough`.
-* **judge cost per item** — the median `tokenUsage` the evaluator's own past results
-  recorded × the judge model's price. Builtin / ThirdParty evaluators run on service
-  capacity: they are listed as billed by AgentCore Evaluations, with no dollar figure
-  the platform can honestly claim.
+  days (span token usage × the price map); else what its previous evaluation runs
+  measured (`cost_actual`); else the model's price × the dataset's average turn count
+  × a default token budget, labelled `rough`.
+* **seconds per session** — the median of what this agent's previous runs measured,
+  else a per-turn default.
+* **tokens per judgement** — the median `judge_tokens` previous runs recorded for the
+  evaluator (`run_cost` writes them), else a default prompt budget.
 
-After the run, `actual_cost` reads the same sources so the estimate can be judged.
+The total is a range (low / mid / high): measured parts are tighter than rough ones.
+`total_usd` is the mid value, the number the limits are enforced against. A model with
+no price is listed in `unpriced_models`, never silently counted as zero.
+
+After the run, `app.evaluation.run_cost` measures the same parts (`cost_actual`).
 """
 
 from __future__ import annotations
@@ -36,8 +46,78 @@ logger = logging.getLogger(__name__)
 # a turn with no history to go on: input + output tokens assumed per exchange
 ROUGH_TOKENS_PER_TURN = 2500
 ROUGH_JUDGE_TOKENS = 1800
+# a judge prompt is mostly input (the trace it reads); its verdict is short
+JUDGE_INPUT_SHARE = 0.85
+# a turn's wall time on the runtime with no history (model calls + tools)
+ROUGH_SECONDS_PER_TURN = 8.0
+# a passive / online session's traces, when nothing says how many turns it has
+ROUGH_TRACES_PER_SESSION = 2.0
 DEFAULT_CONFIRM_USD = 5.0
 MAX_REPEATS = 10
+HISTORY_RUNS = 20
+
+# Configurable unit prices (launchpad.yaml `eval_cost_prices` overrides any key).
+# AgentCore Runtime bills per second of vCPU and memory; AgentCore Evaluations bills
+# its built-in evaluators per judge token. List prices, us-east-1 — an estimate is
+# labelled with this source and date so a stale number is visible as such.
+DEFAULT_EVAL_PRICES: dict[str, Any] = {
+    "runtime_vcpu_hour_usd": 0.0895,
+    "runtime_gb_hour_usd": 0.00945,
+    "runtime_vcpu": 1.0,
+    "runtime_memory_gb": 2.0,
+    "managed_input_per_1k_usd": 0.0024,
+    "managed_output_per_1k_usd": 0.012,
+    "source": "AgentCore list prices (us-east-1)",
+    "updated_at": "2026-10-15",
+}
+
+# how far a part may land from its mid value, by basis: (low factor, high factor)
+BANDS: dict[str, tuple[float, float]] = {
+    "measured": (0.8, 1.3),
+    "history_7d": (0.75, 1.5),
+    "eval_runs": (0.75, 1.5),
+    "rough": (0.5, 2.0),
+}
+
+
+def eval_prices() -> dict[str, Any]:
+    """The unit prices the estimate and the actual cost use, with their source."""
+    override = getattr(get_settings(), "eval_cost_prices", None) or {}
+    prices = {**DEFAULT_EVAL_PRICES, **override}
+    if override and "source" not in override:
+        prices["source"] = "launchpad.yaml eval_cost_prices"
+    return prices
+
+
+def runtime_usd(seconds: float, prices: dict[str, Any] | None = None) -> float:
+    """AgentCore Runtime compute for `seconds` of session time (vCPU + memory)."""
+    p = prices or eval_prices()
+    per_hour = (float(p["runtime_vcpu"]) * float(p["runtime_vcpu_hour_usd"])
+                + float(p["runtime_memory_gb"]) * float(p["runtime_gb_hour_usd"]))
+    return max(0.0, seconds) * per_hour / 3600
+
+
+def managed_usd(input_tokens: float, output_tokens: float,
+                prices: dict[str, Any] | None = None) -> float:
+    """AgentCore Evaluations' charge for built-in judge tokens."""
+    p = prices or eval_prices()
+    return (input_tokens * float(p["managed_input_per_1k_usd"])
+            + output_tokens * float(p["managed_output_per_1k_usd"])) / 1000
+
+
+def judge_usd(input_tokens: float, output_tokens: float,
+              price: dict[str, float]) -> float:
+    """An LLM judge in this account: its tokens at the judge model's price (per 1M)."""
+    return (input_tokens * float(price.get("input", 0.0))
+            + output_tokens * float(price.get("output", 0.0))) / 1e6
+
+
+def split_judge_tokens(total: float) -> tuple[float, float]:
+    return total * JUDGE_INPUT_SHARE, total * (1 - JUDGE_INPUT_SHARE)
+
+
+def is_managed(evaluator_id: str) -> bool:
+    return evaluator_id.startswith(("Builtin.", "ThirdParty."))
 
 
 def _policy(
@@ -85,37 +165,84 @@ def _per_session_from_history(
     return usd / sessions, "history_7d"
 
 
+def _median(samples: list[float]) -> float | None:
+    if not samples:
+        return None
+    ordered = sorted(samples)
+    return ordered[len(ordered) // 2]
+
+
+def _band(samples: list[float], basis: str) -> tuple[float, float]:
+    """(low, high) factors around the median: the samples' own quartiles once there
+    are a few of them, the basis's default band otherwise."""
+    low, high = BANDS.get(basis, BANDS["rough"])
+    if len(samples) >= 3:
+        ordered = sorted(samples)
+        mid = ordered[len(ordered) // 2]
+        if mid > 0:
+            q1 = ordered[len(ordered) // 4]
+            q3 = ordered[(3 * len(ordered)) // 4]
+            low = max(0.5, min(low, q1 / mid))
+            high = min(3.0, max(high, q3 / mid))
+    return low, high
+
+
+def _run_history(db: Session, agent_id: str | None) -> list[dict[str, Any]]:
+    """The measured `cost_actual` of this agent's latest runs (any project's view:
+    the agent id already scopes them)."""
+    if not agent_id:
+        return []
+    with project_context(None):
+        rows = db.scalars(
+            select(EvalRun.cost_actual).where(
+                EvalRun.agent_id == agent_id, EvalRun.cost_actual.isnot(None)
+            ).order_by(EvalRun.created_at.desc()).limit(HISTORY_RUNS)
+        ).all()
+    # a live (unfinished) record and a record the estimate itself filled in are not
+    # measurements: sampling them would feed the estimate its own guesses
+    return [r for r in rows if isinstance(r, dict) and r.get("final")
+            and r.get("source") != "estimate_fallback"]
+
+
 def _rough_per_session(spec: dict[str, Any], items: list[dict[str, Any]]) -> float | None:
     price = _price_of((spec or {}).get("model_id"))
     if not price:
         return None
-    turns = [len(i.get("turns") or []) or 1 for i in items] or [1]
-    per_turn_tokens = ROUGH_TOKENS_PER_TURN
-    avg_turns = sum(turns) / len(turns)
     rate = (float(price.get("input", 0.0)) + float(price.get("output", 0.0))) / 2
-    return avg_turns * per_turn_tokens * rate / 1e6
+    return _avg_turns(items) * ROUGH_TOKENS_PER_TURN * rate / 1e6
+
+
+def _avg_turns(items: list[dict[str, Any]]) -> float:
+    turns = [len(i.get("turns") or []) or 1 for i in items] or [1]
+    return sum(turns) / len(turns)
 
 
 def _judge_evaluators(evaluators: list[str], rows: list[Criterion]) -> list[dict[str, Any]]:
-    """Which of the run's evaluators are LLM judges, and who bills them."""
+    """Which of the run's evaluators are LLM judges, who bills them, at what level."""
+    from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
+
     kinds: dict[str, str] = {}
+    levels: dict[str, str] = {}
     for row in rows:
         executor = row.executor or {}
         if executor.get("kind") == "evaluator" and executor.get("evaluator_id"):
             kinds[executor["evaluator_id"]] = executor.get("evaluator_kind") or "judge"
+            if row.level:
+                levels[executor["evaluator_id"]] = str(row.level).upper()
     out = []
     for evaluator_id in evaluators:
-        managed = evaluator_id.startswith(("Builtin.", "ThirdParty."))
-        kind = kinds.get(evaluator_id) or ("judge" if managed else "judge")
+        managed = is_managed(evaluator_id)
+        kind = kinds.get(evaluator_id) or "judge"
         if evaluator_id.startswith("Builtin.Trajectory") or kind in ("code", "trajectory"):
             continue
-        out.append({"evaluator_id": evaluator_id, "billed_by":
+        level = ALL_BUILTIN_EVALUATORS.get(evaluator_id) or levels.get(evaluator_id) or "TRACE"
+        out.append({"evaluator_id": evaluator_id, "level": level, "billed_by":
                     "agentcore_evaluations" if managed else "your_account"})
     return out
 
 
-def _judge_tokens(db: Session, evaluator_id: str) -> float | None:
-    """Median judge tokens per item, from what previous runs recorded.
+def _judge_samples(db: Session, evaluator_id: str) -> list[float]:
+    """Judge tokens per judgement previous runs measured for this evaluator.
 
     Sampled across every project (a token count is not project data), so a project's
     estimate does not shrink to its own few runs."""
@@ -123,17 +250,32 @@ def _judge_tokens(db: Session, evaluator_id: str) -> float | None:
         rows = db.scalars(
             select(EvalRun.cost_actual).where(
                 EvalRun.cost_actual.isnot(None)
-            ).order_by(EvalRun.created_at.desc()).limit(20)
+            ).order_by(EvalRun.created_at.desc()).limit(HISTORY_RUNS)
         ).all()
     samples = []
     for actual in rows:
         per_evaluator = ((actual or {}).get("judge_tokens") or {}).get(evaluator_id)
         if per_evaluator:
             samples.append(float(per_evaluator))
-    if not samples:
-        return None
-    samples.sort()
-    return samples[len(samples) // 2]
+    return samples
+
+
+def _judge_tokens(db: Session, evaluator_id: str) -> float | None:
+    """Median judge tokens per judgement, from what previous runs recorded."""
+    return _median(_judge_samples(db, evaluator_id))
+
+
+def _units_per_session(level: str, turns: float) -> float:
+    """Judgements one session yields: one per session, per trace (turn) or tool call."""
+    return 1.0 if level == "SESSION" else max(1.0, turns)
+
+
+def _part(key: str, mid: float | None, band: tuple[float, float], basis: str,
+          **extra: Any) -> dict[str, Any]:
+    if mid is None:
+        return {"key": key, "usd": None, "low": None, "high": None, "basis": basis, **extra}
+    return {"key": key, "usd": round(mid, 4), "low": round(mid * band[0], 4),
+            "high": round(mid * band[1], 4), "basis": basis, **extra}
 
 
 def estimate(
@@ -147,57 +289,156 @@ def estimate(
     repeats: int = 1,
     criteria_rows: list[Criterion] | None = None,
     judge_model_id: str | None = None,
+    scope: str = "replay",
+    sessions: int | None = None,
+    period: str = "run",
 ) -> dict[str, Any]:
-    """The estimate the wizard shows before a run is submitted."""
+    """The estimate every evaluation entry shows before it is submitted.
+
+    `scope` is `replay` (dataset items invoked × `repeats`, also the gate), `passive`
+    (`sessions` existing sessions judged, nothing invoked) or `online` (`sessions`
+    sampled sessions per `period` = day, nothing invoked by the platform)."""
     repeats = max(1, int(repeats or 1))
     if repeats > MAX_REPEATS:
         raise AppError("run.repeats_range", f"repeats is 1..{MAX_REPEATS}")
-    sessions = len(items) * repeats
+    invoked = scope == "replay"
+    if invoked:
+        n_sessions = len(items) * repeats
+    else:
+        n_sessions = max(0, int(sessions or 0))
+    prices = eval_prices()
+    agent_id = getattr(agent, "id", None)
+    history = _run_history(db, agent_id) if agent is not None else []
+    unpriced_models: list[str] = []
+    turns = _avg_turns(items) if items else ROUGH_TRACES_PER_SESSION
+
+    # ── the agent under test ──
     basis = "n/a"
     per_session = None
-    if agent is not None and items:
+    agent_samples: list[float] = []
+    if not invoked:
+        basis = "not_invoked"
+    elif agent is not None and items:
         per_session, basis = _per_session_from_history(db, agent, workspace_ctx)
         if per_session is None:
-            per_session = _rough_per_session(agent.spec or {}, items)
+            agent_samples = [float(h["agent_usd_per_session"]) for h in history
+                             if h.get("agent_usd_per_session") is not None]
+            per_session = _median(agent_samples)
+            basis = "eval_runs" if per_session is not None else basis
+        if per_session is None:
+            per_session = _rough_per_session(getattr(agent, "spec", None) or {}, items)
             basis = "rough" if per_session is not None else "unpriced"
-    agent_usd = round(per_session * sessions, 4) if per_session is not None else None
+            if per_session is None:
+                model = (getattr(agent, "spec", None) or {}).get("model_id")
+                if model:
+                    unpriced_models.append(model)
+    agent_usd = round(per_session * n_sessions, 4) if per_session is not None else None
+    if not invoked:
+        agent_usd = 0.0
+    agent_part = _part("agent", agent_usd, _band(agent_samples, basis), basis,
+                       per_session_usd=per_session, samples=len(agent_samples))
 
+    # ── runtime compute (invoked sessions only) ──
+    duration_samples = [float(h["runtime_seconds_per_session"]) for h in history
+                        if h.get("runtime_seconds_per_session")]
+    if invoked and n_sessions:
+        seconds_per_session = _median(duration_samples)
+        runtime_basis = "eval_runs" if seconds_per_session is not None else "rough"
+        if seconds_per_session is None:
+            seconds_per_session = turns * ROUGH_SECONDS_PER_TURN
+        runtime_seconds = seconds_per_session * n_sessions
+        rt_usd = runtime_usd(runtime_seconds, prices)
+    else:
+        runtime_basis, runtime_seconds, rt_usd = "not_invoked", 0.0, 0.0
+    runtime_part = _part("runtime", rt_usd, _band(duration_samples, runtime_basis),
+                         runtime_basis, seconds=round(runtime_seconds, 1))
+
+    # ── LLM judges ──
     judges = _judge_evaluators(evaluators, criteria_rows or [])
-    judge_price = _price_of(judge_model_id or _default_judge_model())
-    judge_usd = 0.0
-    priced_judges = 0
+    judge_model = judge_model_id or _default_judge_model()
+    judge_price = _price_of(judge_model)
+    judge_total = managed_total = 0.0
+    priced_judges = priced_managed = 0
+    judge_lo = judge_hi = managed_lo = managed_hi = 0.0
+    judge_samples_n: dict[str, int] = {}
     details = []
     for judge in judges:
-        tokens = _judge_tokens(db, judge["evaluator_id"]) or ROUGH_JUDGE_TOKENS
+        samples = _judge_samples(db, judge["evaluator_id"])
+        judge_samples_n[judge["evaluator_id"]] = len(samples)
+        measured = _median(samples)
+        tokens = measured or ROUGH_JUDGE_TOKENS
+        band = _band(samples, "measured" if measured else "rough")
+        judgements = n_sessions * _units_per_session(judge["level"], turns)
+        tin, tout = split_judge_tokens(tokens * judgements)
+        note = "estimated from previous runs" if measured else "rough token budget"
         if judge["billed_by"] == "agentcore_evaluations":
-            details.append({**judge, "usd": None,
-                            "note": "billed by AgentCore Evaluations (service capacity)"})
+            usd = managed_usd(tin, tout, prices)
+            managed_total += usd
+            managed_lo += usd * band[0]
+            managed_hi += usd * band[1]
+            priced_managed += 1
+            details.append({**judge, "usd": round(usd, 4), "tokens_per_item": tokens,
+                            "judgements": judgements, "samples": len(samples),
+                            "note": f"AgentCore Evaluations price · {note}"})
             continue
         if not judge_price:
-            details.append({**judge, "usd": None, "note": "judge model is not in the price map"})
+            if judge_model and judge_model not in unpriced_models:
+                unpriced_models.append(judge_model)
+            details.append({**judge, "usd": None, "model": judge_model,
+                            "note": "judge model is not in the price map"})
             continue
-        rate = (float(judge_price.get("input", 0.0)) + float(judge_price.get("output", 0.0))) / 2
-        usd = tokens * rate / 1e6 * sessions
-        judge_usd += usd
+        usd = judge_usd(tin, tout, judge_price)
+        judge_total += usd
+        judge_lo += usd * band[0]
+        judge_hi += usd * band[1]
         priced_judges += 1
-        details.append({**judge, "usd": round(usd, 4),
-                        "tokens_per_item": tokens,
-                        "note": "estimated from previous runs" if _judge_tokens(
-                            db, judge["evaluator_id"]) else "rough token budget"})
-    total = (agent_usd or 0.0) + judge_usd
-    limits = _policy(db, workspace, agent.project_id if agent is not None else None)
+        details.append({**judge, "usd": round(usd, 4), "model": judge_model,
+                        "tokens_per_item": tokens, "judgements": judgements,
+                        "samples": len(samples), "note": note})
+    judge_part = {"key": "judge", "usd": round(judge_total, 4) if priced_judges else None,
+                  "low": round(judge_lo, 4), "high": round(judge_hi, 4),
+                  "basis": "judges", "model": judge_model}
+    managed_part = {"key": "managed", "usd": round(managed_total, 4) if priced_managed else None,
+                    "low": round(managed_lo, 4), "high": round(managed_hi, 4),
+                    "basis": "agentcore_evaluations"}
+
+    parts = [agent_part, runtime_part, judge_part, managed_part]
+    priced_any = agent_usd is not None or priced_judges or priced_managed or rt_usd > 0
+    total = sum(p["usd"] or 0.0 for p in parts)
+    low = sum(p["low"] or 0.0 for p in parts)
+    high = sum(p["high"] or 0.0 for p in parts)
+    limits = _policy(db, workspace, getattr(agent, "project_id", None))
     confirm_usd, max_usd = limits["confirm_usd"], limits["max_usd"]
     concurrency = max(1, get_settings().eval_max_concurrent_runs or 1)
-    minutes = round(sessions * 1.5 / concurrency) + 5  # replay + telemetry wait + batch
+    minutes = (round(n_sessions * 1.5 / concurrency) + 5 if invoked  # replay + wait + batch
+               else 5 + round(n_sessions / 20))
+    prices_meta = get_settings().model_prices_meta or {}
     return {
+        "scope": scope,
+        "period": period,
         "items": len(items),
         "repeats": repeats,
-        "sessions": sessions,
+        "sessions": n_sessions,
         "agent_usd": agent_usd,
         "agent_basis": basis,
-        "judge_usd": round(judge_usd, 4) if priced_judges else None,
+        "runtime_usd": round(rt_usd, 4),
+        "runtime_seconds": round(runtime_seconds, 1),
+        "runtime_basis": runtime_basis,
+        "judge_usd": round(judge_total, 4) if priced_judges else None,
+        "managed_usd": round(managed_total, 4) if priced_managed else None,
         "judges": details,
-        "total_usd": round(total, 4) if (agent_usd is not None or priced_judges) else None,
+        "components": parts,
+        "total_usd": round(total, 4) if priced_any else None,
+        "range": ({"low": round(low, 4), "mid": round(total, 4), "high": round(high, 4)}
+                  if priced_any else None),
+        "basis": {
+            "agent_samples": len(agent_samples),
+            "duration_samples": len(duration_samples),
+            "judge_samples": judge_samples_n,
+            "prices": {"source": prices.get("source"), "updated_at": prices.get("updated_at")},
+            "model_prices_updated_at": prices_meta.get("updated_at"),
+        },
+        "unpriced_models": unpriced_models,
         "estimate": True,
         "duration_minutes": minutes,
         "confirm_required": bool(confirm_usd is not None and total > confirm_usd),
@@ -205,8 +446,35 @@ def estimate(
         "over_limit": bool(max_usd is not None and total > max_usd),
         "max_usd": max_usd,
         # zero sessions cost nothing: "unpriced" means a model without a price
-        "unpriced": bool(items) and agent_usd is None,
+        "unpriced": invoked and bool(items) and agent_usd is None,
     }
+
+
+def window_sessions(
+    db: Session, agent: Agent | None, workspace_ctx: Any, *, hours: float,
+) -> int:
+    """How many sessions a look-back window over the agent's traffic holds, from its
+    last 7 days (0 when there is no history to scale)."""
+    if agent is None:
+        return 0
+    try:
+        from app.services import costs as cost_service
+
+        report = cost_service.cost_report(db, workspace_ctx, range_key="7d")
+    except Exception as exc:  # noqa: BLE001 - estimation never blocks the wizard
+        logger.debug("cost history unavailable: %s", exc)
+        return 0
+    week = sum(int(r.get("sessions") or 0) for r in report.get("by_agent") or []
+               if r.get("agent_id") == agent.id)
+    return round(week * min(hours, 168) / 168)
+
+
+def online_sessions_per_day(
+    db: Session, agent: Agent | None, workspace_ctx: Any, *, sampling_percentage: float,
+) -> int:
+    """Sessions an online evaluation would judge per day at this sampling rate."""
+    daily = window_sessions(db, agent, workspace_ctx, hours=24)
+    return round(daily * max(0.0, min(100.0, sampling_percentage)) / 100)
 
 
 def _default_judge_model() -> str:
@@ -240,38 +508,7 @@ def assert_allowed(
 def actual_cost(
     db: Session, run: EvalRun, workspace_ctx: Any, metrics: dict[str, dict] | None = None
 ) -> dict[str, Any]:
-    """What the run really cost: agent spend from its sessions, judge tokens from results."""
-    out: dict[str, Any] = {"sessions": len(run.session_ids or []), "estimate": True}
-    try:
-        if metrics is None:
-            from app.services import observability
+    """What the run really cost (`app.evaluation.run_cost.compute`)."""
+    from app.evaluation import run_cost
 
-            metrics = observability.session_metrics_bulk(
-                list(run.session_ids or []), workspace_ctx
-            )
-        agent_usd = sum(float(m.get("cost_usd") or 0.0) for m in (metrics or {}).values())
-        priced = [m for m in (metrics or {}).values() if m.get("cost_usd") is not None]
-        out["agent_usd"] = round(agent_usd, 4) if priced else None
-        out["unpriced_sessions"] = len(metrics or {}) - len(priced)
-    except Exception as exc:  # noqa: BLE001
-        out["agent_error"] = f"{type(exc).__name__}: {exc}"[:200]
-    judge_tokens: dict[str, float] = {}
-    from app.models.dlc import CriterionResult
-
-    rows = db.scalars(
-        select(CriterionResult).where(CriterionResult.run_id == run.id)
-    ).all()
-    counts: dict[str, int] = {}
-    for row in rows:
-        if row.evaluator_id.startswith("metric:"):
-            continue
-        counts[row.evaluator_id] = counts.get(row.evaluator_id, 0) + 1
-    for evaluator_id, count in counts.items():
-        judge_tokens[evaluator_id] = ROUGH_JUDGE_TOKENS  # per item, pending AWS token usage
-        out.setdefault("evaluated_items", {})[evaluator_id] = count
-    out["judge_tokens"] = judge_tokens
-    estimate_out = run.cost_estimate or {}
-    if estimate_out.get("total_usd") is not None and out.get("agent_usd") is not None:
-        out["estimate_total_usd"] = estimate_out["total_usd"]
-        out["delta_usd"] = round(out["agent_usd"] - estimate_out["total_usd"], 4)
-    return out
+    return run_cost.compute(db, run, workspace_ctx, metrics=metrics)

@@ -67,6 +67,7 @@ import {
 } from "../standards/calibrationLink";
 import { AtShell, HostedV2, ScoreChip } from "./common";
 import { CopyId } from "./CopyId";
+import { OnlineCostCard, RunCostCard } from "./CostCard";
 import { copyUrl, outcomeSignal, scoreSignal, taskSignal } from "./model";
 
 const POLL_MS = 8000;
@@ -803,6 +804,14 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             <Track nodes={runTrack(data, t)} />
           </Panel>
         )}
+
+        {data.kind === "run" && (
+          <RunCostCard
+            runId={data.id}
+            running={data.status === "running" || data.status === "queued" || data.status === "pending"}
+          />
+        )}
+        {data.kind === "online" && <OnlineCostCard configId={data.id} />}
 
         {!insightsRun && (
           <div className="v3-grid c4">

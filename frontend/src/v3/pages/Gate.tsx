@@ -7,7 +7,8 @@ import { useAuth } from "../../auth/auth-context";
 import { ErrorCallout } from "../../components/ErrorCallout";
 import { api, dlcApi } from "../../lib/api";
 import { type ReleaseStorageEvidence, changeDelta, hasStorage, mountLabel, releaseStorage, storageDlcApi } from "../../lib/api/storageDlc";
-import { type CostEstimate, type GateReport, type GateRow, type ReleaseState, type Scorecard, estimateValue, metricValueLabel } from "../../lib/dlc";
+import { type EvalCostEstimate, evalCostApi } from "../../lib/api/evalCost";
+import { type GateReport, type GateRow, type ReleaseState, type Scorecard, metricValueLabel } from "../../lib/dlc";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { gateSignal, releaseSignal } from "../signals";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -19,6 +20,7 @@ import { StoryHeader } from "../story/StoryHeader";
 import { ago, pct } from "../format";
 import { calibrateUrl } from "./standards/calibrationLink";
 import { dlcText } from "./standards/common";
+import { EstimateCostCard } from "./tasks/CostCard";
 
 const ROW_SIGNAL: Record<GateRow["verdict"], Signal> = {
   PASS: "ok",
@@ -189,8 +191,9 @@ export function V3Gate() {
   const [confirmWrites, setConfirmWrites] = useState(false);
   // what running the gate would cost; over the workspace limit it cannot run, and
   // the server decides whether the cost needs an explicit confirm
-  const estimate = useLoad<CostEstimate | null>(
-    () => (agentId ? dlcApi.estimate({ agent_id: agentId, repeats: 1, release: true }) : Promise.resolve(null)), `v3-gate-est:${agentId}`);
+  const estimate = useLoad<EvalCostEstimate | null>(
+    () => (agentId ? evalCostApi.estimate({ agent_id: agentId, repeats: 1, release: true }) : Promise.resolve(null)), `v3-gate-est:${agentId}`);
+  const [confirmCost, setConfirmCost] = useState(false);
   const release = useLoad<ReleaseState | null>(
     () => (agentId ? dlcApi.release(agentId) : Promise.resolve(null)), `v3-gate-rel:${agentId}:${nonce}`);
   const card = useLoad<Scorecard | null>(
@@ -334,23 +337,18 @@ export function V3Gate() {
           {hasStorage(storage) && <StoragePanel ev={storage} />}
 
           {pending && !evaluated && (
+            <EstimateCostCard estimate={estimate.data} loading={estimate.loading} error={estimate.error}
+              confirmed={confirmCost} onConfirm={setConfirmCost} />
+          )}
+
+          {pending && !evaluated && (
             <Panel title={t("v3.gate.run")} signal="wait">
               <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
                 <span style={{ color: "var(--v3-text-2)" }}>{t("v3.gate.runHint")}</span>
-                <span style={{ display: "inline-flex", gap: 8, alignItems: "center", marginLeft: "auto" }} title={t("v2.dlc.cost.basisHint")}>
-                  <span style={{ color: "var(--v3-text-3)" }}>{t("v2.dlc.cost.estimate")}</span>
-                  <b className="mono">
-                    {estimateValue(estimate.data, t("v2.dlc.cost.unknown"))}
-                  </b>
-                  {estimate.data && (
-                    <span style={{ color: "var(--v3-text-3)", fontSize: 12 }}>
-                      {t("v2.dlc.cost.sessions", { sessions: estimate.data.sessions, minutes: estimate.data.duration_minutes ?? 0 })}
-                    </span>
-                  )}
-                  {estimate.data?.unpriced && <Chip s="wait">{t("v2.dlc.cost.unpriced")}</Chip>}
-                  {estimate.data?.over_limit && <Chip s="act">{t("v2.dlc.cost.overLimit")}</Chip>}
-                </span>
-                <Btn kind="primary" disabled={busy || !can("eval.run") || estimate.loading || Boolean(estimate.data?.over_limit)
+                <span style={{ flex: 1 }} />
+                <Btn kind="primary"
+                  disabled={busy || !can("eval.run") || estimate.loading || Boolean(estimate.data?.over_limit)
+                  || (Boolean(estimate.data?.confirm_required) && !confirmCost)
                   || (writes.length > 0 && !confirmWrites)}
                   onClick={() =>
                     act(

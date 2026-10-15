@@ -59,9 +59,9 @@ def test_estimate_scales_with_repeats_and_flags_confirmation(db, monkeypatch):
                           evaluators=["Builtin.Correctness"], repeats=3)
     assert three["sessions"] == 60 and three["agent_usd"] == pytest.approx(1.2)
     assert three["duration_minutes"] > one["duration_minutes"]
-    # a builtin judge is billed by the service, not by this account
+    # a builtin judge is billed by AgentCore Evaluations, priced at its own rate
     assert three["judges"][0]["billed_by"] == "agentcore_evaluations"
-    assert three["judges"][0]["usd"] is None
+    assert three["judges"][0]["usd"] > 0 and three["managed_usd"] > 0
 
     ws = db.get(Workspace, WS)
     ws.release_policy = {"eval_cost_confirm_usd": 1.0, "eval_cost_max_usd": 1.1}
@@ -122,7 +122,8 @@ def test_a_custom_judge_is_priced_in_this_account(db, monkeypatch):
                         criteria_rows=rows)
     assert out["judges"][0]["billed_by"] == "your_account", out
     assert out["judge_usd"] is not None and out["judge_usd"] > 0, out
-    assert out["total_usd"] == out["judge_usd"]
+    # the replay also runs on AgentCore Runtime (eval-cost D-2): judge + runtime
+    assert out["total_usd"] == pytest.approx(out["judge_usd"] + out["runtime_usd"], abs=1e-4)
 
 
 def test_an_unpriced_judge_model_says_so(db, monkeypatch):
