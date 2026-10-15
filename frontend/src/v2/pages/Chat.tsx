@@ -26,6 +26,7 @@ import {
   type FeedbackVerdict,
   localizedMessage,
 } from "../../lib/api";
+import { budgetRefusalOf } from "../../lib/budgets";
 import {
   agentMemoryState,
   type AsUserChoice,
@@ -38,6 +39,7 @@ import {
 import { livePolicyDeny, restoredPolicyDeny } from "../../lib/policy-deny";
 import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
 import { useLoad, useV2Toast } from "../hooks";
+import { refreshMyUsageIfLimited } from "../myUsage";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
 import "./chat/chat.css";
 import { Composer } from "./chat/Composer";
@@ -321,7 +323,9 @@ export function V2Chat() {
     } catch (err) {
       failed = true;
       const message = errorMessage(err);
-      setMessages((m) => [...m, { kind: "error", text: message }]);
+      // a 402 is final: the row says why and links to My usage, no retry
+      const budget = budgetRefusalOf(err) ?? undefined;
+      setMessages((m) => [...m, { kind: "error", text: message, budget }]);
       if (files.length) setAttachmentError(message);
     } finally {
       if (failed && !retrying) setInput(prompt);
@@ -330,6 +334,7 @@ export function V2Chat() {
       setBusy(false);
       if (activeSessionId) void refreshMemory(activeSessionId);
       if (agentId) void loadSessions(agentId);
+      refreshMyUsageIfLimited(); // the turn was charged: the 80 % banner may be due
     }
   };
 

@@ -4,7 +4,10 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { chatApi, errorMessage, localizedMessage } from "../../../lib/api";
+import { budgetRefusalOf } from "../../../lib/budgets";
 import { sseEvents } from "../../../lib/chat";
+import { BudgetRefusalLink } from "../../BudgetBanner";
+import { refreshMyUsageIfLimited } from "../../myUsage";
 import { Alert, Button, Card } from "../../ui";
 import { applyStreamEvent, awaitingReply, closeOpen, pushTurn, type Turn } from "./tryChatTurns";
 
@@ -66,13 +69,15 @@ export function TryChat({ agentId }: { agentId: string }) {
     } catch (err) {
       if (controller.signal.aborted) return; // unmounted: nobody is looking
       failed = true;
-      setTurns((prev) => pushTurn(prev, { role: "error", text: errorMessage(err) }));
+      const budget = budgetRefusalOf(err) ?? undefined;
+      setTurns((prev) => pushTurn(prev, { role: "error", text: errorMessage(err), budget }));
     } finally {
       if (!controller.signal.aborted) {
         // keep the draft on failure, unless the member already typed a new one
         if (failed) setText((cur) => cur || prompt);
         setTurns(closeOpen);
         setBusy(false);
+        refreshMyUsageIfLimited(); // the turn was charged: the 80 % banner may be due
       }
       inFlight.current = false;
     }
@@ -88,7 +93,7 @@ export function TryChat({ agentId }: { agentId: string }) {
         {turns.length === 0 && <p className="v2-trychat-empty">{t("v2.agents.tryChat.empty")}</p>}
         {turns.map((turn, i) =>
           turn.role === "error" ? (
-            <Alert key={i} tone="error">
+            <Alert key={i} tone="error" action={turn.budget ? <BudgetRefusalLink code={turn.budget} /> : undefined}>
               {turn.text}
             </Alert>
           ) : turn.role === "notice" ? (
