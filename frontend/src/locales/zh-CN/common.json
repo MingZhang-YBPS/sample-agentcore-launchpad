@@ -14060,6 +14060,166 @@
         "conflict": "与 SSO 映射不一致（{{role}}）"
       },
       "refresh": "刷新"
+    },
+    "costTags": {
+      "nav": "成本标签",
+      "eyebrow": "配置",
+      "title": "成本标签",
+      "sub": "平台写在 {{workspace}} 每个资源上的标签，以及 AWS 账单是否已按它们分组成本。",
+      "recheck": "重新检查",
+      "openBilling": "账单成本",
+      "activation": "成本分配",
+      "account": {
+        "standalone": "独立账号",
+        "management": "组织管理账号",
+        "member": "组织成员账号",
+        "unknown": "账号类型未知"
+      },
+      "ofActive": "/ {{total}} 个键已激活",
+      "status": {
+        "active": "已激活",
+        "inactive": "未激活",
+        "not_found": "尚未出现",
+        "unknown": "未知"
+      },
+      "unreadable": "无法读取账单设置（{{code}}）。工作区角色需要 ce:ListCostAllocationTags 权限。",
+      "memberTitle": "此账号属于 AWS Organization：成本分配标签需要在管理账号中激活。",
+      "memberStep1": "登录管理账号 {{account}}。",
+      "memberStep2": "打开“账单和成本管理 → 成本分配标签 → 用户定义的”。",
+      "memberStep3": "选中并激活：{{keys}}。",
+      "activate_one": "激活 {{count}} 个键",
+      "activate_other": "激活 {{count}} 个键",
+      "activateHint": "会修改本账号的账单设置。AWS 约在 {{hours}} 小时内对新的账单明细生效；此前的成本仍为未标记。",
+      "waitingForBilling": "账单尚未在任何资源上看到其余的键。它们会在第一个打了标签的资源出现后最多一天内出现，届时即可激活。",
+      "allActive": "所有键均已激活，Cost Explorer 会按它们分组新的账单明细。",
+      "checked": "{{when}}前检查 · 账号 {{account}}",
+      "activated_one": "已激活 {{count}} 个成本分配标签",
+      "activated_other": "已激活 {{count}} 个成本分配标签",
+      "notFoundYet_one": "{{count}} 个键尚未出现在账单中：请一天后再激活",
+      "notFoundYet_other": "{{count}} 个键尚未出现在账单中：请一天后再激活",
+      "ledger": "标签集",
+      "ledgerEnd": "工作区共享资源标记为 launchpad:project={{shared}}",
+      "col": {
+        "key": "键",
+        "value": "值",
+        "role": "角色",
+        "status": "账单",
+        "lastUsed": "最近使用"
+      },
+      "value": {
+        "project": "项目 id",
+        "workspace": "工作区 id",
+        "agent-id": "Agent id（Agent 级资源）",
+        "managed-by": "launchpad",
+        "department": "部门 id",
+        "custom": "按项目设置"
+      },
+      "role": {
+        "primary": "主维度",
+        "dimension": "维度",
+        "custom": "自定义"
+      },
+      "path": "从打标签的资源到按项目计费",
+      "pathHint": "Cost Explorer 只在标签激活后才按它分组，且只对激活之后产生的成本生效。",
+      "stage": {
+        "tagged": "已打标签",
+        "taggedDetail": "创建和更新时",
+        "active": "已激活",
+        "activeDetail": {
+          "unreadable": "状态无法读取",
+          "inactive": "launchpad:project 未激活",
+          "settling": "launchpad:project 已激活",
+          "billing": "launchpad:project 已激活"
+        },
+        "settling": "生效中",
+        "settlingDetail": "账单约需 {{hours}} 小时",
+        "billed": "按项目计费",
+        "billedDetail": "成本页的账单口径"
+      },
+      "sumTitle": "项目账单成本的构成",
+      "sum": {
+        "taggedOp": "已标记",
+        "tagged": "项目自己的资源",
+        "taggedBody": "launchpad:project 为该项目 id 的账单明细，按服务细分。",
+        "sharedOp": "+ 分摊",
+        "shared": "共享基础设施的一份",
+        "sharedBody": "标记为 {{shared}} 的资源（网关、共享 Memory、登录用户池），按各项目在窗口内的调用量分摊，并标注“分摊”。",
+        "untaggedOp": "不归属",
+        "untagged": "未标记的成本单独列出",
+        "untaggedBody": "没有该标签的账单明细——激活前的成本、未打标签的资源、非平台创建的资源——只列出，不分摊。"
+      },
+      "backfill": "为存量资源补标",
+      "backfillPending": "当前版本尚未提供补标任务。",
+      "backfillBody": "它会给标签集之前创建的资源补打标签，记录每个资源的结果（成功 / 不支持 / 无权限），并在此显示覆盖率，便于补齐 IAM 权限。",
+      "basis": {
+        "estimate": "估算",
+        "billing": "账单"
+      },
+      "billing": {
+        "inactive": "launchpad:project 尚未激活为成本分配标签，因此下面所有成本都是未标记的。",
+        "activateLink": "前往“配置 → 成本标签”激活。",
+        "basisDiff": "账单成本是 AWS 在本区域、所有服务上按 launchpad:project 标签实际收取的费用，最多滞后一天，并包含基础设施；估算是模型 token × 价格表，几分钟内可得。两者会有差异。",
+        "total": "账单 · 本区域",
+        "window": "{{start}} → {{end}}",
+        "estimate30": "估算 · 30 天",
+        "estimateFoot": "token × 价格表",
+        "shared": "共享基础设施",
+        "sharedAllocated": "按调用量分摊",
+        "sharedUnallocated": "未分摊：没有调用",
+        "untagged": "未标记",
+        "untaggedFoot": "不分摊给任何项目",
+        "daily": "按日 · 30 天",
+        "monthly": "按月 · 6 个月",
+        "refresh": "读取 Cost Explorer",
+        "provisional": "本期数字为暂估",
+        "cached": "{{when}}前缓存 · {{region}} · 每 6 小时刷新",
+        "fresh": "{{when}}前读取 · {{region}}",
+        "perDay": "每日账单",
+        "perMonth": "每月账单",
+        "stripLabel": "每期账单成本",
+        "byProject": "按项目的账单",
+        "empty": "此窗口内没有账单成本",
+        "colInvocations": "调用量",
+        "colEstimate": "估算",
+        "colGap": "账单对比估算",
+        "colServices": "主要服务",
+        "allocTitle": "该项目按调用量分摊的共享基础设施成本",
+        "alloc": "分摊",
+        "sharedRow": "共享基础设施",
+        "allocated": "已分摊",
+        "unallocated": "未分摊",
+        "untaggedRow": "未标记",
+        "weightsError": "无法读取调用量（{{error}}），共享行未分摊。"
+      },
+      "project": {
+        "title": "成本标签",
+        "sub": "与平台自己的键一起写在项目的资源上——例如企业的成本中心。新键需在“配置 → 成本标签”中激活后才能按它计费。",
+        "fixed": "平台写入的标签",
+        "keyPlaceholder": "CostCenter",
+        "valuePlaceholder": "1234",
+        "remove": "移除",
+        "error": {
+          "empty": "键不能为空",
+          "long": "键最多 128 个字符，值最多 256 个",
+          "reserved": "键不能以 aws: 或 launchpad: 开头",
+          "chars": "只能使用字母、数字、空格和 _ . : / = + - @",
+          "duplicate": "该键重复（键比较不区分大小写）"
+        },
+        "none": "没有自定义成本标签。",
+        "add": "添加标签",
+        "count": "{{count}} / {{max}}",
+        "saved": "已保存 {{name}} 的成本标签",
+        "basis": "预算比对口径",
+        "basisName": {
+          "estimate": "估算",
+          "billing": "账单成本"
+        },
+        "basisHint": {
+          "estimate": "模型 token × 价格表：几分钟内可得，仅含模型。",
+          "billing": "AWS 按 launchpad:project 实际收取的费用，加上分摊的共享部分：包含所有服务，最多滞后一天。"
+        },
+        "basisSaved": "已修改 {{name}} 的预算口径"
+      }
     }
   },
   "models": {

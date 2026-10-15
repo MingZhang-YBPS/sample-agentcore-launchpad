@@ -146,6 +146,8 @@ const V3NetworkProfiles = lazy(() =>
 );
 // Configure → Storage (storage-mounts §10)
 const V3Storage = lazy(() => import("./v3/pages/storage/Storage").then((m) => ({ default: m.V3Storage })));
+// Configure → Cost tags (cost-tags §1.6)
+const V3CostTags = lazy(() => import("./v3/pages/cost-tags/CostTags").then((m) => ({ default: m.V3CostTags })));
 // Configure → Single sign-on (sso §2.7)
 const V3Sso = lazy(() => import("./v3/pages/sso/Sso").then((m) => ({ default: m.V3Sso })));
 // Configure → System update (online-update §2.7)
@@ -401,6 +403,7 @@ export default function App() {
                 <Route path="workspaces" element={<V3Workspaces />} />
                 <Route path="network" element={<V3NetworkProfiles />} />
                 <Route path="storage" element={<V3Storage />} />
+                <Route path="cost-tags" element={<V3CostTags />} />
                 <Route path="projects" element={<V3Projects />} />
                 <Route path="project-settings" element={<V3ProjectSettings />} />
                 <Route path="models" element={<V3Models />} />

@@ -256,9 +256,12 @@ def quotas_view(db: Session, row: Project) -> dict[str, Any]:
                         checked_at=budget.last_checked_at.isoformat()
                         if budget.last_checked_at else None,
                         workspace_id=budget.workspace_id)
+        if key == "monthly_cost_alert_usd":
+            item["basis"] = budget_basis(row)
         items.append(item)
     return {"project_id": row.id, "department_id": row.department_id,
             "quotas": project, "department_caps": caps, "items": items,
+            "budget_basis": budget_basis(row),
             "month_start": _month_start().isoformat()}
 
 
@@ -305,3 +308,67 @@ def update_quotas(db: Session, identity: Any, row: Project, quotas: dict[str, An
     projects_svc._journal(db, identity, "project.quotas.update",
                           f"project:{row.id} quotas:{','.join(changed)}")
     return row
+
+
+# ── the budget's basis (cost-tags design §1.4-4, CT-2) ────────────────────────
+# `settings.budget_basis`: what `monthly_cost_alert_usd` compares against — the
+# token × price estimate (the default, and every project's until someone chooses)
+# or the billed cost of the project's `launchpad:project` tag (Cost Explorer, with
+# its shared-infrastructure allocation; billed figures trail by up to a day).
+
+BASIS_ESTIMATE = "estimate"
+BASIS_BILLING = "billing"
+BUDGET_BASES = (BASIS_ESTIMATE, BASIS_BILLING)
+
+
+def budget_basis(row: Project | None) -> str:
+    stored = (row.settings or {}).get("budget_basis") if row is not None else None
+    return stored if stored in BUDGET_BASES else BASIS_ESTIMATE
+
+
+def update_budget_basis(db: Session, identity: Any, row: Project, basis: str) -> Project:
+    """Choose the budget's basis; an administrator or the project's department
+    administrator, like the quota it qualifies."""
+    if row.status != projects_svc.STATUS_ACTIVE_PROJECT:
+        raise AppError("project.archived", f"project '{row.id}' is archived",
+                       {"project_id": row.id}, status_code=409)
+    if basis not in BUDGET_BASES:
+        raise AppError("project.setting_invalid",
+                       f"budget_basis must be one of {', '.join(BUDGET_BASES)}",
+                       {"key": "budget_basis"}, status_code=422)
+    if basis == budget_basis(row):
+        return row
+    # the default is stored as its absence, so an untouched project stays untouched
+    row.settings = projects_svc._merge_settings(
+        row.settings or {}, {"budget_basis": basis if basis != BASIS_ESTIMATE else None}
+    ) or None
+    row.updated_at = datetime.now(UTC)
+    db.flush()
+    # it qualifies the budget quota: journalled with the quotas
+    projects_svc._journal(db, identity, "project.quotas.update",
+                          f"project:{row.id} budget_basis:{basis}")
+    return row
+
+
+def budget_spend(
+    db: Session, workspace: Any, project_id: str, *, several: bool,
+) -> tuple[float | None, str]:
+    """The project budget rule's month-to-date value in one workspace, on the
+    project's basis (`several` False: a single-project workspace, whose spend is all
+    the project's). Never raises: (None, why) when the figure cannot be read."""
+    from app.services import billing_costs, costs
+
+    with project_context(None):
+        basis = budget_basis(db.get(Project, project_id))
+    scope = project_id if several else None
+    if basis == BASIS_BILLING:
+        try:
+            usd = billing_costs.project_month_to_date_usd(db, workspace, scope)
+        except Exception as exc:  # noqa: BLE001
+            return None, f"could not read billed spend: {type(exc).__name__}"
+        return usd, "month-to-date billed cost (Cost Explorer, launchpad:project)"
+    try:
+        usd = costs.month_to_date_usd(db, workspace, project=scope)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"could not estimate spend: {type(exc).__name__}"
+    return usd, "month-to-date estimate from the price map"

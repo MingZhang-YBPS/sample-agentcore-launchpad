@@ -329,3 +329,18 @@ def month_to_date_usd(
     if project is None:
         return float(raw["usd"])
     return float((raw.get("by_project") or {}).get(project, 0.0))
+
+
+def invocations_by_project(
+    db: Session, workspace: WorkspaceContext, *, range_key: str = "30d",
+) -> dict[str, int]:
+    """Sessions per project over the window, from the (cached) estimate rows — the
+    invocation volume the billing view (`billing_costs`, cost-tags design D-4)
+    allocates the shared infrastructure row by. Unattributed rows weigh nothing."""
+    raw = cost_report(db, workspace, range_key=range_key)
+    weights: dict[str, int] = {}
+    for row in raw["by_agent"]:
+        if row["project_id"]:
+            weights[row["project_id"]] = weights.get(row["project_id"], 0) + int(
+                row["sessions"] or row["llm_calls"] or 0)
+    return weights
