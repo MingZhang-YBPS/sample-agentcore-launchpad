@@ -43,6 +43,9 @@ def get_fleet(
     A ledger read by design: fanning Logs Insights across every account would be slow,
     billed per scan, and would fail the whole page when one spoke's role lapsed. A
     workspace that is not usable reports `readable: false` rather than zeroes.
+
+    Counts only — no agent, job or alert is named — so it is structure for a steward
+    (§11.4) as it is.
     """
     if project is not None and db.get(Project, project) is None:
         raise NotFoundError("project.not_found", f"project '{project}' not found",

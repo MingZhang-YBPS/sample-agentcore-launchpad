@@ -247,6 +247,9 @@ def enable_key(
             {"reason": reason},
             status_code=409,
         )
+    if not key.enabled:
+        # a disabled key frees its slot, so re-enabling takes one (max_api_keys, §11.3)
+        project_quotas.assert_capacity(db, key.project_id, "max_api_keys")
     key.enabled = True
     db.commit()
     return _key_out(key)

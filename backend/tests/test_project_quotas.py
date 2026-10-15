@@ -118,7 +118,7 @@ def test_read_is_members_write_is_admins_and_the_departments(world):
     db = SessionLocal()
     try:
         targets = list(db.scalars(select(AuditEvent.target).where(
-            AuditEvent.action == "project.update",
+            AuditEvent.action == "project.quotas.update",
             AuditEvent.target.like("% quotas:%")).order_by(AuditEvent.created_at)))
     finally:
         db.close()

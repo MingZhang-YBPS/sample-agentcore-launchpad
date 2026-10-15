@@ -41,9 +41,9 @@ from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import project_context
 from app.core.regions import AGENTCORE_SUGGESTED_REGIONS
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
-from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
+from app.routers.auth import ROLE_MEMBER, Identity, require_identity
+from app.services import access, aws_clients, visibility, workspace_bootstrap
 from app.services import api_keys as api_keys_service
-from app.services import aws_clients, visibility, workspace_bootstrap
 from app.services import promotion as promotion_service
 from app.services import users as users_service
 from app.services.access import bump_epoch, sync_default_membership
@@ -168,7 +168,7 @@ def _fallback_row(db: Session, identity: Identity) -> Workspace:
     lands on `default` and a member with a single grant on that one; anything
     else has to say which.
     """
-    if identity.is_admin:
+    if access.can_manage_structure(identity):  # an administrator or a steward (§11.4)
         return _requested_row(db, DEFAULT_WORKSPACE_ID)
     granted = granted_workspace_ids(db, identity.user_id or "")
     if not granted:
@@ -191,9 +191,11 @@ def _authorize(db: Session, identity: Identity, row: Workspace) -> None:
     """Admins reach every workspace; members need a grant.
 
     The admin bypass is mandatory, not a shortcut: the built-in admin is
-    config-driven and has no `users` row, so it can never own a grant.
+    config-driven and has no `users` row, so it can never own a grant. A steward
+    (§11.4) reaches every workspace too — for its structure; its project snapshot is
+    empty, so every project-scoped route still refuses it.
     """
-    if identity.is_admin:
+    if access.can_manage_structure(identity):
         return
     granted = identity.user_id is not None and (
         row.id in granted_workspace_ids(db, identity.user_id)
@@ -364,12 +366,13 @@ def list_workspaces(request: Request, db: Session = Depends(get_db)) -> dict[str
     """Every workspace for an admin; the granted ones for a member."""
     identity = require_identity(request)
     rows = list(db.scalars(select(Workspace).order_by(Workspace.id)))
-    if not identity.is_admin:
+    every = access.can_manage_structure(identity)  # administrators and stewards
+    if not every:
         granted = set(granted_workspace_ids(db, identity.user_id or ""))
         rows = [row for row in rows if row.id in granted]
     return {
-        "workspaces": [_out(row, reveal_role=identity.is_admin) for row in rows],
-        "all_workspaces": identity.is_admin,
+        "workspaces": [_out(row, reveal_role=every) for row in rows],
+        "all_workspaces": every,
         # Suggestions for the registration form only; any region is accepted.
         "suggested_regions": list(AGENTCORE_SUGGESTED_REGIONS),
     }
@@ -408,7 +411,7 @@ def hub_role_arn(caller_arn: str) -> str:
 
 
 @router.get("/hub-identity")
-def hub_identity(_: Identity = Depends(require_admin)) -> dict[str, Any]:
+def hub_identity(_: Identity = Depends(access.require_structure)) -> dict[str, Any]:
     """The hub's own account and role — the two values a spoke stack is deployed with.
 
     Declared before the `/{workspace_id}` routes so the literal path wins, and
@@ -447,7 +450,7 @@ class WorkspacePreflight(BaseModel):
 @router.post("/preflight")
 def preflight_workspace(
     req: WorkspacePreflight,
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Can this hub actually assume that role? Answered before registration.
 
@@ -495,7 +498,7 @@ def preflight_workspace(
 def create_workspace(
     req: WorkspaceCreate,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     # Validated as sent rather than normalized: the id travels back in every
     # `X-Workspace` header and in URLs, and a silently rewritten one turns into a
@@ -557,7 +560,7 @@ def update_workspace(
     workspace_id: str,
     req: WorkspacePatch,
     db: Session = Depends(get_db),
-    identity: Identity = Depends(require_admin),
+    identity: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Rename and/or re-tier: account/region are the workspace's identity, and its
     resource map belongs to the bootstrap job.
@@ -625,7 +628,7 @@ def _referencing_rows(db: Session, workspace_id: str) -> dict[str, int]:
 def delete_workspace(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Detach-only decommission: the AWS resources it provisioned stay put.
 
@@ -734,7 +737,7 @@ def purge_workspace(
     workspace_id: str,
     dry_run: bool = False,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Delete a failed or abandoned registration outright, rows and all.
 
@@ -821,7 +824,7 @@ def _bootstrap_conflict(row: Workspace) -> AppError:
 def bootstrap_workspace(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Queue the staged bootstrap job for a registered workspace.
 
@@ -860,7 +863,7 @@ def bootstrap_workspace(
 def repair_workspace_observability(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Turn Transaction Search on for a ready workspace whose bootstrap could not.
 
@@ -885,7 +888,7 @@ def repair_workspace_observability(
 def bootstrap_status(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """The latest bootstrap run for this workspace, if any.
 
@@ -945,7 +948,7 @@ def list_grants(
     limit: int = _GRANTS_LIMIT_DEFAULT,
     offset: int = 0,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """The member accounts this workspace can be granted to, and which hold it.
 
@@ -1033,7 +1036,7 @@ def replace_grants(
     workspace_id: str,
     req: GrantsPatch,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Grant and revoke this workspace for several accounts at once.
 
@@ -1069,6 +1072,10 @@ def replace_grants(
         )
     requested = grant | revoke
     if requested:
+        if db.scalar(select(User.id).where(User.id.in_(sorted(requested)),
+                                           User.role == users_service.ROLE_STEWARD)):
+            # a grant would reach project data through the default membership (§11.4)
+            raise users_service._no_grants(users_service.ROLE_STEWARD)
         members = set(
             db.scalars(
                 select(User.id).where(
@@ -1151,7 +1158,7 @@ def _visibility_out(row: Workspace) -> dict[str, Any]:
 def get_visibility(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     return _visibility_out(_requested_row(db, workspace_id))
 
@@ -1161,7 +1168,7 @@ def put_visibility(
     workspace_id: str,
     req: VisibilitySetting,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Switch shared ⇄ isolated. Changes no resource and applies to the next
     request: the workspace row is re-read on every request."""

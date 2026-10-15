@@ -25,6 +25,7 @@ from app.evaluation.models import EvalPipeline, EvalRecommendation, EvalRun
 from app.evaluation.recommendations import PROVIDER_JOB_PREFIX
 from app.models.assistant import AssistantConversation, EvaluationAssetOperation
 from app.models.ledger import Job, PolicyChange
+from app.models.system_update import SystemUpdate
 from app.optimization.models import Experiment, RuntimeCanary
 from app.services import inflight
 from app.services.inflight import (
@@ -154,6 +155,8 @@ def _seed_every_kind() -> dict[str, str]:
         _conversation("conv-turn", active_turn=3,
                       active_turn_started_at=NOW - timedelta(minutes=5)),
         _conversation("conv-prep", preparation_token="tok"),
+        SystemUpdate(id="upd-prep", target_sha="f" * 40, status="preparing"),
+        SystemUpdate(id="upd-done", target_sha="e" * 40, status="done"),
     )
     return {
         "job-deploy": RESUMES, "job-boot": RESUMES, "job-uninst": RESUMES,
@@ -164,7 +167,7 @@ def _seed_every_kind() -> dict[str, str]:
         "sl-eval": FAILS_INTERRUPTED, "pc-run": RECONCILES, "pc-pend": RECONCILES,
         "pipe-run": FAILS_ON_READ, "rec-provider": FAILS_ON_READ,
         "rec-agentcore": RESTART_SAFE, "conv-turn": FAILS_INTERRUPTED,
-        "conv-prep": CLEARED_RETRY,
+        "conv-prep": CLEARED_RETRY, "upd-prep": RESUMES,
     }
 
 
@@ -192,7 +195,9 @@ def test_every_kind_lists_once_with_its_outcome_and_terminal_rows_are_absent():
     assert "resumable on request" in by_id["sl-train"].label
     assert by_id["run-batch"].handled_by == "resume_interrupted_runs"
     assert by_id["pipe-run"].handled_by == inflight.READ_TIME_REAPERS[inflight.EVAL_PIPELINE]
-    assert {i.workspace_id for i in items} == {"default"}
+    # an online update is the platform's, not any workspace's
+    assert by_id["upd-prep"].workspace_id is None
+    assert {i.workspace_id for i in items if i.id != "upd-prep"} == {"default"}
 
 
 def test_every_outcome_is_in_the_closed_set():

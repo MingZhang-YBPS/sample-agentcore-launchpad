@@ -917,6 +917,13 @@ def _records_reader(workspace: WorkspaceContext | None, result: dict[str, Any]) 
     return read
 
 
+def _in_project(project_id: str | None, fn: Callable[..., Any], *args: Any,
+                **kwargs: Any) -> Any:
+    # the queue's worker threads carry no context: run as the row's project
+    with project_context(project_id):
+        return fn(*args, **kwargs)
+
+
 def reconcile_run(
     run_id: str, *, mode: str, batch_id: str, workspace: WorkspaceContext
 ) -> None:
@@ -1000,6 +1007,7 @@ def recheck_run(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
                 status_code=409,
             )
         mode, batch_id = run.mode, run.batch_eval_id
+        run_project = run.project_id
     finally:
         db.close()
     data = data_client(workspace)
@@ -1016,9 +1024,13 @@ def recheck_run(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
             _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
     else:
         _update(run_id, status="evaluating", error=None)
+        # the row's project, not the caller's: its slot counts against that project's
+        # concurrent-run limit (projects §11.3)
         run_queue.submit(
             run_id,
-            lambda: reconcile_run(run_id, mode=mode, batch_id=batch_id, workspace=workspace),
+            lambda: _in_project(run_project, reconcile_run, run_id, mode=mode,
+                                batch_id=batch_id, workspace=workspace),
+            project_id=run_project,
         )
     db = SessionLocal()
     try:
@@ -1109,9 +1121,12 @@ def resume_interrupted_runs() -> list[str]:
                 workspace = context_for_workspace(run.workspace_id)
                 run_queue.submit(
                     run.id,
-                    lambda rid=run.id, m=run.mode, b=run.batch_eval_id, w=workspace: (
-                        reconcile_run(rid, mode=m, batch_id=b, workspace=w)
+                    lambda rid=run.id, m=run.mode, b=run.batch_eval_id, w=workspace,
+                    p=run.project_id: (
+                        _in_project(p, reconcile_run, rid, mode=m, batch_id=b, workspace=w)
                     ),
+                    # a startup thread has no project: the slot is the row's project's
+                    project_id=run.project_id,
                 )
                 resumed.append(run.id)
             else:
@@ -1296,7 +1311,7 @@ def submit_run(
                 qualifier=qualifier,
             )
 
-    position = run_queue.submit(run_id, queued)
+    position = run_queue.submit(run_id, queued, project_id=run_project)
     _update(run_id, queue_position=position)
     db = SessionLocal()
     try:

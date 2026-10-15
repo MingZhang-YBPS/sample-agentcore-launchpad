@@ -243,7 +243,7 @@ def test_admin_sets_and_clears_the_new_settings(app, world):  # noqa: F811
     {"quotas": {"v1_rate_per_minute": api_keys_service.MAX_RATE_PER_MINUTE + 1}},
     {"quotas": {"v1_rate_per_minute": "600"}},
     {"quotas": {"v1_rate_per_minute": True}},
-    {"quotas": {"max_agents": 3}},
+    {"quotas": {"max_widgets": 3}},
     {"quotas": [600]},
     {"inbound_auth_default": {"mode": "jwt"}},
     {"inbound_auth_default": {"mode": "jwt", "jwt": {

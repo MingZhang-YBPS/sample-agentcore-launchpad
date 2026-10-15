@@ -40,13 +40,19 @@ DEFAULT_CONFIRM_USD = 5.0
 MAX_REPEATS = 10
 
 
-def _policy(workspace: Workspace | None) -> dict[str, float | None]:
+def _policy(
+    db: Session, workspace: Workspace | None, project_id: str | None = None,
+) -> dict[str, float | None]:
+    """The confirm threshold (the workspace policy's) and the per-run limit: the
+    smaller of the workspace's `eval_cost_max_usd` and the project's
+    `quotas.eval_run_max_usd` (projects §11.3)."""
+    from app.services import release_gates
+
     policy = (workspace.release_policy if workspace else None) or {}
     confirm = policy.get("eval_cost_confirm_usd", DEFAULT_CONFIRM_USD)
     return {
         "confirm_usd": float(confirm) if confirm is not None else None,
-        "max_usd": (float(policy["eval_cost_max_usd"])
-                    if policy.get("eval_cost_max_usd") is not None else None),
+        "max_usd": release_gates.eval_cost_max_usd(db, workspace, project_id),
     }
 
 
@@ -179,7 +185,7 @@ def estimate(
                         "note": "estimated from previous runs" if _judge_tokens(
                             db, judge["evaluator_id"]) else "rough token budget"})
     total = (agent_usd or 0.0) + judge_usd
-    limits = _policy(workspace)
+    limits = _policy(db, workspace, agent.project_id if agent is not None else None)
     confirm_usd, max_usd = limits["confirm_usd"], limits["max_usd"]
     concurrency = max(1, get_settings().eval_max_concurrent_runs or 1)
     minutes = round(sessions * 1.5 / concurrency) + 5  # replay + telemetry wait + batch

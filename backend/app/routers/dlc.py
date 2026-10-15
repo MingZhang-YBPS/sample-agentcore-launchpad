@@ -973,10 +973,16 @@ def calibration_history(
 class ReleaseEvaluateIn(BaseModel):
     repeats: int = Field(default=1, ge=1, le=10)
     confirm_cost: bool = False
+    # a candidate mounting shared-state storage read-write writes into it during the
+    # replay (storage-mounts §8.2): 409 storage.write_confirm_required without it
+    confirm_storage: bool = False
 
 
 class ReleaseDecisionIn(BaseModel):
     note: str = Field(default="", max_length=2000)
+    # signing acknowledges the candidate's storage changes (storage-mounts §8.1);
+    # block / rollback ignore it
+    storage_ack: bool = False
 
 
 class WaiverIn(BaseModel):
@@ -1060,7 +1066,8 @@ def evaluate_release(
                        status_code=409)
     release_svc.start_evaluation(db, record, agent, ws.context, actor=_actor(request),
                                  repeats=req.repeats, confirm_cost=req.confirm_cost,
-                                 is_admin=_bypasses(request))
+                                 is_admin=_bypasses(request),
+                                 confirm_storage=req.confirm_storage)
     db.commit()
     return _release_payload(db, ws, agent)
 
@@ -1097,7 +1104,7 @@ def sign_release(
     if record is None:
         raise NotFoundError("release.nothing_pending", "no release is open for this agent")
     release_svc.sign(db, record, agent, control_client(ws.context), actor=_actor(request),
-                     note=req.note)
+                     note=req.note, storage_ack=req.storage_ack)
     db.commit()
     return _release_payload(db, ws, agent)
 
@@ -1583,6 +1590,7 @@ def estimate_run(
 
 @router.get("/audit")
 def audit_trail(
+    request: Request,
     target: str | None = Query(default=None, max_length=256),
     action: str | None = Query(default=None, max_length=160),
     project: str | None = Query(default=None, max_length=32),
@@ -1596,10 +1604,15 @@ def audit_trail(
     Cross-project (the route is PROJECT_EXEMPT, design §5.10): `project=<id>` is that
     project's events in every workspace it is bound to, `project=workspace` this
     workspace's events of no project (workspace-level; in `default`, also the
-    structure and account journal). `actor` is a username or a `users.id`."""
+    structure and account journal). `actor` is a username or a `users.id`.
+
+    A steward (§11.4) reads the structure journal only (`audit.steward_visible`):
+    the route is structure for it, and no data event reaches it."""
     from sqlalchemy import or_
 
     from app.core.project_scope import project_context
+    from app.services import audit as audit_service
+    from app.services import steward as steward_service
 
     if project and project != "workspace":
         # a project spans workspaces; the admin's view of it does too
@@ -1614,6 +1627,8 @@ def audit_trail(
         query = query.where(AuditEvent.action.like(f"{action}%"))
     if actor:
         query = query.where(or_(AuditEvent.actor == actor, AuditEvent.actor_user_id == actor))
+    if steward_service.is_steward(require_identity(request)):
+        query = query.where(audit_service.steward_clause())
     with project_context(None):  # every project's rows, whatever the request bound
         rows = db.scalars(query.order_by(AuditEvent.created_at.desc()).limit(limit)).all()
     return {

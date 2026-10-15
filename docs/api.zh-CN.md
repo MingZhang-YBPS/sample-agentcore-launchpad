@@ -329,7 +329,7 @@ lacks expected_response`）；所选自定义评估器读取失败时返回 `422
 
 托管 MCP 服务器之外的网关工具目标（projects §15.12、§15.13、§15.15，`routers/gateway_lambda.py`、`services/gateway_tools.py`）。这些路由属于 Workspace + 项目范围；其他项目的行与不存在的行一样返回 404。它们的工具清单与托管 MCP 服务器经过同样的工具审批（审批单形状见上文）：审批需要 `perm:mcp.approve`，且创建者本人永远不能审批（`409 mcp_review.self_decide`）。
 
-- **Lambda 目标**由控制台创建。创建或删除会改动所有项目共享的 Workspace 网关，因此两者都是 `infra+perm:agents.deploy`：Workspace 只绑定一个项目时为该项目的 `agents.deploy`，绑定多个项目后仅限管理员。两者都受生产保护。
+- **Lambda 目标**由控制台创建。创建或删除会改动所有项目共享的 Workspace 网关，因此两者都是 `infra+perm:agents.deploy`：Workspace 只绑定一个项目时为该项目的 `agents.deploy`，绑定多个项目后仅限管理员——除非那里的每个项目都已隔离且各自的 Cedar 规则生效（projects §10.6-6）：此时重新由项目自己的 `agents.deploy` 决定，其他项目的目标返回 404（`INFRA_LOWERED_WHEN_ISOLATED`，与 `/api/identity/gateway-targets` 的 Connection 绑定目标相同）。两者都受生产保护。
 - **外部托管目标**是在网关上手动创建、且不属于任何托管服务器的 MCP 服务器目标。纳管时把它当前的清单记为已批准基线（已在调用它的 Agent 不会被切断），之后每小时的 `mcp.health` 任务用它比较新的清单。漂移会打开审批，但目标属于客户，永远不会被扣下或改指。
 
 Lambda 目标为 `{id, kind: "lambda", gateway_id, target_id, target_name, lambda_arn, description, tool_names[], status: reviewing|publishing|live|failed|rejected, error, created_by, created_at, review{…闸门状态}}`，创建时另带 `tool_schema[]`。
@@ -567,6 +567,8 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs` | 最近 50 个 ingestion 作业，最新优先，投影同上 |
 | `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/documents?page_size=&token=` | `ListKnowledgeBaseDocuments` 的一页（`page_size` 1–100，默认 50），形如 `{documents, next_token, page_size}`；每个文档带知识库侧的 `status`/`status_reason`/`indexed_at`，以及按对象 key 联结进来的 S3 侧 `size_bytes`/`uploaded_at`（后端无权列举该桶时为空） |
 | `POST` | `/api/knowledge-bases/{kb_id}/query` | 检索 Playground——`{text, number_of_results?}`（1–100，默认 8）→ 带 `managedSearchConfiguration` 的 `Retrieve`，响应 `{results}`，元素为 `{text, score, location_uri, metadata}` |
+| `POST` | `/api/knowledge-bases/{kb_id}/migrate-to-project` | 管理员（数据）。把已隔离项目的现有知识库迁到项目自己的角色、S3 前缀（`projects/<pid>/kb/<kb_id>/`）与标签：复制上传文件、切换角色（`UpdateKnowledgeBase`）、打标签，并在新前缀上创建数据源并同步 → `{kb_id, project_id, role_arn, prefix, copied, old_data_sources[], data_source, sync?, sync_error?, state: syncing\|done}`。幂等且只增不减：旧数据源在 `finish` 之前继续服务。其他项目的知识库 → `404 kb.not_found`；项目未隔离 → `409 project.isolation_disabled`；服务拒绝改角色 → `409 kb.role_update_unsupported`（在项目内重建该知识库） |
+| `POST` | `/api/knowledge-bases/{kb_id}/migrate-to-project/finish` | 管理员（数据）。新数据源最近一次同步为 `COMPLETE` 后：删除旧的 `kb/<kb_id>/` 数据源与共享角色上该知识库的内联策略 → `{kb_id, deleted_data_sources[], state: done}`。旧对象保留。`409 kb.not_migrated`（先迁移）、`409 kb.migration_syncing`（等待同步完成） |
 | `POST` | `/api/knowledge-bases/ensure-gateway` | 按名字「不存在才创建」共享的 `launchpad-kb-gw` MCP 网关，并把 `{id, arn, url}` 持久化到工作区。幂等；harness 部署路径调用的是同一个 helper，因此这条路由只用于提前预置网关 |
 
 错误码：`kb.not_found`（404——未知 id，或该知识库不是 MANAGED）、`kb.ds_not_found`
@@ -1109,7 +1111,7 @@ counter_complete{<counter>: bool}}`。
 
 | 方法 | 路径 | 鉴权 | 结果 |
 |---|---|---|---|
-| `GET` | `/api/auth/status` | 开放 | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions, builtin}`——身份字段在认证前为 null（`permissions` 为 `[]`） |
+| `GET` | `/api/auth/status` | 开放 | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions, builtin, version: {sha}}`（`version.sha` 为正在运行的控制台提交，已打开的页面据此发现在线更新）——身份字段在认证前为 null（`permissions` 为 `[]`） |
 | `POST` | `/api/auth/login` | 开放 | 设置 `launchpad_session` cookie（12 小时，且不超过账户有效期）并回显身份 |
 | `POST` | `/api/auth/register` | 开放 | `201`——创建一个 `member` 账户；默认 `status=pending` 且 `expires_at=null`，直到管理员批准，之后有效期为 `auth_registration_valid_days`（默认 7 天） |
 | `POST` | `/api/auth/logout` | 会话 | 清除 cookie |
@@ -1130,6 +1132,28 @@ counter_complete{<counter>: bool}}`。
 **管理员。** 授予或撤销 admin 角色的 `PATCH {role}` 会在 `user.update` 之外再记入结构事件
 `admin.grant` / `admin.revoke`。任何人都不能撤销自己的管理员角色：这样的 `PATCH` 返回
 `users.self_demote`（409）；若它同时会移除最后一位可登录的管理员，则先返回 `users.last_admin`（409）。
+
+**组织管理员（steward，`role: steward`，projects §11.4）。** 组织管理员管理平台的结构——账户、部门、项目、项目组、绑定、
+Workspace、网络与存储目录——从不接触数据。路由表归为结构（`ADMIN_SPLIT`）的 `admin` 路由它都能通过，数据类的则被拒绝
+（`403 auth.forbidden`）；它为管理结构可进入所有 Workspace（`GET /api/workspaces` 返回 `all_workspaces: true`），但它的
+项目快照为空，项目范围的路由仍拒绝它。它不持有任何授权或成员资格：`PUT /api/workspaces/{id}/grants`、
+`PATCH /api/users/{id} {workspaces}` 以及点名组织管理员的项目 / 项目组成员写操作返回 `400 users.steward_no_grants` 或
+`409 project.steward_member`；组织管理员把自己加入则返回 `403 project.self_membership`。跨平台的读取只给它结构信息：
+`GET /api/audit` 只列结构日志（项目、项目组、部门、管理员、账户、`steward.*`、`system.update.*`、Workspace 等级、网络与
+存储目录），`GET /api/inbox` 只有账户与 Workspace 条目，`GET /api/fleet` 本就只有计数。组织管理员的每次成员变更——在项目
+上、在项目组上（按项目组的每个项目各一次），或把项目移入项目组——都记为 `steward.members.change`（点名项目），并通知该项目
+的负责人（在该项目持有 `project.members` 的账户）。开启 `steward_two_person` 后，组织管理员的项目或项目组成员变更先暂存
+（`pending: [id]`，不生效），直到另一位组织管理员、管理员或该项目的负责人确认（项目组的变更需该组每个项目的负责人）。
+
+| 方法 | 路径 | 鉴权 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/steward/notices` | 成员 | 调用者所负责项目中组织管理员变更的通知：`{items[{id, kind: changed\|pending, project_id, project_name, actor, actor_user_id, changes[{op: upsert\|remove, user_id, username, role_key?}], pending_id, created_at, read}], unread}`（最多 50 条） |
+| `POST` | `/api/steward/notices/{notice_id}/ack` | 成员 | 把调用者的通知标为已读 → `{ok: true, notice_id}`。他人的通知 → `404 steward.notice_not_found` |
+| `GET` | `/api/steward/pending` | 成员 | `{items[{id, project_id, project_name, group_id?, group_name?, project_ids?, changes[…], requested_by, requested_by_user_id, created_at, mine, can_confirm}]}`：调用者可确认的待定变更，以及调用者自己发起的 |
+| `POST` | `/api/steward/pending/{pending_id}/confirm` | 成员 | 按发起人的原样应用该变更 → `{pending_id, project_id, group_id?, added[], updated[], removed[]}`，记为 `steward.pending.confirm`。发起人本人 → `403 steward.confirm_self`；涉及确认人自己的成员资格 → `403 project.self_membership`；其他无权确认者 → `404 steward.pending_not_found` |
+| `POST` | `/api/steward/pending/{pending_id}/reject` | 成员 | 丢弃该变更：发起人撤回（`steward.pending.withdraw`）或确认人拒绝（`steward.pending.reject`）→ `{pending_id, project_id, group_id?, rejected: true}` |
+| `GET` | `/api/steward/settings` | 管理员（结构） | `{steward_two_person}` |
+| `PUT` | `/api/steward/settings` | 管理员（数据：组织管理员不能放宽约束自己的规则） | 请求体 `{steward_two_person: bool}` → 同 GET 形状；记为 `steward.two_person` |
 
 注册错误码：`auth.registration_disabled`（400，认证门未开启或注册已关闭）、
 `auth.invalid_username` / `auth.invalid_email` / `auth.email_domain_blocked` / `auth.weak_password`（400）、
@@ -1237,8 +1261,12 @@ Workspace 范围的路由还有两种策略值。`perm:project.use`（对话、�
 | `GET` | `/api/projects/{project_id}/resources?workspace=` | 成员（非成员 404） | `{resources[{workspace_id, kind, resource_id, arn, status, detail, error, job_id, created_at, updated_at}]}`：隔离为本项目预置的资源。项目未绑定（或调用者无法在其中访问本项目）的 `workspace` → `404 project.not_bound` |
 | `GET` | `/api/projects/{project_id}/provisioning?workspace=` | 成员（非成员 404） | 单个 Workspace 的状态（即 `isolation` 中 `workspaces[]` 的一项）+ `job{id, status, error, stages[], preflight[], actor, created_at, updated_at} \| null` |
 | `POST` | `/api/projects/{project_id}/provision` | 管理员 | 请求体 `{workspace}` → `202` 预置视图 + `created`（已有运行中的预置时为 false）。重试该 Workspace 的资源预置 |
+| `GET` | `/api/projects/{project_id}/quotas` | 成员（非成员 404） | 用量与上限（projects §11.3）：`{project_id, department_id, quotas{…项目自身的值}, department_caps{…}, items[{key, unit: count\|usd, enforcement: block\|queue\|alert\|throttle, project_value, department_cap, limit, used, state?, checked_at?, workspace_id?}], month_start}`。`limit` 取项目值与部门上限中较小者。键：`max_agents`、`max_api_keys`（拒绝）、`max_concurrent_eval_runs`（排队）、`eval_run_max_usd`、`eval_monthly_usd_cap`（拒绝）、`monthly_cost_alert_usd`（告警，`used` 为预算告警最近一次的测量值）、`v1_rate_per_minute`（限流） |
+| `PUT` | `/api/projects/{project_id}/quotas` | 管理员；该项目的部门管理员 | 请求体 `{quotas{key: 值 \| null}}`（部分提交；`null` 清除该项）→ 同 GET 形状。记为 `project.quotas.update`（`project:<id> quotas:<变更的键>`）。不得超过部门上限（`422 project.quota_above_department`，`detail{quota, value, cap, department_id}`）；部门管理员只能在部门设有上限时设置 `v1_rate_per_minute`（`403 project.setting_forbidden`）；取值不合法 → `400 project.setting_invalid` |
 
 错误码（未注明者均为 `project.*`）：
+
+- 409 `quota_exceeded`（`detail{quota, used, limit}`）：创建 Agent（`POST /api/agents`、发现导入、架构助手批准）或 API Key、重新启用已停用的 Key、启动评估运行（`POST /api/eval/runs`、`POST /api/agents/{id}/release/evaluate`）超出项目配额。评估的预估成本对照 `eval_run_max_usd`；本月评估花费加上预估对照 `eval_monthly_usd_cap`（未定价的运行只在本月已超上限时被拒）。超过 `max_concurrent_eval_runs` 的运行改为排队等待。
 
 - 400：`invalid_id`、`workspaces_required`、`binding_conflict`（同一请求中既绑定又解绑）、`member_conflict`（同一请求中既 upsert 又 remove）、`role_unknown`、`override_unknown`、`role_invalid_key`、`setting_invalid`、`transfer_kind`（`detail.supported`）、`transfer_same`。
 - 400 或 403：`setting_forbidden`（`detail.keys`）。所有者修改仅限管理员的设置时为 403，未知设置为 400。
@@ -1257,7 +1285,7 @@ Workspace 范围的路由还有两种策略值。`perm:project.use`（对话、�
 |---|---|---|---|
 | `GET` | `/api/departments?status=active\|archived\|all` | 成员 | `{departments[{id, name, description, archived, archived_at, created_by, created_at, updated_at, project_count, group_count}]}`；`status` 默认 `active`（其他值返回 `400 structure.invalid_status`） |
 | `POST` | `/api/departments` | 管理员 | 请求体 `{id, name（1–64）, description?（≤ 2000）}` → `201` 部门。`409 department.exists` |
-| `PATCH` | `/api/departments/{department_id}` | 管理员 | `{name, description, settings}` 中任意字段 → 部门。`settings` 可部分提交：`{can_create_users: bool（默认 false）, max_projects: 1–10000 \| null（默认 null，不限）, user_validity_max_days: 1–3650（默认 90）}`；值为 `null` 时恢复该键的默认值。未知键或取值不合法 → `400 department.setting_invalid`（`detail.key` / `detail.keys`） |
+| `PATCH` | `/api/departments/{department_id}` | 管理员 | `{name, description, settings}` 中任意字段 → 部门。`settings` 可部分提交：`{can_create_users: bool（默认 false）, max_projects: 1–10000 \| null（默认 null，不限）, user_validity_max_days: 1–3650（默认 90）, quotas: {…项目配额键} \| null（默认 null：不设上限）}`；值为 `null` 时恢复该键的默认值。`quotas` 深一层合并（设置一项上限不影响其余，`null` 清除该项），为本部门各项目的配额设上限。未知键或取值不合法 → `400 department.setting_invalid`（`detail.key` / `detail.keys`） |
 | `POST` | `/api/departments/{department_id}/archive` / `…/unarchive` | 管理员 | → 部门。已归档的部门不能再分配给项目或项目组（`409 department.archived`） |
 | `DELETE` | `/api/departments/{department_id}` | 管理员 | `204`，仅当没有项目和项目组引用它时：否则 `409 department.in_use`（`detail.projects`、`detail.groups`） |
 | `GET` | `/api/departments/{department_id}/admins` | 管理员 | `{admins[{user_id, username, email, account_role, status, added_by, added_at}]}`，按用户名排序 |
@@ -1359,6 +1387,25 @@ created_at, updated_at, archived_at, allowed, is_default}`。各字段含义如�
 | `GET` | `/api/storage-mounts/agents/{agent_id}` | 成员 | Agent 详情页的存储卡片：`{agent_id, version, mounts[{storage_id, mount_path, mode, entry{name, kind, status, max_mode, data_class, archived, checked_at, blocking, warnings} \| null, missing}], inline[{kind, access_point_arn, mount_path, mode: rw}], session_storage}`。其他项目的 Agent → `404 agent.not_found` |
 
 Agent spec 以 `filesystem.mounts[{storage_id, mount_path?（默认 /mnt/<storage_id>）, mode?（默认 ro）}]` 挂载条目；与内联的 `s3_files` / `efs` 挂载合计每个 Agent 最多 4 个，每个条目只能挂载一次，所有挂载路径互不相同。在 `POST /api/agents` 与重新部署时，每个挂载必须在项目允许集合中（`404 storage.not_found`）、未被上次检查阻断（`409 storage.blocked`）、且不超过 `max_mode`（`400 storage.mode_exceeds_max`）；服务端把条目的 `kind` 与 `access_point_arn` 写入保存的 spec，覆盖客户端发送的值。部署时的预检在任何任务创建前拒绝阻断结果（`409 storage.preflight_failed`，`detail.results`）。执行角色对每个挂载获得 `ClientMount`，只有 `rw` 挂载另获 `ClientWrite`。内联接入点挂载仍仅限管理员（`400 storage.inline_not_allowed`，`detail.mount_paths`）。发布晋级时目录 id 就是逻辑名（资源映射种类 `storage`）：除非有映射行指向别的条目，否则使用目标 Workspace 中同 id 的条目；该条目必须在用且允许该项目使用，否则发布被拒（`409 storage.unmapped`）；内联接入点带有源账户，一律拒绝（`409 storage.inline_not_promotable`）。
+
+## 控制台系统更新 API / Console System Update API
+
+控制台在线更新（online-update §2）：控制台拉取配置的源，在运行中的版本旁准备新版本，由管理员安排重启时间；主机上的更新器
+完成切换（`backend/scripts/install_updater.sh`）。全局路由（`/api/system`，不读 `X-Workspace`）；除版本读取外均限管理员。
+请求体不指定仓库或分支：源来自部署配置（请求体为 `extra="forbid"`）。每一步都记为 `system.update.*` 结构事件。
+
+更新行为 `{id, kind: update\|rollback, target_sha, short, target_time, base_sha, behind, commits[], status: preparing\|prepare_failed\|ready\|scheduled\|applying\|done\|rolled_back\|failed\|superseded, staged_dir, progress{}, steps[], scheduled_at, requested_by, announcement_id, error, previous_sha, finished_at, created_at, updated_at}`。
+
+| 方法 | 路径 | 鉴权 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/system/version` | 成员 | `{sha, short, committed_at, built_at, updater_installed, update_enabled, can_schedule}`：正在运行的版本，以及本主机能否在线更新 |
+| `GET` | `/api/system/update` | 管理员 | `{version, source{repo, branch}, remote, current, history[], inflight, manual_commands}`：运行版本、配置的源、最近一次远端检查（缓存十分钟；功能关闭时为 `null`）、最新的更新行、最近 10 行、重启会中断的进行中工作（最新行为 `ready` / `scheduled` 时）、手动更新命令（未装更新器的主机上的 `ready` 行） |
+| `POST` | `/api/system/update/check` | 管理员 | 立即拉取源 → 远端检查 `{repo, branch, checked_at, sha, short, committed_at, running_sha, behind, fast_forward, up_to_date, commits[]}`。`502 update.check_failed`、`409 update.disabled`、`409 update.no_git` |
+| `POST` | `/api/system/update/prepare` | 管理员 | `202` 新的更新行（`preparing`）：在运行版本旁构建最新的快进提交，重启后可续做。`409 update.up_to_date`、`409 update.not_fast_forward`、`409 update.in_progress`、`409 update.disk_low`、`409 update.disabled` |
+| `POST` | `/api/system/update/rollback` | 管理员 | `202` 一条准备上一版本的 `rollback` 行。`409 update.no_previous`、`409 update.not_fast_forward`（上一版本不是祖先提交）、`409 update.in_progress` |
+| `POST` | `/api/system/update/{update_id}/schedule` | 管理员 | 请求体 `{at?: 时间（省略 = 现在，倒计时 60 秒后）, acknowledge_inflight: bool}` → 该行（`scheduled`）；以公告通知已登录用户。`409 update.updater_missing`、`409 update.not_ready`、`409 update.stage_missing`、`409 update.schedule_invalid`、`422 update.inflight_unacknowledged`（会中断进行中的工作；`detail` 列出） |
+| `POST` | `/api/system/update/{update_id}/cancel` | 管理员 | `scheduled` 的行回到 `ready` 并撤下公告 → 该行。其他状态 → `409 update.not_cancellable` |
+| `GET` | `/api/system/update/{update_id}/log` | 管理员 | `{id, status, events[]}`：该更新的步骤日志。`404 update.not_found` |
 
 ## 控制台路由索引——其余路由 / Console route index
 
