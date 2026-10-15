@@ -22,8 +22,6 @@ import { ErrorCallout } from "../../../components/ErrorCallout";
 import { errorMessage } from "../../../lib/api";
 import { useFailure } from "../../failure";
 import { ago } from "../../format";
-import { ErrorCallout } from "../../../components/ErrorCallout";
-import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Filters, Lamp, Notice, Panel, type Signal, Track } from "../../ui";
 import { coverageSegments, kindRows, RESOURCE_SIGNAL, resourceLabel, sortOpen } from "./model";
@@ -185,7 +183,6 @@ export function Backfill() {
   const [view, setView] = useState<BackfillView | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const failed = useFailure();
   const [tick, setTick] = useState(0);
   const run = view?.run ?? null;
   const active = backfillActive(run);
