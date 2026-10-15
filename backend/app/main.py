@@ -82,6 +82,7 @@ from app.routers.review import router as review_router
 from app.routers.share import console_router as share_links_router
 from app.routers.share import router as share_router
 from app.routers.share_annotate import router as share_annotate_router
+from app.routers.sso import router as sso_router
 from app.routers.storage_mounts import router as storage_mounts_router
 from app.routers.system_agents import router as system_agents_router
 from app.routers.system_update import router as system_update_router
@@ -219,6 +220,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     init_db()
     _apply_model_overrides()
     app.include_router(auth_router)
+    app.include_router(sso_router)  # console SSO: IdP buttons, OIDC leg, admin config
     app.include_router(overview_router)
     app.include_router(announcements_router)
     app.include_router(model_defaults_router)  # platform model settings (Models page)

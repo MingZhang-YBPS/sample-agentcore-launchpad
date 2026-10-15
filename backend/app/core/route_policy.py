@@ -1990,3 +1990,29 @@ ROUTE_POLICY.update(PROJECT_MIGRATION_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_MIGRATION_ROUTES)
 ADMIN_SPLIT.update({key: ADMIN for key, role in PROJECT_MIGRATION_ROUTES.items()
                     if role == ADMIN})
+
+# ---- SSO-1: console single sign-on over OIDC (sso design §2.6) ----
+# The login surface is PUBLIC: the providers list feeds the login page, and the OIDC
+# redirect leg arrives without a session by design (`auth._OPEN_API_PATTERN` lets it
+# through the middleware). Configuring an identity provider is the administrators':
+# it decides who may sign in and with which global role (a mapping can grant admin),
+# so a steward — who must not raise its own reach — is refused: data.
+SSO_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/auth/providers"): PUBLIC,
+    ("GET", "/api/auth/oidc/{provider_id}/start"): PUBLIC,
+    ("GET", "/api/auth/oidc/{provider_id}/callback"): PUBLIC,
+    ("GET", "/api/admin/sso/providers"): ADMIN,
+    ("POST", "/api/admin/sso/providers"): ADMIN,
+    ("GET", "/api/admin/sso/providers/{provider_id}"): ADMIN,
+    ("PATCH", "/api/admin/sso/providers/{provider_id}"): ADMIN,
+    ("DELETE", "/api/admin/sso/providers/{provider_id}"): ADMIN,
+    ("POST", "/api/admin/sso/providers/{provider_id}/test"): ADMIN,
+    ("GET", "/api/admin/sso/providers/{provider_id}/mappings"): ADMIN,
+    ("PUT", "/api/admin/sso/providers/{provider_id}/mappings"): ADMIN,
+    ("GET", "/api/admin/sso/providers/{provider_id}/logins"): ADMIN,
+    ("GET", "/api/admin/sso/users/{user_id}"): ADMIN,
+}
+ROUTE_POLICY.update(SSO_ROUTES)
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/admin/sso")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SSO_ROUTES)
+ADMIN_SPLIT.update({key: ADMIN_DATA for key, role in SSO_ROUTES.items() if role == ADMIN})
