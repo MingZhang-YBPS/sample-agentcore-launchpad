@@ -24,6 +24,7 @@ import {
   formFromStoredSpec,
   gatewaySelectionsValid,
   inboundValid,
+  prefillKbPick,
   republishSpec,
   resolveKb,
   type StoredAgentExtras,
@@ -65,9 +66,20 @@ import { formFromSharedTemplate, formFromTemplate } from "./templateForms";
 import { GuardrailCard, MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
 import { IdentityCard } from "./IdentityCard";
 import { InboundCard } from "./InboundAuthFields";
+import { ConversationOutputCard, ModelParamsCard, PromptTemplateCard, StrandsGroup } from "./StrandsSections";
+import { groupIssues, STRANDS_GROUPS, type StrandsGroupKey, strandsReadouts } from "./strandsGroups";
 import { WizardReview } from "./WizardReview";
 
 const METHODS: AgentMethod[] = ["harness", "zip_runtime", "container", "byoc"];
+
+/** The `problems` keys each Strands group holds — a flagged group opens itself. */
+const GROUP_PROBLEMS: Record<StrandsGroupKey, string[]> = {
+  basics: ["name", "prompt", "model"],
+  tools: ["gateway", "identity", "sb.tools"],
+  behaviour: ["sb.behaviour"],
+  output: ["sb.output"],
+  advanced: ["inbound", "fs"],
+};
 const isMethod = (m: string | null): m is AgentMethod => !!m && (METHODS as string[]).includes(m);
 
 interface Draft {
@@ -75,6 +87,23 @@ interface Draft {
   step: number;
   /** what a loaded agent carries besides the form (edit mode only) */
   extras: StoredAgentExtras | null;
+  /** `kb=1`: preselect a knowledge base once the catalog lands (zip_runtime / container) */
+  kbPrefill?: boolean;
+}
+
+/** Methods whose wizard honours `kb=1` here (the managed Harness one is /v3/create). */
+const KB_PREFILL_METHODS: AgentMethod[] = ["zip_runtime", "container"];
+
+/** Groups a fresh Strands form opens on; a loaded agent also opens every group it
+ *  has settings in, so a re-publish shows what it carries. */
+function initialGroups(form: AgentForm, edit: boolean): Set<StrandsGroupKey> {
+  const open = new Set<StrandsGroupKey>(["basics", "tools"]);
+  if (edit) {
+    const readouts = strandsReadouts(form);
+    if (readouts.behaviour) open.add("behaviour");
+    if (readouts.output) open.add("output");
+  }
+  return open;
 }
 
 /** The draft a landing starts on, honouring the classic prefills:
@@ -91,7 +120,12 @@ function initialDraft(params: URLSearchParams): Draft {
   if (method === "zip_runtime" && params.get("protocol") === "a2a") form.protocol = "a2a";
   if (gateway) form.selectedGateway = [gateway];
   if (skill) form.skills = [skill];
-  return { form, step: isMethod(method) || gateway || skill ? 1 : 0, extras: null };
+  return {
+    form,
+    step: isMethod(method) || gateway || skill ? 1 : 0,
+    extras: null,
+    kbPrefill: params.get("kb") === "1" && KB_PREFILL_METHODS.includes(form.method),
+  };
 }
 
 /** A template's form, still in the network the draft had (the preselected default
@@ -262,6 +296,14 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     setForm((prev) => ({ ...prev, ...(typeof patch === "function" ? patch(prev) : patch) }));
   const method = form.method;
   const kb = useInlineKb(set);
+  const [openGroups, setOpenGroups] = useState(() => initialGroups(initial.form, Boolean(edit)));
+  const toggleGroup = (group: StrandsGroupKey) =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
+      return next;
+    });
   const quick = canQuick && method === "harness" && !fullForm;
 
   // Catalogs: a failed read leaves that section empty and never blocks the form.
@@ -285,6 +327,19 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     }),
     [attachables.data, attachables.loading, kbs.data, memories.data],
   );
+  // `kb=1` (chooser): once the catalog lands, preselect its first ACTIVE KB unless
+  // the member already picked one, open the group holding the field and bring it
+  // into view. Once per landing — clearing the pick afterwards is the member's call.
+  const kbPrefilled = useRef(!initial.kbPrefill);
+  useEffect(() => {
+    if (kbPrefilled.current || kbs.loading || !KB_PREFILL_METHODS.includes(method)) return;
+    kbPrefilled.current = true;
+    set((prev) => ({ selectedKbs: prefillKbPick(prev.selectedKbs, kbs.data?.items ?? []) }));
+    setOpenGroups((prev) => new Set(prev).add("tools"));
+    window.setTimeout(() => {
+      document.querySelector('[data-testid="v2-agent-kbs"]')?.scrollIntoView({ block: "center" });
+    }, 0);
+  }, [kbs.loading, kbs.data, method]);
   const specCatalogs: AgentFormCatalogs = {
     gatewayTargets: cat.gatewayTargets,
     remoteMcp: cat.remoteMcp,
@@ -386,6 +441,9 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       if (timeout === null || Number.isNaN(timeout) || timeout < 10 || timeout > 3600)
         out.timeout = t("create.system.settings.errors.timeout");
     }
+    if (method === "zip_runtime") {
+      for (const group of groupIssues(form)) out[`sb.${group}`] = "strands";
+    }
     if (FILESYSTEM_METHODS.includes(method)) {
       const fs = filesystemIssues(form);
       if (fs.sessionMount || Object.keys(fs.rows).length || fs.duplicatePaths || fs.vpc) out.fs = "fs";
@@ -395,6 +453,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form, method, cat, connections, t]);
   // after `problems`: reading it earlier hits the TDZ and crashes every render
+  const readouts = strandsReadouts(form);
   const advancedProblem = ["model", "maxTokens", "maxIterations", "timeout", "gateway"].some((k) => problems[k]);
   const err = (key: string) => (touched ? problems[key] : undefined);
 
@@ -638,32 +697,70 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       )}
 
       {step === 1 && method === "zip_runtime" && (
-        <>
-          <BasicCard {...section} />
-          <ProtocolCard form={form} set={set} onProtocol={changeProtocol} />
-          {modelCard(
-            converted
-              ? { showSource: false, sourceNote: t("v2.agents.wizard.convertedModelLocked"), locked: true }
-              : form.protocol === "a2a"
-                ? { showSource: false, sourceNote: t("v2.agents.wizard.a2aSourcePinned") }
-                : {},
-          )}
-          <StrandsToolsCard {...section} />
-          {(form.protocol === "http" || form.authTools.length > 0) && (
-            <IdentityCard
-              form={form}
-              set={set}
-              touched={touched}
-              connections={connections}
-              catalogError={Boolean(connectionsLoad.error)}
-              onRetry={connectionsLoad.reload}
-            />
-          )}
-          {inboundCard}
-          {skillsKb(t("create.configure.kbNoteDirect"))}
-          <FilesystemCard form={form} set={set} touched={touched} />
-          <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
-        </>
+        <div className="sb-groups" data-testid="sb-groups">
+          {STRANDS_GROUPS.map((group, index) => {
+            const flagged = touched && GROUP_PROBLEMS[group].some((key) => problems[key]);
+            return (
+              <StrandsGroup
+                key={group}
+                group={group}
+                index={index}
+                open={openGroups.has(group) || flagged}
+                onToggle={() => toggleGroup(group)}
+                readout={readouts[group]}
+                flagged={flagged}
+              >
+                {group === "basics" && (
+                  <>
+                    <BasicCard {...section} />
+                    <ProtocolCard form={form} set={set} onProtocol={changeProtocol} />
+                    {modelCard(
+                      converted
+                        ? { showSource: false, sourceNote: t("v2.agents.wizard.convertedModelLocked"), locked: true }
+                        : form.protocol === "a2a"
+                          ? { showSource: false, sourceNote: t("v2.agents.wizard.a2aSourcePinned") }
+                          : {},
+                    )}
+                  </>
+                )}
+                {group === "tools" && (
+                  <>
+                    <StrandsToolsCard {...section} touched={touched} />
+                    {(form.protocol === "http" || form.authTools.length > 0) && (
+                      <IdentityCard
+                        form={form}
+                        set={set}
+                        touched={touched}
+                        connections={connections}
+                        catalogError={Boolean(connectionsLoad.error)}
+                        onRetry={connectionsLoad.reload}
+                      />
+                    )}
+                    {skillsKb(t("create.configure.kbNoteDirect"))}
+                  </>
+                )}
+                {group === "behaviour" && (
+                  <>
+                    <ModelParamsCard form={form} set={set} touched={touched} />
+                    <PromptTemplateCard form={form} set={set} touched={touched} />
+                  </>
+                )}
+                {group === "output" && (
+                  <>
+                    <ConversationOutputCard form={form} set={set} touched={touched} />
+                    <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
+                  </>
+                )}
+                {group === "advanced" && (
+                  <>
+                    {inboundCard}
+                    <FilesystemCard form={form} set={set} touched={touched} />
+                  </>
+                )}
+              </StrandsGroup>
+            );
+          })}
+        </div>
       )}
 
       {step === 1 && method === "container" && (

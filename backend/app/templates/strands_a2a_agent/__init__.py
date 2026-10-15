@@ -18,13 +18,16 @@ from pathlib import Path
 
 from app.schemas.agent import AgentSpec
 from app.services.agentcore.registry import A2A_CARD_VERSION
+from app.templates.strands_agent.builder import apply_builder
 
 TEMPLATE_DIR = Path(__file__).parent
 
 
 def render_a2a_main_py(spec: AgentSpec) -> str:
     skills = [s.model_dump() for s in spec.a2a_skills]
-    source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
+    source = apply_builder(
+        (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8"), spec, a2a=True
+    )
     return (
         source.replace("__LAUNCHPAD_SKILLS_ENABLED__", repr(bool(spec.skills)))
         .replace("__LAUNCHPAD_AGENT_NAME__", spec.name)

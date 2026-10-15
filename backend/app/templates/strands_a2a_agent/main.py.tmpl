@@ -84,6 +84,7 @@ def current_utc_time() -> str:
     """Return the current UTC date and time in ISO-8601 format."""
     return datetime.now(UTC).isoformat()
 
+__LAUNCHPAD_STRANDS_BUILDER_SOURCE__
 
 def skill_plugins() -> list:
     """Enable progressive Skill loading only when packaging produced a bundle."""
@@ -124,6 +125,7 @@ def agent_factory(context_id: str) -> Agent:
     plugins = skill_plugins()
     if plugins:
         kwargs["plugins"] = plugins
+    __LAUNCHPAD_BUILD_AGENT_HOOK__
     return Agent(**kwargs)
 
 

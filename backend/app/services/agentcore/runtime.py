@@ -708,7 +708,11 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
                 },
             }
         elif kind == "complete":
-            yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
+            data: dict[str, Any] = {"text": str(payload.get("result", ""))}
+            # strands-builder SB-1: an output_schema agent's parsed answer
+            if isinstance(payload.get("structured"), (dict, list)):
+                data["structured"] = payload["structured"]
+            yield {"event": "complete", "data": data}
         elif kind == "error":
             raise RuntimeError(str(payload.get("message", "runtime stream failed")))
         return
@@ -940,7 +944,10 @@ def _normalized_runtime_events(
             elif event["event"] == "complete":
                 if not saw_delta and event["data"]["text"]:
                     saw_delta = True
-                    yield {"event": "delta", "data": event["data"]}
+                    yield {"event": "delta", "data": {"text": event["data"]["text"]}}
+                if "structured" in event["data"]:
+                    # the text answer above stays the reply; this rides alongside
+                    yield {"event": "structured", "data": {"value": event["data"]["structured"]}}
             else:
                 if event["event"] in ("tool", "auth_required"):
                     saw_other = True
@@ -1117,7 +1124,8 @@ def invoke_runtime_text(
     as_user consent asks (``auth_required`` events) are collected onto
     ``result["auth_required"]`` — a non-streaming caller still needs the
     authorization URL to relay to the user. Reported token usage (the stream's
-    ``usage`` event) lands on ``result["usage"]``.
+    ``usage`` event) lands on ``result["usage"]``, and an ``output_schema``
+    agent's parsed answer (the ``structured`` event) on ``result["structured"]``.
     """
     session_id = session_id or new_session_id()
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
@@ -1126,6 +1134,7 @@ def invoke_runtime_text(
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
     usage: dict[str, int] | None = None
+    structured: Any = None
     for event in stream_runtime_events(
         client,
         runtime_arn,
@@ -1143,11 +1152,15 @@ def invoke_runtime_text(
             auth_required.append(event["data"])
         elif event["event"] == "usage":
             usage = event["data"]
+        elif event["event"] == "structured":
+            structured = event["data"]["value"]
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
     if usage is not None:
         result["usage"] = usage
+    if structured is not None:
+        result["structured"] = structured
     return result
 
 
@@ -1264,6 +1277,7 @@ def invoke_runtime_text_bearer(
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
     usage: dict[str, int] | None = None
+    structured: Any = None
     for event in stream_runtime_events_bearer(
         region,
         runtime_arn,
@@ -1281,11 +1295,15 @@ def invoke_runtime_text_bearer(
             auth_required.append(event["data"])
         elif event["event"] == "usage":
             usage = event["data"]
+        elif event["event"] == "structured":
+            structured = event["data"]["value"]
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
     if usage is not None:
         result["usage"] = usage
+    if structured is not None:
+        result["structured"] = structured
     return result
 
 

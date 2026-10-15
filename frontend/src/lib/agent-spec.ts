@@ -26,6 +26,7 @@ import {
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
 import { type CatalogMountRow, catalogMountsSpec, catalogRowsFromSpec, MAX_BYO_MOUNTS } from "./api/storage";
 import { BYO_MOUNT_METHODS } from "./storage-mounts";
+import { emptyStrandsForm, type StrandsForm, strandsFormFromSpec, strandsSpec, strandsValid } from "./strands-builder";
 import {
   choiceFromSpec,
   EMPTY_JWT_FORM,
@@ -288,6 +289,14 @@ export interface KbRef {
 export const selectableKbs = <T extends AttachableKb>(catalog: T[]) =>
   catalog.filter((k) => k.status === "ACTIVE" && (k.type == null || k.type === "MANAGED"));
 
+/** `kb=1` (the new-agent chooser's "answer from documents"): the first ACTIVE
+ *  managed KB, only when nothing is selected yet — a member's own pick wins. */
+export const prefillKbPick = (selected: string[], catalog: AttachableKb[]): string[] => {
+  if (selected.length) return selected;
+  const first = selectableKbs(catalog)[0];
+  return first ? [first.kb_id] : selected;
+};
+
 /** Resolve a KB id to its name/description, preferring the live catalog and
  *  falling back to the loaded spec so out-of-catalog KBs keep their label. */
 export const resolveKb = (id: string, catalog: AttachableKb[], specKbs: KbRef[]): KbRef => {
@@ -521,6 +530,11 @@ export interface AgentForm {
    */
   inbound?: InboundChoice;
   inboundJwt?: JwtFormState;
+  /** zip_runtime: Strands builder options (strands-builder SB-1). Optional so a form
+   *  built elsewhere (templates, the classic wizard) still type-checks; absent ⇒
+   *  none set. A loaded agent always carries its stored values, so a re-publish
+   *  from either console keeps them. */
+  strands?: StrandsForm;
 }
 
 /** The fresh form a new agent starts on (the classic wizard's `resetForm`). */
@@ -573,6 +587,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   authTools: [],
   inbound: "inherit",
   inboundJwt: { ...EMPTY_JWT_FORM },
+  strands: emptyStrandsForm(),
 });
 
 /** Spec fields read back when an existing agent is loaded into the form. */
@@ -699,6 +714,7 @@ export function formFromStoredSpec(
     });
   }
   form.authTools = tools.filter(isAuthTool).map(authRowFromStored);
+  if (method === "zip_runtime") form.strands = strandsFormFromSpec(raw);
   const inbound = choiceFromSpec(spec.inbound_auth);
   form.inbound = inbound.choice;
   form.inboundJwt = inbound.form;
@@ -980,6 +996,11 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
     // zip_runtime only, and never together with A2A — the backend rejects both.
     ...(method === "zip_runtime" && protocol === "http" && form.toolkits.length
       ? { toolkits: form.toolkits }
+      : {}),
+    // Strands builder options (SB-1): only what is set, so an agent using none
+    // posts the spec it always did
+    ...(method === "zip_runtime"
+      ? strandsSpec(form.strands, { protocol, modelId: form.modelId.trim(), modelSource: form.modelSource })
       : {}),
     ...(form.selectedKbs.length ? { knowledge_bases: form.selectedKbs.map(cat.kbInfo) } : {}),
     ...((method === "harness" || method === "container" || method === "zip_runtime") &&
@@ -1275,6 +1296,16 @@ export function agentFormValid(
     form.modelId.trim().length > 0 &&
     opts.knobIssues.length === 0 &&
     filesystemValid(form) &&
-    gatewaySelectionsValid(form, cat)
+    gatewaySelectionsValid(form, cat) &&
+    (form.method !== "zip_runtime" || strandsValid(form.strands, strandsContext(form)))
   );
 }
+
+/** What the Strands builder checks need from the rest of the form. */
+export const strandsContext = (form: AgentForm) => ({
+  protocol: form.protocol,
+  modelId: form.modelId.trim(),
+  modelSource: form.modelSource,
+  hasKbs: form.selectedKbs.length > 0,
+  guardrail: form.guardrail !== "off",
+});

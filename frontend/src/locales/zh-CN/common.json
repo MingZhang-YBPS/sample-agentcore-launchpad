@@ -14245,5 +14245,123 @@
     "models.open": "去模型设置",
     "network.open": "去网络配置档",
     "storage.open": "去存储目录"
+  },
+  "strandsBuilder": {
+    "group": {
+      "basics": "基础",
+      "basicsWhen": "名称、指令、协议和模型——每个智能体都需要。",
+      "tools": "工具",
+      "toolsWhen": "回答之外还能做什么：内置工具、网关、身份、技能和知识库。",
+      "behaviour": "模型行为",
+      "behaviourWhen": "调整模型的回答方式：采样、思考、缓存和提示词模板。",
+      "output": "对话与输出",
+      "outputWhen": "保留多少历史，以及是否同时返回结构化结果。",
+      "advanced": "高级",
+      "advancedWhen": "入站认证和文件存储——不确定时保持默认。"
+    },
+    "needsAttention": "需要处理",
+    "remove": "移除",
+    "tools": {
+      "label": "Strands 内置工具",
+      "hint": "精选自 strands-agents-tools。不选时，智能体保留模板自带的 calculator 和 current_utc_time。",
+      "replaceNote": "选中的工具会替换模板自带的 calculator 和 current_utc_time。",
+      "sandboxNote": "shell、python_repl、file_write、use_aws 需要沙箱，暂不提供。",
+      "retrieveNoKb": "请先在下方挂载知识库——retrieve 只检索本智能体的知识库。",
+      "retrieveA2a": "A2A 智能体不挂知识库，retrieve 不可用。",
+      "hostsLabel": "http_request 允许的域名",
+      "hostsHint": "只填域名，用逗号分隔；*.example.com 覆盖其子域名。不跟随重定向。",
+      "hostsNone": "没有域名——工具无处可访问，因此会被拒绝",
+      "when": {
+        "current_time": "涉及今天、截止时间或时区的问题。",
+        "calculator": "需要精确的算术、代数或单位换算，而不是估算。",
+        "http_request": "调用你允许的域名上的公开或合作方 API。",
+        "think": "困难的多步骤问题，适合多轮反思。",
+        "retrieve": "按查询从已挂载的知识库取回段落。",
+        "image_reader": "读取并描述智能体拿到的图片文件。",
+        "journal": "在一个会话的多轮之间记笔记或任务日志。"
+      }
+    },
+    "params": {
+      "title": "推理参数",
+      "sub": "留空即使用模型默认值。参数纳入配置包，可在实验中对比。",
+      "temperature": "温度",
+      "temperatureWhen": "调低让回答稳定、贴近事实；调高让措辞更多样。",
+      "topP": "Top P",
+      "topPWhen": "温度的替代项——Claude 只接受二者之一。",
+      "maxTokens": "最大输出 token",
+      "maxTokensWhen": "限制单次回复长度；写长报告时调高。",
+      "modelDefault": "模型默认",
+      "stop": "停止序列",
+      "stopWhen": "每行一个，最多 4 个——模型写出其中之一即停止。",
+      "mantleNote": "停止序列、扩展思考和提示词缓存是 Bedrock Converse 的选项，Bedrock Mantle 不支持。",
+      "thinking": "扩展思考",
+      "thinkingWhen": "Claude 先逐步推理再回答——难题更准，但更慢、更贵。",
+      "thinkingClaudeOnly": "仅限 Claude 模型——在“基础”中选择 Claude 模型后可用。",
+      "caching": "提示词缓存",
+      "cachingWhen": "系统提示词长或工具多、轮次多时：缓存前缀可降低成本和延迟。",
+      "budget": "思考预算（token）",
+      "budgetWhen": "至少 1024。回复额度在此预算之外另算。"
+    },
+    "prompt": {
+      "title": "提示词模板",
+      "sub": "变量和示例在每次请求时应用到系统提示词；配置包仍可覆盖提示词。",
+      "variables": "模板变量",
+      "variablesWhen": "在指令中写 {{ph}}，按请求填入：先取调用的 context，再取运行时环境变量，最后用这里的默认值。",
+      "found": "指令中出现：",
+      "varName": "变量名",
+      "varDefault": "默认值",
+      "addVariable": "添加变量",
+      "fewShot": "Few-shot 示例",
+      "fewShotWhen": "回答的格式或语气很重要时，给出几组问答示例。",
+      "question": "问题",
+      "answer": "回答",
+      "addExample": "添加示例"
+    },
+    "output": {
+      "title": "对话与结构化输出",
+      "sub": "对话变长时如何裁剪，以及可选的结构化结果。",
+      "conversation": "对话历史",
+      "strategy": {
+        "default": "默认（40 条消息）",
+        "sliding_window": "滑动窗口",
+        "summarizing": "摘要"
+      },
+      "when": {
+        "default": "与现在所有智能体一致：保留最近 40 条消息。",
+        "sliding_window": "任务短或预算紧时：只保留最近的消息。",
+        "summarizing": "会话长且早期细节仍重要时：旧轮次被摘要，近期轮次原样保留。"
+      },
+      "window": "保留消息数",
+      "keepRecent": "原样保留的近期消息数",
+      "windowWhen": "2–1000。消息越少，每轮 token 越少。",
+      "summaryModel": "摘要模型（可选）",
+      "summaryModelWhen": "用更便宜的 Bedrock 模型生成摘要；留空则用智能体自身的模型。",
+      "summaryModelPlaceholder": "例如 us.amazon.nova-lite-v1:0",
+      "schema": "结构化输出（JSON Schema）",
+      "schemaWhen": "回答要被程序读取时：/v1 在文本回答之外返回 `structured` 字段。",
+      "schemaA2a": "A2A 智能体以 A2A 消息分片作答——不支持结构化输出。",
+      "schemaEmpty": "未设置 Schema——只返回文本",
+      "schemaOk": "有效 · {{fields}}",
+      "example": "插入示例"
+    },
+    "err": {
+      "httpHosts": "至少填写一个允许的域名。{{detail}}",
+      "retrieve": "retrieve 需要已挂载的知识库。",
+      "temperature": "温度须在 0 到 1 之间。",
+      "topP": "Top P 须在 0 到 1 之间。",
+      "maxTokens": "最大输出 token 须为 1 到 131072 的整数。",
+      "stopSequences": "最多 4 个停止序列，每个不超过 100 个字符。",
+      "thinkingBudget": "思考预算须为 1024 到 131072 的整数。",
+      "thinkingTemperature": "扩展思考不能与温度同时设置——请清空温度。",
+      "thinkingTopP": "扩展思考要求 Top P 不低于 0.95（或不设置）。",
+      "thinkingMaxTokens": "最大输出 token 须大于思考预算。",
+      "claudeBoth": "Claude 模型只接受温度或 Top P 之一——请清空其中一个。",
+      "windowSize": "保留消息数须为 2 到 1000 的整数。",
+      "outputSchema": "Schema：{{detail}}",
+      "outputSchemaA2a": "A2A 智能体不能返回结构化输出——请清空 Schema。",
+      "outputSchemaGuardrail": "结构化输出暂不能与 PII 保护同时使用。",
+      "variables": "变量名以字母或 _ 开头且不重复（最多 20 个）。{{detail}}",
+      "fewShot": "每个示例都需要问题和回答（最多 10 个）。"
+    }
   }
 }

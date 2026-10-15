@@ -173,6 +173,10 @@ def v1_invoke(
         # T35: "rule" when a curated answer replied without a model call
         "answered_by": result.get("answered_by", "model"),
     }
+    # strands-builder SB-1 (D-4): an agent with an output_schema also answers the
+    # parsed object; `text` stays the readable answer
+    if result.get("structured") is not None:
+        body["structured"] = result["structured"]
     return body
 
 

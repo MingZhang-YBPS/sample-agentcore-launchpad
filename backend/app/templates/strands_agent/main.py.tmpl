@@ -184,6 +184,7 @@ __LAUNCHPAD_GATEWAY_SOURCE__
 
 
 __LAUNCHPAD_IDENTITY_SOURCE__
+__LAUNCHPAD_STRANDS_BUILDER_SOURCE__
 
 # Per-request Gateway MCP tool loader. Rendered as the real loader only when this
 # spec carries a `gateway` ToolRef; otherwise a no-op, so an agent without one
@@ -283,6 +284,7 @@ def build_agent(
     plugins = skill_plugins()
     if plugins:
         kwargs["plugins"] = plugins
+    __LAUNCHPAD_BUILD_AGENT_HOOK__
     return Agent(**kwargs)
 
 
@@ -378,6 +380,7 @@ async def _turn_events(
     payload: dict[str, Any], prompt: str, session_id: str
 ) -> AsyncIterator[dict[str, Any]]:
     actor_id = str(payload.get("actor_id", "default"))
+    __LAUNCHPAD_TURN_HOOK__
     # The Gateway MCP session must stay open for as long as the agent may call one
     # of its tools, so it is scoped to the whole turn. GATEWAY_TOOLS is a no-op
     # returning [] for a spec with no gateway tool.

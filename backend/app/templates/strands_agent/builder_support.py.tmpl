@@ -1,0 +1,328 @@
+# ── Strands builder options (strands-builder SB-1) ─────────────────────────────
+# Rendered only for a spec that sets one of them; every value below is also
+# read from the config bundle per request (same key), so an A/B experiment can
+# compare model parameters, conversation strategy and prompt template.
+import importlib
+import json
+import re
+from contextvars import ContextVar
+
+STRANDS_TOOL_NAMES: list[str] = __LAUNCHPAD_SB_STRANDS_TOOLS__
+HTTP_ALLOWED_HOSTS: list[str] = __LAUNCHPAD_SB_HTTP_ALLOWED_HOSTS__
+MODEL_PARAMS: dict[str, Any] = __LAUNCHPAD_SB_MODEL_PARAMS__
+CONVERSATION: dict[str, Any] = __LAUNCHPAD_SB_CONVERSATION__
+OUTPUT_SCHEMA: dict[str, Any] | None = __LAUNCHPAD_SB_OUTPUT_SCHEMA__
+FEW_SHOT_EXAMPLES: list[dict[str, str]] = __LAUNCHPAD_SB_FEW_SHOT__
+PROMPT_VARIABLES: dict[str, str] = __LAUNCHPAD_SB_PROMPT_VARIABLES__
+# where the journal tool keeps its notes (it writes under cwd by default, and the
+# code directory of a runtime is not the place for it)
+JOURNAL_ROOT = __LAUNCHPAD_SB_JOURNAL_ROOT__
+# the invoke payload's `context` object, for {{variable}} values of this turn
+_LAUNCHPAD_PROMPT_CONTEXT: ContextVar[dict[str, Any]] = ContextVar(
+    "launchpad_prompt_context", default={}
+)
+_PROMPT_VARIABLE_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]{0,63})\s*\}\}")
+HTTP_RESPONSE_MAX_CHARS = 20000
+
+
+def _launchpad_is_set(value: Any) -> bool:
+    # 0 / 0.0 are real settings (temperature 0); unset means None, [] or False
+    return value is not None and value is not False and value != []
+
+
+def _bundle_value(key: str, default: Any) -> Any:
+    value = _config_bundle().get(key)
+    return default if value is None else value
+
+
+def launchpad_render_prompt(text: str) -> str:
+    """{{variable}} substitution (declared variables only) + few-shot examples."""
+    declared = {**PROMPT_VARIABLES, **dict(_bundle_value("prompt_variables", {}) or {})}
+    context = _LAUNCHPAD_PROMPT_CONTEXT.get()
+
+    def substitute(match: "re.Match[str]") -> str:
+        name = match.group(1)
+        if name not in declared:
+            return match.group(0)
+        if name in context:
+            return str(context[name])
+        return os.environ.get(name) or str(declared[name])
+
+    text = _PROMPT_VARIABLE_RE.sub(substitute, text)
+    examples = [
+        e for e in list(_bundle_value("few_shot_examples", FEW_SHOT_EXAMPLES) or [])
+        if isinstance(e, dict) and e.get("question") and e.get("answer")
+    ]
+    if examples:
+        shots = "\n\n".join(
+            f"User: {e['question']}\nAssistant: {e['answer']}" for e in examples
+        )
+        text += (
+            "\n\n## Examples\n\nAnswer in the style of these example exchanges:\n\n" + shots
+        )
+    return text
+
+
+_launchpad_bundle_system_prompt = resolve_system_prompt
+
+
+def resolve_system_prompt() -> str:  # noqa: F811 — wraps the bundle-aware default
+    return launchpad_render_prompt(_launchpad_bundle_system_prompt())
+
+
+def _launchpad_host_allowed(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        return False
+    host = (parts.hostname or "").lower().rstrip(".")
+    for allowed in HTTP_ALLOWED_HOSTS:
+        if allowed.startswith("*."):
+            if host.endswith(allowed[1:]):
+                return True
+        elif host == allowed:
+            return True
+    return False
+
+
+@tool(name="http_request")
+def launchpad_http_request(
+    method: str, url: str, headers: dict[str, str] | None = None, body: str | None = None
+) -> str:
+    """Send an HTTP request (GET, POST, PUT, PATCH, DELETE) to an allowed host and return the status, headers and body. Redirects are not followed."""
+    if not HTTP_ALLOWED_HOSTS or not _launchpad_host_allowed(url):
+        return (
+            f"refused: {url} is not on this agent's allowed host list "
+            f"({', '.join(HTTP_ALLOWED_HOSTS) or 'empty'})"
+        )
+    from strands_tools.http_request import http_request as _impl
+
+    # the platform's allowed-host list is the consent; there is no console to ask
+    os.environ["BYPASS_TOOL_CONSENT"] = "true"
+    result = _impl({
+        "toolUseId": "launchpad-http",
+        "input": {
+            "method": method.upper(),
+            "url": url,
+            "headers": dict(headers or {}),
+            **({"body": body} if body is not None else {}),
+            "allow_redirects": False,
+            "timeout": 30,
+            "convert_to_markdown": True,
+        },
+    })
+    text = "\n".join(
+        str(block.get("text", "")) for block in result.get("content", []) if isinstance(block, dict)
+    )
+    return text[:HTTP_RESPONSE_MAX_CHARS]
+
+
+@tool(name="retrieve")
+def launchpad_retrieve(text: str, knowledge_base_id: str = "", number_of_results: int = 5) -> str:
+    """Retrieve passages relevant to the query from one of this agent's mounted knowledge bases. Leave knowledge_base_id empty for the first mounted one."""
+    known = [kb["kb_id"] for kb in MOUNTED_KBS]
+    kb_id = knowledge_base_id or (known[0] if known else "")
+    if kb_id not in known:
+        return f"unknown knowledge base {kb_id!r}; mounted: {', '.join(known) or 'none'}"
+    from strands_tools.retrieve import retrieve as _impl
+
+    result = _impl({
+        "toolUseId": "launchpad-retrieve",
+        "input": {
+            "text": text,
+            "knowledgeBaseId": kb_id,
+            "numberOfResults": max(1, min(int(number_of_results or 5), 20)),
+            "region": os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
+        },
+    })
+    return "\n".join(
+        str(block.get("text", "")) for block in result.get("content", []) if isinstance(block, dict)
+    )
+
+
+def _launchpad_journal_module() -> Any:
+    module = importlib.import_module("strands_tools.journal")
+
+    def journal_dir() -> Path:
+        directory = Path(JOURNAL_ROOT) / "journal"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    module.ensure_journal_dir = journal_dir
+    return module
+
+
+def _launchpad_agent_tool(module: Any, name: str) -> Any:
+    """A tool object (with ``tool_name`` / ``tool_spec``) for a strands_tools module:
+    its ``@tool`` function, or a PythonAgentTool over its TOOL_SPEC + function."""
+    candidate = getattr(module, name)
+    if hasattr(candidate, "tool_name"):
+        return candidate
+    from strands.tools.tools import PythonAgentTool
+
+    return PythonAgentTool(name, module.TOOL_SPEC, candidate)
+
+
+def _launchpad_strands_tools() -> list:
+    loaded: list = []
+    for name in STRANDS_TOOL_NAMES:
+        if name == "http_request":
+            loaded.append(launchpad_http_request)
+        elif name == "retrieve":
+            loaded.append(launchpad_retrieve)
+        elif name == "journal":
+            loaded.append(_launchpad_agent_tool(_launchpad_journal_module(), name))
+        else:
+            loaded.append(
+                _launchpad_agent_tool(importlib.import_module(f"strands_tools.{name}"), name)
+            )
+    return loaded
+
+
+STRANDS_TOOLS = _launchpad_strands_tools()
+# Their rendered default is "" (keep the tool's own description); fill it in with
+# that description so a bundle override applies per request and the next request
+# without one gets the original back. A promoted override (non-empty) stays.
+for _launchpad_tool in STRANDS_TOOLS:
+    if not DEFAULT_TOOL_DESCRIPTIONS.get(_launchpad_tool.tool_name):
+        DEFAULT_TOOL_DESCRIPTIONS[_launchpad_tool.tool_name] = str(
+            _launchpad_tool.tool_spec.get("description", "")
+        )
+
+
+def _launchpad_schema_type(node: dict[str, Any], name: str) -> Any:
+    from typing import Literal
+
+    if "enum" in node:
+        return Literal[tuple(node["enum"])]
+    kind = node.get("type")
+    if kind == "object":
+        return _launchpad_schema_model(node, name)
+    if kind == "array":
+        return list[_launchpad_schema_type(node.get("items") or {"type": "string"}, name + "Item")]
+    return {"string": str, "integer": int, "number": float, "boolean": bool}.get(kind, str)
+
+
+def _launchpad_schema_model(schema: dict[str, Any], name: str) -> Any:
+    """JSON Schema (the subset the platform validates) → a pydantic model."""
+    from pydantic import Field, create_model
+
+    required = set(schema.get("required") or [])
+    fields: dict[str, Any] = {}
+    for key, node in (schema.get("properties") or {}).items():
+        annotation = _launchpad_schema_type(node, name + key[:1].upper() + key[1:])
+        description = node.get("description")
+        if key in required:
+            fields[key] = (annotation, Field(..., description=description))
+        else:
+            fields[key] = (annotation | None, Field(None, description=description))
+    model = create_model(name, **fields)
+    model.__doc__ = schema.get("description") or "The structured answer."
+    return model
+
+
+def _launchpad_model_name(schema: dict[str, Any]) -> str:
+    title = re.sub(r"[^A-Za-z0-9]", "", str(schema.get("title") or ""))
+    return title if title[:1].isalpha() else "StructuredAnswer"
+
+
+OUTPUT_MODEL = (
+    _launchpad_schema_model(OUTPUT_SCHEMA, _launchpad_model_name(OUTPUT_SCHEMA))
+    if OUTPUT_SCHEMA
+    else None
+)
+
+
+def launchpad_model(params: dict[str, Any]) -> Any:
+    """The model object carrying the inference parameters (bare id when none)."""
+    params = {k: v for k, v in params.items() if _launchpad_is_set(v)}
+    if not params:
+        return build_model()
+    if MODEL_SOURCE == "mantle":
+        from strands.models.openai_responses import OpenAIResponsesModel
+
+        request = {
+            key: params[key] for key in ("temperature", "top_p") if key in params
+        }
+        if "max_tokens" in params:
+            request["max_output_tokens"] = params["max_tokens"]
+        return _launchpad_mantle_model_class(OpenAIResponsesModel)(
+            bedrock_mantle_config={"region": MANTLE_REGION},
+            model_id=MODEL_ID,
+            params=request,
+        )
+    from strands.models import BedrockModel
+
+    config: dict[str, Any] = {
+        key: params[key]
+        for key in ("temperature", "top_p", "max_tokens", "stop_sequences")
+        if key in params
+    }
+    budget = params.get("thinking_budget_tokens")
+    if budget:
+        config["additional_request_fields"] = {
+            "thinking": {"type": "enabled", "budget_tokens": int(budget)}
+        }
+        # the answer needs room after the thinking budget
+        config.setdefault("max_tokens", int(budget) + 4096)
+    if params.get("prompt_caching"):
+        from strands.models.model import CacheConfig
+
+        config["cache_config"] = CacheConfig(strategy="auto")
+    return BedrockModel(model_id=MODEL_ID, **config)
+
+
+def launchpad_conversation_manager(conversation: dict[str, Any]) -> Any:
+    from strands.agent.conversation_manager import (
+        SlidingWindowConversationManager,
+        SummarizingConversationManager,
+    )
+
+    size = int(conversation.get("window_size") or 40)
+    if conversation.get("strategy") == "summarizing":
+        summary_model = conversation.get("summary_model")
+        summarizer = Agent(model=summary_model, tools=[]) if summary_model else None
+        return SummarizingConversationManager(
+            preserve_recent_messages=size, summarization_agent=summarizer
+        )
+    return SlidingWindowConversationManager(window_size=size)
+
+
+def launchpad_builder_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Apply the model parameters, conversation strategy and output schema."""
+    params = {**MODEL_PARAMS, **dict(_bundle_value("model_params", {}) or {})}
+    if any(_launchpad_is_set(v) for v in params.values()):
+        kwargs["model"] = launchpad_model(params)
+    conversation = {**CONVERSATION, **dict(_bundle_value("conversation", {}) or {})}
+    if conversation:
+        kwargs["conversation_manager"] = launchpad_conversation_manager(conversation)
+    if OUTPUT_MODEL is not None:
+        kwargs["structured_output_model"] = OUTPUT_MODEL
+    return kwargs
+
+
+def _launchpad_message_text(result: Any) -> str:
+    message = getattr(result, "message", None) or {}
+    return "".join(
+        str(block.get("text", ""))
+        for block in message.get("content", [])
+        if isinstance(block, dict) and "text" in block
+    )
+
+
+def launchpad_complete_event(result: Any) -> dict[str, Any]:
+    """The turn's `complete` event: the text answer stays `result`, and a
+    structured answer rides along as `structured` (JSON-ready)."""
+    if result is None:
+        return {"event": "complete", "result": ""}
+    structured = getattr(result, "structured_output", None)
+    if structured is None:
+        return {"event": "complete", "result": str(result)}
+    value = structured.model_dump(mode="json") if hasattr(structured, "model_dump") else structured
+    text = _launchpad_message_text(result).strip()
+    return {
+        "event": "complete",
+        "result": text or json.dumps(value, ensure_ascii=False),
+        "structured": value,
+    }
