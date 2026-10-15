@@ -5,11 +5,18 @@ Mirrors gateway_bootstrap: ensure_* functions are create-if-missing by name
 (idempotent). One shared gateway ``launchpad-kb-gw`` carries a per-KB ``Retrieve``
 target (globally visible) plus a per-agent ``AgenticRetrieveStream`` target whose
 retrievers are bound to that agent's selected KBs.
+
+Isolated projects (projects design §10.5, decision D-13's recommended shape) keep
+their targets on this shared gateway: the project's M2M client is added to the
+allowed clients (`allow_project_client`), and `project_targets` names the targets that
+belong to a project — its KBs' ``Retrieve`` targets and its agents' agentic ones — so
+§10.6's Cedar rules (R10-gw) can limit each to that project's principals.
 """
 
 import logging
 import re
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from app.core.errors import cleanup_error, is_not_found
@@ -45,12 +52,16 @@ def agentic_target_name(agent_name: str) -> str:
     return "agentic-" + (_sanitize(agent_name, 60) or "agent")
 
 
-def ensure_kb_gateway(control: Any, resources: dict[str, Any], region: str) -> dict[str, str]:
+def ensure_kb_gateway(
+    control: Any, resources: dict[str, Any], region: str, extra_clients: Iterable[str] = ()
+) -> dict[str, str]:
     """Create (or reuse) the KB gateway with Cognito-JWT inbound auth. Existing
-    gateways get the console + M2M clients appended to allowedClients."""
+    gateways get the console + M2M clients appended to allowedClients —
+    ``extra_clients`` are the isolated projects' M2M clients (``project_client_ids``)."""
     client_id = resources["user_pool_client_id"]
     m2m_client_id = resources.get("m2m_client_id", "")
     allowed = [client_id] + ([m2m_client_id] if m2m_client_id else [])
+    allowed += [c for c in dict.fromkeys(extra_clients) if c and c not in allowed]
 
     items: list[dict[str, Any]] = []
     token = None
@@ -353,7 +364,9 @@ def ensure_kb_gateway_persisted(
             "arn": resources.get("kb_gateway_arn", ""),
             "url": resources["kb_gateway_url"],
         }
-    gateway = ensure_kb_gateway(control, resources, workspace.region)
+    gateway = ensure_kb_gateway(
+        control, resources, workspace.region, project_client_ids(workspace.id)
+    )
     provisioned = {
         "kb_gateway_id": gateway["id"],
         "kb_gateway_arn": gateway["arn"],
@@ -361,3 +374,105 @@ def ensure_kb_gateway_persisted(
     }
     merge_workspace_resources(workspace, provisioned)
     return gateway
+
+
+# ── per project (projects design §10.5) ───────────────────────────────────────
+
+
+def project_client_ids(workspace_id: str) -> list[str]:
+    """The Cognito app client ids of the isolated projects' M2M clients in this
+    workspace (`project_resources` kind `m2m_client`, recorded by R10-gw)."""
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.models.project_isolation import KIND_M2M_CLIENT, ProjectResource
+
+    db = SessionLocal()
+    try:
+        return sorted({
+            rid for rid in db.scalars(select(ProjectResource.resource_id).where(
+                ProjectResource.workspace_id == workspace_id,
+                ProjectResource.kind == KIND_M2M_CLIENT,
+            )) if rid
+        })
+    finally:
+        db.close()
+
+
+def allow_project_client(control: Any, workspace: WorkspaceContext, client_id: str) -> bool:
+    """Add an isolated project's M2M client to the workspace's KB gateway. Never
+    creates the gateway (it is lazy, `ensure_kb_gateway_persisted`, and picks the
+    recorded clients up when it is made). Returns whether a gateway was updated."""
+    gateway_id = workspace.resources.get("kb_gateway_id")
+    if not gateway_id or not client_id:
+        return False
+    ensure_gateway_allows_client(control, gateway_id, client_id)
+    return True
+
+
+def _kb_owners(workspace_id: str) -> tuple[dict[str, str], str | None]:
+    """(kb_id lowercased → project, default project) from the KB ownership rows."""
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.core.project_scope import project_context
+    from app.models.ledger import ResourceCreator
+    from app.services import access, creators
+
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            owners = {
+                str(rid).lower(): pid
+                for rid, pid in db.execute(select(
+                    ResourceCreator.resource_id, ResourceCreator.project_id
+                ).where(ResourceCreator.workspace_id == workspace_id,
+                        ResourceCreator.kind == creators.KB)).all()
+            }
+            bindings = access.workspace_bindings(db, workspace_id)
+    finally:
+        db.close()
+    default = next((b.project_id for b in bindings if b.is_workspace_default),
+                   bindings[0].project_id if bindings else None)
+    return owners, default
+
+
+def _agentic_target_owners(workspace_id: str) -> dict[str, str | None]:
+    """agentic target name → project, over the workspace's harness agents."""
+    from app.core.db import SessionLocal
+    from app.core.project_scope import project_context
+    from app.models.ledger import Agent
+
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            agents = db.query(Agent).filter(
+                Agent.workspace_id == workspace_id, Agent.status != "deleted",
+            ).all()
+        return {agentic_target_name(a.name): a.project_id for a in agents
+                if (a.spec or {}).get("method") == "harness"}
+    finally:
+        db.close()
+
+
+def project_targets(
+    control: Any, gateway_id: str, workspace_id: str, project_id: str
+) -> list[str]:
+    """The names of the KB gateway's targets that belong to ``project_id``: the
+    ``Retrieve`` target of each KB the project owns (a KB with no ownership row is the
+    workspace default project's) and the agentic target of each of its harness
+    agents. Feeds §10.6's per-target Cedar rules (`lp_proj_<pid>_<target>`)."""
+    owners, default = _kb_owners(workspace_id)
+    # by the agents' names, not the `agentic-` prefix: a KB called "Agentic …" has a
+    # Retrieve target that starts with it too
+    agentic = _agentic_target_owners(workspace_id)
+    out: list[str] = []
+    for name in _list_targets(control, gateway_id):
+        if name in agentic:
+            if agentic[name] == project_id:
+                out.append(name)
+            continue
+        kb_id = name.rsplit("-", 1)[-1]
+        if owners.get(kb_id, default) == project_id:
+            out.append(name)
+    return sorted(out)

@@ -19,9 +19,9 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
-from app.core.project_scope import project_context
+from app.core.project_scope import current_project, project_context
 from app.models.ledger import Agent
-from app.services import creators, kb_gateway
+from app.services import creators, kb_gateway, project_kb
 from app.services.agentcore.client import (
     agent_client,
     agent_runtime_client,
@@ -301,19 +301,24 @@ def _kb_policy_document(bucket: str, prefix: str) -> dict[str, Any]:
 
 
 def _sync_kb_policy(
-    workspace: WorkspaceContext, kb_id: str, bucket: str, prefix: str
+    workspace: WorkspaceContext, kb_id: str, bucket: str, prefix: str,
+    role_name: str | None = None,
 ) -> None:
+    """`role_name`: the KB's own role — an isolated project's KB role (R10-kb)
+    carries its external grants; None = the workspace's shared role."""
     iam = workspace.client("iam")
     iam.put_role_policy(
-        RoleName=_kb_role_name(workspace),
+        RoleName=role_name or _kb_role_name(workspace),
         PolicyName=_kb_policy_name(kb_id),
         PolicyDocument=json.dumps(_kb_policy_document(bucket, prefix)),
     )
 
 
-def _delete_kb_policy(workspace: WorkspaceContext, kb_id: str) -> None:
+def _delete_kb_policy(
+    workspace: WorkspaceContext, kb_id: str, role_name: str | None = None
+) -> None:
     iam = workspace.client("iam")
-    role_name, policy_name = _kb_role_name(workspace), _kb_policy_name(kb_id)
+    role_name, policy_name = role_name or _kb_role_name(workspace), _kb_policy_name(kb_id)
     try:
         iam.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
     except Exception as exc:  # NoSuchEntity / role absent — nothing to clean
@@ -349,16 +354,21 @@ def _validate_external_source(bucket: str, prefix: str) -> None:
 
 
 def _resolve_source(
-    workspace: WorkspaceContext, kb_id: str, source: dict[str, Any]
+    workspace: WorkspaceContext,
+    kb_id: str,
+    source: dict[str, Any],
+    placement: project_kb.KbPlacement | None = None,
 ) -> tuple[str, str]:
     """(bucket, prefix) for a source descriptor. ``upload`` targets the artifacts
-    bucket under ``kb/{kb_id}/``; ``existing`` uses the caller's bucket/prefix."""
+    bucket under the KB's prefix — ``kb/{kb_id}/``, or ``projects/<pid>/kb/{kb_id}/``
+    for a KB on an isolated project's role (``placement``); ``existing`` uses the
+    caller's bucket/prefix."""
     artifacts = workspace.resources.get("artifacts_bucket")
     mode = (source or {}).get("mode") or "upload"
     if mode == "upload":
         if not artifacts:
             raise RuntimeError(_MISSING_ARTIFACTS)
-        return artifacts, f"kb/{kb_id}/"
+        return artifacts, (placement or project_kb.shared_placement(workspace)).prefix(kb_id)
     if mode == "existing":
         bucket = (source.get("bucket") or "").strip()
         if not bucket:
@@ -413,15 +423,27 @@ def _find_data_source_at(client: Any, kb_id: str, bucket: str, prefix: str) -> s
 
 
 def _create_data_source(
-    client: Any, workspace: WorkspaceContext, kb_id: str, source: dict[str, Any]
+    client: Any,
+    workspace: WorkspaceContext,
+    kb_id: str,
+    source: dict[str, Any],
+    placement: project_kb.KbPlacement | None = None,
 ) -> str:
-    bucket, prefix = _resolve_source(workspace, kb_id, source)
+    """``placement``: the KB's role and prefix (``project_kb.placement_of``); None =
+    the shared layout."""
+    if placement is None or placement.project_id is None:
+        bucket, prefix = _resolve_source(workspace, kb_id, source)
+    else:
+        bucket, prefix = _resolve_source(workspace, kb_id, source, placement)
     existing = _find_data_source_at(client, kb_id, bucket, prefix)
     if existing:
         return existing
     if bucket != workspace.resources.get("artifacts_bucket"):
-        # dynamic S3 read grant for BYO buckets
-        _sync_kb_policy(workspace, kb_id, bucket, prefix)
+        # dynamic S3 read grant for BYO buckets — on the role the KB uses
+        if placement is not None and placement.project_id:
+            _sync_kb_policy(workspace, kb_id, bucket, prefix, role_name=placement.role_name)
+        else:
+            _sync_kb_policy(workspace, kb_id, bucket, prefix)
     created = client.create_data_source(
         knowledgeBaseId=kb_id,
         name=_ds_name(bucket, prefix),
@@ -433,8 +455,21 @@ def _create_data_source(
     return created["dataSource"]["dataSourceId"]
 
 
-def _has_artifacts_data_source(client: Any, kb_id: str, artifacts: str) -> bool:
-    prefix = f"kb/{kb_id}/"
+def data_source_locations(client: Any, kb_id: str) -> dict[str, tuple[str | None, str | None]]:
+    """ds_id → (bucket, prefix) over the KB's data sources."""
+    out: dict[str, tuple[str | None, str | None]] = {}
+    for ds in _list_data_sources(client, kb_id):
+        detail = client.get_data_source(knowledgeBaseId=kb_id, dataSourceId=ds["dataSourceId"])[
+            "dataSource"
+        ]
+        out[ds["dataSourceId"]] = _parse_ds_location(detail)
+    return out
+
+
+def _has_artifacts_data_source(
+    client: Any, kb_id: str, artifacts: str, prefix: str | None = None
+) -> bool:
+    prefix = prefix or f"kb/{kb_id}/"
     for ds in _list_data_sources(client, kb_id):
         detail = client.get_data_source(knowledgeBaseId=kb_id, dataSourceId=ds["dataSourceId"])[
             "dataSource"
@@ -595,7 +630,10 @@ def create_kb(
     *,
     creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
-    role_arn = workspace.resources.get("kb_role_arn")
+    # an isolated project's KB takes the project role and prefix (§10.5, R10-kb);
+    # every other one the workspace's shared role, as before
+    placement = project_kb.placement_for_new_kb(workspace, current_project())
+    role_arn = placement.role_arn
     if not role_arn:
         raise RuntimeError(
             "kb_role_arn missing from this workspace's resource map — run its bootstrap"
@@ -611,6 +649,9 @@ def create_kb(
     }
     if description:
         kwargs["description"] = description
+    if placement.tags:
+        # the project boundary authorizes retrieval on this tag (project_iam)
+        kwargs["tags"] = placement.tags
     created = client.create_knowledge_base(**kwargs)
     kb_id = created["knowledgeBase"]["knowledgeBaseId"]
     # AWS keeps no ledger row of a KB, so its creator is recorded beside it — now,
@@ -646,35 +687,48 @@ def _start_source_completion(
     which the detail view surfaces with a one-click repair.
 
     The workspace is captured in the closure: there is no KB ledger row to
-    rehydrate it from, so the environment has to travel with the thread.
+    rehydrate it from, so the environment has to travel with the thread — and so
+    does the request's project, which the thread runs inside.
     """
+    project_id = current_project()
 
     def run() -> None:
-        deadline = time.time() + timeout_s
-        try:
-            client = agent_client(workspace)
-            while time.time() < deadline:
-                status = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"].get(
-                    "status"
-                )
-                if status == "ACTIVE":
-                    _create_data_source(client, workspace, kb_id, source)  # idempotent
-                    logger.info("kb %s: data source created after CREATING", kb_id)
-                    return
-                if status in {"FAILED", "DELETING"}:
-                    logger.warning("kb %s: giving up source setup, status %s", kb_id, status)
-                    return
-                # Deliberate polling interval; the surrounding loop owns the deadline.
-                time.sleep(interval_s)  # nosemgrep: arbitrary-sleep
-            logger.warning(
-                "kb %s: still not ACTIVE after %ss — source not created", kb_id, timeout_s
-            )
-        except Exception:  # background best-effort; the UI repair path is the backstop
-            logger.exception("kb %s: background data-source creation failed", kb_id)
+        with project_context(project_id):
+            _complete_source(workspace, kb_id, source, timeout_s, interval_s)
 
     thread = threading.Thread(target=run, name=f"kb-source-{kb_id}", daemon=True)
     thread.start()
     return thread
+
+
+def _complete_source(
+    workspace: WorkspaceContext,
+    kb_id: str,
+    source: dict[str, Any],
+    timeout_s: int,
+    interval_s: int,
+) -> None:
+    deadline = time.time() + timeout_s
+    try:
+        client = agent_client(workspace)
+        while time.time() < deadline:
+            detail = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"]
+            status = detail.get("status")
+            if status == "ACTIVE":
+                placement = project_kb.placement_of(workspace, detail)
+                _create_data_source(client, workspace, kb_id, source, placement)  # idempotent
+                logger.info("kb %s: data source created after CREATING", kb_id)
+                return
+            if status in {"FAILED", "DELETING"}:
+                logger.warning("kb %s: giving up source setup, status %s", kb_id, status)
+                return
+            # Deliberate polling interval; the surrounding loop owns the deadline.
+            time.sleep(interval_s)  # nosemgrep: arbitrary-sleep
+        logger.warning(
+            "kb %s: still not ACTIVE after %ss — source not created", kb_id, timeout_s
+        )
+    except Exception:  # background best-effort; the UI repair path is the backstop
+        logger.exception("kb %s: background data-source creation failed", kb_id)
 
 
 def upload_files(
@@ -684,11 +738,15 @@ def upload_files(
     if not artifacts:
         raise RuntimeError(_MISSING_ARTIFACTS)
     client = agent_client(workspace)
-    _require_managed(_get_kb(client, kb_id))
+    # the KB's prefix follows its role: `projects/<pid>/kb/<id>/` on an isolated
+    # project's role, `kb/<id>/` otherwise
+    prefix = project_kb.placement_of(workspace, _require_managed(_get_kb(client, kb_id))).prefix(
+        kb_id
+    )
     # zero data sources = an upload-mode KB whose source setup is still pending
     # (client replays it once the KB is ACTIVE) — files may land ahead of it
     if _list_data_sources(client, kb_id) and not _has_artifacts_data_source(
-        client, kb_id, artifacts
+        client, kb_id, artifacts, prefix
     ):
         raise AppError(
             "kb.no_upload_target",
@@ -699,7 +757,7 @@ def upload_files(
     s3 = workspace.client("s3")
     keys: list[str] = []
     for filename, data in files:
-        key = f"kb/{kb_id}/{_safe_filename(filename)}"
+        key = f"{prefix}{_safe_filename(filename)}"
         s3.put_object(Bucket=artifacts, Key=key, Body=data)
         keys.append(key)
     return keys
@@ -709,8 +767,8 @@ def add_data_source(
     workspace: WorkspaceContext, kb_id: str, source: dict[str, Any]
 ) -> dict[str, Any]:
     client = agent_client(workspace)
-    _require_managed(_get_kb(client, kb_id))
-    _create_data_source(client, workspace, kb_id, source)
+    placement = project_kb.placement_of(workspace, _require_managed(_get_kb(client, kb_id)))
+    _create_data_source(client, workspace, kb_id, source, placement)
     return get_kb_detail(workspace, kb_id)
 
 
@@ -812,7 +870,7 @@ def delete_kb(
     # delete outright (force or not) — see refuse_if_attached_to_system_agent.
     refuse_if_attached_to_system_agent(workspace, kb_id)
     client = agent_client(workspace)
-    _require_managed(_get_kb(client, kb_id))
+    placement = project_kb.placement_of(workspace, _require_managed(_get_kb(client, kb_id)))
     agents = attached_agents(workspace, kb_id)
     if agents and not force:
         raise KBAttachedError(kb_id, agents)
@@ -835,7 +893,10 @@ def delete_kb(
     if gateway_id:
         kb_gateway.delete_retrieve_target(control_client(workspace), gateway_id, kb_id)
 
-    _delete_kb_policy(workspace, kb_id)
+    if placement.project_id:  # the external grants sit on the project's KB role
+        _delete_kb_policy(workspace, kb_id, placement.role_name)
+    else:
+        _delete_kb_policy(workspace, kb_id)
 
     try:
         client.delete_knowledge_base(knowledgeBaseId=kb_id)
