@@ -494,7 +494,7 @@ RECOMMEND 背后的系统提示词生成器是一个 **provider**
 `*.py.tmpl` 模板）;spec 字段是 `backend/app/schemas/agent.py` 里的
 `AgentSpec.toolkits`。
 
-### Strands 方式——构建选项（SB-1）
+### Strands 方式——构建选项（SB-1、SB-2）
 
 Strands 方式（`zip_runtime`，平台生成的模板）在原有的模型、提示词、工具、知识库、技能、记忆、护栏、环境变量、限额、A2A、挂载与网络之外，开放了 Strands Agents SDK 的一部分精选能力。所有字段都是可选的，且只适用于 `zip_runtime`（不能与自带源码的 `code` / `code_bundle` 同用）；一个都没设置的 spec 生成的代码逐字节不变（快照测试）。字段定义与校验在 `backend/app/schemas/strands_builder.py`；生成的支持代码在 `backend/app/templates/strands_agent/builder_support.py.tmpl`。
 
@@ -505,6 +505,12 @@ Strands 方式（`zip_runtime`，平台生成的模板）在原有的模型、�
 | 对话管理 | `conversation{strategy: sliding_window\|summarizing, window_size, summary_model?}` | 滑动窗口（默认 40，与之前一致），或保留最近 `window_size` 条原文、摘要更早轮次的管理器 | `summary_model` 是 Bedrock 模型，仅用于 `summarizing`；Agent 的执行角色在自身模型之外也获得它的调用权限（`agent_iam.allowed_model_resources`） |
 | 结构化输出 | `output_schema`（JSON Schema 对象） | 在文本之外返回解析后的对象：运行时的 `complete` 事件带 `structured`，控制台流与 `/v1` SSE 发送 `structured` 事件（`{value}`），`/v1` 同步调用返回 `structured` 字段 | 必须是 object schema，每个对象最多 5 层、50 个属性，不超过 20000 个字符。不能与 `protocol: a2a` 同用，也不能与 PII 护栏同用（护栏只筛查文本；调用层对启用护栏的 Agent 也会丢弃 `structured`） |
 | 提示词模板 | `prompt_variables{name: 默认值}`、`few_shot_examples[{question, answer}]`（≤ 10） | 系统提示词中的 `{{name}}` 每次请求时依次取调用 payload 的 `context`（`/v1` 请求字段 `context`）、同名环境变量、默认值；未声明的名字保持原样。few-shot 问答对追加为示例段落 | ≤ 20 个变量，名称须匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，默认值 ≤ 2000 个字符 |
+| 把其他 Agent 当工具 | `agent_tools[{agent_id, tool_name, description}]`（≤ 10） | 每一项成为一个工具，用 Agent 自己的角色调用 `InvokeAgentRuntime`：`http` 目标走平台的 SSE 封装，`a2a` 目标走 JSON-RPC `message/send`。子 Agent 的会话 id 按调用方会话保持不变；调用链最深 3 层 | 目标必须是同一工作空间内、本项目（或以 `use` 级别借给本项目）已部署的 Runtime，协议为 `http` 或 `a2a`，入站认证为 IAM（不是 JWT）；不属于本项目或不存在的 id 返回 404，不符合条件的 Agent 或 Agent 自身返回 422。`runtime_arn` / `protocol` / `qualifier` 来自台账，部署时重新解析（`services/agent_tools.py`）；执行角色只获得这些 ARN 上的 `InvokeAgentRuntime`（需要时加 `InvokeAgentRuntimeForUser`）。工具名不得重复，也不得遮盖其他工具 |
+| 模型提供方 | `model_provider{kind: anthropic\|litellm, connection, base_url?}`（此时 `model_id` 是提供方的模型名） | `AnthropicModel`，或指向 LiteLLM 网关 `base_url` 的 `OpenAIModel`。API 密钥在运行时经令牌保管库从一个 `api_key` 类型的连接读取（缓存 5 分钟）；spec 里从不保存密钥。提供方的模型名写死在代码里，项目级 `LAUNCHPAD_MODEL_ID` 不会替换它 | `litellm` 必须填 `base_url`。仅限 Bedrock 模型来源的 HTTP Agent：`protocol: a2a`、Mantle、extended thinking 或提示词缓存时都会被拒绝 |
+| 工具调用守卫 | `tool_hooks{approval_tools[], max_tool_calls_per_turn, log_tool_calls, mask_args[]}` | Strands hooks：审批列表里的工具（名称或 `*` 模式）在控制台对话中被暂停——流中出现 `approval_required`（`tool`、`tool_use_id`、已脱敏的 `input`），对话显示审批卡片；点“批准”会以 `tool_approvals.approved = [tool]` 发送下一轮，一个名字只放行一次调用。其他调用方（`/v1`、评估、A2A 对端、其他 Agent）一律被拒绝（`approval_refused`）。另有每轮工具调用上限（每轮重置），以及每次调用一行脱敏的 `[launchpad-tool]` 日志 | 审批列表 ≤ 50 项；上限 1–500。`mask_args` 中列出的参数（以及内置的 password / secret / token / api_key / authorization）在日志和审批卡片里显示为 `***` |
+| 限流重试 | `retry{max_attempts, initial_delay_s, max_delay_s}` | Strands `ModelRetryStrategy`：被限流的模型调用按指数退避阶梯重试 | 1–10 次，初始等待 1–60 秒，最长等待 1–600 秒且不小于初始等待 |
+
+SB-2 字段只在至少设置了一个时才额外生成支持文件（`builder_sb2.py.tmpl`），因此 SB-1 的 spec 生成的代码仍逐字节不变。在控制台中，V2 与 V3 对话页把 `approval_required` 显示为审批卡片（工具名与脱敏后的输入，“批准”/“拒绝”）；“拒绝”不发送任何内容，该调用不会执行。新建 Agent 选择页的能力对比在“Strands 构建选项”下列出这些能力。
 
 **实验。** 生成的代码每次请求都从配置包读取 `model_params`、`conversation`、`few_shot_examples` 与 `prompt_variables`（键名相同），因此可以在 A/B 实验中对比：实验的对照配置包带 Agent 已保存的值，实验组配置包带同样的值再叠加实验组的覆盖（`optimization/service.py` 的 `stage_bundles`、`BUNDLE_CONFIG_KEYS`）。一个都没设置的 Agent，配置包请求与之前相同。
 

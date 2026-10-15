@@ -134,8 +134,23 @@ export function wayHref(way: WayKey, defaults: WayDefaults = { kb: false }): str
 /** The four build methods the workshop compares. */
 export type CapColumn = "harness" | "strands" | "sdk" | "byoc";
 export const CAP_COLUMNS: CapColumn[] = ["harness", "strands", "sdk", "byoc"];
-export type CapRow = "artifact" | "kb" | "skills" | "ab" | "model" | "observability";
-export const CAP_ROWS: CapRow[] = ["artifact", "kb", "skills", "ab", "model", "observability"];
+/** The workshop table's rows, then the Strands builder options (strands-builder
+ *  §2, SB-1 and SB-2): what only a platform-generated Strands agent configures in
+ *  the wizard — the other methods say "not supported" plus the way out, or that
+ *  their own code has to do it. */
+export type CapBaseRow = "artifact" | "kb" | "skills" | "ab" | "model" | "observability";
+export type CapBuilderRow =
+  | "builtinTools" | "modelParams" | "conversation" | "structured" | "promptTemplate"
+  | "agentsAsTools" | "providers" | "toolHooks" | "retry";
+export type CapRow = CapBaseRow | CapBuilderRow;
+export const CAP_BASE_ROWS: CapBaseRow[] = ["artifact", "kb", "skills", "ab", "model", "observability"];
+export const CAP_BUILDER_ROWS: CapBuilderRow[] = [
+  // SB-1
+  "builtinTools", "modelParams", "conversation", "structured", "promptTemplate",
+  // SB-2
+  "agentsAsTools", "providers", "toolHooks", "retry",
+];
+export const CAP_ROWS: CapRow[] = [...CAP_BASE_ROWS, ...CAP_BUILDER_ROWS];
 /** yes · partial (works with limits) · no (the cell text names the alternative) · info (a fact, not a verdict) */
 export type CapLevel = "yes" | "partial" | "no" | "info";
 
@@ -146,6 +161,15 @@ export const CAPABILITIES: Record<CapRow, Record<CapColumn, CapLevel>> = {
   ab: { harness: "no", strands: "yes", sdk: "no", byoc: "partial" },
   model: { harness: "yes", strands: "yes", sdk: "partial", byoc: "partial" },
   observability: { harness: "yes", strands: "yes", sdk: "yes", byoc: "no" },
+  builtinTools: { harness: "no", strands: "yes", sdk: "no", byoc: "partial" },
+  modelParams: { harness: "partial", strands: "yes", sdk: "no", byoc: "partial" },
+  conversation: { harness: "no", strands: "yes", sdk: "no", byoc: "partial" },
+  structured: { harness: "no", strands: "yes", sdk: "no", byoc: "partial" },
+  promptTemplate: { harness: "no", strands: "yes", sdk: "no", byoc: "partial" },
+  agentsAsTools: { harness: "no", strands: "yes", sdk: "no", byoc: "partial" },
+  providers: { harness: "partial", strands: "yes", sdk: "no", byoc: "partial" },
+  toolHooks: { harness: "no", strands: "yes", sdk: "no", byoc: "partial" },
+  retry: { harness: "info", strands: "yes", sdk: "info", byoc: "partial" },
 };
 
 /** The comparison column a recommended way is built as (Studio generates
@@ -195,7 +219,7 @@ export function chooserKeys(): string[] {
   const keys = [
     ...["title", "sub", "skip", "reopen", "reopenSub", "pending", "pendingSub", "recommended", "why", "cost", "alternative", "useThis", "notNeeded",
       "compare", "compareSub", "compareNone", "ready", "readySub", "presets", "presetsSub", "market", "marketSub", "sdk", "sdkSub",
-      "capHead", "level.yes", "level.partial", "level.no", "kbPreset"].map((k) => `${p}.${k}`),
+      "capHead", "capBuilder", "capBuilderSub", "level.yes", "level.partial", "level.no", "kbPreset"].map((k) => `${p}.${k}`),
     ...QUESTIONS.map((q) => `${p}.q.${q}`),
     ...HAVE.flatMap((v) => [`${p}.have.${v}`, `${p}.have.${v}Sub`]),
     ...USE.flatMap((v) => [`${p}.use.${v}`, `${p}.use.${v}Sub`]),

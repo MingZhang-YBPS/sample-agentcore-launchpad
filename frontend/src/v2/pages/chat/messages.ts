@@ -1,11 +1,12 @@
 import type { ChatAttachmentMetadata, FeedbackVerdict } from "../../../lib/api";
 import type { PolicyDeny } from "../../../lib/policy-deny";
+import type { ToolApproval } from "../../../lib/tool-approval";
 import type { AuthAsk } from "../../../lib/user-grants";
 
 export { retryPromptFor } from "../../../lib/user-grants";
 
 export interface ChatMessage {
-  kind: "user" | "agent" | "tool" | "memory" | "error" | "auth" | "policy";
+  kind: "user" | "agent" | "tool" | "memory" | "error" | "auth" | "policy" | "approval";
   text: string;
   name?: string;
   streaming?: boolean;
@@ -20,6 +21,10 @@ export interface ChatMessage {
   curated?: boolean;
   /** kind "policy": a Gateway tool call a Cedar policy denied */
   policy?: PolicyDeny;
+  /** kind "approval" (SB-2): a tool call paused for the user's approval, or refused */
+  approval?: ToolApproval;
+  /** kind "user": the tools this turn approved (a retry of the turn sends them again) */
+  approved?: string[];
   /** kind "tool" of a live turn: the call's run (status, duration); a restored row has none */
   run?: import("../../../lib/chat").ToolRun;
   /** the live turn a tool row belongs to (tool ids repeat across turns) */

@@ -6,6 +6,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { JumpToLatest } from "../../components/JumpToLatest";
 import { Markdown } from "../../components/Markdown";
 import { StructuredAnswer } from "../../components/chat/StructuredAnswer";
+import { ToolApprovalCard } from "../../components/chat/ToolApprovalCard";
 import {
   api,
   type ChatHistoryMessage,
@@ -54,6 +55,15 @@ import {
 } from "../../lib/chat";
 import { useStickToBottom } from "../../lib/useStickToBottom";
 import { livePolicyDeny, type PolicyDeny, policyDenyHref, restoredPolicyDeny } from "../../lib/policy-deny";
+import {
+  approvalActionable,
+  approvalPhase,
+  approvalPrompt,
+  decideApproval,
+  liveApproval,
+  restoredApproval,
+  toolApprovalsField,
+} from "../../lib/tool-approval";
 import { useAuth } from "../../auth/auth-context";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { appendDelta, attachStructured } from "../../v2/pages/chat/messages";
@@ -167,12 +177,17 @@ export function V3Chat() {
       r.role === "user"
         ? { kind: "user", text: r.text, ledgerId: r.id }
         : r.role === "agent"
-          ? { kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null, curated: !!r.answered_by }
+          ? {
+            kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null, curated: !!r.answered_by,
+            ...(r.structured != null ? { structured: r.structured } : {}),
+          }
           : r.role === "tool"
             ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
             : r.role === "policy"
               ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
-              : restoredError(r.text),
+              : r.role === "approval"
+                ? { kind: "approval", text: r.text, name: r.name ?? "", approval: restoredApproval(r) }
+                : restoredError(r.text),
     );
 
   const open = async (sid: string) => {
@@ -253,19 +268,37 @@ export function V3Chat() {
     if (!user) return;
     setMessages((m) => m.slice(0, lastUserIndex(m) + 1));
     thread.toBottom();
-    await runTurn(user.text, user.ledgerId, false);
+    await runTurn(user.text, user.ledgerId, false, user.approved);
+  };
+
+  // SB-2 approval card: Approve answers the paused call with the next turn, which
+  // names the tool in `tool_approvals` (one approval = one call); Decline sends
+  // nothing — the call stays unrun and the composer is the user's.
+  const approve = async (index: number) => {
+    const card = messages[index]?.approval;
+    if (!card || !agentId || busy || !approvalActionable(messages, index)) return;
+    const prompt = approvalPrompt(t, card.tool);
+    const approved = [card.tool];
+    setMessages((m) => [...decideApproval(m, index, "approved"), { kind: "user", text: prompt, approved }]);
+    thread.toBottom();
+    await runTurn(prompt, undefined, false, approved);
+  };
+  const decline = (index: number) => {
+    if (busy || !approvalActionable(messages, index)) return;
+    setMessages((m) => decideApproval(m, index, "declined"));
+    inputRef.current?.focus();
   };
 
   // One turn, retried once by itself when it failed transiently before showing
   // anything (§4.2); each retry names the attempt it replaces (`retry_of`).
-  const runTurn = async (prompt: string, retryOf: number | undefined, fromComposer: boolean) => {
+  const runTurn = async (prompt: string, retryOf: number | undefined, fromComposer: boolean, approved?: string[]) => {
     setBusy(true);
     let session = sessionId;
     let replaces = retryOf;
     let failure: TurnFailure | null = null;
     try {
       for (let attempt = 0; ; attempt++) {
-        const result = await streamTurn({ prompt, session, retryOf: replaces });
+        const result = await streamTurn({ prompt, session, retryOf: replaces, approved });
         session = result.session ?? session;
         failure = result.failure;
         if (!shouldAutoRetry(failure, attempt)) break;
@@ -297,8 +330,8 @@ export function V3Chat() {
    *  (`follow`: its turn id, replayed from its first event). A dropped or silent
    *  connection reconnects to the turn (`RESUME_DELAYS_MS`) before it counts as a
    *  failure; a turn no longer held by the server is shown from the ledger. */
-  const streamTurn = async ({ prompt = "", session, retryOf, follow }: {
-    prompt?: string; session?: string; retryOf?: number; follow?: string;
+  const streamTurn = async ({ prompt = "", session, retryOf, follow, approved }: {
+    prompt?: string; session?: string; retryOf?: number; follow?: string; approved?: string[];
   }): Promise<Attempt> => {
     let failure: TurnFailure | null = null;
     let completed = false;
@@ -360,6 +393,13 @@ export function V3Chat() {
           // follows its tool row, which already closed the open bubble
           const policy = livePolicyDeny(data);
           setMessages((m) => [...m, { kind: "policy", text: policy.reason, name: policy.tool, policy }]);
+        } else if (event === "approval_required" || event === "approval_refused") {
+          // SB-2: the agent paused a listed tool call (or the runtime refused it); a
+          // paused call is this turn's outcome, so it counts as an answer
+          answered = true;
+          const approval = liveApproval(data, event === "approval_refused");
+          setMessages((m) => [...m, { kind: "approval", text: approval.tool, name: approval.tool, approval }]);
+          openBubble = false;
         } else if (event === "delta") {
           const wasOpen = openBubble;
           answered = true;
@@ -417,7 +457,9 @@ export function V3Chat() {
       // the turn's signal also aborts the request itself (Stop before the first frame)
       const first = follow
         ? resumeChat(agentId, follow, 0, signal)
-        : streamChat(agentId, { prompt, session_id: session ?? null, retry_of: retryOf }, signal);
+        : streamChat(agentId, {
+          prompt, session_id: session ?? null, retry_of: retryOf, tool_approvals: toolApprovalsField(approved),
+        }, signal);
       try {
         await read(await first);
       } catch (err) {
@@ -607,6 +649,18 @@ export function V3Chat() {
                   </div>
                 );
               if (m.kind === "policy" && m.policy) return <div key={i} className="v3-msg"><PolicyDenied deny={m.policy} /></div>;
+              if (m.kind === "approval" && m.approval)
+                return (
+                  <div key={i} className="v3-msg">
+                    <ToolApprovalCard
+                      approval={m.approval}
+                      phase={approvalPhase(m.approval, approvalActionable(messages, i))}
+                      disabled={busy}
+                      onApprove={() => void approve(i)}
+                      onDecline={() => decline(i)}
+                    />
+                  </div>
+                );
               if (m.kind !== "agent") return null;
               return (
                 <div key={i} className={`v3-msg agent${m.streaming ? " streaming" : ""}`}>

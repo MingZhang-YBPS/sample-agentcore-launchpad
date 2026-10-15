@@ -8,10 +8,13 @@ import { Term } from "../../onboarding/Glossary";
 import { Lamp, type Signal } from "../../ui";
 import {
   type Answers,
+  CAP_BASE_ROWS,
+  CAP_BUILDER_ROWS,
+  type CapColumn,
   CAP_COLUMNS,
-  CAP_ROWS,
   CAPABILITIES,
   type CapLevel,
+  type CapRow,
   capColumn,
   DLC,
   HAVE,
@@ -122,26 +125,41 @@ function Comparison({ highlight }: { highlight: WayKey | null }) {
             </tr>
           </thead>
           <tbody>
-            {CAP_ROWS.map((r) => (
-              <tr key={r}>
-                <th scope="row">{t(`${P}.cap.${r}`)}</th>
-                {CAP_COLUMNS.map((c) => {
-                  const level = CAPABILITIES[r][c];
-                  return (
-                    <td key={c} className={c === col ? "lit" : undefined} data-level={level}>
-                      <span className="cell">
-                        {level !== "info" && <Lamp s={LEVEL_SIGNAL[level]} title={t(`${P}.level.${level}`)} />}
-                        <span>{t(`${P}.cell.${r}.${c}`)}</span>
-                      </span>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+            {CAP_BASE_ROWS.map((r) => <CapabilityRow key={r} row={r} col={col} />)}
+          </tbody>
+          {/* the Strands builder options: a section of its own under a ruled caption row */}
+          <tbody className="builder">
+            <tr className="section">
+              <th scope="colgroup" colSpan={CAP_COLUMNS.length + 1}>
+                <span className="tag">{t(`${P}.capBuilder`)}</span>
+                <span className="sub">{t(`${P}.capBuilderSub`)}</span>
+              </th>
+            </tr>
+            {CAP_BUILDER_ROWS.map((r) => <CapabilityRow key={r} row={r} col={col} />)}
           </tbody>
         </table>
       </div>
     </details>
+  );
+}
+
+function CapabilityRow({ row, col }: { row: CapRow; col: CapColumn | null }) {
+  const { t } = useTranslation();
+  return (
+    <tr>
+      <th scope="row">{t(`${P}.cap.${row}`)}</th>
+      {CAP_COLUMNS.map((c) => {
+        const level = CAPABILITIES[row][c];
+        return (
+          <td key={c} className={c === col ? "lit" : undefined} data-level={level}>
+            <span className="cell">
+              {level !== "info" && <Lamp s={LEVEL_SIGNAL[level]} title={t(`${P}.level.${level}`)} />}
+              <span>{t(`${P}.cell.${row}.${c}`)}</span>
+            </span>
+          </td>
+        );
+      })}
+    </tr>
   );
 }
 

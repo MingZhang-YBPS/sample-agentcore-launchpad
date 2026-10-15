@@ -1,0 +1,104 @@
+/* The tool-approval card in a chat thread (ToolApprovalCard.tsx). One layout, two
+   skins: each maps the --ap-* slots onto its own tokens, no new palette or type.
+   A held call: an amber rail and a breathing lamp while it waits, the tool name as
+   the one large thing, the masked input as a ledger where every masked value is a
+   solid redaction bar. Answered, the rail turns to the verdict and the buttons give
+   way to a stamp. */
+.v3 .lp-approval {
+  --ap-bg: var(--v3-ink-1); --ap-head: var(--v3-ink-2); --ap-line: var(--v3-line); --ap-text: var(--v3-text);
+  --ap-text-2: var(--v3-text-2); --ap-mute: var(--v3-text-3); --ap-wait: var(--v3-wait); --ap-wait-dim: var(--v3-wait-dim);
+  --ap-ok: var(--v3-ok); --ap-ok-dim: var(--v3-ok-dim); --ap-on-ok: var(--v3-on-ok); --ap-act: var(--v3-act);
+  --ap-hover: var(--v3-ink-3); --ap-display: var(--v3-display); --ap-mono: var(--v3-mono); --ap-body: var(--v3-body);
+  --ap-r: var(--v3-r-sm);
+}
+.v2 .lp-approval {
+  --ap-bg: var(--v2-card); --ap-head: var(--v2-fill); --ap-line: var(--v2-line); --ap-text: var(--v2-ink);
+  --ap-text-2: var(--v2-ink-2); --ap-mute: var(--v2-ink-3); --ap-wait: var(--v2-warning); --ap-wait-dim: var(--v2-warning-soft);
+  --ap-ok: var(--v2-success); --ap-ok-dim: var(--v2-success-soft); --ap-on-ok: var(--v2-on-primary); --ap-act: var(--v2-danger);
+  --ap-hover: var(--v2-fill-2); --ap-display: var(--v2-font); --ap-mono: var(--v2-mono); --ap-body: var(--v2-font);
+  --ap-r: var(--v2-radius-sm);
+}
+.lp-approval {
+  --ap-rail: var(--ap-wait);
+  margin: 0; max-width: 560px; border: 1px solid var(--ap-line); border-left: 3px solid var(--ap-rail);
+  border-radius: var(--ap-r); background: var(--ap-bg); overflow: hidden; font-family: var(--ap-body);
+  animation: lp-approval-in 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transition: border-color 0.3s ease;
+}
+.lp-approval[data-phase="approved"] { --ap-rail: var(--ap-ok); }
+.lp-approval[data-phase="declined"], .lp-approval[data-phase="expired"] { --ap-rail: var(--ap-mute); }
+.lp-approval[data-phase="refused"] { --ap-rail: var(--ap-act); }
+
+.lp-approval-head {
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+  background: linear-gradient(90deg, var(--ap-wait-dim), transparent 70%); border-bottom: 1px solid var(--ap-line);
+  color: var(--ap-rail);
+}
+.lp-approval:not([data-phase="pending"]) .lp-approval-head { background: var(--ap-head); }
+.lp-approval-lamp {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--ap-rail); flex: none;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--ap-rail) 55%, transparent);
+}
+.lp-approval[data-phase="pending"] .lp-approval-lamp { animation: lp-approval-breathe 1.8s ease-in-out infinite; }
+.lp-approval-label {
+  font-family: var(--ap-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+}
+.lp-approval-state { margin-left: auto; font-family: var(--ap-mono); font-size: 11px; color: var(--ap-mute); }
+.lp-approval[data-phase="pending"] .lp-approval-state { color: var(--ap-wait); }
+.lp-approval[data-phase="approved"] .lp-approval-state { color: var(--ap-ok); }
+
+.lp-approval-body { display: grid; gap: 8px; padding: 12px 14px 4px; }
+.lp-approval-tool { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.lp-approval-verb { font-size: 12px; color: var(--ap-mute); }
+.lp-approval-tool code {
+  font-family: var(--ap-display); font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--ap-text);
+  background: none; padding: 0; overflow-wrap: anywhere;
+}
+.lp-approval-note { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ap-text-2); }
+
+.lp-approval-input { border: 1px solid var(--ap-line); border-radius: var(--ap-r); overflow: hidden; }
+.lp-approval-input-head {
+  display: flex; align-items: center; gap: 10px; padding: 4px 10px; background: var(--ap-head);
+  font-family: var(--ap-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ap-mute);
+}
+.lp-approval-masked { margin-left: auto; letter-spacing: 0.04em; text-transform: none; }
+.lp-approval-input pre {
+  margin: 0; padding: 8px 10px; max-height: 220px; overflow: auto; background: transparent; border: 0;
+  font: 12px/1.6 var(--ap-mono); color: var(--ap-text); white-space: pre;
+}
+/* a masked value: a solid bar the width of the token, the characters kept for copy */
+.lp-approval-redact {
+  display: inline-block; padding: 0 2px; border-radius: 2px; line-height: 1.25;
+  background: var(--ap-text-2); color: transparent; user-select: none; cursor: help;
+}
+
+.lp-approval-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px 12px; }
+.lp-approval-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px;
+  border: 1px solid var(--ap-line); border-radius: var(--ap-r); background: transparent; color: var(--ap-text);
+  font: 500 12.5px var(--ap-body); cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease;
+}
+.lp-approval-btn:hover:not(:disabled) { background: var(--ap-hover); }
+.lp-approval-btn.go { background: var(--ap-ok); border-color: var(--ap-ok); color: var(--ap-on-ok); }
+.lp-approval-btn.go:hover:not(:disabled) { background: color-mix(in srgb, var(--ap-ok) 86%, var(--ap-text)); }
+.lp-approval-btn:focus-visible { outline: 2px solid var(--ap-wait); outline-offset: 2px; }
+.lp-approval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.lp-approval-once { font-size: 11.5px; color: var(--ap-mute); }
+
+.lp-approval-stamp {
+  margin: 6px 14px 12px; padding: 5px 10px; border-left: 2px solid var(--ap-rail); font-size: 12.5px; color: var(--ap-text-2);
+  background: color-mix(in srgb, var(--ap-rail) 9%, transparent); animation: lp-approval-stamp 0.24s ease-out both;
+}
+.lp-approval[data-phase="refused"] .lp-approval-body,
+.lp-approval[data-phase="expired"] .lp-approval-body { padding-bottom: 12px; }
+
+@keyframes lp-approval-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes lp-approval-stamp { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+@keyframes lp-approval-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ap-rail) 55%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--ap-rail) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-approval, .lp-approval-stamp, .lp-approval[data-phase="pending"] .lp-approval-lamp { animation: none; }
+  .lp-approval, .lp-approval-btn { transition: none; }
+}

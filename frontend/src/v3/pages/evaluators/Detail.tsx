@@ -4,8 +4,10 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type EvaluatorDetail } from "../../../lib/api";
+import { sharedFromOf } from "../../../lib/api/sharedFrom";
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { useLoad } from "../../hooks";
+import { SharedFromTag } from "../../shares/SharedFromTag";
 import { Chip, Lamp, Notice, PageHead, Panel, Skeleton, Stat } from "../../ui";
 import { evaluatorSignal, isManaged } from "./common";
 
@@ -24,6 +26,8 @@ export function EvaluatorView({ id }: { id: string }) {
   if ((detail.loading && !d && !managed) || (list.loading && !list.data)) return <Skeleton rows={6} />;
   if (detail.error) return <Notice s="act"><ApiErrorDetail error={detail.failure ?? detail.error} /></Notice>;
   const s = row ? evaluatorSignal(row) : "info";
+  // an evaluator another project lent this one is its owner's to edit (§11.2)
+  const lent = sharedFromOf(row) ?? sharedFromOf(d);
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
@@ -38,11 +42,12 @@ export function EvaluatorView({ id }: { id: string }) {
           <span style={{ display: "inline-flex", alignItems: "center", gap: 14 }}>
             <Lamp s={s} />
             {name}
+            <SharedFromTag row={lent ? { shared_from: lent } : null} />
           </span>
         }
         sub={d?.description || undefined}
         end={
-          row?.source === "custom" ? (
+          row?.source === "custom" && !lent ? (
             <Link to={`/v3/evaluators?view=edit&id=${encodeURIComponent(id)}`} className="v3-btn primary"><Pencil size={14} /> {t("v3.evaluators.edit")}</Link>
           ) : undefined
         }

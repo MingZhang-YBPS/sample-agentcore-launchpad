@@ -58,6 +58,14 @@ import {
   waitForRetry,
 } from "../../lib/chat";
 import { livePolicyDeny, restoredPolicyDeny } from "../../lib/policy-deny";
+import {
+  approvalActionable,
+  approvalPrompt,
+  decideApproval,
+  liveApproval,
+  restoredApproval,
+  toolApprovalsField,
+} from "../../lib/tool-approval";
 import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Select, Spin, Tag } from "../ui";
@@ -75,6 +83,8 @@ interface RetryOffer {
   failure: TurnFailure;
   prompt: string;
   ledgerId?: number;
+  /** SB-2: the tools the failed turn approved — its retry approves them again */
+  approved?: string[];
 }
 
 const MEMORY_TAG = {
@@ -209,7 +219,10 @@ export function V2Chat() {
           r.role === "user"
             ? { kind: "user", text: r.text, attachments: r.attachments }
             : r.role === "agent"
-              ? { kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null, curated: !!r.answered_by }
+              ? {
+                kind: "agent", text: r.text, id: r.id, verdict: r.verdict ?? null, curated: !!r.answered_by,
+                ...(r.structured != null ? { structured: r.structured } : {}),
+              }
               : r.role === "tool"
                 ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
                 : r.role === "auth"
@@ -222,6 +235,8 @@ export function V2Chat() {
                     }
                   : r.role === "policy"
                     ? { kind: "policy", text: r.text, name: r.name ?? "", policy: restoredPolicyDeny(r) }
+                    : r.role === "approval"
+                      ? { kind: "approval", text: r.text, name: r.name ?? "", approval: restoredApproval(r) }
                     : isStoppedRow(r.text)
                       ? { kind: "error", text: t("v3.chat.status.stopped") }
                       : { kind: "error", text: failureText(t, restoredFailure(r.text)) },
@@ -270,7 +285,9 @@ export function V2Chat() {
   // composer's draft or its pending files. `retryOf` (the retry button,
   // chat-streaming §4.1): the latest turn is re-sent in place — its user message is
   // already in the thread — naming its ledger row, so the retry replaces it.
-  const send = async (retryPrompt?: string, retryOf?: number | null) => {
+  // `approved` (an approval card's Approve, SB-2): the turn names those tools in
+  // `tool_approvals`, so the call the agent paused may run.
+  const send = async (retryPrompt?: string, retryOf?: number | null, approved?: string[]) => {
     const retrying = retryPrompt !== undefined;
     const replacing = retryOf !== undefined;
     const prompt = (retrying ? retryPrompt : input).trim();
@@ -293,6 +310,7 @@ export function V2Chat() {
     const userMessage: ChatMessage = {
       kind: "user",
       text: prompt,
+      ...(approved?.length ? { approved } : {}),
       attachments: capability && files.length ? files.map((f) => attachmentMetadata(f, capability)) : undefined,
     };
     if (!replacing) setMessages((m) => [...m, userMessage]);
@@ -323,6 +341,8 @@ export function V2Chat() {
       try {
         const request: ChatTurnRequest = { prompt, session_id: activeSessionId };
         if (replaces !== undefined) request.retry_of = replaces;
+        const toolApprovals = toolApprovalsField(approved);
+        if (toolApprovals) request.tool_approvals = toolApprovals;
         const asUserValue = asUserField(jwtAgent, asUser);
         if (asUserValue !== undefined) request.as_user = asUserValue;
         if (files.length) {
@@ -379,6 +399,11 @@ export function V2Chat() {
             // follows its tool row, which already closed the open bubble
             const policy = livePolicyDeny(payload);
             setMessages((m) => [...m, { kind: "policy", text: policy.reason, name: policy.tool, policy }]);
+          } else if (event === "approval_required" || event === "approval_refused") {
+            // SB-2: the agent paused a listed tool call (or the runtime refused it)
+            const approval = liveApproval(payload, event === "approval_refused");
+            setMessages((m) => [...m, { kind: "approval", text: approval.tool, name: approval.tool, approval }]);
+            agentOpen = false;
           } else if (event === "delta") {
             const open = agentOpen;
             setMessages((m) => appendDelta(m, payload.text ?? "", open, curated));
@@ -460,7 +485,7 @@ export function V2Chat() {
       }
       // a turn with files gets the offer too: its error item says to re-send the files
       if (failure?.manual) {
-        setRetryOffer({ failure, prompt, ledgerId: userLedgerId ?? replaces });
+        setRetryOffer({ failure, prompt, ledgerId: userLedgerId ?? replaces, approved });
       }
     } finally {
       // a failure the retry offer does not cover hands the prompt back for editing
@@ -476,9 +501,22 @@ export function V2Chat() {
   // the retry, which names that turn's ledger row.
   const retryTurn = () => {
     if (!retryOffer || busy || latestRetryTarget(messages)?.attachments) return;
-    const { prompt, ledgerId } = retryOffer;
+    const { prompt, ledgerId, approved } = retryOffer;
     setMessages((m) => m.slice(0, lastUserIndex(m) + 1));
-    void send(prompt, ledgerId ?? null);
+    void send(prompt, ledgerId ?? null, approved);
+  };
+
+  // SB-2 approval card: Approve answers the paused call with the next turn; Decline
+  // sends nothing — the call stays unrun and the composer is the user's.
+  const approveTool = (index: number) => {
+    const card = messages[index]?.approval;
+    if (!card || busy || restoring || !approvalActionable(messages, index)) return;
+    setMessages((m) => decideApproval(m, index, "approved"));
+    void send(approvalPrompt(t, card.tool), undefined, [card.tool]);
+  };
+  const declineTool = (index: number) => {
+    if (busy || !approvalActionable(messages, index)) return;
+    setMessages((m) => decideApproval(m, index, "declined"));
   };
 
   // Thumbs: optimistic, reverted (with the reason) when the backend refuses.
@@ -777,6 +815,8 @@ export function V2Chat() {
               onRetry={(prompt) => void send(prompt)}
               retryDisabled={busy || restoring}
               onRetryTurn={retryOffer && !busy && !restoring ? retryTurn : undefined}
+              onApprove={approveTool}
+              onDecline={declineTool}
               now={turn.now}
             />
             {retrying !== null && (

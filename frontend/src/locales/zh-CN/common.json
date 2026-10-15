@@ -11063,7 +11063,16 @@
           "skills": "注册中心技能",
           "ab": "配置包 A/B 实验",
           "model": "模型来源",
-          "observability": "可观测（链路、会话）"
+          "observability": "可观测（链路、会话）",
+          "builtinTools": "Strands 内置工具",
+          "modelParams": "推理参数",
+          "conversation": "对话管理策略",
+          "structured": "结构化输出",
+          "promptTemplate": "提示词变量与 few-shot",
+          "agentsAsTools": "把其他智能体当工具",
+          "providers": "Anthropic / LiteLLM 提供方",
+          "toolHooks": "工具调用守卫",
+          "retry": "限流重试"
         },
         "level": {
           "yes": "支持",
@@ -11106,8 +11115,64 @@
             "strands": "自动（平台注入 ADOT）",
             "sdk": "自动（平台生成的 Dockerfile）",
             "byoc": "代码 zip 没有——在镜像里用 ADOT 埋点，或改用 Strands"
+          },
+          "builtinTools": {
+            "harness": "不支持——Harness 提供代码解释器和浏览器；要用 strands-agents-tools 请改用 Strands",
+            "strands": "精选 strands-agents-tools：current_time、calculator、http_request（允许的域名）、think、retrieve、image_reader、journal",
+            "sdk": "不支持——Agent SDK 自带工具；要用 strands-agents-tools 请改用 Strands",
+            "byoc": "在你的代码里自己导入 strands-agents-tools；Strands 在向导里勾选即可"
+          },
+          "modelParams": {
+            "harness": "只有最大 token 数和推理强度——采样、停止序列、思考和缓存需要 Strands",
+            "strands": "temperature、top P、最大 token 数、停止序列；Claude 扩展思考；Bedrock 提示词缓存",
+            "sdk": "不支持——由平台生成的智能体固定；请改用 Strands",
+            "byoc": "在你的代码里设置；Strands 在向导和配置包里设置"
+          },
+          "conversation": {
+            "harness": "不支持——由 Harness 管理；要用滑动窗口或摘要请改用 Strands",
+            "strands": "滑动窗口（可设大小）或摘要旧轮次，可选摘要模型",
+            "sdk": "不支持——使用 SDK 默认值；请改用 Strands",
+            "byoc": "在你的代码里实现；Strands 已内置"
+          },
+          "structured": {
+            "harness": "不支持——要按 JSON Schema 返回请改用 Strands",
+            "strands": "按 JSON Schema 输出；/v1 返回 structured，对话页显示为表格或 JSON",
+            "sdk": "不支持——要按 JSON Schema 返回请改用 Strands",
+            "byoc": "需要你的代码自己发出；Strands 已内置"
+          },
+          "promptTemplate": {
+            "harness": "不支持——只有一段系统提示词；要用 模板变量 和 few-shot 示例请改用 Strands",
+            "strands": "模板变量 来自环境变量或 /v1 的 context，few-shot 示例；纳入配置包",
+            "sdk": "不支持——只有一段系统提示词；请改用 Strands",
+            "byoc": "在你的代码里实现；Strands 放在配置包里"
+          },
+          "agentsAsTools": {
+            "harness": "不支持——请用 Studio 的 Graph 或 Strands",
+            "strands": "本项目（或共享给本项目）已部署的智能体，经 invoke 或 A2A 调用；最小权限授权",
+            "sdk": "不支持——请改用 Strands",
+            "byoc": "在你的代码里调用 InvokeAgentRuntime 并自己授权；Strands 两者都会接好"
+          },
+          "providers": {
+            "harness": "Bedrock 或 OpenAI 兼容——Anthropic API 和 LiteLLM 需要 Strands",
+            "strands": "Anthropic API 或 LiteLLM 网关；密钥来自 api_key 类型的 Connection，不进 spec",
+            "sdk": "不支持——固定 Bedrock + Claude；请改用 Strands",
+            "byoc": "在你的代码里随意选择——别把密钥写进代码；Strands 从 Connection 读取"
+          },
+          "toolHooks": {
+            "harness": "不支持——只有护栏和网关策略；要用审批和调用上限请改用 Strands",
+            "strands": "审批名单（在控制台对话里批准）、每轮调用次数上限、打码的调用日志",
+            "sdk": "不支持——要用审批和调用上限请改用 Strands",
+            "byoc": "在你的代码里写 Strands hooks；Strands 会自动生成"
+          },
+          "retry": {
+            "harness": "由服务管理",
+            "strands": "最大重试次数与指数退避",
+            "sdk": "使用 SDK 默认值",
+            "byoc": "在你的代码里实现；Strands 在向导里设置"
           }
-        }
+        },
+        "capBuilder": "Strands 构建选项",
+        "capBuilderSub": "在 Strands 向导里配置，代码由平台生成"
       }
     },
     "assistant": {
@@ -14742,6 +14807,37 @@
       "retryMax": "等待上限（秒）",
       "ladder": "本轮失败前最多共等待 {{total}} 秒。",
       "noRetry": "只尝试一次——被限流的调用立即失败。"
+    }
+  },
+  "chatApproval": {
+    "label": "需要审批",
+    "refusedLabel": "无法审批",
+    "wants": "智能体要调用",
+    "input": "输入",
+    "masked_one": "已打码 {{count}} 个参数",
+    "masked_other": "已打码 {{count}} 个参数",
+    "maskedHint": "已由智能体的工具调用守卫打码，不显示原值",
+    "approve": "批准",
+    "decline": "拒绝",
+    "once": "只批准这一次调用。",
+    "prompt": "已批准——请继续调用 {{tool}}。",
+    "phase": {
+      "pending": "等你决定",
+      "approved": "已批准",
+      "declined": "已拒绝",
+      "refused": "已拒绝调用",
+      "expired": "未处理"
+    },
+    "note": {
+      "pending": "{{tool}} 在这个智能体的审批名单里，调用已暂停，等你决定。",
+      "approved": "你批准了这次调用。",
+      "declined": "你拒绝了这次调用。",
+      "refused": "{{tool}} 需要人工审批，而这个调用方无法审批，所以智能体没有调用它。",
+      "expired": "这次调用是在之前的轮次里暂停的。如果仍然需要，请让智能体重新发起，再批准。"
+    },
+    "stamp": {
+      "approved": "已作为下一轮发送——{{tool}} 可以调用一次。",
+      "declined": "{{tool}} 不会调用。请告诉智能体改做什么。"
     }
   }
 }

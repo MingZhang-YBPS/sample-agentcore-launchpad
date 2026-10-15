@@ -775,7 +775,7 @@ catalog itself is `backend/app/templates/toolkits/__init__.py` (each member's to
 source is a `*.py.tmpl` template beside it); the spec field is `AgentSpec.toolkits`
 in `backend/app/schemas/agent.py`.
 
-### The Strands method — builder options (SB-1)
+### The Strands method — builder options (SB-1, SB-2)
 
 The Strands method (`zip_runtime`, the platform-generated template) exposes a curated
 part of the Strands Agents SDK beside the model, prompt, tools, knowledge bases,
@@ -793,6 +793,17 @@ renders byte-identical code (snapshot tests). The schema and its checks live in
 | Conversation | `conversation{strategy: sliding_window\|summarizing, window_size, summary_model?}` | Sliding window (default 40, as before) or a summarizing manager that keeps `window_size` recent messages verbatim | `summary_model` is a Bedrock model for `summarizing` only; the agent's execution role is granted it beside the agent's own model (`agent_iam.allowed_model_resources`) |
 | Structured output | `output_schema` (JSON Schema object) | Answers the parsed object as well as the text: the runtime's `complete` event carries `structured`, the console stream and `/v1` SSE a `structured` event (`{value}`), `/v1` sync a `structured` field | An object schema, at most 5 levels and 50 properties per object, 20 000 characters. Not with `protocol: a2a`, and not with PII protection (the guardrail screens the text only; the invoke layer also drops `structured` on a guardrail agent) |
 | Prompt template | `prompt_variables{name: default}`, `few_shot_examples[{question, answer}]` (≤ 10) | `{{name}}` in the system prompt is filled per request from the invoke payload's `context` (`/v1` request field `context`), then the environment variable of that name, then the default; undeclared names are left as written. Few-shot pairs are appended as an examples block | ≤ 20 variables, names `^[A-Za-z_][A-Za-z0-9_]{0,63}$`, defaults ≤ 2000 characters |
+| Other agents as tools | `agent_tools[{agent_id, tool_name, description}]` (≤ 10) | Each entry becomes a tool that calls `InvokeAgentRuntime` with the agent's own role: the platform's SSE envelope for an `http` target, JSON-RPC `message/send` for an `a2a` target. The sub-agent session id is stable per caller session; chains stop at depth 3 | The target must be a deployed Runtime of the same project (or lent to it at `use` level) in the same workspace, protocol `http` or `a2a`, IAM inbound auth (not JWT); a foreign or unknown id answers 404, an ineligible agent or the agent itself 422. `runtime_arn` / `protocol` / `qualifier` come from the ledger, re-resolved at deploy (`services/agent_tools.py`); the role is granted `InvokeAgentRuntime` (and `InvokeAgentRuntimeForUser` when needed) on exactly those ARNs. Tool names are unique and may not shadow other tools |
+| Model provider | `model_provider{kind: anthropic\|litellm, connection, base_url?}` (`model_id` is then the provider's model name) | `AnthropicModel`, or `OpenAIModel` pointed at a LiteLLM gateway's `base_url`. The API key is read at run time through the token vault from an `api_key` Connection (cached 5 minutes); the spec never holds a key. The provider's model name is baked in, so a per-project `LAUNCHPAD_MODEL_ID` does not replace it | `base_url` is required for `litellm`. HTTP agents on the Bedrock model source only: refused with `protocol: a2a`, on Mantle, and with extended thinking or prompt caching |
+| Tool-call guards | `tool_hooks{approval_tools[], max_tool_calls_per_turn, log_tool_calls, mask_args[]}` | Strands hooks: a tool on the approval list (names or `*` patterns) is paused in the console chat — the stream carries `approval_required` (`tool`, `tool_use_id`, masked `input`) and the chat shows an approval card; Approve sends the next turn with `tool_approvals.approved = [tool]`, one name allowing one call. Any other caller (`/v1`, evaluations, A2A peers, other agents) is refused (`approval_refused`). A per-turn call cap that resets each turn, and a masked `[launchpad-tool]` log line per call | ≤ 50 approval entries; cap 1–500. Arguments named in `mask_args` (plus the built-in password / secret / token / api_key / authorization) are written as `***` in the log and on the approval card |
+| Throttling retry | `retry{max_attempts, initial_delay_s, max_delay_s}` | Strands `ModelRetryStrategy`: a throttled model call is retried with an exponential backoff ladder | 1–10 attempts, initial delay 1–60 s, max delay 1–600 s and not below the initial delay |
+
+SB-2 fields render a separate support file (`builder_sb2.py.tmpl`) only when one of
+them is set, so SB-1 specs still render byte-identical code. In the console, the V2
+and V3 chat pages render `approval_required` as an approval card (tool name and the
+masked input, Approve / Decline); Decline sends nothing and the call stays unrun. The
+create-agent chooser's capability comparison lists these options under "Strands
+builder options".
 
 **Experiments.** The generated code reads `model_params`, `conversation`,
 `few_shot_examples` and `prompt_variables` from the configuration bundle per request

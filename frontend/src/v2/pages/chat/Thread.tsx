@@ -5,8 +5,10 @@ import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { JumpToLatest } from "../../../components/JumpToLatest";
 import { Markdown } from "../../../components/Markdown";
 import { StructuredAnswer } from "../../../components/chat/StructuredAnswer";
+import { ToolApprovalCard } from "../../../components/chat/ToolApprovalCard";
 import type { FeedbackVerdict } from "../../../lib/api";
 import { TOOL_RUN_GLYPH, toolRunLabel } from "../../../lib/chat";
+import { approvalActionable, approvalPhase } from "../../../lib/tool-approval";
 import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
 import { Alert, Button, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
@@ -15,8 +17,8 @@ import { type ChatMessage, latestRetryTarget, retryPromptFor } from "./messages"
 
 export type { ChatMessage } from "./messages";
 
-/** The conversation: user / agent bubbles, tool calls, consent and policy-deny
- *  cards, memory writes and errors. */
+/** The conversation: user / agent bubbles, tool calls, consent, policy-deny and
+ *  tool-approval cards, memory writes and errors. */
 export function Thread({
   messages,
   userLabel,
@@ -26,6 +28,8 @@ export function Thread({
   onRetry,
   retryDisabled = false,
   onRetryTurn,
+  onApprove,
+  onDecline,
   now,
 }: {
   messages: ChatMessage[];
@@ -40,6 +44,9 @@ export function Thread({
   /** retry the latest failed turn (chat-streaming §4.1): a Retry button inside its
    *  error item — or, when that turn carried files, the note that it is not retried */
   onRetryTurn?: () => void;
+  /** an approval card's answers (SB-2); omitted ⇒ the cards only show */
+  onApprove?: (index: number) => void;
+  onDecline?: (index: number) => void;
   /** the running turn's clock (a running tool row's elapsed time); omitted ⇒ render time */
   now?: number;
 }) {
@@ -133,6 +140,15 @@ export function Thread({
           />
         ) : msg.kind === "policy" && msg.policy ? (
           <PolicyDenyCard key={i} deny={msg.policy} />
+        ) : msg.kind === "approval" && msg.approval ? (
+          <ToolApprovalCard
+            key={i}
+            approval={msg.approval}
+            phase={approvalPhase(msg.approval, !!onApprove && approvalActionable(messages, i))}
+            disabled={retryDisabled}
+            onApprove={() => onApprove?.(i)}
+            onDecline={() => onDecline?.(i)}
+          />
         ) : msg.kind === "memory" ? (
           <div key={i} className="v2-chat-memline">
             <Database size={13} aria-hidden="true" />

@@ -166,6 +166,9 @@ export interface ChatRequest {
   /** retry the latest failed (or empty) turn: the ledger id of its user message
    *  (`meta.user_message_id`); anything else answers 409 `chat.retry_not_allowed` */
   retry_of?: number;
+  /** SB-2 tool-call approval: the tools the user approved on an approval card —
+   *  each name lets one paused call of that tool run on this turn */
+  tool_approvals?: { approved: string[] };
 }
 
 export interface ChatStreamPayload {
@@ -197,6 +200,9 @@ export interface ChatStreamPayload {
   reason?: string;
   policy_id?: string | null;
   gateway_id?: string | null;
+  /** `approval_required` (SB-2): the paused call's input, masked by the runtime;
+   *  also carries `tool` and `tool_use_id` — see lib/tool-approval.ts */
+  input?: Record<string, unknown>;
   /** `meta`: the ledger id of this turn's user message — what `retry_of` names */
   user_message_id?: number;
   /** `error`: how the console may retry the turn (`ChatRetryHint` in lib/chat.ts) */
@@ -216,6 +222,8 @@ export interface ChatHistoryMessage {
   attachments?: ChatAttachmentMetadata[];
   /** T35: `rule:<id>` when a curated answer, not the model, produced this reply */
   answered_by?: string | null;
+  /** SB-1: an agent answer's parsed value under its output schema (absent / null: none) */
+  structured?: unknown;
 }
 
 export interface SystemAgentIdentity {

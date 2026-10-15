@@ -11063,7 +11063,16 @@
           "skills": "Registry skills",
           "ab": "Config-bundle A/B",
           "model": "Model source",
-          "observability": "Observability (traces, sessions)"
+          "observability": "Observability (traces, sessions)",
+          "builtinTools": "Strands built-in tools",
+          "modelParams": "Inference parameters",
+          "conversation": "Conversation strategy",
+          "structured": "Structured output",
+          "promptTemplate": "Prompt variables & few-shot",
+          "agentsAsTools": "Other agents as tools",
+          "providers": "Anthropic / LiteLLM provider",
+          "toolHooks": "Tool-call guards",
+          "retry": "Throttling retry"
         },
         "level": {
           "yes": "Supported",
@@ -11106,8 +11115,64 @@
             "strands": "Automatic (ADOT injected)",
             "sdk": "Automatic (generated Dockerfile)",
             "byoc": "Not for a code zip — instrument your image with ADOT, or use Strands"
+          },
+          "builtinTools": {
+            "harness": "Not supported — Harness offers code interpreter and browser; use Strands for strands-agents-tools",
+            "strands": "Curated strands-agents-tools: current_time, calculator, http_request (allowed hosts), think, retrieve, image_reader, journal",
+            "sdk": "Not supported — the Agent SDK brings its own tools; use Strands for strands-agents-tools",
+            "byoc": "In your code — import strands-agents-tools yourself; Strands picks them in the wizard"
+          },
+          "modelParams": {
+            "harness": "Max tokens and reasoning effort only — sampling, stop sequences, thinking and caching need Strands",
+            "strands": "Temperature, top P, max tokens, stop sequences; Claude extended thinking; Bedrock prompt caching",
+            "sdk": "Not supported — fixed by the generated agent; use Strands",
+            "byoc": "In your code; Strands sets them in the wizard and the config bundle"
+          },
+          "conversation": {
+            "harness": "Not supported — managed by the Harness; use Strands for a sliding window or summarizing",
+            "strands": "Sliding window (size) or summarizing, with an optional summary model",
+            "sdk": "Not supported — the SDK's own default; use Strands",
+            "byoc": "In your code; Strands has it built in"
+          },
+          "structured": {
+            "harness": "Not supported — use Strands for an answer under a JSON Schema",
+            "strands": "JSON Schema output; /v1 returns structured and chat shows it as a table or JSON",
+            "sdk": "Not supported — use Strands for an answer under a JSON Schema",
+            "byoc": "Your code must emit it itself; Strands has it built in"
+          },
+          "promptTemplate": {
+            "harness": "Not supported — one system prompt; use Strands for template variables and few-shot examples",
+            "strands": "template variables from env or the /v1 context, few-shot examples; part of the config bundle",
+            "sdk": "Not supported — one system prompt; use Strands",
+            "byoc": "In your code; Strands keeps them in the config bundle"
+          },
+          "agentsAsTools": {
+            "harness": "Not supported — use Studio's Graph or Strands",
+            "strands": "Deployed agents of this project (or lent to it) over invoke or A2A; least-privilege grant",
+            "sdk": "Not supported — use Strands",
+            "byoc": "Call InvokeAgentRuntime in your code and grant it yourself; Strands wires both"
+          },
+          "providers": {
+            "harness": "Bedrock or OpenAI-compatible — the Anthropic API and LiteLLM need Strands",
+            "strands": "Anthropic API or a LiteLLM gateway; the key comes from an api_key Connection, never the spec",
+            "sdk": "Not supported — fixed to Bedrock Claude; use Strands",
+            "byoc": "Any, in your code — keep the key out of it; Strands reads it from a Connection"
+          },
+          "toolHooks": {
+            "harness": "Not supported — guardrails and Gateway policies only; use Strands for approvals and call caps",
+            "strands": "Approval list (approved in console chat), per-turn call cap, masked call log",
+            "sdk": "Not supported — use Strands for approvals and call caps",
+            "byoc": "Strands hooks in your code; Strands generates them"
+          },
+          "retry": {
+            "harness": "Managed by the service",
+            "strands": "Max attempts with an exponential backoff ladder",
+            "sdk": "The SDK's default",
+            "byoc": "In your code; Strands sets it in the wizard"
           }
-        }
+        },
+        "capBuilder": "Strands builder options",
+        "capBuilderSub": "Set in the Strands wizard; the platform generates the code"
       }
     },
     "assistant": {
@@ -14742,6 +14807,37 @@
       "retryMax": "Delay ceiling (s)",
       "ladder": "Waits at most {{total}} s in all before the turn fails.",
       "noRetry": "One attempt — a throttled call fails at once."
+    }
+  },
+  "chatApproval": {
+    "label": "Approval needed",
+    "refusedLabel": "Approval unavailable",
+    "wants": "The agent wants to run",
+    "input": "Input",
+    "masked_one": "{{count}} argument masked",
+    "masked_other": "{{count}} arguments masked",
+    "maskedHint": "Masked by the agent's tool-call guard — the value is never shown",
+    "approve": "Approve",
+    "decline": "Decline",
+    "once": "Approves this one call only.",
+    "prompt": "Approved — go ahead with {{tool}}.",
+    "phase": {
+      "pending": "waiting for you",
+      "approved": "approved",
+      "declined": "declined",
+      "refused": "refused",
+      "expired": "not answered"
+    },
+    "note": {
+      "pending": "{{tool}} is on this agent's approval list, so the call is paused until you answer.",
+      "approved": "You approved this call.",
+      "declined": "You declined this call.",
+      "refused": "{{tool}} needs a person's approval, and this caller cannot give it, so the agent did not run it.",
+      "expired": "This call was paused in an earlier turn. If it is still needed, ask the agent again and approve it then."
+    },
+    "stamp": {
+      "approved": "Sent as the next turn — {{tool}} may run once.",
+      "declined": "{{tool}} does not run. Tell the agent what to do instead."
     }
   }
 }

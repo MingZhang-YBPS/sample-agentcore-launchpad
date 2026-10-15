@@ -5,6 +5,8 @@ import zh from "../../../locales/zh-CN/common.json";
 import {
   type Answers,
   CAP_COLUMNS,
+  CAP_BASE_ROWS,
+  CAP_BUILDER_ROWS,
   CAP_ROWS,
   CAPABILITIES,
   capColumn,
@@ -119,7 +121,8 @@ describe("wayHref", () => {
 
 describe("capability comparison", () => {
   it("covers the workshop 20-build §0 rows for the four methods", () => {
-    expect(CAP_ROWS).toEqual(["artifact", "kb", "skills", "ab", "model", "observability"]);
+    expect(CAP_BASE_ROWS).toEqual(["artifact", "kb", "skills", "ab", "model", "observability"]);
+    expect(CAP_ROWS).toEqual([...CAP_BASE_ROWS, ...CAP_BUILDER_ROWS]);
     for (const r of CAP_ROWS) expect(Object.keys(CAPABILITIES[r]).sort()).toEqual([...CAP_COLUMNS].sort());
     expect(CAPABILITIES.ab.strands).toBe("yes");
     expect(CAPABILITIES.ab.harness).toBe("no");
@@ -136,6 +139,18 @@ describe("capability comparison", () => {
           expect(cells[r][c].split(/—|——/).length, `${r}.${c} says the way out`).toBeGreaterThan(1);
         }
       }
+    }
+  });
+
+  it("lists the SB-1 and SB-2 Strands builder options, all supported by Strands only", () => {
+    expect(CAP_BUILDER_ROWS).toEqual([
+      "builtinTools", "modelParams", "conversation", "structured", "promptTemplate",
+      "agentsAsTools", "providers", "toolHooks", "retry",
+    ]);
+    for (const r of CAP_BUILDER_ROWS) {
+      expect(CAPABILITIES[r].strands, r).toBe("yes");
+      expect(CAPABILITIES[r].sdk, r).not.toBe("yes");
+      expect(CAPABILITIES[r].harness, r).not.toBe("yes");
     }
   });
 

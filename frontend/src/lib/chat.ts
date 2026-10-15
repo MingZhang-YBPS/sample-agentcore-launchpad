@@ -460,7 +460,10 @@ export const RETRY_DELAY_MS = 2_000;
 /** Events after which a replay could repeat what the user saw or a tool's side
  *  effect — the backend's `OUTPUT_EVENTS`. */
 export function isOutputEvent(event: string): boolean {
-  return event === "delta" || event === "tool" || event === "auth_required" || event === "policy_denied";
+  return (
+    event === "delta" || event === "tool" || event === "auth_required" || event === "policy_denied" ||
+    event === "approval_required"
+  );
 }
 
 /** A non-2xx answer to the chat request, with its HTTP status. */
