@@ -13,6 +13,7 @@ import type {
   RunRecommendationKind,
   RunRecommendationSource,
 } from "./evaluation";
+import { DETAIL_CODES } from "./errors";
 import type { ExperimentInfo } from "./experiments";
 import type { McpServerOps } from "./api/mcpReviews";
 import type { ModelSource, ReasoningEffort } from "./models";
@@ -1158,13 +1159,17 @@ export function localizedMessage(code: string, fallback: string): string {
 /**
  * `localizedMessage` plus, for the `aws.*` family, the AWS text after it: the
  * console copy says what kind of failure it was, only AWS's own words say which
- * parameter (projects §19). Other translated codes keep the copy alone — their
- * backend message is log text — and untranslated ones already are the raw text.
+ * parameter (projects §19). `DETAIL_CODES` likewise keep the backend's message
+ * after the copy — it names the line, item or list that failed (SG-5b). Other
+ * translated codes keep the copy alone — their backend message is log text — and
+ * untranslated ones already are the raw text.
  */
 export function messageWithRaw(code: string, raw: string): string {
   const title = localizedMessage(code, raw);
-  if (!code.startsWith("aws.") || !raw || title === raw) return title;
-  return i18n.t("apiErrors.detail.withRaw", { title, raw });
+  if (!raw || title === raw) return title;
+  if (code.startsWith("aws.")) return i18n.t("apiErrors.detail.withRaw", { title, raw });
+  if (DETAIL_CODES.has(code)) return i18n.t("apiErrors.detail.withSpecifics", { title, raw });
+  return title;
 }
 
 async function parseResponse<T>(path: string, res: Response): Promise<T> {

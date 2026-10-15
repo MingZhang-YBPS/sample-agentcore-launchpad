@@ -12,6 +12,7 @@ import {
   errorMessage,
 } from "../../../lib/api";
 import { type AssistantKbDetail, kbReadiness } from "../../../lib/assistant";
+import { errorText } from "../../../lib/errors";
 import { Alert, Button, Tag } from "../../ui";
 import { KnowledgeBaseCreateDrawer } from "./KnowledgeBaseCreate";
 import { SECTION_IDS } from "./common";
@@ -91,8 +92,6 @@ export function PreparationCard({
     || selectedSkills.some((key) => !availableSkillKeys.has(key))
     || selectedTools.some((key) => !availableToolKeys.has(key))
     || selectedTools.length > MAX_TOOLS;
-  const describeError = (err: unknown) =>
-    err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err);
 
   useEffect(() => {
     callbacks.current.onDirty(changed && !locked);
@@ -171,7 +170,7 @@ export function PreparationCard({
       setNotice(t("assistantPreparation.saved"));
     } catch (err) {
       if (!alive.current) return;
-      setActionError(describeError(err));
+      setActionError(errorText(err));
       if (err instanceof ApiError && (err.code.includes("stale") || err.code === "assistant.resources_locked")) {
         try {
           const detail = await api.assistantConversation(conversation.id, workspaceId);
