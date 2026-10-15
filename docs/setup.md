@@ -920,7 +920,9 @@ proxy_set_header X-Forwarded-Proto https;   # TLS terminates at CloudFront
 Because TLS terminates at the edge, keep `LAUNCHPAD_AUTH_COOKIE_SECURE=true`;
 over plain HTTP the browser would drop the session cookie.
 
-**3. Update an existing host.**
+**3. Update an existing host.** The short form is below; to upgrade from an older
+version (backup, migration rehearsal, rollback, troubleshooting), follow
+[upgrade.md](upgrade.md).
 
 ```bash
 (cd backend && uv run python scripts/ledger_backup.py)   # online + verified; never cp a live ledger
