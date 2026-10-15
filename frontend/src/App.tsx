@@ -146,6 +146,8 @@ const V3NetworkProfiles = lazy(() =>
 );
 // Configure → Storage (storage-mounts §10)
 const V3Storage = lazy(() => import("./v3/pages/storage/Storage").then((m) => ({ default: m.V3Storage })));
+// Configure → Single sign-on (sso §2.7)
+const V3Sso = lazy(() => import("./v3/pages/sso/Sso").then((m) => ({ default: m.V3Sso })));
 // Configure → System update (online-update §2.7)
 const V3SystemUpdate = lazy(() =>
   import("./v3/pages/system-update/SystemUpdate").then((m) => ({ default: m.V3SystemUpdate })),
@@ -393,6 +395,7 @@ export default function App() {
                 <Route path="skill-lab" element={<V3SkillLab />} />
                 <Route path="users" element={<V3Users />} />
                 <Route path="admins" element={<V3Admins />} />
+                <Route path="sso" element={<V3Sso />} />
                 <Route path="project-groups" element={<V3ProjectGroups />} />
                 <Route path="departments" element={<V3Departments />} />
                 <Route path="workspaces" element={<V3Workspaces />} />

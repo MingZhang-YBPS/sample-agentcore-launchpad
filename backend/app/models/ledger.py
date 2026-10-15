@@ -354,9 +354,19 @@ class User(Base):
     # Forced logout (design §7.4): part of the session cookie's credential stamp, so a
     # bump ends every open session. 0 stamps exactly as before the column existed.
     session_epoch: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    # SSO (sso design §2.2): the console identity provider and its `sub` this account
+    # was created for. The pair is the account's key at sign-in — never the email, so
+    # re-binding an address at the IdP cannot take over another account. NULL = local.
+    external_idp_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    external_subject: Mapped[str | None] = mapped_column(String(255), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    __table_args__ = (
+        Index("ix_users_external_identity", "external_idp_id", "external_subject",
+              unique=True),
     )
 
 

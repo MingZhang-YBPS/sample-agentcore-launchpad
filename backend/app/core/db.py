@@ -228,6 +228,7 @@ def init_db(bind=None) -> None:
     from app.models import resource_mapping as _mapping_models  # noqa: F401
     from app.models import selfservice as _selfservice_models  # noqa: F401 — T35/T36
     from app.models import shares as _share_models  # noqa: F401 — projects §11.2
+    from app.models import sso as _sso_models  # noqa: F401 — console SSO (sso §2.1)
     from app.models import storage as _storage_models  # noqa: F401 — storage-mounts §4
     from app.models import system_update as _update_models  # noqa: F401 — OU-1, hub-global
     from app.models import video as _video_models  # noqa: F401 — register tables before create_all
@@ -493,6 +494,7 @@ def _migrate(bind) -> None:
     _migrate_isolation_columns(bind)
     _migrate_audit_outcome(bind)
     _migrate_department_settings(bind)
+    _migrate_user_external_identity(bind)
 
 
 def _migrate_department_settings(bind) -> None:
@@ -1935,3 +1937,24 @@ def convert_inline_networks(bind) -> dict[str, int]:
             counts["agents"], counts["profiles"],
         )
     return counts
+
+
+def _migrate_user_external_identity(bind) -> None:
+    """`users.external_idp_id` / `external_subject` (sso design §2.2): the IdP and
+    subject an SSO account was created for; NULL on every existing (local) account.
+    The unique index over the pair is what `create_all` builds on a fresh ledger."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "users" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("users")}
+    with bind.begin() as conn:
+        if "external_idp_id" not in existing:
+            conn.execute(text("ALTER TABLE users ADD COLUMN external_idp_id VARCHAR(32)"))
+        if "external_subject" not in existing:
+            conn.execute(text("ALTER TABLE users ADD COLUMN external_subject VARCHAR(255)"))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_external_identity "
+            "ON users (external_idp_id, external_subject)"
+        ))

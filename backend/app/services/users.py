@@ -161,6 +161,21 @@ def credential_stamp(password_hash: str, epoch: int = 0) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
+# An SSO account's `password_hash` (sso design §2.2): not a `pbkdf2_sha256$…` string,
+# so `verify_password` can never match it — the account has no local password.
+SSO_PASSWORD_HASH = "!sso"
+
+
+def is_sso_account(user: User) -> bool:
+    """Whether the account signs in through a console identity provider."""
+    return bool(getattr(user, "external_idp_id", None))
+
+
+def sso_stamp_material(user: User) -> str:
+    """What an SSO account's credential stamp hashes in place of a password hash."""
+    return f"idp:{user.external_idp_id}:{user.external_subject}"
+
+
 def generate_password(length: int = 14) -> str:
     """Admin password reset: a readable-but-random password shown once."""
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_"
@@ -309,6 +324,10 @@ def serialize(
             first_login.isoformat() if (first_login := as_utc(user.first_login_at)) else None
         ),
         "created_by": user.created_by,
+        # account source (sso §2.7): local, or the console IdP and its subject
+        "source": "sso" if is_sso_account(user) else "local",
+        "external_idp_id": user.external_idp_id,
+        "external_subject": user.external_subject,
         "permissions": effective_permissions(user),
         "workspaces": workspaces or [],
         "projects": (memberships or {}).get("projects", []),
@@ -611,6 +630,12 @@ def authenticate(db: Session, username: str, password: str) -> User:
         raise AppError(
             "auth.invalid_credentials", "Invalid username or password", status_code=401
         )
+    if is_sso_account(user):
+        # no local password (sso §2.2): the same answer as a wrong one, same cost
+        _burn_verify(password)
+        raise AppError(
+            "auth.invalid_credentials", "Invalid username or password", status_code=401
+        )
     if not verify_password(password, user.password_hash):
         raise AppError(
             "auth.invalid_credentials", "Invalid username or password", status_code=401
@@ -789,6 +814,12 @@ def apply_patch(
     pending account into projects in the same transaction (§7.5).
     """
     current = settings or get_settings()
+    if "password" in patch and is_sso_account(user):
+        raise AppError(
+            "users.sso_account_password",
+            "This account signs in through single sign-on and has no local password",
+            status_code=409,
+        )
     # shape and existence first, so a bad item refuses the whole patch up front
     project_items = _project_items(db, patch.get("projects")) if "projects" in patch else None
     group_items = _group_items(db, patch.get("groups")) if "groups" in patch else None

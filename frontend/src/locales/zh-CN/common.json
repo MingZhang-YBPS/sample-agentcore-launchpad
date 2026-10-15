@@ -91,6 +91,43 @@
       "validUntil": "有效期至",
       "accountStatus": "状态",
       "statusPending": "待审批"
+    },
+    "sso": {
+      "subtitle": "使用公司身份提供方登录，权限跟随你在那里的组。",
+      "providersLabel": "身份提供方",
+      "continueWith": "使用 {{name}} 登录",
+      "useLocal": "使用用户名和密码登录",
+      "preset": {
+        "keycloak": "Keycloak",
+        "authentik": "Authentik",
+        "okta": "Okta",
+        "entra": "Microsoft Entra ID",
+        "google": "Google Workspace",
+        "oidc": "通用 OIDC"
+      },
+      "presetShort": {
+        "keycloak": "KC",
+        "authentik": "AK",
+        "okta": "OK",
+        "entra": "EN",
+        "google": "GO",
+        "oidc": "OI"
+      },
+      "errors": {
+        "stateInvalid": "该登录链接已失效。",
+        "stateExpired": "登录耗时过长，已超时。",
+        "idpError": "身份提供方拒绝了本次登录。",
+        "notProvisioned": "你还没有控制台账号。",
+        "domainBlocked": "你的邮箱域名不允许登录本控制台。",
+        "emailTaken": "已有其他控制台账号使用你的邮箱地址。",
+        "emailMissing": "身份提供方没有返回可用的邮箱地址。",
+        "accountDisabled": "你的控制台账号已停用。",
+        "verifyFailed": "无法校验身份提供方的应答。",
+        "providerGone": "该登录方式已不可用。",
+        "providerUnreachable": "无法连接身份提供方。",
+        "generic": "单点登录未完成。",
+        "contactAdmin": "请重试，或联系控制台管理员并提供下方代码。"
+      }
     }
   },
   "nav": {
@@ -13723,6 +13760,215 @@
       "confirmTitle": "停用该密钥？",
       "confirmBody": "使用 {{name}} 的应用将收到 401，直到重新启用。",
       "manage": "管理密钥"
+    },
+    "sso": {
+      "nav": "单点登录",
+      "eyebrow": "配置 · 平台",
+      "title": "单点登录",
+      "sub": "让用户通过公司身份提供方（OpenID Connect）登录。首次登录自动建号，角色和项目跟随 IdP 组。",
+      "adminOnly": "只有管理员可以配置单点登录。",
+      "new": "新建身份提供方",
+      "listLabel": "身份提供方",
+      "copy": "复制",
+      "templatesLabel": "属性模板",
+      "presetBody": {
+        "keycloak": "Realm 中的 OIDC 客户端，组来自 Group Membership 映射器。",
+        "authentik": "OAuth2/OpenID 提供方和应用，组在默认的 profile 范围中。",
+        "oidc": "任何支持发现文档的 OpenID Connect 提供方：Authelia、Zitadel、Dex、Casdoor、GitLab……",
+        "okta": "Okta 授权服务器的声明名（groups 范围）。",
+        "entra": "Microsoft Entra ID 应用注册的声明名（v2.0 端点）。",
+        "google": "Google Workspace 的声明名（没有组声明）。"
+      },
+      "defaultName": {
+        "keycloak": "公司 SSO（Keycloak）",
+        "authentik": "公司 SSO（Authentik）",
+        "oidc": "公司 SSO",
+        "okta": "Okta",
+        "entra": "Microsoft Entra ID",
+        "google": "Google Workspace"
+      },
+      "createTitle": "新建身份提供方",
+      "create": "创建",
+      "created": "已创建 {{name}}，请填写连接信息、测试后再启用",
+      "emptyTitle": "还没有身份提供方",
+      "emptyBody": "选择公司正在使用的产品。新建的提供方默认停用，启用前本地账号照常可用。",
+      "state": {
+        "ok": "已上线",
+        "wait": "未测试",
+        "act": "异常",
+        "off": "已停用",
+        "info": "—"
+      },
+      "onLogin": "显示在登录页",
+      "offLogin": "未显示在登录页",
+      "linked_one": "{{count}} 个账号通过它登录",
+      "linked_other": "{{count}} 个账号通过它登录",
+      "enable": "启用",
+      "disable": "停用",
+      "enabled": "{{name}} 已显示在登录页",
+      "disabled": "{{name}} 已从登录页移除",
+      "delete": "删除身份提供方",
+      "deleteTitle": "删除 {{name}}？",
+      "deleteBody": "将删除该提供方及其组映射。目前没有账号通过它登录。",
+      "deleteBlocked_one": "有 {{count}} 个账号通过该提供方登录且没有本地密码，因此不能删除。请改为停用。",
+      "deleteBlocked_other": "有 {{count}} 个账号通过该提供方登录且没有本地密码，因此不能删除。请改为停用。",
+      "deleted": "已删除 {{name}}",
+      "section": {
+        "handoff": "需要在身份提供方侧填写的值",
+        "connection": "连接",
+        "test": "连接测试",
+        "accounts": "账号",
+        "claims": "声明",
+        "mappings": "组映射",
+        "logins": "最近登录"
+      },
+      "handoffBody": {
+        "keycloak": "在 Realm 中创建机密（confidential）OpenID Connect 客户端并开启标准流程，把有效重定向 URI 设为下方回调地址，再添加名为 groups 的 Group Membership 映射器（关闭完整组路径）。",
+        "authentik": "创建机密类型的 OAuth2/OpenID 提供方，重定向 URI 填下方回调地址，再创建使用它的应用。颁发者（issuer）取提供方 OpenID 配置中的 issuer。",
+        "oidc": "注册一个 Web 应用（授权码流程），重定向 URI 填下方回调地址。Launchpad 始终发送 PKCE（S256）。",
+        "template": "注册一个 Web 应用，重定向 URI 填下方回调地址；声明名已按模板预填。"
+      },
+      "callbackUrl": "重定向 URI",
+      "fact": {
+        "flow": "流程",
+        "flowValue": "授权码 + PKCE S256",
+        "scopes": "范围",
+        "groups": "组声明"
+      },
+      "field": {
+        "name": "按钮名称",
+        "issuer": "颁发者 URL",
+        "clientId": "客户端 ID",
+        "clientSecret": "客户端密钥",
+        "scopes": "范围",
+        "policy": "谁可以登录",
+        "domains": "允许的邮箱域名",
+        "defaultRole": "没有映射匹配时的角色",
+        "validDays": "有效期（天）"
+      },
+      "hint": {
+        "name": "在登录页显示为“使用 …… 登录”。",
+        "issuer": "Launchpad 从这里读取 /.well-known/openid-configuration。只接受 https（localhost 可用 http）。",
+        "clientSecret": "只写。加密保存，或粘贴 Secrets Manager 密钥 ARN。公共客户端（仅 PKCE）留空。",
+        "domains": "每行一个。留空则沿用控制台的注册规则（公司邮箱，拒绝公共邮箱）。",
+        "validDays": "SSO 账号在最近一次登录后保持有效的天数。"
+      },
+      "problem": {
+        "issuer": "请使用 https URL（只有 localhost 可用 http）。",
+        "scopes": "范围必须包含 openid。"
+      },
+      "secretStored": "•••••••• 已加密保存，输入新值即替换",
+      "secretNone": "无（公共客户端）",
+      "clearSecret": "删除已保存的密钥",
+      "policy": {
+        "jit": "IdP 放行的任何人",
+        "existing_only": "仅限已有账号"
+      },
+      "policyBody": {
+        "jit": "首次登录自动创建控制台账号（默认）。",
+        "existing_only": "没有账号的主体会被拒绝；需由管理员先创建账号。"
+      },
+      "role": {
+        "admin": "管理员",
+        "steward": "组织管理员",
+        "operator": "运维",
+        "member": "成员"
+      },
+      "claimsBody": "每个属性读取的 id_token 声明名。带点的名称读取嵌套声明，例如 realm_access.roles。",
+      "claim": {
+        "username": "用户名",
+        "email": "邮箱",
+        "name": "显示名",
+        "groups": "组"
+      },
+      "test": "测试连接",
+      "testNever": "尚未测试。测试会读取发现文档和签名密钥，不会登录任何人。",
+      "testNeedsIssuer": "请先填写颁发者 URL 并保存，再测试。",
+      "testedAt": "{{when}}前测试",
+      "check": {
+        "discovery": {
+          "label": "发现文档",
+          "ok": "发现文档与颁发者一致",
+          "act": "读取发现文档失败"
+        },
+        "jwks": {
+          "label": "签名密钥（JWKS）",
+          "ok": "已发布签名密钥",
+          "act": "没有可用的签名密钥",
+          "off": "未检查签名密钥"
+        },
+        "pkce": {
+          "label": "PKCE S256",
+          "ok": "支持 PKCE S256",
+          "act": "不支持 PKCE S256",
+          "wait": "未声明 PKCE 支持（仍会发送）",
+          "off": "未检查 PKCE"
+        },
+        "secret": {
+          "label": "客户端密钥",
+          "ok": "已配置客户端密钥",
+          "act": "缺少客户端密钥",
+          "info": "没有客户端密钥（公共客户端）",
+          "off": "未检查客户端密钥"
+        },
+        "logout": {
+          "label": "单点登出",
+          "ok": "支持 RP 发起的登出",
+          "act": "不支持登出",
+          "info": "没有 end_session_endpoint，登出只在本地生效",
+          "off": "未检查登出"
+        }
+      },
+      "loginsEmpty": "还没有人通过该提供方登录。",
+      "logins": {
+        "when": "时间",
+        "outcome": "结果",
+        "account": "账号",
+        "detail": "原因",
+        "success": "已登录",
+        "refused": "被拒绝",
+        "failed": "失败",
+        "jit": "新建"
+      },
+      "unsaved": "有未保存的修改",
+      "discard": "放弃",
+      "save": "保存",
+      "saved": "已保存 {{name}}",
+      "mapping": {
+        "body": "每次登录读取 {{claim}} 声明，每个目标取第一条匹配的规则。没有角色规则匹配时，账号为{{role}}。",
+        "rules": "登录时只调整这些规则产生的内容。管理员手工设置的成员资格或角色优先，用户页会标注与映射不一致的角色。",
+        "group": "IdP 组",
+        "groupPlaceholder": "IdP 组，例如 /platform/admins",
+        "kind": "授予",
+        "kinds": {
+          "role": "全局角色",
+          "project": "项目",
+          "group": "项目组"
+        },
+        "pick": "请选择……",
+        "role": "角色",
+        "template": {
+          "project_owner": "项目负责人",
+          "developer": "开发者",
+          "biz_owner": "业务负责人",
+          "release_ops": "发布运维",
+          "sme": "领域专家",
+          "tool_steward": "工具审核员",
+          "viewer": "只读"
+        },
+        "remove": "删除规则",
+        "add": "添加规则",
+        "save": "保存映射",
+        "saved": "组映射已保存"
+      },
+      "account": {
+        "local": "本地账号",
+        "sso": "SSO · {{name}}",
+        "subject": "外部主体",
+        "lastLogin": "最近 SSO 登录：{{when}}前",
+        "conflict": "与 SSO 映射不一致（{{role}}）"
+      },
+      "refresh": "刷新"
     }
   },
   "models": {

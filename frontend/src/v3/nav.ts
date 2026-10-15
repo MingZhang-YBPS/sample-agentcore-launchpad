@@ -1,4 +1,4 @@
-import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, Network, UserCog, Waypoints, Wrench } from "lucide-react";
+import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, KeySquare, Network, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -74,6 +74,8 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
     { to: "/v3/departments", labelKey: "v3.departments.nav", icon: Building2, admin: true },
     // a project owner's way in (§6.4): the current project's members and settings
     { to: "/v3/project-settings", labelKey: "v3.nav.projectSettings", icon: FolderCog, perm: "project.members" },
+    // console single sign-on (sso §2.7): identity providers, administrator-only
+    { to: "/v3/sso", labelKey: "v3.sso.nav", icon: KeySquare, admin: true },
   ],
   // Gateway tool targets (Lambda tools, externally hosted MCP servers) sit with
   // the agent's connections and governance

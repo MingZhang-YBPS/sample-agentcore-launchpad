@@ -91,6 +91,43 @@
       "validUntil": "Valid until",
       "accountStatus": "Status",
       "statusPending": "Pending approval"
+    },
+    "sso": {
+      "subtitle": "Use your company identity provider. Your access follows your groups there.",
+      "providersLabel": "Identity providers",
+      "continueWith": "Continue with {{name}}",
+      "useLocal": "Sign in with username and password",
+      "preset": {
+        "keycloak": "Keycloak",
+        "authentik": "Authentik",
+        "okta": "Okta",
+        "entra": "Microsoft Entra ID",
+        "google": "Google Workspace",
+        "oidc": "OpenID Connect"
+      },
+      "presetShort": {
+        "keycloak": "KC",
+        "authentik": "AK",
+        "okta": "OK",
+        "entra": "EN",
+        "google": "GO",
+        "oidc": "OI"
+      },
+      "errors": {
+        "stateInvalid": "This sign-in link is no longer valid.",
+        "stateExpired": "The sign-in took too long and timed out.",
+        "idpError": "Your identity provider declined the sign-in.",
+        "notProvisioned": "There is no console account for you yet.",
+        "domainBlocked": "Your email domain is not allowed to sign in to this console.",
+        "emailTaken": "Another console account already uses your email address.",
+        "emailMissing": "Your identity provider did not send a usable email address.",
+        "accountDisabled": "Your console account is disabled.",
+        "verifyFailed": "The identity provider's answer could not be verified.",
+        "providerGone": "This sign-in option is not available any more.",
+        "providerUnreachable": "The identity provider could not be reached.",
+        "generic": "Single sign-on did not complete.",
+        "contactAdmin": "Try again, or contact your console administrator and quote the code below."
+      }
     }
   },
   "nav": {
@@ -13723,6 +13760,215 @@
       "confirmTitle": "Disable this key?",
       "confirmBody": "Applications using {{name}} will get 401 until it is enabled again.",
       "manage": "Manage keys"
+    },
+    "sso": {
+      "nav": "Single sign-on",
+      "eyebrow": "Configure · Platform",
+      "title": "Single sign-on",
+      "sub": "Let people sign in with your company identity provider over OpenID Connect. Accounts are created on first sign-in and their role and projects follow IdP groups.",
+      "adminOnly": "Only administrators configure single sign-on.",
+      "new": "New provider",
+      "listLabel": "Identity providers",
+      "copy": "Copy",
+      "templatesLabel": "Attribute templates",
+      "presetBody": {
+        "keycloak": "A realm's OIDC client. Groups come from a group-membership mapper.",
+        "authentik": "An OAuth2/OpenID provider and application. Groups are in the default profile scope.",
+        "oidc": "Any OpenID Connect provider with discovery: Authelia, Zitadel, Dex, Casdoor, GitLab…",
+        "okta": "Claim names for an Okta authorization server (groups scope).",
+        "entra": "Claim names for a Microsoft Entra ID app registration (v2.0 endpoint).",
+        "google": "Claim names for Google Workspace (no groups claim)."
+      },
+      "defaultName": {
+        "keycloak": "Company SSO (Keycloak)",
+        "authentik": "Company SSO (Authentik)",
+        "oidc": "Company SSO",
+        "okta": "Okta",
+        "entra": "Microsoft Entra ID",
+        "google": "Google Workspace"
+      },
+      "createTitle": "New identity provider",
+      "create": "Create",
+      "created": "{{name}} created — fill in the connection, test it, then enable it",
+      "emptyTitle": "No identity provider yet",
+      "emptyBody": "Pick what your company runs. The provider starts disabled; local accounts keep working until you enable it.",
+      "state": {
+        "ok": "Live",
+        "wait": "Untested",
+        "act": "Failing",
+        "off": "Off",
+        "info": "—"
+      },
+      "onLogin": "On the login page",
+      "offLogin": "Hidden from the login page",
+      "linked_one": "{{count}} account signs in here",
+      "linked_other": "{{count}} accounts sign in here",
+      "enable": "Enable",
+      "disable": "Disable",
+      "enabled": "{{name}} is on the login page",
+      "disabled": "{{name}} is off the login page",
+      "delete": "Delete provider",
+      "deleteTitle": "Delete {{name}}?",
+      "deleteBody": "The provider and its group mappings are removed. Nobody signs in through it today.",
+      "deleteBlocked_one": "{{count}} account signs in through this provider and has no local password, so it cannot be deleted. Disable it instead.",
+      "deleteBlocked_other": "{{count}} accounts sign in through this provider and have no local password, so it cannot be deleted. Disable it instead.",
+      "deleted": "{{name}} deleted",
+      "section": {
+        "handoff": "Give these to your identity provider",
+        "connection": "Connection",
+        "test": "Connection test",
+        "accounts": "Accounts",
+        "claims": "Claims",
+        "mappings": "Group mappings",
+        "logins": "Recent sign-ins"
+      },
+      "handoffBody": {
+        "keycloak": "Create a confidential OpenID Connect client in your realm with standard flow on, set its valid redirect URI to the callback below, and add a group-membership mapper named groups (full group path off).",
+        "authentik": "Create an OAuth2/OpenID provider (confidential) with the callback below as its redirect URI, then an application that uses it. The issuer is the provider's OpenID configuration issuer.",
+        "oidc": "Register a web application (authorization code flow) with the callback below as its redirect URI. Launchpad always sends PKCE (S256).",
+        "template": "Register a web application with the callback below as its redirect URI; the claim names were pre-filled from the template."
+      },
+      "callbackUrl": "Redirect URI",
+      "fact": {
+        "flow": "Flow",
+        "flowValue": "authorization code + PKCE S256",
+        "scopes": "Scopes",
+        "groups": "Groups claim"
+      },
+      "field": {
+        "name": "Button label",
+        "issuer": "Issuer URL",
+        "clientId": "Client ID",
+        "clientSecret": "Client secret",
+        "scopes": "Scopes",
+        "policy": "Who may sign in",
+        "domains": "Allowed email domains",
+        "defaultRole": "Role when no mapping matches",
+        "validDays": "Validity (days)"
+      },
+      "hint": {
+        "name": "Shown on the login page as “Continue with …”.",
+        "issuer": "Launchpad reads /.well-known/openid-configuration from it. https only (http for localhost).",
+        "clientSecret": "Write-only. Stored encrypted, or paste a Secrets Manager secret ARN. Leave empty for a public client (PKCE only).",
+        "domains": "One per line. Empty: the console's registration rule applies (company email, public mailboxes refused).",
+        "validDays": "An SSO account stays valid this many days after its last sign-in."
+      },
+      "problem": {
+        "issuer": "Use an https URL (http only for localhost).",
+        "scopes": "Scopes must include openid."
+      },
+      "secretStored": "•••••••• stored encrypted — type to replace",
+      "secretNone": "none — a public client",
+      "clearSecret": "Remove the stored secret",
+      "policy": {
+        "jit": "Anyone the IdP lets through",
+        "existing_only": "Existing accounts only"
+      },
+      "policyBody": {
+        "jit": "The first sign-in creates the console account (default).",
+        "existing_only": "A subject without an account is refused; an administrator creates accounts first."
+      },
+      "role": {
+        "admin": "Administrator",
+        "steward": "Organization admin",
+        "operator": "Operator",
+        "member": "Member"
+      },
+      "claimsBody": "The id_token claim each attribute is read from. A dotted name reads a nested claim, e.g. realm_access.roles.",
+      "claim": {
+        "username": "Username",
+        "email": "Email",
+        "name": "Display name",
+        "groups": "Groups"
+      },
+      "test": "Test connection",
+      "testNever": "Not tested yet. The test reads discovery and the signing keys; it signs nobody in.",
+      "testNeedsIssuer": "Set the issuer URL, save, then test.",
+      "testedAt": "Tested {{when}} ago",
+      "check": {
+        "discovery": {
+          "label": "Discovery",
+          "ok": "Discovery document matches the issuer",
+          "act": "Discovery failed"
+        },
+        "jwks": {
+          "label": "Signing keys (JWKS)",
+          "ok": "Signing keys published",
+          "act": "No usable signing keys",
+          "off": "Signing keys not checked"
+        },
+        "pkce": {
+          "label": "PKCE S256",
+          "ok": "PKCE S256 supported",
+          "act": "PKCE S256 not supported",
+          "wait": "PKCE support not advertised (sent anyway)",
+          "off": "PKCE not checked"
+        },
+        "secret": {
+          "label": "Client secret",
+          "ok": "Client secret configured",
+          "act": "Client secret missing",
+          "info": "No client secret — public client",
+          "off": "Client secret not checked"
+        },
+        "logout": {
+          "label": "Single logout",
+          "ok": "RP-initiated logout available",
+          "act": "Logout not available",
+          "info": "No end_session_endpoint — sign-out stays local",
+          "off": "Logout not checked"
+        }
+      },
+      "loginsEmpty": "Nobody has signed in through this provider yet.",
+      "logins": {
+        "when": "When",
+        "outcome": "Outcome",
+        "account": "Account",
+        "detail": "Reason",
+        "success": "Signed in",
+        "refused": "Refused",
+        "failed": "Failed",
+        "jit": "new"
+      },
+      "unsaved": "Unsaved changes",
+      "discard": "Discard",
+      "save": "Save",
+      "saved": "{{name}} saved",
+      "mapping": {
+        "body": "Each sign-in reads the {{claim}} claim and applies the first rule that matches for each target. With no role rule matching, the account is a {{role}}.",
+        "rules": "Only what these rules created is changed at sign-in. A membership or role an administrator set by hand wins, and the user page marks a role that differs.",
+        "group": "IdP group",
+        "groupPlaceholder": "IdP group, e.g. /platform/admins",
+        "kind": "Grants",
+        "kinds": {
+          "role": "Global role",
+          "project": "Project",
+          "group": "Project group"
+        },
+        "pick": "Choose…",
+        "role": "Role",
+        "template": {
+          "project_owner": "Project owner",
+          "developer": "Developer",
+          "biz_owner": "Business owner",
+          "release_ops": "Release ops",
+          "sme": "Subject expert",
+          "tool_steward": "Tool steward",
+          "viewer": "Viewer"
+        },
+        "remove": "Remove rule",
+        "add": "Add rule",
+        "save": "Save mappings",
+        "saved": "Group mappings saved"
+      },
+      "account": {
+        "local": "Local account",
+        "sso": "SSO · {{name}}",
+        "subject": "External subject",
+        "lastLogin": "last SSO sign-in {{when}} ago",
+        "conflict": "Differs from the SSO mapping ({{role}})"
+      },
+      "refresh": "Refresh"
     }
   },
   "models": {

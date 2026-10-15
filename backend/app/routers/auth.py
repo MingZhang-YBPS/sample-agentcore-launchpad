@@ -18,6 +18,7 @@ import binascii
 import hashlib
 import hmac
 import ipaddress
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -52,8 +53,12 @@ _OPEN_API_PATHS = {
     "/api/auth/login",
     "/api/auth/status",
     "/api/auth/register",
+    # the login page's identity-provider buttons (sso §2.6)
+    "/api/auth/providers",
     "/api/health",
 }
+# the OIDC redirect leg (sso §2.2): the browser arrives without a session by design
+_OPEN_API_PATTERN = re.compile(r"^/api/auth/oidc/[A-Za-z0-9_-]{1,32}/(start|callback)$")
 
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
@@ -209,7 +214,13 @@ def account_stamp(user: User) -> str:
     `session_epoch` (design §7.4): epoch 0 stamps exactly as before the column
     existed, so a deploy ends no session; any bump ends every open one.
     """
-    return users_service.credential_stamp(user.password_hash, int(user.session_epoch or 0))
+    # an SSO account has no password: its stamp is the IdP and subject it signs in as
+    material = (
+        users_service.sso_stamp_material(user)
+        if users_service.is_sso_account(user)
+        else user.password_hash
+    )
+    return users_service.credential_stamp(material, int(user.session_epoch or 0))
 
 
 def resolve_identity(
@@ -312,7 +323,11 @@ def _peer_is_loopback(request: Request) -> bool:
 
 
 def _is_guarded_api_path(path: str) -> bool:
-    return (path == "/api" or path.startswith("/api/")) and path not in _OPEN_API_PATHS
+    return (
+        (path == "/api" or path.startswith("/api/"))
+        and path not in _OPEN_API_PATHS
+        and not _OPEN_API_PATTERN.match(path)
+    )
 
 
 async def auth_middleware(request: Request, call_next: Any) -> Any:
@@ -454,8 +469,12 @@ def status(request: Request) -> dict[str, Any]:
         if not required
         else resolve_identity(request, settings)
     )
+    # the enabled identity providers (sso §2.7), the login page's buttons — present
+    # only when there is one, so a console without SSO answers exactly as before
+    providers = _sso_providers() if required else []
     # Nothing about the configured identity is disclosed before authentication.
     return {
+        **({"sso_providers": providers} if providers else {}),
         "auth_required": required,
         "authenticated": identity is not None,
         "registration_enabled": registration_enabled(settings),
@@ -465,6 +484,16 @@ def status(request: Request) -> dict[str, Any]:
         # the restarted console to report the commit it just installed
         "version": {"sha": _running_sha()},
     }
+
+
+def _sso_providers() -> list[dict[str, Any]]:
+    from app.services.sso_oidc import public_providers
+
+    db = SessionLocal()
+    try:
+        return public_providers(db)
+    finally:
+        db.close()
 
 
 def _running_sha() -> str | None:
@@ -568,6 +597,25 @@ class PasswordChangeRequest(BaseModel):
     new_password: str = Field(min_length=1, max_length=256)
 
 
+def user_identity(user: User) -> Identity:
+    """The `Identity` of a registered account, as the login answers it."""
+    return Identity(
+        username=user.username,
+        role=user.role,
+        email=user.email,
+        account_expires_at=users_service.as_utc(user.expires_at),
+        user_id=user.id,
+        permissions=granted_permissions(user.permissions, user.role),
+    )
+
+
+def issue_user_session(response: Response, user: User, settings: Settings | None = None) -> int:
+    """Set the session cookie of a registered account (the SSO callback's way in):
+    the same cookie a password login sets, stamped with `account_stamp`."""
+    current = settings or get_settings()
+    return _set_session_cookie(response, user_identity(user), current, account_stamp(user))
+
+
 def _set_session_cookie(
     response: Response,
     identity: Identity,
@@ -625,6 +673,13 @@ def change_password(
             user = db.get(User, identity.user_id)
             if user is None:
                 raise AppError("auth.required", "Authentication required", status_code=401)
+            if users_service.is_sso_account(user):
+                raise AppError(
+                    "auth.sso_account_no_password",
+                    "This account signs in through single sign-on and has no local "
+                    "password — change it at your identity provider",
+                    status_code=409,
+                )
             if not users_service.verify_password(req.current_password, user.password_hash):
                 raise AppError(
                     "auth.invalid_current_password", "The current password is incorrect"
@@ -648,8 +703,23 @@ def change_password(
 
 
 @router.post("/logout")
-def logout(response: Response) -> dict[str, bool]:
+def logout(request: Request, response: Response) -> dict[str, Any]:
+    """End the console session. An SSO account's answer also carries the IdP's
+    `end_session_url` (OIDC RP-initiated logout, sso D-5) when the IdP has one; the
+    browser goes there next, so the IdP session ends too."""
     settings = get_settings()
+    end_session_url: str | None = None
+    identity = getattr(request.state, "identity", None)
+    if isinstance(identity, Identity) and identity.user_id is not None:
+        from app.services.sso_oidc import end_session_url as sso_end_session_url
+
+        db = SessionLocal()
+        try:
+            user = db.get(User, identity.user_id)
+            if user is not None and users_service.is_sso_account(user):
+                end_session_url = sso_end_session_url(db, user, settings)
+        finally:
+            db.close()
     response.delete_cookie(
         COOKIE_NAME,
         path="/",
@@ -657,4 +727,6 @@ def logout(response: Response) -> dict[str, bool]:
         httponly=True,
         samesite="lax",
     )
+    if end_session_url:
+        return {"ok": True, "end_session_url": end_session_url}
     return {"ok": True}
