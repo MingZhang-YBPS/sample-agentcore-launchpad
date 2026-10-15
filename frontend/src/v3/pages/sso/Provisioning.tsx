@@ -2,8 +2,9 @@ import { EyeOff, KeyRound, RefreshCw, ShieldOff } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type LoginSettings, type Provider, type ScimBlock, ssoAdminApi } from "../../../lib/api/sso-saml";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Lamp, Notice, Panel } from "../../ui";
@@ -22,6 +23,7 @@ export function ScimPanel({ provider, onScim, subject, onSubject }: {
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const scim = provider.scim;
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState<"mint" | "revoke" | null>(null);
@@ -30,11 +32,12 @@ export function ScimPanel({ provider, onScim, subject, onSubject }: {
   const mint = async () => {
     setBusy("mint");
     try {
+      failed.clear();
       const answer = await ssoAdminApi.mintScimToken(provider.id);
       setToken(answer.token);
       onScim(answer.scim);
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -42,13 +45,14 @@ export function ScimPanel({ provider, onScim, subject, onSubject }: {
   const revoke = async () => {
     setBusy("revoke");
     try {
+      failed.clear();
       const answer = await ssoAdminApi.revokeScimToken(provider.id);
       setToken(null);
       setConfirmRevoke(false);
       onScim(answer.scim);
       toast("ok", t("v3.sso.scim.revoked"));
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -66,6 +70,11 @@ export function ScimPanel({ provider, onScim, subject, onSubject }: {
       )}
       end={scim.enabled ? <Chip s="ok">{t("v3.sso.scim.on")}</Chip> : <Chip s="off">{t("v3.sso.scim.off")}</Chip>}
     >
+      {failed.error != null && (
+        <div style={{ marginBottom: 14 }}>
+          <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-sso-scim-error" />
+        </div>
+      )}
       <div className="v3-sso-scim-body">
         <div className="lane">
           <p className="v3-sso-muted">{t(`v3.sso.scim.body.${provider.preset}`, { defaultValue: t("v3.sso.scim.body.default") })}</p>
@@ -136,15 +145,17 @@ export function LoginPageSwitch({ settings, enabledCount, onChange }: {
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [busy, setBusy] = useState(false);
   const hidden = settings.hide_local_login;
   const flip = async () => {
     setBusy(true);
     try {
+      failed.clear();
       onChange(await ssoAdminApi.putSettings({ hide_local_login: !hidden }));
       toast("ok", t(hidden ? "v3.sso.loginPage.shownToast" : "v3.sso.loginPage.hiddenToast"));
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -164,6 +175,7 @@ export function LoginPageSwitch({ settings, enabledCount, onChange }: {
         <b>{t(hidden ? "v3.sso.loginPage.hiddenTitle" : "v3.sso.loginPage.shownTitle")}</b>
         <p className="v3-sso-muted">{t(hidden ? "v3.sso.loginPage.hiddenBody" : "v3.sso.loginPage.shownBody")}</p>
         {inert && <Notice s="wait">{t("v3.sso.loginPage.inert")}</Notice>}
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-sso-loginpage-error" />
       </div>
       <label className="v3-sso-toggle big" data-on={hidden}>
         <input type="checkbox" role="switch" checked={hidden} disabled={busy || (!hidden && enabledCount === 0)}

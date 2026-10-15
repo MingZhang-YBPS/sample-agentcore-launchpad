@@ -1,6 +1,6 @@
 // Pieces the observability views share: ids you can copy, a trace status chip,
 // and the polarity-aware score cell. Formatting comes from the V2 helpers (pure).
-import { Copy } from "lucide-react";
+import { Copy, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -12,22 +12,30 @@ import { Chip } from "../../ui";
 export function CopyId({ id, chars = 16 }: { id: string; chars?: number }) {
   const { t } = useTranslation();
   const toast = useToast();
+  // a failed copy says so on the button itself, where the user is looking
+  const [failed, setFailed] = useState(false);
   return (
     <span className="v3-obs-id" title={id}>
       {shortId(id, chars)}
       <button
         type="button"
         aria-label={t("v3.obs.copyId")}
+        title={failed ? t("v3.obs.copyFailed") : undefined}
+        data-copy={failed ? "failed" : undefined}
         onClick={(e) => {
           e.stopPropagation();
           copyText(id).then(
             () => toast("ok", t("v3.obs.copied")),
-            () => toast("act", t("v3.obs.copyFailed")),
+            () => {
+              setFailed(true);
+              window.setTimeout(() => setFailed(false), 2400);
+            },
           );
         }}
       >
-        <Copy size={12} aria-hidden="true" />
+        {failed ? <X size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
       </button>
+      {failed && <span className="v3-obs-id-failed" role="status">{t("v3.obs.copyFailed")}</span>}
     </span>
   );
 }

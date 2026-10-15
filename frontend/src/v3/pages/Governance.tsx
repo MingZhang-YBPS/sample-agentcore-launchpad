@@ -344,7 +344,7 @@ function CodeInterpreterDemo() {
   };
   return (
     <Panel title={t("v3.governance.tools.ciTitle")} end={
-      <Btn size="sm" kind="primary" disabled={busy || !code.trim()} onClick={() => void run()}>
+      <Btn size="sm" kind="primary" busy={busy} disabled={!code.trim()} disabledReason={t("story.reason.fillCode")} onClick={() => void run()}>
         <Play size={13} /> {busy ? t("v3.governance.tools.running") : t("v3.governance.tools.run")}
       </Btn>
     }>

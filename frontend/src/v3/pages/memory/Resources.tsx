@@ -5,8 +5,10 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, errorMessage, type MemoryResourceRow } from "../../../lib/api";
 import { isTransient, POLL_MS } from "../../../v2/pages/memory/common";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Lamp, Notice, Panel, Skeleton } from "../../ui";
@@ -34,6 +36,7 @@ export function Resources() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const failed = useFailure();
   const { can, isAdmin } = useAuth();
   const mayManage = can("memory.manage");
   const [tick, setTick] = useState(0);
@@ -60,6 +63,7 @@ export function Resources() {
     const { row, kind } = pending;
     setBusy(true);
     try {
+      failed.clear();
       if (kind === "delete") {
         await api.memoryResourceDelete(row.id!);
         toast("ok", t("memoryPage.resources.deleted", { id: row.id }));
@@ -70,7 +74,7 @@ export function Resources() {
       setPending(null);
       setTick((n) => n + 1);
     } catch (err) {
-      toast("act", t(kind === "delete" ? "memoryPage.resources.deleteFailed" : "v2.memory.res.adoptFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t(kind === "delete" ? "memoryPage.resources.deleteFailed" : "v2.memory.res.adoptFailed", { msg: errorMessage(err) }));
     } finally {
       setBusy(false);
     }
@@ -79,6 +83,7 @@ export function Resources() {
   return (
     <>
       <Notice>{t("memoryPage.resources.note")}</Notice>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-memory-resources-error" />
       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
         <div style={{ position: "relative", flex: "1 1 200px", maxWidth: 320 }}>
           <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />

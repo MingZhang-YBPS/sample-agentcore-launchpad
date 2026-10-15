@@ -42,10 +42,11 @@ export function useLoad<T>(fetcher: () => Promise<T>, key: string): Loaded<T> {
 
 
 /**
- * `err` (an `act` toast's caught error) adds its request id and AWS details; such a
- * toast stays until dismissed so the id can be copied (projects §19).
+ * The toast channel carries success only (storyline-ux §4, guided-console §3.4): a
+ * failure stays where it happened, in an `ErrorCallout` fed by `useFailure()`
+ * (failure.ts), with the envelope's way out — so there is no error tone here.
  */
-export type ToastFn = (s: "ok" | "act", text: string, err?: unknown) => void;
+export type ToastFn = (s: "ok", text: string) => void;
 export const ToastContext = createContext<ToastFn>(() => undefined);
 
 export function useToast(): ToastFn {

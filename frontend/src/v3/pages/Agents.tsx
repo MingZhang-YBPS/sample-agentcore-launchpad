@@ -7,6 +7,7 @@ import { isImported, useAgentActions } from "../../lib/agent-admin/actions";
 import { useAgentPermissions } from "../../lib/agent-admin/permissions";
 import { api, type AgentInfo } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { Reasoned } from "../reason";
 import { agentSignal } from "../signals";
 import { Chip, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton } from "../ui";
 import { useLoad, useToast } from "../hooks";
@@ -75,9 +76,11 @@ function AgentList() {
         sub={t("v3.agents.sub")}
         end={<><button type="button" className="v3-btn" onClick={agents.reload} disabled={agents.loading}><RefreshCw size={14} /> {t("v3.ux.refresh")}</button>
           {/* the classic import page until V3 has its own (§3) */}
-          <button type="button" className="v3-btn" onClick={() => navigate("/agents/import")} disabled={perms.locked} title={perms.lockTitle} data-testid="v3-agents-import">
-            <Download size={14} /> {t("v3.agents.import")}
-          </button>
+          <Reasoned disabledReason={perms.lockTitle ?? t("story.reason.locked")}>
+            <button type="button" className="v3-btn" onClick={() => navigate("/agents/import")} disabled={perms.locked} data-testid="v3-agents-import">
+              <Download size={14} /> {t("v3.agents.import")}
+            </button>
+          </Reasoned>
           <Link to="/v3/create" className="v3-btn primary">{t("v3.nav.create")}</Link></>}
       />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -128,10 +131,11 @@ function AgentList() {
               <tr>
                 {picking && (
                   <th className="pick">
-                    <input type="checkbox" checked={allPicked} disabled={pickable.length === 0}
-                      title={perms.locked ? perms.lockTitle : undefined}
-                      onChange={() => setSelected((prev) => toggleSelection(prev, pickable))}
-                      aria-label={t("v3.agents.bulk.selectAll")} data-testid="v3-agents-pick-all" />
+                    <Reasoned disabledReason={perms.locked ? perms.lockTitle ?? t("story.reason.locked") : t("story.reason.nothingToPick")}>
+                      <input type="checkbox" checked={allPicked} disabled={pickable.length === 0}
+                        onChange={() => setSelected((prev) => toggleSelection(prev, pickable))}
+                        aria-label={t("v3.agents.bulk.selectAll")} data-testid="v3-agents-pick-all" />
+                    </Reasoned>
                   </th>
                 )}
                 <th>{t("v3.ux.status")}</th>
@@ -150,10 +154,11 @@ function AgentList() {
                   {picking && (
                     <td className="pick">
                       {perms.canDelete(a) && (
-                        <input type="checkbox" checked={selected.has(a.id) && bulkDeletable(a, perms)} disabled={!bulkDeletable(a, perms)}
-                          title={perms.locked ? perms.lockTitle : a.status === "deploying" ? t("v3.agent.editBlocked.deploying") : undefined}
-                          onChange={() => setSelected((prev) => toggleSelection(prev, a.id))}
-                          aria-label={t("v3.agents.bulk.select", { name: a.display_name || a.name })} data-testid={`v3-agents-pick-${a.id}`} />
+                        <Reasoned disabledReason={perms.locked ? perms.lockTitle ?? t("story.reason.locked") : t("v3.agent.editBlocked.deploying")}>
+                          <input type="checkbox" checked={selected.has(a.id) && bulkDeletable(a, perms)} disabled={!bulkDeletable(a, perms)}
+                            onChange={() => setSelected((prev) => toggleSelection(prev, a.id))}
+                            aria-label={t("v3.agents.bulk.select", { name: a.display_name || a.name })} data-testid={`v3-agents-pick-${a.id}`} />
+                        </Reasoned>
                       )}
                     </td>
                   )}

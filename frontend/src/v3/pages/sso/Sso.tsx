@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { projectGroupsApi } from "../../../lib/api/project-groups";
 import { projectsApi } from "../../../lib/api/projects";
 import { PRIMARY_PRESETS, ssoApi, type SsoLogin, type SsoPreset, SSO_ROLES } from "../../../lib/api/sso";
@@ -18,6 +18,7 @@ import {
   ssoAdminApi,
   TEMPLATE_PRESETS,
 } from "../../../lib/api/sso-saml";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, PageHead, Panel, Skeleton } from "../../ui";
@@ -89,6 +90,7 @@ function CreateDialog({ presets, initial, onClose, onCreated }: {
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [preset, setPreset] = useState<AnyPreset | null>(initial);
   const [name, setName] = useState(initial ? t(`v3.sso.defaultName.${initial}`) : "");
   const [busy, setBusy] = useState(false);
@@ -100,11 +102,12 @@ function CreateDialog({ presets, initial, onClose, onCreated }: {
     if (!preset || !name.trim()) return;
     setBusy(true);
     try {
+      failed.clear();
       const created = await ssoAdminApi.create(createBody(preset, name, presets?.[preset]));
       toast("ok", t("v3.sso.created", { name: created.name }));
       onCreated(created);
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -124,6 +127,7 @@ function CreateDialog({ presets, initial, onClose, onCreated }: {
       )}
     >
       <div style={{ display: "grid", gap: 16 }}>
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-sso-create-error" />
         <PresetGrid value={preset} onPick={pick} />
         <label className="v3-field">
           <span>{t("v3.sso.field.name")}</span>
@@ -242,6 +246,7 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [draft, setDraft] = useState<ProviderDraft>(() => draftOf(provider));
   const [busy, setBusy] = useState<"save" | "test" | "toggle" | "delete" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -257,11 +262,12 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
   const run = async (kind: NonNullable<typeof busy>, work: () => Promise<Provider | void>, okKey?: string) => {
     setBusy(kind);
     try {
+      failed.clear();
       const next = await work();
       if (next) onChanged(next);
       if (okKey) toast("ok", t(okKey, { name: provider.name }));
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -300,6 +306,7 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
           </Btn>
         </div>
       </header>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-sso-detail-error" />
 
       {saml ? <SamlExchange provider={provider} onChanged={onChanged} /> : (
     <section className="v3-sso-handoff" aria-label={t("v3.sso.section.handoff")}>

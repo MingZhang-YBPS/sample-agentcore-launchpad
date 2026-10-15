@@ -4,9 +4,11 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { api, errorMessage, type V2Pipeline } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { api, type V2Pipeline } from "../../../lib/api";
 import { rangeLabel } from "../../../v2/format";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, Panel, type Signal, Skeleton } from "../../ui";
@@ -18,6 +20,7 @@ const editHref = (id: string) => `/v2/eval/data?tab=pipelines&view=pipeline&id=$
 export function PipelinesTab() {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const list = useLoad(() => api.v2Pipelines(), `v3-data-pipelines:${current?.id ?? ""}`);
   const datasets = useLoad(() => api.v2Datasets(), `v3-data-pipeline-ds:${current?.id ?? ""}`);
@@ -41,12 +44,13 @@ export function PipelinesTab() {
   const run = async (p: V2Pipeline) => {
     setRunning(p.id);
     try {
+      failed.clear();
       const out = await api.v2RunPipeline(p.id);
-      if (out.status === "failed") toast("act", out.last_run?.error ?? t("v2.pipelines.failed"));
+      if (out.status === "failed") failed.fail(out.last_run?.error ?? t("v2.pipelines.failed"));
       else toast("ok", t("v2.pipelines.ran", { count: out.last_run?.added ?? 0 }));
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setRunning(null);
     }
@@ -55,12 +59,13 @@ export function PipelinesTab() {
     if (!deleting) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.v2DeletePipeline(deleting.id);
       toast("ok", t("v2.pipelines.deleted"));
       setDeleting(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -73,6 +78,7 @@ export function PipelinesTab() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-pipelines-error" />
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <Filters
           value={state}

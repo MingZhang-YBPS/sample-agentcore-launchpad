@@ -3,10 +3,12 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { api, errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { api } from "../../../lib/api";
 import { type BindingsPut, type ProjectBinding, type ProjectDetail, projectsApi } from "../../../lib/api/projects";
 import { formatRowCounts } from "../../../lib/workspaces";
 import { useProject } from "../../../workspace/project-context";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Notice, Panel, Skeleton } from "../../ui";
@@ -30,6 +32,7 @@ export function WorkspacesTab({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [tick, setTick] = useState(0);
   const bindings = useLoad(() => projectsApi.workspaces(project.id), `v3-project-ws:${project.id}:${tick}`);
   const all = useLoad(
@@ -54,6 +57,7 @@ export function WorkspacesTab({
     setBusy(true);
     setRefusal(null);
     try {
+      failed.clear();
       await projectsApi.putWorkspaces(project.id, body);
       toast("ok", ok);
       setTick((n) => n + 1);
@@ -63,7 +67,7 @@ export function WorkspacesTab({
       const held = inUseRows(err);
       const ws = body.unbind?.[0] ?? "";
       if (held) setRefusal({ ws, rows: held, err });
-      else toast("act", errorMessage(err), err);
+      else failed.fail(err);
     } finally {
       setBusy(false);
       setUnbinding(null);
@@ -95,6 +99,7 @@ export function WorkspacesTab({
           <ApiErrorDetail error={refusal.err} />
         </Notice>
       )}
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-workspaces-error" />
       <Panel flush>
         {bindings.loading && !bindings.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={3} /></div>

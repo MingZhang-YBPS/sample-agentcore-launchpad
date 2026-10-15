@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   AUDIT_OUTCOMES,
   type AuditExportFormat,
@@ -12,8 +12,9 @@ import {
   type ProjectDetail,
   projectAuditApi,
 } from "../../../lib/api/projects";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
-import { useLoad, useToast } from "../../hooks";
+import { useLoad } from "../../hooks";
 import { Btn, Chip, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { AUDIT_RANGES, type AuditRange, auditFilter, outcomeSignal, rangeFrom } from "./auditModel";
 
@@ -36,7 +37,7 @@ function save(blob: Blob, name: string) {
  */
 export function AuditTab({ project }: { project: ProjectDetail }) {
   const { t } = useTranslation();
-  const toast = useToast();
+  const failed = useFailure();
   const [actor, setActor] = useState("");
   const [action, setAction] = useState("");
   const [outcome, setOutcome] = useState<AuditOutcome | "">("");
@@ -66,10 +67,11 @@ export function AuditTab({ project }: { project: ProjectDetail }) {
     if (!cursor) return;
     setBusy("more");
     try {
+      failed.clear();
       const page = await projectAuditApi.list(project.id, filter, { limit: PAGE, cursor });
       setMore({ key, events: [...(extra?.events ?? []), ...page.events], cursor: page.next_cursor });
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -77,11 +79,12 @@ export function AuditTab({ project }: { project: ProjectDetail }) {
   const download = async (format: AuditExportFormat) => {
     setBusy(format);
     try {
+      failed.clear();
       const file = await projectAuditApi.export(project.id, filter, format);
       save(file.blob, file.name);
       setTick((n) => n + 1); // the download is journaled: show it
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -111,6 +114,7 @@ export function AuditTab({ project }: { project: ProjectDetail }) {
           <Btn kind="ghost" onClick={() => void download("jsonl")} disabled={busy !== null}>{t("v3.projects.audit.exportJsonl")}</Btn>
         </span>
       </div>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-audit-error" />
       <Panel flush>
         {first.loading && !first.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={5} /></div>

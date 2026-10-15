@@ -10,12 +10,15 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
-import { dlcApi, errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { dlcApi } from "../../../lib/api";
 import { type CandidateRun, calibrationApi, candidateLabel, DROPDOWN_RUNS } from "../../../lib/api/calibration";
 import type { AnnotationTask } from "../../../lib/dlc";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
+import { firstReason } from "../../reasons";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { ConfusionMatrix } from "./charts";
 import { runNamed, runRefusal } from "./calibrationRunError";
@@ -28,6 +31,7 @@ function LinkPanel({ taskId }: { taskId: string }) {
   const { t } = useTranslation();
   const { can } = useAuth();
   const toast = useToast();
+  const failed = useFailure();
   const [nonce, setNonce] = useState(0);
   const [label, setLabel] = useState("");
   const [days, setDays] = useState(14);
@@ -42,6 +46,7 @@ function LinkPanel({ taskId }: { taskId: string }) {
     <Panel title={t("v2.dlc.calibration.links")} flush={rows.length > 0}>
       <div style={rows.length > 0 ? { padding: "0 20px 14px", display: "grid", gap: 10 } : { display: "grid", gap: 10 }}>
         <p className="v3-std-muted" style={{ margin: 0 }}>{t("v2.dlc.calibration.linksSub")}</p>
+        <ErrorCallout error={failed.error} params={{ task_id: taskId }} onDismiss={failed.clear} data-testid="v3-calibration-links-error" />
         {links.data && !allowed && <Notice s="wait">{links.data.reason}</Notice>}
         {minted && (
           <Notice s="ok">
@@ -83,7 +88,7 @@ function LinkPanel({ taskId }: { taskId: string }) {
                         dlcApi
                           .revokeAnnotationLink(taskId, row.id)
                           .then(() => { toast("ok", t("v2.dlc.calibration.linkRevoked")); setNonce((n) => n + 1); })
-                          .catch((err: unknown) => toast("act", errorMessage(err), err))
+                          .catch((err: unknown) => failed.fail(err))
                           .finally(() => setBusy(false));
                       }}>
                       {t("v2.dlc.calibration.revokeLink")}
@@ -105,7 +110,7 @@ function LinkPanel({ taskId }: { taskId: string }) {
             <span>{t("v2.dlc.calibration.linkDays")}</span>
             <input className="v3-input" type="number" min={1} max={90} value={days} onChange={(e) => setDays(Number(e.target.value))} />
           </label>
-          <Btn disabled={busy || label.trim() === ""}
+          <Btn busy={busy} disabled={label.trim() === ""} disabledReason={t("story.reason.fillName")}
             onClick={() => {
               setBusy(true);
               dlcApi
@@ -115,7 +120,7 @@ function LinkPanel({ taskId }: { taskId: string }) {
                   setLabel("");
                   setNonce((n) => n + 1);
                 })
-                .catch((err: unknown) => toast("act", errorMessage(err), err))
+                .catch((err: unknown) => failed.fail(err))
                 .finally(() => setBusy(false));
             }}>
             {t("v2.dlc.calibration.createLink")}
@@ -223,8 +228,8 @@ function TaskBench({ taskId, onBack }: { taskId: string; onBack: () => void }) {
           )}
           {mayDecide && data.status !== "closed" && (
             <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-              <Btn kind="primary" disabled={busy || measured.suggested_verdict !== "aligned"}
-                title={measured.suggested_verdict !== "aligned" ? t("v2.dlc.calibration.cannotAlign") : undefined}
+              <Btn kind="primary" busy={busy} disabled={measured.suggested_verdict !== "aligned"}
+                disabledReason={t("v2.dlc.calibration.cannotAlign")}
                 onClick={() => { setNote(""); setDeciding("aligned"); }}>
                 {t("v2.dlc.calibration.markAligned")}
               </Btn>
@@ -359,7 +364,7 @@ function RunListDialog({ agentId, agentName, criterionKey, selected, onClose, on
       foot={
         <>
           <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={!choice} onClick={() => choice && onPick(choice)}>{t("v2.dlc.calibration.choose")}</Btn>
+          <Btn kind="primary" disabled={!choice} disabledReason={t("story.reason.pickRun")} onClick={() => choice && onPick(choice)}>{t("v2.dlc.calibration.choose")}</Btn>
         </>
       }
     >
@@ -409,8 +414,10 @@ function RunListDialog({ agentId, agentName, criterionKey, selected, onClose, on
                   title={run.reason ? t(`v2.dlc.calibration.ineligibleReason.${run.reason}`) : undefined}
                   onClick={() => run.eligible && setChoice(run)}>
                   <td style={{ width: 30 }}>
-                    <input type="radio" name="cal-run" checked={run.id === current} disabled={!run.eligible}
-                      aria-label={candidateLabel(run)} onChange={() => setChoice(run)} />
+                    <Reasoned disabledReason={run.reason ? t(`v2.dlc.calibration.ineligibleReason.${run.reason}`) : t("story.reason.unavailable")}>
+                      <input type="radio" name="cal-run" checked={run.id === current} disabled={!run.eligible}
+                        aria-label={candidateLabel(run)} onChange={() => setChoice(run)} />
+                    </Reasoned>
                   </td>
                   <td>
                     <RunName run={run} />
@@ -430,9 +437,9 @@ function RunListDialog({ agentId, agentName, criterionKey, selected, onClose, on
         )}
         {pages > 1 && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-            <Btn size="sm" kind="ghost" disabled={page === 0} onClick={() => setPage((n) => n - 1)}>‹</Btn>
+            <Btn size="sm" kind="ghost" disabled={page === 0} disabledReason={t("story.reason.firstPage")} onClick={() => setPage((n) => n - 1)}>‹</Btn>
             <span className="v3-std-muted">{t("v2.dlc.calibration.page", { page: page + 1, pages })}</span>
-            <Btn size="sm" kind="ghost" disabled={page + 1 >= pages} onClick={() => setPage((n) => n + 1)}>›</Btn>
+            <Btn size="sm" kind="ghost" disabled={page + 1 >= pages} disabledReason={t("story.reason.lastPage")} onClick={() => setPage((n) => n + 1)}>›</Btn>
           </div>
         )}
       </div>
@@ -503,6 +510,7 @@ function RunPicker({ agentId, criterionKey, value, picked, pasting, onPasting, o
     <div className="v3-field">
       <span>{t("v2.dlc.calibration.fromRun")}</span>
       <div style={{ display: "flex", gap: 8 }}>
+        <Reasoned disabledReason={t("story.reason.pickCriterion")}>
         <select className="v3-select mono" style={{ flex: 1, minWidth: 0 }} disabled={!ready}
           value={pasting ? PASTE : known ? value : ""}
           onChange={(e) => {
@@ -520,7 +528,8 @@ function RunPicker({ agentId, criterionKey, value, picked, pasting, onPasting, o
           )}
           <option value={PASTE}>{t("v2.dlc.calibration.pasteRunId")}</option>
         </select>
-        <Btn size="sm" disabled={!ready} onClick={onList}>{t("v2.dlc.calibration.pickFromList")}</Btn>
+        </Reasoned>
+        <Btn size="sm" disabled={!ready} disabledReason={t("story.reason.pickCriterion")} onClick={onList}>{t("v2.dlc.calibration.pickFromList")}</Btn>
       </div>
       {pasting && (
         <input className="v3-input mono" autoFocus value={value} aria-label={t("v2.dlc.calibration.pasteRunId")}
@@ -557,6 +566,7 @@ function NewTask({ agentId, agentName, lineageId, criteriaKeys, people, initialR
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [key, setKey] = useState(initialKey ?? (initialRunId ? "" : criteriaKeys[0] ?? ""));
   const [runId, setRunId] = useState(initialRunId ?? "");
   const [pasting, setPasting] = useState(false);
@@ -573,7 +583,7 @@ function NewTask({ agentId, agentName, lineageId, criteriaKeys, people, initialR
   const [refusal, setRefusal] = useState<{ message: string; suggestion: string | null } | null>(null);
   const refused = (err: unknown, typed: string) => {
     const why = runRefusal(err, typed, key);
-    if (!why) { toast("act", errorMessage(err), err); return; }
+    if (!why) { failed.fail(err); return; }
     setRefusal({ message: t(why.key, why.vars), suggestion: null });
     const name = why.lookupName;
     if (!name || !agentId) return;
@@ -595,7 +605,12 @@ function NewTask({ agentId, agentName, lineageId, criteriaKeys, people, initialR
           <>
             <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
             {/* two raters at least: one person's labels are not a consensus */}
-            <Btn kind="primary" disabled={busy || !key || annotators.length < 2 || !runId.trim()}
+            <Btn kind="primary" busy={busy} disabled={!key || annotators.length < 2 || !runId.trim()}
+              disabledReason={firstReason(
+                !key && t("story.reason.pickCriterion"),
+                annotators.length < 2 && t("story.reason.twoAnnotators"),
+                !runId.trim() && t("story.reason.pickRun"),
+              )}
               onClick={() => {
                 const typed = runId.trim();
                 setBusy(true);
@@ -638,6 +653,7 @@ function NewTask({ agentId, agentName, lineageId, criteriaKeys, people, initialR
               )}
             </Notice>
           )}
+          <ErrorCallout error={failed.error} params={{ agent_id: agentId ?? undefined }} onDismiss={failed.clear} data-testid="v3-calibration-new-error" />
           <div className="v3-field">
             <span>{t("v2.dlc.calibration.annotators")}</span>
             <div className="v3-std-keys">

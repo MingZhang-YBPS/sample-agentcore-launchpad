@@ -2,6 +2,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   changeMark,
   type McpGateState,
@@ -12,6 +13,7 @@ import {
   type ReviewApi,
   serverReviewApi,
 } from "../../../lib/api/mcpReviews";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Notice, type Signal, Skeleton } from "../../ui";
@@ -45,6 +47,7 @@ export function McpReviewSection({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [nonce, setNonce] = useState(0);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
@@ -66,12 +69,13 @@ export function McpReviewSection({
     if (!openId) return;
     setBusy(true);
     try {
+      failed.clear();
       await (approve ? reviews.approve : reviews.reject)(openId, note.trim());
       toast("ok", t(approve ? "mcpReview.approved" : "mcpReview.rejected"));
       setNote("");
       refresh();
     } catch (err) {
-      toast("act", t("mcpReview.decideFailed"), err);
+      failed.fail(err, t("mcpReview.decideFailed"));
     } finally {
       setBusy(false);
     }
@@ -81,11 +85,12 @@ export function McpReviewSection({
     if (!reviews.check) return;
     setBusy(true);
     try {
+      failed.clear();
       const res = await reviews.check();
       toast("ok", t(!res.checked ? "mcpReview.checkNoTarget" : res.drift ? "mcpReview.checkDrift" : "mcpReview.checkClean"));
       refresh();
     } catch (err) {
-      toast("act", t("mcpReview.checkFailed"), err);
+      failed.fail(err, t("mcpReview.checkFailed"));
     } finally {
       setBusy(false);
     }
@@ -94,6 +99,8 @@ export function McpReviewSection({
   if (list.error) return <Notice s="act"><ApiErrorDetail error={list.failure ?? list.error} /></Notice>;
   if (!list.data) return <Skeleton rows={2} />;
   return (
+    <>
+      <ErrorCallout error={failed.error} params={{ agent_id: agentId }} onDismiss={failed.clear} data-testid="v3-mcp-review-error" />
     <McpReviewView
       list={list.data}
       review={detail.data}
@@ -105,6 +112,7 @@ export function McpReviewSection({
       onDecide={decide}
       onCheck={reviews.check ? check : undefined}
     />
+    </>
   );
 }
 

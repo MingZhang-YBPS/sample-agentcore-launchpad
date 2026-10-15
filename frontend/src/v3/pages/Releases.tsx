@@ -7,9 +7,9 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
+import { ErrorCallout } from "../../components/ErrorCallout";
 import {
   api,
-  errorMessage,
   type PromotionInfo,
   type PromotionLogLine,
   type PromotionPlan,
@@ -17,6 +17,7 @@ import {
   type SpecDiffRow,
 } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import {
@@ -320,6 +321,7 @@ function PlanPanel({ p, onStarted }: { p: PromotionInfo; onStarted: () => void }
   const { t } = useTranslation();
   const { can } = useAuth();
   const toast = useToast();
+  const failed = useFailure();
   const plan = useLoad<PromotionPlan>(() => api.promotionPlan(p.id), `v3-plan:${p.id}`);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -327,12 +329,13 @@ function PlanPanel({ p, onStarted }: { p: PromotionInfo; onStarted: () => void }
   const run = async () => {
     setBusy(true);
     try {
+      failed.clear();
       await api.executePromotion(p.id);
       toast("ok", t("v2.promotions.executeStarted"));
       setConfirming(false);
       onStarted();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
       setConfirming(false);
       plan.reload();
     } finally {
@@ -352,6 +355,11 @@ function PlanPanel({ p, onStarted }: { p: PromotionInfo; onStarted: () => void }
       }
     >
       <p style={{ margin: "0 0 12px", color: "var(--v3-text-3)", fontSize: 13 }}>{t("v2.promotions.planSub", { target: p.target_workspace_id })}</p>
+      {failed.error != null && (
+        <div style={{ marginBottom: 12 }}>
+          <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-release-plan-error" />
+        </div>
+      )}
       {plan.loading && !data && <Skeleton rows={3} />}
       {plan.error && <Notice s="act"><ApiErrorDetail error={plan.failure ?? plan.error} /></Notice>}
       {data && (
@@ -399,6 +407,7 @@ function ExecutionPanel({ p, onChanged }: { p: PromotionInfo; onChanged: () => v
   const { t } = useTranslation();
   const { can } = useAuth();
   const toast = useToast();
+  const failed = useFailure();
   const [live, setLive] = useState<{ promotion: PromotionInfo; log: PromotionLogLine[] } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -435,13 +444,14 @@ function ExecutionPanel({ p, onChanged }: { p: PromotionInfo; onChanged: () => v
   const rollback = async () => {
     setBusy(true);
     try {
+      failed.clear();
       await api.rollbackPromotion(p.id);
       toast("ok", t("v2.promotions.rollbackStarted"));
       setConfirming(false);
       previous.current = "executing";
       onChanged();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
       setConfirming(false);
     } finally {
       setBusy(false);
@@ -471,6 +481,11 @@ function ExecutionPanel({ p, onChanged }: { p: PromotionInfo; onChanged: () => v
           </Notice>
         </div>
       )}
+      {failed.error != null && (
+        <div style={{ marginBottom: 14 }}>
+          <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-release-exec-error" />
+        </div>
+      )}
       {nodes.length > 0 && <div className="v3-rel-stages"><Track nodes={nodes} /></div>}
       {canRollback && !current.previous_bundle_id && <p style={{ margin: "12px 0 0", color: "var(--v3-text-3)", fontSize: 13 }}>{t("v2.promotions.noPrevious")}</p>}
       {confirming && (
@@ -493,18 +508,20 @@ function ExecutionPanel({ p, onChanged }: { p: PromotionInfo; onChanged: () => v
 function ReviewDialog({ p, decision, onClose, onDone }: { p: PromotionInfo; decision: "approve" | "reject"; onClose: () => void; onDone: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const failures = p.gates.blocking_failures ?? [];
   const submit = async () => {
     setBusy(true);
     try {
+      failed.clear();
       await api.reviewPromotion(p.id, { decision, note: note.trim() || undefined });
       toast("ok", t(`v2.promotions.${decision}d`));
       onDone();
       onClose();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -523,6 +540,7 @@ function ReviewDialog({ p, decision, onClose, onDone }: { p: PromotionInfo; deci
       }
     >
       <div style={{ display: "grid", gap: 12 }}>
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-release-review-error" />
         {decision === "approve" && failures.length > 0 && <Notice s="wait">{t("v2.promotions.gatesFailing", { keys: failures.join(", ") })}</Notice>}
         <label className="v3-field">
           <span>{t("v2.promotions.reviewNote")}</span>

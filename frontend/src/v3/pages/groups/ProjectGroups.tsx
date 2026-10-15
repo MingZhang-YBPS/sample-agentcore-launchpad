@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type ConsoleUser, errorMessage } from "../../../lib/api";
 import {
   departmentsApi,
@@ -18,6 +19,7 @@ import {
 import { projectsApi } from "../../../lib/api/projects";
 import { usersApi } from "../../../lib/api/users";
 import { useProject } from "../../../workspace/project-context";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { useRoleLabel } from "../users/structure";
@@ -240,6 +242,7 @@ function GroupDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const { isAdmin, managed } = useGroupScope();
   const toast = useToast();
+  const failed = useFailure();
   const label = useRoleLabel();
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "members" ? "members" : "projects";
@@ -261,13 +264,14 @@ function GroupDetail({ id }: { id: string }) {
   const run = async <T,>(call: () => Promise<T>, ok: (result: T) => string) => {
     setBusy(true);
     try {
+      failed.clear();
       const result = await call();
       toast("ok", ok(result));
       loaded.reload();
       projects.reload();
       return true;
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
       return false;
     } finally {
       setBusy(false);
@@ -294,6 +298,7 @@ function GroupDetail({ id }: { id: string }) {
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
       <div><button type="button" className="v3-btn ghost sm" onClick={back}><ArrowLeft size={14} /> {t("v3.groups.title")}</button></div>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-group-error" />
       <PageHead
         eyebrow={`${t("v3.groups.eyebrow")} · ${group.id}`}
         title={group.name}

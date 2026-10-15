@@ -4,8 +4,10 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { api, errorMessage, type V2Dataset } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { api, type V2Dataset } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, Skeleton, Stat } from "../../ui";
@@ -23,6 +25,7 @@ function useCloudLabel() {
 export function DatasetsTab() {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [, setParams] = useSearchParams();
   const { current } = useWorkspace();
   const cloudLabel = useCloudLabel();
@@ -45,12 +48,13 @@ export function DatasetsTab() {
     if (!deleting) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.v2DeleteDataset(deleting.id);
       toast("ok", t("v2.datasets.deleted"));
       setDeleting(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -60,6 +64,7 @@ export function DatasetsTab() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-datasets-error" />
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <Filters
           value={kind}
@@ -152,6 +157,7 @@ export function DatasetsTab() {
 export function DatasetDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [, setParams] = useSearchParams();
   const cloudLabel = useCloudLabel();
   const list = useLoad(() => api.v2Datasets(), `v3-data-dataset:${id}`);
@@ -179,6 +185,7 @@ export function DatasetDetail({ id }: { id: string }) {
     if (!copyName?.trim()) return;
     setCopying(true);
     try {
+      failed.clear();
       const items = [...picked].sort((a, b) => a - b).map((i) => {
         const item = structuredClone(rows[i].original ?? {}) as Record<string, unknown>;
         const meta = (item.metadata && typeof item.metadata === "object" ? item.metadata : {}) as Record<string, unknown>;
@@ -196,7 +203,7 @@ export function DatasetDetail({ id }: { id: string }) {
       setPicked(new Set());
       setParams({ tab: "datasets", view: "dataset", id: created.id });
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setCopying(false);
     }
@@ -225,6 +232,7 @@ export function DatasetDetail({ id }: { id: string }) {
           </>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-dataset-error" />
       <div className="v3-grid c4">
         <Panel><Stat label={t("v2.datasets.colCount")} value={ds.item_count} foot={t(`v2.datasets.origin.${datasetOrigin(ds)}`)} /></Panel>
         <Panel signal={ds.has_ground_truth ? "ok" : undefined}>

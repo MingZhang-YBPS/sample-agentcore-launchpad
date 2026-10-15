@@ -9,6 +9,7 @@ import type { AgentPermissions } from "../../../lib/agent-admin/permissions";
 import type { AgentInfo } from "../../../lib/api";
 import "../agent/agent.css";
 import "./agents-list.css";
+import { Reasoned } from "../../reason";
 import { type RowEntry, rowEntries } from "./rows";
 
 /**
@@ -94,11 +95,12 @@ export function RowMenu({
           {entries.map((entry) => (
             <div key={entry.key} style={{ display: "contents" }}>
               {entry.danger && <div className="sep" role="separator" />}
+              <Reasoned disabledReason={title(entry) ?? t("story.reason.unavailable")}>
               <button
                 type="button"
                 role="menuitem"
                 disabled={entry.disabled}
-                title={title(entry)}
+                title={entry.disabled ? undefined : title(entry)}
                 data-danger={entry.danger ? "true" : undefined}
                 data-testid={`v3-agents-row-${entry.key}`}
                 onClick={() => {
@@ -108,6 +110,7 @@ export function RowMenu({
               >
                 {label(entry)}
               </button>
+              </Reasoned>
             </div>
           ))}
         </div>

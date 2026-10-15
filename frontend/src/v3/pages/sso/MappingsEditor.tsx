@@ -2,8 +2,9 @@ import { ArrowRight, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { ssoApi, type SsoMapping, type SsoMappingKind, SSO_ROLES } from "../../../lib/api/sso";
+import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
 import { Btn, Panel } from "../../ui";
 import { blankMapping, mappingProblems } from "./model";
@@ -97,6 +98,7 @@ export function MappingsEditor<P extends { id: string; mappings: SsoMapping[]; c
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [rows, setRows] = useState<SsoMapping[]>(provider.mappings);
   const [busy, setBusy] = useState(false);
   useEffect(() => setRows(provider.mappings), [provider.mappings]);
@@ -105,11 +107,12 @@ export function MappingsEditor<P extends { id: string; mappings: SsoMapping[]; c
   const save = async () => {
     setBusy(true);
     try {
+      failed.clear();
       const answer = await ssoApi.putMappings(provider.id, rows);
       toast("ok", t("v3.sso.mapping.saved"));
       onSaved({ ...provider, mappings: answer.mappings });
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -128,6 +131,7 @@ export function MappingsEditor<P extends { id: string; mappings: SsoMapping[]; c
         <p className="v3-sso-muted">
           {t("v3.sso.mapping.body", { claim: provider.claims.groups || "groups", role: t(`v3.sso.role.${provider.default_role}`) })}
         </p>
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-sso-mappings-error" />
         {rows.length > 0 && (
           <ol className="v3-sso-maps">
             {rows.map((row, index) => (

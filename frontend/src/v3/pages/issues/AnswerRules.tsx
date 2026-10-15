@@ -3,10 +3,12 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type AnswerRuleInfo, errorMessage, ruleApi } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
-import { useLoad, useToast } from "../../hooks";
+import { useLoad } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import { useAgents } from "./common";
 
@@ -17,7 +19,7 @@ import { useAgents } from "./common";
  */
 export function AnswerRules() {
   const { t } = useTranslation();
-  const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const { agents, label } = useAgents(current?.id ?? "");
   const [picked, setPicked] = useState("");
@@ -33,10 +35,11 @@ export function AnswerRules() {
 
   const act = async (fn: () => Promise<unknown>) => {
     try {
+      failed.clear();
       await fn();
       reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     }
   };
   const move = (index: number, delta: number) => {
@@ -51,6 +54,7 @@ export function AnswerRules() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <ErrorCallout error={failed.error} params={{ agent_id: agentId || undefined }} onDismiss={failed.clear} data-testid="v3-answer-rules-error" />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <select className="v3-select v3-iss-select" value={agentId} onChange={(e) => setPicked(e.target.value)} aria-label={t("selfService.common.agent")}>
           {agents.map((a) => <option key={a.id} value={a.id}>{label(a.id)}</option>)}

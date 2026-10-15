@@ -1,4 +1,7 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+
+import { Reasoned } from "../../reason";
 
 export interface MenuItem {
   key: string;
@@ -27,6 +30,7 @@ export function Menu({
   /** the trigger button's tooltip */
   title?: string;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -65,11 +69,12 @@ export function Menu({
           {items.map((item) => (
             <div key={item.key} style={{ display: "contents" }}>
               {item.separated && <div className="sep" role="separator" />}
+              <Reasoned disabledReason={item.title ?? t("story.reason.unavailable")}>
               <button
                 type="button"
                 role="menuitem"
                 disabled={item.disabled}
-                title={item.title}
+                title={item.disabled ? undefined : item.title}
                 data-danger={item.danger ? "true" : undefined}
                 data-testid={testId ? `${testId}-${item.key}` : undefined}
                 onClick={() => {
@@ -79,6 +84,7 @@ export function Menu({
               >
                 {item.label}
               </button>
+              </Reasoned>
             </div>
           ))}
         </div>

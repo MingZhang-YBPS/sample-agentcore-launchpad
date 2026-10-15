@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { projectsApi } from "../../../lib/api/projects";
 import { type StorageEntry, storageApi } from "../../../lib/api/storage";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Notice, Panel, Skeleton } from "../../ui";
 
@@ -16,6 +17,7 @@ import { Btn, Notice, Panel, Skeleton } from "../../ui";
 export function StorageAccess({ entries, onSaved }: { entries: StorageEntry[]; onSaved: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const workspaceId = current?.id ?? "";
   const projects = useLoad(
@@ -42,12 +44,13 @@ export function StorageAccess({ entries, onSaved }: { entries: StorageEntry[]; o
   const save = async () => {
     setBusy(true);
     try {
+      failed.clear();
       await storageApi.setForProject(projectId, chosen);
       toast("ok", t("v3.storage.access.saved", { project: projectId }));
       allowed.reload();
       onSaved();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -56,6 +59,7 @@ export function StorageAccess({ entries, onSaved }: { entries: StorageEntry[]; o
   return (
     <Panel title={t("v3.storage.access.title")}>
       <p className="v3-hint" style={{ marginTop: 0 }}>{t("v3.storage.access.sub")}</p>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-storage-access-error" />
       {projects.loading && !projects.data ? <Skeleton rows={2} /> : projects.error ? <Notice s="act">{projects.error}</Notice> : (
         <div style={{ display: "grid", gap: 10 }} data-testid="v3-storage-access">
           <label className="v3-field">

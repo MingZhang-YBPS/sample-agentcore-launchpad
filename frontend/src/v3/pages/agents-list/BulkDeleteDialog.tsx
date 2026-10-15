@@ -47,6 +47,7 @@ export function BulkDeleteDialog({
       danger
       busy={busy}
       confirmDisabled={left.length === 0}
+      confirmReason={t("story.reason.nothingSelected")}
       onConfirm={() => void run()}
       onCancel={onCancel}
     >

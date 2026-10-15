@@ -6,7 +6,9 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
-import { api, errorMessage, type FleetRow, type SharedTemplateInfo } from "../../lib/api";
+import { ErrorCallout } from "../../components/ErrorCallout";
+import { api, type FleetRow, type SharedTemplateInfo } from "../../lib/api";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -197,6 +199,7 @@ function MarketView() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const failed = useFailure();
   const [tick, setTick] = useState(0);
   const list = useLoad(() => api.sharedTemplates(), `v3-templates:${tick}`);
   const [withdrawing, setWithdrawing] = useState<SharedTemplateInfo | null>(null);
@@ -205,22 +208,24 @@ function MarketView() {
 
   const take = async (row: SharedTemplateInfo) => {
     try {
+      failed.clear();
       const entry = await api.useSharedTemplate(row.id);
       // the template hands over defaults only: the consumer still goes through the wizard
       navigate(`/v2/agents?${new URLSearchParams({ view: "new", template: entry.id })}`);
     } catch (error) {
-      toast("act", errorMessage(error), error);
+      failed.fail(error);
     }
   };
   const withdraw = async () => {
     if (!withdrawing) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.unpublishTemplate(withdrawing.id);
       toast("ok", t("v2.fleet.withdrawn"));
       setTick((n) => n + 1);
     } catch (error) {
-      toast("act", errorMessage(error), error);
+      failed.fail(error);
     } finally {
       setBusy(false);
       setWithdrawing(null);
@@ -229,6 +234,7 @@ function MarketView() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-fleet-market-error" />
       <Panel title={t("v3.fleet.marketTitle")} end={<span style={{ color: "var(--v3-text-3)" }}>{t("v2.fleet.marketSub")}</span>}>
         {list.loading && !list.data ? (
           <Skeleton rows={3} />

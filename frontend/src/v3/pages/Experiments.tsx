@@ -132,7 +132,7 @@ function ExperimentBoard({ experiments, loading, error, reload }: {
           <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("v3.experiments.search")} aria-label={t("v3.experiments.search")} />
         </div>
         <Btn kind="ghost" onClick={reload} title={t("v3.experiments.refresh")}><RefreshCw size={14} /></Btn>
-        <Btn kind="primary" disabled={hasRunning} title={hasRunning ? t("evalPage.experiment.runningGuard") : undefined}
+        <Btn kind="primary" disabled={hasRunning} disabledReason={t("evalPage.experiment.runningGuard")}
           onClick={() => setParams({ view: "new" })}>
           <Plus size={14} /> {t("v3.experiments.start")}
         </Btn>

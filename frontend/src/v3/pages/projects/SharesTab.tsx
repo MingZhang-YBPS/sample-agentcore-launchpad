@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   type ProjectDetail,
   projectSharesApi,
@@ -16,6 +16,7 @@ import {
   type ShareKind,
   type ShareOptions,
 } from "../../../lib/api/projects";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import type { ProjectAbilities } from "./ProjectDetail";
@@ -58,6 +59,7 @@ export function SharesTab({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { isAdmin } = useAuth();
   const [tick, setTick] = useState(0);
   const [closed, setClosed] = useState(false);
@@ -81,11 +83,12 @@ export function SharesTab({
   const act = async (fn: () => Promise<ResourceShare>, done: (row: ResourceShare) => string) => {
     setBusy(true);
     try {
+      failed.clear();
       const row = await fn();
       toast("ok", done(row));
       reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
       setRevoking(null);
@@ -97,6 +100,7 @@ export function SharesTab({
     <div className="v3-shr" data-testid="project-shares">
       <Notice s="info">{t("v3.projects.shares.intro")}</Notice>
       <ShareNotices projectId={project.id} />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-shares-error" />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         {can.share && (
           <Btn kind="primary" onClick={() => setGranting(true)} disabled={project.workspaces.length === 0}>

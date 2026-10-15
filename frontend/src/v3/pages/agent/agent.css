@@ -29,8 +29,11 @@
   text-align: left;
   cursor: pointer;
 }
-.v3 .v3-agent-menu [role="menuitem"]:hover:not(:disabled) { background: color-mix(in srgb, var(--v3-info) 8%, transparent); }
-.v3 .v3-agent-menu [role="menuitem"]:disabled { opacity: 0.45; cursor: not-allowed; }
+.v3 .v3-agent-menu [role="menuitem"]:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--v3-info) 8%, transparent); }
+.v3 .v3-agent-menu [role="menuitem"]:disabled,
+.v3 .v3-agent-menu [role="menuitem"][aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+/* an item that is off says why (reason.tsx): the wrapper keeps the full row */
+.v3 .v3-agent-menu [role="menu"] .v3-why { display: flex; }
 .v3 .v3-agent-menu [role="menuitem"][data-danger="true"] { color: var(--v3-act); }
 .v3 .v3-agent-menu .sep { height: 1px; margin: 4px 2px; background: var(--v3-line); }
 .v3 .v3-agent-copy { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
@@ -44,6 +47,8 @@
   cursor: pointer;
 }
 .v3 .v3-agent-copy button:hover { color: var(--v3-text); }
+.v3 .v3-agent-copy button[data-copy="failed"] { color: var(--v3-act); }
+.v3 .v3-agent-copy .v3-agent-copy-failed { color: var(--v3-act-text); font-size: 11.5px; white-space: nowrap; }
 .v3 .v3-agent-snippet-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; }
 .v3 .v3-agent-diff { display: grid; gap: 12px; max-height: 60vh; overflow: auto; }
 .v3 .v3-agent-diff .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

@@ -2,10 +2,12 @@ import { ArrowRight } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, errorMessage, type ObsDashboard } from "../../../lib/api";
 import { fmtBucket, fmtCompact } from "../../../pages/observability/format";
 import { fmtNumber } from "../../../v2/format";
 import { approxCost } from "../../../v2/pages/observability/common";
+import { useFailure } from "../../failure";
 import { ms } from "../../format";
 import { useToast } from "../../hooks";
 import { Lamp, Panel, Stat } from "../../ui";
@@ -114,6 +116,7 @@ function Latency({ data }: { data: ObsDashboard }) {
 function Tokens({ data, onPricesRefreshed }: { data: ObsDashboard; onPricesRefreshed: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [busy, setBusy] = useState(false);
   const rows = data.tokens_by_model;
   const grand = Math.max(1, ...rows.map((r) => r.total));
@@ -125,7 +128,7 @@ function Tokens({ data, onPricesRefreshed }: { data: ObsDashboard; onPricesRefre
         toast("ok", t("obs.prices.refreshed", { updated: res.meta.updated.length, added: res.meta.added.length }));
         onPricesRefreshed();
       })
-      .catch((err: unknown) => toast("act", t("obs.loadFailed", { msg: errorMessage(err) }), err))
+      .catch((err: unknown) => failed.fail(err, t("obs.loadFailed", { msg: errorMessage(err) })))
       .finally(() => setBusy(false));
   };
   return (
@@ -137,6 +140,7 @@ function Tokens({ data, onPricesRefreshed }: { data: ObsDashboard; onPricesRefre
         </button>
       }
     >
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-obs-tokens-error" />
       {rows.length === 0 ? (
         <div className="v3-obs-empty">{t("v3.obs.noTokens")}</div>
       ) : (

@@ -165,7 +165,8 @@ export function InboundCard({ agent, perms, onSwitched }: { agent: AgentInfo; pe
             size="sm"
             kind={sw.target === "jwt" ? "primary" : undefined}
             disabled={sw.switchBlocked || perms.locked}
-            title={perms.locked ? perms.lockTitle : sw.defaultsFailed ? t("inboundAuth.switch.defaultsFailed") : undefined}
+            disabledReason={perms.locked ? perms.lockTitle ?? t("story.reason.locked")
+              : sw.defaultsFailed ? t("inboundAuth.switch.defaultsFailed") : t("story.reason.unavailable")}
             onClick={() => setConfirming(true)}
           >
             {t(`inboundAuth.switch.to.${sw.target}`)}

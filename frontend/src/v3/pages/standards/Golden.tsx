@@ -109,7 +109,7 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
           foot={
             <>
               <Btn kind="ghost" onClick={() => setCreating(false)}>{t("v3.common.cancel")}</Btn>
-              <Btn kind="primary" disabled={busy || name.trim() === ""} onClick={create}>{t("v3.standards.save")}</Btn>
+              <Btn kind="primary" busy={busy} disabled={name.trim() === ""} disabledReason={t("story.reason.fillName")} onClick={create}>{t("v3.standards.save")}</Btn>
             </>
           }
         >
@@ -206,7 +206,7 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
                     mayEdit && (
                       <span style={{ display: "inline-flex", gap: 6 }}>
                         <Btn size="sm" disabled={busy} onClick={() => setAdding(name as WritableSplit)}><Plus size={12} /> {t("v3.standards.add")}</Btn>
-                        <Btn size="sm" kind="ghost" disabled={busy || !split} onClick={() => { setReason(""); setRetiring({ split: name, scenario: "" }); }}>
+                        <Btn size="sm" kind="ghost" busy={busy} disabled={!split} disabledReason={t("story.reason.nothingToRetire")} onClick={() => { setReason(""); setRetiring({ split: name, scenario: "" }); }}>
                           {t("v2.dlc.golden.retireItem")}
                         </Btn>
                       </span>
@@ -291,7 +291,8 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
           foot={
             <>
               <Btn kind="ghost" onClick={() => setRetiring(null)}>{t("v3.common.cancel")}</Btn>
-              <Btn kind="danger" disabled={busy || !retiring.scenario || reason.trim() === ""}
+              <Btn kind="danger" busy={busy} disabled={!retiring.scenario || reason.trim() === ""}
+                disabledReason={!retiring.scenario ? t("story.reason.pickScenario") : t("story.reason.fillReason")}
                 onClick={() => {
                   const target = retiring;
                   setRetiring(null);

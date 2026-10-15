@@ -10,9 +10,9 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
-import { dlcApi, errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { dlcApi } from "../../../lib/api";
 import { type AdmissionCandidate, type AdmissionQueue, CASE_TIERS, type CaseTier, type Redaction, type WritableSplit } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, Panel, type Signal, Skeleton, Stat } from "../../ui";
@@ -67,7 +67,8 @@ function AdmitDialog({ candidate, criteriaKeys, onClose, onDone }: { candidate: 
       foot={
         <>
           <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || blocked || expected.trim() === ""} onClick={submit}>{t("v2.dlc.admission.admit")}</Btn>
+          <Btn kind="primary" busy={busy} disabled={blocked || expected.trim() === ""}
+            disabledReason={blocked ? t("v2.dlc.admission.blockedHint") : t("story.reason.fillExpected")} onClick={submit}>{t("v2.dlc.admission.admit")}</Btn>
         </>
       }
     >
@@ -151,10 +152,11 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
   const collect = () => {
     if (!agentId) return;
     setBusy(true);
+    setFailure(null);
     dlcApi
       .admissionQueue({ agentId, status, refresh: true })
       .then(() => setNonce((n) => n + 1))
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
 
@@ -173,7 +175,7 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <Filters value={status} onChange={setStatus} options={STATUSES.map((s) => ({ value: s, label: t(`v2.dlc.admission.status.${s}`) }))} />
         <span style={{ marginLeft: "auto" }} />
-        <Btn size="sm" disabled={busy || !agentId} onClick={collect}><RefreshCw size={13} /> {t("v2.dlc.admission.collect")}</Btn>
+        <Btn size="sm" busy={busy} disabled={!agentId} disabledReason={t("story.reason.pickAgent")} onClick={collect}><RefreshCw size={13} /> {t("v2.dlc.admission.collect")}</Btn>
       </div>
       <p className="v3-std-muted" style={{ margin: 0 }}>{t("v2.dlc.admission.sub")}</p>
 
@@ -245,7 +247,7 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
           foot={
             <>
               <Btn kind="ghost" onClick={() => setRejecting(null)}>{t("v3.common.cancel")}</Btn>
-              <Btn kind="danger" disabled={busy || note.trim() === ""}
+              <Btn kind="danger" busy={busy} disabled={note.trim() === ""} disabledReason={t("story.reason.fillReason")}
                 onClick={() => {
                   const target = rejecting;
                   setRejecting(null);

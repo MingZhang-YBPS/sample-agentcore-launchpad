@@ -9,6 +9,7 @@ import { Download } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ErrorCallout } from "../../../../components/ErrorCallout";
 import { errorMessage } from "../../../../lib/api";
 import { CASE_TIERS, type CaseTier, type GoldenItem, type GoldenSet, type GoldenSplit, type WritableSplit } from "../../../../lib/dlc";
 import {
@@ -21,7 +22,8 @@ import {
   readFile,
 } from "../../../../lib/goldenTable";
 import { downloadCsv } from "../../../../v2/format";
-import { useLoad, useToast } from "../../../hooks";
+import { useFailure } from "../../../failure";
+import { useLoad } from "../../../hooks";
 import { Btn, Dialog, Notice } from "../../../ui";
 import { NO_CRITERIA, loadGoldenItems, loadServedCriteria } from "./served";
 import { downloadItems, downloadTemplate, fileStem, type TableFormat } from "./tables";
@@ -53,7 +55,7 @@ export function ImportDialog({
   onSubmit: (items: GoldenItem[]) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const toast = useToast();
+  const failed = useFailure();
   const zh = (i18n.resolvedLanguage ?? "en").startsWith("zh");
   const lineage = goldenSet.criteria_lineage_id;
   const served = useLoad(() => loadServedCriteria(lineage), `v3-golden-criteria:${lineage ?? ""}`);
@@ -101,7 +103,7 @@ export function ImportDialog({
 
   const download = (fn: () => Promise<void>) => {
     setDownloading(true);
-    fn().catch((err: unknown) => toast("act", errorMessage(err), err)).finally(() => setDownloading(false));
+    fn().catch((err: unknown) => failed.fail(err)).finally(() => setDownloading(false));
   };
   const template = (format: TableFormat) => download(() => downloadTemplate(format, goldenSet.name, t, criteria, zh));
   const hasItems = Object.values(goldenSet.splits).some((s) => (s?.items ?? 0) > 0);
@@ -130,11 +132,12 @@ export function ImportDialog({
         foot={
           <>
             <Btn kind="ghost" onClick={() => setConfirming(false)}>{t(`${K}.back`)}</Btn>
-            <Btn kind="danger" disabled={busy || !sealChecked} onClick={() => onSubmit(check.items)}>{t(`${K}.submitSeed`)}</Btn>
+            <Btn kind="danger" busy={busy} disabled={!sealChecked} disabledReason={t("story.reason.confirmFirst")} onClick={() => onSubmit(check.items)}>{t(`${K}.submitSeed`)}</Btn>
           </>
         }
       >
         <div style={{ display: "grid", gap: 12 }}>
+          <ErrorCallout error={failed.error} params={{ dataset_id: goldenSet.id }} onDismiss={failed.clear} data-testid="v3-golden-import-error" />
           <Notice s="wait">{t(`${K}.sealConfirmBody`)}</Notice>
           <p style={{ margin: 0 }}><b>{t(`${K}.okCount`, { n: check.items.length })}</b> · {projectedText}</p>
           <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -157,7 +160,8 @@ export function ImportDialog({
           {check && check.blocked && check.rows.length > 0 && (
             <Btn onClick={report}><Download size={13} /> {t(`${K}.errorReport`)}</Btn>
           )}
-          <Btn kind="primary" disabled={busy || !check || check.blocked}
+          <Btn kind="primary" busy={busy} disabled={!check || check.blocked}
+            disabledReason={!check ? t("story.reason.addItems") : t("story.reason.fixErrors")}
             onClick={() => {
               if (!check) return;
               if (mode === "seed") {
@@ -171,6 +175,7 @@ export function ImportDialog({
       }
     >
       <div style={{ display: "grid", gap: 12 }}>
+        <ErrorCallout error={failed.error} params={{ dataset_id: goldenSet.id }} onDismiss={failed.clear} data-testid="v3-golden-import-error" />
         <p style={{ margin: 0 }}>{hint}</p>
         {extra}
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -222,7 +227,7 @@ export function ImportDialog({
                     setText(out.text);
                   }
                 })
-                .catch((err: unknown) => toast("act", errorMessage(err), err));
+                .catch((err: unknown) => failed.fail(err));
             }} />
           <small className={source.error ? "v3-err" : "v3-hint"}>{source.error ?? `${t(`${K}.formats`)} ${t("v2.dlc.golden.itemsHint")}`}</small>
           {lineage && served.error && <small className="v3-hint">{t(`${K}.criteriaUnavailable`)}</small>}

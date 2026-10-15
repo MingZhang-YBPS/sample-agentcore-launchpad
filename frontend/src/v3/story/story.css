@@ -600,3 +600,128 @@
   .v3 .v3-journey-dot i, .v3 .v3-journey-tip, .v3 .v3-journey-toggle .chev,
   .v3 .v3-storypos-move svg, .v3 .v3-journey-cta svg, .v3 .v3-nextcard-row .v3-btn.primary svg { transition: none; }
 }
+
+/* ── why a control is off (guided-console §4) ────────────────────────────────
+ * A disabled control hangs a small amber flag: amber because the button is not
+ * broken, it is waiting on a step. The flag reads like an instrument tag — a mono
+ * eyebrow ("NOT YET"), the reason in body type, and the way there in mint, the
+ * same grammar as the error callout's NEXT. A notch ties the flag to the control;
+ * an invisible bridge keeps it open while the pointer travels to the link. It is
+ * always in the DOM (aria-describedby resolves) and only becomes visible on hover
+ * or focus, after a short beat on hover so passing the mouse over a toolbar does
+ * not flash a row of flags. */
+.v3 .v3-why { position: relative; display: inline-flex; vertical-align: middle; }
+/* a field keeps its full width inside the wrapper */
+.v3 .v3-why:has(> input, > select, > textarea) { display: flex; flex: 1 1 auto; min-width: 0; }
+/* a natively disabled field swallows the pointer; let the wrapper take the hover */
+.v3 .v3-why > :disabled { pointer-events: none; }
+.v3 .v3-why-tip {
+  position: absolute;
+  top: calc(100% + 9px);
+  left: 0;
+  z-index: 40;
+  display: grid;
+  gap: 4px;
+  width: max-content;
+  max-width: min(300px, 80vw);
+  padding: 9px 12px 10px 14px;
+  border-radius: var(--v3-r-sm);
+  border: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+  background:
+    linear-gradient(90deg, var(--v3-wait-dim), transparent 55%),
+    var(--v3-ink-2);
+  box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--v3-shade) 70%, transparent);
+  color: var(--v3-text);
+  font-family: var(--v3-body);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  transition: opacity 140ms var(--v3-ease), transform 160ms var(--v3-ease), visibility 0s linear 160ms;
+  pointer-events: none;
+}
+/* the signal rail and the notch that points back at the control */
+.v3 .v3-why-tip::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  border-radius: var(--v3-r-sm) 0 0 var(--v3-r-sm);
+  background: var(--v3-wait);
+}
+.v3 .v3-why-tip::after {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 14px;
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  border-left: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+  border-top: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+  background: var(--v3-ink-2);
+}
+.v3 .v3-why:hover .v3-why-tip,
+.v3 .v3-why:focus-within .v3-why-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity 140ms var(--v3-ease) 120ms, transform 160ms var(--v3-ease) 120ms, visibility 0s linear 120ms;
+}
+.v3 .v3-why:focus-within .v3-why-tip { transition-delay: 0s; }
+/* the bridge across the gap, so the link can be reached with the pointer */
+.v3 .v3-why:hover::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 10px;
+}
+/* controls on the right edge (page-head actions, panel ends, dialog feet) hang their
+   flag from the right; a dialog's foot sits at the bottom, so its flag rises */
+.v3 .v3-head-end .v3-why-tip, .v3 .v3-panel-head .end .v3-why-tip, .v3 .v3-modal .foot .v3-why-tip { left: auto; right: 0; }
+.v3 .v3-head-end .v3-why-tip::after, .v3 .v3-panel-head .end .v3-why-tip::after, .v3 .v3-modal .foot .v3-why-tip::after { left: auto; right: 14px; }
+.v3 .v3-modal .foot .v3-why-tip { top: auto; bottom: calc(100% + 9px); transform: translateY(3px); }
+.v3 .v3-modal .foot .v3-why-tip::after {
+  top: auto;
+  bottom: -5px;
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+  border-bottom: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+}
+.v3 .v3-modal .foot .v3-why:hover .v3-why-tip, .v3 .v3-modal .foot .v3-why:focus-within .v3-why-tip { transform: none; }
+.v3 .v3-modal .foot .v3-why:hover::after { top: auto; bottom: 100%; }
+.v3 .v3-why-tag {
+  font-family: var(--v3-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v3-wait);
+}
+.v3 .v3-why-text { color: var(--v3-text); }
+.v3 .v3-why-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-self: start;
+  margin-top: 2px;
+  color: var(--v3-ok);
+  font-weight: 600;
+  font-size: 12px;
+  text-decoration: none;
+}
+.v3 .v3-why-go svg { transition: transform 160ms var(--v3-ease); }
+.v3 .v3-why-go:hover { text-decoration: underline; text-underline-offset: 3px; }
+.v3 .v3-why-go:hover svg { transform: translateX(2px); }
+.v3 .v3-why-go:focus-visible { outline: 2px solid var(--v3-ok); outline-offset: 2px; border-radius: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-why-tip, .v3 .v3-why:hover .v3-why-tip, .v3 .v3-why:focus-within .v3-why-tip { transform: none; transition: none; }
+  .v3 .v3-why-go svg { transition: none; }
+}

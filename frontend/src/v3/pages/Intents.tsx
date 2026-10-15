@@ -6,9 +6,11 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
-import { errorMessage, type IntentCluster, intentApi, type IntentSession, issueApi } from "../../lib/api";
+import { ErrorCallout } from "../../components/ErrorCallout";
+import { type IntentCluster, intentApi, type IntentSession, issueApi } from "../../lib/api";
 import { useAgents } from "../../v2/pages/selfservice/useAgents";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 
@@ -37,6 +39,7 @@ const chatLink = (s: { agent_id: string; session_id: string }) =>
 export function V3Intents() {
   const { t, i18n } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const { agents, label } = useAgents();
   const [agentId, setAgentId] = useState("");
@@ -54,11 +57,12 @@ export function V3Intents() {
   const toIssueBox = async (s: IntentSession) => {
     if (s.message_id == null) return;
     try {
+      failed.clear();
       await issueApi.open({ agent_id: s.agent_id, session_id: s.session_id, message_id: s.message_id, kind: "unanswered" });
       setSent((prev) => new Set(prev).add(s.session_id));
       toast("ok", t("selfService.intents.sent"));
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     }
   };
 
@@ -98,6 +102,7 @@ export function V3Intents() {
           </>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-intents-error" />
 
       {view.error && <Notice s="act"><ApiErrorDetail error={view.failure ?? view.error} /></Notice>}
       {data?.source === "fallback" && clusters.length > 0 && <Notice s="wait">{t("selfService.intents.fallback")}</Notice>}

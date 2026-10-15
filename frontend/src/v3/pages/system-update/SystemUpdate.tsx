@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   LIVE_STATUSES,
   scheduleAt,
@@ -12,6 +12,7 @@ import {
   systemUpdateApi,
   type UpdateState,
 } from "../../../lib/api/systemUpdate";
+import { type Failure, useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Empty, Notice, PageHead, Panel, type Signal, Skeleton } from "../../ui";
@@ -51,7 +52,10 @@ function StepTrack({ update }: { update: SystemUpdate }) {
   );
 }
 
-function SchedulePanel({ state, update, onDone }: { state: UpdateState; update: SystemUpdate; onDone: () => void }) {
+/** `failed` is the page's: the panel's failures show under the page head with the page's own. */
+function SchedulePanel({ state, update, onDone, failed }: {
+  state: UpdateState; update: SystemUpdate; onDone: () => void; failed: Failure;
+}) {
   const { t } = useTranslation();
   const toast = useToast();
   const [mode, setMode] = useState<"now" | "at">("now");
@@ -62,11 +66,12 @@ function SchedulePanel({ state, update, onDone }: { state: UpdateState; update: 
   const run = async (work: () => Promise<unknown>, okKey: string) => {
     setBusy(true);
     try {
+      failed.clear();
       await work();
       toast("ok", t(okKey));
       onDone();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -180,6 +185,7 @@ export function V3SystemUpdate() {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();
   const toast = useToast();
+  const failed = useFailure();
   const [version, setVersion] = useState(0);
   const [busy, setBusy] = useState(false);
   const state = useLoad(async () => (isAdmin ? systemUpdateApi.state() : null), `v3-sysupdate:${isAdmin}:${version}`);
@@ -209,11 +215,12 @@ export function V3SystemUpdate() {
   const act = async (work: () => Promise<unknown>, okKey: string) => {
     setBusy(true);
     try {
+      failed.clear();
       await work();
       toast("ok", t(okKey));
       reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -238,6 +245,7 @@ export function V3SystemUpdate() {
           </Btn>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-system-update-error" />
       {state.loading && !data ? (
         <Panel><Skeleton rows={4} /></Panel>
       ) : state.error ? (
@@ -322,7 +330,7 @@ export function V3SystemUpdate() {
           </Panel>
 
           {current && (current.status === "ready" || current.status === "scheduled") && (
-            <SchedulePanel state={data} update={current} onDone={reload} />
+            <SchedulePanel state={data} update={current} onDone={reload} failed={failed} />
           )}
 
           {data.history.length > 0 && (

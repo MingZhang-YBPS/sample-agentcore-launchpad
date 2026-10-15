@@ -10,6 +10,7 @@ import { type ReleaseStorageEvidence, changeDelta, hasStorage, mountLabel, relea
 import { type EvalCostEstimate, evalCostApi } from "../../lib/api/evalCost";
 import { type GateReport, type GateRow, type ReleaseState, type Scorecard, metricValueLabel } from "../../lib/dlc";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { firstReason, permReason } from "../reasons";
 import { gateSignal, releaseSignal } from "../signals";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { useLoad, useToast } from "../hooks";
@@ -346,10 +347,16 @@ export function V3Gate() {
               <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
                 <span style={{ color: "var(--v3-text-2)" }}>{t("v3.gate.runHint")}</span>
                 <span style={{ flex: 1 }} />
-                <Btn kind="primary"
-                  disabled={busy || !can("eval.run") || estimate.loading || Boolean(estimate.data?.over_limit)
+                <Btn kind="primary" busy={busy || estimate.loading}
+                  disabled={!can("eval.run") || Boolean(estimate.data?.over_limit)
                   || (Boolean(estimate.data?.confirm_required) && !confirmCost)
                   || (writes.length > 0 && !confirmWrites)}
+                  disabledReason={firstReason(
+                    !can("eval.run") && permReason(t, "eval.run"),
+                    Boolean(estimate.data?.over_limit) && t("story.reason.overCostLimit"),
+                    Boolean(estimate.data?.confirm_required) && !confirmCost && t("story.reason.confirmCost"),
+                    writes.length > 0 && !confirmWrites && t("story.reason.confirmFirst"),
+                  )}
                   onClick={() =>
                     act(
                       () => writes.length > 0
@@ -380,8 +387,8 @@ export function V3Gate() {
               end={
                 can("release.sign") ? (
                   <span style={{ display: "flex", gap: 8 }}>
-                    <Btn kind="primary" size="sm" disabled={busy || report.verdict !== "PASS"}
-                      title={report.verdict !== "PASS" ? t("v2.dlc.release.onlyPassSigns") : undefined}
+                    <Btn kind="primary" size="sm" busy={busy} disabled={report.verdict !== "PASS"}
+                      disabledReason={t("v2.dlc.release.onlyPassSigns")}
                       onClick={() => { setNote(""); setStorageAck(false); setDeciding("sign"); }}>
                       <ShieldCheck size={13} /> {t("v3.gate.sign")}
                     </Btn>
@@ -474,8 +481,10 @@ export function V3Gate() {
                   <Btn kind="ghost" onClick={() => setDeciding(null)}>{t("v3.common.cancel")}</Btn>
                   <Btn
                     kind={deciding === "sign" ? "primary" : "danger"}
-                    disabled={busy || (deciding !== "sign" && !note.trim())
+                    busy={busy}
+                    disabled={(deciding !== "sign" && !note.trim())
                       || (deciding === "sign" && Boolean(storage?.requires_ack) && !storageAck)}
+                    disabledReason={deciding !== "sign" ? t("story.reason.fillReason") : t("story.reason.confirmFirst")}
                     onClick={() => {
                       const action = deciding;
                       setDeciding(null);

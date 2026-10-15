@@ -7,6 +7,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
+import { ErrorCallout } from "../../components/ErrorCallout";
 import { api, type Announcement, type AnnouncementContent } from "../../lib/api";
 import { announcementLink } from "../../lib/announcements";
 import {
@@ -20,6 +21,7 @@ import {
   validationKey,
 } from "../../v2/pages/announcements/common";
 import { type AnnouncementSessions, useAnnouncementSessions } from "../../v2/pages/announcements/useSessions";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -87,6 +89,7 @@ function List({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { sessions, act, tick, refresh } = store;
   const list = useLoad(() => api.manageAnnouncements(PAGE_SIZE, offset), `v3-ann:${offset}:${tick}`);
   const total = list.data?.total ?? 0;
@@ -108,7 +111,7 @@ function List({
     const outcome = await act(row.id, action, row);
     if (!outcome) return;
     if (outcome.ok) toast("ok", t(action === "delete" ? "v2.announcements.deleted" : `announcements.success.${action}`));
-    else toast("act", `${t(`announcements.actions.${action}`)}: ${outcome.error}`);
+    else failed.fail(`${t(`announcements.actions.${action}`)}: ${outcome.error}`);
   };
 
   return (
@@ -124,6 +127,7 @@ function List({
           </>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-announcements-error" />
 
       {buffered.length > 0 && (
         <Notice s="wait">

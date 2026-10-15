@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type PurgePlan, projectLifecycleApi } from "../../../lib/api/project-lifecycle";
 import { type ProjectDetail, projectsApi } from "../../../lib/api/projects";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Notice, Panel, Skeleton } from "../../ui";
 import { countdownParts } from "./model";
@@ -20,6 +21,7 @@ type Pending = "archive" | "unarchive" | "delete" | "cancel" | null;
 export function LifecycleSection({ project, onChanged }: { project: ProjectDetail; onChanged: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [tick, setTick] = useState(0);
   const loaded = useLoad(() => projectLifecycleApi.get(project.id), `v3-project-lifecycle:${project.id}:${tick}`);
   const [pending, setPending] = useState<Pending>(null);
@@ -72,12 +74,13 @@ export function LifecycleSection({ project, onChanged }: { project: ProjectDetai
   const purge = async () => {
     setBusy(true);
     try {
+      failed.clear();
       const started = await projectLifecycleApi.purge(project.id);
       toast("ok", t("v3.projects.lifecycle.purgeStarted", { name: project.name, job: started.job_id ?? "" }));
       setPlan(null);
       reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -102,6 +105,7 @@ export function LifecycleSection({ project, onChanged }: { project: ProjectDetai
     <Panel title={t("v3.projects.lifecycle.title")} end={<Chip>{t(`v3.projects.lifecycle.status.${life.status}`)}</Chip>}>
       <div style={{ display: "grid", gap: 12 }} data-testid="project-lifecycle">
         <small className="v3-hint">{t("v3.projects.lifecycle.sub", { days: life.cooling_off_days })}</small>
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-lifecycle-error" />
         {life.is_default && <Notice>{t("v3.projects.lifecycle.defaultLocked")}</Notice>}
 
         {!life.is_default && life.status !== "deleted" && !deletion && (

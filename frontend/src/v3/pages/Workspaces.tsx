@@ -6,10 +6,10 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
+import { ErrorCallout } from "../../components/ErrorCallout";
 import {
   api,
   ApiError,
-  errorMessage,
   type StageInfo,
   type Workspace,
   type WorkspaceBootstrapJob,
@@ -23,6 +23,7 @@ import { V2ToastProvider } from "../../v2/ui";
 import { InboundDefaultCard } from "../../v2/pages/workspaces/InboundDefaultCard";
 import { MappingsCard } from "../../v2/pages/workspaces/MappingsCard";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat, Track } from "../ui";
@@ -201,6 +202,7 @@ function WorkspaceList() {
 function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [, setParams] = useSearchParams();
   const { refresh: refreshSwitcher } = useWorkspace();
   const [tick, setTick] = useState(0);
@@ -263,6 +265,7 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
     if (!row) return;
     setBusy(true);
     try {
+      failed.clear();
       const ack = await api.bootstrapWorkspace(row.id);
       rememberBootstrapJobId(row.id, ack.job_id);
       setJobId(ack.job_id);
@@ -270,7 +273,7 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
       toast("ok", t("workspacesPage.bootstrapQueued", { name: row.name }));
       await reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -280,11 +283,12 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
     if (!row) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.patchWorkspace(row.id, { tier, confirm_tier_change: confirmed });
       toast("ok", t("v2.workspaces.tierChanged", { name: row.name, tier: t(`v2.workspaces.tier.${tier}`) }));
       await reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
       setPendingTier(null);
@@ -305,6 +309,7 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
     if (!row) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.deleteWorkspace(row.id);
       toast("ok", t("workspacesPage.deleted", { name: row.name }));
       await refreshSwitcher();
@@ -312,8 +317,8 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
     } catch (err) {
       if (err instanceof ApiError && err.code === "workspace.in_use") {
         const rows = (err.detail as { rows?: Record<string, number> } | null)?.rows ?? {};
-        toast("act", t("workspacesPage.deleteInUse", { rows: formatRowCounts(rows) }), err);
-      } else toast("act", errorMessage(err), err);
+        failed.fail(err, t("workspacesPage.deleteInUse", { rows: formatRowCounts(rows) }));
+      } else failed.fail(err);
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -323,8 +328,8 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
   const purgeFailed = (err: unknown) => {
     if (err instanceof ApiError && err.code === "workspace.purge_refused") {
       const reason = (err.detail as { reason?: string } | null)?.reason ?? "";
-      toast("act", t("workspacesPage.detail.purgeRefused", { reason: t(`workspacesPage.detail.purgeReason.${reason}`, err.message) }), err);
-    } else toast("act", errorMessage(err), err);
+      failed.fail(err, t("workspacesPage.detail.purgeRefused", { reason: t(`workspacesPage.detail.purgeReason.${reason}`, err.message) }));
+    } else failed.fail(err);
   };
   const openPurge = async () => {
     if (!row) return;
@@ -406,6 +411,7 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
           </>
         }
       />
+      <ErrorCallout error={failed.error} params={{ workspace_id: workspaceId }} onDismiss={failed.clear} data-testid="v3-workspace-error" />
       {row.is_default && <Notice>{t("workspacesPage.detail.hubNote")}</Notice>}
       {row.bootstrap_status === "registered" && !row.is_default && !jobId && <Notice s="wait">{t("v2.workspaces.needsBootstrap")}</Notice>}
 

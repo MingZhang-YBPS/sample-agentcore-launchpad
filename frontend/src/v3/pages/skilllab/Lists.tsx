@@ -3,10 +3,12 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
-import { api, errorMessage, type SkillLabJobInfo, type SkillLabTasksetInfo } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { api, type SkillLabJobInfo, type SkillLabTasksetInfo } from "../../../lib/api";
 import { isLiveJob, jobSkillName, RESUMABLE_STATUSES, tasksetLabel } from "../../../lib/skillLab";
 import { countsLabel } from "../../../lib/skillLabTasksets";
 import { bestScoreCache, passRateCache, taskgenTarget } from "../../../v2/pages/skilllab/state";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, Panel, Skeleton } from "../../ui";
@@ -40,6 +42,7 @@ type JobAction = "cancel" | "delete" | "resume";
 function useJobActions(type: "eval" | "train" | "taskgen", onDone: () => void) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [pending, setPending] = useState<{ job: SkillLabJobInfo; action: JobAction } | null>(null);
   const [busy, setBusy] = useState(false);
   const act = async () => {
@@ -47,6 +50,7 @@ function useJobActions(type: "eval" | "train" | "taskgen", onDone: () => void) {
     const { job, action } = pending;
     setBusy(true);
     try {
+      failed.clear();
       if (action === "cancel") {
         await api.skillLabJobCancel(job.id);
         toast("ok", t("skillLab.eval.cancelRequested"));
@@ -60,7 +64,7 @@ function useJobActions(type: "eval" | "train" | "taskgen", onDone: () => void) {
       setPending(null);
       onDone();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -98,7 +102,7 @@ function useJobActions(type: "eval" | "train" | "taskgen", onDone: () => void) {
       {body}
     </Confirm>
   ) : null;
-  return { ask: (job: SkillLabJobInfo, action: JobAction) => setPending({ job, action }), busy, dialog };
+  return { ask: (job: SkillLabJobInfo, action: JobAction) => setPending({ job, action }), busy, dialog, failed };
 }
 
 const STATUS_FILTERS = ["all", "wait", "ok", "act", "off"] as const;
@@ -146,6 +150,7 @@ export function JobTable({
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      <ErrorCallout error={actions.failed.error} onDismiss={actions.failed.clear} data-testid="v3-skilllab-jobs-error" />
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <Filters
           value={state}
@@ -257,6 +262,7 @@ export function TasksetTable({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const failed = useFailure();
   const [mode, setMode] = useState<"all" | "single" | "split">("all");
   const [q, setQ] = useState("");
   const [pending, setPending] = useState<SkillLabTasksetInfo | null>(null);
@@ -271,18 +277,20 @@ export function TasksetTable({
     if (!pending) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.skillLabTasksetDelete(pending.id);
       toast("ok", t("skillLab.tasksets.deleted"));
       setPending(null);
       reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
   };
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-skilllab-tasksets-error" />
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <Filters
           value={mode}
@@ -386,6 +394,11 @@ export function TaskgenTable({
       }
     >
       <p style={{ margin: "0 20px 10px", color: "var(--v3-text-3)", fontSize: 13 }}>{t("skillLab.taskgen.listSub")}</p>
+      {actions.failed.error != null && (
+        <div style={{ margin: "0 20px 10px" }}>
+          <ErrorCallout error={actions.failed.error} onDismiss={actions.failed.clear} data-testid="v3-skilllab-taskgen-error" />
+        </div>
+      )}
       {loading && rows.length === 0 ? (
         <div style={{ padding: 20 }}><Skeleton rows={3} /></div>
       ) : error ? (

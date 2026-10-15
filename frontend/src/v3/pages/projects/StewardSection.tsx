@@ -2,8 +2,9 @@ import { Check, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type StewardChange, stewardApi } from "../../../lib/api/steward";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Notice, Panel } from "../../ui";
@@ -43,6 +44,7 @@ export function StewardSection({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [tick, setTick] = useState(0);
   const notices = useLoad(() => stewardApi.notices(), `v3-steward-notices:${tick}`);
   const pending = useLoad(() => stewardApi.pending(), `v3-steward-pending:${tick}`);
@@ -53,12 +55,13 @@ export function StewardSection({
   const run = async (id: string, call: () => Promise<unknown>, doneKey: string, moved = false) => {
     setBusy(id);
     try {
+      failed.clear();
       await call();
       toast("ok", t(doneKey));
       setTick((n) => n + 1);
       if (moved) onChanged();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -68,6 +71,7 @@ export function StewardSection({
     <Panel title={t("v3.steward.trace.title")}>
       <div style={{ display: "grid", gap: 12 }} data-testid="project-steward-trace">
         <small className="v3-hint">{t("v3.steward.trace.sub")}</small>
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-steward-error" />
         {trace.pending.map((p) => (
           <Notice key={p.id} s="wait">
             <div style={{ display: "grid", gap: 6 }} data-testid={`steward-pending-${p.id}`}>

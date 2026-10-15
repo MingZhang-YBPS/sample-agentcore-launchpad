@@ -2,10 +2,11 @@ import { Check, Unlink } from "lucide-react";
 import { type CSSProperties, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type ShareNotice, shareNoticesApi, unreadNoticesFor } from "../../../lib/api/sharedFrom";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
-import { useLoad, useToast } from "../../hooks";
+import { useLoad } from "../../hooks";
 import { Btn, Chip } from "../../ui";
 
 /**
@@ -17,7 +18,7 @@ import { Btn, Chip } from "../../ui";
  */
 export function ShareNotices({ projectId }: { projectId: string }) {
   const { t } = useTranslation();
-  const toast = useToast();
+  const failed = useFailure();
   const [tick, setTick] = useState(0);
   const [acked, setAcked] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
@@ -28,11 +29,12 @@ export function ShareNotices({ projectId }: { projectId: string }) {
   const ack = async (notice: ShareNotice) => {
     setBusy(notice.id);
     try {
+      failed.clear();
       await shareNoticesApi.acknowledge(notice.id);
       setAcked((prev) => new Set(prev).add(notice.id));
       setTick((n) => n + 1);
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -45,6 +47,7 @@ export function ShareNotices({ projectId }: { projectId: string }) {
         <b>{t("v3.projects.shares.notices.title")}</b>
         <span className="count">{rows.length}</span>
       </header>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-share-notices-error" />
       <ul className="v3-shn-list">
         {rows.map((n, i) => (
           <li key={n.id} className="v3-shn-row" data-kind={n.kind} style={{ "--i": Math.min(i, 6) } as CSSProperties}

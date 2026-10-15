@@ -15,8 +15,8 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, type V2Range } from "../../../lib/api";
 import { calibrationApi } from "../../../lib/api/calibration";
 import { hasInsightTrees } from "../../../lib/evaluation";
@@ -621,14 +621,9 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
     setFailure(null);
     try {
       const run = await api.recheckEvaluationRun(data.id);
-      toast(
-        run.status === "failed" ? "act" : "ok",
-        t(
-          run.status === "failed"
-            ? "v2.tasks.recheckStillFailed"
-            : "v2.tasks.done.recheck",
-        ),
-      );
+      // still failing stays in place with the page's other failures (storyline-ux §4)
+      if (run.status === "failed") setFailure(t("v2.tasks.recheckStillFailed"));
+      else toast("ok", t("v2.tasks.done.recheck"));
       task.reload();
     } catch (err) {
       setFailure(err);

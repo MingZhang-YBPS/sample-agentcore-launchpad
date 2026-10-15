@@ -3,14 +3,12 @@
 // The vocabulary is deliberately small: a Signal is one of ok / wait / act / info /
 // off, and every status in the console — an agent, a gate, a release, a run — is
 // mapped onto it once, here, so the same colour always means the same thing.
-import { AlertTriangle, CheckCircle2, Inbox, Info, X, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Inbox, Info, XCircle } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 
-import { ApiErrorDetail } from "../components/ApiErrorDetail";
-import type { ApiError } from "../lib/api";
 import { ToastContext, type ToastFn } from "./hooks";
-import { toastDetail } from "./toast";
+import { Why } from "./reason";
+import type { DisabledReason } from "./reasons";
 
 export type Signal = "ok" | "wait" | "act" | "info" | "off";
 
@@ -82,34 +80,63 @@ export function Stat({
   );
 }
 
+/**
+ * The V3 button. `disabledReason` says why it is off (guided-console §4): the button
+ * stays focusable (aria-disabled), the reason shows on hover and focus and is its
+ * accessible description, and a reason with a step links there. `busy` locks it while
+ * a request runs — no reason needed for that. The `launchpad/disabled-reason` ESLint
+ * rule asks every disabled V3 control for one or the other.
+ */
 export function Btn({
   children,
   kind,
   size,
   disabled,
+  disabledReason,
+  busy,
   title,
   onClick,
   type = "button",
+  className,
+  "aria-label": ariaLabel,
+  "data-testid": testId,
 }: {
   children: ReactNode;
   kind?: "primary" | "danger" | "ghost";
   size?: "sm";
   disabled?: boolean;
+  /** why it is disabled — shown only while `disabled` (and not `busy`) */
+  disabledReason?: DisabledReason | null;
+  /** a request is running: locked, no reason shown */
+  busy?: boolean;
   title?: string;
   onClick?: () => void;
   type?: "button" | "submit";
+  className?: string;
+  "aria-label"?: string;
+  "data-testid"?: string;
 }) {
-  return (
+  const id = useId();
+  const why = disabled && !busy && disabledReason ? disabledReason : null;
+  const locked = Boolean(disabled || busy) && !why;
+  const button = (
+    // eslint-disable-next-line launchpad/disabled-reason -- the primitive: its reason is the prop above
     <button
-      type={type}
-      className={["v3-btn", kind ?? "", size ?? ""].join(" ").trim()}
-      disabled={disabled}
-      title={title}
-      onClick={onClick}
+      type={why ? "button" : type}
+      className={["v3-btn", kind ?? "", size ?? "", className ?? ""].join(" ").replace(/\s+/g, " ").trim()}
+      disabled={locked}
+      aria-disabled={why ? true : undefined}
+      aria-busy={busy || undefined}
+      aria-describedby={why ? id : undefined}
+      aria-label={ariaLabel}
+      data-testid={testId}
+      title={why ? undefined : title}
+      onClick={why ? undefined : onClick}
     >
       {children}
     </button>
   );
+  return why ? <Why id={id} reason={why}>{button}</Why> : button;
 }
 
 export function PageHead({
@@ -194,35 +221,23 @@ export function Spark({ values, s = "ok" }: { values: number[]; s?: "ok" | "act"
 /* ── toasts ────────────────────────────────────────────────────────────── */
 
 
-type ToastItem = { id: number; s: "ok" | "act"; text: string; detail: ApiError | null };
+type ToastItem = { id: number; s: "ok"; text: string };
 
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const { t } = useTranslation();
   const [items, setItems] = useState<ToastItem[]>([]);
   const seq = useRef(0);
   const dismiss = useCallback((id: number) => setItems((prev) => prev.filter((x) => x.id !== id)), []);
-  const push = useCallback<ToastFn>((s, text, err) => {
+  const push = useCallback<ToastFn>((s, text) => {
     const id = ++seq.current;
-    const detail = toastDetail(s, text, err);
-    setItems((prev) => [...prev, { id, s, text, detail }]);
-    // one with a request id stays until dismissed: the id is what support asks for
-    if (!detail) window.setTimeout(() => dismiss(id), 4200);
+    setItems((prev) => [...prev, { id, s, text }]);
+    window.setTimeout(() => dismiss(id), 4200);
   }, [dismiss]);
   const value = useMemo(() => push, [push]);
   return (
     <ToastContext.Provider value={value}>
       {children}
       <div className="v3-toasts" aria-live="polite">
-        {items.map((item) => item.detail ? (
-          <div key={item.id} className="v3-toast" data-testid="v3-toast" style={{ alignItems: "flex-start" }}>
-            <span style={{ marginTop: 4 }}><Lamp s={item.s} /></span>
-            <div style={{ flex: 1, minWidth: 0 }}><ApiErrorDetail error={item.detail} data-testid="v3-toast-error" /></div>
-            <button type="button" className="v3-btn ghost sm" aria-label={t("common.close")} title={t("common.close")}
-              onClick={() => dismiss(item.id)}>
-              <X size={13} aria-hidden="true" />
-            </button>
-          </div>
-        ) : (
+        {items.map((item) => (
           <div key={item.id} className="v3-toast" data-testid="v3-toast">
             <Lamp s={item.s} />
             <span>{item.text}</span>
@@ -261,6 +276,7 @@ export function Confirm({
   danger,
   busy,
   confirmDisabled,
+  confirmReason,
   onConfirm,
   onCancel,
 }: {
@@ -272,6 +288,8 @@ export function Confirm({
   busy?: boolean;
   /** hold the confirm button (e.g. until a typed name matches); cancel stays live */
   confirmDisabled?: boolean;
+  /** why the confirm button is held (guided-console §4) */
+  confirmReason?: DisabledReason | null;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -282,10 +300,11 @@ export function Confirm({
         <h2>{title}</h2>
         <div className="body">{children}</div>
         <div className="foot">
-          <Btn kind="ghost" onClick={onCancel} disabled={busy}>
+          <Btn kind="ghost" onClick={onCancel} busy={busy}>
             {cancelLabel}
           </Btn>
-          <Btn kind={danger ? "danger" : "primary"} onClick={onConfirm} disabled={busy || confirmDisabled}>
+          <Btn kind={danger ? "danger" : "primary"} onClick={onConfirm} busy={busy} disabled={confirmDisabled}
+            disabledReason={confirmReason}>
             {confirmLabel}
           </Btn>
         </div>

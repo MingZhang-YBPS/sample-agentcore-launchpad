@@ -7,9 +7,10 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type ActivationStatus, activationSummary, costTagsApi, type CostTagsView } from "../../../lib/api/costTags";
-import { errorMessage } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Track } from "../../ui";
@@ -20,6 +21,7 @@ import { activatable, stageOf, TAG_SIGNAL } from "./model";
 export function Activation({ status, onActivated }: { status: ActivationStatus; onActivated: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [busy, setBusy] = useState(false);
   const sum = activationSummary(status);
   const todo = activatable(status);
@@ -27,13 +29,14 @@ export function Activation({ status, onActivated }: { status: ActivationStatus; 
 
   const activate = async () => {
     setBusy(true);
+    failed.clear();
     try {
       const result = await costTagsApi.activate();
       toast("ok", t("v3.costTags.activated", { count: result.activated.length }));
       if (result.not_found.length) toast("ok", t("v3.costTags.notFoundYet", { count: result.not_found.length }));
       onActivated();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -43,6 +46,7 @@ export function Activation({ status, onActivated }: { status: ActivationStatus; 
     <Panel title={t("v3.costTags.activation")} signal={status.error ? "act" : sum.active === sum.total ? "ok" : "wait"}
       end={<Chip>{t(`v3.costTags.account.${status.account_type}`)}</Chip>}>
       <div className="v3-ctag-act" data-testid="cost-tags-activation">
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="cost-tags-activate-error" />
         <div className="big">
           {status.error ? "—" : sum.active}
           <small>{t("v3.costTags.ofActive", { total: sum.total })}</small>

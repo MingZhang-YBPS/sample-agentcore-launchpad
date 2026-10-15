@@ -7,7 +7,9 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
-import { api, type ConnectionInfo, errorMessage, type IdentityGatewayTarget, type TargetWarning } from "../../lib/api";
+import { ErrorCallout } from "../../components/ErrorCallout";
+import { api, type ConnectionInfo, type IdentityGatewayTarget, type TargetWarning } from "../../lib/api";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -60,6 +62,7 @@ function Connections() {
   const { t } = useTranslation();
   const { can } = useAuth();
   const toast = useToast();
+  const failed = useFailure();
   const manage = can("identity.manage");
   const list = useLoad(() => api.listConnections(), "v3-connections-admin");
   const [creating, setCreating] = useState(false);
@@ -71,22 +74,24 @@ function Connections() {
 
   const showCallback = async (row: ConnectionInfo) => {
     try {
+      failed.clear();
       // re-read: the list's value may be the create-time snapshot
       setCallback(await api.getConnection(row.kind, row.name));
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     }
   };
   const remove = async () => {
     if (!removing) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.deleteConnection(removing.kind, removing.name);
       toast("ok", t("v2.connections.deleted", { name: removing.name }));
       setRemoving(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -94,6 +99,7 @@ function Connections() {
 
   return (
     <>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-identity-connections-error" />
       <div className="v3-grid c4">
         <Panel><Stat label={t("v3.identity.connections")} value={list.data ? rows.length : "—"} /></Panel>
         <Panel><Stat label={t("identity.kind.oauth2")} value={list.data ? rows.filter((c) => c.kind === "oauth2").length : "—"} /></Panel>
@@ -216,6 +222,7 @@ function Targets() {
   const { t } = useTranslation();
   const { can } = useAuth();
   const toast = useToast();
+  const failed = useFailure();
   const manage = can("identity.manage");
   const list = useLoad(() => api.listIdentityGatewayTargets(), "v3-identity-targets");
   const [creating, setCreating] = useState(false);
@@ -232,12 +239,13 @@ function Targets() {
     if (!removing) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.deleteIdentityGatewayTarget(removing.target_id);
       toast("ok", t("v2.connections.targets.deleted", { name: removing.name }));
       setRemoving(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -248,6 +256,7 @@ function Targets() {
 
   return (
     <>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-identity-targets-error" />
       <div className="v3-grid c3">
         <Panel><Stat label={t("v3.identity.targets")} value={data ? rows.length : "—"} foot={data?.gateway_id ?? undefined} /></Panel>
         <Panel signal={rows.length && !failing.length ? "ok" : undefined}>
