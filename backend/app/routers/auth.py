@@ -461,7 +461,16 @@ def status(request: Request) -> dict[str, Any]:
         "registration_enabled": registration_enabled(settings),
         "registration_requires_approval": registration_requires_approval(settings),
         **_identity_fields(identity if required else None),
+        # the running commit (online update §2.4): the updater's health check waits for
+        # the restarted console to report the commit it just installed
+        "version": {"sha": _running_sha()},
     }
+
+
+def _running_sha() -> str | None:
+    from app.services.system_update import version_sha
+
+    return version_sha()
 
 
 @router.post("/login")

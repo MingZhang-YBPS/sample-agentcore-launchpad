@@ -225,6 +225,7 @@ def init_db(bind=None) -> None:
     from app.models import resource_mapping as _mapping_models  # noqa: F401
     from app.models import selfservice as _selfservice_models  # noqa: F401 — T35/T36
     from app.models import storage as _storage_models  # noqa: F401 — storage-mounts §4
+    from app.models import system_update as _update_models  # noqa: F401 — OU-1, hub-global
     from app.models import video as _video_models  # noqa: F401 — register tables before create_all
     from app.optimization import models as _optimization_models  # noqa: F401
     from app.skill_lab import models as _skill_lab_models  # noqa: F401

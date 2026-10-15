@@ -32,6 +32,8 @@ from app.evaluation.recommendations import PROVIDER_JOB_PREFIX
 from app.evaluation.service import INTERRUPTED_STATUSES
 from app.models.assistant import AssistantConversation, EvaluationAssetOperation
 from app.models.ledger import Job, PolicyChange
+from app.models.system_update import PREPARING as SYSTEM_UPDATE_PREPARING
+from app.models.system_update import SystemUpdate
 from app.optimization.models import Experiment, RuntimeCanary
 from app.skill_lab.models import SkillLabJob
 
@@ -65,6 +67,8 @@ EVAL_PIPELINE = "eval_pipeline"
 EVAL_RECOMMENDATION = "eval_recommendation"
 ASSISTANT_TURN = "assistant_turn"
 ASSISTANT_PREPARATION = "assistant_preparation"
+# online update (OU-1): the prepare job lives on its `system_updates` row, not in `jobs`
+SYSTEM_UPDATE_PREPARE = "system_update_prepare"
 
 # Every call in the `if resume_jobs:` block of `create_app`, by the name main.py
 # calls it, with the inventory kinds it settles. Hooks that touch no ledger row map
@@ -89,6 +93,10 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
         "starts the Agent-DLC tick thread (due watch runs, alert rules, expiry sweeps); "
         "restart-safe — a task claimed by the stopped process is reclaimable after "
         "ten minutes, and the eval runs it started are EVAL_RUN rows"
+    ),
+    "resume_system_updates": (
+        "online update (OU-1): resumes a `preparing` system_updates row's build from its "
+        "checkpoints (listed as system_update_prepare) and reads the updater's apply.result"
     ),
 }
 
@@ -316,6 +324,12 @@ def collect_inflight(
         add(ASSISTANT_PREPARATION, r.id, r.workspace_id, "preparing",
             f"architect conversation {r.title} — preparation claim cleared, retry it",
             r.updated_at, CLEARED_RETRY, "clear_stale_turn_claims")
+
+    for r in reader.rows(SystemUpdate, ["id", "kind", "target_sha", "status", "updated_at"],
+                         lambda m: m.status == SYSTEM_UPDATE_PREPARING):
+        add(SYSTEM_UPDATE_PREPARE, r.id, None, r.status,
+            f"console {r.kind} to {r.target_sha[:12]} — the build resumes from its last step",
+            r.updated_at, RESUMES, "resume_system_updates")
 
     if skipped is not None:
         skipped.extend(reader.skipped)

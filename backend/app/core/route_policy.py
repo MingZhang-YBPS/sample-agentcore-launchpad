@@ -1612,3 +1612,21 @@ PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
     ("GET", "/api/storage-mounts/projects/{project_id}"),
     ("PUT", "/api/storage-mounts/projects/{project_id}"),
 })
+
+# ---- online console update (docs/design online-update §2.6, OU-1) ----
+# Hub-global: the console's own code, not any workspace's or project's data. Everything
+# is ADMIN (it builds and restarts the platform) except the version read the footer
+# shows every member. The source repository / branch is configuration, never a body.
+SYSTEM_UPDATE_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/system/version"): MEMBER,
+    ("GET", "/api/system/update"): ADMIN,
+    ("POST", "/api/system/update/check"): ADMIN,
+    ("POST", "/api/system/update/prepare"): ADMIN,
+    ("POST", "/api/system/update/rollback"): ADMIN,
+    ("POST", "/api/system/update/{update_id}/schedule"): ADMIN,
+    ("POST", "/api/system/update/{update_id}/cancel"): ADMIN,
+    ("GET", "/api/system/update/{update_id}/log"): ADMIN,
+}
+ROUTE_POLICY.update(SYSTEM_UPDATE_ROUTES)
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/system")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SYSTEM_UPDATE_ROUTES)
