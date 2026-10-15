@@ -148,6 +148,9 @@ An SSO account has no local password: its password cannot be reset or changed in
 console. Its global role and project memberships follow the provider's group mappings
 at every sign-in; changes an administrator makes by hand take precedence.
 
+Step-by-step provider guides: [IAM Identity Center (SAML 2.0)](sso-identity-center.md)
+and [Keycloak (OIDC or SAML 2.0)](sso-keycloak.md).
+
 ### Roles: what a member can do / 成员权限
 
 There are two roles, and since 2026-08-11 they differ in exactly one place:

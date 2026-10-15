@@ -124,6 +124,16 @@ def isolated_config_file(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_background_retag(monkeypatch):
+    # A project rename / transfer / cost-tag change starts its re-tag run after the
+    # commit (cost_tags.start_queued). The run calls AWS tagging APIs, so a hermetic
+    # test never starts one; tests of the run call execute_backfill_job themselves.
+    from app.services import cost_tags
+
+    monkeypatch.setattr(cost_tags, "start_backfill_async", lambda job_id: None)
+
+
+@pytest.fixture(autouse=True)
 def reset_aws_client_cache():
     # Tests that stub aws_clients.get_session still populate the module-level
     # client cache; a fake cached under a real key must not leak across tests.

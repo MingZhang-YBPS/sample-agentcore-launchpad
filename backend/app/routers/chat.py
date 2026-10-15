@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import Field
+from pydantic import BaseModel, Field
 from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,10 @@ from app.templates import gateway_support
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
+class ToolApprovalsIn(BaseModel):
+    approved: list[str] = Field(default_factory=list, max_length=50)
+
+
 class ChatRequest(AttachmentRequest):
     session_id: str | None = SessionIdField
     # "Invoke as me" for JWT-inbound agents (identity P3): True presents the
@@ -54,6 +58,16 @@ class ChatRequest(AttachmentRequest):
     # strands-builder SB-2 tool hooks: the approval-list tools the user approved on
     # the chat's approval card for this turn (one entry = one call)
     approved_tools: list[str] | None = Field(default=None, max_length=50)
+    # the same, in the shape the console chat sends (`{approved: [tool]}`)
+    tool_approvals: ToolApprovalsIn | None = None
+
+    def approved(self) -> list[str] | None:
+        """Every approved tool name of the turn, from either field (None: none sent)."""
+        if self.approved_tools is None and self.tool_approvals is None:
+            return None
+        names = [*(self.approved_tools or []),
+                 *(self.tool_approvals.approved if self.tool_approvals else [])]
+        return list(dict.fromkeys(names))[:50]
 
 
 def _turn_tool_approvals(agent: Agent, approved: list[str] | None) -> dict[str, Any] | None:
@@ -373,7 +387,7 @@ def chat(
     workspace_id = ws.id
     workspace = ws.context
     timeout_s = (agent.spec or {}).get("timeout_seconds")
-    tool_approvals = _turn_tool_approvals(agent, req.approved_tools)
+    tool_approvals = _turn_tool_approvals(agent, req.approved())
 
     def run(stop: StopSignal) -> Iterator[dict[str, Any]]:
         # the worker's own context: the invoke reads the turn's approvals from it

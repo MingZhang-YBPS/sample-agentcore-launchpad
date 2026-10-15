@@ -26,7 +26,7 @@ from app.core.errors import (
 )
 from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import recommendations, service
+from app.evaluation import recommendations, run_cost, service
 from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
 from app.evaluation.online_evaluators import require_visible_evaluators
 from app.evaluation.queue import run_queue
@@ -1514,6 +1514,8 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         # additive: an operator stop is pending on this run (in-memory flag;
         # the row turns `stopped` once the poller/worker observes it)
         "stop_requested": service.stop_requested(run.id),
+        # eval-cost §1.3: {usd, kind (actual / live / estimate), estimate_usd}
+        "cost": run_cost.summary(run),
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "updated_at": run.updated_at.isoformat() if run.updated_at else None,
         **creators.fields(run),
@@ -1728,6 +1730,12 @@ def create_run(
             db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=items,
             evaluators=applied, repeats=req.repeats,
         )
+    elif req.mode == "evaluators" and (req.session_ids or req.lookback_hours):
+        # eval-cost §1.1: a passive run (picked sessions or a look-back window) is
+        # priced and held to the same limits — nothing is invoked, the judges are
+        cost_estimate = _passive_estimate(db, ws, agent, req, applied)
+    if cost_estimate is not None:
+        from app.dlc import cost as cost_svc
         from app.routers.auth import require_identity
 
         cost_svc.assert_allowed(
@@ -1769,6 +1777,29 @@ def create_run(
         confirm_storage=req.confirm_storage,
     )
     return _run_out(run)
+
+
+def _passive_estimate(
+    db: Session, ws: WorkspaceScope, agent: Agent | None, req: Any, evaluators: list[str],
+) -> dict[str, Any]:
+    """The estimate of judging existing sessions: the picked ones, or as many as the
+    agent's last 7 days put in the look-back window. The agent's criteria price
+    their judge calls (as on the wizard's card, `POST /api/eval/runs/estimate`)."""
+    from app.dlc import cost as cost_svc
+    from app.dlc import criteria as criteria_svc
+
+    rows = []
+    if agent is not None:
+        cset = criteria_svc.agent_set(db, ws.id, agent.id)
+        rows = criteria_svc.criteria_of(db, cset.id) if cset else []
+    sessions = (len(set(req.session_ids)) if req.session_ids else
+                cost_svc.window_sessions(db, agent, ws.context, hours=req.lookback_hours))
+    out = cost_svc.estimate(
+        db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=[],
+        evaluators=evaluators, criteria_rows=rows, scope="passive", sessions=sessions,
+    )
+    out["sessions_basis"] = "given" if req.session_ids else "history_7d"
+    return out
 
 
 def _golden_lineage(db: Session, ws: WorkspaceScope, dataset_id: str) -> dict[str, Any]:

@@ -2154,3 +2154,15 @@ PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
 })
 ADMIN_SPLIT.update({key: ADMIN_DATA for key, role in CUSTOM_TOOL_ROUTES.items()
                     if role == ADMIN})
+
+# ---- W12-BE: the cost-tag back-fill (cost-tags §1.3, CT-1's job) ----
+# Workspace configuration like the activation beside it (project-exempt): one run
+# tags every project's resources in the workspace and its view lists them, so it is
+# the administrators' and data (a steward does not).
+COST_TAG_BACKFILL_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/cost-tags/backfill"): ADMIN,
+    ("GET", "/api/cost-tags/backfill"): ADMIN,
+}
+ROUTE_POLICY.update(COST_TAG_BACKFILL_ROUTES)
+PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset(COST_TAG_BACKFILL_ROUTES)
+ADMIN_SPLIT.update(dict.fromkeys(COST_TAG_BACKFILL_ROUTES, ADMIN_DATA))

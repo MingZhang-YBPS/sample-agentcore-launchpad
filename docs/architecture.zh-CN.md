@@ -494,13 +494,13 @@ RECOMMEND 背后的系统提示词生成器是一个 **provider**
 `*.py.tmpl` 模板）;spec 字段是 `backend/app/schemas/agent.py` 里的
 `AgentSpec.toolkits`。
 
-### Strands 方式——构建选项（SB-1、SB-2）
+### Strands 方式——构建选项（SB-1、SB-2、SB-3）
 
 Strands 方式（`zip_runtime`，平台生成的模板）在原有的模型、提示词、工具、知识库、技能、记忆、护栏、环境变量、限额、A2A、挂载与网络之外，开放了 Strands Agents SDK 的一部分精选能力。所有字段都是可选的，且只适用于 `zip_runtime`（不能与自带源码的 `code` / `code_bundle` 同用）；一个都没设置的 spec 生成的代码逐字节不变（快照测试）。字段定义与校验在 `backend/app/schemas/strands_builder.py`；生成的支持代码在 `backend/app/templates/strands_agent/builder_support.py.tmpl`。
 
 | 能力 | spec 字段 | 生成的 Agent 做什么 | 限制 |
 |---|---|---|---|
-| 内置工具 | `strands_tools[]`、`strands_tool_config` | 导入所选的 `strands-agents-tools`（锁定 `0.8.3`，自动加入 `requirements.txt`）：`current_time`、`calculator`、`http_request`、`think`、`retrieve`、`image_reader`、`journal`。它们替换模板自带的 `calculator` / `current_utc_time` | `http_request` 需要 `strands_tool_config.http_request.allowed_hosts`（主机名或 `*.host`；为空则拒绝该工具）。`retrieve` 只检索 Agent 已挂载的知识库（必须先挂载）。`journal` 写在运行时的临时目录下。不提供 `shell`、`python_repl`、`file_write`、`use_aws`（需要沙箱） |
+| 内置工具 | `strands_tools[]`、`strands_tool_config` | 导入所选的 `strands-agents-tools`（锁定 `0.8.3`，自动加入 `requirements.txt`）：`current_time`、`calculator`、`http_request`、`think`、`retrieve`、`image_reader`、`journal`。它们替换模板自带的 `calculator` / `current_utc_time` | `http_request` 需要 `strands_tool_config.http_request.allowed_hosts`（主机名或 `*.host`；为空则拒绝该工具）。`retrieve` 只检索 Agent 已挂载的知识库（必须先挂载）。`journal` 写在运行时的临时目录下。这里不提供 `shell`、`python_repl`、`file_write`、`use_aws`——它们是下面的沙箱工具 |
 | 模型参数 | `model_params{temperature, top_p, max_tokens, stop_sequences[], thinking_budget_tokens, prompt_caching}` | 每次模型调用时传入；`thinking_budget_tokens` 开启 Claude extended thinking，`prompt_caching` 开启 SDK 的自动缓存点（系统提示词与工具定义） | 取值范围由 schema 校验；thinking 仅限 Claude 模型 |
 | 对话管理 | `conversation{strategy: sliding_window\|summarizing, window_size, summary_model?}` | 滑动窗口（默认 40，与之前一致），或保留最近 `window_size` 条原文、摘要更早轮次的管理器 | `summary_model` 是 Bedrock 模型，仅用于 `summarizing`；Agent 的执行角色在自身模型之外也获得它的调用权限（`agent_iam.allowed_model_resources`） |
 | 结构化输出 | `output_schema`（JSON Schema 对象） | 在文本之外返回解析后的对象：运行时的 `complete` 事件带 `structured`，控制台流与 `/v1` SSE 发送 `structured` 事件（`{value}`），`/v1` 同步调用返回 `structured` 字段 | 必须是 object schema，每个对象最多 5 层、50 个属性，不超过 20000 个字符。不能与 `protocol: a2a` 同用，也不能与 PII 护栏同用（护栏只筛查文本；调用层对启用护栏的 Agent 也会丢弃 `structured`） |
@@ -509,8 +509,10 @@ Strands 方式（`zip_runtime`，平台生成的模板）在原有的模型、�
 | 模型提供方 | `model_provider{kind: anthropic\|litellm, connection, base_url?}`（此时 `model_id` 是提供方的模型名） | `AnthropicModel`，或指向 LiteLLM 网关 `base_url` 的 `OpenAIModel`。API 密钥在运行时经令牌保管库从一个 `api_key` 类型的连接读取（缓存 5 分钟）；spec 里从不保存密钥。提供方的模型名写死在代码里，项目级 `LAUNCHPAD_MODEL_ID` 不会替换它 | `litellm` 必须填 `base_url`。仅限 Bedrock 模型来源的 HTTP Agent：`protocol: a2a`、Mantle、extended thinking 或提示词缓存时都会被拒绝 |
 | 工具调用守卫 | `tool_hooks{approval_tools[], max_tool_calls_per_turn, log_tool_calls, mask_args[]}` | Strands hooks：审批列表里的工具（名称或 `*` 模式）在控制台对话中被暂停——流中出现 `approval_required`（`tool`、`tool_use_id`、已脱敏的 `input`），对话显示审批卡片；点“批准”会以 `tool_approvals.approved = [tool]` 发送下一轮，一个名字只放行一次调用。其他调用方（`/v1`、评估、A2A 对端、其他 Agent）一律被拒绝（`approval_refused`）。另有每轮工具调用上限（每轮重置），以及每次调用一行脱敏的 `[launchpad-tool]` 日志 | 审批列表 ≤ 50 项；上限 1–500。`mask_args` 中列出的参数（以及内置的 password / secret / token / api_key / authorization）在日志和审批卡片里显示为 `***` |
 | 限流重试 | `retry{max_attempts, initial_delay_s, max_delay_s}` | Strands `ModelRetryStrategy`：被限流的模型调用按指数退避阶梯重试 | 1–10 次，初始等待 1–60 秒，最长等待 1–600 秒且不小于初始等待 |
+| 自定义 Python 工具 | `custom_tools[{name, description, code, requirements[], execution: runtime\|code_interpreter}]` | 每一项是在向导里写的一个 `@tool` 函数。`runtime`：作为 `custom_tools/<name>.py` 打进 zip，启动时导入（锁定版本的 `name==version` 依赖加入 `requirements.txt`）；`code_interpreter`：把源码和本次调用的参数发给 AgentCore Code Interpreter 执行，每次调用一个全新的命名空间。加载失败的工具变成一个返回错误的占位工具 | 不运行代码的静态检查（`schemas/custom_tool_code.py`）：恰好一个与工具同名的顶层 `@tool` 函数、受支持的类型注解、字面量默认值。允许列表之外的 import、`os.system` 一类调用、`eval` / `exec`、计算出的 `getattr`、会话目录之外的 `open()`、dunder 逃逸、导入时执行的代码以及每个声明的依赖都会成为发现项：这样的版本需要管理员按代码哈希批准这一确切版本（`/api/custom-tools/approvals`，按项目），保存 Agent 时检查，部署的生成阶段再查一次。沙箱中运行的工具不能声明依赖 |
+| 沙箱工具 | `sandbox_tools[]` ⊆ `python_repl`、`shell`、`file_write`、`use_aws` | 只在 AgentCore Code Interpreter 中运行（按需开会话，失败时换新会话重试一次），从不在运行时上执行；`use_aws` 校验服务名与操作名，用沙箱自己的角色在沙箱内运行 boto3。执行角色获得 Code Interpreter 的操作权限（与 `code-interpreter` 内置工具相同） | 由工作空间沙箱设置（`/api/custom-tools/sandbox`，管理员）逐个开放，并可指定工作空间自己的 Code Interpreter（`code_interpreter_id`，保存与部署时由服务端写入；客户端传来的 id 会被丢弃）。设置未开放的工具在保存时被拒绝（`422 custom_tool.sandbox_tool_not_allowed`） |
 
-SB-2 字段只在至少设置了一个时才额外生成支持文件（`builder_sb2.py.tmpl`），因此 SB-1 的 spec 生成的代码仍逐字节不变。在控制台中，V2 与 V3 对话页把 `approval_required` 显示为审批卡片（工具名与脱敏后的输入，“批准”/“拒绝”）；“拒绝”不发送任何内容，该调用不会执行。新建 Agent 选择页的能力对比在“Strands 构建选项”下列出这些能力。
+SB-2 字段只在至少设置了一个时才额外生成支持文件（`builder_sb2.py.tmpl`），因此 SB-1 的 spec 生成的代码仍逐字节不变；SB-3 字段同样只在设置时于其后生成 `builder_sb3.py.tmpl`，SB-2 的 spec 也逐字节不变。在控制台中，V2 与 V3 对话页把 `approval_required` 显示为审批卡片（工具名与脱敏后的输入，“批准”/“拒绝”）；“拒绝”不发送任何内容，该调用不会执行。新建 Agent 选择页的能力对比在“Strands 构建选项”下列出这些能力。
 
 **实验。** 生成的代码每次请求都从配置包读取 `model_params`、`conversation`、`few_shot_examples` 与 `prompt_variables`（键名相同），因此可以在 A/B 实验中对比：实验的对照配置包带 Agent 已保存的值，实验组配置包带同样的值再叠加实验组的覆盖（`optimization/service.py` 的 `stage_bundles`、`BUNDLE_CONFIG_KEYS`）。一个都没设置的 Agent，配置包请求与之前相同。
 

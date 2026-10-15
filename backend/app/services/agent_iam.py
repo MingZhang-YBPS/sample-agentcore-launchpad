@@ -43,6 +43,7 @@ from app.schemas.agent import (
     AgentSpec,
     byoc_model_target,
 )
+from app.schemas.strands_builder import uses_code_interpreter
 from app.services.workspace import WorkspaceContext
 
 logger = logging.getLogger(__name__)
@@ -741,7 +742,8 @@ def policy_document(
 
     # ---- builtin tools ----
     builtins = _builtin_names(spec)
-    if BUILTIN_CODE_INTERPRETER in builtins:
+    # SB-3: the sandboxed tools and Code Interpreter custom tools open sessions too
+    if BUILTIN_CODE_INTERPRETER in builtins or uses_code_interpreter(spec):
         statements.append({
             "Sid": "AgentCoreCodeInterpreter",
             "Effect": "Allow",
@@ -1146,6 +1148,13 @@ def provision_execution_role(
     boundary = _project_boundary(agent, spec, workspace, iam, log)
     arn = ensure_role(iam, agent, spec, ctx, log, boundary=boundary)
     name = role_name_for(agent.name, agent.id)
+    # cost-tags §1.2: the role carries the agent's cost tags, set on every provision
+    # (create and update); best-effort, never fails the deploy. Late import: cycle.
+    from app.services import cost_tags
+
+    cost_tags.tag_quietly(_IamWorkspace(workspace, iam),
+                          cost_tags.entry(cost_tags.IAM_ROLE, name=name),
+                          cost_tags.agent_tags(agent, workspace.id), log)
     detail = f"iam role · {name}"
     if fs_policy_document(spec):
         detail += f" (+ {fs_policy_name(agent.name)})"
@@ -1153,6 +1162,19 @@ def provision_execution_role(
         detail += f" · boundary {boundary.label}"
         _record_isolation_applied(agent, boundary.label)
     return arn, detail
+
+
+class _IamWorkspace:
+    """The workspace with the provision stage's own IAM client (tests inject one)."""
+
+    def __init__(self, workspace: WorkspaceContext, iam: Any) -> None:
+        self._workspace = workspace
+        self._iam = iam
+
+    def client(self, service: str, *args: Any, **kwargs: Any) -> Any:
+        if service == "iam":
+            return self._iam
+        return self._workspace.client(service, *args, **kwargs)
 
 
 def _refuse_shared_role_if_isolated(project_id: str | None) -> None:

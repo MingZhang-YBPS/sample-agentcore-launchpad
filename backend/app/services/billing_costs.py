@@ -129,6 +129,12 @@ def update_custom_tags(db: Session, identity: Any, row: Project, tags: Any) -> P
     # a project setting: journalled as one (`project.update`), naming the keys only
     projects_svc._journal(db, identity, "project.update",
                           f"project:{row.id} cost_tags:{','.join(sorted(clean)) or '-'}")
+    # the custom tags are on every resource of the project (cost-tags §1.3): re-tag,
+    # started after the caller's commit (`cost_tags.start_queued`)
+    from app.services import cost_tags
+
+    cost_tags.schedule_retag(db, project_id=row.id, reason="project_update",
+                             **projects_svc._retag_actor(identity))
     return row
 
 

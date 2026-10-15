@@ -176,22 +176,26 @@ def _project_cost_value(
 ) -> tuple[float | None, str]:
     """A budget rule's value: the project's month-to-date spend in every workspace it
     is bound to (`workspace` is the rule's own; the others are rebuilt from their ids)."""
+    from app.services import project_quotas
     from app.services.workspace import context_for_workspace
 
     total = 0.0
     parts = []
+    # the project's budget basis (CT-2): the estimate, or what AWS billed
+    basis = "month-to-date estimate from the price map"
     for ws_id in _project_workspaces(db, project_id):
         try:
             ctx = workspace if ws_id == workspace.id else context_for_workspace(ws_id)
         except Exception as exc:  # noqa: BLE001
             return None, f"could not read workspace {ws_id}: {type(exc).__name__}"
         several = _several_projects(db, ws_id)
-        usd, detail = _cost_value(db, ctx, project_id if several else None)
+        usd, detail = project_quotas.budget_spend(db, ctx, project_id, several=several)
         if usd is None:
             return None, f"{ws_id}: {detail}"
+        basis = detail
         total += usd
         parts.append(f"{ws_id} ${usd:.2f}")
-    return round(total, 4), "month-to-date estimate from the price map" + (
+    return round(total, 4), basis + (
         f" ({', '.join(parts)})" if len(parts) > 1 else "")
 
 

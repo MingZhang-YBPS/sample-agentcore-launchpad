@@ -125,6 +125,8 @@ HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默�
 
 SSO 账户没有本地密码：控制台中不能重置或修改它的密码。它的全局角色与项目成员资格在每次登录时按提供方的组映射更新；管理员手工做的修改优先。
 
+分步配置指南：[IAM Identity Center（SAML 2.0）](sso-identity-center.zh-CN.md)、[Keycloak（OIDC 或 SAML 2.0）](sso-keycloak.zh-CN.md)。
+
 ### 角色:成员能做什么
 
 只有两个角色,自 2026-08-11 起两者只差一处:**用户管理**(`/users`)仅限管理员,

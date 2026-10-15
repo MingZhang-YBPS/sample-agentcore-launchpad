@@ -6,6 +6,9 @@ Three surfaces, the logic in `services/billing_costs.py`:
   state, and the one-click activation (administrators; an organization member
   account gets 409 with the management account to ask). Workspace-scoped, no
   project: activation is the account's billing configuration.
+* `/api/cost-tags/backfill` — the workspace-wide back-fill run (CT-1's resumable job
+  `cost_tags_backfill`, §1.3): start one, read the latest with its coverage
+  (administrators, data: it lists every project's resources).
 * `/api/costs/billing` — what AWS billed per `launchpad:project`, next to the
   estimate of `/api/costs` and classified like it (administrators, cost detail).
 * `/api/projects/{project_id}/cost-tags` and `/budget-basis` — a project's custom
@@ -25,7 +28,7 @@ from app.routers.alerts import _bound_project
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import billing_costs as svc
-from app.services import project_quotas
+from app.services import cost_tags, project_quotas
 from app.services import projects as projects_svc
 
 router = APIRouter(prefix="/api", tags=["cost-tags"])
@@ -105,6 +108,39 @@ def get_billing_costs(
     return report
 
 
+# ── back-fill (cost-tags §1.3, CT-1's resumable job `cost_tags_backfill`) ─────
+
+
+@router.post("/cost-tags/backfill")
+def start_cost_tag_backfill(
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Run the workspace-wide back-fill: every ledger agent's resources and the
+    workspace infrastructure get the standard tag set. An identical run still queued
+    is reused; the view of the run is answered at once."""
+    from app.services.audit import record_audit_event
+
+    identity = require_identity(request)
+    job = cost_tags.start_backfill(db, identity, ws.id)
+    record_audit_event(workspace_id=ws.id, actor=identity.username,
+                       action="cost_tags.backfill", target=job.id, db=db)
+    db.commit()
+    cost_tags.start_backfill_async(job.id)
+    return cost_tags.run_view(job)
+
+
+@router.get("/cost-tags/backfill")
+def get_cost_tag_backfill(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The tag set and the workspace's latest workspace-wide run with its coverage
+    and the resources not tagged (`run` is null before the first)."""
+    return cost_tags.backfill_view(db, ws.id)
+
+
 # ── per project ───────────────────────────────────────────────────────────────
 
 
@@ -134,6 +170,7 @@ def put_project_cost_tags(
     row = projects_svc.get_project(db, project_id)
     svc.update_custom_tags(db, require_identity(request), row, body.cost_tags)
     db.commit()
+    cost_tags.start_queued(db)
     return _project_view(row)
 
 
