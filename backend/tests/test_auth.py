@@ -1,6 +1,7 @@
 """Optional local username/password session authentication."""
 
 import time
+from unittest.mock import ANY
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +40,7 @@ class TestAuthDisabled:
             "account_expires_at": None,
             "permissions": [],
             "builtin": False,
+            "version": {"sha": ANY},
         }
 
     def test_registration_is_refused_while_the_gate_is_open(self, client):
@@ -88,6 +90,7 @@ class TestAuthEnabled:
             "account_expires_at": None,
             "permissions": [],
             "builtin": False,
+            "version": {"sha": ANY},
         }
         response = auth_client.post(
             "/api/auth/login",

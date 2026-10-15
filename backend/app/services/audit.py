@@ -51,8 +51,13 @@ STRUCTURE_ACTIONS = frozenset({
     "admin.grant", "admin.revoke",
     "user.sessions.revoke",
     "project.transfer",
+    "project.quotas.update",
 })
-STRUCTURE_ACTION_PREFIXES = ("group.members.", "group.projects.", "department.")
+# `system.update.*` — the platform's online update (online-update §5); `steward.*` —
+# a structure-only administrator's membership changes and two-person requests (§11.4)
+STRUCTURE_ACTION_PREFIXES = (
+    "group.members.", "group.projects.", "department.", "system.update.", "steward.",
+)
 
 
 def is_structure_action(action: str) -> bool:
@@ -60,6 +65,31 @@ def is_structure_action(action: str) -> bool:
         action.startswith(STRUCTURE_ACTION_PREFIXES)
         and not action.endswith(".")
     )
+
+
+# What a steward (§11.4) reads in `GET /api/audit`: the structure journal above, plus
+# the other platform-shape events it may cause itself — accounts, a workspace's tier,
+# the network / storage catalogues. Never a data event (an agent, a release, a storage
+# write confirmation naming an agent).
+STEWARD_VISIBLE_ACTIONS = STRUCTURE_ACTIONS | {
+    "user.create", "user.update", "user.delete", "workspace.tier_change",
+    "storage.register", "storage.check", "storage.project_set", "storage.update",
+    "storage.archive",
+}
+STEWARD_VISIBLE_PREFIXES = (*STRUCTURE_ACTION_PREFIXES, "network_profile.")
+
+
+def steward_visible(action: str) -> bool:
+    return action in STEWARD_VISIBLE_ACTIONS or (
+        action.startswith(STEWARD_VISIBLE_PREFIXES) and not action.endswith(".")
+    )
+
+
+def steward_clause():
+    """`steward_visible` as a WHERE clause on `audit_events.action`."""
+    # the prefixes carry no LIKE wildcard (`[a-z_.]` only)
+    return or_(AuditEvent.action.in_(sorted(STEWARD_VISIBLE_ACTIONS)),
+               *(AuditEvent.action.like(f"{p}_%") for p in STEWARD_VISIBLE_PREFIXES))
 
 
 def record_audit_event(
@@ -162,10 +192,11 @@ def record_refusal(
 
 # ── the project's audit view (design §11.6) ───────────────────────────────────
 
-# a project's own rows, plus the structure rows naming it: `project.*` / `share.*`
+# a project's own rows, plus the structure rows naming it: `project.*` / `share.*` /
+# `steward.*`
 # actions whose target holds `project:<id>` as a whole token (`project:a` must not
 # match `project:a-b`) — at the end, before a space, a comma or a transfer's `->`
-STRUCTURE_FAMILIES = ("project.", "share.")
+STRUCTURE_FAMILIES = ("project.", "share.", "steward.")
 _TOKEN_ENDINGS = ("", " %", ",%", "->%")
 
 

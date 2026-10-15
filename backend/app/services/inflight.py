@@ -94,10 +94,9 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
         "restart-safe — a task claimed by the stopped process is reclaimable after "
         "ten minutes, and the eval runs it started are EVAL_RUN rows"
     ),
-    "resume_system_updates": (
-        "online update (OU-1): resumes a `preparing` system_updates row's build from its "
-        "checkpoints (listed as system_update_prepare) and reads the updater's apply.result"
-    ),
+    # online update (OU-1): resumes a `preparing` system_updates row's build from its
+    # checkpoints and reads the updater's apply.result
+    "resume_system_updates": (SYSTEM_UPDATE_PREPARE,),
 }
 
 # Subsystems that fail an interrupted row only when it is next read — a startup

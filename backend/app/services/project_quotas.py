@@ -301,7 +301,7 @@ def update_quotas(db: Session, identity: Any, row: Project, quotas: dict[str, An
     from app.services import alerts
 
     alerts.sync_budget_rule(db, row.id)
-    # a settings change like any other (`project.update`); the target names the quotas
-    projects_svc._journal(db, identity, "project.update",
+    # its own structure action; the target names the project and the quotas changed
+    projects_svc._journal(db, identity, "project.quotas.update",
                           f"project:{row.id} quotas:{','.join(changed)}")
     return row
