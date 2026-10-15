@@ -13995,5 +13995,123 @@
     "models.open": "Open model settings",
     "network.open": "Open network profiles",
     "storage.open": "Open storage"
+  },
+  "strandsBuilder": {
+    "group": {
+      "basics": "Basics",
+      "basicsWhen": "Name, instructions, protocol and model — every agent needs these.",
+      "tools": "Tools",
+      "toolsWhen": "What the agent can do beyond answering: built-in tools, Gateway, Identity, Skills and knowledge.",
+      "behaviour": "Model behaviour",
+      "behaviourWhen": "Tune how the model answers: sampling, thinking, caching and prompt templates.",
+      "output": "Conversation & output",
+      "outputWhen": "How much history the agent keeps, and whether it also returns a structured answer.",
+      "advanced": "Advanced",
+      "advancedWhen": "Inbound auth and file storage — leave as is unless you know you need them."
+    },
+    "needsAttention": "Needs attention",
+    "remove": "Remove",
+    "tools": {
+      "label": "Strands built-in tools",
+      "hint": "Curated from strands-agents-tools. None picked: the agent keeps the template's calculator and current_utc_time.",
+      "replaceNote": "Picked tools replace the template's calculator and current_utc_time.",
+      "sandboxNote": "shell, python_repl, file_write and use_aws need a sandbox and are not offered yet.",
+      "retrieveNoKb": "Mount a knowledge base below first — retrieve searches the agent's own.",
+      "retrieveA2a": "A2A agents carry no knowledge base, so retrieve is not available.",
+      "hostsLabel": "Allowed hosts for http_request",
+      "hostsHint": "Host names only, comma separated; *.example.com covers its subdomains. Redirects are not followed.",
+      "hostsNone": "No host — the tool would reach nothing, so it is refused",
+      "when": {
+        "current_time": "Questions about today, deadlines or time zones.",
+        "calculator": "Exact arithmetic, algebra and unit math instead of guessing.",
+        "http_request": "Call a public or partner API on hosts you allow.",
+        "think": "Hard, multi-step problems that benefit from a few reflection passes.",
+        "retrieve": "Pull passages from a mounted knowledge base by query.",
+        "image_reader": "Read an image file the agent was given and describe it.",
+        "journal": "Keep running notes or a task log across turns of a session."
+      }
+    },
+    "params": {
+      "title": "Inference parameters",
+      "sub": "Blank = the model's own default. Part of the config bundle, so an experiment can compare them.",
+      "temperature": "Temperature",
+      "temperatureWhen": "Lower for consistent, factual answers; higher for varied wording.",
+      "topP": "Top P",
+      "topPWhen": "An alternative to temperature — Claude takes one of the two.",
+      "maxTokens": "Max output tokens",
+      "maxTokensWhen": "Cap a single reply; raise it for long reports.",
+      "modelDefault": "model default",
+      "stop": "Stop sequences",
+      "stopWhen": "One per line, up to 4 — the model stops when it writes one.",
+      "mantleNote": "Stop sequences, extended thinking and prompt caching are Bedrock Converse options — not available on Bedrock Mantle.",
+      "thinking": "Extended thinking",
+      "thinkingWhen": "Claude reasons step by step before answering — better on hard problems, slower and costlier.",
+      "thinkingClaudeOnly": "Claude models only — pick a Claude model in Basics to use it.",
+      "caching": "Prompt caching",
+      "cachingWhen": "Long system prompt or many tools, many turns: cached prefix cuts cost and latency.",
+      "budget": "Thinking budget (tokens)",
+      "budgetWhen": "At least 1024. The reply gets room on top of this budget."
+    },
+    "prompt": {
+      "title": "Prompt template",
+      "sub": "Variables and examples are applied to the system prompt on every request; a config bundle can still override the prompt.",
+      "variables": "Template variables",
+      "variablesWhen": "Write {{ph}} in the instructions to fill it per request: the call's context first, then the runtime env, then the default here.",
+      "found": "In your instructions:",
+      "varName": "Variable name",
+      "varDefault": "Default value",
+      "addVariable": "Add variable",
+      "fewShot": "Few-shot examples",
+      "fewShotWhen": "Show a few question / answer pairs when the answer's format or tone matters.",
+      "question": "Question",
+      "answer": "Answer",
+      "addExample": "Add example"
+    },
+    "output": {
+      "title": "Conversation & structured output",
+      "sub": "How the conversation is trimmed as it grows, and an optional structured answer.",
+      "conversation": "Conversation history",
+      "strategy": {
+        "default": "Default (40 messages)",
+        "sliding_window": "Sliding window",
+        "summarizing": "Summarizing"
+      },
+      "when": {
+        "default": "What every agent gets today: the last 40 messages are kept.",
+        "sliding_window": "Short tasks or tight budgets: keep only the most recent messages.",
+        "summarizing": "Long sessions where early details still matter: older turns are summarised, recent ones kept."
+      },
+      "window": "Messages kept",
+      "keepRecent": "Recent messages kept verbatim",
+      "windowWhen": "2 – 1000. Fewer messages, fewer tokens per turn.",
+      "summaryModel": "Summary model (optional)",
+      "summaryModelWhen": "A cheaper Bedrock model for the summaries; blank uses the agent's model.",
+      "summaryModelPlaceholder": "e.g. us.amazon.nova-lite-v1:0",
+      "schema": "Structured output (JSON Schema)",
+      "schemaWhen": "When a program reads the answer: /v1 returns it as `structured` next to the text answer.",
+      "schemaA2a": "A2A agents answer in A2A message parts — structured output is not available.",
+      "schemaEmpty": "No schema — text answers only",
+      "schemaOk": "valid · {{fields}}",
+      "example": "Insert example"
+    },
+    "err": {
+      "httpHosts": "Add at least one allowed host. {{detail}}",
+      "retrieve": "retrieve needs a mounted knowledge base.",
+      "temperature": "Temperature must be between 0 and 1.",
+      "topP": "Top P must be between 0 and 1.",
+      "maxTokens": "Max output tokens must be a whole number from 1 to 131072.",
+      "stopSequences": "Up to 4 stop sequences, each at most 100 characters.",
+      "thinkingBudget": "The thinking budget must be a whole number from 1024 to 131072.",
+      "thinkingTemperature": "Extended thinking cannot be combined with a temperature — clear it.",
+      "thinkingTopP": "Extended thinking needs Top P of at least 0.95 (or none).",
+      "thinkingMaxTokens": "Max output tokens must be larger than the thinking budget.",
+      "claudeBoth": "Claude models take temperature or Top P, not both — clear one of them.",
+      "windowSize": "Messages kept must be a whole number from 2 to 1000.",
+      "outputSchema": "Schema: {{detail}}",
+      "outputSchemaA2a": "A2A agents cannot return structured output — clear the schema.",
+      "outputSchemaGuardrail": "Structured output cannot be combined with PII protection yet.",
+      "variables": "Variable names start with a letter or _ and are unique (at most 20). {{detail}}",
+      "fewShot": "Every example needs both a question and an answer (at most 10)."
+    }
   }
 }

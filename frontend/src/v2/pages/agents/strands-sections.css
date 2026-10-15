@@ -1,0 +1,283 @@
+/* Strands builder groups (strands-builder SB-1).
+ *
+ * The configure step reads like a channel strip: five numbered groups, each
+ * a head you can scan closed — index, name, one line of "when to use", and a
+ * mono readout of what the group holds — and open into the cards. Colour stays
+ * a signal (V2 tokens, re-pointed at the V3 palette when hosted): the primary
+ * line marks the open group and selected tools, a lit lamp marks what is ON,
+ * the danger tone marks only what blocks the deploy.
+ */
+
+.sb-groups { display: grid; gap: 10px; }
+
+.sb-group {
+  position: relative;
+  border: 1px solid var(--v2-line);
+  border-radius: var(--v2-radius);
+  background: var(--v2-card);
+  box-shadow: var(--v2-shadow);
+  transition: border-color 160ms ease;
+}
+/* the channel's spine: line → primary when open → danger when it blocks */
+.sb-group::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--v2-line);
+  transition: background-color 160ms ease;
+}
+.sb-group.open::before { background: var(--v2-primary); }
+.sb-group.flagged { border-color: var(--v2-danger-line); }
+.sb-group.flagged::before { background: var(--v2-danger); }
+
+.sb-group-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 18px 14px 20px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--v2-radius);
+}
+.sb-group-head:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: -2px; }
+.sb-group-head:hover .sb-title { color: var(--v2-primary); }
+
+.sb-idx {
+  font-family: var(--v2-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--v2-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.sb-group.open .sb-idx { color: var(--v2-primary); }
+
+.sb-head-text { display: grid; gap: 2px; min-width: 0; }
+.sb-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--v2-ink);
+  /* the V3 display face is a variable Archivo: instrument labelling runs wide */
+  font-variation-settings: "wdth" 112;
+  transition: color 120ms ease;
+}
+.sb-when { font-size: 12.5px; color: var(--v2-ink-3); }
+
+.sb-readout {
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--v2-mono);
+  font-size: 12px;
+  color: var(--v2-ink-2);
+  padding: 2px 8px;
+  border: 1px solid var(--v2-line);
+  border-radius: 999px;
+  background: var(--v2-fill);
+}
+.sb-group.open .sb-readout { visibility: hidden; }
+.sb-flag {
+  font-size: 12px;
+  color: var(--v2-danger-ink);
+  background: var(--v2-danger-soft);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.sb-chev { color: var(--v2-ink-3); transition: transform 200ms ease; }
+.sb-group.open .sb-chev { transform: rotate(180deg); }
+
+/* open/close: the row track animates from 0fr to 1fr, no measured heights */
+.sb-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 240ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.sb-group.open .sb-body { grid-template-rows: 1fr; }
+.sb-body-inner { overflow: hidden; min-height: 0; }
+.sb-group.open .sb-body-inner { overflow: visible; }
+.sb-stack { display: grid; gap: 12px; padding: 0 14px 14px 20px; }
+/* cards inside a group are its panels, not floating sheets */
+.sb-stack > .v2-card { box-shadow: none; border-color: var(--v2-line-2); background: var(--v2-fill); }
+.sb-stack > .v2-card .v2-input,
+.sb-stack > .v2-card .v2-textarea,
+.sb-stack > .v2-card .v2-sel { background: var(--v2-card); }
+
+/* ── curated tools ─────────────────────────────────────────────────────── */
+.sb-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 8px;
+}
+.sb-tool,
+.sb-toggle {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--v2-line);
+  border-radius: var(--v2-radius-sm);
+  background: var(--v2-card);
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.sb-tool:hover:not(.off),
+.sb-toggle:hover:not(.off) { border-color: var(--v2-primary-line); }
+.sb-tool.on { border-color: var(--v2-primary-line); background: var(--v2-primary-soft); }
+.sb-tool.off,
+.sb-toggle.off { cursor: not-allowed; opacity: 0.6; }
+.sb-tool input,
+.sb-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.sb-tool:has(input:focus-visible),
+.sb-toggle:has(input:focus-visible) { outline: 2px solid var(--v2-primary); outline-offset: 1px; }
+
+.sb-lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--v2-ink-4);
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.sb-tool.on .sb-lamp,
+.sb-toggle:has(input:checked) .sb-lamp,
+.sb-schema.ok .sb-lamp {
+  background: var(--v2-success);
+  border-color: var(--v2-success);
+  box-shadow: 0 0 0 3px var(--v2-success-soft);
+}
+.sb-schema.bad .sb-lamp { background: var(--v2-danger); border-color: var(--v2-danger); box-shadow: 0 0 0 3px var(--v2-danger-soft); }
+
+.sb-tool-name { font-family: var(--v2-mono); font-size: 13px; color: var(--v2-ink); }
+.sb-tool-when { grid-column: 2; font-size: 12px; line-height: 1.45; color: var(--v2-ink-3); }
+
+.sb-toggles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+.sb-toggle { grid-template-columns: auto minmax(0, 1fr); }
+.sb-toggle::before {
+  /* a switch track drawn on the tile, so the whole tile is the control */
+  content: "";
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--v2-fill-2);
+  border: 1px solid var(--v2-line);
+  transition: background-color 160ms ease;
+}
+.sb-toggle::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--v2-ink-3);
+  transition: transform 180ms cubic-bezier(0.2, 0.7, 0.2, 1), background-color 160ms ease;
+}
+.sb-toggle:has(input:checked)::before { background: var(--v2-primary-soft); border-color: var(--v2-primary-line); }
+.sb-toggle:has(input:checked)::after { transform: translateX(12px); background: var(--v2-primary); }
+.sb-toggle-text { display: grid; gap: 2px; }
+.sb-toggle-name { font-size: 13.5px; font-weight: 500; color: var(--v2-ink); }
+.sb-toggle-when { font-size: 12px; color: var(--v2-ink-3); }
+
+/* ── small parts ───────────────────────────────────────────────────────── */
+.sb-fine { margin: 0; font-size: 12px; color: var(--v2-ink-3); }
+.sb-err { margin: 0; font-size: 12px; color: var(--v2-danger-ink); }
+.sb-reveal { display: grid; gap: 10px; animation: sb-in 200ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.sb-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 9px;
+  border: 1px solid var(--v2-line);
+  border-radius: 999px;
+  background: var(--v2-card);
+  color: var(--v2-ink-2);
+}
+.sb-chip.mono { font-family: var(--v2-mono); }
+.sb-chip.refused { color: var(--v2-danger-ink); border-color: var(--v2-danger-line); background: var(--v2-danger-soft); }
+.sb-chip.add { border-style: dashed; border-color: var(--v2-primary-line); color: var(--v2-primary); cursor: pointer; }
+.sb-chip.add:hover { background: var(--v2-primary-soft); }
+.sb-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.sb-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sb-narrow { max-width: 160px; }
+.sb-rows { display: grid; gap: 8px; }
+.sb-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px; align-items: center; }
+.sb-x {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--v2-radius-sm);
+  background: none;
+  color: var(--v2-ink-3);
+  cursor: pointer;
+}
+.sb-x:hover { color: var(--v2-danger); border-color: var(--v2-danger-line); }
+.sb-x:focus-visible { outline: 2px solid var(--v2-primary); }
+.sb-shots { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; counter-reset: shot; }
+.sb-shot { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.sb-shot-n { font-family: var(--v2-mono); font-size: 12px; color: var(--v2-ink-3); padding-top: 9px; }
+.sb-shot .v2-textarea { min-height: 56px; }
+
+.sb-schema { display: grid; gap: 0; }
+.sb-schema .v2-textarea { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.sb-schema-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--v2-line);
+  border-top: 0;
+  border-radius: 0 0 var(--v2-radius-sm) var(--v2-radius-sm);
+  background: var(--v2-fill-2);
+}
+.sb-schema-state {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--v2-mono);
+  font-size: 12px;
+  color: var(--v2-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-schema.bad .sb-schema-state { color: var(--v2-danger-ink); }
+
+@keyframes sb-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 760px) {
+  .sb-group-head { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .sb-readout { display: none; }
+  .sb-grid-3, .sb-grid-2, .sb-row, .sb-shot { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-body, .sb-chev, .sb-group, .sb-group::before, .sb-tool, .sb-toggle, .sb-lamp,
+  .sb-toggle::before, .sb-toggle::after, .sb-title { transition: none; }
+  .sb-reveal { animation: none; }
+}

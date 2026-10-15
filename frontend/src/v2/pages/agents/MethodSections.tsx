@@ -54,6 +54,7 @@ import { useAuth } from "../../../auth/auth-context";
 import { HintLabel } from "../../Glossary";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
 import { NetworkSection } from "./NetworkSection";
+import { StrandsToolPicker } from "./StrandsSections";
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
 
 /** Next slug while it still follows the display name: the ASCII-derived slug, or a
@@ -297,7 +298,7 @@ export function ProtocolCard({
   );
 }
 
-export function StrandsToolsCard(props: SectionProps) {
+export function StrandsToolsCard(props: SectionProps & { touched?: boolean }) {
   const { t } = useTranslation();
   const { form, set } = props;
   const a2a = form.protocol === "a2a";
@@ -315,13 +316,17 @@ export function StrandsToolsCard(props: SectionProps) {
       <div className="v2-form">
         <Field label={t("v2.agents.wizard.templateTools")} hint={t("v2.agents.wizard.templateToolsHint")}>
           <div className="v2-row" data-testid="v2-agent-template-tools">
-            {(kitTools.length ? kitTools : ["calculator", "current_utc_time"]).map((name) => (
-              <Tag key={name} tone={kitTools.length ? "blue" : "gray"}>
+            {(kitTools.length || form.strands?.tools.length
+              ? [...kitTools, ...(form.strands?.tools ?? [])]
+              : ["calculator", "current_utc_time"]
+            ).map((name) => (
+              <Tag key={name} tone={kitTools.length || form.strands?.tools.length ? "blue" : "gray"}>
                 <span className="mono">{name}</span>
               </Tag>
             ))}
           </div>
         </Field>
+        <StrandsToolPicker form={form} set={set} touched={Boolean(props.touched)} />
         {a2a ? (
           <Field label={t("v2.agents.wizard.gateways")}>
             <span className="v2-muted">{t("v2.agents.wizard.gatewayA2a")}</span>
