@@ -1,4 +1,12 @@
-"""AgentCore Memory helpers — session events (short-term) + records (long-term)."""
+"""AgentCore Memory helpers — session events (short-term) + records (long-term).
+
+The default memory is the current project's (`project_memory.effective_memory_id`):
+an isolated project's own memory once provisioned, the workspace's bootstrap memory
+for every other project. While an isolated project is in its dual-read window the
+readers here also look in the old shared memory, for the project's own agents' actors
+only (`project_memory.dual_read`); an explicit ``memory_id`` (an agent-pinned memory)
+is read alone.
+"""
 
 import json
 import re
@@ -10,12 +18,30 @@ from app.services.workspace import WorkspaceContext
 
 
 def memory_id_or_none(workspace: WorkspaceContext) -> str | None:
-    """The workspace's memory id, or None before its bootstrap has run.
+    """The current project's memory id in this workspace, or None before the
+    workspace's bootstrap has run.
 
     The console's landing view needs to distinguish "not bootstrapped" from
     "AWS call failed", so it reads the id without raising.
     """
-    return workspace.resources.get("memory_id") or None
+    from app.services import project_memory
+
+    return project_memory.effective_memory_id(workspace)
+
+
+def _dual_read(workspace: WorkspaceContext, memory_id: str | None):
+    """The shared memory to read as well (`project_memory.DualRead`), or None — always
+    None when the caller pinned a memory."""
+    if memory_id:
+        return None
+    from app.services import project_memory
+
+    return project_memory.dual_read(workspace)
+
+
+def _not_found(exc: Exception) -> bool:
+    code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+    return code == "ResourceNotFoundException"
 
 
 def _memory_id(workspace: WorkspaceContext) -> str:
@@ -187,14 +213,31 @@ def list_events(
     max_results: int = 20,
     memory_id: str | None = None,
 ) -> list[dict]:
-    """Short-term events of one session; ``memory_id`` selects an agent-pinned memory."""
-    return data_client(workspace).list_events(
-        memoryId=memory_id or _memory_id(workspace),
-        actorId=actor_id,
-        sessionId=session_id,
-        includePayloads=True,
-        maxResults=min(max_results, 100),
-    ).get("events", [])
+    """Short-term events of one session; ``memory_id`` selects an agent-pinned memory.
+
+    In a dual-read window a session the project memory does not have (written before
+    the agent moved) is read from the shared memory."""
+    client = data_client(workspace)
+    legacy = _dual_read(workspace, memory_id)
+
+    def read(mem_id: str) -> list[dict]:
+        return client.list_events(
+            memoryId=mem_id,
+            actorId=actor_id,
+            sessionId=session_id,
+            includePayloads=True,
+            maxResults=min(max_results, 100),
+        ).get("events", [])
+
+    if legacy is None or not legacy.allows_actor(actor_id):
+        return read(memory_id or _memory_id(workspace))
+    try:
+        events = read(_memory_id(workspace))
+    except Exception as exc:
+        if not _not_found(exc):
+            raise
+        events = []
+    return events or read(legacy.memory_id)
 
 
 def list_actor_ids(
@@ -207,21 +250,30 @@ def list_actor_ids(
     actors, and callers only need a bounded candidate set).
     """
     client = data_client(workspace)
-    actor_ids: list[str] = []
-    token: str | None = None
-    for _ in range(max_pages):
-        params: dict[str, Any] = {"memoryId": _memory_id(workspace), "maxResults": 100}
-        if token:
-            params["nextToken"] = token
-        page = client.list_actors(**params)
-        actor_ids += [
-            summary["actorId"]
-            for summary in page.get("actorSummaries", [])
-            if summary.get("actorId")
-        ]
-        token = page.get("nextToken")
-        if not token:
-            break
+
+    def read(mem_id: str) -> list[str]:
+        found: list[str] = []
+        token: str | None = None
+        for _ in range(max_pages):
+            params: dict[str, Any] = {"memoryId": mem_id, "maxResults": 100}
+            if token:
+                params["nextToken"] = token
+            page = client.list_actors(**params)
+            found += [
+                summary["actorId"]
+                for summary in page.get("actorSummaries", [])
+                if summary.get("actorId")
+            ]
+            token = page.get("nextToken")
+            if not token:
+                break
+        return found
+
+    actor_ids = read(_memory_id(workspace))
+    legacy = _dual_read(workspace, None)
+    if legacy is not None:
+        # the project's own agents' actors from before the move, once each
+        actor_ids = list(dict.fromkeys(actor_ids + legacy.filter_actors(read(legacy.memory_id))))
     if prefix:
         return [actor_id for actor_id in actor_ids if actor_id.startswith(prefix)]
     return actor_ids
@@ -233,21 +285,46 @@ def list_records(
     max_results: int = 20,
     memory_id: str | None = None,
 ) -> list[dict]:
-    return data_client(workspace).list_memory_records(
-        memoryId=memory_id or _memory_id(workspace),
-        namespacePath=namespace_prefix,
-        maxResults=min(max_results, 100),
-    ).get("memoryRecordSummaries", [])
+    client = data_client(workspace)
+
+    def read(mem_id: str) -> list[dict]:
+        return client.list_memory_records(
+            memoryId=mem_id,
+            namespacePath=namespace_prefix,
+            maxResults=min(max_results, 100),
+        ).get("memoryRecordSummaries", [])
+
+    records = read(memory_id or _memory_id(workspace))
+    legacy = _dual_read(workspace, memory_id)
+    if legacy is not None and legacy.allows_namespace(namespace_prefix):
+        records = merge_records(records, read(legacy.memory_id))[: min(max_results, 100)]
+    return records
+
+
+def merge_records(primary: list[dict], legacy: list[dict]) -> list[dict]:
+    """Primary records first, then the legacy ones not already listed (by id)."""
+    seen = {r.get("memoryRecordId") for r in primary if r.get("memoryRecordId")}
+    return primary + [r for r in legacy if r.get("memoryRecordId") not in seen]
 
 
 def retrieve_records(
     workspace: WorkspaceContext, namespace: str, query: str, top_k: int = 3
 ) -> list[dict]:
-    return data_client(workspace).retrieve_memory_records(
-        memoryId=_memory_id(workspace),
-        namespace=namespace,
-        searchCriteria={"searchQuery": query, "topK": top_k},
-    ).get("memoryRecordSummaries", [])
+    client = data_client(workspace)
+
+    def read(mem_id: str) -> list[dict]:
+        return client.retrieve_memory_records(
+            memoryId=mem_id,
+            namespace=namespace,
+            searchCriteria={"searchQuery": query, "topK": top_k},
+        ).get("memoryRecordSummaries", [])
+
+    records = read(_memory_id(workspace))
+    legacy = _dual_read(workspace, None)
+    if legacy is not None and legacy.allows_namespace(namespace):
+        merged = merge_records(records, read(legacy.memory_id))
+        records = sorted(merged, key=lambda r: -(r.get("score") or 0))[:top_k]
+    return records
 
 
 def session_memory_summary(
