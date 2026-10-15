@@ -31,8 +31,10 @@ import {
 } from "../../../v2/online";
 import { V2ToastProvider } from "../../../v2/ui";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { evalCostApi } from "../../../lib/api/evalCost";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Notice, PageHead, Panel, Skeleton } from "../../ui";
+import { EstimateCostCard } from "../tasks/CostCard";
 import { onlineHref } from "./actions";
 
 /** canonical order, whatever the click order */
@@ -113,6 +115,18 @@ export function OnlineEditor({ id }: { id: string | null }) {
   const dirty = patch ? Object.keys(patch).length > 0 : true;
   const back = () => navigate(row ? onlineHref({ view: "detail", id: row.config_id }) : "/v3/online");
 
+  // eval-cost §1.1: a new scores config is priced per day before it is created
+  const sampling = Number(draft.sampling);
+  const priced = !editing && mode === "scores" && Boolean(agentId) && draft.evaluators.length > 0;
+  const estimate = useLoad(
+    () => (priced
+      ? evalCostApi.estimate({ agent_id: agentId, scope: "online", evaluators: draft.evaluators,
+        sampling_percentage: Number.isFinite(sampling) ? Math.min(100, Math.max(0, sampling)) : 10 })
+      : Promise.resolve(null)),
+    `v3-online-estimate:${priced}:${agentId}:${draft.evaluators.join(",")}:${draft.sampling}`,
+  );
+  const [confirmCost, setConfirmCost] = useState(false);
+
   // live traffic carries no ground truth: evaluators that need it cannot judge it
   const blocked = (e: EvaluatorRow) => (e.requires_ground_truth || e.id.startsWith("Builtin.Trajectory") ? t("v2.online.needsGt") : null);
 
@@ -121,6 +135,8 @@ export function OnlineEditor({ id }: { id: string | null }) {
     if (!editing && !agentId) return setError(t("v2.online.err.agent"));
     const problem = validateDraft(t, draft);
     if (problem) return setError(problem);
+    if (priced && estimate.data?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: estimate.data.max_usd ?? "—" }));
+    if (priced && estimate.data?.confirm_required && !confirmCost) return setError(t("v3.evalCost.confirmFirst"));
     setBusy(true);
     try {
       if (row && patch) {
@@ -282,6 +298,11 @@ export function OnlineEditor({ id }: { id: string | null }) {
           <FilterRows filters={draft.filters} onChange={(filters) => set({ filters })} />
         </div>
       </Panel>
+
+      {priced && (
+        <EstimateCostCard estimate={estimate.data} loading={estimate.loading} error={estimate.error}
+          confirmed={confirmCost} onConfirm={setConfirmCost} />
+      )}
     </div>
   );
 }

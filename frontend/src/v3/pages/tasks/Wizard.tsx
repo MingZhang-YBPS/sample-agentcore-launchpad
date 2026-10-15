@@ -5,9 +5,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../../components/ErrorCallout";
-import { api, dlcApi, type V2Range } from "../../../lib/api";
+import { api, type V2Range } from "../../../lib/api";
+import { type EstimateBody, evalCostApi } from "../../../lib/api/evalCost";
 import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
-import { unpricedJudges } from "../../../lib/dlc";
 import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { INSIGHT_TYPES, insightLabel } from "../../../v2/online";
@@ -19,6 +19,7 @@ import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { StoryHeader } from "../../story/StoryHeader";
 import { HostedV2 } from "./common";
+import { EstimateCostCard } from "./CostCard";
 import { detailUrl } from "./model";
 
 /* Mirrors V2's TaskWizard (v2/pages/tasks/TaskWizard.tsx): the same draft, seed,
@@ -200,12 +201,23 @@ export function TaskWizard() {
   const repeatable =
     !!draft && draft.target === "agent" && draft.source === "dataset" && draft.mode === "evaluators" &&
     draft.strategy === "history" && !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
+  // eval-cost §1.1: every entry is priced before submit — a dataset replay (with
+  // pass^k), past sessions / a look-back window, an online evaluation (per day)
+  const estimateBody = ((): EstimateBody | null => {
+    if (!draft || draft.mode !== "evaluators" || draft.evaluators.length === 0) return null;
+    if (draft.target === "agent" && !draft.agentId) return null;
+    const base = { ...(draft.target === "agent" ? { agent_id: draft.agentId } : {}), evaluators: draft.evaluators };
+    if (draft.strategy === "continuous") return { ...base, scope: "online", sampling_percentage: draft.sampling };
+    if (repeatable) return { ...base, scope: "replay", dataset_id: draft.dataset, repeats: draft.repeats };
+    if (draft.source === "window") return { ...base, scope: "passive", lookback_hours: draft.lookbackHours };
+    if (draft.source === "sessions") return { ...base, scope: "passive", sessions: draft.sessionIds.length };
+    if (draft.source === "logs") return { ...base, scope: "passive", sessions: draft.logSessionIds.length };
+    return null; // a cloud dataset: its items are not counted here
+  })();
+  const estimateKey = estimateBody ? JSON.stringify(estimateBody) : "none";
   const estimate = useLoad(
-    () =>
-      repeatable && draft?.agentId
-        ? dlcApi.estimate({ agent_id: draft.agentId, dataset_id: draft.dataset, evaluators: draft.evaluators, repeats: draft.repeats })
-        : Promise.resolve(null),
-    `v3-task-estimate:${repeatable}:${draft?.agentId}:${draft?.dataset}:${draft?.repeats}:${draft?.evaluators.join(",")}`,
+    () => (estimateBody ? evalCostApi.estimate(estimateBody) : Promise.resolve(null)),
+    `v3-task-estimate:${estimateKey}`,
   );
   if (seed.error) return <Notice s="act"><ApiErrorDetail error={seed.failure} /></Notice>;
   if (!draft) return <Skeleton rows={6} />;
@@ -248,6 +260,8 @@ export function TaskWizard() {
     if (insights && draft.insights.length === 0) return setError(t("v2.tasks.errInsights"));
     if (!insights && draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
     if (!insights && draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
+    if (!insights && estimate.data?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: estimate.data.max_usd ?? "—" }));
+    if (!insights && estimate.data?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
     setSubmitting(true);
     setError(null);
     try {
@@ -606,40 +620,25 @@ export function TaskWizard() {
       )}
 
       {step === 1 && repeatable && (
-        <Panel title={t("v2.tasks.passK")} end={<span>{t("v2.tasks.passKSub")}</span>} signal={estimate.data?.over_limit ? "act" : estimate.data?.confirm_required ? "wait" : undefined}>
+        <Panel title={t("v2.tasks.passK")} end={<span>{t("v2.tasks.passKSub")}</span>}>
           <div className="v3-grid c2" style={{ alignItems: "start" }}>
             <Field label={t("v2.tasks.repeats")} hint={t("v2.tasks.repeatsHint")}>
               <input className="v3-input" type="number" min={1} max={10} value={draft.repeats}
                 onChange={(e) => set({ repeats: Math.max(1, Math.min(10, Number(e.target.value) || 1)), confirmCost: false })} />
             </Field>
-            <div className="v3-field">
-              <span>{t("v2.dlc.cost.estimate")}</span>
-              {estimate.loading ? (
-                <Skeleton rows={1} />
-              ) : estimate.data ? (
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <b className="mono" style={{ fontSize: 20 }}>{estimate.data.total_usd === null ? t("v2.dlc.cost.unknown") : `$${estimate.data.total_usd.toFixed(2)}`}</b>
-                  <span style={{ color: "var(--v3-text-2)" }}>{t("v2.dlc.cost.sessions", { sessions: estimate.data.sessions, minutes: estimate.data.duration_minutes ?? 0 })}</span>
-                  {estimate.data.unpriced && <Chip s="wait">{t("v2.dlc.cost.unpriced")}</Chip>}
-                  {unpricedJudges(estimate.data).length > 0 && (
-                    <Chip s="wait">{t("v2.dlc.cost.judgeUnpriced", { count: unpricedJudges(estimate.data).length })}</Chip>
-                  )}
-                  {estimate.data.over_limit && <Chip s="act">{t("v2.dlc.cost.overLimit")}</Chip>}
-                </div>
-              ) : (
-                <span>—</span>
-              )}
-              <small className="v3-hint">{t("v2.dlc.cost.basisHint")}</small>
-            </div>
           </div>
           {draft.repeats > 1 && <div style={{ marginTop: 12 }}><Notice s="wait">{t("v2.dlc.release.passKCost", { k: draft.repeats })}</Notice></div>}
-          {estimate.data?.confirm_required && (
-            <label className="v3-task-check" style={{ marginTop: 12 }}>
-              <input type="checkbox" checked={draft.confirmCost} onChange={(e) => set({ confirmCost: e.target.checked })} />
-              {t("v2.tasks.confirmCost", { usd: estimate.data.total_usd ?? "—" })}
-            </label>
-          )}
         </Panel>
+      )}
+
+      {step === 1 && estimateBody && (
+        <EstimateCostCard
+          estimate={estimate.data}
+          loading={estimate.loading}
+          error={estimate.error}
+          confirmed={draft.confirmCost}
+          onConfirm={(confirmCost) => set({ confirmCost })}
+        />
       )}
 
       {step === 1 && draft.mode === "evaluators" && (

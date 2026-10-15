@@ -7,6 +7,7 @@ import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
 import { api } from "../../../lib/api";
+import { evalCostApi } from "../../../lib/api/evalCost";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import {
   evaluatorSummary,
@@ -23,6 +24,7 @@ import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../../ui";
 import { calibrateBlocker, calibrateUrl } from "../standards/calibrationLink";
 import { CopyId } from "./CopyId";
+import { CostCell } from "./CostCard";
 import { copyUrl, detailUrl, rankTasks, taskSignal } from "./model";
 
 type Pending = { task: V2Task; action: "stop" | "pause" | "resume" | "delete" };
@@ -68,6 +70,9 @@ export function TaskList() {
       }),
     );
   }, [tasks, state, mode, source, agent, q, calibratable]);
+  // the cost column (eval-cost §1.3): the runs on screen, one request
+  const visibleRunIds = rows.slice(0, shown).filter((task) => task.kind === "run").map((task) => task.id);
+  const costs = useLoad(() => evalCostApi.runCosts(visibleRunIds), `v3-task-costs:${visibleRunIds.join(",")}:${list.data ? "1" : "0"}`);
   const count = (s: Signal) => tasks.filter((task) => taskSignal(task.status) === s).length;
   const failed = rankTasks(tasks.filter((task) => task.status === "failed")).slice(0, 5);
   const modeLabel = (m: TaskMode) => t(m === "insights" ? "v2.tasks.modeInsightsShort" : "v2.tasks.modeEvaluators");
@@ -252,6 +257,7 @@ export function TaskList() {
                   <th>{t("v2.tasks.colAgent")}</th>
                   <th>{t("v2.tasks.colSourceStrategy")}</th>
                   <th>{t("v2.tasks.colEvaluators")}</th>
+                  <th className="num">{t("v3.evalCost.colCost")}</th>
                   <th className="num">{t("v3.tasks.colCreated")}</th>
                   <th />
                 </tr>
@@ -285,6 +291,9 @@ export function TaskList() {
                       </td>
                       <td style={{ color: "var(--v3-text-2)" }}>
                         <span className="v3-task-clip" title={task.evaluators.map(label).join("、")}>{evaluatorSummary(t, task.evaluators, label)}</span>
+                      </td>
+                      <td className="num">
+                        {task.kind === "run" ? <CostCell summary={costs.data?.costs[task.id]} /> : <span style={{ color: "var(--v3-text-3)" }}>—</span>}
                       </td>
                       <td className="num" style={{ color: "var(--v3-text-3)" }} title={task.updatedAt ?? undefined}>{ago(task.createdAt)}</td>
                       <td style={{ width: 1, whiteSpace: "nowrap" }}>{actions(task)}</td>
