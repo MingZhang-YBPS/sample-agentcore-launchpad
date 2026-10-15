@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { networkApi, type NetworkSettings } from "../../../lib/api/networkProfiles";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Notice, Panel, Skeleton } from "../../ui";
 
@@ -15,17 +16,19 @@ import { Notice, Panel, Skeleton } from "../../ui";
 export function Enforcement({ version }: { version: number }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const data = useLoad(() => networkApi.enforcement(), `v3-network-enforcement:${version}`);
   const [busy, setBusy] = useState(false);
 
   const flip = async (key: keyof NetworkSettings, value: boolean) => {
     setBusy(true);
     try {
+      failed.clear();
       await networkApi.putSettings({ [key]: value });
       toast("ok", t("v3.network.enforce.saved"));
       data.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -33,6 +36,7 @@ export function Enforcement({ version }: { version: number }) {
 
   return (
     <Panel title={t("v3.network.enforce.title")}>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-network-enforce-error" />
       {data.loading && !data.data ? <Skeleton rows={3} /> : data.error || !data.data ? <Notice s="act">{data.error}</Notice> : (
         <div style={{ display: "grid", gap: 12 }} data-testid="v3-network-enforcement">
           <label style={{ display: "flex", gap: 8, alignItems: "center" }}>

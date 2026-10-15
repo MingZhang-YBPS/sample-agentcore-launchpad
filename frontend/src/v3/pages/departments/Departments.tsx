@@ -6,8 +6,9 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type Department, departmentsApi, type StructureStatus } from "../../../lib/api/project-groups";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { emptyStructureForm } from "../groups/model";
@@ -96,6 +97,7 @@ function MyDepartments() {
 function AdminDepartments() {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [params, setParams] = useSearchParams();
   const status = (["active", "archived", "all"].includes(params.get("status") ?? "") ? params.get("status") : "active") as StructureStatus;
   const list = useLoad(() => departmentsApi.list(status), `v3-departments:${status}`);
@@ -107,12 +109,13 @@ function AdminDepartments() {
   const run = async (dept: Department, call: () => Promise<unknown>, okKey: string) => {
     setBusyId(dept.id);
     try {
+      failed.clear();
       await call();
       toast("ok", t(okKey, { name: dept.name }));
       list.reload();
       return true;
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
       return false;
     } finally {
       setBusyId(null);
@@ -133,6 +136,7 @@ function AdminDepartments() {
           </>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-departments-error" />
       <Filters
         value={status}
         onChange={(v) => setParams(v === "active" ? {} : { status: v })}

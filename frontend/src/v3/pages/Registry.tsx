@@ -7,10 +7,12 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../components/ErrorCallout";
 import { api, errorMessage, type RegistryRecordOut } from "../../lib/api";
 import { descriptorExcerpt, parseAgentCard, parseMcpUrl, parseSkillDefinition, skillPath } from "../../lib/registry";
 import { isRegistryUnavailable } from "../../v2/pages/registry/common";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { registrySignal } from "../signals";
@@ -52,17 +54,19 @@ function useTypeLabel() {
 function useLifecycle(onDone: () => void) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const statusLabel = useStatusLabel();
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const run = async (record: RegistryRecordOut, action: Lifecycle) => {
     const id = record.record_id;
     setBusy((prev) => new Set(prev).add(id));
     try {
+      failed.clear();
       const updated = await api.registryAction(record.record_id, action);
       toast("ok", t("v2.registry.actionDone", { name: record.name, status: statusLabel(updated.status) }));
       onDone();
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("common.actionFailed", { msg: errorMessage(err) }));
     } finally {
       setBusy((prev) => {
         const next = new Set(prev);
@@ -71,7 +75,7 @@ function useLifecycle(onDone: () => void) {
       });
     }
   };
-  return { busy, run };
+  return { busy, run, failed };
 }
 
 /* ── list ────────────────────────────────────────────────────────────────── */
@@ -150,6 +154,7 @@ function RecordList({ tab }: { tab: RegistryTab }) {
           </>
         }
       />
+      <ErrorCallout error={lifecycle.failed.error} onDismiss={lifecycle.failed.clear} data-testid="v3-registry-error" />
 
       <div className="v3-grid c4">
         <Panel><Stat label={<Term term="a2a">{typeLabel("A2A")}</Term>} value={countType("A2A")} foot={t("v3.registry.footA2A")} /></Panel>
@@ -304,6 +309,7 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const failed = useFailure();
   const { isAdmin } = useAuth();
   const statusLabel = useStatusLabel();
   const typeLabel = useTypeLabel();
@@ -340,11 +346,12 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
   const remove = async () => {
     setBusy(true);
     try {
+      failed.clear();
       await api.registryDelete(r.record_id);
       toast("ok", t("registry.deleted", { name: r.name }));
       navigate(back);
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("common.actionFailed", { msg: errorMessage(err) }));
       setBusy(false);
       setConfirm(null);
     }
@@ -352,11 +359,12 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
   const reimport = async () => {
     setBusy(true);
     try {
+      failed.clear();
       const updated = await api.registryReimport(r.record_id);
       toast("ok", t("registry.drawer.reimportOk", { name: updated.name }));
       setTick((n) => n + 1);
     } catch (err) {
-      toast("act", t("registry.drawer.reimportFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("registry.drawer.reimportFailed", { msg: errorMessage(err) }));
     } finally {
       setBusy(false);
     }
@@ -381,7 +389,7 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
         end={
           <>
             {r.type !== "A2A" && (
-              <Btn kind="primary" disabled={!approved} title={approved ? undefined : t("registry.drawer.useNeedsApproved")} onClick={useInAgent}>
+              <Btn kind="primary" disabled={!approved} disabledReason={t("registry.drawer.useNeedsApproved")} onClick={useInAgent}>
                 {t("v2.registry.useInAgent")}
               </Btn>
             )}
@@ -391,6 +399,8 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
           </>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-registry-record-error" />
+      <ErrorCallout error={lifecycle.failed.error} onDismiss={lifecycle.failed.clear} data-testid="v3-registry-lifecycle-error" />
 
       {r.status_reason && <Notice s={r.status === "REJECTED" ? "act" : "info"}>{r.status_reason}</Notice>}
       {r.system && (

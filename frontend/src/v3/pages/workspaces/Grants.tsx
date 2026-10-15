@@ -3,7 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, ApiError, errorMessage, type WorkspaceGrantFilter, type WorkspaceGrants } from "../../../lib/api";
+import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Empty, Filters, Notice, Panel, Skeleton } from "../../ui";
 
@@ -17,6 +19,7 @@ const PAGE_SIZE = 10;
 export function Grants({ workspaceId, onTotal }: { workspaceId: string; onTotal: (total: number | null) => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [params, setParams] = useSearchParams();
   const query = params.get("gq") ?? "";
   const filterParam = params.get("granted");
@@ -86,6 +89,7 @@ export function Grants({ workspaceId, onTotal }: { workspaceId: string; onTotal:
     if (ids.length === 0) return;
     setBusy(true);
     try {
+      failed.clear();
       const result = await api.updateWorkspaceGrants(workspaceId, { [action]: ids });
       // the count is the selection: re-granting a holder changes no row but is what was asked
       toast("ok", t(action === "grant" ? "workspacesPage.detail.grantsGranted" : "workspacesPage.detail.grantsRevoked", {
@@ -94,7 +98,7 @@ export function Grants({ workspaceId, onTotal }: { workspaceId: string; onTotal:
       setSelected(new Set());
       await load();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -107,6 +111,7 @@ export function Grants({ workspaceId, onTotal }: { workspaceId: string; onTotal:
       end={<span>{t("workspacesPage.detail.grantsSub", { granted: grants?.granted_total ?? 0 })}</span>}>
       <div style={{ padding: "0 20px 14px", display: "grid", gap: 12 }}>
         <Notice>{t("workspacesPage.detail.adminHint")}</Notice>
+        <ErrorCallout error={failed.error} params={{ workspace_id: workspaceId }} onDismiss={failed.clear} data-testid="v3-grants-error" />
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <Filters
             value={filter}

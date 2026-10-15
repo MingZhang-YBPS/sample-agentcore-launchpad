@@ -6,10 +6,12 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
-import { api, errorMessage, type EvaluatorRow } from "../../lib/api";
+import { ErrorCallout } from "../../components/ErrorCallout";
+import { api, type EvaluatorRow } from "../../lib/api";
 import { sharedFromOf } from "../../lib/api/sharedFrom";
 import { evaluatorLabel } from "../../lib/evaluators";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { useLoad, useToast } from "../hooks";
 import { SharedFromTag } from "../shares/SharedFromTag";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -23,6 +25,7 @@ function EvaluatorList() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const list = useLoad(() => api.v2Evaluators(), `v3-evaluators:${current?.id ?? ""}`);
   const [source, setSource] = useState<"all" | Source>("all");
@@ -49,12 +52,13 @@ function EvaluatorList() {
     if (!deleting) return;
     setBusy(true);
     try {
+      failed.clear();
       await api.v2DeleteEvaluator(deleting.id);
       toast("ok", t("v2.evaluators.deleted"));
       setDeleting(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -69,6 +73,7 @@ function EvaluatorList() {
         sub={t("v2.evaluators.desc")}
         end={<Link to="/v3/evaluators?view=new" className="v3-btn primary"><Plus size={14} /> {t("v2.evaluators.new")}</Link>}
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-evaluators-error" />
       <div className="v3-grid c4">
         <Panel><Stat label={t("v3.evaluators.total")} value={list.data ? all.length : "—"} foot={t("v3.evaluators.totalFoot")} /></Panel>
         <Panel signal={custom.length ? "info" : undefined}><Stat label={t("v2.evaluators.source.custom")} value={list.data ? custom.length : "—"} foot={t("v3.evaluators.customFoot")} /></Panel>

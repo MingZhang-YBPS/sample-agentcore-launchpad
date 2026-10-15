@@ -5,15 +5,16 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
+import { ErrorCallout } from "../../components/ErrorCallout";
 import {
   api,
   ApiError,
   type AssistantConversationFootprint,
   type AssistantConversationSummary,
-  errorMessage,
 } from "../../lib/api";
 import { isContextTrimmed } from "../../lib/assistant";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { ArchitectModelPanel } from "./assistant/ArchitectModel";
@@ -26,19 +27,20 @@ const open = (id: string) => `/v2/assistant?view=detail&id=${encodeURIComponent(
 function useClear(onCleared: () => void) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [target, setTarget] = useState<{ id: string; title: string; fp: AssistantConversationFootprint | null } | null>(null);
   const [busy, setBusy] = useState(false);
-  const message = (err: unknown) => (err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err));
 
   const ask = async (c: AssistantConversationSummary) => {
     const title = c.title || c.id.slice(0, 8);
     setTarget({ id: c.id, title, fp: null });
     try {
+      failed.clear();
       const fp = await api.assistantConversationFootprint(c.id);
       setTarget((cur) => (cur?.id === c.id ? { ...cur, fp } : cur));
     } catch (err) {
       setTarget(null);
-      toast("act", message(err), err);
+      failed.fail(err);
     }
   };
   const fp = target?.fp ?? null;
@@ -48,6 +50,7 @@ function useClear(onCleared: () => void) {
     if (!target || !fp || blocked) return;
     setBusy(true);
     try {
+      failed.clear();
       const res = await api.assistantDeleteConversation(target.id);
       toast("ok", t("assistantPage.clear.doneToast", {
         title: target.title, agents: res.agents.length, operations: res.operations_cleaned.length, datasets: res.datasets.length,
@@ -55,7 +58,7 @@ function useClear(onCleared: () => void) {
       setTarget(null);
       onCleared();
     } catch (err) {
-      toast("act", message(err), err);
+      failed.fail(err);
       setTarget(null);
     } finally {
       setBusy(false);
@@ -95,7 +98,7 @@ function useClear(onCleared: () => void) {
       )}
     </Confirm>
   ) : null;
-  return { ask: (c: AssistantConversationSummary) => void ask(c), dialog };
+  return { ask: (c: AssistantConversationSummary) => void ask(c), dialog, failed };
 }
 
 /**
@@ -108,6 +111,7 @@ export function V3Assistant() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const failed = useFailure();
   const { isAdmin } = useAuth();
   const { current } = useWorkspace();
   const ws = current?.id ?? "";
@@ -136,11 +140,12 @@ export function V3Assistant() {
   const create = async () => {
     setCreating(true);
     try {
+      failed.clear();
       const detail = await api.assistantCreateConversation();
-      if (detail.catalog.warnings.length) toast("act", t("assistantPage.catalogWarnings", { list: detail.catalog.warnings.join("; ") }));
+      if (detail.catalog.warnings.length) failed.fail(t("assistantPage.catalogWarnings", { list: detail.catalog.warnings.join("; ") }));
       navigate(open(detail.id));
     } catch (err) {
-      toast("act", err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err), err);
+      failed.fail(err);
       if (err instanceof ApiError && err.code === "assistant.unavailable") status.reload();
     } finally {
       setCreating(false);
@@ -149,11 +154,12 @@ export function V3Assistant() {
   const share = async (c: AssistantConversationSummary) => {
     setSharing(c.id);
     try {
+      failed.clear();
       const res = await api.assistantSetSharing(c.id, !c.shared);
       toast("ok", t(res.shared ? "v2.assistant.sharedToast" : "v2.assistant.unsharedToast"));
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setSharing(null);
     }
@@ -166,12 +172,14 @@ export function V3Assistant() {
         title={t("v3.assistant.title")}
         sub={t("v3.assistant.sub")}
         end={
-          <Btn kind="primary" disabled={creating || !s?.available} onClick={() => void create()}>
+          <Btn kind="primary" busy={creating} disabled={!s?.available} disabledReason={t("story.reason.assistantUnavailable")} onClick={() => void create()}>
             <Plus size={14} /> {t("v3.assistant.new")}
           </Btn>
         }
       />
 
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-assistant-error" />
+      <ErrorCallout error={clear.failed.error} onDismiss={clear.failed.clear} data-testid="v3-assistant-clear-error" />
       {status.error && <Notice s="act"><ApiErrorDetail error={status.failure ?? status.error} /></Notice>}
       {s && !s.available && (
         <Notice s="wait">

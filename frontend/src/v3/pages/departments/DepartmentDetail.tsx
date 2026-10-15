@@ -2,9 +2,11 @@ import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { api, type ConsoleUser, errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { api, type ConsoleUser } from "../../../lib/api";
 import { type Department, departmentsApi } from "../../../lib/api/project-groups";
 import { usersApi } from "../../../lib/api/users";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Dialog, Empty, Filters, Notice, Skeleton } from "../../ui";
 import { type SettingsErrors, settingsForm, settingsPatch, unopened } from "./model";
@@ -40,6 +42,7 @@ export function DepartmentDetail({ dept, onClose, onChanged }: {
 function AdminsTab({ dept }: { dept: Department }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const list = useLoad(() => departmentsApi.admins(dept.id), `v3-dept-admins:${dept.id}`);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
@@ -52,11 +55,12 @@ function AdminsTab({ dept }: { dept: Department }) {
   const put = async (body: { add?: string[]; remove?: string[] }, okKey: string, name: string) => {
     setBusy(true);
     try {
+      failed.clear();
       await departmentsApi.putAdmins(dept.id, body);
       toast("ok", t(okKey, { name }));
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -65,6 +69,7 @@ function AdminsTab({ dept }: { dept: Department }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <small className="v3-hint">{t("v3.departments.admins.hint")}</small>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-department-admins-error" />
       {list.loading && !list.data ? <Skeleton rows={2} /> : list.error ? <Notice s="act">{list.error}</Notice> : admins.length === 0 ? (
         <Empty title={t("v3.departments.admins.empty")} />
       ) : (
@@ -104,6 +109,7 @@ function AdminsTab({ dept }: { dept: Department }) {
 function WorkspacesTab({ dept }: { dept: Department }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const list = useLoad(() => departmentsApi.workspaces(dept.id), `v3-dept-workspaces:${dept.id}`);
   const all = useLoad(() => api.listWorkspaces(), "v3-dept-all-workspaces");
   const [pick, setPick] = useState("");
@@ -113,12 +119,13 @@ function WorkspacesTab({ dept }: { dept: Department }) {
   const put = async (body: { add?: string[]; remove?: string[] }, okKey: string, name: string) => {
     setBusy(true);
     try {
+      failed.clear();
       await departmentsApi.putWorkspaces(dept.id, body);
       toast("ok", t(okKey, { name }));
       setPick("");
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -127,6 +134,7 @@ function WorkspacesTab({ dept }: { dept: Department }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <small className="v3-hint">{t("v3.departments.workspaces.hint")}</small>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-department-workspaces-error" />
       {list.loading && !list.data ? <Skeleton rows={2} /> : list.error ? <Notice s="act">{list.error}</Notice> : opened.length === 0 ? (
         <Empty title={t("v3.departments.workspaces.empty")} />
       ) : (
@@ -166,6 +174,7 @@ function WorkspacesTab({ dept }: { dept: Department }) {
 function SettingsTab({ dept, onSaved }: { dept: Department; onSaved: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [form, setForm] = useState(() => settingsForm(dept.settings));
   const [errors, setErrors] = useState<SettingsErrors>({});
   const [busy, setBusy] = useState(false);
@@ -178,11 +187,12 @@ function SettingsTab({ dept, onSaved }: { dept: Department; onSaved: () => void 
     setErrors({});
     setBusy(true);
     try {
+      failed.clear();
       await departmentsApi.update(dept.id, { settings: out.settings });
       toast("ok", t("v3.departments.settings.saved", { name: dept.name }));
       onSaved();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -190,6 +200,7 @@ function SettingsTab({ dept, onSaved }: { dept: Department; onSaved: () => void 
 
   return (
     <div style={{ display: "grid", gap: 12 }} data-testid="v3-department-settings">
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-department-settings-error" />
       <label className="v3-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input type="checkbox" checked={form.canCreateUsers} onChange={(e) => setForm({ ...form, canCreateUsers: e.target.checked })} />
         <span>{t("v3.departments.settings.canCreateUsers")}</span>

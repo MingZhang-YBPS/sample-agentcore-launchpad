@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   invokeAccessApi,
   type InvokeQualifier,
@@ -11,6 +12,7 @@ import {
   saveBlob,
 } from "../../../lib/api/invokeAccess";
 import type { ProjectDetail } from "../../../lib/api/projects";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Filters, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import { Copyable } from "../agent/Copyable";
@@ -27,6 +29,7 @@ type Scope = "all" | InvokeQualifier;
 export function IntegrationSection({ project }: { project: ProjectDetail }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [scope, setScope] = useState<Scope>("all");
   const [excluded, setExcluded] = useState<string[]>([]);
   const inventory = useLoad(() => invokeAccessApi.project(project.id), `v3-ia-project:${project.id}`);
@@ -45,17 +48,18 @@ export function IntegrationSection({ project }: { project: ProjectDetail }) {
 
   const exportAs = async (format: "csv" | "json") => {
     try {
+      failed.clear();
       const { blob, name } = await invokeAccessApi.export(project.id, format);
       saveBlob(blob, name);
     } catch (err) {
-      toast("act", t("v3.invokeAccess.project.exportFailed"), err);
+      failed.fail(err, t("v3.invokeAccess.project.exportFailed"));
     }
   };
   const copy = (text: string) =>
     navigator.clipboard
       .writeText(text)
       .then(() => toast("ok", t("v3.invokeAccess.copied", { label: t("v3.invokeAccess.policy") })))
-      .catch(() => toast("act", t("v3.invokeAccess.copyFailed")));
+      .catch(() => failed.fail(t("v3.invokeAccess.copyFailed")));
   const toggle = (id: string) => setExcluded((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   const policy = merged.data?.policy ?? null;
 
@@ -71,6 +75,7 @@ export function IntegrationSection({ project }: { project: ProjectDetail }) {
     >
       <div style={{ display: "grid", gap: 14 }} data-testid="project-integration">
         <span className="v3-hint">{t("v3.invokeAccess.project.sub")}</span>
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-integration-error" />
         {inventory.loading && !inventory.data && <Skeleton rows={3} />}
         {inventory.failure != null && <Notice s="act"><ApiErrorDetail error={inventory.failure} /></Notice>}
         {inventory.data && inventory.data.inventory.length === 0 && <span className="v3-hint">{t("v3.invokeAccess.project.none")}</span>}

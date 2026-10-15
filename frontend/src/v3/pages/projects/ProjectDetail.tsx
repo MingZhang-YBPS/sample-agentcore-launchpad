@@ -5,9 +5,10 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type ProjectDetail, projectsApi } from "../../../lib/api/projects";
 import { useProject } from "../../../workspace/project-context";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { AuditTab } from "./AuditTab";
@@ -34,6 +35,7 @@ export interface ProjectAbilities {
 export function ProjectDetailPage({ projectId, tab: requested }: { projectId: string; tab: ProjectTab }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { isAdmin } = useAuth();
   const { refresh: refreshAccess } = useProject();
   const [params, setParams] = useSearchParams();
@@ -80,6 +82,7 @@ export function ProjectDetailPage({ projectId, tab: requested }: { projectId: st
   const changeStatus = async (action: "archive" | "unarchive") => {
     setBusy(true);
     try {
+      failed.clear();
       if (action === "archive") {
         const result = await projectsApi.archive(project.id);
         toast("ok", t("v3.projects.archive.done", {
@@ -92,7 +95,7 @@ export function ProjectDetailPage({ projectId, tab: requested }: { projectId: st
       reload();
       await refreshAccess();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -133,6 +136,7 @@ export function ProjectDetailPage({ projectId, tab: requested }: { projectId: st
           </>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-error" />
       {archived && <Notice s="wait">{t("v3.projects.archive.notice")}</Notice>}
 
       <Filters

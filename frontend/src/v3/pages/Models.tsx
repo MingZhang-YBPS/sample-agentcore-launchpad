@@ -4,11 +4,13 @@ import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
+import { ErrorCallout } from "../../components/ErrorCallout";
 import { api, errorMessage, type ModelProbeResult, type ModelSettingRole } from "../../lib/api";
 import { activeCatalogIds, useModelCatalog } from "../../lib/model-catalog";
 import { reloadModelDefaults } from "../../lib/model-defaults";
 import { isSavable, roleModelOptions, sourceSignal } from "../../lib/model-settings";
 import { CUSTOM_MODEL_OPTION } from "../../lib/models";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Notice, PageHead, Panel, Skeleton } from "../ui";
@@ -44,6 +46,7 @@ function ProbeResult({ probe }: { probe: Probe }) {
 function RoleRow({ role, onSaved }: { role: ModelSettingRole; onSaved: (row: ModelSettingRole) => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [draft, setDraft] = useState(role.value);
   const [custom, setCustom] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -53,6 +56,7 @@ function RoleRow({ role, onSaved }: { role: ModelSettingRole; onSaved: (row: Mod
   const run = async (work: () => Promise<ModelSettingRole>, okKey: string) => {
     setSaving(true);
     try {
+      failed.clear();
       const row = await work();
       onSaved(row);
       setDraft(row.value);
@@ -60,7 +64,7 @@ function RoleRow({ role, onSaved }: { role: ModelSettingRole; onSaved: (row: Mod
       void reloadModelDefaults();
       toast("ok", t(okKey, { role: t(`v3.models.role.${role.field}.name`, { defaultValue: role.field }) }));
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setSaving(false);
     }
@@ -131,6 +135,7 @@ function RoleRow({ role, onSaved }: { role: ModelSettingRole; onSaved: (row: Mod
             />
           )}
           <ProbeResult probe={probe} />
+          <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid={`v3-models-error-${role.field}`} />
         </div>
       </td>
       <td style={{ width: 1, whiteSpace: "nowrap" }}>

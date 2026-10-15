@@ -1,7 +1,9 @@
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { createLambdaTarget, type LambdaToolTarget, parseToolSchema, validateLambdaForm } from "../../../lib/api/mcpReviews";
+import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
 import { Btn, Notice } from "../../ui";
 
@@ -20,6 +22,7 @@ const EXAMPLE = JSON.stringify(
 export function LambdaTargetForm({ onCreated }: { onCreated?: (target: LambdaToolTarget) => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [arn, setArn] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -37,6 +40,7 @@ export function LambdaTargetForm({ onCreated }: { onCreated?: (target: LambdaToo
     if ("error" in parsed) return;
     setBusy(true);
     try {
+      failed.clear();
       const created = await createLambdaTarget({
         lambda_arn: arn.trim(),
         target_name: name.trim(),
@@ -50,7 +54,7 @@ export function LambdaTargetForm({ onCreated }: { onCreated?: (target: LambdaToo
       setTouched(false);
       onCreated?.(created);
     } catch (err) {
-      toast("act", t("lambdaTool.form.failed"), err);
+      failed.fail(err, t("lambdaTool.form.failed"));
     } finally {
       setBusy(false);
     }
@@ -85,6 +89,7 @@ export function LambdaTargetForm({ onCreated }: { onCreated?: (target: LambdaToo
           {t("lambdaTool.form.submit")}
         </Btn>
       </div>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-lambda-form-error" />
     </form>
   );
 }

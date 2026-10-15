@@ -3,8 +3,10 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { errorMessage, reviewLinkApi, type ShareLinkCreated, type ShareLinkInfo, shareLinkApi } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { reviewLinkApi, type ShareLinkCreated, type ShareLinkInfo, shareLinkApi } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Lamp, Notice, Panel, type Signal, Skeleton } from "../../ui";
@@ -21,6 +23,7 @@ const EXPIRY_CHOICES = ["7", "30", "90", "never"] as const;
 export function Reviewers() {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const { agents, label } = useAgents(current?.id ?? "");
   const [picked, setPicked] = useState("");
@@ -39,11 +42,12 @@ export function Reviewers() {
   const create = async () => {
     setBusy(true);
     try {
+      failed.clear();
       setCreated(await reviewLinkApi.create(agentId, { label: name.trim(), expires_in_days: expiry === "never" ? null : Number(expiry) }));
       setName("");
       setTick((n) => n + 1);
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -53,6 +57,7 @@ export function Reviewers() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <ErrorCallout error={failed.error} params={{ agent_id: agentId || undefined }} onDismiss={failed.clear} data-testid="v3-reviewers-error" />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <select className="v3-select v3-iss-select" value={agentId} onChange={(e) => setPicked(e.target.value)} aria-label={t("selfService.common.agent")}>
           {agents.map((a) => <option key={a.id} value={a.id}>{label(a.id)}</option>)}
@@ -146,10 +151,11 @@ export function Reviewers() {
             const target = revoking;
             setRevoking(null);
             try {
+              failed.clear();
               await shareLinkApi.revoke(target.id);
               setTick((n) => n + 1);
             } catch (err) {
-              toast("act", errorMessage(err), err);
+              failed.fail(err);
             }
           }}
         >

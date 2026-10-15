@@ -515,9 +515,10 @@ body.v3-body {
   transition: transform 0.12s var(--v3-ease), border-color 0.15s, background 0.15s, box-shadow 0.2s;
   white-space: nowrap;
 }
-.v3 .v3-btn:hover:not(:disabled) { border-color: var(--v3-text-3); background: var(--v3-ink-hover); }
-.v3 .v3-btn:active:not(:disabled) { transform: translateY(1px); }
-.v3 .v3-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.v3 .v3-btn:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--v3-text-3); background: var(--v3-ink-hover); }
+.v3 .v3-btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+/* aria-disabled = off with a reason (reason.tsx): it looks the same, but stays focusable */
+.v3 .v3-btn:disabled, .v3 .v3-btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
 .v3 .v3-btn.primary {
   color: var(--v3-on-ok);
   background: var(--v3-ok);
@@ -525,10 +526,10 @@ body.v3-body {
   font-weight: 650;
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--v3-ok) 50%, transparent);
 }
-.v3 .v3-btn.primary:hover:not(:disabled) { background: var(--v3-ok-hover); border-color: var(--v3-ok-hover); }
+.v3 .v3-btn.primary:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--v3-ok-hover); border-color: var(--v3-ok-hover); }
 .v3 .v3-btn.danger { color: var(--v3-act); border-color: color-mix(in srgb, var(--v3-act) 45%, transparent); background: var(--v3-act-dim); }
 .v3 .v3-btn.ghost { background: transparent; border-color: transparent; color: var(--v3-text-2); }
-.v3 .v3-btn.ghost:hover:not(:disabled) { background: var(--v3-ink-3); color: var(--v3-text); border-color: var(--v3-line); }
+.v3 .v3-btn.ghost:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--v3-ink-3); color: var(--v3-text); border-color: var(--v3-line); }
 .v3 .v3-btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
 
 .v3 .v3-input, .v3 .v3-select, .v3 textarea.v3-input {

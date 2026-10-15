@@ -2,8 +2,9 @@ import { ArrowLeftRight, Download, FileUp, Link2, RefreshCw, ShieldCheck } from 
 import { type ChangeEvent, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { NAMEID_FORMATS, type Provider, ssoAdminApi } from "../../../lib/api/sso-saml";
+import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Lamp, Notice, Panel } from "../../ui";
 import { type ProviderDraft, daysLeft, type DraftProblem, samlTestRows } from "./model";
@@ -32,6 +33,7 @@ export function CertExpiry({ notAfter, error }: { notAfter?: string; error?: str
 export function SamlExchange({ provider, onChanged }: { provider: Provider; onChanged: (next: Provider) => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const saml = provider.saml!;
   const [url, setUrl] = useState(saml.metadata_url);
   const [busy, setBusy] = useState<"url" | "xml" | "key" | null>(null);
@@ -41,10 +43,11 @@ export function SamlExchange({ provider, onChanged }: { provider: Provider; onCh
   const load = async (kind: "url" | "xml", source: { url?: string; xml?: string }) => {
     setBusy(kind);
     try {
+      failed.clear();
       onChanged(await ssoAdminApi.loadMetadata(provider.id, source));
       toast("ok", t("v3.sso.saml.loaded"));
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -58,10 +61,11 @@ export function SamlExchange({ provider, onChanged }: { provider: Provider; onCh
   const rotate = async () => {
     setBusy("key");
     try {
+      failed.clear();
       onChanged(await ssoAdminApi.rotateSpKey(provider.id));
       toast("ok", t("v3.sso.saml.rotated"));
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(null);
     }
@@ -120,6 +124,7 @@ export function SamlExchange({ provider, onChanged }: { provider: Provider; onCh
               onChange={pick} disabled={busy !== null} />
           </label>
         </form>
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-sso-saml-error" />
         {received ? (
           <dl className="v3-sso-received" data-testid="sso-received">
             <div><dt>{t("v3.sso.saml.idpEntityId")}</dt><dd className="mono">{saml.idp_entity_id}</dd></div>

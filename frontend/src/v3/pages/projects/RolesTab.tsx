@@ -3,8 +3,10 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { ApiError, errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { ApiError } from "../../../lib/api";
 import { type CustomRole, type ProjectDetail, type ProjectRoles, projectsApi } from "../../../lib/api/projects";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
@@ -25,6 +27,7 @@ export function RolesTab({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [tick, setTick] = useState(0);
   const roles = useLoad(() => projectsApi.roles(project.id), `v3-project-roles:${project.id}:${tick}`);
   const roleLabel = useRoleLabel(roles.data?.custom);
@@ -41,14 +44,15 @@ export function RolesTab({
   const remove = async (role: CustomRole) => {
     setBusy(true);
     try {
+      failed.clear();
       await projectsApi.deleteRole(project.id, role.key);
       toast("ok", t("v3.projects.roles.deleted", { name: role.name }));
       reload();
     } catch (err) {
       if (err instanceof ApiError && err.code === "project.role_in_use") {
         const count = (err.detail as { members?: number } | null)?.members ?? role.members;
-        toast("act", t("v3.projects.roles.inUse", { name: role.name, count }), err);
-      } else toast("act", errorMessage(err), err);
+        failed.fail(err, t("v3.projects.roles.inUse", { name: role.name, count }));
+      } else failed.fail(err);
     } finally {
       setBusy(false);
       setDeleting(null);
@@ -61,6 +65,7 @@ export function RolesTab({
 
   return (
     <div style={{ display: "grid", gap: 16 }} data-testid="project-roles">
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-roles-error" />
       <Panel
         title={t("v3.projects.roles.custom")}
         flush

@@ -3,6 +3,7 @@ import { type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   type AgentInvokeAccess,
   INVOKE_INCLUDES,
@@ -17,7 +18,9 @@ import {
 } from "../../../lib/api/invokeAccess";
 import { useProject } from "../../../workspace/project-context";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Filters, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import { Copyable } from "./Copyable";
 import "./invokeAccess.css";
@@ -34,6 +37,7 @@ export type Scope = InvokeQualifier | "all";
 export function InvokeAccessCard({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { current: ws } = useWorkspace();
   const { current: project } = useProject();
   const [scope, setScope] = useState<Scope>("all");
@@ -51,8 +55,11 @@ export function InvokeAccessCard({ agentId }: { agentId: string }) {
   const copy = (text: string, label: string) =>
     navigator.clipboard
       .writeText(text)
-      .then(() => toast("ok", t("v3.invokeAccess.copied", { label })))
-      .catch(() => toast("act", t("v3.invokeAccess.copyFailed")));
+      .then(() => {
+        failed.clear();
+        toast("ok", t("v3.invokeAccess.copied", { label }));
+      })
+      .catch(() => failed.fail(t("v3.invokeAccess.copyFailed")));
 
   const toggle = (opt: InvokeInclude) =>
     setInclude((prev) => (prev.includes(opt) ? prev.filter((o) => o !== opt) : [...prev, opt].sort()));
@@ -64,6 +71,7 @@ export function InvokeAccessCard({ agentId }: { agentId: string }) {
     >
       <div className="v3-ia" data-testid="v3-invoke-access">
         <p className="v3-hint" style={{ margin: "0 0 18px" }}>{t("v3.invokeAccess.sub")}</p>
+        <ErrorCallout error={failed.error} params={{ agent_id: agentId }} onDismiss={failed.clear} data-testid="v3-invoke-access-error" />
         {load.loading && !data && <Skeleton rows={4} />}
         {load.failure != null && !data && <Notice s="act"><ApiErrorDetail error={load.failure} /></Notice>}
         {data && (
@@ -123,7 +131,9 @@ export function InvokeAccessView({ data, scope, onScope, include, onToggle, lang
                   const off = opt === "stop_session" && data.kind === "harness";
                   return (
                     <label key={opt} aria-disabled={off} title={off ? t("v3.invokeAccess.include.harnessNoStop") : undefined}>
-                      <input type="checkbox" checked={include.includes(opt)} disabled={off} onChange={() => onToggle(opt)} />
+                      <Reasoned disabledReason={t("v3.invokeAccess.include.harnessNoStop")}>
+                        <input type="checkbox" checked={include.includes(opt)} disabled={off} onChange={() => onToggle(opt)} />
+                      </Reasoned>
                       {t(`v3.invokeAccess.include.${opt}`)}
                     </label>
                   );

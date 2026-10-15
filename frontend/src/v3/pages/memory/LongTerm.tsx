@@ -2,10 +2,11 @@ import { RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, errorMessage, type MemoryActor, type MemoryNamespace, type MemoryRecord, type MemoryStrategy } from "../../../lib/api";
 import { actorText, fmtRelevance, shortId, type TokenPaged, useTokenPaged } from "../../../v2/pages/memory/common";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
-import { useToast } from "../../hooks";
 import { Btn, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { LoadMore, SourceBadge } from "./common";
 
@@ -66,7 +67,7 @@ export function LongTerm({
   onSelectStrategy: (id: string | null) => void;
 }) {
   const { t } = useTranslation();
-  const toast = useToast();
+  const failed = useFailure();
   const [namespaces, setNamespaces] = useState<MemoryNamespace[]>([]);
   const [nsError, setNsError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -112,7 +113,7 @@ export function LongTerm({
     setSearching(true);
     api.memorySearchRecords({ query: query.trim(), actor_id: actorId, strategy_id: usable?.strategy_id ?? undefined, top_k: topK })
       .then((res) => setResults(res.items))
-      .catch((err: unknown) => toast("act", t("v3.memory.loadFailed", { msg: errorMessage(err) }), err))
+      .catch((err: unknown) => failed.fail(err, t("v3.memory.loadFailed", { msg: errorMessage(err) })))
       .finally(() => setSearching(false));
   };
 
@@ -129,6 +130,7 @@ export function LongTerm({
 
   return (
     <>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-memory-longterm-error" />
       <Panel>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <select className="v3-select" style={{ width: 280 }} value={actorId ?? ""} aria-label={t("v3.memory.actor")}

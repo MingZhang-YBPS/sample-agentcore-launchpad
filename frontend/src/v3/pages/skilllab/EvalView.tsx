@@ -3,11 +3,13 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
-import { api, errorMessage, type SkillLabJobInfo, type SkillLabJobResults } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { api, type SkillLabJobInfo, type SkillLabJobResults } from "../../../lib/api";
 import { elapsed, isLiveJob, LIVE_STATUSES, tasksetLabel } from "../../../lib/skillLab";
 import { ArtifactBrowser } from "../../../v2/pages/skilllab/ArtifactBrowser";
 import { EvalResults } from "../../../v2/pages/skilllab/EvalResults";
 import { passRateCache, useJob } from "../../../v2/pages/skilllab/state";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Lamp, Notice, PageHead, Panel, Skeleton, Stat } from "../../ui";
@@ -57,6 +59,7 @@ export function EvalView({ id }: { id: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const failed = useFailure();
   const { job, setJob, missing, error } = useJob(id);
   const [results, setResults] = useState<SkillLabJobResults | null>(null);
   const [resultsPending, setResultsPending] = useState(true);
@@ -107,6 +110,7 @@ export function EvalView({ id }: { id: string }) {
   const act = async () => {
     setBusy(true);
     try {
+      failed.clear();
       if (confirm === "cancel") {
         setJob(await api.skillLabJobCancel(job.id));
         toast("ok", t("skillLab.eval.cancelRequested"));
@@ -116,7 +120,7 @@ export function EvalView({ id }: { id: string }) {
         back();
       }
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -146,6 +150,7 @@ export function EvalView({ id }: { id: string }) {
           )
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-skilllab-eval-error" />
       {job.error && <Notice s="act"><span style={{ whiteSpace: "pre-wrap" }}>{job.error}</span></Notice>}
 
       <div className="v3-grid c4">

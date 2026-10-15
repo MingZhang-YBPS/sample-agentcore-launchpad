@@ -35,6 +35,7 @@ export function ActionDialog({ actions }: { actions: Actions }) {
       danger={kind !== "convert"}
       busy={busy}
       confirmDisabled={!ready}
+      confirmReason={t("story.reason.typeName")}
       onConfirm={() => void actions.confirm()}
       onCancel={close}
     >

@@ -6,8 +6,10 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
-import { type AlertKind, type AlertRuleInfo, api, errorMessage } from "../../lib/api";
+import { ErrorCallout } from "../../components/ErrorCallout";
+import { type AlertKind, type AlertRuleInfo, api } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -263,6 +265,7 @@ function SpendView() {
 function NewRuleDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [kind, setKind] = useState<AlertKind>("error_rate");
   const [name, setName] = useState("");
   const [threshold, setThreshold] = useState("");
@@ -275,6 +278,7 @@ function NewRuleDialog({ onClose, onDone }: { onClose: () => void; onDone: () =>
     const raw = Number(threshold);
     setBusy(true);
     try {
+      failed.clear();
       await api.createAlertRule({
         kind,
         name: name.trim() || undefined,
@@ -286,7 +290,7 @@ function NewRuleDialog({ onClose, onDone }: { onClose: () => void; onDone: () =>
       onDone();
       onClose();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
@@ -299,11 +303,12 @@ function NewRuleDialog({ onClose, onDone }: { onClose: () => void; onDone: () =>
       foot={
         <>
           <Btn kind="ghost" onClick={onClose} disabled={busy}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || !valid} onClick={() => void submit()}>{t("v2.alerts.create")}</Btn>
+          <Btn kind="primary" busy={busy} disabled={!valid} disabledReason={t("story.reason.fillThreshold")} onClick={() => void submit()}>{t("v2.alerts.create")}</Btn>
         </>
       }
     >
       <div style={{ display: "grid", gap: 12 }}>
+        <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-costs-rule-error" />
         <label className="v3-field">
           <span>{t("v2.alerts.kind")}</span>
           <select className="v3-select" value={kind} onChange={(e) => {
@@ -347,6 +352,7 @@ function NewRuleDialog({ onClose, onDone }: { onClose: () => void; onDone: () =>
 function AlertsView() {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const [tick, setTick] = useState(0);
   const [adding, setAdding] = useState(false);
@@ -359,31 +365,34 @@ function AlertsView() {
   const recheck = async () => {
     setBusy(true);
     try {
+      failed.clear();
       // notify=false: opening or refreshing the page must never page anyone
       const result = await api.evaluateAlerts(false);
       toast("ok", t("v2.alerts.rechecked", { firing: result.firing }));
       refresh();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
     }
   };
   const toggle = async (rule: AlertRuleInfo) => {
     try {
+      failed.clear();
       await api.updateAlertRule(rule.id, { enabled: !rule.enabled });
       refresh();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     }
   };
   const remove = async (rule: AlertRuleInfo) => {
     try {
+      failed.clear();
       await api.deleteAlertRule(rule.id);
       toast("ok", t("v2.alerts.deleted"));
       refresh();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     }
   };
 
@@ -396,6 +405,7 @@ function AlertsView() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-costs-alerts-error" />
       <div className="v3-grid c4">
         <Panel signal={firing ? "act" : undefined}><Stat label={t("v2.alerts.kpiFiring")} value={list.data ? firing : "—"} signal={firing ? "act" : undefined} /></Panel>
         <Panel signal={near ? "wait" : undefined}><Stat label={t("v3.costs.near")} value={list.data ? near : "—"} foot={t("v3.costs.nearFoot")} /></Panel>

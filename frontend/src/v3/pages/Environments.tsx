@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { ErrorCallout } from "../../components/ErrorCallout";
 import {
   api,
   type DriftAgent,
@@ -17,8 +18,9 @@ import {
 } from "../../lib/api";
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { ago } from "../format";
-import { useLoad, useToast } from "../hooks";
+import { useLoad } from "../hooks";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 
 /** How one environment's copy compares with the reference (the highest tier running it). */
@@ -59,7 +61,7 @@ function findingText(t: (k: string, o?: Record<string, unknown>) => string, a: D
  */
 export function V3Environments() {
   const { t } = useTranslation();
-  const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const [params, setParams] = useSearchParams();
   const ws = current?.id ?? "";
@@ -150,9 +152,10 @@ export function V3Environments() {
   const check = async () => {
     setChecking(true);
     try {
+      failed.clear();
       setDrift(await environmentApi.drift());
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setChecking(false);
     }
@@ -170,10 +173,11 @@ export function V3Environments() {
     if (names.includes(name)) return select(name);
     setLooking(true);
     try {
+      failed.clear();
       setExtra(await environmentApi.compare(name));
       select(name);
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setLooking(false);
     }
@@ -197,6 +201,7 @@ export function V3Environments() {
           </Btn>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-environments-error" />
 
       <div className="v3-grid c4">
         <Panel>

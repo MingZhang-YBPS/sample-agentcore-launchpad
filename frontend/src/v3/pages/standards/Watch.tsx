@@ -13,9 +13,13 @@ import { useNavigate } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { useAuth } from "../../../auth/auth-context";
-import { dlcApi, errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { dlcApi } from "../../../lib/api";
 import { DLC_DIMENSIONS, type RunComparison, type WatchView } from "../../../lib/dlc";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
+import { permReason } from "../../reasons";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { BandChart, LadderChart } from "./charts";
 import { CompareCost } from "./CompareCost";
@@ -25,6 +29,7 @@ function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: st
   const { t } = useTranslation();
   const { can } = useAuth();
   const toast = useToast();
+  const failed = useFailure();
   const config = view.config;
   const [form, setForm] = useState({
     every: config?.every ?? "daily",
@@ -35,11 +40,12 @@ function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: st
   });
   const [busy, setBusy] = useState(false);
   const mayEdit = can("eval.run");
+  const readOnly = permReason(t, "eval.run");
   const act = (fn: () => Promise<unknown>, okKey: string) => {
     setBusy(true);
     fn()
       .then(() => { toast("ok", t(okKey)); onReload(); })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => failed.fail(err))
       .finally(() => setBusy(false));
   };
 
@@ -47,29 +53,40 @@ function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: st
     <Panel title={t("v2.dlc.watch.config")} signal={config?.enabled ? "ok" : "wait"}
       end={config ? <Chip s={config.enabled ? "ok" : undefined}>{t(config.enabled ? "v2.dlc.watch.on" : "v2.dlc.watch.off")}</Chip> : <Chip s="wait">{t("v2.dlc.watch.notConfigured")}</Chip>}>
       <p className="v3-std-muted" style={{ margin: "0 0 12px" }}>{t("v2.dlc.watch.configSub")}</p>
+      <ErrorCallout error={failed.error} params={{ agent_id: agentId }} onDismiss={failed.clear} data-testid="v3-watch-error" />
       <div className="v3-grid c4" style={{ alignItems: "end" }}>
         <label className="v3-field">
           <span>{t("v2.dlc.watch.every")}</span>
-          <select className="v3-select" value={form.every} disabled={!mayEdit} onChange={(e) => setForm({ ...form, every: e.target.value as "daily" | "weekly" })}>
-            {["daily", "weekly"].map((v) => <option key={v} value={v}>{t(`v2.dlc.watch.${v}`)}</option>)}
-          </select>
+          <Reasoned disabledReason={readOnly}>
+            <select className="v3-select" value={form.every} disabled={!mayEdit} onChange={(e) => setForm({ ...form, every: e.target.value as "daily" | "weekly" })}>
+              {["daily", "weekly"].map((v) => <option key={v} value={v}>{t(`v2.dlc.watch.${v}`)}</option>)}
+            </select>
+          </Reasoned>
         </label>
         <label className="v3-field">
           <span>{t("v2.dlc.watch.atHour")}</span>
-          <input className="v3-input" type="number" min={0} max={23} disabled={!mayEdit} value={form.at_hour} onChange={(e) => setForm({ ...form, at_hour: Number(e.target.value) })} />
+          <Reasoned disabledReason={readOnly}>
+            <input className="v3-input" type="number" min={0} max={23} disabled={!mayEdit} value={form.at_hour} onChange={(e) => setForm({ ...form, at_hour: Number(e.target.value) })} />
+          </Reasoned>
         </label>
         <label className="v3-field">
           <span>{t("v2.dlc.watch.repeats")}</span>
-          <input className="v3-input" type="number" min={1} max={10} disabled={!mayEdit} value={form.repeats} onChange={(e) => setForm({ ...form, repeats: Number(e.target.value) })} />
+          <Reasoned disabledReason={readOnly}>
+            <input className="v3-input" type="number" min={1} max={10} disabled={!mayEdit} value={form.repeats} onChange={(e) => setForm({ ...form, repeats: Number(e.target.value) })} />
+          </Reasoned>
         </label>
         <label className="v3-field">
           <span>{t("v2.dlc.watch.ceiling")}</span>
-          <input className="v3-input" type="number" min={0} step={0.5} disabled={!mayEdit} value={form.max_cost_usd ?? ""}
-            onChange={(e) => setForm({ ...form, max_cost_usd: e.target.value === "" ? null : Number(e.target.value) })} />
+          <Reasoned disabledReason={readOnly}>
+            <input className="v3-input" type="number" min={0} step={0.5} disabled={!mayEdit} value={form.max_cost_usd ?? ""}
+              onChange={(e) => setForm({ ...form, max_cost_usd: e.target.value === "" ? null : Number(e.target.value) })} />
+          </Reasoned>
         </label>
       </div>
       <label style={{ display: "inline-flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-        <input type="checkbox" checked={form.enabled} disabled={!mayEdit} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
+        <Reasoned disabledReason={readOnly}>
+          <input type="checkbox" checked={form.enabled} disabled={!mayEdit} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
+        </Reasoned>
         {t("v2.dlc.watch.enabled")}
       </label>
       {config && (
@@ -87,7 +104,7 @@ function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: st
             }), "v2.dlc.watch.saved")}>
             {t("v3.standards.save")}
           </Btn>
-          <Btn disabled={busy || !config} onClick={() => act(() => dlcApi.runWatch(agentId), "v2.dlc.watch.started")}><Play size={13} /> {t("v2.dlc.watch.runNow")}</Btn>
+          <Btn busy={busy} disabled={!config} disabledReason={t("story.reason.saveFirst")} onClick={() => act(() => dlcApi.runWatch(agentId), "v2.dlc.watch.started")}><Play size={13} /> {t("v2.dlc.watch.runNow")}</Btn>
         </div>
       )}
     </Panel>

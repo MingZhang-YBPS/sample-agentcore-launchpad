@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   type MemberCandidate,
   type ProjectDetail,
@@ -12,6 +12,7 @@ import {
   type ProjectRoles,
   projectsApi,
 } from "../../../lib/api/projects";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Notice, Panel, Skeleton } from "../../ui";
 import { KeyPicker } from "./KeyPicker";
@@ -46,6 +47,7 @@ export function MembersTab({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { username } = useAuth();
   const [tick, setTick] = useState(0);
   const members = useLoad(() => projectsApi.members(project.id), `v3-project-members:${project.id}:${tick}`);
@@ -71,11 +73,12 @@ export function MembersTab({
   const remove = async (m: ProjectMember) => {
     setBusy(true);
     try {
+      failed.clear();
       await projectsApi.removeMember(project.id, m.user_id);
       toast("ok", t("v3.projects.members.removed", { name: m.username ?? m.user_id }));
       reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setBusy(false);
       setRemoving(null);
@@ -109,6 +112,7 @@ export function MembersTab({
         {canWrite && <Btn kind="primary" onClick={() => setEditing("new")}><UserPlus size={14} /> {t("v3.projects.members.add")}</Btn>}
       </div>
 
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-members-error" />
       <Panel flush>
         {members.loading && !members.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>

@@ -4,8 +4,10 @@ import { Link } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { useAuth } from "../../auth/auth-context";
-import { api, errorMessage, type UserGrantInfo } from "../../lib/api";
+import { ErrorCallout } from "../../components/ErrorCallout";
+import { api, type UserGrantInfo } from "../../lib/api";
 import { revokeDisabled, runRevoke } from "../../lib/user-grants";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
@@ -27,6 +29,7 @@ function grantSignal(g: Pick<UserGrantInfo, "status" | "force_reauth">): Signal 
 export function V3Connections() {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { can } = useAuth();
   const mayRevoke = can("identity.grant");
   const grants = useLoad(() => api.listMyGrants(), "v3-my-grants");
@@ -48,12 +51,13 @@ export function V3Connections() {
         setConfirm(null);
         grants.reload();
       },
-      onError: (err) => toast("act", errorMessage(err), err),
+      onError: (err) => failed.fail(err),
     });
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
       <PageHead eyebrow={t("v3.connections.eyebrow")} title={t("v3.connections.title")} sub={t("v3.connections.sub")} />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-connections-error" />
       {!mayRevoke && <Notice>{t("v2.myConnections.noPermission")}</Notice>}
       <div className="v3-grid c4">
         <Panel><Stat label={t("v3.connections.connections")} value={grants.data ? connections : "—"} foot={t("v3.connections.connectionsFoot")} /></Panel>

@@ -47,7 +47,7 @@ export function useCopyStepLink() {
   return useCallback((path: string) => {
     const url = `${window.location.origin}${path}`;
     const done = () => toast("ok", t("story.card.copied"));
-    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(done, () => toast("act", url));
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(done, () => toast("ok", url));
     else toast("ok", url);
   }, [t, toast]);
 }

@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
+import { ErrorCallout } from "../../components/ErrorCallout";
 import { AGENT_PERMISSIONS, togglePermission, api, type ConsoleUser, type UserState } from "../../lib/api";
 import { isSteward } from "../../lib/api/steward";
 import { type ProjectUser, usersApi } from "../../lib/api/users";
@@ -161,6 +162,7 @@ function UserList() {
           </>
         }
       />
+      <ErrorCallout error={actions.failed.error} onDismiss={actions.failed.clear} data-testid="v3-users-error" />
 
       {s && s.pending > 0 && (
         <Notice s="wait">
@@ -425,6 +427,7 @@ function UserDetail({ username }: { username: string }) {
           sub={t("v3.users.builtin.sub")}
           end={passwordAction}
         />
+        <ErrorCallout error={actions.failed.error} onDismiss={actions.failed.clear} data-testid="v3-user-error" />
         <Notice s="wait">{t("v3.users.builtin.notice")}</Notice>
         <div className="v3-grid c4">
           <Panel signal="ok"><Stat label={t("v2.users.col.state")} value={t("v2.users.state.active")} /></Panel>
@@ -476,6 +479,7 @@ function UserDetail({ username }: { username: string }) {
           </>
         }
       />
+      <ErrorCallout error={actions.failed.error} onDismiss={actions.failed.clear} data-testid="v3-user-error" />
 
       {user.state === "pending" && <Notice s="wait">{t("v2.users.pendingAlert")}</Notice>}
       {user.state === "expired" && <Notice s="act">{t("v2.users.expiredAlert")}</Notice>}

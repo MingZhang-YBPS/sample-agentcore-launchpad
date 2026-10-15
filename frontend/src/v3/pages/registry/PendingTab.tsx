@@ -5,9 +5,12 @@ import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, errorMessage, type RegistryRecordOut } from "../../../lib/api";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Panel } from "../../ui";
 import { PAGE_SIZE, pageCount, runBatch, type RowState } from "./queue";
 
@@ -48,6 +51,8 @@ export function PendingTab({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  // a batch with refused rows says so in place; the rows keep their own reasons
+  const outcome = useFailure();
   const [type, setType] = useState<"all" | RecordType>("all");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(0);
@@ -95,6 +100,7 @@ export function PendingTab({
     setDecision(action);
     setRunning(true);
     setFailed([]);
+    outcome.clear();
     const result = await runBatch(
       ids,
       (id) => api.registryAction(id, action),
@@ -107,9 +113,8 @@ export function PendingTab({
     setSelected((prev) => new Set([...prev].filter((id) => !done.has(id))));
     setFailed(result.failed);
     const verb = t(`v3.registry.batch.${action}Done`);
-    toast(result.failed.length ? "act" : "ok", result.failed.length
-      ? t("v3.registry.batch.summary", { verb, ok: result.ok.length, failed: result.failed.length })
-      : t("v3.registry.batch.summaryOk", { verb, ok: result.ok.length }));
+    if (result.failed.length) outcome.fail(t("v3.registry.batch.summary", { verb, ok: result.ok.length, failed: result.failed.length }));
+    else toast("ok", t("v3.registry.batch.summaryOk", { verb, ok: result.ok.length }));
     // one reload for the whole batch, after the finished rows have faded
     if (result.ok.length) window.setTimeout(onDone, FADE_MS);
   };
@@ -152,22 +157,25 @@ export function PendingTab({
 
   return (
     <>
+      <ErrorCallout error={outcome.error} onDismiss={outcome.clear} data-testid="v3-registry-batch-error" />
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <label style={{ display: "inline-flex", gap: 8, alignItems: "center", color: "var(--v3-text-2)" }}>
-          <input
-            type="checkbox"
-            checked={allChosen}
-            disabled={!selectable.length || running}
-            ref={(el) => { if (el) el.indeterminate = chosen.length > 0 && !allChosen; }}
-            onChange={() => setSelected(allChosen ? new Set() : new Set(selectable))}
-          />
+          <Reasoned disabledReason={running ? null : t("story.reason.nothingToPick")}>
+            <input
+              type="checkbox"
+              checked={allChosen}
+              disabled={!selectable.length || running}
+              ref={(el) => { if (el) el.indeterminate = chosen.length > 0 && !allChosen; }}
+              onChange={() => setSelected(allChosen ? new Set() : new Set(selectable))}
+            />
+          </Reasoned>
           {t("v3.registry.batch.selectAll", { count: selectable.length })}
         </label>
         <span className="mono" style={{ color: "var(--v3-text-3)" }}>{t("v3.registry.batch.selected", { count: chosen.length })}</span>
-        <Btn size="sm" kind="primary" disabled={!chosen.length || running} onClick={() => setConfirm({ action: "approve", ids: chosen })}>
+        <Btn size="sm" kind="primary" busy={running} disabled={!chosen.length} disabledReason={t("story.reason.selectRows")} onClick={() => setConfirm({ action: "approve", ids: chosen })}>
           {t("v3.registry.batch.approve")}
         </Btn>
-        <Btn size="sm" disabled={!chosen.length || running} onClick={() => setConfirm({ action: "reject", ids: chosen })}>
+        <Btn size="sm" busy={running} disabled={!chosen.length} disabledReason={t("story.reason.selectRows")} onClick={() => setConfirm({ action: "reject", ids: chosen })}>
           {t("v3.registry.batch.reject")}
         </Btn>
         {retry.length > 0 && !running && (
@@ -250,11 +258,11 @@ export function PendingTab({
         {pages > 1 && (
           <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }} role="navigation" aria-label={t("v3.registry.pages")}>
             <span style={{ marginRight: 8 }}>{t("v3.registry.perPage", { count: PAGE_SIZE })}</span>
-            <Btn size="sm" kind="ghost" disabled={at === 0} title={t("v3.registry.prevPage")} onClick={() => { setPage(at - 1); setCursor(0); }}>‹</Btn>
+            <Btn size="sm" kind="ghost" disabled={at === 0} disabledReason={t("story.reason.firstPage")} title={t("v3.registry.prevPage")} onClick={() => { setPage(at - 1); setCursor(0); }}>‹</Btn>
             {Array.from({ length: pages }, (_, p) => (
               <Btn key={p} size="sm" kind={p === at ? undefined : "ghost"} onClick={() => { setPage(p); setCursor(0); }}>{p + 1}</Btn>
             ))}
-            <Btn size="sm" kind="ghost" disabled={at === pages - 1} title={t("v3.registry.nextPage")} onClick={() => { setPage(at + 1); setCursor(0); }}>›</Btn>
+            <Btn size="sm" kind="ghost" disabled={at === pages - 1} disabledReason={t("story.reason.lastPage")} title={t("v3.registry.nextPage")} onClick={() => { setPage(at + 1); setCursor(0); }}>›</Btn>
           </span>
         )}
       </div>

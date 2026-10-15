@@ -3,6 +3,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { ErrorCallout } from "../../components/ErrorCallout";
 import { JumpToLatest } from "../../components/JumpToLatest";
 import { Markdown } from "../../components/Markdown";
 import { StructuredAnswer } from "../../components/chat/StructuredAnswer";
@@ -11,7 +12,6 @@ import {
   api,
   type ChatHistoryMessage,
   type ChatSessionInfo,
-  errorMessage,
   feedbackApi,
   type FeedbackVerdict,
 } from "../../lib/api";
@@ -68,9 +68,12 @@ import { useAuth } from "../../auth/auth-context";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { appendDelta, attachStructured } from "../../v2/pages/chat/messages";
 import type { ChatMessage } from "../../v2/pages/chat/messages";
+import { useFailure } from "../failure";
+import { Reasoned } from "../reason";
+import { stepReason } from "../reasons";
 import { agentSignal } from "../signals";
 import { Btn, Empty, Lamp, Notice, Skeleton } from "../ui";
-import { useLoad, useToast } from "../hooks";
+import { useLoad } from "../hooks";
 import { ago } from "../format";
 import { StoryHeader } from "../story/StoryHeader";
 import { ApiKeysEntry } from "./agent/ApiKeysCard";
@@ -130,7 +133,7 @@ function PolicyDenied({ deny }: { deny: PolicyDeny }) {
 
 export function V3Chat() {
   const { t } = useTranslation();
-  const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const [params, setParams] = useSearchParams();
   const agents = useLoad(() => api.listAgents(), `v3-chat-agents:${current?.id ?? ""}`);
@@ -196,6 +199,7 @@ export function V3Chat() {
     setNeedsV2(false);
     let running: RunningTurn | null = null;
     try {
+      failed.clear();
       const history = await chatHistory(agentId, sid);
       running = history.running_turn ?? null;
       // a turn still answering is shown up to its user message; the rest is replayed
@@ -206,7 +210,7 @@ export function V3Chat() {
       thread.toBottom(); // an opened conversation starts at its latest turn
     } catch (err) {
       running = null;
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     } finally {
       setRestoring(false);
     }
@@ -542,10 +546,11 @@ export function V3Chat() {
     const before = msg.verdict ?? null;
     setMessages((m) => m.map((x, i) => (i === index ? { ...x, verdict: verdict === "none" ? null : verdict } : x)));
     try {
+      failed.clear();
       await feedbackApi.rate(agentId, { session_id: sessionId, message_id: msg.id, verdict });
     } catch (err) {
       setMessages((m) => m.map((x, i) => (i === index ? { ...x, verdict: before } : x)));
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
     }
   };
 
@@ -578,7 +583,8 @@ export function V3Chat() {
             ))}
           </select>
         </label>
-        <Btn onClick={fresh} disabled={!agentId}>
+        <Btn onClick={fresh} disabled={!agentId}
+          disabledReason={eligible.length === 0 ? stepReason(t, "build.create") : t("story.reason.pickAgent")}>
           <Plus size={14} /> {t("v3.chat.new")}
         </Btn>
         <div className="v3-rail-label" style={{ padding: "6px 2px 0" }}>{t("v3.chat.sessions")}</div>
@@ -717,6 +723,11 @@ export function V3Chat() {
               </Notice>
             </div>
           )}
+          {failed.error != null && (
+            <div className="v3-msg">
+              <ErrorCallout error={failed.error} params={{ agent_id: agentId || undefined }} onDismiss={failed.clear} data-testid="v3-chat-action-error" />
+            </div>
+          )}
           <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
         </div>
 
@@ -727,6 +738,7 @@ export function V3Chat() {
             void send();
           }}
         >
+          <Reasoned disabledReason={!agent ? (eligible.length === 0 ? stepReason(t, "build.create") : t("story.reason.pickAgent")) : null}>
           <textarea
             ref={inputRef}
             rows={1}
@@ -737,15 +749,18 @@ export function V3Chat() {
             disabled={!agent || busy}
             aria-label={t("v3.chat.placeholder", { name: agent?.name ?? "" })}
           />
+          </Reasoned>
           {busy ? (
             <button type="button" className="v3-btn" onClick={stopTurn} aria-label={t("v3.chat.status.stop")}
               title={t("v3.chat.status.stop")} data-testid="chat-stop">
               <Square size={14} />
             </button>
           ) : (
-            <button type="submit" className="v3-btn primary" disabled={!agent || !input.trim()} aria-label={t("v3.chat.send")}>
-              <ArrowUp size={16} />
-            </button>
+            <Reasoned disabledReason={!agent ? t("story.reason.pickAgent") : t("story.reason.typePrompt")}>
+              <button type="submit" className="v3-btn primary" disabled={!agent || !input.trim()} aria-label={t("v3.chat.send")}>
+                <ArrowUp size={16} />
+              </button>
+            </Reasoned>
           )}
         </form>
       </section>

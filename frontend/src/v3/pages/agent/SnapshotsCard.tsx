@@ -98,7 +98,7 @@ export function SnapshotsCard({
         title={t("v3.agent.snapshots.title")}
         flush
         end={
-          <Btn size="sm" disabled={!snaps.canCompare} onClick={snaps.openDiff}>
+          <Btn size="sm" disabled={!snaps.canCompare} disabledReason={t("story.reason.twoSnapshots")} onClick={snaps.openDiff}>
             <GitCompare size={13} /> {t("v3.agent.snapshots.compare")}
           </Btn>
         }
@@ -147,7 +147,7 @@ export function SnapshotsCard({
                     {r.seq === snaps.currentSeq ? (
                       <Chip s="ok">{t("v3.agent.snapshots.current")}</Chip>
                     ) : (
-                      <Btn size="sm" kind="ghost" disabled={!canRollback} title={canRollback ? undefined : blockedTitle} onClick={() => snaps.askRollback(r)}>
+                      <Btn size="sm" kind="ghost" disabled={!canRollback} disabledReason={blockedTitle ?? t("story.reason.unavailable")} onClick={() => snaps.askRollback(r)}>
                         <RotateCcw size={13} /> {t("v3.agent.snapshots.rollback")}
                       </Btn>
                     )}

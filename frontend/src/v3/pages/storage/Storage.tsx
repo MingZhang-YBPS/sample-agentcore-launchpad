@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { networkApi } from "../../../lib/api/networkProfiles";
 import {
   checksOf,
@@ -18,6 +18,7 @@ import {
   storageFormToBody,
 } from "../../../lib/api/storage";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { STATUS_SIGNAL } from "./model";
@@ -45,6 +46,7 @@ export function V3Storage() {
   const { isAdmin } = useAuth();
   const { current } = useWorkspace();
   const toast = useToast();
+  const failed = useFailure();
   const [params, setParams] = useSearchParams();
   const selectedId = params.get("id") ?? "";
   const [version, setVersion] = useState(0);
@@ -72,12 +74,13 @@ export function V3Storage() {
   const run = async (e: StorageEntry, call: () => Promise<unknown>, okKey: string) => {
     setBusyId(e.id);
     try {
+      failed.clear();
       await call();
       toast("ok", t(okKey, { name: e.name }));
       reload();
       return true;
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      failed.fail(err);
       return false;
     } finally {
       setBusyId(null);
@@ -98,6 +101,7 @@ export function V3Storage() {
           </>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-storage-error" />
       <Panel flush>
         {list.loading && !list.data ? (
           <div style={{ padding: 20 }}><Skeleton rows={4} /></div>
@@ -131,7 +135,7 @@ export function V3Storage() {
             const body = storageFormToBody(form);
             if (editing === "new") {
               const created = await storageApi.register(body);
-              if (created.check_error) toast("act", created.check_error.message);
+              if (created.check_error) failed.fail(created.check_error.message);
             } else {
               await storageApi.update(editing.id, {
                 name: body.name ?? editing.id, max_mode: body.max_mode, data_class: body.data_class,

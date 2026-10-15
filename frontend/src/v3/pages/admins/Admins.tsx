@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, type ConsoleUser, errorMessage } from "../../../lib/api";
 import { type AdminAccount, adminsApi } from "../../../lib/api/projects";
 import { isSteward, STEWARD_ROLE, stewardApi } from "../../../lib/api/steward";
@@ -292,6 +293,7 @@ function AdminList() {
           </>
         }
       />
+      <ErrorCallout error={actions.failed.error} onDismiss={actions.failed.clear} data-testid="v3-admins-error" />
       {list.data && list.data.can_sign_in <= 1 && <Notice s="wait">{t("v3.admins.lastNotice")}</Notice>}
       {!canManage && <Notice s="info">{t("v3.steward.readOnly")}</Notice>}
 

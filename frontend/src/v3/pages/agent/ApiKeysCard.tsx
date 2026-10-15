@@ -4,11 +4,13 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { type ApiKeyInfo, type ApiKeyUsage, chatApi } from "../../../lib/api";
 import { canWriteKeys, keysForAgent, keyState, type KeyState, v1Sample } from "../../../lib/api/invokeAccess";
 import { apiKeyMeta, apiKeyOffboardedNote } from "../../../v2/pages/chat/apiKeys";
 import { useProject } from "../../../workspace/project-context";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { useNextStep } from "../../story/useNextStep";
 import { Btn, Chip, Confirm, Lamp, Notice, Panel, type Signal, Skeleton, Spark } from "../../ui";
@@ -37,6 +39,7 @@ function useKeys() {
 export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName: string }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { isAdmin } = useAuth();
   const { current: project } = useProject();
   const keys = useKeys();
@@ -54,19 +57,20 @@ export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName
     navigator.clipboard
       .writeText(text)
       .then(() => toast("ok", t("v3.apiKeys.copied")))
-      .catch(() => toast("act", t("v3.apiKeys.copyFailed")));
+      .catch(() => failed.fail(t("v3.apiKeys.copyFailed")));
 
   const create = async () => {
     setBusy("create");
     nextStep.clear();
     try {
+      failed.clear();
       const fallback = `${agentName}-${(keys.data?.keys.length ?? 0) + 1}`.slice(0, 64);
       setMinted(await chatApi.createApiKey(name.trim() || fallback, { agent_ids: [agentId] }));
       setName("");
       keys.reload();
       nextStep.show({ done: t("story.done.apiKey"), after: "release.api_key", agentId });
     } catch (err) {
-      toast("act", t("v3.apiKeys.createFailed"), err);
+      failed.fail(err, t("v3.apiKeys.createFailed"));
     } finally {
       setBusy(null);
     }
@@ -75,11 +79,12 @@ export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName
   const toggle = async (key: ApiKeyInfo) => {
     setBusy(key.id);
     try {
+      failed.clear();
       await chatApi.setApiKeyEnabled(key.id, !key.enabled);
       toast("ok", t(key.enabled ? "v3.apiKeys.disabledOk" : "v3.apiKeys.enabledOk", { name: key.name }));
       keys.reload();
     } catch (err) {
-      toast("act", t("v3.apiKeys.toggleFailed"), err);
+      failed.fail(err, t("v3.apiKeys.toggleFailed"));
     } finally {
       setBusy(null);
     }
@@ -92,11 +97,12 @@ export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName
     }
     setUsage((prev) => ({ ...prev, [key.id]: "loading" }));
     try {
+      failed.clear();
       const u = await chatApi.apiKeyUsage(key.id, 14);
       setUsage((prev) => ({ ...prev, [key.id]: u }));
     } catch (err) {
       setUsage((prev) => without(prev, key.id));
-      toast("act", t("v3.apiKeys.usageFailed"), err);
+      failed.fail(err, t("v3.apiKeys.usageFailed"));
     }
   };
 
@@ -138,6 +144,7 @@ export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName
           </Notice>
         )}
         {nextStep.card}
+        <ErrorCallout error={failed.error} params={{ agent_id: agentId }} onDismiss={failed.clear} data-testid="v3-api-keys-error" />
 
         {keys.loading && !keys.data && <Skeleton rows={2} />}
         {keys.error && <Notice s="act">{keys.error} <Btn size="sm" kind="ghost" onClick={keys.reload}>{t("v3.apiKeys.retry")}</Btn></Notice>}

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   adoptExternalTarget,
   deleteLambdaTarget,
@@ -13,6 +14,7 @@ import {
   toolReviewApi,
 } from "../../../lib/api/mcpReviews";
 import { sharedFromOf } from "../../../lib/api/sharedFrom";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { SharedFromTag } from "../../shares/SharedFromTag";
 import { Btn, Chip, Confirm, Empty, Notice, Panel, type Signal, Skeleton } from "../../ui";
@@ -40,6 +42,7 @@ function ToolReview({ toolId, onChanged }: { toolId: string; onChanged: () => vo
 export function GatewayToolTargets() {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [nonce, setNonce] = useState(0);
   const [open, setOpen] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<LambdaToolTarget | null>(null);
@@ -51,11 +54,12 @@ export function GatewayToolTargets() {
   const adopt = async (target: ExternalMcpTarget) => {
     setBusy(true);
     try {
+      failed.clear();
       await adoptExternalTarget(target.target_id);
       toast("ok", t("lambdaTool.external.adopted", { name: target.target_name }));
       reload();
     } catch (err) {
-      toast("act", t("lambdaTool.external.adoptFailed"), err);
+      failed.fail(err, t("lambdaTool.external.adoptFailed"));
     } finally {
       setBusy(false);
     }
@@ -65,12 +69,13 @@ export function GatewayToolTargets() {
     if (!deleting) return;
     setBusy(true);
     try {
+      failed.clear();
       await deleteLambdaTarget(deleting.id);
       toast("ok", t("lambdaTool.list.deleted", { name: deleting.target_name }));
       setDeleting(null);
       reload();
     } catch (err) {
-      toast("act", t("lambdaTool.list.deleteFailed"), err);
+      failed.fail(err, t("lambdaTool.list.deleteFailed"));
     } finally {
       setBusy(false);
     }
@@ -81,6 +86,7 @@ export function GatewayToolTargets() {
       <Panel title={t("lambdaTool.form.title")}>
         <LambdaTargetForm onCreated={(row) => { setOpen(row.id); reload(); }} />
       </Panel>
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-gateway-tools-error" />
       <Panel title={t("lambdaTool.list.title")}>
         {lambdas.error ? (
           <Notice s="act"><ApiErrorDetail error={lambdas.failure ?? lambdas.error} /></Notice>

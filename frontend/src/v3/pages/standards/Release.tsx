@@ -13,10 +13,12 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { ErrorCallout } from "../../../components/ErrorCallout";
-import { dlcApi, errorMessage } from "../../../lib/api";
+import { dlcApi } from "../../../lib/api";
 import { type GateRow, type ReleaseState, type Waiver, estimateValue, goldenVersionsLabel, waiverGapLabel } from "../../../lib/dlc";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
+import { firstReason } from "../../reasons";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { decisionSignal, gateSignal, stamp } from "./common";
 
@@ -99,7 +101,12 @@ function Waivers({ state, rows, onReload }: { state: ReleaseState; rows: GateRow
           foot={
             <>
               <Btn kind="ghost" onClick={() => setAsking(false)}>{t("v3.common.cancel")}</Btn>
-              <Btn kind="primary" disabled={busy || !form.criterion_key || form.reason.trim() === "" || form.risk_owner.trim() === ""}
+              <Btn kind="primary" busy={busy} disabled={!form.criterion_key || form.reason.trim() === "" || form.risk_owner.trim() === ""}
+                disabledReason={firstReason(
+                  !form.criterion_key && t("story.reason.pickCriterion"),
+                  form.reason.trim() === "" && t("story.reason.fillReason"),
+                  form.risk_owner.trim() === "" && t("story.reason.fillRiskOwner"),
+                )}
                 onClick={() => {
                   setAsking(false);
                   const row = rows.find((r) => r.key === form.criterion_key);
@@ -189,6 +196,7 @@ function PolicyPanel() {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();
   const toast = useToast();
+  const failed = useFailure();
   const { current } = useWorkspace();
   const workspaceId = current?.id ?? "default";
   const [nonce, setNonce] = useState(0);
@@ -216,13 +224,14 @@ function PolicyPanel() {
         eval_cost_max_usd: form.max === "" ? null : Number(form.max),
       })
       .then(() => { toast("ok", t("v2.dlc.policy.saved")); setNonce((n) => n + 1); })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => failed.fail(err))
       .finally(() => setBusy(false));
   };
 
   return (
     <Panel title={t("v2.dlc.policy.title")} end={<Chip>{data.tier}</Chip>}>
       <p className="v3-std-muted" style={{ margin: "0 0 12px" }}>{t("v2.dlc.policy.sub", { tier: data.tier })}</p>
+      <ErrorCallout error={failed.error} params={{ workspace_id: workspaceId }} onDismiss={failed.clear} data-testid="v3-release-policy-error" />
       <div className="v3-grid c3">
         <label className="v3-field">
           <span>{t("v2.dlc.policy.mode")}</span>
@@ -313,7 +322,8 @@ export function Release({ agentId }: { agentId: string }) {
           {!live.gateable && live.gateable_reason ? ` ${live.gateable_reason}` : ""}{" "}
           {/* moving production onto named endpoints is a release decision */}
           {can("release.sign") && (
-            <Btn size="sm" disabled={busy || !live.gateable} title={live.gateable_reason ?? undefined} onClick={() => setConfirmMigrate(true)}>
+            <Btn size="sm" busy={busy} disabled={!live.gateable} disabledReason={live.gateable_reason ?? t("story.reason.unavailable")}
+              onClick={() => setConfirmMigrate(true)}>
               {t("v2.dlc.release.migrate")}
             </Btn>
           )}
@@ -355,7 +365,7 @@ export function Release({ agentId }: { agentId: string }) {
             {repeats > 1 && <Notice s="wait">{t("v2.dlc.release.passKCost", { k: repeats })}</Notice>}
             <div>
               {/* over the ceiling is refused; above the confirm line the click is the confirmation */}
-              <Btn kind="primary" disabled={busy || est?.over_limit}
+              <Btn kind="primary" busy={busy} disabled={est?.over_limit} disabledReason={t("story.reason.overCostLimit")}
                 onClick={() => run(() => dlcApi.evaluateRelease(agentId, { repeats, confirm_cost: Boolean(est?.confirm_required) }), "v2.dlc.release.evaluating")}>
                 {t("v2.dlc.release.evaluate")}
               </Btn>

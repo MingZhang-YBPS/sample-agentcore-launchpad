@@ -125,7 +125,7 @@ export function CriteriaIndex({
         flush
         end={
           can("criteria.manage") ? (
-            <Btn size="sm" kind="primary" disabled={!agentId} title={agentId ? undefined : t("v2.dlc.pickAgentFirst")}
+            <Btn size="sm" kind="primary" disabled={!agentId} disabledReason={t("v2.dlc.pickAgentFirst")}
               onClick={() => {
                 setName("");
                 setTemplate("");
@@ -186,8 +186,8 @@ export function CriteriaIndex({
           foot={
             <>
               <Btn kind="ghost" onClick={() => setCreating(false)}>{t("v3.common.cancel")}</Btn>
-              <Btn disabled={busy || name.trim() === ""} onClick={() => create("template")}>{t("v2.dlc.criteria.createTemplate")}</Btn>
-              <Btn kind="primary" disabled={busy || name.trim() === ""} onClick={() => create("agent")}>{t("v2.dlc.criteria.createForAgent")}</Btn>
+              <Btn busy={busy} disabled={name.trim() === ""} disabledReason={t("story.reason.fillName")} onClick={() => create("template")}>{t("v2.dlc.criteria.createTemplate")}</Btn>
+              <Btn kind="primary" busy={busy} disabled={name.trim() === ""} disabledReason={t("story.reason.fillName")} onClick={() => create("agent")}>{t("v2.dlc.criteria.createForAgent")}</Btn>
             </>
           }
         >
@@ -492,12 +492,12 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {!frozen && mayEdit && (
           <>
-            <Btn kind="primary" disabled={busy || !dirty}
+            <Btn kind="primary" busy={busy} disabled={!dirty} disabledReason={t("story.reason.noChanges")}
               onClick={() => void run(() => dlcApi.saveSet(set.lineage_id, { criteria: rows }), "v2.dlc.criteria.saved")}>
               {t("v3.standards.save")}
             </Btn>
-            <Btn disabled={busy || dirty || errors.length > 0 || rows.length === 0}
-              title={errors.length > 0 ? t("v2.dlc.criteria.fixFirst") : dirty ? t("v3.standards.saveFirst") : undefined}
+            <Btn busy={busy} disabled={dirty || errors.length > 0 || rows.length === 0}
+              disabledReason={errors.length > 0 ? t("v2.dlc.criteria.fixFirst") : dirty ? t("v3.standards.saveFirst") : t("story.reason.addCriterion")}
               onClick={() => setConfirmPublish(true)}>
               {t("v2.dlc.criteria.publish")}
             </Btn>

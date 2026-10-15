@@ -76,7 +76,7 @@ export function PromotionCard({ agent, currentWorkspaceId }: { agent: AgentInfo;
           foot={
             <>
               <Btn kind="ghost" onClick={rel.cancelAsk} disabled={rel.busy}>{t("v3.agent.action.cancel")}</Btn>
-              <Btn kind="primary" disabled={!rel.canRequest} onClick={() => void rel.request()}>{t("v3.agent.promotion.requestConfirm")}</Btn>
+              <Btn kind="primary" busy={rel.busy} disabled={!rel.canRequest} disabledReason={t("story.reason.fillRequired")} onClick={() => void rel.request()}>{t("v3.agent.promotion.requestConfirm")}</Btn>
             </>
           }
         >

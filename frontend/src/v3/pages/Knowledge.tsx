@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../components/ErrorCallout";
 import { api, ApiError, errorMessage, v2KnowledgeApi } from "../../lib/api";
 import {
   type DataSource,
@@ -21,8 +22,10 @@ import {
   type QueryResultItem,
 } from "../../lib/knowledgeBases";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
+import { Reasoned } from "../reason";
 import { SharedFromTag } from "../shares/SharedFromTag";
 import { kbSignal, resourceSignal } from "../signals";
 import {
@@ -61,6 +64,7 @@ function useKbStatus() {
 function useKbDelete(onDeleted: () => void) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [target, setTarget] = useState<{ kb_id: string; name: string } | null>(null);
   const [conflict, setConflict] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -72,6 +76,7 @@ function useKbDelete(onDeleted: () => void) {
     if (!target) return;
     setBusy(true);
     try {
+      failed.clear();
       await v2KnowledgeApi.remove(target.kb_id, force);
       toast("ok", t("knowledge.detail.deleted", { name: target.name }));
       close();
@@ -80,7 +85,7 @@ function useKbDelete(onDeleted: () => void) {
       if (err instanceof ApiError && err.code === "kb.has_attached_agents" && !force) {
         setConflict(extractConflictAgents({ detail: err.detail }));
       } else {
-        toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
+        failed.fail(err, t("common.actionFailed", { msg: errorMessage(err) }));
         close();
       }
     } finally {
@@ -102,7 +107,7 @@ function useKbDelete(onDeleted: () => void) {
         : t("knowledge.detail.delete.body", { name: target.name })}
     </Confirm>
   ) : null;
-  return { ask: (kb: { kb_id: string; name: string }) => setTarget(kb), dialog };
+  return { ask: (kb: { kb_id: string; name: string }) => setTarget(kb), dialog, failed };
 }
 
 /* ── shelf ───────────────────────────────────────────────────────────────── */
@@ -308,12 +313,15 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
         }}
         style={{ display: "flex", gap: 8 }}
       >
-        <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)} disabled={!ready}
-          placeholder={t("knowledge.detail.playground.queryPlaceholder")} aria-label={t("knowledge.detail.playground.query")} />
+        <Reasoned disabledReason={t("v3.kb.retrieveNotReady")}>
+          <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)} disabled={!ready}
+            placeholder={t("knowledge.detail.playground.queryPlaceholder")} aria-label={t("knowledge.detail.playground.query")} />
+        </Reasoned>
         <select className="v3-select" style={{ width: 96 }} value={n} onChange={(e) => setN(Number(e.target.value))} aria-label={t("v3.kb.resultCount")}>
           {[3, 5, 10, 20, 50, KB_QUERY_MAX_RESULTS].map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
-        <Btn kind="primary" type="submit" disabled={!ready || busy || !q.trim()}><Search size={14} /> {t("v3.kb.search2")}</Btn>
+        <Btn kind="primary" type="submit" busy={busy} disabled={!ready || !q.trim()}
+          disabledReason={!ready ? t("v3.kb.retrieveNotReady") : t("story.reason.typeQuery")}><Search size={14} /> {t("v3.kb.search2")}</Btn>
       </form>
       {!ready && <div style={{ marginTop: 12 }}><Notice s="wait">{t("v3.kb.retrieveNotReady")}</Notice></div>}
       {error != null && <div style={{ marginTop: 12 }}><Notice s="act"><ApiErrorDetail error={error} /></Notice></div>}
@@ -492,6 +500,7 @@ function KbDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const failed = useFailure();
   const statusLabel = useKbStatus();
   const [params, setParams] = useSearchParams();
   const [kb, setKb] = useState<KnowledgeBaseDetail | null>(null);
@@ -596,11 +605,12 @@ function KbDetail({ id }: { id: string }) {
   const sync = async (ds: DataSource) => {
     setSyncing(ds.ds_id);
     try {
+      failed.clear();
       await v2KnowledgeApi.sync(id, ds.ds_id);
       toast("ok", t("knowledge.detail.sources.syncStarted"));
       refresh();
     } catch (err) {
-      toast("act", t("knowledge.detail.sources.syncFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("knowledge.detail.sources.syncFailed", { msg: errorMessage(err) }));
     } finally {
       setSyncing(null);
     }
@@ -609,12 +619,13 @@ function KbDetail({ id }: { id: string }) {
   const repair = async () => {
     setRepairing(true);
     try {
+      failed.clear();
       await v2KnowledgeApi.addSource(id, { mode: "upload" });
       toast("ok", t("knowledge.detail.sources.autoCreated"));
       sourceWaitTicks.current = 0;
       refresh();
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("common.actionFailed", { msg: errorMessage(err) }));
     } finally {
       setRepairing(false);
     }
@@ -623,12 +634,13 @@ function KbDetail({ id }: { id: string }) {
     if (!removeDs) return;
     setRemoving(true);
     try {
+      failed.clear();
       await v2KnowledgeApi.removeSource(id, removeDs.ds_id);
       toast("ok", t("knowledge.detail.sources.deleted"));
       setRemoveDs(null);
       refresh();
     } catch (err) {
-      toast("act", t("common.actionFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("common.actionFailed", { msg: errorMessage(err) }));
     } finally {
       setRemoving(false);
     }
@@ -658,11 +670,13 @@ function KbDetail({ id }: { id: string }) {
         end={
           <>
             <Btn kind="ghost" onClick={refresh}><RefreshCw size={14} /></Btn>
-            <Btn kind="danger" disabled={String(kb.status).toUpperCase() === "DELETING"} onClick={() => del.ask(kb)}><Trash2 size={14} /> {t("v3.kb.delete")}</Btn>
+            <Btn kind="danger" disabled={String(kb.status).toUpperCase() === "DELETING"} disabledReason={t("story.reason.deleting")} onClick={() => del.ask(kb)}><Trash2 size={14} /> {t("v3.kb.delete")}</Btn>
             <Btn kind="primary" onClick={() => setDialog("add")}><Upload size={14} /> {t("v3.kb.addSource")}</Btn>
           </>
         }
       />
+      <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-kb-error" />
+      <ErrorCallout error={del.failed.error} onDismiss={del.failed.clear} data-testid="v3-kb-delete-error" />
 
       {kb.failure_reasons && kb.failure_reasons.length > 0 && <Notice s="act">{kb.failure_reasons.join("; ")}</Notice>}
       {error != null && <Notice s="wait"><ApiErrorDetail error={error} /></Notice>}
@@ -721,8 +735,8 @@ function KbDetail({ id }: { id: string }) {
                       <td style={{ color: "var(--v3-text-3)" }}>{job ? `${job.status} · ${ago(job.started_at)}` : t("v3.kb.neverSynced")}</td>
                       <td style={{ width: 1, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                          <Btn size="sm" disabled={!available || running || syncing === ds.ds_id}
-                            title={!available ? t("knowledge.detail.sources.syncNotReady") : running ? t("knowledge.detail.sources.syncRunning") : undefined}
+                          <Btn size="sm" busy={syncing === ds.ds_id} disabled={!available || running}
+                            disabledReason={!available ? t("knowledge.detail.sources.syncNotReady") : t("knowledge.detail.sources.syncRunning")}
                             onClick={() => void sync(ds)}>
                             <RefreshCw size={13} /> {syncing === ds.ds_id ? t("knowledge.detail.sources.syncing") : t("knowledge.detail.sources.syncNow")}
                           </Btn>

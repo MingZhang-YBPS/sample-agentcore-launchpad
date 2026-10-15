@@ -51,6 +51,12 @@ if [ -d "$ROOT/frontend" ]; then
   section "frontend · vitest"
   (cd "$ROOT/frontend" && npm run --silent test); result $? "vitest"
 
+  section "frontend · story checks"
+  # storyline-ux §4 / guided-console §7: every step and error next.action is in
+  # NEXT_ACTIONS with en + zh-CN copy; the missing-error-copy and reasonless
+  # disabled-control baselines only shrink
+  (cd "$ROOT/frontend" && node scripts/story_checks.mjs); result $? "story checks"
+
   section "frontend · vite build"
   (cd "$ROOT/frontend" && npm run --silent build); result $? "vite build"
 fi

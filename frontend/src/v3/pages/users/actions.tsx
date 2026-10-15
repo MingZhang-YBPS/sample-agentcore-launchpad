@@ -8,6 +8,7 @@ import { adminsApi } from "../../../lib/api/projects";
 import { type ProjectUser, type UserMembershipPatch, usersApi } from "../../../lib/api/users";
 import { clampDays, MAX_EXTEND_DAYS } from "../../../v2/pages/users/common";
 import { useWorkspace } from "../../../workspace/workspace-context";
+import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
 import { Btn, Confirm, Dialog, Notice } from "../../ui";
 import {
@@ -49,6 +50,7 @@ export type ConfirmKind = "delete" | "disable" | "reject" | "reset" | "role" | "
 export function useUserActions(onChanged: () => void, validDays = 7, structure?: Structure) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const { workspaces } = useWorkspace();
   const { isAdmin } = useAuth();
   // only an administrator creates the platform roles (§11.4); a steward creates accounts
@@ -84,6 +86,7 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
   const patch = async (user: ConsoleUser, body: UserPatchBody | UserMembershipPatch, successKey: string) => {
     setBusyId(user.id);
     try {
+      failed.clear();
       const updated = await (Object.keys(body).some((k) => k === "projects" || k === "groups")
         ? usersApi.update(user.id, body as UserMembershipPatch)
         : api.updateUser(user.id, body as UserPatchBody));
@@ -93,7 +96,7 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
       onChanged();
       return true;
     } catch (err) {
-      toast("act", t("usersPage.actionFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("usersPage.actionFailed", { msg: errorMessage(err) }));
       return false;
     } finally {
       setBusyId(null);
@@ -103,12 +106,13 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
   const remove = async (user: ConsoleUser) => {
     setBusyId(user.id);
     try {
+      failed.clear();
       await api.deleteUser(user.id);
       toast("ok", t("usersPage.deleted", { username: user.username }));
       onChanged();
       return true;
     } catch (err) {
-      toast("act", t("usersPage.actionFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("usersPage.actionFailed", { msg: errorMessage(err) }));
       return false;
     } finally {
       setBusyId(null);
@@ -170,12 +174,13 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
   const revokeSessions = async (user: ConsoleUser) => {
     setBusyId(user.id);
     try {
+      failed.clear();
       await adminsApi.revokeSessions(user.id);
       toast("ok", t("v3.users.sessions.revoked", { username: user.username }));
       onChanged();
       return true;
     } catch (err) {
-      toast("act", t("usersPage.actionFailed", { msg: errorMessage(err) }), err);
+      failed.fail(err, t("usersPage.actionFailed", { msg: errorMessage(err) }));
       return false;
     } finally {
       setBusyId(null);
@@ -550,6 +555,8 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
 
   return {
     busyId, patch, ask, toggleStatus, openExtend, openApprove, openCreate, openWorkspaces, openMemberships, renderDialogs,
+    /** the last action's failure, for the page to show in place (ErrorCallout) */
+    failed,
     /** show a response's one-time password (another page's create) in this dialog */
     showOneTime: setReset,
   };

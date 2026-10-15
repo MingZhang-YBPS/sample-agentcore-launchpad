@@ -21,6 +21,7 @@ import { formFromTemplate } from "../../v2/pages/agents/templateForms";
 import { useProdLock } from "../../workspace/useProdLock";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useLoad, useToast } from "../hooks";
+import { permReason } from "../reasons";
 import { Btn, Chip, Notice, PageHead, Panel, Skeleton } from "../ui";
 import { Term } from "../onboarding/Glossary";
 import { Chooser } from "./create/NewAgentChooser";
@@ -308,7 +309,8 @@ export function V3Create() {
                 </div>
                 {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <Btn kind="primary" type="submit" disabled={busy || !canDeploy}><Rocket size={14} /> {busy ? t("v3.create.deploying") : t("v3.create.deploy")}</Btn>
+                  <Btn kind="primary" type="submit" busy={busy} disabled={!canDeploy}
+                    disabledReason={!can("agents.deploy") ? permReason(t, "agents.deploy") : prodLock.title ?? t("story.reason.locked")}><Rocket size={14} /> {busy ? t("v3.create.deploying") : t("v3.create.deploy")}</Btn>
                   <span style={{ color: "var(--v3-text-3)", fontSize: 13 }}>{t("v3.create.deployHint")}</span>
                 </div>
                 </fieldset>

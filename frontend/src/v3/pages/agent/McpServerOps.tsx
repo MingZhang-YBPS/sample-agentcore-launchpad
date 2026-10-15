@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import {
   checkMcpHealth,
   type McpHealthStatus,
@@ -9,6 +10,7 @@ import {
   rollbackMcpServer,
   scaffoldMcpPolicies,
 } from "../../../lib/api/mcpReviews";
+import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Notice, type Signal } from "../../ui";
@@ -42,6 +44,7 @@ export function McpServerOpsSection({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const failed = useFailure();
   const [busy, setBusy] = useState(false);
   const [rollbackTo, setRollbackTo] = useState<string | null>(null);
   const [plan, setPlan] = useState<McpScaffoldPlan | null>(null);
@@ -49,15 +52,16 @@ export function McpServerOpsSection({
   const [confirmName, setConfirmName] = useState("");
   const [reason, setReason] = useState("");
 
-  const run = async (fn: () => Promise<unknown>, ok: string, failed: string) => {
+  const run = async (fn: () => Promise<unknown>, ok: string, failKey: string) => {
     setBusy(true);
     try {
+      failed.clear();
       await fn();
       toast("ok", t(ok));
       onChanged();
       return true;
     } catch (err) {
-      toast("act", t(failed), err);
+      failed.fail(err, t(failKey));
       return false;
     } finally {
       setBusy(false);
@@ -67,9 +71,10 @@ export function McpServerOpsSection({
   const preview = async () => {
     setBusy(true);
     try {
+      failed.clear();
       setPlan((await scaffoldMcpPolicies(agentId, { dry_run: true, ...(mode ? { mode } : {}) })).plan);
     } catch (err) {
-      toast("act", t("mcpReview.ops.scaffoldFailed"), err);
+      failed.fail(err, t("mcpReview.ops.scaffoldFailed"));
     } finally {
       setBusy(false);
     }
@@ -87,6 +92,8 @@ export function McpServerOpsSection({
     ).then((done) => done && setPlan(null));
 
   return (
+    <>
+      <ErrorCallout error={failed.error} params={{ agent_id: agentId }} onDismiss={failed.clear} data-testid="v3-mcp-ops-error" />
     <McpServerOpsView
       ops={ops}
       version={version}
@@ -122,6 +129,7 @@ export function McpServerOpsSection({
         )
       }
     />
+    </>
   );
 }
 
@@ -191,7 +199,8 @@ export function McpServerOpsView({
         </Chip>
         <span style={{ flex: 1 }} />
         {targets.slice(0, 3).map((v) => (
-          <Btn key={v.review_id} size="sm" kind="ghost" disabled={busy || op.status === "running"} onClick={() => onRollback(v.version)}>
+          <Btn key={v.review_id} size="sm" kind="ghost" busy={busy} disabled={op.status === "running"}
+            disabledReason={t("story.reason.waitRunning")} onClick={() => onRollback(v.version)}>
             {t("mcpReview.ops.rollbackTo", { version: v.version })}
           </Btn>
         ))}
@@ -253,7 +262,7 @@ export function McpServerOpsView({
             </div>
           ))}
           <div>
-            <Btn kind="primary" size="sm" disabled={busy || (changes.length === 0 && !mode)} onClick={onApply}>
+            <Btn kind="primary" size="sm" busy={busy} disabled={changes.length === 0 && !mode} disabledReason={t("story.reason.noChanges")} onClick={onApply}>
               {t("mcpReview.ops.apply")}
             </Btn>
           </div>
