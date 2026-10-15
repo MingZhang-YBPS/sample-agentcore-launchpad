@@ -364,6 +364,9 @@ export function proposalContentFromDraft(
     // a reviewed function narrowing travels with its still-selected Gateway; dropping
     // it silently would widen that Gateway to every declared function
     ...carriedToolFunctions(base.tool_functions, draft.tools),
+    // storage mounts (storage-mounts §8.3) are not editable in the draft either; an
+    // edit keeps the base's `{storage_id, mode}` list as it was
+    ...(Array.isArray(base.storage) && base.storage.length ? { storage: base.storage } : {}),
   };
 }
 

@@ -27,6 +27,7 @@ import {
   sodRefusal,
 } from "./model";
 import type { ProjectAbilities } from "./ProjectDetail";
+import { StewardSection } from "./StewardSection";
 import { useStructureNames } from "./useStructureNames";
 
 /**
@@ -83,6 +84,8 @@ export function MembersTab({
 
   return (
     <div style={{ display: "grid", gap: 12 }} data-testid="project-members">
+      {/* §11.4: an organization admin's changes here, and the ones waiting for an owner */}
+      <StewardSection projectId={project.id} abilities={abilities} onChanged={reload} />
       {strict && <Notice s="info">{t("v3.projects.members.strictNotice")}</Notice>}
       <div className="v3-prj-filters">
         <select className="v3-input" aria-label={t("v3.projects.members.role")} value={role} onChange={(e) => setRole(e.target.value)}>

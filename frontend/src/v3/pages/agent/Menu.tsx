@@ -18,11 +18,14 @@ export function Menu({
   items,
   kind,
   testId,
+  title,
 }: {
   label: ReactNode;
   items: MenuItem[];
   kind?: "primary" | "ghost";
   testId?: string;
+  /** the trigger button's tooltip */
+  title?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -52,6 +55,7 @@ export function Menu({
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         onClick={() => setOpen((v) => !v)}
+        title={title}
         data-testid={testId}
       >
         {label}

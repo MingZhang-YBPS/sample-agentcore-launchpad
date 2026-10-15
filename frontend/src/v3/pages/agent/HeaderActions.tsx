@@ -84,7 +84,8 @@ export function HeaderActions({
       )}
       <Menu
         kind="primary"
-        label={<span title={t(EDIT_HINT_KEY)} style={{ display: "inline-flex", alignItems: "center", gap: "inherit" }}><Settings2 size={14} /> {t(EDIT_LABEL_KEY)} <ChevronDown size={13} /></span>}
+        label={<><Settings2 size={14} /> {t(EDIT_LABEL_KEY)} <ChevronDown size={13} /></>}
+        title={t(EDIT_HINT_KEY)}
         items={editItems}
         testId="v3-agent-edit"
       />

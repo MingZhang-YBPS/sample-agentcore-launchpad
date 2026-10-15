@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { V2_NAV } from "../v2/nav";
 import { v2CounterpartOf } from "./backToV2";
-import { hostedGroups, V3_AFTER, v3TwinOf } from "./nav";
+import { hostedGroups, V3_AFTER, V3_ONLY, v3TwinOf } from "./nav";
 
 describe("v2CounterpartOf", () => {
   it("leaves a hosted V2 page where it is", () => {
@@ -44,8 +44,8 @@ describe("v2CounterpartOf", () => {
     const v2Paths = new Set(V2_NAV.flatMap((g) => g.items).map((i) => i.to.split("?")[0]));
     for (const page of pages) {
       const back = v2CounterpartOf(page, "");
-      // V3-only pages (Models, the launch page, the people/structure and tool pages) have no V2 twin
-      if (page === "/v3/models" || page === "/v3/create" || Object.values(V3_AFTER).flat().some((i) => i.to === page)) continue;
+      // V3-only pages (Models, System update, the launch page, the people/structure and tool pages) have no V2 twin
+      if (page === "/v3/create" || [...Object.values(V3_ONLY), ...Object.values(V3_AFTER)].flat().some((i) => i.to === page)) continue;
       expect(v2Paths.has(back ?? ""), `${page} → ${back}`).toBe(true);
       expect(v3TwinOf(back ?? "", "")?.split("?")[0]).toBe(page);
     }

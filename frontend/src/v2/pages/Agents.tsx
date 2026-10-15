@@ -17,6 +17,8 @@ import {
   type StageInfo,
 } from "../../lib/api";
 import {
+  EDIT_HINT_KEY,
+  EDIT_LABEL_KEY,
   useAgentActions as useSharedAgentActions,
   useAgentDetail,
   useAgentPermissions,
@@ -272,10 +274,10 @@ function AgentList() {
             <LinkButton
               onClick={() => navigate(editPath(a))}
               disabled={perms.locked}
-              title={perms.lockTitle}
+              title={perms.lockTitle ?? t(EDIT_HINT_KEY)}
               testId={`v2-agent-edit-${a.name}`}
             >
-              {t("v2.common.edit")}
+              {t(EDIT_LABEL_KEY)}
             </LinkButton>
           )}
           {perms.canConvert(a) && (
@@ -568,10 +570,10 @@ function AgentDetail({ id }: { id: string }) {
                 kind="primary"
                 onClick={() => navigate(editPath(agent))}
                 disabled={perms.locked}
-                title={perms.lockTitle}
+                title={perms.lockTitle ?? t(EDIT_HINT_KEY)}
                 testId="v2-agent-edit"
               >
-                {t("v2.common.edit")}
+                {t(EDIT_LABEL_KEY)}
               </Button>
             )}
           </>

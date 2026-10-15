@@ -13,6 +13,10 @@ export const STEWARD_STRUCTURE_PATHS: readonly string[] = [
   "/v3/project-groups",
   "/v3/departments",
   "/v2/workspaces",
+  "/v3/workspaces",
+  // the workspace's structure catalogs: VPC network profiles and storage
+  "/v3/network",
+  "/v3/storage",
   "/v3/models",
   "/v3/account",
   "/v2/announcements",

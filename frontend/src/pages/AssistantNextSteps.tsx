@@ -14,6 +14,7 @@ import type {
   ExperimentSummary,
 } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
+import { storageFlag, withStorageConfirm } from "../lib/storage-confirm";
 import type { DeployedAgent } from "../lib/assistant";
 import type { EvaluationRunInfo } from "../lib/evaluation";
 import { evaluationRunPresentation, RUN_TERMINAL_STATUSES } from "../lib/evaluation";
@@ -263,11 +264,12 @@ export function AssistantNextSteps({
     setStarting(true);
     setRunError(null);
     try {
-      const created = await api.createEvaluationRun({
+      const created = await withStorageConfirm((confirm) => api.createEvaluationRun({
         agent_id: targetId,
         dataset_id: datasetId,
         evaluators: evaluators.map((e) => e.id),
-      });
+        ...storageFlag(confirm),
+      }));
       setRuns((prev) => [created, ...(prev ?? []).filter((r) => r.id !== created.id)]);
       toast(t("assistantNext.run.startedToast", { id: created.id.slice(0, 8) }), "good");
     } catch (err) {

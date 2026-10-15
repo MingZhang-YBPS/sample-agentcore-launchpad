@@ -1,7 +1,16 @@
 import { useTranslation } from "react-i18next";
 
+import type { MemorySource } from "../../../lib/api";
 import type { TokenPaged } from "../../../v2/pages/memory/common";
-import { Btn, Notice, Skeleton } from "../../ui";
+import { Btn, Chip, Notice, Skeleton } from "../../ui";
+
+/** "Shared memory" on a dual-read row the project memory does not hold yet (§10.4);
+ *  nothing for the project's own rows or outside dual-read. */
+export function SourceBadge({ source }: { source?: MemorySource }) {
+  const { t } = useTranslation();
+  if (source !== "shared") return null;
+  return <Chip s="wait" title={t("v3.memory.source.sharedHint")}>{t("v3.memory.source.shared")}</Chip>;
+}
 
 /** Token-driven "load more" — renders nothing once AWS stops paginating. */
 export function LoadMore({ list }: { list: Pick<TokenPaged<unknown>, "token" | "loading" | "loadMore"> }) {

@@ -43,7 +43,7 @@ export interface ProjectUserList extends Omit<UserListResult, "items"> {
 export interface UserListFilter {
   q?: string;
   status?: "all" | "pending" | "active" | "expired" | "disabled";
-  role?: "admin" | "operator" | "member";
+  role?: "admin" | "operator" | "member" | "steward";
   /** members of the project (direct or through its group) */
   project?: string;
   group?: string;
@@ -76,7 +76,7 @@ export interface UserCreateWithProjects extends UserCreateBody {
  */
 export interface UserMembershipPatch {
   status?: "pending" | "active" | "disabled";
-  role?: "admin" | "operator" | "member";
+  role?: "admin" | "operator" | "member" | "steward";
   extend_days?: number;
   expires_at?: string | null;
   workspaces?: string[] | null;

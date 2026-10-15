@@ -1,14 +1,41 @@
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
-import { type ProjectDetail, projectsApi } from "../../../lib/api/projects";
+import { type ProjectDetail, projectQuotasApi, projectsApi } from "../../../lib/api/projects";
 import { ago } from "../../format";
 import { useLoad } from "../../hooks";
-import { Chip, Panel, Stat } from "../../ui";
+import { Chip, Lamp, Panel, Stat } from "../../ui";
 import { projectOwners } from "./model";
+import { formatQuota, usageBars, usageSignal } from "./quotasModel";
 import { useStructureNames } from "./useStructureNames";
 
-/** Counts, bindings, owners (§6.3 "Overview"). */
+/** §11.3: how full each limited quota is; the Settings tab edits them. */
+function QuotaUsage({ projectId }: { projectId: string }) {
+  const { t } = useTranslation();
+  const quotas = useLoad(() => projectQuotasApi.get(projectId), `v3-project-overview-quotas:${projectId}`);
+  // a caller who may not read quotas, or a backend without them, simply has no panel
+  if (!quotas.data) return null;
+  const bars = usageBars(quotas.data.items);
+  return (
+    <Panel title={t("v3.projects.overview.usage")}>
+      {bars.length === 0 ? (
+        <span className="v3-prj-muted">{t("v3.projects.overview.noQuota")}</span>
+      ) : (
+        <div className="v3-prj-usage" data-testid="project-overview-usage">
+          {bars.map(({ item, fraction }) => (
+            <div key={item.key} className="row" data-testid={`project-usage-${item.key}`}>
+              <span className="label"><Lamp s={usageSignal(item)} /> {t(`v3.projects.quotas.key.${item.key}`)}</span>
+              <span className="mono">{formatQuota(item, item.used)} / {formatQuota(item, item.limit)}</span>
+              <div className="bar"><i data-s={usageSignal(item)} style={{ width: `${Math.round(fraction * 100)}%` }} /></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/** Counts, bindings, owners, quota usage (§6.3 "Overview", §11.3). */
 export function OverviewTab({ project }: { project: ProjectDetail }) {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();
@@ -64,6 +91,7 @@ export function OverviewTab({ project }: { project: ProjectDetail }) {
           </div>
         </Panel>
       </div>
+      <QuotaUsage projectId={project.id} />
     </div>
   );
 }

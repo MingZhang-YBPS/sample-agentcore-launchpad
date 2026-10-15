@@ -31,6 +31,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
 import { api } from "../lib/api";
+import { isSteward } from "../lib/api/steward";
 import { systemUpdateApi } from "../lib/api/systemUpdate";
 import type { AccessProject } from "../lib/api/projects";
 import { useNavMode } from "../lib/nav-mode";
@@ -40,6 +41,8 @@ import { ModuleDemoProvider } from "../v2/pages/videos/ModuleDemo";
 import { V2ToastProvider } from "../v2/ui";
 import { groupByDepartment, projectRole, scopeKey, showsProjectChip, splitByAccess, useProject } from "../workspace/project-context";
 import { NoBoundProjectBanner } from "../workspace/NoProjectAssigned";
+import { StewardEmptyState } from "../workspace/StewardEmptyState";
+import { showsStewardEmptyState } from "../workspace/steward-paths";
 import { useWorkspace } from "../workspace/workspace-context";
 import { v2CounterpartOf } from "./backToV2";
 import { ChangePasswordDialog } from "./ChangePassword";
@@ -198,6 +201,8 @@ const HUB_GLOBAL = new Set([
   "/announcements", "/v2/announcements", "/v3/announcements", "/videos", "/v2/videos", "/v3/videos", "/v2/video-management", "/v3/video-management",
   // people and structure (projects §7.9): never bound to the workspace or project in the switcher
   "/v3/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments",
+  // the console host itself (online-update): one installation, not a workspace
+  "/v3/system-update",
 ]);
 
 /** The running commit (online-update §2.6), for whoever reports a problem. */
@@ -218,7 +223,12 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAdmin, authRequired, username, builtin, logout } = useAuth();
+  const { isAdmin, role, authRequired, username, builtin, logout } = useAuth();
+  // a steward (organization admin, §11.4) manages structure only: its rail is
+  // Configure, and every business page answers with its empty state
+  const steward = isSteward(role);
+  const stewardEmpty = showsStewardEmptyState(role, location.pathname);
+  const native = useMemo(() => (steward ? NATIVE.filter((item) => item.to === "/v3") : NATIVE), [steward]);
   const [changingPassword, setChangingPassword] = useState(false);
   const { current } = useWorkspace();
   const project = useProject();
@@ -240,7 +250,8 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [railOpen]);
-  const agents = useLoad(() => api.listAgents(), `v3-shell-agents:${scope}`);
+  // a steward reads no agent (the count on the rail would be a refused request)
+  const agents = useLoad(() => (steward ? Promise.resolve({ agents: [] }) : api.listAgents()), `v3-shell-agents:${scope}`);
 
   // Opening a /v3 page is choosing V3 — reloads and "/" land back here.
   useEffect(() => {
@@ -279,15 +290,19 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const perms = useMemo(() => [...new Set(project.projects.flatMap((p) => p.permissions))], [project.projects]);
   // a department administrator (§11.1) also sees Projects, Project groups and Departments
   const managesDepartment = project.managedDepartments.length > 0;
-  const allGroups = useMemo(() => hostedGroups(isAdmin, perms, managesDepartment), [isAdmin, perms, managesDepartment]);
+  const allGroups = useMemo(
+    () => hostedGroups(isAdmin, perms, managesDepartment, steward),
+    [isAdmin, perms, managesDepartment, steward],
+  );
   const groups = useMemo(
     () =>
-      navMode === "expert"
+      // a steward's rail is the structure entries alone: no business slice to pare down to
+      navMode === "expert" || steward
         ? allGroups
         : allGroups
             .map((g) => ({ ...g, items: g.items.filter((item) => item.business === true) }))
             .filter((g) => g.items.length > 0),
-    [allGroups, navMode],
+    [allGroups, navMode, steward],
   );
   // the tour opens on its own on a first visit to the command center, and on request
   const [touring, setTouring] = useState(false);
@@ -300,11 +315,12 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new request opens it
   }, [tourAsk]);
   useEffect(() => {
-    if (location.pathname !== "/v3" || tourDone()) return;
+    // the tour walks the business console, which a steward never sees
+    if (location.pathname !== "/v3" || tourDone() || steward) return;
     // after the page has drawn, so every stop can be measured
     const timer = window.setTimeout(() => setTouring(true), 1200);
     return () => window.clearTimeout(timer);
-  }, [location.pathname]);
+  }, [location.pathname, steward]);
   // the module groups start folded, except the one holding the current page
   const [open, setOpen] = useState<Record<string, boolean>>(readOpen);
   const toggle = (key: string, wasOpen: boolean) =>
@@ -321,7 +337,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const pages = useMemo<Command[]>(() => {
     const group = t("v3.cmdk.pages");
     const all = [
-      ...NATIVE.map((item) => ({ to: item.to, labelKey: item.labelKey, icon: item.icon })),
+      ...native.map((item) => ({ to: item.to, labelKey: item.labelKey, icon: item.icon })),
       ...allGroups.flatMap((g) =>
         g.items.map(({ to, labelKey, icon: Icon }) => ({ to, labelKey, icon: <Icon size={16} /> })),
       ),
@@ -335,7 +351,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
       keywords: `${t(item.labelKey, { lng: "en" })} ${item.to.replace(/[/?=&]/g, " ")}`,
       run: () => navigate(item.to),
     }));
-  }, [allGroups, navigate, t]);
+  }, [allGroups, native, navigate, t]);
 
   // help in the palette: the tour, the glossary, and one entry per term, so typing
   // a word you do not know ("harness", "金标集") explains it
@@ -424,7 +440,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
         </header>
 
         <nav id="v3-navigation" className="v3-rail" aria-label={t("v3.nav.label")}>
-          {NATIVE.map((item) => (
+          {native.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -475,11 +491,13 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
               </div>
             );
           })}
-          <button type="button" className="v3-rail-mode" data-testid="v3-nav-mode"
-            title={t("v3.onboard.mode.hint")}
-            onClick={() => setNavMode(navMode === "business" ? "expert" : "business")}>
-            {navMode === "business" ? t("v3.onboard.mode.showExpert") : t("v3.onboard.mode.showBusiness")}
-          </button>
+          {!steward && (
+            <button type="button" className="v3-rail-mode" data-testid="v3-nav-mode"
+              title={t("v3.onboard.mode.hint")}
+              onClick={() => setNavMode(navMode === "business" ? "expert" : "business")}>
+              {navMode === "business" ? t("v3.onboard.mode.showExpert") : t("v3.onboard.mode.showBusiness")}
+            </button>
+          )}
           </div>
           <div className="v3-rail-foot">
             <span className="mono" style={{ color: "var(--v3-text-3)", fontSize: 11 }}>
@@ -501,7 +519,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
                 >
                   <NoBoundProjectBanner />
                   <RouteChunk key={location.pathname}>
-                    <Outlet />
+                    {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
                   </RouteChunk>
                 </div>
               </ModuleDemoProvider>
@@ -513,14 +531,14 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
             >
               <NoBoundProjectBanner />
               <RouteChunk key={location.pathname}>
-                <Outlet />
+                {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
               </RouteChunk>
             </div>
           ) : (
             <div key={HUB_GLOBAL.has(location.pathname) ? "hub-global-content" : scope}>
               <NoBoundProjectBanner />
               <RouteChunk>
-                <Outlet />
+                {stewardEmpty ? <StewardEmptyState /> : <Outlet />}
               </RouteChunk>
             </div>
           )}

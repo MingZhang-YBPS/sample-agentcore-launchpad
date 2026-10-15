@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { AuthContext, projectCan, useAuth } from "../auth/auth-context";
 import { AUTH_UNAUTHORIZED_EVENT } from "../lib/api";
 import { type MyAccess, projectsApi } from "../lib/api/projects";
+import { isSteward } from "../lib/api/steward";
 import { useUiVersion } from "../lib/ui-version";
 import {
   PROJECT_INVALID_EVENT,
@@ -159,8 +160,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   );
 
   if (access.status === "loading") return <ProjectLoading />;
-  // §6.2: reachable workspace, no project in it (a legacy grant without a default project)
-  if (access.status === "ready" && !auth.isAdmin && entry && entry.projects.length === 0) {
+  // §6.2: reachable workspace, no project in it (a legacy grant without a default project).
+  // A steward is in no project by design (§11.4): the shell shows its own empty state.
+  if (access.status === "ready" && !auth.isAdmin && !isSteward(auth.role) && entry && entry.projects.length === 0) {
     return <NoProjectAssigned workspaceName={workspace?.name ?? entry.name} />;
   }
   return (

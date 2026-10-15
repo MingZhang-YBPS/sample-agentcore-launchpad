@@ -7,7 +7,7 @@ import { api, type MemoryActor, type MemoryEvent, type MemorySessionRow } from "
 import { actorText, fmtBytes, shortId, type TokenPaged, useTokenPaged } from "../../../v2/pages/memory/common";
 import { ago } from "../../format";
 import { Btn, Chip, Panel } from "../../ui";
-import { LoadMore, PaneState } from "./common";
+import { LoadMore, PaneState, SourceBadge } from "./common";
 
 /** ~3 lines show; long or many-line text offers expand rather than being cut. */
 const needsExpand = (text: string | null) => !!text && (text.length > 240 || text.split("\n").length > 3);
@@ -109,7 +109,7 @@ export function ShortTerm({
                   <><b>{a.human_actor}</b> <Chip>{t("v3.memory.unscoped")}</Chip></>
                 )}
               </span>
-              <small className="mono">{shortId(a.actor_id, 12)}</small>
+              <small className="mono">{shortId(a.actor_id, 12)} <SourceBadge source={a.source} /></small>
             </button>
           ))}
         </div>
@@ -122,7 +122,7 @@ export function ShortTerm({
           {sessions.items.map((s) => (
             <button key={s.session_id} type="button" className={s.session_id === sessionId ? "v3-mem-item on" : "v3-mem-item"}
               onClick={() => onSelectSession(s.session_id)} title={s.session_id}>
-              <span className="mono">{shortId(s.session_id, 12)}</span>
+              <span className="mono">{shortId(s.session_id, 12)} <SourceBadge source={s.source} /></span>
               {/* only console-written sessions have a ledger row */}
               <small>{ago(s.created_at)} · {s.ledger ? t("v3.memory.messages", { count: s.ledger.message_count }) : t("v3.memory.externalSession")}</small>
             </button>

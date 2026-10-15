@@ -2,7 +2,15 @@
 // data loading and actions live here, each console draws its own cards.
 export { useAdminLoad, type AdminLoaded } from "./load";
 export { agentPermissions, useAgentPermissions, type AgentPermissions, type EditBlocked } from "./permissions";
-export { classicDetailPath, editKind, editPath, identityPath, type EditKind } from "./edit";
+export {
+  classicDetailPath,
+  EDIT_HINT_KEY,
+  EDIT_LABEL_KEY,
+  editKind,
+  editPath,
+  identityPath,
+  type EditKind,
+} from "./edit";
 export {
   isImported,
   needsTypedName,

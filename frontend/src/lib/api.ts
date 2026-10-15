@@ -1346,6 +1346,8 @@ export interface AssistantProposalContent {
   /** Agent-DLC launch-barrier fishbone the customer confirmed during intake (rendered
    *  in the proposal panel; inert). Absent when the discovery did not happen. */
   fishbone?: AssistantFishbone;
+  /** catalog storage the agent mounts (storage-mounts §8.3; ids, never ARNs or paths) */
+  storage?: { storage_id: string; mode: "ro" | "rw" }[];
 }
 
 export type FishboneDimension =
@@ -2508,6 +2510,10 @@ export interface MemoryNamespaceKeyInput {
   regex_pattern?: string;
 }
 
+/** Which memory a dual-read row came from (projects §10.4): an isolated project's own
+ *  memory, or the workspace's shared one it moved from. Absent outside dual-read. */
+export type MemorySource = "project" | "shared";
+
 /** AgentCore keys memory on actorId alone, so the platform folds the agent in:
  *  `<agent_id>__<human>`. These fields are that id decoded. */
 export interface MemoryActor {
@@ -2516,6 +2522,7 @@ export interface MemoryActor {
   agent_name: string | null;
   human_actor: string;
   scoped: boolean;
+  source?: MemorySource;
 }
 
 export interface MemorySessionLedger {
@@ -2532,6 +2539,7 @@ export interface MemorySessionRow {
   created_at: string | null;
   /** null for sessions the console never wrote (eval runs, /v1 callers) */
   ledger: MemorySessionLedger | null;
+  source?: MemorySource;
 }
 
 export interface MemoryEventPayload {
@@ -2587,6 +2595,7 @@ export interface MemoryRecord {
   /** populated only by semantic retrieval */
   score: number | null;
   metadata: Record<string, unknown>;
+  source?: MemorySource;
 }
 
 export interface MemoryPage<T> {
@@ -2937,7 +2946,10 @@ export interface TtfaInfo {
   users: TtfaUser[];
 }
 
-export type ConsoleRole = "admin" | "member";
+/** Global console role: `operator` approves and runs releases without editing
+ *  agents; `steward` (organization admin) manages structure only and never sees
+ *  project data (projects design §11.4). */
+export type ConsoleRole = "admin" | "member" | "operator" | "steward";
 
 /* ── AgentCore Identity: Connections, bound Gateway targets, agent identity ── */
 
@@ -4675,6 +4687,9 @@ export interface V2RunCreate {
   confirm_cost?: boolean;
   /** the Bedrock model that plays the user — required for a simulated-persona dataset */
   actor_model_id?: string;
+  /** lets a dataset replay write shared-state storage in a gated workspace
+   *  (storage-mounts §8.2; sent after a `storage.write_confirm_required`, `lib/storage-confirm.ts`) */
+  confirm_storage?: boolean;
 }
 
 /** One stream of an agent's runtime log group (`GET /api/eval/agents/{id}/log-streams`). */
@@ -5194,6 +5209,8 @@ export const api = {
     dataset_id: string;
     evaluators: string[];
     wait_seconds?: number;
+    /** storage-mounts §8.2, see `V2RunCreate.confirm_storage` */
+    confirm_storage?: boolean;
   }) =>
     request<EvaluationRunInfo>("/api/eval/runs", {
       method: "POST",
@@ -5958,6 +5975,8 @@ export const api = {
     online_evaluators?: string[];
     /** must be one of `online_evaluators`; absent ⇒ the aggregate verdict */
     primary_evaluator?: string;
+    /** the candidate's share of live traffic writes shared-state storage (storage-mounts §8.2) */
+    confirm_storage?: boolean;
   }) =>
     request<RuntimeCanaryInfo>("/api/runtime-canaries", {
       method: "POST",
