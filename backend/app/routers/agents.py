@@ -46,6 +46,7 @@ from app.services import (
     agent_tools,
     byoc_uploads,
     creators,
+    custom_tools,
     identity_providers,
     mcp_servers,
     memory_ownership,
@@ -270,6 +271,16 @@ def _resolve_agent_tools(
     return agent_tools.resolved_spec(db, spec, agent_id=agent_id, workspace_id=ws.id)
 
 
+def _gate_custom_tools(
+    db: Session, spec: AgentSpec, ws: WorkspaceScope, project_id: str | None
+) -> AgentSpec:
+    """SB-3: refuse an unapproved custom tool version or a sandboxed tool the
+    workspace has not opened when the agent is saved (422; the deploy's generate
+    stage re-checks), and stamp the workspace's Code Interpreter id — a client-sent
+    one never survives."""
+    return custom_tools.assert_deployable(db, spec, workspace=ws.row, project_id=project_id)
+
+
 def _require_project_connections(db: Session, spec: AgentSpec, ws: WorkspaceScope) -> None:
     """A Connection the console recorded for another project reads as unknown, the
     answer a name missing from the vault gets (design §5.4). One created outside the
@@ -380,6 +391,7 @@ def create_agent(
     agent_access.check_pins(db, viewer, ws.context, spec.model_dump())
     _validate_tool_auth(db, spec, ws)
     spec = _resolve_agent_tools(db, spec, ws, None)
+    spec = _gate_custom_tools(db, spec, ws, current_project())
     spec = _server_owned_mcp(spec, None)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55);
     # the deploy job re-checks before any stage, this answers before any row
@@ -933,6 +945,7 @@ def _start_redeploy(
     )
     _validate_tool_auth(db, spec, ws)
     spec = _resolve_agent_tools(db, spec, ws, agent.id)
+    spec = _gate_custom_tools(db, spec, ws, agent.project_id)
     # a pinned memory must be one this workspace manages and ACTIVE (issue #55) —
     # refused before the stored spec changes, so a refusal leaves the agent as is
     memory_ownership.require_spec_memory(

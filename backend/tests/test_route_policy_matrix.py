@@ -31,6 +31,7 @@ from app.core.route_policy import (
     INFRA,
     MEMBER,
     PPERM_PREFIX,
+    PPERM_PROJECT_USE,
     PROJECT_EXEMPT,
     PUBLIC,
     ROUTE_POLICY,
@@ -314,8 +315,14 @@ class TestTheMatrixIsNotVacuous:
         pperm = [k for k in ROUTES if ROUTE_POLICY[k].startswith(PPERM_PREFIX)]
         assert pperm
         assert {expected(principals["owner_a"], "shared", *k) for k in pperm} == {None}
-        assert {expected(principals["developer_a"], "shared", *k) for k in pperm} == {
+        # …except the participation-level ones (`pperm:project.use`, e.g. IA-1's
+        # invoke-access view), which a developer of the project holds
+        owner_only = [k for k in pperm if ROUTE_POLICY[k] != PPERM_PROJECT_USE]
+        assert owner_only
+        assert {expected(principals["developer_a"], "shared", *k) for k in owner_only} == {
             (403, "auth.permission_required")}
+        assert {expected(principals["developer_a"], "shared", *k) for k in pperm
+                if ROUTE_POLICY[k] == PPERM_PROJECT_USE} <= {None}
 
     def test_a_viewer_can_read_but_not_write(self, gated):
         viewer = _seed("shared")["viewer_a"]

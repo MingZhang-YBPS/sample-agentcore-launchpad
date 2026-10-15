@@ -407,6 +407,10 @@ class Settings(BaseSettings):
         },
     }
     model_prices_meta: dict[str, Any] = {}  # written by the price refresher
+    # eval-cost §1.2: overrides of the evaluation unit prices (runtime vCPU / GB-hour,
+    # managed evaluator per 1K tokens…) app.dlc.cost.DEFAULT_EVAL_PRICES names; keys
+    # left out keep their defaults
+    eval_cost_prices: dict[str, Any] = {}
     model_prices_source_url: str = (
         "https://raw.githubusercontent.com/BerriAI/litellm/main/"
         "model_prices_and_context_window.json"

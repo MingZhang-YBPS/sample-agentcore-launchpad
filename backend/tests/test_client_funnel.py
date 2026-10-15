@@ -28,7 +28,9 @@ CONSTRUCTOR_RE = re.compile(
 FACTORY = "services/aws_clients.py"
 # Hub-scoped ambient-credential use, deliberately outside the workspace funnel:
 # a Bedrock credential *availability* probe for the local Claude Code CLI.
-EXEMPT = {"codegen/backends/claude_sdk.py"}
+# The invoke-access view (IA-1) shows sample code for the customer's own backend: its
+# `boto3.client(...)` lines are text in a string, never run here.
+EXEMPT = {"codegen/backends/claude_sdk.py", "services/invoke_access.py"}
 
 # SDK classes that construct boto3 clients internally: the regex above cannot see
 # them, so their construction sites are allowlisted by hand.

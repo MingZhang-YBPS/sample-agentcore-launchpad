@@ -27,7 +27,7 @@ from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
-from app.services import agent_iam, ecr, project_storage
+from app.services import agent_iam, cost_tags, ecr, project_storage
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
@@ -288,6 +288,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # Echoed on every update; omitting (None = IAM) resets a JWT
                 # runtime back to SigV4 — that IS the JWT→IAM transition.
                 "authorizer_configuration": authorizer,
+                # cost-tags §1.2: the full set (agent id, workspace) on create and update
+                "tags": cost_tags.agent_tags(row, row.workspace_id),
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)

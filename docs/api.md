@@ -2304,6 +2304,51 @@ pattern, answer, enabled, created_by, updated_by, source_issue_id, hit_count, �
 | `DELETE` | `/api/marketplace/templates/{template_id}` | `infra` | project | `{deleted: template_id}`. Only the publishing workspace and, in it, the publishing project (`403 marketplace.not_yours`); administrators always |
 | `POST` | `/api/marketplace/templates/{template_id}/use` | `perm:project.write` | project | → template: the wizard defaults and what the consumer must still supply. Creates no agent |
 
+### Cost allocation tags, billed cost and evaluation cost
+
+Every platform-created resource carries the `launchpad:project`, `launchpad:workspace`,
+`launchpad:agent-id`, `launchpad:managed-by` and `launchpad:department` tags plus the
+project's custom cost tags; workspace-shared infrastructure is `launchpad:project=shared`.
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `GET` | `/api/cost-tags?force=` | admin | ws | `{tag_set, shared_value, custom_max, reserved_prefixes, activation{account_id, account_type: standalone\|management\|member, can_activate, management_account_id, project_tag_active, tags[{key, custom, status: active\|inactive\|not_found\|unknown, last_updated, last_used}], error, checked_at, activation_delay_hours}}`: whether Billing has the keys as cost allocation tags (`ce:ListCostAllocationTags`, cached 10 min) |
+| `POST` | `/api/cost-tags/activate` | admin | ws | Body `{keys?}` (omitted: every inactive key) → `{activated, already_active, not_found, errors, status}` (`not_found`: keys Billing has not seen on a resource yet — activate again after a day). `409 cost_tags.org_member` (an organization member account: activate in the management account it names), `403 cost_tags.activation_denied` |
+| `POST` | `/api/cost-tags/backfill` | admin | ws | Starts the workspace-wide back-fill (the resumable job `cost_tags_backfill`): every ledger agent's resources and the workspace infrastructure get the tag set. An identical run still queued is reused. → the run `{id, status, stages[plan, tag], coverage{total, taggable, tagged, percent, by_status, by_kind}, resources[not tagged], reason, actor, created_at}` |
+| `GET` | `/api/cost-tags/backfill` | admin | ws | `{tag_keys, shared_project, max_cost_tags, run}`: the latest workspace-wide run (`null` before the first) with its coverage and the resources it could not tag (why: `unsupported`, `denied` — add the IAM permission —, `missing`, `failed`). A project rename, a department or custom-tag change and a transfer start a re-tag run of their own |
+| `GET` | `/api/costs/billing?granularity=daily\|monthly&project=&force=` | admin | ws | What AWS billed, grouped by `launchpad:project` and service (`ce:GetCostAndUsage`, the workspace's Region; 30 days daily or 6 months monthly; cached 6 h). The `shared` row is allocated by each project's invocations, untagged cost is listed apart. `project_tag_active` says whether the figures can be per project yet. A project not bound to the workspace answers `404` |
+| `GET` | `/api/projects/{project_id}/cost-tags` | member | hub | `{project_id, cost_tags, max, reserved_prefixes, budget_basis, budget_bases}` |
+| `PUT` | `/api/projects/{project_id}/cost-tags` | `pperm:project.members` | hub | Body `{cost_tags: {key: value}}` (≤ 10, AWS tag rules, no `aws:` / `launchpad:` keys, keys unique regardless of case; `{}` clears) → the view; a change re-tags the project's resources |
+| `PUT` | `/api/projects/{project_id}/budget-basis` | admin, department admin | hub | Body `{basis: estimate\|billing}` → the view. The project budget rule (`monthly_cost_alert_usd`) compares this basis |
+| `GET` | `/api/eval/run-costs?runs=` | `perm:project.use` | project | `{costs: {run_id: {usd, kind: actual\|live\|estimate, estimate_usd}}}` for the comma-separated runs the caller can see (each run payload also carries this as `cost`) |
+| `GET` | `/api/eval/runs/{run_id}/cost` | `perm:project.use` | project | The run's cost card: `{run_id, status, final, running, actual, live, estimate, estimate_total_usd, estimate_range, summary, prices}` — measured against the estimate, live while it runs. Another project's run answers `404` |
+| `GET` | `/api/eval/online/{config_id}/cost?days=1..30` | `perm:project.use` | project | An online evaluation's cost per day `{config_id, days[{day, judgements, judge_usd, reports_usd, usd, by_evaluator}], range_days, total_usd}`; another project's config answers `404` |
+
+Evaluation entries are priced before they are submitted (`POST /api/eval/runs/estimate`):
+a dataset replay, a passive run over picked sessions or a look-back window, and an
+online config (per day). Above the workspace's confirm threshold the submit needs
+`confirm_cost: true` (`409 run.cost_confirm_required`); above its limit only an
+administrator may submit (`409 run.cost_over_limit`) — `POST /api/eval/runs` and
+`POST /api/eval/online` alike.
+
+### Strands builder: custom Python tools and the sandboxed tools
+
+| Method | Path | Role | Scope | Result |
+|---|---|---|---|---|
+| `POST` | `/api/custom-tools/check` | `perm:project.use` | project | Body `{name, code, requirements?, execution: runtime\|code_interpreter}` → `{ok, error{message, line, col}, findings[{kind, line, message}], code_hash, input_schema, needs_approval, approval}`: the static check (one top-level `@tool` function named after the tool; imports and calls outside the allow-list are findings) without running the code |
+| `GET` | `/api/custom-tools/approvals` | `perm:project.use` | project | `{approvals[{code_hash, tool_name, execution, requirements, findings, approved_by, approved_at, note}]}` — this project's approved versions, newest first |
+| `POST` | `/api/custom-tools/approvals` | admin | project | Body `{name, code, requirements?, execution, note?}` → `201` the approval of this exact version (keyed by its code hash, ≤ 200 per project); audited `custom_tool.approve` |
+| `DELETE` | `/api/custom-tools/approvals/{code_hash}` | admin | project | `{revoked: code_hash}`; another project's hash answers `404` |
+| `GET` | `/api/custom-tools/sandbox` | member | ws | `{allowed_tools, code_interpreter_id, effective_code_interpreter_id, updated_by, updated_at}` — which of `python_repl`, `shell`, `file_write`, `use_aws` the workspace opens (they only run in the AgentCore Code Interpreter) |
+| `PUT` | `/api/custom-tools/sandbox` | admin | ws | Body `{allowed_tools[], code_interpreter_id?}` → the setting |
+
+Saving or re-publishing an agent (`POST /api/agents`, `POST /api/agents/{id}/redeploy`)
+refuses a custom tool version no administrator approved (`422
+custom_tool.approval_required`, with the `code_hashes`) and a sandboxed tool the
+workspace has not opened (`422 custom_tool.sandbox_tool_not_allowed`); the deploy's
+generate stage checks again. The Code Interpreter id is the workspace's — a
+client-sent one is dropped.
+
 ### Governance, registry and tools: the remaining routes
 
 Governance policies, the registry's MCP and skill records and the gateway's tools are

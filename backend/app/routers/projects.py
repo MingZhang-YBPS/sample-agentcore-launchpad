@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.routers.auth import require_identity
-from app.services import access, project_purge
+from app.services import access, cost_tags, project_purge
 from app.services import projects as svc
 
 logger = logging.getLogger(__name__)
@@ -149,6 +149,7 @@ def patch_project(
     row = svc.get_project(db, project_id)
     svc.update_project(db, identity, row, body.model_dump(exclude_unset=True))
     db.commit()
+    cost_tags.start_queued(db)  # a rename / department / cost-tag change re-tags
     return _detail(db, identity, row)
 
 
@@ -313,6 +314,7 @@ def transfer(
                        {"kind": body.kind, "supported": list(svc.TRANSFER_KINDS)})
     result = svc.transfer_agent(db, identity, row, body.resource_id, body.to_project_id)
     db.commit()
+    cost_tags.start_queued(db)  # the moved agent's resources carry the new project
     return result
 
 

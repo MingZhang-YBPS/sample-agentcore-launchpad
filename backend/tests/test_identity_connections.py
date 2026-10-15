@@ -12,8 +12,8 @@ import app.routers.identity as identity_router
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, IdentityProvider, UserGrant
+from app.services import cost_tags, oauth_sessions
 from app.services import identity_providers as ip
-from app.services import oauth_sessions
 
 VAULT = "arn:aws:bedrock-agentcore:us-west-2:111:token-vault/default"
 OAUTH_ARN = f"{VAULT}/oauth2credentialprovider/team-idp"
@@ -166,6 +166,8 @@ def test_create_oauth2_passes_secret_through_and_never_persists_it(db, caplog):
                 "clientSecret": SECRET,
             }
         },
+        # cost-tags §1.2: the Connection carries the cost tags of where it is made
+        tags=cost_tags.context_tags(workspace_id=DEFAULT_WORKSPACE_ID),
     )
     assert out["callback_url"] == CALLBACK
     assert out["arn"] == OAUTH_ARN and out["source"] == "launchpad"

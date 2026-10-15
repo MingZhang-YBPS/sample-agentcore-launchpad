@@ -24,7 +24,7 @@ from app.core.project_scope import project_context
 from app.models.ledger import Agent
 from app.models.project_isolation import KIND_BOUNDARY_POLICY, ProjectResource
 from app.schemas.agent import AgentSpec
-from app.services import agent_iam, project_iam
+from app.services import agent_iam, cost_tags, project_iam
 from app.services import project_isolation as svc
 from app.services.project_iam import BoundaryInputs, boundary_policy_document
 from app.services.workspace_iam import ForeignResourceError, project_boundary_policy_name
@@ -612,8 +612,11 @@ def test_a_shared_projects_agent_role_is_unchanged(app):  # noqa: F811
                                                           _workspace(iam))
         role = iam.roles[agent_iam.role_name_for("probe", "abcdef1234")]
         assert role["boundary"] is None
-        assert {t["Key"] for t in role["tags"]} == {agent_iam.MANAGED_TAG_KEY,
-                                                     "launchpad:managed"}
+        # no isolation tag; the cost tags (cost-tags §1.2) are on every agent's role
+        keys = {t["Key"] for t in role["tags"]}
+        assert keys == {agent_iam.MANAGED_TAG_KEY, "launchpad:managed",
+                        *cost_tags.agent_tags(agent, WS)}
+        assert "launchpad:isolation" not in keys
         assert "boundary" not in detail and agent.isolation_applied is None
     assert not iam.policies
 

@@ -50,7 +50,7 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec, ByocConfig, McpStdioWrapper, parse_ecr_image_uri
-from app.services import agent_iam, byoc_uploads, mcp_servers, project_storage
+from app.services import agent_iam, byoc_uploads, cost_tags, mcp_servers, project_storage
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -613,6 +613,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         if detail := describe_mounts(spec):
             ctx.log(detail)
 
+        # cost-tags §1.2: the full set (agent id, workspace) on create and update
+        tags = cost_tags.agent_tags(row, row.workspace_id)
+
         def _kwargs() -> dict:
             if code_runtime:
                 return {
@@ -631,6 +634,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     "protocol": protocol,
                     "filesystem_configurations": mounts,
                     "vpc": vpc,
+                    "tags": tags,
                 }
             return {
                 "container_uri": _container_uri(ctx, row, cfg),
@@ -640,6 +644,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "protocol": protocol,
                 "filesystem_configurations": mounts,
                 "vpc": vpc,
+                "tags": tags,
             }
 
         create_fn = rt.create_code_runtime if code_runtime else rt.create_container_runtime

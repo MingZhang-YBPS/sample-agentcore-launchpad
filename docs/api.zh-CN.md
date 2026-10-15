@@ -1689,6 +1689,39 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 | `DELETE` | `/api/marketplace/templates/{template_id}` | `infra` | project | `{deleted: template_id}`。只有发布它的 Workspace、且是其中发布它的项目可以撤回（`403 marketplace.not_yours`）；管理员总是可以 |
 | `POST` | `/api/marketplace/templates/{template_id}/use` | `perm:project.write` | project | → 模板：向导默认值以及使用者仍需提供的内容。不创建 Agent |
 
+### 成本分配标签、账单口径成本与评估成本
+
+平台创建的每个资源都带 `launchpad:project`、`launchpad:workspace`、`launchpad:agent-id`、`launchpad:managed-by`、`launchpad:department` 标签以及项目的自定义成本标签；Workspace 共享的基础设施标为 `launchpad:project=shared`。
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `GET` | `/api/cost-tags?force=` | admin | ws | `{tag_set, shared_value, custom_max, reserved_prefixes, activation{account_id, account_type: standalone\|management\|member, can_activate, management_account_id, project_tag_active, tags[{key, custom, status: active\|inactive\|not_found\|unknown, last_updated, last_used}], error, checked_at, activation_delay_hours}}`：Billing 中这些键是否已激活为成本分配标签（`ce:ListCostAllocationTags`，缓存 10 分钟） |
+| `POST` | `/api/cost-tags/activate` | admin | ws | 请求体 `{keys?}`（省略＝所有未激活的键）→ `{activated, already_active, not_found, errors, status}`（`not_found`：Billing 尚未在任何资源上见过的键，一天后再激活）。`409 cost_tags.org_member`（组织成员账号：到它给出的管理账号中激活），`403 cost_tags.activation_denied` |
+| `POST` | `/api/cost-tags/backfill` | admin | ws | 启动 Workspace 级补标（可恢复的 Job `cost_tags_backfill`）：账本中每个 Agent 的资源与 Workspace 基础设施都补上标签集；仍在排队的相同运行会被复用。→ 运行 `{id, status, stages[plan, tag], coverage{total, taggable, tagged, percent, by_status, by_kind}, resources[未打上的], reason, actor, created_at}` |
+| `GET` | `/api/cost-tags/backfill` | admin | ws | `{tag_keys, shared_project, max_cost_tags, run}`：最近一次 Workspace 级运行（首次运行前为 `null`），含覆盖率和未能打标的资源（原因：`unsupported`、`denied`——补 IAM 权限——、`missing`、`failed`）。项目改名、部门或自定义标签变更、迁移 Agent 会各自启动一次重打 |
+| `GET` | `/api/costs/billing?granularity=daily\|monthly&project=&force=` | admin | ws | AWS 实际账单，按 `launchpad:project` 与服务分组（`ce:GetCostAndUsage`，Workspace 所在区域；按日 30 天或按月 6 个月；缓存 6 小时）。`shared` 行按各项目调用量分摊，未打标签的成本单列。`project_tag_active` 表示能否按项目拆分。未绑定到此 Workspace 的项目返回 `404` |
+| `GET` | `/api/projects/{project_id}/cost-tags` | member | hub | `{project_id, cost_tags, max, reserved_prefixes, budget_basis, budget_bases}` |
+| `PUT` | `/api/projects/{project_id}/cost-tags` | `pperm:project.members` | hub | 请求体 `{cost_tags: {键: 值}}`（≤ 10 个，遵循 AWS 标签规则，不能以 `aws:` / `launchpad:` 开头，键不区分大小写不得重复；`{}` 清空）→ 视图；变更会重打项目资源的标签 |
+| `PUT` | `/api/projects/{project_id}/budget-basis` | admin、部门管理员 | hub | 请求体 `{basis: estimate\|billing}` → 视图。项目预算规则（`monthly_cost_alert_usd`）按此口径比对 |
+| `GET` | `/api/eval/run-costs?runs=` | `perm:project.use` | project | `{costs: {run_id: {usd, kind: actual\|live\|estimate, estimate_usd}}}`，只含调用者可见的运行（每个运行的返回体也以 `cost` 带上这一项） |
+| `GET` | `/api/eval/runs/{run_id}/cost` | `perm:project.use` | project | 运行的成本卡片：`{run_id, status, final, running, actual, live, estimate, estimate_total_usd, estimate_range, summary, prices}`——实测与估算对比，运行中为实时值。其他项目的运行返回 `404` |
+| `GET` | `/api/eval/online/{config_id}/cost?days=1..30` | `perm:project.use` | project | 在线评估每日成本 `{config_id, days[{day, judgements, judge_usd, reports_usd, usd, by_evaluator}], range_days, total_usd}`；其他项目的配置返回 `404` |
+
+评估入口在提交前都会估价（`POST /api/eval/runs/estimate`）：数据集回放、针对所选会话或回溯窗口的被动运行，以及在线配置（按天）。超过 Workspace 的确认阈值时需要 `confirm_cost: true`（`409 run.cost_confirm_required`）；超过上限时只有管理员可以提交（`409 run.cost_over_limit`）——`POST /api/eval/runs` 与 `POST /api/eval/online` 相同。
+
+### Strands 构建：自定义 Python 工具与沙箱工具
+
+| 方法 | 路径 | 角色 | 范围 | 结果 |
+|---|---|---|---|---|
+| `POST` | `/api/custom-tools/check` | `perm:project.use` | project | 请求体 `{name, code, requirements?, execution: runtime\|code_interpreter}` → `{ok, error{message, line, col}, findings[{kind, line, message}], code_hash, input_schema, needs_approval, approval}`：不运行代码的静态检查（恰好一个与工具同名的顶层 `@tool` 函数；允许列表之外的 import 与调用记为发现项） |
+| `GET` | `/api/custom-tools/approvals` | `perm:project.use` | project | `{approvals[{code_hash, tool_name, execution, requirements, findings, approved_by, approved_at, note}]}`——本项目已批准的版本，新的在前 |
+| `POST` | `/api/custom-tools/approvals` | admin | project | 请求体 `{name, code, requirements?, execution, note?}` → `201` 对这一确切版本的批准（按代码哈希，每个项目 ≤ 200 条）；审计动作 `custom_tool.approve` |
+| `DELETE` | `/api/custom-tools/approvals/{code_hash}` | admin | project | `{revoked: code_hash}`；其他项目的哈希返回 `404` |
+| `GET` | `/api/custom-tools/sandbox` | member | ws | `{allowed_tools, code_interpreter_id, effective_code_interpreter_id, updated_by, updated_at}`——Workspace 开放了 `python_repl`、`shell`、`file_write`、`use_aws` 中的哪些（它们只在 AgentCore Code Interpreter 中运行） |
+| `PUT` | `/api/custom-tools/sandbox` | admin | ws | 请求体 `{allowed_tools[], code_interpreter_id?}` → 设置 |
+
+保存或重新发布 Agent（`POST /api/agents`、`POST /api/agents/{id}/redeploy`）时，未经管理员批准的自定义工具版本会被拒绝（`422 custom_tool.approval_required`，附 `code_hashes`），Workspace 未开放的沙箱工具也会被拒绝（`422 custom_tool.sandbox_tool_not_allowed`）；部署的生成阶段会再检查一次。Code Interpreter id 取 Workspace 的设置——客户端传来的会被丢弃。
+
 ### 治理、注册中心与工具：其余路由
 
 治理策略、注册中心的 MCP 与技能记录以及网关工具都是 Workspace 基础设施：所有项目都能读，写入为 `infra`。

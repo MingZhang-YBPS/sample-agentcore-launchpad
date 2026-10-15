@@ -56,6 +56,7 @@ from app.models.project_isolation import (
     ProjectResource,
 )
 from app.services import project_isolation as isolation
+from app.services.project_telemetry import SHARED_PROJECT
 from app.services.workspace_iam import (
     WORKSPACE_TAG_KEY,
     ForeignResourceError,
@@ -194,6 +195,8 @@ def boundary_policy_document(inp: BoundaryInputs) -> dict[str, Any]:
             # tag-backfill). Untagged peers are denied — cross-project A2A is phase
             # 3's sharing grant (§11.2).
             "bedrock-agentcore:InvokeAgentRuntime",
+            # agents-as-tools with runtime_user (SB-2) name the end user
+            "bedrock-agentcore:InvokeAgentRuntimeForUser",
             # ECR: a BYOC container_image may name any repository of the account;
             # allowed when it is tagged for the project (ECR supports aws:ResourceTag)
             "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
@@ -267,14 +270,15 @@ def boundary_policy_document(inp: BoundaryInputs) -> dict[str, Any]:
         "Resource": [f"{repo}/{inp.shared_ecr_repo}/{pid}", f"{repo}/{inp.shared_ecr_repo}"],
     })
 
-    # ---- gateways (SigV4): the project's, or the platform's ----
+    # ---- gateways (SigV4): the project's, or the platform's / workspace's shared ----
     statements.append({
         # TO VERIFY: InvokeGateway honours aws:ResourceTag (R10-gw / R10-obs tag
         # gateways). OAuth gateways authorize the bearer token, not this grant —
         # those are limited by §10.6's per-project M2M client and Cedar.
         "Sid": "Gateways", "Effect": "Allow", "Action": ["bedrock-agentcore:InvokeGateway"],
         "Resource": [f"arn:{p}:bedrock-agentcore:*:{acct}:gateway/*"],
-        "Condition": _tagged([pid, PLATFORM_PROJECT]),
+        # the workspace gateway is tagged launchpad:project=shared (cost-tags §1.2)
+        "Condition": _tagged([pid, PLATFORM_PROJECT, SHARED_PROJECT]),
     })
 
     # ---- identity: workload tokens, then the project's providers by ARN ----

@@ -37,7 +37,7 @@ from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stag
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.schemas.strands_builder import STRANDS_TOOLS_REQUIREMENT
-from app.services import agent_iam, project_storage
+from app.services import agent_iam, cost_tags, project_storage
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -689,6 +689,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # session storage + BYO mounts — likewise reset when omitted on update
                 "filesystem_configurations": filesystem_configurations(spec) or None,
                 "vpc": vpc,
+                # cost-tags §1.2: the full set (agent id, workspace) on create and update
+                "tags": cost_tags.agent_tags(row, row.workspace_id),
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)

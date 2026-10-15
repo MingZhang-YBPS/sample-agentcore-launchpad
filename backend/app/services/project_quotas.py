@@ -118,10 +118,13 @@ def eval_runs_active(db: Session, project_id: str) -> int:
 
 
 def run_spend_usd(run: Any) -> float:
-    """What one run counts against the month: its measured agent spend once known,
-    its estimate until then; a run that failed or was stopped with nothing measured
+    """What one run counts against the month: its full measured cost once final (the
+    agent's invokes plus evaluators, EC-2), its measured agent spend once known, its
+    estimate until then; a run that failed or was stopped with nothing measured
     counts nothing (nor does an unpriced one)."""
     actual = run.cost_actual or {}
+    if actual.get("final") and actual.get("total_usd") is not None:
+        return float(actual["total_usd"])
     if actual.get("agent_usd") is not None:
         return float(actual["agent_usd"])
     if run.status in ("failed", "stopped"):

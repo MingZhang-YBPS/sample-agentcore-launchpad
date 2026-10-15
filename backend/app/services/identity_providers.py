@@ -820,7 +820,8 @@ def create_oauth2_connection(
     _refuse_duplicate(control, db, workspace_id, KIND_OAUTH2, name)
     try:
         created = control.create_oauth2_credential_provider(
-            name=name, credentialProviderVendor=vendor, oauth2ProviderConfigInput=config
+            name=name, credentialProviderVendor=vendor, oauth2ProviderConfigInput=config,
+            tags=_connection_tags(workspace_id),
         )
     except ClientError as exc:
         if _aws_code(exc) == "ConflictException":
@@ -842,6 +843,14 @@ def create_oauth2_connection(
     )
 
 
+def _connection_tags(workspace_id: str) -> dict[str, str]:
+    """cost-tags §1.2: a Connection carries the cost tags of the project it is created
+    in (its token-vault secret is tagged by the back-fill). Late import: cycle-free."""
+    from app.services import cost_tags
+
+    return cost_tags.context_tags(workspace_id=workspace_id)
+
+
 def create_api_key_connection(
     control: Any,
     db: Session,
@@ -854,7 +863,9 @@ def create_api_key_connection(
 ) -> dict[str, Any]:
     _refuse_duplicate(control, db, workspace_id, KIND_API_KEY, name)
     try:
-        created = control.create_api_key_credential_provider(name=name, apiKey=api_key)
+        created = control.create_api_key_credential_provider(
+            name=name, apiKey=api_key, tags=_connection_tags(workspace_id)
+        )
     except ClientError as exc:
         if _aws_code(exc) == "ConflictException":
             raise _exists_error(KIND_API_KEY, name) from None
