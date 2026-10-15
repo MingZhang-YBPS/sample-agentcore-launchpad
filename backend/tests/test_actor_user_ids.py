@@ -215,6 +215,9 @@ def test_criteria_sign_without_ids_behaves_as_before(db):
 
 def test_release_sign_compares_ids(db, monkeypatch):
     monkeypatch.setattr(release_svc, "point_endpoint", lambda *a, **k: {})
+    # no mounts on either version: no storage sign-off needed (storage-mounts §8.1)
+    monkeypatch.setattr(release_svc, "storage_evidence",
+                        lambda *a, **k: {"changes": [], "requires_ack": False})
     agent = SimpleNamespace(id="a1")
     record = ReleaseRecord(workspace_id=WS, agent_id="a1", candidate_version="2",
                            decision="pending", requested_by="dev", requested_by_user_id="u1",

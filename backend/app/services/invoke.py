@@ -210,9 +210,12 @@ def harness_user_overrides(
         configured = detail.get("tools") or []
         tools = hc.user_authenticated_tools(
             spec, workspace.resources, access_token, configured_tools=configured,
+            workspace_id=workspace.id,
         )
     else:
-        tools = hc.user_authenticated_tools(spec, workspace.resources, access_token)
+        tools = hc.user_authenticated_tools(
+            spec, workspace.resources, access_token, workspace_id=workspace.id,
+        )
     if len({tool["name"] for tool in tools}) != len(tools):
         raise ValueError("authenticated Gateway alias conflicts with another configured tool")
     names = {

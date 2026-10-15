@@ -340,8 +340,10 @@ def copy_source_archive(
             "the upload manifest records no sha256 — cannot verify a copy",
             status_code=409,
         )
-    src_key = byoc_uploads.source_key(source.id, upload_id)
-    dst_key = byoc_uploads.source_key(target.id, upload_id)
+    # the upload's project decides its prefix on both sides (isolated: projects/<pid>/)
+    pid = manifest.get("project_id") or None
+    src_key = byoc_uploads.source_key(source.id, upload_id, pid)
+    dst_key = byoc_uploads.source_key(target.id, upload_id, pid)
     try:
         head = t_s3.head_object(Bucket=t_bucket, Key=dst_key)
         if (head.get("Metadata") or {}).get("sha256") == expected:
@@ -370,7 +372,7 @@ def copy_source_archive(
     moved = {**manifest, "workspace_id": target.id}
     t_s3.put_object(
         Bucket=t_bucket,
-        Key=byoc_uploads.manifest_key(target.id, upload_id),
+        Key=byoc_uploads.manifest_key(target.id, upload_id, pid),
         Body=json.dumps(moved, ensure_ascii=False).encode("utf-8"),
         ContentType="application/json",
     )

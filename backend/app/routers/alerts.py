@@ -7,7 +7,7 @@ new telemetry path here, only attribution and a comparison.
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,7 +16,7 @@ from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import current_project
 from app.models.ledger import AlertRule
-from app.routers.auth import Identity, current_identity
+from app.routers.auth import Identity, current_identity, require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import access
 from app.services import alerts as alert_service
@@ -89,6 +89,7 @@ def _check_webhook(url: str | None) -> str | None:
 
 @router.get("/costs")
 def get_costs(
+    request: Request,
     range: str = Query(default=cost_service.DEFAULT_RANGE),
     project: str | None = Query(default=None, max_length=32),
     force: bool = False,
@@ -111,9 +112,15 @@ def get_costs(
         )
     if project is not None:
         _bound_project(db, ws, project)
-    return cost_service.cost_report(
+    report = cost_service.cost_report(
         db, ws.context, range_key=range, force=force, project=project
     )
+    from app.services import steward as steward_service
+
+    if steward_service.is_steward(require_identity(request)):
+        # an organization admin sees the totals, never who or what spent them (§11.4)
+        report = {k: v for k, v in report.items() if not k.startswith("by_")}
+    return report
 
 
 @router.get("/costs/month-to-date")

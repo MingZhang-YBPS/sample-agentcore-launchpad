@@ -300,7 +300,7 @@ def test_invitations_follow_the_departments_settings(world):
         "settings": {"can_create_users": True, "user_validity_max_days": 30}})
     assert res.status_code == 200
     assert res.json()["settings"] == {"can_create_users": True, "max_projects": None,
-                                      "user_validity_max_days": 30}
+                                      "quotas": None, "user_validity_max_days": 30}
     bad = world.admin.patch("/api/departments/retail", json={"settings": {"nope": 1}})
     assert (bad.status_code, bad.json()["code"]) == (400, "department.setting_invalid")
     long = dana.post("/api/departments/retail/invitations", json={**body, "valid_days": 60})

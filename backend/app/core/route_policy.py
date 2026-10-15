@@ -1750,6 +1750,9 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {
 }
 
 _STRUCTURE_ROUTES = (
+    # totals only for an organization admin (routers/alerts.py)
+    ("GET", "/api/costs"),
+    ("GET", "/api/costs/month-to-date"),
     # administrators and accounts (§7.3, §7.4); the handlers keep platform roles to
     # administrators (`routers/users.py`)
     ("GET", "/api/admins"),
@@ -1850,8 +1853,6 @@ _STRUCTURE_ROUTES = (
 )
 _DATA_ROUTES = (
     # cost detail (until its router keeps a steward to totals), time-to-first-agent
-    ("GET", "/api/costs"),
-    ("GET", "/api/costs/month-to-date"),
     ("GET", "/api/overview/ttfa"),
     # a project's data leaves or moves: the export bundle, an agent transfer; deletion
     # (a request purges on its own after the cooling-off) until §11.5's steward

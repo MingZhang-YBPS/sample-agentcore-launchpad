@@ -40,6 +40,8 @@ from app.services.users import AGENT_PERMISSIONS, DEFAULT_BY_ROLE, ROLES
 
 TEMPLATES = sorted(ROLE_TEMPLATES)
 ACCOUNT_ROLES = sorted(ROLES)
+# an organization admin (steward, §11.4) holds no project rows: structure only
+MEMBER_ROLES = sorted(r for r in ROLES if r != "steward")
 CUSTOM_KEY = "custom-reviewer"
 CUSTOM_KEYS = frozenset({"project.use", "eval.run", "golden.admit"})
 
@@ -338,7 +340,7 @@ class TestSnapshotUnion:
             sources = dict(membership.role_sources)
             assert sources.get("direct") == direct and sources.get(f"group:{gid}") == group
 
-    @pytest.mark.parametrize("role", ACCOUNT_ROLES)
+    @pytest.mark.parametrize("role", MEMBER_ROLES)
     @pytest.mark.parametrize("shape", sorted(ACCOUNT_OVERRIDES))
     def test_inherit_uses_the_account_role_and_overrides(self, db, role, shape):
         overrides = ACCOUNT_OVERRIDES[shape]
@@ -439,7 +441,7 @@ class TestBypassAndCache:
     def test_only_admins_bypass(self, role):
         identity = SimpleNamespace(role=role)
         assert access.has_data_bypass(identity) is (role == "admin")
-        assert access.can_manage_structure(identity) is (role == "admin")
+        assert access.can_manage_structure(identity) is (role in ("admin", "steward"))
 
     @pytest.mark.parametrize("key", sorted(ALL_PROJECT_KEYS))
     def test_scope_can(self, key):

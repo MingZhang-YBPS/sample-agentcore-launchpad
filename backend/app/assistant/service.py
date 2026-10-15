@@ -3060,8 +3060,12 @@ def approve_proposal(
         )
         # the approver (possibly a collaborator, not the conversation owner) created it
         creators.stamp(agent, Creator.of(approver))
+        from app.services import project_quotas
+
+        project_quotas.assert_capacity(db, current_project(), "max_agents")  # §11.3
         db.add(agent)
         db.flush()
+        project_quotas.recheck_after_insert(db, agent.project_id, "max_agents")
         agent_names.claim_agent_name(  # 409 → rollback; names the holder only if visible
             db, fresh_row.id, spec.name, agent.id,
             viewer=visibility.viewer_for_principal(db, fresh_row, principal_of(approver)),
