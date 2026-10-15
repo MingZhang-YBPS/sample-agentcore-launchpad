@@ -10580,7 +10580,31 @@
       "na": "not applicable",
       "history": "Release history",
       "editCriteria": "Edit criteria",
-      "calibrate": "Calibrate judges"
+      "calibrate": "Calibrate judges",
+      "storage": {
+        "title": "Storage mounts",
+        "unchanged_one": "The candidate mounts {{count}} storage, unchanged from live.",
+        "unchanged_other": "The candidate mounts {{count}} storages, unchanged from live.",
+        "liveUnknown": "The live version's spec is not recorded, so every candidate mount is shown as added.",
+        "change": {
+          "added": "added",
+          "removed": "removed",
+          "mode": "mode changed",
+          "storage": "other storage",
+          "data_class": "data class changed"
+        },
+        "class": {
+          "reference": "reference data",
+          "shared_state": "shared state",
+          "scratch": "scratch"
+        },
+        "needsAck": "sign-off needed",
+        "ack": "I have reviewed the storage changes and accept that the released version writes to this storage: {{changes}}",
+        "acknowledged": "Storage changes acknowledged by {{who}}.",
+        "writesWarning": "The candidate mounts shared-state storage read-write ({{storage}}). Replaying the gate sets writes into production storage. Prefer evaluating in a DEV workspace that registers the same storage on staging data, then promote.",
+        "confirmWrites": "I understand the evaluation writes into production storage",
+        "writesConfirmed": "{{who}} confirmed the gate evaluation writes to {{storage}}."
+      }
     },
     "registry": {
       "eyebrow": "Catalog",
@@ -10841,6 +10865,16 @@
         "regenerate": "Wrong? Regenerate",
         "regenerating": "Regenerating…",
         "generating": "Summarizing the earlier turns for the assistant…"
+      },
+      "storage": {
+        "label": "Storage",
+        "mode": {
+          "ro": "read-only",
+          "rw": "read-write"
+        },
+        "rwHint": "Read-write: the agent writes into this shared storage",
+        "rwNotice": "This agent mounts storage read-write ({{storage}}): once deployed it writes into storage other agents or systems may share.",
+        "network": "network {{profile}}"
       }
     },
     "releases": {

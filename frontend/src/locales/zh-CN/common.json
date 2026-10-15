@@ -10580,7 +10580,31 @@
       "na": "不适用",
       "history": "放行记录",
       "editCriteria": "编辑判据",
-      "calibrate": "校准裁判"
+      "calibrate": "校准裁判",
+      "storage": {
+        "title": "存储挂载",
+        "unchanged_one": "候选版本挂载 {{count}} 个存储，与 live 版本相同。",
+        "unchanged_other": "候选版本挂载 {{count}} 个存储，与 live 版本相同。",
+        "liveUnknown": "没有记录 live 版本的 spec，候选版本的每个挂载都按新增显示。",
+        "change": {
+          "added": "新增",
+          "removed": "移除",
+          "mode": "模式变更",
+          "storage": "换存储",
+          "data_class": "数据类别变更"
+        },
+        "class": {
+          "reference": "参考数据",
+          "shared_state": "共享状态",
+          "scratch": "临时输出"
+        },
+        "needsAck": "需签字人确认",
+        "ack": "我已核对存储变更，接受放行后的版本写入这些存储：{{changes}}",
+        "acknowledged": "存储变更已由 {{who}} 确认。",
+        "writesWarning": "候选版本以读写方式挂载共享状态存储（{{storage}}），回放放行门数据集会写入生产存储。推荐在 DEV 工作区登记同名存储（指向 staging 数据）完成评估，再晋级。",
+        "confirmWrites": "我知道评估会写入生产存储",
+        "writesConfirmed": "{{who}} 已确认放行门评估写入 {{storage}}。"
+      }
     },
     "registry": {
       "eyebrow": "目录",
@@ -10841,6 +10865,16 @@
         "regenerate": "有误，重新生成",
         "regenerating": "正在重新生成…",
         "generating": "正在为助手总结较早的轮次…"
+      },
+      "storage": {
+        "label": "存储",
+        "mode": {
+          "ro": "只读",
+          "rw": "读写"
+        },
+        "rwHint": "读写：Agent 会写入这块共享存储",
+        "rwNotice": "该 Agent 以读写方式挂载存储（{{storage}}）：部署后会写入可能与其他 Agent 或系统共享的存储。",
+        "network": "网络 {{profile}}"
       }
     },
     "releases": {

@@ -36,6 +36,10 @@ from app.services import promotion as promotion_service
 # alert by design: the release still ships, the approver sees the spend.
 ADVISORY_GATES = frozenset({"guardrail", "target_agent", "project_budget"})
 
+# Gates that inform but never refuse an execution. `storage` is evidence for the
+# approver (storage-mounts §8.1): the bundle's mounts against the target's running agent.
+ADVISORY_GATES = frozenset({"guardrail", "target_agent", "storage"})
+
 TIER_DEFAULTS: dict[str, dict[str, Any]] = {
     "prod": {"require_policy_enforce": True, "observe_seconds": 300},
     "staging": {"require_policy_enforce": False, "observe_seconds": 60},
@@ -412,6 +416,33 @@ def policy_enforce_gate(target: Workspace, policy: dict[str, Any]) -> dict[str, 
     }
 
 
+def storage_gate(db: Session, bundle: ReleaseBundle, target: Workspace) -> dict[str, Any] | None:
+    """The bundle's storage mounts against the agent it replaces in the target, with the
+    target catalog's `data_class` (storage-mounts §8.1). None when neither side mounts
+    storage, so an agent without mounts shows no extra gate. Advisory: a promotion has
+    its own approval, and the release gate in the target asks for the sign-off."""
+    from app.services import storage_dlc
+
+    existing, foreign = promotion_service.target_holder(
+        db, target.id, bundle.agent_name, bundle.project_id,
+    )
+    live = [] if foreign or existing is None else storage_dlc.with_catalog(
+        db, target.id, storage_dlc.mounts_of(existing.spec))
+    out = storage_dlc.evidence(db, target.id, bundle.spec or {}, live)
+    if not out["candidate"] and not live:
+        return None
+    flagged = [c for c in out["changes"] if c["requires_ack"]]
+    detail = (
+        f"{len(out['changes'])} mount change(s), {len(flagged)} needing sign-off: "
+        + ", ".join(f"{c['mount_path']} {c['change']}" for c in flagged)
+        if flagged
+        else f"{len(out['changes'])} mount change(s), none read-write"
+        if out["changes"] else "the storage mounts are unchanged"
+    )
+    return {"key": "storage", "ok": not flagged, "detail": detail,
+            "changes": out["changes"], "shared_state_writes": out["shared_state_writes"]}
+
+
 def execution_gates(
     db: Session,
     bundle: ReleaseBundle,
@@ -431,6 +462,10 @@ def execution_gates(
     budget = project_budget_gate(db, getattr(bundle, "project_id", None))
     if budget is not None:
         checks.append(budget)
+
+    storage = storage_gate(db, bundle, target)
+    if storage is not None:
+        checks.append(storage)
     for check in checks:
         check["blocking"] = check["key"] not in ADVISORY_GATES
         # A zip agent is built from its frozen spec (hashed lock), so "no stored artifact"

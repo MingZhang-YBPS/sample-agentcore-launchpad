@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { api, dlcApi, errorMessage } from "../../lib/api";
+import { type ReleaseStorageEvidence, changeDelta, hasStorage, mountLabel, releaseStorage, storageDlcApi } from "../../lib/api/storageDlc";
 import { type CostEstimate, type GateReport, type GateRow, type ReleaseState, type Scorecard, estimateValue, metricValueLabel } from "../../lib/dlc";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { gateSignal, releaseSignal } from "../signals";
@@ -109,6 +110,55 @@ function Dimensions({ card }: { card: Scorecard }) {
   );
 }
 
+/**
+ * The candidate's storage mounts against live (storage-mounts §8.1): one row per
+ * changed mount, a lit row when the signer has to acknowledge it.
+ */
+function StoragePanel({ ev }: { ev: ReleaseStorageEvidence }) {
+  const { t } = useTranslation();
+  return (
+    <Panel title={t("v3.gate.storage.title")} signal={ev.requires_ack ? "act" : undefined} flush={ev.changes.length > 0}>
+      {!ev.live_known && (
+        <div style={{ padding: ev.changes.length ? "12px 16px 0" : undefined }}>
+          <Notice s="wait">{t("v3.gate.storage.liveUnknown")}</Notice>
+        </div>
+      )}
+      {ev.changes.length === 0 ? (
+        <span style={{ color: "var(--v3-text-2)" }}>{t("v3.gate.storage.unchanged", { count: ev.candidate.length })}</span>
+      ) : (
+        <table className="v3-table" data-testid="v3-gate-storage">
+          <tbody>
+            {ev.changes.map((c) => (
+              <tr key={c.mount_path}>
+                <td style={{ width: 30 }}><Lamp s={c.requires_ack ? "act" : "info"} /></td>
+                <td className="mono">{c.mount_path}</td>
+                <td>{mountLabel(c)}</td>
+                <td>
+                  <Chip s={c.requires_ack ? "act" : undefined}>{t(`v3.gate.storage.change.${c.change}`)}</Chip>
+                  {changeDelta(c) && <span className="mono" style={{ marginLeft: 8, color: "var(--v3-text-2)" }}>{changeDelta(c)}</span>}
+                </td>
+                <td>
+                  {c.mode && <Chip s={c.mode === "rw" ? "wait" : undefined}>{c.mode}</Chip>}{" "}
+                  {c.data_class && <span style={{ color: "var(--v3-text-3)", fontSize: 12 }}>{t(`v3.gate.storage.class.${c.data_class}`)}</span>}
+                </td>
+                <td style={{ color: "var(--v3-text-3)", fontSize: 12 }}>{c.requires_ack ? t("v3.gate.storage.needsAck") : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {ev.acknowledged_by && (
+        <div style={{ padding: "8px 16px", color: "var(--v3-text-2)" }}>{t("v3.gate.storage.acknowledged", { who: ev.acknowledged_by })}</div>
+      )}
+      {ev.write_confirmation && (
+        <div style={{ padding: "8px 16px", color: "var(--v3-text-2)" }}>
+          {t("v3.gate.storage.writesConfirmed", { who: ev.write_confirmation.confirmed_by, storage: ev.write_confirmation.storage.join(", ") })}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export function V3Gate() {
   const { t } = useTranslation();
   const toast = useToast();
@@ -128,6 +178,10 @@ export function V3Gate() {
   // block or rollback must say why, and the reason is recorded against the release
   const [deciding, setDeciding] = useState<"sign" | "block" | "rollback" | null>(null);
   const [note, setNote] = useState("");
+  // storage-mounts §8: the sign-off of read-write storage changes, and the
+  // confirmation that a gate evaluation writes production shared-state storage
+  const [storageAck, setStorageAck] = useState(false);
+  const [confirmWrites, setConfirmWrites] = useState(false);
   // what running the gate would cost; over the workspace limit it cannot run, and
   // the server decides whether the cost needs an explicit confirm
   const estimate = useLoad<CostEstimate | null>(
@@ -142,6 +196,8 @@ export function V3Gate() {
     () => (evaluated ? dlcApi.gate(agentId) : Promise.resolve(null)), `v3-gate-report:${agentId}:${evaluated}:${nonce}`);
   const report = gate.data?.report ?? null;
   const evaluating = gate.data?.status === "evaluating";
+  const storage = releaseStorage(report) ?? releaseStorage(pending);
+  const writes = pending && !evaluated ? (releaseStorage(pending)?.shared_state_writes ?? []) : [];
 
   const act = (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true);
@@ -227,6 +283,8 @@ export function V3Gate() {
             </Panel>
           )}
 
+          {hasStorage(storage) && <StoragePanel ev={storage} />}
+
           {pending && !evaluated && (
             <Panel title={t("v3.gate.run")} signal="wait">
               <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -244,16 +302,29 @@ export function V3Gate() {
                   {estimate.data?.unpriced && <Chip s="wait">{t("v2.dlc.cost.unpriced")}</Chip>}
                   {estimate.data?.over_limit && <Chip s="act">{t("v2.dlc.cost.overLimit")}</Chip>}
                 </span>
-                <Btn kind="primary" disabled={busy || !can("eval.run") || estimate.loading || Boolean(estimate.data?.over_limit)}
+                <Btn kind="primary" disabled={busy || !can("eval.run") || estimate.loading || Boolean(estimate.data?.over_limit)
+                  || (writes.length > 0 && !confirmWrites)}
                   onClick={() =>
                     act(
-                      () => dlcApi.evaluateRelease(agent.id, { repeats: 1, confirm_cost: Boolean(estimate.data?.confirm_required) }),
+                      () => writes.length > 0
+                        ? storageDlcApi.evaluateRelease(agent.id, { repeats: 1, confirm_cost: Boolean(estimate.data?.confirm_required), confirm_storage: confirmWrites })
+                        : dlcApi.evaluateRelease(agent.id, { repeats: 1, confirm_cost: Boolean(estimate.data?.confirm_required) }),
                       "v3.gate.started",
                     )
                   }>
                   <Play size={14} /> {t("v3.gate.runBtn")}
                 </Btn>
               </div>
+              {writes.length > 0 && (
+                <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+                  <Notice s="act">{t("v3.gate.storage.writesWarning", { storage: writes.map(mountLabel).join(", ") })}</Notice>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input type="checkbox" checked={confirmWrites} onChange={(e) => setConfirmWrites(e.target.checked)}
+                      data-testid="v3-gate-storage-confirm" />
+                    {t("v3.gate.storage.confirmWrites")}
+                  </label>
+                </div>
+              )}
             </Panel>
           )}
           {evaluating && <Notice s="wait">{t("v3.gate.evaluating")}</Notice>}
@@ -265,7 +336,7 @@ export function V3Gate() {
                   <span style={{ display: "flex", gap: 8 }}>
                     <Btn kind="primary" size="sm" disabled={busy || report.verdict !== "PASS"}
                       title={report.verdict !== "PASS" ? t("v2.dlc.release.onlyPassSigns") : undefined}
-                      onClick={() => { setNote(""); setDeciding("sign"); }}>
+                      onClick={() => { setNote(""); setStorageAck(false); setDeciding("sign"); }}>
                       <ShieldCheck size={13} /> {t("v3.gate.sign")}
                     </Btn>
                     <Btn kind="danger" size="sm" disabled={busy}
@@ -357,11 +428,15 @@ export function V3Gate() {
                   <Btn kind="ghost" onClick={() => setDeciding(null)}>{t("v3.common.cancel")}</Btn>
                   <Btn
                     kind={deciding === "sign" ? "primary" : "danger"}
-                    disabled={busy || (deciding !== "sign" && !note.trim())}
+                    disabled={busy || (deciding !== "sign" && !note.trim())
+                      || (deciding === "sign" && Boolean(storage?.requires_ack) && !storageAck)}
                     onClick={() => {
                       const action = deciding;
                       setDeciding(null);
-                      if (action === "sign") act(() => dlcApi.signRelease(agent.id, note), "v3.gate.signed");
+                      if (action === "sign") {
+                        act(() => storage?.requires_ack ? storageDlcApi.signRelease(agent.id, note, storageAck)
+                          : dlcApi.signRelease(agent.id, note), "v3.gate.signed");
+                      }
                       else if (action === "block") act(() => dlcApi.blockRelease(agent.id, note), "v3.gate.blocked");
                       else act(() => dlcApi.rollback(agent.id, note), "v3.gate.rolledBack");
                     }}
@@ -379,6 +454,18 @@ export function V3Gate() {
                   <dt>{t("v2.dlc.release.liveAfter")}</dt><dd className="mono">{pending?.candidate_version ? `v${pending.candidate_version}` : "—"}</dd>
                   <dt>{t("v2.dlc.release.rollbackTo")}</dt><dd className="mono">{pending?.previous_live_version ? `v${pending.previous_live_version}` : "—"}</dd>
                 </dl>
+              )}
+              {deciding === "sign" && storage?.requires_ack && (
+                <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 14 }}>
+                  <input type="checkbox" checked={storageAck} onChange={(e) => setStorageAck(e.target.checked)}
+                    data-testid="v3-gate-storage-ack" />
+                  <span>
+                    {t("v3.gate.storage.ack", {
+                      changes: storage.changes.filter((c) => c.requires_ack)
+                        .map((c) => `${c.mount_path} ${t(`v3.gate.storage.change.${c.change}`)}`).join(", "),
+                    })}
+                  </span>
+                </label>
               )}
               <label className="v3-field">
                 <span>{t("v2.dlc.release.note")}{deciding !== "sign" ? " *" : ""}</span>
