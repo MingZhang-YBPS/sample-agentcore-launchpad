@@ -2,13 +2,15 @@
 
 The backend returns machine-readable error codes; the frontend translates
 them into the active locale. Envelope shape: {code, message, detail}; the
-console's AWS-error envelopes add ``request_id`` (projects §19).
+console's AWS-error envelopes add ``request_id`` (projects §19), and a console
+``AppError`` may add ``next`` (where the console sends the user to fix it) and
+``needs`` (the permission that can) — storyline-ux §4, guided-console §3.1.
 """
 
 import logging
 import re
 import uuid
-from typing import Any
+from typing import Any, TypedDict
 
 from botocore.exceptions import ClientError
 from fastapi import FastAPI, Request
@@ -20,8 +22,28 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 logger = logging.getLogger("launchpad.errors")
 
 
+class NextStep(TypedDict):
+    """One way out of an error: a console action key and its parameters.
+
+    The backend names the action only; the console's action table
+    (``frontend/src/v3/story/actions.ts``) owns the route, so a page redesign never
+    touches the backend. An action the console does not know is ignored there."""
+
+    action: str
+    params: dict[str, str]
+
+
+def next_step(action: str, **params: str | None) -> NextStep:
+    """``NextStep`` with the empty parameters dropped (an id the caller lacks)."""
+    return {"action": action, "params": {k: str(v) for k, v in params.items() if v}}
+
+
 class AppError(Exception):
-    """Domain error carrying a stable error code for frontend translation."""
+    """Domain error carrying a stable error code for frontend translation.
+
+    ``next`` (first entry = the primary action) and ``needs`` (``perm:<key>`` when
+    only that permission can fix it) reach the console envelope only — the public
+    ``/v1`` API and the ``/share`` pages never carry them (``app_error_handler``)."""
 
     status_code = 400
 
@@ -32,12 +54,17 @@ class AppError(Exception):
         detail: Any = None,
         status_code: int | None = None,
         headers: dict[str, str] | None = None,
+        *,
+        next: list[NextStep] | None = None,  # noqa: A002 - the envelope's field name
+        needs: str | None = None,
     ):
         super().__init__(message)
         self.headers = headers
         self.code = code
         self.message = message
         self.detail = detail
+        self.next = list(next) if next else None
+        self.needs = needs
         if status_code is not None:
             self.status_code = status_code
 
@@ -47,18 +74,39 @@ class NotFoundError(AppError):
 
 
 def envelope(
-    code: str, message: str, detail: Any = None, request_id: str | None = None
+    code: str,
+    message: str,
+    detail: Any = None,
+    request_id: str | None = None,
+    *,
+    next: list[NextStep] | None = None,  # noqa: A002 - the envelope's field name
+    needs: str | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"code": code, "message": message, "detail": detail}
     if request_id is not None:
         body["request_id"] = request_id
+    if next:
+        body["next"] = next
+    if needs:
+        body["needs"] = needs
     return body
 
 
-async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
+def is_public_path(path: str) -> bool:
+    """``/v1`` (API-key callers) and ``/share`` (account-free pages): across the trust
+    boundary, where console routes and permission names mean nothing to the caller."""
+    return path.startswith((PUBLIC_API_PREFIX, PUBLIC_SHARE_PREFIX))
+
+
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    guided = not is_public_path(request.url.path)
     return JSONResponse(
         status_code=exc.status_code,
-        content=envelope(exc.code, exc.message, exc.detail),
+        content=envelope(
+            exc.code, exc.message, exc.detail,
+            next=getattr(exc, "next", None) if guided else None,
+            needs=getattr(exc, "needs", None) if guided else None,
+        ),
         headers=getattr(exc, "headers", None),
     )
 

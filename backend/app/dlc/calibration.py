@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, next_step
 from app.evaluation import stats
 from app.models.dlc import Annotation, AnnotationTask, CalibrationRecord, Criterion
 
@@ -363,6 +363,7 @@ def decide(
             "issuing one of its annotation links — so you cannot also certify its judge: "
             "the labels are the evidence, and whoever wrote them does not rule on them",
             status_code=403,
+            needs="perm:judge.calibrate",
         )
     measured = agreement(db, task)
     allowed = suggested_verdict(measured, policy)
@@ -375,6 +376,7 @@ def decide(
              "human_human_kappa": measured["human_human_kappa"], "n": measured["n"],
              "kappa_floor": policy["kappa_floor"]},
             status_code=409,
+            next=[next_step("calibration.open", agent_id=task.agent_id, task_id=task.id)],
         )
     ci = measured.get("kappa_ci") or [None, None]
     record = CalibrationRecord(

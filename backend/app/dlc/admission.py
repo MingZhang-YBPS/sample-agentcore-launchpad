@@ -27,7 +27,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, next_step
 from app.dlc import golden as golden_svc
 from app.models.dlc import AdmissionCandidate
 from app.models.ledger import ChatFeedback, ChatMessage
@@ -342,7 +342,8 @@ def admit(
                        status_code=409)
     if split_dataset.split == "holdout":
         raise AppError("golden.holdout_closed",
-                       "the holdout split stays out of the development loop", status_code=409)
+                       "the holdout split stays out of the development loop", status_code=409,
+                       next=[next_step("admission.open", agent_id=candidate.agent_id)])
     if expected_source not in ("annotator", "consensus", "adjudicated"):
         raise AppError("admission.expected_source",
                        "the expected answer must be written or confirmed by a person")

@@ -30,7 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.actor import same_actor, user_id_for
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, next_step
 from app.evaluation import stats
 from app.models.dlc import (
     DENOMINATORS,
@@ -525,7 +525,8 @@ def create_set(
     if kind not in ("template", "agent"):
         raise AppError("criteria.bad_kind", "kind must be template or agent")
     if kind == "agent" and not agent_id:
-        raise AppError("criteria.agent_required", "an agent criteria set names its agent")
+        raise AppError("criteria.agent_required", "an agent criteria set names its agent",
+                       next=[next_step("agent.create")])
     if kind == "template" and (agent_id or template_id):
         raise AppError("criteria.bad_template", "a template belongs to no agent or template")
     if kind == "agent":
@@ -539,7 +540,8 @@ def create_set(
         if existing:
             raise AppError("criteria.agent_has_set",
                            "this agent already has a criteria set — create a new version",
-                           status_code=409)
+                           status_code=409,
+                           next=[next_step("criteria.open", agent_id=agent_id)])
     row = CriteriaSet(
         workspace_id=workspace_id,
         lineage_id=uuid.uuid4().hex[:16],
@@ -654,7 +656,9 @@ def sign(db: Session, row: CriteriaSet, *, actor: str, note: str, is_admin: bool
     by username."""
     if row.status not in ("published", "superseded"):
         raise AppError("criteria.sign_unpublished", "publish the version before signing it",
-                       status_code=409)
+                       status_code=409,
+                       next=[next_step("criteria.publish", agent_id=row.agent_id,
+                                       lineage_id=row.lineage_id)])
     if row.signed_by:
         raise AppError("criteria.already_signed", "this version is already signed",
                        status_code=409)
@@ -665,7 +669,7 @@ def sign(db: Session, row: CriteriaSet, *, actor: str, note: str, is_admin: bool
     ):
         raise AppError("criteria.self_sign",
                        "the person who edited the criteria cannot also sign them",
-                       status_code=409)
+                       status_code=409, needs="perm:criteria.sign")
     row.signed_by = actor
     row.signed_by_user_id = actor_user_id
     row.signed_at = _now()
@@ -680,7 +684,9 @@ def new_version(db: Session, workspace_id: str, lineage_id: str, *, actor: str,
     newest = get_version(db, workspace_id, lineage_id)
     if newest.status == "draft":
         raise AppError("criteria.draft_exists", "a draft of this set already exists",
-                       status_code=409)
+                       status_code=409,
+                       next=[next_step("criteria.open_draft", agent_id=newest.agent_id,
+                                       lineage_id=lineage_id)])
     draft = CriteriaSet(
         workspace_id=workspace_id,
         lineage_id=lineage_id,
@@ -718,7 +724,9 @@ def adopt_template(
         raise AppError("criteria.no_template", "this set does not inherit a template")
     if newest.status == "draft":
         raise AppError("criteria.draft_exists", "finish or discard the current draft first",
-                       status_code=409)
+                       status_code=409,
+                       next=[next_step("criteria.open_draft", agent_id=newest.agent_id,
+                                       lineage_id=lineage_id)])
     target = get_version(db, workspace_id, newest.template_id, template_version)
     if target.status != "published" and target.status != "superseded":
         raise AppError("criteria.template_not_published",
