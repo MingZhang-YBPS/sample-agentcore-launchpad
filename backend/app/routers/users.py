@@ -1,6 +1,6 @@
 """Admin-only console user management (registered accounts + statistics).
 
-Every route requires an administrator identity (`Depends(require_admin)`), which
+Every route requires an administrator identity (`Depends(access.require_structure)`), which
 resolves to the built-in admin, an admin-role registered account, or — when the
 console gate is disabled entirely — the implicit local operator.
 
@@ -24,22 +24,30 @@ filters by `role`, `project` and `group`; `POST`/`PATCH` take `projects` /
 pending account into projects in the same transaction; `GET /api/users/{id}/access`
 is that account's `/api/me/access`; `POST /api/users/bulk/projects` puts several
 accounts into one project. They write the same rows as `PUT /api/projects/{id}/members`.
+
+Stewards (design projects §11.4) — structure-only platform administrators — use these
+routes too (`access.require_structure`), minus the platform roles: only an
+administrator creates, promotes, demotes, edits, deletes or signs out an administrator
+or a steward. `/api/admins` lists both types. The `/api/steward/*` routes are the
+steward trace: the owners' notices of a steward's membership change and the
+two-person rule's pending confirmations (`services/steward.py`).
 """
 
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, StrictBool, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, get_db
 from app.core.errors import AppError
-from app.routers.auth import Identity, require_admin
-from app.services import admin_credential
+from app.routers.auth import Identity, require_admin, require_identity
+from app.services import access, admin_credential
 from app.services import projects as projects_service
+from app.services import steward as steward_service
 from app.services import users as users_service
 from app.services.audit import record_audit_event, record_structure_event
 
@@ -138,8 +146,9 @@ def _audit(db: Session, actor: Identity, action: str, target: str) -> None:
 def create_user(
     req: UserCreate,
     db: Session = Depends(get_db),
-    identity: Identity = Depends(require_admin),
+    identity: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
+    _refuse_platform_role(identity, req.role)
     user, generated = users_service.create_user(
         db,
         username=req.username,
@@ -184,7 +193,7 @@ def list_users(
     project_id: str | None = Query(default=None, max_length=32),
     group_id: str | None = Query(default=None, max_length=32),
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     if status not in users_service.STATUS_FILTERS:
         raise AppError(
@@ -221,7 +230,7 @@ def list_users(
 @router.get("/api/users/stats")
 def user_stats(
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     return users_service.compute_stats(db, get_settings())
 
@@ -231,13 +240,16 @@ def update_user(
     user_id: str,
     patch: UserPatch,
     db: Session = Depends(get_db),
-    identity: Identity = Depends(require_admin),
+    identity: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     sent = {key: getattr(patch, key) for key in patch.model_fields_set}
     if user_id == admin_credential.BUILTIN_ADMIN_ID:
+        _refuse_platform_role(identity, users_service.ROLE_ADMIN)
         return _patch_builtin(db, sent, identity)
     user = users_service.get_user(db, user_id)
+    _refuse_platform_role(identity, user.role, sent.get("role"))
     was_admin = user.role == users_service.ROLE_ADMIN
+    was_steward = user.role == users_service.ROLE_STEWARD
     role_change = "role" in sent and (sent["role"] == users_service.ROLE_ADMIN) != was_admin
     if role_change and was_admin and identity.user_id == user.id:
         # the last-admin answer first: it is the stronger reason, and the one the
@@ -276,6 +288,12 @@ def update_user(
             target=f"user:{user.username} ({user.id}) role={user.role}",
             actor_user_id=identity.user_id,
         )
+    if "role" in sent and was_steward != (user.role == users_service.ROLE_STEWARD):
+        steward_service.journal(
+            db, identity, "steward.revoke" if was_steward else "steward.grant",
+            f"user:{user.username} ({user.id}) role={user.role}",
+        )
+        db.commit()
     payload = users_service.user_detail(db, user)
     if generated is not None:
         # shown once in the console; only the hash is persisted
@@ -287,7 +305,7 @@ def update_user(
 def bulk_add_to_project(
     req: BulkProjectAdd,
     db: Session = Depends(get_db),
-    identity: Identity = Depends(require_admin),
+    identity: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Design §7.6: the user list's "add to project…" — every selected account gets a
     direct membership with `role_key` (an existing member's role is replaced). Each
@@ -305,7 +323,7 @@ def bulk_add_to_project(
 def get_user(
     user_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """The detail page's account: the list row's shape (grants, projects, groups)."""
     if user_id == admin_credential.BUILTIN_ADMIN_ID:
@@ -320,7 +338,7 @@ def get_user(
 def user_access(
     user_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """The account's effective access (design §7.10): reachable workspaces → projects →
     keys and their sources — `/api/me/access` as that account would see it. An
@@ -378,7 +396,7 @@ def _patch_builtin(db: Session, sent: dict[str, Any], identity: Identity) -> dic
 def delete_user(
     user_id: str,
     db: Session = Depends(get_db),
-    identity: Identity = Depends(require_admin),
+    identity: Identity = Depends(access.require_structure),
 ) -> dict[str, bool]:
     if user_id == admin_credential.BUILTIN_ADMIN_ID:
         raise AppError(
@@ -387,6 +405,7 @@ def delete_user(
             status_code=400,
         )
     user = users_service.get_user(db, user_id)
+    _refuse_platform_role(identity, user.role)
     target = f"{user.username} ({user.id})"
     users_service.delete_user(db, user, get_settings())
     _audit(db, identity, "user.delete", target)
@@ -397,7 +416,7 @@ def delete_user(
 def revoke_sessions(
     user_id: str,
     db: Session = Depends(get_db),
-    identity: Identity = Depends(require_admin),
+    identity: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Forced logout: every session the account holds ends on its next request.
 
@@ -411,6 +430,7 @@ def revoke_sessions(
             status_code=400,
         )
     user = users_service.get_user(db, user_id)
+    _refuse_platform_role(identity, user.role)
     epoch = users_service.revoke_sessions(db, user)
     record_structure_event(
         actor=identity.username,
@@ -424,7 +444,7 @@ def revoke_sessions(
 @router.get("/api/admins")
 def list_admins(
     db: Session = Depends(get_db),
-    identity: Identity = Depends(require_admin),
+    identity: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """The administrator page's list (design §7.3): the built-in admin first (while
     the login gate is on), then every admin-role account. `can_demote` is false for
@@ -436,10 +456,100 @@ def list_admins(
         builtin = admin_credential.serialize_builtin(db, settings)
         items.append({**builtin, "can_sign_in": True, "can_demote": False})
     for row in users_service.list_admins(db, settings):
-        row["can_demote"] = row["id"] != identity.user_id and not row["last_signable"]
+        row["can_demote"] = (
+            identity.is_admin and row["id"] != identity.user_id and not row["last_signable"]
+        )
+        items.append(row)
+    # §11.4: the second type — never counted as an administrator who can sign in
+    for row in users_service.list_stewards(db):
+        row["can_demote"] = identity.is_admin
         items.append(row)
     return {
         "items": items,
         "total": len(items),
         "can_sign_in": users_service.admins_who_can_sign_in(db, settings),
+        # only administrators add, demote or edit administrators and stewards
+        "can_manage": identity.is_admin,
     }
+
+
+def _refuse_platform_role(identity: Identity, *roles: str | None) -> None:
+    """§11.1 matrix: administrators and stewards are added, removed and edited by an
+    administrator only — a steward manages every other account."""
+    if identity.is_admin:
+        return
+    if any(role in users_service.PLATFORM_ROLES for role in roles):
+        raise AppError(
+            "users.platform_role_admin_only",
+            "Only an administrator manages administrator and steward accounts",
+            status_code=403,
+        )
+
+
+# ── the steward trace (§11.4) ──────────────────────────────────────────────────
+
+
+class StewardSettings(BaseModel):
+    steward_two_person: StrictBool
+
+
+@router.get("/api/steward/notices")
+def steward_notices(
+    request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The caller's notices of stewards' membership changes in projects they own."""
+    return steward_service.notices_for(db, require_identity(request))
+
+
+@router.post("/api/steward/notices/{notice_id}/ack")
+def acknowledge_steward_notice(
+    notice_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    steward_service.acknowledge(db, require_identity(request), notice_id)
+    db.commit()
+    return {"ok": True, "notice_id": notice_id}
+
+
+@router.get("/api/steward/pending")
+def steward_pending(
+    request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Two-person rule: the changes the caller may confirm, and the caller's own."""
+    return steward_service.pending_for(db, require_identity(request))
+
+
+@router.post("/api/steward/pending/{pending_id}/confirm")
+def confirm_steward_change(
+    pending_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    result = steward_service.confirm(db, require_identity(request), pending_id)
+    db.commit()
+    return result
+
+
+@router.post("/api/steward/pending/{pending_id}/reject")
+def reject_steward_change(
+    pending_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    result = steward_service.reject(db, require_identity(request), pending_id)
+    db.commit()
+    return result
+
+
+@router.get("/api/steward/settings")
+def steward_settings(
+    db: Session = Depends(get_db),
+    _: Identity = Depends(access.require_structure),
+) -> dict[str, Any]:
+    return steward_service.settings_view(db)
+
+
+@router.put("/api/steward/settings")
+def update_steward_settings(
+    body: StewardSettings,
+    db: Session = Depends(get_db),
+    identity: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    steward_service.set_two_person(db, body.steward_two_person, identity)
+    db.commit()
+    return steward_service.settings_view(db)

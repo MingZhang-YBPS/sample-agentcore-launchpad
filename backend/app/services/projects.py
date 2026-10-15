@@ -45,8 +45,9 @@ from app.schemas.inbound_auth import InboundAuth
 from app.services import access
 from app.services import api_keys as api_keys_service
 from app.services import share_links as share_links_service
+from app.services import steward as steward_service
 from app.services.audit import record_audit_event, record_structure_event
-from app.services.users import ROLE_ADMIN, STATUS_ACTIVE
+from app.services.users import PLATFORM_ROLES, ROLE_ADMIN, ROLE_STEWARD, STATUS_ACTIVE
 
 STATUS_ACTIVE_PROJECT = "active"
 STATUS_ARCHIVED = "archived"
@@ -221,9 +222,10 @@ def list_projects(
     group_id: str | None = None, status: str | None = None,
     workspace_id: str | None = None, q: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Administrators: every project (filterable); anyone else: their own."""
+    """Administrators and stewards (§11.4, structure and counts only): every project
+    (filterable); anyone else: their own."""
     query = select(Project).order_by(Project.is_default.desc(), Project.name)
-    if not access.has_data_bypass(identity):
+    if not access.can_manage_structure(identity):
         mine = sorted(access.snapshot_for(db, identity).memberships)
         managed = sorted(access.managed_departments(db, identity))
         # a department administrator also lists their department's projects (§11.1)
@@ -927,9 +929,9 @@ def _refuse_self(db: Session, identity: Any, row: Project, user_ids: set[str]) -
     """Design §3.6 / D-22: nobody but an administrator edits their own membership —
     an owner could otherwise hand themselves the sign / approve keys. A department
     administrator may (§11.1: that is how they get data access); True tells the caller
-    to journal it as such."""
+    to journal it as such. A steward never may (§11.4) — see `_refuse_steward_self`."""
     me = getattr(identity, "user_id", None)
-    if not me or me not in user_ids or access.can_manage_structure(identity):
+    if not me or me not in user_ids or access.has_data_bypass(identity):
         return False
     if can_manage(db, identity, row):
         return True
@@ -937,17 +939,64 @@ def _refuse_self(db: Session, identity: Any, row: Project, user_ids: set[str]) -
                    {"user_id": me}, status_code=403)
 
 
+def _refuse_steward_self(identity: Any, user_ids: set[str]) -> None:
+    """§11.4 ①: a steward never puts itself into a project — not even as the owner of
+    one it creates (`check_self=False` does not lift this)."""
+    me = getattr(identity, "user_id", None)
+    if steward_service.is_steward(identity) and me and me in user_ids:
+        raise AppError("project.self_membership",
+                       "a steward manages structure only and cannot join a project",
+                       {"user_id": me}, status_code=403)
+
+
+def _check_member_targets(
+    db: Session, row: Project, upsert: list[dict[str, Any]], remove: list[str],
+) -> None:
+    """Refuse a change before anything is written (or staged for confirmation)."""
+    for item in upsert:
+        uid = item["user_id"]
+        user = db.get(User, uid)
+        if user is None:
+            raise NotFoundError("user.not_found", f"user '{uid}' not found", {"user_id": uid})
+        if user.role == ROLE_STEWARD:
+            # a steward account as a member would be the data access §11.4 denies it
+            raise AppError("project.steward_member",
+                           f"'{user.username}' is a steward: stewards are never project "
+                           "members", {"user_id": uid}, status_code=409)
+        _check_role_key(db, row, item["role_key"])
+        _check_overrides(item.get("overrides"))
+    for uid in remove:
+        if db.get(ProjectMember, (row.id, uid)) is None:
+            if uid in _group_rows(db, row):
+                raise AppError("project.member_from_group",
+                               "this access comes from the project's group — manage it there",
+                               {"user_id": uid, "group_id": row.group_id}, status_code=409)
+            raise NotFoundError("project.member_not_found",
+                                f"user '{uid}' is not a direct member", {"user_id": uid})
+
+
 def upsert_members(
     db: Session, identity: Any, row: Project, upsert: list[dict[str, Any]],
-    remove: list[str], *, check_self: bool = True,
+    remove: list[str], *, check_self: bool = True, confirmed_by: Any = None,
 ) -> dict[str, list[str]]:
     """Add / update direct members and remove direct rows. Group-sourced access is
-    managed on the group; removing someone with no direct row is a 404."""
+    managed on the group; removing someone with no direct row is a 404.
+
+    A steward's change (§11.4) is journaled and noticed to the project's owners; under
+    `steward_two_person` it is staged instead (`pending: [id]`, nothing applied) until
+    someone else confirms it — `confirmed_by` is that confirmer, applying it."""
     targets = {u["user_id"] for u in upsert} | set(remove)
+    _refuse_steward_self(identity, targets)
     self_edit = _refuse_self(db, identity, row, targets) if check_self else False
     if {u["user_id"] for u in upsert} & set(remove):
         raise AppError("project.member_conflict", "a user cannot be upserted and removed "
                        "in one request")
+    _check_member_targets(db, row, upsert, remove)
+    by_steward = steward_service.is_steward(identity)
+    if (by_steward and confirmed_by is None and targets
+            and steward_service.two_person(db)):
+        pending = steward_service.request_change(db, identity, row, upsert, remove)
+        return {"added": [], "updated": [], "removed": [], "pending": [pending]}
     result: dict[str, list[str]] = {"added": [], "updated": [], "removed": []}
     for item in upsert:
         uid, role_key = item["user_id"], item["role_key"]
@@ -994,6 +1043,9 @@ def upsert_members(
         db.flush()
         enforce_sod(db, row, set(result["added"]) | set(result["updated"]))
         access.bump_epoch(db)
+        if by_steward:  # §11.4 ②: the trace a steward's reach into a project leaves
+            steward_service.after_member_change(db, identity, row, upsert, result,
+                                                confirmed_by=confirmed_by)
         # a removed (or narrowed) creator's keys stop with their membership (§5.7)
         api_keys_service.disable_offboarded_keys_in_project(db, row.id)
     return result
@@ -1002,7 +1054,7 @@ def upsert_members(
 def candidates(db: Session, row: Project, q: str) -> list[dict[str, Any]]:
     """Active accounts matching `q` — username and masked email only (§7.8)."""
     needle = (q or "").strip().lower()
-    query = select(User).where(User.status == STATUS_ACTIVE, User.role != ROLE_ADMIN)
+    query = select(User).where(User.status == STATUS_ACTIVE, User.role.notin_(PLATFORM_ROLES))
     if needle:
         like = f"%{needle}%"
         query = query.where(or_(User.username_key.like(like), User.email.like(like)))
@@ -1293,6 +1345,8 @@ def access_view(db: Session, identity: Any) -> dict[str, Any]:
         "username": identity.username, "user_id": getattr(identity, "user_id", None),
         "role": identity.role, "is_admin": bypass,
         "can_manage_structure": access.can_manage_structure(identity),
+        # §11.4: structure without data — the console's "structure only" empty state
+        "is_steward": steward_service.is_steward(identity),
         # §11.1: what the console shows a department administrator (their department's
         # projects and groups, and where they may bind)
         "managed_departments": _managed_view(db, identity),

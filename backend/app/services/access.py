@@ -14,7 +14,9 @@ The one place project access is decided:
 * ``has_data_bypass`` / ``can_manage_structure`` — the only places "an admin can"
   is decided for project data and structure (phase 3's steward changes just these);
   ``can_manage_structure(identity, department_id, db=db)`` adds the department
-  administrators of §11.1 for that department's projects and groups.
+  administrators of §11.1 for that department's projects and groups. A steward
+  (§11.4) is the platform structure manager without data: ``has_data_bypass`` False,
+  ``can_manage_structure`` True, and its snapshot always empty (no membership counts).
 """
 
 import threading
@@ -23,11 +25,18 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
+from fastapi import Request
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
-from app.services.users import AGENT_PERMISSIONS, ROLE_ADMIN, default_permissions
+from app.services.users import (
+    AGENT_PERMISSIONS,
+    PLATFORM_ROLES,
+    ROLE_ADMIN,
+    ROLE_STEWARD,
+    default_permissions,
+)
 
 PROJECT_HEADER = "X-Project"
 
@@ -141,7 +150,8 @@ def apply_overrides(base: frozenset[str], overrides: dict[str, bool] | None) -> 
 
 
 def has_data_bypass(identity: Any) -> bool:
-    """May see project data without being a member (phase 1: platform admins)."""
+    """May see project data without being a member: platform admins only — never a
+    steward (§11.4)."""
     return getattr(identity, "role", None) == ROLE_ADMIN
 
 
@@ -155,12 +165,24 @@ def can_manage_structure(
     workspaces, every project and group (platform administrators). With one (§11.1):
     that department's projects and groups — an administrator, or one of the
     department's administrators (`department_admins`; needs `db`). A project or group
-    with no department is the platform's only."""
-    if getattr(identity, "role", None) == ROLE_ADMIN:
+    with no department is the platform's only. Stewards (§11.4) manage all of it."""
+    if getattr(identity, "role", None) in PLATFORM_ROLES:
         return True
     if department_id is _ANY_DEPARTMENT or not department_id or db is None:
         return False
     return department_id in managed_departments(db, identity)
+
+
+def require_structure(request: Request) -> Any:
+    """Route dependency: the caller manages the platform's structure — an administrator
+    or a steward (§11.4). 403 `auth.forbidden` like `require_admin` otherwise."""
+    from app.routers.auth import require_identity
+
+    identity = require_identity(request)
+    if not can_manage_structure(identity):
+        raise AppError("auth.forbidden", "This action requires an administrator account",
+                       status_code=403)
+    return identity
 
 
 def managed_departments(db: Session, identity: Any) -> frozenset[str]:
@@ -287,6 +309,9 @@ def workspace_bindings(
 def _load_snapshot(
     db: Session, user_id: str, role: str, overrides: dict[str, bool] | None,
 ) -> AccessSnapshot:
+    if role == ROLE_STEWARD:
+        # §11.4: whatever rows linger, a steward reaches no project's data
+        return AccessSnapshot(user_id=user_id)
     rows = db.execute(
         text(
             "SELECT p.id, p.name, p.status, p.is_default, p.group_id, pw.workspace_id,"
@@ -516,9 +541,10 @@ def sync_default_membership(db: Session, user_id: str, workspace_ids: set[str] |
 
     A new grant adds an ``inherit`` membership of that workspace's default project; a
     revoked one removes the ``inherit`` row (an explicit role is left alone). Admins
-    never get rows (they bypass). Same transaction as the grant write; bumps the epoch.
+    never get rows (they bypass), nor do stewards (they reach no data). Same transaction
+    as the grant write; bumps the epoch.
     """
-    if role == ROLE_ADMIN:
+    if role in PLATFORM_ROLES:
         return
     granted = set(workspace_ids or set())
     before = set(previous or set())

@@ -9,7 +9,8 @@ Why a table instead of per-route `Depends(require_admin)`:
   test_route_policy.py` enumerates the live routes and fails on drift in both
   directions.
 
-Roles: `ADMIN` requires an administrator identity; `MEMBER` requires only a live
+Roles: `ADMIN` requires an administrator identity (a steward passes the structure
+half, `ADMIN_SPLIT` at the end of this file, projects §11.4); `MEMBER` requires only a live
 session (the `auth_middleware` 401 already covers that); `PUBLIC` is reachable
 without one (health, docs, and the login surface itself). A `perm:<key>` value
 requires that member permission (admins implicitly hold all; a member holds every
@@ -886,6 +887,10 @@ def require_path_project_permission(request: Request, key: str) -> None:
 
     identity = require_identity(request)
     project_id = str(request.path_params.get("project_id") or "")
+    # administrators pass; a steward (§11.4) on the structure keys only
+    passes = access.has_data_bypass(identity) or (
+        key in STRUCTURE_PROJECT_KEYS and access.can_manage_structure(identity)
+    )
     db = SessionLocal()
     try:
         with project_context(None):
@@ -893,12 +898,12 @@ def require_path_project_permission(request: Request, key: str) -> None:
                 text("SELECT status FROM projects WHERE id = :p"), {"p": project_id},
             ).scalar()
             membership = (
-                None if access.has_data_bypass(identity)
+                None if passes
                 else access.snapshot_for(db, identity).memberships.get(project_id)
             )
     finally:
         db.close()
-    if not access.has_data_bypass(identity):
+    if not passes:
         if status is None or membership is None:
             if status is not None:  # a real project's: its audit view shows the attempt
                 _journal_refusal(request, "project.not_found", project_id=project_id)
@@ -1170,7 +1175,7 @@ def enforce_route_policy(request: Request) -> None:
             request, path_format):
         return  # §11.1: a department administrator, inside their department (hub-global)
     if role == ADMIN:
-        require_admin(request)
+        require_admin_kind(request, request.method, path_format)  # §11.4 steward split
     if is_workspace_scoped(request.method, path_format):
         # Resolved here rather than per handler: enforcement must not depend on a
         # router remembering to declare the dependency. Handlers read the result
@@ -1700,3 +1705,196 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_QUOTA_ROUTES)
 DEPARTMENT_ADMIN_ROUTES.update({
     ("PUT", "/api/projects/{project_id}/quotas"): "project",
 })
+
+
+# ---- steward: the structure-only platform administrator (projects design §11.4,
+# G11-steward) ----
+# Every `ADMIN` route is one of two kinds, and a steward (`users.role = steward`:
+# `access.can_manage_structure` True, `access.has_data_bypass` False) passes only the
+# first:
+#   ADMIN       structure — accounts, departments, projects, groups, bindings,
+#               workspaces (with bootstrap), network / storage catalogs, platform
+#               settings and content;
+#   ADMIN_DATA  data — anything that shows or moves a project's business data
+#               (data audit events, cost detail, the fleet's agents, the inbox's
+#               business items, exports, agent transfer) or acts inside a workspace's
+#               runtime (installing presets, guardrails, consent portal, alerts) —
+#               and the switches a steward must not flip for itself.
+# The table keeps the value `ADMIN` for both (a member meets the same 403 either way);
+# `ADMIN_SPLIT` is the classification, and `tests/test_route_policy.py` requires every
+# `ADMIN` route in it — a new administrator route cannot ship without choosing. One
+# missing at runtime is treated as `ADMIN_DATA` (closed for a steward).
+ADMIN_DATA = "admin:data"
+
+# the steward's own surface: owner notices and two-person confirmations are any
+# account's (each handler answers only what is the caller's); the two-person switch
+# is the administrators' — a steward does not get to loosen its own rule
+ROUTE_POLICY.update({
+    ("GET", "/api/steward/notices"): MEMBER,
+    ("POST", "/api/steward/notices/{notice_id}/ack"): MEMBER,
+    ("GET", "/api/steward/pending"): MEMBER,
+    ("POST", "/api/steward/pending/{pending_id}/confirm"): MEMBER,
+    ("POST", "/api/steward/pending/{pending_id}/reject"): MEMBER,
+    ("GET", "/api/steward/settings"): ADMIN,
+    ("PUT", "/api/steward/settings"): ADMIN,
+})
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/steward")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {
+    ("GET", "/api/steward/notices"),
+    ("POST", "/api/steward/notices/{notice_id}/ack"),
+    ("GET", "/api/steward/pending"),
+    ("POST", "/api/steward/pending/{pending_id}/confirm"),
+    ("POST", "/api/steward/pending/{pending_id}/reject"),
+    ("GET", "/api/steward/settings"),
+    ("PUT", "/api/steward/settings"),
+}
+
+_STRUCTURE_ROUTES = (
+    # administrators and accounts (§7.3, §7.4); the handlers keep platform roles to
+    # administrators (`routers/users.py`)
+    ("GET", "/api/admins"),
+    ("GET", "/api/users"),
+    ("POST", "/api/users"),
+    ("GET", "/api/users/stats"),
+    ("POST", "/api/users/bulk/projects"),
+    ("GET", "/api/users/{user_id}"),
+    ("PATCH", "/api/users/{user_id}"),
+    ("DELETE", "/api/users/{user_id}"),
+    ("GET", "/api/users/{user_id}/access"),
+    ("POST", "/api/users/{user_id}/sessions/revoke"),
+    # departments and groups (§7.7, §11.1)
+    ("POST", "/api/departments"),
+    ("PATCH", "/api/departments/{department_id}"),
+    ("DELETE", "/api/departments/{department_id}"),
+    ("POST", "/api/departments/{department_id}/archive"),
+    ("POST", "/api/departments/{department_id}/unarchive"),
+    ("GET", "/api/departments/{department_id}/admins"),
+    ("PUT", "/api/departments/{department_id}/admins"),
+    ("GET", "/api/departments/{department_id}/workspaces"),
+    ("PUT", "/api/departments/{department_id}/workspaces"),
+    ("POST", "/api/departments/{department_id}/invitations"),
+    ("GET", "/api/project-groups"),
+    ("POST", "/api/project-groups"),
+    ("GET", "/api/project-groups/{group_id}"),
+    ("PATCH", "/api/project-groups/{group_id}"),
+    ("DELETE", "/api/project-groups/{group_id}"),
+    ("POST", "/api/project-groups/{group_id}/unarchive"),
+    ("PUT", "/api/project-groups/{group_id}/members"),
+    ("PUT", "/api/project-groups/{group_id}/projects"),
+    # projects: create, bind, archive, isolation and provisioning, lifecycle status
+    ("POST", "/api/projects"),
+    ("POST", "/api/projects/{project_id}/archive"),
+    ("POST", "/api/projects/{project_id}/unarchive"),
+    ("PUT", "/api/projects/{project_id}/workspaces"),
+    ("PUT", "/api/projects/{project_id}/isolation"),
+    ("POST", "/api/projects/{project_id}/provision"),
+    ("GET", "/api/projects/{project_id}/lifecycle"),
+    ("POST", "/api/projects/{project_id}/delete-request/cancel"),
+    # workspaces, with bootstrap (§11.4 lists them)
+    ("POST", "/api/workspaces"),
+    ("GET", "/api/workspaces/hub-identity"),
+    ("POST", "/api/workspaces/preflight"),
+    ("PATCH", "/api/workspaces/{workspace_id}"),
+    ("DELETE", "/api/workspaces/{workspace_id}"),
+    ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
+    ("POST", "/api/workspaces/{workspace_id}/bootstrap"),
+    ("GET", "/api/workspaces/{workspace_id}/grants"),
+    ("PUT", "/api/workspaces/{workspace_id}/grants"),
+    ("POST", "/api/workspaces/{workspace_id}/observability/repair"),
+    ("POST", "/api/workspaces/{workspace_id}/purge"),
+    ("GET", "/api/workspaces/{workspace_id}/settings/visibility"),
+    ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"),
+    # network and storage catalogs: what a project may use, not what it holds
+    ("POST", "/api/network-profiles"),
+    ("PATCH", "/api/network-profiles/{profile_id}"),
+    ("DELETE", "/api/network-profiles/{profile_id}"),
+    ("POST", "/api/network-profiles/{profile_id}/check"),
+    ("POST", "/api/network-profiles/{profile_id}/probe"),
+    ("GET", "/api/network-profiles/projects/{project_id}"),
+    ("PUT", "/api/network-profiles/projects/{project_id}"),
+    ("GET", "/api/network-profiles/settings"),
+    ("PUT", "/api/network-profiles/settings"),
+    ("GET", "/api/network-profiles/enforcement"),
+    ("POST", "/api/storage-mounts"),
+    ("POST", "/api/storage-mounts/{storage_id}/check"),
+    ("PATCH", "/api/storage-mounts/{storage_id}"),
+    ("DELETE", "/api/storage-mounts/{storage_id}"),
+    ("GET", "/api/storage-mounts/projects/{project_id}"),
+    ("PUT", "/api/storage-mounts/projects/{project_id}"),
+    # platform settings and installation-wide content
+    ("GET", "/api/models/settings"),
+    ("PUT", "/api/models/settings/{field}"),
+    ("DELETE", "/api/models/settings/{field}"),
+    ("POST", "/api/model-probe"),
+    ("POST", "/api/announcements"),
+    ("GET", "/api/announcements/manage"),
+    ("GET", "/api/announcements/{announcement_id}"),
+    ("PUT", "/api/announcements/{announcement_id}"),
+    ("DELETE", "/api/announcements/{announcement_id}"),
+    ("POST", "/api/announcements/{announcement_id}/publish"),
+    ("POST", "/api/announcements/{announcement_id}/unpublish"),
+    ("GET", "/api/videos/manage"),
+    ("POST", "/api/videos/manage"),
+    ("GET", "/api/videos/manage/{video_id}"),
+    ("PUT", "/api/videos/manage/{video_id}"),
+    ("DELETE", "/api/videos/manage/{video_id}"),
+    ("POST", "/api/videos/manage/{video_id}/publish"),
+    ("POST", "/api/videos/manage/{video_id}/unpublish"),
+    ("GET", "/api/steward/settings"),
+)
+_DATA_ROUTES = (
+    # the journal's data events (structure-only filtering is the audit router's), cost
+    # detail, the fleet's agents, the inbox's business items, time-to-first-agent
+    ("GET", "/api/audit"),
+    ("GET", "/api/costs"),
+    ("GET", "/api/costs/month-to-date"),
+    ("GET", "/api/fleet"),
+    ("GET", "/api/inbox"),
+    ("GET", "/api/overview/ttfa"),
+    # a project's data leaves or moves: the export bundle, an agent transfer; deletion
+    # (a request purges on its own after the cooling-off) until §11.5's steward
+    # two-person purge lands — cancelling one stays structure
+    ("POST", "/api/projects/{project_id}/export"),
+    ("GET", "/api/projects/{project_id}/exports/{export_id}"),
+    ("POST", "/api/projects/{project_id}/transfer"),
+    ("POST", "/api/projects/{project_id}/delete-request"),
+    ("POST", "/api/projects/{project_id}/purge"),
+    # inside a workspace's runtime: agents, memories, guardrails, identity, alerts
+    ("POST", "/api/system-agents/{preset_key}/install"),
+    ("POST", "/api/system-agents/{preset_key}/skill-registration"),
+    ("DELETE", "/api/system-agents/{preset_key}"),
+    ("POST", "/api/memory/resources/{memory_id}/adopt"),
+    ("POST", "/api/governance/guardrail"),
+    ("PUT", "/api/release-policies/{workspace_id}"),
+    ("POST", "/api/identity/consent-portal"),
+    ("DELETE", "/api/identity/consent-portal"),
+    ("POST", "/api/alerts"),
+    ("POST", "/api/alerts/evaluate"),
+    ("PATCH", "/api/alerts/{rule_id}"),
+    ("DELETE", "/api/alerts/{rule_id}"),
+    # the steward's own two-person switch
+    ("PUT", "/api/steward/settings"),
+)
+ADMIN_SPLIT: dict[tuple[str, str], str] = {
+    **dict.fromkeys(_STRUCTURE_ROUTES, ADMIN),
+    **dict.fromkeys(_DATA_ROUTES, ADMIN_DATA),
+}
+# `pperm:` keys that are structure: a steward manages any project's members and
+# custom roles without being a member (§11.1 matrix); every other project key is data
+STRUCTURE_PROJECT_KEYS = frozenset({"project.members"})
+
+
+def admin_kind(method: str, path_format: str) -> str:
+    """`ADMIN` (structure) or `ADMIN_DATA` for an `ADMIN` route; unknown is data."""
+    lookup = "GET" if method == "HEAD" else method
+    return ADMIN_SPLIT.get((lookup, path_format), ADMIN_DATA)
+
+
+def require_admin_kind(request: Request, method: str, path_format: str) -> None:
+    """An `ADMIN` route: administrators always; a steward only on structure."""
+    from app.services import access
+
+    if admin_kind(method, path_format) == ADMIN:
+        access.require_structure(request)
+    else:
+        require_admin(request)
