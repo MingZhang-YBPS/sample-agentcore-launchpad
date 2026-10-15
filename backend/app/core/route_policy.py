@@ -1990,3 +1990,17 @@ ROUTE_POLICY.update(PROJECT_MIGRATION_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_MIGRATION_ROUTES)
 ADMIN_SPLIT.update({key: ADMIN for key, role in PROJECT_MIGRATION_ROUTES.items()
                     if role == ADMIN})
+
+# ---- IA-1: calling an agent from your own backend (invoke-access §0.6) ----
+# The agent's ARNs, least-privilege IAM policy and call samples: a ledger read of an
+# agent in the caller's project (another project's answers 404), participation-level
+# like invoking it. The project inventory + merged policy sits under the hub-global
+# `/api/projects` prefix: `pperm:project.use` on the path project (a non-member 404);
+# the handler reads every workspace the project is bound to inside that project.
+PPERM_PROJECT_USE = "pperm:project.use"
+INVOKE_ACCESS_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/agents/{agent_id}/invoke-access"): PERM_PROJECT_USE,
+    ("GET", "/api/projects/{project_id}/invoke-access"): PPERM_PROJECT_USE,
+}
+ROUTE_POLICY.update(INVOKE_ACCESS_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {("GET", "/api/projects/{project_id}/invoke-access")}
