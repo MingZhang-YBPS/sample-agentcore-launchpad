@@ -239,7 +239,8 @@ def test_installer_writes_the_units_and_a_copy_of_the_script(host):
     root = host["tmp"] / "root"
     env = {**host["env"], "LAUNCHPAD_UPDATER_ROOT": str(root)}
     done = subprocess.run(
-        ["bash", str(INSTALL), "--repo", str(host["live"]), "--user", host["env"]["LAUNCHPAD_OWNER"]],
+        ["bash", str(INSTALL), "--repo", str(host["live"]),
+         "--user", host["env"]["LAUNCHPAD_OWNER"]],
         env=env, capture_output=True, text=True, timeout=30, check=False)
     assert done.returncode == 0, done.stderr
     copy = root / "usr/local/lib/launchpad/apply_update.sh"

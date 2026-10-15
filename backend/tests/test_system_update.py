@@ -181,7 +181,8 @@ def test_prepare_stages_builds_and_self_tests_the_target(env, db):
     assert env["probes"] == [env["c2"]]
     # the self-test never touches the live ledger
     for call in env["calls"]:
-        assert call["env"]["LAUNCHPAD_DATABASE_URL"] == f"sqlite:///{stage / 'data' / 'selftest.db'}"
+        selftest = f"sqlite:///{stage / 'data' / 'selftest.db'}"
+        assert call["env"]["LAUNCHPAD_DATABASE_URL"] == selftest
         assert "VIRTUAL_ENV" not in call["env"]
     assert "system.update.prepare" in audit_actions(db)
     # the running checkout is untouched
