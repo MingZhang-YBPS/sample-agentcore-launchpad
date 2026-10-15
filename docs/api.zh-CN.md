@@ -1218,6 +1218,42 @@ Workspace、网络与存储目录——从不接触数据。路由表归为结�
 
 配置错误（未注明者为 400）：`sso.invalid_preset`、`sso.invalid_name`、`sso.invalid_id`、`sso.invalid_scopes`（必须包含 `openid`）、`sso.invalid_policy`、`sso.invalid_role`、`sso.invalid_url`、`sso.invalid_mappings`、`sso.provider_exists`（409）、`sso.incomplete`（409，没有 issuer / client id 时启用或测试）、`sso.provider_not_found`（404）。`?sso_error=` 与审计日志 `auth.sso.login` 行中的登录原因：`auth.sso.state_invalid` / `state_expired`、`no_code`、`no_id_token`、`bad_signature`、`bad_issuer`、`bad_audience`、`bad_nonce`、`expired`、`no_subject`、`email_missing` / `email_invalid` / `email_domain_blocked` / `email_taken`、`account_conflict`、`not_provisioned`（`existing_only` 且没有已关联的账户）、`idp_error`，以及 `sso.idp_unreachable` / `idp_http_error` / `idp_bad_response` / `discovery_incomplete` / `issuer_mismatch` / `jwks_invalid` / `secret_unreadable`。
 
+## 控制台单点登录 API（SAML、SCIM、登出）/ Console Single Sign-On API (SAML, SCIM, sign-out)
+
+SAML 2.0 通道（sso §2.2；SSO-2）、SCIM 2.0 预配、单点登出与“隐藏本地登录”开关（SSO-3）。SAML 登录链路与 OIDC 一样公开；SCIM 自带凭据——在提供方页面签发的该提供方 Bearer token——从不读取控制台会话或 Workspace。全部为 hub 全局。配置步骤：[sso-identity-center.zh-CN.md](sso-identity-center.zh-CN.md)、[sso-keycloak.zh-CN.md](sso-keycloak.zh-CN.md)。
+
+| 方法 | 路径 | 鉴权 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/auth/saml/{provider_id}/start?return_to=` | 开放 | 带 AuthnRequest `302` 到 IdP 的 SSO URL（HTTP-Redirect 绑定，`sign_requests` 开启时用 SP 密钥签名）。请求 ID 保留 10 分钟供 `InResponseTo` 校验；`return_to` 同 OIDC |
+| `POST` | `/api/auth/saml/{provider_id}/acs` | 开放 | 断言消费服务（HTTP-POST 表单 `SAMLResponse`、`RelayState`）。用 `python3-saml` 严格模式校验：签名（响应或断言）对 IdP 证书——未签名一律拒绝；issuer；受众 = SP entity ID；Destination / Recipient = 本 ACS；`NotBefore` / `NotOnOrAfter` 允许 2 分钟偏差；`InResponseTo` 必须是本控制台 10 分钟内发给该 IdP 的请求（一次性）；断言 ID 记录 10 分钟，重放即拒绝。没有 `InResponseTo` 即 IdP 发起（Identity Center 门户图标），仅在 `allow_idp_initiated` 开启时接受，此时 `RelayState` 为同源落地路径。NameID 作为主体，之后走与 OIDC 相同的 JIT / 组映射路径并 `303` 进入控制台。任何失败都是 `302 /?sso_error=<code>&sso_provider=<id>` |
+| `GET` | `/api/auth/saml/{provider_id}/metadata` | 开放 | SP 元数据（`application/samlmetadata+xml`）：entityID（即此 URL）、ACS、SLO、NameID 格式、SP 证书。提供方尚未启用时也提供；未知或 OIDC 提供方返回 `404 sso.provider_not_found` |
+| `GET` | `/api/auth/saml/{provider_id}/sls?SAMLResponse=\|SAMLRequest=` | 开放 | 单点登出（HTTP-Redirect）。IdP 对控制台 LogoutRequest 的 LogoutResponse，或 IdP 自己的 LogoutRequest——后者结束该账户的全部会话（`session_epoch`）并回应 IdP。之后 `302` 回控制台 |
+| `POST` | `/api/admin/sso/providers/{provider_id}/saml/metadata` | 管理员 | 请求体 `{url?}` 或 `{xml}`：从 URL（不传则用已保存的）或上传文档（重新）加载 IdP 元数据，解析为 `idp_entity_id`、`sso_url`、`slo_url`、`idp_certs`。返回提供方；OIDC 提供方返回 `409 sso.not_saml`。记为 `auth.sso.config.metadata` |
+| `POST` | `/api/admin/sso/providers/{provider_id}/saml/sp-key` | 管理员 | 新的 SP 签名密钥（RSA 2048）与自签名证书；IdP 侧须重新导入元数据。私钥像客户端密钥一样 Fernet 加密保存，从不返回。记为 `auth.sso.config.sp_key` |
+| `POST` | `/api/admin/sso/providers/{provider_id}/scim/token` | 管理员 | 签发该提供方的 SCIM Bearer token（`lpscim_…`），替换之前的：`{token, scim}`——明文只出现在这次返回中（保存为 SHA-256 哈希）。记为 `auth.sso.config.scim_token` |
+| `DELETE` | `/api/admin/sso/providers/{provider_id}/scim/token` | 管理员 | 关闭 SCIM：token 立即失效；已预配的内容保留。`{scim}` |
+| `GET` | `/api/admin/sso/settings` | 管理员 | `{hide_local_login, local_login_hidden}`——开关本身，以及是否生效（开启且至少一个提供方已启用） |
+| `PUT` | `/api/admin/sso/settings` | 管理员 | 请求体 `{hide_local_login}`。开启后：登录页只显示 IdP 按钮、自助注册关闭，`POST /api/auth/login` 对内置管理员以外的账户返回 `403 auth.local_login_hidden`（内置管理员仍可通过 `/?local=1` 打开表单）。没有已启用的提供方时返回 `409 sso.no_enabled_provider`。记为 `auth.sso.config.settings` |
+| `GET` | `/api/scim/v2/ServiceProviderConfig` | SCIM token | 本 SCIM 服务支持的能力（PATCH、filter；不支持 bulk / sort / ETag） |
+| `GET` | `/api/scim/v2/Users?filter=&startIndex=&count=` | SCIM token | 该提供方 SCIM 用户的 `ListResponse`（每页最多 200）；`filter` 为单个 `eq`，可用 `userName`、`externalId`、`id`、`emails.value` |
+| `POST` | `/api/scim/v2/Users` | SCIM token | `201`——创建账户（`userName`、`name`、`displayName`、`emails`、`externalId`、`active`），按 `(提供方, 主体)` 定位，与登录一致；IdP 已经通过 JIT 登录过的账户会被接管而不是重复创建。用户已存在或邮箱被其他账户占用返回 `409 uniqueness` |
+| `GET` | `/api/scim/v2/Users/{user_id}` | SCIM token | 单个用户；其他提供方的用户或已删除的用户返回 `404` |
+| `PUT` | `/api/scim/v2/Users/{user_id}` | SCIM token | 替换用户 |
+| `PATCH` | `/api/scim/v2/Users/{user_id}` | SCIM token | `PatchOp`（`add` / `replace` / `remove`）。`active: false` 停用账户并推进其 `session_epoch`，已打开的会话在下个请求即结束；`active: true` 重新启用 |
+| `DELETE` | `/api/scim/v2/Users/{user_id}` | SCIM token | `204`——停用账户、结束其会话、移除其 SCIM 组成员资格（及其映射出的访问）；此后返回 `404` |
+| `GET` | `/api/scim/v2/Groups?filter=&startIndex=&count=&excludedAttributes=members` | SCIM token | 该提供方组的 `ListResponse`；`filter` 为单个 `eq`，可用 `displayName`、`externalId`、`id` |
+| `POST` | `/api/scim/v2/Groups` | SCIM token | `201`——`{displayName, externalId?, members[{value}]}`；映射按组的 `displayName` 或 `externalId` 匹配。成员的访问立即重新计算 |
+| `GET` | `/api/scim/v2/Groups/{group_id}` | SCIM token | 单个组（`excludedAttributes=members` 去掉成员列表） |
+| `PUT` | `/api/scim/v2/Groups/{group_id}` | SCIM token | 替换名称与成员 |
+| `PATCH` | `/api/scim/v2/Groups/{group_id}` | SCIM token | 对 `displayName`、`externalId`、`members` 的 `PatchOp`（`members[value eq "…"]` 移除单个成员）。受影响的每个成员都会重新应用该提供方的组映射——只改动由映射产生的成员资格，手工设置优先 |
+| `DELETE` | `/api/scim/v2/Groups/{group_id}` | SCIM token | `204`——删除该组及其映射出的访问 |
+
+提供方条目（`GET /api/admin/sso/providers[/{id}]`）另带 `saml`（OIDC 为 `null`）——`{metadata_url, idp_entity_id, sso_url, slo_url, idp_certs[{body, subject, not_after, sha256, expired}], name_id_format, sign_requests, want_encrypted, allow_idp_initiated, sp_entity_id, acs_url, sls_url, metadata_endpoint, sp_cert, sp_cert_facts, sp_key_set}`——以及 `scim` `{enabled, base_url, token_hint, token_created_at, subject: userName|externalId, counts{users, groups}}`。列表另带 `acs_url_template`、`scim_base_url` 与 `settings`；`presets` 增加 `identity-center`、`entra-saml`、`saml`（`kind: saml`）。创建 / `PATCH` 请求体增加 `saml_metadata_url`（会被抓取）、`saml_metadata_xml`（只解析不保存）、`saml_idp_entity_id`、`saml_sso_url`、`saml_slo_url`、`saml_idp_certs[]`、`saml_name_id_format`、`saml_sign_requests`、`saml_want_encrypted`、`saml_allow_idp_initiated` 与 `scim_subject`；SAML 提供方在创建时生成 SP 密钥对，启用前必须有 IdP entity ID、SSO URL 与证书（`409 sso.incomplete`）。对 SAML 提供方调用 `POST …/test` 会重新读取元数据 URL（`metadata_matches`：是否仍与保存的一致，否则 `sso.saml_metadata_changed`），并检查 IdP 证书与 SP 密钥：`{ok, checked_at, kind: saml, entity_id, sso_url, slo_url, certs[], cert_valid, sp_cert, sp_key, metadata_fetched?, metadata_matches?, error?}`。
+
+`GET /api/auth/providers` 的条目现在包含 `kind: saml` 的提供方，返回中带 `hide_local_login`。`GET /api/auth/status`（以及登录返回）带 `account_source`：来自身份提供方的会话为 `sso`，否则为 `local`，登录前不出现——顶栏对 `sso` 隐藏“修改密码”。SAML 会话调用 `POST /api/auth/logout` 时，若 IdP 有 SLO URL，返回 `end_session_url`：一个发往 IdP SLO URL、指明该次登录 NameID / SessionIndex 的 LogoutRequest。
+
+SAML 登录原因（`?sso_error=` 与 `auth.sso.login` 行），在共用的 `auth.sso.*` 之外：`auth.saml.no_response`、`malformed`、`unsigned`、`bad_signature`、`bad_issuer`、`bad_audience`、`bad_destination`、`bad_subject`、`expired`、`in_response_to`（未知、已用过或超过 10 分钟）、`replayed`、`unsolicited`（IdP 发起但该选项已关闭）、`not_encrypted`、`no_subject`、`idp_error`、`invalid`；登出消息被拒为 `auth.saml.logout_invalid`。配置错误：`sso.saml_metadata_invalid`、`sso.saml_cert_invalid`、`sso.saml_key_unreadable`、`sso.invalid_name_id_format`、`sso.invalid_field`（在 OIDC 提供方上设置 SAML 字段）、`sso.invalid_scim_subject`、`sso.not_saml`（409）。SCIM 拒绝均为 SCIM 错误文档（`application/scim+json`，RFC 7644 §3.12）：缺少或未知 token 为 `401`，`400 invalidFilter` / `invalidSyntax` / `invalidValue` / `invalidPath`，`404`，`409 uniqueness`，超过 2 MB 为 `413`。SCIM 变更记为 `auth.scim.user.*` / `auth.scim.group.*`，操作者 `scim:<提供方>`。
+
 ## 控制台项目 API / Console Projects API
 
 **项目**把人员、Agent 及其派生行组织在一个或多个 Workspace 中。成员通过项目角色进入项目，该角色授予的权限键

@@ -103,7 +103,10 @@
         "okta": "Okta",
         "entra": "Microsoft Entra ID",
         "google": "Google Workspace",
-        "oidc": "通用 OIDC"
+        "oidc": "通用 OIDC",
+        "identity-center": "IAM Identity Center",
+        "entra-saml": "Microsoft Entra ID（SAML）",
+        "saml": "SAML 2.0"
       },
       "presetShort": {
         "keycloak": "KC",
@@ -111,7 +114,10 @@
         "okta": "OK",
         "entra": "EN",
         "google": "GO",
-        "oidc": "OI"
+        "oidc": "OI",
+        "identity-center": "IC",
+        "entra-saml": "ES",
+        "saml": "SA"
       },
       "errors": {
         "stateInvalid": "该登录链接已失效。",
@@ -126,8 +132,14 @@
         "providerGone": "该登录方式已不可用。",
         "providerUnreachable": "无法连接身份提供方。",
         "generic": "单点登录未完成。",
-        "contactAdmin": "请重试，或联系控制台管理员并提供下方代码。"
-      }
+        "contactAdmin": "请重试，或联系控制台管理员并提供下方代码。",
+        "samlExpired": "身份提供方的登录应答已过期。请确认双方时钟一致后重试。",
+        "samlReplayed": "这个登录应答已经用过。",
+        "samlUnsolicited": "已关闭从身份提供方门户登录，请从本页开始登录。",
+        "logoutFailed": "无法验证身份提供方的登出应答。你已退出控制台。",
+        "localHidden": "请使用组织的单点登录。"
+      },
+      "localHidden": "本控制台已关闭用户名和密码登录。"
     }
   },
   "nav": {
@@ -13868,7 +13880,10 @@
         "oidc": "任何支持发现文档的 OpenID Connect 提供方：Authelia、Zitadel、Dex、Casdoor、GitLab……",
         "okta": "Okta 授权服务器的声明名（groups 范围）。",
         "entra": "Microsoft Entra ID 应用注册的声明名（v2.0 端点）。",
-        "google": "Google Workspace 的声明名（没有组声明）。"
+        "google": "Google Workspace 的声明名（没有组声明）。",
+        "identity-center": "AWS IAM Identity Center 中的客户托管 SAML 2.0 应用；用户也可以从 AWS 访问门户登录。",
+        "entra-saml": "Entra ID 企业应用，开启 SAML 单点登录，使用标准声明 URI。",
+        "saml": "任何提供元数据的 SAML 2.0 身份提供方：ADFS、Okta、Keycloak、Authentik、Shibboleth……"
       },
       "defaultName": {
         "keycloak": "公司 SSO（Keycloak）",
@@ -13876,7 +13891,10 @@
         "oidc": "公司 SSO",
         "okta": "Okta",
         "entra": "Microsoft Entra ID",
-        "google": "Google Workspace"
+        "google": "Google Workspace",
+        "identity-center": "AWS IAM Identity Center",
+        "entra-saml": "Microsoft Entra ID",
+        "saml": "公司 SSO（SAML）"
       },
       "createTitle": "新建身份提供方",
       "create": "创建",
@@ -13911,13 +13929,17 @@
         "accounts": "账号",
         "claims": "声明",
         "mappings": "组映射",
-        "logins": "最近登录"
+        "logins": "最近登录",
+        "scim": "SCIM 预配"
       },
       "handoffBody": {
         "keycloak": "在 Realm 中创建机密（confidential）OpenID Connect 客户端并开启标准流程，把有效重定向 URI 设为下方回调地址，再添加名为 groups 的 Group Membership 映射器（关闭完整组路径）。",
         "authentik": "创建机密类型的 OAuth2/OpenID 提供方，重定向 URI 填下方回调地址，再创建使用它的应用。颁发者（issuer）取提供方 OpenID 配置中的 issuer。",
         "oidc": "注册一个 Web 应用（授权码流程），重定向 URI 填下方回调地址。Launchpad 始终发送 PKCE（S256）。",
-        "template": "注册一个 Web 应用，重定向 URI 填下方回调地址；声明名已按模板预填。"
+        "template": "注册一个 Web 应用，重定向 URI 填下方回调地址；声明名已按模板预填。",
+        "identity-center": "在 IAM Identity Center 中添加客户托管的 SAML 2.0 应用。上传控制台的元数据（或填写 ACS URL 和 SP 实体 ID），在“属性映射”中把 Subject 设为 ${user:subject}（persistent），并添加 email → ${user:email}、name → ${user:name}、username → ${user:preferredUsername}。分配用户或组后，把 IdP 元数据带回这里。",
+        "entra-saml": "在 Entra ID 中创建企业应用，选择 SAML 单点登录，把“标识符（实体 ID）”和“回复 URL（ACS）”设为下方的值；如需映射组，添加 groups 声明。然后把联合元数据 URL 带回这里。",
+        "saml": "在身份提供方注册 SAML 2.0 服务提供方，填写下方的实体 ID 和 ACS URL（HTTP-POST 绑定），或导入控制台的元数据；然后在右侧加载身份提供方的元数据。"
       },
       "callbackUrl": "重定向 URI",
       "fact": {
@@ -14008,6 +14030,32 @@
           "act": "不支持登出",
           "info": "没有 end_session_endpoint，登出只在本地生效",
           "off": "未检查登出"
+        },
+        "metadata": {
+          "label": "IdP 元数据",
+          "ok": "已重新读取元数据，未变化",
+          "act": "身份提供方的元数据已变化，请重新加载",
+          "info": "手动填写，没有可重新读取的元数据 URL"
+        },
+        "entity": {
+          "label": "实体 ID 和 SSO URL",
+          "ok": "已设置实体 ID 和 SSO URL",
+          "act": "缺少实体 ID 或 SSO URL"
+        },
+        "cert": {
+          "label": "IdP 签名证书",
+          "ok": "有有效的 IdP 签名证书",
+          "act": "没有有效的 IdP 签名证书"
+        },
+        "slo": {
+          "label": "单点登出",
+          "ok": "支持 SP 发起的单点登出",
+          "info": "没有 SLO URL，登出只在本地生效"
+        },
+        "spkey": {
+          "label": "SP 密钥",
+          "ok": "SP 密钥和证书已就绪",
+          "act": "SP 密钥缺失或无法读取，请轮换"
         }
       },
       "loginsEmpty": "还没有人通过该提供方登录。",
@@ -14059,7 +14107,94 @@
         "lastLogin": "最近 SSO 登录：{{when}}前",
         "conflict": "与 SSO 映射不一致（{{role}}）"
       },
-      "refresh": "刷新"
+      "refresh": "刷新",
+      "channel": {
+        "saml": "SAML 2.0",
+        "oidc": "OpenID Connect"
+      },
+      "channelBody": {
+        "saml": "签名断言投递到控制台，Identity Center 为自定义应用提供的就是这种方式。",
+        "oidc": "授权码 + PKCE，大多数开源身份提供方支持。"
+      },
+      "claimsBodySaml": "每个值读取的 SAML 属性，即身份提供方发送的属性 Name（可以是 URI）。NameID 是账号的主体；emailAddress 格式的 NameID 同时作为邮箱。",
+      "saml": {
+        "give": "控制台交给身份提供方",
+        "take": "身份提供方交给控制台",
+        "spEntityId": "SP 实体 ID",
+        "acsUrl": "ACS URL",
+        "slsUrl": "SLO URL",
+        "spCert": "SP 签名证书",
+        "downloadMetadata": "SP 元数据",
+        "rotate": "轮换密钥",
+        "rotateHint": "生成新的 SP 密钥和证书，之后需要在身份提供方重新导入控制台元数据",
+        "rotated": "已启用新的 SP 密钥，请在身份提供方重新导入元数据",
+        "metadataUrl": "IdP 元数据 URL",
+        "fetch": "加载",
+        "or": "或",
+        "upload": "上传元数据文件",
+        "uploadHint": "身份提供方提供下载的 XML 文件",
+        "loaded": "已加载 IdP 元数据",
+        "awaiting": "尚未收到：加载身份提供方的元数据，或在“连接”中填写其实体 ID、SSO URL 和证书。",
+        "idpEntityId": "IdP 实体 ID",
+        "ssoUrl": "SSO URL",
+        "sloUrl": "SLO URL",
+        "sloNone": "无，登出只在本地生效",
+        "sloHint": "填写后，登出时也会结束身份提供方的会话（HTTP-Redirect 绑定）。",
+        "idpCerts_one": "{{count}} 个证书",
+        "idpCerts_other": "{{count}} 个证书",
+        "certsField": "IdP 签名证书",
+        "certsHint": "PEM 格式，每块一个；身份提供方轮换密钥期间可填两个。",
+        "certDays_one": "还有 {{count}} 天有效",
+        "certDays_other": "还有 {{count}} 天有效",
+        "certExpired": "已过期",
+        "certBad": "无法读取",
+        "nameIdFormat": "NameID 格式",
+        "nameIdAny": "任意（unspecified）",
+        "idpInitiated": "允许 IdP 发起登录",
+        "idpInitiatedBody": "用户可以从身份提供方门户（Identity Center 的应用图标）开始登录。关闭后只能从控制台开始。",
+        "signRequests": "签名请求",
+        "signRequestsBody": "用 SP 密钥签名 AuthnRequest 和 LogoutRequest，适用于要求签名的身份提供方（Keycloak 默认要求）。",
+        "wantEncrypted": "要求加密断言",
+        "wantEncryptedBody": "拒绝未用 SP 证书加密的断言。",
+        "encryptedIcNote": "Identity Center 默认不为自定义应用加密断言；除非它加密，否则登录会被拒绝。"
+      },
+      "scim": {
+        "on": "预配中",
+        "off": "未开启",
+        "body": {
+          "default": "身份提供方在用户登录前把账号和组成员推送到这里：停用的用户立即失去访问权限，组成员关系驱动与登录时相同的映射。",
+          "identity-center": "IAM Identity Center 只支持入站预配，不会向自定义 SAML 应用推送用户。请通过 groups 属性映射组，或使用支持 SCIM 的身份提供方（Entra ID、Okta、Authentik）。"
+        },
+        "baseUrl": "SCIM 基础 URL",
+        "token": "Bearer 令牌",
+        "once": "只显示这一次，请立即复制到身份提供方",
+        "mint": "创建令牌",
+        "rotate": "轮换令牌",
+        "revoke": "关闭",
+        "revoked": "已为此身份提供方关闭 SCIM",
+        "revokeTitle": "关闭 SCIM 预配？",
+        "revokeBody": "令牌立即失效。SCIM 已预配的账号和组会保留。",
+        "hint": "令牌 …{{hint}}，创建于{{when}}",
+        "subject": "主体",
+        "subjectHint": "与此身份提供方登录时的 NameID / sub 相同的 SCIM 属性，大多数是 userName。",
+        "pushed": "已预配",
+        "users": "用户",
+        "groups": "组"
+      },
+      "loginPage": {
+        "title": "登录页",
+        "kick": "登录页",
+        "shownTitle": "单点登录，用户名和密码折叠在下方",
+        "hiddenTitle": "只用单点登录",
+        "shownBody": "本地账号仍可用密码登录。",
+        "hiddenBody": "登录页只显示身份提供方，密码登录和自助注册都会被拒绝，内置管理员除外。",
+        "inert": "当前没有启用的身份提供方，启用一个后此开关才生效。",
+        "toggle": "隐藏本地登录",
+        "breakGlass": "内置管理员始终可以通过 ?local=1 登录。",
+        "needsProvider": "请先启用一个身份提供方。",
+        "hiddenToast": "已隐藏本地登录",
+        "shownToast": "已重新显示本地登录"
+      }
     },
     "costTags": {
       "nav": "成本标签",

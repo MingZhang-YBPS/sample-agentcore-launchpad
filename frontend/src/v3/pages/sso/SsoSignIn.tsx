@@ -4,14 +4,8 @@ import { ArrowRight, ChevronDown, KeyRound } from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  clearSsoError,
-  readSsoError,
-  ssoApi,
-  type SsoPublicProvider,
-  ssoStartUrl,
-  wantsLocalLogin,
-} from "../../../lib/api/sso";
+import { clearSsoError, readSsoError, wantsLocalLogin } from "../../../lib/api/sso";
+import { type PublicProvider as SsoPublicProvider, signInUrl, ssoAdminApi } from "../../../lib/api/sso-saml";
 import { ssoErrorKey } from "./model";
 
 /** Where to land after the IdP: the page the browser asked for, minus our own params. */
@@ -34,9 +28,11 @@ function Mark({ preset }: { preset: string }) {
 }
 
 /**
- * The sign-in card's single sign-on half (sso §2.7): one button per enabled IdP on
- * top, the username / password form (`children`) folded under a disclosure. With no
- * provider it renders the form alone, exactly as before; `?local=1` opens it.
+ * The sign-in card's single sign-on half (sso §2.7): one button per enabled IdP (OIDC
+ * or SAML) on top, the username / password form (`children`) folded under a
+ * disclosure. With no provider it renders the form alone, exactly as before;
+ * `?local=1` opens it. With local login hidden (D-2) the disclosure is gone — only
+ * `?local=1`, the built-in administrator's break-glass entry, brings the form back.
  */
 export function SsoSignIn({ skin, children }: {
   skin: "v2" | "v3";
@@ -45,6 +41,7 @@ export function SsoSignIn({ skin, children }: {
 }) {
   const { t } = useTranslation();
   const [providers, setProviders] = useState<SsoPublicProvider[] | null>(null);
+  const [hideLocal, setHideLocal] = useState(false);
   const [error] = useState(() => readSsoError());
   const [localOpen, setLocalOpen] = useState(() => wantsLocalLogin());
   const [leaving, setLeaving] = useState<string | null>(null);
@@ -53,9 +50,13 @@ export function SsoSignIn({ skin, children }: {
   useEffect(clearSsoError, []);
   useEffect(() => {
     let live = true;
-    ssoApi
+    ssoAdminApi
       .providers()
-      .then((answer) => live && setProviders(answer.providers))
+      .then((answer) => {
+        if (!live) return;
+        setProviders(answer.providers);
+        setHideLocal(Boolean(answer.hide_local_login));
+      })
       .catch(() => live && setProviders([]));
     return () => {
       live = false;
@@ -74,7 +75,7 @@ export function SsoSignIn({ skin, children }: {
 
   const go = (provider: SsoPublicProvider) => {
     setLeaving(provider.id);
-    window.location.assign(ssoStartUrl(provider.id, currentReturnTo()));
+    window.location.assign(signInUrl(provider, currentReturnTo()));
   };
 
   return (
@@ -95,7 +96,7 @@ export function SsoSignIn({ skin, children }: {
             >
               <Mark preset={provider.preset} />
               <span className="txt">
-                <span className="kick">{t(`auth.sso.preset.${provider.preset}`, { defaultValue: "OIDC" })}</span>
+                <span className="kick">{t(`auth.sso.preset.${provider.preset}`, { defaultValue: provider.kind.toUpperCase() })}</span>
                 <span className="name">{t("auth.sso.continueWith", { name: provider.name })}</span>
               </span>
               <ArrowRight className="go" size={16} aria-hidden="true" />
@@ -104,23 +105,27 @@ export function SsoSignIn({ skin, children }: {
         ))}
       </ul>
 
-      <div className="v3-sso-local" data-open={localOpen}>
-        <button
-          type="button"
-          className="v3-sso-local-toggle"
-          aria-expanded={localOpen}
-          aria-controls={panelId}
-          onClick={() => setLocalOpen((open) => !open)}
-          data-testid="sso-local-toggle"
-        >
-          <KeyRound size={13} aria-hidden="true" />
-          <span>{t("auth.sso.useLocal")}</span>
-          <ChevronDown className="chev" size={14} aria-hidden="true" />
-        </button>
-        <div id={panelId} className="v3-sso-local-body" hidden={!localOpen}>
-          {localOpen && children(true)}
+      {hideLocal && !localOpen ? (
+        <p className="v3-sso-only" data-testid="sso-local-hidden">{t("auth.sso.localHidden")}</p>
+      ) : (
+        <div className="v3-sso-local" data-open={localOpen}>
+          <button
+            type="button"
+            className="v3-sso-local-toggle"
+            aria-expanded={localOpen}
+            aria-controls={panelId}
+            onClick={() => setLocalOpen((open) => !open)}
+            data-testid="sso-local-toggle"
+          >
+            <KeyRound size={13} aria-hidden="true" />
+            <span>{t("auth.sso.useLocal")}</span>
+            <ChevronDown className="chev" size={14} aria-hidden="true" />
+          </button>
+          <div id={panelId} className="v3-sso-local-body" hidden={!localOpen}>
+            {localOpen && children(true)}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

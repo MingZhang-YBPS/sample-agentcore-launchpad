@@ -495,6 +495,7 @@ def _migrate(bind) -> None:
     _migrate_audit_outcome(bind)
     _migrate_department_settings(bind)
     _migrate_user_external_identity(bind)
+    _migrate_sso_saml_scim_columns(bind)
 
 
 def _migrate_department_settings(bind) -> None:
@@ -1958,3 +1959,39 @@ def _migrate_user_external_identity(bind) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_external_identity "
             "ON users (external_idp_id, external_subject)"
         ))
+
+
+def _migrate_sso_saml_scim_columns(bind) -> None:
+    """SSO-2 / SSO-3 (sso design §2.1, §2.4): the SAML and SCIM columns of
+    `identity_providers_console`. Every existing provider is an OIDC one, for which
+    the defaults (empty / off, IdP-initiated allowed, `userName` subject) are inert.
+    The new `sso_saml_*` / `sso_scim_*` tables are `create_all`'s."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "identity_providers_console" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("identity_providers_console")}
+    columns = {
+        "saml_metadata_url": "VARCHAR(1024) NOT NULL DEFAULT ''",
+        "saml_idp_entity_id": "VARCHAR(512) NOT NULL DEFAULT ''",
+        "saml_sso_url": "VARCHAR(1024) NOT NULL DEFAULT ''",
+        "saml_slo_url": "VARCHAR(1024) NOT NULL DEFAULT ''",
+        "saml_idp_certs": "JSON",
+        "saml_name_id_format": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "saml_sp_cert": "TEXT NOT NULL DEFAULT ''",
+        "saml_sp_key_enc": "TEXT",
+        "saml_sign_requests": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "saml_want_encrypted": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "saml_allow_idp_initiated": "BOOLEAN NOT NULL DEFAULT TRUE",
+        "scim_token_hash": "VARCHAR(64)",
+        "scim_token_hint": "VARCHAR(8)",
+        "scim_token_created_at": "TIMESTAMP",
+        "scim_subject": "VARCHAR(16) NOT NULL DEFAULT 'userName'",
+    }
+    with bind.begin() as conn:
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(text(
+                    f"ALTER TABLE identity_providers_console ADD COLUMN {name} {ddl}"
+                ))

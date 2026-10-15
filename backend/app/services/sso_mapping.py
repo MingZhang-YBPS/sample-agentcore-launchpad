@@ -17,6 +17,15 @@ console account and its access:
   membership role an administrator changed (manual wins; a role conflict is
   recorded for the user page). Any change bumps `access_epoch`, so it applies on the
   next request.
+
+The same path serves every channel: an OIDC id_token, a SAML assertion (SSO-2: the
+NameID as `sub`, attributes by name) and SCIM provisioning (SSO-3: the IdP's groups as
+pushed, `scim_groups`), whose groups a login adds to what its token carries.
+
+The console-wide "hide local login" switch (D-2) lives here too: while it is on (and
+some provider is enabled) the login page shows only the IdP buttons and a password
+login is refused to every account but the built-in administrator, whose `?local=1`
+form is the break-glass way in.
 """
 
 import hashlib
@@ -35,6 +44,7 @@ from app.core.config import Settings, get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID
 from app.core.errors import AppError
 from app.models.ledger import User, UserWorkspace
+from app.models.platform_settings import PlatformSetting
 from app.models.projects import GroupMember, Project, ProjectGroup, ProjectMember
 from app.models.sso import (
     MEMBERSHIP_GROUP,
@@ -42,6 +52,8 @@ from app.models.sso import (
     MEMBERSHIP_ROLE,
     POLICY_EXISTING_ONLY,
     ConsoleIdentityProvider,
+    ScimGroup,
+    ScimGroupMember,
     SsoMembership,
 )
 from app.services import users as users_service
@@ -71,9 +83,13 @@ class ExternalProfile:
 
 
 def _claim(claims: dict[str, Any], name: str | None) -> Any:
-    """A claim by name; a dotted name reads a nested object (`realm_access.roles`)."""
+    """A claim by name; a dotted name reads a nested object (`realm_access.roles`)
+    unless the claims carry it verbatim — SAML attribute names are URIs full of dots
+    (`http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress`)."""
     if not name:
         return None
+    if name in claims:
+        return claims[name]
     value: Any = claims
     for part in name.split("."):
         if not isinstance(value, dict):
@@ -197,7 +213,18 @@ def provision(
         raise AppError("auth.sso.email_taken",
                        "Another console account already uses your email address — ask an "
                        "administrator", status_code=409)
-    name = _free_username(db, _candidate_username(profile), current)
+    return create_account(db, row, profile, email, current), True
+
+
+def create_account(
+    db: Session, row: ConsoleIdentityProvider, profile: ExternalProfile, email: str,
+    settings: Settings, *, status: str = users_service.STATUS_ACTIVE,
+) -> User:
+    """A new SSO account for `(row.id, profile.subject)` — active (JIT, SCIM) or
+    disabled (SCIM `active: false`), no local password, the default workspace grant
+    an administrator-created account gets. Committed."""
+    name = _free_username(db, _candidate_username(profile), settings)
+    now = datetime.now(UTC)
     user = User(
         id=uuid.uuid4().hex,
         username=name,
@@ -205,7 +232,7 @@ def provision(
         email=email,
         password_hash=users_service.SSO_PASSWORD_HASH,
         role=users_service.ROLE_MEMBER,
-        status=users_service.STATUS_ACTIVE,
+        status=status,
         expires_at=now + timedelta(days=max(1, int(row.valid_days or 30))),
         created_by=f"sso:{row.id}"[:64],
         external_idp_id=row.id,
@@ -226,7 +253,7 @@ def provision(
                             role=user.role)
     db.commit()
     db.refresh(user)
-    return user, True
+    return user
 
 
 def _renew(user: User, row: ConsoleIdentityProvider, now: datetime) -> None:
@@ -517,3 +544,57 @@ def account_sso(db: Session, user: User) -> dict[str, Any] | None:
         "last_login_at": last.isoformat() if last else None,
         "role_conflict": record.conflict if record is not None else None,
     }
+
+
+# --- SCIM groups (SSO-3) --------------------------------------------------------------
+
+
+def scim_groups(db: Session, idp_id: str, user_id: str) -> list[str]:
+    """The names a mapping can match for the account's SCIM-pushed groups: each
+    group's displayName and, when the IdP sent one, its externalId (Entra's SAML
+    groups claim carries object ids, its SCIM groups display names)."""
+    rows = db.execute(
+        select(ScimGroup.display_name, ScimGroup.external_id)
+        .join(ScimGroupMember, ScimGroupMember.group_id == ScimGroup.id)
+        .where(ScimGroup.idp_id == idp_id, ScimGroupMember.user_id == user_id)
+    ).all()
+    names = {name for row in rows for name in row if name}
+    return sorted(names)
+
+
+def login_groups(db: Session, row: ConsoleIdentityProvider, user: User,
+                 token_groups: list[str]) -> list[str]:
+    """What a login maps: the token's / assertion's groups plus the SCIM-pushed ones,
+    so a provider that sends no groups claim (or only ids) keeps what SCIM set."""
+    return sorted(set(token_groups) | set(scim_groups(db, row.id, user.id)))
+
+
+# --- hiding local login (D-2) -----------------------------------------------------------
+
+HIDE_LOCAL_LOGIN_KEY = "auth.sso.hide_local_login"
+
+
+def hide_local_login_setting(db: Session) -> bool:
+    row = db.get(PlatformSetting, HIDE_LOCAL_LOGIN_KEY)
+    return row is not None and row.value == "1"
+
+
+def local_login_hidden(db: Session) -> bool:
+    """Whether the switch is on AND a provider is enabled — with every IdP off the
+    switch is inert, so it can never leave the login page empty."""
+    if not hide_local_login_setting(db):
+        return False
+    return db.scalars(
+        select(ConsoleIdentityProvider.id).where(ConsoleIdentityProvider.enabled.is_(True))
+    ).first() is not None
+
+
+def set_hide_local_login(db: Session, value: bool, actor: str) -> None:
+    row = db.get(PlatformSetting, HIDE_LOCAL_LOGIN_KEY)
+    if row is None:
+        row = PlatformSetting(key=HIDE_LOCAL_LOGIN_KEY, value="")
+        db.add(row)
+    row.value = "1" if value else ""
+    row.updated_by = actor[:64]
+    row.updated_at = datetime.now(UTC)
+    db.commit()
