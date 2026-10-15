@@ -13177,6 +13177,17 @@
         "acknowledge": "标为已读",
         "acknowledged": "已标为已读"
       }
+    },
+    "theme": {
+      "label": "主题",
+      "menu": "配色主题",
+      "light": "浅色",
+      "dark": "深色",
+      "system": "跟随系统",
+      "lightHint": "白色底面，信号色加深",
+      "darkHint": "控制室配色（默认）",
+      "systemHint": "跟随设备设置：当前为{{theme}}",
+      "current": "主题：{{theme}}"
     }
   },
   "models": {

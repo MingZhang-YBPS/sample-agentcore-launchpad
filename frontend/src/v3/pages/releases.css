@@ -34,6 +34,6 @@
 .v3 .v3-rel-diff .field { display: grid; gap: 6px; padding-top: 6px; min-width: 0; overflow-wrap: anywhere; }
 .v3 .v3-rel-diff pre.v3-pre { max-height: 220px; }
 .v3 .v3-rel-diff .row[data-kind="removed"] pre.before,
-.v3 .v3-rel-diff .row[data-kind="changed"] pre.before { border-color: rgba(255, 92, 108, 0.3); }
+.v3 .v3-rel-diff .row[data-kind="changed"] pre.before { border-color: color-mix(in srgb, var(--v3-act) 30%, transparent); }
 .v3 .v3-rel-diff .row[data-kind="added"] pre.after,
-.v3 .v3-rel-diff .row[data-kind="changed"] pre.after { border-color: rgba(62, 240, 180, 0.3); }
+.v3 .v3-rel-diff .row[data-kind="changed"] pre.after { border-color: color-mix(in srgb, var(--v3-ok) 30%, transparent); }

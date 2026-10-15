@@ -6,5 +6,5 @@
   border: 1px solid var(--v3-line); background: var(--v3-ink-1); color: var(--v3-text); font: inherit; cursor: pointer; text-align: left;
 }
 .v3 .v3-idn-template:hover { border-color: var(--v3-line-2); }
-.v3 .v3-idn-template.on { border-color: rgba(62, 240, 180, 0.55); background: var(--v3-ok-dim); }
+.v3 .v3-idn-template.on { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); background: var(--v3-ok-dim); }
 .v3 .v3-idn-template b { font-size: 13px; }

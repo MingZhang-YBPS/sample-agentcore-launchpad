@@ -32,7 +32,7 @@
   display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 1fr) 52px 150px; gap: 14px; align-items: center;
   padding: 6px 0; font-size: 13px;
 }
-.v3 .v3-ins-bar + .v3-ins-bar { border-top: 1px solid rgba(29, 43, 69, 0.55); }
+.v3 .v3-ins-bar + .v3-ins-bar { border-top: 1px solid color-mix(in srgb, var(--v3-line) 55%, transparent); }
 .v3 .v3-ins-bar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3 .v3-ins-bar .v3-ins-score { text-align: right; }
 .v3 .v3-ins-bar .meta { color: var(--v3-text-3); font-size: 12px; text-align: right; }
@@ -93,7 +93,7 @@
 /* intents: volume and thumbs-down rate per intent */
 .v3 .v3-ins-intent {
   display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 90px 100px auto; gap: 16px; align-items: center;
-  padding: 11px 20px; border-top: 1px solid rgba(29, 43, 69, 0.55);
+  padding: 11px 20px; border-top: 1px solid color-mix(in srgb, var(--v3-line) 55%, transparent);
 }
 .v3 .v3-ins-intent .track { display: block; height: 6px; border-radius: 3px; background: var(--v3-ink-0); overflow: hidden; }
 .v3 .v3-ins-intent .track i { display: block; height: 100%; border-radius: 3px; background: var(--v3-info); }

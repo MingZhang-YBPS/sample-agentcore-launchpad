@@ -24,13 +24,28 @@
   --v3-text-3: #93a1bb;
   /* signal — the only colours that carry meaning */
   --v3-ok: #3ef0b4;
-  --v3-ok-dim: rgba(62, 240, 180, 0.14);
+  --v3-ok-dim: color-mix(in srgb, var(--v3-ok) 14%, transparent);
   --v3-wait: #ffb547;
-  --v3-wait-dim: rgba(255, 181, 71, 0.14);
+  --v3-wait-dim: color-mix(in srgb, var(--v3-wait) 14%, transparent);
   --v3-act: #ff5c6c;
-  --v3-act-dim: rgba(255, 92, 108, 0.14);
+  --v3-act-dim: color-mix(in srgb, var(--v3-act) 14%, transparent);
   --v3-info: #6ea8ff;
-  --v3-info-dim: rgba(110, 168, 255, 0.13);
+  --v3-info-dim: color-mix(in srgb, var(--v3-info) 13%, transparent);
+  /* the few derived tones a theme has to choose by hand: text set on a signal's
+     dim wash, the primary button's label and hover, a raised hover surface, the
+     scrim behind dialogs and the colour shadows are cast in */
+  --v3-ok-text: #bdfbe4;
+  --v3-wait-text: #ffe0ad;
+  --v3-act-text: #ffc3c9;
+  --v3-on-ok: #04150e;
+  --v3-ok-hover: #6af6c8;
+  --v3-info-hover: #93bfff;
+  --v3-info-active: #4d8cf0;
+  --v3-ink-hover: #1b2a46;
+  --v3-line-soft: #17233a;
+  --v3-text-4: #46536c;
+  --v3-scrim: #03060c;
+  --v3-shade: #000;
 
   --v3-display: "Archivo Variable", "Archivo", "PingFang SC", "Hiragino Sans GB", sans-serif;
   --v3-body: "Archivo Variable", "Archivo", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -54,6 +69,60 @@
 body.v3-body {
   background: var(--v3-ink-0, #070c16);
   margin: 0;
+}
+
+/* ── light: the same room by daylight ───────────────────────────────────────
+ * Chosen in the top bar (theme.ts) and set on <html data-theme> before first
+ * paint; `.v3[data-theme]` also works for a single subtree. Only the palette
+ * changes. The ink steps keep their roles — ink-0 the frame (top bar, rail,
+ * fields), ink-1 the floor, ink-2 the panels, ink-3 raised controls — but run
+ * from paper to cool grey instead of from night to slate. The signals are the
+ * same four hues pulled deep enough to clear WCAG AA (4.5:1) as text on white,
+ * on the floor and on their own dim wash; a signal is the most saturated thing
+ * on the page rather than the brightest. */
+[data-theme="light"] .v3,
+.v3[data-theme="light"] {
+  --v3-ink-0: #fbfcfd;
+  --v3-ink-1: #f2f4f8;
+  --v3-ink-2: #ffffff;
+  --v3-ink-3: #e9edf4;
+  --v3-line: #dce2ec;
+  --v3-line-2: #bac4d4;
+  --v3-text: #0e1829;
+  --v3-text-2: #424f67;
+  --v3-text-3: #56637b;
+  --v3-ok: #026b4f;
+  --v3-ok-dim: color-mix(in srgb, var(--v3-ok) 10%, transparent);
+  --v3-wait: #925000;
+  --v3-wait-dim: color-mix(in srgb, var(--v3-wait) 10%, transparent);
+  --v3-act: #b82133;
+  --v3-act-dim: color-mix(in srgb, var(--v3-act) 10%, transparent);
+  --v3-info: #1b5ac6;
+  --v3-info-dim: color-mix(in srgb, var(--v3-info) 10%, transparent);
+  --v3-ok-text: #035a43;
+  --v3-wait-text: #6e3c00;
+  --v3-act-text: #951a2a;
+  --v3-on-ok: #ffffff;
+  --v3-ok-hover: #015a42;
+  --v3-info-hover: #154ba6;
+  --v3-info-active: #103d8a;
+  --v3-ink-hover: #dfe5ee;
+  --v3-line-soft: #e8ecf3;
+  --v3-text-4: #8995aa;
+  /* scrim and shade carry their own alpha: a dialog over paper needs far less */
+  --v3-scrim: rgba(20, 30, 50, 0.55);
+  --v3-shade: rgba(24, 36, 60, 0.3);
+  color-scheme: light;
+}
+[data-theme="light"] body.v3-body { background: #fbfcfd; }
+
+/* switching theme crossfades the palette once; theme.ts sets the attribute for
+   a moment, so no transition lingers on the page afterwards */
+[data-theme-switching] .v3,
+[data-theme-switching] .v3 *,
+[data-theme-switching] .v3 *::before,
+[data-theme-switching] .v3 *::after {
+  transition: background-color 0.24s var(--v3-ease), border-color 0.24s var(--v3-ease), color 0.24s var(--v3-ease), fill 0.24s, stroke 0.24s !important;
 }
 
 .v3 *, .v3 *::before, .v3 *::after { box-sizing: border-box; }
@@ -109,7 +178,7 @@ body.v3-body {
   font-size: 9px;
   letter-spacing: 0.05em;
   color: var(--v3-ok);
-  border: 1px solid rgba(62, 240, 180, 0.4);
+  border: 1px solid color-mix(in srgb, var(--v3-ok) 40%, transparent);
   border-radius: 4px;
   padding: 0 4px;
   margin-left: 2px;
@@ -179,8 +248,8 @@ body.v3-body {
 .v3 .v3-ws-label { color: var(--v3-text-3); white-space: nowrap; }
 .v3 :is(button, a, input, textarea, select):focus-visible { outline: 2px solid var(--v3-info); outline-offset: 3px; }
 .v3 .v3-ws option { background: var(--v3-ink-2); }
-.v3 .v3-ws[data-tier="prod"] { border-color: rgba(255, 92, 108, 0.5); }
-.v3 .v3-ws[data-tier="staging"] { border-color: rgba(255, 181, 71, 0.45); }
+.v3 .v3-ws[data-tier="prod"] { border-color: color-mix(in srgb, var(--v3-act) 50%, transparent); }
+.v3 .v3-ws[data-tier="staging"] { border-color: color-mix(in srgb, var(--v3-wait) 45%, transparent); }
 
 .v3 .v3-rail {
   position: fixed;
@@ -424,10 +493,10 @@ body.v3-body {
   border: 1px solid var(--v3-line);
   white-space: nowrap;
 }
-.v3 .v3-chip[data-s="ok"] { color: var(--v3-ok); background: var(--v3-ok-dim); border-color: rgba(62, 240, 180, 0.28); }
-.v3 .v3-chip[data-s="wait"] { color: var(--v3-wait); background: var(--v3-wait-dim); border-color: rgba(255, 181, 71, 0.3); }
-.v3 .v3-chip[data-s="act"] { color: var(--v3-act); background: var(--v3-act-dim); border-color: rgba(255, 92, 108, 0.32); }
-.v3 .v3-chip[data-s="info"] { color: var(--v3-info); background: var(--v3-info-dim); border-color: rgba(110, 168, 255, 0.3); }
+.v3 .v3-chip[data-s="ok"] { color: var(--v3-ok); background: var(--v3-ok-dim); border-color: color-mix(in srgb, var(--v3-ok) 28%, transparent); }
+.v3 .v3-chip[data-s="wait"] { color: var(--v3-wait); background: var(--v3-wait-dim); border-color: color-mix(in srgb, var(--v3-wait) 30%, transparent); }
+.v3 .v3-chip[data-s="act"] { color: var(--v3-act); background: var(--v3-act-dim); border-color: color-mix(in srgb, var(--v3-act) 32%, transparent); }
+.v3 .v3-chip[data-s="info"] { color: var(--v3-info); background: var(--v3-info-dim); border-color: color-mix(in srgb, var(--v3-info) 30%, transparent); }
 
 .v3 .v3-btn {
   display: inline-flex;
@@ -446,18 +515,18 @@ body.v3-body {
   transition: transform 0.12s var(--v3-ease), border-color 0.15s, background 0.15s, box-shadow 0.2s;
   white-space: nowrap;
 }
-.v3 .v3-btn:hover:not(:disabled) { border-color: var(--v3-text-3); background: #1b2a46; }
+.v3 .v3-btn:hover:not(:disabled) { border-color: var(--v3-text-3); background: var(--v3-ink-hover); }
 .v3 .v3-btn:active:not(:disabled) { transform: translateY(1px); }
 .v3 .v3-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .v3 .v3-btn.primary {
-  color: #04150e;
+  color: var(--v3-on-ok);
   background: var(--v3-ok);
   border-color: var(--v3-ok);
   font-weight: 650;
-  box-shadow: 0 0 0 0 rgba(62, 240, 180, 0.5);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--v3-ok) 50%, transparent);
 }
-.v3 .v3-btn.primary:hover:not(:disabled) { background: #6af6c8; border-color: #6af6c8; }
-.v3 .v3-btn.danger { color: var(--v3-act); border-color: rgba(255, 92, 108, 0.45); background: var(--v3-act-dim); }
+.v3 .v3-btn.primary:hover:not(:disabled) { background: var(--v3-ok-hover); border-color: var(--v3-ok-hover); }
+.v3 .v3-btn.danger { color: var(--v3-act); border-color: color-mix(in srgb, var(--v3-act) 45%, transparent); background: var(--v3-act-dim); }
 .v3 .v3-btn.ghost { background: transparent; border-color: transparent; color: var(--v3-text-2); }
 .v3 .v3-btn.ghost:hover:not(:disabled) { background: var(--v3-ink-3); color: var(--v3-text); border-color: var(--v3-line); }
 .v3 .v3-btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
@@ -495,12 +564,12 @@ body.v3-body {
 }
 .v3 table.v3-table td {
   padding: 13px 16px;
-  border-bottom: 1px solid rgba(29, 43, 69, 0.6);
+  border-bottom: 1px solid color-mix(in srgb, var(--v3-line) 60%, transparent);
   vertical-align: middle;
 }
 .v3 table.v3-table tbody tr { transition: background 0.12s; }
 .v3 table.v3-table tbody tr.click { cursor: pointer; }
-.v3 table.v3-table tbody tr:hover { background: rgba(110, 168, 255, 0.045); }
+.v3 table.v3-table tbody tr:hover { background: color-mix(in srgb, var(--v3-info) 4.5%, transparent); }
 .v3 table.v3-table tbody tr:last-child td { border-bottom: 0; }
 .v3 table.v3-table .num { text-align: right; font-family: var(--v3-mono); font-variant-numeric: tabular-nums; }
 .v3 .v3-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -521,7 +590,7 @@ body.v3-body {
 .v3 .v3-skel {
   height: 14px;
   border-radius: 4px;
-  background: linear-gradient(90deg, var(--v3-ink-3), #1c2b48, var(--v3-ink-3));
+  background: linear-gradient(90deg, var(--v3-ink-3), var(--v3-ink-hover), var(--v3-ink-3));
   background-size: 200% 100%;
   animation: v3-shimmer 1.4s linear infinite;
 }
@@ -538,9 +607,9 @@ body.v3-body {
   color: var(--v3-text-2);
   font-size: 13px;
 }
-.v3 .v3-alert[data-s="act"] { border-color: rgba(255, 92, 108, 0.4); background: var(--v3-act-dim); color: #ffc3c9; }
-.v3 .v3-alert[data-s="wait"] { border-color: rgba(255, 181, 71, 0.4); background: var(--v3-wait-dim); color: #ffe0ad; }
-.v3 .v3-alert[data-s="ok"] { border-color: rgba(62, 240, 180, 0.35); background: var(--v3-ok-dim); color: #bdfbe4; }
+.v3 .v3-alert[data-s="act"] { border-color: color-mix(in srgb, var(--v3-act) 40%, transparent); background: var(--v3-act-dim); color: var(--v3-act-text); }
+.v3 .v3-alert[data-s="wait"] { border-color: color-mix(in srgb, var(--v3-wait) 40%, transparent); background: var(--v3-wait-dim); color: var(--v3-wait-text); }
+.v3 .v3-alert[data-s="ok"] { border-color: color-mix(in srgb, var(--v3-ok) 35%, transparent); background: var(--v3-ok-dim); color: var(--v3-ok-text); }
 .v3 .v3-alert svg { flex: none; margin-top: 2px; }
 
 /* sparkline */
@@ -549,13 +618,81 @@ body.v3-body {
 .v3 svg.v3-spark .line { fill: none; stroke: var(--v3-ok); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
 .v3 svg.v3-spark .line.act { stroke: var(--v3-act); }
 
+/* ── theme switch: a menu of three palettes, each previewed as a swatch ──── */
+/* The swatches are fixed literals on purpose: they show the other palette,
+   not the one in effect, so they cannot be tokens. */
+.v3 .v3-theme-menu { min-width: 300px; }
+.v3 .v3-theme-menu-head {
+  padding: 6px 10px 4px;
+  font-family: var(--v3-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+}
+.v3 .v3-theme-menu button { position: relative; }
+.v3 .v3-theme-menu .text { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.v3 .v3-theme-menu .text b { font-weight: 550; color: var(--v3-text); }
+.v3 .v3-theme-menu .text small { font-size: 11.5px; color: var(--v3-text-3); }
+.v3 .v3-theme-menu .ico { flex: none; color: var(--v3-text-3); }
+.v3 .v3-theme-menu button[aria-checked="true"] { background: var(--v3-ok-dim); }
+.v3 .v3-theme-menu button[aria-checked="true"] .ico { color: var(--v3-ok); }
+.v3 .v3-theme-menu button[aria-checked="true"]::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--v3-ok);
+}
+.v3 .v3-theme-menu .swatch {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid var(--v3-line-2);
+  overflow: hidden;
+  transition: transform 0.18s var(--v3-ease);
+}
+.v3 .v3-theme-menu button:hover .swatch { transform: rotate(-6deg) scale(1.06); }
+/* a lamp in the corner: each palette's own "running" mint */
+.v3 .v3-theme-menu .swatch::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sw-lamp);
+}
+.v3 .v3-theme-menu .swatch[data-swatch="dark"] {
+  --sw-lamp: #3ef0b4;
+  background: linear-gradient(180deg, #070c16 0 34%, #101a2d 34%);
+}
+.v3 .v3-theme-menu .swatch[data-swatch="light"] {
+  --sw-lamp: #026b4f;
+  background: linear-gradient(180deg, #e9edf4 0 34%, #ffffff 34%);
+}
+.v3 .v3-theme-menu .swatch[data-swatch="system"] {
+  --sw-lamp: #6ea8ff;
+  background: linear-gradient(135deg, #ffffff 0 50%, #101a2d 50%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-theme-menu .swatch { transition: none; }
+  .v3 .v3-theme-menu button:hover .swatch { transform: none; }
+}
+
 /* ── command palette ──────────────────────────────────────────────────────── */
 
 .v3-cmdk-mask {
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: rgba(3, 6, 12, 0.6);
+  background: color-mix(in srgb, var(--v3-scrim) 60%, transparent);
   backdrop-filter: blur(3px);
   display: grid;
   justify-items: center;
@@ -567,8 +704,8 @@ body.v3-body {
   width: min(640px, 92vw);
   border-radius: 14px;
   border: 1px solid var(--v3-line-2);
-  background: rgba(13, 21, 37, 0.97);
-  box-shadow: 0 30px 80px -10px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(62, 240, 180, 0.06);
+  background: color-mix(in srgb, var(--v3-ink-2) 97%, transparent);
+  box-shadow: 0 30px 80px -10px color-mix(in srgb, var(--v3-shade) 70%, transparent), 0 0 0 1px color-mix(in srgb, var(--v3-ok) 6%, transparent);
   overflow: hidden;
   animation: v3-rise 0.18s var(--v3-ease);
 }
@@ -634,10 +771,10 @@ body.v3-body {
   padding: 12px 14px;
   border-radius: 10px;
   border: 1px solid var(--v3-line-2);
-  background: rgba(16, 26, 45, 0.97);
+  background: color-mix(in srgb, var(--v3-ink-2) 97%, transparent);
   color: var(--v3-text);
   font-size: 13px;
-  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 16px 40px -12px color-mix(in srgb, var(--v3-shade) 70%, transparent);
   animation: v3-rise 0.2s var(--v3-ease);
 }
 
@@ -684,7 +821,7 @@ body.v3-body {
   background: var(--v3-line);
 }
 .v3 .v3-pipe-step:last-child::before { display: none; }
-.v3 .v3-pipe-step[data-s="ok"]::before { background: linear-gradient(90deg, var(--v3-ok), rgba(62, 240, 180, 0.25)); }
+.v3 .v3-pipe-step[data-s="ok"]::before { background: linear-gradient(90deg, var(--v3-ok), color-mix(in srgb, var(--v3-ok) 25%, transparent)); }
 .v3 .v3-pipe-step[data-s="info"]::before { background: var(--v3-line-2); }
 .v3 .v3-pipe-node {
   position: relative;
@@ -697,13 +834,13 @@ body.v3-body {
   border: 1px solid var(--v3-line-2);
   margin-bottom: 12px;
 }
-.v3 .v3-pipe-step[data-s="act"] .v3-pipe-node { border-color: var(--v3-act); box-shadow: 0 0 18px rgba(255, 92, 108, 0.4); }
-.v3 .v3-pipe-step[data-s="wait"] .v3-pipe-node { border-color: var(--v3-wait); box-shadow: 0 0 18px rgba(255, 181, 71, 0.35); }
+.v3 .v3-pipe-step[data-s="act"] .v3-pipe-node { border-color: var(--v3-act); box-shadow: 0 0 18px color-mix(in srgb, var(--v3-act) 40%, transparent); }
+.v3 .v3-pipe-step[data-s="wait"] .v3-pipe-node { border-color: var(--v3-wait); box-shadow: 0 0 18px color-mix(in srgb, var(--v3-wait) 35%, transparent); }
 .v3 .v3-pipe-step[data-s="off"] { opacity: 0.45; }
 
 .v3 .v3-interval { display: flex; align-items: center; gap: 10px; }
 .v3 .v3-interval .track { position: relative; flex: 1; height: 8px; border-radius: 4px; background: var(--v3-ink-0); border: 1px solid var(--v3-line); }
-.v3 .v3-interval .ci { position: absolute; top: 1px; bottom: 1px; border-radius: 3px; background: rgba(110, 168, 255, 0.35); }
+.v3 .v3-interval .ci { position: absolute; top: 1px; bottom: 1px; border-radius: 3px; background: color-mix(in srgb, var(--v3-info) 35%, transparent); }
 .v3 .v3-interval .thr { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--v3-text-2); }
 .v3 .v3-interval .dot {
   position: absolute;
@@ -728,7 +865,7 @@ body.v3-body {
   display: grid;
   place-items: start center;
   padding-top: 16vh;
-  background: rgba(3, 6, 12, 0.66);
+  background: color-mix(in srgb, var(--v3-scrim) 66%, transparent);
   backdrop-filter: blur(3px);
   animation: v3-fade 0.12s ease-out;
 }
@@ -738,7 +875,7 @@ body.v3-body {
   border-radius: 14px;
   border: 1px solid var(--v3-line-2);
   background: var(--v3-ink-2);
-  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8);
+  box-shadow: 0 30px 80px -20px color-mix(in srgb, var(--v3-shade) 80%, transparent);
   animation: v3-rise 0.18s var(--v3-ease);
 }
 .v3 .v3-modal h2 { margin: 0 0 10px; font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 18px; font-weight: 650; }
@@ -823,7 +960,7 @@ body.v3-body {
   font: inherit; cursor: pointer; transition: border-color 0.15s, background 0.15s;
 }
 .v3 .v3-scenario:hover { border-color: var(--v3-line-2); background: var(--v3-ink-2); }
-.v3 .v3-scenario.on { border-color: rgba(62, 240, 180, 0.55); background: var(--v3-ok-dim); box-shadow: 0 0 0 3px rgba(62, 240, 180, 0.08); }
+.v3 .v3-scenario.on { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); background: var(--v3-ok-dim); box-shadow: 0 0 0 3px color-mix(in srgb, var(--v3-ok) 8%, transparent); }
 .v3 .v3-scenario small { color: var(--v3-text-2); font-size: 12.5px; line-height: 1.5; }
 .v3 .v3-scenario .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 .v3 .v3-way {
@@ -838,7 +975,7 @@ body.v3-body {
 .v3 .v3-way:hover .go { color: var(--v3-text); }
 .v3 .v3-field .v3-hint, .v3 small.v3-hint { color: var(--v3-text-3); font-size: 12px; text-transform: none; letter-spacing: 0; font-family: var(--v3-body); }
 .v3 .v3-field .v3-err, .v3 small.v3-err { color: var(--v3-act); font-size: 12px; text-transform: none; letter-spacing: 0; font-family: var(--v3-body); }
-.v3 .v3-input[aria-invalid="true"] { border-color: rgba(255, 92, 108, 0.6); }
+.v3 .v3-input[aria-invalid="true"] { border-color: color-mix(in srgb, var(--v3-act) 60%, transparent); }
 
 /* Responsive shell and core pages; override the shared desktop primitives. */
 @media (max-width: 1180px) {
@@ -865,7 +1002,7 @@ body.v3-body {
   .v3 .v3-ws { flex: 1; max-width: none; }
   .v3 .v3-ws-label { display: none; }
   .v3 .v3-top .v3-account { display: none; }
-  .v3 .v3-rail { display: none; width: min(300px, 100%); background: var(--v3-ink-0); box-shadow: 12px 0 32px rgba(0, 0, 0, 0.35); }
+  .v3 .v3-rail { display: none; width: min(300px, 100%); background: var(--v3-ink-0); box-shadow: 12px 0 32px color-mix(in srgb, var(--v3-shade) 35%, transparent); }
   .v3[data-rail-open="true"] .v3-rail { display: flex; }
   .v3 .v3-main { padding: calc(var(--v3-top) + 20px) 16px 40px; }
   .v3 h1.v3-title { font-size: 25px; line-height: 1.3; overflow-wrap: anywhere; }

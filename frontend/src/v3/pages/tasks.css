@@ -40,5 +40,5 @@
   background: var(--v3-line-2); color: var(--v3-text-2); font-family: var(--v3-mono); font-size: 11px;
 }
 .v3 .v3-task-steps button.on { background: var(--v3-ink-3); color: var(--v3-text); }
-.v3 .v3-task-steps button.on .num, .v3 .v3-task-steps button.done .num { background: var(--v3-ok); color: #04150e; }
+.v3 .v3-task-steps button.on .num, .v3 .v3-task-steps button.done .num { background: var(--v3-ok); color: var(--v3-on-ok); }
 .v3 .v3-task-foot { display: flex; justify-content: space-between; gap: 10px; }

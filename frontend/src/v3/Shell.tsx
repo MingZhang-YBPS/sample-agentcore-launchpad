@@ -50,6 +50,7 @@ import { type Command, CommandPalette } from "./CommandPalette";
 import { ToastProvider } from "./ui";
 import { useLoad } from "./hooks";
 import { Lang } from "./Lang";
+import { ThemeSwitch } from "./ThemeSwitch";
 import { hostedGroups, isActive } from "./nav";
 import { GlossaryDialog } from "./onboarding/Glossary";
 import { openGlossary, requestTour, tourDone, useLaunchHidden, useTourRequest } from "./onboarding/state";
@@ -417,6 +418,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
             <WorkspaceSwitch />
             <ProjectSwitch />
             <Lang />
+            <ThemeSwitch />
             <HelpMenu />
             <button type="button" className="v3-btn sm v3-version-switch" onClick={backToV2} data-testid="v3-switch-v2" aria-label={t("v3.switch.back")} title={t("v3.switch.back")}>
               <ArrowLeftRight size={13} aria-hidden="true" />

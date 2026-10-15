@@ -14,6 +14,17 @@
   --v3-obs-other: var(--v3-line-2);
   --v3-obs-out: #4fe3e3;
 }
+/* the same series on white: each hue pulled deep enough to hold 3:1 against
+   the panel as a bar or a line, still kept apart from the signal hues */
+[data-theme="light"] .v3 .v3-obs,
+.v3[data-theme="light"] .v3-obs {
+  --v3-obs-tool: #6b3fc4;
+  --v3-obs-memory: #0b7f86;
+  --v3-obs-gateway: #b02a77;
+  --v3-obs-http: #66728a;
+  --v3-obs-agent: #33415a;
+  --v3-obs-out: #0b7f86;
+}
 
 /* tabs + range sit on one bar under the header */
 .v3 .v3-obs-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -28,8 +39,8 @@
   font: inherit; cursor: pointer; transition: border-color 0.15s, background 0.15s;
 }
 .v3 .v3-obs-finding:hover { background: var(--v3-ink-2); border-color: var(--v3-line-2); }
-.v3 .v3-obs-finding[data-s="act"] { border-color: rgba(255, 92, 108, 0.35); }
-.v3 .v3-obs-finding[data-s="wait"] { border-color: rgba(255, 181, 71, 0.3); }
+.v3 .v3-obs-finding[data-s="act"] { border-color: color-mix(in srgb, var(--v3-act) 35%, transparent); }
+.v3 .v3-obs-finding[data-s="wait"] { border-color: color-mix(in srgb, var(--v3-wait) 30%, transparent); }
 .v3 .v3-obs-finding .what { flex: 1; min-width: 0; }
 .v3 .v3-obs-finding .what small { display: block; color: var(--v3-text-3); font-size: 12px; margin-top: 2px; }
 .v3 .v3-obs-finding .go { color: var(--v3-text-3); font-size: 12px; white-space: nowrap; }
@@ -80,7 +91,7 @@
 .v3 .v3-obs-wf .h { padding: 0 8px 8px; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); border-bottom: 1px solid var(--v3-line); }
 .v3 .v3-obs-wf .h.right, .v3 .v3-obs-wf .dur { text-align: right; }
 .v3 .v3-obs-wf .r { display: contents; cursor: pointer; }
-.v3 .v3-obs-wf .r > span { padding: 6px 8px; border-bottom: 1px solid rgba(29, 43, 69, 0.55); }
+.v3 .v3-obs-wf .r > span { padding: 6px 8px; border-bottom: 1px solid color-mix(in srgb, var(--v3-line) 55%, transparent); }
 .v3 .v3-obs-wf .r:hover > span { background: var(--v3-ink-2); }
 .v3 .v3-obs-wf .r.on > span { background: var(--v3-info-dim); }
 .v3 .v3-obs-wf .nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
