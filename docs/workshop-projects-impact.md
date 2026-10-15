@@ -82,6 +82,31 @@ improvement suggested by design §9.6.
 1. **Recommended — §6 add a row after 工作区.** zh: `| **项目**（project） | 工作区内的数据与权限边界：智能体及其数据只属于一个项目，成员按项目角色工作 | 本 workshop 只有默认项目 `default`，所以看不到项目切换器；所有账号以“继承全局角色”加入它 | [认识角色 §4](/10-prepare/30-roles) |`. en: `| **Project** | The data and permission boundary inside a workspace: an agent and its data belong to one project, and members work through project roles | This workshop has only the `default` project, so there is no project switcher; every account joins it with the inherited global role | … |`.
 2. **Recommended — §7 row 职责分离.** "服务端按**用户名**强制" → "服务端按**账号**（用户 id；旧记录按用户名）强制" / "per **account** (user id; older records by username)".
 
+## Online update (OU-1) — the organizer stack
+
+Not a projects change, but it ships in the same upgrade. **Configure → System update**
+(`/v3/system-update`, administrators only) can schedule a restart only where the root
+updater is installed, so the workshop's CloudFormation user-data
+(`static/infrastructure/workshop-ec2.yaml`, after `systemctl enable --now
+launchpad-backend`) needs one more step:
+
+```bash
+"$APP/backend/scripts/install_updater.sh" --repo "$APP" --user ubuntu \
+  --services "launchpad-backend"   # this stack has no launchpad-frontend unit: nginx serves dist/
+```
+
+- The stack clones with `--depth 1`. The check still works, because the update cache
+  takes the running commit's history from the local checkout.
+- nginx serves `frontend/dist` directly. The updater swaps `dist` in by rename, so
+  nginx needs no restart.
+- **Recommended — `90-appendix/10-organizer-deploy`.** Add a sentence. zh:
+  "控制台可在 **配置 → 系统更新** 在线更新：准备好后排期重启，失败会自动回滚。" en: "The console
+  updates itself from **Configure → System update**: prepare, schedule the restart; a
+  failed health check rolls back automatically."
+- **Required — `10-prepare/20-setup` §3 rail table, row `配置`.** The administrator's
+  **Configure** group gains **System update** (`/v3/system-update`) after **Models**.
+  Retake any screenshot of the expanded rail.
+
 ## Verification at M1
 
 Design §8.6 lists the checks to repeat on a real upgraded environment before these

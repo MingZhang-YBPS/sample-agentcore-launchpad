@@ -698,6 +698,24 @@ curl -s localhost:8000/api/auth/status          # 预期 auth_required: true
 `LAUNCHPAD_AUTH_REGISTRATION_ENABLED=false` 或用
 `LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS` 限定公司域名。
 
+**4. 在线更新（可选）。** 管理员可以在 **配置 → 系统更新** 页面更新控制台，代替手工执行第 3 步。先以 root 安装一次更新器：
+
+```bash
+sudo backend/scripts/install_updater.sh      # 可用 --user / --services / --health-url 覆盖默认值
+systemctl status launchpad-updater.path      # 预期 active (waiting)
+```
+
+安装脚本把 `backend/scripts/apply_update.sh` 复制到 `/usr/local/lib/launchpad/`（更新不会替换执行它的脚本），写入 `/etc/launchpad-updater.env` 和两个单元：`launchpad-updater.path` 监视 `data/updates/apply.request`，`launchpad-updater.service`（`Type=oneshot`，以 root 运行）负责应用。
+
+页面上的流程：
+
+1. **检查**：比较当前运行的提交和所配置来源的最新提交，只接受快进。来源是部署配置，不是请求参数：`LAUNCHPAD_UPDATE_REPO`（默认 `https://github.com/aws-samples/sample-agentcore-launchpad`）和 `LAUNCHPAD_UPDATE_BRANCH`（默认 `console-v3`）。
+2. **准备更新**：把该提交检出到 `data/updates/stage-<sha>`，并以 `nice 10` 在其中只运行固定命令：`uv sync --frozen`、`npm ci`、`npm run build`，然后做导入自检，再用独立的临时台账在临时端口做启动自检。当前服务不受影响。失败（例如访问不了 npm 源）时更新状态为 `prepare_failed`。后端重启后，准备从最后完成的步骤继续。只保留最近两个暂存目录。
+3. **排期重启**（“立即”即一分钟后，或 7 天内的指定时间）会发布公告。如果重启会中断进行中的任务，页面会列出这些任务，并要求先勾选“我已知晓”。到点后控制台写入 `data/updates/apply.request`。更新器随后在线备份台账（`ledger_backup.py`），快进检出，用重命名换入构建好的 `frontend/dist`，执行 `uv sync --frozen` 并重启服务，然后最多等待 120 秒，直到 `/api/auth/status` 返回的 `version.sha` 等于新提交。健康检查失败时，更新器重置到上一个提交，恢复旧的 `dist`，再次重启，并报告 `rolled_back`。控制台读回结果（`data/updates/apply.result`）并结束公告。
+4. **回滚**：准备上一次更新所替换的提交，再像更新一样排期。
+
+未安装更新器时，页面仍可检查和准备，然后显示手工应用暂存目录的命令。`LAUNCHPAD_UPDATE_ENABLED=false` 关闭整个功能。默认只有安装了更新器的主机才能排期。每一步都以 `system.update.*` 记入平台审计日志。另外两个可调参数：`LAUNCHPAD_UPDATE_MIN_FREE_GB`（默认 3，准备所需的空闲磁盘）和 `LAUNCHPAD_UPDATE_STAGE_MAX_GB`（默认 6，暂存目录大小上限）。
+
 ## 资源清理
 
 ```bash

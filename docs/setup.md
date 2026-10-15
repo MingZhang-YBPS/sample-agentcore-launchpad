@@ -905,6 +905,55 @@ is needed. Registration is open as soon as the gate is on — set
 `LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS` if the deployment should not accept
 requests from anyone who has the URL.
 
+**4. Online update (optional).** An administrator can update the console from
+**Configure → System update** instead of running step 3 by hand. Install the
+updater once, as root:
+
+```bash
+sudo backend/scripts/install_updater.sh      # --user / --services / --health-url to override
+systemctl status launchpad-updater.path      # expect active (waiting)
+```
+
+It copies `backend/scripts/apply_update.sh` to `/usr/local/lib/launchpad/` (an
+update never replaces the script that applies it), writes
+`/etc/launchpad-updater.env` and two units: `launchpad-updater.path` watches
+`data/updates/apply.request`, and `launchpad-updater.service` (`Type=oneshot`, root)
+applies it.
+
+The flow on the page:
+
+1. **Check** compares the running commit with the latest commit of the configured
+   source. Only a fast-forward is accepted. The source is deployment configuration,
+   never a request parameter: `LAUNCHPAD_UPDATE_REPO` (default
+   `https://github.com/aws-samples/sample-agentcore-launchpad`) and
+   `LAUNCHPAD_UPDATE_BRANCH` (default `console-v3`).
+2. **Prepare** checks the commit out into `data/updates/stage-<sha>` and runs only
+   fixed commands there at `nice 10`: `uv sync --frozen`, `npm ci`,
+   `npm run build`, then an import check and a start check on a temporary port with
+   its own throwaway ledger. The running console is not affected. A failure (for
+   example no access to the npm registry) leaves the update `prepare_failed`. A
+   backend restart resumes a prepare from its last finished step. The newest two
+   stages are kept.
+3. **Schedule restart** (now = in one minute, or a time within 7 days) publishes an
+   announcement. If the restart would interrupt tasks in progress, the page lists
+   them and asks you to acknowledge first. At the scheduled time the console writes
+   `data/updates/apply.request`. The updater then backs up the ledger
+   (`ledger_backup.py`), fast-forwards the checkout, swaps the built
+   `frontend/dist` in by rename, runs `uv sync --frozen` and restarts the units. It
+   waits up to 120 s for `/api/auth/status` to report `version.sha` equal to the new
+   commit. If that check fails, it resets to the previous commit, restores the old
+   `dist`, restarts again and reports `rolled_back`. The console reads the result
+   (`data/updates/apply.result`) back and ends the announcement.
+4. **Roll back** prepares the commit the last update replaced. You schedule it like
+   an update.
+
+Without the updater, the page still checks and prepares, and then shows the
+commands to apply the prepared stage by hand. `LAUNCHPAD_UPDATE_ENABLED=false` turns
+the whole feature off. By default, scheduling is available only where the updater
+is installed. Every step is journaled as `system.update.*` in the hub's audit log.
+Also tunable: `LAUNCHPAD_UPDATE_MIN_FREE_GB` (default 3, free disk needed to
+prepare) and `LAUNCHPAD_UPDATE_STAGE_MAX_GB` (default 6, the stage size cap).
+
 ## Teardown / 资源清理
 
 ```bash
