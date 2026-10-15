@@ -24,6 +24,22 @@ export interface ChatMessage {
   run?: import("../../../lib/chat").ToolRun;
   /** the live turn a tool row belongs to (tool ids repeat across turns) */
   turn?: number;
+  /** kind "agent": the parsed answer of an agent with an output schema (SB-1 `structured` event) */
+  structured?: unknown;
+}
+
+/** Attach a `structured` event's value to the turn's answer: the latest agent message
+ * after the latest user message, or a new (empty-text) answer when none streamed. */
+export function attachStructured<M extends ChatMessage>(messages: M[], value: unknown): M[] {
+  const next = [...messages];
+  for (let i = next.length - 1; i >= 0; i--) {
+    if (next[i].kind === "user") break;
+    if (next[i].kind === "agent") {
+      next[i] = { ...next[i], structured: value };
+      return next;
+    }
+  }
+  return [...next, { kind: "agent", text: "", structured: value } as M];
 }
 
 /** Append a streamed delta. An auth card asked mid-answer sits after the open

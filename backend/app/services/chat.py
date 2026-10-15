@@ -51,6 +51,7 @@ def chat_stream(
     console_user: bool = True,
     status_events: bool = False,
     stop: "StopSignal | None" = None,
+    context: dict[str, str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
 
@@ -77,6 +78,11 @@ def chat_stream(
     ``stop`` (a console turn running in the background, chat-streaming §5.2): once
     set, the stream raises ``TurnStopped`` within ``STOP_POLL_SECONDS`` even while
     the upstream is silent, and the upstream is closed.
+
+    ``context`` (strands-builder SB-1) is this turn's ``{{variable}}`` values, passed
+    in the runtime payload. An ``output_schema`` agent's parsed answer arrives as a
+    ``structured`` event (``{value}``) after the text; a guardrail turn drops it, as
+    only the text is screened.
     """
     session_id = session_id or new_session_id()
     workspace = workspace if workspace is not None else context_for_workspace(
@@ -160,6 +166,8 @@ def chat_stream(
                 invoke_kwargs["bearer_token"] = bearer_token
             if not console_user:
                 invoke_kwargs["console_user"] = False
+            if context:
+                invoke_kwargs["context"] = context
             source = invoke_agent_events(
                 agent,
                 prompt,
@@ -203,11 +211,14 @@ def _withhold_deltas(
     events: Iterator[dict[str, Any]], buffered: list[str],
 ) -> Iterator[dict[str, Any]]:
     """While screening, text is withheld until the whole answer can be screened;
-    tool and heartbeat events still flow so the UI stays alive."""
+    tool and heartbeat events still flow so the UI stays alive. A `structured` object
+    is not screened, so it is dropped."""
     try:
         for event in events:
             if event.get("event") == "delta":
                 buffered.append(str(event["data"].get("text", "")))
+                continue
+            if event.get("event") == "structured":
                 continue
             yield event
     finally:

@@ -2722,7 +2722,12 @@
     "waiver.self_approve": "申请人不能批准自己的豁免。",
     "waiver.self_approve_why": "批准豁免需要另一个人来决定。",
     "waiver.too_long": "豁免时长超过了允许的上限。",
-    "waiver.unknown_criterion": "这条判据不在智能体的判据表里。"
+    "waiver.unknown_criterion": "这条判据不在智能体的判据表里。",
+    "auth.sso_account_no_password": "你的密码由身份提供方管理。",
+    "users.sso_account_password": "此账号通过 SSO 登录，密码由身份提供方管理，无法在这里重置。",
+    "release.golden_share_read_only": "该金标集以只读方式共享给本项目，发布门禁需要可用权限，请联系所属项目。",
+    "run.evaluator_share_read_only": "本次运行中的某个评估器以只读方式共享给本项目，运行它需要可用权限，请联系所属项目。",
+    "share.read_only": "该资源属于另一个项目，只是共享给本项目使用，只有所属项目可以修改。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -12144,6 +12149,9 @@
         "via": "来自：{{projects}}",
         "globalPermTitle": "全局权限（作用于“继承全局”的项目）",
         "globalPermSub": "项目角色为“继承全局角色”时生效"
+      },
+      "field": {
+        "source": "账号来源"
       }
     },
     "workspaces": {
@@ -12427,7 +12435,9 @@
           "current": "请输入当前密码。",
           "same": "新密码不能与当前密码相同。",
           "mismatch": "两次输入的新密码不一致。"
-        }
+        },
+        "ssoManaged": "此账号通过身份提供方登录，密码保存在身份提供方。请到身份提供方修改密码，控制台无法修改。",
+        "ssoClose": "知道了"
       }
     },
     "dlcText": {
@@ -12964,7 +12974,16 @@
         "typedId": "或输入 AWS id",
         "noResources": "本项目在该工作区没有这类资源。",
         "crossShort": "其他部门",
-        "crossDepartment": "该项目属于其他部门：共享需由其部门管理员（或平台管理员）批准后才生效。"
+        "crossDepartment": "该项目属于其他部门：共享需由其部门管理员（或平台管理员）批准后才生效。",
+        "notices": {
+          "eyebrow": "已结束",
+          "title": "已结束的共享",
+          "revoked": "{{owner}} 已撤销 {{name}}（{{access}}），本项目不能再使用它。",
+          "expired": "{{owner}} 共享的 {{name}}（{{access}}）已到期，本项目不能再使用它。",
+          "pinned": "仍在使用它的智能体：",
+          "by": "由 {{who}} 撤销",
+          "ack": "知道了"
+        }
       },
       "isolation": {
         "title": "运行时隔离",
@@ -14491,7 +14510,8 @@
       "gateReport": "放行门报告已生成：{{verdict}}",
       "releaseSigned": "已签署放行——候选版本已上线",
       "issueFixed": "Issue 已标记为已修复",
-      "issueWontFix": "Issue 已关闭（不修复）"
+      "issueWontFix": "Issue 已关闭（不修复）",
+      "apiKey": "API 密钥已签发，你的应用现在可以调用这个智能体"
     },
     "journey": {
       "title": "旅程",
@@ -14749,7 +14769,114 @@
       "outputSchemaA2a": "A2A 智能体不能返回结构化输出——请清空 Schema。",
       "outputSchemaGuardrail": "结构化输出暂不能与 PII 保护同时使用。",
       "variables": "变量名以字母或 _ 开头且不重复（最多 20 个）。{{detail}}",
-      "fewShot": "每个示例都需要问题和回答（最多 10 个）。"
+      "fewShot": "每个示例都需要问题和回答（最多 10 个）。",
+      "agentToolName": "工具名须以字母开头，之后为字母、数字或 _（最多 64 个）：{{detail}}",
+      "agentToolDuplicate": "工具名 {{detail}} 已被使用——请改名。",
+      "agentToolDescription": "请为每个智能体说明何时调用（最多 1000 个字符）。",
+      "agentToolCount": "最多可把 {{detail}} 个智能体当作工具。",
+      "providerConnection": "请选择存放提供方密钥的 API 密钥连接。",
+      "providerBaseUrl": "请填写网关的 http(s) 地址——不含凭据、查询参数或片段。{{detail}}",
+      "providerConverse": "扩展思考和提示词缓存是 Bedrock 选项——使用此提供方时请关闭。",
+      "approvalTools": "审批项须为工具名或 * 通配：{{detail}}",
+      "maxToolCalls": "每轮工具调用次数须为 1 到 500 的整数。",
+      "maskArgs": "打码参数名只能包含字母、数字、_、. 或 -：{{detail}}",
+      "retryAttempts": "尝试次数须为 1 到 10 的整数。",
+      "retryInitial": "首次等待须为 1 到 60 秒。",
+      "retryMax": "等待上限须为 1 到 600 秒，且不小于首次等待。"
+    },
+    "structured": {
+      "label": "结构化回答",
+      "fields_one": "{{count}} 个字段",
+      "fields_other": "{{count}} 个字段",
+      "asJson": "JSON",
+      "asTable": "表格",
+      "copy": "复制",
+      "copied": "已复制"
+    },
+    "review": {
+      "stops_one": "{{count}} 个停止序列",
+      "stops_other": "{{count}} 个停止序列",
+      "thinking": "思考预算 {{budget}} tokens",
+      "window_one": "保留 {{count}} 条消息",
+      "window_other": "保留 {{count}} 条消息",
+      "schema_one": "{{count}} 个字段：{{fields}}",
+      "schema_other": "{{count}} 个字段：{{fields}}",
+      "examples_one": "{{count}} 个示例",
+      "examples_other": "{{count}} 个示例"
+    },
+    "agents": {
+      "label": "把其他智能体当工具",
+      "hint": "本项目内已部署、模型可以转交子任务的智能体。适用于另一个智能体已经负责某个领域时——账务、政策咨询、研究助理。",
+      "add": "添加智能体…",
+      "loading": "加载中…",
+      "none": "没有可调用的其他已部署智能体",
+      "retry": "重试",
+      "toolName": "模型看到的工具名",
+      "description": "什么时候调用",
+      "descriptionPlaceholder": "说明这个智能体了解什么、什么时候该问它——模型据此决定是否调用。",
+      "sharedFrom": "来自 {{project}}",
+      "blocked": "本项目有 {{count}} 个智能体不能被调用",
+      "block": {
+        "self": "就是正在编辑的这个智能体。",
+        "not_runtime": "托管 Harness 智能体暂时不能当作工具调用。",
+        "not_deployed": "尚未部署。",
+        "protocol": "这是 MCP 服务器——请作为工具挂载。",
+        "jwt_inbound": "只接受 JWT 令牌；本智能体用 IAM 签名调用。"
+      },
+      "roleNote": "调用使用本智能体自己的执行角色；平台只授予对这些运行时的调用权限。智能体之间的嵌套调用最多 3 层。"
+    },
+    "guards": {
+      "label": "工具调用防护",
+      "hint": "每次工具调用前后的钩子：等人确认、限制次数、打码记录日志。",
+      "approval": "需要审批",
+      "approvalWhen": "有副作用的工具（发送、付款、删除）。对话页会显示审批卡片；/v1、评估和其他智能体会收到明确的拒绝。",
+      "cap": "每轮工具调用次数",
+      "capNone": "不限制",
+      "capWhen": "防止智能体陷入循环；超出后的调用被拒绝，并提示模型直接作答。",
+      "log": "记录每次工具调用",
+      "logWhen": "每次调用在运行时日志组写一行：名称、状态、耗时与参数。",
+      "mask": "打码参数",
+      "maskWhen": "这些参数名在日志和审批卡片上显示为 ***；password、secret、token、api_key、authorization 始终打码。",
+      "sample": "日志示例"
+    },
+    "provider": {
+      "label": "模型提供方",
+      "kind": {
+        "bedrock": "Bedrock",
+        "anthropic": "Anthropic API",
+        "litellm": "LiteLLM 网关"
+      },
+      "when": {
+        "bedrock": "使用“基础”中选择的模型，经 Bedrock、以本智能体的角色调用——不需要密钥。",
+        "anthropic": "用贵组织的 API 密钥直接调用 Anthropic API 上的 Claude。",
+        "litellm": "经公司的 LiteLLM 网关调用——统一入口，自带密钥与预算。"
+      },
+      "connection": "API 密钥连接",
+      "pickConnection": "选择连接…",
+      "noKeys": "还没有 API 密钥连接——请先在“身份 → 连接”中创建，再回到这里选择。",
+      "baseUrl": "基础 URL",
+      "baseUrlWhen": {
+        "anthropic": "可选——仅在 Anthropic API 前有代理时填写。",
+        "litellm": "网关地址，例如 https://litellm.internal:4000。"
+      },
+      "keyPath": "密钥的流转路径",
+      "path": {
+        "connection": "连接",
+        "vault": "令牌保管库",
+        "runtime": "运行时（每次请求）"
+      },
+      "modelNote": "密钥在运行时从令牌保管库读取，从不写入智能体的规格。请在“基础”中把模型设为提供方的模型名（自定义模型 ID）。",
+      "notHere": "模型提供方只适用于 Bedrock 上的 HTTP 智能体——本智能体保留其 Bedrock 模型。"
+    },
+    "retry": {
+      "label": "自定义限流重试",
+      "default": "关闭：使用 SDK 默认值——最多 6 次，4 秒起翻倍，最长 240 秒。",
+      "when": "模型被限流时等待后重试；间隔逐次翻倍，直到上限。",
+      "retryAttempts": "尝试次数",
+      "retryInitial": "首次等待（秒）",
+      "retryMax": "等待上限（秒）",
+      "ladder": "本轮失败前最多共等待 {{total}} 秒。",
+      "noRetry": "只尝试一次——被限流的调用立即失败。"
     }
   }
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, errorMessage } from "../lib/api";
+import { isSsoPasswordRefusal } from "../lib/api/sso";
 import { useToast } from "./hooks";
 import { type PasswordChangeForm, validatePasswordChange } from "./pages/users/forms";
 import { Btn, Dialog, Notice } from "./ui";
@@ -10,7 +11,8 @@ import { Btn, Dialog, Notice } from "./ui";
  * Change the signed-in account's own password (`POST /api/auth/password`): the
  * current one, the new one twice. Works for the built-in admin too — its new
  * password then replaces the configured one (the stack's `ConsolePassword`). Every
- * other session of the account ends; this one stays signed in.
+ * other session of the account ends; this one stays signed in. An SSO account has
+ * no console password: the refusal turns the dialog into a note saying where it lives.
  */
 export function ChangePasswordDialog({ username, builtin, onClose }: { username: string; builtin?: boolean; onClose: () => void }) {
   const { t } = useTranslation();
@@ -19,6 +21,7 @@ export function ChangePasswordDialog({ username, builtin, onClose }: { username:
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [managed, setManaged] = useState(false);
   const errors = validatePasswordChange(form);
   const shown = touched ? errors : {};
   // editing clears the last server error, so it never describes input that is gone
@@ -37,7 +40,8 @@ export function ChangePasswordDialog({ username, builtin, onClose }: { username:
       toast("ok", t("v3.account.password.changed"));
       onClose();
     } catch (err) {
-      setError(errorMessage(err));
+      if (isSsoPasswordRefusal(err)) setManaged(true);
+      else setError(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -51,6 +55,17 @@ export function ChangePasswordDialog({ username, builtin, onClose }: { username:
       {shown[key] && <small className="v3-err">{t(shown[key] as string)}</small>}
     </label>
   );
+
+  if (managed) {
+    return (
+      <Dialog title={t("v3.account.password.title")} onClose={onClose}
+        foot={<Btn kind="primary" onClick={onClose}>{t("v3.account.password.ssoClose")}</Btn>}>
+        <div data-testid="password-sso-managed">
+          <Notice s="info">{t("v3.account.password.ssoManaged")}</Notice>
+        </div>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog

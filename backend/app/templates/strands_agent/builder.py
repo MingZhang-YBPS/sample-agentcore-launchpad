@@ -7,13 +7,21 @@ is byte-identical to what the spec produced before SB-1 (pinned by
 ``tests/test_strands_builder.py`` against ``tests/fixtures/strands_builder``).
 Two template lines are swapped instead of marked, because a marker could not
 collapse back to them: the tool-list line and the ``complete`` event line.
+
+SB-2 (agents-as-tools, model providers, tool hooks, retry) rides the same markers:
+its source (``builder_sb2.py.tmpl``) follows the SB-1 source and wraps
+``launchpad_builder_kwargs``, and its turn line joins the turn hook — both only
+for a spec that sets an SB-2 field, so an SB-1 spec renders byte-identically too
+(``tests/test_strands_builder_sb2.py`` against ``tests/fixtures/strands_builder_sb2``).
 """
 
 from pathlib import Path
 
 from app.schemas.agent import AgentSpec
+from app.schemas.strands_builder import SB2_FIELDS
 
 BUILDER_TEMPLATE = Path(__file__).with_name("builder_support.py.tmpl")
+SB2_TEMPLATE = Path(__file__).with_name("builder_sb2.py.tmpl")
 SOURCE_MARKER = "__LAUNCHPAD_STRANDS_BUILDER_SOURCE__\n"
 BUILD_HOOK_MARKER = "    __LAUNCHPAD_BUILD_AGENT_HOOK__\n"
 TURN_HOOK_MARKER = "    __LAUNCHPAD_TURN_HOOK__\n"
@@ -56,12 +64,18 @@ def build_model() -> Any:
 
 BUILDER_FIELDS = (
     "strands_tools", "strands_tool_config", "model_params", "conversation",
-    "output_schema", "few_shot_examples", "prompt_variables",
+    "output_schema", "few_shot_examples", "prompt_variables", *SB2_FIELDS,
 )
+# a turn of an agent-tool call waits at most this long for the other agent
+AGENT_TOOL_TIMEOUT_CEILING_S = 900
 
 
 def uses_builder(spec: AgentSpec) -> bool:
     return any(getattr(spec, name) for name in BUILDER_FIELDS)
+
+
+def uses_sb2(spec: AgentSpec) -> bool:
+    return any(getattr(spec, name) for name in SB2_FIELDS)
 
 
 def builder_tool_descriptions(spec: AgentSpec) -> dict[str, str]:
@@ -104,7 +118,50 @@ def render_builder_source(spec: AgentSpec, *, a2a: bool = False) -> str:
         .replace("__LAUNCHPAD_SB_PROMPT_VARIABLES__", repr(dict(spec.prompt_variables)))
         .replace("__LAUNCHPAD_SB_JOURNAL_ROOT__", repr(journal_root(spec)))
     )
+    if uses_sb2(spec):
+        source += "\n\n" + render_sb2_source(spec)
     return (_A2A_PRELUDE + source) if a2a else source
+
+
+def agent_tool_targets(spec: AgentSpec) -> list[dict[str, object]]:
+    """The AGENT_TOOL_SPECS literal: the resolved targets only (a ref the ledger
+    never resolved has no ARN to call, and the deploy refuses it before render)."""
+    return [
+        {
+            "name": ref.tool_name,
+            "description": ref.description,
+            "runtime_arn": ref.runtime_arn,
+            "protocol": ref.protocol,
+            "qualifier": ref.qualifier,
+            "runtime_user": ref.runtime_user,
+        }
+        for ref in spec.agent_tools
+        if ref.runtime_arn
+    ]
+
+
+def render_sb2_source(spec: AgentSpec) -> str:
+    provider = spec.model_provider.model_dump(exclude_none=True) if spec.model_provider else {}
+    hooks = (
+        spec.tool_hooks.model_dump(exclude_defaults=True)
+        if spec.tool_hooks and not spec.tool_hooks.is_empty()
+        else {}
+    )
+    return (
+        SB2_TEMPLATE.read_text(encoding="utf-8")
+        .replace("__LAUNCHPAD_SB2_AGENT_TOOLS__", repr(agent_tool_targets(spec)))
+        .replace("__LAUNCHPAD_SB2_MODEL_PROVIDER__", repr(provider))
+        .replace("__LAUNCHPAD_SB2_PROVIDER_MODEL_ID__", repr(spec.model_id if provider else ""))
+        .replace("__LAUNCHPAD_SB2_TOOL_HOOKS__", repr(hooks))
+        .replace(
+            "__LAUNCHPAD_SB2_RETRY__",
+            repr(spec.retry.model_dump() if spec.retry else {}),
+        )
+        .replace(
+            "__LAUNCHPAD_SB2_AGENT_TOOL_TIMEOUT__",
+            repr(min(spec.timeout_seconds, AGENT_TOOL_TIMEOUT_CEILING_S)),
+        )
+    )
 
 
 def _is_set(value: object) -> bool:
@@ -132,10 +189,12 @@ def apply_builder(source: str, spec: AgentSpec, *, a2a: bool = False) -> str:
         )
         return _swap(source, A2A_TOOLS_LINE, A2A_TOOLS_LINE_BUILDER)
     source = source.replace(BUILD_HOOK_MARKER, "    kwargs = launchpad_builder_kwargs(kwargs)\n")
-    source = source.replace(
-        TURN_HOOK_MARKER,
+    turn_hook = (
         '    context = payload.get("context")\n'
-        "    _LAUNCHPAD_PROMPT_CONTEXT.set(dict(context) if isinstance(context, dict) else {})\n",
+        "    _LAUNCHPAD_PROMPT_CONTEXT.set(dict(context) if isinstance(context, dict) else {})\n"
     )
+    if uses_sb2(spec):
+        turn_hook += "    launchpad_turn_state(payload, session_id)\n"
+    source = source.replace(TURN_HOOK_MARKER, turn_hook)
     source = _swap(source, HTTP_TOOLS_LINE, HTTP_TOOLS_LINE_BUILDER)
     return _swap(source, HTTP_COMPLETE_LINE, HTTP_COMPLETE_LINE_BUILDER)

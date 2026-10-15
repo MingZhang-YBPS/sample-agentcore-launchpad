@@ -1,12 +1,18 @@
 /**
- * Strands builder options (design strands-builder SB-1) — the zip_runtime form
+ * Strands builder options (design strands-builder SB-1 / SB-2) — the zip_runtime form
  * slice behind the wizard's "Tools / Model behaviour / Conversation & output"
  * groups, its spec mapping and the same checks the backend runs
  * (`backend/app/schemas/strands_builder.py`). Pure: nothing renders here.
  *
  * Every field is optional on the spec and omitted while unset, so an agent that
  * uses none of them posts exactly the spec it posted before SB-1.
+ *
+ * SB-2 adds agents-as-tools, the Anthropic API / LiteLLM gateway providers (the key
+ * stays behind an Identity Connection), tool-call guards and throttling retry. Its
+ * checks live in `sb2Issues` (own keys, so the SB-1 group map stays exhaustive);
+ * `strandsValid` covers both.
  */
+import type { AgentInfo } from "./api";
 import type { ModelSource } from "./models";
 
 /** The curated first batch of `strands-agents-tools` (D-1). shell / python_repl /
@@ -34,6 +40,22 @@ export interface VariableRow {
   value: string;
 }
 
+/** One other agent offered as a tool. Only id / name / description are posted:
+ *  the runtime ARN and protocol are server-owned (`services/agent_tools.py`). */
+export interface AgentToolRow {
+  agentId: string;
+  /** the agent's label when picked (display only) */
+  label: string;
+  toolName: string;
+  description: string;
+  protocol: "http" | "a2a";
+  /** the project that lent it (§11.2); null for this project's own */
+  sharedFrom: string | null;
+}
+
+export type ProviderChoice = "bedrock" | "anthropic" | "litellm";
+export const PROVIDERS: ProviderChoice[] = ["bedrock", "anthropic", "litellm"];
+
 /** Free text throughout, so a half-typed number is validated rather than lost. */
 export interface StrandsForm {
   tools: StrandsTool[];
@@ -54,7 +76,27 @@ export interface StrandsForm {
   outputSchema: string;
   fewShot: FewShotRow[];
   variables: VariableRow[];
+  /* ── SB-2 ── */
+  agentTools: AgentToolRow[];
+  provider: ProviderChoice;
+  /** an api_key Connection name */
+  providerConnection: string;
+  providerBaseUrl: string;
+  /** tool names / * patterns, comma or whitespace separated */
+  approvalTools: string;
+  maxToolCalls: string;
+  logToolCalls: boolean;
+  /** argument names, comma or whitespace separated */
+  maskArgs: string;
+  retry: boolean;
+  retryAttempts: string;
+  retryInitial: string;
+  retryMax: string;
 }
+
+/** Strands' own ModelRetryStrategy defaults (6 attempts, 4 s doubling to 240 s). */
+export const RETRY_DEFAULTS = { attempts: 6, initial: 4, max: 240 } as const;
+export const MAX_AGENT_TOOLS = 10;
 
 export const DEFAULT_WINDOW = 40;
 export const DEFAULT_THINKING_BUDGET = 4096;
@@ -75,6 +117,18 @@ export const emptyStrandsForm = (): StrandsForm => ({
   outputSchema: "",
   fewShot: [],
   variables: [],
+  agentTools: [],
+  provider: "bedrock",
+  providerConnection: "",
+  providerBaseUrl: "",
+  approvalTools: "",
+  maxToolCalls: "",
+  logToolCalls: false,
+  maskArgs: "",
+  retry: false,
+  retryAttempts: String(RETRY_DEFAULTS.attempts),
+  retryInitial: String(RETRY_DEFAULTS.initial),
+  retryMax: String(RETRY_DEFAULTS.max),
 });
 
 /** The spec fields this slice owns (all optional). */
@@ -93,6 +147,22 @@ export interface StrandsSpecFields {
   output_schema?: Record<string, unknown> | null;
   few_shot_examples?: FewShotRow[];
   prompt_variables?: Record<string, string>;
+  agent_tools?: {
+    agent_id: string;
+    tool_name: string;
+    description: string;
+    /* server-owned, read back on edit */
+    protocol?: "http" | "a2a";
+    shared_from?: string | null;
+  }[];
+  model_provider?: { kind: "anthropic" | "litellm"; connection: string; base_url?: string | null } | null;
+  tool_hooks?: {
+    approval_tools?: string[];
+    max_tool_calls_per_turn?: number | null;
+    log_tool_calls?: boolean;
+    mask_args?: string[];
+  } | null;
+  retry?: { max_attempts?: number; initial_delay_s?: number; max_delay_s?: number } | null;
 }
 
 const HOST_RE = /^(\*\.)?(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
@@ -104,7 +174,7 @@ const SCHEMA_MAX_CHARS = 20000;
 const PLACEHOLDER_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]{0,63})\s*\}\}/g;
 
 export const isClaudeModel = (modelId: string) =>
-  modelId.includes("anthropic.claude") || modelId.toLowerCase().includes("claude-");
+  /anthropic\.claude/.test(modelId) || /claude-/i.test(modelId);
 
 export const splitHosts = (s: string) =>
   s
@@ -150,6 +220,33 @@ export function strandsFormFromSpec(raw: unknown): StrandsForm {
     outputSchema: spec.output_schema ? JSON.stringify(spec.output_schema, null, 2) : "",
     fewShot: (spec.few_shot_examples ?? []).map((e) => ({ question: e.question ?? "", answer: e.answer ?? "" })),
     variables: Object.entries(spec.prompt_variables ?? {}).map(([name, value]) => ({ name, value })),
+    ...sb2FormFromSpec(spec),
+  };
+}
+
+function sb2FormFromSpec(spec: StrandsSpecFields): Partial<StrandsForm> {
+  const hooks = spec.tool_hooks ?? {};
+  const retry = spec.retry;
+  return {
+    agentTools: (spec.agent_tools ?? []).map((t) => ({
+      agentId: t.agent_id,
+      label: t.agent_id,
+      toolName: t.tool_name ?? "",
+      description: t.description ?? "",
+      protocol: t.protocol === "a2a" ? "a2a" : "http",
+      sharedFrom: t.shared_from ?? null,
+    })),
+    provider: spec.model_provider?.kind ?? "bedrock",
+    providerConnection: spec.model_provider?.connection ?? "",
+    providerBaseUrl: spec.model_provider?.base_url ?? "",
+    approvalTools: (hooks.approval_tools ?? []).join(", "),
+    maxToolCalls: hooks.max_tool_calls_per_turn == null ? "" : String(hooks.max_tool_calls_per_turn),
+    logToolCalls: Boolean(hooks.log_tool_calls),
+    maskArgs: (hooks.mask_args ?? []).join(", "),
+    retry: retry != null,
+    retryAttempts: String(retry?.max_attempts ?? RETRY_DEFAULTS.attempts),
+    retryInitial: String(retry?.initial_delay_s ?? RETRY_DEFAULTS.initial),
+    retryMax: String(retry?.max_delay_s ?? RETRY_DEFAULTS.max),
   };
 }
 
@@ -195,7 +292,90 @@ export function strandsSpec(form: StrandsForm | undefined, ctx: SpecContext): St
   if (shots.length) out.few_shot_examples = shots.map((e) => ({ question: e.question.trim(), answer: e.answer.trim() }));
   const vars = form.variables.filter((v) => v.name.trim());
   if (vars.length) out.prompt_variables = Object.fromEntries(vars.map((v) => [v.name.trim(), v.value]));
+  return { ...out, ...sb2Spec(form, ctx) };
+}
+
+/** SB-2's fields — again only what is set. */
+function sb2Spec(form: StrandsForm, ctx: SpecContext): StrandsSpecFields {
+  const out: StrandsSpecFields = {};
+  // older drafts (saved before SB-2) carry no SB-2 slice at all
+  const f = { ...emptyStrandsForm(), ...form };
+  if (f.agentTools.length) {
+    out.agent_tools = f.agentTools.map((t) => ({
+      agent_id: t.agentId,
+      tool_name: t.toolName.trim(),
+      description: t.description.trim(),
+    }));
+  }
+  if (f.provider !== "bedrock" && providerApplies(ctx)) {
+    out.model_provider = {
+      kind: f.provider,
+      connection: f.providerConnection.trim(),
+      ...(f.providerBaseUrl.trim() ? { base_url: f.providerBaseUrl.trim() } : {}),
+    };
+  }
+  const hooks: NonNullable<StrandsSpecFields["tool_hooks"]> = {};
+  const approval = splitList(f.approvalTools);
+  if (approval.length) hooks.approval_tools = approval;
+  const cap = num(f.maxToolCalls);
+  if (cap !== null) hooks.max_tool_calls_per_turn = cap;
+  if (f.logToolCalls) hooks.log_tool_calls = true;
+  const mask = splitList(f.maskArgs).map((m) => m.toLowerCase());
+  if (mask.length && (f.logToolCalls || approval.length)) hooks.mask_args = mask;
+  if (Object.keys(hooks).length) out.tool_hooks = hooks;
+  if (f.retry) {
+    out.retry = {
+      max_attempts: num(f.retryAttempts) ?? RETRY_DEFAULTS.attempts,
+      initial_delay_s: num(f.retryInitial) ?? RETRY_DEFAULTS.initial,
+      max_delay_s: num(f.retryMax) ?? RETRY_DEFAULTS.max,
+    };
+  }
   return out;
+}
+
+export const splitList = (s: string) =>
+  [...new Set(s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean))];
+
+/** A provider replaces the Bedrock Converse model: HTTP agents on Bedrock only
+ *  (the A2A template runs on Bedrock; Mantle is a Bedrock surface of its own). */
+export const providerApplies = (ctx: Pick<SpecContext, "modelSource" | "protocol">) =>
+  ctx.protocol === "http" && ctx.modelSource === "bedrock";
+
+/** The model-call delays a retry setting produces (seconds, one per retry). */
+export function backoffDelays(attempts: number, initial: number, max: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < Math.max(0, Math.min(attempts, 10) - 1); i++) out.push(Math.min(initial * 2 ** i, max));
+  return out;
+}
+
+/** A tool name suggested for an agent: `ask_<slug>`. */
+export const agentToolName = (agentName: string) =>
+  `ask_${agentName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`.slice(0, 64);
+
+export type AgentToolBlock = "self" | "not_runtime" | "not_deployed" | "protocol" | "jwt_inbound";
+
+/** Why an agent cannot be offered as a tool (the backend's `eligibility`), or null. */
+export function agentToolBlock(agent: AgentInfo, selfName: string): AgentToolBlock | null {
+  if (selfName && agent.name === selfName) return "self";
+  if (!["zip_runtime", "studio", "container", "byoc", "discovered_runtime"].includes(agent.method)) return "not_runtime";
+  if (agent.status !== "active" || !agent.arn) return "not_deployed";
+  const protocol = (agent.spec?.protocol as string | undefined) ?? "http";
+  if (protocol !== "http" && protocol !== "a2a") return "protocol";
+  if (agent.inbound_auth_mode === "jwt") return "jwt_inbound";
+  return null;
+}
+
+/** A row for a freshly picked agent. */
+export function agentToolRow(agent: AgentInfo): AgentToolRow {
+  const label = agent.display_name || agent.name;
+  return {
+    agentId: agent.id,
+    label,
+    toolName: agentToolName(agent.name),
+    description: `Ask the ${label} agent. Send a complete, self-contained request.`,
+    protocol: (agent.spec?.protocol as string | undefined) === "a2a" ? "a2a" : "http",
+    sharedFrom: null,
+  };
 }
 
 const stopList = (s: string) =>
@@ -311,7 +491,79 @@ export function strandsIssues(form: StrandsForm | undefined, ctx: IssueContext):
 }
 
 export const strandsValid = (form: StrandsForm | undefined, ctx: IssueContext) =>
-  Object.keys(strandsIssues(form, ctx).issues).length === 0;
+  Object.keys(strandsIssues(form, ctx).issues).length === 0 && Object.keys(sb2Issues(form, ctx)).length === 0;
+
+/* ── SB-2 validation ──────────────────────────────────────────────────── */
+
+export type Sb2IssueKey =
+  | "agentToolName"
+  | "agentToolDuplicate"
+  | "agentToolDescription"
+  | "agentToolCount"
+  | "providerConnection"
+  | "providerBaseUrl"
+  | "providerConverse"
+  | "approvalTools"
+  | "maxToolCalls"
+  | "maskArgs"
+  | "retryAttempts"
+  | "retryInitial"
+  | "retryMax";
+
+/** Issues about a value not typed yet: shown once the member tried to continue. */
+export const SB2_KEYS_SHOWN_ON_CONTINUE: Sb2IssueKey[] = ["agentToolDescription", "providerConnection", "providerBaseUrl"];
+
+const AGENT_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const TOOL_PATTERN_RE = /^[A-Za-z0-9_.*?-]{1,128}$/;
+const ARG_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+const CONNECTION_RE = /^[a-zA-Z0-9\-_]{1,128}$/;
+const RESERVED_TOOL_NAMES = ["calculator", "current_utc_time", "kb_search", "kb_deep_search"];
+
+function urlProblem(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return !["http:", "https:"].includes(u.protocol) || !u.hostname || Boolean(u.username || u.password || u.search || u.hash);
+  } catch {
+    return true;
+  }
+}
+
+/** issue key → detail (a name, a pattern; "" when none). Mirrors `_check_sb2`. */
+export function sb2Issues(form: StrandsForm | undefined, ctx: IssueContext): Partial<Record<Sb2IssueKey, string>> {
+  const issues: Partial<Record<Sb2IssueKey, string>> = {};
+  if (!form) return issues;
+  const f = { ...emptyStrandsForm(), ...form };
+  const names = f.agentTools.map((t) => t.toolName.trim());
+  const bad = names.find((n) => !AGENT_TOOL_NAME_RE.test(n));
+  if (bad !== undefined) issues.agentToolName = bad;
+  const taken = new Set([...f.tools, ...RESERVED_TOOL_NAMES]);
+  const dup = names.find((n, i) => names.indexOf(n) !== i || taken.has(n as StrandsTool));
+  if (dup !== undefined && bad === undefined) issues.agentToolDuplicate = dup;
+  if (f.agentTools.some((t) => !t.description.trim() || t.description.trim().length > 1000)) issues.agentToolDescription = "";
+  if (f.agentTools.length > MAX_AGENT_TOOLS) issues.agentToolCount = String(MAX_AGENT_TOOLS);
+  if (f.provider !== "bedrock" && providerApplies(ctx)) {
+    if (!CONNECTION_RE.test(f.providerConnection.trim())) issues.providerConnection = "";
+    const url = f.providerBaseUrl.trim();
+    if (f.provider === "litellm" && !url) issues.providerBaseUrl = "";
+    else if (url && urlProblem(url)) issues.providerBaseUrl = url;
+    if (f.promptCaching || (f.thinking && isClaudeModel(ctx.modelId))) issues.providerConverse = "";
+  }
+  const badPattern = splitList(f.approvalTools).find((p) => !TOOL_PATTERN_RE.test(p));
+  if (badPattern !== undefined) issues.approvalTools = badPattern;
+  if (outOf(num(f.maxToolCalls), 1, 500, true)) issues.maxToolCalls = "";
+  const badArg = splitList(f.maskArgs).find((a) => !ARG_NAME_RE.test(a));
+  if (badArg !== undefined) issues.maskArgs = badArg;
+  if (f.retry) {
+    const attempts = num(f.retryAttempts);
+    const initial = num(f.retryInitial);
+    const max = num(f.retryMax);
+    if (attempts === null || outOf(attempts, 1, 10, true)) issues.retryAttempts = "";
+    if (initial === null || outOf(initial, 1, 60, true)) issues.retryInitial = "";
+    if (max === null || outOf(max, 1, 600, true)) issues.retryMax = "";
+    else if (initial !== null && !Number.isNaN(initial) && max < initial) issues.retryMax = "order";
+  }
+  return issues;
+}
 
 /** The JSON Schema subset the generated code turns into a pydantic model; null when
  *  fine, else a short reason. Mirrors `validate_output_schema` on the backend. */

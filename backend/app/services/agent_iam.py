@@ -304,7 +304,9 @@ def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
     """Union of `model_resources` over every model the spec permits, deduped in
     order. One entry for every method except byoc, whose ``allowed_models`` list
     may authorize several — each still scoped to its exact id, never widened —
-    and studio, which authorizes each native-Bedrock model its flow's nodes use."""
+    and studio, which authorizes each native-Bedrock model its flow's nodes use. A
+    summarizing conversation manager's ``summary_model`` is authorized beside the
+    agent's own model."""
     if spec.method == "studio":
         ids = [m for provider, m in studio_node_models(spec) if provider == STUDIO_BEDROCK_PROVIDER]
         resources: list[str] = []
@@ -316,7 +318,12 @@ def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
                     resources.append(resource)
         return resources
     if spec.method != "byoc":
-        return model_resources(spec.model_id, ctx)
+        resources = model_resources(spec.model_id, ctx)
+        # the summarizing conversation manager calls its own (Bedrock) model (SB-1)
+        summary = spec.conversation.summary_model if spec.conversation else None
+        if summary:
+            resources = list(dict.fromkeys([*resources, *model_resources(summary, ctx)]))
+        return resources
     resources: list[str] = []
     for selection in spec.allowed_model_ids:
         kind, model_id = byoc_model_target(selection)
@@ -462,6 +469,47 @@ def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, A
         "Resource": [f"{secret_base}/oauth2/{n}-*" for n in oauth2]
         + [f"{secret_base}/apikey/{n}-*" for n in api_key],
     })
+    return statements
+
+
+def _agent_tool_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
+    """Agents-as-tools (strands-builder SB-2): invoke exactly the runtimes the spec
+    offers as tools — the runtime ARN and the endpoint its production traffic uses.
+
+    The ARNs are server-owned (``services.agent_tools`` resolves them from the ledger
+    on save and again in the generate stage, before this runs), and only ARNs of
+    this account and region are granted. ``InvokeAgentRuntimeForUser`` joins for a
+    target that needs ``runtimeUserId`` (its own Gateway / identity tools).
+    """
+    prefix = f"arn:{ctx.partition}:bedrock-agentcore:{ctx.region}:{ctx.account_id}:runtime/"
+    refs = [
+        ref for ref in spec.agent_tools
+        if ref.runtime_arn and ref.runtime_arn.startswith(prefix)
+    ]
+    if not refs:
+        return []
+
+    def resources(group: list) -> list[str]:
+        arns: set[str] = set()
+        for ref in group:
+            arns.add(ref.runtime_arn)
+            arns.add(f"{ref.runtime_arn}/runtime-endpoint/{ref.qualifier}")
+        return sorted(arns)
+
+    statements: list[dict[str, Any]] = [{
+        "Sid": "AgentToolsInvoke",
+        "Effect": "Allow",
+        "Action": ["bedrock-agentcore:InvokeAgentRuntime"],
+        "Resource": resources(refs),
+    }]
+    for_user = [ref for ref in refs if ref.runtime_user]
+    if for_user:
+        statements.append({
+            "Sid": "AgentToolsInvokeForUser",
+            "Effect": "Allow",
+            "Action": ["bedrock-agentcore:InvokeAgentRuntimeForUser"],
+            "Resource": resources(for_user),
+        })
     return statements
 
 
@@ -615,6 +663,7 @@ def policy_document(
     # Tool-level outbound auth: exact per-Connection grants, additive to (and
     # independent of) the family-wide gateway grant below.
     statements.extend(_tool_auth_statements(spec, ctx))
+    statements.extend(_agent_tool_statements(spec, ctx))
     if system_preset and spec.knowledge_bases:
         statements.extend(_preset_kb_oauth_statements(spec, ctx))
     elif _uses_gateway(spec):

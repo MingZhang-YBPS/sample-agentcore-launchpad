@@ -5,7 +5,7 @@
  * no workspace header. The client secret is write-only — answers say whether one
  * is set, never its value.
  */
-import { getJson, sendJson } from "../api";
+import { ApiError, getJson, sendJson } from "../api";
 
 const enc = encodeURIComponent;
 
@@ -167,3 +167,8 @@ export const ssoApi = {
   logins: (id: string) => getJson<{ items: SsoLogin[] }>(`${base}/${enc(id)}/logins`),
   account: (userId: string) => getJson<SsoAccount>(`/api/admin/sso/users/${enc(userId)}`),
 };
+
+/** The backend's answer for an account whose password lives at its identity provider:
+ *  `POST /api/auth/password` refuses it (409 auth.sso_account_no_password). */
+export const isSsoPasswordRefusal = (err: unknown): boolean =>
+  err instanceof ApiError && err.code === "auth.sso_account_no_password";

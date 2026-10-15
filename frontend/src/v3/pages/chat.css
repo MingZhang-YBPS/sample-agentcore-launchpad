@@ -7,6 +7,9 @@
   height: calc(100vh - var(--v3-top) - 56px);
   min-height: 520px;
 }
+/* the storyline position line (chat.open with ?agent=) spans both columns above them */
+.v3 .v3-chat:has(> .v3-storypos) { grid-template-rows: auto minmax(0, 1fr); }
+.v3 .v3-chat > .v3-storypos { grid-column: 1 / -1; margin-bottom: 0; }
 .v3 .v3-chat-side {
   display: flex;
   flex-direction: column;

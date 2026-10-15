@@ -12,7 +12,9 @@ import {
   listLambdaTargets,
   toolReviewApi,
 } from "../../../lib/api/mcpReviews";
+import { sharedFromOf } from "../../../lib/api/sharedFrom";
 import { useLoad, useToast } from "../../hooks";
+import { SharedFromTag } from "../../shares/SharedFromTag";
 import { Btn, Chip, Confirm, Empty, Notice, Panel, type Signal, Skeleton } from "../../ui";
 import { McpReviewSection } from "../agent/McpReviewSection";
 import { LambdaTargetForm } from "./LambdaTargetForm";
@@ -92,6 +94,7 @@ export function GatewayToolTargets() {
               <div key={row.id} style={{ display: "grid", gap: 8 }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <span className="mono">{row.target_name}</span>
+                  <SharedFromTag row={row} />
                   <Chip s={STATUS_SIGNAL[row.status]}>{t(`lambdaTool.status.${row.status}`)}</Chip>
                   <span className="v3-hint mono" style={{ wordBreak: "break-all" }}>{row.lambda_arn}</span>
                   <span className="v3-hint">{t("lambdaTool.list.tools", { count: row.tool_names.length })}</span>
@@ -99,9 +102,12 @@ export function GatewayToolTargets() {
                   <Btn size="sm" kind="ghost" onClick={() => setOpen(open === row.id ? null : row.id)}>
                     {t(open === row.id ? "lambdaTool.list.hideReview" : "lambdaTool.list.showReview")}
                   </Btn>
-                  <Btn size="sm" kind="danger" disabled={busy || row.status === "publishing"} onClick={() => setDeleting(row)}>
-                    {t("lambdaTool.list.delete")}
-                  </Btn>
+                  {/* a target another project lent is its owner's to delete */}
+                  {!sharedFromOf(row) && (
+                    <Btn size="sm" kind="danger" disabled={busy || row.status === "publishing"} onClick={() => setDeleting(row)}>
+                      {t("lambdaTool.list.delete")}
+                    </Btn>
+                  )}
                 </div>
                 {row.error && <Notice s="act">{row.error}</Notice>}
                 {open === row.id && <ToolReview toolId={row.id} onChanged={reload} />}
@@ -124,6 +130,7 @@ export function GatewayToolTargets() {
               <div key={target.target_id} style={{ display: "grid", gap: 8 }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <span className="mono">{target.target_name}</span>
+                  <SharedFromTag row={target} />
                   <Chip s="info">{t("lambdaTool.external.hosted")}</Chip>
                   {target.review && <Chip s={target.review.state === "approved" ? "ok" : "wait"}>{t(`mcpReview.state.${target.review.state}`)}</Chip>}
                   {target.health?.status && <span className="v3-hint">{t(`mcpReview.ops.healthState.${target.health.status}`)}</span>}

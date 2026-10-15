@@ -116,6 +116,15 @@ HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默�
 `auth_cookie_secure`,遵循常规配置优先级;密码建议放在进程环境变量中。修改凭证并
 重启后端会使已有会话失效。
 
+#### 单点登录（OIDC）
+
+登录门开启后，管理员可以在**配置 → 单点登录**中添加 OpenID Connect 身份提供方（Keycloak、Authentik、Okta、Entra ID、Google 或任意 OIDC IdP）；每个已启用的提供方在登录页上有一个按钮。本地登录表单仍然可用，内置管理员始终可以用本地方式登录，作为应急入口。部署时要注意两项设置：
+
+- **`public_base_url`**（`LAUNCHPAD_PUBLIC_BASE_URL`）必须是浏览器看到的控制台地址（参考部署中为 CloudFront 地址），因为在 IdP 登记的回调地址由它拼出：`<public_base_url>/api/auth/oidc/<provider-id>/callback`。提供方页面会显示要复制的准确值。该值不对时，IdP 会拒绝回跳。
+- **客户端密钥的加密密钥。** 客户端密钥以 Fernet 加密保存。生产环境请在后端的环境变量（见下文 systemd 单元）中把 `LAUNCHPAD_SSO_SECRET_KEY` 设为一个 Fernet 密钥（`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`）。未设置时，后端在首次使用时于 SQLite 账本旁创建 `data/sso-secret.key`（权限 0600）。请把该文件与账本一起备份：丢失后已保存的密钥无法读取，每个提供方的密钥都要重新填写。以 Secrets Manager ARN 给出的密钥用 hub 的凭证读取，不在本地加密。
+
+SSO 账户没有本地密码：控制台中不能重置或修改它的密码。它的全局角色与项目成员资格在每次登录时按提供方的组映射更新；管理员手工做的修改优先。
+
 ### 角色:成员能做什么
 
 只有两个角色,自 2026-08-11 起两者只差一处:**用户管理**(`/users`)仅限管理员,
@@ -652,6 +661,9 @@ Environment=LAUNCHPAD_RUN_MODE=prod
 Environment=LAUNCHPAD_AUTH_USERNAME=admin
 Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
 Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
+# 仅在使用单点登录时：浏览器访问地址与客户端密钥的加密密钥
+Environment=LAUNCHPAD_PUBLIC_BASE_URL=https://<console-host>
+Environment=LAUNCHPAD_SSO_SECRET_KEY=<fernet-key>
 # 可选的模型配置，见“切换模型”；“-”表示文件可以不存在
 EnvironmentFile=-/etc/launchpad-models.env
 ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000

@@ -992,12 +992,14 @@ def _runtime_invoke_params(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
+    context: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {
         "agentRuntimeArn": runtime_arn,
         "runtimeSessionId": session_id,
         "payload": _invoke_payload(
             prompt, actor_id, gateway_access_token, attachments, force_reauth_providers,
+            context,
         ),
     }
     if qualifier:
@@ -1018,11 +1020,16 @@ def _invoke_payload(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
+    context: dict[str, str] | None = None,
 ) -> bytes:
     """The request body both transports (SigV4 and bearer) send."""
     payload: dict[str, Any] = {"prompt": prompt, "actor_id": actor_id}
     if attachments:
         payload["attachments"] = attachments
+    if context:
+        # this turn's {{variable}} values (strands-builder SB-1): the generated
+        # Strands runtime fills declared prompt variables from it, others ignore it
+        payload["context"] = dict(context)
     if force_reauth_providers:
         # as_user revocation: the generated identity block sends
         # forceAuthentication=true for exactly these Connections this turn.
@@ -1046,6 +1053,7 @@ def stream_runtime_events(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
+    context: dict[str, str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
@@ -1060,6 +1068,7 @@ def stream_runtime_events(
             gateway_access_token,
             attachments,
             force_reauth_providers,
+            context,
         )
     )
     body = response["response"]
@@ -1118,6 +1127,7 @@ def invoke_runtime_text(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
+    context: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses.
 
@@ -1131,6 +1141,8 @@ def invoke_runtime_text(
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
     if force_reauth_providers:
         extra["force_reauth_providers"] = force_reauth_providers
+    if context:
+        extra["context"] = context
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
     usage: dict[str, int] | None = None
@@ -1207,6 +1219,7 @@ def stream_runtime_events_bearer(
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
     http_response: Any = None,
+    context: dict[str, str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Bearer-token InvokeAgentRuntime over the data-plane HTTPS endpoint.
 
@@ -1226,6 +1239,7 @@ def stream_runtime_events_bearer(
     }
     body = _invoke_payload(
         prompt, actor_id, gateway_access_token, attachments, force_reauth_providers,
+        context,
     )
     opener = http_response or _default_bearer_response
     with opener(url, headers, body) as response:
@@ -1272,7 +1286,7 @@ def invoke_runtime_text_bearer(
 ) -> dict[str, Any]:
     """Synchronous bearer invoke (SigV4 twin: ``invoke_runtime_text``); ``extra``
     carries the same optional payload fields (attachments, force-reauth,
-    gateway token)."""
+    gateway token, context)."""
     session_id = session_id or new_session_id()
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []

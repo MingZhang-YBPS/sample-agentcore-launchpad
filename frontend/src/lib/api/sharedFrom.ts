@@ -62,3 +62,10 @@ export const shareNoticesApi = {
   acknowledge: (noticeId: string) =>
     sendJson<{ ok: true; notice_id: string }>(`/api/me/share-notices/${enc(noticeId)}/ack`, "POST"),
 };
+
+/** One project's unread notices, newest first (the list holds every project's). */
+export function unreadNoticesFor(items: readonly ShareNotice[], projectId: string): ShareNotice[] {
+  return items
+    .filter((n) => n.project_id === projectId && !n.read)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}

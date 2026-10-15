@@ -261,6 +261,7 @@ def _invoke_via_stable_endpoint(
     workspace: WorkspaceContext,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    context: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Direct-invoke the runtime pinned to the stable endpoint (= v_current).
 
@@ -276,6 +277,8 @@ def _invoke_via_stable_endpoint(
     }
     if gateway_access_token:
         kwargs["gateway_access_token"] = gateway_access_token
+    if context:
+        kwargs["context"] = context
     return rt.invoke_runtime_text(data_client(workspace), route["arn"], prompt, **kwargs)
 
 
@@ -287,6 +290,7 @@ def _invoke_via_canary(
     workspace: WorkspaceContext,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    context: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Route a real invocation for an active canary.
 
@@ -308,6 +312,7 @@ def _invoke_via_canary(
             workspace,
             runtime_user_id,
             gateway_access_token,
+            context,
         )
     # Runtime session ids must be ≥33 chars (spike); mint one when absent/short.
     sticky = session_id if (session_id and len(session_id) >= 33) else rt.new_session_id()
@@ -318,6 +323,8 @@ def _invoke_via_canary(
         if gateway_access_token:
             body["actor_id"] = actor_id
             body["gateway_access_token"] = gateway_access_token
+        if context:
+            body["context"] = context
         response = gateway.sigv4_post(
             url, body, workspace, session_id=sticky, user_id=runtime_user_id or actor_id,
         )
@@ -338,6 +345,7 @@ def _invoke_via_canary(
             workspace,
             runtime_user_id,
             gateway_access_token,
+            context,
         )
 
 
@@ -422,6 +430,7 @@ def _bearer_kwargs(
     runtime_user_id: str | None,
     gateway_access_token: str | None,
     attachments: PreparedAttachments | None,
+    context: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], str | None]:
     """The optional payload fields of a bearer invoke, plus the ledger user the
     as_user bookkeeping keys on (the Launchpad user, as on the SigV4 path —
@@ -432,6 +441,8 @@ def _bearer_kwargs(
         kwargs["gateway_access_token"] = gateway_access_token
     if attachments and attachments.native:
         kwargs["attachments"] = attachments.native
+    if context:
+        kwargs["context"] = context
     force_reauth = _pending_force_reauth(agent, ledger_user)
     if force_reauth:
         kwargs["force_reauth_providers"] = force_reauth
@@ -483,6 +494,7 @@ def invoke_agent_text(
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
     console_user: bool = True,
+    context: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """The single entry point both entrances share (console chat and `/v1`).
 
@@ -490,9 +502,14 @@ def invoke_agent_text(
     /v1): an as_user consent ask is then refused by name instead of recorded (see
     ``_record_auth_sessions``).
 
+    ``context`` is this turn's ``{{variable}}`` values (strands-builder SB-1), sent
+    in the runtime payload; the Harness and A2A paths have no variables and ignore it.
+
     T12: when the agent opted into PII protection, both ends of the turn are
     screened — the prompt before dispatch (so a `block` refusal costs no model call)
-    and the answer before it is returned.
+    and the answer before it is returned. The text is the answer that is screened:
+    an ``output_schema`` agent's parsed ``structured`` object is dropped, never
+    returned unscreened.
     """
     screen = guardrail.guardrail_config(agent.spec)
     if screen:
@@ -526,7 +543,10 @@ def invoke_agent_text(
         prompt_prepared=screen is not None,
         bearer_token=bearer_token,
         console_user=console_user,
+        context=context,
     )
+    if screen:
+        result.pop("structured", None)
     if screen and isinstance(result.get("text"), str):
         result["text"] = guardrail.screen(
             result["text"],
@@ -549,6 +569,7 @@ def _dispatch_invoke(
     prompt_prepared: bool = False,
     bearer_token: str | None = None,
     console_user: bool = True,
+    context: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
@@ -562,7 +583,7 @@ def _dispatch_invoke(
     if inbound_auth_service.is_jwt_mode(agent):
         token, caller_kind = _bearer_token_for(agent, workspace, bearer_token)
         kwargs, ledger_user = _bearer_kwargs(
-            agent, actor_id, runtime_user_id, gateway_access_token, attachments,
+            agent, actor_id, runtime_user_id, gateway_access_token, attachments, context,
         )
         try:
             result = rt.invoke_runtime_text_bearer(
@@ -634,6 +655,7 @@ def _dispatch_invoke(
                 workspace,
                 runtime_user_id,
                 gateway_access_token,
+                context,
             )
         resolved_user = _runtime_user_id(agent, actor_id, runtime_user_id)
         kwargs: dict[str, Any] = {
@@ -645,6 +667,8 @@ def _dispatch_invoke(
             kwargs["gateway_access_token"] = gateway_access_token
         if attachments and attachments.native:
             kwargs["attachments"] = attachments.native
+        if context:
+            kwargs["context"] = context
         force_reauth = _pending_force_reauth(agent, resolved_user)
         if force_reauth:
             kwargs["force_reauth_providers"] = force_reauth
@@ -715,6 +739,7 @@ def invoke_agent_events(
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
     console_user: bool = True,
+    context: dict[str, str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -723,7 +748,7 @@ def invoke_agent_events(
     parsed incrementally. A zip runtime deployed before its template streamed
     still answers a JSON ``{"result": ...}`` body, which the same parser turns
     into one delta — so the switch is safe for existing agents.
-    ``console_user`` as on ``invoke_agent_text``.
+    ``console_user`` and ``context`` as on ``invoke_agent_text``.
     """
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
@@ -736,7 +761,7 @@ def invoke_agent_events(
         if attachments:
             prompt = attachments.prompt(prompt)
         kwargs, ledger_user = _bearer_kwargs(
-            agent, actor_id, runtime_user_id, gateway_access_token, attachments,
+            agent, actor_id, runtime_user_id, gateway_access_token, attachments, context,
         )
         try:
             for event in rt.stream_runtime_events_bearer(
@@ -778,6 +803,8 @@ def invoke_agent_events(
             prompt = attachments.prompt(prompt)
             if attachments.native:
                 kwargs["attachments"] = attachments.native
+        if context:
+            kwargs["context"] = context
         force_reauth = _pending_force_reauth(agent, resolved_user)
         if force_reauth:
             kwargs["force_reauth_providers"] = force_reauth
@@ -816,6 +843,8 @@ def invoke_agent_events(
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
     if not console_user:
         extra["console_user"] = False
+    if context:
+        extra["context"] = context
     result = invoke_agent_text(
         agent,
         prompt,
@@ -834,3 +863,6 @@ def invoke_agent_events(
             "event": "delta",
             "data": {"text": text[index : index + BUFFERED_CHUNK_CHARS]},
         }
+    if result.get("structured") is not None:
+        # an output_schema agent's parsed answer, as the native stream sends it
+        yield {"event": "structured", "data": {"value": result["structured"]}}

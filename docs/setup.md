@@ -122,6 +122,32 @@ The same values may be placed in `config/launchpad.yaml` as `auth_username`,
 precedence. Prefer the process environment for the password. Changing the
 credentials and restarting the backend invalidates existing sessions.
 
+#### Single sign-on (OIDC) / 单点登录
+
+With the login gate on, an administrator can add OpenID Connect identity providers
+(Keycloak, Authentik, Okta, Entra ID, Google or any OIDC IdP) under **Configure →
+Single sign-on**; each enabled provider gets a button on the login page. The local
+form stays available, and the built-in admin always signs in locally as the way back
+in. Two deployment settings matter:
+
+- **`public_base_url`** (`LAUNCHPAD_PUBLIC_BASE_URL`) must be the console's URL as the
+  browser sees it (for the reference deployment, the CloudFront URL), because the
+  redirect URI registered at the IdP is built from it:
+  `<public_base_url>/api/auth/oidc/<provider-id>/callback`. The provider page shows
+  the exact value to copy. A wrong value makes the IdP refuse the redirect.
+- **The client-secret key.** Client secrets are stored Fernet-encrypted. In production
+  set `LAUNCHPAD_SSO_SECRET_KEY` to a Fernet key
+  (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
+  in the backend's environment (the systemd unit below). Without it, the backend creates
+  `data/sso-secret.key` (mode 0600) next to the SQLite ledger on first use. Back that file
+  up with the ledger: if it is lost, the stored secrets cannot be read, and every provider's
+  secret has to be entered again. A secret given as a Secrets Manager ARN is read with the
+  hub's credentials and is not encrypted locally.
+
+An SSO account has no local password: its password cannot be reset or changed in the
+console. Its global role and project memberships follow the provider's group mappings
+at every sign-in; changes an administrator makes by hand take precedence.
+
 ### Roles: what a member can do / 成员权限
 
 There are two roles, and since 2026-08-11 they differ in exactly one place:
@@ -857,6 +883,9 @@ Environment=LAUNCHPAD_RUN_MODE=prod
 Environment=LAUNCHPAD_AUTH_USERNAME=admin
 Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
 Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
+# only with single sign-on: the browser URL and the client-secret key
+Environment=LAUNCHPAD_PUBLIC_BASE_URL=https://<console-host>
+Environment=LAUNCHPAD_SSO_SECRET_KEY=<fernet-key>
 # optional model settings, see "Choosing models"; "-" = may be absent
 EnvironmentFile=-/etc/launchpad-models.env
 ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000

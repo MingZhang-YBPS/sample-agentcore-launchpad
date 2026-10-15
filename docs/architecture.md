@@ -775,6 +775,33 @@ catalog itself is `backend/app/templates/toolkits/__init__.py` (each member's to
 source is a `*.py.tmpl` template beside it); the spec field is `AgentSpec.toolkits`
 in `backend/app/schemas/agent.py`.
 
+### The Strands method — builder options (SB-1)
+
+The Strands method (`zip_runtime`, the platform-generated template) exposes a curated
+part of the Strands Agents SDK beside the model, prompt, tools, knowledge bases,
+skills, memory, guardrail, environment, limits, A2A, mounts and network it already
+had. Every field is optional and applies to `zip_runtime` only (not with
+`code` / `code_bundle`, which deploy their own source); a spec that sets none of them
+renders byte-identical code (snapshot tests). The schema and its checks live in
+`backend/app/schemas/strands_builder.py`; the generated support code is
+`backend/app/templates/strands_agent/builder_support.py.tmpl`.
+
+| Capability | Spec field | What the generated agent does | Limits |
+|---|---|---|---|
+| Built-in tools | `strands_tools[]`, `strands_tool_config` | Imports the selected `strands-agents-tools` (pinned `0.8.3`, added to `requirements.txt`): `current_time`, `calculator`, `http_request`, `think`, `retrieve`, `image_reader`, `journal`. They replace the template's own `calculator` / `current_utc_time` | `http_request` needs `strands_tool_config.http_request.allowed_hosts` (hosts or `*.host`; empty refuses the tool). `retrieve` searches the agent's mounted knowledge bases only (a mounted KB is required). `journal` writes under the runtime's scratch directory. `shell`, `python_repl`, `file_write` and `use_aws` are not offered (they need a sandbox) |
+| Model parameters | `model_params{temperature, top_p, max_tokens, stop_sequences[], thinking_budget_tokens, prompt_caching}` | Passed to the model per call; `thinking_budget_tokens` turns on Claude extended thinking, `prompt_caching` the SDK's automatic cache point (system prompt and tool definitions) | Ranges checked by the schema; thinking for Claude models only |
+| Conversation | `conversation{strategy: sliding_window\|summarizing, window_size, summary_model?}` | Sliding window (default 40, as before) or a summarizing manager that keeps `window_size` recent messages verbatim | `summary_model` is a Bedrock model for `summarizing` only; the agent's execution role is granted it beside the agent's own model (`agent_iam.allowed_model_resources`) |
+| Structured output | `output_schema` (JSON Schema object) | Answers the parsed object as well as the text: the runtime's `complete` event carries `structured`, the console stream and `/v1` SSE a `structured` event (`{value}`), `/v1` sync a `structured` field | An object schema, at most 5 levels and 50 properties per object, 20 000 characters. Not with `protocol: a2a`, and not with PII protection (the guardrail screens the text only; the invoke layer also drops `structured` on a guardrail agent) |
+| Prompt template | `prompt_variables{name: default}`, `few_shot_examples[{question, answer}]` (≤ 10) | `{{name}}` in the system prompt is filled per request from the invoke payload's `context` (`/v1` request field `context`), then the environment variable of that name, then the default; undeclared names are left as written. Few-shot pairs are appended as an examples block | ≤ 20 variables, names `^[A-Za-z_][A-Za-z0-9_]{0,63}$`, defaults ≤ 2000 characters |
+
+**Experiments.** The generated code reads `model_params`, `conversation`,
+`few_shot_examples` and `prompt_variables` from the configuration bundle per request
+(same keys), so they can be compared in an A/B experiment: the experiment's control
+bundle carries the agent's stored values and the treatment bundle the same values
+with the treatment's overrides (`optimization/service.py` `stage_bundles`,
+`BUNDLE_CONFIG_KEYS`). An agent that sets none of them gets the same bundle request
+as before.
+
 ### Registry Skills and deployment snapshots
 
 The Create Agent wizard reads only APPROVED `AGENT_SKILLS` records from
@@ -3250,6 +3277,34 @@ backend surface.
   dialog, and a ⌘K entry per term. The rail honours V2's business / expert mode
   (`lib/nav-mode.ts`) — a view filter only; ⌘K and URLs reach every page. The "?"
   menu in the top bar reopens the tour, the launch sequence and the glossary.
+- **Storyline (`v3/story/`, storyline-ux).** The console follows the workshop's
+  storyline (define → build → evaluate → release → observe → feedback). The steps are
+  code constants (`AGENT_STORY` in `stories.ts`); each one names its page action from
+  the one action table `NEXT_ACTIONS` (`actions.ts`), the role that does it and a
+  `done` predicate over the facts `GET /api/agents/{id}/story` returns (cached 30 s).
+  The current step is the first step that is not done and not optional; later steps
+  are dimmed but stay reachable. On top of that: a **next-step card** replaces the
+  success toast after the key actions (criteria published / signed, golden set sealed,
+  evaluation done, candidate deployed, gate report, release signed, issue closed) and stays until dismissed; the agent detail shows a **journey strip**
+  (one segment per chapter, "Continue" or "Waiting on {role}"); storyline pages reached
+  with `?agent=` show a **position line** in the page head (`StoryHeader`); the home
+  page lists **your turn / waiting on others** from `GET /api/me/next-steps`; empty
+  states list the missing steps (`Prereqs`, derived from `AGENT_STORY`); errors carry
+  `next` / `needs` in the envelope, which `ErrorCallout` renders as a step to go to;
+  and the Agent-DLC term cards (`terms.ts`) link the steps that use each term.
+  `/v3/create` opens on the **chooser** (three questions → a recommended method with
+  why / trade-off / alternative, table-driven in `pages/create/chooser.ts`). MCP
+  servers and system presets are not on the storyline.
+- **Call it from your backend (invoke access).** The agent's "Access & integration"
+  tab has a card with what a backend needs to call the agent on AgentCore directly
+  (`GET /api/agents/{id}/invoke-access`): the Runtime or Harness ARN per endpoint
+  (`DEFAULT`, and `live` / `candidate` for a gated agent), a least-privilege IAM policy
+  (`InvokeAgentRuntime` on the runtime and endpoint ARNs, or `InvokeHarness`; optional
+  session stop and memory read), the JWT authorizer's requirements instead of a policy
+  for a JWT-inbound agent, and CLI / Python / TypeScript samples with every value
+  filled in. Project settings → Integration lists every agent of the project with one
+  merged policy and a CSV / JSON export (`GET /api/projects/{id}/invoke-access`). The
+  policy is built by the backend from the ledger; the browser never assembles ARNs.
 - **Overlays.** `.v3-reveal` children animate with `fill-mode: backwards`, never
   `forwards`: a filled transform animation makes each block a containing block for
   `position: fixed`, which trapped dialogs inside panels (and a filled opacity
@@ -3427,6 +3482,53 @@ in the developer's browser. Leaving the password unset keeps the gate off for
 loopback (console open, registration refused with `auth.registration_disabled`,
 `/api/users*` reachable as the implicit local admin), preserving the
 bootstrap-free local development and test flow.
+
+## Console single sign-on (OIDC)
+
+With the login gate on, administrators can let people sign in through an OpenID
+Connect identity provider (sso design §2; SSO-1, `routers/sso.py`,
+`services/sso_oidc.py`, `services/sso_mapping.py`). The API is in
+[api.md](api.md#console-single-sign-on-api-oidc).
+
+- **Providers** (`console_identity_providers`, platform-wide, administrators only — a
+  steward is refused, since a mapping can grant the admin role). Presets fill the
+  scopes and claim names for Keycloak, Authentik, Okta, Entra ID, Google and generic
+  OIDC. **Test** reads discovery and the JWKS afresh and reports whether PKCE S256 is
+  advertised. The client secret is write-only: stored Fernet-encrypted, or as a
+  Secrets Manager ARN read with the hub's credentials.
+- **Flow.** Authorization code with PKCE S256. `start` writes a one-time `state`,
+  `nonce` and code verifier to `sso_login_states` (10 minutes, server side) and
+  redirects to the IdP. `callback` deletes the state row before anything else (so a
+  replayed callback finds nothing), exchanges the code with the verifier and verifies
+  the `id_token` in memory with `joserfc`: the JWKS signature (asymmetric algorithms
+  only), `iss`, `aud` / `azp`, `exp` / `iat` with 2 minutes of skew, and the nonce.
+  Tokens are never stored. Every outcome ends in a redirect: into the console with the
+  session cookie, or to the login page with `?sso_error=<code>`. Journal:
+  `auth.sso.login` (success / refused / failed, the reason in the target) and
+  `auth.sso.config.*`.
+- **Accounts.** An account is found by `(external_idp_id, external_subject)`, never by
+  email, so re-binding an address at the IdP cannot take over another account; an
+  email already held by a local account is refused (`auth.sso.email_taken`). The
+  provider's `account_policy` is `jit` (create the account on first sign-in, active at
+  once, with the default workspace grant, valid for `valid_days` and renewed at each
+  sign-in) or `existing_only` (an administrator creates the account first). The email
+  must pass the provider's `allowed_email_domains`, else the console's registration
+  rule. An SSO account has no local password (no
+  reset, no change, no registration approval); its session stamp is
+  `idp:<id>:<subject>` plus `session_epoch`. Logout also answers the IdP's
+  `end_session_url` (RP-initiated logout) when it has one.
+- **Mappings.** At every sign-in the provider's group mappings set the global role,
+  project roles and project-group roles. Only memberships the mapping created
+  (`sso_memberships`) are added or removed; a membership or role an administrator set
+  by hand wins, and the user page flags the difference ("differs from the SSO
+  mapping"). The access epoch is bumped, so the change applies on the next request.
+- **Unchanged.** The built-in admin always signs in locally (the way back in), `/v1`
+  API keys and `/share` links are not affected.
+- **Deployment.** `public_base_url` must be the browser's console URL: the redirect URI
+  registered at the IdP is `<public_base_url>/api/auth/oidc/<id>/callback`. Set
+  `LAUNCHPAD_SSO_SECRET_KEY` (a Fernet key) in production; without it the backend
+  creates `data/sso-secret.key` (0600) next to the SQLite ledger, which must be backed
+  up with it. See [setup.md](setup.md#single-sign-on-oidc--单点登录).
 
 ## Managed Knowledge Bases (console 04)
 

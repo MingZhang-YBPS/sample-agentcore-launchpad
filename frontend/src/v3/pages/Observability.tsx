@@ -9,6 +9,7 @@ import { api, type V2Range } from "../../lib/api";
 import { asRange, asTab, type ObsTab, useCacheAge } from "../../v2/pages/observability/common";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useLoad } from "../hooks";
+import { StoryHeader } from "../story/StoryHeader";
 import { Btn, Filters, Notice, PageHead, Panel, Skeleton } from "../ui";
 import { type DashTarget, DashboardView } from "./observability/Dashboard";
 import { findings } from "./observability/attention";
@@ -79,6 +80,7 @@ export function V3Observability() {
 
   return (
     <div className="v3-reveal v3-obs" style={{ display: "grid", gap: 16 }}>
+      <StoryHeader />
       <PageHead
         eyebrow={`${t("v3.obs.eyebrow")} · ${t(`v2.range.${range}`)}`}
         title={title}

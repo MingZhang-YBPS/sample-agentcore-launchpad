@@ -2722,7 +2722,12 @@
     "waiver.self_approve": "The requester cannot approve their own waiver.",
     "waiver.self_approve_why": "Approving a waiver is a second person's decision.",
     "waiver.too_long": "A waiver lasts at most the allowed number of days.",
-    "waiver.unknown_criterion": "That criterion is not in the agent's criteria table."
+    "waiver.unknown_criterion": "That criterion is not in the agent's criteria table.",
+    "auth.sso_account_no_password": "Your password is managed by your identity provider.",
+    "users.sso_account_password": "This account signs in with SSO. Its password is managed by the identity provider and cannot be reset here.",
+    "release.golden_share_read_only": "This golden set is shared with this project read-only. A release gate needs use access: ask the project that owns it.",
+    "run.evaluator_share_read_only": "An evaluator in this run is shared with this project read-only. Running it needs use access: ask the project that owns it.",
+    "share.read_only": "This resource belongs to another project, which shares it with this one. Only that project can change it."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -12144,6 +12149,9 @@
         "via": "via {{projects}}",
         "globalPermTitle": "Global permissions (for projects that inherit the global role)",
         "globalPermSub": "Applies where the project role is “inherits global role”"
+      },
+      "field": {
+        "source": "Account source"
       }
     },
     "workspaces": {
@@ -12427,7 +12435,9 @@
           "current": "Enter your current password.",
           "same": "Choose a password different from the current one.",
           "mismatch": "The two new passwords do not match."
-        }
+        },
+        "ssoManaged": "This account signs in through your identity provider, so its password lives there. Change it with your identity provider, not in the console.",
+        "ssoClose": "Got it"
       }
     },
     "dlcText": {
@@ -12964,7 +12974,16 @@
         "typedId": "or type the AWS id",
         "noResources": "This project has nothing of this kind in the workspace.",
         "crossShort": "other department",
-        "crossDepartment": "That project belongs to another department: the share waits until its department administrator (or an administrator) approves it."
+        "crossDepartment": "That project belongs to another department: the share waits until its department administrator (or an administrator) approves it.",
+        "notices": {
+          "eyebrow": "Ended",
+          "title": "Shares that ended",
+          "revoked": "{{owner}} revoked {{name}} ({{access}}). This project can no longer use it.",
+          "expired": "The share of {{name}} from {{owner}} ({{access}}) expired. This project can no longer use it.",
+          "pinned": "Agents that still use it:",
+          "by": "revoked by {{who}}",
+          "ack": "Got it"
+        }
       },
       "isolation": {
         "title": "Runtime isolation",
@@ -14491,7 +14510,8 @@
       "gateReport": "Release gate report ready: {{verdict}}",
       "releaseSigned": "Release signed — the candidate is live",
       "issueFixed": "Issue marked fixed",
-      "issueWontFix": "Issue closed as won't fix"
+      "issueWontFix": "Issue closed as won't fix",
+      "apiKey": "API key issued — your app can call the agent now"
     },
     "journey": {
       "title": "Journey",
@@ -14749,7 +14769,114 @@
       "outputSchemaA2a": "A2A agents cannot return structured output — clear the schema.",
       "outputSchemaGuardrail": "Structured output cannot be combined with PII protection yet.",
       "variables": "Variable names start with a letter or _ and are unique (at most 20). {{detail}}",
-      "fewShot": "Every example needs both a question and an answer (at most 10)."
+      "fewShot": "Every example needs both a question and an answer (at most 10).",
+      "agentToolName": "Tool names start with a letter, then letters, digits or _ (at most 64): {{detail}}",
+      "agentToolDuplicate": "Tool name {{detail}} is already used — rename it.",
+      "agentToolDescription": "Describe when to call each agent (at most 1000 characters).",
+      "agentToolCount": "At most {{detail}} agents can be offered as tools.",
+      "providerConnection": "Pick the API key Connection that holds the provider's key.",
+      "providerBaseUrl": "Enter the gateway's http(s) address — no credentials, query or fragment. {{detail}}",
+      "providerConverse": "Extended thinking and prompt caching are Bedrock options — turn them off for this provider.",
+      "approvalTools": "Approval entries are tool names or * patterns: {{detail}}",
+      "maxToolCalls": "Tool calls per turn must be a whole number from 1 to 500.",
+      "maskArgs": "Masked arguments are names of letters, digits, _ . or -: {{detail}}",
+      "retryAttempts": "Attempts must be a whole number from 1 to 10.",
+      "retryInitial": "The first delay must be 1 to 60 seconds.",
+      "retryMax": "The ceiling must be 1 to 600 seconds and at least the first delay."
+    },
+    "structured": {
+      "label": "Structured answer",
+      "fields_one": "{{count}} field",
+      "fields_other": "{{count}} fields",
+      "asJson": "JSON",
+      "asTable": "Table",
+      "copy": "Copy",
+      "copied": "Copied"
+    },
+    "review": {
+      "stops_one": "{{count}} stop sequence",
+      "stops_other": "{{count}} stop sequences",
+      "thinking": "thinking {{budget}} tokens",
+      "window_one": "{{count}} message kept",
+      "window_other": "{{count}} messages kept",
+      "schema_one": "{{count}} field: {{fields}}",
+      "schema_other": "{{count}} fields: {{fields}}",
+      "examples_one": "{{count}} example",
+      "examples_other": "{{count}} examples"
+    },
+    "agents": {
+      "label": "Other agents as tools",
+      "hint": "Deployed agents of this project the model can hand a sub-task to. Use it when another agent already owns a domain — billing, a policy desk, a research assistant.",
+      "add": "Add an agent…",
+      "loading": "Loading…",
+      "none": "No other deployed agent can be called",
+      "retry": "Retry",
+      "toolName": "Tool name the model sees",
+      "description": "When to call it",
+      "descriptionPlaceholder": "Say what this agent knows and when to ask it — the model reads this to decide.",
+      "sharedFrom": "from {{project}}",
+      "blocked": "{{count}} agents of this project cannot be called",
+      "block": {
+        "self": "This is the agent being edited.",
+        "not_runtime": "A managed Harness agent cannot be called as a tool yet.",
+        "not_deployed": "Not deployed.",
+        "protocol": "An MCP server — attach it as a tool instead.",
+        "jwt_inbound": "Accepts JWT bearer tokens only; this agent signs with IAM."
+      },
+      "roleNote": "Calls run with this agent's own execution role; the platform grants invoke on exactly these runtimes. Sub-agents of an agent stop at depth 3."
+    },
+    "guards": {
+      "label": "Tool-call guards",
+      "hint": "Hooks around every tool call: pause for a person, cap the calls, keep a masked log.",
+      "approval": "Needs approval",
+      "approvalWhen": "Tools with side effects (send, pay, delete). The console chat shows an approval card; /v1, evaluations and other agents get a clear refusal instead.",
+      "cap": "Tool calls per turn",
+      "capNone": "No cap",
+      "capWhen": "Stops a looping agent; the next call is refused and the model told to answer.",
+      "log": "Log every tool call",
+      "logWhen": "One line per call in the runtime log group: name, status, duration and arguments.",
+      "mask": "Masked arguments",
+      "maskWhen": "Argument names shown as *** in the log and on the approval card — password, secret, token, api_key and authorization always are.",
+      "sample": "Sample log line"
+    },
+    "provider": {
+      "label": "Model provider",
+      "kind": {
+        "bedrock": "Bedrock",
+        "anthropic": "Anthropic API",
+        "litellm": "LiteLLM gateway"
+      },
+      "when": {
+        "bedrock": "The model from Basics, through Bedrock with this agent's role — no key needed.",
+        "anthropic": "Call Claude on the Anthropic API directly, with your organisation's API key.",
+        "litellm": "Route through your company's LiteLLM gateway — one entry point, its own keys and budgets."
+      },
+      "connection": "API key Connection",
+      "pickConnection": "Pick a Connection…",
+      "noKeys": "No API key Connection yet — create one under Identity → Connections, then pick it here.",
+      "baseUrl": "Base URL",
+      "baseUrlWhen": {
+        "anthropic": "Optional — only for a proxy in front of the Anthropic API.",
+        "litellm": "The gateway's address, e.g. https://litellm.internal:4000."
+      },
+      "keyPath": "Where the key travels",
+      "path": {
+        "connection": "Connection",
+        "vault": "Token vault",
+        "runtime": "Runtime, per request"
+      },
+      "modelNote": "The key is read from the token vault at run time and never stored in the agent's spec. Set the model in Basics to the provider's model name (a custom model id).",
+      "notHere": "A model provider applies to HTTP agents on Bedrock only — this agent keeps its Bedrock model."
+    },
+    "retry": {
+      "label": "Custom throttling retry",
+      "default": "Off: the SDK default — 6 attempts, 4 s doubling to 240 s.",
+      "when": "When the model throttles, wait and try again; the delay doubles up to the ceiling.",
+      "retryAttempts": "Attempts",
+      "retryInitial": "First delay (s)",
+      "retryMax": "Delay ceiling (s)",
+      "ladder": "Waits at most {{total}} s in all before the turn fails.",
+      "noRetry": "One attempt — a throttled call fails at once."
     }
   }
 }

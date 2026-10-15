@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { MessageAttachments } from "../../../components/chat/AttachmentViews";
 import { JumpToLatest } from "../../../components/JumpToLatest";
 import { Markdown } from "../../../components/Markdown";
+import { StructuredAnswer } from "../../../components/chat/StructuredAnswer";
 import type { FeedbackVerdict } from "../../../lib/api";
 import { TOOL_RUN_GLYPH, toolRunLabel } from "../../../lib/chat";
 import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
@@ -82,8 +83,9 @@ export function Thread({
               )}
             </div>
             <div className="v2-chat-bub">
-              <Markdown text={msg.text} />
+              {msg.text && <Markdown text={msg.text} />}
               {msg.streaming && <span className="v2-chat-caret" />}
+              {msg.structured !== undefined && <StructuredAnswer value={msg.structured} />}
             </div>
             {onRate && msg.id != null && !msg.streaming && (
               <div className="v2-chat-thumbs" role="group" aria-label={t("v2.chat.rateAnswer")}>

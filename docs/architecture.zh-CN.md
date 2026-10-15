@@ -494,6 +494,20 @@ RECOMMEND 背后的系统提示词生成器是一个 **provider**
 `*.py.tmpl` 模板）;spec 字段是 `backend/app/schemas/agent.py` 里的
 `AgentSpec.toolkits`。
 
+### Strands 方式——构建选项（SB-1）
+
+Strands 方式（`zip_runtime`，平台生成的模板）在原有的模型、提示词、工具、知识库、技能、记忆、护栏、环境变量、限额、A2A、挂载与网络之外，开放了 Strands Agents SDK 的一部分精选能力。所有字段都是可选的，且只适用于 `zip_runtime`（不能与自带源码的 `code` / `code_bundle` 同用）；一个都没设置的 spec 生成的代码逐字节不变（快照测试）。字段定义与校验在 `backend/app/schemas/strands_builder.py`；生成的支持代码在 `backend/app/templates/strands_agent/builder_support.py.tmpl`。
+
+| 能力 | spec 字段 | 生成的 Agent 做什么 | 限制 |
+|---|---|---|---|
+| 内置工具 | `strands_tools[]`、`strands_tool_config` | 导入所选的 `strands-agents-tools`（锁定 `0.8.3`，自动加入 `requirements.txt`）：`current_time`、`calculator`、`http_request`、`think`、`retrieve`、`image_reader`、`journal`。它们替换模板自带的 `calculator` / `current_utc_time` | `http_request` 需要 `strands_tool_config.http_request.allowed_hosts`（主机名或 `*.host`；为空则拒绝该工具）。`retrieve` 只检索 Agent 已挂载的知识库（必须先挂载）。`journal` 写在运行时的临时目录下。不提供 `shell`、`python_repl`、`file_write`、`use_aws`（需要沙箱） |
+| 模型参数 | `model_params{temperature, top_p, max_tokens, stop_sequences[], thinking_budget_tokens, prompt_caching}` | 每次模型调用时传入；`thinking_budget_tokens` 开启 Claude extended thinking，`prompt_caching` 开启 SDK 的自动缓存点（系统提示词与工具定义） | 取值范围由 schema 校验；thinking 仅限 Claude 模型 |
+| 对话管理 | `conversation{strategy: sliding_window\|summarizing, window_size, summary_model?}` | 滑动窗口（默认 40，与之前一致），或保留最近 `window_size` 条原文、摘要更早轮次的管理器 | `summary_model` 是 Bedrock 模型，仅用于 `summarizing`；Agent 的执行角色在自身模型之外也获得它的调用权限（`agent_iam.allowed_model_resources`） |
+| 结构化输出 | `output_schema`（JSON Schema 对象） | 在文本之外返回解析后的对象：运行时的 `complete` 事件带 `structured`，控制台流与 `/v1` SSE 发送 `structured` 事件（`{value}`），`/v1` 同步调用返回 `structured` 字段 | 必须是 object schema，每个对象最多 5 层、50 个属性，不超过 20000 个字符。不能与 `protocol: a2a` 同用，也不能与 PII 护栏同用（护栏只筛查文本；调用层对启用护栏的 Agent 也会丢弃 `structured`） |
+| 提示词模板 | `prompt_variables{name: 默认值}`、`few_shot_examples[{question, answer}]`（≤ 10） | 系统提示词中的 `{{name}}` 每次请求时依次取调用 payload 的 `context`（`/v1` 请求字段 `context`）、同名环境变量、默认值；未声明的名字保持原样。few-shot 问答对追加为示例段落 | ≤ 20 个变量，名称须匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，默认值 ≤ 2000 个字符 |
+
+**实验。** 生成的代码每次请求都从配置包读取 `model_params`、`conversation`、`few_shot_examples` 与 `prompt_variables`（键名相同），因此可以在 A/B 实验中对比：实验的对照配置包带 Agent 已保存的值，实验组配置包带同样的值再叠加实验组的覆盖（`optimization/service.py` 的 `stage_bundles`、`BUNDLE_CONFIG_KEYS`）。一个都没设置的 Agent，配置包请求与之前相同。
+
 ### Registry 技能与部署快照
 
 创建 Agent 向导只从 `GET /api/registry/attachables` 读取 APPROVED 的 `AGENT_SKILLS` 记录。
@@ -1633,6 +1647,8 @@ DCV live-view chunk（它本来就是懒加载的，见 `pages/governance/ToolsV
 - **已重做的模块（第二批：Agent 运行）。** `/v3/releases`（开发到运维的发布台：等待审阅的请求排在最前，其后是已批准未执行、进行中和历史；`?id=` 为单个发布的详情，审阅/执行/回滚都需先确认）、`/v3/environments`（智能体 × 环境矩阵，按需与 AWS 核对漂移）、`/v3/observability`（以需要关注的事项开头的仪表盘、会话与链路列表，以及原生的会话与链路视图——瀑布图加 Span 详情——沿用 V2 的 `?view=session|trace&id=`）、`/v3/memory`（概览、短期的参与者 → 会话 → 事件、长期记录与检索、资源；资源编辑器仍为承载页）、`/v3/governance`（Gateway 及其目标、Policy Engine 模式与近期拒绝记录、工具目录；Cedar 与限流编辑器仍为承载页）、`/v3/connections`（成员自己的 as_user 授权与撤销）、`/v3/costs`（按智能体和按人统计的花费、本月累计，以及 `?view=alerts` 的告警规则）和 `/v3/issues`（问题箱、标准答案与评审人，沿用 V2 的 `?view=` 标签）。每个页面都与对应 V2 页面的调用和权限检查一致；`v3TwinOf` 会把 V2 链接（包括已重做的视图）路由到这些页面。
 - **已重做的模块（第三、四批：评估、学习、管理）。** `/v3/insights`、`/v3/intents`、`/v3/data`（链路、数据集、流水线；链路与数据集视图）、`/v3/evaluators`（列表、详情与 LLM 评审/派生/代码评估器编辑器）、`/v3/tasks`（失败优先的运行列表、运行详情，以及与 V2 相同处理 pass^k 和 `confirm_cost` 的新建向导）、`/v3/online`（列表、详情、编辑器）、`/v3/experiments`（实验与灰度看板）、`/v3/standards`（Agent-DLC 全部九个视图；放行门本身链接到 `/v3/gate`）、`/v3/skill-lab`（首页与评估运行）、`/v3/users`、`/v3/workspaces`（列表，以及含初始化、级别、授权、清除的详情）、`/v3/identity`（管理员的连接页与 Gateway 目标）、`/v3/fleet`、`/v3/announcements`、`/v3/videos` 和 `/v3/video-management`。`v3TwinOf` 通过 `v3/nav.ts` 中的 `MODULES` 表映射这些页面，表中按 V2 路径列出 V3 页面已重做的 `view=`。对于状态机庞大、又没有数据可以验证重写的流程（实验/灰度的详情与启动、技能实验室的编辑器与向导、少数结果表与选择器），V3 页面把 V2 组件嵌入 `.v2.v3-host` 容器中使用，从而沿用 V2 自身的检查。仍完全承载的有：智能体向导及智能体详情/编辑/身份、注册中心的注册/编辑/消费者视图、新建知识库、架构助手的对话工作台、记忆资源与数据集/流水线编辑器、Cedar 策略与限流编辑器、Gateway 详情，以及注册工作区。
 - **新手引导（`v3/onboarding/`）。** 指挥中心上的「启动序列」：工作区就绪 → 首个智能体上线 → 第一次对话 → 第一次评估 → 设置放行门，每一步都根据实际存在的数据判断是否完成（`launchSteps`，有单元测试），而不是靠点击打勾；关闭后按工作区隐藏，全部完成后折叠为一行。首次进入时的「导览」依次高亮一个区域（⌘K、启动序列、需要你处理的队列、信号颜色、功能模块侧栏、帮助），可用键盘操作、可跳过，只自动出现一次（`launchpad_v3_tour_done`）。「术语解释」复用 V2 的 `glossary.*` 文案：行内 `Term` 提示、术语表对话框，以及 ⌘K 中每个术语一条入口。侧栏沿用 V2 的业务 / 专家模式（`lib/nav-mode.ts`），只是显示筛选，⌘K 和 URL 仍可到达每个页面。顶栏的「?」菜单可重新打开导览、启动序列和术语表。
+- **故事线（`v3/story/`，storyline-ux）。** 控制台按 workshop 的故事线组织（定义 → 构建 → 评估 → 发布 → 观测 → 反馈）。步骤是代码常量（`stories.ts` 中的 `AGENT_STORY`）；每一步从唯一的动作表 `NEXT_ACTIONS`（`actions.ts`）引用页面动作，注明由哪个角色完成，并用 `done` 谓词判断 `GET /api/agents/{id}/story` 返回的事实（缓存 30 秒）。当前步是第一个未完成且非可选的步骤；后面的步骤变淡但仍可进入。在此之上：关键操作（判据表发布 / 签署、封存黄金集、评估完成、部署出候选版本、放行报告、签署放行、关闭 Issue）成功后，用停留的**下一步提示卡**取代成功 toast，直到用户关闭；智能体详情页显示**旅程条**（每章一段，显示「继续」或「等待 {角色}」）；带 `?agent=` 进入故事线上的页面时，页头显示**位置提示**（`StoryHeader`）；首页按 `GET /api/me/next-steps` 列出**轮到你 / 等待别人**；空状态列出缺少的步骤（`Prereqs`，由 `AGENT_STORY` 推出）；错误信封带 `next` / `needs`，由 `ErrorCallout` 显示为要去的那一步；Agent-DLC 术语卡片（`terms.ts`）链接到用到该术语的步骤。`/v3/create` 默认打开**选型助手**（三个问题 → 推荐的方式，附原因 / 代价 / 备选，表驱动，见 `pages/create/chooser.ts`）。MCP 服务器与系统预置不在故事线上。
+- **在你的后端调用（调用接入）。** 智能体的「访问与集成」页签有一张卡片，给出后端直接在 AgentCore 上调用该智能体所需的一切（`GET /api/agents/{id}/invoke-access`）：每个端点（`DEFAULT`，门控智能体另有 `live` / `candidate`）的 Runtime 或 Harness ARN，最小权限 IAM 策略（对 runtime 与端点 ARN 的 `InvokeAgentRuntime`，或 `InvokeHarness`；可选会话停止与读取记忆），JWT 入站的智能体改为给出 JWT 授权器的要求，以及填好所有取值的 CLI / Python / TypeScript 示例。项目设置 → 集成列出项目的全部智能体，附一份合并策略，可导出 CSV / JSON（`GET /api/projects/{id}/invoke-access`）。策略由后端按账本生成，浏览器从不自行拼 ARN。
 - **浮层。** `.v3-reveal` 子元素的动画使用 `fill-mode: backwards` 而非 `forwards`：填充状态的 transform 动画会让每个块成为 `position: fixed` 的包含块，把对话框困在面板里（填充的 opacity 也会覆盖浮层自身的淡入）。`Confirm` / `Dialog` 无论焦点在哪里都可按 Esc 关闭。
 - **其余页面在 V3 中承载，而不是跳回 V2。** 选择 V3 后，`/v2/*` 路由经由 `V2Frame`（`App.tsx`）在 `<V3Shell hosted="v2" />` 内渲染，classic 路由在 `<V3Shell hosted="classic" />` 内渲染——URL 和页面模块不变，外壳换成 V3。因此 V2 页面发出的任何链接都留在 V3 内；在承载页上点「返回 V2」只是用 V2 外壳重新渲染同一 URL。V3 已重做的两个 V2 页面会交给对应的 V3 页面（`/v2` → `/v3`，`/v2/chat` → `/v3/chat`；`/v2/chat?full=1` 保留完整的 V2 对话，V3 对话页在需要授权卡片时链接到它）。侧栏在「功能模块」下按 V2 自己的分组（可折叠）列出这些承载页，列表由 `v2/nav.ts` 派生（`v3/nav.ts` 的 `hostedGroups`，由 `v3/nav.test.ts` 保证完整）；⌘K 命令面板（也可按 `/`）可到达所有页面以及每个智能体的对话与放行门，在 zh-CN 下也能匹配英文名称和路由。
 - **承载主题。** V2 把用到的每个字面颜色都命名为 `--v2-*` token（见 `v2/v2.css` 中 `--v2-mono` 下方的一组；V2 显示完全不变），`v3/host.css` 在 `.v2.v3-host` 容器上把这些 token 重新指向 V3 调色板，并调整面板、标题和表格样式。classic 的 token（`theme/tokens.css`）在 `body.v3-body` 上重新指向，classic 的品牌琥珀色改为 V3 的薄荷绿，因为琥珀色在 V3 中表示「等待」。V2/classic 的弹窗是页面内的 `position: fixed`，所以承载时 `<main>` 不建立层叠上下文（`.v3-main.hosted`）。架构助手的鱼骨图 SVG 有意保留浅色字面调色板——它同时用作独立的 SVG 下载文件。
@@ -1727,6 +1743,17 @@ localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=
 `localhost` 粘死到 HTTPS。不设置密码则对 loopback 保持网关关闭(控制台开放、注册返回
 `auth.registration_disabled`、`/api/users*` 以隐式本地 admin 身份可达),保持免引导的
 本地开发与测试流程。
+
+## 控制台单点登录（OIDC）
+
+登录门开启后，管理员可以让用户通过 OpenID Connect 身份提供方登录（sso 设计 §2；SSO-1，`routers/sso.py`、`services/sso_oidc.py`、`services/sso_mapping.py`）。API 见 [api.zh-CN.md](api.zh-CN.md)「控制台单点登录 API（OIDC）」一节。
+
+- **身份提供方**（`console_identity_providers`，平台级，仅管理员——组织管理员被拒绝，因为映射可以授予管理员角色）。预设模板为 Keycloak、Authentik、Okta、Entra ID、Google 与通用 OIDC 填好 scopes 与声明名。**测试**会重新读取 discovery 与 JWKS，并报告 IdP 是否声明支持 PKCE S256。客户端密钥只写不读：以 Fernet 加密保存，或保存为用 hub 凭证读取的 Secrets Manager ARN。
+- **流程。** 授权码 + PKCE S256。`start` 把一次性的 `state`、`nonce` 与 code verifier 写入 `sso_login_states`（10 分钟，服务端），再重定向到 IdP。`callback` 先删除 state 行（重放的回调什么也找不到），用 verifier 换取 token，并用 `joserfc` 在内存中校验 `id_token`：JWKS 签名（仅非对称算法）、`iss`、`aud` / `azp`、`exp` / `iat`（允许 2 分钟偏差）与 nonce。token 从不入库。所有结果都以重定向结束：带会话 cookie 进入控制台，或带 `?sso_error=<code>` 回到登录页。审计：`auth.sso.login`（成功 / 拒绝 / 失败，原因写在 target 中）与 `auth.sso.config.*`。
+- **账户。** 按 `(external_idp_id, external_subject)` 查找账户，从不按邮箱，因此在 IdP 侧换绑邮箱无法接管别人的账户；邮箱已被本地账户占用时拒绝（`auth.sso.email_taken`）。提供方的 `account_policy` 为 `jit`（首次登录时创建账户，立即生效，带默认工作区授权，有效期 `valid_days`，每次登录续期）或 `existing_only`（由管理员先创建账户）。邮箱须符合提供方的 `allowed_email_domains`，未设置时按控制台的注册规则。SSO 账户没有本地密码（不能重置、不能修改、不走注册审批）；它的会话戳为 `idp:<id>:<subject>` 加 `session_epoch`。若 IdP 提供 `end_session_url`，登出时一并返回（RP 发起的登出）。
+- **映射。** 每次登录都按提供方的组映射设置全局角色、项目角色与项目组角色。只增删由映射产生的成员资格（`sso_memberships`）；管理员手工设置的成员资格或角色优先，用户页会标注差异（「与 SSO 映射不一致」）。访问纪元随之推进，变更在下一个请求生效。
+- **不受影响。** 内置管理员始终用本地方式登录（应急入口），`/v1` API Key 与 `/share` 链接不变。
+- **部署。** `public_base_url` 必须是浏览器访问控制台的地址：在 IdP 登记的回调地址为 `<public_base_url>/api/auth/oidc/<id>/callback`。生产环境请设置 `LAUNCHPAD_SSO_SECRET_KEY`（Fernet 密钥）；未设置时后端在 SQLite 账本旁创建 `data/sso-secret.key`（0600），须与账本一起备份。见 [setup.zh-CN.md](setup.zh-CN.md)「单点登录（OIDC）」一节。
 
 ## 托管知识库（控制台 04）
 

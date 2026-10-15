@@ -1,0 +1,234 @@
+/* Strands builder SB-2 panels — the same channel-strip vocabulary as SB-1
+ * (strands-sections.css): lamps for what is live, mono for what the runtime
+ * reads, the primary line for signal paths, warning only for what pauses a turn.
+ *
+ *  · agents as tools read as a bus: each picked agent is a relay tapped off one
+ *    vertical line, wired to the tool name the model sees;
+ *  · the provider's key path is drawn as three stations (Connection → vault →
+ *    runtime) so "never in the spec" is visible, not just stated;
+ *  · retry renders its own backoff ladder, one rung per retry.
+ */
+
+/* ── agents as tools ───────────────────────────────────────────────────── */
+.sb2-agents { display: grid; gap: 10px; }
+.sb2-relays {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 18px;
+  display: grid;
+  gap: 8px;
+}
+/* the bus every relay taps */
+.sb2-relays::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 18px;
+  bottom: 18px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--v2-primary-line);
+}
+.sb2-relay {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--v2-primary-line);
+  border-radius: var(--v2-radius-sm);
+  background: var(--v2-card);
+  animation: sb-in 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+/* the tap from the bus into the relay */
+.sb2-relay::before {
+  content: "";
+  position: absolute;
+  left: -13px;
+  top: 21px;
+  width: 13px;
+  height: 2px;
+  background: var(--v2-primary-line);
+}
+.sb2-relay-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) auto auto auto minmax(140px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.sb2-relay .sb-lamp {
+  background: var(--v2-success);
+  border-color: var(--v2-success);
+  box-shadow: 0 0 0 3px var(--v2-success-soft);
+}
+.sb2-relay-agent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--v2-ink);
+}
+.sb2-relay-arrow { color: var(--v2-primary); }
+.sb2-relay-name { min-width: 0; }
+.sb2-relay .v2-textarea { min-height: 52px; }
+.sb2-agents-pick { display: flex; align-items: center; gap: 8px; max-width: 420px; }
+.sb2-agents-pick > :first-child { flex: 1; min-width: 0; }
+
+.sb2-blocked { font-size: 12px; color: var(--v2-ink-3); }
+.sb2-blocked summary { cursor: pointer; width: fit-content; }
+.sb2-blocked summary:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: 2px; }
+.sb2-blocked ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.sb2-blocked li { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 12px; }
+.sb2-blocked .mono { font-family: var(--v2-mono); color: var(--v2-ink-2); }
+
+/* ── tool-call guards ──────────────────────────────────────────────────── */
+.sb2-guards {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 10px 14px;
+  padding: 12px;
+  border: 1px dashed var(--v2-line);
+  border-radius: var(--v2-radius-sm);
+}
+.sb2-guard { display: grid; gap: 6px; align-content: start; }
+.sb2-guard-wide { grid-column: 1 / -1; }
+.sb2-guard-k {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--v2-ink-2);
+}
+.sb2-guard-when { font-size: 12px; color: var(--v2-ink-3); }
+/* a tool on the approval list pauses the turn: two bars, warning tone */
+.sb2-pause { border-color: var(--v2-warning-line); background: var(--v2-warning-soft); color: var(--v2-warning-ink); }
+.sb2-pause::before {
+  content: "";
+  width: 6px;
+  height: 8px;
+  border-left: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  box-sizing: border-box;
+}
+.sb2-logline {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: var(--v2-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--v2-ink-2);
+  background: var(--v2-fill-2);
+  border: 1px solid var(--v2-line);
+  border-radius: var(--v2-radius-sm);
+}
+.sb2-logline-tag { color: var(--v2-primary); }
+
+/* ── model provider ────────────────────────────────────────────────────── */
+.sb2-provider { display: grid; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--v2-line-2); }
+.sb2-provider-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.sb2-keypath {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+}
+.sb2-keypath li {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--v2-line);
+  border-radius: var(--v2-radius-sm);
+  background: var(--v2-card);
+  min-width: 0;
+}
+.sb2-keypath li .mono {
+  font-family: var(--v2-mono);
+  font-size: 12px;
+  color: var(--v2-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb2-keypath-k { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--v2-ink-3); }
+/* the wire between stations, with a pulse that runs once when the path appears */
+.sb2-keypath li + li::before {
+  content: "";
+  position: absolute;
+  left: -23px;
+  top: 50%;
+  width: 22px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--v2-primary-line) 0 40%, var(--v2-primary) 50%, var(--v2-primary-line) 60% 100%);
+  background-size: 300% 100%;
+  background-position: 100% 0;
+  animation: sb2-pulse 900ms ease-out 1 both;
+}
+.sb2-keypath li + li:last-child::before { animation-delay: 300ms; }
+.sb2-keypath li:last-child { border-color: var(--v2-primary-line); background: var(--v2-primary-soft); }
+
+/* ── throttling retry ──────────────────────────────────────────────────── */
+.sb2-retry { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--v2-line-2); }
+.sb2-ladder {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 72px;
+  padding: 8px 10px 0;
+  border-bottom: 1px solid var(--v2-line);
+}
+.sb2-rung {
+  flex: 1;
+  max-width: 64px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+  gap: 3px;
+}
+.sb2-rung-v {
+  order: -1;
+  font-family: var(--v2-mono);
+  font-size: 11px;
+  text-align: center;
+  color: var(--v2-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.sb2-rung-bar {
+  height: calc(var(--h) - 16px);
+  min-height: 4px;
+  border-radius: 3px 3px 0 0;
+  background: var(--v2-primary-soft);
+  border-top: 2px solid var(--v2-primary);
+  transform-origin: bottom;
+  animation: sb2-rise 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i) * 45ms);
+}
+
+@keyframes sb2-rise {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+@keyframes sb2-pulse {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+@media (max-width: 760px) {
+  .sb2-guards, .sb2-provider-grid, .sb2-keypath { grid-template-columns: 1fr; }
+  .sb2-keypath li + li::before { display: none; }
+  .sb2-relay-head { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .sb2-relay-arrow { display: none; }
+  .sb2-relay-name { grid-column: 1 / -1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb2-relay, .sb2-rung-bar, .sb2-keypath li + li::before { animation: none; }
+}

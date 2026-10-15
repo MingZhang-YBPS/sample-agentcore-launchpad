@@ -3,6 +3,7 @@ import "./issues.css";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
+import { StoryHeader } from "../story/StoryHeader";
 import { Filters, PageHead } from "../ui";
 import { AnswerRules } from "./issues/AnswerRules";
 import { IssueBox } from "./issues/IssueBox";
@@ -15,15 +16,19 @@ type View = (typeof VIEWS)[number];
  * The business self-service loop on one page: the issue box (find, fix, verify,
  * close), the curated answers a fix can create, and the reviewer links that feed
  * the box. Same `?view=` states as V2 (`answers`, `reviewers`; the box is bare).
+ * The box's agent filter is `?agent=`, kept across views, so the storyline line
+ * places the feedback steps.
  */
 export function V3Issues() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const raw = params.get("view");
   const view: View = (VIEWS as readonly string[]).includes(raw ?? "") ? (raw as View) : "box";
+  const agent = params.get("agent");
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
+      <StoryHeader />
       <PageHead
         eyebrow={t("v3.issues.eyebrow")}
         title={t("selfService.issues.title")}
@@ -31,7 +36,7 @@ export function V3Issues() {
         end={
           <Filters
             value={view}
-            onChange={(next) => setParams(next === "box" ? {} : { view: next })}
+            onChange={(next) => setParams({ ...(next === "box" ? {} : { view: next }), ...(agent ? { agent } : {}) })}
             options={VIEWS.map((value) => ({ value, label: t(`selfService.tab.${value}`) }))}
           />
         }
