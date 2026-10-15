@@ -140,13 +140,15 @@ function RoleRow({ role, onSaved }: { role: ModelSettingRole; onSaved: (row: Mod
       </td>
       <td style={{ width: 1, whiteSpace: "nowrap" }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <Btn size="sm" disabled={probe.busy || !draft.trim()} onClick={() => void test()}>
+          <Btn size="sm" busy={probe.busy} disabled={!draft.trim()} disabledReason={t("story.reason.typeModelId")} onClick={() => void test()}>
             {t("v3.models.test")}
           </Btn>
           <Btn
             size="sm"
             kind="primary"
-            disabled={saving || !isSavable(role, draft)}
+            busy={saving}
+            disabled={!isSavable(role, draft)}
+            disabledReason={!draft.trim() && !role.allow_empty ? t("story.reason.typeModelId") : t("story.reason.noChanges")}
             onClick={() => void run(() => api.updateModelSetting(role.field, draft.trim()), "v3.models.saved")}
           >
             {t("v3.models.save")}

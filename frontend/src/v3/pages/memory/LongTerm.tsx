@@ -7,6 +7,7 @@ import { api, errorMessage, type MemoryActor, type MemoryNamespace, type MemoryR
 import { actorText, fmtRelevance, shortId, type TokenPaged, useTokenPaged } from "../../../v2/pages/memory/common";
 import { useFailure } from "../../failure";
 import { ago } from "../../format";
+import { Reasoned } from "../../reason";
 import { Btn, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { LoadMore, SourceBadge } from "./common";
 
@@ -139,18 +140,22 @@ export function LongTerm({
             {actors.items.map((a) => <option key={a.actor_id} value={a.actor_id}>{actorText(t, a)}</option>)}
           </select>
           {actors.token && <Btn size="sm" kind="ghost" disabled={actors.loading} onClick={actors.loadMore}>{t("v3.memory.moreActors")}</Btn>}
-          <select className="v3-select" style={{ width: 300 }} value={strategyId ?? ""} disabled={!actorId} aria-label={t("v3.memory.strategy")}
-            onChange={(e) => onSelectStrategy(e.target.value || null)}>
-            <option value="">{t("v3.memory.pickStrategy")}</option>
-            {/* a placeholder in the MIDDLE of the path cannot be resolved from an actor alone */}
-            {namespaces.map((n) => (
-              <option key={n.strategy_id ?? n.template} value={n.strategy_id ?? ""} disabled={!n.resolvable}>
-                {`${n.strategy_name ?? n.template}${n.resolvable ? (n.prefix ? ` — ${t("v3.memory.allSessions")}` : "") : ` — ${t("v3.memory.unresolvable")}`}`}
-              </option>
-            ))}
-          </select>
+          <Reasoned disabledReason={t("story.reason.pickActor")}>
+            <select className="v3-select" style={{ width: 300 }} value={strategyId ?? ""} disabled={!actorId} aria-label={t("v3.memory.strategy")}
+              onChange={(e) => onSelectStrategy(e.target.value || null)}>
+              <option value="">{t("v3.memory.pickStrategy")}</option>
+              {/* a placeholder in the MIDDLE of the path cannot be resolved from an actor alone */}
+              {namespaces.map((n) => (
+                <option key={n.strategy_id ?? n.template} value={n.strategy_id ?? ""} disabled={!n.resolvable}>
+                  {`${n.strategy_name ?? n.template}${n.resolvable ? (n.prefix ? ` — ${t("v3.memory.allSessions")}` : "") : ` — ${t("v3.memory.unresolvable")}`}`}
+                </option>
+              ))}
+            </select>
+          </Reasoned>
           {selected && <span className="mono v3-mem-muted" style={{ fontSize: 12 }} title={selected.template}>{selected.namespace}{selected.prefix ? "/…" : ""}</span>}
-          <span style={{ marginLeft: "auto" }}><Btn size="sm" kind="ghost" disabled={!usable} onClick={records.reload}><RefreshCw size={13} /></Btn></span>
+          <span style={{ marginLeft: "auto" }}><Btn size="sm" kind="ghost" disabled={!usable}
+            disabledReason={!actorId ? t("story.reason.pickActor") : t("story.reason.pickStrategy")}
+            aria-label={t("v3.memory.refresh")} onClick={records.reload}><RefreshCw size={13} /></Btn></span>
         </div>
         <form
           onSubmit={(e) => {
@@ -161,13 +166,16 @@ export function LongTerm({
         >
           <div style={{ position: "relative", flex: 1 }}>
             <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />
-            <input className="v3-input" style={{ paddingLeft: 34 }} value={query} disabled={!actorId} onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("v3.memory.searchPlaceholder")} aria-label={t("v3.memory.searchPlaceholder")} />
+            <Reasoned disabledReason={t("story.reason.pickActor")}>
+              <input className="v3-input" style={{ paddingLeft: 34 }} value={query} disabled={!actorId} onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("v3.memory.searchPlaceholder")} aria-label={t("v3.memory.searchPlaceholder")} />
+            </Reasoned>
           </div>
           <select className="v3-select" style={{ width: 110 }} value={topK} onChange={(e) => setTopK(Number(e.target.value))} aria-label={t("v3.memory.topK")}>
             {TOP_K.map((k) => <option key={k} value={k}>{t("v3.memory.topKValue", { k })}</option>)}
           </select>
-          <Btn kind="primary" type="submit" disabled={!actorId || !query.trim() || searching}>{t("v3.memory.search")}</Btn>
+          <Btn kind="primary" type="submit" busy={searching} disabled={!actorId || !query.trim()}
+            disabledReason={!actorId ? t("story.reason.pickActor") : t("story.reason.typeQuery")}>{t("v3.memory.search")}</Btn>
           {isSearch && <Btn kind="ghost" onClick={() => setResults(null)}>{t("v3.memory.backToList")}</Btn>}
         </form>
       </Panel>

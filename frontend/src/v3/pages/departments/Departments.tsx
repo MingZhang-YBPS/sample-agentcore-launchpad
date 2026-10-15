@@ -77,7 +77,7 @@ function MyDepartments() {
                   <td className="num">{d?.group_count ?? "—"}</td>
                   <td style={{ width: 1, whiteSpace: "nowrap" }}>
                     <Btn size="sm" kind="ghost" disabled={!d?.settings.can_create_users}
-                      title={d?.settings.can_create_users ? undefined : t("v3.departments.invite.disabled")}
+                      disabledReason={d ? t("v3.departments.invite.disabled") : t("story.reason.notLoaded")}
                       onClick={() => d && setInviting(d)}>
                       <UserPlus size={13} /> {t("v3.departments.invite.open")}
                     </Btn>
@@ -185,8 +185,8 @@ function AdminDepartments() {
                             <Archive size={13} /> {t("v3.groups.archive")}
                           </Btn>
                         )}
-                        <Btn size="sm" kind="ghost" disabled={busy || !deletable(d)}
-                          title={deletable(d) ? t("v3.departments.delete") : t("v3.departments.inUse")}
+                        <Btn size="sm" kind="ghost" busy={busy} disabled={!deletable(d)} disabledReason={t("v3.departments.inUse")}
+                          title={t("v3.departments.delete")} aria-label={t("v3.departments.delete")}
                           onClick={() => setConfirm({ kind: "delete", dept: d })}>
                           <Trash2 size={13} />
                         </Btn>

@@ -210,6 +210,7 @@ export function LifecycleSection({ project, onChanged }: { project: ProjectDetai
           danger
           busy={busy}
           confirmDisabled={typed.trim() !== project.id}
+          confirmReason={t("story.reason.typeProjectId")}
           onConfirm={() => void purge()}
           onCancel={() => setPlan(null)}
         >

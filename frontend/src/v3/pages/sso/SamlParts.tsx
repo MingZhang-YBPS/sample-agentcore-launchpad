@@ -111,7 +111,7 @@ export function SamlExchange({ provider, onChanged }: { provider: Provider; onCh
             <span className="row">
               <input className="v3-input mono" value={url} spellCheck={false} placeholder="https://…"
                 onChange={(e) => setUrl(e.target.value)} data-testid="sso-metadata-url" />
-              <Btn size="sm" type="submit" disabled={busy !== null || !url.trim()}>
+              <Btn size="sm" type="submit" busy={busy !== null} disabled={!url.trim()} disabledReason={t("story.reason.fillMetadataUrl")}>
                 <Link2 size={13} aria-hidden="true" /> {t("v3.sso.saml.fetch")}
               </Btn>
             </span>

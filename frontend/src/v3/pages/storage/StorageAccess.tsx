@@ -84,7 +84,7 @@ export function StorageAccess({ entries, onSaved }: { entries: StorageEntry[]; o
               </tbody>
             </table>
           )}
-          <div><Btn kind="primary" disabled={busy || !projectId} onClick={() => void save()}>{t("v3.storage.access.save")}</Btn></div>
+          <div><Btn kind="primary" busy={busy} disabled={!projectId} disabledReason={t("story.reason.pickProject")} onClick={() => void save()}>{t("v3.storage.access.save")}</Btn></div>
         </div>
       )}
     </Panel>

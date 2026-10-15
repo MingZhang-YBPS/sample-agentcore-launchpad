@@ -54,6 +54,7 @@
   display: flex; gap: 12px; width: 100%; padding: 8px 10px; text-align: left; font: inherit; color: var(--v3-text-2);
   border-radius: 7px; border: 0; background: none; cursor: pointer;
 }
-.v3 .v3-vid-chapters button:hover:not(:disabled) { background: var(--v3-ink-3); color: var(--v3-text); }
-.v3 .v3-vid-chapters button:disabled { cursor: not-allowed; opacity: 0.5; }
+.v3 .v3-vid-chapters .v3-why { display: flex; }
+.v3 .v3-vid-chapters button:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--v3-ink-3); color: var(--v3-text); }
+.v3 .v3-vid-chapters button:disabled, .v3 .v3-vid-chapters button[aria-disabled="true"] { cursor: not-allowed; opacity: 0.5; }
 .v3 .v3-vid-chapters .time { flex: none; font-family: var(--v3-mono); font-size: 12px; color: var(--v3-info); }

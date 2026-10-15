@@ -18,6 +18,7 @@ import {
 } from "../../../lib/api/projects";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
+import { firstReason } from "../../reasons";
 import { Btn, Chip, Confirm, Dialog, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import type { ProjectAbilities } from "./ProjectDetail";
 import { ShareNotices } from "./ShareNotices";
@@ -103,7 +104,8 @@ export function SharesTab({
       <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-project-shares-error" />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         {can.share && (
-          <Btn kind="primary" onClick={() => setGranting(true)} disabled={project.workspaces.length === 0}>
+          <Btn kind="primary" onClick={() => setGranting(true)} disabled={project.workspaces.length === 0}
+            disabledReason={t("v3.projects.isolation.noWorkspaces")}>
             <Plus size={14} /> {t("v3.projects.shares.grant")}
           </Btn>
         )}
@@ -343,7 +345,13 @@ function GrantDialog({
       foot={
         <>
           <Btn kind="ghost" onClick={onClose} disabled={busy}>{t("v3.projects.shares.cancel")}</Btn>
-          <Btn kind="primary" onClick={() => void submit()} disabled={busy || !options || problems.length > 0}>
+          <Btn kind="primary" onClick={() => void submit()} busy={busy} disabled={!options || problems.length > 0}
+            disabledReason={firstReason(
+              !options && t("story.reason.notLoaded"),
+              problems.includes("resource") && t("story.reason.pickResource"),
+              problems.includes("grantee") && t("story.reason.pickProject"),
+              t("story.reason.fixDays", { max: options?.max_expiry_days ?? 365 }),
+            )}>
             <Share2 size={14} /> {grantee?.cross_department ? t("v3.projects.shares.request") : t("v3.projects.shares.grant")}
           </Btn>
         </>

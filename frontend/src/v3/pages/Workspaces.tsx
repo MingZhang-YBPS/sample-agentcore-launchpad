@@ -401,10 +401,10 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
         end={
           <>
             <Btn kind="ghost" onClick={() => void reload()}><RefreshCw size={14} /></Btn>
-            <Btn disabled={row.is_default || busy} title={row.is_default ? t("workspacesPage.detail.hubNote") : undefined}
+            <Btn busy={busy} disabled={row.is_default} disabledReason={t("workspacesPage.detail.hubNote")}
               onClick={() => setConfirm("detach")}>{t("v2.workspaces.detach")}</Btn>
             {canPurge && <Btn kind="danger" onClick={() => void openPurge()}><Trash2 size={14} /> {t("v2.workspaces.purge")}</Btn>}
-            <Btn kind="primary" disabled={!canBootstrap} title={bootstrapDisabledReason} onClick={() => setConfirm("bootstrap")}>
+            <Btn kind="primary" busy={busy} disabled={!canBootstrap} disabledReason={bootstrapDisabledReason} onClick={() => setConfirm("bootstrap")}>
               <Play size={14} />
               {t(bootstrapping ? "v2.workspaces.bootstrapRunning" : resume ? "v2.workspaces.bootstrapResume" : "v2.workspaces.bootstrapRun")}
             </Btn>

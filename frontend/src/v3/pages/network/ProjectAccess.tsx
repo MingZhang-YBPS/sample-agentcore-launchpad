@@ -8,6 +8,7 @@ import { projectsApi } from "../../../lib/api/projects";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Notice, Panel, Skeleton } from "../../ui";
 
 /**
@@ -86,8 +87,10 @@ export function ProjectAccess({ profiles, onSaved }: { profiles: NetworkProfile[
                     </td>
                     <td><b>{p.name}</b> <small className="mono">{p.id}</small></td>
                     <td style={{ width: 1 }}>
-                      <input type="radio" name="v3-network-default" aria-label={t("v3.network.access.default")}
-                        disabled={!chosen.includes(p.id)} checked={defaultId === p.id} onChange={() => setDefaultId(p.id)} />
+                      <Reasoned disabledReason={t("story.reason.allowFirst")}>
+                        <input type="radio" name="v3-network-default" aria-label={t("v3.network.access.default")}
+                          disabled={!chosen.includes(p.id)} checked={defaultId === p.id} onChange={() => setDefaultId(p.id)} />
+                      </Reasoned>
                     </td>
                   </tr>
                 ))}
@@ -95,7 +98,7 @@ export function ProjectAccess({ profiles, onSaved }: { profiles: NetworkProfile[
             </table>
           )}
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn kind="primary" disabled={busy || !projectId} onClick={() => void save()}>{t("v3.network.access.save")}</Btn>
+            <Btn kind="primary" busy={busy} disabled={!projectId} disabledReason={t("story.reason.pickProject")} onClick={() => void save()}>{t("v3.network.access.save")}</Btn>
             {defaultId && <Btn kind="ghost" disabled={busy} onClick={() => setDefaultId("")}>{t("v3.network.access.noDefault")}</Btn>}
           </div>
         </div>

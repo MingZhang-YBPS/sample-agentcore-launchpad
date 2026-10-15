@@ -21,6 +21,7 @@ import {
 import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { MappingsEditor, type MappingTargets } from "./MappingsEditor";
 import {
@@ -120,7 +121,8 @@ function CreateDialog({ presets, initial, onClose, onCreated }: {
       foot={(
         <>
           <Btn kind="ghost" onClick={onClose} disabled={busy}>{t("common.cancel")}</Btn>
-          <Btn kind="primary" onClick={() => void create()} disabled={busy || !preset || !name.trim()}>
+          <Btn kind="primary" onClick={() => void create()} busy={busy} disabled={!preset || !name.trim()}
+            disabledReason={!preset ? t("story.reason.pickProviderType") : t("story.reason.fillName")}>
             {t("v3.sso.create")}
           </Btn>
         </>
@@ -178,7 +180,7 @@ function TestPanel({ provider, busy, onTest }: { provider: Provider; busy: boole
     <Panel
       title={t("v3.sso.section.test")}
       end={(
-        <Btn size="sm" onClick={onTest} disabled={busy || !provider.issuer}>
+        <Btn size="sm" onClick={onTest} busy={busy} disabled={!provider.issuer} disabledReason={t("story.reason.saveIssuer")}>
           <RefreshCw size={13} className={busy ? "spin" : undefined} aria-hidden="true" /> {t("v3.sso.test")}
         </Btn>
       )}
@@ -297,7 +299,8 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
           </span>
         </div>
         <div className="end">
-          <Btn kind={provider.enabled ? "ghost" : "primary"} onClick={() => void toggle()} disabled={busy !== null || (!provider.enabled && !canEnable(provider))}>
+          <Btn kind={provider.enabled ? "ghost" : "primary"} onClick={() => void toggle()} busy={busy !== null}
+            disabled={!provider.enabled && !canEnable(provider)} disabledReason={t("story.reason.ssoIncomplete")}>
             <Power size={14} aria-hidden="true" /> {t(provider.enabled ? "v3.sso.disable" : "v3.sso.enable")}
           </Btn>
           <Btn kind="ghost" onClick={() => setConfirmDelete(true)} disabled={busy !== null} title={t("v3.sso.delete")}>
@@ -348,9 +351,11 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
             </label>
             <label className="v3-field">
               <span>{t("v3.sso.field.clientSecret")}</span>
-              <input className="v3-input mono" type="password" autoComplete="new-password" value={draft.client_secret}
-                placeholder={secretPlaceholder} disabled={draft.clear_secret}
-                onChange={(e) => set("client_secret", e.target.value)} data-testid="sso-secret" />
+              <Reasoned disabledReason={t("story.reason.secretClearing")}>
+                <input className="v3-input mono" type="password" autoComplete="new-password" value={draft.client_secret}
+                  placeholder={secretPlaceholder} disabled={draft.clear_secret}
+                  onChange={(e) => set("client_secret", e.target.value)} data-testid="sso-secret" />
+              </Reasoned>
               <small className="v3-hint">{t("v3.sso.hint.clientSecret")}</small>
               {provider.client_secret_set && (
                 <label className="v3-sso-check">
@@ -441,8 +446,11 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
 
       <div className="v3-sso-savebar" data-on={dirty} aria-hidden={!dirty}>
         <span><Lamp s="wait" live /> {t("v3.sso.unsaved")}</span>
-        <Btn kind="ghost" onClick={() => setDraft(draftOf(provider))} disabled={busy !== null || !dirty}>{t("v3.sso.discard")}</Btn>
-        <Btn kind="primary" onClick={() => void save()} disabled={busy !== null || !dirty || problems.length > 0}>
+        <Btn kind="ghost" onClick={() => setDraft(draftOf(provider))} busy={busy !== null} disabled={!dirty} disabledReason={t("story.reason.noChanges")}>
+          {t("v3.sso.discard")}
+        </Btn>
+        <Btn kind="primary" onClick={() => void save()} busy={busy !== null} disabled={!dirty || problems.length > 0}
+          disabledReason={!dirty ? t("story.reason.noChanges") : t("story.reason.fixErrors")}>
           {t("v3.sso.save")}
         </Btn>
       </div>

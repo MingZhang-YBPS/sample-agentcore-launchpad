@@ -12,6 +12,7 @@ import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, Skeleton, Stat } from "../../ui";
 import { cloudSignal, datasetOrigin, datasetRows } from "./common";
+import { Reasoned } from "../../reason";
 
 const ROWS = 50;
 const editHref = (id: string) => `/v2/eval/data?tab=datasets&view=dataset-edit&id=${encodeURIComponent(id)}`;
@@ -224,7 +225,8 @@ export function DatasetDetail({ id }: { id: string }) {
         end={
           <>
             {!simulated && <Link to={`/v2/eval/tasks?view=new&dataset=${encodeURIComponent(ds.id)}`} className="v3-btn">{t("v2.datasets.useInTask")}</Link>}
-            <Btn disabled={simulated || picked.size === 0} title={picked.size === 0 ? t("v2.datasets.copyPickHint") : undefined}
+            <Btn disabled={simulated || picked.size === 0}
+              disabledReason={simulated ? t("story.reason.simulatedDataset") : t("v2.datasets.copyPickHint")}
               onClick={() => setCopyName(`${ds.name}-subset`.slice(0, 64))}>
               <Copy size={14} /> {t("v2.datasets.copySelected", { count: picked.size })}
             </Btn>
@@ -250,9 +252,11 @@ export function DatasetDetail({ id }: { id: string }) {
               <thead>
                 <tr>
                   <th style={{ width: 36 }}>
-                    <input type="checkbox" aria-label={t("v2.datasets.pickAll")} disabled={simulated}
-                      checked={rows.length > 0 && picked.size === rows.length}
-                      onChange={(e) => setPicked(e.target.checked ? new Set(rows.map((_, i) => i)) : new Set())} />
+                    <Reasoned disabledReason={t("story.reason.simulatedDataset")}>
+                      <input type="checkbox" aria-label={t("v2.datasets.pickAll")} disabled={simulated}
+                        checked={rows.length > 0 && picked.size === rows.length}
+                        onChange={(e) => setPicked(e.target.checked ? new Set(rows.map((_, i) => i)) : new Set())} />
+                    </Reasoned>
                   </th>
                   <th className="num" style={{ width: 48 }}>#</th>
                   <th>Input</th>
@@ -263,7 +267,11 @@ export function DatasetDetail({ id }: { id: string }) {
               <tbody>
                 {rows.slice(0, limit).map((r, i) => (
                   <tr key={i}>
-                    <td><input type="checkbox" aria-label={t("v2.datasets.pickRow", { n: i + 1 })} disabled={simulated} checked={picked.has(i)} onChange={() => toggle(i)} /></td>
+                    <td>
+                      <Reasoned disabledReason={t("story.reason.simulatedDataset")}>
+                        <input type="checkbox" aria-label={t("v2.datasets.pickRow", { n: i + 1 })} disabled={simulated} checked={picked.has(i)} onChange={() => toggle(i)} />
+                      </Reasoned>
+                    </td>
                     <td className="num" style={{ color: "var(--v3-text-3)" }}>{i + 1}</td>
                     <td><span className="v3-dc-clip" title={r.input}>{r.input}</span></td>
                     <td>{r.expected ? <span className="v3-dc-clip" title={r.expected}>{r.expected}</span> : <span style={{ color: "var(--v3-text-3)" }}>—</span>}</td>
@@ -288,8 +296,8 @@ export function DatasetDetail({ id }: { id: string }) {
           onClose={() => setCopyName(null)}
           foot={
             <>
-              <Btn kind="ghost" onClick={() => setCopyName(null)} disabled={copying}>{t("v3.common.cancel")}</Btn>
-              <Btn kind="primary" disabled={copying || !copyName.trim()} onClick={() => void copy()}>{t("v2.datasets.copyConfirm")}</Btn>
+              <Btn kind="ghost" onClick={() => setCopyName(null)} busy={copying}>{t("v3.common.cancel")}</Btn>
+              <Btn kind="primary" busy={copying} disabled={!copyName.trim()} disabledReason={t("story.reason.fillName")} onClick={() => void copy()}>{t("v2.datasets.copyConfirm")}</Btn>
             </>
           }
         >

@@ -14,6 +14,8 @@ import {
   projectIsolationApi,
 } from "../../../lib/api/projects";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
+import { firstReason } from "../../reasons";
 import { Btn, Chip, Confirm, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import "./isolation.css";
 import {
@@ -86,6 +88,15 @@ export function IsolationSection({ project, abilities }: { project: ProjectDetai
       setBusy(false);
     }
   };
+  // why a mode position is off, in the order it would have to be fixed
+  const modeLock = (mode: IsolationMode) =>
+    firstReason(
+      project.status !== "active" && t("story.reason.projectArchived"),
+      !abilities.admin && t("v3.projects.isolation.readOnly"),
+      mode === "shared" && view.legacy_retired && t("story.reason.sharedRetired"),
+      mode === "shared" && view.mode === "shared" && t("story.reason.currentMode"),
+      mode === "shared" && isBusy(view, migration) && t("story.reason.waitRunning"),
+    );
   const setMode = (mode: IsolationMode) => {
     if (mode === view.mode) return;
     if (mode === "isolated") setPending({ kind: "enable" });
@@ -104,17 +115,18 @@ export function IsolationSection({ project, abilities }: { project: ProjectDetai
           <div className="v3-iso-switch" data-mode={view.mode} role="group" aria-label={t("v3.projects.isolation.mode")}>
             <span className="thumb" aria-hidden="true" />
             {(["shared", "isolated"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                aria-pressed={view.mode === mode}
-                disabled={!can || busy || (mode === "shared" && view.legacy_retired) || (mode === "shared" && !canRevert(view, migration))}
-                onClick={() => setMode(mode)}
-                data-testid={`project-isolation-mode-${mode}`}
-              >
-                <b>{t(`v3.projects.isolation.modes.${mode}`)}</b>
-                <small>{t(`v3.projects.isolation.modes.${mode}Hint`)}</small>
-              </button>
+              <Reasoned key={mode} disabledReason={modeLock(mode)}>
+                <button
+                  type="button"
+                  aria-pressed={view.mode === mode}
+                  disabled={!can || busy || (mode === "shared" && view.legacy_retired) || (mode === "shared" && !canRevert(view, migration))}
+                  onClick={() => setMode(mode)}
+                  data-testid={`project-isolation-mode-${mode}`}
+                >
+                  <b>{t(`v3.projects.isolation.modes.${mode}`)}</b>
+                  <small>{t(`v3.projects.isolation.modes.${mode}Hint`)}</small>
+                </button>
+              </Reasoned>
             ))}
           </div>
           {view.legacy_retired && <span className="v3-iso-retired">{t("v3.projects.isolation.retired")}</span>}
@@ -149,10 +161,12 @@ export function IsolationSection({ project, abilities }: { project: ProjectDetai
             <span className="grow v3-hint">{t(view.legacy_retired ? "v3.projects.isolation.retiredHint" : "v3.projects.isolation.retireHint")}</span>
             {!view.legacy_retired && (
               <>
-                <Btn kind="ghost" disabled={busy || !canRevert(view, migration)} onClick={() => setPending({ kind: "revert" })}>
+                <Btn kind="ghost" busy={busy} disabled={!canRevert(view, migration)} disabledReason={t("story.reason.waitRunning")} onClick={() => setPending({ kind: "revert" })}>
                   <Undo2 size={14} /> {t("v3.projects.isolation.revert")}
                 </Btn>
-                <Btn kind="danger" disabled={busy || !canRetire(view, migration)} onClick={() => setPending({ kind: "retire" })}>
+                <Btn kind="danger" busy={busy} disabled={!canRetire(view, migration)}
+                  disabledReason={isBusy(view, migration) ? t("story.reason.waitRunning") : t("story.reason.migrateEveryWorkspace")}
+                  onClick={() => setPending({ kind: "retire" })}>
                   <Unplug size={14} /> {t("v3.projects.isolation.retire")}
                 </Btn>
               </>

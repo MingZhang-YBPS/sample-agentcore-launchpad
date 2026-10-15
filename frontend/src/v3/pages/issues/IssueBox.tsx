@@ -269,7 +269,8 @@ function IssueBench({ id, onChanged, onClose }: { id: string; onChanged: () => v
                 <textarea className="v3-input" rows={4} value={answer} onChange={(e) => setAnswer(e.target.value)} />
               </label>
               <div>
-                <Btn kind="primary" disabled={busy || !pattern.trim() || !answer.trim()}
+                <Btn kind="primary" busy={busy} disabled={!pattern.trim() || !answer.trim()}
+                  disabledReason={!pattern.trim() ? t("story.reason.fillPattern") : t("story.reason.fillAnswer")}
                   onClick={() => void run(() => ruleApi.create(issue.agent_id, { match, pattern, answer, issue_id: issue.id }), t("selfService.issues.ruleAdded"))}>
                   {t("selfService.issues.saveRule")}
                 </Btn>

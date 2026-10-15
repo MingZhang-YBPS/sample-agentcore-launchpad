@@ -13,6 +13,7 @@ import { evaluatorSummary } from "../../v2/tasks";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad } from "../hooks";
+import { permReason } from "../reasons";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { attentionOf, configSignal, modeOf } from "./online/common";
 import { OnlineDetail } from "./online/Detail";
@@ -73,7 +74,7 @@ function OnlineList() {
         end={
           <>
             <Btn kind="ghost" onClick={reload}><RefreshCw size={14} /></Btn>
-            <Btn kind="primary" disabled={!mayRun} title={mayRun ? undefined : t("v2.tasks.noPermission")}
+            <Btn kind="primary" disabled={!mayRun} disabledReason={permReason(t, "eval.run")}
               onClick={() => navigate(onlineHref({ view: "new" }))}>
               <Plus size={14} /> {t("v3.online.new")}
             </Btn>
@@ -218,17 +219,22 @@ function OnlineList() {
                           </Link>
                         )}
                         {canToggle(row) && row.execution_status === "ENABLED" && (
-                          <Btn size="sm" kind="ghost" disabled={locked} title={t("v2.tasks.pause")} onClick={() => action.ask({ row, action: "pause" })}>
+                          <Btn size="sm" kind="ghost" busy={action.busy} disabled={isTransient(row)} disabledReason={t("story.reason.settling")}
+                            title={t("v2.tasks.pause")} aria-label={t("v2.tasks.pause")} onClick={() => action.ask({ row, action: "pause" })}>
                             <Pause size={13} />
                           </Btn>
                         )}
                         {canToggle(row) && row.execution_status === "DISABLED" && (
-                          <Btn size="sm" kind="ghost" disabled={locked || !mayRun} title={t("v2.tasks.resume")} onClick={() => action.ask({ row, action: "resume" })}>
+                          <Btn size="sm" kind="ghost" busy={action.busy} disabled={isTransient(row) || !mayRun}
+                            disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.settling")}
+                            title={t("v2.tasks.resume")} aria-label={t("v2.tasks.resume")} onClick={() => action.ask({ row, action: "resume" })}>
                             <Play size={13} />
                           </Btn>
                         )}
                         {canToggle(row) && (
-                          <Btn size="sm" kind="ghost" disabled={action.busy || row.status === "DELETING" || !mayRun} title={t("v2.common.delete")}
+                          <Btn size="sm" kind="ghost" busy={action.busy} disabled={row.status === "DELETING" || !mayRun}
+                            disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.deleting")}
+                            title={t("v2.common.delete")} aria-label={t("v2.common.delete")}
                             onClick={() => action.ask({ row, action: "delete" })}>
                             <Trash2 size={13} />
                           </Btn>

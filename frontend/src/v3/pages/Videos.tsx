@@ -16,6 +16,7 @@ import {
   videoTimestamp,
   type VideoVersionFilter,
 } from "../../lib/videos";
+import { Reasoned } from "../reason";
 import { Btn, Chip, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../ui";
 
 /* ── library ─────────────────────────────────────────────────────────────── */
@@ -98,10 +99,12 @@ function Library({
       <div className="v3-vid-bar">
         <label className="v3-vid-section">
           <span>{t("videoManage.section")}</span>
-          <select className="v3-select" value={section ?? ""} disabled={!category} onChange={(e) => onFilter("section", e.target.value)}>
-            <option value="">{t("videos.all")}</option>
-            {sectionOptions.map((item) => <option key={item.id} value={item.id}>{item.title[locale]}</option>)}
-          </select>
+          <Reasoned disabledReason={t("story.reason.pickArea")}>
+            <select className="v3-select" value={section ?? ""} disabled={!category} onChange={(e) => onFilter("section", e.target.value)}>
+              <option value="">{t("videos.all")}</option>
+              {sectionOptions.map((item) => <option key={item.id} value={item.id}>{item.title[locale]}</option>)}
+            </select>
+          </Reasoned>
         </label>
         <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 300 }}>
           <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />
@@ -334,10 +337,12 @@ function Player({
               <ol className="v3-vid-chapters">
                 {video.chapters.map((chapter) => (
                   <li key={chapter.startSeconds}>
-                    <button type="button" disabled={mediaFailed} onClick={() => playChapter(chapter.startSeconds)}>
-                      <span className="time">{videoTimestamp(chapter.startSeconds)}</span>
-                      <span>{chapter.title[locale]}</span>
-                    </button>
+                    <Reasoned disabledReason={t("story.reason.videoFailed")}>
+                      <button type="button" disabled={mediaFailed} onClick={() => playChapter(chapter.startSeconds)}>
+                        <span className="time">{videoTimestamp(chapter.startSeconds)}</span>
+                        <span>{chapter.title[locale]}</span>
+                      </button>
+                    </Reasoned>
                   </li>
                 ))}
               </ol>

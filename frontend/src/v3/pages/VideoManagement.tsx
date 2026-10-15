@@ -10,6 +10,7 @@ import { api, ApiError, errorMessage } from "../../lib/api";
 import type { ConsoleVersion, ManagedVideo, ManagedVideoCatalog, VideoContent, VideoLocale, VideoTaxonomy } from "../../lib/videos";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
+import { Reasoned } from "../reason";
 import { Btn, Chip, Confirm, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 
 const NEW = "new";
@@ -311,7 +312,7 @@ function Editor({
             {row && <Btn kind="ghost" onClick={() => void load()} disabled={busy}><RotateCw size={14} /></Btn>}
             {row && row.status === "published" && <Btn onClick={() => setConfirm("unpublish")} disabled={busy}>{t("videoManage.unpublish")}</Btn>}
             {row && <Btn kind="danger" onClick={() => setConfirm("delete")} disabled={busy}>{t("v3.videomgmt.delete")}</Btn>}
-            <Btn kind="primary" onClick={() => setConfirm("publish")} disabled={!canPublish} title={publishReason ? t(publishReason) : undefined}>
+            <Btn kind="primary" onClick={() => setConfirm("publish")} busy={busy} disabled={!canPublish} disabledReason={publishReason ? t(publishReason) : null}>
               {t("videoManage.publish")}
             </Btn>
           </>
@@ -341,10 +342,12 @@ function Editor({
               </label>
               <label className="v3-field">
                 <span>{t("videoManage.section")} *</span>
-                <select className="v3-select" value={draft.section_id} disabled={!draft.category_id} onChange={(e) => update("section_id", e.target.value)}>
-                  <option value="">{t("videoManage.chooseSection")}</option>
-                  {sections.map((s) => <option key={s.id} value={s.id}>{s.title[locale]}</option>)}
-                </select>
+                <Reasoned disabledReason={t("story.reason.pickArea")}>
+                  <select className="v3-select" value={draft.section_id} disabled={!draft.category_id} onChange={(e) => update("section_id", e.target.value)}>
+                    <option value="">{t("videoManage.chooseSection")}</option>
+                    {sections.map((s) => <option key={s.id} value={s.id}>{s.title[locale]}</option>)}
+                  </select>
+                </Reasoned>
               </label>
             </div>
             <div className="v3-grid c2" style={{ alignItems: "start" }}>
@@ -415,7 +418,7 @@ function Editor({
             </details>
           </fieldset>
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 16 }}>
-            <Btn kind="primary" disabled={!canSave} title={saveReason ? t(saveReason) : undefined} onClick={() => void save()}>
+            <Btn kind="primary" busy={busy} disabled={!canSave} disabledReason={saveReason ? t(saveReason) : null} onClick={() => void save()}>
               {t(busy ? "videoManage.saving" : "v3.videomgmt.save")}
             </Btn>
             {saveReason && !busy && <span style={{ color: "var(--v3-text-3)", fontSize: 13 }}>{t(saveReason)}</span>}

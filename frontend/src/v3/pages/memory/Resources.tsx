@@ -11,6 +11,7 @@ import { isTransient, POLL_MS } from "../../../v2/pages/memory/common";
 import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import { permReason } from "../../reasons";
 import { Btn, Chip, Confirm, Empty, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import { memSignal } from "./signal";
 
@@ -95,7 +96,7 @@ export function Resources() {
           {mayManage ? (
             <Link className="v3-btn primary" to="/v2/memory?view=resource-new"><Plus size={14} /> {t("v3.memory.newResource")}</Link>
           ) : (
-            <Btn kind="primary" disabled title={t("v2.memory.res.noPermission")}><Plus size={14} /> {t("v3.memory.newResource")}</Btn>
+            <Btn kind="primary" disabled disabledReason={permReason(t, "memory.manage")}><Plus size={14} /> {t("v3.memory.newResource")}</Btn>
           )}
         </span>
       </div>
@@ -150,17 +151,18 @@ export function Resources() {
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                         {!row.managed ? (
                           // detected, not managed: only an administrator's adopt applies
-                          isAdmin ? <Btn size="sm" disabled={!row.id || busy} onClick={() => setPending({ row, kind: "adopt" })}>{t("v2.memory.res.adopt")}</Btn> : <span className="v3-mem-muted">—</span>
+                          isAdmin ? <Btn size="sm" busy={busy} disabled={!row.id} disabledReason={t("story.reason.noIdYet")} onClick={() => setPending({ row, kind: "adopt" })}>{t("v2.memory.res.adopt")}</Btn> : <span className="v3-mem-muted">—</span>
                         ) : (
                           <>
                             {mayManage && row.id && !isTransient(row.status) ? (
                               <Link className="v3-btn sm ghost" to={editHref(row.id)}>{t("v3.memory.edit")}</Link>
                             ) : (
-                              <Btn size="sm" kind="ghost" disabled title={mayManage ? undefined : t("v2.memory.res.noPermission")}>{t("v3.memory.edit")}</Btn>
+                              <Btn size="sm" kind="ghost" disabled
+                                disabledReason={!mayManage ? permReason(t, "memory.manage") : !row.id ? t("story.reason.noIdYet") : t("story.reason.settling")}>{t("v3.memory.edit")}</Btn>
                             )}
                             {/* the bootstrap memory is delete-protected: no delete at all */}
                             {!row.is_default && (
-                              <Btn size="sm" kind="ghost" disabled={!row.id || block !== null || busy} title={block ?? undefined}
+                              <Btn size="sm" kind="ghost" busy={busy} disabled={!row.id || block !== null} disabledReason={block ?? t("story.reason.noIdYet")}
                                 onClick={() => setPending({ row, kind: "delete" })}>{t("v3.memory.delete")}</Btn>
                             )}
                           </>

@@ -277,7 +277,7 @@ function Targets() {
         end={
           <span style={{ display: "inline-flex", gap: 8 }}>
             <Btn size="sm" kind="ghost" onClick={list.reload} title={t("v3.identity.refresh")}><RefreshCw size={13} /></Btn>
-            {manage && <Btn size="sm" kind="primary" disabled={noGateway} onClick={() => setCreating(true)}><Plus size={13} /> {t("v2.connections.targets.new")}</Btn>}
+            {manage && <Btn size="sm" kind="primary" disabled={noGateway} disabledReason={t("v2.connections.targets.noGateway")} onClick={() => setCreating(true)}><Plus size={13} /> {t("v2.connections.targets.new")}</Btn>}
           </span>
         }>
         <p className="v3-idn-sub">

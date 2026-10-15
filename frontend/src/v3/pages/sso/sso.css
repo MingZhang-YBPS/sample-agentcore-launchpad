@@ -367,6 +367,9 @@
 .v3 .v3-sso-toggle[data-on="true"] .track::after { transform: translateX(14px); background: var(--v3-ok); }
 .v3 .v3-sso-toggle input:focus-visible + .track { outline: 2px solid var(--v3-ok); outline-offset: 2px; }
 .v3 .v3-sso-toggle input:disabled ~ * { opacity: 0.55; }
+/* off with a reason (reason.tsx): the wrapper sits over the track so hovering it shows why */
+.v3 .v3-sso-toggle > .v3-why { position: absolute; top: 10px; left: 12px; width: 34px; height: 20px; }
+.v3 .v3-sso-toggle > .v3-why:has(> input:disabled) ~ * { opacity: 0.55; }
 .v3 .v3-sso-toggle .txt { display: grid; gap: 2px; }
 .v3 .v3-sso-toggle .txt b { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--v3-text); }
 .v3 .v3-sso-toggle .txt small { font-size: 12px; line-height: 1.5; color: var(--v3-text-3); }

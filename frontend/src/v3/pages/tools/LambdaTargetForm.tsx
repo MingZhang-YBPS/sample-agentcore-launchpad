@@ -85,7 +85,7 @@ export function LambdaTargetForm({ onCreated }: { onCreated?: (target: LambdaToo
       <div className="v3-hint">{t("lambdaTool.form.schemaHint")}</div>
       {error(errors.schema)}
       <div>
-        <Btn kind="primary" type="submit" disabled={busy || (touched && invalid)}>
+        <Btn kind="primary" type="submit" busy={busy} disabled={touched && invalid} disabledReason={t("story.reason.fixErrors")}>
           {t("lambdaTool.form.submit")}
         </Btn>
       </div>

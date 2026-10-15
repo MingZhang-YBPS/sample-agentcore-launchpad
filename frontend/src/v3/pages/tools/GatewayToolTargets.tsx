@@ -110,7 +110,7 @@ export function GatewayToolTargets() {
                   </Btn>
                   {/* a target another project lent is its owner's to delete */}
                   {!sharedFromOf(row) && (
-                    <Btn size="sm" kind="danger" disabled={busy || row.status === "publishing"} onClick={() => setDeleting(row)}>
+                    <Btn size="sm" kind="danger" busy={busy} disabled={row.status === "publishing"} disabledReason={t("story.reason.publishingNow")} onClick={() => setDeleting(row)}>
                       {t("lambdaTool.list.delete")}
                     </Btn>
                   )}

@@ -9,6 +9,7 @@ import { api, type ConsoleUser, errorMessage } from "../../../lib/api";
 import { type ProjectListFilter, type ProjectStatus, projectsApi, type ProjectSummary } from "../../../lib/api/projects";
 import { useProject } from "../../../workspace/project-context";
 import { useLoad, useToast } from "../../hooks";
+import { firstReason } from "../../reasons";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { isProjectId, slugFromName } from "./model";
 import { useStructureNames } from "./useStructureNames";
@@ -237,7 +238,15 @@ function CreateProjectDialog({
       foot={
         <>
           <Btn kind="ghost" onClick={onClose} disabled={busy}>{t("v3.projects.cancel")}</Btn>
-          <Btn kind="primary" onClick={() => void submit()} disabled={busy || !valid}>{t("v3.projects.create.submit")}</Btn>
+          <Btn kind="primary" onClick={() => void submit()} busy={busy} disabled={!valid}
+            disabledReason={firstReason(
+              !idValid && t("story.reason.fixProjectId"),
+              !name.trim() && t("story.reason.fillName"),
+              chosen.length === 0 && t("story.reason.pickWorkspace"),
+              t("story.reason.pickDepartment"),
+            )}>
+            {t("v3.projects.create.submit")}
+          </Btn>
         </>
       }
     >

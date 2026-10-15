@@ -48,10 +48,10 @@ export function V3Announcements() {
         {total > PAGE_SIZE && (
           <nav className="v3-nows-pager" aria-label={t("announcements.pagination")}>
             <span className="mono">{t("pager.total", { count: total })}</span>
-            <Btn size="sm" kind="ghost" disabled={page.loading || offset === 0}
+            <Btn size="sm" kind="ghost" busy={page.loading} disabled={offset === 0} disabledReason={t("story.reason.firstPage")}
               onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>‹ {t("pager.prev")}</Btn>
             <span className="mono">{t("pager.page", { page: Math.floor(offset / PAGE_SIZE) + 1, pages })}</span>
-            <Btn size="sm" kind="ghost" disabled={page.loading || offset + PAGE_SIZE >= total}
+            <Btn size="sm" kind="ghost" busy={page.loading} disabled={offset + PAGE_SIZE >= total} disabledReason={t("story.reason.lastPage")}
               onClick={() => setOffset(offset + PAGE_SIZE)}>{t("pager.next")} ›</Btn>
           </nav>
         )}

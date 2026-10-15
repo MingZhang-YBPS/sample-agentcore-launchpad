@@ -2,6 +2,7 @@ import { Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import { Reasoned } from "../../reason";
 import { Btn } from "../../ui";
 import { type MembershipRow, suggestedRole } from "./forms";
 import type { RoleOption } from "./structure";
@@ -32,7 +33,7 @@ export function MembershipRows({
   targets,
   rolesFor,
   error,
-  disabled,
+  busy,
 }: {
   kind: "projects" | "groups";
   rows: MembershipRow[];
@@ -40,7 +41,8 @@ export function MembershipRows({
   targets: { id: string; name: string }[];
   rolesFor: (id: string) => RoleOption[];
   error?: string | null;
-  disabled?: boolean;
+  /** a save is running: every row locks */
+  busy?: boolean;
 }) {
   const { t } = useTranslation();
   const set = (index: number, next: Partial<MembershipRow>) =>
@@ -55,7 +57,7 @@ export function MembershipRows({
         const roles = row.id ? rolesFor(row.id) : [];
         return (
           <div key={index} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <select className="v3-select" style={{ flex: "2 1 180px" }} value={row.id} disabled={disabled}
+            <select className="v3-select" style={{ flex: "2 1 180px" }} value={row.id} disabled={busy}
               aria-label={t(`v3.users.memberships.${kind}Target`)}
               onChange={(e) => {
                 const options = rolesFor(e.target.value);
@@ -66,13 +68,15 @@ export function MembershipRows({
                 <option key={target.id} value={target.id} disabled={target.id !== row.id && taken.has(target.id)}>{target.name}</option>
               ))}
             </select>
-            <select className="v3-select" style={{ flex: "1 1 140px" }} value={row.role} disabled={disabled || !row.id}
-              aria-label={t("v3.users.memberships.role")} onChange={(e) => set(index, { role: e.target.value })}>
-              <option value="">—</option>
-              {roles.map((role) => <option key={role.key} value={role.key}>{role.label}</option>)}
-              {row.role && !roles.some((role) => role.key === row.role) && <option value={row.role}>{row.role}</option>}
-            </select>
-            <Btn size="sm" kind="ghost" disabled={disabled} title={t("v3.users.memberships.remove")}
+            <Reasoned disabledReason={busy ? null : t(kind === "projects" ? "story.reason.pickProject" : "story.reason.pickGroup")}>
+              <select className="v3-select" style={{ flex: "1 1 140px" }} value={row.role} disabled={busy || !row.id}
+                aria-label={t("v3.users.memberships.role")} onChange={(e) => set(index, { role: e.target.value })}>
+                <option value="">—</option>
+                {roles.map((role) => <option key={role.key} value={role.key}>{role.label}</option>)}
+                {row.role && !roles.some((role) => role.key === row.role) && <option value={row.role}>{row.role}</option>}
+              </select>
+            </Reasoned>
+            <Btn size="sm" kind="ghost" busy={busy} title={t("v3.users.memberships.remove")} aria-label={t("v3.users.memberships.remove")}
               onClick={() => onChange(rows.filter((_, i) => i !== index))}>
               <X size={13} />
             </Btn>
@@ -80,7 +84,7 @@ export function MembershipRows({
         );
       })}
       <div>
-        <Btn size="sm" kind="ghost" disabled={disabled || !firstFree}
+        <Btn size="sm" kind="ghost" busy={busy} disabled={!firstFree} disabledReason={t("story.reason.allListed")}
           onClick={() => {
             const id = firstFree?.id ?? "";
             onChange([...rows, { id, role: suggestedRole(rolesFor(id)) }]);

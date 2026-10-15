@@ -348,7 +348,9 @@ function PlanPanel({ p, onStarted }: { p: PromotionInfo; onStarted: () => void }
       signal={data ? (data.can_execute ? "info" : "wait") : undefined}
       end={
         can("promotion.approve") && (
-          <Btn size="sm" kind="primary" disabled={!data?.can_execute} onClick={() => setConfirming(true)}>
+          <Btn size="sm" kind="primary" disabled={!data?.can_execute} onClick={() => setConfirming(true)}
+            disabledReason={!data ? t("story.reason.notLoaded")
+              : data.blocked_by.length ? t("v2.promotions.blockedBy", { keys: data.blocked_by.join(", ") }) : t("story.reason.unavailable")}>
             <Play size={13} /> {t("v2.promotions.execute")}
           </Btn>
         )

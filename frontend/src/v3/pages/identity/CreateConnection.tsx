@@ -101,7 +101,7 @@ export function CreateConnection({ onClose, onCreated }: { onClose: () => void; 
       foot={
         <>
           <Btn kind="ghost" onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || !template} onClick={() => void submit()}>{t("v2.connections.create")}</Btn>
+          <Btn kind="primary" busy={busy} disabled={!template} disabledReason={t("story.reason.notLoaded")} onClick={() => void submit()}>{t("v2.connections.create")}</Btn>
         </>
       }
     >

@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { type ProjectDetail, projectQuotasApi } from "../../../lib/api/projects";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
+import { permReason } from "../../reasons";
 import { Btn, Chip, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import type { ProjectAbilities } from "./ProjectDetail";
 import { formatQuota, type QuotaDraft, quotaDraft, quotaErrors, quotaPatch, usageSignal } from "./quotasModel";
@@ -94,17 +96,20 @@ export function QuotasSection({ project, abilities }: { project: ProjectDetail; 
                     <td>{item.limit === null ? t("v3.projects.quotas.unlimited") : formatQuota(item, item.limit)}</td>
                     <td>{formatQuota(item, item.department_cap)}</td>
                     <td>
-                      <input
-                        className="v3-input"
-                        inputMode={item.unit === "usd" ? "decimal" : "numeric"}
-                        style={{ maxWidth: 140 }}
-                        value={draft[item.key]}
-                        placeholder={t("v3.projects.quotas.unset")}
-                        disabled={!editable || locked}
-                        aria-invalid={bad}
-                        aria-label={t(`v3.projects.quotas.key.${item.key}`)}
-                        onChange={(e) => setDraft({ ...draft, [item.key]: e.target.value })}
-                      />
+                      <Reasoned disabledReason={project.status !== "active" ? t("story.reason.projectArchived")
+                        : !abilities.structure ? t("v3.projects.quotas.readOnly") : permReason(t, "admin")}>
+                        <input
+                          className="v3-input"
+                          inputMode={item.unit === "usd" ? "decimal" : "numeric"}
+                          style={{ maxWidth: 140 }}
+                          value={draft[item.key]}
+                          placeholder={t("v3.projects.quotas.unset")}
+                          disabled={!editable || locked}
+                          aria-invalid={bad}
+                          aria-label={t(`v3.projects.quotas.key.${item.key}`)}
+                          onChange={(e) => setDraft({ ...draft, [item.key]: e.target.value })}
+                        />
+                      </Reasoned>
                       {bad && <div><small className="v3-hint" style={{ color: "var(--v3-act)" }}>{t("v3.projects.quotas.invalid")}</small></div>}
                     </td>
                   </tr>
@@ -117,7 +122,8 @@ export function QuotasSection({ project, abilities }: { project: ProjectDetail; 
         {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
         {editable && (
           <div>
-            <Btn kind="primary" onClick={() => void save()} disabled={busy || !patch}><Save size={14} /> {t("v3.projects.quotas.save")}</Btn>
+            <Btn kind="primary" onClick={() => void save()} busy={busy} disabled={!patch}
+              disabledReason={invalid.length ? t("story.reason.fixErrors") : t("story.reason.noChanges")}><Save size={14} /> {t("v3.projects.quotas.save")}</Btn>
           </div>
         )}
       </div>

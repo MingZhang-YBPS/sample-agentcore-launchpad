@@ -123,7 +123,8 @@ export function MappingsEditor<P extends { id: string; mappings: SsoMapping[]; c
       end={(
         <span style={{ display: "inline-flex", gap: 8 }}>
           {dirty && <Btn size="sm" kind="ghost" onClick={() => setRows(provider.mappings)} disabled={busy}>{t("v3.sso.discard")}</Btn>}
-          <Btn size="sm" kind="primary" onClick={() => void save()} disabled={busy || !dirty || invalid}>{t("v3.sso.mapping.save")}</Btn>
+          <Btn size="sm" kind="primary" onClick={() => void save()} busy={busy} disabled={!dirty || invalid}
+            disabledReason={invalid ? t("story.reason.fixErrors") : t("story.reason.noChanges")}>{t("v3.sso.mapping.save")}</Btn>
         </span>
       )}
     >

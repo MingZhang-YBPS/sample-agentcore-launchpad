@@ -21,6 +21,7 @@ import { usersApi } from "../../../lib/api/users";
 import { useProject } from "../../../workspace/project-context";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { useRoleLabel } from "../users/structure";
 import { emptyStructureForm, groupsOfDepartments, projectChoices, projectSummary } from "./model";
@@ -201,7 +202,8 @@ function AddMembersDialog({ group, templates, onClose, onDone }: {
       foot={
         <>
           <Btn kind="ghost" disabled={busy} onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || picked.length === 0 || !role} onClick={() => void submit()}>
+          <Btn kind="primary" busy={busy} disabled={picked.length === 0 || !role}
+            disabledReason={picked.length === 0 ? t("story.reason.pickPeople") : t("story.reason.pickRole")} onClick={() => void submit()}>
             {t("v3.groups.members.addSubmit", { count: picked.length })}
           </Btn>
         </>
@@ -331,16 +333,19 @@ function GroupDetail({ id }: { id: string }) {
           title={t("v3.groups.tab.projects")}
           end={
             <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-              <select className="v3-select" style={{ width: "auto" }} value={addingProject} disabled={busy || group.archived}
-                aria-label={t("v3.groups.projects.add")} onChange={(e) => setAddingProject(e.target.value)}>
-                <option value="">{t("v3.groups.projects.pick")}</option>
-                {choices.map((c) => (
-                  <option key={c.id} value={c.id} disabled={c.otherGroup !== null}>
-                    {c.name}{c.otherGroup ? ` · ${t("v3.groups.projects.inOther", { group: c.otherGroup })}` : ""}
-                  </option>
-                ))}
-              </select>
-              <Btn size="sm" kind="primary" disabled={busy || !addingProject}
+              <Reasoned disabledReason={group.archived ? t("story.reason.archivedGroup") : null}>
+                <select className="v3-select" style={{ width: "auto" }} value={addingProject} disabled={busy || group.archived}
+                  aria-label={t("v3.groups.projects.add")} onChange={(e) => setAddingProject(e.target.value)}>
+                  <option value="">{t("v3.groups.projects.pick")}</option>
+                  {choices.map((c) => (
+                    <option key={c.id} value={c.id} disabled={c.otherGroup !== null}>
+                      {c.name}{c.otherGroup ? ` · ${t("v3.groups.projects.inOther", { group: c.otherGroup })}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </Reasoned>
+              <Btn size="sm" kind="primary" busy={busy} disabled={!addingProject}
+                disabledReason={group.archived ? t("story.reason.archivedGroup") : t("story.reason.pickProject")}
                 onClick={() => {
                   const pid = addingProject;
                   void run(() => projectGroupsApi.putProjects(group.id, { add: [pid] }), () => t("v3.groups.projects.added")).then((ok) => ok && setAddingProject(""));
@@ -372,7 +377,7 @@ function GroupDetail({ id }: { id: string }) {
       ) : (
         <Panel
           title={t("v3.groups.tab.members")}
-          end={<Btn size="sm" kind="primary" disabled={busy || group.archived} onClick={() => setAddingMembers(true)}><UserPlus size={13} /> {t("v3.groups.members.add")}</Btn>}
+          end={<Btn size="sm" kind="primary" busy={busy} disabled={group.archived} disabledReason={t("story.reason.archivedGroup")} onClick={() => setAddingMembers(true)}><UserPlus size={13} /> {t("v3.groups.members.add")}</Btn>}
           flush={group.members.length > 0}
         >
           {group.members.length === 0 ? (
@@ -398,16 +403,18 @@ function GroupDetail({ id }: { id: string }) {
                       )}
                     </td>
                     <td>
-                      <select className="v3-select" style={{ width: "auto" }} value={m.role_key} disabled={busy || group.archived}
-                        aria-label={t("v3.users.access.role")}
-                        onChange={(e) => {
-                          const role = e.target.value;
-                          void run(() => projectGroupsApi.putMembers(group.id, { upsert: [{ user_id: m.user_id, role_key: role }] }),
-                            () => t("v3.groups.members.updated", { username: m.username ?? m.user_id }));
-                        }}>
-                        {templateKeys.map((key) => <option key={key} value={key}>{label(key)}</option>)}
-                        {!templateKeys.includes(m.role_key) && <option value={m.role_key}>{label(m.role_key)}</option>}
-                      </select>
+                      <Reasoned disabledReason={group.archived ? t("story.reason.archivedGroup") : null}>
+                        <select className="v3-select" style={{ width: "auto" }} value={m.role_key} disabled={busy || group.archived}
+                          aria-label={t("v3.users.access.role")}
+                          onChange={(e) => {
+                            const role = e.target.value;
+                            void run(() => projectGroupsApi.putMembers(group.id, { upsert: [{ user_id: m.user_id, role_key: role }] }),
+                              () => t("v3.groups.members.updated", { username: m.username ?? m.user_id }));
+                          }}>
+                          {templateKeys.map((key) => <option key={key} value={key}>{label(key)}</option>)}
+                          {!templateKeys.includes(m.role_key) && <option value={m.role_key}>{label(m.role_key)}</option>}
+                        </select>
+                      </Reasoned>
                     </td>
                     <td style={{ width: 1 }}>
                       <Btn size="sm" kind="ghost" disabled={busy} title={t("v3.groups.members.remove")} onClick={() => setRemovingMember(m)}>

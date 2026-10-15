@@ -81,7 +81,7 @@ export function Reviewers() {
               <option key={c} value={c}>{c === "never" ? t("selfService.reviewers.never") : t("selfService.reviewers.inDays", { count: Number(c) })}</option>
             ))}
           </select>
-          <Btn kind="primary" type="submit" disabled={busy || !agentId}><Link2 size={14} /> {t("selfService.reviewers.create")}</Btn>
+          <Btn kind="primary" type="submit" busy={busy} disabled={!agentId} disabledReason={t("story.reason.pickAgent")}><Link2 size={14} /> {t("selfService.reviewers.create")}</Btn>
         </form>
         {created && (
           <div style={{ marginTop: 14 }}>
@@ -131,7 +131,7 @@ export function Reviewers() {
                   <td className="num" style={{ color: "var(--v3-text-3)" }}>{r.expires_at ? new Date(r.expires_at).toLocaleDateString() : t("selfService.reviewers.never")}</td>
                   <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(r.last_used_at)}</td>
                   <td style={{ width: 1, whiteSpace: "nowrap" }}>
-                    <Btn size="sm" kind="danger" disabled={r.state !== "active"} onClick={() => setRevoking(r)}>{t("selfService.reviewers.revoke")}</Btn>
+                    <Btn size="sm" kind="danger" disabled={r.state !== "active"} disabledReason={t("story.reason.expiredOrRevoked")} onClick={() => setRevoking(r)}>{t("selfService.reviewers.revoke")}</Btn>
                   </td>
                 </tr>
               ))}

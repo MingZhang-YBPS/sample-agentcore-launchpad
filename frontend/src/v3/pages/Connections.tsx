@@ -10,6 +10,7 @@ import { revokeDisabled, runRevoke } from "../../lib/user-grants";
 import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
+import { permReason } from "../reasons";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 
 /** authorized = usable; a forced re-auth or pending consent waits on the person; revoked is off. */
@@ -111,7 +112,8 @@ export function V3Connections() {
                     <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(g.authorized_at)}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }}>
                       <Btn size="sm" kind="ghost" disabled={revokeDisabled(g, mayRevoke, revoking)}
-                        title={mayRevoke ? undefined : t("v2.myConnections.noPermission")} onClick={() => setConfirm(g.connection)}>
+                        disabledReason={!mayRevoke ? permReason(t, "identity.grant") : revoking !== null ? t("story.reason.waitRunning") : t("story.reason.alreadyRevoked")}
+                        onClick={() => setConfirm(g.connection)}>
                         {t("v2.myConnections.revoke")}
                       </Btn>
                     </td>

@@ -9,6 +9,7 @@ import { type CustomRole, type ProjectDetail, type ProjectRoles, projectsApi } f
 import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Chip, Confirm, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { KeyPicker } from "./KeyPicker";
 import { useRoleLabel } from "./labels";
@@ -222,7 +223,10 @@ function RoleDialog({
       foot={
         <>
           <Btn kind="ghost" onClick={onClose} disabled={busy}>{t("v3.projects.cancel")}</Btn>
-          <Btn kind="primary" onClick={() => void save()} disabled={busy || !valid}>{t("v3.projects.save")}</Btn>
+          <Btn kind="primary" onClick={() => void save()} busy={busy} disabled={!valid}
+            disabledReason={!name.trim() ? t("story.reason.fillName") : !role && key === "" ? t("story.reason.fillKey") : t("story.reason.fixErrors")}>
+            {t("v3.projects.save")}
+          </Btn>
         </>
       }
     >
@@ -233,8 +237,10 @@ function RoleDialog({
         </label>
         <label className="v3-field">
           <span>{t("v3.projects.roles.key")}*</span>
-          <input className="v3-input mono" value={key} maxLength={32} disabled={role !== null}
-            aria-invalid={keyErr !== null || clash} onChange={(e) => setKey(e.target.value.toLowerCase())} />
+          <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+            <input className="v3-input mono" value={key} maxLength={32} disabled={role !== null}
+              aria-invalid={keyErr !== null || clash} onChange={(e) => setKey(e.target.value.toLowerCase())} />
+          </Reasoned>
           <small className={keyErr || clash ? "v3-err" : "v3-hint"}>
             {clash ? t("v3.projects.roles.keyTaken") : keyErr === "builtin" ? t("v3.projects.roles.keyBuiltin") : t("v3.projects.roles.keyHint")}
           </small>

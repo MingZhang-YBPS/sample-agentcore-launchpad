@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { errorMessage } from "../../../lib/api";
 import { usersApi } from "../../../lib/api/users";
 import { useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
 import { Btn, Dialog, Notice } from "../../ui";
 import { suggestedRole } from "./forms";
 import { type Structure, useProjectRoleOptions } from "./structure";
@@ -61,7 +62,8 @@ export function BulkAddDialog({
       foot={
         <>
           <Btn kind="ghost" disabled={busy} onClick={onClose}>{t("v3.common.cancel")}</Btn>
-          <Btn kind="primary" disabled={busy || !projectId || !chosenRole} onClick={() => void submit()}>{t("v3.users.bulk.submit")}</Btn>
+          <Btn kind="primary" busy={busy} disabled={!projectId || !chosenRole}
+            disabledReason={!projectId ? t("story.reason.pickProject") : t("story.reason.pickRole")} onClick={() => void submit()}>{t("v3.users.bulk.submit")}</Btn>
         </>
       }
     >
@@ -76,9 +78,11 @@ export function BulkAddDialog({
         </label>
         <label className="v3-field">
           <span>{t("v3.users.access.role")}</span>
-          <select className="v3-select" value={chosenRole} onChange={(e) => setRole(e.target.value)} disabled={!projectId}>
-            {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
+          <Reasoned disabledReason={t("story.reason.pickProject")}>
+            <select className="v3-select" value={chosenRole} onChange={(e) => setRole(e.target.value)} disabled={!projectId}>
+              {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </Reasoned>
         </label>
         <small className="v3-hint">{t("v3.users.bulk.hint")}</small>
         {error && <Notice s="act">{error}</Notice>}

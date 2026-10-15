@@ -16,6 +16,8 @@ import { LogStreamPicker } from "../../../v2/pages/tasks/LogStreamPicker";
 import { SERVICE_NAME_RE, type TaskMode } from "../../../v2/tasks";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
+import { Reasoned } from "../../reason";
+import type { DisabledReason } from "../../reasons";
 import { Btn, Chip, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { StoryHeader } from "../../story/StoryHeader";
 import { HostedV2 } from "./common";
@@ -124,21 +126,25 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
   return seeded;
 }
 
-function Option({ on, disabled, title, desc, badge, onClick }: {
+function Option({ on, disabled, disabledReason, title, desc, badge, onClick }: {
   on: boolean;
   disabled?: boolean;
+  /** why it is off — shown on hover and focus (reason.tsx) */
+  disabledReason?: DisabledReason | null;
   title: ReactNode;
   desc: ReactNode;
   badge?: ReactNode;
   onClick: () => void;
 }) {
   return (
-    <button type="button" role="radio" aria-checked={on} disabled={disabled}
-      className={on ? "v3-scenario on v3-task-opt" : "v3-scenario v3-task-opt"} onClick={onClick}>
-      <b>{title}</b>
-      <small>{desc}</small>
-      {badge && <span className="tags">{badge}</span>}
-    </button>
+    <Reasoned disabledReason={disabledReason}>
+      <button type="button" role="radio" aria-checked={on} disabled={disabled}
+        className={on ? "v3-scenario on v3-task-opt" : "v3-scenario v3-task-opt"} onClick={onClick}>
+        <b>{title}</b>
+        <small>{desc}</small>
+        {badge && <span className="tags">{badge}</span>}
+      </button>
+    </Reasoned>
   );
 }
 
@@ -439,7 +445,7 @@ export function TaskWizard() {
           <Panel title={t("v2.tasks.dataConfig")}>
             <div className="v3-task-opts c4" role="radiogroup">
               {sourceCards.map(({ key, disabled }) => (
-                <Option key={key} on={draft.source === key} disabled={disabled} title={t(`v2.tasks.src.${key}`)} desc={t(`v2.tasks.src.${key}Desc`)}
+                <Option key={key} on={draft.source === key} disabled={disabled} disabledReason={t("story.reason.sessionsNeedAgent")} title={t(`v2.tasks.src.${key}`)} desc={t(`v2.tasks.src.${key}Desc`)}
                   badge={disabled ? <Chip>{t("v2.tasks.cw.needsAgent")}</Chip> : undefined} onClick={() => chooseSource(key)} />
               ))}
             </div>
@@ -450,6 +456,8 @@ export function TaskWizard() {
                   <Option on={draft.strategy === "history"} title={t("v2.tasks.strategyHistory")}
                     desc={t(draft.source === "dataset" ? "v2.tasks.strategyReplayDesc" : "v2.tasks.strategyHistoryDesc")} onClick={() => set({ strategy: "history" })} />
                   <Option on={draft.strategy === "continuous"} disabled={draft.source !== "window" || draft.mode === "insights" || cloudwatch}
+                    disabledReason={cloudwatch ? t("story.reason.continuousNeedsAgent")
+                      : draft.source !== "window" ? t("story.reason.continuousNeedsWindow") : t("v2.tasks.insightsNoContinuous")}
                     title={t("v2.tasks.strategyContinuous")} desc={t("v2.tasks.strategyContinuousDesc")} onClick={() => set({ strategy: "continuous" })} />
                 </div>
                 {draft.mode === "insights" && draft.source === "window" && <small className="v3-hint">{t("v2.tasks.insightsNoContinuous")}</small>}
@@ -702,7 +710,11 @@ export function TaskWizard() {
                   const locked = !on && draft.evaluators.length >= MAX_EVALUATORS;
                   return (
                     <tr key={e.id} className={locked ? undefined : "click"} onClick={() => !locked && toggleEvaluator(e.id)}>
-                      <td><input type="checkbox" aria-label={e.id} checked={on} disabled={locked} onChange={() => toggleEvaluator(e.id)} onClick={(ev) => ev.stopPropagation()} /></td>
+                      <td>
+                        <Reasoned disabledReason={t("story.reason.maxEvaluators", { count: MAX_EVALUATORS })}>
+                          <input type="checkbox" aria-label={e.id} checked={on} disabled={locked} onChange={() => toggleEvaluator(e.id)} onClick={(ev) => ev.stopPropagation()} />
+                        </Reasoned>
+                      </td>
                       <td>
                         <div className="v3-name"><div><b>{e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}</b><small>{e.id}</small></div></div>
                       </td>
@@ -729,7 +741,7 @@ export function TaskWizard() {
       )}
 
       <div className="v3-task-foot">
-        <Btn kind="ghost" disabled={step === 0} onClick={() => setStep(0)}><ArrowLeft size={14} /> {t("v2.common.prev")}</Btn>
+        <Btn kind="ghost" disabled={step === 0} disabledReason={t("story.reason.firstStep")} onClick={() => setStep(0)}><ArrowLeft size={14} /> {t("v2.common.prev")}</Btn>
         {step === 0 ? (
           <Btn kind="primary" onClick={next}>{t("v2.common.next")} <ArrowRight size={14} /></Btn>
         ) : (
