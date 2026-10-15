@@ -61,7 +61,7 @@ AGENT_PERMISSIONS = (
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
 ROLE_MEMBER = "member"
-# projects §11.4: the structure-only platform administrator ("结构管理员"). Manages
+# projects §11.4: the structure-only platform administrator ("组织管理员"). Manages
 # accounts, departments, projects, groups, bindings and workspaces like an admin, but
 # never reaches project data (`access.has_data_bypass` is False, `can_manage_structure`
 # True) and holds no workspace grant, project or group membership of its own.

@@ -1,4 +1,4 @@
-"""The structure-only platform administrator — "steward" (结构管理员), projects §11.4.
+"""The structure-only platform administrator — "steward" (组织管理员), projects §11.4.
 
 A steward manages what an administrator manages *about the platform's shape* —
 accounts, departments, projects, groups, bindings, workspaces — and never its data:

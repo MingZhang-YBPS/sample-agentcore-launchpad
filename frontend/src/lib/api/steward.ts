@@ -11,7 +11,7 @@ import { getJson, sendJson } from "../api";
 
 const enc = encodeURIComponent;
 
-/** The steward global role — structure only, no project data ("结构管理员"). */
+/** The steward global role — structure only, no project data ("组织管理员"). */
 export const STEWARD_ROLE = "steward";
 
 /** Whether an account (or the signed-in caller) is a steward. */

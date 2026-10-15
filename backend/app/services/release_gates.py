@@ -33,12 +33,10 @@ from app.models.ledger import Promotion, ReleaseBundle, Workspace
 from app.services import promotion as promotion_service
 
 # Gates that inform but never refuse an execution. A project's budget (§11.3) is an
-# alert by design: the release still ships, the approver sees the spend.
-ADVISORY_GATES = frozenset({"guardrail", "target_agent", "project_budget"})
-
-# Gates that inform but never refuse an execution. `storage` is evidence for the
-# approver (storage-mounts §8.1): the bundle's mounts against the target's running agent.
-ADVISORY_GATES = frozenset({"guardrail", "target_agent", "storage"})
+# alert by design: the release still ships, the approver sees the spend. `storage` is
+# evidence for the approver (storage-mounts §8.1): the bundle's mounts against the
+# target's running agent.
+ADVISORY_GATES = frozenset({"guardrail", "target_agent", "project_budget", "storage"})
 
 TIER_DEFAULTS: dict[str, dict[str, Any]] = {
     "prod": {"require_policy_enforce": True, "observe_seconds": 300},
