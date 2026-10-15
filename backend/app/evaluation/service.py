@@ -1132,6 +1132,17 @@ def evaluator_set_hash(evaluators: list[str]) -> str:
     return hashlib.sha256("|".join(sorted(evaluators or [])).encode()).hexdigest()[:32]
 
 
+def storage_write_check(agent: Agent, *, confirmed: bool, actor: str | None) -> None:
+    """A replay invokes the agent with the mounts it runs with: in a gated workspace a
+    read-write mount of shared-state storage is written by the evaluation (§8.2).
+    409 `storage.write_confirm_required` unless confirmed; a confirmed write is
+    journaled."""
+    from app.services import storage_dlc
+
+    storage_dlc.confirm_run_writes(agent.workspace_id, agent.spec or {}, confirmed=confirmed,
+                                   action="evaluation.run", target=agent.id, actor=actor)
+
+
 def submit_run(
     *,
     agent: Agent | None,
@@ -1163,6 +1174,7 @@ def submit_run(
     agent_version: str | None = None,
     creator: creators.Creator | None = None,
     precheck_telemetry: bool = False,
+    confirm_storage: bool | None = None,
 ) -> EvalRun:
     """Queue one run. The telemetry comes from the platform ``agent`` — or, with
     ``agent=None``, from ``log_source`` {service_name, log_group_names}: an agent
@@ -1170,7 +1182,10 @@ def submit_run(
     content logs are already in CloudWatch. Such a run is passive only (session
     ids or a time window); there is nothing to invoke. ``precheck_telemetry``
     refuses an agent with no spans to score (`require_span_telemetry`) before
-    the run row is created."""
+    the run row is created. ``confirm_storage`` (a member's run: False / True; None
+    = a platform job that decides itself) refuses a replay that would write into
+    production shared-state storage of a gated workspace unless confirmed
+    (storage-mounts §8.2, `storage_write_check`)."""
     if agent is None:
         if not log_source or dataset_items:
             raise ValueError("an agent-less run needs a log_source and a passive scope")
@@ -1190,6 +1205,9 @@ def submit_run(
             from app.services.invoke import production_endpoint
 
             qualifier = production_endpoint(agent).get("qualifier")
+        if dataset_items and confirm_storage is not None:
+            storage_write_check(agent, confirmed=confirm_storage,
+                                actor=creator.name if creator else None)
         service_name, log_group = resolve_telemetry(agent, workspace, qualifier=qualifier)
         if precheck_telemetry:
             require_span_telemetry(agent, workspace, service_name)

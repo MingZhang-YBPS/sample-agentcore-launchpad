@@ -14,6 +14,12 @@ auto-rolling to every new version but carries no production traffic.
 
 Promotion executions are their own approval flow (promotion.approve + release gates in
 the target) and keep `live` in lock-step with the deploy.
+
+Storage (design storage-mounts §8): every open record carries the candidate's mount
+diff against live (`attachments[kind=storage]`, also in the gate report); a new
+read-write mount, `ro → rw`, or a change of storage / `data_class` under a mount must
+be acknowledged when signing. A gate evaluation that writes shared-state storage in
+production needs the runner's confirmation, recorded on the record.
 """
 
 from __future__ import annotations
@@ -171,7 +177,7 @@ def after_deploy(db: Session, agent: Agent, *, note: str | None, actor: str | No
         ).all():
             stale.decision = "superseded"
             stale.note = f"superseded by version {agent.version}"
-        db.add(ReleaseRecord(
+        record = ReleaseRecord(
             workspace_id=agent.workspace_id,
             agent_id=agent.id,
             candidate_version=str(agent.version),
@@ -187,8 +193,14 @@ def after_deploy(db: Session, agent: Agent, *, note: str | None, actor: str | No
                 else agent.created_by if agent.created_by_name else None
             ),
             note=note or "",
-        ))
+        )
+        db.add(record)
         db.flush()
+        try:
+            refresh_storage(db, record, agent)
+            db.flush()
+        except Exception as exc:  # noqa: BLE001 — the gate recomputes it
+            logger.warning("storage evidence of release %s failed: %s", record.id, exc)
     except Exception as exc:  # noqa: BLE001
         logger.warning("release bookkeeping after deploy of %s failed: %s", agent.id, exc)
 
@@ -260,8 +272,95 @@ def record_out(row: ReleaseRecord) -> dict[str, Any]:
         "waiver_ids": row.waiver_ids or [],
         "rollback_target": row.rollback_target or {},
         "attachments": row.attachments or [],
+        # the mount diff against live (storage-mounts §8.1); None before it is computed
+        "storage": _attachment(row, STORAGE_EVIDENCE),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
+
+
+# ── storage evidence (storage-mounts §8) ───────────────────────────────────────
+
+STORAGE_EVIDENCE = "storage"
+STORAGE_WRITE_CONFIRMATION = "storage_write_confirmation"
+
+
+def _attachment(row: ReleaseRecord, kind: str) -> dict[str, Any] | None:
+    return next((a for a in row.attachments or [] if a.get("kind") == kind), None)
+
+
+def _set_attachment(row: ReleaseRecord, kind: str, value: dict[str, Any]) -> None:
+    # a new list: the JSON column only notices a reassignment
+    row.attachments = [a for a in row.attachments or [] if a.get("kind") != kind] + [
+        {**value, "kind": kind}
+    ]
+
+
+def version_spec(db: Session, agent: Agent, version: str | None) -> dict[str, Any] | None:
+    """The spec `version` was published from: its snapshot (T18), else the agent row
+    while the row still is that version. None when nothing records it."""
+    if not version:
+        return None
+    from app.models.ledger import SpecSnapshot
+
+    snap = db.scalars(select(SpecSnapshot).where(
+        SpecSnapshot.agent_id == agent.id, SpecSnapshot.aws_version == str(version),
+    ).order_by(SpecSnapshot.seq.desc())).first()
+    if snap is not None:
+        return snap.spec or {}
+    if str(agent.version or "") == str(version):
+        return agent.spec or {}
+    return None
+
+
+def _live_mounts(db: Session, record: ReleaseRecord, agent: Agent) -> list[dict] | None:
+    """The live version's mounts, with the `data_class` each had when that version was
+    signed (so a reclassification since then shows as a change). `[]` for a first
+    release; None when the live version's spec is unknown."""
+    from app.services import storage_dlc
+
+    if not record.previous_live_version:
+        return []
+    spec = version_spec(db, agent, record.previous_live_version)
+    if spec is None:
+        return None
+    mounts = storage_dlc.with_catalog(db, agent.workspace_id, storage_dlc.mounts_of(spec))
+    signed = db.scalars(select(ReleaseRecord).where(
+        ReleaseRecord.agent_id == agent.id,
+        ReleaseRecord.candidate_version == str(record.previous_live_version),
+        ReleaseRecord.decision.in_(("released", "rolled_back")),
+    ).order_by(ReleaseRecord.created_at.desc())).first()
+    then = _attachment(signed, STORAGE_EVIDENCE) if signed is not None else None
+    classes = {m["mount_path"]: m.get("data_class") for m in (then or {}).get("candidate") or []}
+    for mount in mounts:
+        if classes.get(mount["mount_path"]) and mount.get("storage_id"):
+            mount["data_class"] = classes[mount["mount_path"]]
+    return mounts
+
+
+def storage_evidence(db: Session, record: ReleaseRecord, agent: Agent) -> dict[str, Any]:
+    """The candidate's mounts against live's, freshly read (§8.1)."""
+    from app.services import storage_dlc
+
+    out = storage_dlc.evidence(
+        db, agent.workspace_id, version_spec(db, agent, record.candidate_version),
+        _live_mounts(db, record, agent),
+    )
+    confirmed = _attachment(record, STORAGE_WRITE_CONFIRMATION)
+    if confirmed:
+        out["write_confirmation"] = {k: v for k, v in confirmed.items() if k != "kind"}
+    return out
+
+
+def refresh_storage(db: Session, record: ReleaseRecord, agent: Agent) -> dict[str, Any]:
+    """Recompute the evidence and keep it on the record; returned for the report.
+    An acknowledgement already given survives only while the evidence is unchanged."""
+    out = storage_evidence(db, record, agent)
+    previous = _attachment(record, STORAGE_EVIDENCE) or {}
+    if previous.get("acknowledged_by") and previous.get("changes") == out["changes"]:
+        out["acknowledged_by"] = previous["acknowledged_by"]
+        out["acknowledged_at"] = previous.get("acknowledged_at")
+    _set_attachment(record, STORAGE_EVIDENCE, out)
+    return out
 
 
 # ── gate evaluation ────────────────────────────────────────────────────────────
@@ -320,11 +419,15 @@ def start_evaluation(
     submit: Any = None,
     confirm_cost: bool = False,
     is_admin: bool = False,
+    confirm_storage: bool = False,
 ) -> list[str]:
     """Queue the regression + holdout runs the gate reads, against `candidate`.
 
     Priced first: the estimate covers both splits × `repeats`, and the workspace's
     `eval_cost_confirm_usd` / `eval_cost_max_usd` are enforced here, not only shown.
+    A candidate that mounts shared-state storage read-write writes into it during the
+    replay: 409 `storage.write_confirm_required` unless `confirm_storage` (§8.2, D-3);
+    the confirmation is recorded on the record and in the audit journal.
     """
     if record.decision not in ("pending", "invalid", "blocked"):
         raise AppError("release.not_open", "this release is already decided", status_code=409)
@@ -339,6 +442,12 @@ def start_evaluation(
 
     estimate = gate_estimate(db, record, agent, workspace_ctx, repeats=repeats)
     cost_svc.assert_allowed(estimate, confirmed=confirm_cost, is_admin=is_admin)
+    from app.services import storage_dlc
+
+    writes = storage_dlc.require_write_confirmation(
+        db, record.workspace_id, version_spec(db, agent, record.candidate_version),
+        confirmed=confirm_storage, action="release.evaluate",
+    )
     if submit is None:
         from app.evaluation import service as eval_service
 
@@ -380,6 +489,13 @@ def start_evaluation(
     from app.evaluation.service import evaluator_set_hash
 
     record.evaluator_set_hash = evaluator_set_hash(evaluators)
+    if writes:
+        _set_attachment(record, STORAGE_WRITE_CONFIRMATION,
+                        storage_dlc.confirmation(writes, actor))
+        record_audit_event(workspace_id=record.workspace_id, actor=actor,
+                           action="storage.write_confirmed",
+                           target=f"{record.id}:{','.join(m['storage_id'] for m in writes)}",
+                           db=db)
     record_audit_event(workspace_id=record.workspace_id, actor=actor,
                        action="release.evaluate", target=record.id, db=db)
     db.flush()
@@ -459,6 +575,9 @@ def evaluate(db: Session, record: ReleaseRecord) -> dict[str, Any]:
     )
     report["runs"] = [{"id": r.id, "split": r.split, "status": r.status,
                        "denominator": r.denominator} for r in runs]
+    agent = db.get(Agent, record.agent_id)
+    if agent is not None:
+        report["storage"] = refresh_storage(db, record, agent)
     record.gate_report = report
     record.waiver_ids = [w["waiver"]["id"] for w in report["criteria"] if w.get("waiver")]
     record.decision = {"PASS": "pending", "BLOCKED": "blocked", "INVALID": "invalid"}[
@@ -469,7 +588,10 @@ def evaluate(db: Session, record: ReleaseRecord) -> dict[str, Any]:
 
 
 def sign(db: Session, record: ReleaseRecord, agent: Agent, control: Any, *, actor: str,
-         note: str = "", actor_user_id: str | None = None) -> ReleaseRecord:
+         note: str = "", actor_user_id: str | None = None,
+         storage_ack: bool = False) -> ReleaseRecord:
+    """Release the candidate. A storage change that needs sign-off (§8.1) needs
+    `storage_ack`: 409 `release.storage_ack_required` otherwise, with the changes."""
     report = record.gate_report or {}
     if report.get("verdict") != "PASS":
         raise AppError("release.gate_not_passed",
@@ -482,6 +604,18 @@ def sign(db: Session, record: ReleaseRecord, agent: Agent, control: Any, *, acto
     if same_actor(record.requested_by, record.requested_by_user_id, actor, actor_user_id):
         raise AppError("release.self_sign", "the requester cannot sign their own release",
                        status_code=409)
+    storage = refresh_storage(db, record, agent)
+    if storage["requires_ack"]:
+        if not storage_ack:
+            raise AppError(
+                "release.storage_ack_required",
+                "this release changes read-write storage mounts — acknowledge the storage "
+                "changes to sign it",
+                {"changes": [c for c in storage["changes"] if c["requires_ack"]]},
+                status_code=409,
+            )
+        storage["acknowledged_by"], storage["acknowledged_at"] = actor, _now().isoformat()
+        _set_attachment(record, STORAGE_EVIDENCE, storage)
     point_endpoint(control, agent, LIVE, record.candidate_version)
     record.decision = "released"
     record.decided_by = actor
@@ -491,6 +625,9 @@ def sign(db: Session, record: ReleaseRecord, agent: Agent, control: Any, *, acto
     record.rollback_target = {"version": record.previous_live_version}
     record_audit_event(workspace_id=record.workspace_id, actor=actor,
                        action="release.sign", target=record.id, db=db)
+    if storage["requires_ack"]:
+        record_audit_event(workspace_id=record.workspace_id, actor=actor,
+                           action="release.storage_ack", target=record.id, db=db)
     db.flush()
     return record
 

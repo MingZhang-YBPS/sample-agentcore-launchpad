@@ -208,6 +208,28 @@ def mint_candidate_version(
     return v_current, v_candidate, s3_key
 
 
+# ─── shared-state storage (storage-mounts §8.2) ──────────────────────────────
+def storage_write_check(
+    agent: Any, spec: AgentSpec | dict[str, Any] | None, *, confirmed: bool,
+    actor: str | None = None,
+) -> list[dict[str, Any]]:
+    """Refuse a canary whose candidate mounts shared-state storage read-write in a
+    gated workspace until the starter confirms (409 `storage.write_confirm_required`).
+
+    The candidate ships with the mounts it is measured with, so its share of live
+    traffic writes into that storage; swapping in a read-only mount for the canary
+    would measure — and later promote — another version. Returns the confirmed writes
+    (journaled), ``[]`` when there are none. ``spec`` defaults to the agent's own (a
+    Harness canary compares two existing versions)."""
+    from app.services import storage_dlc
+
+    data = spec.model_dump(mode="json") if isinstance(spec, AgentSpec) else spec
+    return storage_dlc.confirm_run_writes(
+        agent.workspace_id, data if data is not None else (agent.spec or {}),
+        confirmed=confirmed, action="canary.start", target=agent.id, actor=actor,
+    )
+
+
 # ─── dedicated per-canary gateway ────────────────────────────────────────────
 def create_canary_gateway(
     *,

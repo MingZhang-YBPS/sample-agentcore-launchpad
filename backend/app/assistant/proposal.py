@@ -30,9 +30,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.core.config import Settings, get_settings
 from app.schemas.agent import (
+    MAX_BYO_MOUNTS,
+    STORAGE_ID_RE,
     AgentSpec,
+    FilesystemConfig,
     KnowledgeBaseRef,
     MemoryConfig,
+    NetworkProfileRef,
+    StorageMountRef,
     ToolRef,
 )
 from app.system_agents.presets import is_reserved_name
@@ -228,11 +233,23 @@ def fishbone_errors(fb: Fishbone) -> list[str]:
     return errors
 
 
+class StorageChoice(BaseModel):
+    """A storage catalog entry the proposed agent mounts (storage-mounts §8.3): the
+    catalog id and the mode — never an ARN, a path or a network. The path is the
+    catalog default `/mnt/<storage_id>`; the network is the entry's default profile."""
+
+    model_config = ConfigDict(extra="forbid")
+    storage_id: str = Field(pattern=STORAGE_ID_RE)
+    # D-1: read-only unless the proposal says otherwise
+    mode: Literal["ro", "rw"] = "ro"
+
+
 class ProposalContent(BaseModel):
     """Everything an approval may turn into a new managed Harness. ``extra="forbid"``
     is the allowlist: a member (or model) cannot smuggle ``env``, ``code``,
     ``requirements``, ``filesystem``, ``network``, ``allowed_tools``, ``protocol``
-    or any other AgentSpec member through here."""
+    or any other AgentSpec member through here — storage arrives as catalog ids only
+    (``storage``), mapped to ``filesystem`` / ``network`` by ``to_agent_spec``."""
 
     model_config = ConfigDict(extra="forbid")
     version: Literal[1] = 1
@@ -260,6 +277,9 @@ class ProposalContent(BaseModel):
     # Managed knowledge base ids present in the catalog.
     knowledge_bases: list[Key] = Field(default_factory=list, max_length=10)
     memory: MemoryMode = "disabled"
+    # Storage catalog entries visible to the current project, by id (§8.3). Omitted
+    # from the stored content when empty (hash stability, like ``evaluation_plan``).
+    storage: list[StorageChoice] = Field(default_factory=list, max_length=MAX_BYO_MOUNTS)
     max_iterations: int = Field(default=100, ge=1, le=100)
     timeout_seconds: int = Field(default=600, ge=10, le=3600)
     # Solution content, shown for review and kept with the revision.
@@ -287,6 +307,8 @@ def content_dump(content: ProposalContent) -> dict[str, Any]:
     for optional in ("evaluation_plan", "fishbone", "tool_functions"):
         if data.get(optional) is None:
             data.pop(optional, None)
+    if not data.get("storage"):
+        data.pop("storage", None)
     return data
 
 
@@ -307,6 +329,9 @@ def _check_lists(content: ProposalContent) -> list[str]:
     for key, names in (content.tool_functions or {}).items():
         if len(names) != len(set(names)):
             errors.append(f"tool_functions.{key} must not repeat a tool name")
+    storage_ids = [s.storage_id for s in content.storage]
+    if len(storage_ids) != len(set(storage_ids)):
+        errors.append("storage must not repeat an entry")
     if len({g.id for g in content.golden_tests}) != len(content.golden_tests):
         errors.append("golden_tests ids must be unique")
     seed = content.evaluation_plan
@@ -525,7 +550,51 @@ def catalog_index(catalog: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]
         "knowledge_bases": {
             k["kb_id"]: k for k in catalog.get("knowledge_bases") or [] if k.get("kb_id")
         },
+        "storage": {
+            s["storage_id"]: s for s in catalog.get("storage") or [] if s.get("storage_id")
+        },
     }
+
+
+def storage_catalog(db: Any, workspace_id: str, project_id: str | None) -> list[dict[str, Any]]:
+    """The storage catalog entries a proposal of ``project_id`` may name (its allowed
+    set; every live entry when no project is current), with what an approval pins.
+    Blocked entries stay listed so a reference to one explains itself."""
+    from app.services.storage_mounts import list_entries
+
+    out = []
+    for entry in list_entries(db, workspace_id, project_id, see_all=project_id is None):
+        out.append({key: entry.get(key) for key in (
+            "name", "kind", "access_point_arn", "max_mode", "data_class",
+            "network_profile_id", "status")} | {"storage_id": entry["id"]})
+    return out
+
+
+def _storage_errors(content: ProposalContent, index: dict[str, dict[str, Any]]) -> list[str]:
+    """§8.3: catalog ids of the current project only, `mode` within `max_mode`, and
+    one network — the entries' default profile (the proposal names none)."""
+    errors: list[str] = []
+    profiles: set[str] = set()
+    for choice in content.storage:
+        entry = index.get(choice.storage_id)
+        if entry is None:
+            errors.append(f"storage: '{choice.storage_id}' is not a storage entry this "
+                          "project may mount")
+            continue
+        if entry.get("status") == "blocked":
+            errors.append(f"storage: '{choice.storage_id}' failed its check and cannot be "
+                          "mounted")
+        if choice.mode == "rw" and entry.get("max_mode") != "rw":
+            errors.append(f"storage: '{choice.storage_id}' may be mounted read-only at most")
+        if not entry.get("network_profile_id"):
+            errors.append(f"storage: '{choice.storage_id}' has no default network profile; "
+                          "mounting it is a manual choice in the agent wizard")
+        else:
+            profiles.add(entry["network_profile_id"])
+    if len(profiles) > 1:
+        errors.append(f"storage: the entries use different default network profiles "
+                      f"({', '.join(sorted(profiles))}); an agent runs in one")
+    return errors
 
 
 def reference_errors(content: ProposalContent, catalog: dict[str, Any]) -> list[str]:
@@ -584,6 +653,7 @@ def reference_errors(content: ProposalContent, catalog: dict[str, Any]) -> list[
         )
     if content.memory == "workspace" and not resources.get("memory_arn"):
         errors.append("memory: this workspace has no shared AgentCore Memory to bind")
+    errors += _storage_errors(content, index["storage"])
     known = {e.get("evaluator_id") for e in catalog.get("evaluators") or []}
     if known and content.evaluation_plan is not None:  # older snapshots carry no list
         for e in content.evaluation_plan.evaluators:
@@ -630,6 +700,19 @@ def to_agent_spec(content: ProposalContent, catalog: dict[str, Any]) -> AgentSpe
         for kb_id in content.knowledge_bases
     ]
     shared = content.memory == "workspace"
+    storage: dict[str, Any] = {}
+    if content.storage:
+        # stamped from the catalog entry, as `storage_mounts.normalize_spec_storage`
+        # stores a reference; the network is the entries' (single) default profile
+        entries = [index["storage"][c.storage_id] for c in content.storage]
+        storage = {
+            "filesystem": FilesystemConfig(mounts=[
+                StorageMountRef(storage_id=c.storage_id, mode=c.mode, kind=e.get("kind"),
+                                access_point_arn=e.get("access_point_arn"))
+                for c, e in zip(content.storage, entries, strict=True)
+            ]),
+            "network": NetworkProfileRef(profile_id=entries[0]["network_profile_id"]),
+        }
     return AgentSpec(
         name=content.name,
         method="harness",
@@ -646,6 +729,7 @@ def to_agent_spec(content: ProposalContent, catalog: dict[str, Any]) -> AgentSpe
         memory=MemoryConfig(short_term=shared, long_term=shared, memory_id=None),
         max_iterations=content.max_iterations,
         timeout_seconds=content.timeout_seconds,
+        **storage,
     )
 
 
@@ -700,18 +784,28 @@ def resource_bindings(content: ProposalContent, catalog: dict[str, Any]) -> dict
     )
     memory = {"mode": content.memory,
               "arn": resources.get("memory_arn") if content.memory == "workspace" else None}
-    return {
-        **spec,
-        "resources": {
-            "gateways": gateways,
-            "remote_mcp": remote_mcp,
-            "skills": skills,
-            "kb_gateway": kb_gateway,
-            "memory": memory,
-            "execution_role_arn": resources.get("execution_role_arn"),
-            "tool_access_policy": "selected-v1",
-        },
+    bound: dict[str, Any] = {
+        "gateways": gateways,
+        "remote_mcp": remote_mcp,
+        "skills": skills,
+        "kb_gateway": kb_gateway,
+        "memory": memory,
+        "execution_role_arn": resources.get("execution_role_arn"),
+        "tool_access_policy": "selected-v1",
     }
+    if content.storage:  # absent otherwise: earlier bindings keep comparing equal
+        bound["storage"] = {
+            c.storage_id: {
+                "name": index["storage"][c.storage_id].get("name"),
+                "kind": index["storage"][c.storage_id].get("kind"),
+                "access_point_arn": index["storage"][c.storage_id].get("access_point_arn"),
+                "mode": c.mode,
+                "data_class": index["storage"][c.storage_id].get("data_class"),
+                "network_profile_id": index["storage"][c.storage_id].get("network_profile_id"),
+            }
+            for c in content.storage
+        }
+    return {**spec, "resources": bound}
 
 
 def binding_diff(before: dict[str, Any] | None, after: dict[str, Any]) -> list[str]:
@@ -733,7 +827,10 @@ def bindings_view(bindings: dict[str, Any] | None) -> dict[str, Any] | None:
     """The reviewer-facing subset of the bound spec (no prompt duplicate)."""
     if not bindings:
         return None
-    return {k: bindings.get(k) for k in _VIEW_FIELDS}
+    view = {k: bindings.get(k) for k in _VIEW_FIELDS}
+    if (bindings.get("resources") or {}).get("storage"):
+        view["filesystem"], view["network"] = bindings.get("filesystem"), bindings.get("network")
+    return view
 
 
 def validate(
