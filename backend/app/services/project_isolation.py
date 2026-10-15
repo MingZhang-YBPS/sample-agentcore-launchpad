@@ -963,3 +963,4 @@ def retry_provision(db: Session, identity: Any, row: Project, workspace_id: str,
 # The real provisioners register themselves on import (`set_provisioners`); imported
 # last so they can import this module.
 from app.services import project_iam as _project_iam  # noqa: E402,F401 — registers iam
+from app.services import project_kb as _project_kb  # noqa: E402,F401 — registers kb
