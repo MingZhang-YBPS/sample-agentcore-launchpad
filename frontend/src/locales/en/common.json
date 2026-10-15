@@ -13599,6 +13599,130 @@
       "darkHint": "The control room — the default",
       "systemHint": "Follows your device: {{theme}} now",
       "current": "Theme: {{theme}}"
+    },
+    "invokeAccess": {
+      "title": "Call it from your app",
+      "sub": "Everything a backend developer needs to give an IAM role access to this agent: the exact ARNs, a least-privilege policy and filled-in calls.",
+      "resources": "What to call",
+      "permission": "What the caller may do",
+      "call": "How to call",
+      "kind": {
+        "runtime": "AgentCore Runtime",
+        "harness": "AgentCore Harness"
+      },
+      "mode": {
+        "iam": "IAM (SigV4)",
+        "jwt": "JWT (Bearer)"
+      },
+      "arn": "ARN",
+      "account": "Account",
+      "region": "Region",
+      "endpoints": "Endpoints",
+      "allEndpoints": "All endpoints",
+      "role": {
+        "all": "every endpoint below",
+        "production": "production traffic",
+        "DEFAULT": "follows the latest version",
+        "live": "released version",
+        "candidate": "awaiting release"
+      },
+      "policyHint": "attach to the calling role",
+      "jwtHint": "IAM does not apply",
+      "options": "Policy options",
+      "include": {
+        "stop_session": "Session management (StopRuntimeSession)",
+        "memory": "Read the agent's memory",
+        "harnessNoStop": "A Harness has no session-stop operation"
+      },
+      "policy": "IAM policy",
+      "copy": "Copy",
+      "download": "Download",
+      "copied": "{{label}} copied",
+      "copyFailed": "Could not copy to the clipboard",
+      "callHint": "endpoint {{qualifier}}, streaming and non-streaming",
+      "lang": {
+        "cli": "AWS CLI",
+        "python": "Python (boto3)",
+        "ts": "TypeScript (SDK v3)"
+      },
+      "file": {
+        "cli": "invoke.sh",
+        "python": "invoke.py",
+        "ts": "invoke.ts"
+      },
+      "jwtNoIam": "This agent is called with a Bearer token from its identity provider — IAM permissions have no effect on it. Get a token with the configuration below and send it as Authorization: Bearer.",
+      "jwt": {
+        "issuer": "Issuer",
+        "discovery": "Discovery URL",
+        "clients": "Allowed clients",
+        "audience": "Allowed audience",
+        "scopes": "Allowed scopes",
+        "external": "An external authorizer was configured outside Launchpad; ask its owner for the issuer and client."
+      },
+      "note": {
+        "cross_account": "Calling from another account: give the caller's role this policy; whether AgentCore also needs a resource-based policy on the runtime is still to be verified.",
+        "harness_action_unverified": "The Harness IAM action (bedrock-agentcore:InvokeHarness) is still to be verified against the service authorization reference.",
+        "harness_no_stop_session": "A Harness has no session-stop operation, so no StopRuntimeSession grant was added.",
+        "memory_unresolved": "This agent uses no memory Launchpad knows of, so no memory grant was added."
+      },
+      "project": {
+        "title": "Integration",
+        "sub": "Every callable agent of this project with its ARN and endpoints, and one merged policy for a backend role that calls several of them.",
+        "none": "No agent of this project has a deployed resource yet.",
+        "include": "In the policy",
+        "includeAgent": "Include {{name}} in the merged policy",
+        "agent": "Agent",
+        "endpoint": "Endpoint",
+        "mode": "Inbound",
+        "arn": "ARN",
+        "skipped": "Not deployed yet (no ARN): {{names}}",
+        "merged": "Merged policy",
+        "liveOnly": "Production only",
+        "pick": "Tick at least one agent to build the merged policy.",
+        "onlyJwt": "The agents ticked are all JWT agents — they take no IAM grant.",
+        "jwtAgents": "{{count}} JWT agent(s) ticked take no IAM grant and are left out.",
+        "exportFailed": "Could not export the inventory"
+      }
+    },
+    "apiKeys": {
+      "title": "API keys",
+      "sub": "Keys for the public /v1 API that can call this agent. A key is shown once, when it is created.",
+      "name": "Key name",
+      "namePlaceholder": "Key name (optional)",
+      "create": "New key",
+      "scoped": "Scoped to this agent",
+      "readOnly": "Creating, disabling and enabling keys needs write access to this project.",
+      "once": "Copy this key now — it will not be shown again.",
+      "copyKey": "Copy key",
+      "copySample": "Copy call",
+      "dismiss": "Done",
+      "sampleTitle": "Call this agent with it:",
+      "copied": "Copied",
+      "copyFailed": "Could not copy to the clipboard",
+      "createFailed": "Could not create the key",
+      "toggleFailed": "Could not change the key",
+      "usageFailed": "Could not load the key's usage",
+      "disabledOk": "{{name}} disabled",
+      "enabledOk": "{{name}} enabled",
+      "retry": "Retry",
+      "none": "No key can call this agent yet.",
+      "calls_one": "{{count}} call",
+      "calls_other": "{{count}} calls",
+      "allAgents": "every agent",
+      "state": {
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "expired": "Expired",
+        "offboarded": "Creator offboarded"
+      },
+      "usage": "Usage",
+      "usageSummary": "{{total}} calls in the last {{days}} days",
+      "disable": "Disable",
+      "enable": "Enable",
+      "cancel": "Cancel",
+      "confirmTitle": "Disable this key?",
+      "confirmBody": "Applications using {{name}} will get 401 until it is enabled again.",
+      "manage": "Manage keys"
     }
   },
   "models": {

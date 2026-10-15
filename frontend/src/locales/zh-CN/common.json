@@ -13599,6 +13599,130 @@
       "darkHint": "控制室配色（默认）",
       "systemHint": "跟随设备设置：当前为{{theme}}",
       "current": "主题：{{theme}}"
+    },
+    "invokeAccess": {
+      "title": "在你的应用中调用",
+      "sub": "后端开发给 IAM 角色配置调用权限需要的一切：准确的 ARN、最小权限策略和已填好参数的调用示例。",
+      "resources": "要调用的资源",
+      "permission": "调用方的权限",
+      "call": "如何调用",
+      "kind": {
+        "runtime": "AgentCore Runtime",
+        "harness": "AgentCore Harness"
+      },
+      "mode": {
+        "iam": "IAM（SigV4）",
+        "jwt": "JWT（Bearer）"
+      },
+      "arn": "ARN",
+      "account": "账号",
+      "region": "区域",
+      "endpoints": "端点",
+      "allEndpoints": "全部端点",
+      "role": {
+        "all": "下列所有端点",
+        "production": "生产流量",
+        "DEFAULT": "跟随最新版本",
+        "live": "已放行版本",
+        "candidate": "待放行"
+      },
+      "policyHint": "附加到调用方角色",
+      "jwtHint": "IAM 权限不生效",
+      "options": "策略选项",
+      "include": {
+        "stop_session": "会话管理（StopRuntimeSession）",
+        "memory": "读取智能体的记忆",
+        "harnessNoStop": "Harness 没有停止会话的操作"
+      },
+      "policy": "IAM 策略",
+      "copy": "复制",
+      "download": "下载",
+      "copied": "已复制{{label}}",
+      "copyFailed": "无法复制到剪贴板",
+      "callHint": "端点 {{qualifier}}，含流式与非流式",
+      "lang": {
+        "cli": "AWS CLI",
+        "python": "Python（boto3）",
+        "ts": "TypeScript（SDK v3）"
+      },
+      "file": {
+        "cli": "invoke.sh",
+        "python": "invoke.py",
+        "ts": "invoke.ts"
+      },
+      "jwtNoIam": "该智能体用其身份提供方签发的 Bearer token 调用，IAM 权限对它不生效。按下列配置取 token，并以 Authorization: Bearer 发送。",
+      "jwt": {
+        "issuer": "签发方",
+        "discovery": "发现地址",
+        "clients": "允许的客户端",
+        "audience": "允许的受众",
+        "scopes": "允许的范围",
+        "external": "该智能体的授权方在 Launchpad 之外配置，请向其负责人索取签发方与客户端信息。"
+      },
+      "note": {
+        "cross_account": "跨账号调用：把该策略给调用方账号的角色；AgentCore 是否还需要在 Runtime 上配置资源策略，尚待核实。",
+        "harness_action_unverified": "Harness 的 IAM 动作（bedrock-agentcore:InvokeHarness）尚待对照服务授权参考核实。",
+        "harness_no_stop_session": "Harness 没有停止会话的操作，因此未加入 StopRuntimeSession 授权。",
+        "memory_unresolved": "该智能体没有使用 Launchpad 已知的记忆，因此未加入记忆授权。"
+      },
+      "project": {
+        "title": "集成",
+        "sub": "本项目所有可调用智能体的 ARN 与端点，以及一份覆盖所选智能体的合并策略，便于一个后端角色调用多个智能体。",
+        "none": "本项目还没有已部署资源的智能体。",
+        "include": "纳入策略",
+        "includeAgent": "将 {{name}} 纳入合并策略",
+        "agent": "智能体",
+        "endpoint": "端点",
+        "mode": "入站",
+        "arn": "ARN",
+        "skipped": "尚未部署（无 ARN）：{{names}}",
+        "merged": "合并策略",
+        "liveOnly": "仅生产",
+        "pick": "至少勾选一个智能体以生成合并策略。",
+        "onlyJwt": "所选智能体都是 JWT 入站，不需要 IAM 授权。",
+        "jwtAgents": "所选的 {{count}} 个 JWT 智能体不需要 IAM 授权，已排除。",
+        "exportFailed": "无法导出清单"
+      }
+    },
+    "apiKeys": {
+      "title": "API 密钥",
+      "sub": "可调用该智能体的公开 /v1 API 密钥。密钥只在创建时显示一次。",
+      "name": "密钥名称",
+      "namePlaceholder": "密钥名称（可选）",
+      "create": "新建密钥",
+      "scoped": "仅限该智能体",
+      "readOnly": "新建、停用、启用密钥需要本项目的写权限。",
+      "once": "请立即复制该密钥——之后不会再显示。",
+      "copyKey": "复制密钥",
+      "copySample": "复制调用",
+      "dismiss": "完成",
+      "sampleTitle": "用它调用该智能体：",
+      "copied": "已复制",
+      "copyFailed": "无法复制到剪贴板",
+      "createFailed": "无法创建密钥",
+      "toggleFailed": "无法更改密钥",
+      "usageFailed": "无法加载密钥用量",
+      "disabledOk": "已停用 {{name}}",
+      "enabledOk": "已启用 {{name}}",
+      "retry": "重试",
+      "none": "还没有可调用该智能体的密钥。",
+      "calls_one": "{{count}} 次调用",
+      "calls_other": "{{count}} 次调用",
+      "allAgents": "全部智能体",
+      "state": {
+        "enabled": "已启用",
+        "disabled": "已停用",
+        "expired": "已过期",
+        "offboarded": "创建人已离开"
+      },
+      "usage": "用量",
+      "usageSummary": "最近 {{days}} 天共 {{total}} 次调用",
+      "disable": "停用",
+      "enable": "启用",
+      "cancel": "取消",
+      "confirmTitle": "停用该密钥？",
+      "confirmBody": "使用 {{name}} 的应用将收到 401，直到重新启用。",
+      "manage": "管理密钥"
     }
   },
   "models": {
