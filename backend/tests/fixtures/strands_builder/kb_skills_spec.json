@@ -1,0 +1,60 @@
+{
+  "name": "snap-kb",
+  "display_name": null,
+  "method": "zip_runtime",
+  "model_id": "global.anthropic.claude-sonnet-4-5-v1:0",
+  "model_source": "bedrock",
+  "max_tokens": null,
+  "reasoning_effort": null,
+  "agent_sdk": "claude_agent_sdk",
+  "system_prompt": "You are a snapshot agent. {{city}} stays literal.",
+  "tool_description_overrides": {},
+  "tools": [],
+  "toolkits": [],
+  "skills": [
+    "s3://launchpad-artifacts/skills/pirate-speak/"
+  ],
+  "native_tools": [],
+  "allowed_tools": null,
+  "requirements": [],
+  "code": null,
+  "code_bundle": null,
+  "source_harness": null,
+  "conversion_notes": null,
+  "studio_flow": null,
+  "memory": {
+    "short_term": true,
+    "long_term": false,
+    "memory_id": null
+  },
+  "guardrail": {
+    "enabled": false,
+    "mode": "anonymize"
+  },
+  "env": {
+    "TEAM": "ops"
+  },
+  "max_iterations": 100,
+  "timeout_seconds": 600,
+  "filesystem": {
+    "session_storage": {
+      "mount_path": "/mnt/workspace"
+    },
+    "s3_files": [],
+    "efs": [],
+    "mounts": []
+  },
+  "network": null,
+  "knowledge_bases": [
+    {
+      "kb_id": "KB12345678",
+      "name": "Handbook",
+      "description": ""
+    }
+  ],
+  "protocol": "http",
+  "mcp": null,
+  "a2a_skills": [],
+  "byoc": null,
+  "inbound_auth": null
+}
