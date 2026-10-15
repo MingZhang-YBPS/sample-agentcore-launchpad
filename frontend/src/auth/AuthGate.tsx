@@ -28,9 +28,11 @@ import {
   type AuthStatus,
   type RegisterResult,
 } from "../lib/api";
+import { ssoApi } from "../lib/api/sso";
 import { useUiVersion } from "../lib/ui-version";
 import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
 import { V3AuthFrame, V3AuthLoading } from "../v3/AuthFrame";
+import { SsoSignIn } from "../v3/pages/sso/SsoSignIn";
 import { Lamp } from "../v3/ui";
 import { AuthContext } from "./auth-context";
 
@@ -119,7 +121,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      await api.logout();
+      // an SSO session also ends at its IdP (RP-initiated logout, sso D-5)
+      const answer = await ssoApi.logout();
+      if (answer?.end_session_url) {
+        window.location.assign(answer.end_session_url);
+        return;
+      }
     } finally {
       setStatus(LOGGED_OUT);
     }
@@ -233,7 +240,9 @@ function LoginPage({
         </div>
       ) : null}
       {mode === "signin" ? (
-        <SignInForm onLogin={onLogin} prefill={prefill} />
+        <SsoSignIn skin={skin}>
+          {(nested) => <SignInForm onLogin={onLogin} prefill={prefill} nested={nested} />}
+        </SsoSignIn>
       ) : (
         <RegisterForm onRegistered={onRegistered} requiresApproval={requiresApproval} />
       )}
@@ -332,9 +341,12 @@ function Submit({ busy, icon, label, busyLabel }: {
 function SignInForm({
   onLogin,
   prefill,
+  nested = false,
 }: {
   onLogin: (result: AuthLoginResult) => void;
   prefill: string;
+  /** under the single sign-on buttons: the card already has its heading */
+  nested?: boolean;
 }) {
   const { t } = useTranslation();
   const skin = useSkin();
@@ -366,8 +378,12 @@ function SignInForm({
 
   return (
     <form onSubmit={submit} noValidate>
-      <h2>{t("auth.title")}</h2>
-      <p className="sub">{t("auth.v2.subtitle")}</p>
+      {!nested && (
+        <>
+          <h2>{t("auth.title")}</h2>
+          <p className="sub">{t("auth.v2.subtitle")}</p>
+        </>
+      )}
 
       <div className={`${skin}-auth-fields`}>
         <Field id="auth-username" label={t("auth.v2.username")}>
