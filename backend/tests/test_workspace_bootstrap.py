@@ -157,9 +157,12 @@ class FakeEcr:
             return {"repositories": [self.repos[name]]}
         return {"repositories": list(self.repos.values())}
 
-    def create_repository(self, repositoryName, imageScanningConfiguration=None):  # noqa: N803
+    def create_repository(self, repositoryName, imageScanningConfiguration=None,  # noqa: N803
+                          tags=None):
         repo = {
             "repositoryName": repositoryName,
+            "repositoryArn": f"arn:aws:ecr:{REGION}:{ACCOUNT}:repository/{repositoryName}",
+            "tags": {t["Key"]: t["Value"] for t in tags or []},
             "repositoryUri": (
                 f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{repositoryName}"
             ),
@@ -168,6 +171,10 @@ class FakeEcr:
         self.repos[repositoryName] = repo
         self.created.append(repositoryName)
         return {"repository": repo}
+
+    def tag_resource(self, resourceArn, tags):  # noqa: N803
+        name = resourceArn.rsplit("/", 1)[-1]
+        self.repos[name]["tags"].update({t["Key"]: t["Value"] for t in tags})
 
 
 class FakeCodeBuild:
@@ -185,6 +192,10 @@ class FakeCodeBuild:
         self.projects[kwargs["name"]] = kwargs
         self.created.append(kwargs["name"])
         return {"project": kwargs}
+
+    def update_project(self, name, tags):
+        self.projects[name]["tags"] = tags
+        return {"project": self.projects[name]}
 
 
 class FakeCognito:
@@ -290,6 +301,9 @@ class FakeControl:
             },
         }
         return gateway_id
+
+    def tag_resource(self, resourceArn, tags):  # noqa: N803
+        self.tagged = {**getattr(self, "tagged", {}), resourceArn: dict(tags)}
 
     def list_gateways(self, maxResults=None, nextToken=None):  # noqa: N803
         return {"items": list(self.gateways.values())}
@@ -611,6 +625,25 @@ class TestStages:
         assert aws.control.created_memories == ["launchpad_memory"]
         assert aws.control.created_providers == ["launchpad-gw-m2m"]
         assert aws.registry.created == ["launchpad-registry"]
+
+    def test_the_workspace_infrastructure_is_tagged_shared(self, aws):
+        """Cost tags (cost-tags design §1.2): what the bootstrap makes is shared
+        infrastructure — `launchpad:project=shared`, the workspace, managed-by."""
+        _register()
+        ctx = _ctx()
+        for name in wb.STAGE_ORDER:
+            wb.STAGES[name](ctx)
+        shared = {"launchpad:project": "shared", "launchpad:workspace": WS_ID,
+                  "launchpad:managed-by": "launchpad"}
+        assert aws.ecr.repos["launchpad-agents"]["tags"] == shared
+        build_tags = aws.codebuild.projects["launchpad-agent-builder"]["tags"]
+        assert {t["key"]: t["value"] for t in build_tags} == shared
+        role_tags = aws.iam.roles[f"launchpad-gateway-role-{REGION}"]["tags"]
+        assert role_tags["launchpad:project"] == "shared"
+        assert role_tags["launchpad:managed-by"] == "launchpad"
+        assert role_tags["launchpad:workspace"] == WS_ID
+        gateway_arn = _row().resources["gateway_arn"]
+        assert aws.control.tagged[gateway_arn] == shared
 
     def test_the_bucket_carries_the_cdk_posture(self, aws):
         _register()

@@ -586,6 +586,26 @@ def _tags(iam: Any, role_name: str) -> dict[str, str]:
     }
 
 
+def _shared_cost_tags() -> list[dict[str, str]]:
+    """A workspace service role's cost tags (cost-tags design §1.2): shared
+    infrastructure, no project. `launchpad:workspace` is the adoption tag above."""
+    from app.services.project_telemetry import TAG_WORKSPACE, shared_tags
+
+    return [{"Key": k, "Value": v} for k, v in shared_tags().items() if k != TAG_WORKSPACE]
+
+
+def _catch_up_cost_tags(iam: Any, role_name: str, current: dict[str, str],
+                        log: Callable[[str], None]) -> None:
+    """An adopted role made before cost tags gets them; best-effort."""
+    missing = [t for t in _shared_cost_tags() if current.get(t["Key"]) != t["Value"]]
+    if not missing:
+        return
+    try:
+        iam.tag_role(RoleName=role_name, Tags=missing)
+    except Exception as exc:  # noqa: BLE001 — attribution never fails a bootstrap
+        log(f"cost tags on role {role_name} not written: {exc}")
+
+
 def ensure_role(
     iam: Any,
     *,
@@ -614,6 +634,7 @@ def ensure_role(
             Tags=[
                 {"Key": WORKSPACE_TAG_KEY, "Value": workspace_id},
                 {"Key": "launchpad:managed", "Value": "true"},
+                *_shared_cost_tags(),
             ],
         )
         role_arn = created["Role"]["Arn"]
@@ -644,6 +665,7 @@ def ensure_role(
         iam.update_assume_role_policy(
             RoleName=role_name, PolicyDocument=json.dumps(trust_policy)
         )
+        _catch_up_cost_tags(iam, role_name, tags, log)
 
     for policy_name, document in inline_policies.items():
         iam.put_role_policy(

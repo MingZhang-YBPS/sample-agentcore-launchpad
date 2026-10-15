@@ -42,11 +42,12 @@ from app.models.projects import (
     ProjectWorkspace,
 )
 from app.schemas.inbound_auth import InboundAuth
-from app.services import access
+from app.services import access, cost_tags
 from app.services import api_keys as api_keys_service
 from app.services import share_links as share_links_service
 from app.services import steward as steward_service
 from app.services.audit import record_audit_event, record_structure_event
+from app.services.project_telemetry import MAX_COST_TAGS, is_reserved_tag_key
 from app.services.users import PLATFORM_ROLES, ROLE_ADMIN, ROLE_STEWARD, STATUS_ACTIVE
 
 STATUS_ACTIVE_PROJECT = "active"
@@ -59,10 +60,19 @@ OWNER_SETTINGS = frozenset({"resource_visibility"})
 # …an administrator also these (sod_strict loosened by the owner would defeat it;
 # the /v1 project window and the project's own inbound JWT default, design §10.7, are
 # infrastructure decisions like the workspace default they stand in for)
-ADMIN_SETTINGS = OWNER_SETTINGS | {"sod_strict", "quotas", "inbound_auth_default"}
-# …and a department administrator (§11.1) the owner's plus strictness — the /v1
-# window and the inbound JWT default stay platform infrastructure
-DEPARTMENT_SETTINGS = OWNER_SETTINGS | {"sod_strict"}
+ADMIN_SETTINGS = OWNER_SETTINGS | {"sod_strict", "quotas", "inbound_auth_default",
+                                    "cost_tags"}
+# …and a department administrator (§11.1) the owner's plus strictness and the
+# project's cost tags (cost-tags design §1.1, a cost centre is the department's call)
+# — the /v1 window and the inbound JWT default stay platform infrastructure
+DEPARTMENT_SETTINGS = OWNER_SETTINGS | {"sod_strict", "cost_tags"}
+# `settings.cost_tags` (cost-tags D-3): AWS tag rules — key 1–128, value 0–256
+# characters of letters, digits, spaces and `_ . : / = + - @`
+_TAG_TEXT = re.compile(r"^[\w\s.:/=+\-@]*$")
+MAX_TAG_KEY = 128
+MAX_TAG_VALUE = 256
+# a change of any of these re-tags the project's resources (cost_tags.schedule_retag)
+RETAG_FIELDS = frozenset({"name", "department_id"})
 # `settings.quotas` (§11.3): whole-number caps and their bounds…
 QUOTA_COUNTS: dict[str, tuple[int, int]] = {
     "max_agents": (0, 10_000),
@@ -296,8 +306,46 @@ def _check_settings(settings: dict[str, Any], allowed: frozenset[str]) -> dict[s
             value = _check_quotas(value)
         elif key == "inbound_auth_default" and value is not None:
             value = _check_inbound_auth(value)
+        elif key == "cost_tags" and value is not None:
+            value = check_cost_tags(value)
         out[key] = value
     return out
+
+
+def check_cost_tags(value: Any) -> dict[str, str] | None:
+    """`settings.cost_tags`: the project's own cost-allocation tags (`{CostCenter:
+    "1234"}`), at most `MAX_COST_TAGS`, AWS tag syntax, never an `aws:` / `launchpad:`
+    key (the platform's tags say which project a resource belongs to). The whole map
+    is replaced; an empty one clears it (stored as None)."""
+    def invalid(message: str, **detail: Any) -> AppError:
+        return AppError("project.setting_invalid", message,
+                        {"key": "cost_tags", **detail})
+
+    if not isinstance(value, dict):
+        raise invalid("cost_tags must be an object of tag key → value")
+    if len(value) > MAX_COST_TAGS:
+        raise invalid(f"at most {MAX_COST_TAGS} cost tags", limit=MAX_COST_TAGS)
+    out: dict[str, str] = {}
+    seen: set[str] = set()
+    for raw_key, raw_value in value.items():
+        key = str(raw_key).strip()
+        if not isinstance(raw_value, str):
+            raise invalid(f"cost tag '{key}' must have a text value", tag=key)
+        tag_value = raw_value.strip()
+        if not key or len(key) > MAX_TAG_KEY or not _TAG_TEXT.match(key):
+            raise invalid(f"cost tag key '{key}' must be 1–{MAX_TAG_KEY} letters, digits, "
+                          "spaces or _ . : / = + - @", tag=key)
+        if is_reserved_tag_key(key):
+            raise invalid(f"cost tag key '{key}' is reserved — aws: and launchpad: keys "
+                          "are written by AWS and the platform only", tag=key)
+        if len(tag_value) > MAX_TAG_VALUE or not _TAG_TEXT.match(tag_value):
+            raise invalid(f"cost tag '{key}' value must be at most {MAX_TAG_VALUE} "
+                          "letters, digits, spaces or _ . : / = + - @", tag=key)
+        if key.lower() in seen:
+            raise invalid(f"cost tag key '{key}' appears twice", tag=key)
+        seen.add(key.lower())
+        out[key] = tag_value
+    return out or None
 
 
 def _check_quotas(value: Any) -> dict[str, Any]:
@@ -501,6 +549,12 @@ def update_project(
     if not changed:
         return row
     row.updated_at = _now()
+    if RETAG_FIELDS & set(changed) or ("settings" in changed and (
+            (fields["settings"] or {}).keys() & {"cost_tags"})):
+        # the department and cost tags are on every resource of the project (and a
+        # rename re-tags too, design §1.3); runs start after the caller's commit
+        cost_tags.schedule_retag(db, project_id=row.id, reason="project_update",
+                                 **_retag_actor(identity))
     if group_moved or (sod_strict(row) and not was_strict):
         # a new group's roles, or strictness switched on, must not leave a combined duty
         db.flush()
@@ -1255,8 +1309,19 @@ def transfer_agent(
             target=f"agent:{agent_id} project:{source.id}->project:{to_project_id}",
             db=db, project_id=to_project_id,
         )
+        # phase 2 (cost-tags §1.3): the agent's resources take the new project's tags
+        # — queued here, started after the caller's commit (`cost_tags.start_queued`)
+        retag = cost_tags.schedule_retag(
+            db, project_id=to_project_id, reason="transfer",
+            workspace_ids=[agent.workspace_id or "default"], agent_ids=[agent_id],
+            **_retag_actor(identity))
     return {"agent_id": agent_id, "from_project_id": source.id,
-            "to_project_id": to_project_id, "rows": counts}
+            "to_project_id": to_project_id, "rows": counts, "retag_job_ids": retag}
+
+
+def _retag_actor(identity: Any) -> dict[str, Any]:
+    return {"actor": getattr(identity, "username", "admin"),
+            "actor_user_id": getattr(identity, "user_id", None)}
 
 
 # ── the caller's access (GET /api/me/access) ──────────────────────────────────

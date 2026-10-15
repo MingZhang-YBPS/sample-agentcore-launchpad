@@ -354,17 +354,23 @@ def test_a_new_kb_of_an_isolated_project_uses_the_project_role_and_tag(alpha, mo
     with project_context("alpha"):
         knowledge.create_kb(workspace, "docs", "", {"mode": "upload"})
     (kw,) = bedrock.called("create_knowledge_base")
-    assert kw["roleArn"] == ALPHA_ROLE and kw["tags"] == {"launchpad:project": "alpha"}
+    assert kw["roleArn"] == ALPHA_ROLE and kw["tags"]["launchpad:project"] == "alpha"
+    # cost tags (cost-tags design §1.2) ride along
+    assert kw["tags"]["launchpad:managed-by"] == "launchpad"
     assert started == ["KB1"]
 
 
-def test_a_new_kb_of_a_shared_project_is_unchanged(app, monkeypatch):  # noqa: F811
+def test_a_new_kb_of_a_shared_project_keeps_the_shared_role(app, monkeypatch):  # noqa: F811
     bedrock = _Bedrock()
     workspace = _wire(monkeypatch, bedrock)
     monkeypatch.setattr(knowledge, "_start_source_completion", lambda *_a: None)
-    knowledge.create_kb(workspace, "docs", "", {"mode": "upload"})
+    with project_context("default"):
+        knowledge.create_kb(workspace, "docs", "", {"mode": "upload"})
     (kw,) = bedrock.called("create_knowledge_base")
-    assert kw["roleArn"] == SHARED_ROLE and "tags" not in kw
+    # the shared role and layout; only the cost tags (cost-tags design §1.1) are new
+    assert kw["roleArn"] == SHARED_ROLE
+    assert kw["tags"] == {"launchpad:project": "default", "launchpad:workspace": WS,
+                          "launchpad:managed-by": "launchpad"}
 
 
 @pytest.mark.parametrize(("role", "key"), [

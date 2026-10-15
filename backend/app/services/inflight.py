@@ -118,6 +118,7 @@ def resumable_job_types() -> frozenset[str]:
     # the deployer pipeline.
     from app.assistant import purge as assistant_purge
     from app.services import (
+        cost_tags,
         project_isolation,
         project_migration,
         project_purge,
@@ -136,6 +137,7 @@ def resumable_job_types() -> frozenset[str]:
         system_uninstall.JOB_TYPE,
         promotion_exec.JOB_TYPE,
         assistant_purge.JOB_TYPE,
+        cost_tags.JOB_TYPE,
     })
 
 

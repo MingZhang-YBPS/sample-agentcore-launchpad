@@ -11,14 +11,18 @@ The workspace's bootstrap memory stays the default: agents whose spec does not
 pick a memory land on it, so it can never be deleted from here.
 """
 
+import logging
 from datetime import datetime
 from typing import Any
 
 from app.core.errors import AppError
+from app.services import cost_tags
 from app.services.agentcore.client import control_client
 from app.services.memory import memory_id_or_none
 from app.services.memory_strategies import STRATEGIES
 from app.services.workspace import WorkspaceContext
+
+logger = logging.getLogger(__name__)
 
 PAGE_MAX = 100
 
@@ -160,6 +164,8 @@ def create_memory_resource(
             params["memoryExecutionRoleArn"] = role_arn
     if namespace_keys:
         params["namespaceKeys"] = [_namespace_key_entry(k) for k in namespace_keys]
+    # cost tags (cost-tags design §1.2): the creating request's project
+    params["tags"] = cost_tags.context_tags(workspace_id=workspace.id)
     created = control.create_memory(**params).get("memory", {})
     return _detail(created, memory_id_or_none(workspace))
 
@@ -234,7 +240,33 @@ def update_memory_resource(
         params["eventExpiryDuration"] = event_expiry_days
     control.update_memory(**params)
     raw = control.get_memory(memoryId=memory_id).get("memory", {})
+    _tag_managed_memory(workspace, memory_id, raw.get("arn"))
     return _detail(raw, memory_id_or_none(workspace))
+
+
+def _tag_managed_memory(workspace: WorkspaceContext, memory_id: str, arn: str | None) -> None:
+    """An update catches a managed memory up on its cost tags — those of the project
+    its ledger row names (cost-tags design §1.2). The workspace memory and an
+    adopted-but-unowned one are left to the bootstrap and the back-fill."""
+    if not arn or memory_id == memory_id_or_none(workspace):
+        return
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.core.project_scope import project_context
+    from app.models.ledger import ManagedMemory
+
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            project_id = db.scalar(select(ManagedMemory.project_id).where(
+                ManagedMemory.workspace_id == workspace.id,
+                ManagedMemory.memory_id == memory_id))
+    finally:
+        db.close()
+    cost_tags.tag_quietly(workspace, cost_tags.entry(cost_tags.MEMORY, arn=arn),
+                          cost_tags.tags_for(project_id, workspace_id=workspace.id),
+                          logger.info)
 
 
 def delete_memory_resource(workspace: WorkspaceContext, memory_id: str) -> dict[str, Any]:

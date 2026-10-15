@@ -24,6 +24,7 @@ from app.models.ledger import Agent
 from app.schemas.agent import DEFAULT_GPT_MAX_TOKENS, AgentSpec, is_openai_model_id
 from app.services import (
     agent_iam,
+    cost_tags,
     inference_profiles,
     project_gateway,
     project_memory,
@@ -523,20 +524,22 @@ def _execution_role_arn(ctx: StageContext, agent: Agent) -> str:
 def _attribute_to_project(
     ctx: StageContext, agent: Agent, params: dict[str, Any]
 ) -> dict[str, Any]:
-    """Projects design §10.8 for an isolated project's harness: the span resource
-    attributes on its environment variables, the matching `launchpad:*` tags on the
-    create, and — behind `project_inference_profiles`, Bedrock-hosted models only —
-    the project's application inference profile as the model id. Any other agent's
-    request is returned unchanged."""
-    if not project_telemetry.attributed(agent.project_id):
-        return params
+    """Every harness carries the unified cost tags (cost-tags design §1.1: its
+    project — `shared` for a system preset —, workspace, agent id, department and the
+    project's own cost tags). Projects design §10.8 adds, for an isolated project's
+    harness only, the span resource attributes on its environment variables and —
+    behind `project_inference_profiles`, Bedrock-hosted models only — the project's
+    application inference profile as the model id."""
     out = dict(params)
+    out["tags"] = cost_tags.agent_tags(agent, ctx.workspace.id)
+    if not project_telemetry.attributed(agent.project_id):
+        return out
     environment = project_telemetry.with_project_attributes(
         out.get("environmentVariables") or {}, project_id=agent.project_id,
         agent_id=agent.id, workspace_id=ctx.workspace.id,
     )
     out["environmentVariables"] = environment
-    out["tags"] = project_telemetry.tags_from_environment(environment)
+    out["tags"] = {**out["tags"], **project_telemetry.tags_from_environment(environment)}
     spec = AgentSpec(**agent.spec)
     if spec.model_source == "bedrock" and inference_profiles.enabled():
         db = ctx.session()
@@ -791,9 +794,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
 def _tag_harness(client: Any, arn: str | None, tags: dict[str, str] | None,
                  log: Any) -> None:
-    """A re-publish of an isolated project's harness catches up on its project tags
-    (one created before isolation has none). Best-effort: the span attributes
-    already attribute it, so a refusal is logged and the deploy goes on."""
+    """A re-publish catches up on the harness's cost tags (one created before cost
+    tags, or before its project was isolated, has none or old ones). Best-effort: a
+    refusal is logged and the deploy goes on (the back-fill reports it)."""
     if not tags or not arn:
         return
     try:

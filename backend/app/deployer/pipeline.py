@@ -721,7 +721,13 @@ def resume_pending_jobs() -> list[str]:
     # Lazy: the uninstall worker imports the agents router (teardown helper), which
     # imports the system-agents service, which imports this module.
     from app.assistant import purge as assistant_purge
-    from app.services import project_isolation, project_migration, project_purge, promotion_exec
+    from app.services import (
+        cost_tags,
+        project_isolation,
+        project_migration,
+        project_purge,
+        promotion_exec,
+    )
     from app.system_agents import uninstall as system_uninstall
 
     starters: dict[str, Callable[[str], threading.Thread]] = {
@@ -745,6 +751,8 @@ def resume_pending_jobs() -> list[str]:
         project_migration.JOB_TYPE: project_migration.start_migration_async,
         # projects §11.5: a purge continues from its last finished table / agent
         project_purge.JOB_TYPE: project_purge.start_purge_resume,
+        # cost-tags §1.3: a back-fill continues with the first resource not yet tagged
+        cost_tags.JOB_TYPE: cost_tags.start_backfill_async,
     }
     db = SessionLocal()
     try:

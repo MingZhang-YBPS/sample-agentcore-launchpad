@@ -45,6 +45,7 @@ SCOPED_SIDS = frozenset(
         "EcrLaunchpad",
         "CodeBuildLaunchpad",
         "BedrockKnowledgeBases",
+        "CostTagsAgentLogGroups",
     }
 )
 
@@ -325,3 +326,26 @@ def test_an_isolated_agent_role_cannot_be_created_without_a_boundary(
     }
     boundary = deny["Condition"]["StringNotLike"]["iam:PermissionsBoundary"]
     assert _sub(boundary).endswith(":policy/launchpad-project-*")
+
+
+def test_every_cost_tagged_resource_can_be_tagged(statements: list[dict[str, Any]]):
+    """Cost tags (cost-tags design §1.2 / §1.5): each resource the platform tags has
+    its tag action, on the resources Launchpad owns, plus the Cost Explorer reads."""
+    by_sid = {s["Sid"]: s for s in statements}
+    expected = {
+        "IamOnLaunchpadRoles": {"iam:TagRole", "iam:ListRoleTags"},
+        "EcrLaunchpad": {"ecr:TagResource", "ecr:ListTagsForResource"},
+        "EcrProjectRepositories": {"ecr:TagResource", "ecr:ListTagsForResource"},
+        "CodeBuildLaunchpad": {"codebuild:CreateProject", "codebuild:UpdateProject"},
+        "BedrockKnowledgeBases": {"bedrock:TagResource"},
+        "SecretsManagerForTokenVault": {"secretsmanager:TagResource"},
+        "CostTagsAgentLogGroups": {"logs:TagResource", "logs:ListTagsForResource"},
+        "AgentCoreAndRegistry": {"bedrock-agentcore:*"},
+        "CostExplorerByTag": {"ce:GetCostAndUsage", "ce:ListCostAllocationTags",
+                              "ce:UpdateCostAllocationTagsStatus"},
+    }
+    for sid, actions in expected.items():
+        assert actions <= set(by_sid[sid]["Action"]), sid
+    logs = by_sid["CostTagsAgentLogGroups"]["Resource"]
+    assert len(logs) == 1 and logs[0]["Fn::Sub"].endswith(
+        "log-group:/aws/bedrock-agentcore/runtimes/*")

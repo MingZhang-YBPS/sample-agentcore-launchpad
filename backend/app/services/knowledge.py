@@ -21,7 +21,7 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.core.project_scope import current_project, project_context
 from app.models.ledger import Agent
-from app.services import creators, kb_gateway, project_kb
+from app.services import cost_tags, creators, kb_gateway, project_kb
 from app.services.agentcore.client import (
     agent_client,
     agent_runtime_client,
@@ -649,9 +649,9 @@ def create_kb(
     }
     if description:
         kwargs["description"] = description
-    if placement.tags:
-        # the project boundary authorizes retrieval on this tag (project_iam)
-        kwargs["tags"] = placement.tags
+    # cost tags of the creating project (cost-tags design §1.2), then the isolated
+    # project's tag the project boundary authorizes retrieval on (project_iam)
+    kwargs["tags"] = {**cost_tags.context_tags(workspace_id=workspace.id), **placement.tags}
     created = client.create_knowledge_base(**kwargs)
     kb_id = created["knowledgeBase"]["knowledgeBaseId"]
     # AWS keeps no ledger row of a KB, so its creator is recorded beside it — now,
@@ -816,7 +816,17 @@ def update_description(
         roleArn=detail["roleArn"],
         knowledgeBaseConfiguration=detail["knowledgeBaseConfiguration"],
     )
+    _tag_kb(workspace, detail)
     return get_kb_detail(workspace, kb_id)
+
+
+def _tag_kb(workspace: WorkspaceContext, detail: dict[str, Any]) -> None:
+    """An update catches a KB up on its cost tags — those of the request's project,
+    the one the KB is reachable from. Best-effort: a refusal is logged."""
+    arn = detail.get("knowledgeBaseArn")
+    if arn:
+        cost_tags.tag_quietly(workspace, cost_tags.entry(cost_tags.KNOWLEDGE_BASE, arn=arn),
+                              cost_tags.context_tags(workspace_id=workspace.id), logger.info)
 
 
 def _location_uri(location: dict[str, Any]) -> str | None:
