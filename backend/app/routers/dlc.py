@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, next_step
 from app.core.project_scope import owned_get
 from app.dlc import admission as admission_svc
 from app.dlc import calibration as cal_svc
@@ -1063,7 +1063,7 @@ def evaluate_release(
     if record is None:
         raise AppError("release.nothing_pending",
                        "no candidate version is waiting for a gate decision",
-                       status_code=409)
+                       status_code=409, next=[next_step("agent.redeploy", agent_id=agent.id)])
     release_svc.start_evaluation(db, record, agent, ws.context, actor=_actor(request),
                                  repeats=req.repeats, confirm_cost=req.confirm_cost,
                                  is_admin=_bypasses(request),
@@ -1309,7 +1309,9 @@ def admit_candidate(
     if parent is None:
         raise AppError("admission.no_golden_set",
                        "create the golden set for this agent's criteria first",
-                       status_code=409)
+                       status_code=409,
+                       next=[next_step("golden.create", agent_id=candidate.agent_id,
+                                       lineage_id=cset.lineage_id if cset else None)])
     split = golden_svc.splits_of(db, parent).get(req.split)
     if split is None:
         raise NotFoundError("golden.split_not_found", "split not found")

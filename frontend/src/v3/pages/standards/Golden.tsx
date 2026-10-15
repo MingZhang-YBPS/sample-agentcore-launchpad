@@ -9,8 +9,9 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
-import { dlcApi, errorMessage } from "../../../lib/api";
+import { dlcApi } from "../../../lib/api";
 import type { GoldenSet, GoldenSplit, WritableSplit } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
@@ -29,9 +30,11 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
   const [lineage, setLineage] = useState("");
   const [busy, setBusy] = useState(false);
   const rows = list.data?.golden_sets ?? [];
+  const [failure, setFailure] = useState<unknown>(null);
 
   const create = () => {
     setBusy(true);
+    setFailure(null);
     dlcApi
       .createGolden({ name, criteria_lineage_id: lineage || null })
       .then((created) => {
@@ -39,7 +42,7 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
         setCreating(false);
         onOpen(created.id);
       })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
 
@@ -93,7 +96,7 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
       {creating && (
         <Dialog
           title={t("v2.dlc.golden.createTitle")}
-          onClose={() => setCreating(false)}
+          onClose={() => { setCreating(false); setFailure(null); }}
           foot={
             <>
               <Btn kind="ghost" onClick={() => setCreating(false)}>{t("v3.common.cancel")}</Btn>
@@ -114,6 +117,7 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
               </select>
               <small className="v3-hint">{t("v2.dlc.golden.forCriteriaHint")}</small>
             </label>
+            <ErrorCallout error={failure} onDismiss={() => setFailure(null)} data-testid="v3-golden-create-error" />
           </div>
         </Dialog>
       )}
@@ -135,14 +139,17 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
   const mayEdit = can("criteria.manage");
   const maySeed = can("golden.admit");
 
+  // add / seed / retire fail in place, with the way out (storyline-ux §4)
+  const [failure, setFailure] = useState<unknown>(null);
   const run = async (fn: () => Promise<unknown>, okKey: string) => {
     setBusy(true);
+    setFailure(null);
     try {
       await fn();
       toast("ok", t(okKey));
       onReload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      setFailure(err);
     } finally {
       setBusy(false);
     }
@@ -151,6 +158,8 @@ export function GoldenCurator({ goldenSet, onReload, onBack }: { goldenSet: Gold
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div><button type="button" className="v3-btn ghost sm" onClick={onBack}>← {t("v2.dlc.golden.backToList")}</button></div>
+      <ErrorCallout error={failure} params={{ dataset_id: goldenSet.id }} onDismiss={() => setFailure(null)}
+        data-testid="v3-golden-error" />
       <Panel
         title={t("v2.dlc.golden.title", { name: goldenSet.name })}
         signal={sealed ? "ok" : "wait"}

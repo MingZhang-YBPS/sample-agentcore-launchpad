@@ -15,8 +15,9 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
-import { api, errorMessage, type V2Range } from "../../../lib/api";
+import { api, type V2Range } from "../../../lib/api";
 import { calibrationApi } from "../../../lib/api/calibration";
 import { hasInsightTrees } from "../../../lib/evaluation";
 import { evaluatorLabel } from "../../../lib/evaluators";
@@ -517,6 +518,8 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
     null,
   );
   const [busy, setBusy] = useState(false);
+  // a failed stop / pause / recheck stays on the page with its way out (storyline-ux §4)
+  const [failure, setFailure] = useState<unknown>(null);
   const data = task.data;
   const terminal =
     data?.kind === "run" &&
@@ -575,6 +578,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const act = async () => {
     if (!confirm || !data) return;
     setBusy(true);
+    setFailure(null);
     try {
       if (confirm === "stop") await api.stopEvaluationRun(data.id);
       else await api.v2OnlineAction(data.id, confirm);
@@ -582,7 +586,8 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       setConfirm(null);
       task.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      setConfirm(null);
+      setFailure(err);
     } finally {
       setBusy(false);
     }
@@ -597,6 +602,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const recheck = async () => {
     if (data.kind !== "run") return;
     setBusy(true);
+    setFailure(null);
     try {
       const run = await api.recheckEvaluationRun(data.id);
       toast(
@@ -609,7 +615,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
       );
       task.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      setFailure(err);
     } finally {
       setBusy(false);
     }
@@ -718,6 +724,8 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             </>
           }
         />
+        <ErrorCallout error={failure} params={{ agent_id: data.agentId ?? undefined }} onDismiss={() => setFailure(null)}
+          data-testid="v3-task-error" />
 
         {mayCalibrate && calibrationWhy === null && calibrationKeys.length > 1 && (
           <div

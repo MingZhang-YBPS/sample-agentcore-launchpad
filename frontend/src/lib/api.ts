@@ -1029,9 +1029,37 @@ export interface AttachedSkill {
   error_code?: string;
 }
 
+/** One way out of an error (storyline-ux §4): a console action key and its params.
+ *  The console's action table (`v3/story/actions.ts`) owns where it leads. */
+export interface ApiNextStep {
+  action: string;
+  params: Record<string, string>;
+}
+
+/** The envelope's `next`, kept to well-formed entries (a malformed one is dropped). */
+export function parseNextSteps(value: unknown): ApiNextStep[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { action, params } = entry as { action?: unknown; params?: unknown };
+    if (typeof action !== "string" || !action) return [];
+    const clean: Record<string, string> = {};
+    if (params && typeof params === "object" && !Array.isArray(params)) {
+      for (const [k, v] of Object.entries(params as Record<string, unknown>)) {
+        if (typeof v === "string" || typeof v === "number") clean[k] = String(v);
+      }
+    }
+    return [{ action, params: clean }];
+  });
+}
+
 export class ApiError extends Error {
   code: string;
   detail: unknown;
+  /** Console envelopes only: where to go to fix it, first = primary (never on /v1 or /share). */
+  next: ApiNextStep[];
+  /** Console envelopes only: `perm:<key>` when only that permission can fix it. */
+  needs: string | null;
   /** The backend's `message` as sent, before console copy replaced it (projects §19). */
   rawMessage: string;
   /** The localized headline alone — `message` may have the AWS text appended. */
@@ -1044,11 +1072,16 @@ export class ApiError extends Error {
     code: string,
     message: string,
     detail: unknown,
-    extra: { rawMessage?: string; title?: string; requestId?: string | null } = {},
+    extra: {
+      rawMessage?: string; title?: string; requestId?: string | null;
+      next?: ApiNextStep[]; needs?: string | null;
+    } = {},
   ) {
     super(message);
     this.code = code;
     this.detail = detail;
+    this.next = extra.next ?? [];
+    this.needs = extra.needs ?? null;
     this.rawMessage = extra.rawMessage ?? message;
     this.title = extra.title ?? message;
     this.requestId = extra.requestId ?? null;
@@ -1132,13 +1165,17 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
     if (res.status === 401 && !path.startsWith("/api/auth/")) {
       window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
     }
-    const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown; request_id?: string };
+    const env = (body ?? {}) as {
+      code?: string; message?: string; detail?: unknown; request_id?: string; next?: unknown; needs?: unknown;
+    };
     const code = env.code ?? `http.${res.status}`;
     const raw = env.message ?? res.statusText;
     throw new ApiError(code, messageWithRaw(code, raw), env.detail, {
       rawMessage: raw,
       title: localizedMessage(code, raw),
       requestId: env.request_id ?? res.headers.get("X-Request-Id") ?? null,
+      next: parseNextSteps(env.next),
+      needs: typeof env.needs === "string" && env.needs ? env.needs : null,
     });
   }
   if (body === undefined) {

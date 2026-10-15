@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
 import { type CandidateRun, calibrationApi, candidateLabel, DROPDOWN_RUNS } from "../../../lib/api/calibration";
@@ -138,12 +139,15 @@ function TaskBench({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   const data = task.data;
   const measured = agreement.data;
   const mayDecide = can("judge.calibrate");
+  // labelling / adjudicating / deciding fail in place, with the way out (storyline-ux §4)
+  const [failure, setFailure] = useState<unknown>(null);
 
   const act = (fn: () => Promise<unknown>, okKey?: string) => {
     setBusy(true);
+    setFailure(null);
     fn()
       .then(() => { if (okKey) toast("ok", t(okKey)); setNonce((n) => n + 1); })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
 
@@ -156,6 +160,8 @@ function TaskBench({ taskId, onBack }: { taskId: string; onBack: () => void }) {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div><button type="button" className="v3-btn ghost sm" onClick={onBack}>← {t("v2.dlc.view.calibration")}</button></div>
+      <ErrorCallout error={failure} params={{ agent_id: data.agent_id ?? undefined, task_id: data.id }}
+        onDismiss={() => setFailure(null)} data-testid="v3-calibration-error" />
       <Panel
         title={t("v2.dlc.calibration.taskTitle", { key: data.criterion_key })}
         signal={data.status === "closed" ? "ok" : "wait"}

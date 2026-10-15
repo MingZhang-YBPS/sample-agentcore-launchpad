@@ -4,8 +4,9 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
-import { api, errorMessage } from "../../../lib/api";
+import { api } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import {
   evaluatorSummary,
@@ -43,6 +44,8 @@ export function TaskList() {
   const [shown, setShown] = useState(PAGE);
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
+  // a failed stop / delete / pause stays on the page with its way out (storyline-ux §4)
+  const [failure, setFailure] = useState<unknown>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   // "usable for calibration": completed batch evaluator runs, the annotation-task candidates
   const [calibratable, setCalibratable] = useState(false);
@@ -73,6 +76,7 @@ export function TaskList() {
     if (!pending) return;
     const { task, action } = pending;
     setBusy(true);
+    setFailure(null);
     try {
       if (task.kind === "run") {
         if (action === "stop") await api.stopEvaluationRun(task.id);
@@ -86,7 +90,8 @@ export function TaskList() {
       setPending(null);
       list.reload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      setPending(null);
+      setFailure(err);
     } finally {
       setBusy(false);
     }
@@ -147,6 +152,7 @@ export function TaskList() {
           </>
         }
       />
+      <ErrorCallout error={failure} onDismiss={() => setFailure(null)} data-testid="v3-tasks-error" />
 
       <div className="v3-grid c4">
         <Panel signal={count("act") ? "act" : undefined}>

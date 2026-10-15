@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, next_step
 from app.evaluation.models import EvalDataset
 
 SPLITS = ("dev", "regression", "holdout")
@@ -235,11 +235,13 @@ def _prepare(
         scenario_id = str(item.get("scenario_id") or "")
         if not scenario_id or scenario_id in ids:
             raise AppError("golden.duplicate_scenario",
-                           f"scenario '{scenario_id}' is missing or already in this split")
+                           f"scenario '{scenario_id}' is missing or already in this split",
+                           next=[next_step("golden.open", dataset_id=split.split_of or split.id)])
         meta = dlc_meta(item)
         case_tier = meta.get("case_tier") or "known_good"
         if case_tier not in CASE_TIERS:
-            raise AppError("golden.bad_case_tier", f"case_tier must be one of {CASE_TIERS}")
+            raise AppError("golden.bad_case_tier", f"case_tier must be one of {CASE_TIERS}",
+                           next=[next_step("golden.open", dataset_id=split.split_of or split.id)])
         stamped = stamp(
             item,
             case_tier=case_tier,
@@ -270,7 +272,8 @@ def add_items(
     if split.split == "holdout" and not allow_holdout:
         raise AppError("golden.holdout_closed",
                        "the holdout split is never written by admission — it stays out of "
-                       "the development loop", status_code=409)
+                       "the development loop", status_code=409,
+                       next=[next_step("admission.open")])
     validate_items(db, split, items)
     existing, added = _prepare(split, items, actor=actor, origin=origin)
     split.items = existing
@@ -304,6 +307,7 @@ def seed(
             "the holdout split is already curated — it is sealed so that no later change "
             "can be tuned against it",
             status_code=409,
+            next=[next_step("admission.open")],
         )
     if not items:
         raise AppError("golden.seed_empty", "seed the golden set with at least one item")
@@ -348,7 +352,7 @@ def move_item(
 ) -> None:
     if to == "holdout":
         raise AppError("golden.holdout_closed", "items never move into the holdout split",
-                       status_code=409)
+                       status_code=409, next=[next_step("golden.open", dataset_id=parent.id)])
     splits = splits_of(db, parent)
     source = next((s for s in splits.values()
                    if any(str(i.get("scenario_id")) == scenario_id for i in s.items or [])), None)
@@ -356,7 +360,7 @@ def move_item(
         raise NotFoundError("golden.item_not_found", "item not found in this golden set")
     if source.split == "holdout":
         raise AppError("golden.holdout_closed", "holdout items stay in the holdout split",
-                       status_code=409)
+                       status_code=409, next=[next_step("golden.open", dataset_id=parent.id)])
     target = splits.get(to)
     if target is None:
         raise AppError("golden.bad_split", f"split must be one of {SPLITS}")

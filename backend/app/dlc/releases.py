@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.actor import same_actor, user_id_for
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, next_step
 from app.dlc import calibration as calibration_svc
 from app.dlc import criteria as criteria_svc
 from app.dlc import gate as gate_engine
@@ -138,9 +138,10 @@ def migrate_agent(db: Session, agent: Agent, control: Any, *, actor: str) -> Age
     ok, reason = gateable(agent)
     if not ok:
         raise AppError("release.not_gateable", reason or "agent cannot use a live endpoint",
-                       status_code=409)
+                       status_code=409, next=[next_step("agent.open", agent_id=agent.id)])
     if agent.status != "active":
-        raise AppError("release.not_active", "migrate an active agent", status_code=409)
+        raise AppError("release.not_active", "migrate an active agent", status_code=409,
+                       next=[next_step("agent.open", agent_id=agent.id)])
     point_endpoint(control, agent, LIVE, agent.version)
     agent.endpoint_mode = "live"
     record_audit_event(workspace_id=agent.workspace_id, actor=actor,
@@ -374,7 +375,8 @@ def _gate_plan(
     if not record.criteria_set_id:
         raise AppError("release.no_criteria",
                        "publish a criteria set for this agent before evaluating a release",
-                       status_code=409)
+                       status_code=409,
+                       next=[next_step("criteria.publish", agent_id=agent.id)])
     cset = db.get(criteria_svc.CriteriaSet, record.criteria_set_id)
     rows = criteria_svc.criteria_of(db, record.criteria_set_id)
     evaluators = sorted({
@@ -385,7 +387,10 @@ def _gate_plan(
     if parent is None:
         raise AppError("release.no_golden",
                        "create the golden set for these criteria before evaluating a release",
-                       status_code=409)
+                       status_code=409,
+                       next=[next_step("golden.create", agent_id=agent.id,
+                                       lineage_id=cset.lineage_id)],
+                       needs="perm:golden.admit")
     return rows, evaluators, golden_svc.splits_of(db, parent)
 
 
@@ -483,8 +488,11 @@ def start_evaluation(
         )
         run_ids.append(run.id)
     if not run_ids:
+        parent_id = next((s.split_of for s in splits.values() if s.split_of), None)
         raise AppError("release.empty_golden",
-                       "the golden set has no regression or holdout items", status_code=409)
+                       "the golden set has no regression or holdout items", status_code=409,
+                       next=[next_step("golden.open", agent_id=agent.id, dataset_id=parent_id)],
+                       needs="perm:golden.admit")
     record.run_ids = run_ids
     record.golden_versions = golden_versions
     record.decision = "evaluating"
@@ -543,7 +551,8 @@ def evaluate(db: Session, record: ReleaseRecord) -> dict[str, Any]:
     runs = [r for r in runs if r is not None]
     if not runs:
         raise AppError("release.not_evaluated", "start the gate evaluation first",
-                       status_code=409)
+                       status_code=409,
+                       next=[next_step("gate.open", agent_id=record.agent_id)])
     active = [r for r in runs if r.status not in ("completed", "failed", "stopped")]
     if active:
         return {"status": "evaluating", "runs": [{"id": r.id, "status": r.status} for r in runs]}
@@ -599,14 +608,15 @@ def sign(db: Session, record: ReleaseRecord, agent: Agent, control: Any, *, acto
     if report.get("verdict") != "PASS":
         raise AppError("release.gate_not_passed",
                        "only a release whose gate report is PASS can be released",
-                       {"verdict": report.get("verdict")}, status_code=409)
+                       {"verdict": report.get("verdict")}, status_code=409,
+                       next=[next_step("gate.open", agent_id=agent.id)])
     if record.decision != "pending":
         raise AppError("release.not_open", "this release is already decided", status_code=409)
     actor_user_id = user_id_for(actor, actor_user_id)
     # the same person by account id when both sides carry one (design §3.6), else by name
     if same_actor(record.requested_by, record.requested_by_user_id, actor, actor_user_id):
         raise AppError("release.self_sign", "the requester cannot sign their own release",
-                       status_code=409)
+                       status_code=409, needs="perm:release.sign")
     storage = refresh_storage(db, record, agent)
     if storage["requires_ack"]:
         if not storage_ack:
@@ -655,7 +665,7 @@ def rollback(db: Session, agent: Agent, control: Any, *, actor: str, note: str =
     """Re-point `live` at the version it served before the last release."""
     if getattr(agent, "endpoint_mode", None) != "live":
         raise AppError("release.not_live", "this agent does not serve through a live endpoint",
-                       status_code=409)
+                       status_code=409, next=[next_step("release.migrate", agent_id=agent.id)])
     last = db.scalars(
         select(ReleaseRecord).where(
             ReleaseRecord.agent_id == agent.id, ReleaseRecord.decision == "released",
@@ -720,13 +730,15 @@ def request_waiver(
     cset = criteria_svc.agent_set(db, workspace_id, agent_id)
     if cset is None:
         raise AppError("waiver.no_criteria", "the agent has no published criteria set",
-                       status_code=409)
+                       status_code=409, next=[next_step("criteria.publish", agent_id=agent_id)])
     row = next((c for c in criteria_svc.criteria_of(db, cset.id) if c.key == criterion_key),
                None)
     if row is None:
         raise NotFoundError("waiver.unknown_criterion", "criterion not in the agent's set")
     if row.tier == "redline":
-        raise AppError("waiver.redline", "red lines are never waived", status_code=409)
+        raise AppError("waiver.redline", "red lines are never waived", status_code=409,
+                       next=[next_step("criteria.open", agent_id=agent_id,
+                                       lineage_id=cset.lineage_id, criterion=criterion_key)])
     expires = _aware(expires_on)
     if expires is None or expires <= _now():
         raise AppError("waiver.bad_expiry", "a waiver expires in the future")
@@ -758,7 +770,7 @@ def decide_waiver(db: Session, waiver: Waiver, *, actor: str, approve: bool,
     if approve and same_actor(waiver.requested_by, waiver.requested_by_user_id,
                               actor, actor_user_id):
         raise AppError("waiver.self_approve", "the requester cannot approve their own waiver",
-                       status_code=409)
+                       status_code=409, needs="perm:waiver.approve")
     waiver.status = "approved" if approve else "rejected"
     waiver.approved_by = actor
     waiver.approved_by_user_id = actor_user_id

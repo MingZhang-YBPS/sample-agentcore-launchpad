@@ -1930,3 +1930,15 @@ INFRA_LOWERED_WHEN_ISOLATED = INFRA_LOWERED_WHEN_ISOLATED | frozenset({
     ("POST", "/api/gateway-tools/lambda"),
     ("DELETE", "/api/gateway-tools/lambda/{target_id}"),
 })
+
+# ---- SG-1: the storyline (storyline-ux §2.3) ----
+# One agent's storyline facts: a cached ledger read of an agent in the caller's
+# project (another project's answers 404), participation-level like the telemetry
+# status. "My next steps" sits under the hub-global `/api/me`: the handler resolves
+# the X-Workspace / X-Project pair itself and reads inside that project only.
+STORY_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/agents/{agent_id}/story"): PERM_PROJECT_USE,
+    ("GET", "/api/me/next-steps"): MEMBER,
+}
+ROUTE_POLICY.update(STORY_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {("GET", "/api/me/next-steps")}
