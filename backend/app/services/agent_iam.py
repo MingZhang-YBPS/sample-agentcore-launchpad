@@ -428,6 +428,10 @@ def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, A
     from here (grant only when used).
     """
     wanted = {(tool.auth.connection, tool.auth.kind) for tool in spec.tools if tool.auth}
+    # SB-2: a direct model provider reads its key through the same token-vault
+    # path as an ``api_key`` tool, so its Connection is granted the same way.
+    if spec.model_provider is not None:
+        wanted.add((spec.model_provider.connection, "api_key"))
     if not wanted:
         return []
     base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"

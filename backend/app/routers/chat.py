@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import Field
 from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
@@ -25,8 +26,12 @@ from app.services import inbound_auth as inbound_auth_service
 from app.services import memory as memory_service
 from app.services.attachments import prepare_attachments
 from app.services.chat import StopSignal, chat_stream, sse_encode
-from app.services.chat_ledger import persist_events, visible_rows
-from app.services.invoke import stop_agent_session
+from app.services.chat_ledger import fold_structured, persist_events, visible_rows
+from app.services.invoke import (
+    CONSOLE_TOOL_APPROVALS,
+    console_tool_approvals,
+    stop_agent_session,
+)
 from app.services.runtime_discovery import require_invoke_capability
 from app.services.visibility import Viewer, require_viewer
 from app.templates import gateway_support
@@ -46,6 +51,19 @@ class ChatRequest(AttachmentRequest):
     # must be the session's latest turn and have failed or answered nothing; the
     # failed turn then stays in the ledger but /history no longer replays it.
     retry_of: int | None = None
+    # strands-builder SB-2 tool hooks: the approval-list tools the user approved on
+    # the chat's approval card for this turn (one entry = one call)
+    approved_tools: list[str] | None = Field(default=None, max_length=50)
+
+
+def _turn_tool_approvals(agent: Agent, approved: list[str] | None) -> dict[str, Any] | None:
+    """``tool_approvals`` for a console turn of an agent with an approval list: the
+    console user can approve (the runtime pauses the tool and asks), plus what was
+    approved. Agents without one get no new payload field."""
+    hooks = (agent.spec or {}).get("tool_hooks") or {}
+    if not hooks.get("approval_tools"):
+        return None
+    return console_tool_approvals([name[:128] for name in approved or []])
 
 
 def _session_actor(
@@ -208,7 +226,9 @@ def _retry_turn(
 
 # chat-streaming §4.2: events after which a replay could repeat what the user saw or
 # a tool's side effect — once one passed, a failure is retried only by the user
-OUTPUT_EVENTS = frozenset({"delta", "tool", "auth_required", "policy_denied"})
+OUTPUT_EVENTS = frozenset({
+    "delta", "tool", "auth_required", "policy_denied", "approval_required",
+})
 # the type names of transport failures (botocore's and httpx's): the connection to
 # the runtime dropped or timed out, rather than the runtime answering an error
 _TRANSPORT_ERRORS = frozenset({
@@ -353,8 +373,11 @@ def chat(
     workspace_id = ws.id
     workspace = ws.context
     timeout_s = (agent.spec or {}).get("timeout_seconds")
+    tool_approvals = _turn_tool_approvals(agent, req.approved_tools)
 
     def run(stop: StopSignal) -> Iterator[dict[str, Any]]:
+        # the worker's own context: the invoke reads the turn's approvals from it
+        CONSOLE_TOOL_APPROVALS.set(tool_approvals)
         stream_kwargs: dict[str, Any] = {}
         if prepared:
             stream_kwargs["attachments"] = prepared
@@ -621,8 +644,10 @@ def session_history(
                 "attachments": r.attachments or [],
                 "answered_by": r.answered_by,
                 "at": r.created_at.isoformat() if r.created_at else None,
+                # SB-1: an output_schema agent's parsed answer, as the turn streamed it
+                **({"structured": structured} if structured is not None else {}),
             }
-            for r in rows
+            for r, structured in fold_structured(rows)
         ],
         # chat-streaming §5.2: a turn still answering — the page shows the thread up to
         # its user row and resumes it from `GET …/turns/{turn_id}/events?after=0`

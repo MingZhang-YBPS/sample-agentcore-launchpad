@@ -88,13 +88,17 @@ def runtime_user_id(spec: Mapping[str, Any] | None, actor_id: str = "default") -
 
     Also sent when any tool carries an ``auth`` block (tool-level outbound auth,
     ``templates/identity_support``): the token exchange those tools perform needs
-    the same Runtime-injected workload token the Gateway client uses.
+    the same Runtime-injected workload token the Gateway client uses, and when
+    the spec has a ``model_provider`` (SB-2; its key is read the same way).
     """
     tools = (spec or {}).get("tools") or []
     needs_token = any(
         isinstance(tool, dict) and (tool.get("type") == "gateway" or tool.get("auth"))
         for tool in tools
     )
+    # SB-2: a direct model provider reads its api_key through the token vault,
+    # which needs the same Runtime-injected workload token.
+    needs_token = needs_token or bool((spec or {}).get("model_provider"))
     if not needs_token:
         return None
     return (actor_id or "default")[:1024]

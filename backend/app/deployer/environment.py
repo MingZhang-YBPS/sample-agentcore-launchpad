@@ -84,6 +84,10 @@ def runtime_environment(
         environment[ENV_OUTBOUND_AUTH] = auth_declarations
         if workload_name:
             environment.setdefault(ENV_WORKLOAD, workload_name)
+    # SB-2: the direct model provider's key read uses the same self-minted
+    # workload-token fallback as the identity block's tools
+    if spec.model_provider is not None and workload_name:
+        environment.setdefault(ENV_WORKLOAD, workload_name)
     if uses_as_user(spec):
         environment[ENV_OAUTH_RETURN_URL] = get_settings().resolved_oauth_return_url()
         if agent_id:

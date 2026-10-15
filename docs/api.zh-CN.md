@@ -61,6 +61,7 @@ curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
 ```
 
 配置了 `output_schema` 的 Agent（Strands 方式）在 `text`（可读的回答）之外另返回解析后的对象 `structured`；未配置时没有该字段。启用 PII 护栏的 Agent 从不返回 `structured`：护栏只筛查文本，因此该对象会被丢弃。
+配置了工具钩子（`tool_hooks.approval_tools`）的 Strands Agent，其审批名单上的工具只在有人于控制台对话中批准后才运行。`/v1` 无法批准：Agent 尝试调用此类工具时返回 `409 agent.tool_approval_requires_console`（`detail.tool`、`detail.agent_id`）；流式调用以该错误码的 `error` 事件结束。
 
 ## 流式调用(SSE) / Streaming invoke
 
@@ -668,6 +669,8 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 - `meta.turn_id` 标识该轮。除心跳外的每一帧都以 SSE `id:` 行携带其 `seq`，`…/turns/{turn_id}/events?after=` 就从这里接着发送。控制台在连接断开后用它重连；停止按钮除关闭流外，还会调用 `…/turns/{turn_id}/stop`。
 - `GET …/history` 增加 `running_turn {turn_id, user_message_id} | null`：重新打开的会话显示到该用户行为止，并从第一个事件起跟随运行中的轮次。「结束会话」会先停止该会话中运行的轮次。
+- 配置了 `output_schema` 的 Agent，其回答行在 `GET …/history` 中带有 `structured`（该轮流式返回的解析对象）；没有时不含该字段。
+- 工具审批（strands-builder SB-2，配置了 `tool_hooks.approval_tools` 的 Agent）：一轮的流中可能出现 `approval_required {tool, tool_use_id, input}`（`input` 已由运行时打码），表示该工具已暂停，Agent 请用户批准。历史中保存为 `role: "approval"` 行（`text` 为打码后的输入 JSON，`name` 为工具）。批准方法：下一轮带上 `approved_tools: [<工具>]`（一项 = 该工具的一次调用）。此类 Agent 的控制台轮次向运行时发送 `tool_approvals {interactive: true, approved[]}`；`/v1` 从不发送，因此运行时会拒绝该工具（`409 agent.tool_approval_requires_console`）。
 - 每个会话同一时间只运行一轮：会话的上一轮仍在运行时再发新的一轮，会在流打开前返回 `409 chat.turn_in_progress`（`detail.turn_id`、`detail.session_id`）。
 - 一轮最多运行 Agent 的 `timeout_seconds` + 60 秒（规格未设置时为 3600 + 60 秒）。超过后上游被关闭，流以 `error` `chat.turn_timeout` 结束（`detail.limit_s`，`retry.category: timeout`，不提供重试按钮）；被停止按钮结束的轮次以 `chat.turn_stopped` 结束。
 - 缓冲区最多保留 2000 个事件或 600 秒内的事件；已结束的轮次在 60 秒内仍可恢复，之后只剩台账。
@@ -852,7 +855,7 @@ Pipeline 的数据源也可以读取 **CloudWatch 日志组**（`source.type = "
 |---|---|---|
 | `GET` | `/api/eval/evaluators` | `{evaluators[], builtin_count}`——先是本地内置目录（`source: builtin`，轨迹匹配器标 `requires_ground_truth`），再是账户 `ListEvaluators` 的行（`source: third_party \| custom`、`evaluator_type`、`provider`、`status`）。自定义行带 `definition: judge \| derived \| code`（由 `evaluatorType` 推导——列表不含配置）。账号列举失败时仍返回 200，仅含内置评估器，并附 `custom_unavailable: {code, message}`（`aws.*`、`workspace.assume_role_failed` 或 `evaluators.list_failed`；通用消息，绝不回显 AWS 文本）；成功时无此键 |
 | `POST` | `/api/eval/evaluators` | 创建 → 201 `{evaluator_id, arn}`。公共字段：`name`（`^[a-zA-Z][a-zA-Z0-9_]{0,47}$`）、`description`。**评审**：`instructions`（10–4000 字符，至少一个 `{placeholder}`，否则 422 `evaluator.missing_placeholder`）、`rating_scale[≥2]`（默认 pass/fail）、`model_id`、`level`（TOOL_CALL \| TRACE \| SESSION，默认 TRACE）。**派生**：`base_evaluator_id`（`Builtin.*` \| `ThirdParty.*`；不存在 → 400 `evaluator.base_not_found`）、`model_id`；级别取自基础评估器。**代码评估器**：`lambda_arn`（`arn:aws[-partition]:lambda:<region>:<account>:function:<name>[:qualifier]`）、`lambda_timeout_s` 1–300（默认 60）、`level`；Lambda 必须与 workspace 同区域，否则 422 `evaluator.lambda_region_mismatch`（`detail: {lambda_region, workspace_region}`）。派生或代码载荷携带 `rating_scale` → 400 `evaluator.rating_scale_not_allowed`。任何定义在 `CreateEvaluator` 上都必须带 `level` |
-| `GET` | `/api/eval/evaluators/{evaluator_id}` | `{id, name, level, description, definition, instructions, rating_scale, model_id, base_evaluator_id, lambda_arn, lambda_timeout_s, evaluator_type, provider, status}`——其他定义的字段为空/null（代码评估器的 `instructions: ""`、`rating_scale: []`、`model_id: null`） |
+| `GET` | `/api/eval/evaluators/{evaluator_id}` | `{id, name, level, description, definition, instructions, rating_scale, model_id, base_evaluator_id, lambda_arn, lambda_timeout_s, evaluator_type, provider, status, shared_from?}`（其他项目借给本项目的评估器带 `shared_from {project_id, name, access}`，§11.2）——其他定义的字段为空/null（代码评估器的 `instructions: ""`、`rating_scale: []`、`model_id: null`） |
 | `PUT` | `/api/eval/evaluators/{evaluator_id}` | 全量配置替换（`UpdateEvaluator` 接收完整配置，因此每个字段都要回传），载荷与创建相同但不含 `name` → 返回刷新后的详情。载荷必须与评估器**当前**定义一致：用评审/派生载荷更新代码评估器，或用代码载荷更新评审/派生评估器 → 400 `evaluator.definition_mismatch`（`detail: {current, payload}`）——评估器绝不会被转换。托管 id → 400 `evaluator.builtin_immutable` |
 | `DELETE` | `/api/eval/evaluators/{evaluator_id}` | `DeleteEvaluator` → `{deleted: true}`；托管 id → 400 `evaluator.builtin_immutable`。被 ENABLED 在线配置引用的评估器会被 AWS 锁定 |
 
@@ -1355,7 +1358,7 @@ Workspace 范围的路由还有两种策略值。`perm:project.use`（对话、�
 | `GET` | `/api/projects/{project_id}/isolation/agents/{agent_id}` | 成员（非成员 404） | 单个 Agent 的边界：`{agent_id, isolation_applied, boundary_arn, role_arn, tags{}, migrated}`（§10.14） |
 | `GET` | `/api/projects/{project_id}/shares?direction=all\|outgoing\|incoming&include_closed=` | 成员（非成员 404） | 跨项目共享（§11.2）：`{outgoing[], incoming[]}`，元素为 `{id, kind, resource_id, resource_name, owner_project_id, grantee_project_id, access: read\|use, status, expires_at, granted_by, created_at}` |
 | `POST` | `/api/projects/{project_id}/shares` | pperm:project.share | 请求体 `{workspace_id, kind, resource_id, grantee_project_id, access, expires_in_days?, resource_name?, note?}` → `201` 共享（受让方在其他部门时待管理员批准） |
-| `GET` | `/api/projects/{project_id}/shares/options?workspace_id=` | pperm:project.share | 可共享的资源与受让项目：`{resources[{kind, id, name, detail}], grantees[{id, name, cross_department}]}` |
+| `GET` | `/api/projects/{project_id}/shares/options?workspace_id=` | pperm:project.share | 可共享的资源与受让项目：`{resources[{kind, id, name, detail}], grantees[{id, name, cross_department}]}`。类型 `agent` 列出本项目已部署的 Runtime 智能体（`detail` 为创建方式）：`use` 级共享后，受让项目的 Strands 智能体可把它当工具调用（agents-as-tools），隔离的受让项目的权限边界随之允许对它的 `InvokeAgentRuntime` / `InvokeAgentRuntimeForUser` |
 | `DELETE` | `/api/projects/{project_id}/shares/{share_id}` | pperm:project.share | 撤销 → 返回带 `revoked_at` 与 `pinned_by[]`（已引用它的受让方 Agent）的共享；通知受让项目负责人 |
 | `POST` | `/api/projects/{project_id}/shares/{share_id}/approve` | 管理员 | 批准待审批的跨部门共享 |
 | `POST` | `/api/projects/{project_id}/shares/{share_id}/reject` | 管理员 | 拒绝待审批的跨部门共享 |

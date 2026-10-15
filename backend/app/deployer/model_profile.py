@@ -37,6 +37,9 @@ def profiled_model_ids(spec: AgentSpec) -> list[str]:
     the code methods); [] when the agent calls no Bedrock-hosted model."""
     if spec.protocol == "mcp" or spec.model_source != "bedrock":
         return []
+    if spec.model_provider is not None:
+        # SB-2: a direct model provider's id is the provider's, not a Bedrock id
+        return []
     if spec.method not in (*_CODE_METHODS, "harness"):
         return []
     model_id = spec.model_id or ""

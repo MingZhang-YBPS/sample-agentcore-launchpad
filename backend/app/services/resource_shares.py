@@ -16,6 +16,8 @@ What a share opens, per kind (`load_received` turns grants into row ids):
   criteria lineage it is scored against (read-only, like the set);
 * `criteria_set` — every version of a template lineage and their criteria;
 * `gateway_target` — the console Lambda target or adopted MCP target row;
+* `agent` — no row: a `use` grant lets the grantee's agents call the Runtime as a tool
+  (`agent_tools`) and opens it in an isolated grantee's boundary (`boundary_statements`);
 * `knowledge_base` / `evaluator` — AWS-only kinds: their ownership row
   (`resource_creators`), and — `use` only — the pin checks (`agent_access.check_pins`)
   and the isolated project's boundary (`boundary_statements`, registered in
@@ -50,6 +52,7 @@ from app.models.projects import Project, ProjectWorkspace
 from app.models.shares import (
     ACCESS_LEVELS,
     ACCESS_USE,
+    KIND_AGENT,
     KIND_CRITERIA_SET,
     KIND_EVAL_DATASET,
     KIND_EVALUATOR,
@@ -72,6 +75,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_EXPIRY_DAYS = 90  # §11.2 risk: shares expire by default
 MAX_EXPIRY_DAYS = 365
 _AWS_ONLY_KINDS = (KIND_KNOWLEDGE_BASE, KIND_EVALUATOR)
+# kinds whose `use` grant reaches the isolated grantee's permissions boundary
+_BOUNDARY_KINDS = (KIND_KNOWLEDGE_BASE, KIND_AGENT)
 
 
 def _now() -> datetime:
@@ -267,9 +272,14 @@ def resource_of(db: Session, owner_id: str, workspace_id: str, kind: str, resour
     from app.evaluation.models import EvalDataset
     from app.models.dlc import CriteriaSet
     from app.models.lambda_tools import ExternalMcpTarget, LambdaToolTarget
-    from app.models.ledger import ResourceCreator
+    from app.models.ledger import Agent, ResourceCreator
 
     with project_context(None):
+        if kind == KIND_AGENT:
+            row = db.get(Agent, resource_id)
+            ok = (row is not None and row.project_id == owner_id
+                  and row.workspace_id == workspace_id and row.status != "deleted")
+            return row.name if ok else None
         if kind in _AWS_ONLY_KINDS:
             owner = db.execute(select(ResourceCreator.project_id).where(
                 ResourceCreator.workspace_id == workspace_id, ResourceCreator.kind == kind,
@@ -510,7 +520,7 @@ def _after_end(db: Session, identity: Any | None, row: ResourceShare, kind: str,
         notify_grantee(db, identity, row, kind, pinned)
     except Exception:  # noqa: BLE001 — the revocation stands whatever the notice does
         logger.warning("notice of share %s unwritten", row.id, exc_info=True)
-    if row.kind == KIND_KNOWLEDGE_BASE and row.access == ACCESS_USE and row.workspace_id:
+    if row.kind in _BOUNDARY_KINDS and row.access == ACCESS_USE and row.workspace_id:
         actor, actor_user_id = _actor(identity) if identity is not None else ("scheduler", None)
         db.info.setdefault(_RERENDER, set()).add(
             (row.grantee_project_id, row.workspace_id, actor, actor_user_id))
@@ -706,7 +716,7 @@ def options(db: Session, owner: Project, workspace_id: str) -> dict[str, Any]:
     from app.evaluation.models import EvalDataset
     from app.models.dlc import CriteriaSet
     from app.models.lambda_tools import ExternalMcpTarget, LambdaToolTarget
-    from app.models.ledger import ResourceCreator
+    from app.models.ledger import Agent, ResourceCreator
 
     if not _bound(db, owner.id, workspace_id):
         raise NotFoundError("workspace.not_found",
@@ -733,6 +743,15 @@ def options(db: Session, owner: Project, workspace_id: str) -> dict[str, Any]:
                     .order_by(model.target_name)):
                 resources.append({"kind": KIND_GATEWAY_TARGET, "id": row.id,
                                   "name": row.target_name, "detail": model.__tablename__})
+        # deployed Runtime agents (what agents-as-tools can call; SB-2)
+        from app.services.invoke_access import resource_kind
+
+        for row in db.scalars(select(Agent).where(
+                Agent.project_id == owner.id, Agent.workspace_id == workspace_id,
+                Agent.status == "active", Agent.arn.is_not(None)).order_by(Agent.name)):
+            if resource_kind(row) == "runtime":
+                resources.append({"kind": KIND_AGENT, "id": row.id, "name": row.name,
+                                  "detail": row.method})
         for row in db.scalars(select(ResourceCreator).where(
                 ResourceCreator.project_id == owner.id,
                 ResourceCreator.workspace_id == workspace_id,
@@ -758,6 +777,23 @@ def options(db: Session, owner: Project, workspace_id: str) -> dict[str, Any]:
 # ── runtime: the isolated grantee's boundary (R10 hook) ──────────────────────
 
 KB_READ_ACTIONS = ["bedrock:GetKnowledgeBase", "bedrock:Retrieve*"]
+# agents-as-tools (strands-builder SB-2): the grantee's agents call a `use`-shared
+# Runtime, with `runtimeUserId` when the target needs it
+AGENT_INVOKE_ACTIONS = [
+    "bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:InvokeAgentRuntimeForUser",
+]
+
+
+def _use_shared_ids(db: Session, kind: str, project_id: str, workspaces: list[str]
+                    ) -> set[str]:
+    now = _now()
+    return {rid for (rid,) in db.execute(select(ResourceShare.resource_id).where(
+        ResourceShare.kind == kind,
+        ResourceShare.grantee_project_id == project_id,
+        ResourceShare.workspace_id.in_(workspaces),
+        ResourceShare.status == STATUS_ACTIVE, ResourceShare.access == ACCESS_USE,
+        or_(ResourceShare.expires_at.is_(None), ResourceShare.expires_at > now),
+    ))}
 
 
 def boundary_statements(inp: Any) -> list[dict[str, Any]]:
@@ -765,10 +801,14 @@ def boundary_statements(inp: Any) -> list[dict[str, Any]]:
     allows reading the KBs shared with it at `use` level in the boundary's workspace,
     by explicit ARN (the design's fallback to the `launchpad:shared-with` tag, which
     needs no tagging job). KBs the project's agents already pin are listed by the
-    boundary itself. A revoked share leaves with the next boundary render (deploy)."""
+    boundary itself. Agents shared at `use` level (SB-2 agents-as-tools) are invocable
+    by their runtime ARN and its endpoints. A revoked share leaves with the next
+    boundary render (deploy)."""
     from app.core.db import SessionLocal
-    from app.models.ledger import Workspace
+    from app.models.ledger import Agent, Workspace
 
+    runtime_prefix = (f"arn:{inp.partition}:bedrock-agentcore:{inp.region}:"
+                      f"{inp.account_id}:runtime/")
     db = SessionLocal()
     try:
         with project_context(None):
@@ -776,22 +816,28 @@ def boundary_statements(inp: Any) -> list[dict[str, Any]]:
                 Workspace.account_id == inp.account_id, Workspace.region == inp.region))]
             if not workspaces:
                 return []
-            now = _now()
-            kb_ids = sorted({rid for (rid,) in db.execute(select(ResourceShare.resource_id).where(
-                ResourceShare.kind == KIND_KNOWLEDGE_BASE,
-                ResourceShare.grantee_project_id == inp.project_id,
-                ResourceShare.workspace_id.in_(workspaces),
-                ResourceShare.status == STATUS_ACTIVE, ResourceShare.access == ACCESS_USE,
-                or_(ResourceShare.expires_at.is_(None), ResourceShare.expires_at > now),
-            ))} - set(inp.kb_ids))
+            kb_ids = sorted(
+                _use_shared_ids(db, KIND_KNOWLEDGE_BASE, inp.project_id, workspaces)
+                - set(inp.kb_ids))
+            agent_ids = _use_shared_ids(db, KIND_AGENT, inp.project_id, workspaces)
+            runtime_arns = sorted({arn for (arn,) in db.execute(select(Agent.arn).where(
+                Agent.id.in_(sorted(agent_ids)), Agent.status != "deleted",
+            )) if arn and arn.startswith(runtime_prefix)}) if agent_ids else []
     except Exception:  # noqa: BLE001 — no ledger (a pure document test): nothing shared
-        logger.debug("shared KBs for the boundary of %s unreadable", inp.project_id,
+        logger.debug("shared resources for the boundary of %s unreadable", inp.project_id,
                      exc_info=True)
         return []
     finally:
         db.close()
-    if not kb_ids:
-        return []
-    kb = f"arn:{inp.partition}:bedrock:{inp.region}:{inp.account_id}:knowledge-base"
-    return [{"Sid": "KbShared", "Effect": "Allow", "Action": KB_READ_ACTIONS,
-             "Resource": [f"{kb}/{kb_id}" for kb_id in kb_ids]}]
+    statements: list[dict[str, Any]] = []
+    if kb_ids:
+        kb = f"arn:{inp.partition}:bedrock:{inp.region}:{inp.account_id}:knowledge-base"
+        statements.append({"Sid": "KbShared", "Effect": "Allow", "Action": KB_READ_ACTIONS,
+                           "Resource": [f"{kb}/{kb_id}" for kb_id in kb_ids]})
+    if runtime_arns:
+        statements.append({
+            "Sid": "AgentShared", "Effect": "Allow", "Action": AGENT_INVOKE_ACTIONS,
+            "Resource": [r for arn in runtime_arns
+                         for r in (arn, f"{arn}/runtime-endpoint/*")],
+        })
+    return statements

@@ -654,6 +654,10 @@ def _safe_auth_url(value: Any) -> str | None:
     return None
 
 
+# strands-builder SB-2 approval notices the generated runtime streams
+APPROVAL_EVENTS = ("approval_required", "approval_refused")
+
+
 def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     """Normalize one runtime payload to Chat's tool/delta/complete contract
     (lenient ``str()`` coercion of text fields, shared by Chat, the public API
@@ -680,6 +684,7 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     kind = payload.get("event")
     if isinstance(kind, str) and (
         kind in {"delta", "heartbeat", "tool", "auth_required", "complete", "error"}
+        or kind in APPROVAL_EVENTS
         or (kind == "attachments" and payload.get("contract") == "v1")
     ):
         if kind == "attachments":
@@ -712,6 +717,20 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
                     "url": _safe_auth_url(payload.get("url")),
                     "scopes": [str(s) for s in payload.get("scopes") or []],
                     "session_uri": str(payload.get("session_uri", "")),
+                },
+            }
+        elif kind in APPROVAL_EVENTS:
+            # strands-builder SB-2 tool hooks: a tool on the approval list was
+            # paused for the console user (approval_required) or refused for a
+            # caller that cannot approve (approval_refused). The runtime already
+            # masked the input.
+            yield {
+                "event": kind,
+                "data": {
+                    "tool": str(payload.get("tool", "")),
+                    "tool_use_id": str(payload.get("tool_use_id", "")),
+                    "input": payload.get("input") if isinstance(payload.get("input"), dict)
+                    else {},
                 },
             }
         elif kind == "complete":
@@ -956,7 +975,7 @@ def _normalized_runtime_events(
                     # the text answer above stays the reply; this rides alongside
                     yield {"event": "structured", "data": {"value": event["data"]["structured"]}}
             else:
-                if event["event"] in ("tool", "auth_required"):
+                if event["event"] in ("tool", "auth_required", *APPROVAL_EVENTS):
                     saw_other = True
                 yield event
     if require_attachments and not acknowledged:
@@ -1000,13 +1019,14 @@ def _runtime_invoke_params(
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {
         "agentRuntimeArn": runtime_arn,
         "runtimeSessionId": session_id,
         "payload": _invoke_payload(
             prompt, actor_id, gateway_access_token, attachments, force_reauth_providers,
-            context,
+            context, tool_approvals,
         ),
     }
     if qualifier:
@@ -1028,9 +1048,18 @@ def _invoke_payload(
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> bytes:
     """The request body both transports (SigV4 and bearer) send."""
     payload: dict[str, Any] = {"prompt": prompt, "actor_id": actor_id}
+    if tool_approvals is not None:
+        # console chat only (strands-builder SB-2 tool hooks): the caller can
+        # approve, and which tools the user approved for this turn. /v1 and
+        # evaluations never send it, so the runtime refuses approval-list tools.
+        payload["tool_approvals"] = {
+            "interactive": bool(tool_approvals.get("interactive")),
+            "approved": [str(name) for name in tool_approvals.get("approved") or [] if name],
+        }
     if attachments:
         payload["attachments"] = attachments
     if context:
@@ -1061,6 +1090,7 @@ def stream_runtime_events(
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
@@ -1076,6 +1106,7 @@ def stream_runtime_events(
             attachments,
             force_reauth_providers,
             context,
+            tool_approvals,
         )
     )
     body = response["response"]
@@ -1135,6 +1166,7 @@ def invoke_runtime_text(
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses.
 
@@ -1143,6 +1175,8 @@ def invoke_runtime_text(
     authorization URL to relay to the user. Reported token usage (the stream's
     ``usage`` event) lands on ``result["usage"]``, and an ``output_schema``
     agent's parsed answer (the ``structured`` event) on ``result["structured"]``.
+    SB-2 approval notices land on ``result["approval_required"]`` /
+    ``result["approval_refused"]``.
     """
     session_id = session_id or new_session_id()
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
@@ -1150,10 +1184,13 @@ def invoke_runtime_text(
         extra["force_reauth_providers"] = force_reauth_providers
     if context:
         extra["context"] = context
+    if tool_approvals is not None:
+        extra["tool_approvals"] = tool_approvals
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
     usage: dict[str, int] | None = None
     structured: Any = None
+    approvals: dict[str, list[dict[str, Any]]] = {}
     for event in stream_runtime_events(
         client,
         runtime_arn,
@@ -1173,6 +1210,8 @@ def invoke_runtime_text(
             usage = event["data"]
         elif event["event"] == "structured":
             structured = event["data"]["value"]
+        elif event["event"] in APPROVAL_EVENTS:
+            approvals.setdefault(event["event"], []).append(event["data"])
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
@@ -1180,6 +1219,7 @@ def invoke_runtime_text(
         result["usage"] = usage
     if structured is not None:
         result["structured"] = structured
+    result.update(approvals)
     return result
 
 
@@ -1227,6 +1267,7 @@ def stream_runtime_events_bearer(
     force_reauth_providers: list[str] | None = None,
     http_response: Any = None,
     context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Bearer-token InvokeAgentRuntime over the data-plane HTTPS endpoint.
 
@@ -1246,7 +1287,7 @@ def stream_runtime_events_bearer(
     }
     body = _invoke_payload(
         prompt, actor_id, gateway_access_token, attachments, force_reauth_providers,
-        context,
+        context, tool_approvals,
     )
     opener = http_response or _default_bearer_response
     with opener(url, headers, body) as response:
@@ -1293,12 +1334,13 @@ def invoke_runtime_text_bearer(
 ) -> dict[str, Any]:
     """Synchronous bearer invoke (SigV4 twin: ``invoke_runtime_text``); ``extra``
     carries the same optional payload fields (attachments, force-reauth,
-    gateway token, context)."""
+    gateway token, context, tool approvals)."""
     session_id = session_id or new_session_id()
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
     usage: dict[str, int] | None = None
     structured: Any = None
+    approvals: dict[str, list[dict[str, Any]]] = {}
     for event in stream_runtime_events_bearer(
         region,
         runtime_arn,
@@ -1318,6 +1360,8 @@ def invoke_runtime_text_bearer(
             usage = event["data"]
         elif event["event"] == "structured":
             structured = event["data"]["value"]
+        elif event["event"] in APPROVAL_EVENTS:
+            approvals.setdefault(event["event"], []).append(event["data"])
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
@@ -1325,6 +1369,7 @@ def invoke_runtime_text_bearer(
         result["usage"] = usage
     if structured is not None:
         result["structured"] = structured
+    result.update(approvals)
     return result
 
 

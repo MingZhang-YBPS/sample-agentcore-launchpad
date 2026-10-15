@@ -29,9 +29,13 @@ KIND_EVALUATOR = "evaluator"
 KIND_EVAL_DATASET = "eval_dataset"  # a golden set (its three splits come along) or a dataset
 KIND_CRITERIA_SET = "criteria_set"  # a template lineage (every version, its criteria)
 KIND_GATEWAY_TARGET = "gateway_target"  # a console Lambda target or an adopted MCP target
+# a deployed Runtime agent: `read` shows its card, `use` lets the grantee's agents call
+# it as a tool (strands-builder SB-2 agents-as-tools, `services/agent_tools.py`). The
+# agent row itself is not registered shareable: lists of agents stay the project's own.
+KIND_AGENT = "agent"
 SHARE_KINDS = (
     KIND_KNOWLEDGE_BASE, KIND_EVALUATOR, KIND_EVAL_DATASET, KIND_CRITERIA_SET,
-    KIND_GATEWAY_TARGET,
+    KIND_GATEWAY_TARGET, KIND_AGENT,
 )
 ACCESS_READ, ACCESS_USE = "read", "use"
 ACCESS_LEVELS = (ACCESS_READ, ACCESS_USE)
