@@ -98,7 +98,7 @@
     "operate": "OPERATE",
     "phase02": "PHASE 02",
     "overview": "Overview",
-    "createAgent": "Agent Management",
+    "createAgent": "Agents",
     "registry": "Registry",
     "knowledgeBases": "Knowledge Bases",
     "chat": "Chat Playground",
@@ -612,7 +612,7 @@
     },
     "list": {
       "title": "EXISTING AGENTS",
-      "sub": "manage · edit · re-publish",
+      "sub": "View · Edit configuration · Publish a new version",
       "colName": "NAME",
       "colMethod": "METHOD",
       "colStatus": "STATUS",
@@ -2576,7 +2576,22 @@
     "mcp.operation_in_flight": "Another operation on this MCP server is still running — wait for it to finish.",
     "mcp.rollback_noop": "The Gateway target already serves this version.",
     "mcp.rollback_unavailable": "No earlier version of this MCP server has an approved tool list to roll back to.",
-    "mcp.scaffold_nothing_reviewed": "This MCP server has no tool list yet — deploy it so its tools can be reviewed."
+    "mcp.scaffold_nothing_reviewed": "This MCP server has no tool list yet — deploy it so its tools can be reviewed.",
+    "update.disabled": "Online update is turned off on this host (LAUNCHPAD_UPDATE_ENABLED=false).",
+    "update.no_git": "The console does not run from a git checkout, so it cannot be updated online.",
+    "update.check_failed": "The update source could not be checked — see the backend log for the git error.",
+    "update.not_fast_forward": "The new version does not follow from the running commit: only fast-forward updates are accepted.",
+    "update.up_to_date": "The console already runs the latest commit.",
+    "update.in_progress": "Another update is being prepared, is scheduled or is being applied.",
+    "update.disk_low": "Not enough free disk space to prepare the update.",
+    "update.no_previous": "No earlier version to roll back to: the running commit was not installed by an online update.",
+    "update.not_found": "This update no longer exists.",
+    "update.updater_missing": "The updater is not installed on this host — apply the update with the manual commands instead.",
+    "update.not_ready": "This update is not ready to schedule yet.",
+    "update.stage_missing": "The prepared version is gone — prepare the update again.",
+    "update.schedule_invalid": "The restart time must be between now and 7 days from now.",
+    "update.inflight_unacknowledged": "Tasks in progress would be interrupted by the restart — confirm to schedule anyway.",
+    "update.not_cancellable": "Only a scheduled update can be cancelled."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -5556,7 +5571,7 @@
       }
     },
     "agents": {
-      "title": "Agent management",
+      "title": "Agents",
       "desc": "Every agent of the workspace: its creation method, deploy status and AgentCore resources.",
       "kpiTotal": "Agents",
       "kpiActive": "Running",

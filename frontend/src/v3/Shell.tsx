@@ -198,6 +198,8 @@ const HUB_GLOBAL = new Set([
   "/announcements", "/v2/announcements", "/v3/announcements", "/videos", "/v2/videos", "/v3/videos", "/v2/video-management", "/v3/video-management",
   // people and structure (projects §7.9): never bound to the workspace or project in the switcher
   "/v3/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments",
+  // the console host itself (online-update): one installation, not a workspace
+  "/v3/system-update",
 ]);
 
 /** The running commit (online-update §2.6), for whoever reports a problem. */

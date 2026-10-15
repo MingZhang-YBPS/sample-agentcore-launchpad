@@ -98,7 +98,7 @@
     "operate": "运维",
     "phase02": "第二阶段",
     "overview": "总览",
-    "createAgent": "Agent 管理",
+    "createAgent": "智能体",
     "registry": "注册中心",
     "knowledgeBases": "知识库",
     "chat": "对话演练场",
@@ -612,7 +612,7 @@
     },
     "list": {
       "title": "现有 AGENT",
-      "sub": "管理 · 编辑 · 重新发布",
+      "sub": "查看 · 编辑配置 · 发布新版本",
       "colName": "名称",
       "colMethod": "方式",
       "colStatus": "状态",
@@ -2576,7 +2576,22 @@
     "mcp.operation_in_flight": "此 MCP 服务器的另一项操作仍在进行——请等待其完成。",
     "mcp.rollback_noop": "Gateway 目标已在使用该版本。",
     "mcp.rollback_unavailable": "此 MCP 服务器没有已批准工具清单的更早版本可供回滚。",
-    "mcp.scaffold_nothing_reviewed": "此 MCP 服务器尚无工具清单——请先部署，以便审核其工具。"
+    "mcp.scaffold_nothing_reviewed": "此 MCP 服务器尚无工具清单——请先部署，以便审核其工具。",
+    "update.disabled": "此主机已关闭在线更新（LAUNCHPAD_UPDATE_ENABLED=false）。",
+    "update.no_git": "控制台不是从 git 检出目录运行的，无法在线更新。",
+    "update.check_failed": "无法检查更新来源，git 报错请查看后端日志。",
+    "update.not_fast_forward": "新版本不是当前运行提交的后续版本：只接受快进更新。",
+    "update.up_to_date": "控制台已在运行最新提交。",
+    "update.in_progress": "已有另一个更新正在准备、已排期或正在应用。",
+    "update.disk_low": "磁盘剩余空间不足，无法准备更新。",
+    "update.no_previous": "没有可回滚的早期版本：当前运行的提交不是由在线更新安装的。",
+    "update.not_found": "该更新已不存在。",
+    "update.updater_missing": "此主机未安装更新器，请改用手动命令应用更新。",
+    "update.not_ready": "该更新尚未就绪，暂不能排期。",
+    "update.stage_missing": "已准备的版本已丢失，请重新准备更新。",
+    "update.schedule_invalid": "重启时间必须在现在到 7 天之内。",
+    "update.inflight_unacknowledged": "重启会中断正在进行的任务，确认后才能排期。",
+    "update.not_cancellable": "只有已排期的更新可以取消。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -5556,7 +5571,7 @@
       }
     },
     "agents": {
-      "title": "Agent 管理",
+      "title": "智能体",
       "desc": "当前工作区的全部 Agent：创建方式、部署状态与 AgentCore 资源。",
       "kpiTotal": "Agent 总数",
       "kpiActive": "运行中",
