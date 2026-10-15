@@ -46,6 +46,8 @@ from app.models.projects import (
 from app.services import access
 from app.services import api_keys as api_keys_service
 from app.services import projects as projects_service
+from app.services import steward as steward_service
+from app.services.users import ROLE_STEWARD
 
 # group and department ids are slugs, the same rule as project ids (design §2.2)
 SLUG_PATTERN = PROJECT_ID_PATTERN
@@ -54,6 +56,9 @@ _STATUSES = ("active", "archived", "all")
 # `departments.settings` (§11.1) and what an unset key means
 DEPARTMENT_SETTING_DEFAULTS: dict[str, Any] = {
     "can_create_users": False, "max_projects": None, "user_validity_max_days": 90,
+    # caps on its projects' `settings.quotas` (projects §11.3): each project's
+    # effective limit is the smaller of its own and this
+    "quotas": None,
 }
 MAX_VALIDITY_DAYS = 3650
 
@@ -142,6 +147,7 @@ def _check_department_settings(value: Any) -> dict[str, Any]:
     if unknown:
         raise AppError("department.setting_invalid", f"unknown department settings: {unknown}",
                        {"keys": unknown})
+    out = dict(value)
     for key, item in value.items():
         if item is None:
             continue
@@ -154,7 +160,13 @@ def _check_department_settings(value: Any) -> dict[str, Any]:
         ):
             raise AppError("department.setting_invalid", f"{key} must be a positive whole number",
                            {"key": key})
-    return dict(value)
+        if key == "quotas":
+            try:
+                out[key] = projects_service._check_quotas(item)
+            except AppError as exc:
+                raise AppError("department.setting_invalid", exc.message,
+                               {**(exc.detail or {}), "key": key}) from None
+    return out
 
 
 def department_view(
@@ -212,7 +224,8 @@ def update_department(
             changed.append(key)
     if fields.get("settings") is not None:
         clean = _check_department_settings(fields["settings"])
-        merged = {k: v for k, v in {**(row.settings or {}), **clean}.items() if v is not None}
+        # `quotas` merges one level deeper, like a project's (one cap set keeps the rest)
+        merged = projects_service._merge_settings(row.settings or {}, clean)
         if merged != (row.settings or {}):
             row.settings = merged or None
             changed.append("settings")
@@ -632,16 +645,58 @@ def _check_group_role(role_key: str) -> None:
                        {"role_key": role_key, "templates": sorted(access.ROLE_TEMPLATES)})
 
 
-def upsert_members(
+def _check_member_targets(
     db: Session, identity: Any, row: ProjectGroup, upsert: list[dict[str, Any]],
     remove: list[str],
+) -> None:
+    """Refuse a change before anything is written (or staged for confirmation). A
+    group member reaches every project of the group, so the steward rules of a
+    project's members apply (§11.4): a steward never adds itself, and no steward
+    account is ever a member."""
+    me = getattr(identity, "user_id", None)
+    if steward_service.is_steward(identity) and me and me in {u["user_id"] for u in upsert}:
+        raise AppError("project.self_membership",
+                       "a steward manages structure only and cannot join a group",
+                       {"user_id": me}, status_code=403)
+    for item in upsert:
+        uid = item["user_id"]
+        user = db.get(User, uid)
+        if user is None:
+            raise NotFoundError("user.not_found", f"user '{uid}' not found", {"user_id": uid})
+        if user.role == ROLE_STEWARD:
+            raise AppError("project.steward_member",
+                           f"'{user.username}' is a steward: stewards are never project "
+                           "or group members", {"user_id": uid}, status_code=409)
+        _check_group_role(item["role_key"])
+    for uid in remove:
+        if db.get(GroupMember, (row.id, uid)) is None:
+            raise NotFoundError("group.member_not_found",
+                                f"user '{uid}' is not a member of group '{row.id}'",
+                                {"user_id": uid, "group_id": row.id})
+
+
+def upsert_members(
+    db: Session, identity: Any, row: ProjectGroup, upsert: list[dict[str, Any]],
+    remove: list[str], *, confirmed_by: Any = None,
 ) -> dict[str, list[str]]:
     """Add / update / remove group members; each change applies to every project of
-    the group at once."""
+    the group at once.
+
+    A steward's change (§11.4) is journaled and noticed to the owners of every
+    project of the group; under `steward_two_person` it is staged instead
+    (`pending: [id]`, nothing applied) until someone else confirms it —
+    `confirmed_by` is that confirmer, applying it."""
     _active(row)
     if {u["user_id"] for u in upsert} & set(remove):
         raise AppError("group.member_conflict", "a user cannot be upserted and removed "
                        "in one request")
+    _check_member_targets(db, identity, row, upsert, remove)
+    by_steward = steward_service.is_steward(identity)
+    if (by_steward and confirmed_by is None and (upsert or remove)
+            and steward_service.two_person(db)):
+        pending = steward_service.request_group_change(
+            db, identity, row, _group_projects(db, row.id), upsert, remove)
+        return {"added": [], "updated": [], "removed": [], "pending": [pending]}
     result: dict[str, list[str]] = {"added": [], "updated": [], "removed": []}
     for item in upsert:
         uid, role_key = item["user_id"], item["role_key"]
@@ -679,6 +734,11 @@ def upsert_members(
         for project in projects:
             projects_service.enforce_sod(db, project, touched)
         _revoke_effects(db, [p.id for p in projects])
+        if by_steward:  # §11.4 ②: the trace, in each project the group reaches
+            for project in projects:
+                steward_service.after_member_change(
+                    db, identity, project, upsert, result, confirmed_by=confirmed_by,
+                    group_id=row.id)
     return result
 
 
@@ -731,8 +791,18 @@ def update_projects(
     if result["added"] or result["removed"]:
         db.flush()
         if row.archived_at is None:
-            member_ids = {m.user_id for m in _group_members(db, row.id)}
+            members = _group_members(db, row.id)
+            member_ids = {m.user_id for m in members}
             for pid in result["added"]:
                 projects_service.enforce_sod(db, db.get(Project, pid), member_ids)
+            if steward_service.is_steward(identity) and members:
+                # moving a project into a group hands the group's members access to
+                # it: the same trace as adding them one by one (§11.4 ②)
+                upsert = [{"user_id": m.user_id, "role_key": m.role_key} for m in members]
+                for pid in result["added"]:
+                    steward_service.after_member_change(
+                        db, identity, db.get(Project, pid), upsert,
+                        {"added": sorted(member_ids), "updated": [], "removed": []},
+                        group_id=row.id)
         _revoke_effects(db, result["added"] + result["removed"])
     return result

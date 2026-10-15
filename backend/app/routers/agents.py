@@ -442,6 +442,11 @@ def import_discovered_runtimes(
         control, db, req.harness_ids, workspace_id=ws.id
     ).items():
         result[bucket].extend(rows)
+    # the project's max_agents quota (projects §11.3), counted after the flush: a
+    # re-import only updates its row, so a full project may still refresh what it
+    # has; new rows past the limit roll the whole import back (409)
+    if result.get("imported"):
+        project_quotas.recheck_after_insert(db, current_project(), "max_agents")
     db.commit()
     _mask_foreign_managed(
         [row for rows in result.values() for row in (rows if isinstance(rows, list) else [])

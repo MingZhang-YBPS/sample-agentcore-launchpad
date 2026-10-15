@@ -1405,6 +1405,9 @@ class RunCreate(BaseModel):
     # estimate when the workspace policy asks for confirmation.
     repeats: int = Field(default=1, ge=1, le=10)
     confirm_cost: bool = False
+    # storage-mounts §6: a dataset replay against an agent with a read-write mount
+    # writes into shared storage; the member acknowledges it (409 storage.write_confirm)
+    confirm_storage: bool = False
 
 
 def _run_out(run: EvalRun) -> dict[str, Any]:
@@ -1657,6 +1660,11 @@ def create_run(
             cost_estimate, confirmed=req.confirm_cost,
             is_admin=require_identity(request).role == "admin",
         )
+    # the project's evaluation quotas (projects §11.3): the per-run limit against the
+    # estimate, and the monthly cap — which applies to an unpriced run too
+    from app.services import release_gates
+
+    release_gates.assert_eval_budget(db, current_project(), cost_estimate)
 
     run = service.submit_run(
         agent=agent,
@@ -1684,6 +1692,7 @@ def create_run(
         # a BYOC code zip without ADOT fails every session with no spans —
         # say so now instead of after a full replay (projects §17.3-5)
         precheck_telemetry=True,
+        confirm_storage=req.confirm_storage,
     )
     return _run_out(run)
 
