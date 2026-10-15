@@ -1,0 +1,63 @@
+{
+  "name": "snap-sb2-provider",
+  "display_name": null,
+  "method": "zip_runtime",
+  "model_id": "claude-sonnet-4-5",
+  "model_source": "bedrock",
+  "max_tokens": null,
+  "reasoning_effort": null,
+  "agent_sdk": "claude_agent_sdk",
+  "system_prompt": "Be brief.",
+  "tool_description_overrides": {},
+  "tools": [],
+  "toolkits": [],
+  "skills": [],
+  "native_tools": [],
+  "allowed_tools": null,
+  "requirements": [],
+  "code": null,
+  "code_bundle": null,
+  "source_harness": null,
+  "conversion_notes": null,
+  "studio_flow": null,
+  "memory": {
+    "short_term": true,
+    "long_term": false,
+    "memory_id": null
+  },
+  "guardrail": {
+    "enabled": false,
+    "mode": "anonymize"
+  },
+  "env": {},
+  "max_iterations": 100,
+  "timeout_seconds": 600,
+  "filesystem": {
+    "session_storage": {
+      "mount_path": "/mnt/workspace"
+    },
+    "s3_files": [],
+    "efs": [],
+    "mounts": []
+  },
+  "network": null,
+  "knowledge_bases": [],
+  "protocol": "http",
+  "mcp": null,
+  "a2a_skills": [],
+  "byoc": null,
+  "inbound_auth": null,
+  "model_params": {
+    "temperature": 0.3,
+    "top_p": null,
+    "max_tokens": null,
+    "stop_sequences": [],
+    "thinking_budget_tokens": null,
+    "prompt_caching": false
+  },
+  "model_provider": {
+    "kind": "anthropic",
+    "connection": "anthropic-key",
+    "base_url": null
+  }
+}

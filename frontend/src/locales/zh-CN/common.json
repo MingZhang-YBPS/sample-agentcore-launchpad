@@ -14863,7 +14863,7 @@
       "label": "Strands 内置工具",
       "hint": "精选自 strands-agents-tools。不选时，智能体保留模板自带的 calculator 和 current_utc_time。",
       "replaceNote": "选中的工具会替换模板自带的 calculator 和 current_utc_time。",
-      "sandboxNote": "shell、python_repl、file_write、use_aws 需要沙箱，暂不提供。",
+      "sandboxNote": "shell、python_repl、file_write、use_aws 只在沙箱中运行——见下方“沙箱工具”。",
       "retrieveNoKb": "请先在下方挂载知识库——retrieve 只检索本智能体的知识库。",
       "retrieveA2a": "A2A 智能体不挂知识库，retrieve 不可用。",
       "hostsLabel": "http_request 允许的域名",
@@ -14972,7 +14972,14 @@
       "maskArgs": "打码参数名只能包含字母、数字、_、. 或 -：{{detail}}",
       "retryAttempts": "尝试次数须为 1 到 10 的整数。",
       "retryInitial": "首次等待须为 1 到 60 秒。",
-      "retryMax": "等待上限须为 1 到 600 秒，且不小于首次等待。"
+      "retryMax": "等待上限须为 1 到 600 秒，且不小于首次等待。",
+      "customToolName": "工具名以小写字母开头，后接小写字母、数字或 _（最多 64 个字符）。{{detail}}",
+      "customToolDuplicate": "{{detail}} 已经是本智能体的工具——请改名。",
+      "customToolDescription": "请说明什么时候调用这个工具（最多 1000 个字符）。",
+      "customToolCode": "请编写工具代码（最多 20000 个字符）。",
+      "customToolRequirement": "每个依赖都要锁定为 name==version，最多 10 个。{{detail}}",
+      "customToolSandboxRequirements": "在代码解释器中运行的工具不能声明依赖。",
+      "customToolCount": "最多 {{detail}} 个自定义工具。"
     },
     "structured": {
       "label": "结构化回答",
@@ -15067,6 +15074,86 @@
       "retryMax": "等待上限（秒）",
       "ladder": "本轮失败前最多共等待 {{total}} 秒。",
       "noRetry": "只尝试一次——被限流的调用立即失败。"
+    },
+    "sandbox": {
+      "label": "沙箱工具",
+      "hint": "高风险内置工具。每次调用都在 AgentCore 代码解释器会话中运行——绝不在本智能体的运行时里，接触不到它的角色、文件和记忆。",
+      "rail": "AgentCore 代码解释器",
+      "loading": "正在读取工作区设置…",
+      "open": "管理员已在本工作区放开。",
+      "closed": "本工作区未放开——管理员可在下方或工作区的沙箱设置中放开。",
+      "toolClosed": "本工作区未放开。",
+      "closedPick": "本工作区已不再允许 {{tools}}——请移除，或请管理员放开；部署会拒绝它。",
+      "when": {
+        "python_repl": "运行 Python 做数据整理和计算；变量在多次调用间保留。",
+        "shell": "使用命令行工具，运行在沙箱自己的机器上。",
+        "file_write": "写入一个文件，供 python_repl 和 shell 接着处理。",
+        "use_aws": "以沙箱的角色调用 AWS API（需要带执行角色的自定义代码解释器）。"
+      },
+      "adminSummary": "工作区沙箱设置（管理员）",
+      "interpreter": "代码解释器",
+      "interpreterHint": "留空 = AWS 托管的 aws.codeinterpreter.v1（没有 AWS 凭证）。use_aws 需要带执行角色的自定义解释器。",
+      "save": "保存设置",
+      "saveNote": "对本工作区每个智能体的下一次部署生效。"
+    },
+    "custom": {
+      "label": "自定义 Python 工具",
+      "hint": "你自己写的 @tool 函数，随智能体一起打包。边写边检查；允许列表以外的内容，需要管理员批准这一确切版本。",
+      "add": "添加自定义工具",
+      "addWhen": "内置工具做不到时——一段计算、一个解析器、一次对自有服务的调用。",
+      "full": "最多 {{count}} 个自定义工具。",
+      "unnamed": "（未命名）",
+      "name": "工具名",
+      "runs": "运行位置",
+      "where": {
+        "runtime": "智能体运行时",
+        "code_interpreter": "代码解释器"
+      },
+      "runsWhen": {
+        "runtime": "从 zip 中导入；以智能体的角色运行，可以使用声明的依赖。",
+        "code_interpreter": "每次调用在沙箱会话中运行；智能体运行时从不导入这段代码。只能用预装的包。"
+      },
+      "description": "什么时候调用",
+      "descriptionPlaceholder": "工具做什么、模型应在什么时候调用它。",
+      "code": "代码",
+      "params": "模型看到的参数",
+      "reqLine": "依赖",
+      "requirements": "依赖",
+      "requirementsHint": "每行一个 name==version。每个依赖都随工具一起审阅。",
+      "requirementsSandbox": "沙箱不安装任何依赖——请留空。",
+      "verdictShort": {
+        "idle": "未检查",
+        "checking": "检查中",
+        "error": "检查失败",
+        "syntax": "语法错误",
+        "clean": "通过",
+        "review": "待批准",
+        "approved": "已批准"
+      },
+      "verdict": {
+        "idle": "等待工具名和代码。",
+        "checking": "检查中…",
+        "syntax": "第 {{line}} 行：{{message}}",
+        "clean": "通过——{{params}} 个参数；无需审阅即可部署。",
+        "review_one": "{{count}} 项发现——管理员批准后，这一版本才能部署。",
+        "review_other": "{{count}} 项发现——管理员批准后，这一版本才能部署。",
+        "approved": "{{who}} 于 {{when}} 批准——代码有任何改动都需要重新批准。"
+      },
+      "kind": {
+        "import": "导入",
+        "dangerous_import": "危险导入",
+        "call": "危险调用",
+        "open": "文件访问",
+        "dunder": "解释器内部",
+        "import_time": "加载时执行",
+        "requirement": "依赖"
+      },
+      "approve": "批准这一版本",
+      "revoke": "撤销批准",
+      "note": "批准说明",
+      "notePlaceholder": "为什么它是安全的（可选，随批准记录保存）",
+      "approvedNoNote": "批准时未填写说明。",
+      "askAdmin": "请管理员审阅并批准这一版本——在此之前部署会拒绝它。"
     }
   },
   "chatApproval": {

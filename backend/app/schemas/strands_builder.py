@@ -12,6 +12,14 @@ model providers (``model_provider``, the key behind an Identity Connection),
 tool-call hooks (``tool_hooks``: approval list, per-turn cap, masked logs) and
 throttling retry (``retry``) — same rules: optional, absent from the stored spec
 while unset, and a spec that sets none renders exactly what it did before.
+
+SB-3 adds custom Python ``@tool`` functions (``custom_tools``: code checked by
+``schemas.custom_tool_code``, packaged into the zip, optionally run in the AgentCore
+Code Interpreter) and the high-risk built-in tools (``sandbox_tools``: python_repl /
+shell / file_write / use_aws, which only ever run in that sandbox). Whether a
+version may deploy — an administrator's approval of its code hash, the workspace
+setting that opens the sandbox tools — is ledger state, checked by
+``services.custom_tools``; this module checks only the shape.
 """
 
 import json
@@ -253,6 +261,93 @@ class RetryConfig(BaseModel):
 
 SB2_FIELDS = ("agent_tools", "model_provider", "tool_hooks", "retry")
 
+# ── SB-3 ──────────────────────────────────────────────────────────────────────
+# The high-risk strands-agents-tools (§2 item 11): offered only where the workspace
+# setting allows them, and run only inside the AgentCore Code Interpreter sandbox.
+SandboxTool = Literal["python_repl", "shell", "file_write", "use_aws"]
+SANDBOX_TOOLS: tuple[str, ...] = get_args(SandboxTool)
+CustomToolExecution = Literal["runtime", "code_interpreter"]
+MAX_CUSTOM_TOOLS = 10
+MAX_CUSTOM_TOOL_REQUIREMENTS = 10
+# the AWS-managed sandbox; a workspace may name its own (one with an execution role,
+# which use_aws needs) in its sandbox setting
+DEFAULT_CODE_INTERPRETER_ID = "aws.codeinterpreter.v1"
+CODE_INTERPRETER_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+
+
+class CustomTool(BaseModel):
+    """A member-written Strands ``@tool`` function.
+
+    ``code`` is one module defining a top-level ``@tool`` function named ``name``
+    (``schemas.custom_tool_code.tool_signature`` — refused here when it does not).
+    ``requirements`` are ``name==version`` pins installed with the agent.
+    ``execution`` picks where it runs: the agent's runtime (imported from the zip),
+    or the AgentCore Code Interpreter (the source is sent to a sandbox session per
+    call; the runtime never imports it, and only the sandbox's preinstalled packages
+    are there, so ``requirements`` stay empty).
+    """
+
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=1000)
+    code: str = Field(min_length=1, max_length=20000)
+    requirements: list[str] = Field(default_factory=list, max_length=MAX_CUSTOM_TOOL_REQUIREMENTS)
+    execution: CustomToolExecution = "runtime"
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, name: str) -> str:
+        from app.schemas.custom_tool_code import CUSTOM_TOOL_NAME_RE
+
+        if not CUSTOM_TOOL_NAME_RE.match(name):
+            raise ValueError(
+                f"custom tool name {name!r} must be a lowercase letter followed by "
+                "lowercase letters, digits or _ (at most 64) — it is the function's name"
+            )
+        return name
+
+    @field_validator("requirements")
+    @classmethod
+    def _requirements(cls, entries: list[str]) -> list[str]:
+        from app.schemas.custom_tool_code import CUSTOM_TOOL_REQUIREMENT_RE
+
+        cleaned = list(dict.fromkeys(e.strip() for e in entries if e.strip()))
+        for entry in cleaned:
+            if not CUSTOM_TOOL_REQUIREMENT_RE.match(entry):
+                raise ValueError(
+                    f"custom tool requirement {entry!r} must pin one release: name==version"
+                )
+        return cleaned
+
+    @model_validator(mode="after")
+    def _shape(self) -> "CustomTool":
+        from app.schemas.custom_tool_code import tool_signature
+
+        tool_signature(self.code, self.name)  # CustomToolCodeError is a ValueError
+        if self.execution == "code_interpreter" and self.requirements:
+            raise ValueError(
+                f"custom tool {self.name!r} runs in the Code Interpreter sandbox, which "
+                "installs nothing — use its preinstalled packages, or run it in the "
+                "runtime to declare requirements"
+            )
+        return self
+
+    def hash(self) -> str:
+        from app.schemas.custom_tool_code import code_hash
+
+        return code_hash(self.name, self.code, self.requirements, self.execution)
+
+
+SB3_FIELDS = ("custom_tools", "sandbox_tools")
+
+
+def uses_code_interpreter(spec: Any) -> bool:
+    """The generated code opens AgentCore Code Interpreter sessions: a sandbox tool,
+    or a custom tool that runs there. Its execution role needs the Code Interpreter
+    actions (``agent_iam``) — the same grant as the ``code-interpreter`` builtin."""
+    return bool(getattr(spec, "sandbox_tools", None)) or any(
+        t.execution == "code_interpreter" for t in getattr(spec, "custom_tools", None) or []
+    )
+
 
 def is_claude_model_id(model_id: str) -> bool:
     return "anthropic.claude" in model_id or "claude-" in model_id.lower()
@@ -326,11 +421,17 @@ def _check_value(node: Any, path: str, depth: int) -> None:
 def check_builder_fields(spec: Any) -> None:
     """Where the SB-1 fields may sit, and what each needs. ``spec`` is the
     ``AgentSpec`` (typed loosely to keep this module free of the import cycle)."""
+    if spec.code_interpreter_id is not None and not uses_code_interpreter(spec):
+        raise ValueError(
+            "code_interpreter_id applies to sandbox tools and custom tools run in the "
+            "Code Interpreter only"
+        )
     used = [
         name
         for name in (
             "strands_tools", "strands_tool_config", "model_params", "conversation",
             "output_schema", "few_shot_examples", "prompt_variables", *SB2_FIELDS,
+            *SB3_FIELDS,
         )
         if getattr(spec, name)
     ]
@@ -390,6 +491,34 @@ def check_builder_fields(spec: Any) -> None:
         if len(value) > 2000:
             raise ValueError(f"prompt variable {name!r} default exceeds 2000 characters")
     _check_sb2(spec)
+    _check_sb3(spec)
+
+
+def _check_sb3(spec: Any) -> None:
+    """Where the SB-3 fields may sit, and that every tool name is one tool."""
+    sandbox = list(spec.sandbox_tools)
+    if len(sandbox) != len(set(sandbox)):
+        raise ValueError("sandbox_tools must be unique")
+    customs = list(spec.custom_tools)
+    if len(customs) > MAX_CUSTOM_TOOLS:
+        raise ValueError(f"at most {MAX_CUSTOM_TOOLS} custom tools")
+    names = [t.name for t in customs]
+    if len(set(names)) != len(names):
+        raise ValueError("custom tool names must be unique")
+    taken = (
+        set(spec.strands_tools) | set(sandbox) | _RESERVED_TOOL_NAMES
+        | {r.tool_name for r in spec.agent_tools}
+    )
+    clash = sorted(set(names) & taken)
+    if clash:
+        raise ValueError(
+            f"custom tool name {clash[0]!r} is already a tool of this agent — rename it"
+        )
+    clash = sorted({r.tool_name for r in spec.agent_tools} & set(sandbox))
+    if clash:
+        raise ValueError(
+            f"agent tool name {clash[0]!r} is already a tool of this agent — rename it"
+        )
 
 
 def _check_sb2(spec: Any) -> None:

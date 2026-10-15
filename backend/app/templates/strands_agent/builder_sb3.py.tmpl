@@ -1,0 +1,322 @@
+# ── Strands builder options, part three (strands-builder SB-3) ─────────────────
+# Rendered only for a spec that sets one of them: the member's own @tool functions
+# (their source packaged under custom_tools/ in the zip) and the high-risk built-in
+# tools, which only ever run inside an AgentCore Code Interpreter sandbox session —
+# never in this runtime, with its role, files and memory.
+# Same fail-soft rule as the blocks above: a custom tool that cannot load is
+# registered as a tool that says so, and the agent still starts.
+import importlib.util
+import threading
+
+# [{"name", "description", "execution", "file", "input_schema"}] — the input schema
+# is computed by the platform from the function's signature, so a sandboxed tool is
+# offered to the model without its code ever being imported here
+CUSTOM_TOOL_SPECS: list[dict[str, Any]] = __LAUNCHPAD_SB3_CUSTOM_TOOLS__
+SANDBOX_TOOL_NAMES: list[str] = __LAUNCHPAD_SB3_SANDBOX_TOOLS__
+CODE_INTERPRETER_ID = __LAUNCHPAD_SB3_CODE_INTERPRETER_ID__
+# the directory a custom tool may write to (session storage, else /tmp)
+SESSION_DIR = Path(__LAUNCHPAD_SB3_SESSION_DIR__)
+CUSTOM_TOOLS_DIR = Path(__file__).parent / "custom_tools"
+SANDBOX_SESSION_TIMEOUT_S = 900
+SANDBOX_OUTPUT_MAX_CHARS = 20000
+_LAUNCHPAD_RESULT_MARKER = "__LAUNCHPAD_TOOL_RESULT__"
+_LAUNCHPAD_SANDBOX: dict[str, Any] = {}
+_LAUNCHPAD_SANDBOX_LOCK = threading.Lock()
+_LAUNCHPAD_AWS_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_LAUNCHPAD_AWS_OP_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
+
+
+def session_path(*parts: Any) -> Path:
+    """A path under SESSION_DIR — refused when the parts would leave it."""
+    root = SESSION_DIR.resolve()
+    target = root.joinpath(*[str(part) for part in parts]).resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"{target} is outside the session directory {root}")
+    return target
+
+
+# ── the sandbox ──
+
+
+def _launchpad_sandbox() -> Any:
+    """This runtime's Code Interpreter session, started on first use (one microVM
+    serves one runtime session, so python_repl state carries across its turns)."""
+    with _LAUNCHPAD_SANDBOX_LOCK:
+        client = _LAUNCHPAD_SANDBOX.get("client")
+        if client is not None:
+            return client
+        from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
+
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or ""
+        client = CodeInterpreter(region)
+        client.start(
+            identifier=CODE_INTERPRETER_ID, session_timeout_seconds=SANDBOX_SESSION_TIMEOUT_S
+        )
+        _LAUNCHPAD_SANDBOX["client"] = client
+        return client
+
+
+def _launchpad_sandbox_reset() -> None:
+    with _LAUNCHPAD_SANDBOX_LOCK:
+        client = _LAUNCHPAD_SANDBOX.pop("client", None)
+    if client is not None:
+        try:
+            client.stop()
+        except Exception:
+            pass  # an expired session is already gone
+
+
+def _launchpad_sandbox_output(response: Any) -> dict[str, Any]:
+    texts: list[str] = []
+    is_error = False
+    for event in (response or {}).get("stream", []) or []:
+        result = event.get("result") if isinstance(event, dict) else None
+        if not isinstance(result, dict):
+            continue
+        is_error = is_error or bool(result.get("isError"))
+        content = [
+            str(item.get("text", ""))
+            for item in result.get("content", []) or []
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        if not content:
+            structured = result.get("structuredContent") or {}
+            content = [str(structured.get(k) or "") for k in ("stdout", "stderr")]
+        texts.extend(t for t in content if t)
+    return {"text": "\n".join(texts)[:SANDBOX_OUTPUT_MAX_CHARS], "is_error": is_error}
+
+
+def launchpad_sandbox_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """One Code Interpreter call → {"text", "is_error"}. A failed call retries once
+    on a fresh session (the old one may have timed out)."""
+    last: Exception | None = None
+    for _attempt in range(2):
+        try:
+            return _launchpad_sandbox_output(_launchpad_sandbox().invoke(method, params))
+        except Exception as exc:
+            last = exc
+            _launchpad_sandbox_reset()
+    print(f"[launchpad-sandbox] {method} failed: {type(last).__name__}: {last}", flush=True)
+    return {
+        "text": f"error: the Code Interpreter sandbox failed ({type(last).__name__})",
+        "is_error": True,
+    }
+
+
+def _launchpad_sandbox_text(out: dict[str, Any]) -> str:
+    text = out.get("text") or "(no output)"
+    return f"error: {text}" if out.get("is_error") else text
+
+
+# ── the high-risk built-in tools, sandboxed ──
+
+
+@tool(name="python_repl")
+def launchpad_sandbox_python(code: str) -> str:
+    """Run Python code in an isolated AgentCore Code Interpreter sandbox and return what it printed. Variables persist between calls; this agent's own files and credentials are not reachable from the sandbox.
+
+    Args:
+        code: The Python code to run.
+    """
+    return _launchpad_sandbox_text(
+        launchpad_sandbox_call("executeCode", {"language": "python", "code": code})
+    )
+
+
+@tool(name="shell")
+def launchpad_sandbox_shell(command: str) -> str:
+    """Run a shell command in an isolated AgentCore Code Interpreter sandbox and return its output. The sandbox is not this agent's machine.
+
+    Args:
+        command: The shell command to run.
+    """
+    return _launchpad_sandbox_text(launchpad_sandbox_call("executeCommand", {"command": command}))
+
+
+@tool(name="file_write")
+def launchpad_sandbox_file_write(path: str, content: str) -> str:
+    """Write a text file inside the isolated AgentCore Code Interpreter sandbox (python_repl and shell see it).
+
+    Args:
+        path: The file's path inside the sandbox, relative to its working directory.
+        content: The text to write.
+    """
+    if path.startswith("/") or ".." in Path(path).parts:
+        return "refused: give a path relative to the sandbox's working directory"
+    out = launchpad_sandbox_call("writeFiles", {"content": [{"path": path, "text": content}]})
+    return _launchpad_sandbox_text(out) if out.get("is_error") else f"wrote {path}"
+
+
+@tool(name="use_aws")
+def launchpad_sandbox_use_aws(
+    service_name: str,
+    operation_name: str,
+    parameters: dict[str, Any] | None = None,
+    region: str = "",
+) -> str:
+    """Call an AWS API (boto3) from inside the AgentCore Code Interpreter sandbox, with the sandbox's own role — not this agent's — and return the JSON response.
+
+    Args:
+        service_name: The boto3 service name, e.g. s3 or dynamodb.
+        operation_name: The boto3 operation in snake_case, e.g. list_buckets.
+        parameters: The operation's parameters.
+        region: The AWS region (default: the sandbox's).
+    """
+    if not _LAUNCHPAD_AWS_NAME_RE.match(service_name or ""):
+        return f"refused: {service_name!r} is not a boto3 service name"
+    if not _LAUNCHPAD_AWS_OP_RE.match(operation_name or ""):
+        return f"refused: {operation_name!r} is not a snake_case boto3 operation"
+    if region and not _LAUNCHPAD_AWS_NAME_RE.match(region):
+        return f"refused: {region!r} is not a region name"
+    code = (
+        "import json, boto3\n"
+        f"client = boto3.client({service_name!r}, region_name={region!r} or None)\n"
+        f"response = getattr(client, {operation_name!r})(**json.loads({json.dumps(parameters or {})!r}))\n"
+        "response.pop('ResponseMetadata', None)\n"
+        f"print(json.dumps(response, default=str)[:{SANDBOX_OUTPUT_MAX_CHARS}])\n"
+    )
+    return _launchpad_sandbox_text(
+        launchpad_sandbox_call("executeCode", {"language": "python", "code": code})
+    )
+
+
+_LAUNCHPAD_SANDBOX_TOOL_OBJECTS = {
+    "python_repl": launchpad_sandbox_python,
+    "shell": launchpad_sandbox_shell,
+    "file_write": launchpad_sandbox_file_write,
+    "use_aws": launchpad_sandbox_use_aws,
+}
+
+# ── custom tools ──
+
+# Runs one call of a custom tool in the sandbox: a fresh namespace per call (so
+# python_repl's variables are neither seen nor touched), a stand-in for the strands
+# decorator when the sandbox has no strands, and the result after a marker line.
+_LAUNCHPAD_SANDBOX_RUNNER = """
+import json as _lp_json, sys as _lp_sys, types as _lp_types
+from pathlib import Path as _lp_Path
+
+def _lp_tool(*args, **kwargs):
+    if len(args) == 1 and callable(args[0]) and not kwargs:
+        return args[0]
+    return lambda fn: fn
+
+try:
+    import strands as _lp_strands
+except ImportError:
+    _lp_module = _lp_types.ModuleType("strands")
+    _lp_module.tool = _lp_tool
+    _lp_sys.modules["strands"] = _lp_module
+
+_lp_root = _lp_Path.cwd().resolve()
+
+def _lp_session_path(*parts):
+    target = _lp_root.joinpath(*[str(p) for p in parts]).resolve()
+    if target != _lp_root and _lp_root not in target.parents:
+        raise ValueError(f"{target} is outside the session directory {_lp_root}")
+    return target
+
+_lp_ns = {"__name__": "launchpad_custom_tool", "tool": _lp_tool,
+          "SESSION_DIR": _lp_root, "session_path": _lp_session_path}
+exec(compile(_lp_json.loads(__SOURCE__), __FILE__, "exec"), _lp_ns)
+_lp_out = _lp_ns[__NAME__](**_lp_json.loads(__ARGS__))
+print(__MARKER__ + _lp_json.dumps(_lp_out, default=str, ensure_ascii=False))
+"""
+
+
+def launchpad_sandbox_custom(name: str, source: str, args: dict[str, Any]) -> dict[str, Any]:
+    """One custom-tool call in the sandbox → {"text", "is_error"}."""
+    code = (
+        _LAUNCHPAD_SANDBOX_RUNNER.replace("__SOURCE__", repr(json.dumps(source)))
+        .replace("__FILE__", repr(f"{name}.py"))
+        .replace("__NAME__", repr(name))
+        .replace("__ARGS__", repr(json.dumps(args, default=str)))
+        .replace("__MARKER__", repr(_LAUNCHPAD_RESULT_MARKER))
+    )
+    out = launchpad_sandbox_call("executeCode", {"language": "python", "code": code})
+    text = str(out.get("text") or "")
+    for line in reversed(text.splitlines()):
+        if line.startswith(_LAUNCHPAD_RESULT_MARKER):
+            try:
+                value = json.loads(line[len(_LAUNCHPAD_RESULT_MARKER):])
+            except ValueError:
+                value = line[len(_LAUNCHPAD_RESULT_MARKER):]
+            rendered = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            return {"text": rendered[:SANDBOX_OUTPUT_MAX_CHARS], "is_error": False}
+    # no result line: the call raised — its traceback is the output
+    return {"text": text or "the tool returned nothing", "is_error": True}
+
+
+def _launchpad_result_tool(spec: dict[str, Any], run: Any) -> Any:
+    """A tool object over a platform-computed spec; ``run(input) → {"text", "is_error"}``."""
+    from strands.tools.tools import PythonAgentTool
+
+    def call(tool_use: dict[str, Any], **_: Any) -> dict[str, Any]:
+        out = run(dict(tool_use.get("input") or {}))
+        return {
+            "toolUseId": tool_use.get("toolUseId", ""),
+            "status": "error" if out.get("is_error") else "success",
+            "content": [{"text": str(out.get("text") or "")}],
+        }
+
+    tool_spec = {
+        "name": spec["name"],
+        "description": spec["description"],
+        "inputSchema": {"json": spec["input_schema"]},
+    }
+    return PythonAgentTool(spec["name"], tool_spec, call)
+
+
+def _launchpad_runtime_custom_tool(spec: dict[str, Any]) -> Any:
+    """Import the tool's module from the zip and take its @tool function."""
+    module_spec = importlib.util.spec_from_file_location(
+        f"launchpad_custom_tools.{spec['name']}", CUSTOM_TOOLS_DIR / spec["file"]
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise FileNotFoundError(spec["file"])
+    module = importlib.util.module_from_spec(module_spec)
+    module.tool = tool
+    module.SESSION_DIR = SESSION_DIR
+    module.session_path = session_path
+    module_spec.loader.exec_module(module)
+    candidate = getattr(module, spec["name"])
+    if not hasattr(candidate, "tool_spec"):
+        raise TypeError(f"{spec['name']} is not decorated with @tool")
+    candidate.tool_spec["description"] = spec["description"]
+    return candidate
+
+
+def _launchpad_sandbox_custom_tool(spec: dict[str, Any]) -> Any:
+    source = (CUSTOM_TOOLS_DIR / spec["file"]).read_text(encoding="utf-8")
+    return _launchpad_result_tool(
+        spec, lambda args: launchpad_sandbox_custom(spec["name"], source, args)
+    )
+
+
+def _launchpad_custom_tool(spec: dict[str, Any]) -> Any:
+    try:
+        if spec["execution"] == "code_interpreter":
+            return _launchpad_sandbox_custom_tool(spec)
+        return _launchpad_runtime_custom_tool(spec)
+    except Exception as exc:
+        print(
+            f"[launchpad-custom-tool] {spec['name']} failed to load: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        message = (
+            f"error: the custom tool {spec['name']} failed to load "
+            f"({type(exc).__name__}: {exc}) — fix its code in the console and redeploy"
+        )
+        return _launchpad_result_tool(spec, lambda _args: {"text": message, "is_error": True})
+
+
+SANDBOX_TOOLS = [_LAUNCHPAD_SANDBOX_TOOL_OBJECTS[name] for name in SANDBOX_TOOL_NAMES]
+CUSTOM_TOOLS = [_launchpad_custom_tool(spec) for spec in CUSTOM_TOOL_SPECS]
+# like the curated tools, these replace the template's calculator / current_utc_time
+STRANDS_TOOLS = [*STRANDS_TOOLS, *SANDBOX_TOOLS, *CUSTOM_TOOLS]
+for _launchpad_tool in [*SANDBOX_TOOLS, *CUSTOM_TOOLS]:
+    if not DEFAULT_TOOL_DESCRIPTIONS.get(_launchpad_tool.tool_name):
+        DEFAULT_TOOL_DESCRIPTIONS[_launchpad_tool.tool_name] = str(
+            _launchpad_tool.tool_spec.get("description", "")
+        )

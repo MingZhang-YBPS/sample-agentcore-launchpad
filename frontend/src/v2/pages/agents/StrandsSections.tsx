@@ -1,10 +1,14 @@
 import { ArrowRight, ChevronDown, Plus, X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useMemo, useRef } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useAuth } from "../../../auth/auth-context";
 import { type AgentForm, strandsContext } from "../../../lib/agent-spec";
-import { api } from "../../../lib/api";
+import { api, errorMessage } from "../../../lib/api";
+import { customToolsApi } from "../../../lib/api/custom-tools";
 import {
+  SANDBOX_TOOLS,
+  type SandboxTool,
   agentToolBlock,
   agentToolRow,
   backoffDelays,
@@ -34,6 +38,7 @@ import {
 } from "../../../lib/strands-builder";
 import { useLoad } from "../../hooks";
 import { Button, Card, Field, Segmented, Select } from "../../ui";
+import { CustomToolsPanel } from "./CustomToolEditor";
 import { ISSUE_KEYS_SHOWN_ON_CONTINUE, sb, type StrandsGroupKey } from "./strandsGroups";
 import type { SectionProps } from "./wizardKit";
 import "./strands-sections.css";
@@ -50,6 +55,11 @@ import "./strands-sections-sb2.css";
  * gains "Other agents as tools" and "Tool-call guards" (under the curated tools),
  * Model behaviour gains the model provider (head of the parameters card) and
  * throttling retry (its foot).
+ *
+ * SB-3 adds two panels to the Tools group, after the guards: the sandboxed
+ * high-risk tools (an enclosure naming the Code Interpreter they run in, closed
+ * until the workspace setting opens them) and the member's own Python tools
+ * (`CustomToolEditor`).
  */
 
 export function StrandsGroup({
@@ -208,7 +218,124 @@ export function StrandsToolPicker({ form, set, touched }: Pick<SectionProps, "fo
     </Field>
     <AgentToolsPanel form={form} set={set} touched={touched} />
     <ToolGuardsPanel form={form} set={set} touched={touched} />
+    <SandboxToolsPanel form={form} set={set} />
+    <CustomToolsPanel form={form} set={set} touched={touched} />
     </>
+  );
+}
+
+/* ── Tools: the sandboxed high-risk tools (SB-3) ─────────────────────────── */
+
+/** python_repl / shell / file_write / use_aws: selectable where the workspace's
+ *  sandbox setting allows them; each call is a Code Interpreter call. An
+ *  administrator opens them right here. A tool the member already picked stays
+ *  visible (and removable) after the setting closed it — the deploy refuses it. */
+function SandboxToolsPanel({ form, set }: Pick<SectionProps, "form" | "set">) {
+  const { t } = useTranslation();
+  const { isAdmin } = useAuth();
+  const s = sb2Form(form);
+  const patch = useStrands(set);
+  const load = useLoad(() => customToolsApi.sandbox(), "sb3-sandbox");
+  const allowed = new Set<SandboxTool>(load.data?.allowed_tools ?? []);
+  const interpreter = load.data?.effective_code_interpreter_id ?? "aws.codeinterpreter.v1";
+  const open = allowed.size > 0;
+  const toggle = (name: SandboxTool) =>
+    patch((prev) => {
+      const cur = prev.sandboxTools ?? [];
+      return { sandboxTools: cur.includes(name) ? cur.filter((x) => x !== name) : SANDBOX_TOOLS.filter((x) => x === name || cur.includes(x)) };
+    });
+  const closedPicks = s.sandboxTools.filter((x) => load.data && !allowed.has(x));
+  return (
+    <Field
+      label={t("strandsBuilder.sandbox.label")}
+      hint={t("strandsBuilder.sandbox.hint")}
+      error={closedPicks.length ? t("strandsBuilder.sandbox.closedPick", { tools: closedPicks.join(", ") }) : undefined}
+    >
+      <div className={open ? "ct-sandbox" : "ct-sandbox closed"} data-testid="sb-sandbox-tools">
+        <div className="ct-rail">
+          <span className="ct-rail-name">{t("strandsBuilder.sandbox.rail")}</span>
+          <span className="mono">{interpreter}</span>
+          <span>{load.loading ? t("strandsBuilder.sandbox.loading") : open ? t("strandsBuilder.sandbox.open") : t("strandsBuilder.sandbox.closed")}</span>
+        </div>
+        <div className="sb-tools ct-sandbox-tools">
+          {SANDBOX_TOOLS.map((name) => {
+            const on = s.sandboxTools.includes(name);
+            const off = !on && !allowed.has(name);
+            return (
+              <label key={name} className={["sb-tool", on ? "on" : "", off ? "off" : ""].filter(Boolean).join(" ")}>
+                <input type="checkbox" checked={on} disabled={off} onChange={() => toggle(name)} data-testid={`sb-sandbox-${name}`} />
+                <span className="sb-lamp" aria-hidden="true" />
+                <span className="sb-tool-name">{name}</span>
+                <span className="sb-tool-when">{off ? t("strandsBuilder.sandbox.toolClosed") : t(`strandsBuilder.sandbox.when.${name}`)}</span>
+              </label>
+            );
+          })}
+        </div>
+        {isAdmin && load.data && <SandboxSettingEditor allowed={load.data.allowed_tools} interpreterId={load.data.code_interpreter_id} onSaved={load.reload} />}
+      </div>
+      {load.error && (
+        <p className="sb-err">
+          {load.error}{" "}
+          <Button size="sm" onClick={load.reload}>
+            {t("strandsBuilder.agents.retry")}
+          </Button>
+        </p>
+      )}
+    </Field>
+  );
+}
+
+function SandboxSettingEditor({
+  allowed,
+  interpreterId,
+  onSaved,
+}: {
+  allowed: SandboxTool[];
+  interpreterId: string | null;
+  onSaved: () => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState<SandboxTool[]>(allowed);
+  const [ci, setCi] = useState(interpreterId ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = () => {
+    setSaving(true);
+    setError(null);
+    customToolsApi
+      .setSandbox(draft, ci.trim() || null)
+      .then(onSaved)
+      .catch((err: unknown) => setError(errorMessage(err)))
+      .finally(() => setSaving(false));
+  };
+  return (
+    <details className="ct-admin">
+      <summary>{t("strandsBuilder.sandbox.adminSummary")}</summary>
+      <div className="ct-admin-body">
+        <div className="ct-admin-row">
+          {SANDBOX_TOOLS.map((name) => (
+            <label key={name} className="sb-chip mono">
+              <input
+                type="checkbox"
+                checked={draft.includes(name)}
+                onChange={() => setDraft((d) => (d.includes(name) ? d.filter((x) => x !== name) : SANDBOX_TOOLS.filter((x) => x === name || d.includes(x))))}
+              />
+              {name}
+            </label>
+          ))}
+        </div>
+        <Field label={t("strandsBuilder.sandbox.interpreter")} hint={t("strandsBuilder.sandbox.interpreterHint")}>
+          <input className="v2-input mono" value={ci} placeholder="aws.codeinterpreter.v1" onChange={(e) => setCi(e.target.value)} aria-label={t("strandsBuilder.sandbox.interpreter")} />
+        </Field>
+        <div className="ct-admin-row">
+          <Button size="sm" kind="primary" onClick={save} disabled={saving}>
+            {t("strandsBuilder.sandbox.save")}
+          </Button>
+          <span className="sb-fine">{t("strandsBuilder.sandbox.saveNote")}</span>
+        </div>
+        {error && <p className="sb-err">{error}</p>}
+      </div>
+    </details>
   );
 }
 

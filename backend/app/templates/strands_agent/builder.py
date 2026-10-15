@@ -13,15 +13,25 @@ its source (``builder_sb2.py.tmpl``) follows the SB-1 source and wraps
 ``launchpad_builder_kwargs``, and its turn line joins the turn hook — both only
 for a spec that sets an SB-2 field, so an SB-1 spec renders byte-identically too
 (``tests/test_strands_builder_sb2.py`` against ``tests/fixtures/strands_builder_sb2``).
+
+SB-3 (custom ``@tool`` functions, sandboxed high-risk tools) follows the SB-2 source
+(``builder_sb3.py.tmpl``) and extends ``STRANDS_TOOLS``; the custom tools' source
+files are not inlined but packaged next to ``main.py`` (``custom_tool_files``). An
+SB-2 spec renders byte-identically (``tests/test_strands_builder_sb3.py`` against
+``tests/fixtures/strands_builder_sb3``).
 """
 
 from pathlib import Path
 
 from app.schemas.agent import AgentSpec
-from app.schemas.strands_builder import SB2_FIELDS
+from app.schemas.custom_tool_code import tool_signature
+from app.schemas.strands_builder import DEFAULT_CODE_INTERPRETER_ID, SB2_FIELDS, SB3_FIELDS
 
 BUILDER_TEMPLATE = Path(__file__).with_name("builder_support.py.tmpl")
 SB2_TEMPLATE = Path(__file__).with_name("builder_sb2.py.tmpl")
+SB3_TEMPLATE = Path(__file__).with_name("builder_sb3.py.tmpl")
+# where the package stage drops each custom tool's source, next to main.py
+CUSTOM_TOOLS_DIRNAME = "custom_tools"
 SOURCE_MARKER = "__LAUNCHPAD_STRANDS_BUILDER_SOURCE__\n"
 BUILD_HOOK_MARKER = "    __LAUNCHPAD_BUILD_AGENT_HOOK__\n"
 TURN_HOOK_MARKER = "    __LAUNCHPAD_TURN_HOOK__\n"
@@ -64,7 +74,7 @@ def build_model() -> Any:
 
 BUILDER_FIELDS = (
     "strands_tools", "strands_tool_config", "model_params", "conversation",
-    "output_schema", "few_shot_examples", "prompt_variables", *SB2_FIELDS,
+    "output_schema", "few_shot_examples", "prompt_variables", *SB2_FIELDS, *SB3_FIELDS,
 )
 # a turn of an agent-tool call waits at most this long for the other agent
 AGENT_TOOL_TIMEOUT_CEILING_S = 900
@@ -78,6 +88,10 @@ def uses_sb2(spec: AgentSpec) -> bool:
     return any(getattr(spec, name) for name in SB2_FIELDS)
 
 
+def uses_sb3(spec: AgentSpec) -> bool:
+    return any(getattr(spec, name) for name in SB3_FIELDS)
+
+
 def builder_tool_descriptions(spec: AgentSpec) -> dict[str, str]:
     """{tool name → ""} for the selected strands tools.
 
@@ -86,7 +100,10 @@ def builder_tool_descriptions(spec: AgentSpec) -> dict[str, str]:
     description — and, for ``calculator``, keeps the template's description of its
     own calculator from overwriting the strands one.
     """
-    return {name: "" for name in spec.strands_tools}
+    out = {name: "" for name in (*spec.strands_tools, *spec.sandbox_tools)}
+    # a custom tool's description is the member's own (the wizard's field)
+    out.update({t.name: t.description for t in spec.custom_tools})
+    return out
 
 
 def journal_root(spec: AgentSpec) -> str:
@@ -120,7 +137,51 @@ def render_builder_source(spec: AgentSpec, *, a2a: bool = False) -> str:
     )
     if uses_sb2(spec):
         source += "\n\n" + render_sb2_source(spec)
+    if uses_sb3(spec):
+        source += "\n\n" + render_sb3_source(spec)
     return (_A2A_PRELUDE + source) if a2a else source
+
+
+def custom_tool_targets(spec: AgentSpec) -> list[dict[str, object]]:
+    """The CUSTOM_TOOL_SPECS literal: name, description, where it runs, its file in
+    the zip and the model-facing input schema (from the signature, never by import)."""
+    return [
+        {
+            "name": t.name,
+            "description": t.description,
+            "execution": t.execution,
+            "file": f"{t.name}.py",
+            "input_schema": tool_signature(t.code, t.name).input_schema,
+        }
+        for t in spec.custom_tools
+    ]
+
+
+def custom_tool_files(spec: AgentSpec) -> dict[str, str]:
+    """{zip-relative path → source} the package stage writes next to main.py."""
+    return {f"{CUSTOM_TOOLS_DIRNAME}/{t.name}.py": t.code for t in spec.custom_tools}
+
+
+def custom_tool_requirements(spec: AgentSpec) -> list[str]:
+    """The runtime custom tools' pins, deduplicated in declaration order (a
+    sandboxed tool installs nothing — its schema refuses requirements)."""
+    out: list[str] = []
+    for t in spec.custom_tools:
+        out.extend(r for r in t.requirements if r not in out)
+    return out
+
+
+def render_sb3_source(spec: AgentSpec) -> str:
+    return (
+        SB3_TEMPLATE.read_text(encoding="utf-8")
+        .replace("__LAUNCHPAD_SB3_CUSTOM_TOOLS__", repr(custom_tool_targets(spec)))
+        .replace("__LAUNCHPAD_SB3_SANDBOX_TOOLS__", repr(list(spec.sandbox_tools)))
+        .replace(
+            "__LAUNCHPAD_SB3_CODE_INTERPRETER_ID__",
+            repr(spec.code_interpreter_id or DEFAULT_CODE_INTERPRETER_ID),
+        )
+        .replace("__LAUNCHPAD_SB3_SESSION_DIR__", repr(journal_root(spec)))
+    )
 
 
 def agent_tool_targets(spec: AgentSpec) -> list[dict[str, object]]:

@@ -14863,7 +14863,7 @@
       "label": "Strands built-in tools",
       "hint": "Curated from strands-agents-tools. None picked: the agent keeps the template's calculator and current_utc_time.",
       "replaceNote": "Picked tools replace the template's calculator and current_utc_time.",
-      "sandboxNote": "shell, python_repl, file_write and use_aws need a sandbox and are not offered yet.",
+      "sandboxNote": "shell, python_repl, file_write and use_aws run only in a sandbox — see Sandboxed tools below.",
       "retrieveNoKb": "Mount a knowledge base below first — retrieve searches the agent's own.",
       "retrieveA2a": "A2A agents carry no knowledge base, so retrieve is not available.",
       "hostsLabel": "Allowed hosts for http_request",
@@ -14972,7 +14972,14 @@
       "maskArgs": "Masked arguments are names of letters, digits, _ . or -: {{detail}}",
       "retryAttempts": "Attempts must be a whole number from 1 to 10.",
       "retryInitial": "The first delay must be 1 to 60 seconds.",
-      "retryMax": "The ceiling must be 1 to 600 seconds and at least the first delay."
+      "retryMax": "The ceiling must be 1 to 600 seconds and at least the first delay.",
+      "customToolName": "Tool names start with a lowercase letter, then lowercase letters, digits or _ (at most 64). {{detail}}",
+      "customToolDuplicate": "{{detail}} is already a tool of this agent — rename it.",
+      "customToolDescription": "Say when to call the tool (at most 1000 characters).",
+      "customToolCode": "Write the tool's code (at most 20000 characters).",
+      "customToolRequirement": "Pin each requirement as name==version, at most 10. {{detail}}",
+      "customToolSandboxRequirements": "A tool that runs in the Code Interpreter cannot declare requirements.",
+      "customToolCount": "At most {{detail}} custom tools."
     },
     "structured": {
       "label": "Structured answer",
@@ -15067,6 +15074,86 @@
       "retryMax": "Delay ceiling (s)",
       "ladder": "Waits at most {{total}} s in all before the turn fails.",
       "noRetry": "One attempt — a throttled call fails at once."
+    },
+    "sandbox": {
+      "label": "Sandboxed tools",
+      "hint": "The high-risk built-in tools. Each call runs in an AgentCore Code Interpreter session — never in this agent's runtime, with its role, files or memory.",
+      "rail": "AgentCore Code Interpreter",
+      "loading": "reading the workspace setting…",
+      "open": "Opened in this workspace by an administrator.",
+      "closed": "Closed in this workspace — an administrator opens them below or in the workspace's sandbox setting.",
+      "toolClosed": "Closed in this workspace.",
+      "closedPick": "{{tools}} is no longer allowed in this workspace — remove it, or ask an administrator to open it; the deploy refuses it.",
+      "when": {
+        "python_repl": "Data wrangling and calculations by running Python; variables persist across calls.",
+        "shell": "Command-line utilities, in the sandbox's own machine.",
+        "file_write": "Write a file python_repl and shell then work on.",
+        "use_aws": "Call AWS APIs with the sandbox's role (a custom Code Interpreter with an execution role)."
+      },
+      "adminSummary": "Workspace sandbox setting (administrators)",
+      "interpreter": "Code Interpreter",
+      "interpreterHint": "Empty = the AWS-managed aws.codeinterpreter.v1 (no AWS credentials). use_aws needs a custom interpreter with an execution role.",
+      "save": "Save setting",
+      "saveNote": "Applies to every agent of this workspace at its next deploy."
+    },
+    "custom": {
+      "label": "Custom Python tools",
+      "hint": "Your own @tool functions, packaged with the agent. The code is checked as you type; anything outside the allow-list needs an administrator's approval of that exact version.",
+      "add": "Add a custom tool",
+      "addWhen": "When no built-in tool does the job — a calculation, a parser, a call to your own service.",
+      "full": "At most {{count}} custom tools.",
+      "unnamed": "(unnamed)",
+      "name": "Tool name",
+      "runs": "Runs in",
+      "where": {
+        "runtime": "Agent runtime",
+        "code_interpreter": "Code Interpreter"
+      },
+      "runsWhen": {
+        "runtime": "Imported from the zip; it runs with the agent's role and can use its declared requirements.",
+        "code_interpreter": "Each call runs in a sandbox session; the agent's runtime never imports the code. Preinstalled packages only."
+      },
+      "description": "When to call it",
+      "descriptionPlaceholder": "What the tool does and when the model should call it.",
+      "code": "Code",
+      "params": "The model sees",
+      "reqLine": "pkg",
+      "requirements": "Requirements",
+      "requirementsHint": "One name==version per line. Every requirement is reviewed with the tool.",
+      "requirementsSandbox": "The sandbox installs nothing — leave this empty.",
+      "verdictShort": {
+        "idle": "not checked",
+        "checking": "checking",
+        "error": "check failed",
+        "syntax": "syntax error",
+        "clean": "clean",
+        "review": "needs approval",
+        "approved": "approved"
+      },
+      "verdict": {
+        "idle": "Waiting for a name and code to check.",
+        "checking": "Checking…",
+        "syntax": "Line {{line}}: {{message}}",
+        "clean": "Clean — {{params}} parameters; deploys without review.",
+        "review_one": "{{count}} finding — this version deploys once an administrator approves it.",
+        "review_other": "{{count}} findings — this version deploys once an administrator approves it.",
+        "approved": "Approved by {{who}} on {{when}} — any change to the code needs a new approval."
+      },
+      "kind": {
+        "import": "import",
+        "dangerous_import": "dangerous import",
+        "call": "dangerous call",
+        "open": "file access",
+        "dunder": "internals",
+        "import_time": "runs on load",
+        "requirement": "requirement"
+      },
+      "approve": "Approve this version",
+      "revoke": "Revoke approval",
+      "note": "Approval note",
+      "notePlaceholder": "Why this is safe (optional, kept with the approval)",
+      "approvedNoNote": "Approved without a note.",
+      "askAdmin": "Ask an administrator to review and approve this version — the deploy refuses it until then."
     }
   },
   "chatApproval": {
