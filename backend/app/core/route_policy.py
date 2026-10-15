@@ -2030,3 +2030,14 @@ ROUTE_POLICY.update(SSO_ROUTES)
 HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/admin/sso")
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SSO_ROUTES)
 ADMIN_SPLIT.update({key: ADMIN_DATA for key, role in SSO_ROUTES.items() if role == ADMIN})
+
+# ---- SHARE-2: notices of ended cross-project shares (projects design §11.2) ----
+# Hub-global under `/api/me` like the caller's next steps: each handler answers only
+# the caller's own notices (anyone else's notice id answers 404), so any signed-in
+# member may read and acknowledge.
+SHARE_NOTICE_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/me/share-notices"): MEMBER,
+    ("POST", "/api/me/share-notices/{notice_id}/ack"): MEMBER,
+}
+ROUTE_POLICY.update(SHARE_NOTICE_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SHARE_NOTICE_ROUTES)

@@ -304,7 +304,9 @@ def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
     """Union of `model_resources` over every model the spec permits, deduped in
     order. One entry for every method except byoc, whose ``allowed_models`` list
     may authorize several — each still scoped to its exact id, never widened —
-    and studio, which authorizes each native-Bedrock model its flow's nodes use."""
+    and studio, which authorizes each native-Bedrock model its flow's nodes use. A
+    summarizing conversation manager's ``summary_model`` is authorized beside the
+    agent's own model."""
     if spec.method == "studio":
         ids = [m for provider, m in studio_node_models(spec) if provider == STUDIO_BEDROCK_PROVIDER]
         resources: list[str] = []
@@ -316,7 +318,12 @@ def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
                     resources.append(resource)
         return resources
     if spec.method != "byoc":
-        return model_resources(spec.model_id, ctx)
+        resources = model_resources(spec.model_id, ctx)
+        # the summarizing conversation manager calls its own (Bedrock) model (SB-1)
+        summary = spec.conversation.summary_model if spec.conversation else None
+        if summary:
+            resources = list(dict.fromkeys([*resources, *model_resources(summary, ctx)]))
+        return resources
     resources: list[str] = []
     for selection in spec.allowed_model_ids:
         kind, model_id = byoc_model_target(selection)

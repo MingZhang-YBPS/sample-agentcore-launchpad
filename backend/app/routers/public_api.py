@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
+from pydantic import Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.assistant.sessions import refuse_assistant_session
@@ -30,6 +31,7 @@ from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
 from app.schemas.agent import display_name_of
 from app.schemas.attachments import AttachmentRequest, SessionIdField
+from app.schemas.strands_builder import PROMPT_VARIABLE_RE
 from app.services import agent_access, visibility
 from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
@@ -99,9 +101,28 @@ async def api_key_project(key: ApiKey = Depends(require_api_key)) -> ApiKey:
     return key
 
 
+MAX_CONTEXT_KEYS = 20
+MAX_CONTEXT_VALUE = 2000
+
+
 class InvokeV1Request(AttachmentRequest):
     session_id: str | None = SessionIdField
     actor_id: str = "api"
+    # strands-builder SB-1: this call's {{variable}} values; the agent fills the
+    # prompt variables it declares and ignores any other key
+    context: dict[str, str] | None = Field(default=None, max_length=MAX_CONTEXT_KEYS)
+
+    @field_validator("context")
+    @classmethod
+    def _context_shape(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        for name, text in (value or {}).items():
+            if not PROMPT_VARIABLE_RE.match(name):
+                raise ValueError(
+                    f"context key {name!r} must match {PROMPT_VARIABLE_RE.pattern}")
+            if len(text) > MAX_CONTEXT_VALUE:
+                raise ValueError(
+                    f"context value {name!r} exceeds {MAX_CONTEXT_VALUE} characters")
+        return value or None
 
 
 def _active_agent(db: Session, key: ApiKey, agent_id: str) -> Agent:
@@ -154,7 +175,9 @@ def v1_invoke(
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
-    extra = {"attachments": prepared} if prepared else {}
+    extra: dict[str, Any] = {"attachments": prepared} if prepared else {}
+    if req.context:
+        extra["context"] = req.context
     started = time.monotonic()
     # No signed-in console user behind an API key: an as_user tool's consent
     # could never complete, so the invoke layer answers such an ask with 409
@@ -192,7 +215,9 @@ def v1_invoke_stream(
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
-    extra = {"attachments": prepared} if prepared else {}
+    extra: dict[str, Any] = {"attachments": prepared} if prepared else {}
+    if req.context:
+        extra["context"] = req.context
     mem_actor = scoped_actor(agent.id, req.actor_id)
 
     def generate():

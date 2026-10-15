@@ -417,7 +417,7 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
 def _agent_meta(exp: Experiment, workspace: WorkspaceContext) -> dict[str, Any]:
     """Runtime facts captured at create time; rebuilt lazily for old rows."""
     meta = exp.artifacts.get("agent_meta")
-    if meta and "tools" in meta and "experiment_capability" in meta:
+    if meta and all(k in meta for k in ("tools", "experiment_capability", "bundle_config")):
         return meta
     from app.models.ledger import Agent  # local import — avoids cycle at module load
 
@@ -432,6 +432,7 @@ def _agent_meta(exp: Experiment, workspace: WorkspaceContext) -> dict[str, Any]:
                 **meta,
                 "tools": discover_agent_tools(agent_row.spec or {}),
                 "experiment_capability": experiment_capability(agent_row),
+                "bundle_config": bundle_config(agent_row.spec or {}),
             }
             _update(exp.id, artifact={"agent_meta": meta})
         return meta
@@ -449,6 +450,7 @@ def _agent_meta(exp: Experiment, workspace: WorkspaceContext) -> dict[str, Any]:
         "experiment_capability": experiment_capability(agent_row),
         # where this agent's production traffic is logged (`live` once gated)
         "telemetry_endpoint": _telemetry_endpoint(agent_row),
+        "bundle_config": bundle_config(agent_row.spec or {}),
     }
     _update(exp.id, artifact={"agent_meta": meta})
     return meta
@@ -933,12 +935,43 @@ def system_prompt_rec_failed(rec: dict[str, Any]) -> bool:
 
 DEFAULT_TOOL_DESCS = {"calculator": "Evaluate a basic arithmetic expression"}
 
+# strands-builder SB-1: the spec settings the generated Strands runtime also reads
+# from the config bundle per request (same keys), so an experiment can compare them
+BUNDLE_CONFIG_KEYS = ("model_params", "conversation", "few_shot_examples", "prompt_variables")
+
+
+def bundle_config(spec: dict[str, Any]) -> dict[str, Any]:
+    """The agent's own SB-1 bundle settings — only the ones it sets."""
+    return {key: spec[key] for key in BUNDLE_CONFIG_KEYS if spec.get(key)}
+
+
+def _create_bundle(
+    control: Any, *, extra_config: dict[str, Any] | None = None, **kwargs: Any,
+) -> dict[str, Any]:
+    """`ac.create_configuration_bundle`, plus the SB-1 keys beside the system
+    prompt and tools in the agent's configuration (none set: the same request)."""
+    if not extra_config:
+        return ac.create_configuration_bundle(control, **kwargs)
+    return control.create_configuration_bundle(
+        bundleName=kwargs["bundle_name"],
+        description=kwargs.get("description") or kwargs["bundle_name"],
+        components={kwargs["agent_arn"]: {"configuration": {
+            **extra_config,
+            "system_prompt": kwargs["system_prompt"],
+            "tools": {name: {"description": description}
+                      for name, description in kwargs["tool_descriptions"].items()},
+        }}},
+        commitMessage=kwargs["commit_message"],
+        clientToken=str(uuid.uuid4()),
+    )
+
 
 def create_bundle_idempotent(control: Any, **kwargs: Any) -> dict[str, Any]:
     """create_configuration_bundle with conflict-adopt — a retried bundles
-    action after a partial failure must re-use the bundle it already made."""
+    action after a partial failure must re-use the bundle it already made.
+    ``extra_config`` carries the SB-1 keys (``BUNDLE_CONFIG_KEYS``)."""
     try:
-        return ac.create_configuration_bundle(control, **kwargs)
+        return _create_bundle(control, **kwargs)
     except Exception as exc:
         if not _is_conflict(exc):
             raise
@@ -965,12 +998,17 @@ def stage_bundles(
     workspace: WorkspaceContext,
     treatment_tool_descs: dict[str, str] | None = None,
     attribution: str | None = None,
+    treatment_config: dict[str, Any] | None = None,
 ) -> dict:
     control = control_client(workspace)
     current_prompt = agent["system_prompt"]
     # control mirrors production: the agent's own tool descriptions; treatment
     # overlays the accepted edits on that same base
     current_descs = agent.get("tools") or DEFAULT_TOOL_DESCS
+    # SB-1 settings likewise: control carries the agent's own, treatment overlays
+    # its overrides (`BUNDLE_CONFIG_KEYS` only) on them
+    current_config = dict(agent.get("bundle_config") or {})
+    overrides = {k: v for k, v in (treatment_config or {}).items() if k in BUNDLE_CONFIG_KEYS}
     control_bundle = create_bundle_idempotent(
         control,
         agent_arn=agent["arn"],
@@ -978,6 +1016,7 @@ def stage_bundles(
         system_prompt=current_prompt,
         tool_descriptions=current_descs,
         commit_message="control — current production config",
+        extra_config=current_config,
     )
     treatment_bundle = create_bundle_idempotent(
         control,
@@ -985,6 +1024,7 @@ def stage_bundles(
         bundle_name=f"exp_{exp_id[:8]}_treatment",
         system_prompt=treatment_prompt,
         tool_descriptions={**current_descs, **(treatment_tool_descs or {})},
+        extra_config={**current_config, **overrides},
         # who produced the treatment text is part of the bundle's own history
         commit_message="treatment — accepted recommendation"
         + (f" ({attribution})" if attribution else ""),
@@ -1650,6 +1690,9 @@ def action_bundles(exp: Experiment) -> dict[str, Any]:
         rec.get("accepted_tool_descriptions"),
         # only for a 3rd-party recommendation — the AgentCore path is unchanged
         **({"attribution": attribution} if attribution else {}),
+        # SB-1 settings the treatment changes (model params, conversation, …)
+        **({"treatment_config": rec["accepted_config"]}
+           if isinstance(rec.get("accepted_config"), dict) else {}),
     )
     _update(exp.id, stage="bundles", artifact={"bundles": result})
     return result
@@ -1766,6 +1809,7 @@ def start_experiment(
         "experiment_capability": experiment_capability(agent_row),
         # where this agent's production traffic is logged (`live` once gated)
         "telemetry_endpoint": _telemetry_endpoint(agent_row),
+        "bundle_config": bundle_config(agent_row.spec or {}),
     }
     db = SessionLocal()
     try:

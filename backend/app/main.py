@@ -83,6 +83,7 @@ from app.routers.review import router as review_router
 from app.routers.share import console_router as share_links_router
 from app.routers.share import router as share_router
 from app.routers.share_annotate import router as share_annotate_router
+from app.routers.share_notices import router as share_notices_router
 from app.routers.sso import router as sso_router
 from app.routers.storage_mounts import router as storage_mounts_router
 from app.routers.system_agents import router as system_agents_router
@@ -261,6 +262,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(project_audit_router)  # a project's audit view + export (§11.6)
     app.include_router(project_quotas_router)  # a project's quotas and budgets (§11.3)
     app.include_router(resource_shares_router)  # cross-project sharing grants (§11.2)
+    app.include_router(share_notices_router)  # the caller's ended-share notices (SHARE-2)
     app.include_router(role_templates_router)
     app.include_router(my_access_router)  # GET /api/me/access: the caller's projects + keys
     app.include_router(project_groups_router)  # project groups: members + projects (§7.7)

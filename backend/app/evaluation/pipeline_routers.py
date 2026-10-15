@@ -147,7 +147,7 @@ def _write(
     something to write (a dataset cannot be empty). A created dataset records
     `creator`; an append leaves the existing creator alone."""
     if dataset_id:
-        dataset = _dataset_in(db, ws, dataset_id)
+        dataset = _dataset_in(db, ws, dataset_id, need="own")
         merged, added, reasons = pipelines.merge_items(dataset.items, items, dedupe=dedupe)
         skipped.extend({"session_id": "", "reason": r} for r in reasons)
         if added:
@@ -213,7 +213,7 @@ def datasets_from_sessions(
 ) -> dict[str, Any]:
     kind = "predefined"
     if body.dataset_id:
-        target = _dataset_in(db, ws, body.dataset_id, viewer=viewer)
+        target = _dataset_in(db, ws, body.dataset_id, viewer=viewer, need="own")
         _require_receivable(target)
         kind = target.kind
     items, skipped = _read_items(
@@ -310,7 +310,8 @@ def _check_output(
     db: Session, ws: WorkspaceScope, output: PipelineOutput, *, viewer: Viewer
 ) -> None:
     if output.dataset_id:
-        _require_receivable(_dataset_in(db, ws, output.dataset_id, viewer=viewer))
+        _require_receivable(
+            _dataset_in(db, ws, output.dataset_id, viewer=viewer, need="own"))
 
 
 @router.get("/pipelines")
@@ -476,7 +477,7 @@ def _run_pipeline(
             src, proc, out = config.source, config.processing, config.output
             kind = "predefined"
             if out.dataset_id:
-                target = _dataset_in(db, ws, out.dataset_id)
+                target = _dataset_in(db, ws, out.dataset_id, need="own")
                 _require_receivable(target)
                 kind = target.kind
             if src.type == "logs":

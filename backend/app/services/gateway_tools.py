@@ -417,7 +417,20 @@ def list_lambda(db: Session, workspace_id: str) -> list[dict[str, Any]]:
     rows = db.scalars(select(LambdaToolTarget).where(
         LambdaToolTarget.workspace_id == workspace_id
     ).order_by(LambdaToolTarget.created_at.desc())).all()
-    return [lambda_out(db, row) for row in rows]
+    return _label_shared(db, [lambda_out(db, row) for row in rows], "id")
+
+
+def _label_shared(db: Session, items: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    """Add `shared_from` ({project_id, name, access}) to the targets another project
+    lent this one (projects §11.2) — read like its own, changed only by its owner."""
+    from app.services import resource_shares
+
+    ids = {item[key] for item in items if item.get(key)}
+    lent = resource_shares.shared_from(db, resource_shares.KIND_GATEWAY_TARGET, ids)
+    for item in items:
+        if item.get(key) in lent:
+            item["shared_from"] = lent[item[key]]
+    return items
 
 
 # ── externally hosted MCP targets (§15.15) ─────────────────────────────────────
@@ -476,7 +489,7 @@ def list_external(db: Session, workspace: WorkspaceContext) -> list[dict[str, An
             "review": mcp_reviews.state(db, row.id) if row is not None else None,
             "health": (row.health or {}) if row is not None else None,
         })
-    return sorted(out, key=lambda item: item["target_name"])
+    return _label_shared(db, sorted(out, key=lambda item: item["target_name"]), "tool_id")
 
 
 def adopt_external(
