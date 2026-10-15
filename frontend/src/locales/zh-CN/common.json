@@ -12076,7 +12076,8 @@
       "failingFoot": "AgentCore 未接受的自定义评估器",
       "none": "没有匹配的评估器",
       "provider": "提供方",
-      "status": "状态"
+      "status": "状态",
+      "sharedReadOnly": "由 {{project}} 共享给本项目——只有该项目可以编辑它。"
     },
     "users": {
       "eyebrow": "账号",
@@ -14454,7 +14455,15 @@
       "dailyTotal": "7 天合计",
       "dailyAvg": "约每天 {{usd}}",
       "judgeModel": "裁判模型",
-      "estimatedFromJudgements": "按评判次数 × token × 单价估算"
+      "estimatedFromJudgements": "按评判次数 × token × 单价估算",
+      "compareTitle": "成本变化",
+      "compareFirst": "第一次运行",
+      "compareLatest": "最近一次运行",
+      "compareNone": "两次运行都还没有实测成本——无从对比。",
+      "compareOneSided": "两次运行中只有一次有实测成本",
+      "compareParts": "按分项的差异",
+      "compareCheaper": "◂ 更便宜",
+      "compareDearer": "更贵 ▸"
     }
   },
   "models": {
@@ -15134,7 +15143,13 @@
       "schema_one": "{{count}} 个字段：{{fields}}",
       "schema_other": "{{count}} 个字段：{{fields}}",
       "examples_one": "{{count}} 个示例",
-      "examples_other": "{{count}} 个示例"
+      "examples_other": "{{count}} 个示例",
+      "approval": "需批准 {{tools}}",
+      "cap_one": "每轮最多 {{count}} 次调用",
+      "cap_other": "每轮最多 {{count}} 次调用",
+      "mask": "脱敏 {{args}}",
+      "retry_one": "{{count}} 次尝试，{{initial}} 秒起翻倍至 {{max}} 秒",
+      "retry_other": "{{count}} 次尝试，{{initial}} 秒起翻倍至 {{max}} 秒"
     },
     "agents": {
       "label": "把其他智能体当工具",

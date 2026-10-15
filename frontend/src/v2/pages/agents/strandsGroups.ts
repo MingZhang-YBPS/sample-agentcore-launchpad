@@ -4,6 +4,7 @@ import {
   isClaudeModel,
   type Sb2IssueKey,
   sb2Issues,
+  sb3Issues,
   splitList,
   type StrandsForm,
   type StrandsIssueKey,
@@ -65,6 +66,8 @@ export const groupIssues = (form: AgentForm): StrandsGroupKey[] => {
   return [...new Set([
     ...(Object.keys(issues) as StrandsIssueKey[]).map((k) => ISSUE_GROUP[k]),
     ...(Object.keys(sb2Issues(form.strands, ctx)) as Sb2IssueKey[]).map((k) => SB2_ISSUE_GROUP[k]),
+    // SB-3: custom tools and sandboxed tools both live in the Tools group
+    ...(Object.keys(sb3Issues(form.strands)).length ? ["tools" as const] : []),
   ])];
 };
 
@@ -89,11 +92,13 @@ export function strandsReadouts(form: AgentForm): Partial<Record<StrandsGroupKey
   ].filter(Boolean);
   const tools = [
     ...s.tools,
+    ...s.sandboxTools,
     ...form.toolkits,
     form.selectedGateway.length > 0 && `gw ${form.selectedGateway.length}`,
     form.selectedKbs.length > 0 && `kb ${form.selectedKbs.length}`,
     s.agentTools.length > 0 && `agents ${s.agentTools.length}`,
     splitList(s.approvalTools).length > 0 && `approve ${splitList(s.approvalTools).length}`,
+    s.customTools.length > 0 && `py ${s.customTools.length}`,
   ].filter(Boolean);
   return {
     basics: [form.modelId.split(".").slice(-2).join("."), form.protocol === "a2a" ? "a2a" : ""].filter(Boolean).join(" · "),

@@ -62,7 +62,7 @@ import {
   decideApproval,
   liveApproval,
   restoredApproval,
-  toolApprovalsField,
+  approvedToolsField,
 } from "../../lib/tool-approval";
 import { useAuth } from "../../auth/auth-context";
 import { useWorkspace } from "../../workspace/workspace-context";
@@ -272,7 +272,7 @@ export function V3Chat() {
   };
 
   // SB-2 approval card: Approve answers the paused call with the next turn, which
-  // names the tool in `tool_approvals` (one approval = one call); Decline sends
+  // names the tool in `approved_tools` (one approval = one call); Decline sends
   // nothing — the call stays unrun and the composer is the user's.
   const approve = async (index: number) => {
     const card = messages[index]?.approval;
@@ -458,7 +458,7 @@ export function V3Chat() {
       const first = follow
         ? resumeChat(agentId, follow, 0, signal)
         : streamChat(agentId, {
-          prompt, session_id: session ?? null, retry_of: retryOf, tool_approvals: toolApprovalsField(approved),
+          prompt, session_id: session ?? null, retry_of: retryOf, approved_tools: approvedToolsField(approved),
         }, signal);
       try {
         await read(await first);

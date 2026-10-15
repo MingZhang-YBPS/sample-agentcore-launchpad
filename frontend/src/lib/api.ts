@@ -168,7 +168,7 @@ export interface ChatRequest {
   retry_of?: number;
   /** SB-2 tool-call approval: the tools the user approved on an approval card —
    *  each name lets one paused call of that tool run on this turn */
-  tool_approvals?: { approved: string[] };
+  approved_tools?: string[];
 }
 
 export interface ChatStreamPayload {
@@ -3363,7 +3363,9 @@ export interface AuthStatus {
   /** the config-driven built-in admin (no ledger row) */
   builtin?: boolean;
   /** the enabled identity providers (sso §2.7); only present when at least one is */
-  sso_providers?: { id: string; name: string; kind: "oidc"; preset: string }[];
+  sso_providers?: { id: string; name: string; kind: "oidc" | "saml"; preset: string }[];
+  /** 'sso' — the session came from an identity provider (sso §2.7); absent before sign-in */
+  account_source?: "local" | "sso";
 }
 
 export interface AuthLoginResult extends AuthStatus {

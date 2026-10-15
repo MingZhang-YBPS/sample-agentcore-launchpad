@@ -9,7 +9,7 @@ import { ErrorCallout } from "./ErrorCallout";
 
 const auth = (isAdmin: boolean): AuthContextValue => ({
   authRequired: true, username: "u", role: isAdmin ? "admin" : "member", email: null, accountExpiresAt: null,
-  builtin: false, isAdmin, can: () => true, logout: async () => undefined,
+  builtin: false, accountSource: null, isAdmin, can: () => true, logout: async () => undefined,
 });
 
 const html = (error: unknown, { isAdmin = false, params = {} }: { isAdmin?: boolean; params?: Record<string, string> } = {}) =>

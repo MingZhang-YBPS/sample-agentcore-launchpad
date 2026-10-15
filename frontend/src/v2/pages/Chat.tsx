@@ -64,7 +64,7 @@ import {
   decideApproval,
   liveApproval,
   restoredApproval,
-  toolApprovalsField,
+  approvedToolsField,
 } from "../../lib/tool-approval";
 import { liveAuthAsk, restoredAuthAsk } from "../../lib/user-grants";
 import { useLoad, useV2Toast } from "../hooks";
@@ -286,7 +286,7 @@ export function V2Chat() {
   // chat-streaming §4.1): the latest turn is re-sent in place — its user message is
   // already in the thread — naming its ledger row, so the retry replaces it.
   // `approved` (an approval card's Approve, SB-2): the turn names those tools in
-  // `tool_approvals`, so the call the agent paused may run.
+  // `approved_tools`, so the call the agent paused may run.
   const send = async (retryPrompt?: string, retryOf?: number | null, approved?: string[]) => {
     const retrying = retryPrompt !== undefined;
     const replacing = retryOf !== undefined;
@@ -341,8 +341,8 @@ export function V2Chat() {
       try {
         const request: ChatTurnRequest = { prompt, session_id: activeSessionId };
         if (replaces !== undefined) request.retry_of = replaces;
-        const toolApprovals = toolApprovalsField(approved);
-        if (toolApprovals) request.tool_approvals = toolApprovals;
+        const toolApprovals = approvedToolsField(approved);
+        if (toolApprovals) request.approved_tools = toolApprovals;
         const asUserValue = asUserField(jwtAgent, asUser);
         if (asUserValue !== undefined) request.as_user = asUserValue;
         if (files.length) {

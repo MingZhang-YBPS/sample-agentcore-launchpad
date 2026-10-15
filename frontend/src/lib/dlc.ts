@@ -773,8 +773,27 @@ export interface LadderRung {
   mean_gate_rate: number | null;
   redline_violations: number;
   cost_actual_usd: number | null;
+  /** eval-cost §1.3: the rung's measured parts (null while unmeasured) and its estimate */
+  cost?: RungCost;
   /** Which of the seven spec layers changed since the previous rung. */
   layers_changed: string[];
+}
+
+export type RunCostPartKey = "agent_usd" | "runtime_usd" | "judge_usd" | "managed_evaluations_usd";
+
+export interface RungCost extends Partial<Record<RunCostPartKey, number | null>> {
+  total_usd: number | null;
+  estimate_usd: number | null;
+  source: string | null;
+}
+
+/** What the last run cost against the first (eval-cost §1.3 compare page). */
+export interface CostDelta {
+  before_usd: number | null;
+  after_usd: number | null;
+  delta_usd: number | null;
+  delta_pct: number | null;
+  parts: Partial<Record<RunCostPartKey, number | null>>;
 }
 
 export interface ComparedCriterion {
@@ -818,6 +837,8 @@ export interface RunComparison {
   incomparable_reason?: string;
   two_numbers?: TwoNumbers;
   warning?: string;
+  /** absent on a ladder with fewer than two runs (and from an older server) */
+  cost_delta?: CostDelta;
 }
 
 export interface JudgeCostDetail {

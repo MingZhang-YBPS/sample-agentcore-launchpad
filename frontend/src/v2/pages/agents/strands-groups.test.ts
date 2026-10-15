@@ -32,3 +32,18 @@ describe("strandsGroups SB-2", () => {
     expect(groupIssues(withStrands({}))).toEqual([]);
   });
 });
+
+describe("strandsGroups SB-3", () => {
+  const tool = { name: "parse_invoice", description: "Parse an invoice", code: "from strands import tool\n", requirements: "", execution: "runtime" as const };
+
+  it("adds sandboxed tools and the custom tool count to the Tools readout", () => {
+    const tools = strandsReadouts(withStrands({ sandboxTools: ["python_repl"], customTools: [tool] })).tools ?? "";
+    expect(tools).toContain("python_repl");
+    expect(tools).toContain("py 1");
+  });
+
+  it("flags the Tools group for a custom tool problem", () => {
+    expect(groupIssues(withStrands({ customTools: [{ ...tool, name: "Bad Name" }] }))).toContain("tools");
+    expect(groupIssues(withStrands({ customTools: [tool] }))).toEqual([]);
+  });
+});

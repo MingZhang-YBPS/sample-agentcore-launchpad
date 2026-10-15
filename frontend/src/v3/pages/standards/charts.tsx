@@ -14,8 +14,10 @@ import {
   type LadderRung,
   type ScorecardDimension,
 } from "../../../lib/dlc";
+import { usd } from "../../../lib/api/evalCost";
 import { Chip } from "../../ui";
 import { kappaSignal, rate, tierSignal } from "./common";
+import "./compare-cost.css";
 
 /** The criterion's tier, with the demotion made visible when a judge is uncalibrated. */
 export function TierChip({ tier, effective }: { tier: DlcTier; effective?: DlcTier }) {
@@ -229,6 +231,22 @@ export function CoverageMatrix({ rows }: { rows: CoverageRow[] }) {
  * predecessor changed more than one spec layer is marked, because a gain across two
  * changes cannot be attributed to either.
  */
+/** A rung's cost (eval-cost §1.3): measured, else its estimate marked as one. */
+function RungCost({ rung }: { rung: LadderRung }) {
+  const { t } = useTranslation();
+  const measured = rung.cost?.total_usd ?? rung.cost_actual_usd;
+  const estimate = rung.cost?.estimate_usd ?? null;
+  if (measured !== null && measured !== undefined) {
+    return <span className="v3-std-rung-cost" data-kind="actual">{usd(measured)}</span>;
+  }
+  if (estimate === null) return null;
+  return (
+    <span className="v3-std-rung-cost" data-kind="estimate" title={t("v3.evalCost.kind.estimate")}>
+      {`${usd(estimate)} ${t("v3.evalCost.kind.estimate")}`}
+    </span>
+  );
+}
+
 export function LadderChart({ rungs }: { rungs: LadderRung[] }) {
   const { t } = useTranslation();
   if (rungs.length === 0) return <p className="v3-std-empty">{t("v2.dlc.compare.noRuns")}</p>;
@@ -256,6 +274,7 @@ export function LadderChart({ rungs }: { rungs: LadderRung[] }) {
               <span className="mono">{rung.run_id.slice(0, 8)}</span>
               <span>{t("v2.dlc.compare.version", { v: rung.agent_version ?? "—" })}</span>
               <span>{t("v2.dlc.compare.criteriaV", { v: rung.criteria_set_version ?? "—" })}</span>
+              <RungCost rung={rung} />
               {rung.redline_violations > 0 && <Chip s="act">{t("v2.dlc.compare.redlines", { n: rung.redline_violations })}</Chip>}
               {rung.layers_changed.length > 0 && (
                 <Chip s={rung.layers_changed.length > 1 ? "wait" : undefined}>{rung.layers_changed.join(" + ")}</Chip>

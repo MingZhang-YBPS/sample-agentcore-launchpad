@@ -18,6 +18,7 @@ import { DLC_DIMENSIONS, type RunComparison, type WatchView } from "../../../lib
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { BandChart, LadderChart } from "./charts";
+import { CompareCost } from "./CompareCost";
 import { dlcText, rate, stamp } from "./common";
 
 function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: string; onReload: () => void }) {
@@ -243,6 +244,8 @@ export function Compare({ agentId }: { agentId: string }) {
         <Panel signal={data.new_failures.length ? "act" : undefined}><Stat label={t("v2.dlc.compare.newFailures")} value={data.new_failures.length} /></Panel>
         <Panel signal={data.still_failing.length ? "wait" : undefined}><Stat label={t("v2.dlc.compare.stillFailing")} value={data.still_failing.length} /></Panel>
       </div>
+
+      <CompareCost delta={data.cost_delta} />
 
       <Panel title={t("v2.dlc.compare.perCriterion")} flush>
         {data.criteria.length === 0 ? (

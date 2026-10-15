@@ -28,7 +28,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from "react-i18next";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
-import { useAuth } from "../auth/auth-context";
+import { hasConsolePassword, useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
 import { api } from "../lib/api";
 import { isSteward } from "../lib/api/steward";
@@ -225,7 +225,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAdmin, role, authRequired, username, builtin, logout } = useAuth();
+  const { isAdmin, role, authRequired, username, builtin, accountSource, logout } = useAuth();
   // a steward (organization admin, §11.4) manages structure only: its rail is
   // Configure, and every business page answers with its empty state
   const steward = isSteward(role);
@@ -437,7 +437,8 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
             <span className="v3-chip v3-account" title={displayName}>
               {displayName}
             </span>
-            {authRequired && (
+            {/* an SSO account's password lives at its identity provider (sso §2.7) */}
+            {hasConsolePassword(authRequired, accountSource) && (
               <button type="button" className="v3-btn ghost sm" onClick={() => setChangingPassword(true)} data-testid="v3-change-password"
                 aria-label={t("v3.account.password.title")} title={t("v3.account.password.title")}>
                 <KeyRound size={14} />

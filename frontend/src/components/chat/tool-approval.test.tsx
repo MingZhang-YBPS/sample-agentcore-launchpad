@@ -12,7 +12,7 @@ import {
   maskedInputPieces,
   restoredApproval,
   type ToolApproval,
-  toolApprovalsField,
+  approvedToolsField,
 } from "../../lib/tool-approval";
 import { ToolApprovalCard } from "./ToolApprovalCard";
 
@@ -34,6 +34,9 @@ describe("tool approval state", () => {
       tool: "t", toolUseId: "", input: {}, refused: true,
     });
     expect(restoredApproval({ name: "send_email" }).restored).toBe(true);
+    // the ledger keeps the masked input as JSON in the row's text
+    expect(restoredApproval({ name: "send_email", text: '{"to":"***"}' }).input).toEqual({ to: "***" });
+    expect(restoredApproval({ name: "send_email", text: "not json" }).input).toEqual({});
   });
 
   it("is actionable only on the latest turn and until answered", () => {
@@ -56,10 +59,10 @@ describe("tool approval state", () => {
     expect(approvalPhase(paused({ restored: true }), true)).toBe("expired");
   });
 
-  it("sends tool_approvals only when something was approved", () => {
-    expect(toolApprovalsField(undefined)).toBeUndefined();
-    expect(toolApprovalsField([""])).toBeUndefined();
-    expect(toolApprovalsField(["send_email", "send_email"])).toEqual({ approved: ["send_email"] });
+  it("sends approved_tools only when something was approved", () => {
+    expect(approvedToolsField(undefined)).toBeUndefined();
+    expect(approvedToolsField([""])).toBeUndefined();
+    expect(approvedToolsField(["send_email", "send_email"])).toEqual(["send_email"]);
     expect(approvalPrompt(i18n.t.bind(i18n), "send_email")).toBe("Approved — go ahead with send_email.");
   });
 

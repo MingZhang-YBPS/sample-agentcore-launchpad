@@ -20,6 +20,7 @@ import {
   LEVEL_PLACEHOLDERS,
 } from "../../../lib/evaluators";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { sharedFromOf } from "../../../lib/api/sharedFrom";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
@@ -138,6 +139,23 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
   if (editing && draft === null && detail.data) setDraft(draftFrom(detail.data));
   if (editing && (detail.loading || draft === null)) return detail.error ? <Notice s="act"><ApiErrorDetail error={detail.failure ?? detail.error} /></Notice> : <Skeleton rows={6} />;
   if (!draft) return <Skeleton rows={6} />;
+  // an evaluator another project lent this one is its owner's to edit (§11.2): a
+  // typed ?view=edit URL lands on a note, not on a form the backend would refuse
+  const lent = editing
+    ? sharedFromOf(detail.data) ?? sharedFromOf(catalog.data?.evaluators.find((e) => e.id === id))
+    : null;
+  if (lent && id) {
+    return (
+      <div style={{ display: "grid", gap: 16 }}>
+        <div>
+          <button type="button" className="v3-btn ghost sm" onClick={() => setParams({ view: "detail", id })}>
+            <ArrowLeft size={14} /> {id}
+          </button>
+        </div>
+        <Notice s="wait">{t("v3.evaluators.sharedReadOnly", { project: lent.name })}</Notice>
+      </div>
+    );
+  }
 
   const bases = (catalog.data?.evaluators ?? []).filter((e) => e.source !== "custom");
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });

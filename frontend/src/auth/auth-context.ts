@@ -11,6 +11,9 @@ export interface AuthContextValue {
   accountExpiresAt: string | null;
   /** the config-driven built-in admin (its password replaces the configured one) */
   builtin: boolean;
+  /** where the signed-in account came from (sso §2.7): an SSO account has no
+   *  console password to change; null = not signed in / an open console */
+  accountSource: "local" | "sso" | null;
   /** admin-only surfaces (an open console keeps full local-operator access) */
   isAdmin: boolean;
   /** member-grantable agent-management capability (admins always pass). Inside a
@@ -27,6 +30,7 @@ export const AuthContext = createContext<AuthContextValue>({
   email: null,
   accountExpiresAt: null,
   builtin: false,
+  accountSource: null,
   isAdmin: true,
   can: () => true,
   logout: async () => undefined,
@@ -46,6 +50,14 @@ export function projectCan(
   if (projectKeys === null) return globalCan;
   const granted = new Set(projectKeys);
   return (permission) => granted.has(permission);
+}
+
+/**
+ * Whether the signed-in account has a console password to change: an open console
+ * has no accounts, and an SSO account signs in at its identity provider (sso §2.7).
+ */
+export function hasConsolePassword(authRequired: boolean, accountSource: "local" | "sso" | null): boolean {
+  return authRequired && accountSource !== "sso";
 }
 
 export function useAuth() {

@@ -3,8 +3,8 @@
 // A Strands agent with an approval list pauses a listed tool call and the stream
 // carries `approval_required` ({tool, tool_use_id, input}; the input is already
 // masked by the runtime: a masked argument reads "***"). The console answers with
-// the next turn: Approve sends `tool_approvals.approved = [tool]` — one approved
-// name lets one call of that tool run on that turn. Decline sends nothing: the
+// the next turn: Approve sends `approved_tools: [tool]` — one approved name lets
+// one call of that tool run on that turn. Decline sends nothing: the
 // call stays paused and the user tells the agent what to do instead.
 // `approval_refused` is the runtime refusing a listed tool for a caller that can
 // not approve (never the console chat in practice — shown so it is not lost).
@@ -43,9 +43,16 @@ export function liveApproval(payload: Partial<ChatStreamPayload>, refused = fals
   };
 }
 
-/** A history row of role `approval` (tool in `name`), should the ledger keep one. */
-export function restoredApproval(row: Pick<ChatHistoryMessage, "name">): ToolApproval {
-  return { tool: row.name ?? "", toolUseId: "", input: {}, restored: true };
+/** A history row of role `approval`: the tool in `name`, the masked input as JSON in `text`. */
+export function restoredApproval(row: Pick<ChatHistoryMessage, "name"> & { text?: string }): ToolApproval {
+  let input: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = row.text ? JSON.parse(row.text) : {};
+    if (isRecord(parsed)) input = parsed;
+  } catch {
+    // an unreadable row still shows the card, just without its input
+  }
+  return { tool: row.name ?? "", toolUseId: "", input, restored: true };
 }
 
 /** The approval card's phase: what it shows and whether its buttons are live. */
@@ -81,10 +88,10 @@ export function approvalPrompt(t: TFunction, tool: string): string {
   return t("chatApproval.prompt", { tool });
 }
 
-/** The request field of a turn that carries approvals; omitted when there are none. */
-export function toolApprovalsField(approved: string[] | undefined): { approved: string[] } | undefined {
+/** The `approved_tools` request field of a turn that carries approvals; omitted when there are none. */
+export function approvedToolsField(approved: string[] | undefined): string[] | undefined {
   const names = (approved ?? []).filter(Boolean);
-  return names.length ? { approved: [...new Set(names)] } : undefined;
+  return names.length ? [...new Set(names)] : undefined;
 }
 
 /** One piece of the masked-input JSON: plain text, or a masked value to draw as a redaction. */

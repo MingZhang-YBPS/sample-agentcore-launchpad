@@ -116,6 +116,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       account_expires_at: result.account_expires_at,
       permissions: result.permissions ?? [],
       builtin: result.builtin ?? false,
+      account_source: result.account_source,
     });
   }, []);
 
@@ -143,6 +144,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       email: status?.email ?? null,
       accountExpiresAt: status?.account_expires_at ?? null,
       builtin: status?.builtin ?? false,
+      accountSource: status?.account_source ?? null,
       isAdmin,
       can: (permission: AgentPermission) => isAdmin || granted.has(permission),
       logout,
@@ -150,6 +152,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [
     logout,
     status?.account_expires_at,
+    status?.account_source,
     status?.auth_required,
     status?.builtin,
     status?.email,

@@ -12076,7 +12076,8 @@
       "failingFoot": "custom evaluators AgentCore did not accept",
       "none": "No evaluator matches",
       "provider": "Provider",
-      "status": "Status"
+      "status": "Status",
+      "sharedReadOnly": "Shared with this project by {{project}} — only that project can edit it."
     },
     "users": {
       "eyebrow": "Accounts",
@@ -14454,7 +14455,15 @@
       "dailyTotal": "7-day total",
       "dailyAvg": "about {{usd}} a day",
       "judgeModel": "judge model",
-      "estimatedFromJudgements": "estimated from judgements × tokens × price"
+      "estimatedFromJudgements": "estimated from judgements × tokens × price",
+      "compareTitle": "Cost change",
+      "compareFirst": "First run",
+      "compareLatest": "Latest run",
+      "compareNone": "Neither run has a measured cost yet — nothing to compare.",
+      "compareOneSided": "only one of the two runs was measured",
+      "compareParts": "Difference by part",
+      "compareCheaper": "◂ cheaper",
+      "compareDearer": "dearer ▸"
     }
   },
   "models": {
@@ -15134,7 +15143,13 @@
       "schema_one": "{{count}} field: {{fields}}",
       "schema_other": "{{count}} fields: {{fields}}",
       "examples_one": "{{count}} example",
-      "examples_other": "{{count}} examples"
+      "examples_other": "{{count}} examples",
+      "approval": "approve {{tools}}",
+      "cap_one": "at most {{count}} call per turn",
+      "cap_other": "at most {{count}} calls per turn",
+      "mask": "masked {{args}}",
+      "retry_one": "{{count}} attempt, {{initial}} s doubling to {{max}} s",
+      "retry_other": "{{count}} attempts, {{initial}} s doubling to {{max}} s"
     },
     "agents": {
       "label": "Other agents as tools",
