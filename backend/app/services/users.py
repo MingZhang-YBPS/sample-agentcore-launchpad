@@ -168,7 +168,7 @@ SSO_PASSWORD_HASH = "!sso"
 
 def is_sso_account(user: User) -> bool:
     """Whether the account signs in through a console identity provider."""
-    return bool(user.external_idp_id)
+    return bool(getattr(user, "external_idp_id", None))
 
 
 def sso_stamp_material(user: User) -> str:
