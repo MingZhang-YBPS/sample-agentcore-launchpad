@@ -25,7 +25,7 @@ import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type
 import { calibrateBlocker, calibrateUrl } from "../standards/calibrationLink";
 import { CopyId } from "./CopyId";
 import { CostCell } from "./CostCard";
-import { copyUrl, detailUrl, rankTasks, taskSignal } from "./model";
+import { copyUrl, detailUrl, listCosts, rankTasks, runsWithoutCost, taskSignal } from "./model";
 
 type Pending = { task: V2Task; action: "stop" | "pause" | "resume" | "delete" };
 const PAGE = 25;
@@ -70,9 +70,12 @@ export function TaskList() {
       }),
     );
   }, [tasks, state, mode, source, agent, q, calibratable]);
-  // the cost column (eval-cost §1.3): the runs on screen, one request
-  const visibleRunIds = rows.slice(0, shown).filter((task) => task.kind === "run").map((task) => task.id);
-  const costs = useLoad(() => evalCostApi.runCosts(visibleRunIds), `v3-task-costs:${visibleRunIds.join(",")}:${list.data ? "1" : "0"}`);
+  // the cost column (eval-cost §1.3): each run payload's own `cost`, one batch
+  // request for the runs on screen an older server sent without it
+  const visible = rows.slice(0, shown);
+  const missingIds = runsWithoutCost(visible);
+  const fetched = useLoad(() => evalCostApi.runCosts(missingIds), `v3-task-costs:${missingIds.join(",")}:${list.data ? "1" : "0"}`);
+  const costs = listCosts(visible, fetched.data?.costs);
   const count = (s: Signal) => tasks.filter((task) => taskSignal(task.status) === s).length;
   const failed = rankTasks(tasks.filter((task) => task.status === "failed")).slice(0, 5);
   const modeLabel = (m: TaskMode) => t(m === "insights" ? "v2.tasks.modeInsightsShort" : "v2.tasks.modeEvaluators");
@@ -293,7 +296,7 @@ export function TaskList() {
                         <span className="v3-task-clip" title={task.evaluators.map(label).join("、")}>{evaluatorSummary(t, task.evaluators, label)}</span>
                       </td>
                       <td className="num">
-                        {task.kind === "run" ? <CostCell summary={costs.data?.costs[task.id]} /> : <span style={{ color: "var(--v3-text-3)" }}>—</span>}
+                        {task.kind === "run" ? <CostCell summary={costs[task.id]} /> : <span style={{ color: "var(--v3-text-3)" }}>—</span>}
                       </td>
                       <td className="num" style={{ color: "var(--v3-text-3)" }} title={task.updatedAt ?? undefined}>{ago(task.createdAt)}</td>
                       <td style={{ width: 1, whiteSpace: "nowrap" }}>{actions(task)}</td>

@@ -31,9 +31,10 @@ import {
 } from "../../../v2/online";
 import { V2ToastProvider } from "../../../v2/ui";
 import { useWorkspace } from "../../../workspace/workspace-context";
-import { evalCostApi } from "../../../lib/api/evalCost";
+import { evalCostApi, type EvalCostEstimate } from "../../../lib/api/evalCost";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Notice, PageHead, Panel, Skeleton } from "../../ui";
+import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "../tasks/CostCard";
 import { onlineHref } from "./actions";
 
@@ -126,6 +127,11 @@ export function OnlineEditor({ id }: { id: string | null }) {
     `v3-online-estimate:${priced}:${agentId}:${draft.evaluators.join(",")}:${draft.sampling}`,
   );
   const [confirmCost, setConfirmCost] = useState(false);
+  // the estimate a 409 cost refusal carried (the server's figure), until the draft changes
+  const [refused, setRefused] = useState<EvalCostEstimate | null>(null);
+  const estimateKey = `${priced}:${agentId}:${draft.evaluators.join(",")}:${draft.sampling}`;
+  useEffect(() => setRefused(null), [estimateKey]);
+  const shown = priced ? refused ?? estimate.data : null;
 
   // live traffic carries no ground truth: evaluators that need it cannot judge it
   const blocked = (e: EvaluatorRow) => (e.requires_ground_truth || e.id.startsWith("Builtin.Trajectory") ? t("v2.online.needsGt") : null);
@@ -135,8 +141,8 @@ export function OnlineEditor({ id }: { id: string | null }) {
     if (!editing && !agentId) return setError(t("v2.online.err.agent"));
     const problem = validateDraft(t, draft);
     if (problem) return setError(problem);
-    if (priced && estimate.data?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: estimate.data.max_usd ?? "—" }));
-    if (priced && estimate.data?.confirm_required && !confirmCost) return setError(t("v3.evalCost.confirmFirst"));
+    if (shown?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: shown.max_usd ?? "—" }));
+    if (shown?.confirm_required && !confirmCost) return setError(t("v3.evalCost.confirmFirst"));
     setBusy(true);
     try {
       if (row && patch) {
@@ -144,12 +150,21 @@ export function OnlineEditor({ id }: { id: string | null }) {
         toast("ok", t("v2.online.saved"));
         navigate(onlineHref({ view: "detail", id: row.config_id }));
       } else {
-        const created = await api.v2CreateOnlineConfig(createBody(agentId, draft, enable));
+        // eval-cost §1.1: a scores config is priced per day and confirmed like a run
+        const body = createBody(agentId, draft, enable);
+        const created = await api.v2CreateOnlineConfig(mode === "scores" ? { ...body, confirm_cost: confirmCost } : body);
         toast("ok", t("v2.online.created"));
         navigate(onlineHref({ view: "detail", id: created.config_id }));
       }
     } catch (err) {
-      setError(err);
+      const refusal = costRefusal(err);
+      if (refusal) {
+        setRefused(refusal.estimate);
+        if (refusal.kind === "confirm") setConfirmCost(false);
+        setError(refusalText(t, refusal));
+      } else {
+        setError(err);
+      }
     } finally {
       setBusy(false);
     }
@@ -300,7 +315,7 @@ export function OnlineEditor({ id }: { id: string | null }) {
       </Panel>
 
       {priced && (
-        <EstimateCostCard estimate={estimate.data} loading={estimate.loading} error={estimate.error}
+        <EstimateCostCard estimate={shown ?? null} loading={estimate.loading} error={estimate.error}
           confirmed={confirmCost} onConfirm={setConfirmCost} />
       )}
     </div>

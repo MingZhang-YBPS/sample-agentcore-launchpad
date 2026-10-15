@@ -1,4 +1,11 @@
-import type { ActivationStatus, BillingReport, TagStatus } from "../../../lib/api/costTags";
+import type {
+  ActivationStatus,
+  BackfillCoverage,
+  BackfillResource,
+  BillingReport,
+  ResourceTagStatus,
+  TagStatus,
+} from "../../../lib/api/costTags";
 import type { Signal } from "../../ui";
 
 export const TAG_SIGNAL: Record<TagStatus, Signal> = { active: "ok", inactive: "wait", not_found: "off", unknown: "act" };
@@ -43,4 +50,63 @@ export function pointTotals(report: BillingReport): number[] {
 export function gap(billed: number, estimate: number | null | undefined): number | null {
   if (estimate == null || estimate <= 0) return null;
   return (billed - estimate) / estimate;
+}
+
+/* ── back-fill coverage (§1.3) ─────────────────────────────────────────────── */
+
+/** Each result's lamp: the ones an administrator can fix (`denied`, `failed`) are red. */
+export const RESOURCE_SIGNAL: Record<ResourceTagStatus, Signal> = {
+  tagged: "ok", pending: "info", missing: "wait", denied: "act", failed: "act", unsupported: "off",
+};
+
+/** The coverage bar's order: done, still to do, what needs a look, what cannot carry tags. */
+export const COVERAGE_ORDER: ResourceTagStatus[] = ["tagged", "pending", "missing", "denied", "failed", "unsupported"];
+
+export interface CoverageSegment {
+  status: ResourceTagStatus;
+  count: number;
+  /** share of every resource found, 0..100 */
+  pct: number;
+}
+
+/** The bar's segments (empty ones dropped), as shares of the whole inventory. */
+export function coverageSegments(coverage: BackfillCoverage): CoverageSegment[] {
+  const total = coverage.total;
+  return COVERAGE_ORDER.map((status) => ({ status, count: coverage.by_status[status] ?? 0 }))
+    .filter((s) => s.count > 0)
+    .map((s) => ({ ...s, pct: total ? (s.count / total) * 100 : 0 }));
+}
+
+export interface KindRow {
+  kind: string;
+  total: number;
+  tagged: number;
+  /** resources of this kind not tagged that could be (pending, denied, missing, failed) */
+  open: number;
+  unsupported: number;
+}
+
+/** Per resource kind: what was found and how much of it is tagged — most open first. */
+export function kindRows(coverage: BackfillCoverage): KindRow[] {
+  return Object.entries(coverage.by_kind)
+    .map(([kind, counts]) => {
+      const total = Object.values(counts).reduce((a, b) => a + (b ?? 0), 0);
+      const tagged = counts.tagged ?? 0;
+      const unsupported = counts.unsupported ?? 0;
+      return { kind, total, tagged, unsupported, open: total - tagged - unsupported };
+    })
+    .sort((a, b) => b.open - a.open || b.total - a.total || a.kind.localeCompare(b.kind));
+}
+
+/** The resources not tagged, the ones to act on first: denied, failed, missing, then pending. */
+export function sortOpen(resources: BackfillResource[]): BackfillResource[] {
+  const rank: Partial<Record<ResourceTagStatus, number>> = { denied: 0, failed: 1, missing: 2, pending: 3 };
+  return [...resources].sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || a.kind.localeCompare(b.kind) || a.key.localeCompare(b.key));
+}
+
+/** What a resource is called on screen: its name, else its ARN's last part. */
+export function resourceLabel(r: BackfillResource): string {
+  if (r.name) return r.name;
+  const tail = r.arn.split(/[:/]/).filter(Boolean).pop();
+  return tail || r.key;
 }

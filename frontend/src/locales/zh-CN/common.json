@@ -14285,8 +14285,7 @@
         "untaggedBody": "没有该标签的账单明细——激活前的成本、未打标签的资源、非平台创建的资源——只列出，不分摊。"
       },
       "backfill": "为存量资源补标",
-      "backfillPending": "当前版本尚未提供补标任务。",
-      "backfillBody": "它会给标签集之前创建的资源补打标签，记录每个资源的结果（成功 / 不支持 / 无权限），并在此显示覆盖率，便于补齐 IAM 权限。",
+      "backfillBody": "它给标签集之前创建的资源补打标签，记录每个资源的结果（成功 / 不支持 / 无权限），并在此显示覆盖率，便于补齐 IAM 权限。",
       "basis": {
         "estimate": "估算",
         "billing": "账单"
@@ -14355,6 +14354,77 @@
           "billing": "AWS 按 launchpad:project 实际收取的费用，加上分摊的共享部分：包含所有服务，最多滞后一天。"
         },
         "basisSaved": "已修改 {{name}} 的预算口径"
+      },
+      "bf": {
+        "start": "开始补标",
+        "rerun": "再次补标",
+        "started": "补标已开始",
+        "status": {
+          "queued": "排队中",
+          "running": "进行中",
+          "succeeded": "已完成",
+          "failed": "失败"
+        },
+        "writes": "写入",
+        "setHint": "到找到的每个资源；工作区基础设施打 launchpad:project={{shared}}（每个资源最多 {{max}} 个标签）。",
+        "none": "此工作区还没有运行过补标。",
+        "nothingFound": "没有找到需要补标的资源。",
+        "coverageSub": "已打标——可打标签的 {{taggable}} 个中 {{tagged}} 个 · 共找到 {{total}} 个",
+        "coverageAria": "已打标 {{percent}}%：{{taggable}} 个中 {{tagged}} 个",
+        "result": {
+          "pending": "待处理",
+          "tagged": "已打标",
+          "unsupported": "不支持标签",
+          "denied": "无权限",
+          "missing": "已不存在",
+          "failed": "失败"
+        },
+        "stage": {
+          "plan": "盘点",
+          "tag": "打标"
+        },
+        "stageStatus": {
+          "pending": "等待中",
+          "running": "进行中…",
+          "succeeded": "已完成",
+          "failed": "失败"
+        },
+        "by": "{{actor}} 于 {{when}} 发起 · {{reason}}",
+        "reason": {
+          "admin": "工作区全量补标",
+          "project_update": "项目变更后的重打",
+          "transfer": "转移后的重打"
+        },
+        "failed": "补标中断：{{error}}。再次运行即可从未完成处继续。",
+        "byKind": "按资源类型",
+        "kind": {
+          "runtime": "Runtime",
+          "runtime_endpoint": "Runtime 端点",
+          "harness": "Harness",
+          "memory": "Memory",
+          "gateway": "Gateway",
+          "gateway_target": "Gateway 目标",
+          "credential_provider": "凭证提供方",
+          "knowledge_base": "知识库",
+          "data_source": "知识库数据源",
+          "iam_role": "IAM 角色",
+          "ecr_repository": "ECR 仓库",
+          "codebuild_project": "CodeBuild 项目",
+          "log_group": "日志组",
+          "secret": "密钥"
+        },
+        "noTags": "不支持",
+        "openTitle_one": "{{count}} 个资源未打标",
+        "openTitle_other": "{{count}} 个资源未打标",
+        "all": "全部",
+        "deniedHint": "无权限：平台角色缺少这些资源的打标权限（例如 bedrock-agentcore:TagResource、iam:TagRole、logs:TagResource、ecr:TagResource）。补上后再次运行。",
+        "col": {
+          "result": "结果",
+          "kind": "类型",
+          "resource": "资源",
+          "detail": "原因"
+        },
+        "more": "再显示 {{count}} 个"
       }
     },
     "evalCost": {
@@ -14463,7 +14533,15 @@
       "compareOneSided": "两次运行中只有一次有实测成本",
       "compareParts": "按分项的差异",
       "compareCheaper": "◂ 更便宜",
-      "compareDearer": "更贵 ▸"
+      "compareDearer": "更贵 ▸",
+      "refusedConfirm": "服务端预估本次评估 {{usd}}，超过确认阈值。请在预估卡片上勾选确认后再提交。",
+      "refusedOver": "服务端预估本次评估 {{usd}}，超过本工作区上限（{{max}}）。请缩小范围，或请管理员提交。",
+      "rungTitle": "每次运行的花费",
+      "rungSub": "阶梯上的每次运行：实测花费（未实测时为预估），以及相对上一次的变化。",
+      "rungSpan": "首次 {{first}} → 最近 {{latest}}",
+      "rungRun": "运行",
+      "rungVersion": "Agent 版本",
+      "rungChange": "相对上一次"
     }
   },
   "models": {

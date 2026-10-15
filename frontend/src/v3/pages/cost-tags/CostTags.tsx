@@ -13,6 +13,7 @@ import { useWorkspace } from "../../../workspace/workspace-context";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Track } from "../../ui";
+import { Backfill } from "./Backfill";
 import { activatable, stageOf, TAG_SIGNAL } from "./model";
 
 /** The activation meter and the one action: activate here, or what to ask for. */
@@ -222,12 +223,7 @@ export function V3CostTags() {
             </div>
           </Panel>
 
-          <Panel title={t("v3.costTags.backfill")}>
-            <div className="v3-ctag-slot" data-testid="cost-tags-backfill">
-              <b>{t("v3.costTags.backfillPending")}</b>
-              <span>{t("v3.costTags.backfillBody")}</span>
-            </div>
-          </Panel>
+          <Backfill key={current?.id ?? ""} />
         </>
       )}
     </div>

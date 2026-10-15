@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, dlcApi, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
+import { evalCostApi, usd } from "../../../lib/api/evalCost";
+import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { actorModelOptions, CLOUD_VALUE_PREFIX, defaultActorModel } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
@@ -31,6 +33,7 @@ import {
 } from "../../ui";
 import { LogSourceFields } from "./LogSourceFields";
 import { LogStreamPicker } from "./LogStreamPicker";
+import { isPassiveSource, passiveEstimateBody } from "./passiveCost";
 
 type Source = "window" | "sessions" | "logs" | "dataset";
 /** What is evaluated: a platform agent, or CloudWatch telemetry with no agent behind it. */
@@ -215,6 +218,13 @@ export function TaskWizard() {
         : Promise.resolve(null),
     `task-estimate:${repeatable}:${draft?.agentId}:${draft?.dataset}:${draft?.repeats}:${draft?.evaluators.join(",")}`,
   );
+  // eval-cost §1.1: a passive run and an online config are priced (and confirmed) too
+  const passiveBody = repeatable ? null : passiveEstimateBody(draft);
+  const passiveKey = passiveBody ? JSON.stringify(passiveBody) : "none";
+  const passiveEstimate = useLoad(
+    () => (passiveBody ? evalCostApi.estimate(passiveBody) : Promise.resolve(null)),
+    `task-passive-estimate:${passiveKey}`,
+  );
   if (seed.error) return <Alert tone="error">{seed.error}</Alert>;
   if (!draft) return <Spin />;
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
@@ -260,6 +270,9 @@ export function TaskWizard() {
     if (insights && draft.insights.length === 0) return setError(t("v2.tasks.errInsights"));
     if (!insights && draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
     if (!insights && draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
+    const priced = passiveBody ? passiveEstimate.data : null;
+    if (!insights && priced?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: usd(priced.max_usd) }));
+    if (!insights && priced?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
     setSubmitting(true);
     setError(null);
     try {
@@ -273,6 +286,7 @@ export function TaskWizard() {
           filters: [],
           description: draft.name.trim().slice(0, 200),
           enable_on_create: true,
+          confirm_cost: draft.confirmCost,
         });
         toast("success", t("v2.tasks.createdOnline"));
         setParams({ view: "detail", kind: "online", id: cfg.config_id });
@@ -295,14 +309,18 @@ export function TaskWizard() {
           description: draft.description || undefined,
           ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
           ...scope,
-          ...(repeatable ? { repeats: draft.repeats, confirm_cost: draft.confirmCost } : {}),
+          ...(repeatable ? { repeats: draft.repeats } : {}),
+          // a replay and a passive run (session_ids / lookback_hours) alike
+          ...(!insights && (repeatable || isPassiveSource(draft.source)) ? { confirm_cost: draft.confirmCost } : {}),
           ...storageFlag(confirm),
         }));
         toast("success", t("v2.tasks.createdRun"));
         setParams({ view: "detail", kind: "run", id: run.id });
       }
     } catch (err) {
-      setError(errorMessage(err));
+      const refusal = costRefusal(err);
+      if (refusal?.kind === "confirm") set({ confirmCost: false });
+      setError(refusal ? refusalText(t, refusal) : errorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -757,6 +775,44 @@ export function TaskWizard() {
               <input type="checkbox" checked={draft.confirmCost} onChange={(e) => set({ confirmCost: e.target.checked })} />{" "}
               {t("v2.tasks.confirmCost", { usd: estimate.data.total_usd ?? "—" })}
             </label>
+          )}
+        </Card>
+      )}
+
+      {step === 1 && passiveBody && (
+        <Card
+          title={t("v3.evalCost.estimateTitle")}
+          sub={passiveBody.scope === "online" ? t("v3.evalCost.perDay") : t("v3.evalCost.perRun")}
+          testId="v2-task-cost"
+        >
+          {passiveEstimate.loading && !passiveEstimate.data ? (
+            <Spin />
+          ) : !passiveEstimate.data ? (
+            <Alert tone="warn">{t("v3.evalCost.estimateUnavailable")}</Alert>
+          ) : (
+            <>
+              <span>
+                <b>
+                  {passiveEstimate.data.total_usd === null ? t("v3.evalCost.unknown") : usd(passiveEstimate.data.total_usd)}
+                  {passiveBody.scope === "online" && passiveEstimate.data.total_usd !== null && ` ${t("v3.evalCost.slashDay")}`}
+                </b>{" "}
+                {passiveBody.scope === "online"
+                  ? t("v3.evalCost.sessionsPerDay", { count: passiveEstimate.data.sessions })
+                  : t("v3.evalCost.sessionsRun", { count: passiveEstimate.data.sessions, minutes: passiveEstimate.data.duration_minutes ?? 0 })}
+                {passiveEstimate.data.sessions_basis === "history_7d" && ` · ${t("v3.evalCost.sessionsFromHistory")}`}{" "}
+                {(passiveEstimate.data.unpriced_models?.length ?? 0) > 0 && (
+                  <Tag tone="orange">{t("v3.evalCost.unpricedCount", { count: passiveEstimate.data.unpriced_models?.length ?? 0 })}</Tag>
+                )}
+                {passiveEstimate.data.over_limit && <Tag tone="red">{t("v3.evalCost.overLimit", { max: usd(passiveEstimate.data.max_usd) })}</Tag>}
+              </span>
+              {passiveEstimate.data.over_limit && <Alert tone="error">{t("v3.evalCost.overLimitHint", { max: usd(passiveEstimate.data.max_usd) })}</Alert>}
+              {passiveEstimate.data.confirm_required && !passiveEstimate.data.over_limit && (
+                <label className="v2-check">
+                  <input type="checkbox" checked={draft.confirmCost} onChange={(e) => set({ confirmCost: e.target.checked })} />{" "}
+                  {t("v3.evalCost.confirm", { usd: usd(passiveEstimate.data.total_usd) })}
+                </label>
+              )}
+            </>
           )}
         </Card>
       )}

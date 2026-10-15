@@ -1,3 +1,4 @@
+import type { CostSummary } from "../../../lib/api/evalCost";
 import type { ResultRow } from "../../../v2/results";
 import type { TaskStatus, V2Task } from "../../../v2/tasks";
 import type { Signal } from "../../ui";
@@ -39,3 +40,30 @@ export const detailUrl = (task: Pick<V2Task, "kind" | "id">) =>
   `/v3/tasks?view=detail&kind=${task.kind}&id=${encodeURIComponent(task.id)}`;
 export const copyUrl = (task: Pick<V2Task, "kind" | "id">) =>
   `/v3/tasks?view=new&from=${encodeURIComponent(`${task.kind}:${task.id}`)}`;
+
+/* ── evaluation cost (eval-cost §1.1, §1.3) ──────────────────────────────── */
+
+/** The run payload's own cost summary (`run.cost`, newer servers), when it carries one. */
+export function runCostOf(task: Pick<V2Task, "kind" | "run">): CostSummary | null {
+  if (task.kind !== "run") return null;
+  const cost = (task.run as { cost?: CostSummary | null } | undefined)?.cost;
+  return cost && typeof cost === "object" && "kind" in cost ? cost : null;
+}
+
+/** The cost column: the run's own summary first, `/api/eval/run-costs` for the rest. */
+export function listCosts(tasks: Pick<V2Task, "kind" | "id" | "run">[], fetched: Record<string, CostSummary> | undefined) {
+  const out: Record<string, CostSummary> = { ...(fetched ?? {}) };
+  for (const task of tasks) {
+    const own = runCostOf(task);
+    if (own) out[task.id] = own;
+  }
+  return out;
+}
+
+/** The runs on screen whose payload carries no cost: the only ones the batch read needs. */
+export const runsWithoutCost = (tasks: Pick<V2Task, "kind" | "id" | "run">[]) =>
+  tasks.filter((task) => task.kind === "run" && !runCostOf(task)).map((task) => task.id);
+
+/** A passive run (picked sessions or a look-back window) — priced and confirmed like a replay. */
+export const isPassiveScope = (scope: { lookback_hours?: number; session_ids?: string[] }) =>
+  Boolean(scope.lookback_hours) || Boolean(scope.session_ids?.length);

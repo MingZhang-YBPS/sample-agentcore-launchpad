@@ -3581,6 +3581,9 @@ export interface OnlineEvalConfigCreate {
   filters: OnlineEvalFilter[];
   description?: string | null;
   enable_on_create: boolean;
+  /** scores mode: acknowledges the daily estimate above the confirm threshold
+   *  (eval-cost §1.1; else 409 `run.cost_confirm_required`) */
+  confirm_cost?: boolean;
 }
 
 /** `PATCH /api/eval/online/{id}` — only changed fields travel; the rule is
@@ -4740,7 +4743,8 @@ export interface V2RunCreate {
   wait_seconds?: number;
   /** pass^k: replay each dataset scenario k times (opt-in, priced first) */
   repeats?: number;
-  /** acknowledges the estimate when the workspace policy asks for confirmation */
+  /** acknowledges the estimate when the workspace policy asks for confirmation — a
+   *  dataset replay and a passive run (session_ids / lookback_hours) alike (eval-cost §1.1) */
   confirm_cost?: boolean;
   /** the Bedrock model that plays the user — required for a simulated-persona dataset */
   actor_model_id?: string;

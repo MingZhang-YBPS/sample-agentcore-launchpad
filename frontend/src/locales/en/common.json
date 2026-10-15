@@ -14285,8 +14285,7 @@
         "untaggedBody": "Line items without the tag — cost from before activation, untagged resources, anything the platform did not create — are listed, never allocated."
       },
       "backfill": "Backfill existing resources",
-      "backfillPending": "The backfill job is not available in this build yet.",
-      "backfillBody": "It will tag resources created before the tag set, record each resource's result (tagged, unsupported, denied) and show coverage here, so missing IAM permissions are easy to find.",
+      "backfillBody": "It tags resources created before the tag set, records each resource's result (tagged, unsupported, denied) and shows the coverage here, so missing IAM permissions are easy to find.",
       "basis": {
         "estimate": "Estimate",
         "billing": "Billed"
@@ -14355,6 +14354,77 @@
           "billing": "What AWS billed under launchpad:project plus the allocated shared share: every service, up to a day behind."
         },
         "basisSaved": "Changed the budget basis of {{name}}"
+      },
+      "bf": {
+        "start": "Run back-fill",
+        "rerun": "Run again",
+        "started": "Back-fill started",
+        "status": {
+          "queued": "Queued",
+          "running": "Running",
+          "succeeded": "Done",
+          "failed": "Failed"
+        },
+        "writes": "Writes",
+        "setHint": "on every resource it finds; workspace infrastructure gets launchpad:project={{shared}} (up to {{max}} tags per resource).",
+        "none": "No back-fill has run in this workspace yet.",
+        "nothingFound": "No resources found to tag.",
+        "coverageSub": "tagged — {{tagged}} of {{taggable}} that can carry tags · {{total}} found",
+        "coverageAria": "{{percent}}% tagged: {{tagged}} of {{taggable}}",
+        "result": {
+          "pending": "To do",
+          "tagged": "Tagged",
+          "unsupported": "No tags",
+          "denied": "Denied",
+          "missing": "Gone",
+          "failed": "Failed"
+        },
+        "stage": {
+          "plan": "Inventory",
+          "tag": "Tag"
+        },
+        "stageStatus": {
+          "pending": "Waiting",
+          "running": "Running…",
+          "succeeded": "Done",
+          "failed": "Failed"
+        },
+        "by": "Started by {{actor}} {{when}} · {{reason}}",
+        "reason": {
+          "admin": "workspace-wide run",
+          "project_update": "re-tag after a project change",
+          "transfer": "re-tag after a transfer"
+        },
+        "failed": "The run stopped: {{error}}. Run it again — it continues with what is still to do.",
+        "byKind": "Resources by kind",
+        "kind": {
+          "runtime": "Runtime",
+          "runtime_endpoint": "Runtime endpoint",
+          "harness": "Harness",
+          "memory": "Memory",
+          "gateway": "Gateway",
+          "gateway_target": "Gateway target",
+          "credential_provider": "Credential provider",
+          "knowledge_base": "Knowledge base",
+          "data_source": "KB data source",
+          "iam_role": "IAM role",
+          "ecr_repository": "ECR repository",
+          "codebuild_project": "CodeBuild project",
+          "log_group": "Log group",
+          "secret": "Secret"
+        },
+        "noTags": "no tags",
+        "openTitle_one": "{{count}} resource not tagged",
+        "openTitle_other": "{{count}} resources not tagged",
+        "all": "All",
+        "deniedHint": "Denied: the platform role lacks the tagging permission for these resources (for example bedrock-agentcore:TagResource, iam:TagRole, logs:TagResource, ecr:TagResource). Add it and run again.",
+        "col": {
+          "result": "Result",
+          "kind": "Kind",
+          "resource": "Resource",
+          "detail": "Why"
+        },
+        "more": "Show {{count}} more"
       }
     },
     "evalCost": {
@@ -14463,7 +14533,15 @@
       "compareOneSided": "only one of the two runs was measured",
       "compareParts": "Difference by part",
       "compareCheaper": "◂ cheaper",
-      "compareDearer": "dearer ▸"
+      "compareDearer": "dearer ▸",
+      "refusedConfirm": "The server priced this evaluation at {{usd}}, above the confirm threshold. Tick the confirmation on the estimate card and submit again.",
+      "refusedOver": "The server priced this evaluation at {{usd}}, over this workspace's limit ({{max}}). Narrow the scope, or ask an administrator to submit it.",
+      "rungTitle": "Cost per run",
+      "rungSub": "Each run on the ladder: measured cost, else its estimate, and the change against the run before.",
+      "rungSpan": "First run {{first}} → latest {{latest}}",
+      "rungRun": "Run",
+      "rungVersion": "Agent version",
+      "rungChange": "Change vs previous"
     }
   },
   "models": {

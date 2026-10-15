@@ -19,10 +19,12 @@ import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
-import { DLC_DIMENSIONS, type RunComparison, type WatchView } from "../../../lib/dlc";
+import { usd } from "../../../lib/api/evalCost";
+import { type CostDelta, DLC_DIMENSIONS, type LadderRung, type RunComparison, type WatchView } from "../../../lib/dlc";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, Kpi, LinkButton, Select, Spin, Table, Tag } from "../../ui";
 import { BandChart, LadderChart } from "./charts";
+import { anyRungCost, rungCostSteps } from "./rungCost";
 
 const pct = (v: number | null | undefined, digits = 1) =>
   v === null || v === undefined ? "—" : `${(v * 100).toFixed(digits)}%`;
@@ -228,6 +230,78 @@ function DriftPanel({ view }: { view: WatchView }) {
   );
 }
 
+const signedUsd = (value: number) => `${value > 0 ? "+" : value < 0 ? "−" : "±"}${usd(Math.abs(value))}`;
+
+/** A dearer rung reads red, a cheaper one green — the opposite of the gate rate's Δ. */
+function CostChange({ usdDelta, pctDelta }: { usdDelta: number | null; pctDelta: number | null }) {
+  if (usdDelta === null) return <>—</>;
+  const flat = Math.abs(usdDelta) < 0.00005;
+  return (
+    <span className={flat ? undefined : usdDelta > 0 ? "v2-dlc-down" : "v2-dlc-up"}>
+      {signedUsd(usdDelta)}
+      {pctDelta !== null && ` (${pctDelta > 0 ? "+" : ""}${pctDelta}%)`}
+    </span>
+  );
+}
+
+/**
+ * The ladder's cost per rung (eval-cost §1.3, like the V3 compare tab): each run's
+ * cost and its change against the rung before, the first-to-latest change on top.
+ */
+function RungCostCard({ rungs, delta }: { rungs: LadderRung[]; delta: CostDelta | undefined }) {
+  const { t } = useTranslation();
+  const steps = rungCostSteps(rungs);
+  if (!anyRungCost(steps)) return null;
+  return (
+    <Card
+      title={t("v3.evalCost.rungTitle")}
+      sub={
+        delta && delta.delta_usd !== null
+          ? t("v3.evalCost.rungSpan", { first: usd(delta.before_usd), latest: usd(delta.after_usd) })
+          : t("v3.evalCost.rungSub")
+      }
+      flush
+      testId="v2-dlc-rung-cost"
+    >
+      {delta && delta.delta_usd !== null && (
+        <div className="v2-dlc-kpis" style={{ padding: "12px 24px 0" }}>
+          <Kpi label={t("v3.evalCost.compareFirst")} value={usd(delta.before_usd)} />
+          <Kpi label={t("v3.evalCost.compareLatest")} value={usd(delta.after_usd)} />
+          <Kpi
+            label={t("v3.evalCost.compareTitle")}
+            value={`${signedUsd(delta.delta_usd)}${delta.delta_pct !== null ? ` · ${delta.delta_pct > 0 ? "+" : ""}${delta.delta_pct}%` : ""}`}
+            tone={delta.delta_usd > 0.00005 ? "bad" : delta.delta_usd < -0.00005 ? "good" : undefined}
+          />
+        </div>
+      )}
+      <Table
+        rows={steps}
+        rowKey={(row) => row.run_id}
+        columns={[
+          { key: "run", title: t("v3.evalCost.rungRun"), render: (row) => <span className="mono">{row.run_id.slice(0, 8)}</span> },
+          { key: "version", title: t("v3.evalCost.rungVersion"), render: (row) => row.agent_version ?? "—" },
+          {
+            key: "cost",
+            title: t("v3.evalCost.colUsd"),
+            render: (row) =>
+              row.usd === null ? "—" : (
+                <>
+                  {usd(row.usd)}
+                  {row.kind === "estimate" && <> <Tag tone="gray">{t("v3.evalCost.kind.estimate")}</Tag></>}
+                </>
+              ),
+          },
+          {
+            key: "change",
+            title: t("v3.evalCost.rungChange"),
+            render: (row) => <CostChange usdDelta={row.delta_usd} pctDelta={row.delta_pct} />,
+          },
+        ]}
+      />
+    </Card>
+  );
+}
+
 function ComparePanel({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
   const ladder = useLoad<RunComparison>(() => dlcApi.ladder(agentId), `ladder:${agentId}`);
@@ -267,6 +341,8 @@ function ComparePanel({ agentId }: { agentId: string }) {
         )}
         <LadderChart rungs={data.runs} />
       </Card>
+
+      <RungCostCard rungs={data.runs} delta={data.cost_delta} />
 
       <Card title={t("v2.dlc.compare.perCriterion")} flush>
         <Table

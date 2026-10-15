@@ -6,7 +6,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, type V2Range } from "../../../lib/api";
-import { type EstimateBody, evalCostApi } from "../../../lib/api/evalCost";
+import { type EstimateBody, evalCostApi, type EvalCostEstimate } from "../../../lib/api/evalCost";
 import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
@@ -19,8 +19,9 @@ import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { StoryHeader } from "../../story/StoryHeader";
 import { HostedV2 } from "./common";
+import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "./CostCard";
-import { detailUrl } from "./model";
+import { detailUrl, isPassiveScope } from "./model";
 
 /* Mirrors V2's TaskWizard (v2/pages/tasks/TaskWizard.tsx): the same draft, seed,
    validation, scope building and request — only the presentation is V3's. */
@@ -174,6 +175,8 @@ export function TaskWizard() {
   // a validation string the wizard wrote, or what the create call threw (projects §19)
   const [error, setError] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
+  // the estimate a 409 cost refusal carried: the card shows the server's figure
+  const [refused, setRefused] = useState<EvalCostEstimate | null>(null);
   const [evalLevel, setEvalLevel] = useState<"all" | EvaluatorLevel>("all");
   const [evalQ, setEvalQ] = useState("");
 
@@ -219,6 +222,8 @@ export function TaskWizard() {
     () => (estimateBody ? evalCostApi.estimate(estimateBody) : Promise.resolve(null)),
     `v3-task-estimate:${estimateKey}`,
   );
+  // a changed draft is priced afresh: the refusal's figure no longer applies
+  useEffect(() => setRefused(null), [estimateKey]);
   if (seed.error) return <Notice s="act"><ApiErrorDetail error={seed.failure} /></Notice>;
   if (!draft) return <Skeleton rows={6} />;
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
@@ -260,10 +265,12 @@ export function TaskWizard() {
     if (insights && draft.insights.length === 0) return setError(t("v2.tasks.errInsights"));
     if (!insights && draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
     if (!insights && draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
-    if (!insights && estimate.data?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: estimate.data.max_usd ?? "—" }));
-    if (!insights && estimate.data?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
+    const priced = refused ?? estimate.data;
+    if (!insights && priced?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: priced.max_usd ?? "—" }));
+    if (!insights && priced?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
     setSubmitting(true);
     setError(null);
+    setRefused(null);
     try {
       if (draft.strategy === "continuous" && !insights) {
         const cfg = await api.v2CreateOnlineConfig({
@@ -275,6 +282,8 @@ export function TaskWizard() {
           filters: [],
           description: draft.name.trim().slice(0, 200),
           enable_on_create: true,
+          // eval-cost §1.1: a scores config is priced per day and confirmed like a run
+          confirm_cost: draft.confirmCost,
         });
         toast("ok", t("v2.tasks.createdOnline"));
         navigate(detailUrl({ kind: "online", id: cfg.config_id }));
@@ -297,14 +306,23 @@ export function TaskWizard() {
           description: draft.description || undefined,
           ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
           ...scope,
-          ...(repeatable ? { repeats: draft.repeats, confirm_cost: draft.confirmCost } : {}),
+          ...(repeatable ? { repeats: draft.repeats } : {}),
+          // eval-cost §1.1: a replay and a passive run (sessions / look-back) alike
+          ...(!insights && (repeatable || isPassiveScope(scope)) ? { confirm_cost: draft.confirmCost } : {}),
           ...storageFlag(confirm),
         }));
         toast("ok", t("v2.tasks.createdRun"));
         navigate(detailUrl({ kind: "run", id: run.id }));
       }
     } catch (err) {
-      setError(err);
+      const refusal = costRefusal(err);
+      if (refusal) {
+        setRefused(refusal.estimate);
+        if (refusal.kind === "confirm") set({ confirmCost: false });
+        setError(refusalText(t, refusal));
+      } else {
+        setError(err);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -633,7 +651,7 @@ export function TaskWizard() {
 
       {step === 1 && estimateBody && (
         <EstimateCostCard
-          estimate={estimate.data}
+          estimate={refused ?? estimate.data}
           loading={estimate.loading}
           error={estimate.error}
           confirmed={draft.confirmCost}

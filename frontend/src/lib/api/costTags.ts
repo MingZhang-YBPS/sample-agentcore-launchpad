@@ -3,7 +3,8 @@
  * the workspace's tag set with each key's activation state and the one-click
  * activation, what AWS billed per `launchpad:project` (Cost Explorer, cached 6 hours,
  * the shared row allocated by invocations), and a project's custom cost tags and
- * budget basis. The pure helpers validate the custom tag editor the way
+ * budget basis, and the workspace-wide back-fill run (§1.3) with its coverage and the
+ * resources it could not tag. The pure helpers validate the custom tag editor the way
  * `services/billing_costs.check_custom_tags` does, so a bad row is named before save.
  */
 import { getJson, sendJson } from "../api";
@@ -117,6 +118,69 @@ export interface ProjectCostTags {
   budget_bases: BudgetBasis[];
 }
 
+/* ── back-fill (§1.3, the resumable job `cost_tags_backfill`) ─────────────── */
+
+export type BackfillStatus = "queued" | "running" | "succeeded" | "failed";
+export type BackfillStageName = "plan" | "tag";
+export type BackfillStageStatus = "pending" | "running" | "succeeded" | "failed";
+/** A resource's result; `pending` until the tag stage reaches it. */
+export type ResourceTagStatus = "pending" | "tagged" | "unsupported" | "denied" | "missing" | "failed";
+
+export interface BackfillStage {
+  name: BackfillStageName;
+  status: BackfillStageStatus;
+  detail: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface BackfillCoverage {
+  total: number;
+  /** total less `unsupported` (what can carry tags at all) */
+  taggable: number;
+  tagged: number;
+  /** tagged share of taggable, one decimal; null with nothing taggable */
+  percent: number | null;
+  by_status: Partial<Record<ResourceTagStatus, number>>;
+  by_kind: Record<string, Partial<Record<ResourceTagStatus, number>>>;
+}
+
+export interface BackfillResource {
+  key: string;
+  kind: string;
+  arn: string;
+  name: string;
+  project_id: string | null;
+  agent_id: string | null;
+  status: ResourceTagStatus;
+  detail: string;
+  tagged_at?: string;
+}
+
+export interface BackfillRun {
+  id: string;
+  status: BackfillStatus;
+  error: string | null;
+  workspace_id: string;
+  project_id: string | null;
+  scope: { project_id?: string | null; agent_ids?: string[] | null };
+  /** `admin` for this page's run; `project_update` / `transfer` start re-tag runs */
+  reason: string | null;
+  actor: string | null;
+  created_at: string | null;
+  stages: BackfillStage[];
+  coverage: BackfillCoverage;
+  /** the resources not tagged (neither `tagged` nor `unsupported`) */
+  resources: BackfillResource[];
+}
+
+export interface BackfillView {
+  tag_keys: string[];
+  shared_project: string;
+  max_cost_tags: number;
+  run: BackfillRun | null;
+}
+
 export const costTagsApi = {
   get: (force = false) => getJson<CostTagsView>(`/api/cost-tags${force ? "?force=true" : ""}`),
   activate: (keys?: string[]) => sendJson<ActivationResult>("/api/cost-tags/activate", "POST", keys ? { keys } : {}),
@@ -127,7 +191,13 @@ export const costTagsApi = {
     sendJson<ProjectCostTags>(`/api/projects/${enc(projectId)}/cost-tags`, "PUT", { cost_tags: costTags }),
   putBudgetBasis: (projectId: string, basis: BudgetBasis) =>
     sendJson<ProjectCostTags>(`/api/projects/${enc(projectId)}/budget-basis`, "PUT", { basis }),
+  backfill: () => getJson<BackfillView>("/api/cost-tags/backfill"),
+  startBackfill: () => sendJson<BackfillRun>("/api/cost-tags/backfill", "POST", {}),
 };
+
+/** A run that will still change: poll it. */
+export const backfillActive = (run: BackfillRun | null | undefined): boolean =>
+  !!run && (run.status === "queued" || run.status === "running");
 
 /* ── the custom tag editor ─────────────────────────────────────────────────── */
 
