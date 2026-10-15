@@ -12493,6 +12493,40 @@
             "body": "清除 {{name}} 会永久删除其 Agent 和数据，无法恢复。"
           }
         }
+      },
+      "quotas": {
+        "title": "配额与预算",
+        "sub": "本项目的用量与上限。生效上限取项目值与部门上限中的较小者；留空表示项目未设置。花费为估算值，有几分钟延迟，金额上限是软上限。",
+        "col": {
+          "quota": "配额",
+          "used": "已用",
+          "limit": "上限",
+          "department": "部门上限",
+          "project": "项目值"
+        },
+        "key": {
+          "max_agents": "Agent 数",
+          "max_api_keys": "启用的 API Key 数",
+          "max_concurrent_eval_runs": "并发评估运行数",
+          "eval_run_max_usd": "单次评估运行花费（美元）",
+          "eval_monthly_usd_cap": "本月评估花费（美元）",
+          "monthly_cost_alert_usd": "月度成本告警（美元）",
+          "v1_rate_per_minute": "/v1 每分钟调用数（全部 Key）"
+        },
+        "enforcement": {
+          "block": "超出上限时拒绝",
+          "queue": "超出的运行排队等待",
+          "alert": "只告警，不阻断",
+          "throttle": "超出的调用返回 429"
+        },
+        "unlimited": "不限",
+        "unset": "未设置",
+        "firing": "超出预算",
+        "notMeasured": "尚未测量：预算告警下一轮评估时读取花费。",
+        "invalid": "取值无效，或超过部门上限。",
+        "readOnly": "只有平台管理员或本项目所属部门的管理员可以修改配额。",
+        "save": "保存配额",
+        "saved": "已保存 {{name}} 的配额"
       }
     },
     "admins": {

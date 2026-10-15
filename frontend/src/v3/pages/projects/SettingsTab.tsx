@@ -10,6 +10,7 @@ import { Btn, Notice, Panel } from "../../ui";
 import { LifecycleSection } from "./LifecycleSection";
 import { type SettingsDraft, settingsDraft, settingsPatch } from "./model";
 import type { ProjectAbilities } from "./ProjectDetail";
+import { QuotasSection } from "./QuotasSection";
 import { useStructureNames } from "./useStructureNames";
 
 /**
@@ -117,6 +118,7 @@ export function SettingsTab({
           <Btn kind="primary" onClick={() => void save()} disabled={busy || !patch}><Save size={14} /> {t("v3.projects.save")}</Btn>
         </div>
       )}
+      <QuotasSection project={project} abilities={abilities} />
       {abilities.admin && <LifecycleSection project={project} onChanged={onChanged} />}
     </div>
   );

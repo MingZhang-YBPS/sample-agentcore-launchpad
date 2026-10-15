@@ -12493,6 +12493,40 @@
             "body": "Purging {{name}} deletes its agents and data for good. This cannot be undone."
           }
         }
+      },
+      "quotas": {
+        "title": "Quotas and budgets",
+        "sub": "Usage against this project's limits. The limit is the smaller of the project's value and its department's cap; an empty field means no project value. Spend figures are estimates with a few minutes' delay, so the money caps are soft.",
+        "col": {
+          "quota": "Quota",
+          "used": "Used",
+          "limit": "Limit",
+          "department": "Department cap",
+          "project": "Project value"
+        },
+        "key": {
+          "max_agents": "Agents",
+          "max_api_keys": "Enabled API keys",
+          "max_concurrent_eval_runs": "Concurrent evaluation runs",
+          "eval_run_max_usd": "Cost per evaluation run (USD)",
+          "eval_monthly_usd_cap": "Evaluation spend this month (USD)",
+          "monthly_cost_alert_usd": "Monthly cost alert (USD)",
+          "v1_rate_per_minute": "/v1 calls per minute (all keys)"
+        },
+        "enforcement": {
+          "block": "Refused when over the limit",
+          "queue": "Further runs wait for a slot",
+          "alert": "Alerts only, never blocks",
+          "throttle": "Calls over the limit get 429"
+        },
+        "unlimited": "No limit",
+        "unset": "Not set",
+        "firing": "Over budget",
+        "notMeasured": "Not measured yet: the budget alert reads the spend on its next pass.",
+        "invalid": "Not a valid value, or above the department cap.",
+        "readOnly": "Only an administrator or this project's department administrator can change quotas.",
+        "save": "Save quotas",
+        "saved": "Quotas of {{name}} saved"
       }
     },
     "admins": {

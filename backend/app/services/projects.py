@@ -62,8 +62,18 @@ ADMIN_SETTINGS = OWNER_SETTINGS | {"sod_strict", "quotas", "inbound_auth_default
 # …and a department administrator (§11.1) the owner's plus strictness — the /v1
 # window and the inbound JWT default stay platform infrastructure
 DEPARTMENT_SETTINGS = OWNER_SETTINGS | {"sod_strict"}
-# `settings.quotas` keys accepted so far (§11.3 adds the rest with its own route)
-QUOTA_KEYS = frozenset({api_keys_service.PROJECT_RATE_KEY})
+# `settings.quotas` (§11.3): whole-number caps and their bounds…
+QUOTA_COUNTS: dict[str, tuple[int, int]] = {
+    "max_agents": (0, 10_000),
+    "max_api_keys": (0, 10_000),
+    # the account's own 5 active batch evaluations still apply (evaluation/queue.py)
+    "max_concurrent_eval_runs": (1, 100),
+    api_keys_service.PROJECT_RATE_KEY: (1, api_keys_service.MAX_RATE_PER_MINUTE),
+}
+# …and dollar amounts (≥ 0, a run's estimate and the month's spend compared against them)
+QUOTA_USD = frozenset({"eval_run_max_usd", "eval_monthly_usd_cap", "monthly_cost_alert_usd"})
+MAX_QUOTA_USD = 10_000_000
+QUOTA_KEYS = frozenset(QUOTA_COUNTS) | QUOTA_USD
 _VISIBILITY = ("shared", "isolated")
 CANDIDATE_LIMIT = 20
 TRANSFER_KINDS = ("agent",)
@@ -296,15 +306,29 @@ def _check_quotas(value: Any) -> dict[str, Any]:
     if unknown:
         raise AppError("project.setting_invalid", f"unknown quotas: {unknown}",
                        {"key": "quotas", "quotas": unknown})
-    rate = value.get(api_keys_service.PROJECT_RATE_KEY)
-    if rate is not None and (isinstance(rate, bool) or not isinstance(rate, int)
-                             or not 1 <= rate <= api_keys_service.MAX_RATE_PER_MINUTE):
-        raise AppError(
-            "project.setting_invalid",
-            f"quotas.{api_keys_service.PROJECT_RATE_KEY} must be a whole number from 1 to "
-            f"{api_keys_service.MAX_RATE_PER_MINUTE}",
-            {"key": "quotas", "quota": api_keys_service.PROJECT_RATE_KEY})
-    return dict(value)
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        if item is not None:
+            item = check_quota_value(key, item)
+        out[key] = item
+    return out
+
+
+def check_quota_value(key: str, value: Any) -> int | float:
+    """One quota's value, normalized (a whole-number dollar amount stays an int)."""
+    if key in QUOTA_COUNTS:
+        low, high = QUOTA_COUNTS[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            raise AppError("project.setting_invalid",
+                           f"quotas.{key} must be a whole number from {low} to {high}",
+                           {"key": "quotas", "quota": key})
+        return value
+    if (isinstance(value, bool) or not isinstance(value, int | float)
+            or not 0 <= value <= MAX_QUOTA_USD or value != value):
+        raise AppError("project.setting_invalid",
+                       f"quotas.{key} must be an amount from 0 to {MAX_QUOTA_USD} USD",
+                       {"key": "quotas", "quota": key})
+    return value
 
 
 def _check_inbound_auth(value: Any) -> dict[str, Any]:

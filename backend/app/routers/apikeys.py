@@ -24,7 +24,7 @@ from app.core.project_scope import current_project
 from app.models.ledger import Agent, ApiKey
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import agent_access
+from app.services import agent_access, project_quotas
 from app.services import api_keys as api_keys_service
 from app.services.users import as_utc
 from app.services.visibility import Viewer, require_viewer
@@ -187,6 +187,8 @@ def create_key(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     identity = require_identity(request)
+    # the project's key quota (projects §11.3): enabled keys count
+    project_quotas.assert_capacity(db, current_project(), "max_api_keys")
     raw = f"lp_live_{secrets.token_hex(16)}"
     # The key's workspace is what scopes it on /v1 — a key minted here reaches
     # this environment's agents only. Its creator is what keeps it alive: the
@@ -206,6 +208,8 @@ def create_key(
         created_by_name=identity.username,
     )
     db.add(key)
+    db.flush()
+    project_quotas.recheck_after_insert(db, key.project_id, "max_api_keys")
     db.commit()
     # The full key is returned exactly once; only the hash is at rest.
     return {**_key_out(key), "key": raw}

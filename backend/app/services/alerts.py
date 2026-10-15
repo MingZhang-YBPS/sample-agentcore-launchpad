@@ -61,6 +61,12 @@ WINDOWS = ("1h", "6h", "24h", "7d", "30d")
 # Error rate and latency come from the observability dashboard, which has no 30-day range.
 DASHBOARD_KINDS = ("error_rate", "latency_p95_ms")
 DASHBOARD_WINDOWS = ("1h", "6h", "24h", "7d")
+# A project's `quotas.monthly_cost_alert_usd` (projects §11.3) is kept as one ordinary
+# `cost_mtd_usd` rule of the project, named this, in the project's home workspace (its
+# workspace-default binding, else the first): it reads the project's spend across every
+# workspace it is bound to, and is (re)written from the quota — never blocks anything.
+BUDGET_RULE_NAME = "project monthly budget"
+BUDGET_RULE_CREATOR = "quota"
 
 
 def validate(kind: str, comparison: str, window: str, threshold: float) -> None:
@@ -156,11 +162,45 @@ def read_value(
             return _dashboard_value(rule.kind, rule.window or "24h", db, workspace)
         if rule.kind == "online_quality":
             return _quality_value(db, workspace)
+        if rule.kind == "cost_mtd_usd" and is_budget_rule(rule):
+            return _project_cost_value(db, workspace, rule.project_id or "")
         if rule.kind == "cost_mtd_usd":
             # a single-project workspace's spend is all that project's, attributed or not
             several = rule.project_id is not None and _several_projects(db, workspace.id)
             return _cost_value(db, workspace, rule.project_id if several else None)
     return None, f"unknown kind '{rule.kind}'"
+
+
+def _project_cost_value(
+    db: Session, workspace: WorkspaceContext, project_id: str
+) -> tuple[float | None, str]:
+    """A budget rule's value: the project's month-to-date spend in every workspace it
+    is bound to (`workspace` is the rule's own; the others are rebuilt from their ids)."""
+    from app.services.workspace import context_for_workspace
+
+    total = 0.0
+    parts = []
+    for ws_id in _project_workspaces(db, project_id):
+        try:
+            ctx = workspace if ws_id == workspace.id else context_for_workspace(ws_id)
+        except Exception as exc:  # noqa: BLE001
+            return None, f"could not read workspace {ws_id}: {type(exc).__name__}"
+        several = _several_projects(db, ws_id)
+        usd, detail = _cost_value(db, ctx, project_id if several else None)
+        if usd is None:
+            return None, f"{ws_id}: {detail}"
+        total += usd
+        parts.append(f"{ws_id} ${usd:.2f}")
+    return round(total, 4), "month-to-date estimate from the price map" + (
+        f" ({', '.join(parts)})" if len(parts) > 1 else "")
+
+
+def _project_workspaces(db: Session, project_id: str) -> list[str]:
+    from app.models.projects import ProjectWorkspace
+
+    with project_context(None):
+        return sorted(db.scalars(select(ProjectWorkspace.workspace_id).where(
+            ProjectWorkspace.project_id == project_id)))
 
 
 def _several_projects(db: Session, workspace_id: str) -> bool:
@@ -231,6 +271,7 @@ def evaluate_rules(
     Notifies only on an ok/unknown → firing transition. A delivery result is recorded in
     `last_detail` rather than raised: a broken webhook must not hide the breach.
     """
+    sync_budget_rules(db, workspace.id)
     rules = db.scalars(
         select(AlertRule).where(AlertRule.workspace_id == workspace.id).order_by(
             AlertRule.created_at
@@ -274,6 +315,97 @@ def evaluate_rules(
         "firing": len(firing),
         "unknown": len([row for row in evaluated if row["state"] == STATE_UNKNOWN]),
     }
+
+
+# ── project budgets (projects §11.3) ─────────────────────────────────────────────
+
+
+def is_budget_rule(rule: AlertRule) -> bool:
+    return bool(rule.project_id) and rule.name == BUDGET_RULE_NAME \
+        and rule.created_by == BUDGET_RULE_CREATOR
+
+
+def budget_rule(db: Session, project_id: str) -> AlertRule | None:
+    """The project's budget rule, in whichever workspace it lives."""
+    with project_context(None):
+        rows = db.scalars(select(AlertRule).where(
+            AlertRule.project_id == project_id, AlertRule.name == BUDGET_RULE_NAME,
+            AlertRule.created_by == BUDGET_RULE_CREATOR,
+        ).order_by(AlertRule.created_at)).all()
+    return rows[0] if rows else None
+
+
+def _home_workspace(db: Session, project_id: str) -> str | None:
+    from app.models.projects import ProjectWorkspace
+
+    with project_context(None):
+        rows = db.execute(select(ProjectWorkspace.workspace_id,
+                                 ProjectWorkspace.is_workspace_default).where(
+            ProjectWorkspace.project_id == project_id)).all()
+    if not rows:
+        return None
+    defaults = sorted(ws for ws, is_default in rows if is_default)
+    return (defaults or sorted(ws for ws, _ in rows))[0]
+
+
+def sync_budget_rule(db: Session, project_id: str) -> AlertRule | None:
+    """Make the project's budget rule match `quotas.monthly_cost_alert_usd`: create it
+    in the home workspace, move it there, retune its threshold, or remove it when the
+    quota is cleared. What someone set on the rule (a webhook, disabling it) stays."""
+    from app.models.projects import Project
+    from app.services.project_quotas import limit_of
+
+    with project_context(None):
+        project = db.get(Project, project_id)
+        threshold = limit_of(db, project_id, "monthly_cost_alert_usd") if project else None
+        rows = list(db.scalars(select(AlertRule).where(
+            AlertRule.project_id == project_id, AlertRule.name == BUDGET_RULE_NAME,
+            AlertRule.created_by == BUDGET_RULE_CREATOR).order_by(AlertRule.created_at)))
+        home = _home_workspace(db, project_id) if threshold is not None else None
+        keep = rows[0] if rows and home is not None else None
+        for extra in rows[1:] if keep is not None else rows:
+            db.delete(extra)
+        if home is None:
+            db.flush()
+            return None
+        if keep is None:
+            keep = AlertRule(workspace_id=home, project_id=project_id, kind="cost_mtd_usd",
+                             name=BUDGET_RULE_NAME, comparison="above", window="30d",
+                             threshold=float(threshold), created_by=BUDGET_RULE_CREATOR)
+            db.add(keep)
+        else:
+            if keep.workspace_id != home:
+                keep.workspace_id = home
+                keep.state = STATE_UNKNOWN
+            if keep.threshold != float(threshold):
+                keep.threshold = float(threshold)
+                keep.state = STATE_UNKNOWN  # re-judged (and re-notified) on the next pass
+        db.flush()
+    return keep
+
+
+def sync_budget_rules(db: Session, workspace_id: str) -> None:
+    """Before an evaluation pass: the budget rules of every project bound here, so a
+    quota set, a department cap changed or a binding moved since is picked up."""
+    from app.models.projects import Project, ProjectWorkspace
+
+    with project_context(None):
+        bound = set(db.scalars(select(ProjectWorkspace.project_id).where(
+            ProjectWorkspace.workspace_id == workspace_id)))
+        ruled = set(db.scalars(select(AlertRule.project_id).where(
+            AlertRule.workspace_id == workspace_id, AlertRule.name == BUDGET_RULE_NAME,
+            AlertRule.created_by == BUDGET_RULE_CREATOR)))
+        candidates = sorted(p for p in bound | ruled if p)
+        if not candidates:
+            return
+        rows = db.scalars(select(Project).where(Project.id.in_(candidates))).all()
+    from app.services.project_quotas import department_caps, project_values
+
+    for row in rows:
+        quota = project_values(row).get("monthly_cost_alert_usd")
+        cap = department_caps(db, row).get("monthly_cost_alert_usd")
+        if quota is not None or cap is not None or row.id in ruled:
+            sync_budget_rule(db, row.id)
 
 
 def _inactive_projects(db: Session, project_ids: set[str]) -> set[str]:
@@ -323,6 +455,8 @@ def rule_out(rule: AlertRule, skipped: str | None = None) -> dict[str, Any]:
         # NULL = a workspace-level rule, measured across every project
         "scope": "project" if rule.project_id else "workspace",
         "project_id": rule.project_id,
+        # kept from the project's `quotas.monthly_cost_alert_usd` (§11.3)
+        "budget": is_budget_rule(rule),
         "created_by": rule.created_by,
         "created_at": rule.created_at.isoformat() if rule.created_at else None,
         **({"skipped": skipped} if skipped else {}),
