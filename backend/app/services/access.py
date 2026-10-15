@@ -17,6 +17,10 @@ The one place project access is decided:
   administrators of §11.1 for that department's projects and groups. A steward
   (§11.4) is the platform structure manager without data: ``has_data_bypass`` False,
   ``can_manage_structure`` True, and its snapshot always empty (no membership counts).
+* ``shared_for`` / ``shared_rows`` — what other projects shared with a project
+  (§11.2, ``resource_shares``): per kind the resource ids and their access level, and
+  per shareable table the row ids its reads may see. Cached per project like the
+  snapshot (epoch + TTL), and dropped early once the first of its shares expires.
 """
 
 import threading
@@ -279,6 +283,7 @@ def reset_cache_for_tests() -> None:
     with _lock:
         _cache.clear()
         _bindings_cache.clear()
+        _shared_cache.clear()
 
 
 def workspace_bindings(
@@ -446,6 +451,73 @@ def reachable_workspace_ids(db: Session, identity: Any) -> set[str]:
     for membership in snapshot.memberships.values():
         out |= membership.workspaces
     return out
+
+
+# ── what other projects shared with this one (§11.2) ──────────────────────────
+
+
+@dataclass(frozen=True)
+class SharedResources:
+    """The active, unexpired shares one project receives."""
+
+    # kind -> {resource_id: "read" | "use"}
+    by_kind: dict[str, dict[str, str]] = field(default_factory=dict)
+    # kind -> {resource_id: owner project}
+    owners: dict[str, dict[str, str]] = field(default_factory=dict)
+    # shareable table -> the row ids the project's reads may see
+    rows: dict[str, frozenset[str]] = field(default_factory=dict)
+    # the earliest expiry among them: past it the cached value is stale
+    valid_until: Any = None
+
+    def ids(self, kind: str, *, use: bool = False) -> frozenset[str]:
+        granted = self.by_kind.get(kind) or {}
+        return frozenset(rid for rid, level in granted.items() if not use or level == "use")
+
+
+_NO_SHARES = SharedResources()
+_shared_cache: dict[str, tuple[int, float, SharedResources]] = {}
+_MAX_SHARED_PROJECTS = 5000
+
+
+def shared_for(db: Session, project_id: str | None, *, epoch: int | None = None
+               ) -> SharedResources:
+    """The shares ``project_id`` receives, from the epoch-checked cache (every share
+    write bumps the epoch; the scheduler's expiry sweep too)."""
+    if not project_id:
+        return _NO_SHARES
+    from datetime import UTC, datetime
+
+    epoch = current_epoch(db) if epoch is None else epoch
+    now = time.monotonic()
+    with _lock:
+        hit = _shared_cache.get(project_id)
+    fresh = hit and hit[0] == epoch and now - hit[1] < _TTL_S
+    if fresh and not _expired(hit[2], datetime.now(UTC)):
+        return hit[2]
+    from app.services import resource_shares
+
+    value = resource_shares.load_received(db, project_id)
+    with _lock:
+        if len(_shared_cache) >= _MAX_SHARED_PROJECTS:
+            _shared_cache.clear()
+        _shared_cache[project_id] = (epoch, now, value)
+    return value
+
+
+def _expired(value: SharedResources, now: Any) -> bool:
+    until = value.valid_until
+    if until is None:
+        return False
+    if until.tzinfo is None:
+        from datetime import UTC
+
+        until = until.replace(tzinfo=UTC)
+    return until <= now
+
+
+def shared_rows(db: Session, project_id: str) -> dict[str, frozenset[str]]:
+    """``{table: row ids}`` for the ORM criteria (``core/project_scope.py``)."""
+    return shared_for(db, project_id).rows
 
 
 # ── the request's project ─────────────────────────────────────────────────────
