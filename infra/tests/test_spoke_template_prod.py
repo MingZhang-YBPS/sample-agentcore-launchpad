@@ -105,3 +105,13 @@ def test_project_boundary_statements_match_the_standard_template(standard, prod)
     prd = {s["Sid"]: s for s in _statements(prod)}
     for sid in sids:
         assert prd[sid] == std[sid], sid
+
+
+def test_cost_tags_work_the_same_in_a_prod_workspace(standard, prod):
+    """Cost tags (cost-tags design §1.5): the log-group tagging and Cost Explorer
+    statements are copied verbatim; the shared repository can be tagged too."""
+    std = {s["Sid"]: s for s in _statements(standard)}
+    prd = {s["Sid"]: s for s in _statements(prod)}
+    for sid in ("CostTagsAgentLogGroups", "CostExplorerByTag"):
+        assert prd[sid] == std[sid], sid
+    assert {"ecr:TagResource", "ecr:ListTagsForResource"} <= set(prd["EcrLaunchpad"]["Action"])

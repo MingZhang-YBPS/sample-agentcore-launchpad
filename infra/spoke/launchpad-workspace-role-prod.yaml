@@ -310,6 +310,9 @@ Resources:
               # (roadmap T24), then reads back its digest and scan findings. No
               # build, no docker login (GetAuthorizationToken), and no read of
               # layers out of this account (GetDownloadUrlForLayer/BatchGetImage).
+              # TagResource / ListTagsForResource: the shared repository's cost tags
+              # (launchpad:project=shared, cost-tags design §1.2), at create
+              # (CreateRepository with tags=) and by the cost_tags_backfill job.
               - Sid: EcrLaunchpad
                 Effect: Allow
                 Action:
@@ -317,6 +320,8 @@ Resources:
                   - ecr:DescribeImageScanFindings
                   - ecr:DescribeImages
                   - ecr:DescribeRepositories
+                  - ecr:ListTagsForResource
+                  - ecr:TagResource
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/launchpad-agents"
 
@@ -597,6 +602,33 @@ Resources:
                   - logs:PutRetentionPolicy
                 Resource:
                   - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/evaluations/*"
+
+              # ── Cost tags (cost-tags design §1.2 / §1.5) ───────────────────
+              # An agent runtime's log groups carry its project's cost tags,
+              # written by the cost_tags_backfill job. IAM roles (TagRole on
+              # launchpad-*), AgentCore resources (bedrock-agentcore:*), KBs
+              # (bedrock:TagResource) and the token vault's secrets
+              # (secretsmanager:TagResource) are tagged under their own
+              # statements above.
+              - Sid: CostTagsAgentLogGroups
+                Effect: Allow
+                Action:
+                  - logs:ListTagsForResource
+                  - logs:TagResource
+                Resource:
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
+
+              # The bill by launchpad:project (cost-tags design §1.4): Cost Explorer
+              # and the cost-allocation-tag switch take no resource. Activating the
+              # tags is optional — an organization member account is refused and
+              # the console says so.
+              - Sid: CostExplorerByTag
+                Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                  - ce:ListCostAllocationTags
+                  - ce:UpdateCostAllocationTagsStatus
+                Resource: "*"
 
               # ── Secrets Manager (AgentCore Identity token vault) ──────────
               # LIVE-OBSERVED, not call-site derivable (2026-08-13, first spoke
