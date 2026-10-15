@@ -1,10 +1,23 @@
-import { ChevronDown, Plus, X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { ArrowRight, ChevronDown, Plus, X } from "lucide-react";
+import { type ReactNode, useEffect, useId, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { type AgentForm, strandsContext } from "../../../lib/agent-spec";
+import { api } from "../../../lib/api";
 import {
+  agentToolBlock,
+  agentToolRow,
+  backoffDelays,
   bedrockOnlyApplies,
+  MAX_AGENT_TOOLS,
+  type ProviderChoice,
+  PROVIDERS,
+  providerApplies,
+  RETRY_DEFAULTS,
+  SB2_KEYS_SHOWN_ON_CONTINUE,
+  type Sb2IssueKey,
+  sb2Issues,
+  splitList,
   type ConversationChoice,
   emptyStrandsForm,
   EXAMPLE_OUTPUT_SCHEMA,
@@ -19,10 +32,12 @@ import {
   strandsIssues,
   type StrandsTool,
 } from "../../../lib/strands-builder";
-import { Button, Card, Field, Segmented } from "../../ui";
+import { useLoad } from "../../hooks";
+import { Button, Card, Field, Segmented, Select } from "../../ui";
 import { ISSUE_KEYS_SHOWN_ON_CONTINUE, sb, type StrandsGroupKey } from "./strandsGroups";
 import type { SectionProps } from "./wizardKit";
 import "./strands-sections.css";
+import "./strands-sections-sb2.css";
 
 /**
  * The Strands (zip_runtime) configure step as five collapsible groups — Basics /
@@ -30,6 +45,11 @@ import "./strands-sections.css";
  * "共同要求") — plus the SB-1 cards that fill them. Every group and option carries
  * one "when to use" line; the closed head shows a mono readout of what is set, so
  * a collapsed group still says what it holds.
+ *
+ * SB-2 rides inside the same cards so every group keeps its place: the Tools group
+ * gains "Other agents as tools" and "Tool-call guards" (under the curated tools),
+ * Model behaviour gains the model provider (head of the parameters card) and
+ * throttling retry (its foot).
  */
 
 export function StrandsGroup({
@@ -107,6 +127,21 @@ function useIssue(form: AgentForm, touched: boolean) {
   };
 }
 
+/** The SB-2 counterpart of `useIssue` (own keys, same touched rule). */
+function useSb2Issue(form: AgentForm, touched: boolean) {
+  const { t } = useTranslation();
+  const issues = sb2Issues(form.strands, strandsContext(form));
+  return (key: Sb2IssueKey): string | undefined => {
+    const detail = issues[key];
+    if (detail === undefined) return undefined;
+    if (!detail && !touched && SB2_KEYS_SHOWN_ON_CONTINUE.includes(key)) return undefined;
+    return t(`strandsBuilder.err.${key}`, { detail });
+  };
+}
+
+/** A drafted form saved before SB-2 has no SB-2 slice: fill the defaults in. */
+const sb2Form = (form: AgentForm): StrandsForm => ({ ...emptyStrandsForm(), ...sb(form) });
+
 /* ── Tools: the curated strands-agents-tools ─────────────────────────────── */
 
 /** Mounted inside the Strands tools card (MethodSections). */
@@ -125,6 +160,7 @@ export function StrandsToolPicker({ form, set, touched }: Pick<SectionProps, "fo
       ? t(form.protocol === "a2a" ? "strandsBuilder.tools.retrieveA2a" : "strandsBuilder.tools.retrieveNoKb")
       : null;
   return (
+    <>
     <Field
       label={t("strandsBuilder.tools.label")}
       hint={s.tools.length ? t("strandsBuilder.tools.replaceNote") : t("strandsBuilder.tools.hint")}
@@ -170,6 +206,336 @@ export function StrandsToolPicker({ form, set, touched }: Pick<SectionProps, "fo
         </div>
       )}
     </Field>
+    <AgentToolsPanel form={form} set={set} touched={touched} />
+    <ToolGuardsPanel form={form} set={set} touched={touched} />
+    </>
+  );
+}
+
+/* ── Tools: other agents as tools (SB-2) ─────────────────────────────────── */
+
+/** Pick deployed agents of this project to call as tools; each becomes a relay
+ *  row — the agent, the tool name the model sees, and when to call it. */
+function AgentToolsPanel({ form, set, touched }: Pick<SectionProps, "form" | "set"> & { touched: boolean }) {
+  const { t } = useTranslation();
+  const s = sb2Form(form);
+  const patch = useStrands(set);
+  const issue = useSb2Issue(form, touched);
+  const load = useLoad(() => api.listAgents(), "sb2-agent-tools");
+  const agents = useMemo(() => load.data?.agents ?? [], [load.data]);
+  const picked = new Set(s.agentTools.map((r) => r.agentId));
+  const verdicts = agents.filter((a) => !picked.has(a.id)).map((a) => ({ agent: a, block: agentToolBlock(a, form.name.trim()) }));
+  const open = verdicts.filter((v) => v.block === null);
+  const blocked = verdicts.filter((v) => v.block !== null && v.block !== "self");
+  const full = s.agentTools.length >= MAX_AGENT_TOOLS;
+  const setRow = (i: number, change: Partial<StrandsForm["agentTools"][number]>) =>
+    patch((prev) => ({ agentTools: (prev.agentTools ?? []).map((r, j) => (j === i ? { ...r, ...change } : r)) }));
+  const add = (id: string) => {
+    const agent = agents.find((a) => a.id === id);
+    if (agent) patch((prev) => ({ agentTools: [...(prev.agentTools ?? []), agentToolRow(agent)] }));
+  };
+  const rowIssue = issue("agentToolName") ?? issue("agentToolDuplicate") ?? issue("agentToolDescription") ?? issue("agentToolCount");
+  return (
+    <Field label={t("strandsBuilder.agents.label")} hint={t("strandsBuilder.agents.hint")} error={rowIssue}>
+      <div className="sb2-agents" data-testid="sb-agent-tools">
+        {s.agentTools.length > 0 && (
+          <ol className="sb2-relays">
+            {s.agentTools.map((row, i) => (
+              <li key={row.agentId} className="sb2-relay" data-testid={`sb-agent-tool-${row.agentId}`}>
+                <div className="sb2-relay-head">
+                  <span className="sb-lamp on" aria-hidden="true" />
+                  <span className="sb2-relay-agent">{agents.find((a) => a.id === row.agentId)?.display_name || agents.find((a) => a.id === row.agentId)?.name || row.label}</span>
+                  <span className="sb-chip mono">{row.protocol === "a2a" ? "A2A" : "HTTP"}</span>
+                  {row.sharedFrom && <span className="sb-chip">{t("strandsBuilder.agents.sharedFrom", { project: row.sharedFrom })}</span>}
+                  <ArrowRight size={14} className="sb2-relay-arrow" aria-hidden="true" />
+                  <input
+                    className="v2-input mono sb2-relay-name"
+                    value={row.toolName}
+                    aria-label={t("strandsBuilder.agents.toolName")}
+                    onChange={(e) => setRow(i, { toolName: e.target.value })}
+                    data-testid={`sb-agent-tool-name-${row.agentId}`}
+                  />
+                  <button
+                    type="button"
+                    className="sb-x"
+                    aria-label={t("strandsBuilder.remove")}
+                    onClick={() => patch((prev) => ({ agentTools: (prev.agentTools ?? []).filter((_, j) => j !== i) }))}
+                  >
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </div>
+                <textarea
+                  className="v2-textarea"
+                  rows={2}
+                  value={row.description}
+                  placeholder={t("strandsBuilder.agents.descriptionPlaceholder")}
+                  aria-label={t("strandsBuilder.agents.description")}
+                  onChange={(e) => setRow(i, { description: e.target.value })}
+                />
+              </li>
+            ))}
+          </ol>
+        )}
+        <div className="sb2-agents-pick">
+          <Select
+            value=""
+            placeholder={
+              load.loading
+                ? t("strandsBuilder.agents.loading")
+                : open.length
+                  ? t("strandsBuilder.agents.add")
+                  : t("strandsBuilder.agents.none")
+            }
+            options={open.map(({ agent }) => ({ value: agent.id, label: agent.display_name || agent.name }))}
+            onChange={(id) => id && add(id)}
+            disabled={full || load.loading || !open.length}
+            ariaLabel={t("strandsBuilder.agents.add")}
+            testId="sb-agent-tool-add"
+          />
+          {load.error && (
+            <Button size="sm" onClick={load.reload}>
+              {t("strandsBuilder.agents.retry")}
+            </Button>
+          )}
+        </div>
+        {blocked.length > 0 && (
+          <details className="sb2-blocked">
+            <summary>{t("strandsBuilder.agents.blocked", { count: blocked.length })}</summary>
+            <ul>
+              {blocked.map(({ agent, block }) => (
+                <li key={agent.id}>
+                  <span className="mono">{agent.display_name || agent.name}</span>
+                  <span>{t(`strandsBuilder.agents.block.${block}`)}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        <p className="sb-fine">{t("strandsBuilder.agents.roleNote")}</p>
+      </div>
+    </Field>
+  );
+}
+
+/* ── Tools: tool-call guards (SB-2) ──────────────────────────────────────── */
+
+function ToolGuardsPanel({ form, set, touched }: Pick<SectionProps, "form" | "set"> & { touched: boolean }) {
+  const { t } = useTranslation();
+  const s = sb2Form(form);
+  const patch = useStrands(set);
+  const issue = useSb2Issue(form, touched);
+  const approval = splitList(s.approvalTools);
+  const masked = ["password", "token", ...splitList(s.maskArgs).map((a) => a.toLowerCase())];
+  const sampleTool = approval.find((a) => !a.includes("*")) ?? s.agentTools[0]?.toolName ?? "send_email";
+  const sampleArgs = JSON.stringify({ to: "ops@example.com", [masked[masked.length - 1]]: "***" });
+  return (
+    <Field label={t("strandsBuilder.guards.label")} hint={t("strandsBuilder.guards.hint")}>
+      <div className="sb2-guards" data-testid="sb-tool-guards">
+        <div className="sb2-guard">
+          <span className="sb2-guard-k">{t("strandsBuilder.guards.approval")}</span>
+          <input
+            className="v2-input mono"
+            value={s.approvalTools}
+            placeholder="send_email, crm___*"
+            aria-label={t("strandsBuilder.guards.approval")}
+            onChange={(e) => patch({ approvalTools: e.target.value })}
+            data-testid="sb-approval-tools"
+          />
+          <span className="sb2-guard-when">{t("strandsBuilder.guards.approvalWhen")}</span>
+          {issue("approvalTools") && <span className="sb-err">{issue("approvalTools")}</span>}
+          {approval.length > 0 && (
+            <div className="sb-chips">
+              {approval.map((name) => (
+                <span key={name} className="sb-chip mono sb2-pause">
+                  {name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="sb2-guard">
+          <span className="sb2-guard-k">{t("strandsBuilder.guards.cap")}</span>
+          <input
+            className="v2-input mono sb-narrow"
+            inputMode="numeric"
+            value={s.maxToolCalls}
+            placeholder={t("strandsBuilder.guards.capNone")}
+            aria-label={t("strandsBuilder.guards.cap")}
+            onChange={(e) => patch({ maxToolCalls: e.target.value })}
+            data-testid="sb-max-tool-calls"
+          />
+          <span className="sb2-guard-when">{t("strandsBuilder.guards.capWhen")}</span>
+          {issue("maxToolCalls") && <span className="sb-err">{issue("maxToolCalls")}</span>}
+        </div>
+        <label className="sb-toggle sb2-guard-wide">
+          <input
+            type="checkbox"
+            checked={s.logToolCalls}
+            onChange={(e) => patch({ logToolCalls: e.target.checked })}
+            data-testid="sb-log-tool-calls"
+          />
+          <span className="sb-toggle-text">
+            <span className="sb-toggle-name">{t("strandsBuilder.guards.log")}</span>
+            <span className="sb-toggle-when">{t("strandsBuilder.guards.logWhen")}</span>
+          </span>
+        </label>
+        {(s.logToolCalls || approval.length > 0) && (
+          <div className="sb-reveal sb2-guard-wide">
+            <Field label={t("strandsBuilder.guards.mask")} hint={t("strandsBuilder.guards.maskWhen")} error={issue("maskArgs")}>
+              <input
+                className="v2-input mono"
+                value={s.maskArgs}
+                placeholder="card_number, ssn"
+                onChange={(e) => patch({ maskArgs: e.target.value })}
+                data-testid="sb-mask-args"
+              />
+            </Field>
+            {s.logToolCalls && (
+              <pre className="sb2-logline" aria-label={t("strandsBuilder.guards.sample")}>
+                <span className="sb2-logline-tag">[launchpad-tool]</span> {sampleTool} status=success ms=412 args={sampleArgs}
+              </pre>
+            )}
+          </div>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+/* ── Model behaviour: model provider (SB-2) ──────────────────────────────── */
+
+function ProviderPanel({ form, set, touched }: Pick<SectionProps, "form" | "set"> & { touched: boolean }) {
+  const { t } = useTranslation();
+  const s = sb2Form(form);
+  const patch = useStrands(set);
+  const issue = useSb2Issue(form, touched);
+  const applies = providerApplies(form);
+  const external = applies && s.provider !== "bedrock";
+  const load = useLoad(() => (external ? api.listConnections() : Promise.resolve({ connections: [] })), `sb2-conn-${external}`);
+  const keys = (load.data?.connections ?? []).filter((c) => c.kind === "api_key");
+  const options = keys.map((c) => ({ value: c.name, label: c.name }));
+  if (s.providerConnection && !keys.some((c) => c.name === s.providerConnection)) {
+    options.unshift({ value: s.providerConnection, label: s.providerConnection });
+  }
+  // A2A and Mantle agents keep their Bedrock surface; a choice left over from a
+  // protocol / source change says why it is not sent
+  if (!applies) return s.provider !== "bedrock" ? <p className="sb-fine">{t("strandsBuilder.provider.notHere")}</p> : null;
+  return (
+    <div className="sb2-provider" data-testid="sb-model-provider">
+      <Field label={t("strandsBuilder.provider.label")} hint={t(`strandsBuilder.provider.when.${s.provider}`)}>
+        <Segmented<ProviderChoice>
+          value={s.provider}
+          ariaLabel={t("strandsBuilder.provider.label")}
+          options={PROVIDERS.map((value) => ({ value, label: t(`strandsBuilder.provider.kind.${value}`) }))}
+          onChange={(provider) => patch({ provider })}
+        />
+      </Field>
+      {external && (
+        <div className="sb-reveal">
+          <div className="sb-grid-3 sb2-provider-grid">
+            <Field label={t("strandsBuilder.provider.connection")} required error={issue("providerConnection")}>
+              <Select
+                value={s.providerConnection}
+                placeholder={load.loading ? t("strandsBuilder.agents.loading") : t("strandsBuilder.provider.pickConnection")}
+                options={options}
+                onChange={(providerConnection) => patch({ providerConnection })}
+                mono
+                ariaLabel={t("strandsBuilder.provider.connection")}
+                testId="sb-provider-connection"
+              />
+            </Field>
+            <Field
+              label={t("strandsBuilder.provider.baseUrl")}
+              required={s.provider === "litellm"}
+              hint={t(`strandsBuilder.provider.baseUrlWhen.${s.provider}`)}
+              error={issue("providerBaseUrl")}
+            >
+              <input
+                className="v2-input mono"
+                value={s.providerBaseUrl}
+                placeholder={s.provider === "litellm" ? "https://litellm.internal:4000" : "https://api.anthropic.com"}
+                onChange={(e) => patch({ providerBaseUrl: e.target.value })}
+                data-testid="sb-provider-base-url"
+              />
+            </Field>
+          </div>
+          {!load.loading && !keys.length && <p className="sb-fine">{t("strandsBuilder.provider.noKeys")}</p>}
+          {issue("providerConverse") && <p className="sb-err">{issue("providerConverse")}</p>}
+          <ol className="sb2-keypath" aria-label={t("strandsBuilder.provider.keyPath")}>
+            <li>
+              <span className="sb2-keypath-k">{t("strandsBuilder.provider.path.connection")}</span>
+              <span className="mono">{s.providerConnection || "—"}</span>
+            </li>
+            <li>
+              <span className="sb2-keypath-k">{t("strandsBuilder.provider.path.vault")}</span>
+              <span className="mono">GetResourceApiKey</span>
+            </li>
+            <li>
+              <span className="sb2-keypath-k">{t("strandsBuilder.provider.path.runtime")}</span>
+              <span className="mono">{form.modelId.trim() || "model"}</span>
+            </li>
+          </ol>
+          <p className="sb-fine">{t("strandsBuilder.provider.modelNote")}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Model behaviour: throttling retry (SB-2) ────────────────────────────── */
+
+function RetryPanel({ form, set, touched }: Pick<SectionProps, "form" | "set"> & { touched: boolean }) {
+  const { t } = useTranslation();
+  const s = sb2Form(form);
+  const patch = useStrands(set);
+  const issue = useSb2Issue(form, touched);
+  const n = (v: string, d: number) => (Number.isFinite(Number(v)) && v.trim() ? Number(v) : d);
+  const delays = backoffDelays(n(s.retryAttempts, RETRY_DEFAULTS.attempts), n(s.retryInitial, RETRY_DEFAULTS.initial), n(s.retryMax, RETRY_DEFAULTS.max));
+  const peak = Math.max(1, ...delays);
+  const total = delays.reduce((a, b) => a + b, 0);
+  const field = (key: "retryAttempts" | "retryInitial" | "retryMax") => (
+    <Field label={t(`strandsBuilder.retry.${key}`)} error={issue(key)}>
+      <input
+        className="v2-input mono sb-narrow"
+        inputMode="numeric"
+        value={s[key]}
+        onChange={(e) => patch({ [key]: e.target.value })}
+        data-testid={`sb-${key}`}
+      />
+    </Field>
+  );
+  return (
+    <div className="sb2-retry" data-testid="sb-retry">
+      <label className="sb-toggle">
+        <input type="checkbox" checked={s.retry} onChange={(e) => patch({ retry: e.target.checked })} data-testid="sb-retry-on" />
+        <span className="sb-toggle-text">
+          <span className="sb-toggle-name">{t("strandsBuilder.retry.label")}</span>
+          <span className="sb-toggle-when">{t(s.retry ? "strandsBuilder.retry.when" : "strandsBuilder.retry.default")}</span>
+        </span>
+      </label>
+      {s.retry && (
+        <div className="sb-reveal">
+          <div className="sb-grid-3">
+            {field("retryAttempts")}
+            {field("retryInitial")}
+            {field("retryMax")}
+          </div>
+          <div className="sb2-ladder" aria-label={t("strandsBuilder.retry.ladder", { total })}>
+            {delays.length ? (
+              delays.map((d, i) => (
+                <span key={i} className="sb2-rung" style={{ ["--h" as string]: `${Math.max(8, (d / peak) * 100)}%`, ["--i" as string]: i }}>
+                  <span className="sb2-rung-bar" aria-hidden="true" />
+                  <span className="sb2-rung-v">{d}s</span>
+                </span>
+              ))
+            ) : (
+              <span className="sb-fine">{t("strandsBuilder.retry.noRetry")}</span>
+            )}
+          </div>
+          {delays.length > 0 && <p className="sb-fine">{t("strandsBuilder.retry.ladder", { total })}</p>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -197,6 +563,7 @@ export function ModelParamsCard({ form, set, touched }: Pick<SectionProps, "form
   return (
     <Card title={t("strandsBuilder.params.title")} sub={t("strandsBuilder.params.sub")} testId="sb-model-params">
       <div className="v2-form">
+        <ProviderPanel form={form} set={set} touched={touched} />
         <div className="sb-grid-3">
           {numField("temperature", "0 – 1")}
           {numField("topP", "0 – 1")}
@@ -263,6 +630,7 @@ export function ModelParamsCard({ form, set, touched }: Pick<SectionProps, "form
             </Field>
           </div>
         )}
+        <RetryPanel form={form} set={set} touched={touched} />
       </div>
     </Card>
   );

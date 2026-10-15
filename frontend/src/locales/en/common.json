@@ -14634,7 +14634,20 @@
       "outputSchemaA2a": "A2A agents cannot return structured output — clear the schema.",
       "outputSchemaGuardrail": "Structured output cannot be combined with PII protection yet.",
       "variables": "Variable names start with a letter or _ and are unique (at most 20). {{detail}}",
-      "fewShot": "Every example needs both a question and an answer (at most 10)."
+      "fewShot": "Every example needs both a question and an answer (at most 10).",
+      "agentToolName": "Tool names start with a letter, then letters, digits or _ (at most 64): {{detail}}",
+      "agentToolDuplicate": "Tool name {{detail}} is already used — rename it.",
+      "agentToolDescription": "Describe when to call each agent (at most 1000 characters).",
+      "agentToolCount": "At most {{detail}} agents can be offered as tools.",
+      "providerConnection": "Pick the API key Connection that holds the provider's key.",
+      "providerBaseUrl": "Enter the gateway's http(s) address — no credentials, query or fragment. {{detail}}",
+      "providerConverse": "Extended thinking and prompt caching are Bedrock options — turn them off for this provider.",
+      "approvalTools": "Approval entries are tool names or * patterns: {{detail}}",
+      "maxToolCalls": "Tool calls per turn must be a whole number from 1 to 500.",
+      "maskArgs": "Masked arguments are names of letters, digits, _ . or -: {{detail}}",
+      "retryAttempts": "Attempts must be a whole number from 1 to 10.",
+      "retryInitial": "The first delay must be 1 to 60 seconds.",
+      "retryMax": "The ceiling must be 1 to 600 seconds and at least the first delay."
     },
     "structured": {
       "label": "Structured answer",
@@ -14655,6 +14668,80 @@
       "schema_other": "{{count}} fields: {{fields}}",
       "examples_one": "{{count}} example",
       "examples_other": "{{count}} examples"
+    },
+    "agents": {
+      "label": "Other agents as tools",
+      "hint": "Deployed agents of this project the model can hand a sub-task to. Use it when another agent already owns a domain — billing, a policy desk, a research assistant.",
+      "add": "Add an agent…",
+      "loading": "Loading…",
+      "none": "No other deployed agent can be called",
+      "retry": "Retry",
+      "toolName": "Tool name the model sees",
+      "description": "When to call it",
+      "descriptionPlaceholder": "Say what this agent knows and when to ask it — the model reads this to decide.",
+      "sharedFrom": "from {{project}}",
+      "blocked": "{{count}} agents of this project cannot be called",
+      "block": {
+        "self": "This is the agent being edited.",
+        "not_runtime": "A managed Harness agent cannot be called as a tool yet.",
+        "not_deployed": "Not deployed.",
+        "protocol": "An MCP server — attach it as a tool instead.",
+        "jwt_inbound": "Accepts JWT bearer tokens only; this agent signs with IAM."
+      },
+      "roleNote": "Calls run with this agent's own execution role; the platform grants invoke on exactly these runtimes. Sub-agents of an agent stop at depth 3."
+    },
+    "guards": {
+      "label": "Tool-call guards",
+      "hint": "Hooks around every tool call: pause for a person, cap the calls, keep a masked log.",
+      "approval": "Needs approval",
+      "approvalWhen": "Tools with side effects (send, pay, delete). The console chat shows an approval card; /v1, evaluations and other agents get a clear refusal instead.",
+      "cap": "Tool calls per turn",
+      "capNone": "No cap",
+      "capWhen": "Stops a looping agent; the next call is refused and the model told to answer.",
+      "log": "Log every tool call",
+      "logWhen": "One line per call in the runtime log group: name, status, duration and arguments.",
+      "mask": "Masked arguments",
+      "maskWhen": "Argument names shown as *** in the log and on the approval card — password, secret, token, api_key and authorization always are.",
+      "sample": "Sample log line"
+    },
+    "provider": {
+      "label": "Model provider",
+      "kind": {
+        "bedrock": "Bedrock",
+        "anthropic": "Anthropic API",
+        "litellm": "LiteLLM gateway"
+      },
+      "when": {
+        "bedrock": "The model from Basics, through Bedrock with this agent's role — no key needed.",
+        "anthropic": "Call Claude on the Anthropic API directly, with your organisation's API key.",
+        "litellm": "Route through your company's LiteLLM gateway — one entry point, its own keys and budgets."
+      },
+      "connection": "API key Connection",
+      "pickConnection": "Pick a Connection…",
+      "noKeys": "No API key Connection yet — create one under Identity → Connections, then pick it here.",
+      "baseUrl": "Base URL",
+      "baseUrlWhen": {
+        "anthropic": "Optional — only for a proxy in front of the Anthropic API.",
+        "litellm": "The gateway's address, e.g. https://litellm.internal:4000."
+      },
+      "keyPath": "Where the key travels",
+      "path": {
+        "connection": "Connection",
+        "vault": "Token vault",
+        "runtime": "Runtime, per request"
+      },
+      "modelNote": "The key is read from the token vault at run time and never stored in the agent's spec. Set the model in Basics to the provider's model name (a custom model id).",
+      "notHere": "A model provider applies to HTTP agents on Bedrock only — this agent keeps its Bedrock model."
+    },
+    "retry": {
+      "label": "Custom throttling retry",
+      "default": "Off: the SDK default — 6 attempts, 4 s doubling to 240 s.",
+      "when": "When the model throttles, wait and try again; the delay doubles up to the ceiling.",
+      "retryAttempts": "Attempts",
+      "retryInitial": "First delay (s)",
+      "retryMax": "Delay ceiling (s)",
+      "ladder": "Waits at most {{total}} s in all before the turn fails.",
+      "noRetry": "One attempt — a throttled call fails at once."
     }
   }
 }

@@ -472,6 +472,47 @@ def _tool_auth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, A
     return statements
 
 
+def _agent_tool_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
+    """Agents-as-tools (strands-builder SB-2): invoke exactly the runtimes the spec
+    offers as tools — the runtime ARN and the endpoint its production traffic uses.
+
+    The ARNs are server-owned (``services.agent_tools`` resolves them from the ledger
+    on save and again in the generate stage, before this runs), and only ARNs of
+    this account and region are granted. ``InvokeAgentRuntimeForUser`` joins for a
+    target that needs ``runtimeUserId`` (its own Gateway / identity tools).
+    """
+    prefix = f"arn:{ctx.partition}:bedrock-agentcore:{ctx.region}:{ctx.account_id}:runtime/"
+    refs = [
+        ref for ref in spec.agent_tools
+        if ref.runtime_arn and ref.runtime_arn.startswith(prefix)
+    ]
+    if not refs:
+        return []
+
+    def resources(group: list) -> list[str]:
+        arns: set[str] = set()
+        for ref in group:
+            arns.add(ref.runtime_arn)
+            arns.add(f"{ref.runtime_arn}/runtime-endpoint/{ref.qualifier}")
+        return sorted(arns)
+
+    statements: list[dict[str, Any]] = [{
+        "Sid": "AgentToolsInvoke",
+        "Effect": "Allow",
+        "Action": ["bedrock-agentcore:InvokeAgentRuntime"],
+        "Resource": resources(refs),
+    }]
+    for_user = [ref for ref in refs if ref.runtime_user]
+    if for_user:
+        statements.append({
+            "Sid": "AgentToolsInvokeForUser",
+            "Effect": "Allow",
+            "Action": ["bedrock-agentcore:InvokeAgentRuntimeForUser"],
+            "Resource": resources(for_user),
+        })
+    return statements
+
+
 def _preset_kb_oauth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
     """The exact OAuth2-credential-provider grants the harness devguide lists for an
     OAuth-protected gateway ("Execution role policy → OAuth2 credential provider",
@@ -622,6 +663,7 @@ def policy_document(
     # Tool-level outbound auth: exact per-Connection grants, additive to (and
     # independent of) the family-wide gateway grant below.
     statements.extend(_tool_auth_statements(spec, ctx))
+    statements.extend(_agent_tool_statements(spec, ctx))
     if system_preset and spec.knowledge_bases:
         statements.extend(_preset_kb_oauth_statements(spec, ctx))
     elif _uses_gateway(spec):

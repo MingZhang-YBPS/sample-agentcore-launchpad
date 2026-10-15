@@ -11,11 +11,15 @@ from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned
 from app.schemas.strands_builder import (
+    AgentToolRef,
     ConversationConfig,
     FewShotExample,
     ModelParams,
+    ModelProvider,
+    RetryConfig,
     StrandsTool,
     StrandsToolConfig,
+    ToolHooks,
     check_builder_fields,
 )
 
@@ -811,6 +815,19 @@ class AgentSpec(BaseModel):
     prompt_variables: dict[str, str] = Field(
         default_factory=dict, max_length=20, exclude_if=lambda v: not v
     )
+    # ── SB-2 (same rules) ──
+    # other deployed agents of this project (or lent to it, §11.2) offered as tools;
+    # their runtime ARNs are server-owned (``services.agent_tools``)
+    agent_tools: list[AgentToolRef] = Field(
+        default_factory=list, max_length=10, exclude_if=lambda v: not v
+    )
+    # Anthropic API / LiteLLM gateway instead of Bedrock; the key is an Identity
+    # Connection, read by the runtime from the token vault
+    model_provider: ModelProvider | None = Field(default=None, exclude_if=lambda v: v is None)
+    # approval list, per-turn tool-call cap, masked tool-call log
+    tool_hooks: ToolHooks | None = Field(default=None, exclude_if=lambda v: v is None)
+    # throttling retry / backoff of model calls; None = the SDK default
+    retry: RetryConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def _strands_builder_fields(self) -> "AgentSpec":

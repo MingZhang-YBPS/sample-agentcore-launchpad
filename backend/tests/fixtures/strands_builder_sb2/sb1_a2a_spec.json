@@ -1,0 +1,64 @@
+{
+  "name": "snap-sb1-a2a",
+  "display_name": null,
+  "method": "zip_runtime",
+  "model_id": "global.anthropic.claude-sonnet-4-5-v1:0",
+  "model_source": "bedrock",
+  "max_tokens": null,
+  "reasoning_effort": null,
+  "agent_sdk": "claude_agent_sdk",
+  "system_prompt": "Weather for {{city}}.",
+  "tool_description_overrides": {},
+  "tools": [],
+  "toolkits": [],
+  "skills": [],
+  "native_tools": [],
+  "allowed_tools": null,
+  "requirements": [],
+  "code": null,
+  "code_bundle": null,
+  "source_harness": null,
+  "conversion_notes": null,
+  "studio_flow": null,
+  "memory": {
+    "short_term": true,
+    "long_term": false,
+    "memory_id": null
+  },
+  "guardrail": {
+    "enabled": false,
+    "mode": "anonymize"
+  },
+  "env": {},
+  "max_iterations": 100,
+  "timeout_seconds": 600,
+  "filesystem": {
+    "session_storage": {
+      "mount_path": "/mnt/workspace"
+    },
+    "s3_files": [],
+    "efs": [],
+    "mounts": []
+  },
+  "network": null,
+  "knowledge_bases": [],
+  "protocol": "a2a",
+  "mcp": null,
+  "a2a_skills": [],
+  "byoc": null,
+  "inbound_auth": null,
+  "strands_tools": [
+    "think"
+  ],
+  "model_params": {
+    "temperature": null,
+    "top_p": 0.9,
+    "max_tokens": null,
+    "stop_sequences": [],
+    "thinking_budget_tokens": null,
+    "prompt_caching": false
+  },
+  "prompt_variables": {
+    "city": "Rome"
+  }
+}

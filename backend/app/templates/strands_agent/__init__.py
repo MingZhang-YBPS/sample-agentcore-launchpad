@@ -9,7 +9,11 @@ from pathlib import Path
 from app.schemas.agent import AgentSpec
 from app.templates.attachment_support import render_attachment_source
 from app.templates.gateway_support import render_gateway_source, uses_gateway
-from app.templates.identity_support import render_identity_source, uses_identity
+from app.templates.identity_support import (
+    IDENTITY_TEMPLATE,
+    render_identity_source,
+    uses_identity,
+)
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
     KB_TOOL_NAME,
@@ -27,6 +31,27 @@ from app.templates.toolkits import (
 )
 
 TEMPLATE_DIR = Path(__file__).parent
+
+
+def _identity_source(spec: AgentSpec) -> str:
+    """The outbound-auth block — also for a ``model_provider`` spec with no auth
+    tool, whose provider key is read through the same token-vault helper
+    (``resource_api_key``); it then carries no tool of its own."""
+    source = render_identity_source(spec)
+    if source or spec.model_provider is None:
+        return source
+    return (
+        IDENTITY_TEMPLATE.read_text(encoding="utf-8")
+        .strip()
+        .replace("__LAUNCHPAD_IDENTITY_TOOLS__", "[]")
+    )
+
+
+def _notices_fn(spec: AgentSpec) -> str:
+    # tool hooks queue approval asks next to the identity block's auth asks
+    if spec.tool_hooks is not None:
+        return "launchpad_turn_notices"
+    return "identity_drain_auth_notices" if uses_identity(spec) else "lambda: []"
 
 
 def render_main_py(spec: AgentSpec) -> str:
@@ -62,17 +87,14 @@ def render_main_py(spec: AgentSpec) -> str:
             "__LAUNCHPAD_GATEWAY_TOOLS_FN__",
             "gateway_tools" if uses_gateway(spec) else "lambda _stack, _user_token=None: []",
         )
-        .replace("__LAUNCHPAD_IDENTITY_SOURCE__", render_identity_source(spec))
+        .replace("__LAUNCHPAD_IDENTITY_SOURCE__", _identity_source(spec))
         .replace(
             "__LAUNCHPAD_IDENTITY_TOOLS_FN__",
             "identity_tools"
             if uses_identity(spec)
             else 'lambda _stack, _session_id="", _force_reauth=(): []',
         )
-        .replace(
-            "__LAUNCHPAD_IDENTITY_NOTICES_FN__",
-            "identity_drain_auth_notices" if uses_identity(spec) else "lambda: []",
-        )
+        .replace("__LAUNCHPAD_IDENTITY_NOTICES_FN__", _notices_fn(spec))
         .replace("__LAUNCHPAD_TOOLKIT_TOOLS__", toolkit_tools)
         .replace(
             "__LAUNCHPAD_TOOLKIT_TOOL_DESCRIPTIONS__",
