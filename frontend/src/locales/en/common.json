@@ -13995,6 +13995,166 @@
         "conflict": "Differs from the SSO mapping ({{role}})"
       },
       "refresh": "Refresh"
+    },
+    "costTags": {
+      "nav": "Cost tags",
+      "eyebrow": "Configure",
+      "title": "Cost tags",
+      "sub": "The tags the platform writes on every resource of {{workspace}}, and whether AWS Billing groups cost by them yet.",
+      "recheck": "Check again",
+      "openBilling": "Billed cost",
+      "activation": "Cost allocation",
+      "account": {
+        "standalone": "standalone account",
+        "management": "organization management account",
+        "member": "organization member account",
+        "unknown": "account type unknown"
+      },
+      "ofActive": "of {{total}} keys active",
+      "status": {
+        "active": "Active",
+        "inactive": "Inactive",
+        "not_found": "Not seen yet",
+        "unknown": "Unknown"
+      },
+      "unreadable": "Billing could not be read ({{code}}). The workspace role needs ce:ListCostAllocationTags.",
+      "memberTitle": "This account belongs to an AWS Organization: cost allocation tags are activated in its management account.",
+      "memberStep1": "Sign in to the management account {{account}}.",
+      "memberStep2": "Open Billing and Cost Management → Cost allocation tags → User-defined.",
+      "memberStep3": "Select and activate: {{keys}}.",
+      "activate_one": "Activate {{count}} key",
+      "activate_other": "Activate {{count}} keys",
+      "activateHint": "Changes this account's Billing settings. AWS applies an activation to new line items within about {{hours}} hours; earlier cost stays untagged.",
+      "waitingForBilling": "Billing has not seen the remaining keys on a resource yet. They appear up to a day after the first tagged resource and can be activated then.",
+      "allActive": "Every key is active. Cost Explorer groups new line items by them.",
+      "checked": "checked {{when}} · account {{account}}",
+      "activated_one": "Activated {{count}} cost allocation tag",
+      "activated_other": "Activated {{count}} cost allocation tags",
+      "notFoundYet_one": "{{count}} key is not in Billing yet: activate it again in a day",
+      "notFoundYet_other": "{{count}} keys are not in Billing yet: activate them again in a day",
+      "ledger": "Tag set",
+      "ledgerEnd": "workspace-shared resources carry launchpad:project={{shared}}",
+      "col": {
+        "key": "Key",
+        "value": "Value",
+        "role": "Role",
+        "status": "Billing",
+        "lastUsed": "Last used"
+      },
+      "value": {
+        "project": "the project id",
+        "workspace": "the workspace id",
+        "agent-id": "the agent id (agent resources)",
+        "managed-by": "launchpad",
+        "department": "the department id",
+        "custom": "set per project"
+      },
+      "role": {
+        "primary": "primary",
+        "dimension": "dimension",
+        "custom": "custom"
+      },
+      "path": "From tagged resource to billed project",
+      "pathHint": "Cost Explorer only groups by a tag once it is active, and only for cost incurred after that.",
+      "stage": {
+        "tagged": "Tagged",
+        "taggedDetail": "on create and update",
+        "active": "Activated",
+        "activeDetail": {
+          "unreadable": "status unreadable",
+          "inactive": "launchpad:project is not active",
+          "settling": "launchpad:project is active",
+          "billing": "launchpad:project is active"
+        },
+        "settling": "Settling",
+        "settlingDetail": "about {{hours}} h in Billing",
+        "billed": "Billed by project",
+        "billedDetail": "the billing view on Costs"
+      },
+      "sumTitle": "How a project's billed cost is built",
+      "sum": {
+        "taggedOp": "tagged",
+        "tagged": "Its own resources",
+        "taggedBody": "Line items whose launchpad:project is the project id, per service.",
+        "sharedOp": "+ allocated",
+        "shared": "A share of the shared infrastructure",
+        "sharedBody": "Resources tagged {{shared}} (gateways, the shared memory, the sign-in pool), split by each project's invocations over the window and marked as allocated.",
+        "untaggedOp": "nobody's",
+        "untagged": "Untagged cost stays apart",
+        "untaggedBody": "Line items without the tag — cost from before activation, untagged resources, anything the platform did not create — are listed, never allocated."
+      },
+      "backfill": "Backfill existing resources",
+      "backfillPending": "The backfill job is not available in this build yet.",
+      "backfillBody": "It will tag resources created before the tag set, record each resource's result (tagged, unsupported, denied) and show coverage here, so missing IAM permissions are easy to find.",
+      "basis": {
+        "estimate": "Estimate",
+        "billing": "Billed"
+      },
+      "billing": {
+        "inactive": "launchpad:project is not active as a cost allocation tag, so every dollar below is untagged.",
+        "activateLink": "Activate it under Configure → Cost tags.",
+        "basisDiff": "Billed cost is what AWS charged this region, all services, by the launchpad:project tag; it trails by up to a day and includes infrastructure. The estimate is model tokens × the price map, available within minutes. Expect them to differ.",
+        "total": "Billed · this region",
+        "window": "{{start}} → {{end}}",
+        "estimate30": "Estimate · 30 days",
+        "estimateFoot": "tokens × price map",
+        "shared": "Shared infrastructure",
+        "sharedAllocated": "allocated by invocations",
+        "sharedUnallocated": "not allocated: no invocations",
+        "untagged": "Untagged",
+        "untaggedFoot": "allocated to no project",
+        "daily": "Daily · 30 days",
+        "monthly": "Monthly · 6 months",
+        "refresh": "Read Cost Explorer",
+        "provisional": "current period provisional",
+        "cached": "cached {{when}} · {{region}} · refreshed every 6 h",
+        "fresh": "read {{when}} · {{region}}",
+        "perDay": "Billed per day",
+        "perMonth": "Billed per month",
+        "stripLabel": "Billed cost per period",
+        "byProject": "Billed by project",
+        "empty": "No billed cost in this window",
+        "colInvocations": "Invocations",
+        "colEstimate": "Estimate",
+        "colGap": "Billed vs. est.",
+        "colServices": "Top services",
+        "allocTitle": "This project's share of the shared infrastructure, by invocations",
+        "alloc": "shared",
+        "sharedRow": "Shared infrastructure",
+        "allocated": "allocated",
+        "unallocated": "not allocated",
+        "untaggedRow": "Untagged",
+        "weightsError": "Invocations could not be read ({{error}}), so the shared row is not allocated."
+      },
+      "project": {
+        "title": "Cost tags",
+        "sub": "Written on the project's resources next to the platform's own keys — for example your company's cost center. Activate new keys under Configure → Cost tags to bill by them.",
+        "fixed": "Tags the platform writes",
+        "keyPlaceholder": "CostCenter",
+        "valuePlaceholder": "1234",
+        "remove": "Remove",
+        "error": {
+          "empty": "A key is required",
+          "long": "Keys are at most 128 characters, values 256",
+          "reserved": "Keys may not start with aws: or launchpad:",
+          "chars": "Letters, digits, spaces and _ . : / = + - @ only",
+          "duplicate": "This key is given twice (keys compare case-insensitively)"
+        },
+        "none": "No custom cost tags.",
+        "add": "Add tag",
+        "count": "{{count}} / {{max}}",
+        "saved": "Saved the cost tags of {{name}}",
+        "basis": "Budget compares against",
+        "basisName": {
+          "estimate": "Estimate",
+          "billing": "Billed cost"
+        },
+        "basisHint": {
+          "estimate": "Model tokens × the price map: within minutes, models only.",
+          "billing": "What AWS billed under launchpad:project plus the allocated shared share: every service, up to a day behind."
+        },
+        "basisSaved": "Changed the budget basis of {{name}}"
+      }
     }
   },
   "models": {

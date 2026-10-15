@@ -1,0 +1,82 @@
+/* V3 cost tags — a tag key drawn as the label it is: a notched mono tab with a hole,
+   lit by its activation lamp; billed cost as a ledger whose rows add up in a column. */
+
+/* the tag key: a luggage-tag tab (notched left edge, punched hole) */
+.v3 .v3-ctag {
+  position: relative; display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 10px 3px 18px; font-family: var(--v3-mono); font-size: 12px; color: var(--v3-text);
+  background: var(--v3-ink-2); border: 1px solid var(--v3-line);
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 9px 100%, 0 50%);
+  border-radius: 0 var(--v3-r-sm) var(--v3-r-sm) 0; white-space: nowrap;
+}
+.v3 .v3-ctag::before {
+  content: ""; position: absolute; left: 7px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px;
+  border-radius: 50%; background: var(--v3-ink-0); box-shadow: inset 0 0 0 1px var(--v3-line-2);
+}
+.v3 .v3-ctag[data-s="ok"] { border-color: color-mix(in srgb, var(--v3-ok) 45%, var(--v3-line)); background: var(--v3-ok-dim); }
+.v3 .v3-ctag[data-s="wait"] { border-color: color-mix(in srgb, var(--v3-wait) 45%, var(--v3-line)); }
+.v3 .v3-ctag[data-primary="true"] { font-weight: 600; }
+
+/* the head of the page: where the workspace stands, and the one action that moves it */
+.v3 .v3-ctag-hero { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 16px; align-items: stretch; }
+@media (max-width: 960px) { .v3 .v3-ctag-hero { grid-template-columns: minmax(0, 1fr); } }
+.v3 .v3-ctag-act { display: grid; gap: 10px; align-content: start; }
+.v3 .v3-ctag-act .big {
+  font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 30px; font-weight: 650; line-height: 1;
+}
+.v3 .v3-ctag-act .big small { font-family: var(--v3-body); font-size: 13px; font-weight: 400; color: var(--v3-text-3); margin-left: 6px; }
+.v3 .v3-ctag-meter { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--v3-line); }
+.v3 .v3-ctag-meter > i { display: block; height: 100%; transition: width 0.5s var(--v3-ease); }
+.v3 .v3-ctag-meter > i[data-s="ok"] { background: var(--v3-ok); }
+.v3 .v3-ctag-meter > i[data-s="wait"] { background: var(--v3-wait); }
+.v3 .v3-ctag-meter > i[data-s="off"] { background: var(--v3-line-2); }
+.v3 .v3-ctag-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-ctag-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.v3 .v3-ctag-steps { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; color: var(--v3-text-2); }
+
+/* how a billed figure is put together: three terms of one sum */
+.v3 .v3-ctag-sum { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
+@media (max-width: 760px) { .v3 .v3-ctag-sum { grid-template-columns: minmax(0, 1fr); } }
+.v3 .v3-ctag-sum > div { padding: 14px 16px; display: grid; gap: 6px; align-content: start; border-left: 1px solid var(--v3-line-soft); }
+.v3 .v3-ctag-sum > div:first-child { border-left: 0; }
+.v3 .v3-ctag-sum .op { font-family: var(--v3-mono); color: var(--v3-text-4); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+.v3 .v3-ctag-sum b { font-family: var(--v3-display); font-variation-settings: "wdth" 108; font-size: 15px; }
+.v3 .v3-ctag-sum p { margin: 0; color: var(--v3-text-3); font-size: 12.5px; line-height: 1.5; }
+
+/* the backfill placeholder: a dashed slot where the job will sit */
+.v3 .v3-ctag-slot {
+  border: 1px dashed var(--v3-line-2); border-radius: var(--v3-r); padding: 16px; display: grid; gap: 6px;
+  color: var(--v3-text-3); font-size: 13px;
+  background: repeating-linear-gradient(-45deg, transparent 0 10px, color-mix(in srgb, var(--v3-line) 35%, transparent) 10px 11px);
+}
+.v3 .v3-ctag-slot b { color: var(--v3-text-2); }
+
+/* the billing ledger on the costs page */
+.v3 .v3-bill-strip { display: flex; align-items: flex-end; gap: 2px; height: 56px; padding: 0 2px; }
+.v3 .v3-bill-strip > i {
+  flex: 1 1 0; min-width: 2px; border-radius: 2px 2px 0 0; background: color-mix(in srgb, var(--v3-info) 70%, transparent);
+  transform-origin: bottom; animation: v3-bill-rise 0.5s var(--v3-ease) both;
+}
+.v3 .v3-bill-strip > i[data-est="true"] { background: repeating-linear-gradient(0deg, var(--v3-info-dim) 0 3px, color-mix(in srgb, var(--v3-info) 55%, transparent) 3px 5px); }
+.v3 .v3-bill-strip > i:hover { background: var(--v3-info); }
+@keyframes v3-bill-rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.v3 .v3-bill-axis { display: flex; justify-content: space-between; font-family: var(--v3-mono); font-size: 11px; color: var(--v3-text-4); margin-top: 4px; }
+.v3 .v3-bill-row.shared td:first-child, .v3 .v3-bill-row.untagged td:first-child { color: var(--v3-text-2); }
+.v3 .v3-bill-row.untagged { color: var(--v3-text-3); }
+.v3 .v3-bill-alloc { display: inline-flex; align-items: center; gap: 4px; font-family: var(--v3-mono); font-size: 11.5px; color: var(--v3-text-3); }
+.v3 .v3-bill-alloc::before { content: "+"; color: var(--v3-info); }
+.v3 .v3-bill-services { font-size: 12px; color: var(--v3-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.v3 .v3-bill-gap[data-dir="up"] { color: var(--v3-wait-text); }
+.v3 .v3-bill-gap[data-dir="down"] { color: var(--v3-ok-text); }
+
+/* the custom tag editor */
+.v3 .v3-ctag-rows { display: grid; gap: 8px; }
+.v3 .v3-ctag-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; gap: 8px; align-items: start; }
+.v3 .v3-ctag-row .v3-input[aria-invalid="true"] { border-color: var(--v3-act); }
+.v3 .v3-ctag-row .err { grid-column: 1 / 3; color: var(--v3-act-text); font-size: 12px; margin-top: -4px; }
+.v3 .v3-ctag-fixed { display: flex; flex-wrap: wrap; gap: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-bill-strip > i { animation: none; }
+  .v3 .v3-ctag-meter > i { transition: none; }
+}

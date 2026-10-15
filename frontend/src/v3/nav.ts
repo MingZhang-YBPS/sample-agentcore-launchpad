@@ -1,4 +1,4 @@
-import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, KeySquare, Network, UserCog, Waypoints, Wrench } from "lucide-react";
+import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, KeySquare, Network, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -85,6 +85,8 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
   "/v2/workspaces": [
     { to: "/v3/network", labelKey: "v3.network.nav", icon: Waypoints, admin: true },
     { to: "/v3/storage", labelKey: "v3.storage.nav", icon: HardDrive, admin: true },
+    // cost allocation tags and their activation in Billing (cost-tags §1.6), administrator-only
+    { to: "/v3/cost-tags", labelKey: "v3.costTags.nav", icon: Tags, admin: true },
   ],
 };
 

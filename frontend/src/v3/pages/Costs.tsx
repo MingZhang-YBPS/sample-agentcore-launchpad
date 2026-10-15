@@ -11,6 +11,7 @@ import { useWorkspace } from "../../workspace/workspace-context";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
+import { BillingView } from "./cost-tags/BillingView";
 
 /* Spend is labelled an estimate everywhere, and models the price map cannot value
    are named rather than silently counted as free — the same rules as V2. */
@@ -449,6 +450,8 @@ export function V3Costs() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const view = params.get("view") === "alerts" ? "alerts" : "spend";
+  // the spend view's basis (cost-tags §1.4-2): the token estimate, or what AWS billed
+  const basis = params.get("basis") === "billing" ? "billing" : "estimate";
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
       <PageHead
@@ -456,14 +459,23 @@ export function V3Costs() {
         title={t("v2.costs.title")}
         sub={t("v2.costs.desc")}
         end={
-          <Filters
-            value={view}
-            onChange={(next) => setParams(next === "spend" ? {} : { view: next })}
-            options={(["spend", "alerts"] as const).map((value) => ({ value, label: t(`v2.costs.tab.${value}`) }))}
-          />
+          <>
+            {view === "spend" && (
+              <Filters
+                value={basis}
+                onChange={(next) => setParams(next === "billing" ? { basis: next } : {})}
+                options={(["estimate", "billing"] as const).map((value) => ({ value, label: t(`v3.costTags.basis.${value}`) }))}
+              />
+            )}
+            <Filters
+              value={view}
+              onChange={(next) => setParams(next === "spend" ? {} : { view: next })}
+              options={(["spend", "alerts"] as const).map((value) => ({ value, label: t(`v2.costs.tab.${value}`) }))}
+            />
+          </>
         }
       />
-      {view === "spend" ? <SpendView /> : <AlertsView />}
+      {view === "spend" ? (basis === "billing" ? <BillingView /> : <SpendView />) : <AlertsView />}
     </div>
   );
 }
