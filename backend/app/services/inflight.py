@@ -119,6 +119,7 @@ def resumable_job_types() -> frozenset[str]:
     from app.assistant import purge as assistant_purge
     from app.services import (
         project_isolation,
+        project_migration,
         project_purge,
         promotion_exec,
         workspace_bootstrap,
@@ -129,6 +130,7 @@ def resumable_job_types() -> frozenset[str]:
         "deploy_agent",
         workspace_bootstrap.JOB_TYPE,
         project_isolation.JOB_TYPE,
+        project_migration.JOB_TYPE,
         project_purge.JOB_TYPE,
         "agent_eni_release",  # pipeline.ENI_JOB_TYPE (a VPC agent's ENI wait, §12.9)
         system_uninstall.JOB_TYPE,

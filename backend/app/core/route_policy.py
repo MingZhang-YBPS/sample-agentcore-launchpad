@@ -1931,3 +1931,22 @@ INFRA_LOWERED_WHEN_ISOLATED = INFRA_LOWERED_WHEN_ISOLATED | frozenset({
     ("POST", "/api/gateway-tools/lambda"),
     ("DELETE", "/api/gateway-tools/lambda/{target_id}"),
 })
+
+# ---- R10-migrate: moving existing agents into (and out of) an isolated project
+# (projects design §10.11, §10.13) ----
+# Hub-global like the rest of the isolation routes: the project is the path's, the
+# workspace a body / query field it must be bound to. The status and an agent's
+# boundary line are every member's (a non-member, another project's agent: 404 in the
+# handler); starting, retrying and retiring republish agents and change their roles:
+# administrators, structure like switching isolation itself (a steward may).
+PROJECT_MIGRATION_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/projects/{project_id}/isolation/migrate"): ADMIN,
+    ("GET", "/api/projects/{project_id}/isolation/migration"): MEMBER,
+    ("POST", "/api/projects/{project_id}/isolation/migration/{run_id}/retry"): ADMIN,
+    ("POST", "/api/projects/{project_id}/isolation/retire"): ADMIN,
+    ("GET", "/api/projects/{project_id}/isolation/agents/{agent_id}"): MEMBER,
+}
+ROUTE_POLICY.update(PROJECT_MIGRATION_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_MIGRATION_ROUTES)
+ADMIN_SPLIT.update({key: ADMIN for key, role in PROJECT_MIGRATION_ROUTES.items()
+                    if role == ADMIN})
