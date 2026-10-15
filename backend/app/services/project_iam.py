@@ -125,6 +125,16 @@ class BoundaryInputs:
 EXTRA_BOUNDARY_STATEMENT_BUILDERS: list[Callable[[BoundaryInputs], list[dict[str, Any]]]] = []
 
 
+def _shared_kb_statements(inp: BoundaryInputs) -> list[dict[str, Any]]:
+    """§11.2: read access to the KBs other projects shared with this one (`use`)."""
+    from app.services import resource_shares
+
+    return resource_shares.boundary_statements(inp)
+
+
+EXTRA_BOUNDARY_STATEMENT_BUILDERS.append(_shared_kb_statements)
+
+
 # ── the document ──────────────────────────────────────────────────────────────
 
 

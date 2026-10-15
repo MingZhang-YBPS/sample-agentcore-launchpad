@@ -8,7 +8,8 @@ This adds a single 60-second tick that:
 
 * runs `watch_configs` that are due (respecting their cost ceiling);
 * evaluates alert rules and notifies only on a transition;
-* sweeps calibration and waiver expiry into inbox-visible state;
+* sweeps calibration and waiver expiry into inbox-visible state, and expires
+  cross-project shares past their date (projects §11.2);
 * checks every hosted MCP server's Gateway target hourly (`mcp.health`, design
   projects §15.8): re-sync, tool-list drift against the approved list, health stored,
   and the same drift check for hand-made targets brought under review (§15.15).
@@ -340,6 +341,12 @@ def _start_due_purges(db: Session) -> Any:
     return project_purge.start_due_purges(db)
 
 
+def _expire_shares(db: Session) -> Any:
+    from app.services import resource_shares
+
+    return resource_shares.expire_due(db)
+
+
 def _system_update(db: Session) -> Any:
     from app.services import system_update
 
@@ -358,6 +365,8 @@ TASKS = (
     ("dlc.eni_release", _sweep_eni_releases, TICK_SECONDS),
     # projects past their deletion cooling-off start their purge (§11.5)
     ("project.purge", _start_due_purges, TICK_SECONDS),
+    # cross-project shares past their expiry stop counting (§11.2)
+    ("project.share_expiry", _expire_shares, TICK_SECONDS),
     # online update (OU-1): a due restart writes apply.request; the updater's
     # apply.result is read back
     ("system.update", _system_update, TICK_SECONDS),

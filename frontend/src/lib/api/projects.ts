@@ -547,3 +547,82 @@ export const projectQuotasApi = {
   put: (projectId: string, quotas: Partial<Record<QuotaKey, number | null>>) =>
     sendJson<ProjectQuotas>(projectPath(projectId, "quotas"), "PUT", { quotas }),
 };
+
+/* ── cross-project shares (projects §11.2) ─────────────────────────────────────── */
+
+export type ShareKind = "knowledge_base" | "evaluator" | "eval_dataset" | "criteria_set" | "gateway_target";
+export const SHARE_KINDS: readonly ShareKind[] = [
+  "eval_dataset",
+  "criteria_set",
+  "knowledge_base",
+  "evaluator",
+  "gateway_target",
+];
+/** read → the grantee sees it · use → its agents pin it, its evaluations run on it */
+export type ShareAccess = "read" | "use";
+/** requested → a cross-department share waiting for the grantee department */
+export type ShareStatus = "requested" | "active" | "revoked" | "expired" | "rejected";
+
+export interface ResourceShare {
+  id: string;
+  kind: ShareKind;
+  resource_id: string;
+  resource_name: string;
+  workspace_id: string;
+  owner_project_id: string;
+  owner_project_name: string;
+  grantee_project_id: string;
+  grantee_project_name: string;
+  access: ShareAccess;
+  status: ShareStatus;
+  note: string;
+  granted_by: string;
+  granted_at: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  revoked_by: string | null;
+  revoked_at: string | null;
+  expires_at: string | null;
+  /** on revoke: the grantee's agents still pinning the KB (their next publish fails) */
+  pinned_by?: string[];
+}
+
+export interface ProjectShares {
+  outgoing?: ResourceShare[];
+  incoming?: ResourceShare[];
+}
+
+export interface ShareOptions {
+  workspace_id: string;
+  kinds: ShareKind[];
+  default_expiry_days: number;
+  max_expiry_days: number;
+  resources: { kind: ShareKind; id: string; name: string; detail: string }[];
+  grantees: { id: string; name: string; cross_department: boolean }[];
+}
+
+export interface ShareCreate {
+  workspace_id: string;
+  kind: ShareKind;
+  resource_id: string;
+  grantee_project_id: string;
+  access: ShareAccess;
+  expires_in_days?: number;
+  resource_name?: string;
+  note?: string;
+}
+
+export const projectSharesApi = {
+  list: (projectId: string, opts: { direction?: "all" | "outgoing" | "incoming"; include_closed?: boolean } = {}) =>
+    getJson<ProjectShares>(`${projectPath(projectId, "shares")}${queryString({ ...opts })}`),
+  options: (projectId: string, workspaceId: string) =>
+    getJson<ShareOptions>(`${projectPath(projectId, "shares", "options")}${queryString({ workspace_id: workspaceId })}`),
+  create: (projectId: string, body: ShareCreate) =>
+    sendJson<ResourceShare>(projectPath(projectId, "shares"), "POST", body),
+  revoke: (projectId: string, shareId: string) =>
+    sendJson<ResourceShare>(projectPath(projectId, "shares", shareId), "DELETE"),
+  approve: (projectId: string, shareId: string) =>
+    sendJson<ResourceShare>(projectPath(projectId, "shares", shareId, "approve"), "POST"),
+  reject: (projectId: string, shareId: string) =>
+    sendJson<ResourceShare>(projectPath(projectId, "shares", shareId, "reject"), "POST"),
+};

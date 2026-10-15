@@ -12539,6 +12539,7 @@
         "members": "成员",
         "roles": "角色",
         "workspaces": "工作区",
+        "shares": "共享",
         "settings": "设置",
         "audit": "审计"
       },
@@ -12836,6 +12837,78 @@
         "readOnly": "只有平台管理员或本项目所属部门的管理员可以修改配额。",
         "save": "保存配额",
         "saved": "已保存 {{name}} 的配额"
+      },
+      "shares": {
+        "intro": "把本项目的资源借给同一工作区的其他项目——只读，或供其 Agent 与评估使用。共享永远不允许修改、不能转授，并会到期（默认 90 天）。",
+        "grant": "共享资源",
+        "request": "申请共享",
+        "showClosed": "显示已结束的共享",
+        "outgoing": "借出",
+        "incoming": "收到",
+        "dir": {
+          "outgoing": "出",
+          "incoming": "入"
+        },
+        "empty": {
+          "outgoing": "本项目还没有借出任何资源。",
+          "incoming": "还没有项目向本项目共享资源。"
+        },
+        "kind": {
+          "knowledge_base": "知识库",
+          "evaluator": "评估器",
+          "eval_dataset": "黄金集 / 数据集",
+          "criteria_set": "判据模板",
+          "gateway_target": "网关工具"
+        },
+        "access": {
+          "read": "只读",
+          "use": "可用"
+        },
+        "accessHint": {
+          "read": "可查看：元数据、条目、工具列表。不能在其上运行。",
+          "use": "其 Agent 可钉住、其评估可运行——仍然不能修改。"
+        },
+        "status": {
+          "requested": "待审批",
+          "active": "生效中",
+          "revoked": "已撤销",
+          "expired": "已到期",
+          "rejected": "已拒绝"
+        },
+        "flowLabel": "{{owner}} 共享给 {{grantee}}（{{access}}）",
+        "daysLeft_one": "剩余 {{count}} 天",
+        "daysLeft_other": "剩余 {{count}} 天",
+        "noExpiry": "不过期",
+        "endedBy": "已结束 · {{who}}",
+        "grantedBy": "由 {{who}} 授予",
+        "approvedBy": "{{who}} 批准",
+        "approve": "批准",
+        "reject": "拒绝",
+        "revoke": "撤销",
+        "cancel": "取消",
+        "approved": "已批准 {{name}} 的共享",
+        "rejected": "已拒绝 {{name}} 的共享",
+        "granted": "{{name}} 已共享给 {{project}}",
+        "requested": "已申请把 {{name}} 共享给 {{project}}——由接收方部门审批",
+        "revoked": "已撤销 {{name}} 的共享",
+        "revokedPinned": "已撤销 {{name}} 的共享——{{agents}} 仍钉住它；移除钉住前它们无法再次发布",
+        "revokeTitle": "撤销 {{name}} 的共享？",
+        "revokeBody": "{{project}} 在下一次请求时失去访问。钉住该资源的 Agent 在移除钉住前无法再次发布。",
+        "grantTitle": "共享 {{name}} 的资源",
+        "field": {
+          "workspace": "工作区",
+          "days": "天数",
+          "kind": "类型",
+          "resource": "资源",
+          "grantee": "共享给",
+          "access": "访问级别",
+          "note": "备注（可选）"
+        },
+        "pick": "请选择…",
+        "typedId": "或输入 AWS id",
+        "noResources": "本项目在该工作区没有这类资源。",
+        "crossShort": "其他部门",
+        "crossDepartment": "该项目属于其他部门：共享需由其部门管理员（或平台管理员）批准后才生效。"
       }
     },
     "admins": {

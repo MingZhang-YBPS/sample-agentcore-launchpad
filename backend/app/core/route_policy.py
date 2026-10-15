@@ -1942,3 +1942,32 @@ STORY_ROUTES: dict[tuple[str, str], str] = {
 }
 ROUTE_POLICY.update(STORY_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {("GET", "/api/me/next-steps")}
+
+
+# ---- cross-project sharing grants (projects design §11.2, G11-share) ----
+# Hub-global under /api/projects like the rest of project administration: the path's
+# project is the owner (grant, revoke, the share form's options — `pperm:project.share`,
+# a non-member 404) or, for approve / reject, the grantee of a cross-department request
+# (its department administrator through the `dadmin` overlay, or an administrator;
+# another department's project 404). The list is every member's: both directions, the
+# handler answers 404 to a non-member. Approving lets one project's data into another,
+# so a steward does not (§11.1 matrix): data.
+PPERM_PROJECT_SHARE = "pperm:project.share"
+RESOURCE_SHARE_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/projects/{project_id}/shares"): MEMBER,
+    ("GET", "/api/projects/{project_id}/shares/options"): PPERM_PROJECT_SHARE,
+    ("POST", "/api/projects/{project_id}/shares"): PPERM_PROJECT_SHARE,
+    ("DELETE", "/api/projects/{project_id}/shares/{share_id}"): PPERM_PROJECT_SHARE,
+    ("POST", "/api/projects/{project_id}/shares/{share_id}/approve"): ADMIN,
+    ("POST", "/api/projects/{project_id}/shares/{share_id}/reject"): ADMIN,
+}
+ROUTE_POLICY.update(RESOURCE_SHARE_ROUTES)
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(RESOURCE_SHARE_ROUTES)
+DEPARTMENT_ADMIN_ROUTES.update({
+    ("POST", "/api/projects/{project_id}/shares/{share_id}/approve"): "project",
+    ("POST", "/api/projects/{project_id}/shares/{share_id}/reject"): "project",
+})
+ADMIN_SPLIT.update({
+    ("POST", "/api/projects/{project_id}/shares/{share_id}/approve"): ADMIN_DATA,
+    ("POST", "/api/projects/{project_id}/shares/{share_id}/reject"): ADMIN_DATA,
+})

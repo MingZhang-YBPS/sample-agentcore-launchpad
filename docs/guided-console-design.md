@@ -1,5 +1,7 @@
 # Guided console — design
 
+> **Merged into** `docs/design/storyline-ux.zh-CN.md` (storyline guidance, 2026-10-15), which is authoritative; this document stays as the detailed reference for the error / disabled-button / glossary parts.
+
 > Source: customer feedback (2026-10-14). When something fails, the console only says that it failed, not where to go next. A first-time user can read the word "criteria" (判据) but does not know which steps use it or who owns it.
 
 ## 1. Goals and principles

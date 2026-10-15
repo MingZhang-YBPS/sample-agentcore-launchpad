@@ -15,7 +15,10 @@ and legacy rows, which therefore stay visible to every member).
   *allow*-set — this project's agents plus the platform presets — because a deny-set
   built under the project filter never contains another project's agents.
 - `check_pins` refuses a spec that pins a KB / memory the caller cannot see, or a KB
-  of another project.
+  of another project — unless that project shared it with this one at `use` level
+  (projects §11.2); a kept pin whose share has since ended is refused too.
+  `shared_for_use` is the same rule for the other `use`-level kinds (evaluators,
+  golden sets / datasets) where an evaluation names them.
 
 The `viewer` default is `Viewer.ALL`: deploy pipeline, resume, workers, purge, the
 observability resolver and name claims stay unfiltered. Only routers pass
@@ -333,9 +336,12 @@ def check_pins(
 
     The project rule runs whatever the viewer (design §5.4): an added KB must be this
     project's, or unowned while this project is the workspace default (§5.5: a KB
-    with no creator row belongs to the default project). A memory pin needs no extra
-    check — `managed_memories` is project-filtered, so another project's memory is
-    already `agent.memory_not_managed`.
+    with no creator row belongs to the default project), or shared with this project
+    at `use` level (§11.2). A KB kept from `previous_spec` whose share was revoked or
+    expired is refused (`kb.share_revoked`): the dependency is gone, so the next
+    publish fails until the pin is removed. A memory pin needs no extra check —
+    `managed_memories` is project-filtered (and memory is never shared), so another
+    project's memory is already `agent.memory_not_managed`.
     """
     added_kbs = _kb_ids(spec) - _kb_ids(previous_spec)
     foreign = foreign_kb_ids(db, workspace.id, added_kbs)
@@ -343,8 +349,18 @@ def check_pins(
         raise NotFoundError(
             "kb.not_found", "knowledge base not found", {"kb_id": sorted(foreign)[0]}
         )
+    ended = _ended_kb_shares(db, workspace.id, _kb_ids(spec) - added_kbs)
+    if ended:
+        raise NotFoundError(
+            "kb.share_revoked",
+            "the share of this knowledge base with this project has ended — remove the pin",
+            {"kb_id": sorted(ended)[0]},
+        )
     if not viewer.filters:
         return
+    # a shared KB is the owner project's creation: the member visibility rule (who
+    # created it) is not this project's to apply
+    added_kbs -= shared_for_use(db, creators.KB, added_kbs)
     if added_kbs:
         hidden = visibility.hidden_aws_ids(viewer, db, workspace.id, creators.KB, added_kbs)
         if hidden:
@@ -365,11 +381,38 @@ def check_pins(
             )
 
 
+def shared_for_use(db: Session, kind: str, ids: set[str],
+                   project_id: str | None = None) -> set[str]:
+    """Of `ids`, those another project shared with the (current) project at `use`
+    level (§11.2) — what its agents may pin and its evaluations run on. `kind` is a
+    `resource_shares.kind` (`knowledge_base`, `evaluator`, `eval_dataset`, …). Empty
+    without a current project."""
+    wanted = {i for i in ids if i}
+    if not wanted:
+        return set()
+    from app.services import resource_shares
+
+    return set(resource_shares.received_ids(db, kind, use=True, project_id=project_id)
+               & wanted)
+
+
+def _ended_kb_shares(db: Session, workspace_id: str, kept: set[str]) -> set[str]:
+    """Kept KB pins of another project whose share with this one has ended."""
+    pid = current_project()
+    if pid is None or not kept:
+        return set()
+    from app.services import resource_shares
+
+    lent = resource_shares.revoked_ids(db, creators.KB, kept, pid)
+    return lent & foreign_kb_ids(db, workspace_id, lent) if lent else set()
+
+
 def foreign_kb_ids(db: Session, workspace_id: str, kb_ids: set[str],
                    project_id: str | None = None) -> set[str]:
     """The KB ids the current project may not pin: owned (`resource_creators`) by
-    another project, or unowned while this project is not the workspace default.
-    Empty without a query when no project is current."""
+    another project — unless shared with it at `use` level (§11.2) — or unowned while
+    this project is not the workspace default. Empty without a query when no project
+    is current."""
     pid = project_id or current_project()
     wanted = {kb for kb in kb_ids if kb}
     if pid is None or not wanted:
@@ -393,4 +436,6 @@ def foreign_kb_ids(db: Session, workspace_id: str, kb_ids: set[str],
         is_default = any(b.project_id == pid and b.is_workspace_default for b in bindings)
         if not is_default and len(bindings) > 1:
             out |= unowned
+    if out:
+        out -= shared_for_use(db, creators.KB, out, project_id=pid)
     return out

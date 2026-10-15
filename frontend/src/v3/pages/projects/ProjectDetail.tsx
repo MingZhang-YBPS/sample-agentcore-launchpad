@@ -16,6 +16,7 @@ import { type ProjectTab, visibleProjectTabs } from "./model";
 import { OverviewTab } from "./OverviewTab";
 import { RolesTab } from "./RolesTab";
 import { SettingsTab } from "./SettingsTab";
+import { SharesTab } from "./SharesTab";
 import { TransferDialog } from "./TransferDialog";
 import { WorkspacesTab } from "./WorkspacesTab";
 
@@ -144,6 +145,7 @@ export function ProjectDetailPage({ projectId, tab: requested }: { projectId: st
       {tab === "members" && <MembersTab project={project} abilities={abilities} onChanged={changed} />}
       {tab === "roles" && <RolesTab project={project} abilities={abilities} onChanged={changed} />}
       {tab === "workspaces" && <WorkspacesTab project={project} abilities={abilities} onChanged={changed} />}
+      {tab === "shares" && <SharesTab project={project} abilities={abilities} onChanged={changed} />}
       {tab === "settings" && <SettingsTab project={project} abilities={abilities} onChanged={changed} />}
       {tab === "audit" && <AuditTab project={project} />}
 

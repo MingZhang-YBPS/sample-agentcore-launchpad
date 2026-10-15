@@ -87,6 +87,9 @@ WORKSPACE_SCOPED_TABLES = (
     # the storage catalog + each project's allowed set (models/storage.py, storage-mounts §4)
     "storage_mounts",
     "project_storage_mounts",
+    # cross-project sharing grants (models/shares.py, projects §11.2): a share never
+    # leaves its workspace
+    "resource_shares",
 )
 
 # Project boundary (design §4). STRICT rows always belong to one project; SHARED rows
@@ -224,6 +227,7 @@ def init_db(bind=None) -> None:
     from app.models import projects as _project_models  # noqa: F401 — design §2.2
     from app.models import resource_mapping as _mapping_models  # noqa: F401
     from app.models import selfservice as _selfservice_models  # noqa: F401 — T35/T36
+    from app.models import shares as _share_models  # noqa: F401 — projects §11.2
     from app.models import storage as _storage_models  # noqa: F401 — storage-mounts §4
     from app.models import system_update as _update_models  # noqa: F401 — OU-1, hub-global
     from app.models import video as _video_models  # noqa: F401 — register tables before create_all
@@ -1355,6 +1359,8 @@ def _migrate_workspace_columns(bind) -> None:
         ),
         # born with the column (storage-mounts §4); listed so the scoped-tables drift test holds
         "storage_mounts": "ALTER TABLE storage_mounts ADD COLUMN workspace_id VARCHAR(32)",
+        # born with the column (projects §11.2); listed for the same drift test
+        "resource_shares": "ALTER TABLE resource_shares ADD COLUMN workspace_id VARCHAR(32)",
         "project_storage_mounts": (
             "ALTER TABLE project_storage_mounts ADD COLUMN workspace_id VARCHAR(32)"
         ),
