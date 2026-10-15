@@ -21,7 +21,7 @@ from app.optimization import canary_harness, canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import agent_access, creators, visibility
+from app.services import agent_access, budgets, creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.harness_convert import graft_config_bundle
@@ -366,8 +366,8 @@ def runtime_canary_action(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     row = _canary_in(db, ws, canary_id, viewer=viewer)
-    # the spend-budget gate for setup / traffic only: rolling back or completing a
-    # canary must stay possible for a payer over budget
+    # the spend-budget gate for setup / traffic / advance only: rolling back or
+    # completing a canary must stay possible for a payer over budget
     billing_policy.gate_action(request, req.action)
     if req.action not in AGENT_FREE_ACTIONS:
         # setup / advance / complete / rollback re-publish the champion and traffic
@@ -413,18 +413,28 @@ def runtime_canary_action(
             "dataset_id": dataset.id,
             "dataset_name": dataset.name,
         }
+        if canary_service.is_harness(row):
+            # paired calls are metered by tokens at each arm's model: a budgeted caller
+            # is refused an arm with no price (or no known model, an imported Harness)
+            # rather than spending past the limit unseen
+            payer = budgets.payer_of_request(request)
+            if payer.budgeted:
+                for model in dict.fromkeys(canary_service.arm_models(row).values()):
+                    budgets.check(db, payer, model_id=model, model_unknown=model is None)
     elif req.action in {"advance", "complete"}:
         canary_service.assert_verdict_allows(
             row, allow_non_significant=req.allow_non_significant
         )
 
     action = req.action
+    # who pays for this action: the caller, recorded per action
+    caller = Creator.of_request(request)
     if action == "setup":
         fn = partial(canary_service.act_setup, canary_id)
     elif action == "traffic":
         fn = partial(
             canary_service.act_traffic, canary_id, prompts, dataset_info,
-            scenario_ids=scenario_ids,
+            scenario_ids=scenario_ids, caller=caller,
         )
     elif action == "verdict":
         fn = partial(canary_service.act_verdict, canary_id)
@@ -445,7 +455,7 @@ def runtime_canary_action(
     else:
         fn = partial(canary_service.act_cleanup, canary_id)
 
-    canary_service.run_action(canary_id, action, fn)
+    canary_service.run_action(canary_id, action, fn, caller=caller)
     response.status_code = 202
     db.expire_all()
     row = db.get(RuntimeCanary, canary_id)
