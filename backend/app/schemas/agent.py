@@ -11,12 +11,15 @@ from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned
 from app.schemas.strands_builder import (
+    CODE_INTERPRETER_ID_RE,
     AgentToolRef,
     ConversationConfig,
+    CustomTool,
     FewShotExample,
     ModelParams,
     ModelProvider,
     RetryConfig,
+    SandboxTool,
     StrandsTool,
     StrandsToolConfig,
     ToolHooks,
@@ -828,6 +831,23 @@ class AgentSpec(BaseModel):
     tool_hooks: ToolHooks | None = Field(default=None, exclude_if=lambda v: v is None)
     # throttling retry / backoff of model calls; None = the SDK default
     retry: RetryConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    # ── SB-3 (same rules) ──
+    # member-written @tool functions, packaged into the zip; one whose static check
+    # has findings deploys only with an administrator's approval of that exact
+    # version (``services.custom_tools``)
+    custom_tools: list[CustomTool] = Field(
+        default_factory=list, max_length=10, exclude_if=lambda v: not v
+    )
+    # python_repl / shell / file_write / use_aws — run only in the AgentCore Code
+    # Interpreter sandbox, and only where the workspace's sandbox setting allows them
+    sandbox_tools: list[SandboxTool] = Field(
+        default_factory=list, max_length=4, exclude_if=lambda v: not v
+    )
+    # server-owned: the Code Interpreter those run in, stamped from the workspace's
+    # sandbox setting by the deploy's generate stage (None = the AWS-managed one)
+    code_interpreter_id: str | None = Field(
+        default=None, pattern=CODE_INTERPRETER_ID_RE, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def _strands_builder_fields(self) -> "AgentSpec":

@@ -45,6 +45,7 @@ from app.services.requirements_txt import RESOLVE_FIX_HINTS, summarize_resolver_
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
 from app.services.workspace import WorkspaceContext
 from app.templates.strands_agent import base_requirements, render_main_py
+from app.templates.strands_agent.builder import custom_tool_files, custom_tool_requirements
 
 
 def sanitize_runtime_name(name: str) -> str:
@@ -399,6 +400,17 @@ def _generate_code(spec: AgentSpec) -> tuple[str, str]:
     return render_main_py(with_prompt_note(spec)), "strands template"
 
 
+def write_custom_tool_files(spec: AgentSpec, pkg_dir: Path) -> int:
+    """strands-builder SB-3: each custom tool's source next to main.py
+    (``custom_tools/<name>.py``), where the generated code loads it from."""
+    files = custom_tool_files(spec)
+    for rel, content in files.items():
+        dest = pkg_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+    return len(files)
+
+
 def write_bundle_files(spec: AgentSpec, pkg_dir: Path) -> int:
     """Drop a code_bundle's non-entrypoint files into the package dir."""
     written = 0
@@ -489,6 +501,9 @@ def platform_requirements(
 
 
 def _method_requirements(spec: AgentSpec) -> list[str]:
+    # SB-3: a runtime custom tool's own pins join the member's list (pinned by its
+    # schema; one already listed is not repeated)
+    tool_pins = [r for r in custom_tool_requirements(spec) if r not in spec.requirements]
     return (
         platform_requirements(
             spec.method, spec.model_source, spec.protocol,
@@ -496,6 +511,7 @@ def _method_requirements(spec: AgentSpec) -> list[str]:
             model_provider=spec.model_provider.kind if spec.model_provider else None,
         )
         + spec.requirements
+        + tool_pins
     )
 
 
@@ -528,8 +544,38 @@ def _resolve_agent_tools(agent: Agent, spec: AgentSpec) -> AgentSpec:
     return resolved
 
 
+def _gate_custom_tools(agent: Agent, spec: AgentSpec) -> AgentSpec:
+    """strands-builder SB-3: refuse an unapproved custom tool version or a sandbox
+    tool the workspace does not allow, and store the Code Interpreter id the
+    workspace setting names on the row (the provision stage reads the row)."""
+    if not (spec.custom_tools or spec.sandbox_tools or spec.code_interpreter_id):
+        return spec
+    from sqlalchemy.orm import object_session
+
+    from app.core.project_scope import project_context
+    from app.models.ledger import Workspace
+    from app.services.custom_tools import assert_deployable
+
+    db = object_session(agent)
+    if db is None:
+        raise RuntimeError("agent row is detached — cannot check its custom tools")
+    with project_context(agent.project_id):
+        gated = assert_deployable(
+            db, spec, workspace=db.get(Workspace, agent.workspace_id),
+            project_id=agent.project_id,
+        )
+    if gated.code_interpreter_id != spec.code_interpreter_id:
+        stored = {**(agent.spec or {})}
+        if gated.code_interpreter_id is None:
+            stored.pop("code_interpreter_id", None)
+        else:
+            stored["code_interpreter_id"] = gated.code_interpreter_id
+        agent.spec = stored
+    return gated
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
-    spec = _resolve_agent_tools(agent, AgentSpec(**agent.spec))
+    spec = _gate_custom_tools(agent, _resolve_agent_tools(agent, AgentSpec(**agent.spec)))
     code, source = _generate_code(spec)
     requirements = _method_requirements(spec)
     ctx.scratch["code"] = code
@@ -558,6 +604,9 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
         if spec.code_bundle:
             count = write_bundle_files(spec, pkg_dir)
             ctx.log(f"bundle files staged: {count} (+ main.py)")
+        if spec.custom_tools:
+            count = write_custom_tool_files(spec, pkg_dir)
+            ctx.log(f"custom tools staged: {count} under custom_tools/")
         bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log, ctx.workspace))
 
     zip_path = build_zip(

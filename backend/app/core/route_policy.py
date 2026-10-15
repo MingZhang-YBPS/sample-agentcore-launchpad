@@ -2041,3 +2041,26 @@ SHARE_NOTICE_ROUTES: dict[tuple[str, str], str] = {
 }
 ROUTE_POLICY.update(SHARE_NOTICE_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SHARE_NOTICE_ROUTES)
+
+# ---- SB-3: custom Python tools and the sandboxed built-in tools (strands-builder §2) ----
+# The code check and the approvals list are participation-level reads inside the
+# request's project (another project's approval is not found). Approving — or revoking
+# — a version lets code outside the allow-list run with an agent's role: an
+# administrator's call, data (a steward does not). The sandbox setting is workspace
+# configuration (project-exempt): every member reads it (the wizard greys out the
+# closed tools), only an administrator opens it.
+CUSTOM_TOOL_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/custom-tools/check"): PERM_PROJECT_USE,
+    ("GET", "/api/custom-tools/approvals"): PERM_PROJECT_USE,
+    ("POST", "/api/custom-tools/approvals"): ADMIN,
+    ("DELETE", "/api/custom-tools/approvals/{code_hash}"): ADMIN,
+    ("GET", "/api/custom-tools/sandbox"): MEMBER,
+    ("PUT", "/api/custom-tools/sandbox"): ADMIN,
+}
+ROUTE_POLICY.update(CUSTOM_TOOL_ROUTES)
+PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
+    ("GET", "/api/custom-tools/sandbox"),
+    ("PUT", "/api/custom-tools/sandbox"),
+})
+ADMIN_SPLIT.update({key: ADMIN_DATA for key, role in CUSTOM_TOOL_ROUTES.items()
+                    if role == ADMIN})

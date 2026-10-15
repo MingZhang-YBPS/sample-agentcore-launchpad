@@ -45,6 +45,7 @@ from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
+from app.routers.custom_tools import router as custom_tools_router
 from app.routers.departments import router as departments_router
 from app.routers.dlc import router as dlc_router
 from app.routers.environments import router as environments_router
@@ -234,6 +235,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(agent_story_router)  # storyline facts + my next steps (SG-1)
     app.include_router(invoke_access_router)  # ARNs + IAM policy for your backend (IA-1)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources
+    app.include_router(custom_tools_router)  # custom @tool checks, approvals, sandbox (SB-3)
     app.include_router(tools_router)
     app.include_router(identity_router)  # Connections + Connection-bound gateway targets
     app.include_router(registry_router)
