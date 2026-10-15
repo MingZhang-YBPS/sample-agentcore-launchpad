@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from app.core.config import REPO_ROOT, get_settings
+from app.services.agentcore.policy import _GATEWAY_UPDATE_FIELDS
 
 GATEWAY_NAME = "launchpad-gw"
 HR_TARGET_NAME = "hr-database"
@@ -108,6 +109,25 @@ def ensure_api_key_provider(
 
 GATEWAY_M2M_PROVIDER_NAME = "launchpad-gw-m2m"
 GATEWAY_SCOPE = "launchpad-gw/invoke"
+# the Cognito resource server the gateway scopes live on (workspace_bootstrap's
+# RESOURCE_SERVER_ID); an isolated project adds `project.<pid>` to it (§10.6)
+GATEWAY_RESOURCE_SERVER = GATEWAY_SCOPE.split("/", 1)[0]
+
+
+def find_oauth_provider(control: Any, name: str) -> str:
+    """The ARN of the OAuth2 credential provider called `name`, or "". Paged: with one
+    provider per isolated project (`launchpad-gw-m2m-<pid>`, projects §10.6) and the
+    workspace's Connections, the vault holds more than one page."""
+    token = None
+    while True:
+        kwargs: dict[str, Any] = {"maxResults": 20} | ({"nextToken": token} if token else {})
+        page = control.list_oauth2_credential_providers(**kwargs)
+        for provider in page.get("credentialProviders", []):
+            if provider.get("name") == name:
+                return str(provider["credentialProviderArn"])
+        token = page.get("nextToken")
+        if not token:
+            return ""
 
 
 def ensure_oauth_provider(
@@ -121,12 +141,9 @@ def ensure_oauth_provider(
 ) -> tuple[str, bool]:
     """OAuth2 credential provider (client_credentials against Cognito) that
     harnesses use for outbound gateway auth."""
-    providers = control.list_oauth2_credential_providers(maxResults=20).get(
-        "credentialProviders", []
-    )
-    for provider in providers:
-        if provider.get("name") == name:
-            return provider["credentialProviderArn"], False
+    existing = find_oauth_provider(control, name)
+    if existing:
+        return existing, False
     secret = cognito_client.describe_user_pool_client(
         UserPoolId=user_pool_id, ClientId=m2m_client_id
     )["UserPoolClient"]["ClientSecret"]
@@ -158,16 +175,37 @@ def ensure_gateway_allows_client(
     if client_id in allowed:
         return False
     auth["customJWTAuthorizer"]["allowedClients"] = allowed + [client_id]
-    control.update_gateway(
-        gatewayIdentifier=gateway_id,
-        name=gateway["name"],
-        roleArn=gateway["roleArn"],
-        protocolType=gateway.get("protocolType", "MCP"),
-        authorizerType=gateway["authorizerType"],
-        authorizerConfiguration=auth,
-    )
+    control.update_gateway(**_gateway_update_echo(gateway_id, gateway, auth))
     _wait_gateway_ready(control, gateway_id, timeout_s=timeout_s)
     return True
+
+
+def _gateway_update_echo(
+    gateway_id: str, gateway: dict[str, Any], auth: dict[str, Any]
+) -> dict[str, Any]:
+    """UpdateGateway with a new authorizer configuration and everything else echoed.
+
+    UpdateGateway has replace semantics: a field left out is reset, so an update that
+    named only the authorizer would detach the Policy Engine — and with it the
+    per-project Cedar rules (projects §10.6) — the moment a project's M2M client
+    joins `allowedClients`."""
+    params: dict[str, Any] = {
+        "gatewayIdentifier": gateway_id,
+        "name": gateway["name"],
+        "roleArn": gateway["roleArn"],
+        "protocolType": gateway.get("protocolType", "MCP"),
+        "authorizerType": gateway["authorizerType"],
+    }
+    for name in _GATEWAY_UPDATE_FIELDS:
+        if gateway.get(name) is not None and name not in params:
+            params[name] = gateway[name]
+    params["authorizerConfiguration"] = auth
+    engine = gateway.get("policyEngineConfiguration")
+    if isinstance(engine, dict) and engine.get("arn"):
+        params["policyEngineConfiguration"] = {
+            key: engine[key] for key in ("arn", "mode") if engine.get(key)
+        }
+    return params
 
 
 def _list_targets(control: Any, gateway_id: str) -> dict[str, dict[str, Any]]:

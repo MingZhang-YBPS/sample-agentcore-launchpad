@@ -1231,8 +1231,18 @@ def require_infra(request: Request, role: str) -> None:
     db = SessionLocal()
     try:
         active = [b for b in access.workspace_bindings(db, workspace.id) if b.status == "active"]
+        lowered = (len(active) > 1 and _lowerable(request)
+                   and not require_identity(request).is_admin
+                   and _infra_lowered(db, workspace.id))
     finally:
         db.close()
+    if lowered:
+        # §10.6-6: every project here is isolated with its Cedar rules in force, so a
+        # project's own Connection-bound targets are reachable only by that project —
+        # the project's key decides, and another project's target is not found
+        require_permission(request, infra_key(role))
+        _require_own_target(request, workspace.id)
+        return
     if len(active) > 1:
         identity = require_identity(request)
         if not identity.is_admin:
@@ -1246,6 +1256,49 @@ def require_infra(request: Request, role: str) -> None:
             )
         return
     require_permission(request, infra_key(role))
+
+
+# §10.6-6 (R10-gw): the `infra` routes that become the project's own once Cedar is per
+# project — creating / deleting the project's Connection-bound gateway targets. The
+# gateway's baseline policies, guardrails and Lambda targets (`gateway_tools`, which
+# records no ownership yet) stay administrator-only in a multi-project workspace.
+INFRA_LOWERED_WHEN_ISOLATED: frozenset[tuple[str, str]] = frozenset({
+    ("POST", "/api/identity/gateway-targets"),
+    ("DELETE", "/api/identity/gateway-targets/{target_id}"),
+})
+
+
+def _route_key(request: Request) -> tuple[str, str]:
+    route: Any = request.scope.get("route")
+    return request.method, getattr(route, "path_format", None) or request.url.path
+
+
+def _lowerable(request: Request) -> bool:
+    return _route_key(request) in INFRA_LOWERED_WHEN_ISOLATED
+
+
+def _infra_lowered(db: Any, workspace_id: str) -> bool:
+    from app.services import project_gateway
+
+    return project_gateway.infra_lowered(db, workspace_id)
+
+
+def _require_own_target(request: Request, workspace_id: str) -> None:
+    target_id = (request.scope.get("path_params") or {}).get("target_id")
+    if not target_id:
+        return
+    from app.core.db import SessionLocal
+    from app.core.project_scope import project_context
+    from app.services import project_gateway
+
+    # the policy runs before `bind_request_project` publishes the request's project
+    project = getattr(request.state, "project", None)
+    db = SessionLocal()
+    try:
+        with project_context(project.id if project is not None else None):
+            project_gateway.require_own_target(db, workspace_id, str(target_id))
+    finally:
+        db.close()
 
 
 # ---- P1F-admin: administrator management (design projects §7.3, §7.4, §7.10) ----

@@ -9,6 +9,12 @@ from `GetGatewayTarget`, never stored in the ledger.
 Target type ↔ outbound auth (devguide gateway-outbound-auth, cross-checked in
 docs/identity.md §1.4): OpenAPI takes OAuth client credentials or an API key;
 an MCP server takes OAuth only. Lambda / Smithy targets never take a Connection.
+
+Ownership (projects §10.6-3): a target created here belongs to the current project
+(`resource_creators` kind `gateway_target`). In an isolated project the target's
+tools are then refused to other projects by its Cedar rule (`project_gateway`), which
+is rewritten in the background after each create and delete; a target of another
+project answers 404 to a delete.
 """
 
 import json
@@ -20,6 +26,7 @@ from botocore.exceptions import ClientError
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project
 from app.schemas.inbound_auth import issuer_from_discovery_url
 from app.services import consent_portals
 from app.services import identity_providers as connections
@@ -319,6 +326,7 @@ def create_target(
     api_key_parameter: str = "Authorization",
     api_key_prefix: str | None = None,
     workspace_id: str | None = None,
+    creator: Any = None,
 ) -> dict[str, Any]:
     """Create one target bound to a Connection. Returns without waiting for
     READY — the list re-reads the status (MCP targets sync tools first).
@@ -326,7 +334,8 @@ def create_target(
     The gateway is workspace-shared, so a target makes its Connection usable from
     every project: with ``workspace_id`` given, a Connection another project
     created answers ``identity.connection_not_found`` before any AWS call (only a
-    current-project or workspace-level one may be bound)."""
+    current-project or workspace-level one may be bound) and the created target is
+    recorded as the current project's (``creator``: a `creators.Creator`, optional)."""
     gateway_id = _gateway_id(resources)
     if workspace_id is not None:
         db = SessionLocal()
@@ -440,11 +449,52 @@ def create_target(
     )
     # non-blocking hints about the created target (obo issuer trust)
     out["warnings"] = warnings
+    if workspace_id is not None:
+        _owned(workspace_id, out["target_id"], creator)
     return out
 
 
-def delete_target(control: Any, resources: dict[str, Any], target_id: str) -> None:
+def _owned(workspace_id: str, target_id: str, creator: Any) -> None:
+    """Record the new target as the current project's and, in an isolated project,
+    have its Cedar rule written once the target is READY (§10.6-4)."""
+    from app.services import creators, project_gateway
+
+    if not target_id:
+        return
+    db = SessionLocal()
+    try:
+        creators.record(db, workspace_id, project_gateway.TARGET_KIND, target_id, creator)
+    finally:
+        db.close()
+    project_id = current_project()
+    if project_id:
+        project_gateway.schedule_reconcile(project_id, workspace_id, wait_target=target_id)
+
+
+def _disowned(target_id: str) -> None:
+    """After a delete: drop the ownership row and the project's rule for the target."""
+    from app.services import creators, project_gateway
+
+    db = SessionLocal()
+    try:
+        owner = project_gateway.target_owner(db, target_id)
+        if owner is None:
+            return
+        workspace_id, project_id = owner
+        creators.forget(db, workspace_id, project_gateway.TARGET_KIND, target_id)
+    finally:
+        db.close()
+    if project_id:
+        project_gateway.schedule_reconcile(project_id, workspace_id)
+
+
+def delete_target(control: Any, resources: dict[str, Any], target_id: str,
+                  workspace_id: str | None = None) -> None:
+    """Delete one Connection-bound target. A target another project owns answers 404
+    (by its ownership row; with ``workspace_id`` an unrecorded one is the workspace
+    default project's, as everywhere else)."""
     gateway_id = _gateway_id(resources)
+    _require_visible(target_id, workspace_id)
     try:
         detail = control.get_gateway_target(gatewayIdentifier=gateway_id, targetId=target_id)
     except ClientError as exc:
@@ -468,3 +518,22 @@ def delete_target(control: Any, resources: dict[str, Any], target_id: str) -> No
             status_code=409,
         )
     control.delete_gateway_target(gatewayIdentifier=gateway_id, targetId=target_id)
+    _disowned(target_id)
+
+
+def _require_visible(target_id: str, workspace_id: str | None) -> None:
+    from app.services import project_gateway
+
+    project_id = current_project()
+    if project_id is None:
+        return  # workers and project-less callers see every target
+    db = SessionLocal()
+    try:
+        if workspace_id is not None:
+            project_gateway.require_own_target(db, workspace_id, target_id)
+            return
+        owner = project_gateway.target_owner(db, target_id)
+    finally:
+        db.close()
+    if owner is not None and owner[1] not in (None, project_id):
+        raise NotFoundError("identity.target_not_found", f"no gateway target {target_id!r}")
