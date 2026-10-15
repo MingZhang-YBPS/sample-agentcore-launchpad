@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, dlcApi, type V2Range } from "../../../lib/api";
 import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { unpricedJudges } from "../../../lib/dlc";
@@ -347,7 +348,8 @@ export function TaskWizard() {
           </div>
         }
       />
-      {error != null && <Notice s="act"><ApiErrorDetail error={error} /></Notice>}
+      <ErrorCallout error={error} params={{ agent_id: draft?.agentId || undefined }} onDismiss={() => setError(null)}
+        data-testid="v3-task-wizard-error" />
 
       {step === 0 && (
         <>

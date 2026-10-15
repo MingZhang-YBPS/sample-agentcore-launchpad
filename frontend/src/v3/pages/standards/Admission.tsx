@@ -10,6 +10,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { useAuth } from "../../../auth/auth-context";
 import { dlcApi, errorMessage } from "../../../lib/api";
 import { type AdmissionCandidate, type AdmissionQueue, CASE_TIERS, type CaseTier, type Redaction, type WritableSplit } from "../../../lib/dlc";
@@ -41,9 +42,12 @@ function AdmitDialog({ candidate, criteriaKeys, onClose, onDone }: { candidate: 
   const row = detail.data ?? candidate;
   const redaction = row.redaction as Redaction;
   const blocked = redaction?.status === "blocked";
+  // the dialog stays open on a refusal, so the way out is shown inside it
+  const [failure, setFailure] = useState<unknown>(null);
 
   const submit = () => {
     setBusy(true);
+    setFailure(null);
     dlcApi
       .admit(candidate.id, { split, expected_response: expected, expected_source: "annotator", criteria_ids: keys, case_tier: caseTier })
       .then(() => {
@@ -51,7 +55,7 @@ function AdmitDialog({ candidate, criteriaKeys, onClose, onDone }: { candidate: 
         onDone();
         onClose();
       })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
 
@@ -117,6 +121,8 @@ function AdmitDialog({ candidate, criteriaKeys, onClose, onDone }: { candidate: 
             </div>
           </div>
         </div>
+        <ErrorCallout error={failure} params={{ agent_id: candidate.agent_id }} onDismiss={() => setFailure(null)}
+          data-testid="v3-admit-error" />
       </div>
     </Dialog>
   );
@@ -140,6 +146,7 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
   const data = queue.data;
   const order = new Map((data?.priority ?? []).map((id, index) => [id, index]));
   const rows = [...(data?.candidates ?? [])].sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+  const [failure, setFailure] = useState<unknown>(null);
 
   const collect = () => {
     if (!agentId) return;
@@ -153,6 +160,8 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <ErrorCallout error={failure} params={{ agent_id: agentId ?? undefined }} onDismiss={() => setFailure(null)}
+        data-testid="v3-admission-error" />
       <div className="v3-grid c4">
         {STATUSES.map((key) => (
           <Panel key={key} signal={key === "new" && (data?.counts?.new ?? 0) > 0 ? "wait" : undefined}>
@@ -241,10 +250,11 @@ export function Admission({ agentId, criteriaKeys }: { agentId: string | null; c
                   const target = rejecting;
                   setRejecting(null);
                   setBusy(true);
+                  setFailure(null);
                   dlcApi
                     .rejectCandidate(target.id, note)
                     .then(() => { toast("ok", t("v2.dlc.admission.rejected")); setNonce((n) => n + 1); })
-                    .catch((err: unknown) => toast("act", errorMessage(err), err))
+                    .catch((err: unknown) => setFailure(err))
                     .finally(() => setBusy(false));
                 }}>
                 {t("v2.dlc.admission.reject")}

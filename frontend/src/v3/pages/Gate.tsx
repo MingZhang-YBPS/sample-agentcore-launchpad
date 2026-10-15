@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
-import { api, dlcApi, errorMessage } from "../../lib/api";
+import { ErrorCallout } from "../../components/ErrorCallout";
+import { api, dlcApi } from "../../lib/api";
 import { type ReleaseStorageEvidence, changeDelta, hasStorage, mountLabel, releaseStorage, storageDlcApi } from "../../lib/api/storageDlc";
 import { type CostEstimate, type GateReport, type GateRow, type ReleaseState, type Scorecard, estimateValue, metricValueLabel } from "../../lib/dlc";
 import { useWorkspace } from "../../workspace/workspace-context";
@@ -199,14 +200,18 @@ export function V3Gate() {
   const storage = releaseStorage(report) ?? releaseStorage(pending);
   const writes = pending && !evaluated ? (releaseStorage(pending)?.shared_state_writes ?? []) : [];
 
+  // a failed gate action stays on the page with its way out (storyline-ux §4)
+  const [failure, setFailure] = useState<unknown>(null);
+  useEffect(() => setFailure(null), [agentId]);
   const act = (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true);
+    setFailure(null);
     fn()
       .then(() => {
         toast("ok", t(ok));
         setNonce((n) => n + 1);
       })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
 
@@ -246,6 +251,9 @@ export function V3Gate() {
               foot={release.data?.criteria_set?.signed_by ? t("v3.gate.signedBy", { who: release.data.criteria_set.signed_by })
                 : t("v3.gate.unsigned")} signal={release.data?.criteria_set?.signed_by ? undefined : "wait"} /></Panel>
           </div>
+
+          <ErrorCallout error={failure} params={{ agent_id: agent.id }} onDismiss={() => setFailure(null)}
+            data-testid="v3-gate-error" />
 
           {state?.endpoint_mode !== "live" && (
             <Notice s="wait">

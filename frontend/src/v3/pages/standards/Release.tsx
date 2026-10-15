@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
+import { ErrorCallout } from "../../../components/ErrorCallout";
 import { dlcApi, errorMessage } from "../../../lib/api";
 import { type GateRow, type ReleaseState, type Waiver, estimateValue, goldenVersionsLabel, waiverGapLabel } from "../../../lib/dlc";
 import { useWorkspace } from "../../../workspace/workspace-context";
@@ -32,16 +33,20 @@ function Waivers({ state, rows, onReload }: { state: ReleaseState; rows: GateRow
   // a red line is never waivable, so it is not even offered
   const waivable = rows.filter((r) => r.tier !== "redline" && r.verdict === "BLOCKED");
 
+  const [failure, setFailure] = useState<unknown>(null);
   const run = (fn: () => Promise<unknown>, okKey: string) => {
     setBusy(true);
+    setFailure(null);
     fn()
       .then(() => { toast("ok", t(okKey)); onReload(); })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
 
   return (
     <>
+      <ErrorCallout error={failure} params={{ agent_id: state.agent_id }} onDismiss={() => setFailure(null)}
+        data-testid="v3-waiver-error" />
       <Panel title={t("v2.dlc.waiver.title")} flush={state.waivers.length > 0}
         signal={state.waivers.some((w) => w.status === "requested") ? "wait" : undefined}
         end={waivable.length > 0 ? <Btn size="sm" onClick={() => { setForm({ ...form, criterion_key: waivable[0].key }); setAsking(true); }}>{t("v2.dlc.waiver.request")}</Btn> : undefined}>
@@ -270,11 +275,14 @@ export function Release({ agentId }: { agentId: string }) {
   const rows = report?.criteria ?? [];
   const evaluating = gate.data?.status === "evaluating";
 
+  // evaluate / migrate fail in place, with the way out (storyline-ux §4)
+  const [failure, setFailure] = useState<unknown>(null);
   const run = (fn: () => Promise<unknown>, okKey: string) => {
     setBusy(true);
+    setFailure(null);
     fn()
       .then(() => { toast("ok", t(okKey)); setNonce((n) => n + 1); })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
 
@@ -285,6 +293,8 @@ export function Release({ agentId }: { agentId: string }) {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <ErrorCallout error={failure} params={{ agent_id: agentId }} onDismiss={() => setFailure(null)}
+        data-testid="v3-release-error" />
       <div className="v3-grid c4">
         <Panel signal={live.endpoint_mode === "live" ? "ok" : "wait"}>
           <Stat label={t("v2.dlc.release.endpointModeLabel")} value={t(`v2.dlc.release.endpointMode.${live.endpoint_mode}`)} foot={t(`v2.dlc.release.mode.${state.data.release_mode}`)} />

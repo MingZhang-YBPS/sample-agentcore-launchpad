@@ -1,0 +1,117 @@
+/* Storyline surfaces (storyline-ux §4) — the error callout.
+ *
+ * Same signal grammar as the rest of V3: coral says "this needs you", amber "this
+ * waits on someone else", and the way out is mint — the colour of things running
+ * as intended — so the eye goes from the problem straight to the button that fixes
+ * it. The left rail is the signal; a dashed route line runs from the NEXT tag to the
+ * actions, reading as "from here, go there". Tokens only (v3.css); no new palette.
+ */
+
+.v3 .v3-callout {
+  --cl: var(--v3-act);
+  --cl-dim: var(--v3-act-dim);
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 14px 14px 14px 18px;
+  border-radius: var(--v3-r);
+  border: 1px solid color-mix(in srgb, var(--cl) 34%, var(--v3-line));
+  background:
+    linear-gradient(90deg, var(--cl-dim), transparent 42%),
+    var(--v3-ink-2);
+  color: var(--v3-text);
+  font-size: 13px;
+  overflow: hidden;
+  animation: v3-callout-in 260ms var(--v3-ease) both;
+}
+.v3 .v3-callout[data-s="wait"] { --cl: var(--v3-wait); --cl-dim: var(--v3-wait-dim); }
+
+/* the signal rail */
+.v3 .v3-callout::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--cl);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--cl) 55%, transparent);
+  transform-origin: top;
+  animation: v3-callout-rail 420ms var(--v3-ease) both;
+}
+
+.v3 .v3-callout-icon { color: var(--cl); margin-top: 2px; flex: none; }
+.v3 .v3-callout-body { display: grid; gap: 8px; min-width: 0; }
+.v3 .v3-callout-what { font-weight: 600; line-height: 1.45; color: var(--v3-text); }
+.v3 .v3-callout-what details { font-weight: 400; color: var(--v3-text-2); }
+.v3 .v3-callout-why { margin: 0; color: var(--v3-text-2); line-height: 1.55; max-width: 72ch; }
+
+.v3 .v3-callout-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+.v3 .v3-callout-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--v3-ok);
+}
+/* the route line: from the tag to the way out */
+.v3 .v3-callout-tag::after {
+  content: "";
+  width: 22px;
+  border-top: 1px dashed color-mix(in srgb, var(--v3-ok) 60%, transparent);
+}
+.v3 .v3-callout-next a.v3-btn { display: inline-flex; align-items: center; gap: 6px; }
+.v3 .v3-callout-next a.v3-btn.primary svg { transition: transform 160ms var(--v3-ease); }
+.v3 .v3-callout-next a.v3-btn.primary:hover svg { transform: translateX(2px); }
+
+.v3 .v3-callout-needs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border-radius: var(--v3-r-sm);
+  border: 1px dashed var(--v3-line-2);
+  color: var(--v3-text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.v3 .v3-callout-needs svg { color: var(--v3-wait); align-self: center; flex: none; }
+.v3 .v3-callout-needs code,
+.v3 .v3-callout-perm {
+  font-family: var(--v3-mono);
+  font-size: 0.92em;
+  color: var(--v3-text);
+}
+.v3 .v3-callout-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--v3-info);
+  white-space: nowrap;
+}
+.v3 .v3-callout-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.v3 .v3-callout-close { margin: -4px -4px 0 0; }
+
+@keyframes v3-callout-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes v3-callout-rail {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-callout, .v3 .v3-callout::before { animation: none; }
+  .v3 .v3-callout-next a.v3-btn.primary svg { transition: none; }
+}

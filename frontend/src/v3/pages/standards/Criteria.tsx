@@ -10,7 +10,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
-import { dlcApi, errorMessage } from "../../../lib/api";
+import { ErrorCallout } from "../../../components/ErrorCallout";
+import { dlcApi } from "../../../lib/api";
 import {
   compoundRate,
   type CriteriaSet,
@@ -90,9 +91,11 @@ export function CriteriaIndex({
   const [template, setTemplate] = useState("");
   const [busy, setBusy] = useState(false);
   const templates = useLoad(() => dlcApi.listSets({ kind: "template" }), "v3-std-templates");
+  const [failure, setFailure] = useState<unknown>(null);
 
   const create = (kind: "agent" | "template") => {
     setBusy(true);
+    setFailure(null);
     const chosen = templates.data?.sets.find((s) => s.lineage_id === template);
     dlcApi
       .createSet({
@@ -108,7 +111,7 @@ export function CriteriaIndex({
         onReload();
         onOpen(created.set.lineage_id);
       })
-      .catch((err: unknown) => toast("act", errorMessage(err), err))
+      .catch((err: unknown) => setFailure(err))
       .finally(() => setBusy(false));
   };
 
@@ -173,7 +176,7 @@ export function CriteriaIndex({
       {creating && (
         <Dialog
           title={t("v2.dlc.criteria.createTitle")}
-          onClose={() => setCreating(false)}
+          onClose={() => { setCreating(false); setFailure(null); }}
           foot={
             <>
               <Btn kind="ghost" onClick={() => setCreating(false)}>{t("v3.common.cancel")}</Btn>
@@ -200,6 +203,8 @@ export function CriteriaIndex({
               </select>
               <small className="v3-hint">{t("v2.dlc.criteria.fromTemplateHint")}</small>
             </label>
+            <ErrorCallout error={failure} params={{ agent_id: agentId ?? undefined }} onDismiss={() => setFailure(null)}
+              data-testid="v3-criteria-create-error" />
           </div>
         </Dialog>
       )}
@@ -336,15 +341,18 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
     (r) => typeof r.threshold === "number" && Math.abs((r.threshold as number) * 100 - Math.round((r.threshold as number) * 100)) > 1e-9,
   );
 
+  // publish / sign / save fail in place, with the way out (storyline-ux §4)
+  const [failure, setFailure] = useState<unknown>(null);
   const run = async (fn: () => Promise<unknown>, okKey: string) => {
     setBusy(true);
+    setFailure(null);
     try {
       await fn();
       toast("ok", t(okKey));
       setDirty(false);
       onReload();
     } catch (err) {
-      toast("act", errorMessage(err), err);
+      setFailure(err);
     } finally {
       setBusy(false);
     }
@@ -355,6 +363,8 @@ export function CriteriaEditor({ payload, onReload, onBack }: { payload: Criteri
       <div>
         <button type="button" className="v3-btn ghost sm" onClick={onBack}>← {t("v2.dlc.criteria.backToList")}</button>
       </div>
+      <ErrorCallout error={failure} params={{ agent_id: set.agent_id ?? undefined, lineage_id: set.lineage_id }}
+        onDismiss={() => setFailure(null)} data-testid="v3-criteria-error" />
       <Panel
         title={t("v2.dlc.criteria.tableTitle", { name: set.name, version: set.version })}
         signal={!frozen ? "info" : set.signed_by ? "ok" : "wait"}
