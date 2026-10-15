@@ -434,9 +434,18 @@ STUDIO_EXTRA_REQUIREMENTS = [
 # rather than a property of when the zip happened to be built.
 MANTLE_EXTRA_REQUIREMENTS = ["strands-agents[openai]>=1.47,<2", "openai>=2,<3"]
 
+# strands-builder SB-2 model providers, on top of the Bedrock base set: the
+# Anthropic Messages API client, or (LiteLLM gateway = OpenAI chat-completions
+# proxy) the same openai pair Mantle uses.
+PROVIDER_EXTRA_REQUIREMENTS = {
+    "anthropic": ["strands-agents[anthropic]>=1.47,<2"],
+    "litellm": MANTLE_EXTRA_REQUIREMENTS,
+}
+
 
 def platform_requirements(
-    method: str, model_source: str, protocol: str = "http", strands_tools: bool = False
+    method: str, model_source: str, protocol: str = "http", strands_tools: bool = False,
+    model_provider: str | None = None,
 ) -> list[str]:
     """Every requirement the package stage adds on top of `spec.requirements`.
 
@@ -457,6 +466,8 @@ def platform_requirements(
 
     ``strands_tools``: the spec selected curated ``strands-agents-tools``
     (strands-builder SB-1) — the pinned package joins either Strands base set.
+    ``model_provider``: the SB-2 provider kind (``anthropic`` / ``litellm``), whose
+    client package joins the HTTP base set.
     """
     tools_extra = [STRANDS_TOOLS_REQUIREMENT] if strands_tools else []
     if protocol == "a2a":
@@ -472,6 +483,8 @@ def platform_requirements(
         extra = MANTLE_EXTRA_REQUIREMENTS
     else:
         extra = []
+    if model_provider:
+        extra = [*extra, *PROVIDER_EXTRA_REQUIREMENTS[model_provider]]
     return base_requirements() + extra + tools_extra
 
 
@@ -480,6 +493,7 @@ def _method_requirements(spec: AgentSpec) -> list[str]:
         platform_requirements(
             spec.method, spec.model_source, spec.protocol,
             strands_tools=bool(spec.strands_tools),
+            model_provider=spec.model_provider.kind if spec.model_provider else None,
         )
         + spec.requirements
     )
@@ -493,8 +507,29 @@ def package_key(agent: Agent) -> str:
     )
 
 
+def _resolve_agent_tools(agent: Agent, spec: AgentSpec) -> AgentSpec:
+    """strands-builder SB-2: re-read every agent tool's runtime facts from the ledger
+    and store them on the row, so the provision stage grants exactly what the
+    generated code calls (a ref the save path missed, or one whose target moved)."""
+    if not spec.agent_tools:
+        return spec
+    from sqlalchemy.orm import object_session
+
+    from app.services.agent_tools import resolved_spec
+
+    db = object_session(agent)
+    if db is None:
+        raise RuntimeError("agent row is detached — cannot resolve its agent tools")
+    resolved = resolved_spec(db, spec, agent_id=agent.id, workspace_id=agent.workspace_id)
+    refs = [ref.model_dump() for ref in resolved.agent_tools]
+    if refs != [ref.model_dump() for ref in spec.agent_tools]:
+        # the pipeline commits with the stage's status, before provision reads the row
+        agent.spec = {**(agent.spec or {}), "agent_tools": refs}
+    return resolved
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
-    spec = AgentSpec(**agent.spec)
+    spec = _resolve_agent_tools(agent, AgentSpec(**agent.spec))
     code, source = _generate_code(spec)
     requirements = _method_requirements(spec)
     ctx.scratch["code"] = code
