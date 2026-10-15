@@ -61,7 +61,14 @@ AGENT_PERMISSIONS = (
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
 ROLE_MEMBER = "member"
-ROLES = (ROLE_ADMIN, ROLE_OPERATOR, ROLE_MEMBER)
+# projects §11.4: the structure-only platform administrator ("结构管理员"). Manages
+# accounts, departments, projects, groups, bindings and workspaces like an admin, but
+# never reaches project data (`access.has_data_bypass` is False, `can_manage_structure`
+# True) and holds no workspace grant, project or group membership of its own.
+ROLE_STEWARD = "steward"
+ROLES = (ROLE_ADMIN, ROLE_OPERATOR, ROLE_MEMBER, ROLE_STEWARD)
+# platform roles: reach structure by role, so they hold no grant or membership rows
+PLATFORM_ROLES = (ROLE_ADMIN, ROLE_STEWARD)
 
 # Which permissions each role holds unless an administrator overrode one. Admins are
 # absent on purpose: they hold everything by role, never by row.
@@ -85,6 +92,8 @@ DEFAULT_BY_ROLE: dict[str, frozenset[str]] = {
          "promotion.request", "identity.manage", "identity.grant", "memory.manage",
          "criteria.manage"}
     ),
+    # structure only: no agent key, so no `perm:*` route opens for a steward
+    ROLE_STEWARD: frozenset(),
 }
 
 
@@ -439,13 +448,9 @@ def create_user(
 
     project_items = _project_items(db, projects)
     group_items = _group_items(db, groups)
-    if role == ROLE_ADMIN:
+    if role in PLATFORM_ROLES:
         if workspaces or project_items or group_items:
-            raise AppError(
-                "users.admin_no_grants",
-                "An administrator reaches every workspace and project by role and holds "
-                "no grant or membership",
-            )
+            raise _no_grants(role)
         requested: list[str] = []
     else:
         requested = [DEFAULT_WORKSPACE_ID] if workspaces is None else workspaces
@@ -515,6 +520,20 @@ def create_user(
         ) from exc
     db.refresh(user)
     return user, generated
+
+
+def _no_grants(role: str) -> AppError:
+    if role == ROLE_STEWARD:
+        return AppError(
+            "users.steward_no_grants",
+            "A steward manages structure only: it holds no workspace grant, project or "
+            "group membership (it would reach project data through one)",
+        )
+    return AppError(
+        "users.admin_no_grants",
+        "An administrator reaches every workspace and project by role and holds "
+        "no grant or membership",
+    )
 
 
 def _validated_workspace_ids(db: Session, value: Any) -> set[str]:
@@ -796,7 +815,14 @@ def apply_patch(
                 "users.invalid_role", f"Role must be one of {', '.join(ROLES)}"
             )
         demoted = user.role == ROLE_ADMIN and role != ROLE_ADMIN
+        to_steward = role == ROLE_STEWARD and user.role != ROLE_STEWARD
         user.role = role
+        if to_steward:
+            # §11.4: a steward reaches no project data, so nothing it held as a member
+            # survives the change (an admin keeps its rows for a demotion; a steward's
+            # would be a back door)
+            demoted = False
+            _strip_access_rows(db, user, actor or _SystemActor("system"))
         if demoted:
             # admins hold no project rows (they bypass): give the account back the
             # default-project memberships its workspace grants imply (design §8.5)
@@ -826,6 +852,10 @@ def apply_patch(
     if "permissions" in patch:
         # after the role patch above, so an override is measured against the new role
         user.permissions = _normalized_permissions(patch["permissions"], user.role)
+    if user.role == ROLE_STEWARD and any(
+            patch.get(key) for key in ("workspaces", "projects", "groups")):
+        db.rollback()
+        raise _no_grants(ROLE_STEWARD)
     if "workspaces" in patch:
         set_workspace_grants(db, user, patch["workspaces"])
     who = actor or _SystemActor("system")
@@ -851,6 +881,24 @@ def apply_patch(
     db.commit()
     db.refresh(user)
     return generated
+
+
+def _strip_access_rows(db: Session, user: User, actor: Any) -> None:
+    """Drop every workspace grant, project and group membership of an account that
+    becomes a steward (§11.4), journaled and with the epoch bumped (same transaction)."""
+    from app.services import steward as steward_service
+    from app.services.access import bump_epoch
+
+    removed = 0
+    for table in ("user_workspaces", "project_members", "group_members"):
+        removed += db.execute(
+            text(f"DELETE FROM {table} WHERE user_id = :id"), {"id": user.id},  # noqa: S608
+        ).rowcount or 0
+    if not removed:
+        return
+    bump_epoch(db)
+    steward_service.journal(db, actor, "steward.access_cleared",
+                            f"user:{user.username} ({user.id}) rows={removed}")
 
 
 def revoke_sessions(db: Session, user: User) -> int:
@@ -881,6 +929,23 @@ def list_admins(db: Session, settings: Settings | None = None) -> list[dict[str,
         payload["builtin"] = False
         payload["can_sign_in"] = can_sign_in
         payload["last_signable"] = can_sign_in and signable <= 1
+        items.append(payload)
+    return items
+
+
+def list_stewards(db: Session) -> list[dict[str, Any]]:
+    """Every steward account (§11.4), oldest first — the administrator page's second
+    type. Never counted by `users.last_admin`: a steward is no administrator."""
+    now = datetime.now(UTC)
+    rows = list(
+        db.scalars(select(User).where(User.role == ROLE_STEWARD).order_by(User.created_at))
+    )
+    items = []
+    for row in rows:
+        payload = serialize(row, now, [])
+        payload["builtin"] = False
+        payload["can_sign_in"] = account_state(row, now) == STATUS_ACTIVE
+        payload["last_signable"] = False
         items.append(payload)
     return items
 
@@ -1316,10 +1381,13 @@ def bulk_add_to_project(
         raise NotFoundError(
             "users.not_found", f"Unknown user id(s): {', '.join(unknown)}", {"unknown": unknown}
         )
+    # stewards hold no membership either (§11.4): reported, never written
     skipped = [
         {"user_id": uid, "reason": "admin"}
-        for uid in wanted
         if uid == BUILTIN_ADMIN_ID or rows[uid].role == ROLE_ADMIN
+        else {"user_id": uid, "reason": "steward"}
+        for uid in wanted
+        if uid == BUILTIN_ADMIN_ID or rows[uid].role in PLATFORM_ROLES
     ]
     skip_ids = {item["user_id"] for item in skipped}
     upsert: list[dict[str, Any]] = []

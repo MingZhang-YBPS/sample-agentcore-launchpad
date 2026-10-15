@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "../../../auth/auth-context";
 import { api, type ConsoleUser, errorMessage } from "../../../lib/api";
 import { type AdminAccount, adminsApi } from "../../../lib/api/projects";
+import { isSteward, STEWARD_ROLE, stewardApi } from "../../../lib/api/steward";
 import { usersApi } from "../../../lib/api/users";
 import { MAX_EXTEND_DAYS } from "../../../v2/pages/users/common";
 import { ChangePasswordDialog } from "../../ChangePassword";
@@ -15,7 +16,7 @@ import { useLoad } from "../../hooks";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton } from "../../ui";
 import { useUserActions } from "../users/actions";
 import { type CreateForm, oneTimePassword } from "../users/forms";
-import { adminCreateBody, demoteBlock, emptyAdminForm, promotable, validateAdminForm } from "./model";
+import { adminCreateBody, demoteBlock, emptyAdminForm, type PlatformType, platformType, promotable, validateAdminForm } from "./model";
 
 const STATE_SIGNAL: Record<ConsoleUser["state"], Signal> = { pending: "wait", active: "ok", expired: "act", disabled: "off" };
 
@@ -43,7 +44,9 @@ function DemoteDialog({ admin, busy, onCancel, onConfirm }: {
       }
     >
       <div style={{ display: "grid", gap: 12 }} data-testid="v3-admin-demote">
-        <p style={{ margin: 0 }}>{t("v3.admins.demote.body", { username: admin.username })}</p>
+        <p style={{ margin: 0 }}>
+          {t(platformType(admin) === "steward" ? "v3.steward.demoteBody" : "v3.admins.demote.body", { username: admin.username })}
+        </p>
         <label className="v3-field">
           <span>{t("v3.admins.demote.role")}</span>
           <select className="v3-select" value={role} onChange={(e) => setRole(e.target.value as "member" | "operator")}>
@@ -67,6 +70,7 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
   onDone: (created?: ConsoleUser) => void;
 }) {
   const { t } = useTranslation();
+  const [type, setType] = useState<PlatformType>("admin");
   const [mode, setMode] = useState<"promote" | "create">("promote");
   const [q, setQ] = useState("");
   const [pick, setPick] = useState<ConsoleUser | null>(null);
@@ -90,7 +94,8 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
       if (!pick) return;
       setBusy(true);
       try {
-        await usersApi.update(pick.id, { role: "admin" });
+        // the console's role type predates the steward; the backend takes it
+        await usersApi.update(pick.id, { role: (type === "steward" ? STEWARD_ROLE : "admin") as "admin" });
         onDone();
       } catch (err) {
         setError(errorMessage(err));
@@ -103,7 +108,7 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
     if (Object.keys(validateAdminForm(form, reservedName)).length > 0) return;
     setBusy(true);
     try {
-      onDone(await api.createUser(adminCreateBody(form)));
+      onDone(await api.createUser(adminCreateBody(form, type)));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -131,6 +136,14 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
       }
     >
       <form style={{ display: "grid", gap: 12 }} data-testid="v3-admin-add" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+        <label className="v3-field">
+          <span>{t("v3.admins.col.type")}</span>
+          <select className="v3-select" value={type} data-testid="v3-admin-add-type" onChange={(e) => { setType(e.target.value as PlatformType); setError(null); }}>
+            <option value="admin">{t("v3.admins.type.admin")}</option>
+            <option value="steward">{t("v3.admins.type.steward")}</option>
+          </select>
+          {type === "steward" && <small className="v3-hint">{t("v3.steward.typeHint")}</small>}
+        </label>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>{radio("promote")}{radio("create")}</div>
         {mode === "promote" ? (
           <div className="v3-field">
@@ -197,7 +210,7 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
             </label>
           </>
         )}
-        <Notice s="wait">{t("v3.admins.add.warning")}</Notice>
+        <Notice s="wait">{t(type === "steward" ? "v3.steward.addWarning" : "v3.admins.add.warning")}</Notice>
         {error && <Notice s="act">{error}</Notice>}
         <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
       </form>
@@ -219,6 +232,40 @@ function Forbidden() {
   );
 }
 
+/** `platform_settings.steward_two_person` (§11.4): a steward's membership changes wait
+ * for another steward or the project's owner. Administrators flip it; stewards read it. */
+function TwoPersonPanel({ canManage }: { canManage: boolean }) {
+  const { t } = useTranslation();
+  const settings = useLoad(() => stewardApi.settings(), "v3-steward-settings");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const on = settings.data?.steward_two_person ?? false;
+  const toggle = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await stewardApi.updateSettings({ steward_two_person: !on });
+      settings.reload();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Panel>
+      <div style={{ display: "grid", gap: 8 }} data-testid="v3-steward-two-person">
+        <label style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+          <input type="checkbox" checked={on} disabled={!canManage || busy || settings.loading} onChange={() => void toggle()} />
+          <b>{t("v3.steward.twoPerson.label")}</b>
+        </label>
+        <small className="v3-hint">{t("v3.steward.twoPerson.hint")}</small>
+        {error && <Notice s="act">{error}</Notice>}
+      </div>
+    </Panel>
+  );
+}
+
 function AdminList() {
   const { t } = useTranslation();
   const auth = useAuth();
@@ -228,6 +275,8 @@ function AdminList() {
   const [adding, setAdding] = useState(false);
   const [changingOwn, setChangingOwn] = useState(false);
   const items = list.data?.items ?? [];
+  // §11.4: a steward sees both types but manages neither (the server's `can_manage`)
+  const canManage = (list.data as { can_manage?: boolean } | null)?.can_manage ?? auth.isAdmin;
   const builtin = items.find((a) => a.builtin) ?? null;
   const isSelf = (a: AdminAccount) => a.username === auth.username && (auth.builtin ? a.builtin : !a.builtin);
 
@@ -240,11 +289,12 @@ function AdminList() {
         end={
           <>
             <Btn kind="ghost" onClick={list.reload} disabled={list.loading}><RefreshCw size={14} /> {t("v3.users.refresh")}</Btn>
-            <Btn kind="primary" onClick={() => setAdding(true)}><ShieldPlus size={14} /> {t("v3.admins.add.open")}</Btn>
+            {canManage && <Btn kind="primary" onClick={() => setAdding(true)}><ShieldPlus size={14} /> {t("v3.admins.add.open")}</Btn>}
           </>
         }
       />
       {list.data && list.data.can_sign_in <= 1 && <Notice s="wait">{t("v3.admins.lastNotice")}</Notice>}
+      {!canManage && <Notice s="info">{t("v3.steward.readOnly")}</Notice>}
 
       <Panel flush>
         {list.loading && !list.data ? (
@@ -268,7 +318,8 @@ function AdminList() {
             <tbody>
               {items.map((a) => {
                 const busy = actions.busyId === a.id;
-                const block = demoteBlock(a);
+                const block = demoteBlock(a, canManage);
+                const kind = platformType(a);
                 const self = isSelf(a);
                 return (
                   <tr key={a.id}>
@@ -284,20 +335,24 @@ function AdminList() {
                         </small>
                       )}
                     </td>
-                    <td><Chip s={a.builtin ? undefined : "info"}>{t(a.builtin ? "v3.users.builtin.chip" : "v3.admins.type.account")}</Chip></td>
+                    <td>
+                      <Chip s={a.builtin ? undefined : kind === "steward" ? "wait" : "info"}>
+                        {t(a.builtin ? "v3.users.builtin.chip" : kind === "steward" ? "v3.admins.type.steward" : "v3.admins.type.account")}
+                      </Chip>
+                    </td>
                     <td><Chip s={STATE_SIGNAL[a.state] === "off" ? undefined : STATE_SIGNAL[a.state]}>{t(`v2.users.state.${a.state}`)}</Chip></td>
                     <td className="num" style={{ color: "var(--v3-text-3)" }}>{a.builtin ? "—" : ago(a.last_login_at)}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                         {self ? (
                           <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setChangingOwn(true)}><KeyRound size={13} /> {t("v3.account.password.title")}</Btn>
-                        ) : (
+                        ) : canManage && (
                           <Btn size="sm" kind="ghost" disabled={busy} onClick={() => actions.ask("reset", a)}><KeyRound size={13} /> {t("v2.users.action.resetPassword")}</Btn>
                         )}
-                        {!a.builtin && a.state === "expired" && (
+                        {canManage && !a.builtin && a.state === "expired" && (
                           <Btn size="sm" kind="ghost" disabled={busy} onClick={() => actions.openExtend(a)}>{t("v2.users.action.extend")}</Btn>
                         )}
-                        {!a.builtin && !self && (
+                        {canManage && !a.builtin && !self && (
                           <Btn size="sm" kind="ghost" disabled={busy} title={t("v3.users.sessions.hint")} onClick={() => actions.ask("sessions", a)}>
                             <LogOut size={13} /> {t("v3.users.sessions.action")}
                           </Btn>
@@ -317,6 +372,7 @@ function AdminList() {
           </table>
         )}
       </Panel>
+      <TwoPersonPanel canManage={canManage} />
       <small className="v3-hint">{t("v3.admins.breakGlass")}</small>
 
       {demoting && (
@@ -348,13 +404,15 @@ function AdminList() {
 
 /**
  * Administrators (projects §7.3, platform administrators only): the built-in admin
- * first, then every admin-role account (`GET /api/admins`); add one by promoting an
+ * first, then every admin-role account and every steward (§11.4, structure only —
+ * a steward reads the page, an administrator manages both types; `GET /api/admins`); add one by promoting an
  * account or creating an admin account; demote with the server's guards (never the
  * built-in one, yourself or the last admin who can sign in); reset passwords and
  * force a sign-out. Hub-global: no workspace or project in any of these calls.
  */
 export function V3Admins() {
-  const { isAdmin } = useAuth();
-  if (!isAdmin) return <Forbidden />;
+  const { isAdmin, role } = useAuth();
+  // a steward reads the page (§11.4) — the server keeps both types the administrators'
+  if (!isAdmin && !isSteward(role)) return <Forbidden />;
   return <AdminList />;
 }

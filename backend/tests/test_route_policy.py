@@ -256,6 +256,37 @@ class TestNoDrift:
             assert key not in WORKSPACE_EXEMPT
 
 
+class TestTheStewardSplit:
+    """Projects §11.4: every `ADMIN` route is classified structure (`ADMIN`, a steward
+    passes) or data (`ADMIN_DATA`, a steward is refused) — both directions."""
+
+    def test_every_admin_route_is_one_of_the_two(self, gated_app):
+        from app.core.route_policy import ADMIN_SPLIT
+
+        unclassified = sorted(set(ADMIN_ROUTES) - set(ADMIN_SPLIT))
+        assert not unclassified, (
+            "classify these ADMIN routes as structure (ADMIN) or data (ADMIN_DATA) in "
+            f"route_policy.ADMIN_SPLIT (projects §11.4): {unclassified}"
+        )
+        stale = sorted(set(ADMIN_SPLIT) - set(ADMIN_ROUTES))
+        assert not stale, f"ADMIN_SPLIT names routes that are not ADMIN: {stale}"
+
+    def test_the_two_kinds_do_not_overlap(self):
+        from app.core.route_policy import _DATA_ROUTES, _STRUCTURE_ROUTES
+
+        assert not set(_DATA_ROUTES) & set(_STRUCTURE_ROUTES)
+        assert len(set(_DATA_ROUTES)) == len(_DATA_ROUTES)
+        assert len(set(_STRUCTURE_ROUTES)) == len(_STRUCTURE_ROUTES)
+
+    def test_the_design_s_data_routes_are_data(self):
+        from app.core.route_policy import ADMIN_DATA, admin_kind
+
+        for key in [("GET", "/api/audit"), ("GET", "/api/costs"), ("GET", "/api/fleet"),
+                    ("GET", "/api/inbox"), ("PUT", "/api/steward/settings")]:
+            assert admin_kind(*key) == ADMIN_DATA, key
+        assert admin_kind("GET", "/api/not-a-route") == ADMIN_DATA  # unknown is closed
+
+
 class TestAdminRoutesAreEnforced:
     @pytest.mark.parametrize(("method", "path_format"), ADMIN_ROUTES)
     def test_anonymous_gets_401(self, anon_session, method, path_format):

@@ -12506,7 +12506,9 @@
         "type": "Type"
       },
       "type": {
-        "account": "Account"
+        "account": "Account",
+        "admin": "Administrator",
+        "steward": "Steward"
       },
       "passwordSource": "Password: {{source}} ({{when}})",
       "block": {
@@ -12960,6 +12962,31 @@
         "none": "No storage is available to this project. Ask an administrator to register it.",
         "modeTooWide": "This storage can only be mounted read-only",
         "preflightOk": "Storage preflight passed"
+      }
+    },
+    "steward": {
+      "typeHint": "A steward manages structure only — accounts, departments, projects, groups, bindings and workspaces — and never sees project data.",
+      "addWarning": "A steward cannot enter projects: every membership change it makes is journaled and noticed to the project's owners.",
+      "demoteBody": "{{username}} loses the steward role and with it the structure pages.",
+      "readOnly": "Your role manages structure only: administrators and stewards are added and changed by an administrator.",
+      "twoPerson": {
+        "label": "Two-person rule for stewards",
+        "hint": "When on, a steward's project membership changes wait until another steward or the project's owner confirms them."
+      },
+      "empty": {
+        "eyebrow": "Steward",
+        "heading": "Structure only",
+        "meta": "Signed in as {{username}} (steward)",
+        "title": "Your role manages structure only",
+        "body": "A steward manages accounts, departments, projects, groups and workspaces, and does not access any project's data. Use the configuration pages below."
+      },
+      "links": {
+        "users": "Users",
+        "admins": "Administrators",
+        "projects": "Projects",
+        "groups": "Project groups",
+        "departments": "Departments",
+        "workspaces": "Workspaces"
       }
     }
   },
