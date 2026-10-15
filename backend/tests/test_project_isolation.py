@@ -787,8 +787,12 @@ def test_a_beta_link_never_opens_an_alpha_object(world, links):
 
 # Read by every project of the workspace by design (platform rows, design §4.2).
 WORKSPACE_LOGS = {"/api/governance/decisions": "the shared gateway's one decision log"}
+# timestamps, ages and what a background scheduler tick writes meanwhile (a slow run
+# lets the watch / alert sweep run between two snapshots) are not data of beta's
 _VOLATILE = re.compile(
-    r"\d{4}-\d\d-\d\dT[\d:.+]+Z?|\"(generated_at|checked_at|now)\":[^,}]+"
+    r"\d{4}-\d\d-\d\dT[\d:.+]+Z?|\"(generated_at|checked_at|now|oldest_open_hours"
+    r"|hours_to_close|last_checked_at|next_due_at|last_status|last_detail)\":"
+    r"(\"(?:[^\"\\\\]|\\\\.)*\"|[^,}]+)"
 )
 
 

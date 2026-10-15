@@ -461,7 +461,9 @@ def test_chat_stream_keeps_invocation_scoped_gateway_identity(monkeypatch):
         runtime_user_id="operator", gateway_access_token="test-token", workspace=workspace,
     ))
     assert events[-1]["event"] == "done"
-    authenticated_tools.assert_called_once_with({}, workspace.resources, "test-token")
+    authenticated_tools.assert_called_once_with(
+        {}, workspace.resources, "test-token", workspace_id=workspace.id,
+    )
     assert data.invoke_harness.call_args.kwargs == {
         "harnessArn": ARN, "runtimeSessionId": SID, "actorId": "agent__operator",
         "runtimeUserId": "operator", "tools": tools,
