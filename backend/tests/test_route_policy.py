@@ -281,9 +281,12 @@ class TestTheStewardSplit:
     def test_the_design_s_data_routes_are_data(self):
         from app.core.route_policy import ADMIN_DATA, admin_kind
 
-        for key in [("GET", "/api/audit"), ("GET", "/api/costs"), ("GET", "/api/fleet"),
-                    ("GET", "/api/inbox"), ("PUT", "/api/steward/settings")]:
+        for key in [("GET", "/api/costs"), ("PUT", "/api/steward/settings"),
+                    ("POST", "/api/system/update/prepare")]:
             assert admin_kind(*key) == ADMIN_DATA, key
+        # cross-platform reads whose handlers keep a steward to structure (WIRE-B)
+        for key in [("GET", "/api/audit"), ("GET", "/api/fleet"), ("GET", "/api/inbox")]:
+            assert admin_kind(*key) != ADMIN_DATA, key
         assert admin_kind("GET", "/api/not-a-route") == ADMIN_DATA  # unknown is closed
 
 

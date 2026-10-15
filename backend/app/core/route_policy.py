@@ -1264,9 +1264,9 @@ def require_infra(request: Request, role: str) -> None:
 
 
 # §10.6-6 (R10-gw): the `infra` routes that become the project's own once Cedar is per
-# project — creating / deleting the project's Connection-bound gateway targets. The
-# gateway's baseline policies, guardrails and Lambda targets (`gateway_tools`, which
-# records no ownership yet) stay administrator-only in a multi-project workspace.
+# project — creating / deleting the project's Connection-bound gateway targets (and,
+# appended below, its Lambda targets). The gateway's baseline policies and guardrails
+# stay administrator-only in a multi-project workspace.
 INFRA_LOWERED_WHEN_ISOLATED: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/identity/gateway-targets"),
     ("DELETE", "/api/identity/gateway-targets/{target_id}"),
@@ -1841,15 +1841,17 @@ _STRUCTURE_ROUTES = (
     ("POST", "/api/videos/manage/{video_id}/publish"),
     ("POST", "/api/videos/manage/{video_id}/unpublish"),
     ("GET", "/api/steward/settings"),
-)
-_DATA_ROUTES = (
-    # the journal's data events (structure-only filtering is the audit router's), cost
-    # detail, the fleet's agents, the inbox's business items, time-to-first-agent
+    # read across the platform, each handler keeping a steward to structure: the
+    # journal's structure events (`audit.steward_visible`), the fleet's counts (it
+    # names no agent), the inbox's account and workspace items
     ("GET", "/api/audit"),
-    ("GET", "/api/costs"),
-    ("GET", "/api/costs/month-to-date"),
     ("GET", "/api/fleet"),
     ("GET", "/api/inbox"),
+)
+_DATA_ROUTES = (
+    # cost detail (until its router keeps a steward to totals), time-to-first-agent
+    ("GET", "/api/costs"),
+    ("GET", "/api/costs/month-to-date"),
     ("GET", "/api/overview/ttfa"),
     # a project's data leaves or moves: the export bundle, an agent transfer; deletion
     # (a request purges on its own after the cooling-off) until §11.5's steward
@@ -1898,3 +1900,33 @@ def require_admin_kind(request: Request, method: str, path_format: str) -> None:
         access.require_structure(request)
     else:
         require_admin(request)
+
+
+# ---- WIRE-B: routes and lowerings the B8 nodes asked for ----
+# R10-kb: moving an isolated project's existing knowledge base onto the project's own
+# role, S3 prefix and tag, then dropping the old data source. Project-scoped, not
+# PROJECT_EXEMPT: the KB is resolved in the request's project (another project's is
+# 404). Administrator data work — it copies the KB's documents.
+KB_MIGRATION_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/knowledge-bases/{kb_id}/migrate-to-project"): ADMIN,
+    ("POST", "/api/knowledge-bases/{kb_id}/migrate-to-project/finish"): ADMIN,
+}
+ROUTE_POLICY.update(KB_MIGRATION_ROUTES)
+ADMIN_SPLIT.update(dict.fromkeys(KB_MIGRATION_ROUTES, ADMIN_DATA))
+
+# the steward split of the B8 administrator routes (projects §11.4): a project's
+# quotas are its structure (a steward sees quotas and counts); the online update
+# restarts the console under every project's in-flight work and stays the
+# administrators' (online-update §2.6)
+ADMIN_SPLIT.update({
+    ("PUT", "/api/projects/{project_id}/quotas"): ADMIN,
+    **{key: ADMIN_DATA for key, role in SYSTEM_UPDATE_ROUTES.items() if role == ADMIN},
+})
+
+# R10-gw: console-created Lambda targets are the project's own once Cedar is per
+# project, like its Connection-bound targets (`gateway_tools` records their ownership,
+# so another project's target is not found)
+INFRA_LOWERED_WHEN_ISOLATED = INFRA_LOWERED_WHEN_ISOLATED | frozenset({
+    ("POST", "/api/gateway-tools/lambda"),
+    ("DELETE", "/api/gateway-tools/lambda/{target_id}"),
+})

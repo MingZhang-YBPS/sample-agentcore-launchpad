@@ -24,7 +24,7 @@ from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import NETWORK_PROFILE_ID_RE, StorageMountRef
-from app.services import agent_access
+from app.services import access, agent_access
 from app.services import storage_mounts as service
 from app.services.audit import record_audit_event
 from app.services.visibility import Viewer, require_viewer
@@ -81,7 +81,8 @@ def _actor(request: Request) -> str:
 
 
 def _see_all(request: Request) -> bool:
-    return require_identity(request).is_admin
+    # administrators and stewards (§11.4): the catalogue is structure, not project data
+    return access.can_manage_structure(require_identity(request))
 
 
 def _project_id(request: Request) -> str | None:

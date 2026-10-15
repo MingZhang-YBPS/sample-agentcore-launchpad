@@ -577,6 +577,7 @@ def _projects_of(db: Session, rows: list[Any]) -> list[dict[str, Any] | None]:
 
 @router.get("/inbox")
 def inbox(
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
@@ -586,7 +587,13 @@ def inbox(
     workspace (failed jobs, promotions), because that is how an administrator works: one
     environment in focus, the tenancy always visible. Every entry carries a `to` the
     console turns into a link, so the inbox never becomes a dead end.
+
+    A steward (§11.4) gets the hub-global items only: the workspace's jobs, promotions,
+    alerts and agents are project business data.
     """
+    from app.routers.auth import require_identity
+    from app.services import steward as steward_service
+
     now = datetime.now(UTC)
     soon = now + timedelta(days=7)
     items: list[dict[str, Any]] = []
@@ -637,6 +644,8 @@ def inbox(
                 "sample": [f"{row.id} ({row.bootstrap_status})" for row in stuck_workspaces[:5]],
             }
         )
+    if steward_service.is_steward(require_identity(request)):
+        return _inbox_out(ws.id, now, items)
 
     failed_jobs = db.scalars(
         select(Job)
@@ -719,10 +728,14 @@ def inbox(
             }
         )
 
+    return _inbox_out(ws.id, now, items)
+
+
+def _inbox_out(workspace_id: str, now: datetime, items: list[dict[str, Any]]) -> dict[str, Any]:
     order = {"action": 0, "warn": 1, "info": 2}
     items.sort(key=lambda item: (order.get(item["severity"], 3), -item["count"]))
     return {
-        "workspace_id": ws.id,
+        "workspace_id": workspace_id,
         "generated_at": now.isoformat(),
         "total": sum(item["count"] for item in items),
         "items": items,

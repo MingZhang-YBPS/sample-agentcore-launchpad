@@ -24,6 +24,7 @@ from app.core.db import get_db
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import access
 from app.services import network_enforcement as enforcement
 from app.services import network_profiles as service
 from app.services.audit import record_audit_event
@@ -123,7 +124,8 @@ def _actor(request: Request) -> str:
 
 
 def _see_all(request: Request) -> bool:
-    return require_identity(request).is_admin
+    # administrators and stewards (§11.4): the catalogue is structure, not project data
+    return access.can_manage_structure(require_identity(request))
 
 
 def _project_id(request: Request) -> str | None:

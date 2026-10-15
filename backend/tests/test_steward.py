@@ -177,12 +177,13 @@ def test_structure_reads_answer_200_and_data_403_404_over_http(world):
                  "/api/projects/shop/candidates", f"/api/users/{world.olivia_id}",
                  f"/api/users/{world.olivia_id}/access", "/api/models/settings",
                  "/api/announcements/manage", "/api/videos/manage", "/api/steward/settings",
-                 "/api/departments"):
+                 "/api/departments", "/api/audit", "/api/fleet", "/api/inbox"):
         res = sam.get(path)
         assert res.status_code == 200, (path, res.text)
     assert {p["id"] for p in sam.get("/api/projects").json()["projects"]} >= {"default", "shop"}
     # data: the ADMIN_DATA routes, the project audit view, and the project-scoped surface
-    for path in ("/api/audit", "/api/costs", "/api/fleet", "/api/inbox", "/api/overview/ttfa"):
+    # (audit, fleet and inbox answer it their structure part — tests/test_wire_b.py)
+    for path in ("/api/costs", "/api/overview/ttfa"):
         res = sam.get(path)
         assert (res.status_code, res.json()["code"]) == (403, "auth.forbidden"), path
     res = sam.get("/api/projects/shop/audit")

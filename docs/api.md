@@ -605,7 +605,11 @@ same tool review as hosted MCP servers (the review shape above): decisions take
 - **Lambda targets** are created by the console. Creating or deleting one changes the
   workspace Gateway every project shares, so both are `infra+perm:agents.deploy`: the
   project's `agents.deploy` while the workspace binds one project, administrators only
-  once it binds several. Both are production-protected.
+  once it binds several — unless every project there is isolated with its Cedar rules in
+  force (projects §10.6-6): then the project's own `agents.deploy` decides again, and
+  another project's target answers 404 (`INFRA_LOWERED_WHEN_ISOLATED`, like the
+  Connection-bound targets of `/api/identity/gateway-targets`). Both are
+  production-protected.
 - **Externally hosted targets** are MCP-server targets made by hand on the Gateway that
   no hosted server owns. Adopting one records its current list as the approved baseline
   (agents already calling it are not cut off), and the hourly `mcp.health` task compares
@@ -896,6 +900,8 @@ everything else is a live AWS call. See
 | `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs` | The 50 most recent ingestion jobs, newest first, in the same projection |
 | `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/documents?page_size=&token=` | One page of `ListKnowledgeBaseDocuments` (`page_size` 1–100, default 50) as `{documents, next_token, page_size}`; each document carries the KB-side `status`/`status_reason`/`indexed_at` plus S3-side `size_bytes`/`uploaded_at` joined by object key (absent when the backend cannot list the bucket) |
 | `POST` | `/api/knowledge-bases/{kb_id}/query` | Retrieval playground — `{text, number_of_results?}` (1–100, default 8) → `Retrieve` with a `managedSearchConfiguration`, answering `{results}` of `{text, score, location_uri, metadata}` |
+| `POST` | `/api/knowledge-bases/{kb_id}/migrate-to-project` | Admin (data). An isolated project's existing KB moves onto the project's own role, S3 prefix (`projects/<pid>/kb/<kb_id>/`) and tag: the uploads are copied, the role switched (`UpdateKnowledgeBase`), the KB tagged, and a data source on the new prefix created and synced → `{kb_id, project_id, role_arn, prefix, copied, old_data_sources[], data_source, sync?, sync_error?, state: syncing\|done}`. Idempotent and additive: the old data source keeps serving until `finish`. A KB of another project → `404 kb.not_found`; a project that is not isolated → `409 project.isolation_disabled`; a service that refuses the role change → `409 kb.role_update_unsupported` (rebuild the KB in the project) |
+| `POST` | `/api/knowledge-bases/{kb_id}/migrate-to-project/finish` | Admin (data). Once the new data source's latest sync is `COMPLETE`: deletes the old `kb/<kb_id>/` data source and the shared role's inline policy for the KB → `{kb_id, deleted_data_sources[], state: done}`. The old objects stay. `409 kb.not_migrated` (migrate first), `409 kb.migration_syncing` (wait for the sync) |
 | `POST` | `/api/knowledge-bases/ensure-gateway` | Create-if-missing the shared `launchpad-kb-gw` MCP gateway and persist `{id, arn, url}` onto the workspace. Idempotent; the harness deploy path calls the same helper, so this is only needed to provision the gateway ahead of time |
 
 Error codes: `kb.not_found` (404 — unknown id, or a KB that is not MANAGED),
@@ -1507,7 +1513,7 @@ it. Neither surface touches AWS. See
 
 | Method | Path | Auth | Result |
 |---|---|---|---|
-| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions, builtin}` — identity fields are null (`permissions`: `[]`) until authenticated |
+| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions, builtin, version: {sha}}` (`version.sha`: the running console commit, so an open tab notices an online update) — identity fields are null (`permissions`: `[]`) until authenticated |
 | `POST` | `/api/auth/login` | open | Sets the `launchpad_session` cookie (12h, clamped to the account validity) and echoes the identity |
 | `POST` | `/api/auth/register` | open | `201` — creates a `member` account; by default `status=pending` with `expires_at=null` until an admin approves it, then valid for `auth_registration_valid_days` (default 7) |
 | `POST` | `/api/auth/logout` | session | Clears the cookie |
@@ -1535,6 +1541,39 @@ journals the structure event `admin.grant` / `admin.revoke` beside `user.update`
 Nobody removes their own admin role: such a `PATCH` answers `users.self_demote` (409),
 unless it would also remove the last admin who can sign in, in which case
 `users.last_admin` (409) answers first.
+
+**Organization administrators (stewards, `role: steward`, projects §11.4).** A
+steward manages the platform's structure — accounts, departments, projects, groups,
+bindings, workspaces, the network and storage catalogues — and never its data. It
+passes every `admin` route the route table classes as structure (`ADMIN_SPLIT`) and
+is refused the data ones (`403 auth.forbidden`); it reaches every workspace for
+structure (`GET /api/workspaces` answers `all_workspaces: true`), but its project
+snapshot is empty, so project-scoped routes refuse it. It holds no grant or
+membership: `PUT /api/workspaces/{id}/grants`, `PATCH /api/users/{id} {workspaces}`
+and project / group member writes naming a steward answer `400 users.steward_no_grants`
+or `409 project.steward_member`; a steward adding itself answers
+`403 project.self_membership`. On the cross-platform reads it is kept to structure:
+`GET /api/audit` lists the structure journal only (projects, groups, departments,
+administrators, accounts, `steward.*`, `system.update.*`, workspace tiers, the network
+and storage catalogues), `GET /api/inbox` only the account and workspace items, and
+`GET /api/fleet` is counts only. Every membership change a steward makes — on a
+project, on a group (once per project of the group) or by moving a project into a
+group — is journaled as `steward.members.change` naming the project and noticed to
+the project's owners (the accounts holding `project.members` there). With
+`steward_two_person` on, a steward's project or group membership change is staged
+(`pending: [id]`, nothing applied) until another steward, an administrator or the
+project's owner confirms it (an owner of every project of the group, for a group's
+change).
+
+| Method | Path | Auth | Result |
+|---|---|---|---|
+| `GET` | `/api/steward/notices` | member | The caller's notices of stewards' changes in projects they own: `{items[{id, kind: changed\|pending, project_id, project_name, actor, actor_user_id, changes[{op: upsert\|remove, user_id, username, role_key?}], pending_id, created_at, read}], unread}` (at most 50) |
+| `POST` | `/api/steward/notices/{notice_id}/ack` | member | Marks the caller's notice read → `{ok: true, notice_id}`. Someone else's notice → `404 steward.notice_not_found` |
+| `GET` | `/api/steward/pending` | member | `{items[{id, project_id, project_name, group_id?, group_name?, project_ids?, changes[…], requested_by, requested_by_user_id, created_at, mine, can_confirm}]}`: the pending changes the caller may confirm, and the caller's own |
+| `POST` | `/api/steward/pending/{pending_id}/confirm` | member | Applies the change as its requester made it → `{pending_id, project_id, group_id?, added[], updated[], removed[]}`; journaled as `steward.pending.confirm`. The requester → `403 steward.confirm_self`; a change to the confirmer's own membership → `403 project.self_membership`; anyone else who may not confirm it → `404 steward.pending_not_found` |
+| `POST` | `/api/steward/pending/{pending_id}/reject` | member | Drops the change: withdrawn by its requester (`steward.pending.withdraw`) or refused by a confirmer (`steward.pending.reject`) → `{pending_id, project_id, group_id?, rejected: true}` |
+| `GET` | `/api/steward/settings` | admin (structure) | `{steward_two_person}` |
+| `PUT` | `/api/steward/settings` | admin (data: a steward does not loosen its own rule) | Body `{steward_two_person: bool}` → the GET shape; journaled as `steward.two_person` |
 
 Registration error codes: `auth.registration_disabled` (400, gate off or
 registration disabled), `auth.invalid_username` / `auth.invalid_email` /
@@ -1664,8 +1703,12 @@ your own request) stay the backstop.
 | `GET` | `/api/projects/{project_id}/resources?workspace=` | member (404 to non-members) | `{resources[{workspace_id, kind, resource_id, arn, status, detail, error, job_id, created_at, updated_at}]}`: the per-project resources isolation provisioned. A `workspace` the project is not bound to (or the caller does not reach it in) → `404 project.not_bound` |
 | `GET` | `/api/projects/{project_id}/provisioning?workspace=` | member (404 to non-members) | One workspace's state (the `isolation` `workspaces[]` entry) + `job{id, status, error, stages[], preflight[], actor, created_at, updated_at} \| null` |
 | `POST` | `/api/projects/{project_id}/provision` | admin | Body `{workspace}` → `202` the provisioning view + `created` (false when a run is already in flight). Retries the workspace's provisioning |
+| `GET` | `/api/projects/{project_id}/quotas` | member (404 to non-members) | Usage against limits (projects §11.3): `{project_id, department_id, quotas{…the project's own}, department_caps{…}, items[{key, unit: count\|usd, enforcement: block\|queue\|alert\|throttle, project_value, department_cap, limit, used, state?, checked_at?, workspace_id?}], month_start}`. `limit` is the smaller of the project's value and its department's cap. Keys: `max_agents`, `max_api_keys` (block), `max_concurrent_eval_runs` (queue), `eval_run_max_usd`, `eval_monthly_usd_cap` (block), `monthly_cost_alert_usd` (alert, `used` = what the budget alert last measured), `v1_rate_per_minute` (throttle) |
+| `PUT` | `/api/projects/{project_id}/quotas` | admin; the project's department administrator | Body `{quotas{key: value \| null}}` (partial; `null` clears one) → the GET shape. Journaled as `project.quotas.update` (`project:<id> quotas:<changed keys>`). Never above the department's cap (`422 project.quota_above_department`, `detail{quota, value, cap, department_id}`); a department administrator sets `v1_rate_per_minute` only under a department cap (`403 project.setting_forbidden`); a bad value → `400 project.setting_invalid` |
 
 Error codes (`project.*` unless noted):
+
+- 409 `quota_exceeded` (`detail{quota, used, limit}`): creating an agent (`POST /api/agents`, a discovery import, an architect approval) or an API key, re-enabling a disabled key, or starting an evaluation run (`POST /api/eval/runs`, `POST /api/agents/{id}/release/evaluate`) over the project's quotas. An evaluation's estimate is checked against `eval_run_max_usd`; this month's evaluation spend plus the estimate against `eval_monthly_usd_cap` (an unpriced run is refused only once the month is already over the cap). Runs past `max_concurrent_eval_runs` wait in the queue instead.
 
 - 400: `invalid_id`, `workspaces_required`, `binding_conflict` (bound and unbound in one request), `member_conflict` (upserted and removed in one request), `role_unknown`, `override_unknown`, `role_invalid_key`, `setting_invalid`, `transfer_kind` (`detail.supported`), `transfer_same`.
 - 400 or 403: `setting_forbidden` (`detail.keys`). It is 403 for an admin-only setting changed by an owner and 400 for an unknown setting.
@@ -1700,7 +1743,7 @@ journaled as structure events: `department.create` / `.update` / `.archive` /
 |---|---|---|---|
 | `GET` | `/api/departments?status=active\|archived\|all` | member | `{departments[{id, name, description, archived, archived_at, created_by, created_at, updated_at, project_count, group_count}]}`; `status` defaults to `active` (`400 structure.invalid_status` otherwise) |
 | `POST` | `/api/departments` | admin | Body `{id, name (1–64), description? (≤ 2000)}` → `201` department. `409 department.exists` |
-| `PATCH` | `/api/departments/{department_id}` | admin | Any of `{name, description, settings}` → department. `settings` is partial: `{can_create_users: bool (default false), max_projects: 1–10000 \| null (default null, no limit), user_validity_max_days: 1–3650 (default 90)}`; a `null` value restores that key's default. An unknown key or a bad value → `400 department.setting_invalid` (`detail.key` / `detail.keys`) |
+| `PATCH` | `/api/departments/{department_id}` | admin | Any of `{name, description, settings}` → department. `settings` is partial: `{can_create_users: bool (default false), max_projects: 1–10000 \| null (default null, no limit), user_validity_max_days: 1–3650 (default 90), quotas: {…the project quota keys} \| null (default null: no caps)}`; a `null` value restores that key's default. `quotas` merges one level deep (setting one cap keeps the others; a `null` cap clears it) and caps each of the department's projects' quotas. An unknown key or a bad value → `400 department.setting_invalid` (`detail.key` / `detail.keys`) |
 | `POST` | `/api/departments/{department_id}/archive` / `…/unarchive` | admin | → department. An archived department cannot be given to a project or group (`409 department.archived`) |
 | `DELETE` | `/api/departments/{department_id}` | admin | `204`, only while no project and no group names it: `409 department.in_use` (`detail.projects`, `detail.groups`) |
 | `GET` | `/api/departments/{department_id}/admins` | admin | `{admins[{user_id, username, email, account_role, status, added_by, added_at}]}`, by username |
@@ -1862,6 +1905,32 @@ target workspace's entry of the same id is used unless a mapping row names anoth
 it must be live and allowed for the project, else the release is refused with
 `409 storage.unmapped`; inline access points carry the source account and are refused
 with `409 storage.inline_not_promotable`.
+
+## Console System Update API — online update
+
+Online console update (online-update §2): the console fetches the configured source,
+prepares the new version beside the running one, and an administrator schedules the
+restart; the host's updater swaps it in (`backend/scripts/install_updater.sh`). Hub-global
+(`/api/system`, no `X-Workspace`); every route but the version read is an
+administrator's. No body names a repository or a branch: the source is deployment
+configuration (bodies are `extra="forbid"`). Each step is journaled as a
+`system.update.*` structure event.
+
+An update row is `{id, kind: update\|rollback, target_sha, short, target_time, base_sha,
+behind, commits[], status: preparing\|prepare_failed\|ready\|scheduled\|applying\|done\|rolled_back\|failed\|superseded,
+staged_dir, progress{}, steps[], scheduled_at, requested_by, announcement_id, error,
+previous_sha, finished_at, created_at, updated_at}`.
+
+| Method | Path | Auth | Result |
+|---|---|---|---|
+| `GET` | `/api/system/version` | member | `{sha, short, committed_at, built_at, updater_installed, update_enabled, can_schedule}`: the running version and whether this host can update online |
+| `GET` | `/api/system/update` | admin | `{version, source{repo, branch}, remote, current, history[], inflight, manual_commands}`: the running version, the configured source, the last remote check (cached ten minutes; `null` while the feature is off), the newest update row, the last 10 rows, the work a restart would interrupt (while the newest row is `ready` / `scheduled`), and the commands for a manual update (a `ready` row on a host without the updater) |
+| `POST` | `/api/system/update/check` | admin | Fetches the source now → the remote check `{repo, branch, checked_at, sha, short, committed_at, running_sha, behind, fast_forward, up_to_date, commits[]}`. `502 update.check_failed`, `409 update.disabled`, `409 update.no_git` |
+| `POST` | `/api/system/update/prepare` | admin | `202` the new update row (`preparing`): builds the newest fast-forward commit beside the running one, resumable after a restart. `409 update.up_to_date`, `409 update.not_fast_forward`, `409 update.in_progress`, `409 update.disk_low`, `409 update.disabled` |
+| `POST` | `/api/system/update/rollback` | admin | `202` a `rollback` row preparing the previous version. `409 update.no_previous`, `409 update.not_fast_forward` (the previous version is not an ancestor), `409 update.in_progress` |
+| `POST` | `/api/system/update/{update_id}/schedule` | admin | Body `{at?: datetime (omitted = now, after a 60-second countdown), acknowledge_inflight: bool}` → the row (`scheduled`); an announcement tells signed-in users. `409 update.updater_missing`, `409 update.not_ready`, `409 update.stage_missing`, `409 update.schedule_invalid`, `422 update.inflight_unacknowledged` (in-progress work would be interrupted; `detail` lists it) |
+| `POST` | `/api/system/update/{update_id}/cancel` | admin | A `scheduled` row goes back to `ready` and its announcement is withdrawn → the row. Any other status → `409 update.not_cancellable` |
+| `GET` | `/api/system/update/{update_id}/log` | admin | `{id, status, events[]}`: the update's step log. `404 update.not_found` |
 
 ## Console route index — the remaining routes
 
