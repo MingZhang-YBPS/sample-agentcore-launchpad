@@ -12909,6 +12909,97 @@
         "noResources": "This project has nothing of this kind in the workspace.",
         "crossShort": "other department",
         "crossDepartment": "That project belongs to another department: the share waits until its department administrator (or an administrator) approves it."
+      },
+      "isolation": {
+        "title": "Runtime isolation",
+        "sub": "Shared: only data visibility is separated. Isolated: each agent's role carries the project's permissions boundary and uses the project's own memory, gateway credentials and repository. Existing agents move over without downtime — old grants stay until you retire them.",
+        "live": "updating",
+        "mode": "Isolation mode",
+        "modes": {
+          "shared": "Shared",
+          "sharedHint": "data isolation only",
+          "isolated": "Isolated",
+          "isolatedHint": "IAM boundary, own memory and credentials"
+        },
+        "retired": "shared grants retired",
+        "updatedBy": "last changed by {{who}}",
+        "noWorkspaces": "The project is not bound to any workspace yet.",
+        "provision": {
+          "not_provisioned": "not provisioned",
+          "provisioning": "provisioning",
+          "ready": "resources ready",
+          "partial": "ready (some stages pending)",
+          "failed": "provisioning failed"
+        },
+        "run": {
+          "isolate": "migration",
+          "revert": "revert",
+          "retire": "retire"
+        },
+        "state": {
+          "not_started": "not started",
+          "running": "in progress",
+          "succeeded": "done",
+          "awaiting_release": "waiting for release",
+          "failed": "failed"
+        },
+        "provisionAgain": "Provision again",
+        "retry": "Retry",
+        "migrate": "Migrate agents",
+        "migrateAgain": "Migrate again",
+        "skipped": "Not provisioned yet: {{stages}}",
+        "resources": "Project resources",
+        "preflight": "Quota preflight",
+        "quotaUnknown": "unknown",
+        "noAgents": "No agents in this workspace — new ones deploy straight onto the project's resources.",
+        "readyToMigrate": "Resources are ready: migrate the existing agents to put them under the boundary.",
+        "agent": "Agent",
+        "detail": "Detail",
+        "step": {
+          "grant-new": "grant",
+          "republish": "republish",
+          "verify": "verify",
+          "switch": "switch",
+          "retire": "retire"
+        },
+        "agentStatus": {
+          "pending": "pending",
+          "running": "running",
+          "succeeded": "done",
+          "skipped": "skipped",
+          "failed": "failed",
+          "awaiting_release": "waiting for release"
+        },
+        "awaiting": "Live endpoint: sign the release candidate, then retry to switch",
+        "retireHint": "Old shared grants stay on every role until you retire them; after that the project cannot go back to shared.",
+        "retiredHint": "The shared grants are retired: agents reach only this project's resources.",
+        "revert": "Revert to shared",
+        "retire": "Retire old grants",
+        "readOnly": "Only administrators change runtime isolation.",
+        "enableTitle": "Isolate this project?",
+        "enableBody": "The project's resources (boundary, memory, M2M client, Cedar rules, repository) are provisioned in every bound workspace. Running agents are not touched until you migrate them.",
+        "enable": "Isolate",
+        "enabled": "{{name}} is isolated — provisioning started",
+        "revertTitle": "Revert to shared?",
+        "revertBody": "Every agent is republished onto the workspace's shared resources, then its boundary is removed. Running agents keep serving throughout.",
+        "revertQueued": "Revert started",
+        "retireTitle": "Retire the old shared grants?",
+        "retireBody": "Removes the bridge policies, rewrites each workspace's boundary without the shared memory and providers, and ends the 30-day dual read of the old memory. This cannot be undone: the project stays isolated.",
+        "retireQueued": "Retire started",
+        "provisionQueued": "Provisioning queued in {{ws}}",
+        "migrateQueued": "Migration started in {{ws}}",
+        "retryQueued": "Run resumed in {{ws}}",
+        "boundary": {
+          "title": "Project boundary",
+          "noPolicy": "no boundary policy",
+          "none": "not attached",
+          "current": "current",
+          "drift": "older than {{current}}",
+          "missing": "role carries no boundary",
+          "migrating": "migrating",
+          "leftover": "left over from isolation",
+          "driftHint": "The project is isolated but this role is not on its current boundary — migrate the project's agents, or republish this one."
+        }
       }
     },
     "admins": {

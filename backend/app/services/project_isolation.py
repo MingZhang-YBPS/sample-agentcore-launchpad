@@ -28,7 +28,7 @@ The job runs inside `project_context(<project>)`; a job is queued when isolation
 switched on (one per bound workspace) and when an isolated project is bound to another
 workspace (`on_workspaces_bound`). Switching isolation off only changes the setting:
 the resources stay recorded, and undoing what agents carry is §10.11's reverse
-migration (R10-migrate).
+migration (`project_migration`, Job `project_isolate`).
 """
 
 from __future__ import annotations
@@ -180,6 +180,13 @@ def isolation_settings(row: Project) -> dict[str, Any]:
 
 def is_isolated(row: Project | None) -> bool:
     return row is not None and isolation_settings(row)["mode"] == MODE_ISOLATED
+
+
+def legacy_retired(row: Project | None) -> bool:
+    """§10.11 `retire`: the old shared resources left the boundary (`project_iam`
+    reads the same key). Set once by `project_migration.retire`; no way back."""
+    raw = ((row.settings or {}).get("isolation") if row is not None else None) or {}
+    return bool(raw.get("legacy_retired")) if isinstance(raw, dict) else False
 
 
 # ── provisioner interfaces ────────────────────────────────────────────────────
@@ -459,7 +466,13 @@ def set_provisioners(**changes: Any) -> Provisioners:
 
 
 def _stage_preflight(ctx: ProvisionContext, p: Provisioners) -> tuple[str, dict[str, Any]]:
-    findings = p.quotas.check(ctx)
+    return evaluate_preflight(p.quotas.check(ctx))
+
+
+def evaluate_preflight(findings: list[QuotaFinding]) -> tuple[str, dict[str, Any]]:
+    """(stage detail, `{"preflight": report}`) for a set of findings; raises
+    `QuotaExceeded` when one is blocked. Shared with §10.11's migration
+    (`project_migration`), whose preflight adds the agent roles it will create."""
     report = [f.to_dict() for f in findings]
     blocked = [f for f in findings if f.blocked]
     if blocked:
@@ -868,7 +881,8 @@ def isolation_view(db: Session, row: Project, visible: set[str] | None) -> dict[
     with project_context(None):
         workspaces = [workspace_state(db, row.id, ws) for ws in _bound(db, row.id)
                       if visible is None or ws in visible]
-    return {"project_id": row.id, **isolation_settings(row), "workspaces": workspaces}
+    return {"project_id": row.id, **isolation_settings(row),
+            "legacy_retired": legacy_retired(row), "workspaces": workspaces}
 
 
 def provisioning_view(db: Session, project_id: str, workspace_id: str) -> dict[str, Any]:
@@ -906,8 +920,9 @@ def set_isolation(db: Session, identity: Any, row: Project, *, mode: str,
                   gateway: str | None = None) -> list[str]:
     """Switch the project's isolation mode (administrators). Switching on queues a run
     in every bound workspace that has none in flight; switching off only records the
-    mode (§10.11's reverse migration is R10-migrate). Commits; returns the job ids
-    queued — the caller starts them."""
+    mode (moving the agents back is `project_migration`'s `revert`) and is refused
+    once the project retired its shared grants. Commits; returns the job ids queued —
+    the caller starts them."""
     if mode not in MODES:
         raise AppError("project.isolation_invalid", f"mode must be one of {list(MODES)}",
                        {"mode": mode})
@@ -919,10 +934,18 @@ def set_isolation(db: Session, identity: Any, row: Project, *, mode: str,
     gateway = gateway or current["gateway"]
     if current["mode"] == mode and current["gateway"] == gateway:
         return []
+    if mode != MODE_ISOLATED and legacy_retired(row):
+        # after `retire` the agents carry only the project's resources: there is no
+        # shared grant left to fall back on (§10.11 "retire 之前" may revert)
+        raise AppError("project.isolation_retired",
+                       f"project '{row.id}' retired its shared resources — it stays isolated",
+                       {"project_id": row.id}, status_code=409)
     actor = getattr(identity, "username", "admin")
     actor_user_id = getattr(identity, "user_id", None)
     settings = dict(row.settings or {})
-    settings["isolation"] = {"mode": mode, "gateway": gateway, "updated_by": actor,
+    raw = settings.get("isolation") if isinstance(settings.get("isolation"), dict) else {}
+    # keys other nodes keep here (`legacy_retired`, …) survive a switch
+    settings["isolation"] = {**raw, "mode": mode, "gateway": gateway, "updated_by": actor,
                              "updated_at": _now_iso()}
     row.settings = settings  # reassigned: in-place JSON edits are not tracked
     record_audit_event(workspace_id=DEFAULT_WORKSPACE_ID, actor=actor,

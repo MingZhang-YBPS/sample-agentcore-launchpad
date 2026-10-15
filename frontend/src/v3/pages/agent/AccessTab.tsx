@@ -3,12 +3,13 @@ import { useTranslation } from "react-i18next";
 import type { AgentPermissions } from "../../../lib/agent-admin/permissions";
 import type { AgentInfo } from "../../../lib/api";
 import { Notice, Panel } from "../../ui";
+import { BoundaryEntry } from "./BoundaryEntry";
 import { IdentityEntry } from "./IdentityEntry";
 import { InboundCard } from "./InboundCard";
 import { IntegrationCard } from "./IntegrationCard";
 import type { DetailSections } from "./tabs";
 
-/** 访问与集成: inbound auth (and its switch), the /v1 integration snippets, the identity page entry. */
+/** 访问与集成: inbound auth (and its switch), the /v1 integration snippets, the identity page entry, the project boundary (§10.14). */
 export function AccessTab({
   agent,
   sections,
@@ -34,6 +35,7 @@ export function AccessTab({
       ) : (
         <Panel title={t("v3.agent.identityEntry.title")}><span className="v3-hint">{t("v3.agent.identityEntry.imported")}</span></Panel>
       )}
+      <BoundaryEntry agentId={agent.id} />
     </>
   );
 }
