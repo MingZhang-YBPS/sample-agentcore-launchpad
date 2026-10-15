@@ -13,10 +13,14 @@ from app.schemas.agent import A2ASkill, AgentSpec, KnowledgeBaseRef, ToolRef
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "strands_builder"
 
-_BASE = {"method": "zip_runtime", "system_prompt": "You are a snapshot agent. {{city}} stays literal."}
+_BASE = {
+    "method": "zip_runtime",
+    "system_prompt": "You are a snapshot agent. {{city}} stays literal.",
+}
+_CLAUDE = "global.anthropic.claude-sonnet-4-5-v1:0"
 
 OLD_SPECS: dict[str, AgentSpec] = {
-    "default": AgentSpec(name="snap-default", model_id="global.anthropic.claude-sonnet-4-5-v1:0", **_BASE),
+    "default": AgentSpec(name="snap-default", model_id=_CLAUDE, **_BASE),
     "mantle": AgentSpec(
         name="snap-mantle", model_source="mantle", model_id="openai.gpt-5.6-sol", **_BASE
     ),

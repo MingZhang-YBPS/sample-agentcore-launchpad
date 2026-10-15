@@ -19,6 +19,7 @@ from app.templates.kb_support import (
     mounted_kbs,
     render_direct_kb_source,
 )
+from app.templates.strands_agent.builder import apply_builder, builder_tool_descriptions
 from app.templates.toolkits import (
     toolkit_source,
     toolkit_tool_descriptions,
@@ -29,7 +30,8 @@ TEMPLATE_DIR = Path(__file__).parent
 
 
 def render_main_py(spec: AgentSpec) -> str:
-    source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
+    # SB-1 builder markers first: their lines vanish for a spec that sets none
+    source = apply_builder((TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8"), spec)
     kbs = mounted_kbs(spec)
     # Both KB tools land in DEFAULT_TOOL_DESCRIPTIONS so the config-bundle A/B
     # contract can tune each one; spec overrides still win (they merge after).
@@ -74,7 +76,10 @@ def render_main_py(spec: AgentSpec) -> str:
         .replace("__LAUNCHPAD_TOOLKIT_TOOLS__", toolkit_tools)
         .replace(
             "__LAUNCHPAD_TOOLKIT_TOOL_DESCRIPTIONS__",
-            repr(toolkit_tool_descriptions(list(spec.toolkits))),
+            repr({
+                **toolkit_tool_descriptions(list(spec.toolkits)),
+                **builder_tool_descriptions(spec),
+            }),
         )
         .replace(
             "__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__",

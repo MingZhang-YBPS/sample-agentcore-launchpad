@@ -36,6 +36,7 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.schemas.strands_builder import STRANDS_TOOLS_REQUIREMENT
 from app.services import agent_iam, project_storage
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
@@ -435,7 +436,7 @@ MANTLE_EXTRA_REQUIREMENTS = ["strands-agents[openai]>=1.47,<2", "openai>=2,<3"]
 
 
 def platform_requirements(
-    method: str, model_source: str, protocol: str = "http"
+    method: str, model_source: str, protocol: str = "http", strands_tools: bool = False
 ) -> list[str]:
     """Every requirement the package stage adds on top of `spec.requirements`.
 
@@ -453,11 +454,15 @@ def platform_requirements(
     Takes the three fields it reads as scalars rather than an `AgentSpec`, because
     every caller that needs pinning is holding *unpinned* requirements and so
     cannot construct one (`AgentSpec` validates `requirements` are pinned).
+
+    ``strands_tools``: the spec selected curated ``strands-agents-tools``
+    (strands-builder SB-1) — the pinned package joins either Strands base set.
     """
+    tools_extra = [STRANDS_TOOLS_REQUIREMENT] if strands_tools else []
     if protocol == "a2a":
         from app.templates.strands_a2a_agent import a2a_base_requirements
 
-        return a2a_base_requirements()
+        return a2a_base_requirements() + tools_extra
     if method == "studio":
         # The canvas bakes the model into its code and knows which providers its
         # nodes use, so it supplies its own extras via spec.requirements;
@@ -467,12 +472,15 @@ def platform_requirements(
         extra = MANTLE_EXTRA_REQUIREMENTS
     else:
         extra = []
-    return base_requirements() + extra
+    return base_requirements() + extra + tools_extra
 
 
 def _method_requirements(spec: AgentSpec) -> list[str]:
     return (
-        platform_requirements(spec.method, spec.model_source, spec.protocol)
+        platform_requirements(
+            spec.method, spec.model_source, spec.protocol,
+            strands_tools=bool(spec.strands_tools),
+        )
         + spec.requirements
     )
 

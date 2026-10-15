@@ -10,6 +10,14 @@ from app.core.config import Settings, get_settings
 from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned
+from app.schemas.strands_builder import (
+    ConversationConfig,
+    FewShotExample,
+    ModelParams,
+    StrandsTool,
+    StrandsToolConfig,
+    check_builder_fields,
+)
 
 # Latest Sonnet inference profile available in the target account (verified via
 # bedrock list-inference-profiles; there is no "sonnet-5" profile).
@@ -772,6 +780,42 @@ class AgentSpec(BaseModel):
     # is snapshotted onto the Agent row (``inbound_auth_mode`` /
     # ``inbound_auth_config``) by the deploy stage, so consumers never re-derive.
     inbound_auth: InboundAuth | None = None
+    # ── Strands builder (design strands-builder SB-1; zip_runtime only) ──────────
+    # All optional and left out of the stored spec while unset, so a spec written
+    # before they existed dumps and renders byte-identically. Checked together in
+    # ``schemas.strands_builder.check_builder_fields``.
+    # curated strands-agents-tools; selecting any replaces the template's own
+    # calculator / current_utc_time, as a toolkit does
+    strands_tools: list[StrandsTool] = Field(
+        default_factory=list, max_length=7, exclude_if=lambda v: not v
+    )
+    # per-tool settings, e.g. http_request.allowed_hosts (required for that tool)
+    strands_tool_config: StrandsToolConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    # temperature / top_p / max_tokens / stop / extended thinking / prompt caching
+    model_params: ModelParams | None = Field(default=None, exclude_if=lambda v: v is None)
+    # None = the SDK default (sliding window of 40 messages)
+    conversation: ConversationConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    # JSON Schema of a structured answer (``/v1`` ``structured``); the text answer stays
+    output_schema: dict[str, Any] | None = Field(default=None, exclude_if=lambda v: v is None)
+    # question / answer pairs appended to the system prompt as examples
+    few_shot_examples: list[FewShotExample] = Field(
+        default_factory=list, max_length=10, exclude_if=lambda v: not v
+    )
+    # ``{{name}}`` placeholders in the system prompt → default value. Resolved per
+    # request from the invoke ``context``, then the runtime env, then this default;
+    # an undeclared ``{{name}}`` stays literal text.
+    prompt_variables: dict[str, str] = Field(
+        default_factory=dict, max_length=20, exclude_if=lambda v: not v
+    )
+
+    @model_validator(mode="after")
+    def _strands_builder_fields(self) -> "AgentSpec":
+        check_builder_fields(self)
+        return self
 
     @model_validator(mode="after")
     def _claude_sdk_default_model(self) -> "AgentSpec":
