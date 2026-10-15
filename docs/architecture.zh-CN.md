@@ -276,6 +276,11 @@ Agent 安全组出站与挂载目标安全组入站放行 NFS（TCP 2049）。**
 否则拒绝发布（`storage.unmapped`），解析后的 spec 以目标的接入点重新盖章。内联接入点带有源账户，不能晋级
 （`storage.inline_not_promotable`）。
 
+**会写入生产存储的运行**（storage-mounts §8.2）。在 `gated` 工作区中，若 Agent 以读写方式挂载了 `shared_state` 存储，
+评估回放或金丝雀都会写入该存储，后端因此返回 `409 storage.write_confirm_required` 并附上这些挂载。控制台无法事先判断，
+所以运行页与金丝雀页照常发送请求，收到该回复后询问一次，再带 `confirm_storage: true` 重发（`lib/storage-confirm.ts`）；
+放行门展示挂载差异，其评估按钮需要同样的确认，签字通过读写变更时需要 `storage_ack`。
+
 **Agent 如何得知挂载**（`app/deployer/mounts.py`）。代码运行时（zip、studio、container、BYOC）的环境变量
 里有 `LAUNCHPAD_MOUNTS`（JSON：`[{name, path, kind, mode}]`）；Strands HTTP 模板、Claude SDK 容器模板与
 Harness 还会在系统提示词末尾附一段「Shared directories」说明（模板渲染进代码；Harness 拼进 `systemPrompt`，
@@ -2219,6 +2224,12 @@ BYOC 代码）退回账本解析。模型花费记在模型而非运行时名下
 设置、移动 Agent）、**项目组** 与 **部门**。项目负责人（`project.members`）可进入当前项目的 **项目设置**。
 账号管理、项目结构以及项目组 / 部门路由都是中枢全局的；`access.can_manage_structure` 是唯一的判断
 （阶段 3 的 steward 只需修改它）。
+
+**组织管理员**（全局角色 `steward`，项目设计 §11.4）只管理结构，不访问项目数据。它在 V3 中的导航只有“配置”分组
+的结构入口（用户管理、管理员管理、项目、项目组、部门、工作区、模型、网络、存储：`v3/nav.ts` 的 `STEWARD_ENTRIES`）；
+其余页面显示 `StewardEmptyState`（`workspace/steward-paths.ts`），工作区与项目的入口检查也不会因它没有授权而拦下它。
+它可在用户管理页创建、编辑账号，但不能创建或修改平台角色。它在项目中做的每次成员变更都会通知项目负责人；负责人在
+项目“成员”页签顶部看到这些通知，开启二人规则时还可确认或拒绝待确认的变更（`/api/steward/*`）。
 
 ### 运维
 

@@ -94,8 +94,7 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
       if (!pick) return;
       setBusy(true);
       try {
-        // the console's role type predates the steward; the backend takes it
-        await usersApi.update(pick.id, { role: (type === "steward" ? STEWARD_ROLE : "admin") as "admin" });
+        await usersApi.update(pick.id, { role: type === "steward" ? STEWARD_ROLE : "admin" });
         onDone();
       } catch (err) {
         setError(errorMessage(err));

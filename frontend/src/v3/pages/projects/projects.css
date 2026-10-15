@@ -22,3 +22,12 @@
 .v3 .v3-prj-dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
 .v3 .v3-prj-dl dt { color: var(--v3-text-3); }
 .v3 .v3-prj-dl dd { margin: 0; }
+/* Overview → quota usage (§11.3) */
+.v3 .v3-prj-usage { display: grid; gap: 10px; }
+.v3 .v3-prj-usage .row { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; font-size: 13px; }
+.v3 .v3-prj-usage .label { display: inline-flex; gap: 8px; align-items: center; }
+.v3 .v3-prj-usage .bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--v3-ink-2); overflow: hidden; }
+.v3 .v3-prj-usage .bar i { display: block; height: 100%; background: var(--v3-ok); }
+.v3 .v3-prj-usage .bar i[data-s="wait"] { background: var(--v3-wait); }
+.v3 .v3-prj-usage .bar i[data-s="act"] { background: var(--v3-act); }
+.v3 .v3-prj-usage .bar i[data-s="off"] { background: var(--v3-text-3); }

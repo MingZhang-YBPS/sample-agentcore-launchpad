@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, dlcApi, type V2Range } from "../../../lib/api";
+import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { unpricedJudges } from "../../../lib/dlc";
 import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
@@ -272,7 +273,7 @@ export function TaskWizard() {
                 : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
                   ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
                   : { dataset_id: draft.dataset };
-        const run = await api.v2CreateRun({
+        const run = await withStorageConfirm((confirm) => api.v2CreateRun({
           ...(draft.target === "cloudwatch"
             ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
             : { agent_id: draft.agentId }),
@@ -281,7 +282,8 @@ export function TaskWizard() {
           ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
           ...scope,
           ...(repeatable ? { repeats: draft.repeats, confirm_cost: draft.confirmCost } : {}),
-        });
+          ...storageFlag(confirm),
+        }));
         toast("ok", t("v2.tasks.createdRun"));
         navigate(detailUrl({ kind: "run", id: run.id }));
       }

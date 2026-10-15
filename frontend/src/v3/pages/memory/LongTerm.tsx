@@ -7,7 +7,7 @@ import { actorText, fmtRelevance, shortId, type TokenPaged, useTokenPaged } from
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
 import { Btn, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
-import { LoadMore } from "./common";
+import { LoadMore, SourceBadge } from "./common";
 
 const TOP_K = [3, 5, 10, 20];
 
@@ -192,7 +192,7 @@ export function LongTerm({
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.record_id ?? `${r.text}-${i}`} className="click" onClick={() => setDetail(r)}>
-                  <td><span className="v3-mem-clamp" title={r.text}>{r.text}</span></td>
+                  <td><span className="v3-mem-clamp" title={r.text}>{r.text}</span> <SourceBadge source={r.source} /></td>
                   <td style={{ color: "var(--v3-text-2)", whiteSpace: "nowrap" }} title={r.strategy_id ?? ""}>{strategyName(r.strategy_id)}</td>
                   {isSearch && <td className="num" style={{ color: "var(--v3-info)" }}>{fmtRelevance(r.score)}</td>}
                   <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(r.created_at)}</td>

@@ -16,6 +16,7 @@ import {
 } from "../components";
 import type { AgentInfo, RuntimeCanaryInfo } from "../lib/api";
 import { api } from "../lib/api";
+import { storageFlag, withStorageConfirm } from "../lib/storage-confirm";
 import { fmtScore } from "../lib/format";
 
 interface DatasetInfo {
@@ -191,13 +192,14 @@ export function RuntimeCanaryView() {
       const candidate: { system_prompt?: string; code?: string } = {};
       if (candidatePrompt.trim()) candidate.system_prompt = candidatePrompt;
       if (isStudio && candidateCode.trim()) candidate.code = candidateCode;
-      const row = await api.createRuntimeCanary({
+      const row = await withStorageConfirm((confirm) => api.createRuntimeCanary({
         agent_id: agentId,
         candidate,
         ...(sourceExperimentId
           ? { source_experiment_id: sourceExperimentId }
           : {}),
-      });
+        ...storageFlag(confirm),
+      }));
       await refresh();
       selectCanary(row.id);
     } catch (error) {

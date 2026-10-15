@@ -2591,7 +2591,13 @@
     "update.stage_missing": "已准备的版本已丢失，请重新准备更新。",
     "update.schedule_invalid": "重启时间必须在现在到 7 天之内。",
     "update.inflight_unacknowledged": "重启会中断正在进行的任务，确认后才能排期。",
-    "update.not_cancellable": "只有已排期的更新可以取消。"
+    "update.not_cancellable": "只有已排期的更新可以取消。",
+    "steward.confirm_self": "此变更需由另一位组织管理员或项目负责人确认，发起人不能自己确认。",
+    "steward.notice_not_found": "该通知已不存在。",
+    "steward.pending_not_found": "该变更已不在等待中：已被确认、拒绝或撤回。",
+    "project.steward_member": "组织管理员不能成为项目成员。",
+    "users.steward_no_grants": "组织管理员只管理结构：不持有工作区授权、项目或项目组成员资格。",
+    "storage.write_confirm_required": "本次运行会写入生产共享存储：请确认，或在登记了同名存储（指向预发数据）的 DEV 工作区中评估。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -8703,7 +8709,8 @@
       "role": {
         "admin": "管理员",
         "member": "成员",
-        "operator": "运维"
+        "operator": "运维",
+        "steward": "组织管理员"
       },
       "state": {
         "pending": "待审批",
@@ -11207,7 +11214,11 @@
       "unresolvable": "无法解析",
       "unscoped": "未分区",
       "updated": "更新于",
-      "usedBy": "使用者"
+      "usedBy": "使用者",
+      "source": {
+        "shared": "共享记忆",
+        "sharedHint": "读自工作区的共享记忆：写于本项目改用自己的记忆之前。"
+      }
     },
     "connections": {
       "eyebrow": "身份",
@@ -11721,7 +11732,8 @@
         "roleHint": {
           "member": "在被授予的工作区中构建、部署和评测 Agent",
           "operator": "审批并执行发布，不编辑 Agent",
-          "admin": "完全权限，包括用户和工作区管理——按角色可访问所有工作区"
+          "admin": "完全权限，包括用户和工作区管理——按角色可访问所有工作区",
+          "steward": "组织管理员：管理账号、部门、项目和工作区，不访问项目数据，也不持有授权或成员资格"
         },
         "expiryDefault_one": "默认（{{count}} 天）",
         "expiryDefault_other": "默认（{{count}} 天）",
@@ -13148,6 +13160,22 @@
         "groups": "项目组",
         "departments": "部门",
         "workspaces": "工作区"
+      },
+      "trace": {
+        "title": "组织管理员的变更",
+        "sub": "组织管理员在本项目中做过的成员变更，以及等待项目负责人确认的变更（二人规则）。",
+        "pending": "{{actor}} 申请变更成员（{{when}}）",
+        "confirm": "确认",
+        "reject": "拒绝",
+        "withdraw": "撤回",
+        "confirmed": "变更已确认并生效",
+        "rejected": "变更已拒绝",
+        "withdrawn": "变更已撤回",
+        "unread": "新",
+        "noticeChanged": "{{actor}} 变更了成员（{{when}}）",
+        "noticePending": "{{actor}} 申请变更成员（{{when}}）",
+        "acknowledge": "标为已读",
+        "acknowledged": "已标为已读"
       }
     }
   },
@@ -13447,6 +13475,15 @@
         "public": "公网（AgentCore 托管网络）。服务器的工具需要访问私有后端（数据库、内部 API）时，请在网络步骤中选择 VPC 配置档。",
         "vpc": "VPC 配置档 {{id}}：服务器的出站调用从该配置档的子网发出。网关仍经 AgentCore 数据面访问它，不经过你的 VPC。配置档需要拉取镜像与服务器自身后端所需的端点；通常不需要 bedrock-runtime。"
       }
+    },
+    "writeConfirm": {
+      "question": "本次运行会写入生产共享存储：{{storage}}。\n\n建议在登记了同名存储（指向预发数据）的 DEV 工作区中评估。仍要运行并写入生产存储吗？"
+    }
+  },
+  "projects": {
+    "overview": {
+      "usage": "配额用量",
+      "noQuota": "本项目没有配额限制。"
     }
   }
 }

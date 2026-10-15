@@ -59,6 +59,15 @@ export function emptyCreateForm(): CreateForm {
   };
 }
 
+/**
+ * The platform roles (`services/users.PLATFORM_ROLES`): an administrator reaches
+ * every project by role, a steward (organization admin) manages structure only —
+ * neither holds a workspace grant or a membership, and the backend refuses one.
+ */
+export function isPlatformRole(role: string | null | undefined): boolean {
+  return role === "admin" || role === "steward";
+}
+
 export type CreateErrors = Partial<Record<"username" | "email" | "password" | "days" | "projects" | "groups", string>>;
 
 /**
@@ -91,7 +100,7 @@ export function validateCreate(form: CreateForm, reservedName?: string | null): 
     const days = Number(form.days);
     if (!Number.isInteger(days) || days < 1 || days > MAX_EXTEND_DAYS) errors.days = "v3.users.create.err.days";
   }
-  if (form.role !== "admin") {
+  if (!isPlatformRole(form.role)) {
     const projects = validateMemberships(form.projects, "projects");
     const groups = validateMemberships(form.groups, "groups");
     if (projects) errors.projects = projects;
@@ -101,12 +110,13 @@ export function validateCreate(form: CreateForm, reservedName?: string | null): 
 }
 
 /**
- * The request body for a valid form. Administrators carry no workspace grant and no
- * membership (they reach every project by role); empty membership lists are left
- * out, so a form without projects sends exactly what it did before projects.
+ * The request body for a valid form. Administrators and stewards carry no workspace
+ * grant and no membership (an administrator reaches every project by role, a steward
+ * none); empty membership lists are left out, so a form without projects sends
+ * exactly what it did before projects.
  */
 export function createBody(form: CreateForm): UserCreateWithProjects {
-  const admin = form.role === "admin";
+  const admin = isPlatformRole(form.role);
   const body: UserCreateWithProjects = {
     username: form.username.trim(),
     email: form.email.trim(),
@@ -190,7 +200,7 @@ export function sourceGroup(source: string): string | null {
 
 /* ── list filters in the URL (projects §7.4) ─────────────────────────────── */
 
-const ROLES = ["admin", "operator", "member"] as const;
+const ROLES = ["admin", "steward", "operator", "member"] as const;
 
 /** `?status= &q= &role= &project= &group= &page=` → the list request. */
 export function listFilterFrom(params: URLSearchParams, pageSize: number): UserListFilter & { page: number } {

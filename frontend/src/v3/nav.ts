@@ -89,6 +89,16 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
 /** `admin` entries a department administrator (non-empty `managed_departments`) sees too. */
 export const DEPARTMENT_ADMIN_ENTRIES: ReadonlySet<string> = new Set(["/v3/projects", "/v3/project-groups", "/v3/departments"]);
 
+/**
+ * The rail of a steward (organization admin, projects §11.4): the structure entries of
+ * Configure and nothing else — the business groups would only open its empty state.
+ * Listed by their rail path (before the V3 twin mapping: `/v2/users` opens `/v3/users`).
+ */
+export const STEWARD_ENTRIES: ReadonlySet<string> = new Set([
+  "/v2/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments",
+  "/v2/workspaces", "/v3/models", "/v3/network", "/v3/storage",
+]);
+
 export interface V3ModuleGroup {
   key: string;
   labelKey: string;
@@ -100,12 +110,18 @@ export interface V3ModuleGroup {
  * than redesigns, in V2's groups. Derived from `V2_NAV` so a page added to V2
  * shows up in V3 too, instead of becoming unreachable from it.
  */
-export function hostedGroups(isAdmin: boolean, perms: readonly string[] = [], managesDepartment = false): V3ModuleGroup[] {
+export function hostedGroups(
+  isAdmin: boolean,
+  perms: readonly string[] = [],
+  managesDepartment = false,
+  steward = false,
+): V3ModuleGroup[] {
   return V2_NAV.map((group) => ({
     key: group.key,
     labelKey: group.labelKey,
     items: [...group.items.flatMap((item) => [item, ...(V3_AFTER[item.to] ?? [])]), ...(V3_ONLY[group.key] ?? [])]
-      .filter((item) => !REBUILT.has(item.to) && visible(item, isAdmin, perms, managesDepartment))
+      .filter((item) => !REBUILT.has(item.to)
+        && (steward ? STEWARD_ENTRIES.has(item.to) : visible(item, isAdmin, perms, managesDepartment)))
       .map((item) => {
         const [path, query] = item.to.split("?");
         const twin = v3TwinOf(path, query ? `?${query}` : "");

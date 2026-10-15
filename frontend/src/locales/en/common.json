@@ -2591,7 +2591,13 @@
     "update.stage_missing": "The prepared version is gone — prepare the update again.",
     "update.schedule_invalid": "The restart time must be between now and 7 days from now.",
     "update.inflight_unacknowledged": "Tasks in progress would be interrupted by the restart — confirm to schedule anyway.",
-    "update.not_cancellable": "Only a scheduled update can be cancelled."
+    "update.not_cancellable": "Only a scheduled update can be cancelled.",
+    "steward.confirm_self": "Another organization admin or the project's owner confirms this change — not the one who asked for it.",
+    "steward.notice_not_found": "This notice no longer exists.",
+    "steward.pending_not_found": "This change is no longer waiting: it was confirmed, rejected or withdrawn.",
+    "project.steward_member": "An organization admin is never a project member.",
+    "users.steward_no_grants": "An organization admin manages structure only: it holds no workspace grant, project or group membership.",
+    "storage.write_confirm_required": "This run writes into production shared storage — confirm it, or evaluate in a DEV workspace that registers the same storage on staging data."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -8703,7 +8709,8 @@
       "role": {
         "admin": "Administrator",
         "member": "Member",
-        "operator": "Operator"
+        "operator": "Operator",
+        "steward": "Organization admin"
       },
       "state": {
         "pending": "Pending approval",
@@ -11207,7 +11214,11 @@
       "unresolvable": "cannot resolve",
       "unscoped": "unscoped",
       "updated": "Updated",
-      "usedBy": "Used by"
+      "usedBy": "Used by",
+      "source": {
+        "shared": "Shared memory",
+        "sharedHint": "Read from the workspace's shared memory: written before this project moved to its own memory."
+      }
     },
     "connections": {
       "eyebrow": "Identity",
@@ -11721,7 +11732,8 @@
         "roleHint": {
           "member": "Builds, deploys and evaluates agents in the granted workspaces",
           "operator": "Approves and runs releases; does not edit agents",
-          "admin": "Full access, including user and workspace management — every workspace by role"
+          "admin": "Full access, including user and workspace management — every workspace by role",
+          "steward": "Organization admin: manages accounts, departments, projects and workspaces — no project data, no grant or membership"
         },
         "expiryDefault_one": "Default ({{count}} day)",
         "expiryDefault_other": "Default ({{count}} days)",
@@ -13148,6 +13160,22 @@
         "groups": "Project groups",
         "departments": "Departments",
         "workspaces": "Workspaces"
+      },
+      "trace": {
+        "title": "Organization admin changes",
+        "sub": "Membership changes an organization admin made in this project, and the ones waiting for an owner's confirmation (two-person rule).",
+        "pending": "{{actor}} asks to change the members ({{when}})",
+        "confirm": "Confirm",
+        "reject": "Reject",
+        "withdraw": "Withdraw",
+        "confirmed": "Change confirmed and applied",
+        "rejected": "Change rejected",
+        "withdrawn": "Change withdrawn",
+        "unread": "New",
+        "noticeChanged": "{{actor}} changed the members ({{when}})",
+        "noticePending": "{{actor}} asked to change the members ({{when}})",
+        "acknowledge": "Mark as read",
+        "acknowledged": "Marked as read"
       }
     }
   },
@@ -13447,6 +13475,15 @@
         "public": "Public (AgentCore managed network). Choose a VPC profile in the network step when the server's tools call private back ends (databases, internal APIs).",
         "vpc": "VPC profile {{id}}: the server's outbound calls leave from the profile's subnets. The Gateway still reaches it through the AgentCore data plane, not through your VPC. The profile needs the endpoints for pulling the image and for the server's own back ends; bedrock-runtime is usually not needed."
       }
+    },
+    "writeConfirm": {
+      "question": "This run writes into production shared storage: {{storage}}.\n\nPrefer evaluating in a DEV workspace that registers the same storage on staging data. Run anyway and write into production storage?"
+    }
+  },
+  "projects": {
+    "overview": {
+      "usage": "Usage against quotas",
+      "noQuota": "No quota limits this project."
     }
   }
 }

@@ -7,6 +7,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { AGENT_PERMISSIONS, togglePermission, api, type ConsoleUser, type UserState } from "../../lib/api";
+import { isSteward } from "../../lib/api/steward";
 import { type ProjectUser, usersApi } from "../../lib/api/users";
 import { PAGE_SIZE, USER_STATES } from "../../v2/pages/users/common";
 import { useWorkspace } from "../../workspace/workspace-context";
@@ -17,7 +18,7 @@ import { Btn, Chip, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, 
 import { AccessPanel } from "./users/AccessPanel";
 import { useUserActions } from "./users/actions";
 import { BulkAddDialog } from "./users/BulkAdd";
-import { listFilterFrom } from "./users/forms";
+import { isPlatformRole, listFilterFrom } from "./users/forms";
 import { GrantChip } from "./users/GrantChip";
 import { useRoleLabel, useStructure } from "./users/structure";
 
@@ -33,7 +34,7 @@ function RoleChip({ role, builtin }: { role: ConsoleUser["role"]; builtin?: bool
   const { t } = useTranslation();
   return (
     <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
-      <Chip s={role === "admin" ? "info" : undefined}>{t(`v2.users.role.${role}`)}</Chip>
+      <Chip s={role === "admin" ? "info" : role === "steward" ? "wait" : undefined}>{t(`v2.users.role.${role}`)}</Chip>
       {builtin && <Chip>{t("v3.users.builtin.chip")}</Chip>}
     </span>
   );
@@ -210,7 +211,7 @@ function UserList() {
         <select className="v3-select" style={{ width: "auto" }} value={filter.role ?? ""} aria-label={t("v3.users.filter.role")}
           onChange={(e) => setParam("role", e.target.value || null)}>
           <option value="">{t("v3.users.filter.anyRole")}</option>
-          {(["admin", "operator", "member"] as const).map((r) => <option key={r} value={r}>{t(`v2.users.role.${r}`)}</option>)}
+          {(["admin", "steward", "operator", "member"] as const).map((r) => <option key={r} value={r}>{t(`v2.users.role.${r}`)}</option>)}
         </select>
         {(multi || filter.project) && (
           <select className="v3-select" style={{ width: "auto" }} value={filter.project ?? ""} aria-label={t("v3.users.filter.project")}
@@ -389,6 +390,10 @@ function UserDetail({ username }: { username: string }) {
   }
   const busy = actions.busyId === user.id;
   const isAdminRole = user.role === "admin";
+  // §11.4: a steward holds no grant, membership or agent permission (structure only)
+  const isStewardRole = user.role === "steward";
+  // only an administrator changes the platform roles; stewards are managed on the Administrators page
+  const canToggleRole = auth.isAdmin && !isStewardRole;
   // the signed-in account itself: change (current + new) instead of a reset that
   // would end this very session
   const isSelf = auth.username === user.username && (auth.builtin ? Boolean(user.builtin) : !user.builtin);
@@ -504,9 +509,11 @@ function UserDetail({ username }: { username: string }) {
             <p className="v3-usr-muted" style={{ margin: "0 0 10px" }}>{t("v2.users.roleSub")}</p>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <RoleChip role={user.role} />
-              <Btn size="sm" disabled={busy} onClick={() => actions.ask("role", user)}>
-                <ShieldCheck size={13} /> {t(isAdminRole ? "v2.users.action.makeMember" : "v2.users.action.makeAdmin")}
-              </Btn>
+              {canToggleRole && (
+                <Btn size="sm" disabled={busy} onClick={() => actions.ask("role", user)}>
+                  <ShieldCheck size={13} /> {t(isAdminRole ? "v2.users.action.makeMember" : "v2.users.action.makeAdmin")}
+                </Btn>
+              )}
             </div>
           </Panel>
         </div>
@@ -523,6 +530,8 @@ function UserDetail({ username }: { username: string }) {
       >
         {isAdminRole ? (
           <span className="v3-usr-muted">{t("v2.users.allByRole")}</span>
+        ) : isStewardRole ? (
+          <span className="v3-usr-muted">{t("v3.steward.typeHint")}</span>
         ) : (
           <div className="v3-usr-chips">
             {AGENT_PERMISSIONS.map((key) => {
@@ -541,13 +550,15 @@ function UserDetail({ username }: { username: string }) {
 
       <Panel
         title={t("v2.users.wsTitle")}
-        end={isAdminRole ? undefined : (
+        end={isPlatformRole(user.role) ? undefined : (
           <Btn size="sm" disabled={busy} onClick={() => actions.openWorkspaces(user)}><Pencil size={13} /> {t("v3.users.ws.open")}</Btn>
         )}
       >
         {isAdminRole ? (
           // admins reach every workspace by role; a grant row would suggest revocable access
           <span className="v3-usr-muted">{t("v2.users.allByRole")}</span>
+        ) : isStewardRole ? (
+          <span className="v3-usr-muted">{t("v3.steward.typeHint")}</span>
         ) : user.workspaces.length === 0 ? (
           <Notice s="wait">{t("v3.users.ws.none")}</Notice>
         ) : (
@@ -563,7 +574,7 @@ function UserDetail({ username }: { username: string }) {
             })}
           </div>
         )}
-        {!isAdminRole && <small className="v3-hint" style={{ display: "block", marginTop: 10 }}>{t("v3.users.ws.hint")}</small>}
+        {!isPlatformRole(user.role) && <small className="v3-hint" style={{ display: "block", marginTop: 10 }}>{t("v3.users.ws.hint")}</small>}
       </Panel>
       {actions.renderDialogs({ onDeleted: back })}
       {ownPasswordDialog}
@@ -572,7 +583,7 @@ function UserDetail({ username }: { username: string }) {
 }
 
 /**
- * Users (admin-only): registration statistics and trend, the account table with
+ * Users (administrators and stewards, §11.4): registration statistics and trend, the account table with
  * approvals first, and one account at `?view=detail&user=` — validity, role,
  * agent permissions and workspace grants. Same calls and confirmations as V2;
  * members never fire the admin-only requests.
@@ -585,9 +596,10 @@ function UserDetail({ username }: { username: string }) {
  * sign-out. A single-project hub keeps the dialogs and columns it had.
  */
 export function V3Users() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, role } = useAuth();
   const [params] = useSearchParams();
-  if (!isAdmin) return <Forbidden />;
+  // a steward manages accounts too (§11.4) — the server refuses it the platform roles
+  if (!isAdmin && !isSteward(role)) return <Forbidden />;
   const username = params.get("user");
   if (params.get("view") === "detail" && username) return <UserDetail key={username} username={username} />;
   return <UserList />;

@@ -74,3 +74,18 @@ export function formatQuota(item: Pick<QuotaItem, "unit">, value: number | null 
   if (value === null || value === undefined) return "—";
   return item.unit === "usd" ? `$${value.toFixed(2)}` : String(value);
 }
+
+/**
+ * The overview's usage bars (§11.3): the quotas with both a limit and a usage to
+ * draw, each with how full it is (0–1, clamped; a zero limit is full).
+ */
+export function usageBars(items: readonly QuotaItem[]): { item: QuotaItem; fraction: number }[] {
+  return items
+    .filter((item) => item.limit !== null && item.used !== null && item.used !== undefined)
+    .map((item) => {
+      const limit = item.limit as number;
+      const used = item.used as number;
+      const fraction = limit <= 0 ? 1 : Math.min(1, Math.max(0, used / limit));
+      return { item, fraction };
+    });
+}

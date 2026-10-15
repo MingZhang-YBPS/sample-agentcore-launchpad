@@ -10,6 +10,7 @@ import { loadModelCatalog, setCatalogWorkspace } from "../lib/model-catalog";
 import { loadModelDefaults } from "../lib/model-defaults";
 import { setActiveRegion } from "../lib/regions";
 import { api, AUTH_UNAUTHORIZED_EVENT, type Workspace } from "../lib/api";
+import { isSteward } from "../lib/api/steward";
 import { storedWorkspaceId, storeWorkspaceId } from "../lib/workspace-header";
 import { useUiVersion } from "../lib/ui-version";
 import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
@@ -53,7 +54,7 @@ function resolveCurrent(
  * workspace and a member with several grants meets `workspace.header_required`.
  */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const { isAdmin } = useAuth();
+  const { isAdmin, role } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [list, setList] = useState<ListState>(EMPTY);
@@ -152,7 +153,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   if (list.status === "loading") return <WorkspaceLoading />;
-  if (list.status === "ready" && !isAdmin && list.workspaces.length === 0) {
+  // A steward holds no grant by design (§11.4): its structure pages are hub-global,
+  // and the shell shows the steward's empty state on every business page.
+  if (list.status === "ready" && !isAdmin && !isSteward(role) && list.workspaces.length === 0) {
     return <NoWorkspaceGranted />;
   }
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

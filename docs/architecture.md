@@ -370,6 +370,14 @@ and the resolved spec is re-stamped with the target's access point. Inline acces
 points name the source account and are not promotable
 (`storage.inline_not_promotable`).
 
+**Runs that write production storage** (storage-mounts §8.2). In a gated workspace an
+evaluation replay or a canary of an agent that mounts `shared_state` storage read-write
+writes into it, so the backend answers `409 storage.write_confirm_required` with the
+mounts. The console cannot know beforehand, so the run and canary pages send their
+request unchanged and, on that answer, ask once and resend with `confirm_storage: true`
+(`lib/storage-confirm.ts`); the release gate shows the mount diff, its evaluate button
+needs the same confirmation, and signing a read-write change needs `storage_ack`.
+
 **What the agent is told** (`app/deployer/mounts.py`). Code runtimes (zip,
 studio, container, BYOC) get `LAUNCHPAD_MOUNTS` — JSON
 `[{name, path, kind, mode}]` — in their environment; the Strands HTTP template,
@@ -4763,6 +4771,16 @@ roles, workspace bindings, settings, moving an agent), **Project groups** and
 the current project. Account management, project structure and group / department
 routes are hub-global; `access.can_manage_structure` is the single check (phase 3's
 steward changes only it).
+
+An **organization admin** (global role `steward`, projects design §11.4) manages
+structure without project data. Its V3 rail is Configure's structure entries alone
+(Users, Administrators, Projects, Project groups, Departments, Workspaces, Models,
+Network, Storage: `STEWARD_ENTRIES` in `v3/nav.ts`); every other page renders
+`StewardEmptyState` (`workspace/steward-paths.ts`), and the workspace and project gates
+do not stop it for holding no grant. It creates and edits accounts on the Users page but
+never the platform roles. Each membership change it makes in a project is noticed to the
+project's owners, who see the notices — and, under the two-person rule, confirm or reject
+the pending change — at the top of the project's Members tab (`/api/steward/*`).
 
 ### Operating projects
 

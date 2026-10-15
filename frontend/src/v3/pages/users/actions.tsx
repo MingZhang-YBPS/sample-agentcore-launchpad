@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, type ConsoleRole, type ConsoleUser, errorMessage, type UserPatchBody } from "../../../lib/api";
+import { useAuth } from "../../../auth/auth-context";
 import { adminsApi } from "../../../lib/api/projects";
 import { type ProjectUser, type UserMembershipPatch, usersApi } from "../../../lib/api/users";
 import { clampDays, MAX_EXTEND_DAYS } from "../../../v2/pages/users/common";
@@ -20,6 +21,7 @@ import {
   emptyCreateForm,
   groupItems,
   groupRows,
+  isPlatformRole,
   type MembershipRow,
   oneTimePassword,
   projectItems,
@@ -48,6 +50,9 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
   const { t } = useTranslation();
   const toast = useToast();
   const { workspaces } = useWorkspace();
+  const { isAdmin } = useAuth();
+  // only an administrator creates the platform roles (§11.4); a steward creates accounts
+  const createRoles: ConsoleRole[] = isAdmin ? ["member", "operator", "admin", "steward"] : ["member", "operator"];
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ kind: ConfirmKind; user: ConsoleUser } | null>(null);
   const [extendTarget, setExtendTarget] = useState<ConsoleUser | null>(null);
@@ -288,7 +293,7 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
                 <label className="v3-field">
                   <span>{t("v2.users.col.role")}</span>
                   <select className="v3-select" name="role" value={creating.role} onChange={(e) => setField("role", e.target.value as ConsoleRole)}>
-                    {(["member", "operator", "admin"] as ConsoleRole[]).map((role) => (
+                    {createRoles.map((role) => (
                       <option key={role} value={role}>{t(`v2.users.role.${role}`)}</option>
                     ))}
                   </select>
@@ -326,7 +331,7 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
                 )}
                 {createErrors.password ? <small className="v3-err">{t(createErrors.password)}</small> : <small className="v3-hint">{t("v3.users.create.passwordHint")}</small>}
               </div>
-              {showMemberships && creating.role !== "admin" && (
+              {showMemberships && !isPlatformRole(creating.role) && (
                 <>
                   <MembershipRows kind="projects" rows={creating.projects} onChange={(rows) => setField("projects", rows)}
                     targets={projectTargets} rolesFor={roleOptions} error={createErrors.projects} />
@@ -336,11 +341,13 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
                   )}
                 </>
               )}
-              <LegacyGrants multiProject={showMemberships && creating.role !== "admin"}>
+              <LegacyGrants multiProject={showMemberships && !isPlatformRole(creating.role)}>
               <div className="v3-field">
                 <span>{t("v2.users.col.workspaces")}</span>
                 {creating.role === "admin" ? (
                   <small className="v3-hint">{t("v2.users.allByRole")}</small>
+                ) : creating.role === "steward" ? (
+                  <small className="v3-hint">{t("v3.steward.typeHint")}</small>
                 ) : (
                   <>
                     <div className="v3-usr-chips">
