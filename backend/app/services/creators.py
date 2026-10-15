@@ -171,7 +171,11 @@ def outside_current_project(
                 )
             ).all()
         )
-    return {rid for rid in ids if owners.get(rid, default) != pid}
+    # a resource another project shared with this one is visible to it (§11.2)
+    from app.services import resource_shares
+
+    shared = resource_shares.received_ids(db, kind, project_id=pid)
+    return {rid for rid in ids if owners.get(rid, default) != pid and rid not in shared}
 
 
 def lookup(

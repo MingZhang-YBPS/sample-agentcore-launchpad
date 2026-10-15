@@ -4,6 +4,7 @@ import "./auth.css";
 import { type ReactNode, useEffect } from "react";
 
 import { Lang } from "./Lang";
+import { ThemeSwitch } from "./ThemeSwitch";
 
 /** The dark V3 ground on <body> while a pre-shell page is mounted. */
 function useV3Body() {
@@ -32,6 +33,7 @@ export function V3AuthFrame({ end, children, testId }: {
           <sup>V3</sup>
         </span>
         <div className="v3-top-right">
+          <ThemeSwitch />
           <Lang />
           {end}
         </div>

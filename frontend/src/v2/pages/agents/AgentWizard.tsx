@@ -87,6 +87,8 @@ function initialDraft(params: URLSearchParams): Draft {
   // `method=byoc&protocol=mcp` — the "MCP server" entry: a byoc artifact hosted as
   // an MCP server and wired to the workspace Gateway
   if (method === "byoc" && params.get("protocol") === "mcp") form.protocol = "mcp";
+  // the new-agent chooser's answers (storyline §3.6)
+  if (method === "zip_runtime" && params.get("protocol") === "a2a") form.protocol = "a2a";
   if (gateway) form.selectedGateway = [gateway];
   if (skill) form.skills = [skill];
   return { form, step: isMethod(method) || gateway || skill ? 1 : 0, extras: null };
