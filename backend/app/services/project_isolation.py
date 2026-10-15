@@ -920,8 +920,9 @@ def set_isolation(db: Session, identity: Any, row: Project, *, mode: str,
                   gateway: str | None = None) -> list[str]:
     """Switch the project's isolation mode (administrators). Switching on queues a run
     in every bound workspace that has none in flight; switching off only records the
-    mode (§10.11's reverse migration is R10-migrate). Commits; returns the job ids
-    queued — the caller starts them."""
+    mode (moving the agents back is `project_migration`'s `revert`) and is refused
+    once the project retired its shared grants. Commits; returns the job ids queued —
+    the caller starts them."""
     if mode not in MODES:
         raise AppError("project.isolation_invalid", f"mode must be one of {list(MODES)}",
                        {"mode": mode})
