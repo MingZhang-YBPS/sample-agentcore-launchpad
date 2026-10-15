@@ -50,6 +50,18 @@ curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
 # → {"agent":"…","text":"4","session_id":"…","latency_ms":1234}
 ```
 
+可选请求字段 `context`（两个调用路由都接受）：本次调用为 Agent 的 `{{变量}}` 填入的值——最多 20 个字符串值的对象，键须匹配
+`^[A-Za-z_][A-Za-z0-9_]{0,63}$`，每个值不超过 2000 个字符（否则返回 `422`）。它以 `context` 字段随运行时 payload 发送；Strands（`zip_runtime`）Agent 用它填充自己声明的提示词变量（`spec.prompt_variables`），忽略其他键，没有值时依次回退到同名环境变量与声明的默认值。其他方式忽略该字段。
+
+```bash
+curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
+  -H "X-Api-Key: $LP_KEY" -H 'Content-Type: application/json' \
+  -d '{"prompt": "Weather?", "context": {"city": "Oslo"}}'
+# → {"agent":"…","text":"Sunny, 21 °C","structured":{"city":"Oslo","temp":21.0},"session_id":"…",…}
+```
+
+配置了 `output_schema` 的 Agent（Strands 方式）在 `text`（可读的回答）之外另返回解析后的对象 `structured`；未配置时没有该字段。启用 PII 护栏的 Agent 从不返回 `structured`：护栏只筛查文本，因此该对象会被丢弃。
+
 ## 流式调用(SSE) / Streaming invoke
 
 ```bash
@@ -59,8 +71,11 @@ curl -N -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke-stream \
 # event: meta   → {"session_id": "…", "mode": "stream"}
 # event: delta  → {"text": "Once"} … (增量分片)
 # event: usage  → {"input_tokens": 812, "output_tokens": 64, "total_tokens": 876, "model_calls": 1}（运行时上报用量时发送一次）
+# event: structured → {"value": {"city": "Oslo", "temp": 21.0}}（配置了 output_schema 的 Agent，在文本之后）
 # event: done   → {"latency_ms": 2100}
 ```
+
+流式调用接受与同步调用相同的 `context` 字段。配置了 `output_schema` 的 Agent 在回答文本之后发送一次 `structured`（启用 PII 护栏的 Agent 从不发送）。
 
 在下一次调用时传回返回的 `session_id` 即可延续对话(session 上下文与
 AgentCore Memory 随之而来)。
@@ -332,7 +347,7 @@ lacks expected_response`）；所选自定义评估器读取失败时返回 `422
 - **Lambda 目标**由控制台创建。创建或删除会改动所有项目共享的 Workspace 网关，因此两者都是 `infra+perm:agents.deploy`：Workspace 只绑定一个项目时为该项目的 `agents.deploy`，绑定多个项目后仅限管理员——除非那里的每个项目都已隔离且各自的 Cedar 规则生效（projects §10.6-6）：此时重新由项目自己的 `agents.deploy` 决定，其他项目的目标返回 404（`INFRA_LOWERED_WHEN_ISOLATED`，与 `/api/identity/gateway-targets` 的 Connection 绑定目标相同）。两者都受生产保护。
 - **外部托管目标**是在网关上手动创建、且不属于任何托管服务器的 MCP 服务器目标。纳管时把它当前的清单记为已批准基线（已在调用它的 Agent 不会被切断），之后每小时的 `mcp.health` 任务用它比较新的清单。漂移会打开审批，但目标属于客户，永远不会被扣下或改指。
 
-Lambda 目标为 `{id, kind: "lambda", gateway_id, target_id, target_name, lambda_arn, description, tool_names[], status: reviewing|publishing|live|failed|rejected, error, created_by, created_at, review{…闸门状态}}`，创建时另带 `tool_schema[]`。
+Lambda 目标为 `{id, kind: "lambda", gateway_id, target_id, target_name, lambda_arn, description, tool_names[], status: reviewing|publishing|live|failed|rejected, error, created_by, created_at, review{…闸门状态}}`，创建时另带 `tool_schema[]`。其他项目共享给本项目的目标（projects §11.2，类型 `gateway_target`）在两个列表中都带 `shared_from: {project_id, name, access: read|use}`（外部目标列表按 `tool_id` 对应）；只有它自己的项目能修改它。
 
 | 方法 | 路径 | 权限 | 结果 |
 |---|---|---|---|
@@ -779,6 +794,17 @@ span，以及最近一次在多久之前。未带 ADOT 启动器部署的 BYOC �
 错误码：`agent.not_found`（404，未知 id，或属于其他 Workspace、其他项目、对调用者隐藏的 Agent）。探测失败从不让请求失败，
 而是返回 `status: unknown`。
 
+## 控制台 Agent API——调用接入 / Console Agents API: invoke access
+
+自己的后端直接调用 AgentCore 上的 Agent 所需的信息（invoke-access §0.6；详情页「从你的后端调用」卡片）：ARN、调用方式、最小权限 IAM 策略与调用示例。只读，不调用 AWS。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/invoke-access?qualifier=&include=` | `perm:project.use`——`{agent_id, name, method, kind: runtime\|harness, mode: sigv4\|jwt, account, region, partition, arn, qualifiers[], available_qualifiers[], production_qualifier, sample_qualifier, include[], resources[], policy, jwt, samples, notes[], actions{runtime, harness, harness_verified}}`。`qualifier` 取 `DEFAULT`、`live` 或 `candidate`（默认：生产流量所用的端点）；`include` 为逗号分隔的 `stop_session`（会话管理操作）与 `memory`（读取 Agent 的记忆）。`policy` 是调用方角色需要的 IAM 策略文档；JWT 方式的 Agent 由 `jwt` 给出入站授权器的要求（令牌须满足），否则为 `null` |
+| `GET` | `/api/projects/{project_id}/invoke-access?agents=&qualifier=&include=&format=json\|csv` | 路径项目上的 `pperm:project.use`（非成员 404）——项目在其绑定的各 Workspace 中所有可调用的 Agent：`{project_id, inventory[{agent_id, name, method, kind, mode, account, region, arn, qualifier, endpoint_arn, production}], policy, jwt_agents[], skipped[{agent_id, name, reason}], qualifier, include[]}`；`policy` 合并所有 Agent 的语句（无可调用 Agent 时为 `null`）。`agents` 用逗号分隔的 id 缩小范围（不属于该项目的 id → `404 agent.not_found`，`detail.agent_ids`）。`format=csv` / `json` 把清单下载为 `<project_id>-agent-arns.csv` / `.json` |
+
+错误码：`agent.not_found`（404）、`invoke_access.unknown_qualifier` / `invoke_access.unknown_include` / `invoke_access.unknown_format`（400，`detail` 列出允许的取值）。
+
 ## 控制台评估数据集 API / Console Evaluation Datasets API
 
 `/api/eval/datasets` 保存本地 scenario 数据集(SQLite,可编辑的事实来源)及其各自对应的一个 AWS Dataset。AWS 数据集由一份**草稿(DRAFT)**加若干不可变的编号**版本**组成:「同步 AWS」首次创建数据集,之后原地替换草稿中的示例;「发布版本」把草稿快照为版本。
@@ -1167,6 +1193,31 @@ Workspace、网络与存储目录——从不接触数据。路由表归为结�
 会话与角色错误：`auth.required`（401——cookie 缺失、被篡改或已过期，也包括账户此后被禁用、过期或删除）、
 `auth.forbidden`（403——member 会话访问 `/api/users*`）、`users.not_found`（404）。
 
+## 控制台单点登录 API（OIDC）/ Console Single Sign-On API
+
+通过 OpenID Connect 身份提供方登录控制台（sso §2.6；SSO-1）。登录入口公开；配置身份提供方属于管理员（组织管理员被拒绝：映射可以授予管理员角色）。所有路由均为 hub 全局。详见
+[architecture.zh-CN.md](architecture.zh-CN.md)「控制台单点登录（OIDC）」一节。
+
+| 方法 | 路径 | 鉴权 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/auth/providers` | 开放 | 登录页的按钮：`{providers[{id, name, kind: oidc, preset}]}`，只含已启用的提供方。登录门开启且有已启用的提供方时，`GET /api/auth/status` 也以 `sso_providers` 返回它们 |
+| `GET` | `/api/auth/oidc/{provider_id}/start?return_to=` | 开放 | `302` 到 IdP 的授权端点（授权码 + PKCE S256；`state`、`nonce` 与 verifier 留在服务端 10 分钟）。`return_to` 为登录后要进入的同源路径（其他值一律为 `/`） |
+| `GET` | `/api/auth/oidc/{provider_id}/callback?code=&state=` | 开放 | IdP 的回跳。校验 `id_token`（按 JWKS 验签，仅非对称算法；`iss`、`aud` / `azp`、`exp` / `iat` 允许 2 分钟时钟偏差、存储的 `nonce`），创建或关联账户并应用组映射，然后带着会话 cookie `302` 进入控制台。任何失败都是 `302 /?sso_error=<code>&sso_provider=<id>`——重定向途中从不返回 JSON 错误 |
+| `GET` | `/api/admin/sso/providers` | 管理员 | `{items[提供方], presets{keycloak, authentik, okta, entra, google, oidc}, callback_url_template}`。提供方为 `{id, name, kind, preset, enabled, sort_order, issuer, client_id, client_secret_set, client_secret_source: encrypted\|secrets_manager\|null, client_secret_ref, scopes, claims{username, email, name, groups}, account_policy: jit\|existing_only, allowed_email_domains[], default_role, valid_days, mappings[], last_test, callback_url, linked_accounts, created_by, created_at, updated_at}`——从不返回客户端密钥本身 |
+| `POST` | `/api/admin/sso/providers` | 管理员 | `201`——请求体 `{id?, name, preset?, enabled?, sort_order?, issuer?, client_id?, client_secret?, scopes?, claims?, account_policy?, allowed_email_domains?, default_role?, valid_days?}`；`id`（2-32 位小写字母、数字或连字符）默认为 `<preset>-<hex>`，预设模板填入 scopes 与声明名。`client_secret`：普通值以 Fernet 加密保存，`arn:aws:secretsmanager:` 值作为引用保存，`""` 清除（公共 PKCE 客户端）。记为 `auth.sso.config.create` |
+| `GET` | `/api/admin/sso/providers/{provider_id}` | 管理员 | 单个提供方（条目形状） |
+| `PATCH` | `/api/admin/sso/providers/{provider_id}` | 管理员 | 创建请求体中除 `id` 外的任意字段；修改 issuer、client id 或密钥会清除 `last_test`。记为 `auth.sso.config.update`（只记字段名） |
+| `DELETE` | `/api/admin/sso/providers/{provider_id}` | 管理员 | `{ok: true, id}`；仍有账户通过它登录时返回 `409 sso.provider_in_use`（`detail.linked_accounts`）——请改为停用 |
+| `POST` | `/api/admin/sso/providers/{provider_id}/test` | 管理员 | 重新读取 discovery 与 JWKS → `{ok, checked_at, issuer, authorization_endpoint, token_endpoint, userinfo_endpoint, end_session_endpoint, scopes_supported, pkce_s256, jwks_keys, secret_configured, error?{code, message}}`，并保存为 `last_test`。IdP 侧的问题就是答案（`ok: false`），不是错误状态码 |
+| `GET` | `/api/admin/sso/providers/{provider_id}/mappings` | 管理员 | `{mappings[{group, kind: role\|project\|group, target_id, role_key}], default_role}` |
+| `PUT` | `/api/admin/sso/providers/{provider_id}/mappings` | 管理员 | 请求体 `{mappings[…]}`（整体替换）→ 同 GET 形状。`role` 设置全局角色（`target_id` 为空），`project` 设置项目角色（内置模板或该项目的自定义角色），`group` 设置项目组角色。每次登录时应用；记为 `auth.sso.config.mappings` |
+| `GET` | `/api/admin/sso/providers/{provider_id}/logins?limit=` | 管理员 | 来自审计日志的该提供方最近登录，最新在前（默认 20，最多 100）：`{items[{at, outcome: success\|refused\|failed, username, reason, jit, target}]}` |
+| `GET` | `/api/admin/sso/users/{user_id}` | 管理员 | 用户页的账户来源：`{source: local\|sso, sso: {provider_id, provider_name, subject, last_login_at, role_conflict} \| null}` |
+
+`GET /api/users` 的条目带 `source`（`local` / `sso`）、`external_idp_id` 与 `external_subject`。SSO 账户没有本地密码：`PATCH /api/users/{id} {password}` 返回 `409 users.sso_account_password`，`POST /api/auth/password` 返回 `409 auth.sso_account_no_password`。SSO 会话调用 `POST /api/auth/logout` 时，若 IdP 提供 `end_session_url`（OIDC RP 发起的登出），返回中会一并带上。
+
+配置错误（未注明者为 400）：`sso.invalid_preset`、`sso.invalid_name`、`sso.invalid_id`、`sso.invalid_scopes`（必须包含 `openid`）、`sso.invalid_policy`、`sso.invalid_role`、`sso.invalid_url`、`sso.invalid_mappings`、`sso.provider_exists`（409）、`sso.incomplete`（409，没有 issuer / client id 时启用或测试）、`sso.provider_not_found`（404）。`?sso_error=` 与审计日志 `auth.sso.login` 行中的登录原因：`auth.sso.state_invalid` / `state_expired`、`no_code`、`no_id_token`、`bad_signature`、`bad_issuer`、`bad_audience`、`bad_nonce`、`expired`、`no_subject`、`email_missing` / `email_invalid` / `email_domain_blocked` / `email_taken`、`account_conflict`、`not_provisioned`（`existing_only` 且没有已关联的账户）、`idp_error`，以及 `sso.idp_unreachable` / `idp_http_error` / `idp_bad_response` / `discovery_incomplete` / `issuer_mismatch` / `jwks_invalid` / `secret_unreadable`。
+
 ## 控制台项目 API / Console Projects API
 
 **项目**把人员、Agent 及其派生行组织在一个或多个 Workspace 中。成员通过项目角色进入项目，该角色授予的权限键
@@ -1272,6 +1323,8 @@ Workspace 范围的路由还有两种策略值。`perm:project.use`（对话、�
 | `DELETE` | `/api/projects/{project_id}/shares/{share_id}` | pperm:project.share | 撤销 → 返回带 `revoked_at` 与 `pinned_by[]`（已引用它的受让方 Agent）的共享；通知受让项目负责人 |
 | `POST` | `/api/projects/{project_id}/shares/{share_id}/approve` | 管理员 | 批准待审批的跨部门共享 |
 | `POST` | `/api/projects/{project_id}/shares/{share_id}/reject` | 管理员 | 拒绝待审批的跨部门共享 |
+| `GET` | `/api/me/share-notices` | 成员 | 调用者所负责项目（受让项目的 `project.members` 持有者）中已结束共享的通知：`{items[{id, kind: revoked\|expired, share_id, project_id, project_name, owner_project_id, owner_project_name, resource_kind, resource_id, resource_name, access, workspace_id, pinned_by[], actor, created_at, read}], unread}`（最新在前，最多 50 条）。`pinned_by` 列出引用了该资源的受让方 Agent |
+| `POST` | `/api/me/share-notices/{notice_id}/ack` | 成员 | 把调用者的通知标为已读 → `{ok: true, notice_id}`。他人的通知 → `404 share.notice_not_found` |
 | `GET` | `/api/agents/{agent_id}/story` | perm:project.use | 单个 Agent 的故事线事实（storyline-ux §2.3，缓存 30 秒）：判据草稿 / 发布 / 签署、黄金集封存与条目、开发集评估、端点模式、候选版本、放行门结论、live 放行、API Key、Cedar 模式、近 7 天 span（只读探测缓存）、告警规则、Issue、校准、待审豁免。其他项目的 Agent → `404 agent.not_found` |
 | `GET` | `/api/me/next-steps` | 成员 | 当前工作区各 Agent 上轮到调用者的事（按 X-Workspace / X-Project 规则）：`{mine[{agent_id, name, step, action, params}], waiting[{agent_id, name, step, role}]}`；跳过 MCP 服务器与系统预置 |
 | `GET` | `/api/projects/{project_id}/quotas` | 成员（非成员 404） | 用量与上限（projects §11.3）：`{project_id, department_id, quotas{…项目自身的值}, department_caps{…}, items[{key, unit: count\|usd, enforcement: block\|queue\|alert\|throttle, project_value, department_cap, limit, used, state?, checked_at?, workspace_id?}], month_start}`。`limit` 取项目值与部门上限中较小者。键：`max_agents`、`max_api_keys`（拒绝）、`max_concurrent_eval_runs`（排队）、`eval_run_max_usd`、`eval_monthly_usd_cap`（拒绝）、`monthly_cost_alert_usd`（告警，`used` 为预算告警最近一次的测量值）、`v1_rate_per_minute`（限流） |

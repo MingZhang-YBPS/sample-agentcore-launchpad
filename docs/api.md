@@ -60,6 +60,27 @@ curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
 # → {"agent":"…","text":"4","session_id":"…","latency_ms":1234}
 ```
 
+Optional request field `context` (both invoke routes): this call's values for the
+agent's `{{variables}}` — an object of at most 20 string values, keys matching
+`^[A-Za-z_][A-Za-z0-9_]{0,63}$`, each value at most 2000 characters (otherwise
+`422`). It rides in the runtime payload as `context`; a Strands (`zip_runtime`) agent
+fills the prompt variables it declares (`spec.prompt_variables`) from it and ignores
+any other key, before falling back to the environment variable of that name and then
+the declared default. Other methods ignore it.
+
+```bash
+curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
+  -H "X-Api-Key: $LP_KEY" -H 'Content-Type: application/json' \
+  -d '{"prompt": "Weather?", "context": {"city": "Oslo"}}'
+# → {"agent":"…","text":"Sunny, 21 °C","structured":{"city":"Oslo","temp":21.0},"session_id":"…",…}
+```
+
+An agent with an `output_schema` (Strands method) also answers its parsed object as
+`structured` beside `text` (the readable answer); without one the field is absent.
+A PII-guardrail agent never returns `structured`: only the text is screened, so the
+object is dropped.
+可选请求字段 `context` 为本次调用填入 Agent 的 `{{变量}}`;配置了 `output_schema` 的 Agent 另返回解析后的 `structured` 对象。
+
 ## Streaming invoke (SSE) / 流式调用
 
 ```bash
@@ -69,8 +90,12 @@ curl -N -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke-stream \
 # event: meta   → {"session_id": "…", "mode": "stream"}
 # event: delta  → {"text": "Once"} … (incremental chunks)
 # event: usage  → {"input_tokens": 812, "output_tokens": 64, "total_tokens": 876, "model_calls": 1} (once, when the runtime reports usage)
+# event: structured → {"value": {"city": "Oslo", "temp": 21.0}} (output_schema agents, after the text)
 # event: done   → {"latency_ms": 2100}
 ```
+
+The stream takes the same `context` field as the sync call. `structured` follows the
+text of an `output_schema` agent's answer once (never on a PII-guardrail agent).
 
 Pass the returned `session_id` on the next call to continue the conversation
 (session context + AgentCore Memory ride on it).
@@ -247,6 +272,21 @@ to AWS or the ledger.
 Error codes: `agent.not_found` (404, unknown id, or an agent of another workspace or
 project or hidden from the caller). Probe failures never fail the request; they are
 `status: unknown`.
+
+## Console Agents API — invoke access
+
+What your own backend needs to call an agent on AgentCore directly (invoke-access
+§0.6; the detail page's "Call from your backend" card): its ARNs, the call mode, a
+least-privilege IAM policy and call samples. Read-only; nothing here calls AWS.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/invoke-access?qualifier=&include=` | `perm:project.use` — `{agent_id, name, method, kind: runtime\|harness, mode: sigv4\|jwt, account, region, partition, arn, qualifiers[], available_qualifiers[], production_qualifier, sample_qualifier, include[], resources[], policy, jwt, samples, notes[], actions{runtime, harness, harness_verified}}`. `qualifier` is `DEFAULT`, `live` or `candidate` (default: what production uses); `include` is a comma list of `stop_session` (session management actions) and `memory` (reading the agent's memory). `policy` is the IAM policy document a caller role needs; `jwt` is the inbound authorizer's facts for a JWT-mode agent (the token must satisfy them), else `null` |
+| `GET` | `/api/projects/{project_id}/invoke-access?agents=&qualifier=&include=&format=json\|csv` | `pperm:project.use` on the path project (a non-member 404) — every callable agent of the project across the workspaces it is bound to: `{project_id, inventory[{agent_id, name, method, kind, mode, account, region, arn, qualifier, endpoint_arn, production}], policy, jwt_agents[], skipped[{agent_id, name, reason}], qualifier, include[]}`; `policy` merges every agent's statements (`null` when nothing is callable). `agents` narrows to a comma list of ids (an id outside the project → `404 agent.not_found`, `detail.agent_ids`). `format=csv` / `json` downloads the inventory as `<project_id>-agent-arns.csv` / `.json` |
+
+Error codes: `agent.not_found` (404), `invoke_access.unknown_qualifier` /
+`invoke_access.unknown_include` / `invoke_access.unknown_format` (400, `detail` lists
+the allowed values).
 
 ## Console Identity API — Connections and bound Gateway targets
 
@@ -619,6 +659,9 @@ same tool review as hosted MCP servers (the review shape above): decisions take
 A Lambda target is `{id, kind: "lambda", gateway_id, target_id, target_name, lambda_arn,
 description, tool_names[], status: reviewing|publishing|live|failed|rejected, error,
 created_by, created_at, review{…gate state}}`, plus `tool_schema[]` on create.
+A target another project shared with this one (projects §11.2, kind `gateway_target`)
+is listed with `shared_from: {project_id, name, access: read|use}` — in both lists
+(the external list keys it on `tool_id`); only its own project changes it.
 
 | Method | Path | Permission | Result |
 |---|---|---|---|
@@ -1591,6 +1634,48 @@ cookie, and also an account that has since been disabled, expired, or deleted),
 `auth.forbidden` (403 — member session on `/api/users*`), `users.not_found`
 (404).
 
+## Console Single Sign-On API (OIDC)
+
+Console sign-in through an OpenID Connect identity provider (sso §2.6; SSO-1). The
+login surface is public; configuring a provider is an administrator's (a steward is
+refused: a mapping can grant the admin role). All routes are hub-global. See
+[architecture.md](architecture.md#console-single-sign-on-oidc).
+
+| Method | Path | Auth | Result |
+|---|---|---|---|
+| `GET` | `/api/auth/providers` | open | The login page's buttons: `{providers[{id, name, kind: oidc, preset}]}`, enabled providers only. `GET /api/auth/status` also carries them as `sso_providers` while the login gate is on and one is enabled |
+| `GET` | `/api/auth/oidc/{provider_id}/start?return_to=` | open | `302` to the IdP's authorization endpoint (authorization code + PKCE S256; `state`, `nonce` and the verifier stay server side for 10 minutes). `return_to` is a same-origin path to land on after sign-in (anything else is `/`) |
+| `GET` | `/api/auth/oidc/{provider_id}/callback?code=&state=` | open | The IdP's redirect back. Verifies the `id_token` (JWKS signature, asymmetric algorithms only; `iss`, `aud` / `azp`, `exp` / `iat` with 2 minutes of skew, the stored `nonce`), provisions or links the account, applies the group mappings, then `302` into the console with the session cookie set. Any failure is `302 /?sso_error=<code>&sso_provider=<id>` — never a JSON error mid-redirect |
+| `GET` | `/api/admin/sso/providers` | admin | `{items[provider], presets{keycloak, authentik, okta, entra, google, oidc}, callback_url_template}`. A provider is `{id, name, kind, preset, enabled, sort_order, issuer, client_id, client_secret_set, client_secret_source: encrypted\|secrets_manager\|null, client_secret_ref, scopes, claims{username, email, name, groups}, account_policy: jit\|existing_only, allowed_email_domains[], default_role, valid_days, mappings[], last_test, callback_url, linked_accounts, created_by, created_at, updated_at}` — the client secret itself is never returned |
+| `POST` | `/api/admin/sso/providers` | admin | `201` — body `{id?, name, preset?, enabled?, sort_order?, issuer?, client_id?, client_secret?, scopes?, claims?, account_policy?, allowed_email_domains?, default_role?, valid_days?}`; `id` (2-32 lowercase letters, digits, hyphens) defaults to `<preset>-<hex>`, the preset fills scopes and claim names. `client_secret`: a value is stored Fernet-encrypted, an `arn:aws:secretsmanager:` value is stored as a reference, `""` clears it (a public PKCE client). Journaled `auth.sso.config.create` |
+| `GET` | `/api/admin/sso/providers/{provider_id}` | admin | One provider (the item shape) |
+| `PATCH` | `/api/admin/sso/providers/{provider_id}` | admin | Any field of the create body except `id`; changing the issuer, client id or secret clears `last_test`. Journaled `auth.sso.config.update` (field names only) |
+| `DELETE` | `/api/admin/sso/providers/{provider_id}` | admin | `{ok: true, id}`; `409 sso.provider_in_use` (`detail.linked_accounts`) while accounts sign in through it — disable it instead |
+| `POST` | `/api/admin/sso/providers/{provider_id}/test` | admin | Reads discovery and the JWKS afresh → `{ok, checked_at, issuer, authorization_endpoint, token_endpoint, userinfo_endpoint, end_session_endpoint, scopes_supported, pkce_s256, jwks_keys, secret_configured, error?{code, message}}`, stored as `last_test`. An IdP-side problem is the answer (`ok: false`), not an error status |
+| `GET` | `/api/admin/sso/providers/{provider_id}/mappings` | admin | `{mappings[{group, kind: role\|project\|group, target_id, role_key}], default_role}` |
+| `PUT` | `/api/admin/sso/providers/{provider_id}/mappings` | admin | Body `{mappings[…]}` (full replacement) → the GET shape. `role` sets the global role (`target_id` empty), `project` a project role (a built-in template or the project's custom role), `group` a project-group role. Applied at every sign-in; journaled `auth.sso.config.mappings` |
+| `GET` | `/api/admin/sso/providers/{provider_id}/logins?limit=` | admin | The provider's recent sign-ins from the journal, newest first (default 20, at most 100): `{items[{at, outcome: success\|refused\|failed, username, reason, jit, target}]}` |
+| `GET` | `/api/admin/sso/users/{user_id}` | admin | The user page's account source: `{source: local\|sso, sso: {provider_id, provider_name, subject, last_login_at, role_conflict} \| null}` |
+
+`GET /api/users` items carry `source` (`local` / `sso`), `external_idp_id` and
+`external_subject`. An SSO account has no local password: `PATCH /api/users/{id}
+{password}` answers `409 users.sso_account_password` and `POST /api/auth/password`
+answers `409 auth.sso_account_no_password`. `POST /api/auth/logout` on an SSO session
+also answers `end_session_url` (OIDC RP-initiated logout) when the IdP has one.
+
+Configuration errors (400 unless noted): `sso.invalid_preset`, `sso.invalid_name`,
+`sso.invalid_id`, `sso.invalid_scopes` (must include `openid`), `sso.invalid_policy`,
+`sso.invalid_role`, `sso.invalid_url`, `sso.invalid_mappings`, `sso.provider_exists`
+(409), `sso.incomplete` (409, enabling or testing without an issuer / client id),
+`sso.provider_not_found` (404). Sign-in reasons in `?sso_error=` and the journal's
+`auth.sso.login` rows: `auth.sso.state_invalid` / `state_expired`, `no_code`,
+`no_id_token`, `bad_signature`, `bad_issuer`, `bad_audience`, `bad_nonce`, `expired`,
+`no_subject`, `email_missing` / `email_invalid` / `email_domain_blocked` /
+`email_taken`, `account_conflict`, `not_provisioned` (`existing_only` and no linked
+account), `idp_error`, plus `sso.idp_unreachable` / `idp_http_error` /
+`idp_bad_response` / `discovery_incomplete` / `issuer_mismatch` / `jwks_invalid` /
+`secret_unreadable`.
+
 ## Console Projects API
 
 A **project** groups people, agents and their derived rows inside one or more
@@ -1714,6 +1799,8 @@ your own request) stay the backstop.
 | `DELETE` | `/api/projects/{project_id}/shares/{share_id}` | pperm:project.share | Revoke → the share with `revoked_at` and `pinned_by[]` (grantee agents that pinned it); the grantee's owners are notified |
 | `POST` | `/api/projects/{project_id}/shares/{share_id}/approve` | admin | Approve a pending cross-department share |
 | `POST` | `/api/projects/{project_id}/shares/{share_id}/reject` | admin | Reject a pending cross-department share |
+| `GET` | `/api/me/share-notices` | member | The caller's notices of shares that ended in projects they own (a `project.members` holder of the grantee): `{items[{id, kind: revoked\|expired, share_id, project_id, project_name, owner_project_id, owner_project_name, resource_kind, resource_id, resource_name, access, workspace_id, pinned_by[], actor, created_at, read}], unread}` (newest first, at most 50). `pinned_by` names the grantee's agents that pinned the resource |
+| `POST` | `/api/me/share-notices/{notice_id}/ack` | member | Marks the caller's notice read → `{ok: true, notice_id}`. Someone else's notice → `404 share.notice_not_found` |
 | `GET` | `/api/agents/{agent_id}/story` | perm:project.use | Storyline facts for one agent (storyline-ux §2.3, cached 30 s): criteria draft / published / signed, golden sealed and items, dev run, endpoint mode, candidate, gate verdict, live release, API keys, Cedar mode, spans in 7 days (cached probe only), alert rules, issues, calibration, pending waivers. Another project's agent → `404 agent.not_found` |
 | `GET` | `/api/me/next-steps` | member | The caller's turn across the current workspace's agents (X-Workspace / X-Project rules): `{mine[{agent_id, name, step, action, params}], waiting[{agent_id, name, step, role}]}`; MCP servers and presets are skipped |
 | `GET` | `/api/projects/{project_id}/quotas` | member (404 to non-members) | Usage against limits (projects §11.3): `{project_id, department_id, quotas{…the project's own}, department_caps{…}, items[{key, unit: count\|usd, enforcement: block\|queue\|alert\|throttle, project_value, department_cap, limit, used, state?, checked_at?, workspace_id?}], month_start}`. `limit` is the smaller of the project's value and its department's cap. Keys: `max_agents`, `max_api_keys` (block), `max_concurrent_eval_runs` (queue), `eval_run_max_usd`, `eval_monthly_usd_cap` (block), `monthly_cost_alert_usd` (alert, `used` = what the budget alert last measured), `v1_rate_per_minute` (throttle) |
