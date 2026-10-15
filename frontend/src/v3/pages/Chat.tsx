@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { JumpToLatest } from "../../components/JumpToLatest";
 import { Markdown } from "../../components/Markdown";
+import { StructuredAnswer } from "../../components/chat/StructuredAnswer";
 import {
   api,
   type ChatHistoryMessage,
@@ -55,12 +56,13 @@ import { useStickToBottom } from "../../lib/useStickToBottom";
 import { livePolicyDeny, type PolicyDeny, policyDenyHref, restoredPolicyDeny } from "../../lib/policy-deny";
 import { useAuth } from "../../auth/auth-context";
 import { useWorkspace } from "../../workspace/workspace-context";
-import { appendDelta } from "../../v2/pages/chat/messages";
+import { appendDelta, attachStructured } from "../../v2/pages/chat/messages";
 import type { ChatMessage } from "../../v2/pages/chat/messages";
 import { agentSignal } from "../signals";
 import { Btn, Empty, Lamp, Notice, Skeleton } from "../ui";
 import { useLoad, useToast } from "../hooks";
 import { ago } from "../format";
+import { StoryHeader } from "../story/StoryHeader";
 import { ApiKeysEntry } from "./agent/ApiKeysCard";
 import "./chat.css";
 import "./chatStatus.css";
@@ -363,6 +365,10 @@ export function V3Chat() {
           answered = true;
           setMessages((m) => appendDelta(m, data.text ?? "", wasOpen, curated));
           openBubble = true;
+        } else if (event === "structured") {
+          // SB-1: the parsed answer, shown under the text answer (it counts as an answer)
+          answered = true;
+          setMessages((m) => attachStructured(m, data.value));
         } else if (event === "saved") {
           setMessages((m) => {
             const next = [...m];
@@ -510,6 +516,7 @@ export function V3Chat() {
 
   return (
     <div className="v3-chat">
+      <StoryHeader />
       <aside className="v3-chat-side">
         <label className="v3-stat" style={{ display: "block" }}>
           <span className="label">{t("v3.chat.agent")}</span>
@@ -604,8 +611,9 @@ export function V3Chat() {
               return (
                 <div key={i} className={`v3-msg agent${m.streaming ? " streaming" : ""}`}>
                   <div className="bubble">
-                    <Markdown text={m.text} />
+                    {m.text && <Markdown text={m.text} />}
                     {m.streaming && <span className="v3-caret" aria-hidden="true" />}
+                    {m.structured !== undefined && <StructuredAnswer value={m.structured} />}
                   </div>
                   {m.id != null && !m.streaming && (
                     <div className="v3-msg-actions">

@@ -51,9 +51,9 @@ export const NEXT_ACTIONS = {
   "apikey.create": action("apikey.create", (p) => at("/v3/agents", { id: p.agent_id, tab: "access" })),
   "cedar.open": action("cedar.open", () => "/v3/governance"),
   // observe and feedback
-  "traces.open": action("traces.open", () => at("/v3/observability", { tab: "traces" })),
+  "traces.open": action("traces.open", (p) => at("/v3/observability", { tab: "traces", agent: p.agent_id })),
   "alerts.open": action("alerts.open", () => "/v3/costs"),
-  "issues.open": action("issues.open", () => "/v3/issues"),
+  "issues.open": action("issues.open", (p) => at("/v3/issues", { agent: p.agent_id })),
   // the platform (administrators)
   "workspace.open": action("workspace.open", (p) => at("/v3/workspaces", { id: p.workspace_id })),
   "workspace.fix_role": action("workspace.fix_role", (p) => at("/v3/workspaces", { id: p.workspace_id })),

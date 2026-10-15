@@ -30,7 +30,8 @@ export function IssueBox() {
   const { agents, label } = useAgents(ws);
   const [params, setParams] = useSearchParams();
   const [status, setStatus] = useState<StatusFilter>("open");
-  const [agentId, setAgentId] = useState("");
+  // the agent filter lives in `?agent=` (a storyline link lands filtered, §3.3)
+  const agentId = params.get("agent") ?? "";
   const [tick, setTick] = useState(0);
   const openId = params.get("issue");
 
@@ -46,6 +47,12 @@ export function IssueBox() {
   const summary = list.data?.summary;
   const items = list.data?.items ?? [];
   const reload = () => setTick((n) => n + 1);
+  const setAgentId = (id: string) => {
+    const next = new URLSearchParams(params);
+    if (id) next.set("agent", id);
+    else next.delete("agent");
+    setParams(next, { replace: true });
+  };
   const select = (id: string | null) => {
     const next = new URLSearchParams(params);
     if (id) next.set("issue", id);

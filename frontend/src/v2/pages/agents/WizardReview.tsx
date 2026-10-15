@@ -19,6 +19,7 @@ import { Alert, Card, Descriptions } from "../../ui";
 import { InlineKbState } from "./InlineKb";
 import { type InlineKb, inlineKbBlock } from "./useInlineKb";
 import { ReachabilityWarning } from "./InboundAuthFields";
+import { strandsReviewItems, strandsReviewSpec } from "./strandsReview";
 import type { WizardCatalogs, WizardUi } from "./wizardKit";
 
 /** The review step: what will be deployed, per method (read-only). */
@@ -201,14 +202,18 @@ export function WizardReview({
     } else if (method === "zip_runtime") {
       const a2a = form.protocol === "a2a";
       const kit = toolkitToolNames(form.toolkits);
+      const strands = strandsReviewSpec(form);
+      // picked Strands tools replace the template's calculator and current_utc_time
+      const base = kit.length ? kit : strands.strands_tools?.length ? [] : ["calculator", "current_utc_time"];
       items = [
         ...head,
         { label: t("v2.agents.protocol"), value: t(`v2.agents.wizard.protocol.${form.protocol}`) },
         ...model,
         {
           label: t("v2.agents.wizard.tools"),
-          value: list([...(kit.length ? kit : ["calculator", "current_utc_time"]), ...(a2a ? [] : form.selectedGateway)]),
+          value: list([...base, ...(strands.strands_tools ?? []), ...(a2a ? [] : form.selectedGateway)]),
         },
+        ...strandsReviewItems(strands, t),
         ...(a2a
           ? [{ label: t("v2.agents.wizard.a2aSkills"), value: list(form.a2aSkills.filter((s) => s.name.trim()).map((s) => s.name.trim())) }]
           : [{ label: t("v2.agents.wizard.toolkits"), value: list(form.toolkits) }]),

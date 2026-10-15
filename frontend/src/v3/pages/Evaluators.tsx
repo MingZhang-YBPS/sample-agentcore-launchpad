@@ -7,6 +7,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { api, errorMessage, type EvaluatorRow } from "../../lib/api";
+import { sharedFromOf } from "../../lib/api/sharedFrom";
 import { evaluatorLabel } from "../../lib/evaluators";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useLoad, useToast } from "../hooks";
@@ -129,7 +130,8 @@ function EvaluatorList() {
                     <td style={{ color: "var(--v3-text-2)" }}>{row.definition ? t(`v2.evaluators.definition.${row.definition}`) : t("v2.evaluators.definition.managed")}</td>
                     <td>{row.requires_ground_truth ? <Chip s="wait">{t("v2.evaluators.needsGt")}</Chip> : <span style={{ color: "var(--v3-text-3)" }}>{t("v2.common.no")}</span>}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                      {row.source === "custom" && (
+                      {/* a borrowed evaluator belongs to its owner: the server refuses writes */}
+                      {row.source === "custom" && !sharedFromOf(row) && (
                         <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                           <Link to={`/v3/evaluators?view=edit&id=${encodeURIComponent(row.id)}`} className="v3-btn ghost sm" title={t("v3.evaluators.edit")}><Pencil size={13} /></Link>
                           <Btn size="sm" kind="ghost" onClick={() => setDeleting(row)} title={t("v3.evaluators.delete")}><Trash2 size={13} /></Btn>

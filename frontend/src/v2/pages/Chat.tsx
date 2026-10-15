@@ -66,7 +66,7 @@ import { Composer } from "./chat/Composer";
 import { ShareLinksModal } from "./chat/ShareLinks";
 import { Inspector, type InspectorTab } from "./chat/Inspector";
 import { SessionRail } from "./chat/SessionRail";
-import { appendDelta, latestRetryTarget } from "./chat/messages";
+import { appendDelta, attachStructured, latestRetryTarget } from "./chat/messages";
 import { type ChatMessage, Thread } from "./chat/Thread";
 
 /** The latest turn's retry offer (chat-streaming §4.1): the failure, the prompt to
@@ -383,6 +383,9 @@ export function V2Chat() {
             const open = agentOpen;
             setMessages((m) => appendDelta(m, payload.text ?? "", open, curated));
             agentOpen = true;
+          } else if (event === "structured") {
+            // SB-1: the parsed answer, shown under the text answer
+            setMessages((m) => attachStructured(m, payload.value));
           } else if (event === "saved") {
             // the answer bubble just closed: attach its ledger id so it can be rated
             const messageId = payload.message_id;

@@ -2710,7 +2710,12 @@
     "waiver.self_approve": "The requester cannot approve their own waiver.",
     "waiver.self_approve_why": "Approving a waiver is a second person's decision.",
     "waiver.too_long": "A waiver lasts at most the allowed number of days.",
-    "waiver.unknown_criterion": "That criterion is not in the agent's criteria table."
+    "waiver.unknown_criterion": "That criterion is not in the agent's criteria table.",
+    "auth.sso_account_no_password": "Your password is managed by your identity provider.",
+    "users.sso_account_password": "This account signs in with SSO. Its password is managed by the identity provider and cannot be reset here.",
+    "release.golden_share_read_only": "This golden set is shared with this project read-only. A release gate needs use access: ask the project that owns it.",
+    "run.evaluator_share_read_only": "An evaluator in this run is shared with this project read-only. Running it needs use access: ask the project that owns it.",
+    "share.read_only": "This resource belongs to another project, which shares it with this one. Only that project can change it."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -12132,6 +12137,9 @@
         "via": "via {{projects}}",
         "globalPermTitle": "Global permissions (for projects that inherit the global role)",
         "globalPermSub": "Applies where the project role is “inherits global role”"
+      },
+      "field": {
+        "source": "Account source"
       }
     },
     "workspaces": {
@@ -12415,7 +12423,9 @@
           "current": "Enter your current password.",
           "same": "Choose a password different from the current one.",
           "mismatch": "The two new passwords do not match."
-        }
+        },
+        "ssoManaged": "This account signs in through your identity provider, so its password lives there. Change it with your identity provider, not in the console.",
+        "ssoClose": "Got it"
       }
     },
     "dlcText": {
@@ -12952,7 +12962,16 @@
         "typedId": "or type the AWS id",
         "noResources": "This project has nothing of this kind in the workspace.",
         "crossShort": "other department",
-        "crossDepartment": "That project belongs to another department: the share waits until its department administrator (or an administrator) approves it."
+        "crossDepartment": "That project belongs to another department: the share waits until its department administrator (or an administrator) approves it.",
+        "notices": {
+          "eyebrow": "Ended",
+          "title": "Shares that ended",
+          "revoked": "{{owner}} revoked {{name}} ({{access}}). This project can no longer use it.",
+          "expired": "The share of {{name}} from {{owner}} ({{access}}) expired. This project can no longer use it.",
+          "pinned": "Agents that still use it:",
+          "by": "revoked by {{who}}",
+          "ack": "Got it"
+        }
       },
       "isolation": {
         "title": "Runtime isolation",
@@ -14356,7 +14375,8 @@
       "gateReport": "Release gate report ready: {{verdict}}",
       "releaseSigned": "Release signed — the candidate is live",
       "issueFixed": "Issue marked fixed",
-      "issueWontFix": "Issue closed as won't fix"
+      "issueWontFix": "Issue closed as won't fix",
+      "apiKey": "API key issued — your app can call the agent now"
     },
     "journey": {
       "title": "Journey",
@@ -14615,6 +14635,26 @@
       "outputSchemaGuardrail": "Structured output cannot be combined with PII protection yet.",
       "variables": "Variable names start with a letter or _ and are unique (at most 20). {{detail}}",
       "fewShot": "Every example needs both a question and an answer (at most 10)."
+    },
+    "structured": {
+      "label": "Structured answer",
+      "fields_one": "{{count}} field",
+      "fields_other": "{{count}} fields",
+      "asJson": "JSON",
+      "asTable": "Table",
+      "copy": "Copy",
+      "copied": "Copied"
+    },
+    "review": {
+      "stops_one": "{{count}} stop sequence",
+      "stops_other": "{{count}} stop sequences",
+      "thinking": "thinking {{budget}} tokens",
+      "window_one": "{{count}} message kept",
+      "window_other": "{{count}} messages kept",
+      "schema_one": "{{count}} field: {{fields}}",
+      "schema_other": "{{count}} fields: {{fields}}",
+      "examples_one": "{{count}} example",
+      "examples_other": "{{count}} examples"
     }
   }
 }

@@ -15,6 +15,7 @@ import { ago } from "../format";
 import { useLoad } from "../hooks";
 import { ChangePasswordDialog } from "../ChangePassword";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
+import { SsoAccountSource } from "./sso/AccountSource";
 import { AccessPanel } from "./users/AccessPanel";
 import { useUserActions } from "./users/actions";
 import { BulkAddDialog } from "./users/BulkAdd";
@@ -397,7 +398,10 @@ function UserDetail({ username }: { username: string }) {
   // the signed-in account itself: change (current + new) instead of a reset that
   // would end this very session
   const isSelf = auth.username === user.username && (auth.builtin ? Boolean(user.builtin) : !user.builtin);
-  const passwordAction = isSelf ? (
+  // an SSO account has no console password: the identity provider holds it, and the
+  // backend refuses a reset (users.sso_account_password)
+  const ssoAccount = user.source === "sso";
+  const passwordAction = ssoAccount ? null : isSelf ? (
     <Btn disabled={busy} onClick={() => setChangingOwn(true)}><KeyRound size={14} /> {t("v3.account.password.title")}</Btn>
   ) : (
     <Btn disabled={busy} onClick={() => actions.ask("reset", user)}><KeyRound size={14} /> {t("v2.users.action.resetPassword")}</Btn>
@@ -493,6 +497,7 @@ function UserDetail({ username }: { username: string }) {
             <dt>{t("v2.users.field.email")}</dt><dd>{user.email}</dd>
             <dt>{t("v2.users.col.created")}</dt><dd>{user.created_at ? `${user.created_at.slice(0, 10)} · ${ago(user.created_at)}` : "—"}</dd>
             <dt>{t("v2.users.field.createdBy")}</dt><dd>{user.created_by || "—"}</dd>
+            <dt>{t("v3.users.field.source")}</dt><dd><SsoAccountSource userId={user.id} source={user.source} /></dd>
             <dt>ID</dt><dd className="mono">{user.id}</dd>
           </dl>
         </Panel>

@@ -2710,7 +2710,12 @@
     "waiver.self_approve": "申请人不能批准自己的豁免。",
     "waiver.self_approve_why": "批准豁免需要另一个人来决定。",
     "waiver.too_long": "豁免时长超过了允许的上限。",
-    "waiver.unknown_criterion": "这条判据不在智能体的判据表里。"
+    "waiver.unknown_criterion": "这条判据不在智能体的判据表里。",
+    "auth.sso_account_no_password": "你的密码由身份提供方管理。",
+    "users.sso_account_password": "此账号通过 SSO 登录，密码由身份提供方管理，无法在这里重置。",
+    "release.golden_share_read_only": "该金标集以只读方式共享给本项目，发布门禁需要可用权限，请联系所属项目。",
+    "run.evaluator_share_read_only": "本次运行中的某个评估器以只读方式共享给本项目，运行它需要可用权限，请联系所属项目。",
+    "share.read_only": "该资源属于另一个项目，只是共享给本项目使用，只有所属项目可以修改。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -12132,6 +12137,9 @@
         "via": "来自：{{projects}}",
         "globalPermTitle": "全局权限（作用于“继承全局”的项目）",
         "globalPermSub": "项目角色为“继承全局角色”时生效"
+      },
+      "field": {
+        "source": "账号来源"
       }
     },
     "workspaces": {
@@ -12415,7 +12423,9 @@
           "current": "请输入当前密码。",
           "same": "新密码不能与当前密码相同。",
           "mismatch": "两次输入的新密码不一致。"
-        }
+        },
+        "ssoManaged": "此账号通过身份提供方登录，密码保存在身份提供方。请到身份提供方修改密码，控制台无法修改。",
+        "ssoClose": "知道了"
       }
     },
     "dlcText": {
@@ -12952,7 +12962,16 @@
         "typedId": "或输入 AWS id",
         "noResources": "本项目在该工作区没有这类资源。",
         "crossShort": "其他部门",
-        "crossDepartment": "该项目属于其他部门：共享需由其部门管理员（或平台管理员）批准后才生效。"
+        "crossDepartment": "该项目属于其他部门：共享需由其部门管理员（或平台管理员）批准后才生效。",
+        "notices": {
+          "eyebrow": "已结束",
+          "title": "已结束的共享",
+          "revoked": "{{owner}} 已撤销 {{name}}（{{access}}），本项目不能再使用它。",
+          "expired": "{{owner}} 共享的 {{name}}（{{access}}）已到期，本项目不能再使用它。",
+          "pinned": "仍在使用它的智能体：",
+          "by": "由 {{who}} 撤销",
+          "ack": "知道了"
+        }
       },
       "isolation": {
         "title": "运行时隔离",
@@ -14356,7 +14375,8 @@
       "gateReport": "放行门报告已生成：{{verdict}}",
       "releaseSigned": "已签署放行——候选版本已上线",
       "issueFixed": "Issue 已标记为已修复",
-      "issueWontFix": "Issue 已关闭（不修复）"
+      "issueWontFix": "Issue 已关闭（不修复）",
+      "apiKey": "API 密钥已签发，你的应用现在可以调用这个智能体"
     },
     "journey": {
       "title": "旅程",
@@ -14615,6 +14635,26 @@
       "outputSchemaGuardrail": "结构化输出暂不能与 PII 保护同时使用。",
       "variables": "变量名以字母或 _ 开头且不重复（最多 20 个）。{{detail}}",
       "fewShot": "每个示例都需要问题和回答（最多 10 个）。"
+    },
+    "structured": {
+      "label": "结构化回答",
+      "fields_one": "{{count}} 个字段",
+      "fields_other": "{{count}} 个字段",
+      "asJson": "JSON",
+      "asTable": "表格",
+      "copy": "复制",
+      "copied": "已复制"
+    },
+    "review": {
+      "stops_one": "{{count}} 个停止序列",
+      "stops_other": "{{count}} 个停止序列",
+      "thinking": "思考预算 {{budget}} tokens",
+      "window_one": "保留 {{count}} 条消息",
+      "window_other": "保留 {{count}} 条消息",
+      "schema_one": "{{count}} 个字段：{{fields}}",
+      "schema_other": "{{count}} 个字段：{{fields}}",
+      "examples_one": "{{count}} 个示例",
+      "examples_other": "{{count}} 个示例"
     }
   }
 }
