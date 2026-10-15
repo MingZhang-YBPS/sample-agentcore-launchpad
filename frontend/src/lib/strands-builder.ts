@@ -11,12 +11,17 @@
  * stays behind an Identity Connection), tool-call guards and throttling retry. Its
  * checks live in `sb2Issues` (own keys, so the SB-1 group map stays exhaustive);
  * `strandsValid` covers both.
+ *
+ * SB-3 adds custom Python `@tool` functions (code, pinned requirements, where they
+ * run) and the sandboxed high-risk built-in tools. The syntax / static check runs on
+ * the backend (`lib/api/custom-tools.ts`); `sb3Issues` holds the checks the form can
+ * make itself, and `strandsValid` covers them too.
  */
 import type { AgentInfo } from "./api";
 import type { ModelSource } from "./models";
 
 /** The curated first batch of `strands-agents-tools` (D-1). shell / python_repl /
- *  file_write / use_aws need a sandbox and arrive with SB-3. */
+ *  file_write / use_aws need a sandbox: `SANDBOX_TOOLS` (SB-3). */
 export const STRANDS_TOOLS = [
   "current_time",
   "calculator",
@@ -52,6 +57,25 @@ export interface AgentToolRow {
   /** the project that lent it (§11.2); null for this project's own */
   sharedFrom: string | null;
 }
+
+/** SB-3: the high-risk built-in tools — selectable where the workspace's sandbox
+ *  setting allows them, and run only in the AgentCore Code Interpreter. */
+export const SANDBOX_TOOLS = ["python_repl", "shell", "file_write", "use_aws"] as const;
+export type SandboxTool = (typeof SANDBOX_TOOLS)[number];
+
+export type CustomToolExecution = "runtime" | "code_interpreter";
+
+/** One member-written `@tool` function. */
+export interface CustomToolRow {
+  name: string;
+  description: string;
+  code: string;
+  /** one `name==version` per line */
+  requirements: string;
+  execution: CustomToolExecution;
+}
+
+export const MAX_CUSTOM_TOOLS = 10;
 
 export type ProviderChoice = "bedrock" | "anthropic" | "litellm";
 export const PROVIDERS: ProviderChoice[] = ["bedrock", "anthropic", "litellm"];
@@ -92,6 +116,9 @@ export interface StrandsForm {
   retryAttempts: string;
   retryInitial: string;
   retryMax: string;
+  /* ── SB-3 ── */
+  customTools: CustomToolRow[];
+  sandboxTools: SandboxTool[];
 }
 
 /** Strands' own ModelRetryStrategy defaults (6 attempts, 4 s doubling to 240 s). */
@@ -129,6 +156,8 @@ export const emptyStrandsForm = (): StrandsForm => ({
   retryAttempts: String(RETRY_DEFAULTS.attempts),
   retryInitial: String(RETRY_DEFAULTS.initial),
   retryMax: String(RETRY_DEFAULTS.max),
+  customTools: [],
+  sandboxTools: [],
 });
 
 /** The spec fields this slice owns (all optional). */
@@ -163,6 +192,14 @@ export interface StrandsSpecFields {
     mask_args?: string[];
   } | null;
   retry?: { max_attempts?: number; initial_delay_s?: number; max_delay_s?: number } | null;
+  custom_tools?: {
+    name: string;
+    description: string;
+    code: string;
+    requirements?: string[];
+    execution?: CustomToolExecution;
+  }[];
+  sandbox_tools?: SandboxTool[];
 }
 
 const HOST_RE = /^(\*\.)?(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
@@ -221,6 +258,14 @@ export function strandsFormFromSpec(raw: unknown): StrandsForm {
     fewShot: (spec.few_shot_examples ?? []).map((e) => ({ question: e.question ?? "", answer: e.answer ?? "" })),
     variables: Object.entries(spec.prompt_variables ?? {}).map(([name, value]) => ({ name, value })),
     ...sb2FormFromSpec(spec),
+    customTools: (spec.custom_tools ?? []).map((t) => ({
+      name: t.name ?? "",
+      description: t.description ?? "",
+      code: t.code ?? "",
+      requirements: (t.requirements ?? []).join("\n"),
+      execution: t.execution === "code_interpreter" ? "code_interpreter" : "runtime",
+    })),
+    sandboxTools: (spec.sandbox_tools ?? []).filter((t): t is SandboxTool => (SANDBOX_TOOLS as readonly string[]).includes(t)),
   };
 }
 
@@ -292,8 +337,27 @@ export function strandsSpec(form: StrandsForm | undefined, ctx: SpecContext): St
   if (shots.length) out.few_shot_examples = shots.map((e) => ({ question: e.question.trim(), answer: e.answer.trim() }));
   const vars = form.variables.filter((v) => v.name.trim());
   if (vars.length) out.prompt_variables = Object.fromEntries(vars.map((v) => [v.name.trim(), v.value]));
-  return { ...out, ...sb2Spec(form, ctx) };
+  return { ...out, ...sb2Spec(form, ctx), ...sb3Spec(form) };
 }
+
+/** SB-3's fields — only what is set. */
+function sb3Spec(form: StrandsForm): StrandsSpecFields {
+  const out: StrandsSpecFields = {};
+  const f = { ...emptyStrandsForm(), ...form };
+  if (f.customTools.length) {
+    out.custom_tools = f.customTools.map((t) => ({
+      name: t.name.trim(),
+      description: t.description.trim(),
+      code: t.code,
+      ...(requirementList(t.requirements).length ? { requirements: requirementList(t.requirements) } : {}),
+      ...(t.execution === "code_interpreter" ? { execution: "code_interpreter" as const } : {}),
+    }));
+  }
+  if (f.sandboxTools.length) out.sandbox_tools = SANDBOX_TOOLS.filter((t) => f.sandboxTools.includes(t));
+  return out;
+}
+
+export const requirementList = (s: string) => [...new Set(s.split("\n").map((x) => x.trim()).filter(Boolean))];
 
 /** SB-2's fields — again only what is set. */
 function sb2Spec(form: StrandsForm, ctx: SpecContext): StrandsSpecFields {
@@ -491,7 +555,90 @@ export function strandsIssues(form: StrandsForm | undefined, ctx: IssueContext):
 }
 
 export const strandsValid = (form: StrandsForm | undefined, ctx: IssueContext) =>
-  Object.keys(strandsIssues(form, ctx).issues).length === 0 && Object.keys(sb2Issues(form, ctx)).length === 0;
+  Object.keys(strandsIssues(form, ctx).issues).length === 0 &&
+  Object.keys(sb2Issues(form, ctx)).length === 0 &&
+  Object.keys(sb3Issues(form)).length === 0;
+
+/* ── SB-3 validation ──────────────────────────────────────────────────── */
+
+export type Sb3IssueKey =
+  | "customToolName"
+  | "customToolDuplicate"
+  | "customToolDescription"
+  | "customToolCode"
+  | "customToolRequirement"
+  | "customToolSandboxRequirements"
+  | "customToolCount";
+
+/** Mirrors `schemas/custom_tool_code.py` (name, pins) and `_check_sb3`. */
+export const CUSTOM_TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
+export const CUSTOM_TOOL_REQUIREMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9._,-]+\])?==[A-Za-z0-9.+!_-]+$/;
+
+/** Issues per tool row (index → key → detail) plus the list-level ones under -1. */
+export function sb3RowIssues(form: StrandsForm | undefined): Map<number, Partial<Record<Sb3IssueKey, string>>> {
+  const out = new Map<number, Partial<Record<Sb3IssueKey, string>>>();
+  if (!form) return out;
+  const f = { ...emptyStrandsForm(), ...form };
+  const put = (i: number, key: Sb3IssueKey, detail = "") => out.set(i, { ...(out.get(i) ?? {}), [key]: detail });
+  const taken = new Set<string>([...f.tools, ...f.sandboxTools, ...RESERVED_TOOL_NAMES, ...f.agentTools.map((t) => t.toolName.trim())]);
+  const names = f.customTools.map((t) => t.name.trim());
+  f.customTools.forEach((t, i) => {
+    const name = names[i];
+    if (!CUSTOM_TOOL_NAME_RE.test(name)) put(i, "customToolName", name);
+    else if (names.indexOf(name) !== i || taken.has(name)) put(i, "customToolDuplicate", name);
+    if (!t.description.trim() || t.description.trim().length > 1000) put(i, "customToolDescription");
+    if (!t.code.trim() || t.code.length > 20000) put(i, "customToolCode");
+    const reqs = requirementList(t.requirements);
+    const bad = reqs.find((r) => !CUSTOM_TOOL_REQUIREMENT_RE.test(r));
+    if (bad !== undefined) put(i, "customToolRequirement", bad);
+    else if (reqs.length > 10) put(i, "customToolRequirement", "");
+    if (t.execution === "code_interpreter" && reqs.length) put(i, "customToolSandboxRequirements");
+  });
+  if (f.customTools.length > MAX_CUSTOM_TOOLS) put(-1, "customToolCount", String(MAX_CUSTOM_TOOLS));
+  return out;
+}
+
+export function sb3Issues(form: StrandsForm | undefined): Partial<Record<Sb3IssueKey, string>> {
+  const merged: Partial<Record<Sb3IssueKey, string>> = {};
+  for (const issues of sb3RowIssues(form).values()) Object.assign(merged, issues);
+  return merged;
+}
+
+/** A starting point for a new tool: the decorator, typed parameters and an Args
+ *  docstring — the parts the platform reads to describe the tool to the model. */
+export function customToolTemplate(name: string): string {
+  return [
+    "from strands import tool",
+    "",
+    "",
+    "@tool",
+    `def ${name}(text: str, limit: int = 10) -> str:`,
+    '    """Describe what the tool does, in one sentence the model can act on.',
+    "",
+    "    Args:",
+    "        text: What the parameter holds.",
+    "        limit: Optional parameters take a literal default.",
+    '    """',
+    "    return text[:limit]",
+    "",
+  ].join("\n");
+}
+
+/** A free tool name: `my_tool`, `my_tool_2`, … */
+export function nextCustomToolName(rows: CustomToolRow[]): string {
+  const used = new Set(rows.map((r) => r.name.trim()));
+  if (!used.has("my_tool")) return "my_tool";
+  let n = 2;
+  while (used.has(`my_tool_${n}`)) n++;
+  return `my_tool_${n}`;
+}
+
+/** Rename the tool's function in its code along with the name field, when the
+ *  code still defines the old name. */
+export function renameInCode(code: string, from: string, to: string): string {
+  if (!from || !CUSTOM_TOOL_NAME_RE.test(from)) return code;
+  return code.replace(new RegExp(`(^|\\n)(def\\s+)${from}(\\s*\\()`), `$1$2${to}$3`);
+}
 
 /* ── SB-2 validation ──────────────────────────────────────────────────── */
 
