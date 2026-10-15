@@ -61,6 +61,7 @@ import { agentSignal } from "../signals";
 import { Btn, Empty, Lamp, Notice, Skeleton } from "../ui";
 import { useLoad, useToast } from "../hooks";
 import { ago } from "../format";
+import { ApiKeysEntry } from "./agent/ApiKeysCard";
 import "./chat.css";
 import "./chatStatus.css";
 
@@ -542,6 +543,7 @@ export function V3Chat() {
             </button>
           ))}
         </div>
+        {agentId && <ApiKeysEntry agentId={agentId} />}
       </aside>
 
       <section className="v3-chat-main">
