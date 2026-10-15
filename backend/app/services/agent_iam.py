@@ -31,7 +31,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from app.core.config import get_settings
@@ -86,25 +86,38 @@ class RoleContext:
     # auth uses (bootstrap writes it as `oauth_provider_arn`). Only the
     # system-preset KB path scopes to it; ordinary agents keep the family grant.
     oauth_provider_arn: str = ""
+    # an isolated project's repository holds the agent's new images; the shared one
+    # may still hold its earlier builds (projects design §10.10)
+    extra_ecr_repo_arns: tuple[str, ...] = ()
+    # the project's application inference profiles standing in for the spec's model
+    # (§10.8, `deployer/model_profile.py`): granted next to the model's own resources
+    inference_profile_arns: tuple[str, ...] = ()
 
     @property
     def partition(self) -> str:
         return partition_for_region(self.region)
 
 
-def role_context(workspace: WorkspaceContext) -> RoleContext:
-    """Build a `RoleContext` from the workspace the agent is deployed into."""
+def role_context(workspace: WorkspaceContext, project_id: str | None = None) -> RoleContext:
+    """Build a `RoleContext` from the workspace the agent is deployed into. With the
+    agent's `project_id`, an isolated project's ECR repository comes first (a shared
+    project — every single-project workspace — reads exactly as without it)."""
     resources = workspace.resources or {}
-    repo = resources.get("ecr_repo", "launchpad-agents")
+    base = f"arn:{workspace.partition}:ecr:{workspace.region}:{workspace.account_id}:repository"
+    if project_id:
+        from app.services import project_storage
+
+        repos = project_storage.ecr_repos(workspace, project_id)
+    else:
+        repos = [resources.get("ecr_repo", "launchpad-agents")]
     return RoleContext(
         account_id=workspace.account_id,
         region=workspace.region,
         artifacts_bucket=resources.get("artifacts_bucket", ""),
-        ecr_repo_arn=(
-            f"arn:{workspace.partition}:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
-        ),
+        ecr_repo_arn=f"{base}/{repos[0]}",
         memory_id=resources.get("memory_id", ""),
         oauth_provider_arn=resources.get("oauth_provider_arn", ""),
+        extra_ecr_repo_arns=tuple(f"{base}/{repo}" for repo in repos[1:]),
     )
 
 
@@ -517,7 +530,11 @@ def policy_document(
             "Sid": "BedrockModels",
             "Effect": "Allow",
             "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-            "Resource": allowed_model_resources(spec, ctx),
+            # an application inference profile authorizes against the profile and the
+            # models it routes to — the latter are already the spec's own resources
+            "Resource": list(dict.fromkeys(
+                [*allowed_model_resources(spec, ctx), *ctx.inference_profile_arns]
+            )),
         })
 
     if spec.protocol != "mcp" and uses_mantle(spec):
@@ -706,11 +723,14 @@ def policy_document(
             )
         else:
             repo_arn = ctx.ecr_repo_arn
+        repo_arns = [repo_arn]
+        if byoc_kind != "container_image":
+            repo_arns += [arn for arn in ctx.extra_ecr_repo_arns if arn != repo_arn]
         statements.append({
             "Sid": "EcrPull",
             "Effect": "Allow",
             "Action": ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
-            "Resource": [repo_arn],
+            "Resource": repo_arns,
         })
         statements.append({
             # UNSCOPABLE: ecr:GetAuthorizationToken takes no resource by design.
@@ -1054,7 +1074,12 @@ def provision_execution_role(
 
     if iam is None:
         iam = workspace.client("iam")
-    ctx = role_context(workspace)
+    project_id = getattr(agent, "project_id", None)
+    ctx = role_context(workspace, project_id)
+    from app.deployer.model_profile import profile_arns
+
+    if profiles := profile_arns(project_id, spec, workspace, log):
+        ctx = replace(ctx, inference_profile_arns=tuple(profiles.values()))
     boundary = _project_boundary(agent, spec, workspace, iam, log)
     arn = ensure_role(iam, agent, spec, ctx, log, boundary=boundary)
     name = role_name_for(agent.name, agent.id)

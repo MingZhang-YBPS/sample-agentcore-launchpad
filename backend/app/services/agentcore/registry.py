@@ -134,6 +134,7 @@ def build_a2a_card(
     url: str | None = None,
     skills: list[dict[str, Any]] | None = None,
     transport: str = "agentcore-http",
+    project_id: str | None = None,
 ) -> dict[str, Any]:
     """A2A AgentCard for the registry record.
 
@@ -142,7 +143,21 @@ def build_a2a_card(
     invocations contract (`agentcore-http` — call via the platform API).
     ``version`` defaults to ``A2A_CARD_VERSION`` — the same constant the A2A
     runtime template serves — so record and live card match on that field.
+    ``project_id`` (an isolated project's agent, projects design §10.9) adds
+    ``launchpad.project`` to the card's ``metadata`` — the record's own custom
+    field, read back by discovery; ``agent_card_diff`` ignores ``metadata``, so it
+    never reads as drift.
     """
+    metadata: dict[str, Any] = {
+        "launchpad.method": method,
+        "launchpad.transport": transport,
+        "launchpad.invoke": (
+            "standard A2A JSON-RPC (InvokeAgentRuntime passthrough)"
+            if transport == "a2a-jsonrpc" else "platform /v1 API"
+        ),
+    }
+    if project_id:
+        metadata["launchpad.project"] = project_id
     return {
         "protocolVersion": A2A_SCHEMA_VERSION,
         "name": name,
@@ -154,14 +169,7 @@ def build_a2a_card(
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
         "skills": list(skills or []),
-        "metadata": {
-            "launchpad.method": method,
-            "launchpad.transport": transport,
-            "launchpad.invoke": (
-                "standard A2A JSON-RPC (InvokeAgentRuntime passthrough)"
-                if transport == "a2a-jsonrpc" else "platform /v1 API"
-            ),
-        },
+        "metadata": metadata,
     }
 
 
@@ -414,11 +422,17 @@ def upsert_record(
     descriptor_type: str,
     descriptors: dict[str, Any],
     record_version: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Create the record or refresh its descriptors. Returns (record, created).
 
     ``record_version`` is only meaningful on the update branch (reimport bumps it
     to a fresh revision, e.g. ``1.1.0``); create always starts at ``1.0.0``.
+    ``tags`` (the `launchpad:*` tags of an isolated project's agent, projects design
+    §10.9) ride CreateRegistryRecord's ``tags`` map and, on the update branch —
+    UpdateRegistryRecord takes none — a best-effort TagResource on the record ARN.
+    UNVERIFIED live: the registry honouring record tags (both are in the
+    agent-registry-control service model).
     """
     existing = find_record(client, registry_id, name, descriptor_type)
     aws_record_type = _PLATFORM_TO_AWS_TYPE[descriptor_type]
@@ -435,6 +449,7 @@ def upsert_record(
             # same name for A2A/MCP/Skill records. Type-qualified initial
             # versions preserve that platform contract.
             recordVersion=_INITIAL_VERSION_BY_TYPE[descriptor_type],
+            **({"tags": dict(tags)} if tags else {}),
         )
         # CreateRegistryRecord returns only {recordArn, status}
         record_id = created["recordArn"].split("/")[-1]
@@ -453,7 +468,23 @@ def upsert_record(
     if record_version is not None:
         kwargs["recordVersion"] = record_version
     updated = client.update_registry_record(**kwargs)
-    return normalize_record(updated), False
+    record = normalize_record(updated)
+    if tags:
+        tag_record(client, record.get("recordArn") or existing.get("recordArn"), tags)
+    return record, False
+
+
+def tag_record(client: Any, record_arn: str | None, tags: dict[str, str]) -> bool:
+    """TagResource on a registry record — never fails the caller (a record made
+    before the tags, or a role without the grant, keeps working untagged)."""
+    if not record_arn or not tags:
+        return False
+    try:
+        client.tag_resource(resourceArn=record_arn, tags=dict(tags))
+    except Exception as exc:  # noqa: BLE001 — tags are attribution, not function
+        logger.warning("registry record %s not tagged: %s", record_arn, exc)
+        return False
+    return True
 
 
 def _wrap_ga_descriptor(value: dict[str, Any]) -> dict[str, Any]:

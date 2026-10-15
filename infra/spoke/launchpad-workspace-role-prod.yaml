@@ -352,6 +352,10 @@ Resources:
               # that set is account-scoped rather than resource-scoped, so an ARN
               # list would grant nothing while breaking on the next API. The
               # boundary here is that this role only reaches THIS account.
+              # The wildcard includes bedrock-agentcore:TagResource and
+              # agent-registry:TagResource: the launchpad:project / launchpad:workspace
+              # tags on an isolated project's runtimes, harnesses, memories and
+              # registry records (projects design §10.8, §10.9).
               - Sid: AgentCoreAndRegistry
                 Effect: Allow
                 Action:
@@ -409,6 +413,33 @@ Resources:
                   - Fn::Sub: "arn:${AWS::Partition}:bedrock:::foundation-model/*"
                   - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
                   - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
+
+              # ── Bedrock application inference profiles (projects design §10.8) ──
+              # Behind the hub's project_inference_profiles setting: one profile per
+              # (isolated project, model), copied from the model or the system
+              # cross-region profile the agent names and tagged launchpad:project,
+              # so model spend splits by project. CreateInferenceProfile is called
+              # with tags= (hence TagResource); TO VERIFY live whether it also
+              # authorizes against the copyFrom source, which is why the model and
+              # system-profile ARNs are listed next to the application profiles.
+              - Sid: BedrockApplicationInferenceProfiles
+                Effect: Allow
+                Action:
+                  - bedrock:CreateInferenceProfile
+                  - bedrock:GetInferenceProfile
+                  - bedrock:TagResource
+                Resource:
+                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
+                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
+                  - Fn::Sub: "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+
+              # A profile found by name after a run died between create and record:
+              # ListInferenceProfiles takes no resource.
+              - Sid: BedrockListInferenceProfiles
+                Effect: Allow
+                Action:
+                  - bedrock:ListInferenceProfiles
+                Resource: "*"
 
               # ── Bedrock Guardrails (the workspace PII preset) ──────────────────────────
               - Sid: BedrockGuardrails

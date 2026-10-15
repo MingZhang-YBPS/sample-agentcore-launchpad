@@ -39,6 +39,7 @@ from typing import Any
 from app.core.config import REPO_ROOT, get_settings
 from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
 from app.core.runtime_target import pip_platform_args
+from app.deployer import model_profile
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.mounts import describe as describe_mounts
@@ -49,7 +50,7 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec, ByocConfig, McpStdioWrapper, parse_ecr_image_uri
-from app.services import agent_iam, byoc_uploads, mcp_servers
+from app.services import agent_iam, byoc_uploads, mcp_servers, project_storage
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -73,6 +74,14 @@ from .zip_runtime import _compile_lock, sanitize_runtime_name
 logger = logging.getLogger(__name__)
 
 PACKAGE_KEY_TMPL = "agents/{name}/byoc_package.zip"
+
+
+def package_key(agent: Agent) -> str:
+    """The code_zip package's S3 key, under `projects/<pid>/` for an agent of an
+    isolated project (projects design §10.10)."""
+    return project_storage.artifact_key(
+        getattr(agent, "project_id", None), PACKAGE_KEY_TMPL.format(name=agent.name)
+    )
 
 # the stdio → streamable-HTTP bridge (§15.5); copied into wrapped bundles
 STDIO_BRIDGE_DIR = REPO_ROOT / "samples" / "mcp_stdio_bridge"
@@ -426,7 +435,7 @@ def _build_code_zip(
     size_mb = final_zip.stat().st_size / 1e6
     secs = time.monotonic() - t0
 
-    s3_key = PACKAGE_KEY_TMPL.format(name=agent.name)
+    s3_key = package_key(agent)
     ctx.workspace.client("s3").upload_file(str(final_zip), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
     ctx.log(f"package {secs:.1f}s · {size_mb:.1f}MB → s3://{bucket}/{s3_key}")
@@ -574,6 +583,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         if spec.protocol != "mcp":  # an MCP server is granted no model
             environment.setdefault("MODEL_ID", spec.model_id)
             environment.setdefault("ALLOWED_MODEL_IDS", ",".join(spec.allowed_model_ids))
+            # §10.8: an isolated project's profile ARN for the primary model, for code
+            # that opts in (MODEL_ID stays the spec's id — user code may parse it)
+            environment.update(model_profile.model_environment(
+                row.project_id, spec, ctx.workspace, ctx.log
+            ))
         # the BYO mounts' manifest (storage-mounts §3.2) — platform-owned, wins over spec.env
         with_mounts_env(environment, spec)
         wrapper = stdio_wrapper(spec)
@@ -604,8 +618,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 return {
                     "s3_bucket": ctx.scratch.get("s3_bucket")
                     or ctx.workspace.resources.get("artifacts_bucket", ""),
-                    "s3_key": ctx.scratch.get("s3_key")
-                    or PACKAGE_KEY_TMPL.format(name=row.name),
+                    "s3_key": ctx.scratch.get("s3_key") or package_key(row),
                     "role_arn": role_arn,
                     "environment": environment,
                     "python_version": cfg.python_version,
@@ -801,30 +814,36 @@ def delete_agent_resources(
         is_mcp and cfg.get("artifact_kind") == "code_zip" and wrapper.get("base") == "node"
     )
     if built_image:
-        # the builds this agent pushed are {name}-v{version} tags on the shared repo
-        repo = (workspace.resources or {}).get("ecr_repo", "launchpad-agents")
-        try:
-            ecr = ecr_client or workspace.client("ecr")
-            versions = range(1, int(agent.version or "1") + 1)
-            resp = ecr.batch_delete_image(
-                repositoryName=repo,
-                imageIds=[{"imageTag": f"{agent.name}-v{v}"} for v in versions],
+        # the builds this agent pushed are {name}-v{version} tags on the shared repo,
+        # or on an isolated project's own (and the shared one for builds before it)
+        for repo in project_storage.ecr_repos(workspace, getattr(agent, "project_id", None)):
+            _delete_image_tags(agent, repo, workspace, ecr_client)
+
+
+def _delete_image_tags(agent: Agent, repo: str, workspace: WorkspaceContext,
+                       ecr_client: Any = None) -> None:
+    try:
+        ecr = ecr_client or workspace.client("ecr")
+        versions = range(1, int(agent.version or "1") + 1)
+        resp = ecr.batch_delete_image(
+            repositoryName=repo,
+            imageIds=[{"imageTag": f"{agent.name}-v{v}"} for v in versions],
+        )
+    except Exception as exc:  # noqa: BLE001 — cleanup must never block a delete
+        if not is_not_found(exc):
+            logger.warning(
+                "byoc delete %s: ECR tags %s-v* in %s left behind: %s",
+                agent.name, agent.name, repo, cleanup_error(exc),
             )
-        except Exception as exc:  # noqa: BLE001 — cleanup must never block a delete
-            if not is_not_found(exc):
-                logger.warning(
-                    "byoc delete %s: ECR tags %s-v* in %s left behind: %s",
-                    agent.name, agent.name, repo, cleanup_error(exc),
-                )
-            return
-        # per-image failures come back in the response, not as an exception
-        for failure in (resp or {}).get("failures") or []:
-            if failure.get("failureCode") != "ImageNotFound":
-                logger.warning(
-                    "byoc delete %s: ECR image %s in %s left behind: %s: %s",
-                    agent.name,
-                    (failure.get("imageId") or {}).get("imageTag", "?"),
-                    repo,
-                    failure.get("failureCode"),
-                    failure.get("failureReason", ""),
-                )
+        return
+    # per-image failures come back in the response, not as an exception
+    for failure in (resp or {}).get("failures") or []:
+        if failure.get("failureCode") != "ImageNotFound":
+            logger.warning(
+                "byoc delete %s: ECR image %s in %s left behind: %s: %s",
+                agent.name,
+                (failure.get("imageId") or {}).get("imageTag", "?"),
+                repo,
+                failure.get("failureCode"),
+                failure.get("failureReason", ""),
+            )

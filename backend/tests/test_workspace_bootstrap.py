@@ -741,9 +741,8 @@ class TestRolePolicyFidelity:
             ),
             "gateway": workspace_iam.gateway_role_policy(ACCOUNT, REGION),
             "kb": workspace_iam.kb_role_policy(bucket),
-            "codebuild": workspace_iam.codebuild_role_policy(
-                ACCOUNT, REGION, bucket, repo_arn, "launchpad-agent-builder"
-            ),
+            # the push grant widened to the per-project repositories (§10.10)
+            "codebuild": wb.codebuild_policy(ACCOUNT, REGION, bucket, repo_arn),
         }
 
     def test_the_execution_role_carries_every_cdk_statement(self):

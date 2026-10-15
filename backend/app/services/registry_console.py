@@ -100,6 +100,9 @@ def register_agent_record(
     # their harness ARN (the /runtimes/ data plane doesn't apply to them).
     is_a2a = spec.get("protocol") == "a2a"
     arn = agent.arn or ""
+    # §10.9: an isolated project's record names its project (card metadata + tags);
+    # every other agent's record is exactly as before
+    project_id, tags = _record_project(agent, workspace)
     card = reg.build_a2a_card(
         name=agent.name,
         description=(spec.get("system_prompt") or "")[:180] or f"Launchpad agent {agent.name}",
@@ -115,6 +118,7 @@ def register_agent_record(
         ),
         skills=reg.derive_card_skills(spec) or None,
         transport="a2a-jsonrpc" if is_a2a else "agentcore-http",
+        project_id=project_id,
     )
     record, created = reg.upsert_record(
         client,
@@ -123,12 +127,29 @@ def register_agent_record(
         description=f"Launchpad agent · method {agent.method}",
         descriptor_type="A2A",
         descriptors=reg.build_a2a_descriptors(card),
+        tags=tags,
     )
     record_id = record["recordId"]
     if created and auto_submit:
         reg.wait_record_settled(client, registry_id, record_id)
         reg.submit_record(client, registry_id, record_id)
     return {"record_id": record_id, "created": created}
+
+
+def _record_project(
+    agent: Agent, workspace: WorkspaceContext
+) -> tuple[str | None, dict[str, str] | None]:
+    """`(project id, launchpad:* tags)` for an isolated project's agent, else
+    `(None, None)` (projects design §10.9)."""
+    from app.services import project_telemetry
+
+    project_id = getattr(agent, "project_id", None)
+    if not project_telemetry.attributed(project_id):
+        return None, None
+    return project_id, project_telemetry.project_tags(
+        project_id, workspace_id=getattr(workspace, "id", None),
+        agent_id=getattr(agent, "id", None),
+    )
 
 
 def agent_record_state(agent: Agent, workspace: WorkspaceContext) -> str:

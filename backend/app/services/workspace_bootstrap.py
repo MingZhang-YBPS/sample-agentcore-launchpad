@@ -705,6 +705,70 @@ def _stage_storage(ctx: BootstrapContext) -> str:
 
 # ── stage: codebuild ───────────────────────────────────────────────────────
 
+CODEBUILD_POLICY_NAME = "launchpad-agent-builder"
+
+
+def codebuild_policy(
+    account_id: str, region: str, bucket: str, ecr_repo_arn: str
+) -> dict[str, Any]:
+    """`workspace_iam.codebuild_role_policy`, with the push grant widened from the
+    shared repository to it **and** the per-project repositories under it
+    (`launchpad-agents/<pid>`, projects design §10.10): an isolated project's images
+    are built by the same project, into its own repository."""
+    policy = workspace_iam.codebuild_role_policy(
+        account_id, region, bucket, ecr_repo_arn, CODEBUILD_PROJECT_NAME
+    )
+    for statement in policy["Statement"]:
+        if statement.get("Sid") == "EcrPullPush":
+            statement["Resource"] = [ecr_repo_arn, f"{ecr_repo_arn}/*"]
+    return policy
+
+
+def ensure_codebuild_project_repos(
+    workspace: WorkspaceContext, log: Callable[[str], None] = lambda _m: None
+) -> bool:
+    """Put the widened `codebuild_policy` on the role the workspace's CodeBuild project
+    runs as, for a workspace bootstrapped before the widening (or by the CDK stack,
+    whose role carries `repo.grant_pull_push` on the shared repository only, and is not
+    named `launchpad-*`, so the workspace role cannot write it). Called by the `ecr`
+    stage of `project_provision` (`project_storage`); idempotent. Returns
+    whether the role carries the grant now; a role that cannot be read or written is
+    logged and reported False — the repository is still made, and the deploy's build
+    stage then names the missing grant."""
+    resources = workspace.resources or {}
+    bucket = resources.get("artifacts_bucket")
+    project = resources.get("codebuild_project") or CODEBUILD_PROJECT_NAME
+    if not bucket:
+        log("artifacts_bucket missing from the resource map — CodeBuild role not widened")
+        return False
+    repo = resources.get("ecr_repo") or ECR_REPO_NAME
+    repo_arn = (
+        f"arn:{partition_for_region(workspace.region)}:ecr:{workspace.region}:"
+        f"{workspace.account_id}:repository/{repo}"
+    )
+    try:
+        found = workspace.client("codebuild").batch_get_projects(names=[project])
+        projects = found.get("projects") or []
+        role_arn = str(projects[0].get("serviceRole") or "") if projects else ""
+        if not role_arn:
+            log(f"CodeBuild project {project} not found — CodeBuild role not widened")
+            return False
+        role_name = role_arn.rsplit("/", 1)[-1]
+        # a plain put, like `workspace_iam.ensure_role`'s reconcile: PutRolePolicy is
+        # idempotent and the workspace role is not granted GetRolePolicy
+        workspace.client("iam").put_role_policy(
+            RoleName=role_name, PolicyName=CODEBUILD_POLICY_NAME,
+            PolicyDocument=json.dumps(codebuild_policy(
+                workspace.account_id, workspace.region, bucket, repo_arn
+            )),
+        )
+        log(f"CodeBuild role {role_name} may push to {repo}/*")
+        return True
+    except (ClientError, BotoCoreError) as exc:
+        log(f"CodeBuild role not widened to {repo}/*: {_error_code(exc)} — re-run the "
+            "workspace bootstrap, or grant its role push on the project repository")
+        return False
+
 
 def _stage_codebuild(ctx: BootstrapContext) -> str:
     bucket = ctx.require("artifacts_bucket")
@@ -718,12 +782,8 @@ def _stage_codebuild(ctx: BootstrapContext) -> str:
             "codebuild.amazonaws.com", ctx.account_id, source_account=False
         ),
         inline_policies={
-            "launchpad-agent-builder": workspace_iam.codebuild_role_policy(
-                ctx.account_id,
-                ctx.region,
-                bucket,
-                _ecr_repo_arn(ctx),
-                CODEBUILD_PROJECT_NAME,
+            CODEBUILD_POLICY_NAME: codebuild_policy(
+                ctx.account_id, ctx.region, bucket, _ecr_repo_arn(ctx)
             )
         },
         description="Assumed by CodeBuild to build Launchpad agent images",
