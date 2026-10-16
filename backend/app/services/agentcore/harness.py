@@ -195,6 +195,56 @@ def delete_harness(client: Any, harness_id: str) -> None:
     client.delete_harness(harnessId=harness_id)
 
 
+# DeleteHarness is asynchronous: the harness stays DELETING (and keeps its name) for a
+# minute or two after the console row is gone and its name released
+NAME_RELEASE_TIMEOUT_S = 300
+NAME_RELEASE_POLL_S = 10
+
+
+def _is_name_conflict(exc: Exception) -> bool:
+    return type(exc).__name__ == "ConflictException" and "already exists" in str(exc)
+
+
+def create_after_name_release(
+    client: Any,
+    create: Callable[[], dict[str, Any]],
+    harness_name: str,
+    log: Callable[[str], None],
+    timeout_s: float = NAME_RELEASE_TIMEOUT_S,
+    poll_s: float = NAME_RELEASE_POLL_S,
+    sleeper: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Run ``create`` (CreateHarness), waiting out a same-name harness that is still
+    being deleted.
+
+    Deleting an agent releases its console name at once while AWS takes a while to let
+    go of the harness, so re-creating the name right away is refused with "already
+    exists". Only that window is waited out: a conflict whose holder is a live
+    (not DELETING) harness is a real name collision and is raised immediately."""
+    deadline = clock() + timeout_s
+    while True:
+        try:
+            return create()
+        except Exception as exc:
+            if not _is_name_conflict(exc):
+                raise
+            holder = next(
+                (h for h in list_harnesses(client) if h.get("harnessName") == harness_name),
+                None,
+            )
+            # absent from the list but still refused: the delete is just finishing
+            if holder is not None and holder.get("status") != "DELETING":
+                raise
+            if clock() + poll_s > deadline:
+                raise
+            log(
+                f"harness name {harness_name} is still held by a harness being deleted "
+                f"— retrying CreateHarness in {poll_s:g}s"
+            )
+            sleeper(poll_s)
+
+
 def get_harness_endpoint(client: Any, harness_id: str, endpoint_name: str) -> dict[str, Any]:
     """GetHarnessEndpoint → the ``endpoint`` object ({status, liveVersion, arn, …})."""
     return client.get_harness_endpoint(harnessId=harness_id, endpointName=endpoint_name)[
