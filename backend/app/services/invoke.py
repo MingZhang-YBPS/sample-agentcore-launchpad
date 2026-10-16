@@ -204,6 +204,32 @@ def tool_approval_requires_console(*, tool: str = "", agent_id: str = "") -> App
     )
 
 
+def upstream_invoke_error(exc: BaseException, *, public: bool = False) -> AppError | None:
+    """The named 502 for an invoke that died upstream of the platform — the model or
+    the runtime failed mid-answer (a streamed ``internalServerException`` /
+    ``runtimeClientError``, a 5xx, a dropped stream), the failures
+    ``transient_invoke_error`` already replays for an evaluation run. Without it the
+    HTTP routes answered a bare 500 for them (live 2026-10-16: GLM-5.3 on Bedrock
+    failing 1 call in 3). ``None`` for anything else, which keeps its own handling.
+
+    ``public`` (``/v1``) leaves the AWS text out, like the ``/v1`` AWS envelope."""
+    from app.evaluation.service import transient_invoke_error
+
+    if isinstance(exc, AppError) or not transient_invoke_error(exc):
+        return None
+    code = aws_error_code(exc) if isinstance(exc, ClientError) else type(exc).__name__
+    detail: dict[str, Any] = {"upstream_error": code, "retryable": True}
+    if not public:
+        detail["upstream_message"] = str(exc)[:500]
+    return AppError(
+        "agent.upstream_error",
+        f"the agent's model or runtime failed before answering ({code}) — usually "
+        "temporary; send the turn again",
+        detail,
+        status_code=502,
+    )
+
+
 def _refuse_unapprovable(agent: Agent, result: dict[str, Any], console_user: bool) -> None:
     """A non-console caller whose turn hit an approval-list tool gets the named
     error instead of an answer the runtime had to refuse a tool for."""

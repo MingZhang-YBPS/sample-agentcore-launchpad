@@ -36,7 +36,7 @@ from app.services import agent_access, visibility
 from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
-from app.services.invoke import invoke_agent_text
+from app.services.invoke import invoke_agent_text, upstream_invoke_error
 from app.services.memory import scoped_actor
 from app.services.runtime_discovery import invoke_capability, require_invoke_capability
 from app.services.workspace import get_workspace_row
@@ -182,12 +182,18 @@ def v1_invoke(
     # No signed-in console user behind an API key: an as_user tool's consent
     # could never complete, so the invoke layer answers such an ask with 409
     # identity.as_user_requires_console instead of a dead-end consent URL.
-    result = invoke_agent_text(
-        agent, req.prompt, session_id=req.session_id,
-        actor_id=scoped_actor(agent.id, req.actor_id),
-        console_user=False,
-        **extra,
-    )
+    try:
+        result = invoke_agent_text(
+            agent, req.prompt, session_id=req.session_id,
+            actor_id=scoped_actor(agent.id, req.actor_id),
+            console_user=False,
+            **extra,
+        )
+    except Exception as exc:
+        upstream = upstream_invoke_error(exc, public=True)
+        if upstream is None:
+            raise
+        raise upstream from exc
     body = {
         "agent": agent.name,
         "text": result["text"],

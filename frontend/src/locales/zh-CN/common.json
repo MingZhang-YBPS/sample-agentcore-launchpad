@@ -2740,6 +2740,7 @@
     "agent.no_resource": "该 Agent 还没有可调用的已部署 AgentCore 资源。",
     "agent.teardown_pending": "AWS 仍在删除该 Agent 的端点。Agent 已从控制台移除，AWS 释放后其资源会自动删除。",
     "agent.tool_approval_requires_console": "该 Agent 的某个工具需要人工批准，只能在 Launchpad 控制台的对话中批准。",
+    "agent.upstream_error": "智能体的模型或运行时在回答前出错，通常是暂时的。请重新发送；反复出现时打开该智能体的追踪查看。",
     "agent_tools.jwt_inbound": "该 Agent 不能作为工具提供：它的 Runtime 只接受 JWT Bearer 令牌，而调用方 Agent 使用 IAM 签名。",
     "agent_tools.not_deployed": "该 Agent 不能作为工具提供：它尚未部署。",
     "agent_tools.not_found": "未找到被选作工具的 Agent。",

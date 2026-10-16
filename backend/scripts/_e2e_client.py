@@ -22,9 +22,15 @@ Two traps this deliberately handles:
   `Cookie` header. That is a test-client relaxation only: `Secure` is a hint to
   the client, the server neither sees nor cares, and the product's cookie posture
   is untouched.
+
+An invoke the console answers with `502 agent.upstream_error` (the model or runtime
+failed before answering — live 2026-10-16 on GLM-5.3) is sent again up to
+`UPSTREAM_RETRIES` times, the "send the turn again" the console tells a person.
 """
 
+import json
 import os
+import time
 from typing import Any, NoReturn
 
 import httpx
@@ -34,6 +40,35 @@ SESSION_COOKIE = "launchpad_session"
 # deployment itself is configured with
 USERNAME_VARS = ("LAUNCHPAD_E2E_USERNAME", "LAUNCHPAD_AUTH_USERNAME")
 PASSWORD_VARS = ("LAUNCHPAD_E2E_PASSWORD", "LAUNCHPAD_AUTH_PASSWORD")
+UPSTREAM_RETRIES = 2
+
+
+class _RetryUpstream(httpx.BaseTransport):
+    """Re-sends an invoke that died upstream (`502 agent.upstream_error`)."""
+
+    def __init__(self, inner: httpx.BaseTransport) -> None:
+        self._inner = inner
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        for attempt in range(UPSTREAM_RETRIES + 1):
+            response = self._inner.handle_request(request)
+            if not (request.method == "POST" and request.url.path.endswith("/invoke")
+                    and response.status_code == 502) or attempt == UPSTREAM_RETRIES:
+                return response
+            response.read()
+            try:
+                code = json.loads(response.content).get("code")
+            except ValueError:
+                code = None
+            if code != "agent.upstream_error":
+                return response
+            print(f"  (invoke failed upstream — sending it again, {attempt + 1}/{UPSTREAM_RETRIES})")
+            response.close()
+            time.sleep(5)  # nosemgrep: arbitrary-sleep — paced retry against real AWS
+        return response
+
+    def close(self) -> None:
+        self._inner.close()
 
 
 def _first_env(names: tuple[str, ...]) -> str | None:
@@ -65,7 +100,9 @@ def e2e_client(base: str, timeout: float = 300) -> httpx.Client:
     target needs auth and no usable credentials are available, so nothing is
     created before the problem surfaces.
     """
-    client = httpx.Client(base_url=base, timeout=timeout)
+    client = httpx.Client(
+        base_url=base, timeout=timeout, transport=_RetryUpstream(httpx.HTTPTransport())
+    )
 
     if not _auth_status(client).get("auth_required"):
         return client  # dev deployment: behaves exactly as before this helper existed

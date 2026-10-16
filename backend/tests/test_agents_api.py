@@ -127,6 +127,56 @@ def test_invoke_active_agent(client, monkeypatch):
     assert body["text"] == "4" and body["session_id"] == "s" * 40
 
 
+def _stream_error(code: str):
+    from botocore.exceptions import EventStreamError
+
+    return EventStreamError(
+        {"Error": {"Code": code, "Message": "An error occurred (internalServerException) "
+                   "when calling the ConverseStream operation: try again"}},
+        "InvokeHarness",
+    )
+
+
+def test_invoke_upstream_failure_is_a_named_502(client, monkeypatch):
+    """Live 2026-10-16: a model failing mid-stream answered a bare 500."""
+    agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]
+    _activate(agent_id)
+
+    def boom(*_a, **_kw):
+        raise _stream_error("runtimeClientError")
+
+    monkeypatch.setattr(agents_router, "invoke_agent_text", boom)
+    res = client.post(f"/api/agents/{agent_id}/invoke", json={"prompt": "hi"})
+    assert res.status_code == 502
+    body = res.json()
+    assert body["code"] == "agent.upstream_error"
+    assert body["detail"]["upstream_error"] == "runtimeClientError"
+    assert body["detail"]["retryable"] is True
+    assert "ConverseStream" in body["detail"]["upstream_message"]
+
+
+def test_invoke_final_aws_error_keeps_its_own_handling(client, monkeypatch):
+    agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]
+    _activate(agent_id)
+
+    def denied(*_a, **_kw):
+        raise _stream_error("AccessDeniedException")
+
+    monkeypatch.setattr(agents_router, "invoke_agent_text", denied)
+    res = client.post(f"/api/agents/{agent_id}/invoke", json={"prompt": "hi"})
+    assert res.status_code == 403
+    assert res.json()["code"] == "aws.access_denied"
+
+
+def test_upstream_error_on_v1_leaves_the_aws_text_out():
+    from app.services.invoke import upstream_invoke_error
+
+    err = upstream_invoke_error(_stream_error("internalServerException"), public=True)
+    assert err is not None and err.status_code == 502
+    assert err.detail == {"upstream_error": "internalServerException", "retryable": True}
+    assert upstream_invoke_error(ValueError("bug")) is None
+
+
 def test_delete_marks_ledger(client, monkeypatch):
     deleted: list[str] = []
     monkeypatch.setattr(

@@ -76,40 +76,43 @@ def main() -> int:
         "name": "e2e-math-mini", "items": DATASET,
     }).json()
 
-    print("── evaluators listing:")
-    evaluators = client.get("/api/eval/evaluators").json()
-    print(f"  builtin: {evaluators['builtin_count']}")
+    try:
+        print("── evaluators listing:")
+        evaluators = client.get("/api/eval/evaluators").json()
+        print(f"  builtin: {evaluators['builtin_count']}")
 
-    print("── starting evaluators run (Correctness + Helpfulness)…")
-    run = client.post("/api/eval/runs", json={
-        "agent_id": agent["id"], "dataset_id": dataset["id"],
-        "evaluators": ["Builtin.Correctness", "Builtin.Helpfulness"],
-        "wait_seconds": 180,
-    }).json()
-    result = wait_run(client, run["id"])
-    if result["status"] != "completed":
-        print(f"RUN FAILED: {result['error']}")
-        return 1
-    print(f"  batch: {result['batch_eval_id']}")
-    print(f"  scores: {json.dumps(result['scores'], indent=1)}")
-    assert len(result["scores"]) >= 1, "expected numeric scores"
+        print("── starting evaluators run (Correctness + Helpfulness)…")
+        run = client.post("/api/eval/runs", json={
+            "agent_id": agent["id"], "dataset_id": dataset["id"],
+            "evaluators": ["Builtin.Correctness", "Builtin.Helpfulness"],
+            "wait_seconds": 180,
+        }).json()
+        result = wait_run(client, run["id"])
+        if result["status"] != "completed":
+            print(f"RUN FAILED: {result['error']}")
+            return 1
+        print(f"  batch: {result['batch_eval_id']}")
+        print(f"  scores: {json.dumps(result['scores'], indent=1)}")
+        assert len(result["scores"]) >= 1, "expected numeric scores"
 
-    print("── starting insights run over the same sessions…")
-    insights_run = client.post("/api/eval/runs", json={
-        "agent_id": agent["id"], "mode": "insights",
-        "session_ids": result["session_ids"], "wait_seconds": 0,
-    }).json()
-    insights_result = wait_run(client, insights_run["id"])
-    if insights_result["status"] != "completed":
-        print(f"INSIGHTS FAILED: {insights_result['error']}")
-        return 1
-    excerpt = json.dumps(insights_result["insights"], ensure_ascii=False)[:900]
-    print(f"  insights excerpt: {excerpt}")
+        print("── starting insights run over the same sessions…")
+        insights_run = client.post("/api/eval/runs", json={
+            "agent_id": agent["id"], "mode": "insights",
+            "session_ids": result["session_ids"], "wait_seconds": 0,
+        }).json()
+        insights_result = wait_run(client, insights_run["id"])
+        if insights_result["status"] != "completed":
+            print(f"INSIGHTS FAILED: {insights_result['error']}")
+            return 1
+        excerpt = json.dumps(insights_result["insights"], ensure_ascii=False)[:900]
+        print(f"  insights excerpt: {excerpt}")
 
-    if not args.keep:
-        client.delete(f"/api/eval/datasets/{dataset['id']}")
-    print("E2E EVAL RUN: PASS")
-    return 0
+        print("E2E EVAL RUN: PASS")
+        return 0
+    finally:
+        # a failed run must not leave its dataset behind for the next one
+        if not args.keep:
+            client.delete(f"/api/eval/datasets/{dataset['id']}")
 
 
 if __name__ == "__main__":
