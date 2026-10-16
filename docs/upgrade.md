@@ -38,7 +38,8 @@ An upgrade does not create, change or delete AWS resources.
 
 | Path | When |
 |---|---|
-| [Manual upgrade](#manual-upgrade) | Always possible. **Required for the first upgrade** from a version that has no **Configure → System update** page (any version before the online update feature). |
+| [One-command upgrade](#one-command-upgrade) | The recommended first upgrade: the manual steps below in one command, rolled back automatically if the new version does not come up. |
+| [Manual upgrade](#manual-upgrade) | Always possible. **Required for the first upgrade** from a version that has no **Configure → System update** page (any version before the online update feature) — or use the one-command upgrade. |
 | [Online update](#online-update-configure--system-update) | Once you run a version with the online update and have installed the root updater. An administrator prepares, schedules and (if needed) rolls back from the console. |
 
 The steps below use the reference host of the workshop: an Ubuntu EC2 instance, the
@@ -48,6 +49,32 @@ serving `frontend/dist`. Substitute your own path, owner and units. If your host
 also runs a `launchpad-frontend` unit (`vite preview`, see
 [setup.md](setup.md#hosted-deployment--托管部署)), restart it together with the
 backend wherever this page restarts `launchpad-backend`.
+
+## One-command upgrade
+
+`backend/scripts/upgrade.sh` runs every step of the [manual upgrade](#manual-upgrade) below in order and stops at the first one that fails. It ships with the **new** version, so take it from the release branch rather than from the old checkout (older versions do not have it):
+
+```bash
+cd /home/ubuntu/agentcore_launchpad
+git fetch origin
+git show origin/console-v3:backend/scripts/upgrade.sh > /tmp/lp-upgrade.sh
+sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --dry-run      # checks, backup and rehearsal only — changes nothing
+sudo bash /tmp/lp-upgrade.sh --repo "$PWD"                # the upgrade
+sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --install-updater   # the same, then install the online updater
+```
+
+| Step | What it does | On failure |
+|---|---|---|
+| 1. Preflight | checkout owner, no local changes, fast-forward to the target, free disk (`--min-free-gb`, default 3), `uv` and `npm` found, the systemd units exist | stops, nothing changed |
+| 2. In-flight work | the running version's `inflight.py`; exit `3` stops the run unless `--yes` | stops, nothing changed |
+| 3. Ledger backup | the **target's** `ledger_backup.py`, online and verified, renamed `….bak-<stamp>-preupgrade-<old sha>` (out of the rotation), with `config/launchpad.yaml` and `data/sso-secret.key` copied next to it | stops, nothing changed |
+| 4. Rehearsal | the target's `rehearse_projects_migration.py` migrates a copy of that backup in a temporary worktree | stops, nothing changed |
+| 5. Update | `git merge --ff-only`, `uv sync --frozen`, `npm ci && npm run build` (the old build kept as `frontend/dist.prev`) | rolled back |
+| 6. Restart and verify | restarts the units (the ledger migrates on this start) and waits for `/api/auth/status` to report the target's `version.sha` (`--health-timeout`, default 180 s) | rolled back |
+
+`--dry-run` ends after step 4. The automatic rollback restores the code and `frontend/dist` of the previous commit, runs `uv sync --frozen`, restarts and checks the console answers again. The ledger stays migrated (old versions start on it — see [Rollback](#rollback)); the step-3 backup is still there.
+
+Exit codes: `0` upgraded (or already at the target); `1` stopped in steps 1–4, nothing changed; `2` the upgrade failed and was rolled back; `3` the rollback failed too — follow [Rollback](#rollback) by hand; `64` bad arguments. Each run's full log is `data/upgrade/upgrade-<UTC stamp>.log`. See `bash /tmp/lp-upgrade.sh --help` for the rest (`--target` for a commit or branch, `--services` for the units to restart, `--health-url`).
 
 ## Manual upgrade
 
