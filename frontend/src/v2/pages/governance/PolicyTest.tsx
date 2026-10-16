@@ -23,7 +23,7 @@ import { Alert, Button, Card, Descriptions, Field, Select, Tag, type TagTone } f
 const OUTCOME_TONE: Record<GovernancePolicyTestOutcome, TagTone> = { ALLOW: "green", DENY: "red", ERROR: "orange" };
 
 /** A real tools/call through the configured Launchpad Gateway as a demo identity. */
-export function PolicyTestCard({ actions }: { actions: GovernanceGatewayAction[] }) {
+export function PolicyTestCard({ actions, onAttachEngine }: { actions: GovernanceGatewayAction[]; onAttachEngine?: () => void }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
   const ordered = useMemo(() => sortTestActions(actions), [actions]);
@@ -112,26 +112,49 @@ export function PolicyTestCard({ actions }: { actions: GovernanceGatewayAction[]
           <Alert tone="error">{error}</Alert>
         </div>
       )}
-      {result && (
-        <div className="v2-governance-test-result" aria-live="polite">
-          <div className="v2-row" style={{ marginBottom: 12 }}>
-            <Tag tone={OUTCOME_TONE[result.outcome]}>{result.outcome}</Tag>
-            <span className="mono">{result.principal}</span>
-            <Tag tone={result.recorded ? "green" : "orange"}>
-              {result.recorded ? t("v2.governance.recorded") : t("v2.governance.notRecorded")}
-            </Tag>
-          </div>
-          <Descriptions
-            items={[
-              { label: t("v2.governance.exactAction"), value: <span className="mono">{result.tool}</span> },
-              { label: t("v2.governance.determiningPolicy"), value: <span className="mono">{result.policy_id ?? "—"}</span> },
-              { label: t("v2.governance.decisionId"), value: <span className="mono">{result.decision_id ?? "—"}</span> },
-            ]}
-          />
-          <div className="v2-sub-title">{t("v2.governance.rawDetail")}</div>
-          <pre className="v2-pre">{result.detail}</pre>
+      {result && <PolicyTestResultView result={result} onAttachEngine={onAttachEngine} />}
+    </Card>
+  );
+}
+
+/** One policy-test answer. `enforced: false` — the Gateway has no Policy Engine, so no
+ *  Cedar policy decided and nothing was journaled — says so and offers the way to attach one. */
+export function PolicyTestResultView({ result, onAttachEngine }: { result: GovernancePolicyTestResult; onAttachEngine?: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="v2-governance-test-result" aria-live="polite">
+      <div className="v2-row" style={{ marginBottom: 12 }}>
+        <Tag tone={OUTCOME_TONE[result.outcome]}>{result.outcome}</Tag>
+        <span className="mono">{result.principal}</span>
+        <Tag tone={result.recorded ? "green" : "orange"}>
+          {result.recorded ? t("v2.governance.recorded") : t("v2.governance.notRecorded")}
+        </Tag>
+        {result.enforced === false && <Tag tone="orange">{t("governance.policyTest.notEnforced")}</Tag>}
+      </div>
+      {result.enforced === false && (
+        <div style={{ marginBottom: 12 }} data-testid="v2-governance-policy-test-not-enforced">
+          <Alert
+            tone="warn"
+            action={onAttachEngine && (
+              <Button size="sm" onClick={onAttachEngine} testId="v2-governance-policy-test-attach-engine">
+                {t("governance.policyTest.attachEngine")}
+              </Button>
+            )}
+          >
+            <strong>{t("governance.policyTest.notEnforced")}</strong> {t("governance.policyTest.notEnforcedBody")}
+          </Alert>
         </div>
       )}
-    </Card>
+      <Descriptions
+        items={[
+          { label: t("v2.governance.exactAction"), value: <span className="mono">{result.tool}</span> },
+          { label: t("v2.governance.determiningPolicy"), value: <span className="mono">{result.policy_id ?? "—"}</span> },
+          { label: t("v2.governance.decisionId"), value: <span className="mono">{result.decision_id ?? "—"}</span> },
+          { label: t("governance.policyTest.engine"), value: <span className="mono">{result.policy_engine_id ?? "—"}</span> },
+        ]}
+      />
+      <div className="v2-sub-title">{t("v2.governance.rawDetail")}</div>
+      <pre className="v2-pre">{result.detail}</pre>
+    </div>
   );
 }

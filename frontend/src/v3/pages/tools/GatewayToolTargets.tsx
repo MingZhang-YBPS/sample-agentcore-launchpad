@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { Plus } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
@@ -17,7 +18,7 @@ import { sharedFromOf } from "../../../lib/api/sharedFrom";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { SharedFromTag } from "../../shares/SharedFromTag";
-import { Btn, Chip, Confirm, Empty, Notice, Panel, type Signal, Skeleton } from "../../ui";
+import { Btn, Chip, Confirm, Empty, Notice, PageHead, Panel, type Signal, Skeleton } from "../../ui";
 import { McpReviewSection } from "../agent/McpReviewSection";
 import { LambdaTargetForm } from "./LambdaTargetForm";
 
@@ -50,6 +51,11 @@ export function GatewayToolTargets() {
   const lambdas = useLoad(() => listLambdaTargets(), `v3-lambda-tools:${nonce}`);
   const external = useLoad(() => listExternalTargets(), `v3-external-tools:${nonce}`);
   const reload = () => setNonce((n) => n + 1);
+  const formRef = useRef<HTMLDivElement>(null);
+  const toForm = () => {
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    formRef.current?.querySelector<HTMLElement>("input, textarea")?.focus({ preventScroll: true });
+  };
 
   const adopt = async (target: ExternalMcpTarget) => {
     setBusy(true);
@@ -82,10 +88,13 @@ export function GatewayToolTargets() {
   };
 
   return (
-    <div style={{ display: "grid", gap: 16 }} data-testid="v3-gateway-tools">
-      <Panel title={t("lambdaTool.form.title")}>
-        <LambdaTargetForm onCreated={(row) => { setOpen(row.id); reload(); }} />
-      </Panel>
+    <div className="v3-reveal" style={{ display: "grid", gap: 16 }} data-testid="v3-gateway-tools">
+      <PageHead
+        eyebrow={t("lambdaTool.page.eyebrow")}
+        title={t("lambdaTool.page.title")}
+        sub={t("lambdaTool.page.sub")}
+        end={<Btn kind="primary" onClick={toForm}><Plus size={14} /> {t("lambdaTool.page.new")}</Btn>}
+      />
       <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-gateway-tools-error" />
       <Panel title={t("lambdaTool.list.title")}>
         {lambdas.error ? (
@@ -122,6 +131,11 @@ export function GatewayToolTargets() {
           </div>
         )}
       </Panel>
+      <div ref={formRef} style={{ scrollMarginTop: 16 }}>
+        <Panel title={t("lambdaTool.form.title")}>
+          <LambdaTargetForm onCreated={(row) => { setOpen(row.id); reload(); }} />
+        </Panel>
+      </div>
       <Panel title={t("lambdaTool.external.title")}>
         <div className="v3-hint" style={{ marginBottom: 8 }}>{t("lambdaTool.external.intro")}</div>
         {external.error ? (

@@ -30,9 +30,22 @@ def main() -> int:
     client = e2e_client(args.base, timeout=300)
 
     print("── sync-defaults (MCP + AGENT_SKILLS records)…")
+    # 202 + a job: the sync waits every new record out of CREATING (minutes)
     res = client.post("/api/registry/sync-defaults")
     res.raise_for_status()
-    for row in res.json()["results"]:
+    sync = res.json()
+    for _ in range(120):
+        if sync["done"]:
+            break
+        # Real-AWS job polling is intentionally paced and attempt-bounded.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
+        res = client.get(f"/api/registry/sync-defaults/{sync['job_id']}")
+        res.raise_for_status()
+        sync = res.json()
+    if sync["status"] != "succeeded":
+        print(f"  sync-defaults {sync['status']}: {sync.get('error')}")
+        return 1
+    for row in sync["results"]:
         print(f"  {row['type']:<12} {row['name']:<24} {row['record_id']} "
               f"({'created' if row['created'] else 'refreshed'})")
 

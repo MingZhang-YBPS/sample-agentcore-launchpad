@@ -197,7 +197,15 @@ export function PolicyTestPanel({ actions }: Props) {
                 ? t("governance.policyTest.recorded")
                 : t("governance.policyTest.notRecorded")}
             </Chip>
+            {result.enforced === false ? (
+              <Chip tone="warn">{t("governance.policyTest.notEnforced")}</Chip>
+            ) : null}
           </div>
+          {result.enforced === false ? (
+            <div className="gov-cell-note" style={{ marginBottom: 10 }} data-testid="policy-test-not-enforced">
+              {t("governance.policyTest.notEnforcedBody")}
+            </div>
+          ) : null}
           <div className="gov-kv-list">
             <div className="kv">
               <span className="k">{t("governance.policyTest.exactAction")}</span>

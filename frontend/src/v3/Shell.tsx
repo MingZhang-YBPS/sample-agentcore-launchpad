@@ -406,7 +406,7 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const failing = (agents.data?.agents ?? []).filter((a) => a.status === "failed").length;
 
   return (
-    <div className="v3" data-testid="v3-shell" data-rail-open={railOpen}>
+    <div className="v3 v3-shell" data-testid="v3-shell" data-rail-open={railOpen}>
       <ToastProvider>
         <header className="v3-top">
           <button ref={railToggle} type="button" className="v3-btn ghost sm v3-rail-toggle"

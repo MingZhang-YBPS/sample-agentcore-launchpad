@@ -1731,7 +1731,7 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 | `GET` | `/api/governance/policies` | member | project | `{engine{id, name, status, attached_mode, attached}, policies[{id, name, status, statement}]}`：网关策略引擎上的 Cedar 策略。`503 policy.engine_deleted` |
 | `DELETE` | `/api/governance/gateways/{gateway_id}/policies/{policy_id}` | `infra` | project | 请求体 `{expected_gateway_updated_at, expected_policy_updated_at, acknowledged_gateway_ids[], confirmation_name, override_reason?}` → `202 {operation}`：排队并记入审计的策略变更（见“控制台治理 API”） |
 | `GET` | `/api/governance/decisions` | member | project | `{decisions[{at, principal, tool, outcome, reason, source}], source: "demo"}`：`policy-test` 记录的最近 30 条决策 |
-| `POST` | `/api/governance/policy-test` | `infra` | project | 请求体 `{tool, arguments, username}` → `{principal, tool, outcome: ALLOW\|DENY\|ERROR, detail, policy_id, decision_id, recorded}`：以该主体做一次真实的 `tools/call`。只记录 ALLOW 与 DENY |
+| `POST` | `/api/governance/policy-test` | `infra` | project | 请求体 `{tool, arguments, username}` → `{principal, tool, outcome: ALLOW\|DENY\|ERROR, detail, policy_id, decision_id, recorded, enforced, policy_engine_id, note}`：以该主体做一次真实的 `tools/call`。只记录 ALLOW 与 DENY，且仅当 Gateway 已挂接 Policy Engine 时记录（`enforced: true`，`policy_engine_id` 为其 id）。未挂接时调用照常执行，但返回 `enforced: false`、`policy_engine_id: null`、`recorded: false` 并附 `note`——没有任何 Cedar 策略参与判定 |
 | `POST` | `/api/governance/policy-generation` | `infra` | project | 请求体 `{text, name}` → `{available, generation_id, status}`（预览 API；AWS 拒绝时 `available: false` 并带 `error`） |
 | `GET` | `/api/governance/policy-generation/{generation_id}` | member | ws | `{status, assets[{id, statement}]}` |
 | `GET` | `/api/governance/guardrail` | member | ws | 该 Workspace 是否有 `launchpad-pii` 护栏及其状态 |
@@ -1743,7 +1743,8 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 | `PUT` | `/api/registry/records/{record_id}` | `infra` | project | `{description, url, skill_md, staging_id, index}` 中任意项 → 记录。改内容会递增记录版本；DEPRECATED、A2A 与系统托管的记录不可编辑。`400 registry.nothing_to_update` / `registry.field_conflict` / `registry.field_type_mismatch`，`410 registry.staging_expired` |
 | `DELETE` | `/api/registry/records/{record_id}` | `infra` | project | `{deleted: true, record_id}` |
 | `POST` | `/api/registry/records/{record_id}/reimport` | `infra` | project | → 记录：重新获取 git 或 URL 来源的技能并递增版本。`400 registry.not_reimportable`，`422 registry.skill_invalid` |
-| `POST` | `/api/registry/sync-defaults` | `infra` | project | `{results[…]}`：注册网关的 MCP 目标与示例技能包 |
+| `POST` | `/api/registry/sync-defaults` | `infra` | project | `202 {job_id, status, done, results[], error, started}`：排队一个 `registry_sync_defaults` 作业，注册网关的 MCP 目标与示例技能包（每条新记录都要等到离开 CREATING，超过源站 60 秒超时）。已有排队或运行中的同步时直接返回它，`started: false`；重启后重跑（每一步都是 upsert） |
+| `GET` | `/api/registry/sync-defaults/{job_id}` | `infra` | project | `{job_id, status: queued\|running\|succeeded\|failed, done, results[{name, type, record_id, created}], error}`：同步进度；每条记录落定后 `results` 追加一项。`404 job.not_found` |
 | `POST` | `/api/registry/skills/inspect` | `perm:agents.deploy` | project | multipart `.zip` 或 JSON `{source{…}}`（git）→ `{staging_id, skills[…]}`：校验后的技能包暂存以供预览，绑定调用者、Workspace 与项目。不写 S3 |
 | `POST` | `/api/registry/skills/import` | `infra` | project | 请求体 `{staging_id, selections[{index, name?, name_override?, description_override?}]}` → `{records[{name, ok, record?, error?, error_code?}]}`。单项失败不中止整批。`410 registry.staging_expired` |
 | `GET` | `/api/registry/skills/capabilities` | member | ws | `{git{…}}`：git 导入所需的 `git` CLI 是否可用 |

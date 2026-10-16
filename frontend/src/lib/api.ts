@@ -2142,6 +2142,10 @@ export interface GovernancePolicyTestResult {
   policy_id: string | null;
   decision_id: string | null;
   recorded: boolean;
+  /** false: the Gateway has no Policy Engine — no Cedar policy decided, nothing journaled */
+  enforced: boolean;
+  policy_engine_id: string | null;
+  note: string | null;
 }
 
 export interface GovernanceOperation {

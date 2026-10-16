@@ -123,6 +123,7 @@ def resumable_job_types() -> frozenset[str]:
         project_migration,
         project_purge,
         promotion_exec,
+        registry_sync,
         workspace_bootstrap,
     )
     from app.system_agents import uninstall as system_uninstall
@@ -138,6 +139,7 @@ def resumable_job_types() -> frozenset[str]:
         promotion_exec.JOB_TYPE,
         assistant_purge.JOB_TYPE,
         cost_tags.JOB_TYPE,
+        registry_sync.JOB_TYPE,
     })
 
 

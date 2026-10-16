@@ -266,6 +266,19 @@ body.v3-body {
   gap: 2px;
   overflow-y: auto;
 }
+/* The shell paints the top bar's band and the rail's column on its own background,
+   down the full height of the page. The fixed bar and rail cover them on screen; a
+   capture of the whole page (or any paint below the first viewport) gets the frame
+   instead of the bare floor where the fixed rail was not drawn. */
+.v3.v3-shell {
+  background-color: var(--v3-ink-1);
+  background-image:
+    linear-gradient(to bottom, var(--v3-ink-0) calc(100% - 1px), var(--v3-line) 0),
+    linear-gradient(to right, var(--v3-ink-0) calc(100% - 1px), var(--v3-line) 0);
+  background-size: 100% var(--v3-top), var(--v3-rail) 100%;
+  background-position: 0 0, 0 0;
+  background-repeat: no-repeat;
+}
 .v3 .v3-rail-group { display: grid; gap: 2px; }
 .v3 .v3-rail button.v3-rail-group-head { height: 32px; font-size: 13px; color: var(--v3-text-3); }
 .v3 .v3-rail button.v3-rail-group-head:hover { background: var(--v3-ink-3); color: var(--v3-text); }
@@ -1005,6 +1018,7 @@ body.v3-body {
   .v3 .v3-top .v3-account { display: none; }
   .v3 .v3-rail { display: none; width: min(300px, 100%); background: var(--v3-ink-0); box-shadow: 12px 0 32px color-mix(in srgb, var(--v3-shade) 35%, transparent); }
   .v3[data-rail-open="true"] .v3-rail { display: flex; }
+  .v3.v3-shell { background-size: 100% var(--v3-top), 0 0; } /* the rail is an overlay here */
   .v3 .v3-main { padding: calc(var(--v3-top) + 20px) 16px 40px; }
   .v3 h1.v3-title { font-size: 25px; line-height: 1.3; overflow-wrap: anywhere; }
   .v3 .v3-head-end { gap: 8px; }

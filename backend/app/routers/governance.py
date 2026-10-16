@@ -554,6 +554,18 @@ def _determining_policy_id(exc: AppError) -> str | None:
     return determining_policy_id(f"{detail.get('message') or ''} {exc.message}")
 
 
+def _attached_engine(ws: WorkspaceScope) -> str:
+    """The Policy Engine attached to the workspace Gateway (`""` = none)."""
+    return governance_service.attached_policy_engine_id(control_client(ws.context), ws.context)
+
+
+NOT_ENFORCED_NOTE = (
+    "Not enforced: the workspace Gateway has no Policy Engine attached, so no Cedar "
+    "policy evaluated this call and nothing was recorded in the decision log. Attach "
+    "a Policy Engine under Governance to enforce policies."
+)
+
+
 @router.post("/governance/policy-test")
 def policy_test(
     req: PolicyTestRequest,
@@ -565,7 +577,14 @@ def policy_test(
     Only ALLOW and DENY are authorization decisions and get journaled. ERROR means
     the evaluation never happened (bad credentials, gateway unreachable, an
     unrecognised failure) and writes nothing — an error is not a decision.
+
+    Without a Policy Engine on the Gateway no Cedar policy decides anything: the call
+    still runs (its outcome is what the Gateway did), but the answer carries
+    `enforced: false` and a note, and nothing is journaled — a permit nobody
+    evaluated is not audit evidence.
     """
+    engine_id = _attached_engine(ws)
+    enforced = bool(engine_id)
     principal = f"{req.username}@{ROLE_BY_USER.get(req.username, 'user')}"
     outcome, reason = "ALLOW", None
     policy_id = None
@@ -585,7 +604,7 @@ def policy_test(
             policy_id = _determining_policy_id(exc)
 
     decision_id = None
-    if outcome in ("ALLOW", "DENY"):
+    if enforced and outcome in ("ALLOW", "DENY"):
         decision = PolicyDecision(
             workspace_id=ws.id,
             principal=principal,
@@ -604,6 +623,9 @@ def policy_test(
         "policy_id": policy_id,
         "decision_id": decision_id,
         "recorded": decision_id is not None,
+        "enforced": enforced,
+        "policy_engine_id": engine_id or None,
+        "note": None if enforced else NOT_ENFORCED_NOTE,
     }
 
 

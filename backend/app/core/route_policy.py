@@ -277,7 +277,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/registry/skills/import"): INFRA,
     # fetches remote content (SSRF-guarded); staging-only, needed by deploy
     ("POST", "/api/registry/skills/inspect"): PERM_AGENT_DEPLOY,
+    # queues the registry_sync_defaults job (202); its status reads at the same role
     ("POST", "/api/registry/sync-defaults"): INFRA,
+    ("GET", "/api/registry/sync-defaults/{job_id}"): INFRA,
     ("GET", "/api/registry/attachables"): MEMBER,
     ("POST", "/api/registry/a2a-demo"): PERM_PROJECT_USE,  # an invoke; parity with Chat
     # ---- identity: Connections (credential providers) and gateway targets

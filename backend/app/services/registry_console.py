@@ -8,6 +8,7 @@ registryRecordId.
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -220,8 +221,15 @@ def upload_skill_bundle(
     }
 
 
-def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
-    """Register the gateway targets (MCP) + sample skill bundle (AGENT_SKILLS)."""
+def ensure_default_records(
+    workspace: WorkspaceContext,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Register the gateway targets (MCP) + sample skill bundle (AGENT_SKILLS).
+
+    Slow on a real workspace (each new record is waited out of CREATING before it is
+    submitted), so the console runs it as the `registry_sync` job; ``on_result`` is
+    called with each record's result as soon as it settles, for the job's progress."""
     client = registry_control_client(workspace)
     registry_id = _registry_id(workspace)
     results: list[dict[str, Any]] = []
@@ -259,6 +267,8 @@ def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
             reg.submit_record(client, registry_id, record["recordId"])
         results.append({"name": target, "type": "MCP", "record_id": record["recordId"],
                         "created": created})
+        if on_result is not None:
+            on_result(results[-1])
 
     bundle = upload_skill_bundle(workspace)
     record, created = reg.upsert_record(
@@ -276,6 +286,8 @@ def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
         reg.submit_record(client, registry_id, record["recordId"])
     results.append({"name": SKILL_NAME, "type": "AGENT_SKILLS",
                     "record_id": record["recordId"], "created": created})
+    if on_result is not None:
+        on_result(results[-1])
     return results
 
 

@@ -727,6 +727,7 @@ def resume_pending_jobs() -> list[str]:
         project_migration,
         project_purge,
         promotion_exec,
+        registry_sync,
     )
     from app.system_agents import uninstall as system_uninstall
 
@@ -753,6 +754,8 @@ def resume_pending_jobs() -> list[str]:
         project_purge.JOB_TYPE: project_purge.start_purge_resume,
         # cost-tags §1.3: a back-fill continues with the first resource not yet tagged
         cost_tags.JOB_TYPE: cost_tags.start_backfill_async,
+        # POST /api/registry/sync-defaults: re-runs the sync (every step is an upsert)
+        registry_sync.JOB_TYPE: registry_sync.start_async,
     }
     db = SessionLocal()
     try:
