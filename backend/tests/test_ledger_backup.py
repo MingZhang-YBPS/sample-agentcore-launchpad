@@ -87,6 +87,21 @@ def test_backup_is_named_verified_and_matches_the_source(cli, tmp_path, capsys):
     assert not list(tmp_path.glob("*.partial"))
 
 
+def test_two_backups_in_one_second_get_distinct_names(cli, tmp_path):
+    # an update and its immediate rollback each back up first, often inside one second
+    ledger = _ledger(tmp_path / "launchpad.db")
+    now = datetime(2026, 10, 16, 9, 9, 30, tzinfo=UTC)
+    first = cli.take_backup(ledger, tmp_path, now=now, timeout=5)
+    first.replace(first.with_name(first.name.removesuffix(".partial")))
+    second = cli.take_backup(ledger, tmp_path, now=now, timeout=5)
+    second.replace(second.with_name(second.name.removesuffix(".partial")))
+
+    assert [p.name for p in _backups(tmp_path)] == [
+        "launchpad.db.bak-20261016-090930",
+        "launchpad.db.bak-20261016-090931",
+    ]
+
+
 def test_dest_override_and_missing_tables(cli, tmp_path, capsys):
     ledger = tmp_path / "launchpad.db"
     conn = sqlite3.connect(ledger)
