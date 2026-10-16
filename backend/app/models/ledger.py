@@ -150,6 +150,13 @@ class Agent(ProjectShared, Base):
     # detection against the project's current boundary. NULL = no boundary attached
     # (a shared-mode project, or an isolated one not yet migrated).
     isolation_applied: Mapped[str | None] = mapped_column(String(16), default=None)
+    # Set when a delete removed the console row but AWS still held the resource
+    # (`agent.teardown_pending`, e.g. canary or release endpoints still DELETING):
+    # `dlc.scheduler.sweep_deleted_resources` retries every such row, whatever its
+    # endpoint_mode, and clears it once AWS has let go. NULL = nothing left to finish.
+    teardown_pending_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

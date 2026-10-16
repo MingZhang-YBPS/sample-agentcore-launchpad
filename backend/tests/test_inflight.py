@@ -24,7 +24,7 @@ from app.core.db import Base, SessionLocal, engine
 from app.evaluation.models import EvalPipeline, EvalRecommendation, EvalRun
 from app.evaluation.recommendations import PROVIDER_JOB_PREFIX
 from app.models.assistant import AssistantConversation, EvaluationAssetOperation
-from app.models.ledger import Job, PolicyChange
+from app.models.ledger import Agent, Job, PolicyChange
 from app.models.system_update import SystemUpdate
 from app.optimization.models import Experiment, RuntimeCanary
 from app.services import inflight
@@ -157,6 +157,11 @@ def _seed_every_kind() -> dict[str, str]:
         _conversation("conv-prep", preparation_token="tok"),
         SystemUpdate(id="upd-prep", target_sha="f" * 40, status="preparing"),
         SystemUpdate(id="upd-done", target_sha="e" * 40, status="done"),
+        Agent(id="agent-teardown", workspace_id="default", name="gone-held",
+              method="harness", status="deleted", resource_id="h-held",
+              teardown_pending_at=NOW - timedelta(minutes=10)),
+        Agent(id="agent-deleted", workspace_id="default", name="gone-clean",
+              method="harness", status="deleted", resource_id="h-clean"),
     )
     return {
         "job-deploy": RESUMES, "job-boot": RESUMES, "job-uninst": RESUMES,
@@ -168,6 +173,7 @@ def _seed_every_kind() -> dict[str, str]:
         "pipe-run": FAILS_ON_READ, "rec-provider": FAILS_ON_READ,
         "rec-agentcore": RESTART_SAFE, "conv-turn": FAILS_INTERRUPTED,
         "conv-prep": CLEARED_RETRY, "upd-prep": RESUMES,
+        "agent-teardown": RESTART_SAFE,
     }
 
 

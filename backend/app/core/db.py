@@ -496,6 +496,7 @@ def _migrate(bind) -> None:
     _migrate_department_settings(bind)
     _migrate_user_external_identity(bind)
     _migrate_sso_saml_scim_columns(bind)
+    _migrate_agent_teardown_pending(bind)
 
 
 def _migrate_department_settings(bind) -> None:
@@ -1995,3 +1996,17 @@ def _migrate_sso_saml_scim_columns(bind) -> None:
                 conn.execute(text(
                     f"ALTER TABLE identity_providers_console ADD COLUMN {name} {ddl}"
                 ))
+
+
+def _migrate_agent_teardown_pending(bind) -> None:
+    """`agents.teardown_pending_at`: a deleted agent whose AWS teardown was deferred,
+    for the teardown sweep to retry. NULL on every existing row — a gated (live)
+    row deferred before the column existed is still found by its endpoint_mode."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "agents" not in inspector.get_table_names():
+        return
+    if "teardown_pending_at" not in {c["name"] for c in inspector.get_columns("agents")}:
+        with bind.begin() as conn:
+            conn.execute(text("ALTER TABLE agents ADD COLUMN teardown_pending_at TIMESTAMP"))

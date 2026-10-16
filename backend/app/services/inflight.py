@@ -31,7 +31,7 @@ from app.evaluation.models import EvalPipeline, EvalRecommendation, EvalRun
 from app.evaluation.recommendations import PROVIDER_JOB_PREFIX
 from app.evaluation.service import INTERRUPTED_STATUSES
 from app.models.assistant import AssistantConversation, EvaluationAssetOperation
-from app.models.ledger import Job, PolicyChange
+from app.models.ledger import Agent, Job, PolicyChange
 from app.models.system_update import PREPARING as SYSTEM_UPDATE_PREPARING
 from app.models.system_update import SystemUpdate
 from app.optimization.models import Experiment, RuntimeCanary
@@ -69,6 +69,8 @@ ASSISTANT_TURN = "assistant_turn"
 ASSISTANT_PREPARATION = "assistant_preparation"
 # online update (OU-1): the prepare job lives on its `system_updates` row, not in `jobs`
 SYSTEM_UPDATE_PREPARE = "system_update_prepare"
+# a deleted agent whose AWS teardown was deferred (`agents.teardown_pending_at`)
+AGENT_TEARDOWN = "agent_teardown"
 
 # Every call in the `if resume_jobs:` block of `create_app`, by the name main.py
 # calls it, with the inventory kinds it settles. Hooks that touch no ledger row map
@@ -335,6 +337,14 @@ def collect_inflight(
         add(SYSTEM_UPDATE_PREPARE, r.id, None, r.status,
             f"console {r.kind} to {r.target_sha[:12]} — the build resumes from its last step",
             r.updated_at, RESUMES, "resume_system_updates")
+
+    for r in reader.rows(Agent, ["id", "workspace_id", "name", "teardown_pending_at"],
+                         lambda m: m.status == "deleted",
+                         lambda m: m.teardown_pending_at.isnot(None)):
+        add(AGENT_TEARDOWN, r.id, r.workspace_id, "teardown_pending",
+            f"deleted agent {r.name} — AWS still holds its resource; the Agent-DLC "
+            "tick's teardown sweep keeps retrying the delete", r.teardown_pending_at,
+            RESTART_SAFE, "dlc.scheduler.sweep_deleted_resources")
 
     if skipped is not None:
         skipped.extend(reader.skipped)
