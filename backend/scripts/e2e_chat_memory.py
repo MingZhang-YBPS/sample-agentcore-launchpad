@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """E2E: chat with session continuity + short/long-term AgentCore Memory.
 
-Flow (against the persistent `hr-assistant` harness agent):
+Flow (against an HR harness agent with the hr-database gateway tool —
+``--agent``, default the persistent `hr-assistant`):
   1. session A turn 1: identify as EMP-1024, ask vacation days → expects "9"
   2. session A turn 2: "what department am I in?" → continuity proves turn-1 context
   3. ListEvents(session A) shows conversation events (short-term)
@@ -11,8 +12,12 @@ Flow (against the persistent `hr-assistant` harness agent):
      via the /memory endpoint, which re-scopes internally, rather than hitting
      /preferences/<actor> directly.
   5. session B (NEW): ask about preferences → long-term influence evidence
+  Steps 4-5 need the agent's long-term memory: an agent deployed with
+  ``memory.long_term=false`` (``e2e_gateway_tool.py --keep`` without
+  ``--long-term-memory``) runs steps 1-3 and reports the long-term half as
+  skipped.
 
-Run:  cd backend && uv run python scripts/e2e_chat_memory.py [--actor river]
+Run:  cd backend && uv run python scripts/e2e_chat_memory.py [--agent NAME] [--actor river]
 """
 
 import argparse
@@ -23,7 +28,7 @@ import time
 import httpx
 from _e2e_client import e2e_client
 
-AGENT_NAME = "hr-assistant"
+DEFAULT_AGENT = "hr-assistant"
 
 
 def sse_collect(client: httpx.Client, agent_id: str, prompt: str, session_id, actor: str):
@@ -53,18 +58,27 @@ def sse_collect(client: httpx.Client, agent_id: str, prompt: str, session_id, ac
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://localhost:8000")
+    parser.add_argument(
+        "--agent", default=DEFAULT_AGENT,
+        help=f"active agent with the hr-database gateway tool (default: {DEFAULT_AGENT})",
+    )
     parser.add_argument("--actor", default="river")
     parser.add_argument("--extract-timeout", type=int, default=420)
     args = parser.parse_args()
     client = e2e_client(args.base, timeout=300)
 
     agents = client.get("/api/agents").json()["agents"]
-    agent = next((a for a in agents if a["name"] == AGENT_NAME and a["status"] == "active"), None)
+    agent = next((a for a in agents if a["name"] == args.agent and a["status"] == "active"), None)
     if not agent:
-        print(f"agent '{AGENT_NAME}' not active — deploy it first")
+        print(f"agent '{args.agent}' not active — deploy it first")
         return 1
     agent_id = agent["id"]
-    print(f"agent: {AGENT_NAME} · {agent['arn'][-40:]}")
+    print(f"agent: {args.agent} · {agent['arn'][-40:]}")
+    memory = (client.get(f"/api/agents/{agent_id}").json().get("spec") or {}).get("memory") or {}
+    if not memory.get("short_term"):
+        print(f"agent '{args.agent}' has no short-term memory — nothing to test")
+        return 1
+    long_term = bool(memory.get("long_term"))
 
     print("\n── session A · turn 1")
     q1 = "Hi! My employee id is EMP-1024. How many vacation days do I have left this year?"
@@ -89,6 +103,11 @@ def main() -> int:
         for p in ev["payload"][:2]:
             print(f"    [{p['role']}] {p['text'][:70]}")
     assert mem["event_count"] >= 1, "expected conversation events in short-term memory"
+
+    if not long_term:
+        print("\n── long-term memory is off for this agent: steps 4-5 SKIPPED")
+        print("\nE2E CHAT MEMORY: PASS (short-term only)")
+        return 0
 
     print("\n── stating a long-term preference")
     q3 = (

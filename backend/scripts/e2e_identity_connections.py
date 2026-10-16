@@ -18,6 +18,11 @@ each (as_agent), checks the read-back binding and the 409s, then deletes them al
 and proves each is gone (`--keep` skips the teardown so screenshots can be taken;
 `cleanup` finishes it later). The role passed to `gateway-up` is only referenced,
 never modified.
+
+Precondition: `run` is NOT self-contained against a deployed console — it needs a
+backend whose workspace gateway is the throwaway `lpid-e2e-gw` (a local uvicorn started
+with LAUNCHPAD_RESOURCES as above, after `gateway-up`) plus an OIDC `--discovery-url`
+for the OAuth2 Connection. run_live_e2e.sh therefore skips it.
 """
 
 import argparse

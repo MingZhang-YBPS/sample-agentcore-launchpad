@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """E2E: observability endpoints against live aws/spans + AgentCore Memory.
 
-Chats with hr-assistant once (fresh spans), then exercises all five
-/api/observability endpoints, prints live dashboard numbers, one real trace
-tree, session list + detail with the memory transcript, and proves the 60s
-cache (2nd identical call <300ms).
+Chats with the HR agent (``--agent``, default hr-assistant) once (fresh
+spans), then exercises all five /api/observability endpoints, prints live
+dashboard numbers, one real trace tree, session list + detail with the memory
+transcript, and proves the 60s cache (2nd identical call <300ms).
 
-Run:  cd backend && uv run python scripts/e2e_observability.py
+Run:  cd backend && uv run python scripts/e2e_observability.py [--agent NAME]
 """
 
 import argparse
@@ -17,7 +17,7 @@ import time
 import httpx
 from _e2e_client import e2e_client
 
-AGENT_NAME = "hr-assistant"
+DEFAULT_AGENT = "hr-assistant"
 RANGE = "24h"
 
 
@@ -44,17 +44,22 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--base", default="http://localhost:8000")
+    parser.add_argument(
+        "--agent", default=DEFAULT_AGENT,
+        help=f"active agent with the hr-database gateway tool (default: {DEFAULT_AGENT})",
+    )
     args = parser.parse_args()
 
     client = e2e_client(args.base, timeout=300)
 
-    print("── fresh spans: one chat turn with hr-assistant…")
+    print(f"── fresh spans: one chat turn with {args.agent}…")
     agents = client.get("/api/agents").json()["agents"]
     agent = next(
-        (a for a in agents if a["name"] == AGENT_NAME and a["status"] == "active"), None
+        (a for a in agents if a["name"] == args.agent and a["status"] == "active"), None
     )
     if not agent:
-        print("hr-assistant not active")
+        print(f"agent {args.agent!r} not active — deploy it first "
+              "(e2e_gateway_tool.py --keep)")
         return 1
     session_id = None
     with client.stream(

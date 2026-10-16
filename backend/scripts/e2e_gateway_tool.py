@@ -4,13 +4,19 @@
 Proof of tool usage: the answer must contain seeded facts (9 remaining days /
 Maya Chen) that the model cannot know without calling hr-database___get_employee.
 
-Run:  cd backend && uv run python scripts/e2e_gateway_tool.py [--keep]
+``--keep`` leaves the agent deployed for e2e_observability / e2e_traces /
+e2e_chat_memory (``--agent e2e-gw-hr-assistant``); ``--long-term-memory`` turns
+on long-term memory so e2e_chat_memory can run its long-term half too.
+
+Run:  cd backend && uv run python scripts/e2e_gateway_tool.py [--keep] [--long-term-memory]
 """
 
 import argparse
+import os
 import sys
 import time
 
+import boto3
 from _e2e_client import e2e_client
 
 AGENT_NAME = "e2e-gw-hr-assistant"
@@ -20,16 +26,42 @@ SYSTEM_PROMPT = (
 )
 
 
+def wait_harness_name_free(harness_name: str, region: str, timeout_s: int = 300) -> None:
+    """DeleteHarness is async: the old harness keeps its name while DELETING, and a
+    CreateHarness of the same name in that window is refused ("already exists")."""
+    control = boto3.client("bedrock-agentcore-control", region_name=region)
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        names, token = set(), None
+        while True:
+            page = control.list_harnesses(maxResults=100, **({"nextToken": token} if token else {}))
+            names |= {h.get("harnessName") for h in page.get("harnesses", [])}
+            token = page.get("nextToken")
+            if not token:
+                break
+        if harness_name not in names:
+            return
+        print(f"  waiting for the previous {harness_name} harness to finish deleting…")
+        # Real-AWS delete polling is intentionally paced and attempt-bounded.
+        time.sleep(10)  # nosemgrep: arbitrary-sleep
+    raise SystemExit(f"harness {harness_name} still present {timeout_s}s after delete")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://localhost:8000")
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--long-term-memory", action="store_true")
+    parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"),
+                        help="workspace region (to see the old harness finish deleting)")
     args = parser.parse_args()
     client = e2e_client(args.base, timeout=300)
 
-    for agent in client.get("/api/agents").json()["agents"]:
-        if agent["name"] == AGENT_NAME:
-            client.delete(f"/api/agents/{agent['id']}")
+    stale = [a for a in client.get("/api/agents").json()["agents"] if a["name"] == AGENT_NAME]
+    for agent in stale:
+        client.delete(f"/api/agents/{agent['id']}")
+    if stale:
+        wait_harness_name_free(AGENT_NAME.replace("-", "_"), args.region)
 
     print("── creating harness agent with gateway tool…")
     res = client.post(
@@ -39,7 +71,7 @@ def main() -> int:
             "method": "harness",
             "system_prompt": SYSTEM_PROMPT,
             "tools": [{"type": "gateway", "name": "hr-database"}],
-            "memory": {"short_term": True, "long_term": False},
+            "memory": {"short_term": True, "long_term": args.long_term_memory},
         },
     )
     res.raise_for_status()
@@ -73,7 +105,8 @@ def main() -> int:
     print("── tool-usage assertions PASSED (seeded data reflected in answer)")
 
     if args.keep:
-        print("--keep set: leaving agent deployed")
+        print(f"--keep set: leaving {AGENT_NAME} deployed ({agent_id})")
+        print("E2E GATEWAY TOOL: PASS")
         return 0
     client.delete(f"/api/agents/{agent_id}").raise_for_status()
     print("E2E GATEWAY TOOL: PASS")

@@ -17,13 +17,21 @@ endpoints, dedicated gateway + targets + trace delivery, online evaluations, A/B
 Harness, its backing runtime, both endpoints, gateway, A/B test, online evaluations,
 trace delivery source and the execution role are gone; the shared KB gateway and the
 shared execution role are still there.
+
+LOCAL ONLY: the conversation is written into THIS machine's ledger
+(``LAUNCHPAD_DATABASE_URL``), so a remote ``--base`` would deploy a Harness Agent
+and a canary on AWS that the remote backend's clear can never find — they would
+be left behind. The script therefore refuses a non-loopback ``--base`` (exit 2)
+before it touches anything.
 """
 
 import argparse
+import ipaddress
 import sys
 import time
 import uuid
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from _e2e_client import e2e_client
 
@@ -75,13 +83,36 @@ def _gone(fn, *args, **kwargs) -> bool:
     return False
 
 
+def _is_local(base: str) -> bool:
+    """True when ``base`` is a backend on this machine (loopback host)."""
+    host = (urlsplit(base).hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--base", default="http://localhost:8011")
     parser.add_argument("--deploy-timeout", type=int, default=600)
     parser.add_argument("--setup-timeout", type=int, default=1200)
     parser.add_argument("--clear-timeout", type=int, default=3600)
     args = parser.parse_args()
+    if not _is_local(args.base):
+        print(
+            f"refusing --base {args.base}: this e2e seeds the conversation straight into "
+            "the LOCAL ledger, so it only works against a backend running on this "
+            "machine with the same LAUNCHPAD_DATABASE_URL (e.g. --base "
+            "http://localhost:8011). A remote run would leave its Harness Agent and "
+            "canary behind on AWS.",
+            file=sys.stderr,
+        )
+        return 2
     client = e2e_client(args.base, timeout=120)
 
     print(f"── deploying Harness agent {NAME} (v1)…")

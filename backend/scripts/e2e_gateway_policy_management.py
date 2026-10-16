@@ -14,6 +14,11 @@ Example:
 
 Add --allow-enforcement-changes, --candidate-statement-file, and
 --override-reason to exercise ENFORCE, candidate cutover, and rollback.
+
+Precondition: a DISPOSABLE MCP Gateway id the operator names (never the shared
+workspace gateway — enforcement changes cut traffic to every target on it) and a Cedar
+statement file. run_live_e2e.sh runs it only when E2E_POLICY_GATEWAY_ID and
+E2E_POLICY_STATEMENT_FILE are set.
 """
 
 import argparse
