@@ -696,7 +696,7 @@ proxy_set_header X-Forwarded-Proto https;   # TLS 在 CloudFront 终结
 由于 TLS 在边缘终结,`LAUNCHPAD_AUTH_COOKIE_SECURE=true` 必须保持开启;纯 HTTP 下
 浏览器会丢弃会话 Cookie。
 
-**3. 更新已有主机。**
+**3. 更新已有主机。** 下面是简要步骤；从旧版本升级（备份、迁移演练、回滚、故障排查）请按 [upgrade.zh-CN.md](upgrade.zh-CN.md) 操作。
 
 ```bash
 (cd backend && uv run python scripts/ledger_backup.py)   # 在线备份并校验；服务运行时不要 cp 台账
