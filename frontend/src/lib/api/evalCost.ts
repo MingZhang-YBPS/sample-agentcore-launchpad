@@ -65,6 +65,8 @@ export interface EvalCostEstimate {
   confirm_usd: number | null;
   over_limit: boolean;
   max_usd: number | null;
+  /** whose limit `max_usd` is: the project's quota (no administrator override) or the workspace policy's */
+  max_source?: "project" | "workspace" | null;
   unpriced: boolean;
   gate_unavailable?: string;
 }

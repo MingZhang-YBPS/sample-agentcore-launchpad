@@ -419,3 +419,33 @@ def test_the_budget_rule_fires_on_the_projects_spend(world, monkeypatch):
     finally:
         db.close()
     assert _budget_rules() == []
+
+
+def test_the_per_run_limit_names_its_source(app):  # noqa: F811
+    """E2E-projects: a refusal under the project's quota must not promise an
+    administrator override (the administrator is refused by the quota too)."""
+    from app.dlc import cost as cost_svc
+
+    _project("alpha")
+    _set("alpha", {"eval_run_max_usd": 4})
+    db = SessionLocal()
+    try:
+        policy = SimpleNamespace(release_policy={"eval_cost_max_usd": 10})
+        assert release_gates.eval_cost_limit(db, policy, "alpha") == (4, "project")
+        assert release_gates.eval_cost_limit(db, policy, "default") == (10, "workspace")
+        tighter = SimpleNamespace(release_policy={"eval_cost_max_usd": 3})
+        assert release_gates.eval_cost_limit(db, tighter, "alpha") == (3, "workspace")
+        assert release_gates.eval_cost_limit(db, None, None) == (None, None)
+    finally:
+        db.close()
+    over = {"over_limit": True, "total_usd": 5.0, "max_usd": 4.0, "max_source": "project"}
+    with pytest.raises(AppError) as exc:
+        cost_svc.assert_allowed(over, confirmed=True, is_admin=False)
+    assert exc.value.code == "run.cost_over_limit"
+    assert "project's per-run evaluation limit" in exc.value.message
+    assert "override" not in exc.value.message
+    assert exc.value.detail["quota"] == "eval_run_max_usd"
+    with pytest.raises(AppError) as exc:
+        cost_svc.assert_allowed({**over, "max_source": "workspace"}, confirmed=True,
+                                is_admin=False)
+    assert "workspace's limit" in exc.value.message

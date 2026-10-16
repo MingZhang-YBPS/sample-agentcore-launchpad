@@ -15120,6 +15120,7 @@
       "compareDearer": "dearer ▸",
       "refusedConfirm": "The server priced this evaluation at {{usd}}, above the confirm threshold. Tick the confirmation on the estimate card and submit again.",
       "refusedOver": "The server priced this evaluation at {{usd}}, over this workspace's limit ({{max}}). Narrow the scope, or ask an administrator to submit it.",
+      "refusedOverProject": "The server priced this evaluation at {{usd}}, over this project's per-run evaluation limit ({{max}}). Narrow the scope, or ask an administrator to raise the project's quota.",
       "rungTitle": "Cost per run",
       "rungSub": "Each run on the ladder: measured cost, else its estimate, and the change against the run before.",
       "rungSpan": "First run {{first}} → latest {{latest}}",

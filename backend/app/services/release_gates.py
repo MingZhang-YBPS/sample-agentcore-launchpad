@@ -193,13 +193,25 @@ def eval_cost_max_usd(
 ) -> float | None:
     """The per-run evaluation cost limit: the workspace policy's `eval_cost_max_usd`
     and the project's `quotas.eval_run_max_usd` (projects §11.3), the smaller one."""
+    return eval_cost_limit(db, workspace, project_id)[0]
+
+
+def eval_cost_limit(
+    db: Session, workspace: Workspace | None, project_id: str | None,
+) -> tuple[float | None, str | None]:
+    """`(limit, source)`: the per-run limit and whose it is — `project` when the
+    project's quota is the binding one (an administrator cannot override that one,
+    only raise the quota), `workspace` for the release policy's, None without one."""
     from app.services.project_quotas import limit_of
 
     policy = (workspace.release_policy if workspace is not None else None) or {}
-    values = [float(v) for v in (policy.get("eval_cost_max_usd"),
-                                 limit_of(db, project_id, "eval_run_max_usd"))
-              if v is not None]
-    return min(values) if values else None
+    ws_limit = policy.get("eval_cost_max_usd")
+    project_limit = limit_of(db, project_id, "eval_run_max_usd")
+    candidates = [(float(v), source) for v, source in
+                  ((project_limit, "project"), (ws_limit, "workspace")) if v is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda c: c[0])
 
 
 def assert_eval_budget(

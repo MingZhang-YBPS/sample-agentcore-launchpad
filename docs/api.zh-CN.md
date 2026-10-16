@@ -803,7 +803,7 @@ span，以及最近一次在多久之前。未带 ADOT 启动器部署的 BYOC �
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
-| `GET` | `/api/agents/{agent_id}/invoke-access?qualifier=&include=` | `perm:project.use`——`{agent_id, name, method, kind: runtime\|harness, mode: sigv4\|jwt, account, region, partition, arn, qualifiers[], available_qualifiers[], production_qualifier, sample_qualifier, include[], resources[], policy, jwt, samples, notes[], actions{runtime, harness, harness_verified}}`。`qualifier` 取 `DEFAULT`、`live` 或 `candidate`（默认：生产流量所用的端点）；`include` 为逗号分隔的 `stop_session`（会话管理操作）与 `memory`（读取 Agent 的记忆）。`policy` 是调用方角色需要的 IAM 策略文档；JWT 方式的 Agent 由 `jwt` 给出入站授权器的要求（令牌须满足），否则为 `null` |
+| `GET` | `/api/agents/{agent_id}/invoke-access?qualifier=&include=` | `perm:project.use`——`{agent_id, name, method, kind: runtime\|harness, mode: iam\|jwt, account, region, partition, arn, qualifiers[], available_qualifiers[], production_qualifier, sample_qualifier, include[], resources[], policy, jwt, samples, notes[], actions{runtime, harness, harness_verified}}`。`qualifier` 取 `DEFAULT`、`live` 或 `candidate`（默认：生产流量所用的端点）；`include` 为逗号分隔的 `stop_session`（会话管理操作）与 `memory`（读取 Agent 的记忆）。`policy` 是调用方角色需要的 IAM 策略文档；JWT 方式的 Agent 由 `jwt` 给出入站授权器的要求（令牌须满足），否则为 `null` |
 | `GET` | `/api/projects/{project_id}/invoke-access?agents=&qualifier=&include=&format=json\|csv` | 路径项目上的 `pperm:project.use`（非成员 404）——项目在其绑定的各 Workspace 中所有可调用的 Agent：`{project_id, inventory[{agent_id, name, method, kind, mode, account, region, arn, qualifier, endpoint_arn, production}], policy, jwt_agents[], skipped[{agent_id, name, reason}], qualifier, include[]}`；`policy` 合并所有 Agent 的语句（无可调用 Agent 时为 `null`）。`agents` 用逗号分隔的 id 缩小范围（不属于该项目的 id → `404 agent.not_found`，`detail.agent_ids`）。`format=csv` / `json` 把清单下载为 `<project_id>-agent-arns.csv` / `.json` |
 
 错误码：`agent.not_found`（404）、`invoke_access.unknown_qualifier` / `invoke_access.unknown_include` / `invoke_access.unknown_format`（400，`detail` 列出允许的取值）。
@@ -1707,7 +1707,7 @@ answer, enabled, created_by, updated_by, source_issue_id, hit_count, …}`。
 | `GET` | `/api/eval/runs/{run_id}/cost` | `perm:project.use` | project | 运行的成本卡片：`{run_id, status, final, running, actual, live, estimate, estimate_total_usd, estimate_range, summary, prices}`——实测与估算对比，运行中为实时值。其他项目的运行返回 `404` |
 | `GET` | `/api/eval/online/{config_id}/cost?days=1..30` | `perm:project.use` | project | 在线评估每日成本 `{config_id, days[{day, judgements, judge_usd, reports_usd, usd, by_evaluator}], range_days, total_usd}`；其他项目的配置返回 `404` |
 
-评估入口在提交前都会估价（`POST /api/eval/runs/estimate`）：数据集回放、针对所选会话或回溯窗口的被动运行，以及在线配置（按天）。超过 Workspace 的确认阈值时需要 `confirm_cost: true`（`409 run.cost_confirm_required`）；超过上限时只有管理员可以提交（`409 run.cost_over_limit`）——`POST /api/eval/runs` 与 `POST /api/eval/online` 相同。
+评估入口在提交前都会估价（`POST /api/eval/runs/estimate`）：数据集回放、针对所选会话或回溯窗口的被动运行，以及在线配置（按天）。超过 Workspace 的确认阈值时需要 `confirm_cost: true`（`409 run.cost_confirm_required`）；超过上限时只有管理员可以提交（`409 run.cost_over_limit`）——`POST /api/eval/runs` 与 `POST /api/eval/online` 相同。上限取 Workspace 放行策略的 `eval_cost_max_usd` 与项目 `quotas.eval_run_max_usd` 中较小者，预估里用 `max_source: project | workspace` 标明来源。项目配额生效时管理员也不能越过（管理员提交得到 `409 project.quota_exceeded`），所以拒绝文案改为请管理员提高项目配额。
 
 ### Strands 构建：自定义 Python 工具与沙箱工具
 
