@@ -20,6 +20,39 @@ from pathlib import Path
 import httpx
 from _e2e_client import e2e_client
 
+
+def chat_sse(client: httpx.Client, agent_id: str, prompt: str) -> dict:
+    """One console chat turn over `/api/chat/{id}` (SSE).
+
+    Not the sync `/invoke`: a Claude Agent SDK container's first turn (cold start)
+    routinely runs past CloudFront's 60 s origin read timeout, and `/invoke` sends
+    nothing until the answer is complete, so the edge cuts it to `504`. The chat
+    stream sends named heartbeats for the whole turn (chat-streaming S1), which keeps
+    the connection alive however long the cold start takes."""
+    text, sid, event = "", None, None
+    started = time.monotonic()
+    with client.stream(
+        "POST", f"/api/chat/{agent_id}", json={"prompt": prompt}, timeout=900
+    ) as res:
+        res.raise_for_status()
+        for line in res.iter_lines():
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:") and event:
+                data = json.loads(line[5:])
+                if event == "meta":
+                    sid = data["session_id"]
+                elif event == "delta":
+                    text += data["text"]
+                elif event == "error":
+                    raise RuntimeError(f"chat turn failed: {data.get('message')!r}")
+    assert sid, "chat stream ended without a meta event (no session id)"
+    return {
+        "text": text,
+        "session_id": sid,
+        "latency_ms": int((time.monotonic() - started) * 1000),
+    }
+
 AGENT_NAME = "e2e-claude-sdk"
 SYSTEM_PROMPT = (
     "You are a terse assistant. Answer with just the result."
@@ -291,12 +324,7 @@ def main() -> int:
         print(f"── runtime READY · arn {arn}")
 
         print("── invoking: what is 6*7?")
-        inv = client.post(
-            f"/api/agents/{agent_id}/invoke",
-            json={"prompt": "What is 6*7? Reply with just the number."},
-        )
-        inv.raise_for_status()
-        answer = inv.json()
+        answer = chat_sse(client, agent_id, "What is 6*7? Reply with just the number.")
         print(f"answer: {answer['text']!r} · {answer['latency_ms']}ms")
         assert "42" in answer["text"], f"expected '42', got: {answer['text']!r}"
         print("── invoke assertion PASSED")
