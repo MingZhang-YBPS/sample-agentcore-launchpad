@@ -149,3 +149,37 @@ def e2e_client(base: str, timeout: float = 300) -> httpx.Client:
             "not reaching the backend"
         )
     return client
+
+
+def chat_sse(client: httpx.Client, agent_id: str, prompt: str,
+             session_id: str | None = None) -> dict[str, Any]:
+    """One console chat turn over `/api/chat/{id}` (SSE) → {text, session_id, latency_ms}.
+
+    Use it instead of the sync `/api/agents/{id}/invoke` wherever the turn can be
+    slow (a cold container, the first call to a just-redeployed endpoint): `/invoke`
+    sends nothing until the answer is complete, so behind CloudFront (60 s origin
+    read timeout) a slow turn becomes `504`. The chat stream sends named heartbeats
+    for the whole turn (chat-streaming S1). It routes exactly like `/invoke`,
+    including the `live` endpoint of a migrated agent."""
+    text, sid, event = "", session_id, None
+    body: dict[str, Any] = {"prompt": prompt}
+    if session_id:
+        body["session_id"] = session_id
+    started = time.monotonic()
+    with client.stream("POST", f"/api/chat/{agent_id}", json=body, timeout=900) as res:
+        res.raise_for_status()
+        for line in res.iter_lines():
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:") and event:
+                data = json.loads(line[5:])
+                if event == "meta":
+                    sid = data["session_id"]
+                elif event == "delta":
+                    text += data["text"]
+                elif event == "error":
+                    raise RuntimeError(f"chat turn failed: {data.get('message')!r}")
+    if not sid:
+        raise RuntimeError("chat stream ended without a meta event (no session id)")
+    return {"text": text, "session_id": sid,
+            "latency_ms": int((time.monotonic() - started) * 1000)}
