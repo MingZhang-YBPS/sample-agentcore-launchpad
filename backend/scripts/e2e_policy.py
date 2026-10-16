@@ -4,6 +4,10 @@
 Uses the platform policy-test endpoint so every evaluation lands in the
 decision log the Governance UI renders.
 
+Policy is opt-in: a workspace whose Gateway has no Policy Engine attached cannot
+DENY anything, so the script reports a skipped precondition (exit 0) instead of
+asserting outcomes no Cedar policy decides.
+
 Run:  cd backend && uv run python scripts/e2e_policy.py
 """
 
@@ -23,6 +27,12 @@ def main() -> int:
 
     client = e2e_client(args.base, timeout=120)
 
+    overview = client.get("/api/overview")
+    overview.raise_for_status()
+    if not (overview.json().get("services") or {}).get("policy"):
+        print("SKIP precondition: no Policy Engine attached (opt-in)")
+        return 0
+
     cases = [
         ("demo", "hr-database___get_employee", {"employee_id": "EMP-1024"}, "ALLOW"),
         ("demo", "hr-database___create_payout", {"employee_id": "EMP-1024", "amount": 42},
@@ -40,6 +50,9 @@ def main() -> int:
         res.raise_for_status()
         body = res.json()
         outcome = body["outcome"]
+        if body.get("enforced") is False:  # the engine went away between the checks
+            print("SKIP precondition: no Policy Engine attached (opt-in)")
+            return 0
         # ERROR means no authorization decision was reached at all (bad demo
         # credentials, gateway unreachable, …). Counting it as a plain mismatch would
         # make an infrastructure outage look like a policy regression, so it is

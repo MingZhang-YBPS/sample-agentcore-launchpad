@@ -162,4 +162,4 @@ English: [troubleshooting.md](troubleshooting.md)
 | `409 calibration.not_supported` 且 `human_human_kappa: null` | 只有一个人做了标注。裁判是对照「彼此一致的人」来认证的，只有单人标注的样本不计入——请让第二位标注人完成 |
 | `409 admission.redaction_blocked` | 个人信息护栏拒绝了这段会话，它不能进入黄金集。准入接口自己会做脱敏检测，所以即使没打开过候选详情，答案也是这个 |
 | 签署 / 准入 / 校准时 `403 auth.permission_required` | `criteria.sign`、`golden.admit`、`judge.calibrate` 只授予具体的人，不按角色给——它们决定“什么叫好”。由管理员按用户授予 |
-| 删除门控智能体返回 `aws_resource_deleted: false` | 这是预期行为，不是失败。harness 端点可能 DELETING 数分钟，而 AgentCore 不允许删除仍带端点的资源，所以控制台的行立即删除，AWS 侧由后台 sweep（`dlc.teardown`，每个 tick 执行）收尾。无需处理；已删除行的 `endpoint_mode` 回到 `default` 就是 sweep 的回执 |
+| 删除智能体返回 `aws_resource_deleted: false`（门控智能体，或带 Runtime Canary 端点的智能体） | 这是预期行为，不是失败。harness 端点可能 DELETING 数分钟，而 AgentCore 不允许删除仍带端点的资源，所以控制台的行立即删除，AWS 侧由后台 sweep（`dlc.teardown`，每个 tick 执行）收尾。无需处理；已删除行的 `teardown_pending_at` 清空（且 `endpoint_mode` 回到 `default`）就是 sweep 的回执 |

@@ -1441,7 +1441,11 @@
       "exactAction": "EXACT ACTION",
       "policy": "DETERMINING POLICY",
       "decisionId": "DECISION ID",
-      "detail": "RAW DETAIL"
+      "detail": "RAW DETAIL",
+      "notEnforced": "Not enforced — no Policy Engine attached",
+      "notEnforcedBody": "No Cedar policy evaluated this call: the outcome is only what the Gateway did, and nothing was written to the decision log. Attach a Policy Engine to this Gateway to enforce its policies.",
+      "attachEngine": "Attach a Policy Engine",
+      "engine": "Policy Engine"
     },
     "blockers": {
       "notManaged": "manage this Gateway first",
@@ -15365,6 +15369,12 @@
     }
   },
   "lambdaTool": {
+    "page": {
+      "eyebrow": "Tools",
+      "title": "Gateway tool targets",
+      "sub": "Lambda functions and externally hosted MCP servers on the workspace Gateway. Agents can call a target's tools only after its schema is reviewed.",
+      "new": "New Lambda tool target"
+    },
     "status": {
       "reviewing": "awaiting review",
       "publishing": "publishing",

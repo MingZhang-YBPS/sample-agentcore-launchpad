@@ -693,7 +693,7 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
           empty={liveEngine ? t("v2.governance.noPolicies") : t("governance.blockers.noEngine")}
         />
       </Card>
-      {gateway.policy_test_available && <PolicyTestCard actions={gateway.actions} />}
+      {gateway.policy_test_available && <PolicyTestCard actions={gateway.actions} onAttachEngine={() => goSection("overview")} />}
     </>
   );
 

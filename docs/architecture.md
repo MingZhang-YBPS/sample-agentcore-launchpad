@@ -5051,8 +5051,13 @@ which only appear once an agent actually has named endpoints:
   `GetHarness` before deleting, because **AgentCore answers `DeleteHarness` on an
   already-gone harness with `AccessDenied`, not `ResourceNotFound`**: inferring "gone"
   from the delete error would either retry a vanished resource forever or swallow a real
-  permission problem. Its done-marker is `endpoint_mode` returning to `default`, which
-  keeps `resource_id` as the historical pointer every deleted row retains. Waivers need a reason, a named risk owner, an expiry
+  permission problem. The deferred row is stamped `teardown_pending_at`, and the sweep
+  retries every stamped row whatever its `endpoint_mode` — a default-mode harness held
+  by Runtime Canary endpoints is retried too: it re-issues the delete of any named
+  endpoint not yet DELETING, then deletes the resource, its execution role and its A2A
+  record. Its done-marker is `teardown_pending_at` cleared and `endpoint_mode` back to
+  `default` (rows deferred before the column are still found by `live`), which keeps
+  `resource_id` as the historical pointer every deleted row retains. Waivers need a reason, a named risk owner, an expiry
 ≤ 30 days and a second person (`waiver.approve`); the gate report counts how often a
 criterion has been waived.
 

@@ -1294,11 +1294,15 @@ def delete_agent_row(db: Session, agent: Agent, workspace: WorkspaceContext) -> 
             raise
         # AWS is still letting go of the resource (a gated agent's endpoints can stay
         # DELETING for minutes). The console row goes now; `dlc.scheduler
-        # .sweep_deleted_resources` retries the AWS delete until it succeeds, so the
+        # .sweep_deleted_resources` retries every row carrying `teardown_pending_at`
+        # until the AWS delete succeeds, so the
         # alternative — refusing the delete — would just leave the operator retrying
         # by hand against an asynchronous AWS state machine.
         logger.info("agent %s: AWS teardown deferred — %s", agent.id, exc.message)
         aws_resource_deleted = False
+        # the sweep's marker, whatever the endpoint_mode: a default-mode harness held
+        # by Runtime Canary endpoints must be retried as surely as a gated one
+        agent.teardown_pending_at = datetime.now(UTC)
     mark_agent_deleted(db, agent)
     try:  # a VPC agent's ENIs linger after the delete; wait them out (§12.9)
         from app.deployer import pipeline as deploy_pipeline

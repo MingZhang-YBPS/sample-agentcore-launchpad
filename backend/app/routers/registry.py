@@ -17,6 +17,7 @@ from app.core.project_scope import current_project, project_context
 from app.routers.auth import require_identity, require_permission
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
+from app.services import registry_sync
 from app.services import skill_ingest as si
 from app.services.skill_ingest import (
     SKILL_BUNDLE_MAX_BYTES,
@@ -809,9 +810,37 @@ def attachables(
     return data
 
 
-@router.post("/sync-defaults")
+@router.post("/sync-defaults", status_code=202)
 def sync_defaults(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    """Register gateway targets (MCP) + the sample skill bundle (AGENT_SKILLS)."""
-    results = console.ensure_default_records(ws.context)
-    _invalidate_attachables(ws.id)
-    return {"results": results}
+    """Queue the registration of the gateway targets (MCP) + the sample skill bundle
+    (AGENT_SKILLS) as a `registry_sync_defaults` job — it waits every new record out
+    of CREATING, longer than an origin request may take. A sync already in flight is
+    returned instead of starting another. Poll `GET /sync-defaults/{job_id}`."""
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        job, created = registry_sync.queue(db, ws.id)
+        if created:
+            registry_sync.start_async(job.id)
+        return {**registry_sync.view(job), "started": created}
+    finally:
+        db.close()
+
+
+@router.get("/sync-defaults/{job_id}")
+def sync_defaults_status(
+    job_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    """A sync job's status and the per-record results recorded so far."""
+    from app.core.db import SessionLocal
+    from app.models.ledger import Job
+
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id)
+        if job is None or job.type != registry_sync.JOB_TYPE or job.workspace_id != ws.id:
+            raise NotFoundError("job.not_found", "job not found")
+        return registry_sync.view(job)
+    finally:
+        db.close()

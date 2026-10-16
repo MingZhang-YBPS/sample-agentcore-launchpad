@@ -538,3 +538,134 @@ def test_a_real_permission_failure_keeps_being_reported(db, monkeypatch):
     assert _row(out, agent.id) == "error:AccessDeniedException"
     # still to be retried: the resource is really there and really undeletable
     assert agent.resource_id == "h-gone"
+
+
+# ── a deferred teardown outside the gated path (Runtime Canary endpoints) ──────
+
+
+def _deferred_default(db, name="aw-canary"):
+    """Live repro (us-west-2): a harness deleted while its Runtime Canary endpoints
+    were DELETING — endpoint_mode stays `default`, so only the marker finds it."""
+    agent = Agent(workspace_id=WS, name=name, method="harness", status="deleted",
+                  spec={"name": name}, version="3", resource_id="h-canary",
+                  endpoint_mode="default", teardown_pending_at=datetime.now(UTC))
+    db.add(agent)
+    db.commit()
+    return agent
+
+
+def _sweep_seams(monkeypatch, endpoints):
+    from app.dlc import releases as release_svc
+    from app.routers import agents as agents_router
+
+    monkeypatch.setattr("app.services.workspace.context_for_workspace",
+                        lambda wid: SimpleNamespace(id=wid))
+    monkeypatch.setattr("app.services.agentcore.client.control_client", lambda ctx: object())
+    monkeypatch.setattr(release_svc, "endpoint_status", lambda a, c, name: None)
+    monkeypatch.setattr("app.services.agentcore.harness.list_harness_endpoints",
+                        lambda c, rid: list(endpoints))
+    monkeypatch.setattr("app.services.agentcore.harness.get_harness",
+                        lambda c, rid, version=None: {"harness": {"status": "READY"}})
+    calls = {"endpoint_deletes": [], "harness_deletes": [], "cleanup": []}
+    monkeypatch.setattr("app.services.agentcore.harness.delete_harness_endpoint",
+                        lambda c, rid, name: calls["endpoint_deletes"].append(name) or True)
+    monkeypatch.setattr("app.services.agentcore.harness.delete_harness",
+                        lambda c, rid: calls["harness_deletes"].append(rid))
+    monkeypatch.setattr(agents_router, "delete_agent_role",
+                        lambda a, ws: calls["cleanup"].append(("role", a.id)) or True)
+    monkeypatch.setattr(agents_router, "delete_agent_registry_record",
+                        lambda a, ws: calls["cleanup"].append(("record", a.id)) or True)
+    return calls
+
+
+def test_a_deferred_default_mode_harness_waits_for_its_canary_endpoints(db, monkeypatch):
+    agent = _deferred_default(db)
+    calls = _sweep_seams(monkeypatch, [
+        {"endpointName": "DEFAULT", "status": "READY"},
+        {"endpointName": "canary-a", "status": "DELETING"},
+        {"endpointName": "canary-b", "status": "READY"},
+    ])
+    out = scheduler.sweep_deleted_resources(db)
+    assert _row(out, agent.id) == "waiting"
+    assert calls["harness_deletes"] == []  # not while an endpoint holds it
+    assert calls["endpoint_deletes"] == ["canary-b"]  # a stuck one is deleted; DELETING waits
+    assert agent.teardown_pending_at is not None  # still to be retried
+
+
+def test_a_deferred_default_mode_harness_is_deleted_once_aws_lets_go(db, monkeypatch):
+    agent = _deferred_default(db)
+    calls = _sweep_seams(monkeypatch, [{"endpointName": "DEFAULT", "status": "READY"}])
+    out = scheduler.sweep_deleted_resources(db)
+    assert _row(out, agent.id) == "deleted"
+    assert calls["harness_deletes"] == ["h-canary"]
+    # what the deferred delete skipped after the resource: role and A2A record
+    assert calls["cleanup"] == [("role", agent.id), ("record", agent.id)]
+    assert agent.teardown_pending_at is None and agent.endpoint_mode == "default"
+    assert agent.resource_id == "h-canary"  # the historical pointer stays
+    # finished: the next sweep leaves it alone
+    assert all(r["agent_id"] != agent.id for r in scheduler.sweep_deleted_resources(db)["results"])
+
+
+def test_only_marked_rows_are_retried_ordinary_deleted_rows_are_untouched(db, monkeypatch):
+    marked = _deferred_default(db, name="aw-marked")
+    plain = Agent(workspace_id=WS, name="aw-plain2", method="harness", status="deleted",
+                  spec={}, version="1", resource_id="h-plain2", endpoint_mode="default")
+    db.add(plain)
+    db.commit()
+    calls = _sweep_seams(monkeypatch, [])
+    out = scheduler.sweep_deleted_resources(db)
+    assert out["checked"] == 1
+    assert [r["agent_id"] for r in out["results"]] == [marked.id]
+    assert calls["harness_deletes"] == ["h-canary"]  # never h-plain2
+    assert plain.teardown_pending_at is None and plain.resource_id == "h-plain2"
+
+
+def test_a_deferred_delete_stamps_the_marker_whatever_the_endpoint_mode(db, monkeypatch):
+    from app.deployer import pipeline as deploy_pipeline
+    from app.routers import agents as agents_router
+
+    agent = Agent(workspace_id=WS, name="aw-defer", method="harness", status="active",
+                  spec={"name": "aw-defer"}, version="1", resource_id="h-defer",
+                  endpoint_mode="default")
+    db.add(agent)
+    db.commit()
+
+    def pending(_agent, _ws):
+        raise AppError("agent.teardown_pending", "endpoints still deleting", {})
+
+    monkeypatch.setattr(agents_router, "_delete_agent_resources", pending)
+    monkeypatch.setattr(deploy_pipeline, "start_eni_release_wait", lambda *a, **k: None)
+    assert agents_router.delete_agent_row(db, agent, SimpleNamespace(id=WS)) is False
+    db.refresh(agent)
+    assert agent.status == "deleted" and agent.teardown_pending_at is not None
+    assert agent.endpoint_mode == "default"
+
+
+def test_a_completed_delete_leaves_no_marker(db, monkeypatch):
+    from app.deployer import pipeline as deploy_pipeline
+    from app.routers import agents as agents_router
+
+    agent = Agent(workspace_id=WS, name="aw-done", method="harness", status="active",
+                  spec={"name": "aw-done"}, version="1", resource_id="h-done")
+    db.add(agent)
+    db.commit()
+    monkeypatch.setattr(agents_router, "_delete_agent_resources", lambda a, ws: True)
+    monkeypatch.setattr(deploy_pipeline, "start_eni_release_wait", lambda *a, **k: None)
+    assert agents_router.delete_agent_row(db, agent, SimpleNamespace(id=WS)) is True
+    db.refresh(agent)
+    assert agent.status == "deleted" and agent.teardown_pending_at is None
+
+
+def test_teardown_pending_at_is_migrated_onto_an_old_agents_table(tmp_path):
+    import sqlalchemy as sa
+
+    from app.core import db as db_module
+    from app.core.db import Base
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(sa.text("ALTER TABLE agents DROP COLUMN teardown_pending_at"))
+    assert "teardown_pending_at" in db_module.schema_drift(engine).get("agents", [])
+    db_module._migrate(engine)
+    assert db_module.schema_drift(engine) == {}

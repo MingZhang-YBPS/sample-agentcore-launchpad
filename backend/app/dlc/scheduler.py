@@ -212,21 +212,63 @@ def _resource_exists(control: Any, agent: Any) -> bool:
     return True
 
 
+def _other_endpoints(control: Any, agent: Any) -> list[dict[str, Any]]:
+    """The resource's named endpoints besides DEFAULT and the release pair the gated
+    path already handles — a Runtime Canary's, typically — as {name, status}."""
+    from app.dlc import releases as release_svc
+
+    skip = {"DEFAULT", release_svc.CANDIDATE, release_svc.LIVE}
+    if agent.method == "harness":
+        from app.services.agentcore import harness as hc
+
+        rows = [{"name": e.get("endpointName"), "status": e.get("status")}
+                for e in hc.list_harness_endpoints(control, agent.resource_id)]
+    else:
+        from app.services.agentcore import runtime as rt
+
+        rows = [{"name": e.get("name"), "status": e.get("status")}
+                for e in rt.list_runtime_endpoints(control, agent.resource_id)]
+    return [r for r in rows if r["name"] and r["name"] not in skip]
+
+
+def _delete_endpoint(control: Any, agent: Any, name: str) -> None:
+    if agent.method == "harness":
+        from app.services.agentcore import harness as hc
+
+        hc.delete_harness_endpoint(control, agent.resource_id, name)
+    else:
+        from app.services.agentcore import runtime as rt
+
+        rt.delete_runtime_endpoint(control, runtime_id=agent.resource_id, endpoint_name=name)
+
+
+def _finish_deferred_cleanup(agent: Any, workspace: Any) -> None:
+    """What the deferred delete skipped after the resource: the agent's own execution
+    role and its A2A registry record. Both helpers are best-effort and never raise."""
+    from app.routers import agents as agents_router
+
+    agents_router.delete_agent_role(agent, workspace)
+    agents_router.delete_agent_registry_record(agent, workspace)
+
+
 def sweep_deleted_resources(db: Session) -> dict[str, Any]:
     """Finish an AWS teardown the delete request could not wait out.
 
-    A gated agent's endpoints can stay DELETING for minutes, and AgentCore refuses to
-    delete a harness/runtime that still has them. Rather than hold an HTTP delete open
-    (or leave the operator retrying by hand against an asynchronous state machine), the
-    route marks the ledger row deleted with `aws_resource_deleted: false` and this task
+    A gated agent's endpoints — or a Runtime Canary's on any agent — can stay DELETING
+    for minutes, and AgentCore refuses to delete a harness/runtime that still has
+    them. Rather than hold an HTTP delete open (or leave the operator retrying by hand
+    against an asynchronous state machine), the route marks the ledger row deleted
+    with `aws_resource_deleted: false`, stamps `teardown_pending_at`, and this task
     retries until AWS has let go.
 
-    The done-marker is `endpoint_mode` going back to `default` — semantically true (no
-    named endpoint remains) and it keeps `resource_id`, which every other deleted row
-    retains as a historical pointer. That same field is the sweep's filter, so an
-    ordinary deleted agent is never retried.
+    Two markers select a row: `teardown_pending_at` (every deferred delete, whatever
+    the endpoint_mode) and, for rows deferred before that column existed,
+    `endpoint_mode == "live"`. Done clears both — `endpoint_mode` back to `default`
+    (semantically true: no named endpoint remains) and `teardown_pending_at` to NULL —
+    and keeps `resource_id`, which every other deleted row retains as a historical
+    pointer. An ordinary deleted agent carries neither marker and is never retried.
     """
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
 
     from app.dlc import releases as release_svc
     from app.models.ledger import Agent
@@ -238,13 +280,16 @@ def sweep_deleted_resources(db: Session) -> dict[str, Any]:
             Agent.status == "deleted",
             Agent.resource_id.isnot(None),
             Agent.resource_id != "",
-            Agent.endpoint_mode == "live",
+            or_(Agent.endpoint_mode == "live", Agent.teardown_pending_at.isnot(None)),
         ).limit(20)
     ).all()
     out: list[dict[str, Any]] = []
     for agent in rows:
+        deferred = agent.teardown_pending_at is not None
+        workspace = None
         try:
-            control = control_client(context_for_workspace(agent.workspace_id))
+            workspace = context_for_workspace(agent.workspace_id)
+            control = control_client(workspace)
             pending = [
                 name for name in (release_svc.CANDIDATE, release_svc.LIVE)
                 if release_svc.endpoint_status(agent, control, name) is not None
@@ -252,6 +297,18 @@ def sweep_deleted_resources(db: Session) -> dict[str, Any]:
             if pending:
                 # re-issue: an endpoint whose delete never landed would wait forever
                 release_svc.delete_endpoints(agent, control, timeout_s=0)
+            if deferred:
+                # canary (or any other named) endpoints hold the resource too
+                for endpoint in _other_endpoints(control, agent):
+                    pending.append(endpoint["name"])
+                    if str(endpoint["status"] or "").upper() != "DELETING":
+                        try:
+                            _delete_endpoint(control, agent, endpoint["name"])
+                        except Exception as exc:  # noqa: BLE001 - retried next tick
+                            logger.info("teardown sweep: agent %s endpoint %s: %s: %s",
+                                        agent.id, endpoint["name"],
+                                        type(exc).__name__, exc)
+            if pending:
                 out.append({"agent_id": agent.id, "status": "waiting",
                             "endpoints": pending})
                 continue
@@ -280,7 +337,10 @@ def sweep_deleted_resources(db: Session) -> dict[str, Any]:
                             agent.id, kind, exc)
                 continue
         # gone (or never there): stop retrying this row
+        if deferred and workspace is not None:
+            _finish_deferred_cleanup(agent, workspace)
         agent.endpoint_mode = "default"
+        agent.teardown_pending_at = None
         db.commit()
         out.append({"agent_id": agent.id, "status": "deleted"})
     return {"checked": len(rows), "results": out}
