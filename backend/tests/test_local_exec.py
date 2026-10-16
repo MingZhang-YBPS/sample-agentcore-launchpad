@@ -711,3 +711,125 @@ def test_reap_orphans_clears_stale_workdirs(monkeypatch, tmp_path):
     monkeypatch.setattr(local_exec.subprocess, "run", fake_run)
     local_exec.reap_orphan_containers(_docker_settings())
     assert list(tmp_path.iterdir()) == []
+
+
+# --- container CLI resolution (docker, else finch) ---------------------------
+
+def _fake_which(available: dict[str, str]):
+    return lambda name, *a, **kw: available.get(name)
+
+
+def test_container_cli_auto_prefers_docker_then_finch_then_bare_docker(monkeypatch):
+    from app.core import config
+
+    monkeypatch.setattr(
+        config.shutil, "which",
+        _fake_which({"docker": "/usr/bin/docker", "finch": "/usr/local/bin/finch"}),
+    )
+    assert config.resolve_container_cli("auto") == "/usr/bin/docker"
+    monkeypatch.setattr(
+        config.shutil, "which", _fake_which({"finch": "/usr/local/bin/finch"})
+    )
+    assert config.resolve_container_cli("auto") == "/usr/local/bin/finch"
+    assert config.resolve_container_cli("") == "/usr/local/bin/finch"
+    # Neither installed: keep the familiar name so the refusal still reads
+    # "the `docker` CLI is not installed".
+    monkeypatch.setattr(config.shutil, "which", _fake_which({}))
+    assert config.resolve_container_cli("auto") == "docker"
+
+
+def test_container_cli_explicit_value_wins_and_reads_from_env(monkeypatch):
+    from app.core import config
+
+    monkeypatch.setattr(config.shutil, "which", _fake_which({"docker": "/usr/bin/docker"}))
+    assert config.resolve_container_cli("/opt/finch/bin/finch") == "/opt/finch/bin/finch"
+    monkeypatch.setenv("LAUNCHPAD_CONTAINER_CLI", "finch")
+    settings = config.Settings()
+    assert settings.container_cli == "finch"
+    assert local_exec.container_cli(settings) == "finch"
+    monkeypatch.delenv("LAUNCHPAD_CONTAINER_CLI")
+    assert config.Settings().container_cli == "auto"
+
+
+def test_finch_backend_uses_finch_for_run_kill_reap_and_probe(monkeypatch):
+    settings = _docker_settings(container_cli="/usr/local/bin/finch")
+    inv = local_exec.build_exec_invocation("/t/c.py", "/t", settings=settings)
+    assert inv.argv[0].endswith("finch") and inv.argv[1] == "run"
+
+    probes = []
+    monkeypatch.setattr(
+        local_exec, "_run_docker_probe", lambda argv: probes.append(argv) or (True, "")
+    )
+    monkeypatch.setattr(local_exec, "_finch_unshared_workdir_error", lambda cli: None)
+    assert local_exec.docker_exec_error(settings) is None
+    # finch's `version --format` has no .Server.Version; `info` answers instead.
+    assert probes[0] == [
+        "/usr/local/bin/finch", "info", "--format", "{{.ServerVersion}}"
+    ]
+    assert probes[1][:3] == ["/usr/local/bin/finch", "image", "inspect"]
+
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        out = "id1\n" if argv[1] == "ps" else ""
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+    monkeypatch.setattr(local_exec.subprocess, "run", fake_run)
+    assert local_exec.reap_orphan_containers(settings) == 1
+    assert calls[-1] == ["/usr/local/bin/finch", "kill", "id1"]
+
+
+def test_docker_probe_keeps_the_server_version_query():
+    assert local_exec._server_probe_argv("/usr/bin/docker") == [
+        "/usr/bin/docker", "version", "--format", "{{.Server.Version}}"
+    ]
+
+
+def test_missing_cli_message_names_the_resolved_binary(monkeypatch):
+    def missing(*a, **kw):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(local_exec.subprocess, "run", missing)
+    ok, detail = local_exec._run_docker_probe(["/usr/local/bin/finch", "info"])
+    assert not ok and "`finch` CLI is not installed" in detail
+
+
+def test_finch_refuses_exec_workdirs_outside_the_vm_shares(monkeypatch, tmp_path):
+    """finch on macOS only shares $HOME (+ additional_directories) into its VM;
+    a bind mount from elsewhere silently mounts empty."""
+    home = tmp_path / "home"
+    (home / ".finch").mkdir(parents=True)
+    monkeypatch.setattr(local_exec.sys, "platform", "darwin")
+    monkeypatch.setattr(local_exec.Path, "home", classmethod(lambda cls: home))
+
+    monkeypatch.setattr(local_exec, "DATA_DIR", tmp_path / "elsewhere" / "data")
+    problem = local_exec._finch_unshared_workdir_error("/usr/local/bin/finch")
+    assert problem and "additional_directories" in problem
+    # docker has no such VM boundary.
+    assert local_exec._finch_unshared_workdir_error("/usr/bin/docker") is None
+
+    (home / ".finch" / "finch.yaml").write_text(
+        f"additional_directories:\n  - path: {tmp_path / 'elsewhere'}\n"
+    )
+    assert local_exec._finch_unshared_workdir_error("finch") is None
+
+    (home / ".finch" / "finch.yaml").write_text("cpus: 2\n")
+    monkeypatch.setattr(local_exec, "DATA_DIR", home / "repo" / "data")
+    assert local_exec._finch_unshared_workdir_error("finch") is None
+
+
+def test_skill_bundling_gets_the_callers_workspace(monkeypatch, tmp_path):
+    """It called ``bundle_skills_into`` without its ``workspace`` argument, so every
+    local run logged "skill bundling skipped (TypeError)" and bundled nothing."""
+    import app.deployer.zip_runtime as zr
+    import app.services.workspace as ws_mod
+
+    seen = {}
+    monkeypatch.setattr(ws_mod, "context_for_workspace", lambda wid: f"ctx:{wid}")
+    monkeypatch.setattr(
+        zr, "bundle_skills_into",
+        lambda code, dest, log, workspace, **_kw: seen.update(workspace=workspace, dest=dest),
+    )
+    local_exec.bundle_skills_for_workdir("print(1)", str(tmp_path), "ws-1")
+    assert seen == {"workspace": "ctx:ws-1", "dest": tmp_path}

@@ -18,12 +18,16 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from app.core.config import DATA_DIR, get_settings
+import yaml
+
+from app.core.config import DATA_DIR, get_settings, resolve_container_cli
 
 logger = logging.getLogger("launchpad.local_exec")
 
@@ -39,6 +43,52 @@ class ExecUserUnavailable(RuntimeError):
     become it. Both are configuration problems, and both must surface as one
     legible message instead of a `PermissionError` from deep inside a spawn.
     """
+
+
+def container_cli(settings: Any = None) -> str:
+    """The docker-compatible CLI (docker, else finch) per `container_cli`."""
+    current = settings or get_settings()
+    return resolve_container_cli(current.container_cli)
+
+
+def _cli_name(cli: str) -> str:
+    return os.path.basename(cli)
+
+
+def _server_probe_argv(cli: str) -> list[str]:
+    """A cheap query that fails when the daemon/VM is unreachable. finch (and
+    nerdctl under it) has no `.Server.Version` field in `version --format`, but
+    both answer `info --format {{.ServerVersion}}`."""
+    if _cli_name(cli) in ("finch", "nerdctl"):
+        return [cli, "info", "--format", "{{.ServerVersion}}"]
+    return [cli, "version", "--format", "{{.Server.Version}}"]
+
+
+def _finch_unshared_workdir_error(cli: str) -> str | None:
+    """finch on macOS runs containers in a Lima VM that only sees $HOME plus
+    `additional_directories` from ~/.finch/finch.yaml. A bind mount from
+    anywhere else (e.g. a checkout under /tmp) mounts empty, and the run dies
+    with a baffling "can't open file '/work/generated_agent.py'"."""
+    if _cli_name(cli) != "finch" or sys.platform != "darwin":
+        return None
+    base = (DATA_DIR / "exec-runs").resolve()
+    shared = [Path.home().resolve()]
+    try:
+        cfg = yaml.safe_load((Path.home() / ".finch" / "finch.yaml").read_text()) or {}
+        for entry in cfg.get("additional_directories") or []:
+            path = entry.get("path") if isinstance(entry, dict) else entry
+            if path:
+                shared.append(Path(os.path.expanduser(str(path))).resolve())
+    except (OSError, yaml.YAMLError, AttributeError):
+        pass
+    if any(base == root or root in base.parents for root in shared):
+        return None
+    return (
+        f"finch cannot bind-mount the exec workspace {base}: its VM only shares "
+        f"$HOME and ~/.finch/finch.yaml additional_directories. Move the checkout "
+        f"under {Path.home()}, or add its data/ directory to additional_directories "
+        "and run `finch vm stop && finch vm start`."
+    )
 
 
 def docker_backend(settings: Any = None) -> bool:
@@ -90,16 +140,17 @@ def missing_interpreter_message() -> str:
 
 
 def _run_docker_probe(argv: list[str]) -> tuple[bool, str]:
-    """Run a short docker CLI query; (ok, stderr-or-reason). Module-level so
+    """Run a short container CLI query; (ok, stderr-or-reason). Module-level so
     tests can monkeypatch it and stay daemon-free."""
+    name = _cli_name(argv[0])
     try:
         result = subprocess.run(  # noqa: S603 — fixed argv, no shell
             argv, capture_output=True, text=True, timeout=15
         )
     except FileNotFoundError:
-        return False, "the `docker` CLI is not installed"
+        return False, f"the `{name}` CLI is not installed"
     except subprocess.TimeoutExpired:
-        return False, "the docker CLI did not answer within 15s"
+        return False, f"the {name} CLI did not answer within 15s"
     if result.returncode != 0:
         return False, (result.stderr or result.stdout).strip()
     return True, ""
@@ -114,15 +165,18 @@ def docker_exec_error(settings: Any = None) -> str | None:
     ~30 ms, and caching would serve stale 'image missing' after a build.
     """
     current = settings or get_settings()
-    ok, detail = _run_docker_probe(["docker", "version", "--format", "{{.Server.Version}}"])
+    cli = container_cli(current)
+    ok, detail = _run_docker_probe(_server_probe_argv(cli))
     if not ok:
         return (
-            f"Docker exec backend selected but the docker daemon is not usable: {detail}. "
-            "Install/start docker and make sure the backend user may talk to it "
-            "(docker group), or switch LAUNCHPAD_STUDIO_EXEC_BACKEND back to subprocess."
+            f"Docker exec backend selected but the {_cli_name(cli)} daemon is not "
+            f"usable: {detail}. Install/start Docker (or finch: `finch vm start`) "
+            "and make sure the backend user may talk to it (docker group), set "
+            "LAUNCHPAD_CONTAINER_CLI if the CLI is not on PATH, or switch "
+            "LAUNCHPAD_STUDIO_EXEC_BACKEND back to subprocess."
         )
     ok, detail = _run_docker_probe(
-        ["docker", "image", "inspect", current.studio_exec_docker_image]
+        [cli, "image", "inspect", current.studio_exec_docker_image]
     )
     if not ok:
         return (
@@ -130,6 +184,9 @@ def docker_exec_error(settings: Any = None) -> str | None:
             "Build it with scripts/setup_exec_docker.sh "
             "(or point LAUNCHPAD_STUDIO_EXEC_DOCKER_IMAGE at an existing image)."
         )
+    unshared = _finch_unshared_workdir_error(cli)
+    if unshared:
+        return unshared
     if not current.studio_exec_forward_aws_credentials and not current.studio_exec_docker_network:
         return (
             "studio_exec_forward_aws_credentials=false needs "
@@ -336,16 +393,17 @@ def reap_orphan_containers(settings: Any = None) -> int:
     if base:
         for entry in os.listdir(base):
             shutil.rmtree(os.path.join(base, entry), ignore_errors=True)
+    cli = container_cli(current)
     try:
         listing = subprocess.run(  # noqa: S603 — fixed argv, no shell
-            ["docker", "ps", "-q", "--filter", "name=strands-exec-"],
+            [cli, "ps", "-q", "--filter", "name=strands-exec-"],
             capture_output=True, text=True, timeout=15,
         )
         names = listing.stdout.split()
         if listing.returncode != 0 or not names:
             return 0
         subprocess.run(  # noqa: S603
-            ["docker", "kill", *names], capture_output=True, timeout=30
+            [cli, "kill", *names], capture_output=True, timeout=30
         )
         logger.info("reaped %d orphaned exec container(s)", len(names))
         return len(names)
@@ -360,7 +418,7 @@ def kill_container(container_name: str | None) -> None:
         return
     try:
         subprocess.run(  # noqa: S603 — fixed argv, no shell
-            ["docker", "kill", container_name], capture_output=True, timeout=15
+            [container_cli(), "kill", container_name], capture_output=True, timeout=15
         )
     except Exception:  # noqa: BLE001 — termination must never raise
         pass
@@ -395,8 +453,9 @@ def _docker_run_argv(
     mem = f"{settings.studio_exec_memory_mb}m"
     cpu = settings.studio_exec_cpu_seconds
     fsize = settings.studio_exec_max_file_mb * 1024 * 1024
+    cli = container_cli(settings)
     argv = [
-        shutil.which("docker") or "docker", "run", "--rm", "-i",
+        shutil.which(cli) or cli, "run", "--rm", "-i",
         "--name", container_name,
         "-v", f"{workdir}:/work",
         "-w", "/work",
@@ -621,16 +680,21 @@ def chunk_to_sse(chunk_str: str) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def bundle_skills_for_workdir(code: str, workdir: str) -> None:
+def bundle_skills_for_workdir(code: str, workdir: str, workspace_id: str | None = None) -> None:
     """Download any APPROVED skills the code references into ``workdir/skills/``
-    so a local run resolves them like a deployed one. Never raises — a skill
-    problem must not sink a local debug run (mirrors the deploy-time bundler)."""
+    so a local run resolves them like a deployed one — from ``workspace_id``'s
+    registry (``None`` = the default workspace). Never raises — a skill problem must
+    not sink a local debug run (mirrors the deploy-time bundler)."""
     from pathlib import Path
 
     try:
         from app.deployer.zip_runtime import bundle_skills_into
+        from app.services.workspace import context_for_workspace
 
-        bundle_skills_into(code, Path(workdir), lambda m: logger.info("skill bundle: %s", m))
+        bundle_skills_into(
+            code, Path(workdir), lambda m: logger.info("skill bundle: %s", m),
+            context_for_workspace(workspace_id),
+        )
     except Exception as exc:  # noqa: BLE001 — skills are best-effort for local debug
         logger.warning("skill bundling skipped (%s)", type(exc).__name__)
 
@@ -640,6 +704,7 @@ async def spawn_execution_subprocess(
     input_data: str | None,
     openai_api_key: str | None = None,
     bedrock_api_key: str | None = None,
+    workspace_id: str | None = None,
 ) -> ExecRun:
     """Write code to a temp workspace and run it as ``python -u code.py
     [--user-input ...]`` on the configured backend (host exec interpreter or a
@@ -654,7 +719,7 @@ async def spawn_execution_subprocess(
     with open(code_file, "w", encoding="utf-8") as f:
         f.write(code)
 
-    bundle_skills_for_workdir(code, workdir)
+    bundle_skills_for_workdir(code, workdir, workspace_id)
     grant_workdir_to_exec_user(workdir, settings)
 
     script_args = ["--user-input", input_data] if input_data is not None else []
@@ -699,6 +764,7 @@ async def execute_strands_code(
     input_data: str | None = None,
     openai_api_key: str | None = None,
     bedrock_api_key: str | None = None,
+    workspace_id: str | None = None,
 ) -> str:
     """Run generated agent code in an isolated subprocess and return its stdout.
 
@@ -710,7 +776,7 @@ async def execute_strands_code(
     run: ExecRun | None = None
     try:
         run = await spawn_execution_subprocess(
-            code, input_data, openai_api_key, bedrock_api_key
+            code, input_data, openai_api_key, bedrock_api_key, workspace_id
         )
         process = run.process
         logger.info("execution subprocess started — pid %s, timeout %ss", process.pid, timeout)

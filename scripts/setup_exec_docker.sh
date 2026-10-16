@@ -17,6 +17,8 @@ IMAGE="${LAUNCHPAD_STUDIO_EXEC_DOCKER_IMAGE:-launchpad-studio-exec:latest}"
 NETWORK="${LAUNCHPAD_STUDIO_EXEC_DOCKER_NETWORK:-launchpad-exec}"
 SUBNET="${LAUNCHPAD_STUDIO_EXEC_DOCKER_SUBNET:-172.30.100.0/24}"
 HARDEN_NET=0
+# docker, else finch (macOS without Docker Desktop); LAUNCHPAD_CONTAINER_CLI overrides.
+CLI="${LAUNCHPAD_CONTAINER_CLI:-$(command -v docker || command -v finch || echo docker)}"
 for arg in "$@"; do
   case "${arg}" in
     --harden-net) HARDEN_NET=1 ;;
@@ -31,16 +33,28 @@ for arg in "$@"; do
   esac
 done
 
+CTX="${SCRIPT_DIR}/exec-image"
+# finch builds inside a VM that only shares $HOME: stage the context there.
+if [[ "$(basename "${CLI}")" == finch && "${CTX}" != "${HOME}"/* ]]; then
+  STAGED="${HOME}/.cache/launchpad/exec-image"
+  rm -rf "${STAGED}" && mkdir -p "${STAGED}" && cp -R "${CTX}/." "${STAGED}/"
+  CTX="${STAGED}"
+fi
+
 echo "==> building exec image: ${IMAGE}"
-docker build -t "${IMAGE}" "${SCRIPT_DIR}/exec-image"
+"${CLI}" build -t "${IMAGE}" "${CTX}"
 
 echo "==> verifying imports inside the image"
-docker run --rm "${IMAGE}" python -c \
+"${CLI}" run --rm "${IMAGE}" python -c \
   "import strands, strands_tools, mcp, aws_bedrock_token_generator"
 
 if [[ "${HARDEN_NET}" -eq 1 ]]; then
   if [[ "$(uname -s)" != "Linux" ]]; then
     echo "!!  --harden-net is Linux-only (it needs a DOCKER-USER iptables rule)." >&2
+    exit 1
+  fi
+  if [[ "$(basename "${CLI}")" != docker ]]; then
+    echo "!!  --harden-net needs the docker CLI (it relies on docker's DOCKER-USER chain)." >&2
     exit 1
   fi
   if [[ "${EUID}" -ne 0 ]]; then
@@ -49,10 +63,10 @@ if [[ "${HARDEN_NET}" -eq 1 ]]; then
   fi
 
   echo "==> exec network: ${NETWORK} (${SUBNET})"
-  if docker network inspect "${NETWORK}" >/dev/null 2>&1; then
+  if "${CLI}" network inspect "${NETWORK}" >/dev/null 2>&1; then
     echo "    already exists"
   else
-    docker network create --subnet "${SUBNET}" "${NETWORK}"
+    "${CLI}" network create --subnet "${SUBNET}" "${NETWORK}"
   fi
 
   echo "==> denying ${SUBNET} egress to the metadata service"

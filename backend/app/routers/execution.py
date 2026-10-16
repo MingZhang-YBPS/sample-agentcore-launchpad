@@ -12,12 +12,13 @@ import logging
 import shutil
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import local_exec
 
 logger = logging.getLogger("launchpad.execution")
@@ -47,13 +48,16 @@ def _require_local_execution() -> None:
 
 
 @router.post("/execute")
-async def execute_code(request: ExecutionRequest) -> dict:
+async def execute_code(
+    request: ExecutionRequest, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict:
     """One-shot execution: run the code and return its captured stdout."""
     _require_local_execution()
     start = time.monotonic()
     try:
         output = await local_exec.execute_strands_code(
-            request.code, request.input_data, request.openai_api_key, request.bedrock_api_key
+            request.code, request.input_data, request.openai_api_key,
+            request.bedrock_api_key, ws.id,
         )
         return {
             "success": True,
@@ -70,7 +74,9 @@ async def execute_code(request: ExecutionRequest) -> dict:
 
 
 @router.post("/execute/stream")
-async def execute_code_stream(request: ExecutionRequest) -> StreamingResponse:
+async def execute_code_stream(
+    request: ExecutionRequest, ws: WorkspaceScope = Depends(require_workspace)
+) -> StreamingResponse:
     """Streaming execution: forward subprocess stdout as SSE, ending with a
     `[STREAM_COMPLETE:<seconds>]` sentinel. Uses the multiline framing so
     newlines survive `data:` splitting (an empty `data: ` line = newline)."""
@@ -86,7 +92,7 @@ async def execute_code_stream(request: ExecutionRequest) -> StreamingResponse:
         try:
             run = await local_exec.spawn_execution_subprocess(
                 request.code, request.input_data,
-                request.openai_api_key, request.bedrock_api_key,
+                request.openai_api_key, request.bedrock_api_key, ws.id,
             )
             process = run.process
             logger.info("streaming subprocess started — pid %s, timeout %ss", process.pid, timeout)

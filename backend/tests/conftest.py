@@ -17,6 +17,11 @@ os.environ["LAUNCHPAD_ALLOW_OPEN_CONSOLE"] = "true"
 # Manual refresh and price-merge behavior remain covered by test_model_prices.py.
 os.environ["LAUNCHPAD_MODEL_PRICES_REFRESH_HOURS"] = "0"
 
+# Docker-backend tests assert literal `docker ...` argv; pin the container CLI so
+# "auto" resolution does not pick finch on a host without docker. The resolver's
+# own tests pass container_cli explicitly.
+os.environ["LAUNCHPAD_CONTAINER_CLI"] = "docker"
+
 # Isolate configuration reads before db/main bind settings or seed the default
 # workspace. Host YAML may select another Region or Docker execution in production.
 # Tests that exercise YAML precedence still repoint this late-bound path themselves.

@@ -10,7 +10,7 @@ English: [setup.md](setup.md)
   无需开启预览
 - 具备管理员级别权限的凭证(`aws sts get-caller-identity` 可用)
 - `uv` ≥ 0.8、Node.js ≥ 20(`npm`)、AWS CDK CLI v2(`npm i -g aws-cdk`)、
-  Docker(支持 ARM64,第 5 阶段容器路径需要)
+  Docker(支持 ARM64,第 5 阶段容器路径需要；也可用 [finch](https://github.com/runfinch/finch)，见下文)
 - 每个账号/区域执行一次 CDK bootstrap:`cdk bootstrap aws://<account>/us-west-2`
 
 ## 引导(Bootstrap)
@@ -382,6 +382,12 @@ export LAUNCHPAD_STUDIO_EXEC_BACKEND=docker   # 或在 launchpad.yaml 里写 stu
 `run_mode=prod` + `studio_exec_backend=docker` 即可提供本地调试端点,不再需要
 `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true`(显式设为 `false` 仍然是总开关)。
 前提:后端用户能访问 docker daemon(`docker` 组),且已用上面的脚本构建镜像。
+
+没有 Docker？所有容器调用（本后端、`setup_exec_docker.sh`、`local_container_smoke.sh`、
+`e2e_docker_exec.py`）在 PATH 上有 `docker` 时用它，否则用 `finch`；设置
+`LAUNCHPAD_CONTAINER_CLI`（或 launchpad.yaml 里的 `container_cli:`）可固定其一。finch 的
+虚拟机只共享 `$HOME`，所以代码检出要放在其下（或把它的 `data/` 加进
+`~/.finch/finch.yaml` 的 `additional_directories`）；`--harden-net` 仍仅支持 docker。
 
 有一道边界**不是**白来的:EC2 上 IMDS hop limit ≥ 2 时(这些机器的默认值),默认
 bridge 网络里的容器仍能访问实例元数据服务 —— 这也正是依赖 ambient 凭证的 Bedrock 路径无需 API key
