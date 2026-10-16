@@ -44,8 +44,19 @@ from botocore.exceptions import ClientError  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.core.db import Base, _seed_default_projects, _seed_default_workspace, engine  # noqa: E402
+from app.dlc import scheduler as _dlc_scheduler  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.services.workspace import WorkspaceContext  # noqa: E402
+
+# Importing app.main builds the module-level `app = create_app(resume_jobs=True)`,
+# which starts the real Agent-DLC scheduler thread in every test process. Its
+# 60 s tick then runs scheduled tasks against whatever a test has monkeypatched —
+# on a loaded host a tick lands inside a test and doubles its calls (seen with
+# test_the_scheduler_checks_each_server_in_its_project_and_skips_archived).
+# Tests drive scheduler.tick() / run_* directly; stop the background loop.
+_dlc_scheduler.stop()
+if _dlc_scheduler._THREAD is not None:
+    _dlc_scheduler._THREAD.join(timeout=5)
 
 
 def ws_ctx(resources: dict | None = None, **fields) -> WorkspaceContext:
