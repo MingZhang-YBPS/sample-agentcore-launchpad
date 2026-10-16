@@ -1,0 +1,202 @@
+# Agent-DLC workshop screenshots — one entry per image base name.
+# Read by backend/scripts/capture_workshop_screens.py (format in its docstring).
+#
+# Fields: name · chapter (content file) · status (keep | replace | new) · account
+# (admin | developer | biz-owner | release-ops | sme | anon) · path · wait · actions ·
+# clip (Playwright selector(s); the crop is their union plus `margin`) · highlights
+# ([{n, box}] — the numbers match the "图中：" caption; no n = an unnumbered frame) ·
+# hide / mask (selectors hidden / blurred) · storage (localStorage overrides on top
+# of: dark theme, the shot's language, V3, tour seen, chooser skipped) · viewport ·
+# requires (agent:NAME, user:NAME, fact:<agent>.<story fact>[=value], state:<what a
+# workshop walk-through must have produced>) · manual (why it is not captured).
+# Any string may be a {zh: ..., en: ...} pair; {agent:NAME} / {user:NAME} expand to ids.
+
+shots:
+  # ── 10-prepare/20-setup ────────────────────────────────────────────────────
+  - name: 10-setup-signin
+    chapter: 10-prepare/20-setup
+    status: keep
+    account: anon
+    path: /v3
+    wait: '[data-testid=auth-tabs]'
+    highlights:
+      - {n: 1, box: '[data-testid=auth-tab-signin]'}
+      - {n: 2, box: '.v3-auth-fields .v3-field >> nth=0'}
+      - {n: 3, box: '.v3-auth-fields .v3-field >> nth=1'}
+      - {n: 4, box: '.v3-auth-submit'}
+
+  - name: 10-setup-v3-topbar
+    chapter: 10-prepare/20-setup
+    status: replace   # the top bar gained the theme switch
+    account: admin
+    path: /v3
+    wait: '[data-testid=v3-shell]'
+    clip: header.v3-top
+    margin: 6
+    highlights:
+      - {n: 1, box: .v3-cmdk-trigger}
+      - {n: 2, box: 'label.v3-ws >> nth=0'}
+      - {n: 3, box: '.v3-top-right > button.v3-btn.ghost.sm >> nth=0'}
+      - {n: 4, box: '[data-testid=v3-theme-switch]'}
+      - {n: 5, box: '.v3-top-right > .v3-help:not(.v3-theme)'}
+      - {n: 6, box: '[data-testid=v3-switch-v2]'}
+      - {n: 7, box: ['.v3-account', '.v3-top-right > button >> nth=-1']}
+
+  - name: 10-setup-v3-onboarding
+    chapter: 10-prepare/20-setup
+    status: keep
+    account: admin
+    path: /v3
+    storage: {launchpad_v3_tour_done: null}
+    wait: .v3-tour-card
+    requires: ['state:fresh workspace (launch sequence at 1/5, no agents)']
+    highlights:
+      - {box: .v3-tour-card}
+
+  - name: 10-setup-v3-rail
+    chapter: 10-prepare/20-setup
+    status: replace   # the Configure group grew from 6 to 17 entries
+    account: admin
+    path: /v3
+    viewport: [1440, 1400]
+    storage: {launchpad_nav_mode: expert}
+    wait: '[data-testid=v3-shell]'
+    actions: [{expand_rail: true}]
+    clip: nav.v3-rail
+    margin: 0
+    highlights:
+      - {box: ['[data-tour=modules] .v3-rail-label', '[data-tour=modules] .v3-rail-group']}
+      - {n: 1, box: '[data-testid=v3-nav-mode]'}
+
+  # ── 10-prepare/30-roles ────────────────────────────────────────────────────
+  - name: 15-roles-developer-sidebar
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: developer
+    path: /v3
+    viewport: [1440, 1100]
+    storage: {launchpad_nav_mode: null}
+    wait: '[data-testid=v3-shell]'
+    actions: [{expand_rail: true}]
+    clip: nav.v3-rail
+    margin: 0
+    highlights:
+      - {n: 1, box: 'nav.v3-rail > a'}
+      - {n: 2, box: '[data-tour=modules] .v3-rail-group'}
+      - {n: 3, box: '[data-testid=v3-nav-mode]'}
+
+  - name: 15-roles-bizowner-perms
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: admin
+    path: /v3/users?view=detail&user=biz-owner
+    requires: [user:biz-owner]
+    wait: '.v3-usr-chip'
+    clip: ['section.v3-panel:has(.v3-usr-chip)', 'section.v3-panel:has([data-testid=v3-user-granted])']
+    highlights:
+      - {n: 1, box: '.v3-usr-chip:has-text("criteria.sign")'}
+      - {n: 2, box: '.v3-usr-chip:has-text("golden.admit")'}
+      - {n: 3, box: '.v3-usr-chip:has-text("judge.calibrate")'}
+      - {n: 4, box: '[data-testid=v3-user-granted] .v3-chip'}
+
+  # ── 20-flywheel/10-define ──────────────────────────────────────────────────
+  - name: 20-define-sidebar-expert
+    chapter: 20-flywheel/10-define
+    status: keep
+    account: developer
+    path: /v3
+    viewport: [1440, 1100]
+    storage: {launchpad_nav_mode: expert, launchpad_v3_rail_open: '{"eval":true}'}
+    wait: '[data-testid=v3-shell]'
+    clip: nav.v3-rail
+    margin: 0
+    highlights:
+      - {n: 1, box: '[data-testid=v3-nav-mode]'}
+      - {n: 2, box: '.v3-rail-group:has([data-testid=v3-rail-group-eval])'}
+      - {n: 3, box: 'a.v3-rail-sub[href="/v3/evaluators"]'}
+
+  # ── 20-flywheel/20-build ───────────────────────────────────────────────────
+  - name: 30-build-chooser
+    chapter: 20-flywheel/20-build
+    status: new
+    account: developer
+    path: /v3/create
+    storage: {lp.v3.create.chooser: null}
+    wait: .v3-chooser-main
+    actions:
+      - {click: {zh: '.v3-chooser-qs >> text=什么都没有', en: '.v3-chooser-qs >> text=Nothing yet'}}
+      - {click: {zh: '.v3-chooser-qs >> text=调用工具办事', en: '.v3-chooser-qs >> text=Gets things done with tools'}}
+      - {click: {zh: '.v3-chooser-qs >> text=要，走完整 Agent-DLC', en: '.v3-chooser-qs >> text=Yes — the full Agent-DLC'}}
+    clip: .v3-chooser-main
+    highlights:
+      - {n: 1, box: ol.v3-chooser-qs}
+      - {n: 2, box: .v3-chooser-side}
+      - {n: 3, box: details.v3-chooser-compare}
+
+  - name: 30-build-method-cards
+    chapter: 20-flywheel/20-build
+    status: replace   # /v3/create now opens on the chooser; the ways sit behind "skip"
+    account: developer
+    path: /v3/create
+    wait: .v3-way
+    clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("其他构建方式"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Other ways to build"))'}
+    highlights:
+      - {n: 1, box: '.v3-way:has-text("Strands")'}
+
+  - name: 30-build-byoc-entry
+    chapter: 20-flywheel/20-build
+    status: keep
+    account: developer
+    path: /v3/create
+    wait: .v3-way
+    clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("其他构建方式"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Other ways to build"))'}
+    highlights:
+      - {n: 1, box: {zh: '.v3-way:has-text("自带代码")', en: '.v3-way:has-text("Bring your own code")'}}
+
+  - name: 30-build-journey-strip
+    chapter: 20-flywheel/20-build
+    status: new
+    account: developer
+    path: /v3/agents?id={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    wait: '[data-testid=v3-journey-continue], [data-testid=v3-journey-waiting]'
+    clip: '[data-testid=v3-journey]'
+    highlights:
+      - {n: 1, box: ol.v3-journey-line}
+      - {n: 2, box: '[data-testid=v3-journey-continue], [data-testid=v3-journey-waiting]'}
+
+  # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
+  - name: 90-organizer-users-detail
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # the page head gained 强制下线
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    clip: '.v3-main header.v3-head'
+    highlights:
+      - {n: 1, box: {zh: '.v3-head-end button:has-text("重置密码")', en: '.v3-head-end button:has-text("Reset password")'}}
+      - {n: 2, box: {zh: '.v3-head-end button:has-text("强制下线")', en: '.v3-head-end button:has-text("Force sign-out")'}}
+
+  - name: 90-organizer-admins
+    chapter: 90-appendix/10-organizer-deploy
+    status: new
+    account: admin
+    path: /v3/admins
+    wait: '[data-testid=v3-admins-table]'
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: '.v3-head-end .v3-btn.primary'}
+      - {n: 2, box: '[data-testid=v3-admins-table]'}
+
+  - name: 90-organizer-system-update
+    chapter: 90-appendix/10-organizer-deploy
+    status: new
+    account: admin
+    path: /v3/system-update
+    wait: '[data-testid=v3-sysupdate-current]'
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: '[data-testid=v3-sysupdate-current]'}
+      - {n: 2, box: '[data-testid=v3-sysupdate-remote]'}
+      - {n: 3, box: '[data-testid=v3-sysupdate-commits]'}
