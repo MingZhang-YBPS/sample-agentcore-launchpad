@@ -527,6 +527,7 @@ def update_project(
                 db, identity, fields.get("department_id", row.department_id) or None,
                 fields.get("group_id") or None,  # a group named now: the department's
             )
+    tag_keys_before = _project_tag_keys(row)
     changed: list[str] = []
     for key in ("name", "description", "department_id"):
         if key in fields and getattr(row, key) != fields[key]:
@@ -554,6 +555,7 @@ def update_project(
         # the department and cost tags are on every resource of the project (and a
         # rename re-tags too, design §1.3); runs start after the caller's commit
         cost_tags.schedule_retag(db, project_id=row.id, reason="project_update",
+                                 remove_keys=tag_keys_before - _project_tag_keys(row),
                                  **_retag_actor(identity))
     if group_moved or (sod_strict(row) and not was_strict):
         # a new group's roles, or strictness switched on, must not leave a combined duty
@@ -1311,12 +1313,25 @@ def transfer_agent(
         )
         # phase 2 (cost-tags §1.3): the agent's resources take the new project's tags
         # — queued here, started after the caller's commit (`cost_tags.start_queued`)
+        # the source project's custom cost tags and department leave with it (the
+        # target's set is written first; only the keys it lacks are removed)
         retag = cost_tags.schedule_retag(
             db, project_id=to_project_id, reason="transfer",
             workspace_ids=[agent.workspace_id or "default"], agent_ids=[agent_id],
-            **_retag_actor(identity))
+            remove_keys=_project_tag_keys(source), **_retag_actor(identity))
     return {"agent_id": agent_id, "from_project_id": source.id,
             "to_project_id": to_project_id, "rows": counts, "retag_job_ids": retag}
+
+
+def _project_tag_keys(row: Project) -> set[str]:
+    """The tag keys a project puts on its resources beyond the standard set: its
+    custom cost tags and, with a department, `launchpad:department`."""
+    from app.services import billing_costs, project_telemetry
+
+    keys = set(billing_costs.custom_tags(row))
+    if row.department_id:
+        keys.add(project_telemetry.TAG_DEPARTMENT)
+    return keys
 
 
 def _retag_actor(identity: Any) -> dict[str, Any]:

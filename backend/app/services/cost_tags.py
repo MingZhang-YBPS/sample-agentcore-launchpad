@@ -248,6 +248,48 @@ class AwsTagWriter:
             return UNSUPPORTED, f"no tagging for resource kind '{kind}'"
         return TAGGED, ""
 
+    def untag(self, workspace: Any, entry: dict[str, Any],
+              keys: list[str]) -> tuple[str, str]:
+        """Remove `keys` from one resource (tags a project change made stale: the old
+        project's custom cost tags after a transfer, a key dropped from the project's
+        set, a department cleared); never raises. A key the resource does not carry
+        is not an error on any of these services."""
+        try:
+            return self._untag(workspace, entry, keys)
+        except Exception as exc:  # noqa: BLE001 — recorded per resource, never raised
+            return classify(exc, entry["kind"])
+
+    @staticmethod
+    def _untag(workspace: Any, entry: dict[str, Any], keys: list[str]) -> tuple[str, str]:
+        kind = entry["kind"]
+        arn = entry.get("arn") or ""
+        if kind in AGENTCORE_KINDS:
+            workspace.client("bedrock-agentcore-control").untag_resource(
+                resourceArn=arn, tagKeys=keys)
+        elif kind == KNOWLEDGE_BASE:
+            workspace.client("bedrock-agent").untag_resource(resourceArn=arn, tagKeys=keys)
+        elif kind == IAM_ROLE:
+            workspace.client("iam").untag_role(RoleName=entry["name"], TagKeys=keys)
+        elif kind == ECR_REPOSITORY:
+            workspace.client("ecr").untag_resource(resourceArn=arn, tagKeys=keys)
+        elif kind == LOG_GROUP:
+            workspace.client("logs").untag_resource(resourceArn=arn, tagKeys=keys)
+        elif kind == CODEBUILD_PROJECT:
+            codebuild = workspace.client("codebuild")
+            found = codebuild.batch_get_projects(names=[entry["name"]]).get("projects") or []
+            if not found:
+                return MISSING, f"CodeBuild project {entry['name']} not found"
+            current = {t["key"]: t.get("value", "") for t in found[0].get("tags") or []}
+            kept = {k: v for k, v in current.items() if k not in keys}
+            if kept != current:
+                codebuild.update_project(name=entry["name"],
+                                         tags=tag_list(kept, "key", "value"))
+        elif kind == SECRET and arn:
+            workspace.client("secretsmanager").untag_resource(SecretId=arn, TagKeys=keys)
+        else:
+            return UNSUPPORTED, f"no untagging for resource kind '{kind}'"
+        return TAGGED, ""
+
     @staticmethod
     def _codebuild(workspace: Any, name: str, tags: dict[str, str]) -> tuple[str, str]:
         """CodeBuild has no TagResource: UpdateProject replaces the project's tags, so
@@ -648,7 +690,16 @@ def _stage_tag(db: Session, job_id: str, workspace: Any, ops: BackfillOps) -> st
     for index, item in enumerate(resources):
         if item.get("status") != PENDING:
             continue
-        result, detail = ops.writer.apply(workspace, item, _desired_tags(db, workspace, item))
+        desired = _desired_tags(db, workspace, item)
+        result, detail = ops.writer.apply(workspace, item, desired)
+        stale = sorted(set(payload.get("remove_keys") or []) - set(desired))
+        untag = getattr(ops.writer, "untag", None)
+        if result == TAGGED and stale and untag is not None:
+            # tags the change made stale (an old project's cost center must not keep
+            # attributing the resource to it); a failure here is the resource's result
+            result, detail = untag(workspace, item, stale)
+            if result == TAGGED:
+                item["untagged"] = stale
         item.update(status=result, detail=detail, tagged_at=_now_iso())
         resources[index] = item
         payload = dict(_job(db, job_id).payload or {})
@@ -747,16 +798,24 @@ def start_backfill_async(job_id: str) -> threading.Thread:
 
 
 def _new_job(db: Session, workspace_id: str, scope: Scope, *, reason: str, actor: str,
-             actor_user_id: str | None) -> Any:
+             actor_user_id: str | None, remove_keys: Iterable[str] | None = None) -> Any:
     """A run of `scope` in the workspace, unless an identical one is still queued (it
-    will read the ledger as it is when it runs). Flushed, not committed."""
+    will read the ledger as it is when it runs; it takes this run's `remove_keys` too).
+    Flushed, not committed."""
     from app.models.ledger import Job
 
+    remove = sorted(set(remove_keys or ()))
     with project_context(None):
         for job in db.scalars(select(Job).where(
                 Job.type == JOB_TYPE, Job.workspace_id == workspace_id,
                 Job.status == "queued")):
             if (job.payload or {}).get("scope") == scope.as_dict():
+                if remove:
+                    payload = dict(job.payload or {})
+                    payload["remove_keys"] = sorted(
+                        set(payload.get("remove_keys") or []) | set(remove))
+                    job.payload = payload
+                    db.flush()
                 return job
         payload: dict[str, Any] = {
             "workspace_id": workspace_id, "scope": scope.as_dict(), "reason": reason,
@@ -764,6 +823,9 @@ def _new_job(db: Session, workspace_id: str, scope: Scope, *, reason: str, actor
             "stages": [{"name": s, "status": "pending", "detail": ""} for s in STAGES],
             "resources": [],
         }
+        if remove:
+            # keys to take off each resource unless its desired set has them
+            payload["remove_keys"] = remove
         if scope.project_id is None and not scope.agent_ids:
             payload["platform"] = True  # workspace-wide: no project owns the run
         job = Job(workspace_id=workspace_id, type=JOB_TYPE, payload=payload,
@@ -787,11 +849,14 @@ def start_backfill(db: Session, identity: Any, workspace_id: str) -> Any:
 def schedule_retag(db: Session, *, project_id: str, reason: str,
                    workspace_ids: Iterable[str] | None = None,
                    agent_ids: list[str] | None = None, actor: str = "system",
-                   actor_user_id: str | None = None) -> list[str]:
+                   actor_user_id: str | None = None,
+                   remove_keys: Iterable[str] | None = None) -> list[str]:
     """Queue the re-tag a project change needs (a transfer: the agents; a department
     or `cost_tags` change, a rename: the project) in the caller's transaction, one run
     per workspace (default: every workspace the project is bound to). The ids wait in
-    `db.info` until `start_queued` runs after the commit."""
+    `db.info` until `start_queued` runs after the commit. `remove_keys`: tags the
+    change made stale (the old project's custom keys, a dropped key, a cleared
+    department) — removed from each resource whose desired set lacks them."""
     from app.models.projects import ProjectWorkspace
 
     if workspace_ids is None:
@@ -802,7 +867,7 @@ def schedule_retag(db: Session, *, project_id: str, reason: str,
     ids = []
     for ws in workspace_ids:
         job = _new_job(db, ws, scope, reason=reason, actor=actor,
-                       actor_user_id=actor_user_id)
+                       actor_user_id=actor_user_id, remove_keys=remove_keys)
         ids.append(job.id)
     db.info.setdefault(_PENDING_KEY, []).extend(i for i in ids
                                                 if i not in db.info[_PENDING_KEY])
