@@ -116,10 +116,16 @@ def main() -> int:
             f"turn2 → {turn2['text']!r} ({turn2['latency_ms']}ms, session {session_id[:12]}…)",
         )
 
-        # 4 — gateway tool call (Cedar-enforced MCP gateway → HR lambda)
+        # 4 — gateway tool call (Cedar-enforced MCP gateway → HR lambda). The HR
+        # toolset only looks employees up by id (get_employee takes EMP-NNNN; there
+        # is no search by name), so the prompt gives the id — as e2e_gateway_tool
+        # does. Asking by name alone made Claude ask back for the id instead.
         hr = client.post(
             f"/api/agents/{agent_id}/invoke",
-            json={"prompt": "How many vacation days does Maya Chen have left?"},
+            json={
+                "prompt": "How many vacation days does Maya Chen (employee EMP-1024) "
+                "have left this year?"
+            },
         ).json()
         step("gateway-tool", "9" in hr["text"], f"→ {hr['text']!r}")
 
