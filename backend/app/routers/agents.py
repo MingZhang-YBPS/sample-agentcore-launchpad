@@ -62,7 +62,7 @@ from app.services.agentcore import harness as harness_api
 from app.services.agentcore.client import control_client
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.creators import Creator
-from app.services.invoke import invoke_agent_text
+from app.services.invoke import invoke_agent_text, upstream_invoke_error
 from app.services.memory import scoped_actor
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
@@ -1246,12 +1246,18 @@ def invoke_agent(
     )
     started = time.monotonic()
     extra = {"attachments": prepared} if prepared else {}
-    result = invoke_agent_text(
-        agent, req.prompt, session_id=req.session_id,
-        actor_id=scoped_actor(agent.id, req.actor_id),
-        workspace=ws.context,
-        **extra,
-    )
+    try:
+        result = invoke_agent_text(
+            agent, req.prompt, session_id=req.session_id,
+            actor_id=scoped_actor(agent.id, req.actor_id),
+            workspace=ws.context,
+            **extra,
+        )
+    except Exception as exc:
+        upstream = upstream_invoke_error(exc)
+        if upstream is None:
+            raise
+        raise upstream from exc
     return InvokeResponse(
         answered_by=result.get("answered_by", "model"),
         text=result["text"],

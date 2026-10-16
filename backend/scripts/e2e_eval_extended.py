@@ -240,7 +240,10 @@ def main() -> int:
     res = client.delete(f"/api/eval/datasets/cloud/{cloud['dataset_id']}")
     print(f"  cloud dataset {cloud['dataset_id']}: "
           f"{'deleted' if res.status_code == 200 else res.text}", flush=True)
-    print(f"  local dataset {ds['id']} kept as demo material", flush=True)
+    # every run makes a fresh-named set: keeping them piled one up per run
+    res = client.delete(f"/api/eval/datasets/{ds['id']}")
+    print(f"  local dataset {ds['id']}: "
+          f"{'deleted' if res.status_code == 200 else res.text}", flush=True)
 
     print("E2E EVAL EXTENDED: PASS")
     return 0
