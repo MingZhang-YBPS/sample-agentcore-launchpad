@@ -38,7 +38,7 @@ import time
 import uuid
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 RUN = uuid.uuid4().hex[:6]
 PROMPT = "You are a concise arithmetic assistant. Reply with just the number."
@@ -205,11 +205,12 @@ def main() -> int:
 
         # ── 6. each agent answers through its own workspace ───────────────────
         for ws, agent_id in ids.items():
-            res = admin.post(f"/api/agents/{agent_id}/invoke", headers={"X-Workspace": ws},
-                             json={"prompt": "What is 6 * 7? Reply with just the number."})
-            text = res.json().get("text", "") if res.status_code == 200 else res.text[:120]
-            step(f"invoke.{ws}", res.status_code == 200 and "42" in text,
-                 f"HTTP {res.status_code} · {text[:40]!r}")
+            try:
+                text = chat_sse(admin, agent_id, "What is 6 * 7? Reply with just the number.",
+                                headers={"X-Workspace": ws})["text"]
+                step(f"invoke.{ws}", "42" in text, f"{text[:40]!r}")
+            except (httpx.HTTPStatusError, RuntimeError) as exc:
+                step(f"invoke.{ws}", False, f"{type(exc).__name__}: {exc}"[:120])
     except (RuntimeError, httpx.HTTPError, KeyError, StopIteration, KeyboardInterrupt) as exc:
         RESULTS.append(("aborted", "FAIL", f"{type(exc).__name__}: {exc}"[:300]))
     finally:

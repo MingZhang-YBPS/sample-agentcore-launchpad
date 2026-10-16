@@ -181,6 +181,7 @@ def suggestions(client: httpx.Client, agent_id: str) -> None:
 
 
 def anonymize_invoke(client: httpx.Client, agent_id: str) -> None:
+    # The sync route's own contract (masking on /invoke); anonymize_stream covers chat.
     res = client.post(
         f"/api/agents/{agent_id}/invoke",
         json={"prompt": PII_PROMPT, "session_id": session("pii")},

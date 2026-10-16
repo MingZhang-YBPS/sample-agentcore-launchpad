@@ -11,7 +11,7 @@ import argparse
 import sys
 import time
 
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 AGENT_NAME = "e2e-harness-smoke"
 SYSTEM_PROMPT = "You are a concise math assistant. Answer with just the result."
@@ -72,12 +72,7 @@ def main() -> int:
     print(f"── harness READY · arn {arn}")
 
     print("── invoking: what is 2+2?")
-    inv = client.post(
-        f"/api/agents/{agent_id}/invoke",
-        json={"prompt": "What is 2+2? Reply with just the number."},
-    )
-    inv.raise_for_status()
-    answer = inv.json()
+    answer = chat_sse(client, agent_id, "What is 2+2? Reply with just the number.")
     print(
         f"answer: {answer['text']!r} · {answer['latency_ms']}ms "
         f"· session {answer['session_id'][:12]}…"

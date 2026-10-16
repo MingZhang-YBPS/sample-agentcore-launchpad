@@ -6064,11 +6064,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  invokeAgent: (id: string, prompt: string, sessionId?: string) =>
-    request<{ text: string; session_id: string; latency_ms: number }>(
-      `/api/agents/${id}/invoke`,
-      { method: "POST", body: JSON.stringify({ prompt, session_id: sessionId }) },
-    ),
+  // no `invokeAgent`: console chat turns go over `POST /api/chat/{id}` (lib/chat.ts
+  // `streamChat`) — the sync `/invoke` sends nothing until the answer is complete, so a
+  // proxy read timeout (CloudFront: 60 s) cuts a slow turn to 504
   deleteAgent: (id: string) =>
     request<{ deleted: boolean; agent_id: string; aws_resource_deleted: boolean }>(
       `/api/agents/${id}`,

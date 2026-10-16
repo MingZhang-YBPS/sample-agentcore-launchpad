@@ -3,38 +3,49 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ErrorCallout } from "../../../components/ErrorCallout";
-import { api, type AgentInfo } from "../../../lib/api";
+import { type AgentInfo } from "../../../lib/api";
+import { streamChat } from "../../../lib/chat";
 import { useFailure } from "../../failure";
 import { ms } from "../../format";
 import { Reasoned } from "../../reason";
 import { agentNotRunning } from "../../reasons";
 import { Btn, Panel } from "../../ui";
+import { readTurn } from "./tryTurn";
 
-/** One-shot invoke from the detail page (the full conversation is Chat). */
+/** One-shot turn from the detail page (the full conversation is Chat). It runs over
+ *  the console chat stream, not the sync `/invoke`: the stream carries heartbeats, so
+ *  a cold start or a long answer is not cut off by a proxy's read timeout. */
 export function TryIt({ agent }: { agent: AgentInfo }) {
   const { t } = useTranslation();
   // a failed call stays under the form, with the way out (storyline-ux §4)
   const failed = useFailure();
   const [prompt, setPrompt] = useState("");
-  const [answer, setAnswer] = useState<{ text: string; latency: number } | null>(null);
+  const [answer, setAnswer] = useState<{ text: string; latency: number | null } | null>(null);
   const [busy, setBusy] = useState(false);
-  const run = () => {
+  const run = async () => {
     if (!prompt.trim() || busy || agent.status !== "active") return;
     setBusy(true);
     failed.clear();
     setAnswer(null);
-    api
-      .invokeAgent(agent.id, prompt.trim())
-      .then((res) => setAnswer({ text: res.text, latency: res.latency_ms }))
-      .catch((err: unknown) => failed.fail(err))
-      .finally(() => setBusy(false));
+    const started = performance.now();
+    try {
+      const res = await streamChat(agent.id, { prompt: prompt.trim(), session_id: null });
+      const text = await readTurn(res, (partial) => setAnswer({ text: partial, latency: null }),
+        t("v3.chat.failed"));
+      setAnswer({ text, latency: Math.round(performance.now() - started) });
+    } catch (err: unknown) {
+      failed.fail(err);
+    } finally {
+      setBusy(false);
+    }
   };
   return (
-    <Panel title={t("v3.agent.try")} end={answer ? <span className="mono">{ms(answer.latency)}</span> : undefined}>
+    <Panel title={t("v3.agent.try")}
+      end={answer?.latency != null ? <span className="mono">{ms(answer.latency)}</span> : undefined}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          run();
+          void run();
         }}
         style={{ display: "flex", gap: 8 }}
       >

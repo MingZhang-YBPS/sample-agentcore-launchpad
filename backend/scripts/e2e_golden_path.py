@@ -18,7 +18,7 @@ import time
 import uuid
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 # unique per run — harness deletion is async, so a fixed name races re-runs
 AGENT_NAME = f"golden-path-{uuid.uuid4().hex[:6]}"
@@ -98,18 +98,13 @@ def main() -> int:
 
     try:
         # 3 — chat two turns, same session (short-term memory)
-        turn1 = client.post(
-            f"/api/agents/{agent_id}/invoke",
-            json={"prompt": "Hi! My favourite colour is teal. Please remember that."},
-        ).json()
+        turn1 = chat_sse(
+            client, agent_id, "Hi! My favourite colour is teal. Please remember that."
+        )
         session_id = turn1["session_id"]
-        turn2 = client.post(
-            f"/api/agents/{agent_id}/invoke",
-            json={
-                "prompt": "What is my favourite colour? One word.",
-                "session_id": session_id,
-            },
-        ).json()
+        turn2 = chat_sse(
+            client, agent_id, "What is my favourite colour? One word.", session_id=session_id
+        )
         step(
             "chat-memory",
             "teal" in turn2["text"].lower(),
@@ -120,13 +115,10 @@ def main() -> int:
         # toolset only looks employees up by id (get_employee takes EMP-NNNN; there
         # is no search by name), so the prompt gives the id — as e2e_gateway_tool
         # does. Asking by name alone made Claude ask back for the id instead.
-        hr = client.post(
-            f"/api/agents/{agent_id}/invoke",
-            json={
-                "prompt": "How many vacation days does Maya Chen (employee EMP-1024) "
-                "have left this year?"
-            },
-        ).json()
+        hr = chat_sse(
+            client, agent_id,
+            "How many vacation days does Maya Chen (employee EMP-1024) have left this year?",
+        )
         step("gateway-tool", "9" in hr["text"], f"→ {hr['text']!r}")
 
         # 5 — registry approval chain on the auto-created A2A record
