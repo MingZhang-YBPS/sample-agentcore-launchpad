@@ -37,7 +37,7 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # `datetime.UTC` is 3.11+; this script must also run under an older system python3
@@ -98,7 +98,16 @@ def take_backup(ledger: Path, dest_dir: Path, *, now: datetime, timeout: float) 
     if not dest_dir.is_dir():
         raise BackupError(f"destination {dest_dir} is not a directory")
     final = dest_dir / backup_name(ledger, now)
-    if final.exists():
+    # The stamp has one-second resolution, so two backups inside one second (an
+    # update and its immediate rollback both back up first) share a name. Step the
+    # stamp forward instead of refusing: the name keeps its format, still sorts by
+    # age for --keep, and an existing backup is never overwritten.
+    for _ in range(60):
+        if not final.exists():
+            break
+        now += timedelta(seconds=1)
+        final = dest_dir / backup_name(ledger, now)
+    else:
         raise BackupError(f"{final} already exists")
     partial = final.with_name(final.name + ".partial")
     partial.unlink(missing_ok=True)  # leftover of an interrupted run
