@@ -700,9 +700,9 @@ proxy_set_header X-Forwarded-Proto https;   # TLS 在 CloudFront 终结
 
 ```bash
 (cd backend && uv run python scripts/ledger_backup.py)   # 在线备份并校验；服务运行时不要 cp 台账
-git merge --ff-only origin/main
-cd backend && uv sync && cd ..
-cd frontend && npm run build && cd ..          # 必须:preview 只吃 dist/
+git fetch origin && git merge --ff-only origin/console-v3
+cd backend && uv sync --frozen && cd ..
+cd frontend && npm ci && npm run build && cd ..          # 必须:preview 只吃 dist/
 sudo systemctl restart launchpad-backend launchpad-frontend
 curl -s localhost:8000/api/auth/status          # 预期 auth_required: true
 ```

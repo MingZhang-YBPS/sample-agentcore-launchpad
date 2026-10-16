@@ -926,9 +926,9 @@ version (backup, migration rehearsal, rollback, troubleshooting), follow
 
 ```bash
 (cd backend && uv run python scripts/ledger_backup.py)   # online + verified; never cp a live ledger
-git merge --ff-only origin/main
-cd backend && uv sync && cd ..
-cd frontend && npm run build && cd ..          # required: preview serves dist/
+git fetch origin && git merge --ff-only origin/console-v3
+cd backend && uv sync --frozen && cd ..
+cd frontend && npm ci && npm run build && cd ..          # required: preview serves dist/
 sudo systemctl restart launchpad-backend launchpad-frontend
 curl -s localhost:8000/api/auth/status          # expect auth_required: true
 ```
