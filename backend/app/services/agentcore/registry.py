@@ -394,6 +394,16 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
 def find_record(
     client: Any, registry_id: str, name: str, descriptor_type: str | None = None
 ) -> dict[str, Any] | None:
+    matches = find_records(client, registry_id, name, descriptor_type)
+    # a DEPRECATED record is terminal: a live record of the same name wins over it
+    live = [r for r in matches if r.get("status") != "DEPRECATED"]
+    return (live or matches or [None])[0]
+
+
+def find_records(
+    client: Any, registry_id: str, name: str, descriptor_type: str | None = None
+) -> list[dict[str, Any]]:
+    """Every record named ``name`` (each version, DEPRECATED ones included)."""
     filters = [{"name": "name", "values": [name]}]
     if descriptor_type:
         filters.append(
@@ -407,10 +417,25 @@ def find_record(
         "filters": filters,
         "maxResults": 20,
     }
-    for record in client.list_registry_records(**kwargs).get("registryRecords", []):
-        if record.get("name") == name:
-            return normalize_record(record)
-    return None
+    return [
+        normalize_record(record)
+        for record in client.list_registry_records(**kwargs).get("registryRecords", [])
+        if record.get("name") == name
+    ]
+
+
+def _next_initial_version(descriptor_type: str, taken: list[str]) -> str:
+    """The create version after DEPRECATED ones: ``1.0.0-mcp`` → ``2.0.0-mcp``.
+    GA uniqueness is (name, recordVersion), so a record re-created after its name was
+    deprecated needs a version none of them holds."""
+    initial = _INITIAL_VERSION_BY_TYPE[descriptor_type]
+    suffix = initial.partition("-")[2]
+    majors = [
+        int(v.split(".", 1)[0]) for v in taken if v and v.split(".", 1)[0].isdigit()
+    ]
+    if not majors:
+        return initial
+    return f"{max(majors) + 1}.0.0" + (f"-{suffix}" if suffix else "")
 
 
 def upsert_record(
@@ -434,10 +459,14 @@ def upsert_record(
     UNVERIFIED live: the registry honouring record tags (both are in the
     agent-registry-control service model).
     """
-    existing = find_record(client, registry_id, name, descriptor_type)
+    matches = find_records(client, registry_id, name, descriptor_type)
+    live = [r for r in matches if r.get("status") != "DEPRECATED"]
+    existing = live[0] if live else None
     aws_record_type = _PLATFORM_TO_AWS_TYPE[descriptor_type]
     ga_descriptors = to_ga_descriptors(descriptor_type, descriptors)
     if existing is None:
+        # only DEPRECATED records hold the name (terminal — UpdateRegistryRecord
+        # refuses them, live 2026-10-16): create the record again under a new version
         created = client.create_registry_record(
             registryId=registry_id,
             name=name,
@@ -448,7 +477,9 @@ def upsert_record(
             # GA uniqueness is (name, recordVersion), while preview allowed the
             # same name for A2A/MCP/Skill records. Type-qualified initial
             # versions preserve that platform contract.
-            recordVersion=_INITIAL_VERSION_BY_TYPE[descriptor_type],
+            recordVersion=_next_initial_version(
+                descriptor_type, [str(r.get("recordVersion") or "") for r in matches]
+            ),
             **({"tags": dict(tags)} if tags else {}),
         )
         # CreateRegistryRecord returns only {recordArn, status}

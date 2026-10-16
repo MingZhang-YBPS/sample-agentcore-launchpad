@@ -140,6 +140,49 @@ def test_upsert_updates_with_wrappers():
     assert "optionalValue" in kwargs["descriptors"]
 
 
+def test_upsert_recreates_a_deprecated_record_under_a_new_version():
+    """Live 2026-10-16: sync-defaults updated the DEPRECATED office-facts record and
+    AWS refused (terminal state); the sync failed for every default."""
+    client = MagicMock()
+    client.list_registry_records.return_value = {
+        "registryRecords": [
+            {"name": "x", "recordId": "old1", "recordType": "MCP",
+             "status": "DEPRECATED", "recordVersion": "1.0.0-mcp"},
+        ]
+    }
+    client.create_registry_record.return_value = {
+        "recordArn": f"arn:aws:agent-registry:us-west-2:1:registry/{RID}/record/new2",
+        "status": "CREATING",
+    }
+    record, created = reg.upsert_record(
+        client, RID, name="x", description="d", descriptor_type="MCP",
+        descriptors={"mcp": {"server": {"schemaVersion": "v", "inlineContent": "{}"}}},
+    )
+    assert created is True and record["recordId"] == "new2"
+    client.update_registry_record.assert_not_called()
+    assert client.create_registry_record.call_args.kwargs["recordVersion"] == "2.0.0-mcp"
+
+
+def test_upsert_updates_the_live_record_next_to_a_deprecated_one():
+    client = MagicMock()
+    client.list_registry_records.return_value = {
+        "registryRecords": [
+            {"name": "x", "recordId": "old1", "recordType": "MCP",
+             "status": "DEPRECATED", "recordVersion": "1.0.0-mcp"},
+            {"name": "x", "recordId": "live2", "recordType": "MCP",
+             "status": "APPROVED", "recordVersion": "2.0.0-mcp"},
+        ]
+    }
+    client.update_registry_record.return_value = {"recordId": "live2", "recordType": "MCP"}
+    _, created = reg.upsert_record(
+        client, RID, name="x", description="d", descriptor_type="MCP",
+        descriptors={"mcp": {"server": {"schemaVersion": "v", "inlineContent": "{}"}}},
+    )
+    assert created is False
+    assert client.update_registry_record.call_args.kwargs["recordId"] == "live2"
+    assert reg.find_record(client, RID, "x", "MCP")["recordId"] == "live2"
+
+
 def test_status_transitions():
     client = MagicMock()
     reg.submit_record(client, RID, "r1")
