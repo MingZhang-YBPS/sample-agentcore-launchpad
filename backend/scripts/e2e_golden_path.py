@@ -175,7 +175,10 @@ def main() -> int:
         )
         run_res.raise_for_status()
         run = run_res.json()
-        deadline = time.time() + 900
+        # Same budget as e2e_eval_run.wait_run: AgentCore batch evaluation has been
+        # observed to take ~21 min for this 2-item dataset when it queues behind
+        # e2e_eval_extended's runs, so 15 min failed a run that later completed.
+        deadline = time.time() + 1800
         while time.time() < deadline:
             run = client.get(f"/api/eval/runs/{run['id']}").json()
             if run["status"] in ("completed", "failed"):
