@@ -24,6 +24,10 @@ is named `mw-e2e-*` and deleted at the end.
 
 Run:  cd backend && uv run python scripts/e2e_multi_workspace.py --base URL [--keep]
       [--dev default --staging staging --prod prod]
+
+Precondition: THREE ready workspaces (ids as passed above, tiers dev/staging/prod, three
+regions) on the hub; run_live_e2e.sh skips the script when `GET /api/workspaces` lists
+fewer.
 """
 
 import argparse

@@ -772,8 +772,14 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             harness_id = row.resource_id
             ctx.log(f"resuming — harness {harness_id} already created, polling status")
         else:  # first create
-            harness = agent_iam.retry_iam_propagation(
-                lambda: hc.create_harness(client, _params()), ctx.log
+            create_params = _params()
+            harness = hc.create_after_name_release(
+                client,
+                lambda: agent_iam.retry_iam_propagation(
+                    lambda: hc.create_harness(client, create_params), ctx.log
+                ),
+                create_params["harnessName"],
+                ctx.log,
             )
             harness_id = harness["harnessId"]
             row.resource_id = harness_id

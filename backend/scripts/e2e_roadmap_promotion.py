@@ -18,6 +18,10 @@ Run:  cd backend && uv run python scripts/e2e_roadmap_promotion.py \\
 
 Needs the login gate on (admin in LAUNCHPAD_E2E_USERNAME / _PASSWORD) and a READY target
 workspace that is not tier `prod`.
+
+Precondition: a SECOND bootstrapped workspace (`GET /api/workspaces` lists more than the
+source) — ideally in another region. A single-workspace hub cannot run this script;
+run_live_e2e.sh skips it there.
 """
 
 import argparse

@@ -3,7 +3,7 @@
 
 Asserts the normalized span tree contains model + tool activity.
 
-Run:  cd backend && uv run python scripts/e2e_traces.py
+Run:  cd backend && uv run python scripts/e2e_traces.py [--agent NAME]
 """
 
 import argparse
@@ -13,7 +13,7 @@ import time
 
 from _e2e_client import e2e_client
 
-AGENT_NAME = "hr-assistant"
+DEFAULT_AGENT = "hr-assistant"
 
 
 def main() -> int:
@@ -22,13 +22,18 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--base", default="http://localhost:8000")
+    parser.add_argument(
+        "--agent", default=DEFAULT_AGENT,
+        help=f"active agent with the hr-database gateway tool (default: {DEFAULT_AGENT})",
+    )
     args = parser.parse_args()
 
     client = e2e_client(args.base, timeout=300)
     agents = client.get("/api/agents").json()["agents"]
-    agent = next((a for a in agents if a["name"] == AGENT_NAME and a["status"] == "active"), None)
+    agent = next((a for a in agents if a["name"] == args.agent and a["status"] == "active"), None)
     if not agent:
-        print("hr-assistant not active")
+        print(f"agent {args.agent!r} not active — deploy it first "
+              "(e2e_gateway_tool.py --keep)")
         return 1
 
     print("── chat turn (tool + model activity)…")

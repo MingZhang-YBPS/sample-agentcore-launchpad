@@ -4,6 +4,10 @@
 Requires a bootstrapped default workspace, AWS credentials, a Registry skill record id,
 and the Skill Lab worker Runtime. It uploads PDF/PNG/XLSX inputs, creates a task set,
 submits evaluation, then verifies the Runtime rollout retained byte-identifying markers.
+
+Precondition: `--record-id` (or SKILL_LAB_E2E_RECORD_ID) names an AGENT_SKILLS record in
+`GET /api/registry/records?type=AGENT_SKILLS`; it is only read. run_live_e2e.sh picks the
+first such record, or skips when there is none.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ def xlsx_bytes() -> bytes:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--base-url", "--base", dest="base_url", default="http://127.0.0.1:8000")
     parser.add_argument("--record-id", default=os.environ.get("SKILL_LAB_E2E_RECORD_ID"))
     parser.add_argument("--timeout", type=int, default=1800)
     args = parser.parse_args()

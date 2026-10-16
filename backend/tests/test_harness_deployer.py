@@ -460,3 +460,77 @@ def test_reasoning_additional_params_validate_as_raw_converse_stream_kwargs():
     assert not validator.validate(
         _converse_stream_kwargs(plain["bedrockModelConfig"]), op.input_shape
     ).has_errors()
+
+
+class ConflictException(Exception):  # noqa: N818 — named like the botocore error
+    pass
+
+
+class NameHeldControl:
+    """ListHarnesses answers with the scripted holder of the conflicting name."""
+
+    def __init__(self, holders):
+        self.holders = list(holders)
+
+    def list_harnesses(self, **_kwargs):
+        holder = self.holders.pop(0) if len(self.holders) > 1 else self.holders[0]
+        return {"harnesses": [holder] if holder else []}
+
+
+def _creator(failures):
+    calls = []
+
+    def create():
+        calls.append(1)
+        if len(calls) <= failures:
+            raise ConflictException("An agent with the specified name already exists.")
+        return {"harnessId": "h-new"}
+
+    return create, calls
+
+
+def _wait(client, create, **over):
+    logs, sleeps = [], []
+    kwargs = {"sleeper": sleeps.append, "clock": lambda: 0.0, **over}
+    result = hc.create_after_name_release(client, create, "hr_x", logs.append, **kwargs)
+    return result, logs, sleeps
+
+
+def test_create_waits_out_a_same_name_harness_that_is_deleting():
+    """Delete-then-recreate the same name: the old harness is still DELETING on AWS."""
+    client = NameHeldControl([
+        {"harnessName": "hr_x", "status": "DELETING"},
+        None,  # gone from the list, but the name is not free yet
+    ])
+    create, calls = _creator(failures=2)
+    result, logs, sleeps = _wait(client, create)
+    assert result == {"harnessId": "h-new"}
+    assert len(calls) == 3 and sleeps == [hc.NAME_RELEASE_POLL_S] * 2
+    assert "being deleted" in logs[0]
+
+
+def test_create_raises_a_conflict_with_a_live_harness_at_once():
+    client = NameHeldControl([{"harnessName": "hr_x", "status": "READY"}])
+    create, calls = _creator(failures=1)
+    with pytest.raises(ConflictException):
+        _wait(client, create)
+    assert len(calls) == 1
+
+
+def test_create_gives_up_when_the_name_is_never_released():
+    client = NameHeldControl([{"harnessName": "hr_x", "status": "DELETING"}])
+    create, calls = _creator(failures=99)
+    ticks = iter(range(0, 10_000, 10))
+    with pytest.raises(ConflictException):
+        _wait(client, create, timeout_s=30, clock=lambda: float(next(ticks)))
+    assert 1 < len(calls) < 99
+
+
+def test_create_does_not_retry_other_errors():
+    client = NameHeldControl([None])
+
+    def create():
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        _wait(client, create)
