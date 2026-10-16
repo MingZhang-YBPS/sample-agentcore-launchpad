@@ -70,6 +70,11 @@ PEOPLE = {
     for who in ("user-a", "user-b", "steward")
 }
 
+# failures of the account / service rather than of the platform: the eval leg runs once more
+TRANSIENT_EVAL_ERRORS = ("no span documents", "internalServerException",
+                         "InternalServerException", "ThrottlingException",
+                         "ServiceUnavailableException")
+
 RESULTS: list[tuple[str, str, str]] = []
 
 
@@ -798,12 +803,14 @@ def eval_cost(admin: httpx.Client, users: dict[str, httpx.Client], agent_id: str
         # the batch reads the session's spans from Transaction Search; when they are
         # not indexed yet AgentCore fails the batch ("no span documents") — an ingest
         # delay of the account, not a verdict: one more run with a longer wait
-        if "no span documents" not in (run.get("error") or ""):
+        # likewise a 5xx / throttle of the AgentCore data plane mid-run
+        error = run.get("error") or ""
+        if not any(mark in error for mark in TRANSIENT_EVAL_ERRORS):
             break
-        print("     eval: spans not indexed yet — one more run with a longer wait", flush=True)
+        print(f"     eval: transient AWS failure ({error[:120]}) — one more run", flush=True)
     cost = run.get("cost") or {}
     check("eval.run_completed", run.get("status") == "completed",
-          f"status={run.get('status')} error={(run.get('error') or '')[:100]}")
+          f"status={run.get('status')} error={(run.get('error') or '')[:240]}")
     check("eval.run_cost", cost.get("kind") == "actual" and isinstance(cost.get("usd"),
           int | float), f"cost={cost}")
     res = call(users["user-b"], "GET", f"/api/eval/runs/{run_id}", project=PROJECT_B)
