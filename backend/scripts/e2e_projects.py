@@ -784,15 +784,23 @@ def eval_cost(admin: httpx.Client, users: dict[str, httpx.Client], agent_id: str
         check("quota.eval_restored", res.status_code == 200, code(res))
     else:
         skip("quota.eval_refused", f"estimate unpriced (total={total}) — a cap cannot refuse it")
-    res = call(a, "POST", "/api/eval/runs", project=PROJECT_A, json={
-        "agent_id": agent_id, "dataset_id": dataset_id, "evaluators": evaluators,
-        "wait_seconds": 120})
-    check("eval.run_started", res.status_code == 201, code(res), fatal=True)
-    run_id = body(res)["id"]
-    run = wait_for("eval run", lambda: (lambda r: r if r.get("status") in (
-        "completed", "failed", "stopped") else None)(
-        body(call(a, "GET", f"/api/eval/runs/{run_id}", project=PROJECT_A))),
-        timeout=1800, every=20) or {}
+    run: dict = {}
+    for attempt in range(2):
+        res = call(a, "POST", "/api/eval/runs", project=PROJECT_A, json={
+            "agent_id": agent_id, "dataset_id": dataset_id, "evaluators": evaluators,
+            "wait_seconds": 180 + 120 * attempt})
+        check("eval.run_started", res.status_code == 201, code(res), fatal=True)
+        run_id = body(res)["id"]
+        run = wait_for("eval run", lambda rid=run_id: (lambda r: r if r.get("status") in (
+            "completed", "failed", "stopped") else None)(
+            body(call(a, "GET", f"/api/eval/runs/{rid}", project=PROJECT_A))),
+            timeout=1800, every=20) or {}
+        # the batch reads the session's spans from Transaction Search; when they are
+        # not indexed yet AgentCore fails the batch ("no span documents") — an ingest
+        # delay of the account, not a verdict: one more run with a longer wait
+        if "no span documents" not in (run.get("error") or ""):
+            break
+        print("     eval: spans not indexed yet — one more run with a longer wait", flush=True)
     cost = run.get("cost") or {}
     check("eval.run_completed", run.get("status") == "completed",
           f"status={run.get('status')} error={(run.get('error') or '')[:100]}")
