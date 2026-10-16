@@ -17,7 +17,7 @@ import sys
 import time
 
 import boto3
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 AGENT_NAME = "e2e-gw-hr-assistant"
 SYSTEM_PROMPT = (
@@ -96,9 +96,7 @@ def main() -> int:
         "and what is their name?"
     )
     print(f"── asking: {question}")
-    inv = client.post(f"/api/agents/{agent_id}/invoke", json={"prompt": question})
-    inv.raise_for_status()
-    answer = inv.json()["text"]
+    answer = chat_sse(client, agent_id, question)["text"]
     print(f"answer: {answer!r}")
     assert "9" in answer, f"expected seeded '9 days' in answer: {answer!r}"
     assert "Maya" in answer or "Chen" in answer, f"expected seeded employee name: {answer!r}"

@@ -11,7 +11,7 @@ import argparse
 import sys
 import time
 
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 AGENT_NAME = "e2e-zip-smoke"
 SYSTEM_PROMPT = (
@@ -77,12 +77,10 @@ def main() -> int:
     print(f"── runtime READY · arn {arn}")
 
     print("── invoking: what is 17*23?")
-    inv = client.post(
-        f"/api/agents/{agent_id}/invoke",
-        json={"prompt": "What is 17*23? Use the calculator tool and reply with just the number."},
+    answer = chat_sse(
+        client, agent_id,
+        "What is 17*23? Use the calculator tool and reply with just the number.",
     )
-    inv.raise_for_status()
-    answer = inv.json()
     print(f"answer: {answer['text']!r} · {answer['latency_ms']}ms")
     assert "391" in answer["text"], f"expected '391' in answer, got: {answer['text']!r}"
     print("── invoke assertion PASSED")

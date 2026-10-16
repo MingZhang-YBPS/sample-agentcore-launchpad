@@ -49,7 +49,7 @@ from typing import Any
 
 import boto3
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 from botocore.exceptions import ClientError
 
 RUN = uuid.uuid4().hex[:6]
@@ -363,22 +363,14 @@ def deploy(user_a: httpx.Client, timeout: int) -> str:
           f"status={agent.get('status')} arn={agent.get('arn')}", fatal=True)
     check("deploy.in_project_a", agent.get("project_id") in (None, PROJECT_A),
           f"project_id={agent.get('project_id')}")
-    sid = session_id("a")
-    for _attempt in range(4):
-        # the first turn of a fresh runtime is a cold start; through CloudFront's origin
-        # timeout that can surface as a 504 before the runtime is warm — try again in
-        # the SAME session (a new session id is a new microVM, i.e. another cold start)
-        started = time.time()
-        res = call(user_a, "POST", f"/api/agents/{agent_id}/invoke", project=PROJECT_A,
-                   json={"prompt": "What is 6*7? Reply with just the number.",
-                         "session_id": sid})
-        if res.status_code != 504:
-            break
-        print(f"     invoke: 504 after {time.time() - started:.0f}s (cold start?) "
-              f"{res.text[:80]!r} — retrying", flush=True)
-        pause(10)
-    check("deploy.invoke_user_a", res.status_code == 200 and "42" in body(res).get("text", ""),
-          f"{code(res)} text={body(res).get('text', '')[:60]!r}")
+    # the first turn of a fresh runtime is a cold start; over the chat stream (heartbeats
+    # throughout) it cannot be cut by CloudFront's origin timeout, unlike sync /invoke
+    try:
+        text = chat_sse(user_a, agent_id, "What is 6*7? Reply with just the number.",
+                        session_id=session_id("a"), headers={"X-Project": PROJECT_A})["text"]
+        check("deploy.invoke_user_a", "42" in text, f"text={text[:60]!r}")
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        check("deploy.invoke_user_a", False, f"{type(exc).__name__}: {exc}"[:160])
     return agent_id
 
 
@@ -408,6 +400,7 @@ def isolation(admin: httpx.Client, users: dict[str, httpx.Client], agent_id: str
     ids = {a["id"] for a in body(call(b, "GET", "/api/agents", project=PROJECT_B))
            .get("agents", [])}
     check("iso.b_list_agents", agent_id not in ids, f"{len(ids)} agents listed")
+    # route authorization, not a chat turn: project B must not reach these routes
     for name, method, path, kw in (
         ("get", "GET", f"/api/agents/{agent_id}", {}),
         ("invoke", "POST", f"/api/agents/{agent_id}/invoke",

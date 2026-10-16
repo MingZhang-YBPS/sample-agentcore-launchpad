@@ -152,8 +152,15 @@ def e2e_client(base: str, timeout: float = 300) -> httpx.Client:
 
 
 def chat_sse(client: httpx.Client, agent_id: str, prompt: str,
-             session_id: str | None = None) -> dict[str, Any]:
-    """One console chat turn over `/api/chat/{id}` (SSE) → {text, session_id, latency_ms}.
+             session_id: str | None = None,
+             headers: dict[str, str] | None = None) -> dict[str, Any]:
+    """One console chat turn over `/api/chat/{id}` (SSE) →
+    {text, session_id, latency_ms, answered_by}.
+
+    The default for every chat turn an e2e script sends: keep the sync `/invoke` only
+    where the server has no streaming equivalent (e.g. an `actor_id` override) or
+    the test is about the sync route's own contract. `headers` carries
+    `X-Workspace` / `X-Project`.
 
     Use it instead of the sync `/api/agents/{id}/invoke` wherever the turn can be
     slow (a cold container, the first call to a just-redeployed endpoint): `/invoke`
@@ -161,12 +168,13 @@ def chat_sse(client: httpx.Client, agent_id: str, prompt: str,
     read timeout) a slow turn becomes `504`. The chat stream sends named heartbeats
     for the whole turn (chat-streaming S1). It routes exactly like `/invoke`,
     including the `live` endpoint of a migrated agent."""
-    text, sid, event = "", session_id, None
+    text, sid, event, answered_by = "", session_id, None, "model"
     body: dict[str, Any] = {"prompt": prompt}
     if session_id:
         body["session_id"] = session_id
     started = time.monotonic()
-    with client.stream("POST", f"/api/chat/{agent_id}", json=body, timeout=900) as res:
+    with client.stream("POST", f"/api/chat/{agent_id}", json=body, headers=headers,
+                       timeout=900) as res:
         res.raise_for_status()
         for line in res.iter_lines():
             if line.startswith("event:"):
@@ -177,9 +185,11 @@ def chat_sse(client: httpx.Client, agent_id: str, prompt: str,
                     sid = data["session_id"]
                 elif event == "delta":
                     text += data["text"]
+                elif event == "done":
+                    answered_by = data.get("answered_by", answered_by)
                 elif event == "error":
                     raise RuntimeError(f"chat turn failed: {data.get('message')!r}")
     if not sid:
         raise RuntimeError("chat stream ended without a meta event (no session id)")
-    return {"text": text, "session_id": sid,
+    return {"text": text, "session_id": sid, "answered_by": answered_by,
             "latency_ms": int((time.monotonic() - started) * 1000)}

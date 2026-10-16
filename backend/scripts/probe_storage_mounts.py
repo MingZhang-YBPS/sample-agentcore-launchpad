@@ -118,11 +118,16 @@ class Probe:
 
     def write_read(self, agent_id: str, path: str) -> str:
         token = uuid.uuid4().hex[:12]
-        res = self.client.post(f"/api/agents/{agent_id}/invoke",
-                               json={"prompt": MARKER_PROMPT.format(token=token, path=path)})
-        if res.status_code >= 400:
-            return f"invoke HTTP {res.status_code}: {res.text[:300]}"
-        answer = str(res.json().get("text") or res.json())
+        import httpx
+        from _e2e_client import chat_sse
+
+        try:
+            answer = chat_sse(self.client, agent_id,
+                              MARKER_PROMPT.format(token=token, path=path))["text"]
+        except httpx.HTTPStatusError as exc:
+            return f"chat HTTP {exc.response.status_code}: {exc.response.text[:300]}"
+        except RuntimeError as exc:
+            return f"chat failed: {exc}"[:300]
         if token in answer:
             return "write+read ok"
         return f"unexpected answer: {answer[:300]}"

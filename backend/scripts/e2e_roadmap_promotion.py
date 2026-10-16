@@ -31,7 +31,7 @@ import time
 import uuid
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 RUN = uuid.uuid4().hex[:6]
 AGENT = f"rm-e2e-rel-{RUN}"
@@ -233,10 +233,14 @@ def harness_rollback(dev: httpx.Client, ops: httpx.Client, admin: httpx.Client,
     step("rollback.v1_restored",
          (restored or {}).get("spec", {}).get("system_prompt") == PROMPT_V1,
          "the target serves the first bundle again")
-    reply = admin.post(f"/api/agents/{restored['id']}/invoke", headers={"X-Workspace": target},
-                       json={"prompt": "Say hello in one word.", "session_id": session("rb")})
-    step("rollback.answers", reply.status_code == 200 and reply.json().get("text"),
-         f"{reply.json().get('text', '')[:40]!r}")
+    try:
+        text = chat_sse(admin, restored["id"], "Say hello in one word.",
+                        session_id=session("rb"), headers={"X-Workspace": target})["text"]
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        text, error = "", f"{type(exc).__name__}: {exc}"[:120]
+    else:
+        error = ""
+    step("rollback.answers", bool(text), f"{text[:40]!r}{' ' + error if error else ''}")
 
 
 def _raise_interrupt(signum: int, frame: object) -> None:
@@ -300,12 +304,15 @@ def main() -> int:
              f"{(landed or {}).get('id')} in {args.target}")
         step("target.active", (landed or {}).get("status") == "active",
              f"status={(landed or {}).get('status')}")
-        reply = admin.post(f"/api/agents/{landed['id']}/invoke",
-                           headers={"X-Workspace": args.target},
-                           json={"prompt": "Say hello in one word.",
-                                 "session_id": session("target")})
-        step("target.answers", reply.status_code == 200 and reply.json().get("text"),
-             f"{target['region']} says {reply.json().get('text', '')[:40]!r}")
+        try:
+            text = chat_sse(admin, landed["id"], "Say hello in one word.",
+                            session_id=session("target"),
+                            headers={"X-Workspace": args.target})["text"]
+        except (httpx.HTTPStatusError, RuntimeError) as exc:
+            text = f"<{type(exc).__name__}: {exc}>"[:120]
+            step("target.answers", False, f"{target['region']} says {text!r}")
+        else:
+            step("target.answers", bool(text), f"{target['region']} says {text[:40]!r}")
         step("target.region_correct", target["region"] in (landed.get("arn") or ""),
              f"arn region ok: {(landed.get('arn') or '')[:70]}")
 

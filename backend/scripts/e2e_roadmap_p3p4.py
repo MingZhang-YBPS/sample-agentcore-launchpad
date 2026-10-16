@@ -29,7 +29,7 @@ import time
 import uuid
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 RUN = uuid.uuid4().hex[:6]
 AGENT = f"rm-e2e-p34-{RUN}"
@@ -90,11 +90,13 @@ def deploy(client: httpx.Client, timeout: int) -> str:
 
 
 def chat_turn(client: httpx.Client, agent_id: str, prompt: str) -> dict:
-    res = client.post(
-        f"/api/agents/{agent_id}/invoke",
-        json={"prompt": prompt, "session_id": session("turn")},
-    )
-    return {"status": res.status_code, **(res.json() if res.status_code == 200 else {})}
+    try:
+        turn = chat_sse(client, agent_id, prompt, session_id=session("turn"))
+    except httpx.HTTPStatusError as exc:
+        return {"status": exc.response.status_code}
+    except RuntimeError as exc:
+        return {"status": 0, "error": str(exc)}
+    return {"status": 200, **turn}
 
 
 # ── P4 T35: curated answers ──────────────────────────────────────────────────────

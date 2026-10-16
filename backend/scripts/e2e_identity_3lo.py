@@ -418,6 +418,8 @@ def run(base: str, ui: str, timeout: int) -> int:
 
     # (4) another runtime user is not covered
     log("step", n=4, what="different runtime user → not authorized")
+    # Sync /invoke on purpose: it is the only route that takes an `actor_id`
+    # override (the chat stream always runs as the signed-in user).
     other = client.post(
         f"/api/agents/{agent_id}/invoke",
         json={"prompt": "Who am I? Use the userinfo tool.", "actor_id": "lpid-e2e-someone-else"},
