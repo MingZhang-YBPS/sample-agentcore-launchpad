@@ -135,7 +135,7 @@ def main() -> int:
             check("chat.answered", len(text.strip()) > 0, repr(text.strip()[:60]))
         visit("gate", "/v3/gate", ".v3-title")
         # rebuilt modules: each opens natively, and its V2 URL hands over to it
-        visit("create", "/v3/create", ".v3-scenarios")
+        visit("create", "/v3/create", ".v3-title")
         visit("registry", "/v3/registry", ".v3-title")
         visit("knowledge", "/v3/knowledge", ".v3-title")
         visit("assistant", "/v3/assistant", ".v3-title")

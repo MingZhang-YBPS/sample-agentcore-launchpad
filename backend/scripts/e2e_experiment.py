@@ -101,7 +101,7 @@ def main() -> int:
     # resume an interrupted run instead of tripping the one-running guard —
     # completed actions are skipped by artifact presence, like the UI does
     running = [e for e in client.get("/api/experiments").json()["experiments"]
-               if e["status"] == "running"]
+               if e["status"] in ("running", "ready")]
     if running:
         exp = running[0]
         exp_id = exp["id"]
@@ -175,7 +175,9 @@ def main() -> int:
                                     if k != "metrics"}))
     print("  metrics:", json.dumps(verdict["metrics"])[:400])
 
-    ensure("promote", lambda a: "promote" in a)
+    # three sessions never make a significant verdict: the e2e checks the promote
+    # mechanics, so it confirms the override the console asks for
+    ensure("promote", lambda a: "promote" in a, allow_non_significant=True)
     promote = exp["artifacts"]["promote"]
     print("  deployed version:", promote["agent_version"],
           "· A/B test:", promote["ab_test_status"])
