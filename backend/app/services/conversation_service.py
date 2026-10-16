@@ -113,10 +113,15 @@ class ConversationService:
             current_project(),
             caller.username if caller else None,
         )
-        self._initialize_agent(session.session_id, request.generated_code)
+        self._initialize_agent(
+            session.session_id, request.generated_code,
+            caller.workspace_id if caller else None,
+        )
         return session
 
-    def _initialize_agent(self, session_id: str, generated_code: str) -> None:
+    def _initialize_agent(
+        self, session_id: str, generated_code: str, workspace_id: str | None = None
+    ) -> None:
         """Write the generated code to a persistent per-session temp dir and
         bundle any referenced skills next to it."""
         session_dir = Path(tempfile.mkdtemp(
@@ -125,7 +130,7 @@ class ConversationService:
         ))
         agent_file = session_dir / "agent.py"
         agent_file.write_text(generated_code, encoding="utf-8")
-        local_exec.bundle_skills_for_workdir(generated_code, str(session_dir))
+        local_exec.bundle_skills_for_workdir(generated_code, str(session_dir), workspace_id)
         local_exec.grant_workdir_to_exec_user(str(session_dir))
         self.agent_processes[session_id] = {
             "session_dir": session_dir,
@@ -144,7 +149,8 @@ class ConversationService:
         agent_info = self.agent_processes[session_id]
         agent_info["agent_file"].write_text(generated_code, encoding="utf-8")
         local_exec.bundle_skills_for_workdir(
-            generated_code, str(agent_info["session_dir"])
+            generated_code, str(agent_info["session_dir"]),
+            self.owners[session_id].workspace_id if session_id in self.owners else None,
         )
         # The rewritten file and any newly bundled skills are owned by the backend
         # user again, so re-hand them over.

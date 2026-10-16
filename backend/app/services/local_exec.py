@@ -680,16 +680,21 @@ def chunk_to_sse(chunk_str: str) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def bundle_skills_for_workdir(code: str, workdir: str) -> None:
+def bundle_skills_for_workdir(code: str, workdir: str, workspace_id: str | None = None) -> None:
     """Download any APPROVED skills the code references into ``workdir/skills/``
-    so a local run resolves them like a deployed one. Never raises — a skill
-    problem must not sink a local debug run (mirrors the deploy-time bundler)."""
+    so a local run resolves them like a deployed one — from ``workspace_id``'s
+    registry (``None`` = the default workspace). Never raises — a skill problem must
+    not sink a local debug run (mirrors the deploy-time bundler)."""
     from pathlib import Path
 
     try:
         from app.deployer.zip_runtime import bundle_skills_into
+        from app.services.workspace import context_for_workspace
 
-        bundle_skills_into(code, Path(workdir), lambda m: logger.info("skill bundle: %s", m))
+        bundle_skills_into(
+            code, Path(workdir), lambda m: logger.info("skill bundle: %s", m),
+            context_for_workspace(workspace_id),
+        )
     except Exception as exc:  # noqa: BLE001 — skills are best-effort for local debug
         logger.warning("skill bundling skipped (%s)", type(exc).__name__)
 
@@ -699,6 +704,7 @@ async def spawn_execution_subprocess(
     input_data: str | None,
     openai_api_key: str | None = None,
     bedrock_api_key: str | None = None,
+    workspace_id: str | None = None,
 ) -> ExecRun:
     """Write code to a temp workspace and run it as ``python -u code.py
     [--user-input ...]`` on the configured backend (host exec interpreter or a
@@ -713,7 +719,7 @@ async def spawn_execution_subprocess(
     with open(code_file, "w", encoding="utf-8") as f:
         f.write(code)
 
-    bundle_skills_for_workdir(code, workdir)
+    bundle_skills_for_workdir(code, workdir, workspace_id)
     grant_workdir_to_exec_user(workdir, settings)
 
     script_args = ["--user-input", input_data] if input_data is not None else []
@@ -758,6 +764,7 @@ async def execute_strands_code(
     input_data: str | None = None,
     openai_api_key: str | None = None,
     bedrock_api_key: str | None = None,
+    workspace_id: str | None = None,
 ) -> str:
     """Run generated agent code in an isolated subprocess and return its stdout.
 
@@ -769,7 +776,7 @@ async def execute_strands_code(
     run: ExecRun | None = None
     try:
         run = await spawn_execution_subprocess(
-            code, input_data, openai_api_key, bedrock_api_key
+            code, input_data, openai_api_key, bedrock_api_key, workspace_id
         )
         process = run.process
         logger.info("execution subprocess started — pid %s, timeout %ss", process.pid, timeout)

@@ -817,3 +817,19 @@ def test_finch_refuses_exec_workdirs_outside_the_vm_shares(monkeypatch, tmp_path
     (home / ".finch" / "finch.yaml").write_text("cpus: 2\n")
     monkeypatch.setattr(local_exec, "DATA_DIR", home / "repo" / "data")
     assert local_exec._finch_unshared_workdir_error("finch") is None
+
+
+def test_skill_bundling_gets_the_callers_workspace(monkeypatch, tmp_path):
+    """It called ``bundle_skills_into`` without its ``workspace`` argument, so every
+    local run logged "skill bundling skipped (TypeError)" and bundled nothing."""
+    import app.deployer.zip_runtime as zr
+    import app.services.workspace as ws_mod
+
+    seen = {}
+    monkeypatch.setattr(ws_mod, "context_for_workspace", lambda wid: f"ctx:{wid}")
+    monkeypatch.setattr(
+        zr, "bundle_skills_into",
+        lambda code, dest, log, workspace, **_kw: seen.update(workspace=workspace, dest=dest),
+    )
+    local_exec.bundle_skills_for_workdir("print(1)", str(tmp_path), "ws-1")
+    assert seen == {"workspace": "ctx:ws-1", "dest": tmp_path}
