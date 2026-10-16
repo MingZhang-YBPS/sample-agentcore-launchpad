@@ -38,7 +38,7 @@ import uuid
 from typing import Any
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 RUN = uuid.uuid4().hex[:6]
 AGENT = f"dlc-e2e-{RUN}"
@@ -279,10 +279,15 @@ def main() -> int:
              and str(state.get("candidate_version")) == v2,
              f"live {state.get('live_version')} · candidate {state.get('candidate_version')} "
              f"(ledger {v2})")
-        invoked = eng.post(f"/api/agents/{agent_id}/invoke",
-                           json={"prompt": "What is 2 + 3? Reply with just the number."})
-        step("invoke.through_live", invoked.status_code == 200 and "5" in invoked.json()["text"],
-             f"HTTP {invoked.status_code} · {invoked.json().get('text', '')[:40]!r}")
+        # Over the chat stream, not sync /invoke: the first turn on a just-redeployed
+        # harness's live endpoint can outlast CloudFront's 60 s origin timeout (504).
+        # The stream routes to the same live endpoint.
+        try:
+            answer = chat_sse(eng, agent_id, "What is 2 + 3? Reply with just the number.")
+            step("invoke.through_live", "5" in answer["text"],
+                 f"{answer['latency_ms']}ms · {answer['text'][:40]!r}")
+        except (httpx.HTTPStatusError, RuntimeError) as exc:
+            step("invoke.through_live", False, f"{type(exc).__name__}: {exc}"[:200])
 
         # ── 6. the gate ────────────────────────────────────────────────────────────
         estimate = eng.post("/api/eval/runs/estimate", json={"agent_id": agent_id,
