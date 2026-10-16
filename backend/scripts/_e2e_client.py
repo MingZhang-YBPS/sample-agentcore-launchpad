@@ -62,7 +62,8 @@ class _RetryUpstream(httpx.BaseTransport):
                 code = None
             if code != "agent.upstream_error":
                 return response
-            print(f"  (invoke failed upstream — sending it again, {attempt + 1}/{UPSTREAM_RETRIES})")
+            print(f"  (invoke failed upstream — sending it again, "
+                  f"{attempt + 1}/{UPSTREAM_RETRIES})")
             response.close()
             time.sleep(5)  # nosemgrep: arbitrary-sleep — paced retry against real AWS
         return response

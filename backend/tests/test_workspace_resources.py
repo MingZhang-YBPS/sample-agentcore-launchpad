@@ -171,8 +171,10 @@ class TestMergeWorkspaceResources:
 
 
 class TestCachesAreKeyedByWorkspace:
-    def test_a_dashboard_cached_for_one_workspace_is_not_served_to_another(self):
+    def test_a_dashboard_cached_for_one_workspace_is_not_served_to_another(self, monkeypatch):
         obs.reset_cache()
+        # the empty span result falls back to the CloudWatch token metric — keep it off AWS
+        monkeypatch.setattr(obs, "query_token_usage_metrics", lambda *_a, **_kw: [])
         hub = ws_ctx(id=DEFAULT_WORKSPACE_ID)
         other = ws_ctx(id=OTHER, region="eu-central-1")
         logs = _CountingLogs()
