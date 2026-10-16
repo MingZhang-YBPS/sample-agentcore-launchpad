@@ -58,6 +58,8 @@ def main() -> int:
         # the language is persisted by the console; set it before the first render
         page.goto(f"{args.ui}/v2")
         page.evaluate("lang => localStorage.setItem('i18nextLng', lang)", args.lang)
+        # these are the V2 Standards tabs; V3 is the default and /v2 forwards to V3
+        page.evaluate("localStorage.setItem('launchpad_ui_version', 'v2')")
 
         for view in VIEWS:
             errors.clear()

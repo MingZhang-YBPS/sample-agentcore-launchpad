@@ -75,7 +75,9 @@ def main() -> int:
             for line in (real + bad)[:4]:
                 print(f"        {line[:200]}")
 
-        # V2 → V3 through the visible switch, not by typing a URL
+        # V2 → V3 through the visible switch, not by typing a URL. V3 is the default,
+        # so /v2 forwards to its V3 twin until the browser has chosen V2
+        page.evaluate("localStorage.setItem('launchpad_ui_version', 'v2')")
         page.goto(f"{args.ui}/v2", wait_until="networkidle")
         page.locator('[data-testid="v2-switch-v3"]').click()
         page.wait_for_url("**/v3", timeout=10000)

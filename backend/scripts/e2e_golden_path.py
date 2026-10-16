@@ -66,11 +66,14 @@ def main() -> int:
     health = client.get("/api/health").json()
     overview = client.get("/api/overview").json()
     services = overview["services"]
-    down = [k for k, v in services.items() if not v and k != "evaluation"]
+    # evaluation lights up after the first run; Policy is opt-in (d071afa) — a fresh
+    # workspace has no engine until an administrator attaches one
+    down = [k for k, v in services.items() if not v and k not in ("evaluation", "policy")]
     step(
         "bootstrap-verify",
         health.get("status") == "ok" and not down,
-        f"health ok · services {'all green' if not down else 'DOWN: ' + ','.join(down)}",
+        f"health ok · services {'all green' if not down else 'DOWN: ' + ','.join(down)}"
+        f"{'' if services.get('policy') else ' · policy not attached (opt-in)'}",
     )
 
     # 2 — create harness agent
