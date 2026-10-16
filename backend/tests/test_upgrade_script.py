@@ -107,7 +107,8 @@ esac
 echo "uv $* in $PWD" >>{calls}
 case "$*" in
   *inflight.py*) exit "$(cat {knobs}/inflight 2>/dev/null || echo 0)" ;;
-  *rehearse_projects_migration.py*) echo "OK no drift"; exit "$(cat {knobs}/rehearse 2>/dev/null || echo 0)" ;;
+  *rehearse_projects_migration.py*)
+    echo "OK no drift"; exit "$(cat {knobs}/rehearse 2>/dev/null || echo 0)" ;;
 esac
 """)
     npm = fake_bin(bin_dir / "npm", f"""
