@@ -130,9 +130,11 @@ def _policy(
 
     policy = (workspace.release_policy if workspace else None) or {}
     confirm = policy.get("eval_cost_confirm_usd", DEFAULT_CONFIRM_USD)
+    max_usd, max_source = release_gates.eval_cost_limit(db, workspace, project_id)
     return {
         "confirm_usd": float(confirm) if confirm is not None else None,
-        "max_usd": release_gates.eval_cost_max_usd(db, workspace, project_id),
+        "max_usd": max_usd,
+        "max_source": max_source,
     }
 
 
@@ -445,6 +447,8 @@ def estimate(
         "confirm_usd": confirm_usd,
         "over_limit": bool(max_usd is not None and total > max_usd),
         "max_usd": max_usd,
+        # whose limit `max_usd` is: `project` (its quota) or `workspace` (release policy)
+        "max_source": limits["max_source"],
         # zero sessions cost nothing: "unpriced" means a model without a price
         "unpriced": invoked and bool(items) and agent_usd is None,
     }
@@ -490,6 +494,16 @@ def assert_allowed(
     if not estimate_out:
         return
     if estimate_out.get("over_limit") and not is_admin:
+        if estimate_out.get("max_source") == "project":
+            # the project's quota binds: no override — an administrator would be
+            # refused too (`project.quota_exceeded`), so name the quota instead
+            raise AppError(
+                "run.cost_over_limit",
+                f"the estimated cost (${estimate_out['total_usd']}) exceeds this "
+                f"project's per-run evaluation limit (${estimate_out['max_usd']}) — "
+                "narrow the scope, or ask an administrator to raise the project's quota",
+                {"estimate": estimate_out, "quota": "eval_run_max_usd"}, status_code=409,
+            )
         raise AppError(
             "run.cost_over_limit",
             f"the estimated cost (${estimate_out['total_usd']}) exceeds this workspace's "

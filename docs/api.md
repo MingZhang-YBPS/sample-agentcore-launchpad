@@ -286,7 +286,7 @@ least-privilege IAM policy and call samples. Read-only; nothing here calls AWS.
 
 | Method | Path | Result |
 |---|---|---|
-| `GET` | `/api/agents/{agent_id}/invoke-access?qualifier=&include=` | `perm:project.use` — `{agent_id, name, method, kind: runtime\|harness, mode: sigv4\|jwt, account, region, partition, arn, qualifiers[], available_qualifiers[], production_qualifier, sample_qualifier, include[], resources[], policy, jwt, samples, notes[], actions{runtime, harness, harness_verified}}`. `qualifier` is `DEFAULT`, `live` or `candidate` (default: what production uses); `include` is a comma list of `stop_session` (session management actions) and `memory` (reading the agent's memory). `policy` is the IAM policy document a caller role needs; `jwt` is the inbound authorizer's facts for a JWT-mode agent (the token must satisfy them), else `null` |
+| `GET` | `/api/agents/{agent_id}/invoke-access?qualifier=&include=` | `perm:project.use` — `{agent_id, name, method, kind: runtime\|harness, mode: iam\|jwt, account, region, partition, arn, qualifiers[], available_qualifiers[], production_qualifier, sample_qualifier, include[], resources[], policy, jwt, samples, notes[], actions{runtime, harness, harness_verified}}`. `qualifier` is `DEFAULT`, `live` or `candidate` (default: what production uses); `include` is a comma list of `stop_session` (session management actions) and `memory` (reading the agent's memory). `policy` is the IAM policy document a caller role needs; `jwt` is the inbound authorizer's facts for a JWT-mode agent (the token must satisfy them), else `null` |
 | `GET` | `/api/projects/{project_id}/invoke-access?agents=&qualifier=&include=&format=json\|csv` | `pperm:project.use` on the path project (a non-member 404) — every callable agent of the project across the workspaces it is bound to: `{project_id, inventory[{agent_id, name, method, kind, mode, account, region, arn, qualifier, endpoint_arn, production}], policy, jwt_agents[], skipped[{agent_id, name, reason}], qualifier, include[]}`; `policy` merges every agent's statements (`null` when nothing is callable). `agents` narrows to a comma list of ids (an id outside the project → `404 agent.not_found`, `detail.agent_ids`). `format=csv` / `json` downloads the inventory as `<project_id>-agent-arns.csv` / `.json` |
 
 Error codes: `agent.not_found` (404), `invoke_access.unknown_qualifier` /
@@ -2329,7 +2329,11 @@ a dataset replay, a passive run over picked sessions or a look-back window, and 
 online config (per day). Above the workspace's confirm threshold the submit needs
 `confirm_cost: true` (`409 run.cost_confirm_required`); above its limit only an
 administrator may submit (`409 run.cost_over_limit`) — `POST /api/eval/runs` and
-`POST /api/eval/online` alike.
+`POST /api/eval/online` alike. The limit is the smaller of the workspace policy's
+`eval_cost_max_usd` and the project's `quotas.eval_run_max_usd`; the estimate names
+whose it is (`max_source: project | workspace`). When the project's quota binds, no
+administrator override exists — an administrator's submit is refused with
+`409 project.quota_exceeded` — so the refusal says to raise the project's quota.
 
 ### Strands builder: custom Python tools and the sandboxed tools
 

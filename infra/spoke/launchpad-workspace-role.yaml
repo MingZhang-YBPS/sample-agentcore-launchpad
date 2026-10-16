@@ -178,6 +178,7 @@ Resources:
                   - iam:PutRolePolicy
                   - iam:SimulatePrincipalPolicy
                   - iam:TagRole
+                  - iam:UntagRole
                   - iam:UpdateAssumeRolePolicy
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-*"
@@ -341,6 +342,7 @@ Resources:
                   - ecr:DescribeRepositories
                   - ecr:ListTagsForResource
                   - ecr:TagResource
+                  - ecr:UntagResource
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/launchpad-agents"
 
@@ -360,6 +362,7 @@ Resources:
                   - ecr:DescribeRepositories
                   - ecr:ListTagsForResource
                   - ecr:TagResource
+                  - ecr:UntagResource
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/launchpad-agents/*"
 
@@ -473,6 +476,7 @@ Resources:
                   - bedrock:Retrieve
                   - bedrock:StartIngestionJob
                   - bedrock:TagResource
+                  - bedrock:UntagResource
                   - bedrock:UpdateKnowledgeBase
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:knowledge-base/*"
@@ -697,6 +701,7 @@ Resources:
                 Action:
                   - logs:ListTagsForResource
                   - logs:TagResource
+                  - logs:UntagResource
                 Resource:
                   - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
 
@@ -728,6 +733,7 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:PutSecretValue
                   - secretsmanager:TagResource
+                  - secretsmanager:UntagResource
                   - secretsmanager:UpdateSecret
                 Resource:
                   Fn::Sub: "arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:bedrock-agentcore-identity!*"

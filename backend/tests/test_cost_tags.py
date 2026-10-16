@@ -451,3 +451,103 @@ def test_the_backfill_is_a_resumable_job_type():
     from app.services import inflight
 
     assert ct.JOB_TYPE in inflight.resumable_job_types()
+
+
+# ── stale tags (E2E-projects: a transferred runtime kept its old cost center) ──
+
+
+class _UntagWriter(_Writer):
+    def __init__(self):
+        super().__init__()
+        self.removed: dict[str, list[str]] = {}
+
+    def untag(self, workspace, item, keys):
+        self.removed[item["key"]] = list(keys)
+        return ct.TAGGED, ""
+
+
+def test_a_transfer_run_removes_the_old_projects_cost_tags():
+    """TagResource merges: writing beta's set leaves alpha's `CostCenter` and
+    department on the runtime, still billing it to alpha's cost center — the run
+    must take them off."""
+    ids = _world()  # alpha: department risk, CostCenter 1234
+    _project("beta")
+    db = SessionLocal()
+    try:
+        source = db.get(Project, "alpha")
+        [job_id] = projects_service.transfer_agent(db, ADMIN, source, ids["runtime"],
+                                                   "beta")["retag_job_ids"]
+        db.commit()
+    finally:
+        db.close()
+    assert _job(job_id).payload["remove_keys"] == ["CostCenter", pt.TAG_DEPARTMENT]
+    writer = _UntagWriter()
+    _run(job_id, writer)
+    job = _job(job_id)
+    assert job.status == "succeeded"
+    assert writer.removed["runtime:arn:rt/rt-1"] == ["CostCenter", pt.TAG_DEPARTMENT]
+    row = next(r for r in job.payload["resources"] if r["key"] == "runtime:arn:rt/rt-1")
+    assert row["status"] == ct.TAGGED and row["untagged"] == ["CostCenter", pt.TAG_DEPARTMENT]
+
+
+def test_a_key_the_target_also_carries_is_rewritten_not_removed():
+    ids = _world()
+    _project("beta")
+    db = SessionLocal()
+    try:
+        db.get(Project, "beta").settings = {"cost_tags": {"CostCenter": "9999"}}
+        db.commit()
+        [job_id] = projects_service.transfer_agent(
+            db, ADMIN, db.get(Project, "alpha"), ids["runtime"], "beta")["retag_job_ids"]
+        db.commit()
+    finally:
+        db.close()
+    writer = _UntagWriter()
+    _run(job_id, writer)
+    assert dict(writer.calls)["runtime:arn:rt/rt-1"]["CostCenter"] == "9999"
+    assert writer.removed["runtime:arn:rt/rt-1"] == [pt.TAG_DEPARTMENT]
+
+
+def test_dropping_a_custom_tag_queues_its_removal():
+    from app.services import billing_costs
+
+    _alpha(cost={"CostCenter": "1234", "Team": "risk"})
+    db = SessionLocal()
+    try:
+        row = db.get(Project, "alpha")
+        billing_costs.update_custom_tags(db, ADMIN, row, {"CostCenter": "1234"})
+        db.commit()
+        with project_context(None):
+            [job] = [j for j in db.query(Job).filter(Job.type == ct.JOB_TYPE)
+                     if (j.payload or {}).get("reason") == "project_update"]
+        assert job.payload["remove_keys"] == ["Team"]
+    finally:
+        db.close()
+
+
+def test_untag_uses_each_services_own_call():
+    clients = {
+        "bedrock-agentcore-control": _Stub(), "iam": _Stub(), "ecr": _Stub(),
+        "logs": _Stub(),
+        "codebuild": _Stub(batch_get_projects={"projects": [{"name": "b", "tags": [
+            {"key": "Owner", "value": "ops"}, {"key": "CostCenter", "value": "1"}]}]}),
+    }
+    ws = _ws(clients=clients)
+    writer = ct.AwsTagWriter()
+    keys = ["CostCenter"]
+    for item in (ct.entry(ct.RUNTIME, arn="arn:rt"), ct.entry(ct.IAM_ROLE, name="r"),
+                 ct.entry(ct.ECR_REPOSITORY, arn="arn:ecr"), ct.entry(ct.LOG_GROUP, arn="arn:lg"),
+                 ct.entry(ct.CODEBUILD_PROJECT, name="b")):
+        assert writer.untag(ws, item, keys) == (ct.TAGGED, "")
+    assert clients["bedrock-agentcore-control"].calls == [
+        ("untag_resource", {"resourceArn": "arn:rt", "tagKeys": keys})]
+    assert clients["iam"].calls == [("untag_role", {"RoleName": "r", "TagKeys": keys})]
+    assert clients["ecr"].calls == [("untag_resource", {"resourceArn": "arn:ecr",
+                                                        "tagKeys": keys})]
+    assert clients["logs"].calls == [("untag_resource", {"resourceArn": "arn:lg",
+                                                         "tagKeys": keys})]
+    assert clients["codebuild"].calls[-1] == ("update_project", {"name": "b", "tags": [
+        {"key": "Owner", "value": "ops"}]})
+    denied = _ws(clients={"bedrock-agentcore-control": _Stub(
+        fail={"untag_resource": _err("AccessDeniedException", "UntagResource")})})
+    assert writer.untag(denied, ct.entry(ct.RUNTIME, arn="arn:rt"), keys)[0] == ct.DENIED

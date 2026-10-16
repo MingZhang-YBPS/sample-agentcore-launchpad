@@ -118,7 +118,8 @@ def update_custom_tags(db: Session, identity: Any, row: Project, tags: Any) -> P
         raise AppError("project.archived", f"project '{row.id}' is archived",
                        {"project_id": row.id}, status_code=409)
     clean = check_custom_tags(tags)
-    if clean == custom_tags(row):
+    before = custom_tags(row)
+    if clean == before:
         return row
     merged = projects_svc._merge_settings(row.settings or {}, {"cost_tags": None})
     if clean:
@@ -133,7 +134,9 @@ def update_custom_tags(db: Session, identity: Any, row: Project, tags: Any) -> P
     # started after the caller's commit (`cost_tags.start_queued`)
     from app.services import cost_tags
 
+    # a key dropped from the set comes off the resources (a changed value is rewritten)
     cost_tags.schedule_retag(db, project_id=row.id, reason="project_update",
+                             remove_keys=set(before) - set(clean),
                              **projects_svc._retag_actor(identity))
     return row
 

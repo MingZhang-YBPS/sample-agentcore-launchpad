@@ -33,6 +33,13 @@ describe("the 409 cost refusals", () => {
     expect(over).toContain("$3.00 / day");
     expect(over).toContain("$10.00");
   });
+
+  it("names the project's quota when it is the binding limit (no administrator override)", () => {
+    const over = refusalText(i18n.t, { kind: "over", estimate: estimate({ total_usd: 3, max_source: "project" }) });
+    expect(over).toContain("this project's per-run evaluation limit");
+    expect(over).toContain("raise the project's quota");
+    expect(over).not.toContain("workspace");
+  });
 });
 
 describe("passive runs and the cost column", () => {
