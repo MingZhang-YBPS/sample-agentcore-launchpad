@@ -6,6 +6,7 @@ Sources, in ascending precedence: defaults < config/launchpad.yaml < environment
 runnable locally.
 """
 
+import shutil
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -272,6 +273,11 @@ class Settings(BaseSettings):
     # LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true.
     studio_exec_backend: Literal["subprocess", "docker"] = "subprocess"
     studio_exec_docker_image: str = "launchpad-studio-exec:latest"
+    # The docker-compatible CLI every container call shells out to (the docker
+    # exec backend, its e2e and the local container smoke). "auto" = `docker`
+    # if it is on PATH, else `finch` (macOS hosts without Docker Desktop);
+    # any other value is used as-is. Read it through resolve_container_cli().
+    container_cli: str = "auto"
     # Docker network the exec containers join. Empty = docker's default bridge.
     # Set to the network created by scripts/setup_exec_docker.sh --harden-net
     # (whose subnet a DOCKER-USER rule blocks from IMDS) when running with
@@ -458,6 +464,18 @@ class Settings(BaseSettings):
             _YamlSource(settings_cls),
             file_secret_settings,
         )
+
+
+def resolve_container_cli(value: str = "auto") -> str:
+    """The container CLI to invoke for setting value ``value``.
+
+    "auto" (or empty) picks `docker` if it is on PATH, else `finch`, else the
+    bare name "docker" — so a host with neither still gets the familiar
+    "docker is not installed" refusal. An explicit value is returned as-is.
+    """
+    if value and value != "auto":
+        return value
+    return shutil.which("docker") or shutil.which("finch") or "docker"
 
 
 @lru_cache

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """E2E for the Claude SDK container path — REAL AWS.
 
-Flow: [local docker smoke] → POST /api/agents (container) → poll stages
+Flow: [local container smoke] → POST /api/agents (container) → poll stages
       (CodeBuild+ECR+Runtime) → invoke → observability → optional Evaluation
       → DELETE.
 
@@ -223,7 +223,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if not args.skip_local:
-        print("── local docker smoke (pre-CodeBuild gate)…")
+        print("── local container smoke (pre-CodeBuild gate)…")
         repo_root = Path(__file__).resolve().parents[2]
         smoke = subprocess.run(
             ["bash", str(repo_root / "scripts" / "local_container_smoke.sh")],
