@@ -247,7 +247,11 @@ def cleanup(admin: httpx.Client) -> None:
                    json={"quotas": {k: None for k in keys}})
         print(f"     restore quotas {pid} {sorted(keys)}: {code(res)}")
     for lineage, pid in STATE["criteria"]:
-        res = call(admin, "DELETE", f"/api/criteria-sets/{lineage}", project=pid)
+        # an agent's criteria set moves with it on a transfer
+        for where in dict.fromkeys((pid, STATE["agent_project"] or pid)):
+            res = call(admin, "DELETE", f"/api/criteria-sets/{lineage}", project=where)
+            if res.status_code != 404:
+                break
         print(f"     delete criteria set {lineage}: {code(res)}")
     for dataset, pid in STATE["datasets"]:
         res = call(admin, "DELETE", f"/api/eval/datasets/{dataset}", project=pid)
@@ -359,15 +363,19 @@ def deploy(user_a: httpx.Client, timeout: int) -> str:
           f"status={agent.get('status')} arn={agent.get('arn')}", fatal=True)
     check("deploy.in_project_a", agent.get("project_id") in (None, PROJECT_A),
           f"project_id={agent.get('project_id')}")
-    for _attempt in range(3):
+    sid = session_id("a")
+    for _attempt in range(4):
         # the first turn of a fresh runtime is a cold start; through CloudFront's origin
-        # timeout that can surface as a 504 before the runtime is warm — try again
+        # timeout that can surface as a 504 before the runtime is warm — try again in
+        # the SAME session (a new session id is a new microVM, i.e. another cold start)
+        started = time.time()
         res = call(user_a, "POST", f"/api/agents/{agent_id}/invoke", project=PROJECT_A,
                    json={"prompt": "What is 6*7? Reply with just the number.",
-                         "session_id": session_id("a")})
+                         "session_id": sid})
         if res.status_code != 504:
             break
-        print("     invoke: 504 (cold start) — retrying", flush=True)
+        print(f"     invoke: 504 after {time.time() - started:.0f}s (cold start?) "
+              f"{res.text[:80]!r} — retrying", flush=True)
         pause(10)
     check("deploy.invoke_user_a", res.status_code == 200 and "42" in body(res).get("text", ""),
           f"{code(res)} text={body(res).get('text', '')[:60]!r}")
