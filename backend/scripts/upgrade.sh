@@ -45,6 +45,7 @@ usage: upgrade.sh --repo DIR [options]
                       launchpad-frontend when that unit exists)
   --health-url URL    reports {"version": {"sha": …}} (default: http://127.0.0.1:8000/api/auth/status)
   --health-timeout S  seconds to wait for the new version (default: 180)
+  --rollback-timeout S  seconds to wait for the old version after a rollback (default: 180)
   --min-free-gb N     refuse below N GB free on the checkout's disk (default: 3)
   --dry-run           preflight, in-flight check, backup and rehearsal only
   --yes               go on when inflight.py reports work a restart would disrupt
@@ -55,7 +56,7 @@ EOF
 
 REPO="" TARGET="" REMOTE=origin SERVICES="" DRY_RUN=no YES=no INSTALL_UPDATER=no
 HEALTH_URL=${LAUNCHPAD_HEALTH_URL:-http://127.0.0.1:8000/api/auth/status}
-HEALTH_TIMEOUT=180 MIN_FREE_GB=3
+HEALTH_TIMEOUT=180 ROLLBACK_TIMEOUT=180 MIN_FREE_GB=3
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO=${2:-}; shift 2 ;;
@@ -64,6 +65,7 @@ while [ $# -gt 0 ]; do
     --services) SERVICES=${2:-}; shift 2 ;;
     --health-url) HEALTH_URL=${2:-}; shift 2 ;;
     --health-timeout) HEALTH_TIMEOUT=${2:-}; shift 2 ;;
+    --rollback-timeout) ROLLBACK_TIMEOUT=${2:-}; shift 2 ;;
     --min-free-gb) MIN_FREE_GB=${2:-}; shift 2 ;;
     --dry-run) DRY_RUN=yes; shift ;;
     --yes) YES=yes; shift ;;
@@ -75,7 +77,7 @@ done
 [ -n "$REPO" ] || { usage >&2; exit 64; }
 [ -d "$REPO/.git" ] || { echo "upgrade.sh: $REPO is not a git checkout" >&2; exit 64; }
 REPO=$(cd "$REPO" && pwd)
-case "$HEALTH_TIMEOUT$MIN_FREE_GB" in *[!0-9]*) echo "upgrade.sh: timeouts/sizes are whole numbers" >&2; exit 64 ;; esac
+case "$HEALTH_TIMEOUT$ROLLBACK_TIMEOUT$MIN_FREE_GB" in *[!0-9]*|"") echo "upgrade.sh: timeouts/sizes are whole numbers" >&2; exit 64 ;; esac
 
 # test seams, like apply_update.sh
 SYSTEMCTL=${LAUNCHPAD_SYSTEMCTL:-systemctl}
@@ -210,7 +212,8 @@ reports() {  # reports <sha>: the console reports <sha> within HEALTH_TIMEOUT
   return 1
 }
 answers() {  # answers: something healthy answers (an old version reports no version.sha)
-  local deadline=$((SECONDS + HEALTH_TIMEOUT))
+  # its own budget: a short --health-timeout must not make a good rollback look failed
+  local deadline=$((SECONDS + ROLLBACK_TIMEOUT))
   while [ $SECONDS -lt $deadline ]; do
     curl -fsS --max-time 5 -o /dev/null "$HEALTH_URL" 2>/dev/null && return 0
     sleep 3
