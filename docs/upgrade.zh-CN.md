@@ -24,10 +24,37 @@ AWS 仍是事实来源：台账只保存标识符和派生的进度。升级不�
 
 | 方式 | 适用场景 |
 |---|---|
-| [手动升级](#手动升级) | 任何时候都可用。从没有 **配置 → 系统更新** 页面的版本（在线更新功能之前的所有版本）**第一次升级时必须手动**。 |
+| [一键升级](#一键升级) | 推荐的第一次升级方式：用一条命令执行下面的手动升级步骤，并在新版本起不来时自动回滚。 |
+| [手动升级](#手动升级) | 任何时候都可用。从没有 **配置 → 系统更新** 页面的版本（在线更新功能之前的所有版本）**第一次升级时必须手动**（或用一键升级）。 |
 | [在线更新](#在线更新配置--系统更新) | 当前版本已带在线更新，并已安装 root 更新器。管理员在控制台中准备、排期，必要时回滚。 |
 
 下面的步骤以 workshop 的参考主机为例：Ubuntu EC2 实例，检出目录 `/home/ubuntu/agentcore_launchpad`，属主 `ubuntu`，systemd 单元 `launchpad-backend` 在 `backend/` 下运行 `uv run uvicorn app.main:app`，nginx 直接提供 `frontend/dist`。请换成你自己的路径、属主和单元。如果你的主机还运行 `launchpad-frontend` 单元（`vite preview`，见 [setup.zh-CN.md](setup.zh-CN.md#托管部署)），本文每次重启 `launchpad-backend` 时都要一并重启它。
+
+## 一键升级
+
+`backend/scripts/upgrade.sh` 按顺序执行下面[手动升级](#手动升级)的每一步，并在任何一步失败时停下。它随**新**版本发布，所以从发布分支取出来再运行，不要用旧检出目录里的（旧版本没有它）：
+
+```bash
+cd /home/ubuntu/agentcore_launchpad
+git fetch origin
+git show origin/console-v3:backend/scripts/upgrade.sh > /tmp/lp-upgrade.sh
+sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --dry-run      # 只做检查、备份和演练，不改任何东西
+sudo bash /tmp/lp-upgrade.sh --repo "$PWD"                # 正式升级
+sudo bash /tmp/lp-upgrade.sh --repo "$PWD" --install-updater   # 同上，并安装在线更新器
+```
+
+| 步骤 | 内容 | 失败时 |
+|---|---|---|
+| 1. 预检查 | 检出目录属主、没有本地修改、能快进到目标、磁盘空闲（`--min-free-gb`，默认 3）、找到 `uv` 和 `npm`、systemd 单元存在 | 停下，什么都没改 |
+| 2. 进行中的任务 | 运行中版本的 `inflight.py`；退出码 `3` 时停下，除非加 `--yes` | 停下，什么都没改 |
+| 3. 备份台账 | 用**目标版本**的 `ledger_backup.py` 在线备份并校验，改名为 `….bak-<时间>-preupgrade-<旧 sha>`（不参与轮换），旁边复制 `config/launchpad.yaml` 和 `data/sso-secret.key` | 停下，什么都没改 |
+| 4. 演练迁移 | 在临时 worktree 中用目标版本的 `rehearse_projects_migration.py` 迁移备份副本 | 停下，什么都没改 |
+| 5. 更新 | `git merge --ff-only`、`uv sync --frozen`、`npm ci && npm run build`（旧构建保留为 `frontend/dist.prev`） | 自动回滚 |
+| 6. 重启并验证 | 重启单元（台账在这次启动时迁移），等待 `/api/auth/status` 返回目标的 `version.sha`（`--health-timeout`，默认 180 秒） | 自动回滚 |
+
+`--dry-run` 在第 4 步后结束。自动回滚会把代码和 `frontend/dist` 恢复到升级前的提交、执行 `uv sync --frozen`、重启并确认控制台恢复响应。台账保持迁移后的状态（旧版本能在上面启动，见[回滚](#回滚)），第 3 步的备份仍在。
+
+退出码：`0` 已升级（或已经是目标版本）；`1` 停在第 1–4 步，什么都没改；`2` 升级失败并已回滚；`3` 回滚也失败，请按[回滚](#回滚)手工处理；`64` 参数错误。每次运行的完整日志在 `data/upgrade/upgrade-<UTC 时间>.log`。其他参数见 `bash /tmp/lp-upgrade.sh --help`（`--target` 指定提交或分支，`--services` 指定要重启的单元，`--health-url` 指定健康检查地址）。
 
 ## 手动升级
 
