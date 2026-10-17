@@ -184,6 +184,22 @@ shots:
       - {n: 3, box: '.v3-usr-chip:has-text("judge.calibrate")'}
       - {n: 4, box: '[data-testid=v3-user-granted] .v3-chip'}
 
+  - name: 15-roles-user-sessions
+    chapter: 10-prepare/30-roles
+    status: new   # account detail: Force sign-out (revoke every session)
+    account: admin
+    path: /v3/users?view=detail&user=biz-owner
+    requires: [user:biz-owner]
+    wait: '.v3-usr-chip'
+    actions:
+      - {click: {zh: 'button:has-text("强制下线")', en: 'button:has-text("Force sign-out")'}}
+      - {sleep: 1500}
+    clip: .v3-modal
+    margin: 40
+    highlights:
+      - {n: 1, box: '.v3-modal h2', badge: left}
+      - {n: 2, box: '.v3-modal .v3-btn.danger', badge: top}
+
   # ── 20-flywheel/10-define ──────────────────────────────────────────────────
   - name: 20-define-sidebar-expert
     chapter: 20-flywheel/10-define
