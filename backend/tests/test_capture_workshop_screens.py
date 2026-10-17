@@ -99,3 +99,11 @@ def test_manifest_is_well_formed():
         numbers = [h["n"] for h in shot.get("highlights", []) if h.get("n") is not None]
         # badges follow the caption: 1, 2, 3 ... with no gap
         assert numbers == list(range(1, len(numbers) + 1)), shot["name"]
+
+
+def test_assume_state_satisfies_state_but_not_missing_agents():
+    ctx = _ctx()
+    ctx.assume_state = True
+    cws.check_requires({"name": "x", "requires": ["state:a sealed golden set"]}, ctx)
+    with pytest.raises(cws.SkipShot):
+        cws.check_requires({"name": "x", "requires": ["state:fresh", "agent:nope"]}, ctx)

@@ -20,10 +20,10 @@ shots:
     path: /v3
     wait: '[data-testid=auth-tabs]'
     highlights:
-      - {n: 1, box: '[data-testid=auth-tab-signin]'}
-      - {n: 2, box: '.v3-auth-fields .v3-field >> nth=0'}
-      - {n: 3, box: '.v3-auth-fields .v3-field >> nth=1'}
-      - {n: 4, box: '.v3-auth-submit'}
+      - {n: 1, box: '[data-testid=auth-tab-signin]', badge: left}
+      - {n: 2, box: '.v3-auth-fields .v3-field >> nth=0', badge: left}
+      - {n: 3, box: '.v3-auth-fields .v3-field >> nth=1', badge: left}
+      - {n: 4, box: '.v3-auth-submit', badge: left}
 
   - name: 10-setup-v3-topbar
     chapter: 10-prepare/20-setup

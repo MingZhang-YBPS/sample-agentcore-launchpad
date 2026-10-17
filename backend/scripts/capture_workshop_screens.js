@@ -20,7 +20,12 @@
     if (b.n != null) {
       const d = document.createElement('div');
       d.textContent = String(b.n);
-      d.style.cssText = `position:absolute;left:${r.x - p - 13}px;top:${r.y - p - 13}px;width:28px;height:28px;`
+      // default: on the frame's top-left corner; 'left': outside the frame, centred
+      // vertically, for a box whose corner would cover its own label
+      const at = b.badge === 'left'
+        ? `left:${r.x - p - 36}px;top:${r.y + r.h / 2 - 14}px;`
+        : `left:${r.x - p - 13}px;top:${r.y - p - 13}px;`;
+      d.style.cssText = `position:absolute;${at}width:28px;height:28px;`
         + 'border-radius:50%;background:#e5243b;color:#fff;font:700 16px/28px system-ui,sans-serif;'
         + 'text-align:center;box-shadow:0 0 0 2px #fff,0 1px 3px rgba(0,0,0,.4)';
       host.appendChild(d);

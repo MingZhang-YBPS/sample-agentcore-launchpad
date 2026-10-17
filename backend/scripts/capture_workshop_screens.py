@@ -85,6 +85,8 @@ class Ctx:
     agents: dict[str, str] = field(default_factory=dict)
     users: dict[str, str] = field(default_factory=dict)
     facts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # set by --assume-state: the walker vouches for every `state:` requirement
+    assume_state: bool = False
 
 
 # ── configuration ────────────────────────────────────────────────────────────
@@ -177,8 +179,10 @@ def check_requires(shot: dict[str, Any], ctx: Ctx) -> None:
             if not ok:
                 raise SkipShot(f"needs {target}{'=' + want if want else ''} (is {have!r})")
         if kind == "state":
-            # a precondition only a walk-through produces; the shot waits for it
-            raise SkipShot(f"needs workshop state: {rest}")
+            # a precondition only a walk-through produces: the walker who reached
+            # it says so with --assume-state; otherwise the shot waits for it
+            if not ctx.assume_state:
+                raise SkipShot(f"needs workshop state: {rest}")
 
 
 def base_storage(lang: str, shot: dict[str, Any]) -> dict[str, str | None]:
@@ -304,7 +308,8 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
             rect = union_rect(page, sels)
             if rect is None:
                 raise RuntimeError(f"highlight {i + 1} matched nothing: {sels}")
-            boxes.append({"n": h.get("n"), "rect": rect, "pad": h.get("pad")})
+            boxes.append({"n": h.get("n"), "rect": rect, "pad": h.get("pad"),
+                          "badge": h.get("badge")})
         page.evaluate(OVERLAY_JS, {"boxes": boxes, "pad": shot.get("box_pad", 4)})
         clip = None
         if shot.get("clip"):
@@ -384,8 +389,11 @@ def main() -> int:
     p.add_argument("--only", nargs="*", default=["*"], help="shot name globs")
     p.add_argument("--lang", choices=sorted(LANGS), action="append")
     p.add_argument("--stack", default="agent-dlc-launchpad")
-    p.add_argument("--region", default="us-west-2")
+    p.add_argument("--region", default="us-east-1")
     p.add_argument("--report", action="store_true", help="only compare manifest, disk and content")
+    p.add_argument("--assume-state", action="store_true",
+                   help="the console is in the walk-through state the chosen shots' "
+                        "`state:` requirements name (only the walker can say so)")
     p.add_argument("--probe", type=Path,
                    help="write a full-page PNG + element outline here instead of the crop")
     p.add_argument("--out", type=Path,
@@ -402,6 +410,7 @@ def main() -> int:
         return 0
     chosen = [s for s in shots if any(fnmatch.fnmatch(s["name"], g) for g in args.only)]
     ctx = load_ctx(args.stack, args.region)
+    ctx.assume_state = args.assume_state
     discover(ctx)
     out = args.out or args.workshop / "static" / "images"
     out.mkdir(parents=True, exist_ok=True)
