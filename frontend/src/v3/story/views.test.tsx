@@ -90,7 +90,7 @@ describe("JourneyStrip", () => {
   it("chapters with step dots, the current one amber, and Continue for the viewer's turn", () => {
     const s = state({ sessions: 1 });
     const out = html(<JourneyStripView state={s} viewer={developer} collapsed={false} onToggle={() => undefined} href={hrefFor(s)} />);
-    for (const c of ["Build", "Evaluate", "Release", "Observe", "Feedback"]) expect(out).toContain(c);
+    for (const c of ["Build", "Evaluate", "Release", "Observe", "Improve"]) expect(out).toContain(c);
     expect(out).toContain('data-step="evaluate.criteria.draft" aria-label="Draft the criteria table · Current step"');
     expect(out).toMatch(/data-s="current" data-step="evaluate.criteria.draft"/);
     expect(out).toMatch(/data-s="done" data-step="build.create"/);
