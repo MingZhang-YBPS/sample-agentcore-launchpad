@@ -297,7 +297,7 @@ shots:
     highlights:
       - {n: 1, box: '[data-testid=v3-network-access] select', badge: left}
       - {n: 2, box: '[data-testid=v3-network-access] tr:has-text("workshop-private")', badge: left}
-      - {n: 3, box: '[data-testid=v3-network-access] button.v3-btn.primary', badge: right}
+      - {n: 3, box: '[data-testid=v3-network-access] button.v3-btn.primary', badge: top}
 
   - name: 50-platform-config-enforcement
     chapter: 10-prepare/50-platform-config
