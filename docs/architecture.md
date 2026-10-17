@@ -439,7 +439,12 @@ exists:
 - a profile → its preflight is re-run for *this* agent's features
   (`network_preflight.features_of_spec`: container image pulls, Bedrock models, memory,
   Gateway tools, Identity, A2A, knowledge bases), so the endpoints the agent needs are
-  checked, not only the ones every agent needs. Any blocking item →
+  checked, not only the ones every agent needs. A Gateway data plane
+  (`<id>.gateway.bedrock-agentcore.<region>.amazonaws.com`, used by Gateway tools and by
+  a harness's mounted knowledge bases) needs its own `bedrock-agentcore.gateway`
+  endpoint; when the VPC has a `bedrock-agentcore` interface endpoint with private DNS,
+  that zone hides the gateway names, so NAT cannot stand in and the missing endpoint
+  blocks (`details.shadowed_by`). Any blocking item →
   `409 network.preflight_failed`, with the blocking items in `detail.results`. A
   `legacy-<hash8>` profile is not preflighted: its deploys behave as before profiles.
 

@@ -50,6 +50,9 @@ ENDPOINT_MATRIX: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("logs", "Interface", frozenset({"always"})),
     ("bedrock-runtime", "Interface", frozenset({"bedrock_models"})),
     ("bedrock-agentcore", "Interface", frozenset({"memory", "identity", "gateway", "a2a"})),
+    # a gateway's data plane is <id>.gateway.bedrock-agentcore.<region>.amazonaws.com:
+    # its own endpoint service (gateway tools, and a harness's mounted knowledge bases)
+    ("bedrock-agentcore.gateway", "Interface", frozenset({"gateway"})),
     ("bedrock-agent-runtime", "Interface", frozenset({"knowledge_bases"})),
     ("xray", "Interface", frozenset({"xray"})),
     ("secretsmanager", "Interface", frozenset({"connections"})),
@@ -91,6 +94,9 @@ def features_of_spec(spec: dict[str, Any]) -> set[str]:
         features.add("a2a")
     if spec.get("knowledge_bases"):
         features.add("knowledge_bases")
+        if method == "harness":
+            # a harness mounts its knowledge bases as tools on a platform gateway
+            features.add("gateway")
     if spec.get("inbound_auth"):
         # not an endpoint need: tells the inbound-endpoint entry that OAuth callers
         # reach this agent (an endpoint policy cannot restrict them, §12.2)
@@ -547,8 +553,17 @@ def _endpoint_results(
                                 "profile's security groups")
         uses = ", ".join(sorted(n for n in needs if n != "always")) or "every agent"
         check = f"endpoint.{svc}"
+        shadow = _shadowing_zone(endpoints, region, svc) if problems else None
         if not problems:
             out.append(_result(check, "ok", f"{name} is ready", needed_by=uses))
+        elif shadow:
+            # the parent service's private DNS zone answers for every name under it, so
+            # the subdomain resolves to nothing in this VPC and NAT cannot stand in
+            severity = "block" if needed else "warn"
+            out.append(_result(check, severity, f"{problems[0]}, and the private DNS of {shadow} "
+                               f"hides *.{svc}.{region}.amazonaws.com in this VPC, so NAT "
+                               f"cannot reach it — needed by {uses}", needed_by=uses,
+                               shadowed_by=shadow))
         elif via_nat:
             out.append(_result(check, "ok", f"reached through NAT ({problems[0]}); an endpoint "
                                "avoids NAT data charges", needed_by=uses, via="nat"))
@@ -557,6 +572,24 @@ def _endpoint_results(
             out.append(_result(check, severity, "; ".join(problems) + f" — needed by {uses}",
                                needed_by=uses))
     return out
+
+
+def _shadowing_zone(endpoints: list[dict[str, Any]], region: str, svc: str) -> str | None:
+    """The interface endpoint whose private DNS zone covers ``svc`` as a subdomain.
+
+    ``bedrock-agentcore`` with private DNS on puts a private hosted zone for
+    ``bedrock-agentcore.<region>.amazonaws.com`` in the VPC; ``<id>.gateway.`` under it
+    then has no record, so without its own endpoint the gateway does not resolve.
+    """
+    parent, dot, _child = svc.rpartition(".")
+    if not dot:
+        return None
+    name = f"com.amazonaws.{region}.{parent}"
+    for ep in endpoints:
+        if (ep.get("ServiceName") == name and ep.get("PrivateDnsEnabled")
+                and str(ep.get("VpcEndpointType", "")).lower() == "interface"):
+            return name
+    return None
 
 
 def _reachable_result(reachable: list[dict[str, Any]],

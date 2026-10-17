@@ -366,6 +366,31 @@ def test_the_endpoint_matrix_follows_the_spec():
     assert "a2a" in preflight.features_of_spec({"method": "zip_runtime", "protocol": "a2a"})
 
 
+
+def test_a_harness_knowledge_base_needs_the_gateway_endpoint():
+    harness = preflight.features_of_spec({"method": "harness", "knowledge_bases": [{"id": "k"}]})
+    assert "bedrock-agentcore.gateway" in preflight.required_endpoints(harness)
+    # a zip agent retrieves straight from Bedrock: no gateway
+    zip_agent = preflight.features_of_spec(
+        {"method": "zip_runtime", "knowledge_bases": [{"id": "k"}]})
+    assert "bedrock-agentcore.gateway" not in preflight.required_endpoints(zip_agent)
+
+
+def test_nat_cannot_stand_in_for_a_gateway_hidden_by_agentcore_private_dns():
+    # the workshop VPC: NAT, the bedrock-agentcore endpoint with private DNS, no gateway one
+    data = _with_nat(_vpc())
+    gw = f"com.amazonaws.{REGION}.bedrock-agentcore.gateway"
+    data["endpoints"] = [e for e in data["endpoints"] if e["ServiceName"] != gw]
+    features = preflight.features_of_spec({"method": "harness", "knowledge_bases": [{"id": "k"}]})
+    result = _check(data, internet="nat", features=features)["endpoint.bedrock-agentcore.gateway"]
+    assert result["severity"] == "block"
+    assert result["details"]["shadowed_by"] == f"com.amazonaws.{REGION}.bedrock-agentcore"
+    # without the parent's private DNS, NAT reaches the public gateway name
+    data["endpoints"] = [e for e in data["endpoints"]
+                         if e["ServiceName"] != f"com.amazonaws.{REGION}.bedrock-agentcore"]
+    result = _check(data, internet="nat", features=features)["endpoint.bedrock-agentcore.gateway"]
+    assert result["severity"] == "ok" and result["details"]["via"] == "nat"
+
 # ── the routes ────────────────────────────────────────────────────────────────
 
 
