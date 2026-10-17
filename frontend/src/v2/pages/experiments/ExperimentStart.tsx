@@ -199,7 +199,7 @@ export function ExperimentStart({ hasRunning }: { hasRunning: boolean }) {
     <>
       <FlowHeader
         title={t("expPage.start")}
-        onBack={() => setParams({})}
+        onBack={() => setParams({ mode: "configuration" })}
         end={
           <Button
             kind="primary"
