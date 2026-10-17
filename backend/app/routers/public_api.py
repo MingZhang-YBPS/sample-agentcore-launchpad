@@ -39,6 +39,7 @@ from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import invoke_agent_text, upstream_invoke_error
 from app.services.memory import scoped_actor
 from app.services.runtime_discovery import invoke_capability, require_invoke_capability
+from app.services.sync_deadline import call_within, ensure_session_id
 from app.services.workspace import get_workspace_row
 
 router = APIRouter(prefix="/v1", tags=["public-v1"])
@@ -182,12 +183,18 @@ def v1_invoke(
     # No signed-in console user behind an API key: an as_user tool's consent
     # could never complete, so the invoke layer answers such an ask with 409
     # identity.as_user_requires_console instead of a dead-end consent URL.
+    # Past the sync deadline: a readable 504 invoke.timeout with the session id and
+    # the streaming route, the turn still running (services/sync_deadline.py).
+    session_id = ensure_session_id(req.session_id)
     try:
-        result = invoke_agent_text(
-            agent, req.prompt, session_id=req.session_id,
-            actor_id=scoped_actor(agent.id, req.actor_id),
-            console_user=False,
-            **extra,
+        result = call_within(
+            lambda: invoke_agent_text(
+                agent, req.prompt, session_id=session_id,
+                actor_id=scoped_actor(agent.id, req.actor_id),
+                console_user=False,
+                **extra,
+            ),
+            session_id=session_id, stream_route=f"/v1/agents/{agent.id}/invoke-stream",
         )
     except Exception as exc:
         upstream = upstream_invoke_error(exc, public=True)

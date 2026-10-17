@@ -84,6 +84,18 @@ approval list only after a person approves it in the console chat. `/v1` cannot
 approve: a call whose agent tried such a tool answers `409
 agent.tool_approval_requires_console` (`detail.tool`, `detail.agent_id`); the stream
 ends with an `error` event of that code.
+
+**Sync invoke has a deadline: use the stream for chat.** A synchronous invoke sends
+nothing until the whole answer exists, and a proxy in front of the console cuts such a
+request off (CloudFront's default origin read timeout is 60 s). So both sync routes
+(`/v1/agents/{id}/invoke` and the console's `/api/agents/{id}/invoke`) wait at most
+`sync_invoke_deadline_s` (default 50 s; env `LAUNCHPAD_SYNC_INVOKE_DEADLINE_S`, `0` = no
+deadline when nothing in front of the console times out). Past it they answer `504
+invoke.timeout` with `detail.session_id`, `detail.deadline_s` and `detail.stream_route`.
+The turn is not cancelled: it finishes in that session, so a follow-up on the same
+`session_id` continues from it. Use sync invoke for short, machine-to-machine answers;
+use `invoke-stream` (console: `POST /api/chat/{id}`) for conversations and anything
+that may run long — it sends heartbeats and never hits the proxy timeout.
 可选请求字段 `context` 为本次调用填入 Agent 的 `{{变量}}`;配置了 `output_schema` 的 Agent 另返回解析后的 `structured` 对象。
 
 ## Streaming invoke (SSE) / 流式调用

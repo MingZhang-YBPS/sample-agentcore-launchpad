@@ -163,6 +163,13 @@ class Settings(BaseSettings):
     # ``agentcore_read_timeout_s`` (live 2026-10-13: 1 of 24 replays, 1000 s).
     agentcore_heartbeat_read_timeout_s: int = Field(default=120, gt=0)
 
+    # The longest a synchronous invoke (console /invoke, public /v1 invoke) waits
+    # before answering 504 invoke.timeout with the session id and the streaming
+    # route; the turn keeps running (services/sync_deadline.py). 50 s stays under
+    # CloudFront's default 60 s origin read timeout. 0 = no deadline, for a
+    # deployment with no proxy timeout in front of it.
+    sync_invoke_deadline_s: int = Field(default=50, ge=0)
+
     # How many experiment/canary replay prompts are posted through the A/B gateway
     # at once (optimization.service.send_gateway_traffic). Each prompt is an
     # independent session, so this only trades wall clock against how hard the

@@ -63,6 +63,8 @@ curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
 配置了 `output_schema` 的 Agent（Strands 方式）在 `text`（可读的回答）之外另返回解析后的对象 `structured`；未配置时没有该字段。启用 PII 护栏的 Agent 从不返回 `structured`：护栏只筛查文本，因此该对象会被丢弃。
 配置了工具钩子（`tool_hooks.approval_tools`）的 Strands Agent，其审批名单上的工具只在有人于控制台对话中批准后才运行。`/v1` 无法批准：Agent 尝试调用此类工具时返回 `409 agent.tool_approval_requires_console`（`detail.tool`、`detail.agent_id`）；流式调用以该错误码的 `error` 事件结束。
 
+**同步调用有时限，对话请用流式。** 同步调用在整段回答生成完之前不发送任何内容，控制台前面的代理会掐断这样的请求（CloudFront 默认源站读超时为 60 秒）。因此两个同步路由（`/v1/agents/{id}/invoke` 与控制台的 `/api/agents/{id}/invoke`）最多等待 `sync_invoke_deadline_s`（默认 50 秒；环境变量 `LAUNCHPAD_SYNC_INVOKE_DEADLINE_S`，控制台前面没有会超时的代理时可设为 `0` 关闭）。超过时限返回 `504 invoke.timeout`，带 `detail.session_id`、`detail.deadline_s` 与 `detail.stream_route`。这一轮不会被取消，会在该会话里跑完，用同一个 `session_id` 继续提问即可接上。同步调用适合简短的机器间调用；对话以及可能耗时较长的调用请用 `invoke-stream`（控制台为 `POST /api/chat/{id}`）——它全程发送心跳，不会触发代理超时。
+
 ## 流式调用(SSE) / Streaming invoke
 
 ```bash

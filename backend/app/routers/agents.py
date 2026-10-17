@@ -74,6 +74,7 @@ from app.services.runtime_discovery import (
     scan_runtimes,
 )
 from app.services.suggestions import suggested_questions
+from app.services.sync_deadline import call_within, ensure_session_id
 from app.services.visibility import Viewer, require_viewer
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.system_agents import service as system_agents
@@ -1246,12 +1247,19 @@ def invoke_agent(
     )
     started = time.monotonic()
     extra = {"attachments": prepared} if prepared else {}
+    # A sync request sends nothing until the answer exists: past the deadline it
+    # answers a readable 504 naming the session and the streaming route instead
+    # of being cut off by the proxy (services/sync_deadline.py).
+    session_id = ensure_session_id(req.session_id)
     try:
-        result = invoke_agent_text(
-            agent, req.prompt, session_id=req.session_id,
-            actor_id=scoped_actor(agent.id, req.actor_id),
-            workspace=ws.context,
-            **extra,
+        result = call_within(
+            lambda: invoke_agent_text(
+                agent, req.prompt, session_id=session_id,
+                actor_id=scoped_actor(agent.id, req.actor_id),
+                workspace=ws.context,
+                **extra,
+            ),
+            session_id=session_id, stream_route=f"/api/chat/{agent.id}",
         )
     except Exception as exc:
         upstream = upstream_invoke_error(exc)

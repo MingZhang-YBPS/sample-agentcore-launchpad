@@ -2738,6 +2738,7 @@
     "agent.convert_in_flight": "该 Harness Agent 已有一次转换正在部署，请等待其完成。",
     "agent.convert_unsupported": "只有运行中的托管 Harness Agent 才能转换。",
     "agent.no_resource": "该 Agent 还没有可调用的已部署 AgentCore 资源。",
+    "invoke.timeout": "Agent 仍在回答，超过了单次请求能等待的时长。这一轮会在同一会话里继续运行；回答较长时请使用流式对话。",
     "agent.teardown_pending": "AWS 仍在删除该 Agent 的端点。Agent 已从控制台移除，AWS 释放后其资源会自动删除。",
     "agent.tool_approval_requires_console": "该 Agent 的某个工具需要人工批准，只能在 Launchpad 控制台的对话中批准。",
     "agent.upstream_error": "智能体的模型或运行时在回答前出错，通常是暂时的。请重新发送；反复出现时打开该智能体的追踪查看。",

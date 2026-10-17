@@ -2738,6 +2738,7 @@
     "agent.convert_in_flight": "A conversion of this Harness agent is already deploying. Wait for it to finish.",
     "agent.convert_unsupported": "Only active managed-Harness agents can be converted.",
     "agent.no_resource": "This agent has no deployed AgentCore resource to call yet.",
+    "invoke.timeout": "The agent is still answering, longer than a one-shot request can wait. The turn keeps running in the same session; use the streaming chat for long answers.",
     "agent.teardown_pending": "AWS is still deleting this agent's endpoints. The agent is removed from the console and its resource is deleted automatically once AWS releases it.",
     "agent.tool_approval_requires_console": "A tool in this agent needs a person's approval, which only the Launchpad console chat can give.",
     "agent.upstream_error": "The agent's model or runtime failed before answering — usually temporary. Send the turn again; if it keeps failing, open the agent's traces.",
