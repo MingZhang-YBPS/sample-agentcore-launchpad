@@ -644,6 +644,44 @@ shots:
       - {n: 2, box: '[data-testid=chat-tool]', badge: left}
       - {n: 3, box: '.v3-msg.agent', badge: left}
 
+  - name: 30-build-memory-longterm
+    chapter: 20-flywheel/20-build
+    status: replace   # V3 memory, long-term tab; strategy picked by label (ids differ per console)
+    account: developer
+    path: /v3/memory?tab=long-term&actor={agent:lab-service-assistant}__developer
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'select:has(option:text-is("user_preferences"))'
+    actions:
+      - {select: ['select:has(option:text-is("user_preferences"))', user_preferences]}
+      - {wait: 'tr.click:has-text("高楼层")'}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: 'select:has(option[value$="__developer"])', badge: left}
+      - {n: 2, box: 'select:has(option:text-is("user_preferences"))', badge: left}
+      - {n: 3, box: 'tr.click:has-text("高楼层")', badge: left}
+
+  - name: 30-build-memory-record
+    chapter: 20-flywheel/20-build
+    status: new   # the record dialog of the hotel preference
+    account: developer
+    path: /v3/memory?tab=long-term&actor={agent:lab-service-assistant}__developer
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'select:has(option:text-is("user_preferences"))'
+    actions:
+      - {select: ['select:has(option:text-is("user_preferences"))', user_preferences]}
+      - {wait: 'tr.click:has-text("高楼层")'}
+      - {click: 'tr.click:has-text("高楼层")'}
+      - {wait: '.v3-modal[role=dialog]'}
+      - {sleep: 800}
+    clip: '.v3-modal[role=dialog]'
+    highlights:
+      - {n: 1, box: '.v3-modal dd.mono:has-text("/preferences/")', badge: left}
+      - {n: 2, box: '.v3-modal dl.v3-kv:has(dt:has-text("preference"))', badge: left}
+
   - name: 30-build-journey-strip
     chapter: 20-flywheel/20-build
     status: new

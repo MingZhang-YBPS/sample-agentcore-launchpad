@@ -260,6 +260,10 @@ def run_actions(page: Page, actions: list[dict[str, Any]], ctx: Ctx, lang: str) 
                 [str(base / p) for p in per_lang(paths, lang)])
         elif verb == "press":
             page.keyboard.press(arg)
+        elif verb == "select":
+            # [selector of a <select>, visible option label]; ids differ per console
+            sel, label = arg
+            page.locator(expand(sel, ctx, lang)).first.select_option(label=expand(label, ctx, lang))
         elif verb == "wait":
             page.wait_for_selector(expand(arg, ctx, lang), timeout=30000)
         elif verb == "sleep":
