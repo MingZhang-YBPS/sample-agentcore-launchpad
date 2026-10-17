@@ -160,6 +160,14 @@ def expand(text: Any, ctx: Ctx, lang: str) -> Any:
             raise SkipShot(f"no {kind} named {name!r} on the console")
         return table[name]
 
+    def env(m: re.Match[str]) -> str:
+        # a secret the manifest types but never stores (e.g. a trainee's password)
+        value = os.environ.get(m.group(1))
+        if not value:
+            raise SkipShot(f"needs environment variable {m.group(1)}")
+        return value
+
+    text = re.sub(r"\{env:([A-Z][A-Z0-9_]*)\}", env, text)
     return re.sub(r"\{(agent|user):([\w.-]+)\}", sub, text)
 
 

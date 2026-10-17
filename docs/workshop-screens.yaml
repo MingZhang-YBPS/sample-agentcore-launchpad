@@ -97,7 +97,63 @@ shots:
       - {n: 2, box: '.v3-dlc-term >> nth=0'}
       - {n: 3, box: '.v3-dlc-term >> nth=0 >> .v3-dlc-term-used', badge: left}
 
-  # ── 10-prepare/30-roles ──────────────────────────────────────────────────── ────────────────────────────────────────────────────
+  # ── 10-prepare/30-roles ────────────────────────────────────────────────────
+  # Taking this shot IS the walk-through's self-registration: one trainee per
+  # language (re-running fails at the wait, the name being taken).
+  - name: 15-roles-register-pending
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: anon
+    path: /v3
+    wait: '[data-testid=auth-tabs]'
+    actions:
+      - {click: '[data-testid=auth-tab-register]'}
+      - {fill: {zh: ['#reg-username', trainee-xiaoming], en: ['#reg-username', trainee-alex]}}
+      - {fill: {zh: ['#reg-email', trainee-xiaoming@example.com], en: ['#reg-email', trainee-alex@example.com]}}
+      - {fill: ['#reg-password', '{env:LP_TRAINEE_PW}']}
+      - {fill: ['#reg-confirm', '{env:LP_TRAINEE_PW}']}
+      - {click: '.v3-auth-card form button[type=submit]'}
+      - {wait: '[data-testid=register-success]'}
+    clip: .v3-auth-card
+    margin: 40
+    highlights:
+      - {n: 1, box: '[data-testid=register-success] h2', badge: left}
+      - {n: 2, box: '[data-testid=register-status]', badge: left}
+      - {n: 3, box: '[data-testid=register-success] .v3-auth-submit', badge: left}
+
+  - name: 15-roles-users-pending
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: admin
+    path: /v3/users
+    requires: ['user:trainee-xiaoming']
+    wait: 'div.v3-alert'
+    actions:
+      - {click: 'div.v3-alert button'}
+      - {sleep: 800}
+    clip: main.v3-main div.v3-reveal
+    margin: 16
+    highlights:
+      - {n: 1, box: 'div.v3-alert button', badge: right}
+      - {box: '.v3-filters button >> nth=1'}
+      - {n: 2, box: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("通过")', en: 'tr:has-text("trainee-alex") button:has-text("Approve")'}, badge: top}
+
+  - name: 15-roles-approve-dialog
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: admin
+    path: /v3/users
+    requires: ['user:trainee-xiaoming']
+    wait: 'div.v3-alert'
+    actions:
+      - {click: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("通过")', en: 'tr:has-text("trainee-alex") button:has-text("Approve")'}}
+      - {wait: '[data-testid=v3-user-approve]'}
+    clip: '[role=dialog]'
+    margin: 40
+    highlights:
+      - {n: 1, box: '[data-testid=v3-user-approve] button', badge: left}
+      - {n: 2, box: '[role=dialog] .v3-btn.primary', badge: top}
+
   - name: 15-roles-developer-sidebar
     chapter: 10-prepare/30-roles
     status: keep

@@ -20,11 +20,16 @@
     if (b.n != null) {
       const d = document.createElement('div');
       d.textContent = String(b.n);
-      // default: on the frame's top-left corner; 'left': outside the frame, centred
-      // vertically, for a box whose corner would cover its own label
+      // default: on the frame's top-left corner; 'left' / 'right': outside the frame,
+      // centred vertically; 'top': above the frame, centred — for a box whose corner
+      // would cover its own label or a neighbour
       const at = b.badge === 'left'
         ? `left:${r.x - p - 36}px;top:${r.y + r.h / 2 - 14}px;`
-        : `left:${r.x - p - 13}px;top:${r.y - p - 13}px;`;
+        : b.badge === 'right'
+          ? `left:${r.x + r.w + p + 8}px;top:${r.y + r.h / 2 - 14}px;`
+          : b.badge === 'top'
+            ? `left:${r.x + r.w / 2 - 14}px;top:${r.y - p - 36}px;`
+            : `left:${r.x - p - 13}px;top:${r.y - p - 13}px;`;
       d.style.cssText = `position:absolute;${at}width:28px;height:28px;`
         + 'border-radius:50%;background:#e5243b;color:#fff;font:700 16px/28px system-ui,sans-serif;'
         + 'text-align:center;box-shadow:0 0 0 2px #fff,0 1px 3px rgba(0,0,0,.4)';
