@@ -1,9 +1,9 @@
 /* Configure → Projects (projects design §6.3): list, detail tabs, key picker */
 .v3 .v3-prj-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .v3 .v3-prj-filters select.v3-input { width: auto; min-width: 140px; }
-.v3 .v3-prj-filters .search { margin-left: auto; position: relative; flex: 1 1 200px; max-width: 300px; }
-.v3 .v3-prj-filters .search svg { position: absolute; left: 12px; top: 11px; color: var(--v3-text-3); }
-.v3 .v3-prj-filters .search input { padding-left: 34px; }
+.v3 .v3-prj-filters .v3-prj-search { margin-left: auto; position: relative; flex: 1 1 200px; max-width: 300px; }
+.v3 .v3-prj-filters .v3-prj-search svg { position: absolute; left: 12px; top: 11px; color: var(--v3-text-3); }
+.v3 .v3-prj-filters .v3-prj-search input { padding-left: 34px; }
 .v3 .v3-prj-muted { color: var(--v3-text-3); }
 .v3 .v3-prj-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .v3 .v3-prj-form { display: grid; gap: 12px; }

@@ -12564,7 +12564,7 @@
     },
     "fleet": {
       "eyebrow": "全局",
-      "title": "所有环境",
+      "title": "多环境总览",
       "sub": "一次看全部工作区——哪里出了问题、当前工作区的治理发现，以及各团队共享的模板。",
       "workspaces": "工作区",
       "readableFoot_one": "{{count}} 个可读",
@@ -14464,7 +14464,7 @@
       "nav": "单点登录",
       "eyebrow": "配置 · 平台",
       "title": "单点登录",
-      "sub": "让用户通过公司身份提供方（OpenID Connect）登录。首次登录自动建号，角色和项目跟随 IdP 组。",
+      "sub": "让用户通过公司身份提供方（SAML 2.0 或 OpenID Connect）登录。首次登录自动建号，角色和项目跟随 IdP 组。",
       "adminOnly": "只有管理员可以配置单点登录。",
       "new": "新建身份提供方",
       "listLabel": "身份提供方",

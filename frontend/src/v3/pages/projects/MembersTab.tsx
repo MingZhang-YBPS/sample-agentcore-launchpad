@@ -105,7 +105,7 @@ export function MembersTab({
             { value: "group", label: t("v3.projects.members.source.group") },
           ]}
         />
-        <div className="search">
+        <div className="v3-prj-search">
           <Search size={14} aria-hidden="true" />
           <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)}
             placeholder={t("v3.projects.members.search")} aria-label={t("v3.projects.members.search")} />

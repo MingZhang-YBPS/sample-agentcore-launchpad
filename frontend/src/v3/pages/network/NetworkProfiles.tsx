@@ -135,14 +135,14 @@ export function V3NetworkProfiles() {
                 const probe = groupResults(resultsOf(p)).probe;
                 return (
                   <tr key={p.id} aria-selected={p.id === selectedId || undefined}>
-                    <td>
+                    <td style={{ whiteSpace: "nowrap" }}>
                       <button type="button" className="v3-inline-link" style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
                         onClick={() => setParams(p.id === selectedId ? {} : { id: p.id })}>
                         <b>{p.name}</b>
                       </button>
                       <div><small className="mono">{p.id}</small> {p.legacy && <Chip s="off">{t("v3.network.legacy")}</Chip>}</div>
                     </td>
-                    <td className="mono">{p.vpc_id || "—"}</td>
+                    <td className="mono" style={{ whiteSpace: "nowrap" }}>{p.vpc_id || "—"}</td>
                     <td>{p.subnet_ids.length}{azs.length ? ` · ${azs.join(", ")}` : ""}</td>
                     <td>{t(`v3.network.purpose.${p.purpose}`)}</td>
                     <td>

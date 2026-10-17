@@ -77,7 +77,7 @@ export function ProjectList() {
           <option value="">{t("v3.projects.filter.workspace")}: {t("v3.projects.filter.all")}</option>
           {names.workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </select>
-        <div className="search">
+        <div className="v3-prj-search">
           <Search size={14} aria-hidden="true" />
           <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)}
             placeholder={t("v3.projects.search")} aria-label={t("v3.projects.search")} />

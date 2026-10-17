@@ -387,7 +387,7 @@ body.v3-body {
 .v3 .v3-inline-link { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--v3-line-2); }
 .v3 .v3-inline-link:hover { color: var(--v3-info); text-decoration-color: currentColor; }
 /* a <button> does not inherit color/font from its row (UA buttontext is near-black on the dark theme) */
-.v3 button.v3-inline-link { color: inherit; font: inherit; }
+.v3 button.v3-inline-link { color: inherit; font: inherit; text-align: inherit; }
 .v3 .v3-agent-search { position: relative; flex: 1 1 220px; max-width: 320px; margin-left: auto; }
 .v3 .v3-list-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--v3-text-2); font-size: 13px; }
 .v3 .v3-list-summary label { display: flex; align-items: center; gap: 8px; }

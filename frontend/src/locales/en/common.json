@@ -12564,7 +12564,7 @@
     },
     "fleet": {
       "eyebrow": "Fleet",
-      "title": "Every environment",
+      "title": "Fleet",
       "sub": "All workspaces at once — where anything is wrong, the governance findings of this one, and the templates teams share.",
       "workspaces": "Workspaces",
       "readableFoot_one": "{{count}} readable",
@@ -14464,7 +14464,7 @@
       "nav": "Single sign-on",
       "eyebrow": "Configure · Platform",
       "title": "Single sign-on",
-      "sub": "Let people sign in with your company identity provider over OpenID Connect. Accounts are created on first sign-in and their role and projects follow IdP groups.",
+      "sub": "Let people sign in with your company identity provider over SAML 2.0 or OpenID Connect. Accounts are created on first sign-in and their role and projects follow IdP groups.",
       "adminOnly": "Only administrators configure single sign-on.",
       "new": "New provider",
       "listLabel": "Identity providers",
