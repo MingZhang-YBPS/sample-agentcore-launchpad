@@ -269,7 +269,7 @@ shots:
     storage: {'launchpad_project:default': retail-service}
     wait: '[data-testid=v3-project-switch]'
     highlights:
-      - {n: 1, box: '[data-testid=v3-project-switch]', badge: bottom}
+      - {n: 1, box: '[data-testid=v3-project-switch]', badge: right}
 
   # ── 20-flywheel/10-define ──────────────────────────────────────────────────
   - name: 20-define-sidebar-expert
