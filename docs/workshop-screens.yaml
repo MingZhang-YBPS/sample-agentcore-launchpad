@@ -501,6 +501,36 @@ shots:
       - {n: 5, box: 'section.v3-panel:has(.v3-grid.c3 label.v3-field) .v3-grid.c3 > label.v3-field:nth-child(5)', badge: left}
       - {n: 6, box: 'section.v3-panel:has(.v3-grid.c3 label.v3-field) button.v3-btn.primary', badge: left}
 
+  - name: 30-build-harness-tools
+    chapter: 20-flywheel/20-build
+    status: new   # harness full form: native execution unticked
+    account: developer
+    path: /v2/agents?view=new&method=harness
+    viewport: [1440, 1600]
+    storage: {'launchpad_project:default': retail-service}
+    wait: main.v3-main
+    actions:
+      - {click: {zh: 'button:has-text("切换到完整表单")', en: 'button:has-text("full form")'}}
+      - {wait: '[data-testid=v2-agent-native-tools]'}
+      - {click: '[data-testid=v2-agent-native-tools] label.v2-check >> nth=0'}
+      - {click: '[data-testid=v2-agent-native-tools] label.v2-check >> nth=1'}
+      - {sleep: 800}
+    clip: 'section.v2-card:has([data-testid=v2-agent-native-tools])'
+    highlights:
+      - {n: 1, box: '[data-testid=v2-agent-native-tools]', badge: left}
+
+  - name: 30-build-harness-deploy-done
+    chapter: 20-flywheel/20-build
+    status: new   # V3 agent page of lab-policy-advisor (harness, VPC)
+    account: developer
+    path: /v3/agents?id={agent:lab-policy-advisor}
+    requires: [agent:lab-policy-advisor]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions: [{sleep: 2500}]
+    clip: main.v3-main div.v3-reveal
+
   - name: 30-build-journey-strip
     chapter: 20-flywheel/20-build
     status: new
