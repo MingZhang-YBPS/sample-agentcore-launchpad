@@ -405,7 +405,7 @@ shots:
     status: new
     account: developer
     path: /v3/create
-    storage: {lp.v3.create.chooser: null}
+    storage: {lp.v3.create.chooser: null, 'launchpad_project:default': retail-service}
     wait: .v3-chooser-main
     actions:
       - {click: {zh: '.v3-chooser-qs >> text=什么都没有', en: '.v3-chooser-qs >> text=Nothing yet'}}
