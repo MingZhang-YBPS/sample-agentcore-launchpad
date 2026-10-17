@@ -616,3 +616,28 @@ def test_generated_agents_can_read_a_routed_configuration_bundle():
 def test_harness_agents_get_no_configuration_bundle_grant():
     """A Harness never reads a bundle with its own role — the service routes it."""
     assert "ConfigurationBundleRead" not in _sids(_spec(method="harness"))
+
+
+# ─── VPC-mode harness: managed image pull (BUG-9) ───────────────────────────
+
+class TestHarnessManagedImagePull:
+    """A harness in VPC mode pulls its managed container from a private ECR repo
+    (`harness-<region>`, AWS-owned) with the execution role; on the public network
+    it uses ECR Public and needs no grant."""
+
+    def test_vpc_harness_gets_the_pull_and_token(self):
+        spec = _spec(method="harness", network={"profile_id": "np-1"})
+        pull = _statement(spec, "HarnessManagedImagePull")
+        assert pull["Resource"] == ["arn:aws:ecr:us-west-2:*:repository/harness-*"]
+        assert set(pull["Action"]) == {
+            "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability",
+        }
+        token = _statement(spec, "HarnessManagedImageToken")
+        assert token["Action"] == ["ecr:GetAuthorizationToken"]
+
+    @pytest.mark.parametrize("spec", [
+        _spec(method="harness"),
+        _spec(method="zip_runtime", network={"profile_id": "np-1"}),
+    ])
+    def test_absent_for_a_public_harness_and_other_methods(self, spec):
+        assert not {"HarnessManagedImagePull", "HarnessManagedImageToken"} & _sids(spec)

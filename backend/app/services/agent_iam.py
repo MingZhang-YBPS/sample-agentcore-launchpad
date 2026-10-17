@@ -805,6 +805,32 @@ def policy_document(
             "Resource": "*",
         })
 
+    # ---- VPC-mode harness: the managed image comes from private ECR ----
+    # On the public network a harness pulls its managed container from ECR Public;
+    # in VPC mode it pulls `harness-<region>` from a private ECR repository owned by
+    # an AWS service account, WITH THIS ROLE. Without the grant every session fails
+    # to start ("no basic auth credentials" in the runtime log, then InvokeHarness
+    # "Runtime initialization time exceeded") — measured live. The repository
+    # account is not ours, so it is wildcarded; region and repo prefix are not.
+    if spec.method == "harness" and spec.network is not None:
+        statements.append({
+            "Sid": "HarnessManagedImagePull",
+            "Effect": "Allow",
+            "Action": [
+                "ecr:BatchGetImage",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchCheckLayerAvailability",
+            ],
+            "Resource": [f"arn:{ctx.partition}:ecr:{ctx.region}:*:repository/harness-*"],
+        })
+        statements.append({
+            # UNSCOPABLE: ecr:GetAuthorizationToken takes no resource by design.
+            "Sid": "HarnessManagedImageToken",
+            "Effect": "Allow",
+            "Action": ["ecr:GetAuthorizationToken"],
+            "Resource": "*",
+        })
+
     # ---- attached skill bundles: scoped to this agent's skills ----
     if spec.skills and ctx.artifacts_bucket:
         prefixes = sorted({_skill_prefix(path) for path in spec.skills})
