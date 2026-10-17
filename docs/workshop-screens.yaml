@@ -531,6 +531,59 @@ shots:
     actions: [{sleep: 2500}]
     clip: main.v3-main div.v3-reveal
 
+  - name: 30-build-kb-create
+    chapter: 20-flywheel/20-build
+    status: replace   # create form in retail-service; description counter /200
+    account: developer
+    path: /v2/knowledge-bases?view=new
+    viewport: [1440, 1400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-kb-name]'
+    actions:
+      - {fill: ['[data-testid=v2-kb-name]', lab-unicorn-policies]}
+      - {fill: ['[data-testid=v2-kb-desc]', {zh: "独角兽公司客服政策库：独角兽商城退换货、退款时效、优惠叠加与部分退货分摊、价保；独角兽航空各票价品牌的改签与退票费率、税费、非自愿退改、行李额；独角兽酒店各房价类型的取消窗口、未入住、延迟退房、国庆规则。回答退换货、退款、改签退票、行李、酒店取消或费用计算问题时查询本知识库。", en: "Unicorn Company policies: Unicorn Mall returns and refunds; Unicorn Air change/refund fees, taxes, baggage; Unicorn Hotels cancellation, no-show. Query it for refunds, flight changes, baggage or fees."}]}
+      - {upload: ['[data-testid=v2-kb-source] input[type=file]', {zh: ["assets/kb/ecommerce-returns-policy.md", "assets/kb/unicorn-air-change-refund-baggage.md", "assets/kb/unicorn-hotels-cancellation.md"], en: ["assets/kb/ecommerce-returns-policy.en.md", "assets/kb/unicorn-air-change-refund-baggage.en.md", "assets/kb/unicorn-hotels-cancellation.en.md"]}]}
+      - {sleep: 800}
+    clip: main.v3-main
+    highlights:
+      - {n: 1, box: '[data-testid=v2-kb-name]', badge: left}
+      - {n: 2, box: '[data-testid=v2-kb-desc]', badge: left}
+      - {n: 3, box: '[data-testid=v2-kb-source] .v2-options', badge: left}
+      - {n: 4, box: '[data-testid=v2-kb-source] .v2-field >> nth=1', badge: left}
+      - {n: 5, box: '[data-testid=v2-kb-submit]', badge: top}
+
+  - name: 30-build-kb-ingestion
+    chapter: 20-flywheel/20-build
+    status: new   # detail page import track: AVAILABLE -> COMPLETE -> indexed 3
+    account: developer
+    path: /v3/knowledge?id={kb:lab-unicorn-policies}
+    requires: [kb:lab-unicorn-policies]
+    viewport: [1440, 2400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'ol.v3-track'
+    actions: [{sleep: 2000}]
+    clip: 'section.v3-panel:has(ol.v3-track)'
+    highlights:
+      - {n: 1, box: 'ol.v3-track', badge: left}
+
+  - name: 30-build-kb-retrieve
+    chapter: 20-flywheel/20-build
+    status: replace   # retrieve card with results
+    account: developer
+    path: /v3/knowledge?id={kb:lab-unicorn-policies}
+    requires: [kb:lab-unicorn-policies]
+    viewport: [1440, 3000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'ol.v3-track'
+    actions:
+      - {fill: [{zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) input.v3-input', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) input.v3-input'}, {zh: 标准预付价酒店最晚什么时候可以免费取消？, en: "When is the latest I can cancel a Standard prepaid hotel booking for free?"}]}
+      - {click: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) button.v3-btn.primary', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) button.v3-btn.primary'}}
+      - {sleep: 6000}
+    clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve"))'}
+    highlights:
+      - {n: 1, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) input.v3-input', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) input.v3-input'}, badge: left}
+      - {n: 2, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) button.v3-btn.primary', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) button.v3-btn.primary'}, badge: right}
+
   - name: 30-build-journey-strip
     chapter: 20-flywheel/20-build
     status: new

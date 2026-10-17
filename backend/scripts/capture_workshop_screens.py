@@ -85,6 +85,9 @@ class Ctx:
     agents: dict[str, str] = field(default_factory=dict)
     users: dict[str, str] = field(default_factory=dict)
     facts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    kbs: dict[str, str] = field(default_factory=dict)
+    # the workshop repo: `upload` paths are relative to it
+    workshop: Path | None = None
     # set by --assume-state: the walker vouches for every `state:` requirement
     assume_state: bool = False
 
@@ -139,6 +142,10 @@ def discover(ctx: Ctx) -> None:
             for a in res.json().get("agents", []):
                 ctx.agents.setdefault(a["name"], a["id"])
                 project_of.setdefault(a["id"], pid)
+            kres = c.get("/api/knowledge-bases", headers={"X-Project": pid})
+            if kres.status_code == 200:
+                for kb in kres.json().get("items", []):
+                    ctx.kbs.setdefault(kb["name"], kb["kb_id"])
         for u in c.get("/api/users").json().get("items", []):
             ctx.users[u["username"]] = u["id"]
         for name, aid in ctx.agents.items():
@@ -167,7 +174,7 @@ def expand(text: Any, ctx: Ctx, lang: str) -> Any:
 
     def sub(m: re.Match[str]) -> str:
         kind, name = m.group(1), m.group(2)
-        table = ctx.agents if kind == "agent" else ctx.users
+        table = {"agent": ctx.agents, "user": ctx.users, "kb": ctx.kbs}[kind]
         if name not in table:
             raise SkipShot(f"no {kind} named {name!r} on the console")
         return table[name]
@@ -180,7 +187,7 @@ def expand(text: Any, ctx: Ctx, lang: str) -> Any:
         return value
 
     text = re.sub(r"\{env:([A-Z][A-Z0-9_]*)\}", env, text)
-    return re.sub(r"\{(agent|user):([\w.-]+)\}", sub, text)
+    return re.sub(r"\{(agent|user|kb):([\w.-]+)\}", sub, text)
 
 
 def check_requires(shot: dict[str, Any], ctx: Ctx) -> None:
@@ -189,6 +196,8 @@ def check_requires(shot: dict[str, Any], ctx: Ctx) -> None:
         kind, _, rest = req.partition(":")
         if kind == "agent" and rest not in ctx.agents:
             raise SkipShot(f"needs agent {rest}")
+        if kind == "kb" and rest not in ctx.kbs:
+            raise SkipShot(f"needs knowledge base {rest}")
         if kind == "user" and rest not in ctx.users:
             raise SkipShot(f"needs user {rest}")
         if kind == "fact":
@@ -233,6 +242,12 @@ def run_actions(page: Page, actions: list[dict[str, Any]], ctx: Ctx, lang: str) 
         elif verb == "fill":
             sel, value = arg
             page.locator(expand(sel, ctx, lang)).first.fill(expand(value, ctx, lang))
+        elif verb == "upload":
+            # [selector of an <input type=file>, [paths relative to the workshop repo]]
+            sel, paths = arg
+            base = ctx.workshop or Path(".")
+            page.locator(expand(sel, ctx, lang)).first.set_input_files(
+                [str(base / p) for p in per_lang(paths, lang)])
         elif verb == "press":
             page.keyboard.press(arg)
         elif verb == "wait":
@@ -431,6 +446,7 @@ def main() -> int:
     chosen = [s for s in shots if any(fnmatch.fnmatch(s["name"], g) for g in args.only)]
     ctx = load_ctx(args.stack, args.region)
     ctx.assume_state = args.assume_state
+    ctx.workshop = args.workshop
     discover(ctx)
     out = args.out or args.workshop / "static" / "images"
     out.mkdir(parents=True, exist_ok=True)
