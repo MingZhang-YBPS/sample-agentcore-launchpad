@@ -612,6 +612,21 @@ shots:
       - {n: 1, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("生命周期"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Lifecycle"))'}}
       - {n: 2, box: {zh: 'main.v3-main button:has-text("在新 Agent 中使用")', en: 'main.v3-main button:has-text("Use in new agent")'}, badge: left}
 
+  - name: 30-build-attach-skill-kb
+    chapter: 20-flywheel/20-build
+    status: replace   # V2 re-publish wizard inside V3, both attached
+    account: developer
+    path: /v2/agents?view=edit&id={agent:lab-policy-advisor}
+    requires: [agent:lab-policy-advisor, kb:lab-unicorn-policies, record:lab-unicorn-service-rules]
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-agent-skills]'
+    actions: [{sleep: 2000}]
+    clip: {zh: 'section.v2-card:has(h2.v2-sec-title:text-is("Skill 与知识库"))', en: 'section.v2-card:has(h2.v2-sec-title:text-is("Skills and knowledge"))'}
+    highlights:
+      - {n: 1, box: '[data-testid=v2-agent-skills] label:has-text("lab-unicorn-service-rules")', badge: left}
+      - {n: 2, box: 'label:has-text("lab-unicorn-policies")', badge: left}
+
   - name: 30-build-journey-strip
     chapter: 20-flywheel/20-build
     status: new
