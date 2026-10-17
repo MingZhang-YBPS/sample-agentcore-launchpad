@@ -51,12 +51,22 @@ export function Enforcement({ version }: { version: number }) {
             <span>{t("v3.network.enforce.enforce")}</span>
           </label>
           <small className="v3-hint" style={{ marginTop: -8 }}>{t("v3.network.enforce.enforceHint")}</small>
-          <dl className="v3-kv">
+          <dl className="v3-kv wide">
             <dt>ApprovedSubnetIds</dt><dd className="mono">{data.data.stack_parameters.ApprovedSubnetIds || "—"}</dd>
             <dt>ApprovedSecurityGroupIds</dt><dd className="mono">{data.data.stack_parameters.ApprovedSecurityGroupIds || "—"}</dd>
             <dt>{t("v3.network.enforce.actions")}</dt><dd className="mono">{data.data.actions.join(", ")}</dd>
           </dl>
-          {data.data.not_enforceable.map((line) => <Notice key={line} s="info">{line}</Notice>)}
+          {(() => {
+            const codes = data.data.not_enforceable_codes;
+            return data.data.not_enforceable.map((line, i) => {
+              const code = codes?.[i];
+              return (
+                <Notice key={line} s="info">
+                  {code ? t(`v3.network.enforce.gap.${code}`, { defaultValue: line }) : line}
+                </Notice>
+              );
+            });
+          })()}
           <details>
             <summary>{t("v3.network.enforce.policy")}</summary>
             <pre className="mono" style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{JSON.stringify(data.data.policy, null, 2)}</pre>

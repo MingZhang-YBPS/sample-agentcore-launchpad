@@ -703,6 +703,7 @@ def test_the_enforcement_policy_lists_the_approved_networks(client):
     assert "bedrock-agentcore:CreateAgentRuntime" in subnets["Action"]
     assert not any("Harness" in a for a in subnets["Action"])  # no keys on harness actions
     assert body["not_enforceable"]
+    assert len(body["not_enforceable_codes"]) == len(body["not_enforceable"])
 
 
 def test_run_check_with_features_reports_without_storing(ec2):

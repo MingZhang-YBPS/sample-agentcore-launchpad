@@ -386,6 +386,8 @@ body.v3-body {
 .v3 .v3-head > div:first-child { min-width: 0; }
 .v3 .v3-inline-link { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--v3-line-2); }
 .v3 .v3-inline-link:hover { color: var(--v3-info); text-decoration-color: currentColor; }
+/* a <button> does not inherit color/font from its row (UA buttontext is near-black on the dark theme) */
+.v3 button.v3-inline-link { color: inherit; font: inherit; }
 .v3 .v3-agent-search { position: relative; flex: 1 1 220px; max-width: 320px; margin-left: auto; }
 .v3 .v3-list-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--v3-text-2); font-size: 13px; }
 .v3 .v3-list-summary label { display: flex; align-items: center; gap: 8px; }
@@ -919,6 +921,8 @@ body.v3-body {
 .v3 .v3-kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px 18px; margin: 0; }
 .v3 .v3-kv dt { color: var(--v3-text-3); font-family: var(--v3-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; padding-top: 2px; }
 .v3 .v3-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+/* long machine labels (stack parameter names): the label column grows to fit them */
+.v3 .v3-kv.wide { grid-template-columns: max-content minmax(0, 1fr); }
 .v3 pre.v3-pre {
   margin: 0;
   padding: 14px;

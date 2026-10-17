@@ -14068,7 +14068,11 @@
         "enforceHint": "Apply the approved sets below as the spoke stack parameters or as an SCP; the platform does not change its own role.",
         "actions": "Actions covered",
         "policy": "Policy document (SCP or inline)",
-        "saved": "Network rules saved"
+        "saved": "Network rules saved",
+        "gap": {
+          "harness_no_keys": "bedrock-agentcore:CreateHarness and UpdateHarness carry no network condition keys, so the network of a managed harness cannot be restricted at the IAM layer.",
+          "public_not_refusable": "No condition key expresses networkMode, so the IAM layer cannot refuse PUBLIC; to forbid the public network, turn off \"Agents may run on the public network (PUBLIC)\" above."
+        }
       },
       "card": {
         "title": "Network",

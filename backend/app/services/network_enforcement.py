@@ -43,9 +43,12 @@ ENFORCED_ACTIONS = (
     "bedrock-agentcore:CreateCodeInterpreter",
     "bedrock-agentcore:UpdateAgentRuntime",
 )
+# (stable code, English text): the console localizes by code, the text stays for API callers
 NOT_ENFORCEABLE = (
-    "bedrock-agentcore:CreateHarness and UpdateHarness carry no network condition keys",
-    "no condition key expresses networkMode, so PUBLIC cannot be refused at the IAM layer",
+    ("harness_no_keys",
+     "bedrock-agentcore:CreateHarness and UpdateHarness carry no network condition keys"),
+    ("public_not_refusable",
+     "no condition key expresses networkMode, so PUBLIC cannot be refused at the IAM layer"),
 )
 
 
@@ -125,5 +128,6 @@ def enforcement(db: Session, workspace_id: str) -> dict[str, Any]:
                              "ApprovedSecurityGroupIds": ",".join(groups)},
         "policy": policy_document(subnets, groups),
         "actions": list(ENFORCED_ACTIONS),
-        "not_enforceable": list(NOT_ENFORCEABLE),
+        "not_enforceable": [text for _, text in NOT_ENFORCEABLE],
+        "not_enforceable_codes": [code for code, _ in NOT_ENFORCEABLE],
     }

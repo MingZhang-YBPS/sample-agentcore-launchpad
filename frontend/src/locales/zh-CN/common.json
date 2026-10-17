@@ -14068,7 +14068,11 @@
         "enforceHint": "请把下面的已批准集合作为 spoke 栈参数或 SCP 落地；平台不会修改自己的角色。",
         "actions": "覆盖的操作",
         "policy": "策略文档（SCP 或内联策略）",
-        "saved": "网络规则已保存"
+        "saved": "网络规则已保存",
+        "gap": {
+          "harness_no_keys": "bedrock-agentcore:CreateHarness 和 UpdateHarness 不带网络条件键，托管 Harness 的网络无法在 IAM 层限制。",
+          "public_not_refusable": "没有条件键能表达 networkMode，所以 IAM 层拦不住 PUBLIC；要禁止公网，请关闭上面的「允许 Agent 使用公网（PUBLIC）」。"
+        }
       },
       "card": {
         "title": "网络",

@@ -41,6 +41,8 @@ export interface NetworkEnforcement {
   policy: Record<string, unknown>;
   actions: string[];
   not_enforceable: string[];
+  /** stable codes, index-aligned with `not_enforceable` (the console localizes by code) */
+  not_enforceable_codes?: string[];
 }
 
 export const networkApi = {
