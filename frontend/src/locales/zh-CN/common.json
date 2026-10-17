@@ -2694,25 +2694,25 @@
     "criteria.sign_unpublished": "请先发布这个版本再签署。",
     "criteria.template_not_published": "只能继承已发布的模板版本。",
     "golden.bad_case_tier": "用例档位必须是已知好例、已知坏例、模糊或对抗之一。",
-    "golden.bad_split": "切分只能是开发集、回归集或保留集。",
+    "golden.bad_split": "切分只能是开发集、回归集或留出集。",
     "golden.duplicate_scenario": "有样本缺少场景 ID，或这个 ID 已在该切分中。",
     "golden.full": "这个切分已满。",
-    "golden.holdout_closed": "保留集不进入开发循环。",
-    "golden.holdout_closed_why": "保留集不能被调优，编制后就不再写入；新样本请走样本准入，进入开发集或回归集。",
-    "golden.holdout_sealed": "保留集已经编制并封存。",
+    "golden.holdout_closed": "留出集不进入开发循环。",
+    "golden.holdout_closed_why": "留出集不能被调优，编制后就不再写入；新样本请走样本准入，进入开发集或回归集。",
+    "golden.holdout_sealed": "留出集已经编制并封存。",
     "golden.holdout_sealed_why": "封存是为了让后续改动无法针对它调优；新样本请走样本准入。",
     "golden.item_not_found": "黄金集里找不到这个样本。",
     "golden.not_found": "找不到这个黄金集。",
     "golden.seed_empty": "编制黄金集至少需要一个样本。",
     "golden.split_not_found": "这个黄金集没有该切分。",
-    "release.empty_golden": "黄金集的回归集和保留集里没有样本。",
-    "release.empty_golden_why": "放行门回放的是回归集和保留集，请先编制它们。",
+    "release.empty_golden": "黄金集的回归集和留出集里没有样本。",
+    "release.empty_golden_why": "放行门回放的是回归集和留出集，请先编制它们。",
     "release.gate_not_passed": "只有放行报告通过的版本才能签署放行。",
-    "release.gate_not_passed_why": "请修好未通过的判据后重新评估，或为门限判据申请豁免。",
+    "release.gate_not_passed_why": "请修好未通过的判据后重新评估，或为门禁判据申请豁免。",
     "release.no_criteria": "智能体还没有已发布的判据表，放行门无法评估。",
     "release.no_criteria_why": "放行门要按已发布的判据逐条判定；部署那一刻会锁定当时已发布的判据表版本。",
     "release.no_golden": "这份判据还没有黄金集。",
-    "release.no_golden_why": "放行门要回放黄金集的回归集和保留集。",
+    "release.no_golden_why": "放行门要回放黄金集的回归集和留出集。",
     "release.not_active": "只有运行中的智能体才能迁移到 live 端点。",
     "release.not_evaluated": "请先启动放行门评估。",
     "release.not_found": "找不到这条放行记录。",
@@ -2923,7 +2923,7 @@
     "criteria.empty": "判据表中没有判据。",
     "criteria.empty_text": "判据文本为空。",
     "criteria.judge_needs_examples": "请至少添加一个正例和一个反例——评审模型靠它们校准。",
-    "criteria.judge_uncalibrated_until_calibrated": "评审模型判据在校准前仅观察（不阻断）。",
+    "criteria.judge_uncalibrated_until_calibrated": "评审模型判据在校准前仅观测（不阻断）。",
     "criteria.metric_dimension": "成本和性能判据是度量指标，不是评估器分数。",
     "criteria.no_evaluator": "请选择判定该判据的评估器。",
     "criteria.no_redline": "判据表至少需要一条红线。",
@@ -7687,8 +7687,8 @@
       },
       "tier": {
         "redline": "红线",
-        "gate": "门限",
-        "observe": "观察"
+        "gate": "门禁",
+        "observe": "观测"
       },
       "caseTier": {
         "known_good": "已知正例",
@@ -7699,7 +7699,7 @@
       "split": {
         "dev": "开发集",
         "regression": "回归集",
-        "holdout": "保留集"
+        "holdout": "留出集"
       },
       "label": {
         "pass": "通过",
@@ -7770,7 +7770,7 @@
         },
         "count": "判据条数",
         "redlines": "红线条数",
-        "effectiveGates": "实际生效门限",
+        "effectiveGates": "实际生效门禁",
         "judgeShare": "由大模型裁判判定",
         "cadence": "建议运行节奏",
         "rows": "判据",
@@ -7782,7 +7782,7 @@
         "dimension": "维度",
         "tier": "档位",
         "threshold": "阈值 %",
-        "thresholdHint": "按整数百分比。94.9% 的通过率过不了 95% 的门限。",
+        "thresholdHint": "按整数百分比。94.9% 的通过率过不了 95% 的门禁。",
         "executor": "由谁判定",
         "executorEvaluator": "评估器",
         "executorMetric": "指标",
@@ -7818,12 +7818,12 @@
         "saved": "已保存",
         "fixFirst": "先修掉错误再发布。",
         "assistant": "阈值合在一起看",
-        "assistantSub": "每个门限各自判定，但一个会话必须同时过掉所有门限。",
-        "gateCount": "门限数量",
-        "compound": "全部门限同时达成",
-        "compoundWarn": "八条 95% 的门限只会放过 66% 的会话。当前 {{n}} 条门限叠加后是 {{v}}——要么这就是你想要的标准，要么其中一些本应是“观察”。",
+        "assistantSub": "每个门禁各自判定，但一个会话必须同时过掉所有门禁。",
+        "gateCount": "门禁数量",
+        "compound": "全部门禁同时达成",
+        "compoundWarn": "八条 95% 的门禁只会放过 66% 的会话。当前 {{n}} 条门禁叠加后是 {{v}}——要么这就是你想要的标准，要么其中一些本应是“观测”。",
         "integerWarn": "在当前样本量下，比整数百分比更细的阈值与噪声无法区分：{{keys}}。",
-        "demotedGates": "有 {{n}} 条声明为门限的判据还不会拦人：裁判类判据在校准之前只作观察。",
+        "demotedGates": "有 {{n}} 条声明为门禁的判据还不会拦人：裁判类判据在校准之前只作观测。",
         "demotedFrom": "声明为{{tier}}",
         "demotedHint": "裁判类判据只有被证明与人判一致后才会拦人。",
         "templateNewer": "这张表所依据的模板已更新到 v{{v}}。",
@@ -7833,7 +7833,7 @@
       },
       "golden": {
         "indexTitle": "黄金集",
-        "indexSub": "三个切分，三种用途：开发集用来迭代，回归集供放行门重放，保留集封存，以免有人对着它调参。",
+        "indexSub": "三个切分，三种用途：开发集用来迭代，回归集供放行门重放，留出集封存，以免有人对着它调参。",
         "noSets": "还没有黄金集。",
         "create": "新建黄金集",
         "createTitle": "新建黄金集",
@@ -7857,14 +7857,14 @@
           "regression": "放行门重放的集合",
           "holdout": "绝不对着它调参"
         },
-        "sealed": "保留集已封存",
-        "unsealed": "保留集为空",
+        "sealed": "留出集已封存",
+        "unsealed": "留出集为空",
         "seed": "初次编制切分",
         "seedTitle": "一次性编制三个切分",
         "seedHint": "样本按用例档位分层，使三个切分见到同样的构成；若样本自己指定了切分，则按指定放入。支持 Excel、CSV、JSON，可先下载模板。",
-        "seedOnce": "这一步只做一次。之后保留集会被封存——正是这一点让它成为保留集。",
-        "seedNeeded": "保留集为空，放行门会判为“无法判定”。编制切分以打开它。",
-        "seeded": "切分已编制，保留集已封存",
+        "seedOnce": "这一步只做一次。之后留出集会被封存——正是这一点让它成为留出集。",
+        "seedNeeded": "留出集为空，放行门会判为“无法判定”。编制切分以打开它。",
+        "seeded": "切分已编制，留出集已封存",
         "addTo": "添加到{{split}}",
         "addTitle": "添加到{{split}}",
         "addHint": "每行一条：`编号 | 问题 | 期望答案`；也支持 JSON 数组、Excel 和 CSV 文件。",
@@ -7911,13 +7911,13 @@
           "errorReport": "下载错误报告",
           "errorColumn": "错误",
           "useTemplate": "可下载模板查看需要的列。",
-          "projected": "按档位分层后预计：开发集 {{dev}} / 回归集 {{regression}} / 保留集 {{holdout}}",
+          "projected": "按档位分层后预计：开发集 {{dev}} / 回归集 {{regression}} / 留出集 {{holdout}}",
           "submitAdd": "追加 {{n}} 条",
-          "submitSeed": "编制并封存保留集",
+          "submitSeed": "编制并封存留出集",
           "back": "返回",
-          "sealConfirmTitle": "确认封存保留集？",
-          "sealConfirmBody": "保留集将被封存，之后不能再修改或追加；请确认期望答案已经由业务负责人审过。",
-          "sealConfirmCheck": "期望答案已经审过，我知道保留集封存后不能再修改。",
+          "sealConfirmTitle": "确认封存留出集？",
+          "sealConfirmBody": "留出集将被封存，之后不能再修改或追加；请确认期望答案已经由业务负责人审过。",
+          "sealConfirmCheck": "期望答案已经审过，我知道留出集封存后不能再修改。",
           "col": {
             "line": "行",
             "id": "编号",
@@ -7964,7 +7964,7 @@
             "expected_response": "人写的期望答案。它就是标准——没有它，这条样本判不了任何事。",
             "case_tier": "known_good / known_bad / ambiguous / adversarial，也可以写“已知正例 / 已知反例 / 模糊样本 / 对抗样本”。",
             "criteria_ids": "建议填写。这条样本考察的判据编号，用 ; , 或换行分隔，例如 C1;Q1;P1。留空则不计入任何判据的覆盖。",
-            "split": "仅编制时有效：dev / regression / holdout（或“开发集 / 回归集 / 保留集”）；留空则按档位分层。",
+            "split": "仅编制时有效：dev / regression / holdout（或“开发集 / 回归集 / 留出集”）；留空则按档位分层。",
             "expected_source": "annotator（默认）/ consensus / adjudicated。",
             "other": "原样保存为 metadata.<列名>；值里含 ; 时拆成列表。",
             "multiTurn": "一行是一条单轮样本。多轮样本请使用 JSON 模板。"
@@ -8100,7 +8100,7 @@
         "adjudicate": "开始仲裁",
         "decideTitle": "记录校准结论",
         "alignedHint": "在校准失效之前，这个裁判可以在该判据上拦人。",
-        "notAlignedHint": "该判据仍只作观察：记录在案，但不拦放行。",
+        "notAlignedHint": "该判据仍只作观测：记录在案，但不拦放行。",
         "decided": "结论已记录",
         "note": "备注",
         "notFound": "没有找到该任务。",
@@ -8207,14 +8207,14 @@
           "BLOCKED": "拦住",
           "INVALID": "无法判定",
           "WAIVED": "已豁免",
-          "OBSERVED": "仅观察"
+          "OBSERVED": "仅观测"
         },
         "gateOrder": "判定顺序",
         "gateStep": {
           "redline": "红线",
           "denominator": "分母",
-          "gate": "各维度门限",
-          "observe": "观察项"
+          "gate": "各维度门禁",
+          "observe": "观测项"
         },
         "signedBy": "标准签署人",
         "goldenVersions": "黄金集版本",
@@ -8256,12 +8256,12 @@
       },
       "waiver": {
         "title": "豁免",
-        "sub": "明知未达门限仍放行，必须有责任人和失效日期。红线不在其列。",
+        "sub": "明知未达门禁仍放行，必须有责任人和失效日期。红线不在其列。",
         "none": "没有豁免。",
         "request": "申请豁免",
         "requestTitle": "申请豁免",
         "requested": "豁免已申请",
-        "neverRedline": "红线不可豁免，只有阈值门限可以。",
+        "neverRedline": "红线不可豁免，只有阈值门禁可以。",
         "reason": "为什么仍要放行",
         "reasonHint": "业务上的理由是什么？那些不达标的会话会怎么处理？",
         "riskOwner": "风险责任人",
@@ -8384,7 +8384,7 @@
         "noCriteria": "没有已签署的判据表——目前还没有可对照的标准。",
         "notFound": "该智能体没有记分卡。",
         "standard": "标准 {{v}}",
-        "gates": "{{declared}} 条门限中有 {{effective}} 条生效",
+        "gates": "{{declared}} 条门禁中有 {{effective}} 条生效",
         "violations": "{{n}} 次突破",
         "notApplicable": "不适用——这里没有人写过判据",
         "lastRun": "最近运行",
@@ -10566,7 +10566,7 @@
       "observability": "可观测性",
       "trace": "链路"
     },
-    "criteria": "判据是标准的最小单元：一条可核对的表述，带着它的维度、档位（红线 / 门限 / 观察）以及由谁判定。"
+    "criteria": "判据是标准的最小单元：一条可核对的表述，带着它的维度、档位（红线 / 门禁 / 观测）以及由谁判定。"
   },
   "shareLinks": {
     "button": "分享",
@@ -11276,7 +11276,7 @@
         "waiting": "有候选版本在等待",
         "none": "没有等待放行的版本"
       },
-      "sub": "依次是红线、分母、各维度门限、仅观察项。只有当一份通过的报告由人签署后，放行才会生效。",
+      "sub": "依次是红线、分母、各维度门禁、仅观测项。只有当一份通过的报告由人签署后，放行才会生效。",
       "noAgents": "这个工作区里没有运行中的智能体",
       "live": "生产",
       "namedEndpoint": "在具名 live 端点上",
@@ -11294,25 +11294,25 @@
       "step": {
         "redline": "红线",
         "denominator": "分母",
-        "gate": "门限",
-        "observe": "观察项"
+        "gate": "门禁",
+        "observe": "观测项"
       },
       "stopped": {
         "redline_one": "{{count}} 条红线被突破",
         "redline_other": "{{count}} 条红线被突破",
         "denominator_one": "证据有 {{count}} 处问题",
         "denominator_other": "证据有 {{count}} 处问题",
-        "gate_one": "{{count}} 条门限未达到",
-        "gate_other": "{{count}} 条门限未达到",
-        "observe_one": "{{count}} 条仅观察",
-        "observe_other": "{{count}} 条仅观察"
+        "gate_one": "{{count}} 条门禁未达到",
+        "gate_other": "{{count}} 条门禁未达到",
+        "observe_one": "{{count}} 条仅观测",
+        "observe_other": "{{count}} 条仅观测"
       },
       "passed": "通过",
       "notReached": "未到达",
       "recorded_one": "记录 {{count}} 条",
       "recorded_other": "记录 {{count}} 条",
       "run": "运行放行门",
-      "runHint": "对候选端点重放回归集与保留集。",
+      "runHint": "对候选端点重放回归集与留出集。",
       "runBtn": "运行放行门",
       "started": "放行评估已启动",
       "criteria": "判据",
@@ -12855,7 +12855,7 @@
         "gate": "最近一次放行门结果为 {{v}}",
         "noCriteria": "还没有判据表——没有可以衡量这个智能体的标准",
         "unsigned": "判据 v{{v}} 已发布但未签署——放行门无法据此判定",
-        "uncalibrated": "{{n}} 条裁判判据未校准，只作观察",
+        "uncalibrated": "{{n}} 条裁判判据未校准，只作观测",
         "waivers": "有 {{n}} 条豁免生效中",
         "thin": "{{n}} 条判据的黄金集样本太少，无法衡量"
       },
@@ -13110,7 +13110,7 @@
       "finding": {
         "criteria.redline_judge": "红线不能由 LLM 裁判判定——请用代码断言、轨迹匹配或指标",
         "criteria.metric_dimension": "成本与性能判据是测量出来的指标，不是评估器打分",
-        "criteria.judge_uncalibrated_until_calibrated": "裁判类判据在校准之前只作观察（不拦人）",
+        "criteria.judge_uncalibrated_until_calibrated": "裁判类判据在校准之前只作观测（不拦人）",
         "criteria.judge_needs_examples": "至少加一个正例和一个反例——校准裁判靠的就是它们",
         "criteria.dimension_missing": "缺少「{{dimension}}」维度的判据——添加一条，或在某条判据的备注里写 n/a:{{raw}} <原因>",
         "criteria.no_redline": "判据表至少需要一条红线",
@@ -13120,7 +13120,7 @@
       },
       "msg": {
         "below threshold": "低于阈值",
-        "judge not calibrated — observed until calibrated": "裁判未校准——校准之前只作观察",
+        "judge not calibrated — observed until calibrated": "裁判未校准——校准之前只作观测",
         "the runs used different criteria versions": "这些运行用的判据版本不同",
         "the runs used different golden versions": "这些运行用的黄金集版本不同",
         "evaluationErrors": "{{n}} 条评估出错",
@@ -15531,7 +15531,7 @@
       "candidate": "候选版本 v{{version}} 已部署",
       "criteriaPublished": "判据表 v{{version}} 已发布",
       "criteriaSigned": "判据表 v{{version}} 已签署",
-      "goldenSealed": "黄金集已封存——保留集只写一次并锁定",
+      "goldenSealed": "黄金集已封存——留出集只写一次并锁定",
       "evalDone": "评估已完成",
       "gateReport": "放行门报告已生成：{{verdict}}",
       "releaseSigned": "已签署放行——候选版本已上线",
@@ -15568,6 +15568,16 @@
       "needs": "需要 {{role}}"
     },
     "term": {
+      "goldenStandard": {
+        "name": "黄金标准",
+        "short": "黄金测试集 + 五维评分标准（认知、质量、责任、成本、性能）。六个阶段都围着它转：定义产出它，评估取用它，发布据它判定，回流把生产失败回灌进它。",
+        "owner": "biz-owner"
+      },
+      "drillDown": {
+        "name": "三层下钻（会话级 / 轨迹级 / 步骤级）",
+        "short": "不过线时逐层定位：会话级看整轮是否失败，轨迹级锁定出错的那一步，步骤级看这一步具体做了什么。",
+        "owner": "developer"
+      },
       "section": "Agent-DLC",
       "usedIn": "用在",
       "owner": "谁负责",
@@ -15582,8 +15592,8 @@
         "owner": "developer 起草，biz-owner 签署"
       },
       "criteriaTier": {
-        "name": "红线 / 门限 / 观察",
-        "short": "判据的分量：红线一票否决，门限要达到阈值，观察只记录不拦截。",
+        "name": "红线 / 门禁 / 观测",
+        "short": "判据分三档：红线碰到即否决，门禁要过线才放行，观测先只看不拦，校准准了再升档。",
         "owner": "developer 提议，biz-owner 决定"
       },
       "goldenSet": {
@@ -15592,9 +15602,9 @@
         "owner": "biz-owner 准入，developer 维护"
       },
       "goldenSplit": {
-        "name": "开发集 / 回归集 / 保留集",
-        "short": "黄金集的三个切分：开发集用于迭代，回归集用于回放，保留集只写一次并封存，留给放行门。",
-        "owner": "biz-owner 写入保留集"
+        "name": "开发集 / 回归集 / 留出集",
+        "short": "黄金集的三个切分：开发集用于迭代，回归集用于回放，留出集只写一次并封存，留给放行门。",
+        "owner": "biz-owner 写入留出集"
       },
       "caseTier": {
         "name": "用例档位",
@@ -15603,12 +15613,12 @@
       },
       "admission": {
         "name": "样本准入",
-        "short": "真实对话加入黄金集之前的审核，让反馈变成测试。",
+        "short": "回流里的「拍板入集」：线上样本经归因聚簇后，由人拍板写入黄金集，进集即成为新标准。",
         "owner": "biz-owner"
       },
       "judgeCalibration": {
         "name": "裁判校准",
-        "short": "把 LLM 裁判与人工标注对比；未校准的裁判不能把守门限。",
+        "short": "把 LLM 裁判与人工标注对比；未校准的裁判不能把守门禁。",
         "owner": "sme 标注，biz-owner 判定"
       },
       "gate": {
@@ -15623,7 +15633,7 @@
       },
       "waiver": {
         "name": "豁免",
-        "short": "对一条被拦截的门限判据给出的限期例外，需写明风险负责人和补偿措施；红线永不豁免。",
+        "short": "对一条被拦截的门禁判据给出的限期例外，需写明风险负责人和补偿措施；红线永不豁免。",
         "owner": "developer 申请，release-ops 批准"
       },
       "releaseRecord": {
@@ -15638,7 +15648,7 @@
       },
       "repairLadder": {
         "name": "修复阶梯",
-        "short": "先用最便宜的修法：规则，然后知识库，然后提示词，最后换模型。",
+        "short": "一次只改一处，每改一处就用同一把尺重跑：每级台阶涨的分都能归因到那一处修改（方法论里的 F1–F5）。",
         "owner": "developer"
       },
       "scorecard": {

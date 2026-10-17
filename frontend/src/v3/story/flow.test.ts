@@ -131,8 +131,8 @@ describe("the viewer", () => {
 describe("Agent-DLC term cards (guided-console §5.2)", () => {
   const en = locale("en");
   const zh = locale("zh-CN");
-  it("fifteen terms, each step a storyline step, each related word a card", () => {
-    expect(DLC_TERMS).toHaveLength(15);
+  it("seventeen terms, each step a storyline step, each related word a card", () => {
+    expect(DLC_TERMS).toHaveLength(17);
     for (const term of DLC_TERMS) {
       const card = DLC_TERM_CARDS[term];
       expect(card.steps.length).toBeGreaterThan(0);

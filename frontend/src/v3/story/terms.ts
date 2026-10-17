@@ -5,6 +5,7 @@
 // step key exists in `AGENT_STORY`.
 
 export const DLC_TERMS = [
+  "goldenStandard",
   "criteria",
   "criteriaSet",
   "criteriaTier",
@@ -19,6 +20,7 @@ export const DLC_TERMS = [
   "releaseRecord",
   "driftWatch",
   "repairLadder",
+  "drillDown",
   "scorecard",
 ] as const;
 
@@ -31,6 +33,10 @@ export interface DlcTermCard {
 }
 
 export const DLC_TERM_CARDS: Record<DlcTerm, DlcTermCard> = {
+  goldenStandard: {
+    steps: ["evaluate.criteria.draft", "evaluate.golden.seal", "evaluate.gate", "feedback.loop"],
+    related: ["criteriaSet", "goldenSet", "admission"],
+  },
   criteria: {
     steps: ["evaluate.criteria.draft", "evaluate.criteria.sign", "evaluate.gate", "feedback.loop"],
     related: ["criteriaSet", "criteriaTier", "goldenSet"],
@@ -54,6 +60,7 @@ export const DLC_TERM_CARDS: Record<DlcTerm, DlcTermCard> = {
   releaseRecord: { steps: ["release.sign", "observe.traces"], related: ["gate", "waiver"] },
   driftWatch: { steps: ["observe.traces", "observe.alerts"], related: ["criteria", "scorecard"] },
   repairLadder: { steps: ["observe.traces", "feedback.triage"], related: ["admission", "driftWatch"] },
+  drillDown: { steps: ["evaluate.dev_run", "observe.traces"], related: ["repairLadder", "criteria"] },
   scorecard: { steps: ["evaluate.dev_run", "observe.traces"], related: ["criteria", "driftWatch"] },
 };
 

@@ -15568,6 +15568,16 @@
       "needs": "Needs {{role}}"
     },
     "term": {
+      "goldenStandard": {
+        "name": "Golden standard",
+        "short": "The golden test set plus the five-dimension criteria (cognition, quality, responsibility, cost, performance). All six stages turn around it: Define produces it, Evaluate draws on it, Release decides by it, Improve feeds production failures back into it.",
+        "owner": "biz-owner"
+      },
+      "drillDown": {
+        "name": "Three-level drill-down (session / trajectory / step)",
+        "short": "When a case fails, locate it level by level: the session shows whether the whole turn failed, the trajectory pins the step that went wrong, the step shows what exactly it did.",
+        "owner": "developer"
+      },
       "section": "Agent-DLC",
       "usedIn": "Used in",
       "owner": "Who",
@@ -15582,8 +15592,8 @@
         "owner": "developer drafts, biz-owner signs"
       },
       "criteriaTier": {
-        "name": "Red line / gate / watch",
-        "short": "How much a criterion counts: a red line blocks any release, a gate needs its threshold, a watch is only observed.",
+        "name": "Red line / gate / observe",
+        "short": "Criteria come in three tiers: a red line vetoes on contact, a gate must be met to release, an observe criterion only watches until its calibration proves it, then moves up.",
         "owner": "developer proposes, biz-owner decides"
       },
       "goldenSet": {
@@ -15603,7 +15613,7 @@
       },
       "admission": {
         "name": "Sample admission",
-        "short": "Reviewing a real conversation before it joins the golden set, so feedback becomes a test.",
+        "short": "Improve's \"admit into the set\": after attribution clustering, a person decides which production samples join the golden set; once in, a sample is part of the standard.",
         "owner": "biz-owner"
       },
       "judgeCalibration": {
@@ -15638,7 +15648,7 @@
       },
       "repairLadder": {
         "name": "Fix ladder",
-        "short": "The cheapest fix first: a rule, then the knowledge base, then the prompt, then the model.",
+        "short": "One change per rung, each rerun on the same yardstick, so every gain is attributable to that one change (F1–F5 in the methodology).",
         "owner": "developer"
       },
       "scorecard": {

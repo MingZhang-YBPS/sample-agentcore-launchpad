@@ -98,6 +98,9 @@ describe("table parsing", () => {
     );
     expect(parsed.rows[0].item.split).toBe("holdout");
     expect(parsed.rows[1].badTier).toBe("坏档位");
+    // 留出集 is the methodology's name; the earlier 保留集 still parses
+    const named = tableToImport([["编号", "问题", "期望答案", "用例档位", "切分"], ["c", "q", "e", "已知反例", "留出集"]], "csv");
+    expect(named.rows[0].item.split).toBe("holdout");
     expect(parsed.rows[1].badSplit).toBe("测试集");
   });
 });

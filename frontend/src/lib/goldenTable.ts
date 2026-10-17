@@ -65,7 +65,8 @@ const SPLIT_OF = new Map<string, GoldenSplit>([
   ...SPLITS.map((s) => [s, s] as const),
   ["开发集", "dev"],
   ["回归集", "regression"],
-  ["保留集", "holdout"],
+  ["留出集", "holdout"],
+  ["保留集", "holdout"], // the earlier name of 留出集, still accepted in uploads
 ]);
 /** Sheet names read in preference to the first sheet. */
 const SAMPLE_SHEETS = ["样本", "samples"];
