@@ -86,6 +86,7 @@ class Ctx:
     users: dict[str, str] = field(default_factory=dict)
     facts: dict[str, dict[str, Any]] = field(default_factory=dict)
     kbs: dict[str, str] = field(default_factory=dict)
+    records: dict[str, str] = field(default_factory=dict)
     # the workshop repo: `upload` paths are relative to it
     workshop: Path | None = None
     # set by --assume-state: the walker vouches for every `state:` requirement
@@ -146,6 +147,11 @@ def discover(ctx: Ctx) -> None:
             if kres.status_code == 200:
                 for kb in kres.json().get("items", []):
                     ctx.kbs.setdefault(kb["name"], kb["kb_id"])
+            rres = c.get("/api/registry/records", headers={"X-Project": pid})
+            if rres.status_code == 200:
+                body = rres.json()
+                for rec in body if isinstance(body, list) else body.get("records", []):
+                    ctx.records.setdefault(rec["name"], rec["record_id"])
         for u in c.get("/api/users").json().get("items", []):
             ctx.users[u["username"]] = u["id"]
         for name, aid in ctx.agents.items():
@@ -174,7 +180,8 @@ def expand(text: Any, ctx: Ctx, lang: str) -> Any:
 
     def sub(m: re.Match[str]) -> str:
         kind, name = m.group(1), m.group(2)
-        table = {"agent": ctx.agents, "user": ctx.users, "kb": ctx.kbs}[kind]
+        table = {"agent": ctx.agents, "user": ctx.users, "kb": ctx.kbs,
+                 "record": ctx.records}[kind]
         if name not in table:
             raise SkipShot(f"no {kind} named {name!r} on the console")
         return table[name]
@@ -187,17 +194,20 @@ def expand(text: Any, ctx: Ctx, lang: str) -> Any:
         return value
 
     text = re.sub(r"\{env:([A-Z][A-Z0-9_]*)\}", env, text)
-    return re.sub(r"\{(agent|user|kb):([\w.-]+)\}", sub, text)
+    return re.sub(r"\{(agent|user|kb|record):([\w.-]+)\}", sub, text)
 
 
 def check_requires(shot: dict[str, Any], ctx: Ctx) -> None:
-    """`requires` entries: `agent:<name>`, `user:<name>`, `fact:<agent>.<key>[=<value>]`."""
+    """`requires` entries: `agent:<name>`, `kb:<name>`, `record:<name>`, `user:<name>`,
+    `fact:<agent>.<key>[=<value>]`."""
     for req in shot.get("requires", []):
         kind, _, rest = req.partition(":")
         if kind == "agent" and rest not in ctx.agents:
             raise SkipShot(f"needs agent {rest}")
         if kind == "kb" and rest not in ctx.kbs:
             raise SkipShot(f"needs knowledge base {rest}")
+        if kind == "record" and rest not in ctx.records:
+            raise SkipShot(f"needs registry record {rest}")
         if kind == "user" and rest not in ctx.users:
             raise SkipShot(f"needs user {rest}")
         if kind == "fact":

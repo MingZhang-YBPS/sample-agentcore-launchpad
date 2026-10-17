@@ -584,6 +584,34 @@ shots:
       - {n: 1, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) input.v3-input', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) input.v3-input'}, badge: left}
       - {n: 2, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) button.v3-btn.primary', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) button.v3-btn.primary'}, badge: right}
 
+  - name: 30-build-registry-list
+    chapter: 20-flywheel/20-build
+    status: new
+    account: developer
+    path: /v3/registry
+    requires: [record:lab-unicorn-service-rules]
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main table tbody tr'
+    actions: [{sleep: 2000}]
+    highlights:
+      - {n: 1, box: 'main.v3-main .v3-btn.primary', badge: left}
+      - {n: 2, box: 'main.v3-main table tbody tr:has-text("lab-unicorn-service-rules")'}
+
+  - name: 30-build-registry-record
+    chapter: 20-flywheel/20-build
+    status: new
+    account: biz-owner
+    path: /v3/registry?id={record:lab-unicorn-service-rules}
+    requires: [record:lab-unicorn-service-rules]
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'ol.v3-track'
+    actions: [{sleep: 2000}]
+    highlights:
+      - {n: 1, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("生命周期"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Lifecycle"))'}}
+      - {n: 2, box: {zh: 'main.v3-main button:has-text("在新 Agent 中使用")', en: 'main.v3-main button:has-text("Use in new agent")'}, badge: left}
+
   - name: 30-build-journey-strip
     chapter: 20-flywheel/20-build
     status: new
