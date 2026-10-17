@@ -41,14 +41,20 @@ class SourceSpec(BaseModel):
     prefix: str | None = None
 
 
+# Bedrock CreateKnowledgeBase / UpdateKnowledgeBase cap `description` at 200
+# characters; a longer one used to pass here and come back from AWS as a bare
+# ValidationException ("invalid parameter").
+KB_DESCRIPTION_MAX = 200
+
+
 class CreateKBRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100, pattern=r"^[0-9a-zA-Z][0-9a-zA-Z_-]{0,99}$")
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=KB_DESCRIPTION_MAX)
     source: SourceSpec = SourceSpec()
 
 
 class PatchKBRequest(BaseModel):
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=KB_DESCRIPTION_MAX)
 
 
 class QueryRequest(BaseModel):

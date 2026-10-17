@@ -99,7 +99,8 @@ export type KBSourceMode = KBSourceBody["mode"];
 /** Mirrors the backend rule — starts alphanumeric, then letters/digits/-/_ (no
  *  spaces; the AWS KB name constraint), 100 characters at most. */
 export const KB_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9\-_]{0,99}$/;
-export const KB_DESCRIPTION_MAX = 1000;
+/** Bedrock's own limit on a knowledge base description (Create/UpdateKnowledgeBase). */
+export const KB_DESCRIPTION_MAX = 200;
 export const KB_QUERY_MAX_RESULTS = 100;
 
 /** Connectors shown as "coming soon" next to the two S3 modes (v1 is S3-only). */
