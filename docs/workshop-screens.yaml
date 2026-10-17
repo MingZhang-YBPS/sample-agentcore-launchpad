@@ -627,6 +627,23 @@ shots:
       - {n: 1, box: '[data-testid=v2-agent-skills] label:has-text("lab-unicorn-service-rules")', badge: left}
       - {n: 2, box: 'label:has-text("lab-unicorn-policies")', badge: left}
 
+  - name: 30-build-chat-kb
+    chapter: 20-flywheel/20-build
+    status: replace   # V3 chat, advisor with skill + KB gateway tools; the session is
+                      # asked beforehand over /api/chat and opened by id (LP_CHAT_SID_*)
+    account: developer
+    path: {zh: '/v3/chat?agent={agent:lab-policy-advisor}&session={env:LP_CHAT_SID_ZH}',
+           en: '/v3/chat?agent={agent:lab-policy-advisor}&session={env:LP_CHAT_SID_EN}'}
+    requires: [agent:lab-policy-advisor]
+    viewport: [1440, 1400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=chat-tool]'
+    actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
+    highlights:
+      - {n: 1, box: 'select:has(option:text-is("lab-policy-advisor"))', badge: left}
+      - {n: 2, box: '[data-testid=chat-tool]', badge: left}
+      - {n: 3, box: '.v3-msg.agent', badge: left}
+
   - name: 30-build-journey-strip
     chapter: 20-flywheel/20-build
     status: new
