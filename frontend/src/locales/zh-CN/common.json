@@ -956,6 +956,12 @@
         "noteAdmin": "平台持有：内容由预置管道发布（“系统预置”面板 → 修复/更新）并从那里重新注册；不提供编辑、重新导入和删除。你可以在此提交、批准、驳回或停用。",
         "noteMember": "平台持有：成员可查看此 Skill，并在其为 APPROVED 后挂载到新 Agent；其内容与审批由管理员维护。",
         "memberReadOnly": "成员只读 · 审批为管理员操作"
+      },
+      "useReady": "已发布：可以挂载到智能体，在智能体配置的「技能」里选择它。",
+      "reason": {
+        "approved": "已在 Launchpad 控制台批准",
+        "disabled": "已在 Launchpad 控制台停用",
+        "rejected": "已在 Launchpad 控制台驳回"
       }
     },
     "confirmDisable": {

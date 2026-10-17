@@ -9,7 +9,7 @@ import { useAuth } from "../../auth/auth-context";
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../components/ErrorCallout";
 import { api, errorMessage, type RegistryRecordOut } from "../../lib/api";
-import { descriptorExcerpt, parseAgentCard, parseMcpUrl, parseSkillDefinition, skillPath } from "../../lib/registry";
+import { descriptorExcerpt, parseAgentCard, parseMcpUrl, parseSkillDefinition, skillPath, statusReasonText } from "../../lib/registry";
 import { isRegistryUnavailable } from "../../v2/pages/registry/common";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
@@ -402,7 +402,7 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
       <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-registry-record-error" />
       <ErrorCallout error={lifecycle.failed.error} onDismiss={lifecycle.failed.clear} data-testid="v3-registry-lifecycle-error" />
 
-      {r.status_reason && <Notice s={r.status === "REJECTED" ? "act" : "info"}>{r.status_reason}</Notice>}
+      {r.status_reason && <Notice s={r.status === "REJECTED" ? "act" : "info"}>{statusReasonText(r.status_reason, t)}</Notice>}
       {r.system && (
         <Notice>
           {t(isAdmin ? "registry.drawer.system.noteAdmin" : "registry.drawer.system.noteMember")}{" "}
@@ -430,7 +430,7 @@ function RecordDetail({ id, back }: { id: string; back: string }) {
       >
         <Track nodes={lifecycleNodes(r.status, statusLabel)} />
         <p style={{ margin: "14px 0 0", color: "var(--v3-text-3)", fontSize: 13 }}>
-          {t(r.type === "A2A" ? "v2.registry.lifecycleNoteA2A" : "registry.drawer.useNeedsApproved")}
+          {t(r.type === "A2A" ? "v2.registry.lifecycleNoteA2A" : approved ? "registry.drawer.useReady" : "registry.drawer.useNeedsApproved")}
         </p>
       </Panel>
 

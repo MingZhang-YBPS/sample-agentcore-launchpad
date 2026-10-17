@@ -956,6 +956,12 @@
         "noteAdmin": "Platform-owned: the content is published by the preset pipeline (System presets panel → REPAIR/UPDATE) and re-registered from there; edit, re-import and delete are not available. You may submit, approve, reject or disable it here.",
         "noteMember": "Platform-owned: members can view this Skill and mount it in a new agent once it is APPROVED; its content and approval are maintained by administrators.",
         "memberReadOnly": "read-only for members · approval is an administrator action"
+      },
+      "useReady": "Published: it can be attached to an agent — pick it under Skills in the agent's configuration.",
+      "reason": {
+        "approved": "Approved in the Launchpad console",
+        "disabled": "Disabled in the Launchpad console",
+        "rejected": "Rejected in the Launchpad console"
       }
     },
     "confirmDisable": {
