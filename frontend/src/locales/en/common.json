@@ -1247,6 +1247,16 @@
         "conflictBody": "This knowledge base is attached to: {{agents}}. Deleting it will break retrieval for those agents. Delete anyway?",
         "force": "DELETE ANYWAY"
       }
+    },
+    "stats": {
+      "numberOfDocumentsScanned": "Documents scanned",
+      "numberOfMetadataDocumentsScanned": "Metadata documents scanned",
+      "numberOfNewDocumentsIndexed": "New documents indexed",
+      "numberOfModifiedDocumentsIndexed": "Modified documents indexed",
+      "numberOfMetadataDocumentsModified": "Metadata documents modified",
+      "numberOfDocumentsDeleted": "Documents deleted",
+      "numberOfDocumentsFailed": "Documents failed",
+      "numberOfDocumentsSkipped": "Documents skipped"
     }
   },
   "chat": {

@@ -1247,6 +1247,16 @@
         "conflictBody": "此知识库已挂载到：{{agents}}。删除会中断这些 Agent 的检索。仍要删除吗？",
         "force": "仍然删除"
       }
+    },
+    "stats": {
+      "numberOfDocumentsScanned": "已扫描文档",
+      "numberOfMetadataDocumentsScanned": "已扫描元数据文档",
+      "numberOfNewDocumentsIndexed": "新索引文档",
+      "numberOfModifiedDocumentsIndexed": "已更新索引的文档",
+      "numberOfMetadataDocumentsModified": "已修改元数据文档",
+      "numberOfDocumentsDeleted": "已删除文档",
+      "numberOfDocumentsFailed": "失败文档",
+      "numberOfDocumentsSkipped": "已跳过文档"
     }
   },
   "chat": {

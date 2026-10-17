@@ -706,7 +706,7 @@ function KbDetail({ id }: { id: string }) {
           {current.ingestion_jobs?.[0]?.statistics && (
             <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, fontFamily: "var(--v3-mono)", fontSize: 12, color: "var(--v3-text-3)" }}>
               {Object.entries(current.ingestion_jobs[0].statistics).map(([k, v]) => (
-                <span key={k}>{humanizeStat(k)} <b style={{ color: "var(--v3-text)", fontWeight: 500 }}>{v}</b></span>
+                <span key={k}>{t(`knowledge.stats.${k}`, { defaultValue: humanizeStat(k) })} <b style={{ color: "var(--v3-text)", fontWeight: 500 }}>{v}</b></span>
               ))}
             </div>
           )}
