@@ -682,6 +682,96 @@ shots:
       - {n: 1, box: '.v3-modal dd.mono:has-text("/preferences/")', badge: left}
       - {n: 2, box: '.v3-modal dl.v3-kv:has(dt:has-text("preference"))', badge: left}
 
+  - name: 30-build-byoc-artifact
+    chapter: 20-flywheel/20-build
+    status: replace   # V2 byoc wizard after the zip upload (the upload itself stages a new upload id)
+    account: developer
+    path: /v2/agents?view=new&method=byoc
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-agent-byoc-drop]'
+    actions:
+      - {upload: ['[data-testid=v2-agent-byoc-file]', ["assets/byoc/lab-legacy-agent.zip"]]}
+      - {wait: '[data-testid=v2-agent-byoc-uploaded]'}
+      - {sleep: 2500}
+    clip: 'section.v2-card:has([data-testid=v2-agent-byoc-drop])'
+    highlights:
+      - {n: 1, box: '[data-testid=v2-agent-byoc-kind-code_zip]', badge: left}
+      - {n: 2, box: '[data-testid=v2-agent-byoc-drop]', badge: left}
+      - {n: 3, box: '[data-testid=v2-agent-byoc-telemetry]', badge: left}
+      - {n: 4, box: 'section.v2-card:has([data-testid=v2-agent-byoc-drop]) .v2-alert.success', badge: left}
+      - {n: 5, box: '[data-testid=v2-agent-byoc-entrypoint]', badge: left}
+
+  - name: 30-build-byoc-config
+    chapter: 20-flywheel/20-build
+    status: replace   # the allowed-models card of the byoc wizard
+    account: developer
+    path: /v2/agents?view=new&method=byoc
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-agent-byoc-models]'
+    actions: [{sleep: 1500}]
+    clip: 'section.v2-card:has([data-testid=v2-agent-byoc-models])'
+    highlights:
+      - {n: 1, box: 'section.v2-card:has([data-testid=v2-agent-byoc-models]) .v2-row', badge: left}
+      - {n: 2, box: '[data-testid=v2-agent-byoc-model-row]', badge: left}
+
+  - name: 30-build-byoc-deploy-done
+    chapter: 20-flywheel/20-build
+    status: replace   # V3 agent page of the byoc agent
+    account: developer
+    path: /v3/agents?id={agent:lab-legacy-agent}
+    requires: [agent:lab-legacy-agent]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions: [{sleep: 2500}]
+    clip: main.v3-main div.v3-reveal
+
+  - name: 30-build-byoc-code-card
+    chapter: 20-flywheel/20-build
+    status: replace   # the Uploaded code panel on the V3 agent page
+    account: developer
+    path: /v3/agents?id={agent:lab-legacy-agent}
+    requires: [agent:lab-legacy-agent]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("上传的代码"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Uploaded code"))'}
+    actions: [{sleep: 1000}]
+    clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("上传的代码"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Uploaded code"))'}
+
+  - name: 30-build-byoc-try-refund
+    chapter: 20-flywheel/20-build
+    status: replace   # session asked beforehand over /api/chat (LP_CHAT_SID_BYOC_REFUND)
+    account: developer
+    path: '/v3/chat?agent={agent:lab-legacy-agent}&session={env:LP_CHAT_SID_BYOC_REFUND}'
+    requires: [agent:lab-legacy-agent]
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=chat-tool]'
+    actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
+    highlights:
+      - {n: 1, box: 'select:has(option:text-is("lab-legacy-agent"))', badge: left}
+      - {n: 2, box: '.v3-msg.user', badge: left}
+      - {n: 3, box: '[data-testid=chat-tool]', badge: left}
+      - {n: 4, box: '.v3-msg.agent', badge: left}
+
+  - name: 30-build-byoc-try-baggage
+    chapter: 20-flywheel/20-build
+    status: replace   # session asked beforehand over /api/chat (LP_CHAT_SID_BYOC_BAGGAGE)
+    account: developer
+    path: '/v3/chat?agent={agent:lab-legacy-agent}&session={env:LP_CHAT_SID_BYOC_BAGGAGE}'
+    requires: [agent:lab-legacy-agent]
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=chat-tool]'
+    actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
+    highlights:
+      - {n: 1, box: 'select:has(option:text-is("lab-legacy-agent"))', badge: left}
+      - {n: 2, box: '.v3-msg.user', badge: left}
+      - {n: 3, box: '[data-testid=chat-tool]', badge: left}
+      - {n: 4, box: '.v3-msg.agent', badge: left}
+
   - name: 30-build-journey-strip
     chapter: 20-flywheel/20-build
     status: new
