@@ -13354,7 +13354,7 @@
         "agents_import": "Import agents",
         "agents_delete": "Delete agents",
         "agents_convert": "Convert agents",
-        "eval_run": "Run evaluations",
+        "eval_run": "Eval run",
         "identity_manage": "Manage identity",
         "memory_manage": "Manage memory",
         "identity_grant": "Grant own access",
