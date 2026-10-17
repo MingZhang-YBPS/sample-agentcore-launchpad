@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """i18n gate.
 
-Default: fail if en and zh-CN locale files don't share identical key sets.
+Default: fail if en and zh-CN locale files don't share identical key sets, or if
+a static t("…") reference in frontend/src names no locale key (a missing key
+renders as the raw key string in the UI). A key resolves when it exists, or when
+i18next suffixes complete it (plural `_one`/`_other`, context `_<ctx>`).
 --strict adds:
   * hardcoded-string scan — JSX text literals and user-facing attributes in
     frontend/src that look like natural language (not routed through t());
     technical tokens (API names, ARNs, units, symbols, ALL-CAPS chips) are
     allowlisted by shape, plus an explicit literal allowlist below
-  * key-usage audit — t("…") references missing from en/common.json fail;
-    locale keys never referenced are reported (report-only)
+  * unused-key report — locale keys never referenced (report-only)
 """
 
 import json
@@ -92,6 +94,47 @@ def parity_check() -> tuple[bool, set[str]]:
     return failed, all_keys
 
 
+def resolves(key: str, locale_keys: set[str], prefixes: set[str]) -> bool:
+    """True when `key` exists, or i18next suffixes (`_one`, `_<context>_other`, …)
+    complete it — `prefixes` holds every proper `_`-prefix of the locale keys."""
+    return key in locale_keys or key in prefixes
+
+
+def suffix_prefixes(locale_keys: set[str]) -> set[str]:
+    out: set[str] = set()
+    for k in locale_keys:
+        head, _, tail = k.rpartition(".")
+        parts = tail.split("_")
+        for i in range(1, len(parts)):
+            out.add(f"{head}.{'_'.join(parts[:i])}" if head else "_".join(parts[:i]))
+    return out
+
+
+def static_t_keys() -> list[tuple[str, int, str]]:
+    found: list[tuple[str, int, str]] = []
+    for path in sorted(SRC.rglob("*.tsx")) + sorted(SRC.rglob("*.ts")):
+        if "locales" in path.parts:
+            continue
+        rel = str(path.relative_to(ROOT))
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for match in T_CALL_RE.finditer(line):
+                key = match.group(2)
+                if "${" not in key and "." in key:
+                    found.append((rel, lineno, key))
+    return found
+
+
+def missing_key_check(locale_keys: set[str]) -> bool:
+    prefixes = suffix_prefixes(locale_keys)
+    refs = static_t_keys()
+    missing = [(rel, n, k) for rel, n, k in refs if not resolves(k, locale_keys, prefixes)]
+    for rel, n, k in missing:
+        print(f"i18n_check: t() key missing from locales {rel}:{n}: {k}")
+    if not missing:
+        print(f"i18n_check: all {len({k for _, _, k in refs})} static t() keys resolve")
+    return bool(missing)
+
+
 def is_hardcoded(text: str) -> bool:
     text = text.strip()
     if not text or text in ALLOWLIST:
@@ -136,13 +179,6 @@ def strict_checks(locale_keys: set[str]) -> bool:
             print(f"i18n_check: hardcoded string {rel}:{lineno}: {text!r}")
     print(f"i18n_check: hardcoded-string findings: {len(findings)}")
 
-    missing = sorted(k for k in used_keys if k not in locale_keys)
-    if missing:
-        failed = True
-        print(f"i18n_check: t() keys missing from locales: {missing}")
-    else:
-        print(f"i18n_check: all {len(used_keys)} static t() keys resolve")
-
     unused = sorted(
         k
         for k in locale_keys
@@ -161,6 +197,8 @@ def strict_checks(locale_keys: set[str]) -> bool:
 def main() -> int:
     strict = "--strict" in sys.argv
     failed, locale_keys = parity_check()
+    if locale_keys and missing_key_check(locale_keys):
+        failed = True
     if strict and strict_checks(locale_keys):
         failed = True
     print(f"i18n_check: {'FAIL' if failed else 'PASS'}{' (strict)' if strict else ''}")

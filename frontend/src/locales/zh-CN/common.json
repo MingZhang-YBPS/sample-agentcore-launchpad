@@ -13266,7 +13266,9 @@
         "owners": "项目负责人",
         "noOwners": "还没有项目负责人。",
         "createdBy": "创建人",
-        "archivedAt": "归档时间"
+        "archivedAt": "归档时间",
+        "usage": "配额用量",
+        "noQuota": "这个项目还没有设置上限，可在「设置」页签设置配额。"
       },
       "archive": {
         "action": "归档",

@@ -13266,7 +13266,9 @@
         "owners": "Project owners",
         "noOwners": "No project owner yet.",
         "createdBy": "Created by",
-        "archivedAt": "Archived"
+        "archivedAt": "Archived",
+        "usage": "Quota usage",
+        "noQuota": "No limit is set for this project. Set quotas on the Settings tab."
       },
       "archive": {
         "action": "Archive",
