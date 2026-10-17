@@ -576,7 +576,7 @@ shots:
     storage: {'launchpad_project:default': retail-service}
     wait: 'ol.v3-track'
     actions:
-      - {fill: [{zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) input.v3-input', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) input.v3-input'}, {zh: 标准预付价酒店最晚什么时候可以免费取消？, en: "When is the latest I can cancel a Standard prepaid hotel booking for free?"}]}
+      - {fill: [{zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) input.v3-input', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) input.v3-input'}, {zh: 标准预付价酒店最晚什么时候可以免费取消？, en: "Until when can a Standard Prepaid hotel booking be cancelled for free?"}]}
       - {click: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) button.v3-btn.primary', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) button.v3-btn.primary'}}
       - {sleep: 6000}
     clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve"))'}
