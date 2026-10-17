@@ -403,9 +403,12 @@ class RegisterRequest(BaseModel):
 
 @router.post("/records", status_code=201)
 def register_record(
-    req: RegisterRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: RegisterRequest,
+    request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     if req.type == "MCP":
+        _refuse_on_project_path(request)
         if not req.url or not req.url.startswith(("https://", "http://")):
             raise AppError(
                 "registry.invalid_url",
@@ -424,8 +427,39 @@ def register_record(
             status_code=400,
         )
     record = console.register_skill(ws.context, req.name, req.description, req.skill_md)
+    _own_skill(request, ws, record)
     _invalidate_attachables(ws.id)
     return _record_out(record)
+
+
+def _refuse_on_project_path(request: Request) -> None:
+    """A non-admin reached a create route through the project-owned skill path
+    (route policy): only an Agent-skill record may be created there."""
+    if getattr(request.state, "project_skill_only", False):
+        raise AppError(
+            "auth.infra_admin_required",
+            "this workspace holds several projects, so its shared infrastructure "
+            "(governance, registry catalog, gateway targets…) is changed by an "
+            "administrator only",
+            status_code=403,
+        )
+
+
+def _own_skill(request: Request, ws: WorkspaceScope, record: dict[str, Any]) -> None:
+    """The current project owns the skill record it just registered (its members
+    manage it in a multi-project workspace)."""
+    from app.core.db import SessionLocal
+    from app.services import creators
+
+    record_id = str(record.get("recordId") or "")
+    if not record_id:
+        return
+    db = SessionLocal()
+    try:
+        creators.record(db, ws.id, creators.REGISTRY_SKILL, record_id,
+                        creators.Creator.of_request(request))
+    finally:
+        db.close()
 
 
 def _sweep_staging() -> None:
@@ -601,7 +635,9 @@ def _match_bundle(bundles: list[SkillBundle], sel: ImportSelection) -> SkillBund
 
 @router.post("/skills/import")
 def import_skills(
-    req: ImportRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: ImportRequest,
+    request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Register each selected staged bundle via the shared pipeline. A per-item
     failure (name conflict, validation) is reported inline and never aborts the
@@ -632,6 +668,7 @@ def import_skills(
                 name_override=sel.name_override,
                 description_override=sel.description_override,
             )
+            _own_skill(request, ws, record)
             records.append({"name": record.get("name", label), "ok": True,
                             "record": _record_out(record)})
         except AppError as exc:
@@ -792,6 +829,14 @@ def delete_record(
 ) -> dict[str, Any]:
     _require_record_visible(ws, viewer, record_id)
     console.console_delete(ws.context, record_id)
+    from app.core.db import SessionLocal
+    from app.services import creators
+
+    db = SessionLocal()
+    try:
+        creators.forget(db, ws.id, creators.REGISTRY_SKILL, record_id)
+    finally:
+        db.close()
     _invalidate_attachables(ws.id)
     return {"deleted": True, "record_id": record_id}
 

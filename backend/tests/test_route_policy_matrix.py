@@ -209,7 +209,13 @@ def expected(p: Principal, layout: str, method: str, path: str) -> Outcome:
     if role == MEMBER:
         return None
     if role.startswith(INFRA) and layout == "shared":
-        return (403, "auth.infra_admin_required")
+        from app.core.route_policy import PROJECT_SKILL_CREATE
+
+        # an Agent-skill record is the registering project's own (the router refuses
+        # any other record type on that path); a record-id route needs the project to
+        # own the record, which the probe id never is
+        if (method, path) not in PROJECT_SKILL_CREATE:
+            return (403, "auth.infra_admin_required")
     return None if key in keys else denied
 
 

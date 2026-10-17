@@ -1250,6 +1250,14 @@ def require_infra(request: Request, role: str) -> None:
         require_permission(request, infra_key(role))
         _require_own_target(request, workspace.id)
         return
+    if len(active) > 1 and not require_identity(request).is_admin and _project_skill_route(
+        request, workspace.id
+    ):
+        # a skill record belongs to the project that registered it: that project's
+        # members manage it with the project key; MCP records, unowned / system
+        # skills and the bulk sources stay administrator-only
+        require_permission(request, infra_key(role))
+        return
     if len(active) > 1:
         identity = require_identity(request)
         if not identity.is_admin:
@@ -1278,6 +1286,44 @@ INFRA_LOWERED_WHEN_ISOLATED: frozenset[tuple[str, str]] = frozenset({
 def _route_key(request: Request) -> tuple[str, str]:
     route: Any = request.scope.get("route")
     return request.method, getattr(route, "path_format", None) or request.url.path
+
+
+# Registry Agent-skill records are project-owned (`resource_creators` kind
+# `registry_skill`). Creating one is a project write (the router refuses any other
+# record type on this path, `request.state.project_skill_only`); changing one is a
+# project write only for a record the current project owns.
+PROJECT_SKILL_CREATE: frozenset[tuple[str, str]] = frozenset({
+    ("POST", "/api/registry/records"),
+    ("POST", "/api/registry/skills/import"),
+})
+PROJECT_SKILL_RECORD: frozenset[tuple[str, str]] = frozenset({
+    ("PUT", "/api/registry/records/{record_id}"),
+    ("DELETE", "/api/registry/records/{record_id}"),
+    ("POST", "/api/registry/records/{record_id}/action"),
+    ("POST", "/api/registry/records/{record_id}/reimport"),
+})
+
+
+def _project_skill_route(request: Request, workspace_id: str) -> bool:
+    key = _route_key(request)
+    if key in PROJECT_SKILL_CREATE:
+        request.state.project_skill_only = True
+        return True
+    if key not in PROJECT_SKILL_RECORD:
+        return False
+    record_id = (request.scope.get("path_params") or {}).get("record_id")
+    project = getattr(request.state, "project", None)
+    if not record_id or project is None:
+        return False
+    from app.core.db import SessionLocal
+    from app.services import creators
+
+    db = SessionLocal()
+    try:
+        return creators.owner_project(
+            db, workspace_id, creators.REGISTRY_SKILL, str(record_id)) == project.id
+    finally:
+        db.close()
 
 
 def _lowerable(request: Request) -> bool:

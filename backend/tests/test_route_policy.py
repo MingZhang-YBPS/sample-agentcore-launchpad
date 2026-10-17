@@ -434,3 +434,74 @@ class TestOpenConsoleIsUnaffected:
         so the table must not lock a single-operator dev box out of its own
         console."""
         assert client.get("/api/apikeys").status_code == 200
+
+
+class TestProjectOwnedSkillRecords:
+    """A registry Agent-skill record belongs to the project that registered it: in a
+    multi-project workspace that project's members manage it with project.write,
+    while MCP records and another project's / unowned skills stay admin-only."""
+
+    @pytest.fixture
+    def two_projects(self, member_session, monkeypatch):
+        from sqlalchemy import text
+
+        from app.routers import registry as registry_router
+        from app.services import access
+
+        _set_default_role("developer")
+        db = SessionLocal()
+        try:
+            db.execute(text("INSERT INTO projects (id, name, description, status, is_default,"
+                            " created_at, updated_at) VALUES ('alpha', 'Alpha', '', 'active', 0,"
+                            " '2026-10-14 00:00:00', '2026-10-14 00:00:00')"))
+            db.execute(text("INSERT INTO project_workspaces (project_id, workspace_id,"
+                            " is_workspace_default, enabled_at) VALUES ('alpha', 'default', 0,"
+                            " '2026-10-14 00:00:00')"))
+            access.bump_epoch(db)
+            db.commit()
+        finally:
+            db.close()
+        record = {"recordId": "rec-skill-1", "name": "s1", "descriptorType": "AGENT_SKILLS",
+                  "status": "DRAFT"}
+        calls: list[tuple[str, str]] = []
+        monkeypatch.setattr(registry_router.console, "register_skill",
+                            lambda ctx, name, desc, md: dict(record))
+        monkeypatch.setattr(registry_router.console, "console_action",
+                            lambda ctx, rid, action, is_admin: calls.append((rid, action)))
+        monkeypatch.setattr(registry_router.console, "console_get",
+                            lambda ctx, rid: {**record, "recordId": rid})
+        monkeypatch.setattr(registry_router, "_with_system",
+                            lambda ws, recs: [registry_router._record_out(r) for r in recs])
+        return calls
+
+    def test_member_registers_a_skill_and_manages_it(self, member_session, two_projects):
+        from app.models.ledger import ResourceCreator
+
+        response = member_session.post("/api/registry/records", json={
+            "type": "AGENT_SKILLS", "name": "skill-one", "skill_md": "---\nname: s1\n---\n"})
+        assert response.status_code == 201, response.text
+        db = SessionLocal()
+        try:
+            row = db.query(ResourceCreator).filter_by(resource_id="rec-skill-1").one()
+            assert (row.kind, row.project_id) == ("registry_skill", "default")
+        finally:
+            db.close()
+        submit = member_session.post("/api/registry/records/rec-skill-1/action",
+                                     json={"action": "submit"})
+        assert submit.status_code == 200, submit.text
+        assert two_projects == [("rec-skill-1", "submit")]
+
+    def test_mcp_registration_stays_admin_only(self, member_session, two_projects):
+        response = member_session.post("/api/registry/records", json={
+            "type": "MCP", "name": "mcp-one", "url": "https://example.com/mcp"})
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.infra_admin_required"
+
+    def test_a_record_this_project_does_not_own_stays_admin_only(
+        self, member_session, two_projects
+    ):
+        response = member_session.post("/api/registry/records/rec-unowned/action",
+                                       json={"action": "submit"})
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.infra_admin_required"
+        assert two_projects == []

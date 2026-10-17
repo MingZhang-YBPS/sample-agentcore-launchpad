@@ -41,6 +41,8 @@ logger = logging.getLogger(__name__)
 # `resource_creators.kind` values — the AWS-only kinds.
 KB = "knowledge_base"
 EVALUATOR = "evaluator"
+# a registry Agent-skill record: its row is the project that may manage it
+REGISTRY_SKILL = "registry_skill"
 
 
 @dataclass(frozen=True)
@@ -176,6 +178,19 @@ def outside_current_project(
 
     shared = resource_shares.received_ids(db, kind, project_id=pid)
     return {rid for rid in ids if owners.get(rid, default) != pid and rid not in shared}
+
+
+def owner_project(db: Session, workspace_id: str, kind: str, resource_id: str) -> str | None:
+    """The project an AWS-only resource's ownership row names, read across projects;
+    None when there is no row."""
+    with project_context(None):
+        return db.scalar(
+            select(ResourceCreator.project_id).where(
+                ResourceCreator.workspace_id == workspace_id,
+                ResourceCreator.kind == kind,
+                ResourceCreator.resource_id == resource_id,
+            )
+        )
 
 
 def lookup(
