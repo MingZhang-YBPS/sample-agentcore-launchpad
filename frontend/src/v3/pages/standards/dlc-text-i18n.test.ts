@@ -19,7 +19,7 @@ const t = (k: string, o?: Record<string, unknown>) => zh.t(k, o as never) as unk
 describe("backend English copy reads in Chinese", () => {
   it("translates the gate, ladder and watch messages", () => {
     expect(dlcText(t, "below threshold")).toBe("低于阈值");
-    expect(dlcText(t, "judge not calibrated — observed until calibrated")).toBe("裁判未校准——校准之前只作观察");
+    expect(dlcText(t, "judge not calibrated — observed until calibrated")).toBe("裁判未校准——校准之前只作观测");
     expect(dlcText(t, "the runs used different criteria versions")).toBe("这些运行用的判据版本不同");
     expect(dlcText(t, "1 evaluation error(s)")).toBe("1 条评估出错");
     expect(dlcText(t, "2 of 15 expected items have no verdict")).toBe("2 / 15 个预期样本没有判定");
