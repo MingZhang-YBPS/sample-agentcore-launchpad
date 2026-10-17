@@ -68,7 +68,36 @@ shots:
       - {box: ['[data-tour=modules] .v3-rail-label', '[data-tour=modules] .v3-rail-group']}
       - {n: 1, box: '[data-testid=v3-nav-mode]'}
 
-  # ── 10-prepare/30-roles ────────────────────────────────────────────────────
+  - name: 10-setup-service-health
+    chapter: 10-prepare/20-setup
+    status: keep
+    account: admin
+    path: /v2?full=1
+    wait: ul.v2-home-health
+    clip: 'div:has(> ul.v2-home-health)'
+    margin: 8
+    highlights:
+      - {box: ['[data-testid=v2-health-gateway]', '[data-testid=v2-health-memory]',
+               '[data-testid=v2-health-registry]', '[data-testid=v2-health-observability]']}
+
+  - name: 10-concepts-glossary
+    chapter: 10-prepare/10-concepts
+    status: new   # the console's own glossary: platform terms + Agent-DLC term cards
+    account: admin
+    path: /v3
+    wait: '[data-testid=v3-shell]'
+    actions:
+      - {click: '.v3-top-right > .v3-help:not(.v3-theme) > button'}
+      - {click: {zh: '.v3-help-menu >> text=术语表', en: '.v3-help-menu >> text=Glossary'}}
+      - {wait: .v3-dlc-terms}
+    clip: '[role=dialog]'
+    margin: 44   # room for the left badges outside the dialog
+    highlights:
+      - {n: 1, box: '[role=dialog] input.v3-input', badge: left}
+      - {n: 2, box: '.v3-dlc-term >> nth=0'}
+      - {n: 3, box: '.v3-dlc-term >> nth=0 >> .v3-dlc-term-used', badge: left}
+
+  # ── 10-prepare/30-roles ──────────────────────────────────────────────────── ────────────────────────────────────────────────────
   - name: 15-roles-developer-sidebar
     chapter: 10-prepare/30-roles
     status: keep
