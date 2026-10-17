@@ -133,7 +133,10 @@ function EvaluatorList() {
                     <td><Chip s={row.source === "custom" ? "info" : undefined}>{t(`v2.evaluators.source.${row.source}`)}</Chip></td>
                     <td style={{ color: "var(--v3-text-2)" }}>{t(`v2.level.${row.level}`, { defaultValue: row.level })}</td>
                     <td style={{ color: "var(--v3-text-2)" }}>{row.definition ? t(`v2.evaluators.definition.${row.definition}`) : t("v2.evaluators.definition.managed")}</td>
-                    <td>{row.requires_ground_truth ? <Chip s="wait">{t("v2.evaluators.needsGt")}</Chip> : <span style={{ color: "var(--v3-text-3)" }}>{t("v2.common.no")}</span>}</td>
+                    <td>{row.requires_ground_truth ? <Chip s="wait">{t("v2.evaluators.needsGt")}</Chip>
+                      // ListEvaluators carries no config: a custom row's need is read on its detail page
+                      : row.source !== "builtin" ? <span style={{ color: "var(--v3-text-3)" }} title={t("v3.evaluators.gtOnDetail")}>—</span>
+                      : <span style={{ color: "var(--v3-text-3)" }}>{t("v2.common.no")}</span>}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                       {/* a borrowed evaluator belongs to its owner: the server refuses writes */}
                       {row.source === "custom" && !sharedFromOf(row) && (

@@ -28,6 +28,8 @@ export function EvaluatorView({ id }: { id: string }) {
   const s = row ? evaluatorSignal(row) : "info";
   // an evaluator another project lent this one is its owner's to edit (§11.2)
   const lent = sharedFromOf(row) ?? sharedFromOf(d);
+  // a custom evaluator's need comes from its config (the detail read), never the list
+  const gt = d ? (d.requires_ground_truth ?? null) : (row?.requires_ground_truth ?? false);
 
   return (
     <div className="v3-reveal" style={{ display: "grid", gap: 16 }}>
@@ -59,8 +61,8 @@ export function EvaluatorView({ id }: { id: string }) {
           <Stat label={t("v2.evaluators.colDefinition")}
             value={<span style={{ fontSize: 22 }}>{d?.definition ? t(`v2.evaluators.definition.${d.definition}`) : t("v2.evaluators.definition.managed")}</span>} />
         </Panel>
-        <Panel signal={row?.requires_ground_truth ? "wait" : undefined}>
-          <Stat label={t("v2.evaluators.colGroundTruth")} value={<span style={{ fontSize: 22 }}>{row?.requires_ground_truth ? t("v2.evaluators.needsGt") : t("v2.common.no")}</span>} />
+        <Panel signal={gt ? "wait" : undefined}>
+          <Stat label={t("v2.evaluators.colGroundTruth")} value={<span style={{ fontSize: 22 }}>{gt ? t("v2.evaluators.needsGt") : gt === null ? "—" : t("v2.common.no")}</span>} />
         </Panel>
         <Panel><Stat label={t("v3.evaluators.status")} value={<span style={{ fontSize: 22 }}>{d?.status ?? row?.status ?? "—"}</span>} /></Panel>
       </div>

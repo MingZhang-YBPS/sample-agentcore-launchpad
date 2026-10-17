@@ -3461,6 +3461,8 @@ export interface EvaluatorDetail {
   lambda_arn: string | null;
   lambda_timeout_s: number | null;
   status: string | null;
+  /** From the config, as the run gate reads it; null = unknown (external code). */
+  requires_ground_truth?: boolean | null;
   evaluator_type?: string | null;
   provider?: string | null;
   /** `users.id` of the creating account (the ownership key); null for the config

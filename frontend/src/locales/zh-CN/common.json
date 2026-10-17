@@ -12658,6 +12658,7 @@
       "delete": "删除",
       "total": "评估器",
       "totalFoot": "托管目录与自定义",
+      "gtOnDetail": "在详情页按定义读取",
       "customFoot": "在这个工作区中定义",
       "needGt": "需要真值",
       "needGtFoot": "只能对照带期望值的数据集评分",

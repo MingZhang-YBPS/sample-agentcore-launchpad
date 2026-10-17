@@ -12658,6 +12658,7 @@
       "delete": "Delete",
       "total": "Evaluators",
       "totalFoot": "managed catalog and custom",
+      "gtOnDetail": "Read from its definition on the detail page",
       "customFoot": "defined in this workspace",
       "needGt": "Need ground truth",
       "needGtFoot": "score only against a dataset with expected values",

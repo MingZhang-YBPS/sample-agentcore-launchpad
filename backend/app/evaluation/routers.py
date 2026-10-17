@@ -1292,9 +1292,16 @@ def get_evaluator(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _require_visible_evaluator(db, ws, viewer, evaluator_id, need="read")
-    detail = _evaluator_out(
-        ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
-    )
+    raw = ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
+    detail = _evaluator_out(raw)
+    # the same reading the run gate applies (`_check_ground_truth`): a judge needs
+    # what its rubric's placeholders name, a derived one what its base needs.
+    # ListEvaluators carries no config, so only this read can answer; an external
+    # code evaluator stays unknown (None).
+    from app.evaluation import coverage
+
+    needs, _kind = coverage.needs_from_config(raw, None)
+    detail["requires_ground_truth"] = None if needs is None else bool(needs)
     out = {**detail, **creators.lookup_one(db, ws.id, creators.EVALUATOR, evaluator_id)}
     # a borrowed evaluator (§11.2) says whose it is, so the page hides Edit
     lent = resource_shares.shared_from(db, creators.EVALUATOR, {evaluator_id})
