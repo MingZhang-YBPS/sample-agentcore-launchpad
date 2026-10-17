@@ -437,11 +437,69 @@ shots:
     highlights:
       - {n: 1, box: {zh: '.v3-way:has-text("自带代码")', en: '.v3-way:has-text("Bring your own code")'}}
 
+  - name: 30-build-strands-config
+    chapter: 20-flywheel/20-build
+    status: replace   # Strands wizard in retail-service: 01 basics filled, not deployed
+    account: developer
+    path: /v2/agents?view=new&method=zip_runtime
+    viewport: [1440, 1400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=sb-group-advanced]'
+    actions:
+      - {fill: ['input[placeholder="hr-assistant-v3"]', 'lab-service-assistant']}
+      - {fill: [{zh: 'textarea[placeholder^="描述"]', en: 'textarea[placeholder^="Describe"]'}, {zh: "你是独角兽公司的智能客服助手，服务独角兽商城（电商购物）和独角兽旅行（机票、酒店）两条业务线的用户。请友好、简洁地回答用户关于商品、订单、退换货、航班退改签、行李和酒店预订取消的问题。", en: "You are the customer service assistant of Unicorn Company, serving users of two business lines: Unicorn Mall (online shopping) and Unicorn Trip (flights and hotels). Answer questions about products, orders, returns and exchanges, flight changes and refunds, baggage, and hotel booking cancellations in a friendly, concise way."}]}
+      - {sleep: 500}
+    clip: '[data-testid=sb-group-basics]'
+    highlights:
+      - {n: 1, box: 'input[placeholder="hr-assistant-v3"]', badge: left}
+      - {n: 2, box: {zh: 'textarea[placeholder^="描述"]', en: 'textarea[placeholder^="Describe"]'}, badge: left}
+
+  - name: 30-build-strands-network
+    chapter: 20-flywheel/20-build
+    status: new   # the network card preselects the project default workshop-private
+    account: developer
+    path: /v2/agents?view=new&method=zip_runtime
+    viewport: [1440, 5000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=sb-group-advanced]'
+    actions:
+      - {click: '[data-testid=sb-group-advanced] button.sb-group-head'}
+      - {wait: '[data-testid=v2-agent-network-profile]'}
+      - {sleep: 3500}
+    clip: '[data-testid=v2-agent-network]'
+    highlights:
+      - {n: 1, box: '[data-testid=v2-agent-network-profile]', badge: left}
+
+  - name: 30-build-strands-deploy-done
+    chapter: 20-flywheel/20-build
+    status: replace   # V3 agent page after the first deploy (private network, ~6 min)
+    account: developer
+    path: /v3/agents?id={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions: [{sleep: 2500}]
+    clip: main.v3-main div.v3-reveal
+
+  - name: 15-roles-release-policy
+    chapter: 10-prepare/30-roles
+    status: new   # deferred from 1.3: needs a running agent; admin, read only
+    account: admin
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions: [{sleep: 2500}]
+    clip: main.v3-main div.v3-reveal
+
   - name: 30-build-journey-strip
     chapter: 20-flywheel/20-build
     status: new
     account: developer
     path: /v3/agents?id={agent:lab-service-assistant}
+    storage: {'launchpad_project:default': retail-service}
     requires: [agent:lab-service-assistant]
     wait: '[data-testid=v3-journey-continue], [data-testid=v3-journey-waiting]'
     clip: '[data-testid=v3-journey]'

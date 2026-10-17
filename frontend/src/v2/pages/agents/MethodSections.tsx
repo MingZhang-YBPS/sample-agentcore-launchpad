@@ -53,6 +53,7 @@ import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../..
 import { useAuth } from "../../../auth/auth-context";
 import { HintLabel } from "../../Glossary";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
+import { useNetworkProfiles } from "../../../lib/useNetworkProfiles";
 import { NetworkSection } from "./NetworkSection";
 import { StrandsToolPicker } from "./StrandsSections";
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
@@ -555,6 +556,7 @@ export function FilesystemCard({
   const byo = byoAllowed && hasByoMounts(form);
   const rowsMode = byoAllowed ? byoRowsMode(form.method, isAdmin, byo) : "hidden";
   const editable = rowsMode === "edit";
+  const { profiles } = useNetworkProfiles();
   const needsProfile = mountNeedsProfile({ method: form.method, networkProfileId: form.networkProfileId, hasByo: byo });
   const show = (on: boolean, key: string) => (touched && on ? t(key) : undefined);
   const kinds = [
@@ -667,8 +669,11 @@ export function FilesystemCard({
         )}
         {form.networkProfileId ? (
           // a stored profile reference: the profile's ids live on the profile, not here
-          <div className="v2-muted" data-testid="v2-agent-network-profile">
-            {t("v2.agents.wizard.networkProfile", { id: form.networkProfileId })}
+          // its own test id: the network card's profile picker owns v2-agent-network-profile
+          <div className="v2-muted" data-testid="v2-agent-fs-network-profile">
+            {t("v2.agents.wizard.networkProfile", {
+              id: profiles?.find((p) => p.id === form.networkProfileId)?.name ?? form.networkProfileId,
+            })}
           </div>
         ) : byo && form.method === "container" && (
           // the legacy inline network a container agent's mounts predate profiles with

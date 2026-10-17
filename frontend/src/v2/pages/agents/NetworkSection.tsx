@@ -1,37 +1,15 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { type AgentForm, hasByoMounts } from "../../../lib/agent-spec";
 import { type NetworkChoice, networkChoices, RUNTIME_NETWORK_PURPOSES } from "../../../lib/api/agent-network";
-import { type NetworkProfile, networkProfilesApi } from "../../../lib/api/projects";
-import { errorMessage } from "../../../lib/api";
+import { useNetworkProfiles } from "../../../lib/useNetworkProfiles";
 import { Alert, Card, Field, Segmented, Select, Spin, Tag, type TagTone } from "../../ui";
 import type { SectionProps } from "./wizardKit";
 
 type Mode = "PUBLIC" | "VPC";
 
 const STATUS_TONE: Record<string, TagTone> = { ok: "green", warn: "orange", blocked: "red", unchecked: "gray" };
-
-/** The profiles this project may pick (`GET /api/network-profiles`); null while loading. */
-function useNetworkProfiles(): { profiles: NetworkProfile[] | null; error: string | null } {
-  const [profiles, setProfiles] = useState<NetworkProfile[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    networkProfilesApi
-      .list()
-      .then((res) => live && setProfiles(res.profiles))
-      .catch((e: unknown) => {
-        if (!live) return;
-        setProfiles([]);
-        setError(errorMessage(e));
-      });
-    return () => {
-      live = false;
-    };
-  }, []);
-  return { profiles, error };
-}
 
 const initialMode = (form: AgentForm): Mode => (form.networkProfileId || form.networkVpc ? "VPC" : "PUBLIC");
 

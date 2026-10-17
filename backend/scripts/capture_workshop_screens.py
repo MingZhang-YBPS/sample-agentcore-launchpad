@@ -126,12 +126,24 @@ def discover(ctx: Ctx) -> None:
     """Names the manifest refers to → ids, plus each agent's story facts."""
     c = api(ctx)
     try:
-        for a in c.get("/api/agents").json().get("agents", []):
-            ctx.agents[a["name"]] = a["id"]
+        # agents are project-scoped: without X-Project the list is the default
+        # project's only, and the workshop's flywheel runs in retail-service
+        projects = c.get("/api/projects").json()
+        pids = [p["id"] for p in (projects if isinstance(projects, list)
+                                  else projects.get("projects", projects.get("items", [])))]
+        project_of: dict[str, str] = {}
+        for pid in pids or ["default"]:
+            res = c.get("/api/agents", headers={"X-Project": pid})
+            if res.status_code != 200:
+                continue
+            for a in res.json().get("agents", []):
+                ctx.agents.setdefault(a["name"], a["id"])
+                project_of.setdefault(a["id"], pid)
         for u in c.get("/api/users").json().get("items", []):
             ctx.users[u["username"]] = u["id"]
         for name, aid in ctx.agents.items():
-            r = c.get(f"/api/agents/{aid}/story")
+            r = c.get(f"/api/agents/{aid}/story",
+                      headers={"X-Project": project_of.get(aid, "default")})
             if r.status_code == 200:
                 ctx.facts[name] = r.json().get("facts", {})
     finally:
