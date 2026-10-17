@@ -200,6 +200,77 @@ shots:
       - {n: 1, box: '.v3-modal h2', badge: left}
       - {n: 2, box: '.v3-modal .v3-btn.danger', badge: top}
 
+  # ── 10-prepare/40-teams ────────────────────────────────────────────────────
+  - name: 40-teams-departments
+    chapter: 10-prepare/40-teams
+    status: new   # department list after creating 客服中心
+    account: admin
+    path: /v3/departments
+    wait: 'td:has-text("客服中心")'
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: 'tr:has(td:has-text("客服中心"))', badge: left}
+
+  - name: 40-teams-project-create
+    chapter: 10-prepare/40-teams
+    status: new   # New project dialog filled like retail-service; never submitted
+    account: admin
+    path: /v3/projects
+    wait: '[data-testid=projects-table]'
+    actions:
+      - {click: {zh: 'button.v3-btn.primary:has-text("新建项目")', en: 'button.v3-btn.primary:has-text("New project")'}}
+      - {wait: '[data-testid=project-create]'}
+      - {fill: ['[data-testid=project-create] input.v3-input >> nth=0', '零售客服']}
+      - {fill: ['[data-testid=project-create] input.v3-input.mono', 'retail-service']}
+      - {eval: "(() => { const f=document.querySelector('[data-testid=project-create]'); const set=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; const s=f.querySelectorAll('select'); set.call(s[0],'customer-care'); s[0].dispatchEvent(new Event('change',{bubbles:true})); setTimeout(()=>{ const s2=f.querySelectorAll('select'); set.call(s2[1],'retail'); s2[1].dispatchEvent(new Event('change',{bubbles:true})); },300); })()"}
+      - {sleep: 800}
+      - {fill: ['[data-testid=project-create] textarea', '零售与电商的智能客服，飞轮主线在这里']}
+      - {click: '[data-testid=project-create] input[type=checkbox] >> nth=0'}
+      - {sleep: 500}
+    clip: .v3-modal
+    margin: 40
+    highlights:
+      - {n: 1, box: '[data-testid=project-create] select >> nth=0', badge: left}
+      - {n: 2, box: '[data-testid=project-create] select >> nth=1', badge: left}
+      - {n: 3, box: '[data-testid=project-create] input[type=checkbox] >> nth=0', badge: left}
+
+  - name: 40-teams-members
+    chapter: 10-prepare/40-teams
+    status: new   # retail-service members: four project roles, biz-owner override
+    account: admin
+    path: /v3/projects?id=retail-service&tab=members
+    wait: 'td:has-text("biz-owner")'
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: 'tr:has(td:has-text("biz-owner"))', badge: left}
+
+  - name: 40-teams-member-edit
+    chapter: 10-prepare/40-teams
+    status: new   # edit biz-owner: overrides ticked, criteria.manage unticked; cancelled, not saved
+    account: admin
+    path: /v3/projects?id=retail-service&tab=members
+    wait: 'td:has-text("biz-owner")'
+    actions:
+      - {click: {zh: 'tr:has(td:has-text("biz-owner")) button:has-text("编辑")', en: 'tr:has(td:has-text("biz-owner")) button:has-text("Edit")'}}
+      - {wait: '[data-testid=member-dialog]'}
+      - {sleep: 800}
+    clip: .v3-modal
+    margin: 40
+    highlights:
+      - {n: 1, box: '.v3-prj-checks input[type=checkbox] >> nth=0', badge: left}
+      - {n: 2, box: '[data-testid=key-picker] label:has-text("criteria.manage")', badge: left}
+
+  - name: 40-teams-switcher
+    chapter: 10-prepare/40-teams
+    status: new   # developer after switching to retail-service (persisted per workspace)
+    account: developer
+    path: /v3
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v3-project-switch]'
+    highlights:
+      - {n: 1, box: '[data-testid=v3-project-switch]', badge: bottom}
+
   # ── 20-flywheel/10-define ──────────────────────────────────────────────────
   - name: 20-define-sidebar-expert
     chapter: 20-flywheel/10-define
