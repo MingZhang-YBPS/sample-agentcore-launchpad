@@ -360,6 +360,45 @@ shots:
       - {n: 2, box: '.v3-rail-group:has([data-testid=v3-rail-group-eval])'}
       - {n: 3, box: 'a.v3-rail-sub[href="/v3/evaluators"]'}
 
+  - name: 20-define-evaluator-rubric
+    chapter: 20-flywheel/10-define
+    status: new   # developer in retail-service: new LLM-judge form filled, NOT created
+    account: developer
+    path: /v3/evaluators?view=new
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service, launchpad_nav_mode: expert}
+    wait: 'main.v3-main textarea'
+    actions:
+      - {fill: ['main.v3-main input[placeholder="answer_faithfulness"]', 'unicorn_fee_check']}
+      - {fill: [{zh: ':nth-match(main.v3-main input.v3-input:not(.mono), 1)', en: ':nth-match(main.v3-main input.v3-input:not(.mono), 1)'}, {zh: '金额、费率与时限是否与参考答案一致', en: 'Whether amounts, rates and time limits match the reference answer'}]}
+      - {fill: ['main.v3-main textarea', {zh: "你是独角兽公司客服质检员。用户问题与上下文：{context}\n客服的回答：{assistant_turn}\n政策专家给出的参考答案：{expected_response}\n只检查一件事：回答中出现的金额、费用比例、退款金额、时限（天数、小时、截止时间）和行李重量是否与参考答案一致、计算是否正确。\n- 回答没有涉及任何数字或时限，参考答案也不需要数字：判为 pass。\n- 回答中的数字与参考答案一致（允许等价写法，如 ¥980 与 980 元）：判为 pass。\n- 任何一个数字、比例或时限与参考答案矛盾或计算错误：判为 fail。\n不要评价语气、篇幅或其他方面。\n", en: "You are a quality reviewer for Unicorn Company customer service. User question and context: {context}\nThe agent's reply: {assistant_turn}\nThe reference answer written by a policy expert: {expected_response}\nCheck one thing only: whether the amounts, fee percentages, refund amounts, time limits (days, hours, deadlines) and baggage weights in the reply match the reference answer and are calculated correctly.\n- The reply contains no numbers or time limits and the reference answer needs none: pass.\n- Every number in the reply matches the reference answer (equivalent forms such as ¥980 and 980 yuan are fine): pass.\n- Any number, percentage or time limit contradicts the reference answer or is miscalculated: fail.\nDo not judge tone, length or anything else.\n"}]}
+      - {fill: [{zh: ':nth-match(input[aria-label="定义"], 1)', en: ':nth-match(input[aria-label="Definition"], 1)'}, {zh: '金额、比例与时限全部正确，或不涉及', en: 'All amounts, rates and time limits are correct, or none are involved'}]}
+      - {fill: [{zh: ':nth-match(input[aria-label="定义"], 2)', en: ':nth-match(input[aria-label="Definition"], 2)'}, {zh: '至少一个金额、比例或时限错误', en: 'At least one amount, rate or time limit is wrong'}]}
+      - {sleep: 600}
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: '.v3-ev-defs', badge: left}
+      - {n: 2, box: '.v3-panel:has(input[placeholder="answer_faithfulness"])', badge: left}
+      - {n: 3, box: '.v3-panel:has(textarea)', badge: left}
+      - {n: 4, box: '.v3-panel:has-text("{expected_response}"):not(:has(textarea))', badge: top}
+      - {n: 5, box: {zh: '.v3-panel:has(input[aria-label="定义"])', en: '.v3-panel:has(input[aria-label="Definition"])'}, badge: left}
+      - {n: 6, box: 'main.v3-main button.v3-btn.primary', badge: left}
+
+  - name: 20-define-evaluator-list-custom
+    chapter: 20-flywheel/10-define
+    status: new   # the three unicorn_ evaluators, Custom filter, project retail-service
+    account: developer
+    path: /v3/evaluators
+    storage: {'launchpad_project:default': retail-service, launchpad_nav_mode: expert}
+    wait: 'td:has-text("unicorn_fee_check")'
+    actions:
+      - {click: {zh: 'main.v3-main button:has-text("自定义")', en: 'main.v3-main button:has-text("Custom")'}}
+      - {sleep: 800}
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: {zh: 'main.v3-main button:has-text("自定义")', en: 'main.v3-main button:has-text("Custom")'}, badge: top}
+      - {n: 2, box: 'tr:has(td:has-text("unicorn_"))', badge: left}
+
   # ── 20-flywheel/20-build ───────────────────────────────────────────────────
   - name: 30-build-chooser
     chapter: 20-flywheel/20-build
