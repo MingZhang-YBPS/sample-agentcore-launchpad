@@ -925,6 +925,34 @@ shots:
       - {n: 5, box: 'main table.v3-table tr:has(td .mono:text-is("K1"))', badge: left}
       - {n: 6, box: 'main .v3-grid[style*="repeat(5"]', badge: left}
 
+  - name: 40-evaluate-calib-newtask
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # admin, dialog filled but NOT saved: S2, the gate's regression run, developer + sme
+    account: admin
+    path: /v3/standards?view=calibration&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions:
+      - {sleep: 2000}
+      - {click: {zh: 'main button.v3-btn.primary:has-text("新建标注任务")', en: 'main button.v3-btn.primary:has-text("New labelling task")'}}
+      - {wait: '.v3-modal select.v3-select >> nth=0'}
+      - {select: ['.v3-modal select.v3-select >> nth=0', S2]}
+      - {sleep: 2500}
+      # the run dropdown's labels carry dates; pick the gate's regression run by its id (LP_GATE_RUN)
+      - {eval: "() => { const s = document.querySelectorAll('.v3-modal select.v3-select')[1]; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, '{env:LP_GATE_RUN}'); s.dispatchEvent(new Event('change', {bubbles: true})); }"}
+      - {sleep: 800}
+      - {click: '.v3-modal label:has(span:text-is("developer")) input'}
+      - {click: '.v3-modal label:has(span:text-is("sme")) input'}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal .v3-grid.c2 > label.v3-field', badge: left}
+      - {n: 2, box: '.v3-modal .v3-grid.c2 > div.v3-field', badge: right}
+      - {n: 3, box: '.v3-modal .v3-std-keys', badge: left}
+      - {n: 4, box: '.v3-modal select.v3-select >> nth=2', badge: left}
+      - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy

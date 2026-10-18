@@ -269,7 +269,7 @@ def run_actions(page: Page, actions: list[dict[str, Any]], ctx: Ctx, lang: str) 
         elif verb == "sleep":
             page.wait_for_timeout(int(arg))
         elif verb == "eval":
-            page.evaluate(arg)
+            page.evaluate(expand(arg, ctx, lang))  # placeholders ({env:…}) expand here too
         elif verb == "expand_rail":
             # unfold every module group (what the reader sees after clicking each head)
             heads = page.locator('[data-testid^="v3-rail-group-"]')
