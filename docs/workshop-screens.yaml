@@ -1120,6 +1120,23 @@ shots:
       - {n: 2, box: '[data-testid="v2-governance-iam"]', badge: left}
       - {n: 3, box: '[data-testid="v2-governance-engine"] dl.v2-desc', badge: left}
 
+  - name: 50-release-exp-start
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, start-experiment form prefilled with lab-service-assistant, readiness loaded (not started)
+    account: developer
+    path: /v3/experiments?view=new&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v2-exp-agent"]'
+    actions:
+      - {sleep: 6000}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-exp-agent"]', badge: left}
+      - {n: 2, box: '[data-testid="v2-exp-lookback"]', badge: right}
+      - {n: 3, box: {zh: '.v2-card:has(h2.v2-sec-title:has-text("数据就绪度"))', en: '.v2-card:has(h2.v2-sec-title:has-text("DATA READINESS"))'}, badge: left}
+      - {n: 4, box: '[data-testid="v2-exp-start"]', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
