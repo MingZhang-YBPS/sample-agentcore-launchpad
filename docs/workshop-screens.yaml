@@ -849,6 +849,29 @@ shots:
       - {n: 2, box: 'section.v3-panel div.v3-grid.c3:has(div.v3-std-split)', badge: left}
       - {n: 3, box: 'table.v3-std-coverage', badge: left}
 
+  - name: 40-evaluate-task-passk
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # wizard step 2 with k = 3, NOT submitted; dataset = the golden dev split (LP_GOLDEN_DEV)
+    account: developer
+    path: /v3/tasks?view=new&agent={agent:lab-service-assistant}&dataset={env:LP_GOLDEN_DEV}&evaluators=Builtin.Correctness,unicorn_fee_check-0TvQY63jCW,unicorn_privacy_guard-gCMQxs5vjS,unicorn_no_overpromise-O00JOXCDwe
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    clip: ['main.v3-main h1', 'section.v3-panel.flush span.v3-chip:not(td span)']
+    actions:
+      - {sleep: 2000}
+      - {fill: ['main input.v3-input >> nth=0', dev-baseline]}
+      - {click: {zh: 'main button.v3-btn.primary:has-text("下一步")', en: 'main button.v3-btn.primary:has-text("Next")'}}
+      - {wait: '.v3-grid.c2 label.v3-field input.v3-input'}
+      - {fill: ['.v3-grid.c2 label.v3-field input.v3-input', '3']}
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: '.v3-grid.c2 label.v3-field', badge: left}
+      - {n: 2, box: 'div.v3-cost-head', badge: left}
+      - {n: 3, box: 'section.v3-panel >> nth=0 >> div[style*="margin-top"]', badge: left}
+      - {n: 4, box: 'section.v3-panel.flush span.v3-chip:not(td span)', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
