@@ -1106,6 +1106,20 @@ shots:
       - {n: 1, box: '.v3-keys-create', badge: left}
       - {n: 2, box: '[data-testid="v3-api-key-row"]', badge: left}
 
+  - name: 50-release-gw-engine-logonly
+    chapter: 20-flywheel/40-release
+    status: replace   # admin, launchpad-gw overview after manage + engine attach in LOG_ONLY (set LP_GW to the gateway id)
+    account: admin
+    path: /v2/governance?view=gateway&gateway={env:LP_GW}&full=1
+    viewport: [1440, 1100]
+    wait: '[data-testid="v2-governance-engine"]'
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: {zh: '.v2-row .v2-tag:has-text("已纳管")', en: '.v2-row .v2-tag:has-text("Managed")'}, badge: right}
+      - {n: 2, box: '[data-testid="v2-governance-iam"]', badge: left}
+      - {n: 3, box: '[data-testid="v2-governance-engine"] dl.v2-desc', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
