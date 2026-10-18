@@ -953,6 +953,22 @@ shots:
       - {n: 4, box: '.v3-modal select.v3-select >> nth=2', badge: left}
       - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
 
+  - name: 40-evaluate-calib-status
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # admin, right after creating the S2 task: Labelling, developer 0/15 · sme 0/15
+    account: admin
+    path: /v3/standards?view=calibration&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main table.v3-table tbody tr'
+    clip: ['main.v3-main h1', 'main table.v3-table']
+    actions:
+      - {sleep: 2000}
+    highlights:
+      - {n: 1, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=3', badge: left}
+      - {n: 2, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=4', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
