@@ -1206,6 +1206,35 @@ shots:
       - {n: 3, box: 'main .v3-obs-split > .v3-panel', badge: left}
       - {n: 4, box: 'main .v3-obs-side', badge: right}
 
+  - name: 60-observe-score-now
+    chapter: 20-flywheel/50-observe
+    status: replace   # developer, V2 full session page: Score now with Helpfulness + unicorn_privacy_guard (runs a billed score)
+    account: developer
+    path: /v2/observability?tab=sessions&view=session&id={env:LP_OBS_SID}&full=1
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v2-obs-score-now"]'
+    clip: '[data-testid="v2-obs-score-now"]'
+    actions:
+      - {sleep: 2500}
+      - {fill: ['[data-testid="v2-obs-score-now"] .v2-search input', Helpfulness]}
+      - {sleep: 600}
+      - {click: '[data-testid="v2-obs-score-Builtin.Helpfulness"]'}
+      - {fill: ['[data-testid="v2-obs-score-now"] .v2-search input', privacy]}
+      - {sleep: 600}
+      - {click: '[data-testid^="v2-obs-score-unicorn_privacy_guard"]'}
+      - {fill: ['[data-testid="v2-obs-score-now"] .v2-search input', '']}
+      - {click: '[data-testid="v2-obs-score-run"]'}
+      - {click: '[data-testid="v2-confirm-ok"]'}
+      - {sleep: 25000}
+      - {wait: '[data-testid="v2-obs-score-results"]'}
+      - {sleep: 1000}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-obs-score-now"] .v2-search', badge: left}
+      - {n: 2, box: '[data-testid="v2-obs-score-run"]', badge: right}
+      - {n: 3, box: '[data-testid="v2-obs-score-now"] .v2-sub-title', badge: left}
+      - {n: 4, box: '[data-testid="v2-obs-score-results"]', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
