@@ -906,6 +906,25 @@ shots:
       - {n: 3, box: 'main .v3-grid.c3 label.v3-field', badge: left}
       - {n: 4, box: 'main .v3-grid.c3 ~ div button.v3-btn.primary', badge: right}
 
+  - name: 40-evaluate-gate-report
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # V3 gate page after the decision: BLOCKED (P2, K1), red line P1 passed
+    account: developer
+    path: /v3/gate?agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-pipe'
+    actions:
+      - {sleep: 3000}
+    highlights:
+      - {n: 1, box: 'main.v3-main h1', badge: left}
+      - {n: 2, box: 'main .v3-grid.c4 > .v3-panel >> nth=2', badge: left}
+      - {n: 3, box: 'main .v3-pipe', badge: left}
+      - {n: 4, box: 'main table.v3-table tr:has(td .mono:text-is("P1"))', badge: left}
+      - {n: 5, box: 'main table.v3-table tr:has(td .mono:text-is("K1"))', badge: left}
+      - {n: 6, box: 'main .v3-grid[style*="repeat(5"]', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
