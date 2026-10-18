@@ -872,6 +872,22 @@ shots:
       - {n: 3, box: 'section.v3-panel >> nth=0 >> div[style*="margin-top"]', badge: left}
       - {n: 4, box: 'section.v3-panel.flush span.v3-chip:not(td span)', badge: left}
 
+  - name: 40-evaluate-migrate
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # release-ops BEFORE the migration: single endpoint + the switch button
+    account: release-ops
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    clip: ['main.v3-main h1', 'main .v3-alert:has(button)']
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4 > .v3-panel >> nth=0', badge: left}
+      - {n: 2, box: 'main .v3-alert:has(button) button', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
