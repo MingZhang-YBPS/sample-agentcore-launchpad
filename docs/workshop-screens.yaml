@@ -1071,6 +1071,25 @@ shots:
       - {n: 2, box: '.v3-modal textarea', badge: left}
       - {n: 3, box: '.v3-modal button.v3-btn.primary', badge: right}
 
+  - name: 50-release-records
+    chapter: 20-flywheel/40-release
+    status: replace   # release-ops after the re-release: live on the new version, history released / rolled back
+    account: release-ops
+    path: /v3/gate?agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 3000}
+      - {eval: "() => { const b = [...document.querySelectorAll('main .v3-panel button')].find((x) => /回滚|Roll back/.test(x.textContent)); b && b.closest('.v3-panel').scrollIntoView({block: 'end'}); }"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: 'main.v3-main h1', badge: left}
+      - {n: 2, box: 'main .v3-grid.c4 > .v3-panel >> nth=0', badge: left}
+      - {n: 3, box: {zh: 'main .v3-panel:has(button:has-text("回滚")) table', en: 'main .v3-panel:has(button:has-text("Roll back")) table'}, badge: left}
+      - {n: 4, box: {zh: 'main .v3-panel button:has-text("回滚")', en: 'main .v3-panel button:has-text("Roll back")'}, badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
