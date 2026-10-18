@@ -969,6 +969,43 @@ shots:
       - {n: 1, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=3', badge: left}
       - {n: 2, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=4', badge: right}
 
+  - name: 40-evaluate-calib-label
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # developer after labelling all 15 (sme not yet): blind, no Judge column
+    account: developer
+    path: /v3/standards?view=calibration&agent={agent:lab-service-assistant}&task={env:LP_CAL_TASK}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-std-seg'
+    clip: ['main.v3-main h1', 'main tr:has(.v3-std-seg) >> nth=1']
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: 'main .v3-panel .v3-alert >> nth=0', badge: left}
+      - {n: 2, box: 'main .v3-grid.c3 > * >> nth=1', badge: left}
+      - {n: 3, box: 'main tr:has(.v3-std-seg) >> nth=0 >> td >> nth=2', badge: left}
+      - {n: 4, box: 'main tr:has(.v3-std-seg) >> nth=0 >> td >> nth=3', badge: left}
+      - {n: 5, box: 'main tr:has(.v3-std-seg) >> nth=0 >> .v3-std-seg', badge: right}
+
+  - name: 40-evaluate-calib-decide
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # biz-owner on the closed S2 task: kappa 1.00/1.00, one-class notice, confusion 15/0/0/0
+    account: biz-owner
+    path: /v3/standards?view=calibration&agent={agent:lab-service-assistant}&task={env:LP_CAL_TASK}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.v3-split'
+    clip: ['main.v3-main h1', 'main .v3-panel:has(.v3-grid.v3-split)']
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.v3-split .v3-grid.c2 > * >> nth=0', badge: left}
+      - {n: 2, box: 'main .v3-grid.v3-split .v3-grid.c2 > * >> nth=1', badge: right}
+      - {n: 3, box: 'main .v3-grid.v3-split .v3-alert', badge: left}
+      - {n: 4, box: 'main .v3-grid.v3-split > * >> nth=1', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
