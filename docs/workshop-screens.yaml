@@ -1051,6 +1051,26 @@ shots:
       - {n: 1, box: '.v3-modal dl.v3-kv', badge: left}
       - {n: 2, box: '.v3-modal button.v3-btn.primary', badge: right}
 
+  - name: 50-release-sign-modal
+    chapter: 20-flywheel/40-release
+    status: replace   # release-ops, gate PASS with P2+K1 waived; sign dialog open, note filled, NOT confirmed
+    account: release-ops
+    path: /v3/gate?agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-pipe'
+    actions:
+      - {sleep: 3000}
+      - {click: {zh: 'main button:has-text("签署并放行")', en: 'main button:has-text("Sign and release")'}}
+      - {wait: '.v3-modal dl.v3-kv'}
+      - {fill: ['.v3-modal textarea', {zh: 'P2、K1 已豁免 14 天，风险责任人 biz-owner；红线 P1 通过', en: 'P2 and K1 waived for 14 days, risk owner biz-owner; red line P1 passed'}]}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal dl.v3-kv', badge: left}
+      - {n: 2, box: '.v3-modal textarea', badge: left}
+      - {n: 3, box: '.v3-modal button.v3-btn.primary', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
