@@ -357,6 +357,18 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
             "reason_code": "not-active",
             "reason": "Canary agent must be active.",
         }
+    if getattr(agent_row, "endpoint_mode", None) == "live":
+        # A gated agent serves production from its named `live` endpoint and ships
+        # through the release gate. A canary routes production through its own
+        # gateway and compares against DEFAULT (possibly an unsigned candidate),
+        # so it would bypass the gate, and its promote would never move `live`.
+        return {
+            **base,
+            "reason_code": "gated",
+            "reason": "This agent ships through the release gate (live / candidate "
+                      "endpoints); a canary would route its production traffic around "
+                      "the gate. Release it through the gate instead.",
+        }
     if agent_row.method == "harness":
         # A Harness canary A/Bs two EXISTING versions (control vs the latest)
         # behind passthrough gateway targets — nothing to mint from a spec.

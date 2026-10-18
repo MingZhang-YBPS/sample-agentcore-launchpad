@@ -4251,7 +4251,8 @@
       "a2a": "A2A agents are not compatible with HTTP target-canary traffic.",
       "no-runtime-arn": "This agent has no deployed AgentCore Runtime ARN.",
       "no-harness-arn": "The agent has no deployed Harness ARN.",
-      "jwt-inbound": "Agents with JWT inbound auth cannot be canaried: the canary gateway calls the Runtime with SigV4, which a JWT authorizer refuses."
+      "jwt-inbound": "Agents with JWT inbound auth cannot be canaried: the canary gateway calls the Runtime with SigV4, which a JWT authorizer refuses.",
+      "gated": "This agent ships through the release gate (live / candidate endpoints); a canary would route its production traffic around the gate. Release it through the gate instead."
     },
     "meta": "Live production traffic · candidate-version A/B · per-canary gateway",
     "modeLabel": "Experiment workflow",

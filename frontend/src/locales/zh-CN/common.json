@@ -4251,7 +4251,8 @@
       "a2a": "A2A Agent 不兼容 HTTP target-canary 流量。",
       "no-runtime-arn": "该 Agent 尚无已部署的 AgentCore Runtime ARN。",
       "no-harness-arn": "该 Agent 没有已部署的 Harness ARN。",
-      "jwt-inbound": "使用 JWT 入站认证的 Agent 无法进行金丝雀发布：金丝雀网关以 SigV4 调用 Runtime，JWT 授权器会拒绝该请求。"
+      "jwt-inbound": "使用 JWT 入站认证的 Agent 无法进行金丝雀发布：金丝雀网关以 SigV4 调用 Runtime，JWT 授权器会拒绝该请求。",
+      "gated": "该 Agent 已切换到 live / candidate 双端点，通过放行门发布；金丝雀会让生产流量绕过放行门。请改用放行门发布。"
     },
     "meta": "真实生产流量 · 候选版本 A/B · 每金丝雀独立网关",
     "modeLabel": "实验流程",
