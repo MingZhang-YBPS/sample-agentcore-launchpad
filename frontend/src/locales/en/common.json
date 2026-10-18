@@ -2711,6 +2711,8 @@
     "dataset.golden_managed_why": "A golden set and its splits change only on the golden set page — admit, move or retire items there — so provenance and the holdout seal are kept.",
     "golden.delete_busy": "An evaluation is still running on this golden set.",
     "golden.delete_busy_why": "Wait for it to finish or stop it, then delete the golden set.",
+    "annotation.closed": "A decided labelling task cannot be deleted.",
+    "annotation.closed_why": "It is the evidence of that calibration verdict; to calibrate again, create a new task.",
     "golden.item_not_found": "Sample not found in this golden set.",
     "golden.not_found": "Golden set not found.",
     "golden.seed_empty": "Seed the golden set with at least one sample.",
@@ -8052,6 +8054,9 @@
         "newTaskTitle": "New labelling task",
         "newTaskHint": "Items come from a completed run, with the judge's verdict attached but hidden from annotators until the task closes.",
         "taskCreated": "Task created",
+        "deleteTask": "Delete labelling task",
+        "taskDeleted": "Labelling task deleted",
+        "deleteTaskBody": "Delete this {{key}} labelling task? Its {{done}} recorded labels go with it, and this cannot be undone. Only a task that has not been decided can be deleted.",
         "taskTitle": "Labelling · {{key}}",
         "taskStatus": {
           "open": "Labelling",

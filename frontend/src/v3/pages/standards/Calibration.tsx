@@ -5,7 +5,7 @@
  * a task needs at least two annotators, and `aligned` is refused by the server when
  * the numbers do not support it or when the decider labelled the evidence.
  */
-import { Copy, Plus } from "lucide-react";
+import { Copy, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -19,7 +19,7 @@ import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
 import { firstReason } from "../../reasons";
-import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
+import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { ConfusionMatrix } from "./charts";
 import { runNamed, runRefusal } from "./calibrationRunError";
 import { kappaSignal, stamp } from "./common";
@@ -703,6 +703,11 @@ export function Calibration({ agentId, agentName, lineageId, criteriaKeys, peopl
   const { t } = useTranslation();
   const [nonce, setNonce] = useState(0);
   const [creating, setCreating] = useState(Boolean(prefill));
+  const { can } = useAuth();
+  const toast = useToast();
+  const [discarding, setDiscarding] = useState<AnnotationTask | null>(null);
+  const [discardBusy, setDiscardBusy] = useState(false);
+  const discardFailed = useFailure();
   const tasks = useLoad<{ tasks: AnnotationTask[] }>(() => dlcApi.listTasks({ agentId: agentId ?? undefined }), `v3-std-tasks:${agentId ?? ""}:${nonce}`);
   const prefillKey = prefill ? `${prefill.runId}:${prefill.criterion ?? ""}` : "";
   // a link followed while the page is already open
@@ -734,6 +739,7 @@ export function Calibration({ agentId, agentName, lineageId, criteriaKeys, peopl
                 <th>{t("v3.standards.status")}</th>
                 <th>{t("v2.dlc.calibration.progress")}</th>
                 <th>{t("v3.standards.created")}</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -745,12 +751,37 @@ export function Calibration({ agentId, agentName, lineageId, criteriaKeys, peopl
                   <td><Chip s={row.status === "closed" ? "ok" : "wait"}>{t(`v2.dlc.calibration.taskStatus.${row.status}`)}</Chip></td>
                   <td className="mono" style={{ color: "var(--v3-text-2)" }}>{row.annotators.map((a) => `${a} ${row.progress[a] ?? 0}/${row.total}`).join(" · ")}</td>
                   <td>{stamp(row.created_at)}</td>
+                  <td style={{ width: 44 }} onClick={(e) => e.stopPropagation()}>
+                    {/* an undecided task made by mistake (wrong run, a duplicate) can go */}
+                    {can("criteria.manage") && row.status !== "closed" && (
+                      <Btn size="sm" kind="ghost" title={t("v2.dlc.calibration.deleteTask")}
+                        aria-label={t("v2.dlc.calibration.deleteTask")}
+                        onClick={() => setDiscarding(row)}>
+                        <Trash2 size={13} />
+                      </Btn>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </Panel>
+      {discarding && (
+        <Confirm title={t("v2.dlc.calibration.deleteTask")} confirmLabel={t("v2.dlc.calibration.deleteTask")}
+          cancelLabel={t("v3.common.cancel")} danger busy={discardBusy}
+          onCancel={() => setDiscarding(null)}
+          onConfirm={() => {
+            setDiscardBusy(true);
+            dlcApi.deleteTask(discarding.id)
+              .then(() => { toast("ok", t("v2.dlc.calibration.taskDeleted")); setDiscarding(null); setNonce((n) => n + 1); })
+              .catch((err: unknown) => { discardFailed.fail(err); setDiscarding(null); })
+              .finally(() => setDiscardBusy(false));
+          }}>
+          {t("v2.dlc.calibration.deleteTaskBody", { key: discarding.criterion_key, done: Object.values(discarding.progress ?? {}).reduce((a, b) => a + b, 0) })}
+        </Confirm>
+      )}
+      <ErrorCallout error={discardFailed.error} onDismiss={discardFailed.clear} data-testid="v3-calibration-delete-error" />
       {creating && (
         <NewTask key={prefillKey} agentId={agentId} agentName={agentName || agentId || ""} lineageId={lineageId}
           criteriaKeys={criteriaKeys} people={people}

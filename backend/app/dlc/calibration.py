@@ -119,6 +119,28 @@ def create_task(
     return task
 
 
+def delete_task(db: Session, task: AnnotationTask) -> int:
+    """Remove a labelling task that has not been decided, with its labels and links.
+
+    For a task created by mistake (a wrong run or key, a duplicate after a timed-out
+    create). A closed task is the evidence a calibration verdict stands on, so it stays.
+    Returns how many labels went with it."""
+    from app.models.ledger import ShareLink
+
+    if task.status == "closed":
+        raise AppError("annotation.closed",
+                       "a decided task is the evidence of its calibration and stays",
+                       {"task_id": task.id}, status_code=409)
+    labels = labels_of(db, task.id)
+    for label in labels:
+        db.delete(label)
+    for link in db.scalars(select(ShareLink).where(ShareLink.target_id == task.id)).all():
+        db.delete(link)
+    db.delete(task)
+    db.flush()
+    return len(labels)
+
+
 def get_task(db: Session, workspace_id: str, task_id: str) -> AnnotationTask:
     task = db.get(AnnotationTask, task_id)
     if task is None or task.workspace_id != workspace_id:

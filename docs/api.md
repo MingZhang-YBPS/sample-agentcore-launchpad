@@ -1348,6 +1348,7 @@ between the readings the data allows.
 | `GET` | `/api/annotation-tasks?agent_id&status` | `{tasks: [...]}` |
 | `POST` | `/api/annotation-tasks` | `criteria.manage` — `{criterion_key, annotators[2..10], adjudicator?, run_id?\|items?, purpose, agent_id?, criteria_lineage_id?, dataset_id?}` → 201. Items taken from a completed run carry that run's judge verdicts (hidden until close). `422 annotation.no_items` when a run has no verdict for the criterion |
 | `GET` | `/api/annotation-tasks/{id}` | The task as *this viewer* may see it. An annotator sees only their own labels; `judge.calibrate` (or an admin) sees everything |
+| `DELETE` | `/api/annotation-tasks/{id}` | `criteria.manage` — discard a task that has not been decided, with its labels and links → `{deleted, id, labels}`, audited as `annotation.delete`. `409 annotation.closed` for a decided task (the evidence of its calibration) |
 | `POST` | `/api/annotation-tasks/{id}/labels` | `{item_ref, label, rationale?, answer?}` → 201. Only an annotator on the task (`403 annotation.not_annotator`); while adjudicating, only the adjudicator |
 | `POST` | `/api/annotation-tasks/{id}/adjudicate` | Move to adjudication — the adjudicator settles the disputed items |
 | `GET` | `/api/annotation-tasks/{id}/agreement` | `{n, pairs, human_human_kappa, judge_human_kappa, kappa_ci, band, confusion, disagreements, accuracy, policy, suggested_verdict}`. Human–human comes **first**: if people cannot agree, the criterion is unwritable and no judge can fix that |

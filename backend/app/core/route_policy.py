@@ -599,6 +599,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/annotation-tasks"): MEMBER,
     ("POST", "/api/annotation-tasks"): PERM_CRITERIA_MANAGE,
     ("GET", "/api/annotation-tasks/{task_id}"): MEMBER,
+    ("DELETE", "/api/annotation-tasks/{task_id}"): PERM_CRITERIA_MANAGE,
     # labelling is the annotator's own act; the service refuses a non-annotator
     ("POST", "/api/annotation-tasks/{task_id}/labels"): PERM_PROJECT_USE,
     ("POST", "/api/annotation-tasks/{task_id}/adjudicate"): PERM_JUDGE_CALIBRATE,

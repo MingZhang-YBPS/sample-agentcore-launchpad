@@ -957,6 +957,7 @@ AWS Dataset，各有不可变版本。样本出处记录在 `metadata.dlc`（`ca
 | `GET` | `/api/annotation-tasks?agent_id&status` | `{tasks: [...]}` |
 | `POST` | `/api/annotation-tasks` | `criteria.manage` —— `{criterion_key, annotators[2..10], adjudicator?, run_id?\|items?, purpose, agent_id?, criteria_lineage_id?, dataset_id?}` → 201。取自已完成评估运行的样本会带上该运行的裁判判定（关闭前隐藏）。该运行对此判据没有判定时返回 `422 annotation.no_items` |
 | `GET` | `/api/annotation-tasks/{id}` | 按**当前查看者**的权限返回：标注人只看到自己的标注；持 `judge.calibrate`（或管理员）看到全部 |
+| `DELETE` | `/api/annotation-tasks/{id}` | `criteria.manage` —— 删除一个尚未判定的任务及其标注与链接 → `{deleted, id, labels}`，审计记为 `annotation.delete`。已判定的任务（校准结论的证据）返回 `409 annotation.closed` |
 | `POST` | `/api/annotation-tasks/{id}/labels` | `{item_ref, label, rationale?, answer?}` → 201。只有该任务的标注人可提交（`403 annotation.not_annotator`）；仲裁阶段只有仲裁人可提交 |
 | `POST` | `/api/annotation-tasks/{id}/adjudicate` | 进入仲裁——由仲裁人裁定有分歧的样本 |
 | `GET` | `/api/annotation-tasks/{id}/agreement` | `{n, pairs, human_human_kappa, judge_human_kappa, kappa_ci, band, confusion, disagreements, accuracy, policy, suggested_verdict}`。**先看人—人**：如果人都判不一致，这条判据写不下来，换裁判也救不了 |

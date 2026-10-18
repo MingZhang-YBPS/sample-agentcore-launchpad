@@ -2711,6 +2711,8 @@
     "dataset.golden_managed_why": "黄金集及其切分只能在黄金集页面里准入、移动或退役样本，这样才能保留来源记录和留出集的封存。",
     "golden.delete_busy": "还有评估在使用这个黄金集。",
     "golden.delete_busy_why": "等它跑完或先停止，再删除黄金集。",
+    "annotation.closed": "已判定的标注任务不能删除。",
+    "annotation.closed_why": "它是这次校准结论的证据；要重新校准，新建一个任务。",
     "golden.item_not_found": "黄金集里找不到这个样本。",
     "golden.not_found": "找不到这个黄金集。",
     "golden.seed_empty": "编制黄金集至少需要一个样本。",
@@ -8052,6 +8054,9 @@
         "newTaskTitle": "新建标注任务",
         "newTaskHint": "样本取自一次已完成的评估运行，裁判的判定会一并带上，但在任务关闭前对标注人隐藏。",
         "taskCreated": "任务已创建",
+        "deleteTask": "删除标注任务",
+        "taskDeleted": "标注任务已删除",
+        "deleteTaskBody": "删除这个 {{key}} 标注任务？已记录的 {{done}} 条标注会一并删除，无法恢复。只有还没判定的任务能删除。",
         "taskTitle": "标注 · {{key}}",
         "taskStatus": {
           "open": "标注中",

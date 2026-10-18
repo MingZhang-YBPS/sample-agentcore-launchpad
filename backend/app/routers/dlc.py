@@ -741,6 +741,24 @@ def create_annotation_task(
     return cal_svc.task_view(db, task, viewer=_actor(request), privileged=True)
 
 
+@router.delete("/annotation-tasks/{task_id}")
+def delete_annotation_task(
+    task_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Discard an undecided labelling task (its labels and links go with it)."""
+    from app.services.audit import record_audit_event
+
+    task = cal_svc.get_task(db, ws.id, task_id)
+    labels = cal_svc.delete_task(db, task)
+    record_audit_event(workspace_id=ws.id, actor=_actor(request), action="annotation.delete",
+                       target=task_id, db=db)
+    db.commit()
+    return {"deleted": True, "id": task_id, "labels": labels}
+
+
 @router.get("/annotation-tasks/{task_id}")
 def get_annotation_task(
     task_id: str,

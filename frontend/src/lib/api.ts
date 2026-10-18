@@ -7300,6 +7300,9 @@ export const dlcApi = {
     items?: Record<string, unknown>[] | null;
   }) => request<AnnotationTask>("/api/annotation-tasks", { method: "POST", body: JSON.stringify(body) }),
   getTask: (taskId: string) => request<AnnotationTask>(dlcTask(taskId)),
+  /** An undecided task only (409 annotation.closed otherwise); its labels go with it. */
+  deleteTask: (taskId: string) =>
+    request<{ deleted: boolean; id: string; labels: number }>(dlcTask(taskId), { method: "DELETE" }),
   label: (taskId: string, body: { item_ref: string; label?: string; answer?: string; rationale?: string }) =>
     request<AnnotationTask>(dlcTask(taskId, "/labels"), { method: "POST", body: JSON.stringify(body) }),
   adjudicate: (taskId: string) =>
