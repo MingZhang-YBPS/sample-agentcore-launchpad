@@ -888,6 +888,24 @@ shots:
       - {n: 1, box: 'main .v3-grid.c4 > .v3-panel >> nth=0', badge: left}
       - {n: 2, box: 'main .v3-alert:has(button) button', badge: right}
 
+  - name: 40-evaluate-gate-run
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # after the §8 redeploy, BEFORE the gate runs: live 2, candidate 3, k = 1
+    account: developer
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c3 label.v3-field input.v3-input'
+    clip: ['main .v3-grid.c4', 'main .v3-grid.c3 ~ div button.v3-btn.primary']
+    actions:
+      - {sleep: 3000}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4 > .v3-panel >> nth=1', badge: left}
+      - {n: 2, box: 'main .v3-grid.c4 > .v3-panel >> nth=2', badge: left}
+      - {n: 3, box: 'main .v3-grid.c3 label.v3-field', badge: left}
+      - {n: 4, box: 'main .v3-grid.c3 ~ div button.v3-btn.primary', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
