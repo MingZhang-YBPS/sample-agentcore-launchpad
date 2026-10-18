@@ -308,6 +308,30 @@ def _release_setup(engineer, owner, *, endpoint_mode="live"):
     return agent_id, lineage
 
 
+def test_a_golden_set_is_not_editable_or_deletable_as_a_plain_dataset(engineer, owner):
+    """The plain dataset routes would skip admission and rewrite a sealed holdout."""
+    agent_id = _agent()
+    lineage = _create_set(engineer, agent_id)
+    engineer.put(f"/api/criteria-sets/{lineage}", json={"criteria": CRITERIA})
+    engineer.post(f"/api/criteria-sets/{lineage}/publish", json={})
+    dataset_id = _golden(engineer, lineage, seeder=owner)
+    splits = engineer.get(f"/api/golden-sets/{dataset_id}").json()["splits"]
+    holdout = splits["holdout"]["id"]
+    forged = [{"scenario_id": "h0", "turns": [{"input": "hq0", "expected_response": "forged"}]}]
+    for client in (engineer, owner):
+        res = client.put(f"/api/eval/datasets/{holdout}", json={"items": forged})
+        assert res.status_code == 409, res.text
+        assert res.json()["code"] == "dataset.golden_managed"
+        for target in (holdout, dataset_id):
+            res = client.delete(f"/api/eval/datasets/{target}")
+            assert res.status_code == 409, res.text
+    after = engineer.get(f"/api/golden-sets/{dataset_id}").json()["splits"]
+    assert after["holdout"]["active_items"] == splits["holdout"]["active_items"]
+    # metadata stays editable: a rename touches no item
+    assert engineer.put(f"/api/eval/datasets/{holdout}",
+                        json={"description": "sealed"}).status_code == 200
+
+
 def test_release_gate_blocks_a_red_line_and_signs_a_clean_candidate(engineer, owner, admin,
                                                                    monkeypatch):
     from app.dlc import releases as release_svc

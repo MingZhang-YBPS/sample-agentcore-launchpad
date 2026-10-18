@@ -2707,6 +2707,8 @@
     "golden.holdout_closed_why": "Nobody tunes against the holdout, so it is never written after curation; new samples go through sample admission into dev or regression.",
     "golden.holdout_sealed": "The holdout split is already curated and sealed.",
     "golden.holdout_sealed_why": "Sealing keeps later changes from being tuned against it; new samples go through sample admission.",
+    "dataset.golden_managed": "A golden set cannot be edited or deleted as a plain dataset.",
+    "dataset.golden_managed_why": "A golden set and its splits change only on the golden set page — admit, move or retire items there — so provenance and the holdout seal are kept.",
     "golden.item_not_found": "Sample not found in this golden set.",
     "golden.not_found": "Golden set not found.",
     "golden.seed_empty": "Seed the golden set with at least one sample.",

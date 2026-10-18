@@ -95,7 +95,9 @@ def test_manifest_is_well_formed():
         if shot.get("manual"):
             continue
         assert shot["account"] in accounts, shot["name"]
-        assert shot["path"].startswith("/"), shot["name"]
+        # a path is one string, or one per language ({zh: ..., en: ...})
+        paths = shot["path"].values() if isinstance(shot["path"], dict) else [shot["path"]]
+        assert all(p.startswith("/") for p in paths), shot["name"]
         numbers = [h["n"] for h in shot.get("highlights", []) if h.get("n") is not None]
         # badges follow the caption: 1, 2, 3 ... with no gap
         assert numbers == list(range(1, len(numbers) + 1)), shot["name"]

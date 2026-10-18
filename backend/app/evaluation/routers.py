@@ -466,6 +466,7 @@ def update_dataset(
 ) -> dict[str, Any]:
     dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     if req.items is not None:
+        _refuse_golden(dataset, "edit")
         _validate_items(req.items)
         if _infer_kind(req.items) != dataset.kind:
             raise AppError(
@@ -491,9 +492,26 @@ def delete_dataset(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
+    _refuse_golden(dataset, "delete")
     db.delete(dataset)
     db.commit()
     return {"deleted": True}
+
+
+def _refuse_golden(dataset: EvalDataset, action: str) -> None:
+    """A golden set and its splits change only through the golden routes.
+
+    Those routes carry the admission permission, the provenance stamps and the holdout
+    seal (`app/dlc/golden.py`); a plain dataset write would skip all three — rewrite a
+    sealed holdout, or orphan the splits of a deleted parent."""
+    if dataset.role == "golden":
+        raise AppError(
+            "dataset.golden_managed",
+            f"a golden set cannot be {'edited' if action == 'edit' else 'deleted'} as a plain "
+            "dataset — admit, move or retire its items on the golden set page",
+            {"id": dataset.id, "action": action},
+            status_code=409,
+        )
 
 
 # ─── AWS cloud datasets (draft in place + published versions) ───────────────
