@@ -1006,6 +1006,33 @@ shots:
       - {n: 3, box: 'main .v3-grid.v3-split .v3-alert', badge: left}
       - {n: 4, box: 'main .v3-grid.v3-split > * >> nth=1', badge: right}
 
+  # ── 20-flywheel/40-release ─────────────────────────────────────────────────
+  - name: 50-release-waiver-request
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, K1 waiver dialog filled but NOT submitted
+    account: developer
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 2500}
+      - {click: {zh: 'main button:has-text("申请豁免")', en: 'main button:has-text("Request a waiver")'}}
+      - {wait: '.v3-modal select.v3-select'}
+      - {eval: "() => { const s = document.querySelector('.v3-modal select.v3-select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, 'K1'); s.dispatchEvent(new Event('change', {bubbles: true})); }"}
+      - {fill: ['.v3-modal textarea.v3-input', {zh: '成本预算 500 token/会话 低于当前用量，开发者两周内优化提示词与检索；先按现有用量放行', en: 'The 500-token budget is below current usage; the developer optimises prompt and retrieval within two weeks; release at current usage meanwhile'}]}
+      - {fill: ['.v3-modal .v3-grid.c2 input.v3-input >> nth=0', biz-owner]}
+      - {eval: "() => { const i = document.querySelector('.v3-modal input[type=number]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, '14'); i.dispatchEvent(new Event('input', {bubbles: true})); }"}
+      - {fill: ['.v3-modal div[style*="grid"] > label.v3-field:last-child input.v3-input', {zh: '每天在观测页查看每会话 token 用量；优化完成后重新部署并重跑放行门', en: 'Check tokens per session on the Observe page daily; redeploy and rerun the gate once optimised'}]}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal label.v3-field:has(select)', badge: left}
+      - {n: 2, box: '.v3-modal label.v3-field:has(textarea)', badge: left}
+      - {n: 3, box: '.v3-modal .v3-grid.c2', badge: left}
+      - {n: 4, box: '.v3-modal div[style*="grid"] > label.v3-field:last-child', badge: left}
+      - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
