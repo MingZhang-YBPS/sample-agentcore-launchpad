@@ -1170,6 +1170,24 @@ shots:
       - {n: 1, box: '[data-testid="v2-exp-card-verdict"] h2.v2-sec-title', badge: left}
       - {n: 2, box: '[data-testid="v2-exp-card-verdict"] table', badge: left}
 
+  # ── 20-flywheel/50-observe ─────────────────────────────────────────────────
+  - name: 60-observe-dashboard
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, Observability dashboard 24H
+    account: biz-owner
+    path: /v3/observability?range=24h
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '.v3-obs-stats'
+    actions:
+      - {sleep: 6000}
+    highlights:
+      - {n: 1, box: 'main .v3-filters >> nth=-1', badge: right}
+      - {n: 2, box: 'main .v3-panel:has(.v3-obs-findings)', badge: left}
+      - {n: 3, box: 'main .v3-obs-stats', badge: left}
+      - {n: 4, box: 'main .v3-grid.c2 >> nth=0', badge: left}
+      - {n: 5, box: 'main .v3-grid.c2 >> nth=1', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy

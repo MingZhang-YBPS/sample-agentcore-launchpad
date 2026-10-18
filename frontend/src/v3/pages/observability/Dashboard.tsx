@@ -2,10 +2,13 @@ import { ArrowRight } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useAuth } from "../../../auth/auth-context";
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, errorMessage, type ObsDashboard } from "../../../lib/api";
+import { canWriteKeys } from "../../../lib/api/invokeAccess";
 import { fmtBucket, fmtCompact } from "../../../pages/observability/format";
 import { fmtNumber } from "../../../v2/format";
+import { useProject } from "../../../workspace/project-context";
 import { approxCost } from "../../../v2/pages/observability/common";
 import { useFailure } from "../../failure";
 import { ms } from "../../format";
@@ -118,6 +121,11 @@ function Tokens({ data, onPricesRefreshed }: { data: ObsDashboard; onPricesRefre
   const toast = useToast();
   const failed = useFailure();
   const [busy, setBusy] = useState(false);
+  // the price table is workspace-shared config (route policy INFRA): offer the
+  // refresh only to who may write it — admins, or project writers
+  const { isAdmin } = useAuth();
+  const { current: project } = useProject();
+  const mayRefresh = canWriteKeys(isAdmin, project);
   const rows = data.tokens_by_model;
   const grand = Math.max(1, ...rows.map((r) => r.total));
   const refresh = () => {
@@ -134,11 +142,11 @@ function Tokens({ data, onPricesRefreshed }: { data: ObsDashboard; onPricesRefre
   return (
     <Panel
       title={t("v3.obs.tokens")}
-      end={
+      end={mayRefresh ? (
         <button type="button" className="v3-obs-link" disabled={busy} onClick={refresh}>
           {busy ? t("v3.obs.pricesUpdating") : t("v3.obs.pricesUpdate")}
         </button>
-      }
+      ) : undefined}
     >
       <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-obs-tokens-error" />
       {rows.length === 0 ? (
