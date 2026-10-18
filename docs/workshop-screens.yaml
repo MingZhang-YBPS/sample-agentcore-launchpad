@@ -1188,6 +1188,24 @@ shots:
       - {n: 4, box: 'main .v3-grid.c2 >> nth=0', badge: left}
       - {n: 5, box: 'main .v3-grid.c2 >> nth=1', badge: left}
 
+  - name: 60-observe-session
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, session detail of the five-question chat session (LP_OBS_SID)
+    account: biz-owner
+    path: /v3/observability?tab=sessions&view=session&id={env:LP_OBS_SID}&range=24h
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '.v3-obs-turns'
+    actions:
+      - {sleep: 3000}
+      - {eval: "() => { const t = document.querySelector('.v3-obs-turns'); t.style.maxHeight = '560px'; t.style.overflow = 'hidden'; }"}
+      - {sleep: 400}
+    highlights:
+      - {n: 1, box: 'main header.v3-head .v3-head-end', badge: left}
+      - {n: 2, box: 'main .v3-grid.c4', badge: left}
+      - {n: 3, box: 'main .v3-obs-split > .v3-panel', badge: left}
+      - {n: 4, box: 'main .v3-obs-side', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
