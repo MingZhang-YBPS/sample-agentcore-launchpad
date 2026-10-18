@@ -807,6 +807,48 @@ shots:
       - {n: 4, box: 'section.v3-panel.flush:has(td:text-is("P1")) table.v3-table', badge: left}
       - {n: 5, box: {zh: 'button.v3-btn:text-is("开出新版本") + span.v3-std-muted', en: 'button.v3-btn:text-is("Open a new version") + span.v3-std-muted'}, badge: right}
 
+  - name: 40-evaluate-golden-seed
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # biz-owner's seed dialog, file chosen, NOT submitted; capture before seeding
+    account: biz-owner
+    path: /v3/standards?view=golden&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'text=unicorn-service-golden'
+    actions:
+      - {click: 'text=unicorn-service-golden'}
+      - {wait: {zh: 'button:has-text("初次编制切分")', en: 'button:has-text("Curate the splits")'}}
+      - {click: {zh: 'button:has-text("初次编制切分")', en: 'button:has-text("Curate the splits")'}}
+      - {wait: '.v3-modal .body textarea'}
+      - {upload: ['.v3-modal .body input[type=file]', {zh: ["assets/datasets/unicorn-service-golden.json"], en: ["assets/datasets/unicorn-service-golden.en.json"]}]}
+      - {sleep: 1500}
+    clip: '.v3-modal'
+    highlights:
+      - {n: 1, box: {zh: 'xpath=//*[starts-with(normalize-space(text()),"下载模板")]/..', en: 'xpath=//*[starts-with(normalize-space(text()),"Download a template")]/..'}, badge: left}
+      - {n: 2, box: '.v3-modal .body input[type=file]', badge: left}
+      - {n: 3, box: '.v3-modal .body textarea', badge: left}
+      - {n: 4, box: '.v3-modal .foot button.primary', badge: left}
+
+  - name: 20-define-golden-coverage
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # developer after biz-owner sealed the splits
+    account: developer
+    path: /v3/standards?view=golden&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'text=unicorn-service-golden'
+    actions:
+      - {click: 'text=unicorn-service-golden'}
+      - {wait: 'table.v3-std-coverage'}
+      - {sleep: 1500}
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: 'section.v3-panel:has(div.v3-std-split) .v3-panel-head span.end', badge: left}
+      - {n: 2, box: 'section.v3-panel div.v3-grid.c3:has(div.v3-std-split)', badge: left}
+      - {n: 3, box: 'table.v3-std-coverage', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
