@@ -1155,6 +1155,21 @@ shots:
       - {n: 1, box: '[data-testid="v2-exp-traffic-dataset"]', badge: left}
       - {n: 2, box: '.v2-form:has([data-testid="v2-exp-traffic-dataset"]) button', badge: right}
 
+  - name: 50-release-exp-verdict
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, experiment verdict card after MONITOR RESULTS (LP_EXP = experiment id)
+    account: developer
+    path: /v3/experiments?view=detail&id={env:LP_EXP}
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v2-exp-card-verdict"]'
+    clip: '[data-testid="v2-exp-card-verdict"]'
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-exp-card-verdict"] h2.v2-sec-title', badge: left}
+      - {n: 2, box: '[data-testid="v2-exp-card-verdict"] table', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
