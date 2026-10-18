@@ -1235,6 +1235,25 @@ shots:
       - {n: 3, box: '[data-testid="v2-obs-score-now"] .v2-sub-title', badge: left}
       - {n: 4, box: '[data-testid="v2-obs-score-results"]', badge: left}
 
+  - name: 60-observe-waterfall
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, trace detail of the slowest turn (LP_OBS_TID), last model call selected
+    account: biz-owner
+    path: /v3/observability?tab=traces&view=trace&id={env:LP_OBS_TID}&range=24h
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '.v3-obs-wf .r'
+    actions:
+      - {sleep: 2500}
+      - {click: '.v3-obs-wf .r:has(.t:text-is("chat global.zai.glm-5.3")) >> nth=-1'}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4', badge: left}
+      - {n: 2, box: 'main .v3-obs-legend', badge: left}
+      - {n: 3, box: '.v3-obs-wf [role=listitem] >> nth=10 >> xpath=./span', badge: left}
+      - {n: 4, box: '.v3-obs-wf [role=listitem] >> nth=20 >> xpath=./span', badge: left}
+      - {n: 5, box: 'main .v3-obs-side', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
