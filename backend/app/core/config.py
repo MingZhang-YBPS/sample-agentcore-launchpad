@@ -167,6 +167,9 @@ class Settings(BaseSettings):
     # create past CloudFront's 60 s for good (live 2026-10-18); a short timeout and
     # one retry turn that stall into a fast fresh attempt.
     agentcore_memory_read_timeout_s: int = Field(default=15, gt=0)
+    # Read timeout for request/response AgentCore data-plane APIs (A/B tests,
+    # recommendations, batch-evaluation reads) — see ``api_data_client``.
+    agentcore_api_read_timeout_s: int = Field(default=60, gt=0)
 
     # The longest a synchronous invoke (console /invoke, public /v1 invoke) waits
     # before answering 504 invoke.timeout with the session id and the streaming

@@ -20,7 +20,8 @@ from app.schemas.agent import AgentSpec
 from app.services import creators
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
-from app.services.agentcore.client import control_client, data_client
+from app.services.agentcore.client import api_data_client as data_client
+from app.services.agentcore.client import control_client
 from app.services.memory import scoped_actor
 from app.services.workspace import WorkspaceContext, context_for_workspace
 

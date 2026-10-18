@@ -48,6 +48,21 @@ def memory_data_client(ctx: WorkspaceContext) -> Any:
     )
 
 
+def api_data_client(ctx: WorkspaceContext) -> Any:
+    """Data-plane client for request/response AgentCore APIs that never stream an
+    agent turn: A/B tests, configuration-bundle recommendations, batch-evaluation
+    reads. A 60 s read timeout with standard retries, not the runtime's 1000 s:
+    a stalled CreateABTest otherwise held a canary setup for exactly 1000 s before
+    botocore's retry went through (live 2026-10-18: 17 min instead of ~1)."""
+    timeout = get_settings().agentcore_api_read_timeout_s
+    return ctx.client(
+        "bedrock-agentcore",
+        cache_token=f"read_timeout={timeout};connect=5;retries=3",
+        config=Config(read_timeout=timeout, connect_timeout=5,
+                      retries={"max_attempts": 3, "mode": "standard"}),
+    )
+
+
 # Methods whose runtime runs a platform template that emits a ``heartbeat`` event at
 # least every 15 s (strands_agent / claude_sdk_agent main.py templates). BYOC and
 # imported runtimes run the customer's own code, which owes no heartbeat.

@@ -44,7 +44,8 @@ from app.optimization.providers import evidence as rec_evidence
 from app.optimization.providers.base import OptimizeRequest
 from app.schemas.agent import AgentSpec
 from app.services import creators, visibility
-from app.services.agentcore.client import control_client, data_client
+from app.services.agentcore.client import api_data_client as data_client
+from app.services.agentcore.client import control_client
 from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
 from app.services.visibility import Viewer
