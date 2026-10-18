@@ -71,8 +71,12 @@ uv run python ../scripts/teardown.py --yes        # 删除（网关层 → 凭�
   属于 CDK 栈，绝不会被匹配。每个逐 Agent 角色在创建时就带上了该标签，因此清扫也会
   列出你尚未删除的 Agent 的角色，而不只是 Agent 删除失败留下的孤儿角色。请先删除
   演示 Agent（第 1 节），并在确认前审阅 dry-run 输出。
-- 已部署的 Agent runtime 与 Policy engine 属于演示资源（第 1 节），脚本不会触及；先删除
-  你的演示 Agent 可让共享基础设施的清理保持干净。X-Ray Transaction Search 是账号级的
+- Launchpad 为 `launchpad-gw` / `launchpad-kb-gw` 创建的 Cedar 策略引擎在 Gateway 之后删除，
+  先删引擎里的策略。引擎必须带 Launchpad 的纳管标签，别人创建的引擎绝不会被匹配；之前一次
+  部署遗留的引擎也会被删除（按描述“Policy Engine managed from Launchpad for …”识别）。
+  策略名在账号和区域内唯一，遗留引擎里的策略会挡住下一次部署里的同名策略。
+- 已部署的 Agent runtime 属于演示资源（第 1 节），脚本不会触及；先删除你的演示 Agent
+  可让共享基础设施的清理保持干净。X-Ray Transaction Search 是账号级的
   共享可观测性设施，不在清理范围内。
 
 ## 删除 VPC 前先删除使用它的 Agent

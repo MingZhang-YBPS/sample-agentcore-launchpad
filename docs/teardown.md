@@ -80,9 +80,16 @@ Notes:
   the roles of agents you have not deleted yet — not only the orphans a failed
   agent deletion leaves behind. Delete demo agents first (section 1) and review
   the dry-run before confirming.
-- Deployed agent runtimes and the Policy engine are demo-scoped (section 1) and
-  are not touched by the script; deleting your demo agents first keeps the
-  shared-infra teardown clean. X-Ray Transaction Search is account-wide shared
+- Cedar Policy Engines that Launchpad created for `launchpad-gw` /
+  `launchpad-kb-gw` are deleted after the gateways, their policies first. An
+  engine must carry Launchpad's managed tags, so one someone else created is
+  never matched; a leftover engine from an earlier deployment is (it is found by
+  its "Policy Engine managed from Launchpad for …" description). Policy names are
+  unique across the account and Region, so a leftover engine would otherwise
+  block the next deployment's identically named policies.
+- Deployed agent runtimes are demo-scoped (section 1) and are not touched by
+  the script; deleting your demo agents first keeps the shared-infra teardown
+  clean. X-Ray Transaction Search is account-wide shared
   observability and stays out of scope.
 
 ## Delete the agents before the VPC
