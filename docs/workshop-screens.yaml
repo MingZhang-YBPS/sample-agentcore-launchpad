@@ -1254,6 +1254,24 @@ shots:
       - {n: 4, box: '.v3-obs-wf [role=listitem] >> nth=20 >> xpath=./span', badge: left}
       - {n: 5, box: 'main .v3-obs-side', badge: right}
 
+
+  - name: 60-observe-costs
+    chapter: 20-flywheel/50-observe
+    status: replace   # admin, Costs & alerts → Spend, 24h estimate
+    account: admin
+    path: /v3/costs
+    viewport: [1440, 1200]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 6000}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4', badge: left}
+      - {n: 2, box: 'main .v3-filters >> nth=0', badge: left}
+      - {n: 3, box: 'main .v3-panel:has(.v3-table) >> nth=0', badge: left}
+      - {n: 4, box: 'main .v3-panel:has([data-testid=v3-costs-by-project])', badge: right}
+      - {n: 5, box: 'main .v3-panel:has(.v3-table) >> nth=-1', badge: right}
+      - {n: 6, box: 'main .v3-filters >> nth=-1', badge: left}
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
