@@ -117,6 +117,22 @@ def test_metric_criteria_and_provenance():
     assert report["verdict"] == "INVALID"
 
 
+def test_a_missed_gate_names_a_ceiling_as_exceeded_and_a_floor_as_not_reached():
+    """A latency or token budget that is overrun is not "below threshold"."""
+    ceiling = Criterion(set_id="s", key="K1", text="tokens", dimension="cost", tier="gate",
+                        level="session", denominator="sessions", executor={"kind": "metric"},
+                        metric_rule={"metric": "tokens_per_session", "op": "<=", "value": 500})
+    over = summary(K1={"kind": "metric", "value": 6799, "rule": ceiling.metric_rule, "n": 24,
+                       "expected": 24, "missing": 0})
+    report = gate.decide(rows=[ceiling], summaries=[over], calibration={}, waivers=[])
+    assert report["verdict"] == "BLOCKED"
+    assert report["criteria"][0]["reason"] == "over the limit"
+    rows = [crit("G1", threshold=0.95)]
+    floor = gate.decide(rows=rows, summaries=[summary(G1=entry(18, 2))], calibration={},
+                        waivers=[])
+    assert floor["criteria"][0]["reason"] == "below threshold"
+
+
 def test_threshold_precision_is_integer_percent():
     rows = [crit("G1", threshold=0.95)]
     report = gate.decide(rows=rows, summaries=[summary(G1=entry(949, 51))], calibration={},

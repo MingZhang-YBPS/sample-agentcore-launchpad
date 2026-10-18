@@ -214,7 +214,7 @@ def decide(
                 waived.append(row.key)
             else:
                 out["verdict"] = BLOCKED
-                out["reason"] = "below threshold"
+                out["reason"] = _shortfall(row)
                 gate_failures.append(row.key)
         else:
             ok, measured = _gate_ok(row, entry) if entry else (None, None)
@@ -254,6 +254,15 @@ def _metric_ok(entry: dict[str, Any]) -> bool:
         return False
     bound = float(rule.get("value", 0))
     return value <= bound if rule.get("op", "<=") == "<=" else value >= bound
+
+
+def _shortfall(row: Criterion) -> str:
+    """Why a gate missed: a ceiling (`<=` / `<`, e.g. latency, tokens) is exceeded,
+    a floor (a pass rate, a `>=` metric) is not reached."""
+    rule = row.metric_rule or {}
+    if (row.executor or {}).get("kind") == "metric" and str(rule.get("op", "")).startswith("<"):
+        return "over the limit"
+    return "below threshold"
 
 
 def _gate_ok(row: Criterion, entry: dict[str, Any]) -> tuple[bool, float | None]:

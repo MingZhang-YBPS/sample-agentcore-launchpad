@@ -13130,6 +13130,7 @@
       },
       "msg": {
         "below threshold": "低于阈值",
+        "over the limit": "超出上限",
         "judge not calibrated — observed until calibrated": "裁判未校准——校准之前只作观测",
         "the runs used different criteria versions": "这些运行用的判据版本不同",
         "the runs used different golden versions": "这些运行用的黄金集版本不同",
