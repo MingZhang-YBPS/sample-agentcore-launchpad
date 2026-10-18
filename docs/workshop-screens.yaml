@@ -1033,6 +1033,24 @@ shots:
       - {n: 4, box: '.v3-modal div[style*="grid"] > label.v3-field:last-child', badge: left}
       - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
 
+  - name: 50-release-waiver-approve
+    chapter: 20-flywheel/40-release
+    status: replace   # release-ops, K1 approve confirm open but NOT confirmed
+    account: release-ops
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 2500}
+      - {click: {zh: 'main tr:has(td:text-is("K1")) button:has-text("批准")', en: 'main tr:has(td:text-is("K1")) button:has-text("Approve")'}}
+      - {wait: '.v3-modal dl.v3-kv'}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal dl.v3-kv', badge: left}
+      - {n: 2, box: '.v3-modal button.v3-btn.primary', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
