@@ -1272,6 +1272,46 @@ shots:
       - {n: 4, box: 'main .v3-panel:has([data-testid=v3-costs-by-project])', badge: right}
       - {n: 5, box: 'main .v3-panel:has(.v3-table) >> nth=-1', badge: right}
       - {n: 6, box: 'main .v3-filters >> nth=-1', badge: left}
+
+  - name: 60-observe-alert-new
+    chapter: 20-flywheel/50-observe
+    status: replace   # admin, New alert rule dialog filled (p95 / lab-p95-30s / 30000) but NOT submitted
+    account: admin
+    path: /v3/costs?view=alerts
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 2500}
+      - {click: {zh: 'main button:has-text("新建规则")', en: 'main button:has-text("New rule")'}}
+      - {wait: '.v3-modal select.v3-select'}
+      - {eval: "() => { const s = document.querySelector('.v3-modal select.v3-select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, 'latency_p95_ms'); s.dispatchEvent(new Event('change', {bubbles: true})); }"}
+      - {fill: ['.v3-modal label.v3-field >> nth=1 >> input.v3-input', lab-p95-30s]}
+      - {fill: ['.v3-modal .v3-grid.c2 input.v3-input', '30000']}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal label.v3-field:has(select) >> nth=0', badge: left}
+      - {n: 2, box: '.v3-modal label.v3-field >> nth=1', badge: left}
+      - {n: 3, box: '.v3-modal .v3-grid.c2 label.v3-field >> nth=0', badge: left}
+      - {n: 4, box: '.v3-modal .v3-grid.c2 label.v3-field >> nth=1', badge: right}
+      - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
+
+  - name: 60-observe-alert-rule
+    chapter: 20-flywheel/50-observe
+    status: replace   # admin, Alerts tab after Re-check: lab-p95-30s firing (P95 ~32 s)
+    account: admin
+    path: /v3/costs?view=alerts
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-cost-rule'
+    actions:
+      - {sleep: 1500}
+      - {click: {zh: 'main button:has-text("立即重新检查")', en: 'main button:has-text("Re-check now")'}}
+      - {sleep: 4000}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4', badge: left}
+      - {n: 2, box: {zh: 'main button:has-text("立即重新检查")', en: 'main button:has-text("Re-check now")'}, badge: left}
+      - {n: 3, box: 'main .v3-cost-rule >> nth=0', badge: left}
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
