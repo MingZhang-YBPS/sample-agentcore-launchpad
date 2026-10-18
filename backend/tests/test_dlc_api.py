@@ -332,6 +332,42 @@ def test_a_golden_set_is_not_editable_or_deletable_as_a_plain_dataset(engineer, 
                         json={"description": "sealed"}).status_code == 200
 
 
+def test_an_admin_deletes_a_golden_set_with_its_splits(engineer, owner, admin):
+    """The only way out of a sealed holdout is to replace the whole set."""
+    from app.core.db import SessionLocal
+    from app.evaluation.models import EvalDataset, EvalRun
+
+    agent_id = _agent()
+    lineage = _create_set(engineer, agent_id)
+    engineer.put(f"/api/criteria-sets/{lineage}", json={"criteria": CRITERIA})
+    engineer.post(f"/api/criteria-sets/{lineage}/publish", json={})
+    dataset_id = _golden(engineer, lineage, seeder=owner)
+    split_ids = [s["id"] for s in
+                 engineer.get(f"/api/golden-sets/{dataset_id}").json()["splits"].values()]
+    for client in (engineer, owner):
+        assert client.delete(f"/api/golden-sets/{dataset_id}").status_code == 403
+    with SessionLocal() as db:
+        run = EvalRun(workspace_id=WS, agent_id=agent_id, agent_name="a", name="busy",
+                      dataset_id=split_ids[0],
+                      status="evaluating")
+        db.add(run)
+        db.commit()
+        run_id = run.id
+    busy = admin.delete(f"/api/golden-sets/{dataset_id}")
+    assert busy.status_code == 409 and busy.json()["code"] == "golden.delete_busy"
+    with SessionLocal() as db:
+        db.get(EvalRun, run_id).status = "completed"
+        db.commit()
+    res = admin.delete(f"/api/golden-sets/{dataset_id}")
+    assert res.status_code == 200, res.text
+    assert res.json()["items"]["holdout"] == 2
+    assert engineer.get(f"/api/golden-sets/{dataset_id}").status_code == 404
+    with SessionLocal() as db:
+        assert all(db.get(EvalDataset, i) is None for i in [*split_ids, dataset_id])
+    # a fresh set for the same criteria can be curated again, holdout included
+    assert _golden(engineer, lineage, seeder=owner)
+
+
 def test_release_gate_blocks_a_red_line_and_signs_a_clean_candidate(engineer, owner, admin,
                                                                    monkeypatch):
     from app.dlc import releases as release_svc

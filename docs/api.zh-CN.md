@@ -932,6 +932,7 @@ AWS Dataset，各有不可变版本。样本出处记录在 `metadata.dlc`（`ca
 | `POST` | `/api/golden-sets/{id}/seed` | `golden.admit` —— **唯一写入保留集的路径。** `{items: [{split?, scenario_id, turns, metadata}], shares?}` 会把未指定切分的样本按用例档位分层，使三个切分见到同样的构成，然后**封存**保留集：再调一次就是 `409 golden.holdout_sealed`。只有没人对着它调参，保留集才有意义 |
 | `POST` | `/api/golden-sets/{id}/move` | `criteria.manage` —— `{scenario_id, to: dev\|regression}`。样本既不会移入也不会移出保留集 |
 | `POST` | `/api/golden-sets/{id}/retire` | `criteria.manage` —— `{split, scenario_id, reason}`。退役样本离开放行门的分母，但仍会被重放，这样修好的问题不会悄悄回来 |
+| `DELETE` | `/api/golden-sets/{id}` | 管理员 —— 删除该集合**及全部三个切分（包括留出集）**→ `{deleted, id, items}`，审计记为 `golden.delete`。这是替换一个用错文件编制、已封存的留出集的唯一办法。仍有评估在回放某个切分时返回 `409 golden.delete_busy`。普通的 `PUT`/`DELETE /api/eval/datasets/{id}` 拒绝黄金集（`409 dataset.golden_managed`） |
 
 `items` 与 `seed` 在写入前逐条校验，任何一条不通过都整体拒绝，什么都不写（`seed` 也就不封存保留集，改好后可以重新提交）：
 

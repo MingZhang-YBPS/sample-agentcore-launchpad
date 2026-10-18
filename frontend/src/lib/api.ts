@@ -7254,6 +7254,11 @@ export const dlcApi = {
   createGolden: (body: { name: string; criteria_lineage_id?: string | null; description?: string }) =>
     request<GoldenSet>("/api/golden-sets", { method: "POST", body: JSON.stringify(body) }),
   getGolden: (datasetId: string) => request<GoldenSet>(dlcGolden(datasetId)),
+  /** Admin only: the set and all three splits, holdout included (409 while a run replays it). */
+  deleteGolden: (datasetId: string) =>
+    request<{ deleted: boolean; id: string; items: Record<string, number> }>(dlcGolden(datasetId), {
+      method: "DELETE",
+    }),
   addGoldenItems: (datasetId: string, split: WritableSplit, items: GoldenItem[]) =>
     request<{ added: number; golden_set: GoldenSet }>(dlcGolden(datasetId, "/items"), {
       method: "POST",

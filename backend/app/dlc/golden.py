@@ -387,6 +387,36 @@ def retire_item(db: Session, split: EvalDataset, scenario_id: str, *, actor: str
     db.flush()
 
 
+RUN_IN_FLIGHT = ("queued", "invoking", "waiting", "evaluating")
+
+
+def delete(db: Session, parent: EvalDataset) -> dict[str, int]:
+    """Remove a golden set — the parent and all three splits, holdout included.
+
+    The only way out of a sealed holdout: a set curated from a wrong file cannot be
+    fixed item by item (the holdout is never written again), so it is replaced whole.
+    Refused while an evaluation still replays one of its splits. Past runs keep their
+    results; they just name a dataset that no longer exists."""
+    from app.evaluation.models import EvalRun
+
+    splits = list(splits_of(db, parent).values())
+    ids = [s.id for s in splits] + [parent.id]
+    busy = db.scalars(
+        select(EvalRun.id).where(EvalRun.dataset_id.in_(ids),
+                                 EvalRun.status.in_(RUN_IN_FLIGHT))
+    ).first()
+    if busy:
+        raise AppError("golden.delete_busy",
+                       "an evaluation is still running on this golden set — wait for it "
+                       "or stop it first", {"run_id": busy}, status_code=409)
+    counts = {s.split: len(s.items or []) for s in splits}
+    for row in splits:
+        db.delete(row)
+    db.delete(parent)
+    db.flush()
+    return counts
+
+
 def coverage(criteria_keys: list[str], splits: dict[str, EvalDataset]) -> dict[str, Any]:
     """criteria × case-tier counts, plus items that exercise no criterion."""
     matrix: dict[str, Counter] = defaultdict(Counter)

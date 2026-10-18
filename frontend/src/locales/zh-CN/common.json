@@ -2709,6 +2709,8 @@
     "golden.holdout_sealed_why": "封存是为了让后续改动无法针对它调优；新样本请走样本准入。",
     "dataset.golden_managed": "黄金集不能当作普通数据集修改或删除。",
     "dataset.golden_managed_why": "黄金集及其切分只能在黄金集页面里准入、移动或退役样本，这样才能保留来源记录和留出集的封存。",
+    "golden.delete_busy": "还有评估在使用这个黄金集。",
+    "golden.delete_busy_why": "等它跑完或先停止，再删除黄金集。",
     "golden.item_not_found": "黄金集里找不到这个样本。",
     "golden.not_found": "找不到这个黄金集。",
     "golden.seed_empty": "编制黄金集至少需要一个样本。",

@@ -1321,6 +1321,7 @@ provenance lives in `metadata.dlc` (`case_tier`, `criteria_ids`, `origin`,
 | `POST` | `/api/golden-sets/{id}/seed` | `golden.admit` — **the only path that writes the holdout.** `{items: [{split?, scenario_id, turns, metadata}], shares?}` stratifies un-split items by case tier so all three splits see the same mix, then **seals** the holdout: a second call is `409 golden.holdout_sealed`. A holdout only means anything if nobody tunes against it |
 | `POST` | `/api/golden-sets/{id}/move` | `criteria.manage` — `{scenario_id, to: dev\|regression}`. Items never move into or out of the holdout |
 | `POST` | `/api/golden-sets/{id}/retire` | `criteria.manage` — `{split, scenario_id, reason}`. A retired item leaves the gate's denominator but is still replayed, so a fixed bug cannot come back unnoticed |
+| `DELETE` | `/api/golden-sets/{id}` | admin — deletes the set **and all three splits, holdout included** → `{deleted, id, items}`, audited as `golden.delete`. The only way to replace a sealed holdout curated from a wrong file. `409 golden.delete_busy` while a run still replays a split. The plain `PUT`/`DELETE /api/eval/datasets/{id}` refuse golden rows (`409 dataset.golden_managed`) |
 
 `items` and `seed` check every item before writing; if any item fails, the whole request is refused and nothing is written (so `seed` does not seal the holdout, and the corrected batch can be sent again):
 

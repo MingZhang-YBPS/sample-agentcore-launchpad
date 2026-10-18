@@ -2709,6 +2709,8 @@
     "golden.holdout_sealed_why": "Sealing keeps later changes from being tuned against it; new samples go through sample admission.",
     "dataset.golden_managed": "A golden set cannot be edited or deleted as a plain dataset.",
     "dataset.golden_managed_why": "A golden set and its splits change only on the golden set page — admit, move or retire items there — so provenance and the holdout seal are kept.",
+    "golden.delete_busy": "An evaluation is still running on this golden set.",
+    "golden.delete_busy_why": "Wait for it to finish or stop it, then delete the golden set.",
     "golden.item_not_found": "Sample not found in this golden set.",
     "golden.not_found": "Golden set not found.",
     "golden.seed_empty": "Seed the golden set with at least one sample.",

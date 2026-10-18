@@ -447,6 +447,24 @@ def get_golden_set(
     return _golden_payload(db, ws, golden_svc.get_parent(db, ws.id, dataset_id))
 
 
+@router.delete("/golden-sets/{dataset_id}")
+def delete_golden_set(
+    dataset_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Delete a golden set with its three splits (admin only — the holdout goes too)."""
+    from app.services.audit import record_audit_event
+
+    parent = golden_svc.get_parent(db, ws.id, dataset_id)
+    counts = golden_svc.delete(db, parent)
+    record_audit_event(workspace_id=ws.id, actor=_actor(request), action="golden.delete",
+                       target=parent.id, db=db)
+    db.commit()
+    return {"deleted": True, "id": parent.id, "items": counts}
+
+
 @router.post("/golden-sets/{dataset_id}/items", status_code=201)
 def add_golden_items(
     dataset_id: str,

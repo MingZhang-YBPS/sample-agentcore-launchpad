@@ -590,6 +590,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/golden-sets"): MEMBER,
     ("POST", "/api/golden-sets"): PERM_CRITERIA_MANAGE,
     ("GET", "/api/golden-sets/{dataset_id}"): MEMBER,
+    ("DELETE", "/api/golden-sets/{dataset_id}"): ADMIN,
     ("POST", "/api/golden-sets/{dataset_id}/items"): PERM_CRITERIA_MANAGE,
     # seeding writes the holdout once: the same right that admits golden samples
     ("POST", "/api/golden-sets/{dataset_id}/seed"): PERM_GOLDEN_ADMIT,
@@ -1897,6 +1898,8 @@ _STRUCTURE_ROUTES = (
     ("GET", "/api/inbox"),
 )
 _DATA_ROUTES = (
+    # a golden set (holdout included) is the project's evaluation data
+    ("DELETE", "/api/golden-sets/{dataset_id}"),
     ("GET", "/api/costs"),
     ("GET", "/api/costs/month-to-date"),
     # cost detail (until its router keeps a steward to totals), time-to-first-agent
