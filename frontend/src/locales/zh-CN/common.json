@@ -11185,7 +11185,7 @@
         "copy": "复制",
         "copied": "示例代码已复制。",
         "copyFailed": "无法复制到剪贴板。",
-        "keyHint": "可在对话控制台的 API 密钥面板创建密钥，并可限定为仅限本智能体、设置有效期与速率限制。",
+        "keyHint": "在下方 API 密钥 卡片里创建只限本智能体的密钥；有效期与速率限制通过 /api/apikeys 接口设置。",
         "unavailable": "这个智能体不能通过 /v1 API 调用。"
       },
       "identityEntry": {

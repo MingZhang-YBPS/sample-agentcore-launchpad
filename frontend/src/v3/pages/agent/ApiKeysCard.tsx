@@ -158,7 +158,7 @@ export function ApiKeysCard({ agentId, agentName }: { agentId: string; agentName
                 <li key={key.id} className="v3-keys-row" data-testid="v3-api-key-row">
                   <Lamp s={STATE_SIGNAL[state]} />
                   <div className="who">
-                    <b>{key.name} <span className="mono" style={{ fontWeight: 400 }}>{key.prefix}…</span></b>
+                    <b>{key.name} <span className="mono" style={{ fontWeight: 400 }}>{key.prefix}</span></b>
                     <span>
                       {apiKeyMeta(t, key)}
                       {key.use_count != null && ` · ${t("v3.apiKeys.calls", { count: key.use_count })}`}
@@ -231,7 +231,7 @@ export function ApiKeysEntry({ agentId }: { agentId: string }) {
             <li key={key.id}>
               <Lamp s={STATE_SIGNAL[keyState(key)]} />
               <span>{key.name}</span>
-              <span className="mono">{key.prefix}…</span>
+              <span className="mono">{key.prefix}</span>
             </li>
           ))}
         </ul>

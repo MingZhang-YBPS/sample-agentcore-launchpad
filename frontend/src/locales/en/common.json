@@ -11185,7 +11185,7 @@
         "copy": "Copy",
         "copied": "Snippet copied.",
         "copyFailed": "Could not copy to the clipboard.",
-        "keyHint": "Create keys, optionally limited to this agent, with an expiry and a rate limit, from the API keys panel in the Chat console.",
+        "keyHint": "Create a key scoped to this agent in the API keys card below; set an expiry or a rate limit through the /api/apikeys endpoint.",
         "unavailable": "This agent cannot be called through the /v1 API."
       },
       "identityEntry": {
