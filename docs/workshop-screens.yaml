@@ -1090,6 +1090,22 @@ shots:
       - {n: 3, box: {zh: 'main .v3-panel:has(button:has-text("回滚")) table', en: 'main .v3-panel:has(button:has-text("Roll back")) table'}, badge: left}
       - {n: 4, box: {zh: 'main .v3-panel button:has-text("回滚")', en: 'main .v3-panel button:has-text("Roll back")'}, badge: right}
 
+  - name: 50-release-api-key
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, V3 agent page Access & integration tab: API keys card with the agent-scoped key (no plaintext shown)
+    account: developer
+    path: /v3/agents?id={agent:lab-service-assistant}&tab=access
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v3-api-key-row"]'
+    clip: 'main .v3-panel:has(.v3-keys)'
+    actions:
+      - {sleep: 2000}
+    highlights:
+      - {n: 1, box: '.v3-keys-create', badge: left}
+      - {n: 2, box: '[data-testid="v3-api-key-row"]', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
