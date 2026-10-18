@@ -6,6 +6,7 @@ so it can be tested without a request. Permissions are declared in
 `golden.admit`, `judge.calibrate`) are granted to named people, not roles.
 """
 
+import time
 from datetime import datetime
 from typing import Any, Literal
 
@@ -608,6 +609,10 @@ def _session_units(rows: list[Any]) -> dict[tuple[str, int], list[Any]]:
     return grouped
 
 
+# how long creating a calibration task may spend reading the agent's replies
+REPLY_BUDGET_S = 25.0
+
+
 def _items_from_run(
     db: Session, ws: WorkspaceScope, run: EvalRun, criterion_key: str,
 ) -> list[dict[str, Any]]:
@@ -624,10 +629,15 @@ def _items_from_run(
     grouped = _session_units(rows)
     replies: dict[str, str] = {}
     out = []
+    # The replies are read one memory call per session. The request answers within its
+    # budget either way: an item whose reply is not read in time keeps an empty
+    # `answer`, which the first view of the task fills in (`_backfill_answers`).
+    deadline = time.monotonic() + REPLY_BUDGET_S
     for (scenario_id, attempt), group in grouped.items():
         first = group[0]
         question, expected = texts.get(scenario_id, ("", ""))
-        if first.session_id and first.session_id not in replies:
+        if (first.session_id and first.session_id not in replies
+                and time.monotonic() < deadline):
             replies[first.session_id] = _agent_reply(db, ws, run, first.session_id)
         verdict = engine_svc.collapse([r.verdict for r in group])
         explanation = "\n\n".join(dict.fromkeys(r.explanation for r in group if r.explanation))
@@ -765,8 +775,9 @@ def _backfill_answers(db: Session, ws: WorkspaceScope, task: Any) -> None:
     if run is None or run.workspace_id != ws.id:
         return
     items = []
+    deadline = time.monotonic() + REPLY_BUDGET_S  # the rest waits for the next view
     for item in task.items or []:
-        if item in pending:
+        if item in pending and time.monotonic() < deadline:
             item = {**item, "answer": _agent_reply(db, ws, run, item["session_id"])[:4000],
                     "answer_checked": True}
         items.append(item)

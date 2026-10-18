@@ -13,7 +13,8 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from app.services.agentcore.client import data_client
+# memory calls get their own short-timeout client (agentcore.client.memory_data_client)
+from app.services.agentcore.client import memory_data_client as data_client
 from app.services.workspace import WorkspaceContext
 
 

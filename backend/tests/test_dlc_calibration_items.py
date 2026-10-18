@@ -228,3 +228,67 @@ def test_a_session_with_two_judged_traces_is_one_item(monkeypatch):
         db.query(EvalDataset).filter(EvalDataset.name == "cal-items-2t").delete()
         db.commit()
         db.close()
+
+
+def test_reading_replies_stops_at_the_budget_and_leaves_the_rest_to_backfill(monkeypatch):
+    """A stalled memory read must not hold the create request past the proxy's 60 s:
+    once the budget is spent the remaining items keep an empty answer (filled on the
+    first view by `_backfill_answers`)."""
+    db = SessionLocal()
+    try:
+        ds = EvalDataset(workspace_id=WS, name="cal-items-budget", kind="predefined", items=[
+            {"scenario_id": "kb-88", "turns": [{"input": "q", "expected_response": "e"}]},
+            {"scenario_id": "kg-88", "turns": [{"input": "q2", "expected_response": "e2"}]},
+        ])
+        db.add(ds)
+        db.flush()
+        run = EvalRun(workspace_id=WS, agent_id="agent-x", agent_name="a", status="completed",
+                      name="rbudget", dataset_id=ds.id, session_ids=["s-c", "s-d"])
+        db.add(run)
+        db.flush()
+        for sid, scen in (("s-c", "kb-88"), ("s-d", "kg-88")):
+            db.add(CriterionResult(workspace_id=WS, run_id=run.id, criterion_key="S2",
+                                   scenario_id=scen, attempt=1, session_id=sid, unit_ref=sid,
+                                   evaluator_id="judge", level="trace", verdict="pass"))
+        db.commit()
+        reads = []
+        clock = {"now": 0.0}
+        monkeypatch.setattr(dlc_router.time, "monotonic", lambda: clock["now"])
+
+        def slow_reply(_db, _ws, _run, session_id):
+            reads.append(session_id)
+            clock["now"] += dlc_router.REPLY_BUDGET_S + 1  # this read stalled past the budget
+            return "reply"
+
+        monkeypatch.setattr(dlc_router, "_agent_reply", slow_reply)
+        ws = SimpleNamespace(id=WS, context=SimpleNamespace(id=WS))
+        items = dlc_router._items_from_run(db, ws, run, "S2")
+        assert len(items) == 2
+        assert reads == ["s-c"]
+        assert [i["answer"] for i in items] == ["reply", ""]
+    finally:
+        db.rollback()
+        db.query(CriterionResult).filter(
+            CriterionResult.scenario_id.in_(["kb-88", "kg-88"])).delete()
+        db.query(EvalRun).filter(EvalRun.name == "rbudget").delete()
+        db.query(EvalDataset).filter(EvalDataset.name == "cal-items-budget").delete()
+        db.commit()
+        db.close()
+
+
+def test_memory_calls_use_a_short_read_timeout_not_the_runtimes():
+    from app.services import memory
+    from app.services.agentcore import client as ac_client
+
+    captured = {}
+
+    class Ctx:
+        def client(self, name, cache_token=None, config=None):
+            captured.update(name=name, read=config.read_timeout,
+                            attempts=config.retries["max_attempts"])
+            return object()
+
+    assert memory.data_client is ac_client.memory_data_client
+    ac_client.memory_data_client(Ctx())
+    assert captured["name"] == "bedrock-agentcore"
+    assert captured["read"] <= 30 and captured["attempts"] == 2

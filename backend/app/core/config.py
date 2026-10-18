@@ -162,6 +162,11 @@ class Settings(BaseSettings):
     # stalled InvokeAgentRuntime stream held a release-gate replay for the full
     # ``agentcore_read_timeout_s`` (live 2026-10-13: 1 of 24 replays, 1000 s).
     agentcore_heartbeat_read_timeout_s: int = Field(default=120, gt=0)
+    # AgentCore Memory reads and writes answer in well under a second. With the
+    # runtime's 1000 s read timeout a stalled ListEvents held a calibration-task
+    # create past CloudFront's 60 s for good (live 2026-10-18); a short timeout and
+    # one retry turn that stall into a fast fresh attempt.
+    agentcore_memory_read_timeout_s: int = Field(default=15, gt=0)
 
     # The longest a synchronous invoke (console /invoke, public /v1 invoke) waits
     # before answering 504 invoke.timeout with the session id and the streaming

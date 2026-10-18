@@ -35,6 +35,19 @@ def data_client(ctx: WorkspaceContext) -> Any:
     )
 
 
+def memory_data_client(ctx: WorkspaceContext) -> Any:
+    """Data-plane client for AgentCore Memory (events, records): a short read timeout,
+    not the runtime's 1000 s — a memory call never legitimately takes that long, and a
+    stalled one must not hold the request that made it."""
+    timeout = get_settings().agentcore_memory_read_timeout_s
+    return ctx.client(
+        "bedrock-agentcore",
+        cache_token=f"read_timeout={timeout};connect=5;retries=2",
+        config=Config(read_timeout=timeout, connect_timeout=5,
+                      retries={"max_attempts": 2, "mode": "standard"}),
+    )
+
+
 # Methods whose runtime runs a platform template that emits a ``heartbeat`` event at
 # least every 15 s (strands_agent / claude_sdk_agent main.py templates). BYOC and
 # imported runtimes run the customer's own code, which owes no heartbeat.
