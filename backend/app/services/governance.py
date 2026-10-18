@@ -1576,9 +1576,7 @@ def queue_engine_attach(
                 mode=attachment.get("mode"),
             )
     requested = request.model_dump(mode="json")
-    requested["engine_name"] = request.name or _resource_name(
-        f"{gateway['name']}_policy"
-    )
+    requested["engine_name"] = request.name or _default_engine_name(gateway)
     if dangling:
         requested["replaced_engine_arn"] = dangling["arn"]
     change = _new_change(
@@ -1934,6 +1932,18 @@ def _assert_evidence_or_override(
             {"evidence_count": 0},
             status_code=409,
         )
+
+
+def _default_engine_name(gateway: dict[str, Any]) -> str:
+    """Name a new Policy Engine after the Gateway's unique id, not its name.
+
+    Engine names are unique per account and Region, and a Gateway name is not: a
+    redeployed stack recreates ``launchpad-gw`` under a new id while an earlier
+    deployment's ``launchpad_gw_policy`` may still exist, and CreatePolicyEngine
+    then fails with a ConflictException. The id suffix keeps the name distinct.
+    """
+    base = _resource_name(str(gateway.get("gatewayId") or gateway["name"]))
+    return f"{base[:41]}_policy"
 
 
 def _resource_name(value: str) -> str:
