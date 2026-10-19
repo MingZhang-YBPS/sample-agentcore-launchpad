@@ -19,10 +19,11 @@
 # roadmap phases → Skill Lab assets → scripts whose preconditions are probed
 # from the live env (a second / third workspace, a disposable policy gateway).
 #
+# The browser scripts run last, headless Chromium against the console's own URL.
+#
 # Never run here (each is reported as SKIP with its reason): scripts that read or
 # write the LOCAL ledger (assistant_clear_canary, runtime_canary, skill_lab,
-# knowledge_base, kb_gateway, docker_exec, identity_*) and the browser scripts
-# (they need a local frontend + Playwright).
+# knowledge_base, kb_gateway, docker_exec, identity_*).
 #
 # A run that dies on a network drop (ConnectError / ENOTFOUND) is retried after
 # a pause, up to E2E_NETWORK_RETRIES times (default 2).
@@ -84,6 +85,11 @@ skill_lab_taskgen_assets|--base @BASE@ --record-id @RECORD@
 roadmap_promotion|--base @BASE@ --target @TARGET@
 multi_workspace|--base @BASE@
 gateway_policy_management|--base @BASE@ --gateway-id @POLICY_GW@ --statement-file @POLICY_FILE@ --confirm-real-aws
+v3_console_browser|--ui @BASE@ --out @LOGDIR@/v3-shots
+agent_dlc_browser|--ui @BASE@ --out @LOGDIR@/dlc-shots
+skill_lab_assets_browser|--base-url @BASE@ --evidence-dir @LOGDIR@/skill-lab-assets
+skill_lab_taskgen_assets_browser|--base-url @BASE@ --evidence-dir @LOGDIR@/skill-lab-taskgen
+policy_deny_browser|--ui @BASE@ --agent @DENY_AGENT@ --project @DENY_PROJECT@
 "
 
 # never run against a deployed console: name|reason
@@ -97,11 +103,6 @@ docker_exec|service-layer script on the LOCAL ledger
 identity_connections|needs a local backend bound to its throwaway lpid-e2e-gw gateway + --discovery-url
 identity_inbound|reads the LOCAL ledger: needs a local backend + --gateway-role-arn
 identity_3lo|needs a local backend + UI and a browser
-agent_dlc_browser|browser script: needs a local frontend + Playwright
-policy_deny_browser|browser script: needs a local frontend + Playwright
-skill_lab_assets_browser|browser script: needs a local frontend + Playwright
-skill_lab_taskgen_assets_browser|browser script: needs a local frontend + Playwright
-v3_console_browser|browser script: needs a local frontend + Playwright
 "
 
 selected() {
@@ -164,6 +165,8 @@ TARGET="$(echo "$PROBE" | sed -n 's/^TARGET=//p')"
 RECORD="$(echo "$PROBE" | sed -n 's/^RECORD=//p')"
 POLICY_GW="${E2E_POLICY_GATEWAY_ID:-}"
 POLICY_FILE="${E2E_POLICY_STATEMENT_FILE:-}"
+DENY_AGENT="${E2E_POLICY_DENY_AGENT:-}"
+DENY_PROJECT="${E2E_POLICY_DENY_PROJECT:-default}"
 echo "── $BASE · ready workspaces=$WORKSPACES · promotion target=${TARGET:-none}" \
      "· skill record=${RECORD:-none} · logs in $LOG_DIR"
 
@@ -178,6 +181,8 @@ skip_reason() {
     gateway_policy_management)
       [ -n "$POLICY_GW" ] && [ -n "$POLICY_FILE" ] \
         || echo "set E2E_POLICY_GATEWAY_ID (a disposable gateway) + E2E_POLICY_STATEMENT_FILE" ;;
+    policy_deny_browser)
+      [ -n "$DENY_AGENT" ] || echo "set E2E_POLICY_DENY_AGENT (an active agent id; E2E_POLICY_DENY_PROJECT if not in default)" ;;
     observability|traces|chat_memory)
       grep -q "^gateway_tool	PASS" "$RESULTS" \
         || echo "gateway_tool did not leave $HR_AGENT deployed" ;;
@@ -197,6 +202,9 @@ run_one() {
   args="${args//@TARGET@/$TARGET}"
   args="${args//@POLICY_GW@/$POLICY_GW}"
   args="${args//@POLICY_FILE@/$POLICY_FILE}"
+  args="${args//@LOGDIR@/$LOG_DIR}"
+  args="${args//@DENY_AGENT@/$DENY_AGENT}"
+  args="${args//@DENY_PROJECT@/$DENY_PROJECT}"
   started=$(date +%s)
   while :; do
     printf '── %-28s ' "$name"
