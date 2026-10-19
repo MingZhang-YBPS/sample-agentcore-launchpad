@@ -1332,6 +1332,24 @@ shots:
       - {n: 3, box: 'main .v3-grid.c4', badge: left}
       - {n: 4, box: 'main .v3-panel:has(.v3-ins-note)', badge: left}
       - {n: 5, box: 'main .v3-panel:has(.v3-ins-intent)', badge: left}
+
+  - name: 60-observe-watch
+    chapter: 20-flywheel/50-observe
+    status: replace   # developer, Standards → Drift watch after Save + Run now (regression run finished)
+    account: developer
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=watch
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 2200]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table'
+    actions:
+      - {sleep: 3000}
+    highlights:
+      - {n: 1, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^告警"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Alerts"))'}, badge: left}
+      - {n: 2, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^通过率"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Pass rate"))'}, badge: left}
+      - {n: 3, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^是智能体"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Agent or judge"))'}, badge: left}
+      - {n: 4, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^排程(?!运行)"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Schedule(?!d)"))'}, badge: left}
+      - {n: 5, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^排程运行"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Scheduled runs"))'}, badge: left}
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
