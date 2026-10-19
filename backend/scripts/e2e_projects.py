@@ -585,7 +585,8 @@ def quotas(admin: httpx.Client, users: dict[str, httpx.Client]) -> None:
 
 def aws_tags(arn: str) -> tuple[dict[str, str], dict[str, str], str]:
     """(runtime tags, execution role tags, role name)."""
-    control = boto3.client("bedrock-agentcore-control")
+    # botocore reads AWS_DEFAULT_REGION, not AWS_REGION: the ARN names the region outright
+    control = boto3.client("bedrock-agentcore-control", region_name=arn.split(":")[3])
     runtime_tags = control.list_tags_for_resource(resourceArn=arn).get("tags") or {}
     runtime_id = arn.rsplit("/", 1)[-1]
     role_arn = control.get_agent_runtime(agentRuntimeId=runtime_id)["roleArn"]
@@ -698,7 +699,7 @@ def invoke_access(users: dict[str, httpx.Client], agent_id: str, arn: str) -> No
         RoleArn=role_arn, RoleSessionName=f"pj-e2e-{RUN}")["Credentials"],
         timeout=120, every=10)
     check("invoke.assume_role", creds is not None, role_arn, fatal=True)
-    region = boto3.session.Session().region_name or "us-west-2"
+    region = arn.split(":")[3]  # the runtime's own region, whatever the shell sets
     data_plane = boto3.client(
         "bedrock-agentcore", region_name=region,
         aws_access_key_id=creds["AccessKeyId"], aws_secret_access_key=creds["SecretAccessKey"],
