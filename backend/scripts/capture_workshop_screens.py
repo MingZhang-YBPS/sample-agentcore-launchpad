@@ -506,7 +506,8 @@ def main() -> int:
                     except SkipShot:
                         raise
                     except Exception as first:  # noqa: BLE001 - one retry for a slow page
-                        print(f"RETRY  {shot['name']:<40} {lang} {str(first).splitlines()[0][:120]}")
+                        why = str(first).splitlines()[0][:120]
+                        print(f"RETRY  {shot['name']:<40} {lang} {why}")
                         path = capture(pw, shot, lang, ctx, out, args.probe)
                     tally["OK"] += 1
                     print(f"OK     {shot['name']:<40} {lang} {path.name} "
