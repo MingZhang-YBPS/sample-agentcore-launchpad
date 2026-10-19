@@ -417,15 +417,6 @@ shots:
       - {n: 2, box: .v3-chooser-side}
       - {n: 3, box: details.v3-chooser-compare}
 
-  - name: 30-build-method-cards
-    chapter: 20-flywheel/20-build
-    status: replace   # /v3/create now opens on the chooser; the ways sit behind "skip"
-    account: developer
-    path: /v3/create
-    wait: .v3-way
-    clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("其他构建方式"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Other ways to build"))'}
-    highlights:
-      - {n: 1, box: '.v3-way:has-text("Strands")'}
 
   - name: 30-build-byoc-entry
     chapter: 20-flywheel/20-build
@@ -772,18 +763,6 @@ shots:
       - {n: 3, box: '[data-testid=chat-tool]', badge: left}
       - {n: 4, box: '.v3-msg.agent', badge: left}
 
-  - name: 30-build-journey-strip
-    chapter: 20-flywheel/20-build
-    status: new
-    account: developer
-    path: /v3/agents?id={agent:lab-service-assistant}
-    storage: {'launchpad_project:default': retail-service}
-    requires: [agent:lab-service-assistant]
-    wait: '[data-testid=v3-journey-continue], [data-testid=v3-journey-waiting]'
-    clip: '[data-testid=v3-journey]'
-    highlights:
-      - {n: 1, box: ol.v3-journey-line}
-      - {n: 2, box: '[data-testid=v3-journey-continue], [data-testid=v3-journey-waiting]'}
 
   # ── 20-flywheel/30-evaluate ───────────────────────────────────────────────
   - name: 20-define-criteria-table
