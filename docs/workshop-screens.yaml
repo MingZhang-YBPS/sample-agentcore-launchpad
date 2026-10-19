@@ -1564,6 +1564,22 @@ shots:
       - {n: 2, box: 'main .v3-grid.c3:has(> .v3-panel) >> nth=-1', badge: left}
       - {n: 3, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^逐条判据"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Per criterion"))'}, badge: left}
 
+  - name: 70-feedback-two-numbers
+    chapter: 20-flywheel/60-feedback
+    status: new   # developer, Standards → Fix ladder after §7.4: first and last rung use different criteria versions → agent improved / standard tightened / added
+    account: developer
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=compare
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-std-ladder'
+    actions: [{sleep: 2500}]
+    highlights:
+      - {n: 1, box: 'main .v3-panel .v3-alert[data-s=wait] >> nth=0', badge: left}
+      - {n: 2, box: 'main .v3-panel .v3-grid.c3 >> nth=0', badge: left}
+      - {n: 3, box: 'main .v3-std-ladder', badge: left}
+      - {n: 4, box: 'main .v3-grid.c3:has(> .v3-panel) >> nth=0', badge: left}
+
   - name: 70-feedback-rec-failed
     chapter: 20-flywheel/60-feedback
     status: replace   # developer, eval task detail of the §4 regression run (LP_REC_RUN): two FAILED system-prompt recommendations (prompt attack protection)
@@ -1579,6 +1595,43 @@ shots:
       - {sleep: 600}
     highlights:
       - {n: 1, box: '[data-testid=v2-rec-system_prompt] >> nth=0', badge: left}
+
+  # ── 30-wrap-up/10-team-lab ─────────────────────────────────────────────────
+  - name: 80-team-lab-reviewer-revoke
+    chapter: 30-wrap-up/10-team-lab
+    status: replace   # biz-owner, Issue box → Reviewers: opens the revoke confirm on the first active link (does NOT confirm)
+    account: biz-owner
+    path: /v3/issues?view=reviewers
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main select.v3-iss-select'
+    actions:
+      - {sleep: 1500}
+      - {select: ['main select.v3-iss-select', lab-service-assistant]}
+      - {wait: 'main .v3-table tbody tr'}
+      - {sleep: 800}
+      - {click: {zh: 'main .v3-table tbody tr:has-text("售后政策专家 sme") button.v3-btn:not([disabled])', en: 'main .v3-table tbody tr:has-text("after-sales policy expert sme") button.v3-btn:not([disabled])'}}
+      - {wait: '.v3-modal'}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: {zh: 'header button:has-text("评审人"), .v3-head a:has-text("评审人"), .v3-head button:has-text("评审人")', en: 'header button:has-text("Reviewers"), .v3-head a:has-text("Reviewers"), .v3-head button:has-text("Reviewers")'}, badge: left}
+      - {n: 2, box: {zh: 'main .v3-table tbody tr:has-text("售后政策专家 sme") button.v3-btn:not([disabled])', en: 'main .v3-table tbody tr:has-text("after-sales policy expert sme") button.v3-btn:not([disabled])'}, badge: left}
+      - {n: 3, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: top}
+
+  - name: 80-team-lab-user-disable
+    chapter: 30-wrap-up/10-team-lab
+    status: replace   # admin, Users: opens the Disable account confirm on a self-registered trainee (does NOT confirm)
+    account: admin
+    path: /v3/users
+    wait: 'table.v3-table'
+    actions:
+      - {sleep: 1200}
+      - {click: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("禁用")', en: 'tr:has-text("trainee-alex") button:has-text("Disable")'}}
+      - {wait: '.v3-modal'}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("禁用")', en: 'tr:has-text("trainee-alex") button:has-text("Disable")'}, badge: left}
+      - {n: 2, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: top}
 
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
