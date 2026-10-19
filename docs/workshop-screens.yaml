@@ -1658,7 +1658,7 @@ shots:
       - {n: 2, box: '[data-testid=v3-admins-table]'}
 
   - name: 90-organizer-system-update
-    chapter: 90-appendix/10-organizer-deploy
+    chapter: 90-appendix/40-platform-ops
     status: new
     account: admin
     path: /v3/system-update
@@ -1667,4 +1667,4 @@ shots:
     highlights:
       - {n: 1, box: '[data-testid=v3-sysupdate-current]'}
       - {n: 2, box: '[data-testid=v3-sysupdate-remote]'}
-      - {n: 3, box: '[data-testid=v3-sysupdate-commits]'}
+      - {n: 3, box: '[data-testid=v3-sysupdate-history]'}
