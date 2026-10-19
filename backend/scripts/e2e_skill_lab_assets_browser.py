@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Portable browser E2E for Skill Lab binary task assets.
 
-Runs against an already-started local frontend/backend, writes only the requested
+Runs against an already-started frontend/backend (signs in with
+LAUNCHPAD_E2E_USERNAME / _PASSWORD when set), writes only the requested
 screenshot/network evidence directory, and deletes the task set it creates.
 It uses the repository's locked Playwright Python dependency; no browser install
 or /opt mutation is performed.
@@ -13,11 +14,18 @@ import argparse
 import io
 import json
 import os
+import re
 import time
 import zipfile
 from pathlib import Path
 
 from playwright.sync_api import Request, Response, sync_playwright
+
+
+def tid(scope, test_id: str):
+    """The classic page's test id, or the same id as the V2 page hosted in console V3
+    renders it (`v2-` prefixed) — classic `/skill-lab` URLs now redirect there."""
+    return scope.locator(f'[data-testid="{test_id}"], [data-testid="v2-{test_id}"]')
 
 
 def xlsx_bytes() -> bytes:
@@ -50,6 +58,14 @@ def main() -> int:
             launch["executable_path"] = args.browser
         browser = playwright.chromium.launch(**launch)
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        # a console with the login gate on (prod) needs a session first
+        user = os.environ.get("LAUNCHPAD_E2E_USERNAME")
+        password = os.environ.get("LAUNCHPAD_E2E_PASSWORD")
+        if user and password:
+            res = page.request.post(f"{args.base_url}/api/auth/login",
+                                    data={"username": user, "password": password})
+            if not res.ok:
+                raise SystemExit(f"login failed: HTTP {res.status}")
 
         def request_finished(request: Request) -> None:
             if "/api/skill-lab/" not in request.url:
@@ -68,20 +84,20 @@ def main() -> int:
         page.on("requestfinished", request_finished)
         try:
             page.goto(f"{args.base_url}/skill-lab?view=tasksets&ts=new", wait_until="networkidle")
-            page.get_by_test_id("taskset-name").fill(f"portable-assets-{int(time.time())}")
-            row = page.get_by_test_id("task-row-tasks-0")
+            tid(page, "taskset-name").fill(f"portable-assets-{int(time.time())}")
+            row = tid(page, "task-row-tasks-0")
             row.locator("textarea").nth(0).fill("Inspect every attached binary file.")
             row.locator("textarea").nth(1).fill("PASS when all files are present.")
-            page.get_by_test_id("task-assets-tasks-0").set_input_files(
+            tid(page, "task-assets-tasks-0").set_input_files(
                 [fixtures / "source.xlsx", fixtures / "brief.pdf", fixtures / "pixel.png"]
             )
             # Upload starts asynchronously; save must stay unavailable until the
             # staged descriptors have returned and entered draft state.
-            assert page.get_by_test_id("taskset-save").is_disabled()
+            assert tid(page, "taskset-save").is_disabled()
             destinations = row.get_by_label("Destination path")
             destinations.nth(2).wait_for()
             destinations.nth(0).fill(".git/source.xlsx")
-            assert page.get_by_test_id("taskset-save").is_disabled()
+            assert tid(page, "taskset-save").is_disabled()
             destinations.nth(0).fill("inputs/source.xlsx")
             destinations.nth(1).fill("docs/brief.pdf")
             destinations.nth(2).fill("images/pixel.png")
@@ -91,7 +107,7 @@ def main() -> int:
                     and response.url.endswith("/api/skill-lab/tasksets")
                 )
             ) as create_info:
-                page.get_by_test_id("taskset-save").click()
+                tid(page, "taskset-save").click()
             create_response = create_info.value
             assert create_response.status == 201, create_response.text()
             create_json = create_response.request.post_data_json
@@ -103,18 +119,20 @@ def main() -> int:
 
             taskset_id = str(create_response.json()["id"])
             assert taskset_id.startswith("ts_"), create_response.text()
-            page.wait_for_url(f"**?view=tasksets&ts={taskset_id}")
-            page.get_by_test_id("taskset-edit").click()
-            edit_row = page.get_by_test_id("task-row-tasks-0")
+            # classic `?view=tasksets&ts=<id>`, or V3's `?tab=tasksets&view=detail&id=<id>`
+            page.wait_for_url(re.compile(rf"[?&](ts|id)={re.escape(taskset_id)}\b"))
+            tid(page, "taskset-edit").click()
+            edit_row = tid(page, "task-row-tasks-0")
             edit_row.get_by_label("Destination path").nth(2).wait_for()
-            edit_row.locator('[data-testid^="task-asset-remove-"]').last.click()
+            edit_row.locator('[data-testid^="task-asset-remove-"], '
+                             '.v2-skilllab-asset button').last.click()
             with page.expect_response(
                 lambda response: (
                     response.request.method == "PUT"
                     and response.url.endswith(f"/api/skill-lab/tasksets/{taskset_id}")
                 )
             ) as update_info:
-                page.get_by_test_id("taskset-save").click()
+                tid(page, "taskset-save").click()
             update_response = update_info.value
             assert update_response.status == 200, update_response.text()
             update_files = update_response.request.post_data_json["tasks_by_split"]["tasks"][0][

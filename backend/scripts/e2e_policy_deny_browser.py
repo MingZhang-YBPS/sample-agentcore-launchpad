@@ -8,7 +8,7 @@ renders the card after its tool row, and a restored ``policy`` history row rende
 it again (the backend side is covered by tests/test_chat_api.py).
 
 Run:  cd backend && uv run python scripts/e2e_policy_deny_browser.py --ui http://localhost:5173 \\
-        --agent <an active agent id> [--lang zh-CN]
+        --agent <an active agent id> [--lang zh-CN] [--project <project id>]
 Needs LAUNCHPAD_E2E_USERNAME / _PASSWORD when the login gate is on.
 """
 
@@ -34,6 +34,8 @@ def main() -> int:
     parser.add_argument("--ui", default="http://localhost:5173")
     parser.add_argument("--agent", required=True)
     parser.add_argument("--lang", default="zh-CN")
+    parser.add_argument("--project", default=None,
+                        help="project id the agent lives in, e.g. retail-service")
     args = parser.parse_args()
     failures: list[str] = []
 
@@ -82,6 +84,9 @@ def main() -> int:
         page.goto(f"{args.ui}/v2")
         page.evaluate(f"() => {{ localStorage.setItem('i18nextLng','{args.lang}');"
                       " localStorage.setItem('launchpad_v3_tour_done','1'); }")
+        if args.project:
+            page.evaluate("p => localStorage.setItem('launchpad_project:default', p)",
+                          args.project)
 
         for console in ("v3", "v2"):
             page.evaluate(f"() => localStorage.setItem('launchpad_ui_version','{console}')")
