@@ -1120,6 +1120,32 @@ shots:
       - {n: 2, box: '[data-testid="v2-governance-iam"]', badge: left}
       - {n: 3, box: '[data-testid="v2-governance-engine"] dl.v2-desc', badge: left}
 
+  - name: 50-release-policy-test-deny
+    chapter: 20-flywheel/40-release
+    status: replace   # admin, launchpad-gw Policies section, policy test after ENFORCE: demo create_payout → DENY (LP_GW = gateway id)
+    account: admin
+    path: /v2/governance?view=gateway&gateway={env:LP_GW}&section=policies&full=1
+    viewport: [1440, 1300]
+    wait: '[data-testid="v2-governance-policy-test"]'
+    actions:
+      - {sleep: 2500}
+      - {click: '[data-testid="v2-governance-policy-test"] button.v2-sel >> nth=0'}
+      - {click: '[role=option]:has-text("demo@hr-analyst")'}
+      - {click: '[data-testid="v2-governance-policy-test"] button.v2-sel >> nth=1'}
+      - {click: '[role=option]:has-text("hr-database___create_payout")'}
+      - {fill: ['[data-testid="v2-governance-policy-test"] textarea', '{"employee_id":"EMP-1024","amount":1}']}
+      - {click: '[data-testid="v2-governance-policy-test-run"]'}
+      - {wait: '[data-testid="v2-governance-policy-test"] .v2-governance-test-result'}
+      - {eval: "() => document.querySelector('[data-testid=v2-governance-policy-test]').scrollIntoView({block: 'start'})"}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-governance-policy-test"] button.v2-sel >> nth=0', badge: left}
+      - {n: 2, box: '[data-testid="v2-governance-policy-test"] button.v2-sel >> nth=1', badge: right}
+      - {n: 3, box: '[data-testid="v2-governance-policy-test"] textarea', badge: left}
+      - {n: 4, box: '[data-testid="v2-governance-policy-test-run"]', badge: left}
+      - {n: 5, box: '[data-testid="v2-governance-policy-test"] .v2-governance-test-result .v2-row >> nth=0', badge: left}
+      - {n: 6, box: '[data-testid="v2-governance-policy-test"] .v2-governance-test-result dl', badge: left}
+
   - name: 50-release-exp-start
     chapter: 20-flywheel/40-release
     status: replace   # developer, start-experiment form prefilled with lab-service-assistant, readiness loaded (not started)
