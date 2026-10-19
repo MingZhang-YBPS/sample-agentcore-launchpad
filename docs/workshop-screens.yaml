@@ -1410,6 +1410,23 @@ shots:
       - {n: 2, box: 'main .v3-filters >> nth=0 >> button[aria-pressed=true]', badge: top}
       - {n: 3, box: 'main .v3-filters >> nth=-1', badge: left}
       - {n: 4, box: 'main .v3-table', badge: left}
+  # ── 20-flywheel/60-feedback ──────────────────────────────────────────────
+
+  - name: 70-feedback-thumbs-down
+    chapter: 20-flywheel/60-feedback
+    status: replace   # developer, V3 chat, second (no-fare) question answered with the stale ¥760, thumbs-down pressed (LP_FB_SID = that session)
+    account: developer
+    path: '/v3/chat?agent={agent:lab-service-assistant}&session={env:LP_FB_SID}'
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '.v3-msg-actions button[aria-pressed=true]'
+    actions: [{sleep: 1500}]
+    highlights:
+      - {n: 1, box: '.v3-chat-side select.v3-select', badge: left}
+      - {n: 2, box: '.v3-chat-session.on', badge: left}
+      - {n: 3, box: '.v3-msg-actions button[aria-pressed=true]', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
