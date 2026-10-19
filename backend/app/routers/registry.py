@@ -206,7 +206,11 @@ def list_records(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    records = _visible_records(ws, viewer, console.console_list(ws.context, type, status))
+    try:
+        listed = console.console_list(ws.context, type, status)
+    except ValueError as exc:  # unknown ?type= — a caller mistake, not a 500
+        raise AppError("registry.bad_type", str(exc), status_code=422) from exc
+    records = _visible_records(ws, viewer, listed)
     return {"records": _with_system(ws, records)}
 
 

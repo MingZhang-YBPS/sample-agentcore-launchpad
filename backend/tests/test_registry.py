@@ -312,6 +312,31 @@ def test_registry_endpoint_returns_unavailable_envelope(client, monkeypatch):
     }
 
 
+def test_list_records_accepts_ga_type_names():
+    """`?type=` takes the platform (`AGENT_SKILLS`) or GA (`skill`) spelling alike."""
+    control = MagicMock()
+    control.list_registry_records.return_value = {"registryRecords": []}
+    for name in ("AGENT_SKILLS", "SKILL", "skill"):
+        reg.list_records(control, RID, name)
+        assert control.list_registry_records.call_args.kwargs["filters"] == [
+            {"name": "recordType", "values": ["SKILL"]}
+        ]
+
+
+def test_list_route_unknown_type_is_422(client, monkeypatch):
+    import app.services.registry_console as console
+
+    control = MagicMock()
+    monkeypatch.setattr(console, "registry_control_client", lambda _ws: control)
+    monkeypatch.setattr(console, "_registry_id", lambda _ws: RID)
+
+    response = client.get("/api/registry/records?type=gadget")
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "registry.bad_type"
+    control.list_registry_records.assert_not_called()
+
+
 # ---------- consumer view: ListDiscoverableRegistryRecords ----------
 
 _REGISTRY_ARN = f"arn:aws:agent-registry:us-west-2:111122223333:registry/{RID}"

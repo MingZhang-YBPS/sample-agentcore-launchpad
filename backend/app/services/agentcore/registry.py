@@ -593,7 +593,7 @@ def list_records(
         filters.append(
             {
                 "name": "recordType",
-                "values": [_PLATFORM_TO_AWS_TYPE[descriptor_type]],
+                "values": [ga_record_type(descriptor_type)],
             }
         )
     if status:
