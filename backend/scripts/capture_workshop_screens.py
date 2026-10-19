@@ -117,10 +117,20 @@ def _env_pw(account: str) -> str | None:
     return os.environ.get("LAUNCHPAD_WS_PASSWORD_" + account.upper().replace("-", "_"))
 
 
+def password_for(ctx: Ctx, account: str) -> str:
+    """The five stack accounts come from the stack; any other account a shot signs in
+    as (one the walk created, e.g. `developer-2`) from `LAUNCHPAD_WS_PASSWORD_<ACCOUNT>`."""
+    pw = ctx.passwords.get(account) or _env_pw(account)
+    if not pw:
+        raise SkipShot(f"no password for {account} (set LAUNCHPAD_WS_PASSWORD_"
+                       f"{account.upper().replace('-', '_')})")
+    return pw
+
+
 def api(ctx: Ctx, account: str = "admin") -> httpx.Client:
     client = httpx.Client(base_url=ctx.url, timeout=60)
     r = client.post("/api/auth/login",
-                    json={"username": account, "password": ctx.passwords[account]})
+                    json={"username": account, "password": password_for(ctx, account)})
     if r.status_code != 200:
         raise SystemExit(f"login as {account} failed: HTTP {r.status_code}")
     return client
@@ -271,11 +281,15 @@ def run_actions(page: Page, actions: list[dict[str, Any]], ctx: Ctx, lang: str) 
         elif verb == "eval":
             page.evaluate(expand(arg, ctx, lang))  # placeholders ({env:…}) expand here too
         elif verb == "save_value":
-            # [selector of an <input>, file path]: keep a value the page shows only once
-            # (a reviewer link) so a later step can use it; the file is written 0600
+            # [selector, file path]: keep a value the page shows only once (a reviewer link,
+            # a one-time password; an <input>'s value, otherwise the element's text) so a
+            # later step can use it; the file is written 0600
             sel, dest = arg
             out = Path(expand(dest, ctx, lang)).expanduser()
-            out.write_text(page.locator(expand(sel, ctx, lang)).first.input_value())
+            el = page.locator(expand(sel, ctx, lang)).first
+            is_field = el.evaluate(
+                "e => e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement")
+            out.write_text((el.input_value() if is_field else el.inner_text()).strip())
             out.chmod(0o600)
         elif verb == "expand_rail":
             # unfold every module group (what the reader sees after clicking each head)
@@ -322,7 +336,7 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
         account = shot.get("account", "admin")
         if account != "anon":
             r = context.request.post(f"{ctx.url}/api/auth/login", data={
-                "username": account, "password": ctx.passwords[account]})
+                "username": account, "password": password_for(ctx, account)})
             if r.status != 200:
                 raise RuntimeError(f"login as {account}: HTTP {r.status}")
         page = context.new_page()

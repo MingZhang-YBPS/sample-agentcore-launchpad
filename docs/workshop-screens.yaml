@@ -1634,6 +1634,117 @@ shots:
       - {n: 2, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: top}
 
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
+  - name: 90-organizer-users-create-open
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, Users: the Add user button; the built-in admin row
+    account: admin
+    path: /v3/users
+    wait: 'table.v3-table'
+    actions: [{sleep: 1200}]
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: {zh: 'main button:has-text("新增用户")', en: 'main button:has-text("Add user")'}, badge: left}
+
+  - name: 90-organizer-users-create-form
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, Add user dialog filled for developer-2 with project 零售客服 / Developer (NOT submitted)
+    account: admin
+    path: /v3/users
+    viewport: [1440, 1300]
+    wait: 'table.v3-table'
+    actions:
+      - {sleep: 1200}
+      - {click: {zh: 'main button:has-text("新增用户")', en: 'main button:has-text("Add user")'}}
+      - {wait: '[data-testid=v3-user-create]'}
+      - {fill: ['[data-testid=v3-user-create] input[name=username]', developer-2]}
+      - {fill: ['[data-testid=v3-user-create] input[name=email]', developer-2@example.com]}
+      - {click: {zh: '[data-testid=v3-user-projects] button:has-text("添加项目")', en: '[data-testid=v3-user-projects] button:has-text("Add project")'}}
+      - {select: ['[data-testid=v3-user-projects] select >> nth=0', 零售客服]}
+      - {select: ['[data-testid=v3-user-projects] select >> nth=1', {zh: 开发者, en: Developer}]}
+      - {sleep: 500}
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-user-create] input[name=username]', badge: left}
+      - {n: 2, box: '[data-testid=v3-user-create] input[name=email]', badge: right}
+      - {n: 3, box: '[data-testid=v3-user-create] select[name=role]', badge: left}
+      - {n: 4, box: '[data-testid=v3-user-create] select[name=expiry]', badge: right}
+      - {n: 5, box: '[data-testid=v3-user-create] input[name=password-choice] >> nth=0', badge: left}
+      - {n: 6, box: '[data-testid=v3-user-projects] select >> nth=0', badge: left}
+      - {n: 7, box: '[data-testid=v3-user-projects] select >> nth=1', badge: right}
+      - {n: 8, box: '[role=dialog] .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-create-password
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # CREATES developer-2 (side effect!) and saves its one-time password to LP_DEV2_PW_FILE (0600); masked in the image
+    account: admin
+    path: /v3/users
+    wait: 'table.v3-table'
+    actions:
+      - {sleep: 1200}
+      - {click: {zh: 'main button:has-text("新增用户")', en: 'main button:has-text("Add user")'}}
+      - {wait: '[data-testid=v3-user-create]'}
+      - {fill: ['[data-testid=v3-user-create] input[name=username]', developer-2]}
+      - {fill: ['[data-testid=v3-user-create] input[name=email]', developer-2@example.com]}
+      - {click: {zh: '[data-testid=v3-user-projects] button:has-text("添加项目")', en: '[data-testid=v3-user-projects] button:has-text("Add project")'}}
+      - {select: ['[data-testid=v3-user-projects] select >> nth=0', 零售客服]}
+      - {select: ['[data-testid=v3-user-projects] select >> nth=1', {zh: 开发者, en: Developer}]}
+      - {click: '[role=dialog] .v3-btn.primary'}
+      - {wait: '[data-testid=v3-one-time-password]'}
+      - {save_value: ['[data-testid=v3-one-time-password]', '{env:LP_DEV2_PW_FILE}']}
+      - {sleep: 600}
+    mask: ['[data-testid=v3-one-time-password]']
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-one-time-password]', badge: left}
+      - {n: 2, box: {zh: '[role=dialog] button:has-text("复制")', en: '[role=dialog] button:has-text("Copy")'}, badge: top}
+      - {n: 3, box: {zh: '[role=dialog] button:has-text("关闭")', en: '[role=dialog] button:has-text("Close")'}, badge: top}
+
+  - name: 90-organizer-users-list
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, Users: the new developer-2 row
+    account: admin
+    path: /v3/users
+    requires: [user:developer-2]
+    wait: 'table.v3-table'
+    actions: [{sleep: 1200}]
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: 'table.v3-table tbody tr:has-text("developer-2")', badge: left}
+
+  - name: 90-organizer-users-workspaces
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, developer-2 detail: Projects and roles card (Default inherits + 零售客服 Developer)
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    actions: [{sleep: 1200}]
+    clip: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^项目与角色"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Projects and roles"))'}
+    margin: 16
+    highlights:
+      - {n: 1, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^项目与角色")) tbody tr:has-text("零售客服")', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Projects and roles")) tbody tr:has-text("零售客服")'}, badge: left}
+      - {n: 2, box: {zh: 'main button:has-text("编辑项目与项目组")', en: 'main button:has-text("Edit projects and groups")'}, badge: left}
+
+  - name: 90-organizer-users-workspaces-dialog
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, developer-2: the Edit projects and groups dialog (NOT saved)
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    actions:
+      - {sleep: 1200}
+      - {click: {zh: 'main button:has-text("编辑项目与项目组")', en: 'main button:has-text("Edit projects and groups")'}}
+      - {wait: '[data-testid=v3-user-memberships]'}
+      - {sleep: 500}
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-user-memberships] [data-testid=v3-user-projects]', badge: left}
+      - {n: 2, box: '[role=dialog] .v3-btn.primary', badge: top}
+
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
     status: replace   # the page head gained 强制下线
