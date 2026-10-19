@@ -222,6 +222,44 @@ def test_reject_needs_a_reason(db):
     assert candidate.status == "rejected"
 
 
+def test_a_candidate_is_decided_once(db):
+    """Admit / reject / duplicate each refuse a candidate that already has a decision."""
+    agent = _agent(db)
+    cset = _criteria(db, agent)
+    parent = _golden(db, cset)
+    splits = golden_svc.splits_of(db, parent)
+    rejected = AdmissionCandidate(workspace_id=WS, agent_id=agent.id, source="feedback",
+                                  source_ref="d1", question="q1", answer="a1")
+    admitted = AdmissionCandidate(workspace_id=WS, agent_id=agent.id, source="review",
+                                  source_ref="d2", question="q2", answer="a2")
+    db.add_all([rejected, admitted])
+    db.commit()
+    admission.reject(db, rejected, actor="biz", note="not a real failure")
+    admission.admit(db, admitted, split_dataset=splits["regression"], expected_response="yes",
+                    expected_source="annotator", criteria_ids=["G1"], case_tier="known_bad",
+                    actor="biz")
+    db.commit()
+
+    def refused(call):
+        with pytest.raises(AppError) as exc:
+            call()
+        assert exc.value.code == "admission.decided"
+
+    # a rejected candidate never reaches the golden set, and its reason is not rewritten
+    refused(lambda: admission.admit(db, rejected, split_dataset=splits["regression"],
+                                    expected_response="x", expected_source="annotator",
+                                    criteria_ids=["G1"], case_tier="known_bad", actor="biz"))
+    refused(lambda: admission.reject(db, rejected, actor="biz", note="another reason"))
+    refused(lambda: admission.mark_duplicate(db, rejected, of="x", actor="biz"))
+    assert rejected.note == "not a real failure"
+    # an admitted candidate cannot be relabelled while its golden item stays behind
+    refused(lambda: admission.reject(db, admitted, actor="biz", note="changed my mind"))
+    refused(lambda: admission.mark_duplicate(db, admitted, of="x", actor="biz"))
+    assert admitted.status == "admitted"
+    counts = admission.queue(db, WS, agent_id=agent.id)["counts"]
+    assert counts["admitted"] == 1 and counts["rejected"] == 1
+
+
 # ── watch ─────────────────────────────────────────────────────────────────────
 
 

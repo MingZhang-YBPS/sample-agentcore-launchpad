@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 SOURCES = ("feedback", "issue", "insight_failure", "insight_intent", "review", "manual",
            "online")
 STATUSES = ("new", "annotating", "admitted", "rejected", "duplicate")
+# a candidate in one of these still awaits its single decision
+OPEN_STATUSES = ("new", "annotating")
 _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[^\w]+", re.UNICODE)
 # a space between CJK and anything else carries no meaning for a dedupe key
@@ -337,9 +339,7 @@ def admit(
     redact: bool = True,
 ) -> dict[str, Any]:
     """Admit one candidate into a dev or regression split, with a human expected answer."""
-    if candidate.status in ("admitted", "duplicate"):
-        raise AppError("admission.decided", "this candidate is already decided",
-                       status_code=409)
+    _require_undecided(candidate)
     if split_dataset.split == "holdout":
         raise AppError("golden.holdout_closed",
                        "the holdout split stays out of the development loop", status_code=409,
@@ -405,7 +405,17 @@ def admit(
     return added[0]
 
 
+def _require_undecided(candidate: AdmissionCandidate) -> None:
+    """A candidate is decided once. Admitting a rejected one would put a sample the owner
+    turned down into the golden set; rejecting an admitted one would leave its golden item
+    behind under a 'rejected' label; and re-rejecting would rewrite the recorded reason."""
+    if candidate.status not in OPEN_STATUSES:
+        raise AppError("admission.decided", "this candidate is already decided",
+                       status_code=409, detail={"status": candidate.status})
+
+
 def reject(db: Session, candidate: AdmissionCandidate, *, actor: str, note: str) -> None:
+    _require_undecided(candidate)
     if not note.strip():
         raise AppError("admission.reason_required", "say why this candidate is not admitted")
     candidate.status = "rejected"
@@ -418,6 +428,7 @@ def reject(db: Session, candidate: AdmissionCandidate, *, actor: str, note: str)
 def mark_duplicate(
     db: Session, candidate: AdmissionCandidate, *, of: str, actor: str
 ) -> None:
+    _require_undecided(candidate)
     candidate.status = "duplicate"
     candidate.duplicate_of = of[:160]
     candidate.decided_by = actor
