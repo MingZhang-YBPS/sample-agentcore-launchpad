@@ -25,6 +25,7 @@ import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, Kpi, LinkButton, Select, Spin, Table, Tag } from "../../ui";
 import { BandChart, LadderChart } from "./charts";
 import { anyRungCost, rungCostSteps } from "./rungCost";
+import { alertDetailText } from "../../../lib/alertDetail";
 
 const pct = (v: number | null | undefined, digits = 1) =>
   v === null || v === undefined ? "—" : `${(v * 100).toFixed(digits)}%`;
@@ -122,7 +123,7 @@ function WatchConfigCard({ view, agentId, onReload }: { view: WatchView; agentId
         <p className="v2-muted">
           {t("v2.dlc.watch.nextDue", { at: config.next_due_at?.slice(0, 16).replace("T", " ") ?? "—" })}
           {config.last_status ? ` · ${t(`v2.dlc.watch.lastStatus.${config.last_status}`, { defaultValue: config.last_status })}` : ""}
-          {config.last_detail ? ` — ${config.last_detail}` : ""}
+          {config.last_detail ? ` — ${alertDetailText(t, config.last_detail)}` : ""}
         </p>
       )}
       {mayEdit && (

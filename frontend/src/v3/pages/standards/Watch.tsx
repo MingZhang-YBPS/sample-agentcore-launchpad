@@ -24,6 +24,7 @@ import { Btn, Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "
 import { BandChart, LadderChart } from "./charts";
 import { CompareCost } from "./CompareCost";
 import { dlcText, rate, stamp } from "./common";
+import { alertDetailText } from "../../../lib/alertDetail";
 
 function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: string; onReload: () => void }) {
   const { t } = useTranslation();
@@ -93,7 +94,7 @@ function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: st
         <p className="v3-std-muted" style={{ margin: "10px 0 0" }}>
           {t("v2.dlc.watch.nextDue", { at: stamp(config.next_due_at) })}
           {config.last_status ? ` · ${t(`v2.dlc.watch.lastStatus.${config.last_status}`, { defaultValue: config.last_status })}` : ""}
-          {config.last_detail ? ` — ${config.last_detail}` : ""}
+          {config.last_detail ? ` — ${alertDetailText(t, config.last_detail)}` : ""}
         </p>
       )}
       {mayEdit && (

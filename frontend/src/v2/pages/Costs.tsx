@@ -29,6 +29,7 @@ import {
   Tag,
   type TagTone,
 } from "../ui";
+import { alertDetailText } from "../../lib/alertDetail";
 
 /**
  * T28/T29 — where the money went, and what the platform watches.
@@ -373,7 +374,7 @@ function AlertsView() {
       render: (row) => (
         <>
           <span>{shown(row.kind, row.last_value)}</span>
-          {row.last_detail && <span className="sub">{row.last_detail}</span>}
+          {row.last_detail && <span className="sub">{alertDetailText(t, row.last_detail)}</span>}
         </>
       ),
     },

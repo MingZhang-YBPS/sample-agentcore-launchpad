@@ -16165,5 +16165,28 @@
       "approved": "已作为下一轮发送——{{tool}} 可以调用一次。",
       "declined": "{{tool}} 不会调用。请告诉智能体改做什么。"
     }
+  },
+  "alertDetail": {
+    "p95": "{{n}} 条链路的 P95",
+    "errors": "{{n}} 条链路中 {{errors}} 条失败",
+    "noTraffic": "这个时间窗口里没有流量",
+    "noLatency": "这个时间窗口里没有延迟分位数",
+    "badWindow": "窗口“{{window}}”不是可观测的时间范围",
+    "telemetryFailed": "读取遥测失败：{{error}}",
+    "onlineFailed": "读取在线评估失败：{{error}}",
+    "noScores": "最近 24 小时没有在线评估分数",
+    "scores": "{{sessions}} 个会话的 {{scores}} 个分数",
+    "spendFailed": "估算花费失败：{{error}}",
+    "billedFailed": "读取账单花费失败：{{error}}",
+    "workspaceFailed": "读取工作区 {{workspace}} 失败：{{error}}",
+    "estimate": "本月至今按价格表估算",
+    "estimateParts": "本月至今按价格表估算（{{parts}}）",
+    "billed": "本月至今账单花费（Cost Explorer，launchpad:project）",
+    "billedParts": "本月至今账单花费（Cost Explorer，launchpad:project）（{{parts}}）",
+    "unknownKind": "未知类型“{{kind}}”",
+    "webhook": "Webhook {{outcome}}",
+    "watchRun": "运行 {{id}}",
+    "projectArchived": "项目已归档",
+    "overCeiling": "估算 ${{estimate}} 超过设定的上限 ${{ceiling}}"
   }
 }

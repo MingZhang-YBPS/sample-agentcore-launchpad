@@ -14,6 +14,7 @@ import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { BillingView } from "./cost-tags/BillingView";
+import { alertDetailText } from "../../lib/alertDetail";
 
 /* Spend is labelled an estimate everywhere, and models the price map cannot value
    are named rather than silently counted as free — the same rules as V2. */
@@ -93,7 +94,7 @@ function RuleCard({ rule, onToggle, onRemove }: { rule: AlertRuleInfo; onToggle?
         <small>{rule.last_checked_at ? t("v3.costs.checked", { when: ago(rule.last_checked_at) }) : t("v3.costs.neverChecked")}</small>
       </div>
       <Gauge rule={rule} />
-      <div className="detail">{rule.last_detail ?? ""}</div>
+      <div className="detail">{alertDetailText(t, rule.last_detail)}</div>
     </Panel>
   );
 }

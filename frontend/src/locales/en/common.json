@@ -16165,5 +16165,28 @@
       "approved": "Sent as the next turn — {{tool}} may run once.",
       "declined": "{{tool}} does not run. Tell the agent what to do instead."
     }
+  },
+  "alertDetail": {
+    "p95": "p95 over {{n}} traces",
+    "errors": "{{errors}}/{{n}} traces failed",
+    "noTraffic": "no traffic in this window",
+    "noLatency": "no latency percentile in this window",
+    "badWindow": "window '{{window}}' is not an observability range",
+    "telemetryFailed": "could not read telemetry: {{error}}",
+    "onlineFailed": "could not read online evaluation: {{error}}",
+    "noScores": "no online evaluation scores in the last 24 h",
+    "scores": "{{scores}} score(s) over {{sessions}} session(s)",
+    "spendFailed": "could not estimate spend: {{error}}",
+    "billedFailed": "could not read billed spend: {{error}}",
+    "workspaceFailed": "could not read workspace {{workspace}}: {{error}}",
+    "estimate": "month-to-date estimate from the price map",
+    "estimateParts": "month-to-date estimate from the price map ({{parts}})",
+    "billed": "month-to-date billed cost (Cost Explorer, launchpad:project)",
+    "billedParts": "month-to-date billed cost (Cost Explorer, launchpad:project) ({{parts}})",
+    "unknownKind": "unknown kind '{{kind}}'",
+    "webhook": "webhook {{outcome}}",
+    "watchRun": "run {{id}}",
+    "projectArchived": "project archived",
+    "overCeiling": "estimated ${{estimate}} exceeds the configured ceiling ${{ceiling}}"
   }
 }
