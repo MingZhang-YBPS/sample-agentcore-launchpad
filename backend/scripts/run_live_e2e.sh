@@ -6,6 +6,7 @@
 # printed at the end and the exit code is non-zero when any script failed.
 #
 #   export LAUNCHPAD_E2E_USERNAME=admin LAUNCHPAD_E2E_PASSWORD=...
+#   export LAUNCHPAD_E2E_MEMBER_USERNAME=developer LAUNCHPAD_E2E_MEMBER_PASSWORD=...  # 403 checks
 #   export AWS_REGION=us-west-2            # the workspace region (AWS readbacks)
 #   backend/scripts/run_live_e2e.sh --base https://<console> [--log-dir DIR]
 #       [--only name,name] [--skip name,name] [--list]
@@ -58,6 +59,9 @@ harness|--base @BASE@
 zip_runtime|--base @BASE@
 registry|--base @BASE@
 policy|--base @BASE@
+platform_structure|--base @BASE@
+platform_ops|--base @BASE@
+dlc_records_and_tools|--base @BASE@
 gateway_tool|--base @BASE@ --keep --long-term-memory
 observability|--base @BASE@ --agent $HR_AGENT
 traces|--base @BASE@ --agent $HR_AGENT
@@ -68,6 +72,7 @@ online_eval|--base @BASE@
 eval_extended|--base @BASE@
 experiment|--base @BASE@
 golden_path|--base @BASE@
+projects|--base @BASE@
 claude_sdk|--base @BASE@ --skip-local
 agent_dlc|--base @BASE@
 roadmap_p0|--base @BASE@

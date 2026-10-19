@@ -30,6 +30,7 @@ Run:  cd backend && uv run python scripts/e2e_experiment.py --base URL [--keep]
 
 import argparse
 import json
+import os
 import secrets
 import sys
 import time
@@ -150,7 +151,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--base", default="http://localhost:8000")
-    parser.add_argument("--region", default="us-west-2",
+    parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"),
                         help="region of the AWS readback (the workspace region)")
     parser.add_argument("--keep", action="store_true",
                         help="on failure, leave the canary/experiment for a resume")
