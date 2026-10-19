@@ -9,6 +9,7 @@ shared across threads.
 """
 
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 import boto3
@@ -27,7 +28,14 @@ SessionKey = tuple[str, str, str | None, str | None]
 
 _SESSIONS: dict[SessionKey, boto3.Session] = {}
 _CLIENTS: dict[tuple[SessionKey, str, str | None], Any] = {}
+_LAST_USED: dict[tuple[SessionKey, str, str | None], float] = {}
 _LOCK = threading.Lock()
+
+# A NAT gateway forgets an idle TCP flow after 350 s without resetting it, so the
+# next request on a pooled connection hangs for botocore's full read timeout (60 s)
+# before the retry opens a new one. A cached client left unused for longer than this
+# is rebuilt instead: a new client starts with an empty connection pool.
+IDLE_RECYCLE_S = 300.0
 
 # The hub's own credentials are themselves an assumed role, and role chaining caps
 # a chained session at one hour regardless of the spoke role's MaxSessionDuration
@@ -233,10 +241,13 @@ def client(
     with _LOCK:
         if cfg and cache_token is None:
             return session.client(service, **cfg)
-        cached = _CLIENTS.get((key, service, cache_token))
-        if cached is None:
+        slot = (key, service, cache_token)
+        now = time.monotonic()
+        cached = _CLIENTS.get(slot)
+        if cached is None or now - _LAST_USED.get(slot, now) > IDLE_RECYCLE_S:
             cached = session.client(service, **cfg)
-            _CLIENTS[(key, service, cache_token)] = cached
+            _CLIENTS[slot] = cached
+        _LAST_USED[slot] = now
         return cached
 
 
@@ -291,3 +302,4 @@ def reset_cache() -> None:
     with _LOCK:
         _SESSIONS.clear()
         _CLIENTS.clear()
+        _LAST_USED.clear()

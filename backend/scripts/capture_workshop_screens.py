@@ -128,7 +128,7 @@ def password_for(ctx: Ctx, account: str) -> str:
 
 
 def api(ctx: Ctx, account: str = "admin") -> httpx.Client:
-    client = httpx.Client(base_url=ctx.url, timeout=60)
+    client = httpx.Client(base_url=ctx.url, timeout=150)
     r = client.post("/api/auth/login",
                     json={"username": account, "password": password_for(ctx, account)})
     if r.status_code != 200:
@@ -501,7 +501,13 @@ def main() -> int:
             for lang in args.lang or shot.get("langs", list(LANGS)):
                 started = time.monotonic()
                 try:
-                    path = capture(pw, shot, lang, ctx, out, args.probe)
+                    try:
+                        path = capture(pw, shot, lang, ctx, out, args.probe)
+                    except SkipShot:
+                        raise
+                    except Exception as first:  # noqa: BLE001 - one retry for a slow page
+                        print(f"RETRY  {shot['name']:<40} {lang} {str(first).splitlines()[0][:120]}")
+                        path = capture(pw, shot, lang, ctx, out, args.probe)
                     tally["OK"] += 1
                     print(f"OK     {shot['name']:<40} {lang} {path.name} "
                           f"{time.monotonic() - started:.0f}s")

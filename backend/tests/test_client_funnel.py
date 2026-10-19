@@ -146,6 +146,28 @@ def test_clients_are_cached_per_service_unless_cfg_makes_them_unique(monkeypatch
     aws_clients.reset_cache()
 
 
+def test_a_client_idle_past_the_nat_timeout_is_rebuilt(monkeypatch):
+    """A pooled connection a NAT gateway dropped hangs a full read timeout, so a
+    cached client unused for longer than IDLE_RECYCLE_S comes back fresh — and one
+    in steady use keeps its connection pool."""
+    aws_clients.reset_cache()
+    monkeypatch.setattr(aws_clients, "get_session", lambda *a, **k: _StubSession())
+    clock = [1000.0]
+    monkeypatch.setattr(aws_clients.time, "monotonic", lambda: clock[0])
+    ctx = ws.WorkspaceContext(account_id="111122223333", region="us-west-2")
+
+    first = ctx.client("agent-registry-control")
+    clock[0] += aws_clients.IDLE_RECYCLE_S - 1
+    assert ctx.client("agent-registry-control") is first  # within the window
+    clock[0] += aws_clients.IDLE_RECYCLE_S - 1
+    assert ctx.client("agent-registry-control") is first  # each use restarts it
+    clock[0] += aws_clients.IDLE_RECYCLE_S + 1
+    rebuilt = ctx.client("agent-registry-control")
+    assert rebuilt is not first
+    assert ctx.client("agent-registry-control") is rebuilt
+    aws_clients.reset_cache()
+
+
 class _StubSession:
     def client(self, service_name, **kwargs):
         return object()
