@@ -1490,6 +1490,47 @@ shots:
       - {n: 3, box: 'main .v3-iss-transcript + div', badge: right}
       - {n: 4, box: 'main .v3-iss-fixes', badge: right}
 
+  - name: 70-feedback-admission-queue
+    chapter: 20-flywheel/60-feedback
+    status: replace   # biz-owner, Standards → Admission after Collect: three candidates for the same question (issue / feedback / review)
+    account: biz-owner
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=admission
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table tbody tr'
+    actions: [{sleep: 2000}]
+    highlights:
+      - {n: 1, box: {zh: 'main button:has-text("收集新候选")', en: 'main button:has-text("Collect")'}, badge: left}
+      - {n: 2, box: 'main .v3-grid.c4', badge: left}
+      - {n: 3, box: 'main .v3-filters >> nth=-1', badge: left}
+      - {n: 4, box: 'main .v3-table', badge: left}
+
+  - name: 70-feedback-admit-modal
+    chapter: 20-flywheel/60-feedback
+    status: replace   # biz-owner, Admit dialog on the review candidate, expected answer pasted, S1 unticked, NOT admitted
+    account: biz-owner
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=admission
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1200]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table tbody tr'
+    actions:
+      - {sleep: 1500}
+      - {click: {zh: 'main tr:has(td:text-is("review")) button:has-text("准入")', en: 'main tr:has(td:text-is("review")) button:has-text("Admit")'}}
+      - {wait: '.v3-modal textarea'}
+      - {sleep: 1500}
+      - {fill: ['.v3-modal textarea', '延误 2 小时不属于非自愿退票（A-08 要求因航空公司原因航班取消、延误 3 小时及以上或时刻变更），按自愿退票处理：轻享经济舱票面价不退，只退税费 ¥80（机场建设费 ¥50 + 燃油附加费 ¥30），7 个工作日内原路退回，独角兽旅行不收服务费（A-03、A-06、A-11）。这次用户没有提供票面价，不能替用户假定票面是 ¥760；延误达到 3 小时可全额退票（票面价 + 税费），金额以订单票面价为准。']}
+      - {eval: "() => { for (const l of document.querySelectorAll('.v3-modal .v3-std-keys label')) { const c = l.querySelector('input'); const want = l.textContent.trim() !== 'S1'; if (c.checked !== want) c.click(); } }"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: '.v3-modal .v3-grid.c2', badge: left}
+      - {n: 2, box: '.v3-modal .v3-grid.c2 + *', badge: left}
+      - {n: 3, box: '.v3-modal label.v3-field:has(textarea)', badge: left}
+      - {n: 4, box: '.v3-modal .v3-grid.c3 label.v3-field >> nth=0', badge: left}
+      - {n: 5, box: '.v3-modal .v3-grid.c3 label.v3-field >> nth=1', badge: left}
+      - {n: 6, box: '.v3-modal button.v3-btn:not(.ghost) >> nth=-1', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
