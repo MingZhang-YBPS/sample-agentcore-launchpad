@@ -1564,6 +1564,22 @@ shots:
       - {n: 2, box: 'main .v3-grid.c3:has(> .v3-panel) >> nth=-1', badge: left}
       - {n: 3, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^逐条判据"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Per criterion"))'}, badge: left}
 
+  - name: 70-feedback-rec-failed
+    chapter: 20-flywheel/60-feedback
+    status: replace   # developer, eval task detail of the §4 regression run (LP_REC_RUN): two FAILED system-prompt recommendations (prompt attack protection)
+    account: developer
+    path: '/v3/tasks?view=detail&id={env:LP_REC_RUN}'
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-rec-system_prompt]'
+    clip: ['[data-testid=v2-rec-system_prompt]']
+    actions:
+      - {sleep: 2000}
+      - {eval: "() => document.querySelector('[data-testid=v2-rec-system_prompt]').scrollIntoView({block: 'start'})"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: '[data-testid=v2-rec-system_prompt] >> nth=0', badge: left}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
