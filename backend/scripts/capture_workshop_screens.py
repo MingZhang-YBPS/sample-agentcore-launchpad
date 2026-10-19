@@ -270,6 +270,13 @@ def run_actions(page: Page, actions: list[dict[str, Any]], ctx: Ctx, lang: str) 
             page.wait_for_timeout(int(arg))
         elif verb == "eval":
             page.evaluate(expand(arg, ctx, lang))  # placeholders ({env:…}) expand here too
+        elif verb == "save_value":
+            # [selector of an <input>, file path]: keep a value the page shows only once
+            # (a reviewer link) so a later step can use it; the file is written 0600
+            sel, dest = arg
+            out = Path(expand(dest, ctx, lang)).expanduser()
+            out.write_text(page.locator(expand(sel, ctx, lang)).first.input_value())
+            out.chmod(0o600)
         elif verb == "expand_rail":
             # unfold every module group (what the reader sees after clicking each head)
             heads = page.locator('[data-testid^="v3-rail-group-"]')
