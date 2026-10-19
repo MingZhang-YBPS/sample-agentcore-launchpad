@@ -1312,6 +1312,26 @@ shots:
       - {n: 1, box: 'main .v3-grid.c4', badge: left}
       - {n: 2, box: {zh: 'main button:has-text("立即重新检查")', en: 'main button:has-text("Re-check now")'}, badge: left}
       - {n: 3, box: 'main .v3-cost-rule >> nth=0', badge: left}
+
+  - name: 60-observe-intents
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, Intent view 7 days, lab-service-assistant, AI-grouped
+    account: biz-owner
+    path: /v3/intents
+    viewport: [1440, 1250]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 1500}
+      - {eval: "() => { const s = document.querySelector('main select.v3-select'); const o = [...s.options].find(x => x.textContent.trim() === 'lab-service-assistant'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, o.value); s.dispatchEvent(new Event('change', {bubbles: true})); }"}
+      - {wait: 'main .v3-ins-intent >> nth=1'}
+      - {sleep: 1500}
+    highlights:
+      - {n: 1, box: 'main select.v3-select', badge: top}
+      - {n: 2, box: 'main .v3-ins-nowrap + button', badge: top}
+      - {n: 3, box: 'main .v3-grid.c4', badge: left}
+      - {n: 4, box: 'main .v3-panel:has(.v3-ins-note)', badge: left}
+      - {n: 5, box: 'main .v3-panel:has(.v3-ins-intent)', badge: left}
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
