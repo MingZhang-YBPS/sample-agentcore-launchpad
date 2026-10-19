@@ -441,3 +441,36 @@ def test_a_still_deleting_harness_defers_instead_of_refusing_the_delete(db, monk
         harness_method.delete_agent_resources(agent, ws)
     assert exc.value.code == "agent.teardown_pending"
     assert "automatically" in exc.value.message  # it says who finishes the job
+
+
+@pytest.mark.parametrize("module", ["zip_runtime", "container", "byoc"])
+def test_a_runtime_still_holding_deleting_endpoints_defers_like_a_harness(
+        db, monkeypatch, module):
+    """A gated runtime agent whose live/candidate endpoints outlive the delete wait
+    gets ConflictException from DeleteAgentRuntime: that must defer to the sweep
+    (teardown_pending), not surface as a 409 the operator can only retry by hand."""
+    import importlib
+
+    from app.core.errors import AppError
+    from app.dlc import releases as release_svc
+
+    method = importlib.import_module(f"app.deployer.{module}")
+    agent = _agent(db)
+    agent.method = {"zip_runtime": "zip_runtime"}.get(module, module)
+    db.commit()
+
+    class _Client:
+        class exceptions:  # noqa: N801 - mirrors botocore's shape
+            ResourceNotFoundException = type("ResourceNotFoundException", (Exception,), {})
+            ConflictException = type("ConflictException", (Exception,), {})
+
+    client = _Client()
+    monkeypatch.setattr(method, "control_client", lambda ws: client)
+    monkeypatch.setattr(release_svc, "delete_endpoints", lambda a, c, **kw: [])
+    monkeypatch.setattr("app.services.agentcore.runtime.delete_runtime",
+                        lambda c, rid: (_ for _ in ()).throw(
+                            _Client.exceptions.ConflictException("has endpoints")))
+    ws = SimpleNamespace(resources={}, region="us-east-1")
+    with pytest.raises(AppError) as exc:
+        method.delete_agent_resources(agent, ws)
+    assert exc.value.code == "agent.teardown_pending"

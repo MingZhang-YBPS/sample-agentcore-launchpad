@@ -886,6 +886,32 @@ def _endpoint_gone(agent: Agent, control: Any, name: str) -> bool:
     return endpoint_status(agent, control, name) is None
 
 
+def delete_runtime_or_defer(agent: Any, client: Any) -> None:
+    """Delete ``agent``'s AgentCore Runtime after its named endpoints were asked to go.
+
+    A gated agent's ``live`` / ``candidate`` endpoints can stay DELETING past
+    `delete_endpoints`' wait, and AgentCore answers ``DeleteAgentRuntime`` with a
+    ConflictException until they are gone. Like the harness path, that is reported as
+    ``AppError("agent.teardown_pending")``: the route marks the row deleted and
+    `dlc.scheduler.sweep_deleted_resources` finishes the AWS delete, instead of the
+    console answering 409 to an operator who can only retry by hand.
+    """
+    from app.core.errors import AppError
+    from app.services.agentcore import runtime as rt
+
+    try:
+        rt.delete_runtime(client, agent.resource_id)
+    except client.exceptions.ResourceNotFoundException:
+        pass
+    except client.exceptions.ConflictException as exc:
+        raise AppError(
+            "agent.teardown_pending",
+            "the runtime endpoints are still being deleted on AWS; the agent is removed "
+            "from the console and the runtime is deleted automatically once AWS lets go",
+            {"resource_id": agent.resource_id},
+        ) from exc
+
+
 def delete_endpoints(
     agent: Agent, control: Any, *, log: Any = None, timeout_s: float = ENDPOINT_DELETE_TIMEOUT_S,
 ) -> list[dict[str, Any]]:

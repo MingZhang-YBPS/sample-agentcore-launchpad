@@ -791,6 +791,7 @@ def delete_agent_resources(
 
     Everything after the runtime delete is best-effort: an orphan S3 object or
     ECR tag must never block deleting the agent."""
+    pending: AppError | None = None
     is_mcp = (agent.spec or {}).get("protocol") == "mcp"
     if is_mcp:
         # the Gateway target first: it points at the runtime about to go
@@ -799,13 +800,14 @@ def delete_agent_resources(
         client = control_client(workspace)
         # a gated agent serves through named endpoints; AgentCore refuses to delete a
         # runtime that still has them (Agent-DLC §6)
-        from app.dlc.releases import delete_endpoints
+        from app.dlc.releases import delete_endpoints, delete_runtime_or_defer
 
         delete_endpoints(agent, client)
         try:
-            rt.delete_runtime(client, agent.resource_id)
-        except client.exceptions.ResourceNotFoundException:
-            pass
+            delete_runtime_or_defer(agent, client)
+        except AppError as exc:
+            # the S3 / ECR cleanup below is ours either way; the sweep finishes the runtime
+            pending = exc
     if is_mcp:
         mcp_servers.release_identity(
             workspace, agent, lambda msg: logger.warning("agent %s: %s", agent.id, msg)
@@ -823,6 +825,8 @@ def delete_agent_resources(
         # or on an isolated project's own (and the shared one for builds before it)
         for repo in project_storage.ecr_repos(workspace, getattr(agent, "project_id", None)):
             _delete_image_tags(agent, repo, workspace, ecr_client)
+    if pending is not None:
+        raise pending
 
 
 def _delete_image_tags(agent: Agent, repo: str, workspace: WorkspaceContext,

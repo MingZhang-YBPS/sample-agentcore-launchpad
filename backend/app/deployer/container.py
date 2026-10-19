@@ -368,13 +368,10 @@ def delete_agent_resources(
     client = control_client(workspace)
     # a gated agent serves through named endpoints; AgentCore refuses to delete a
     # runtime that still has them (Agent-DLC §6)
-    from app.dlc.releases import delete_endpoints
+    from app.dlc.releases import delete_endpoints, delete_runtime_or_defer
 
     delete_endpoints(agent, client)
-    try:
-        rt.delete_runtime(client, agent.resource_id)
-    except client.exceptions.ResourceNotFoundException:
-        pass
+    delete_runtime_or_defer(agent, client)
     # With per-agent roles the whole role goes away (routers/agents.py), which takes
     # its inline policies with it. This cleanup is only still needed for the
     # shared-role fallback, where a stale launchpad-fs-<agent> policy would otherwise
