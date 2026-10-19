@@ -1456,9 +1456,9 @@ shots:
 
   - name: 70-feedback-review-page
     chapter: 20-flywheel/60-feedback
-    status: replace   # anon (sme), review page from the reviewer link (LP_REVIEW_PATH = /r/<token>, never logged); Wrong + correction filled, NOT submitted
+    status: replace   # anon (sme), review page from the reviewer link (LP_REVIEW_TOKEN = the link's token, never logged); Wrong + correction filled, NOT submitted
     account: anon
-    path: '{env:LP_REVIEW_PATH}'
+    path: '/r/{env:LP_REVIEW_TOKEN}'
     viewport: [1280, 1000]
     wait: '[data-testid=review-card]'
     clip: ['.share-head', '.review-intro', '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0']
