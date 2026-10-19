@@ -1745,6 +1745,150 @@ shots:
       - {n: 1, box: '[data-testid=v3-user-memberships] [data-testid=v3-user-projects]', badge: left}
       - {n: 2, box: '[role=dialog] .v3-btn.primary', badge: top}
 
+  - name: 90-organizer-users-register
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # anon, login card Register tab filled for developer-3 (NOT submitted)
+    account: anon
+    path: /v3
+    wait: '[data-testid=auth-tabs]'
+    actions:
+      - {click: '[data-testid=auth-tab-register]'}
+      - {fill: ['#reg-username', developer-3]}
+      - {fill: ['#reg-email', developer-3@example.com]}
+      - {sleep: 400}
+    clip: .v3-auth-card
+    margin: 40
+    highlights:
+      - {n: 1, box: '[data-testid=auth-tab-register]', badge: left}
+      - {n: 2, box: '#reg-username', badge: left}
+      - {n: 3, box: '.v3-auth-card form button[type=submit]', badge: left}
+
+  - name: 90-organizer-users-approve
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, Users: the Approve dialog for a pending developer-3 (registered by the walk; NOT confirmed)
+    account: admin
+    path: /v3/users
+    requires: ['user:developer-3']
+    wait: 'div.v3-alert'
+    actions:
+      - {click: {zh: 'tr:has-text("developer-3") button:has-text("通过")', en: 'tr:has-text("developer-3") button:has-text("Approve")'}}
+      - {wait: '[data-testid=v3-user-approve]'}
+      - {sleep: 500}
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-user-approve] [data-testid=v3-user-projects]', badge: left}
+      - {n: 2, box: '[role=dialog] .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-denied
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # developer-2 (password from LAUNCHPAD_WS_PASSWORD_DEVELOPER_2) opens Users: admin required
+    account: developer-2
+    path: /v3/users
+    wait: '.v3-main'
+    actions: [{sleep: 1500}]
+    highlights:
+      - {n: 1, box: 'header.v3-top .v3-account', badge: left}
+      - {n: 2, box: '.v3-main .v3-empty, .v3-main [role=alert], .v3-main .v3-alert', badge: left}
+
+  - name: 90-organizer-users-reset
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, developer-2 detail: the Reset password confirm (NOT confirmed)
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    actions:
+      - {click: {zh: '.v3-head-end button:has-text("重置密码")', en: '.v3-head-end button:has-text("Reset password")'}}
+      - {wait: '.v3-modal'}
+      - {sleep: 400}
+    clip: '.v3-modal'
+    margin: 24
+    highlights:
+      - {n: 1, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-newpw
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # RESETS developer-2's password (side effect!) and saves the new one to LP_DEV2_PW_FILE; masked
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    actions:
+      - {click: {zh: '.v3-head-end button:has-text("重置密码")', en: '.v3-head-end button:has-text("Reset password")'}}
+      - {wait: '.v3-modal'}
+      - {click: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary'}
+      - {wait: '[data-testid=v3-one-time-password]'}
+      - {save_value: ['[data-testid=v3-one-time-password]', '{env:LP_DEV2_PW_FILE}']}
+      - {sleep: 500}
+    mask: ['[data-testid=v3-one-time-password]']
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-one-time-password]', badge: left}
+      - {n: 2, box: {zh: '[role=dialog] button:has-text("复制")', en: '[role=dialog] button:has-text("Copy")'}, badge: top}
+      - {n: 3, box: {zh: '[role=dialog] button:has-text("关闭")', en: '[role=dialog] button:has-text("Close")'}, badge: top}
+
+  - name: 90-organizer-users-admin-key
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, top bar: the Change password key icon
+    account: admin
+    path: /v3
+    wait: '[data-testid=v3-shell]'
+    clip: header.v3-top
+    margin: 6
+    highlights:
+      - {n: 1, box: {zh: 'header.v3-top button[aria-label="修改密码"]', en: 'header.v3-top button[aria-label="Change password"]'}, badge: left}
+
+  - name: 90-organizer-users-admin-password
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin: the Change password dialog, empty (NOT submitted)
+    account: admin
+    path: /v3
+    wait: '[data-testid=v3-shell]'
+    actions:
+      - {click: {zh: 'header.v3-top button[aria-label="修改密码"]', en: 'header.v3-top button[aria-label="Change password"]'}}
+      - {wait: '[data-testid=password-current]'}
+      - {sleep: 400}
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=password-current]', badge: left}
+      - {n: 2, box: '[data-testid=password-next]', badge: left}
+      - {n: 3, box: '[data-testid=password-confirm]', badge: left}
+      - {n: 4, box: '[role=dialog] .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-builtin
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, the built-in admin's detail page
+    account: admin
+    path: /v3/users?view=detail&user=admin
+    wait: '.v3-main .v3-alert'
+    actions: [{sleep: 1000}]
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: {zh: '.v3-head-end button:has-text("修改密码")', en: '.v3-head-end button:has-text("Change password")'}, badge: left}
+      - {n: 2, box: '.v3-main .v3-alert', badge: left}
+
+  - name: 90-organizer-architecture
+    chapter: 90-appendix/10-organizer-deploy
+    manual: architecture diagram (not a console page); must be redrawn for the private-network template (NAT, two private subnets, VPC endpoints, S3 Files, CloudFront VPC origin)
+  - name: 90-organizer-upgrade-outputs
+    chapter: 90-appendix/10-organizer-deploy
+    manual: CloudFormation console, stack Outputs tab (SessionManagerUrl row), secrets masked
+  - name: 90-organizer-upgrade-terminal
+    chapter: 90-appendix/10-organizer-deploy
+    manual: Session Manager browser terminal (whoami → ssm-user)
+  - name: 90-organizer-upgrade-create
+    chapter: 90-appendix/10-organizer-deploy
+    manual: Session Manager terminal, cat > /tmp/lp-upgrade.sh
+  - name: 90-organizer-upgrade-run
+    chapter: 90-appendix/10-organizer-deploy
+    manual: Session Manager terminal, the one-line upgrade command running
+  - name: 90-organizer-upgrade-health
+    chapter: 90-appendix/10-organizer-deploy
+    manual: Session Manager terminal, build done and health check ok
+
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
     status: replace   # the page head gained 强制下线
