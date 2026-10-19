@@ -1475,6 +1475,21 @@ shots:
       - {n: 3, box: '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> textarea', badge: left}
       - {n: 4, box: '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> [data-testid=review-submit]', badge: right}
 
+  - name: 70-feedback-issue-correction
+    chapter: 20-flywheel/60-feedback
+    status: replace   # biz-owner, Issue box with the thumbs-down issue open; the reviewer's correction merged into it (LP_FB_ISSUE = issue id)
+    account: biz-owner
+    path: '/v3/issues?issue={env:LP_FB_ISSUE}'
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-iss-transcript'
+    actions: [{sleep: 2000}]
+    highlights:
+      - {n: 1, box: 'main .v3-iss-item.on', badge: left}
+      - {n: 2, box: 'main .v3-iss-turn.flagged .who', badge: right}
+      - {n: 3, box: 'main .v3-iss-transcript + div', badge: right}
+      - {n: 4, box: 'main .v3-iss-fixes', badge: right}
+
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-detail
     chapter: 90-appendix/10-organizer-deploy
