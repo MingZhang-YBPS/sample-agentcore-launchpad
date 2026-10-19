@@ -55,6 +55,9 @@ export function DatasetsTab() {
       setDeleting(null);
       list.reload();
     } catch (err) {
+      // close the confirm: the callout above it says why (e.g. a golden set is managed
+      // on its own page) — left open, the modal hid the reason and looked unresponsive
+      setDeleting(null);
       failed.fail(err);
     } finally {
       setBusy(false);
