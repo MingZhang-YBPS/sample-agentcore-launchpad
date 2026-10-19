@@ -94,7 +94,8 @@ def test_manifest_is_well_formed():
         assert shot["status"] in {"keep", "replace", "new"}, shot["name"]
         if shot.get("manual"):
             continue
-        assert shot["account"] in accounts, shot["name"]
+        # an account the walk itself created signs in from LAUNCHPAD_WS_PASSWORD_<ACCOUNT>
+        assert shot["account"] in accounts or shot.get("walk_account"), shot["name"]
         # a path is one string, or one per language ({zh: ..., en: ...})
         paths = shot["path"].values() if isinstance(shot["path"], dict) else [shot["path"]]
         assert all(p.startswith("/") for p in paths), shot["name"]
