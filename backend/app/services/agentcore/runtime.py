@@ -425,19 +425,17 @@ def wait_endpoint_ready(
         sleeper(interval_s)
 
 
-def flatten_sse_text(raw: str, *, on_usage: Any = None) -> str | None:
+def flatten_sse_text(raw: str) -> str | None:
     """Join the text deltas of an SSE event stream, or None if raw isn't SSE.
 
     Supports both converted-Harness event envelopes and Launchpad's native
-    runtime events. ``on_usage`` as on ``_runtime_payload_events``.
+    runtime events.
     """
     if not raw.lstrip().startswith("data:"):
         return None
     parts = [
         event["data"]["text"]
-        for event in _normalized_runtime_events(
-            _sse_payloads(raw.splitlines()), on_usage=on_usage,
-        )
+        for event in _normalized_runtime_events(_sse_payloads(raw.splitlines()))
         if event["event"] == "delta"
     ]
     return "".join(parts) or None
@@ -519,29 +517,10 @@ def _safe_auth_url(value: Any) -> str | None:
     return None
 
 
-def report_usage(on_usage: Any, usage: Any, kind: str = "call") -> None:
-    """Hand a runtime-reported token usage to the caller's meter. ``kind`` is
-    ``"call"`` for one model call (summed per turn) or ``"turn"`` for a whole-turn
-    aggregate. A meter must never fail the invocation, so nothing escapes."""
-    if on_usage is None or not isinstance(usage, dict):
-        return
-    try:
-        on_usage(usage, kind)
-    except Exception:  # noqa: BLE001 — metering is best effort by contract
-        pass
-
-
-def _runtime_payload_events(
-    payload: Any, on_usage: Any = None,
-) -> Iterator[dict[str, Any]]:
+def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     """Normalize one runtime payload to Chat's tool/delta/complete contract
     (lenient ``str()`` coercion of text fields, shared by Chat, the public API
-    and evaluation replays).
-
-    ``on_usage(usage, kind)`` receives the token usage the runtime reported: the
-    Claude Agent SDK template's ``complete.usage`` (Anthropic field names, one
-    aggregate for the whole turn → ``"turn"``), a ``{"result", "usage"}`` body, and
-    each Converse-shaped ``metadata`` event (one model call → ``"call"``)."""
+    and evaluation replays)."""
     if isinstance(payload, str) and _REPR_EVENT.match(payload):
         recovered = _repr_event(payload)
         if recovered is None:
@@ -599,7 +578,6 @@ def _runtime_payload_events(
                 },
             }
         elif kind == "complete":
-            report_usage(on_usage, payload.get("usage"), "turn")
             yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
         elif kind == "error":
             raise RuntimeError(str(payload.get("message", "runtime stream failed")))
@@ -610,8 +588,6 @@ def _runtime_payload_events(
         detail = inner.get("runtimeClientError") or inner.get("internalServerException")
         raise RuntimeError(f"runtime returned error: {detail}")
     converse_event = _is_converse_stream_event(inner)
-    if converse_event and "metadata" in inner:
-        report_usage(on_usage, inner["metadata"].get("usage"), "call")
     if converse_event:
         tool_use = inner.get("contentBlockStart", {}).get("start", {}).get("toolUse")
         if isinstance(tool_use, dict):
@@ -624,7 +600,6 @@ def _runtime_payload_events(
         if text:
             yield {"event": "delta", "data": {"text": str(text)}}
     if "result" in payload:
-        report_usage(on_usage, payload.get("usage"), "turn")
         yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
     elif not converse_event:
         text = _free_form_payload_text(payload)
@@ -703,13 +678,13 @@ def _free_form_payload_text(payload: dict[str, Any]) -> str:
 
 
 def _normalized_runtime_events(
-    payloads: Iterable[Any], *, require_attachments: bool = False, on_usage: Any = None,
+    payloads: Iterable[Any], *, require_attachments: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Suppress a final full result when real deltas were already emitted."""
     saw_delta = False
     acknowledged = False
     for payload in payloads:
-        for event in _runtime_payload_events(payload, on_usage):
+        for event in _runtime_payload_events(payload):
             if event["event"] == "attachments":
                 acknowledged = event["data"].get("contract") == "v1"
                 continue
@@ -801,10 +776,8 @@ def stream_runtime_events(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
-    on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
-    """Invoke a runtime and yield normalized tool/text events as bytes arrive.
-    ``on_usage`` as on ``_runtime_payload_events``."""
+    """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
     response = client.invoke_agent_runtime(
         **_runtime_invoke_params(
@@ -823,7 +796,6 @@ def stream_runtime_events(
     try:
         yield from _runtime_body_events(
             body, str(response.get("contentType", "")).lower(), bool(attachments),
-            on_usage=on_usage,
         )
     finally:
         if hasattr(body, "close"):
@@ -831,7 +803,7 @@ def stream_runtime_events(
 
 
 def _runtime_body_events(
-    body: Any, content_type: str, require_attachments: bool, *, on_usage: Any = None,
+    body: Any, content_type: str, require_attachments: bool,
 ) -> Iterator[dict[str, Any]]:
     if "text/event-stream" in content_type:
         lines = (
@@ -840,7 +812,7 @@ def _runtime_body_events(
             else body.read().splitlines()
         )
         yield from _normalized_runtime_events(
-            _sse_payloads(lines), require_attachments=require_attachments, on_usage=on_usage,
+            _sse_payloads(lines), require_attachments=require_attachments,
         )
         return
 
@@ -852,17 +824,13 @@ def _runtime_body_events(
         if decoded.lstrip().startswith("data:"):
             yield from _normalized_runtime_events(
                 _sse_payloads(decoded.splitlines()), require_attachments=require_attachments,
-                on_usage=on_usage,
             )
         else:
             yield from _normalized_runtime_events(
                 [decoded] if decoded else [], require_attachments=require_attachments,
-                on_usage=on_usage,
             )
     else:
-        yield from _normalized_runtime_events(
-            [payload], require_attachments=require_attachments, on_usage=on_usage,
-        )
+        yield from _normalized_runtime_events([payload], require_attachments=require_attachments)
 
 
 def invoke_runtime_text(
@@ -876,21 +844,17 @@ def invoke_runtime_text(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
-    on_usage: Any = None,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses.
 
     as_user consent asks (``auth_required`` events) are collected onto
     ``result["auth_required"]`` — a non-streaming caller still needs the
-    authorization URL to relay to the user. ``on_usage`` as on
-    ``_runtime_payload_events``.
+    authorization URL to relay to the user.
     """
     session_id = session_id or new_session_id()
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
     if force_reauth_providers:
         extra["force_reauth_providers"] = force_reauth_providers
-    if on_usage is not None:
-        extra["on_usage"] = on_usage
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
     for event in stream_runtime_events(
@@ -957,7 +921,6 @@ def stream_runtime_events_bearer(
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
     http_response: Any = None,
-    on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
     """Bearer-token InvokeAgentRuntime over the data-plane HTTPS endpoint.
 
@@ -998,9 +961,7 @@ def stream_runtime_events_bearer(
         content_type = str(
             (getattr(response, "headers", None) or {}).get("content-type") or ""
         ).lower()
-        yield from _runtime_body_events(
-            _HttpxBody(response), content_type, bool(attachments), on_usage=on_usage,
-        )
+        yield from _runtime_body_events(_HttpxBody(response), content_type, bool(attachments))
 
 
 def _read_error_body(response: Any, limit: int = 500) -> str:

@@ -8927,117 +8927,6 @@
           "name": "Skill Lab 目标模型（codex）",
           "desc": "通过 codex CLI 评估 Skill 时的默认模型。仅限 OpenAI。"
         }
-      },
-      "tab": {
-        "roles": "模型角色",
-        "prices": "价格",
-        "rates": "AgentCore 费率"
-      },
-      "prices": {
-        "title": "模型价格",
-        "sub": "USD / 1M Token；一个键匹配所有包含它的模型 ID，最长的键优先",
-        "note": "成本页面和预算共用一张价格表。覆盖设置优先于 launchpad.yaml、每日刷新和内置价格，并立即在本部署生效。模型没有价格期间，有预算的人使用它时会被拒绝。",
-        "unpricedWarn": "有 {{count}} 个模型没有价格：在你设置价格之前，有预算的人无法使用它们。",
-        "spansError": "无法读取最近 span 中出现的模型；只列出账本中已知的模型。",
-        "add": "添加价格",
-        "addTitle": "添加模型价格",
-        "editTitle": "编辑模型价格",
-        "modelId": "模型 ID 或键",
-        "modelIdHint": "完整模型 ID、推理配置文件 ARN，或较短的键（例如 claude-sonnet-5），匹配所有包含它的 ID。",
-        "modelIdInvalid": "只能使用字母、数字和 . _ : / @ + -，长度 2 到 200 个字符。",
-        "unitNote": "价格单位为 USD / 1M Token。",
-        "field": {
-          "input": "输入",
-          "output": "输出",
-          "cache_read": "缓存读取",
-          "cache_write": "缓存写入"
-        },
-        "hint": {
-          "cache_read": "留空则为输入 × {{factor}}。",
-          "cache_write": "留空则为输入 × {{factor}}。"
-        },
-        "invalid": "请输入 0 到 {{max}} 之间的价格。",
-        "derivedPlaceholder": "默认 {{value}}",
-        "derived": "输入 × {{factor}}",
-        "baseRates": "不含覆盖时：输入 {{input}}，输出 {{output}}。",
-        "confirmGlobal": "修改会立即作用于本部署的所有工作区和成员。",
-        "saved": "{{model}} 的价格已保存",
-        "resetDone": "{{model}}：已移除覆盖",
-        "resetTitle": "移除价格覆盖？",
-        "resetBody": "这个键恢复为输入 {{input}}、输出 {{output}}。",
-        "resetBodyNone": "这个键没有其他价格：移除覆盖后，该模型重新变为无价格。",
-        "colModel": "模型",
-        "colUpdated": "修改人",
-        "unpriced": "无价格",
-        "setPrice": "设置价格",
-        "search": "搜索模型 ID",
-        "empty": "没有价格。",
-        "seenIn": {
-          "usage": "计量用量",
-          "agents": "Agent",
-          "roles": "平台角色",
-          "spans": "span（24 小时）"
-        }
-      },
-      "rates": {
-        "note": "AgentCore 公开费用（读取于 2026-10-15）以及估算使用的校准系数。Runtime 计算费用和内置评估器 Token 按这些值估算，之后再对账。",
-        "ratesTitle": "费率",
-        "ratesSub": "每单位 USD",
-        "calibrationTitle": "校准",
-        "calibrationSub": "估算所乘的系数",
-        "colItem": "项目",
-        "colValue": "值",
-        "colDefault": "默认值",
-        "valueUsd": "USD / {{unit}}",
-        "defaultHint": "默认值：{{value}}",
-        "invalid": "请输入非负数。",
-        "saved": "{{name}} 已保存",
-        "resetDone": "{{name}} 已恢复默认",
-        "key": {
-          "runtime_v1_vcpu_hour": "Runtime v1 CPU",
-          "runtime_v1_gb_hour": "Runtime v1 内存",
-          "runtime_v2_vcpu_hour": "Runtime v2 CPU",
-          "runtime_v2_gb_hour": "Runtime v2 内存",
-          "memory_event": "Memory 短期事件",
-          "memory_retrieval": "Memory 长期检索",
-          "gateway_call": "Gateway 调用",
-          "gateway_search": "Gateway 搜索",
-          "policy_authorization": "Policy 授权",
-          "web_search_query": "Web Search 查询",
-          "kb_query": "知识库检索",
-          "kb_agentic_query": "知识库智能检索",
-          "evaluation_builtin_input_per_1k": "内置评估器输入（按需与在线）",
-          "evaluation_builtin_output_per_1k": "内置评估器输出（按需与在线）",
-          "evaluation_batch_input_per_1k": "内置评估器输入（批量）",
-          "evaluation_batch_output_per_1k": "内置评估器输出（批量）",
-          "evaluation_custom": "自定义评估",
-          "code_interpreter_vcpu_hour": "Code Interpreter CPU",
-          "code_interpreter_gb_hour": "Code Interpreter 内存",
-          "browser_vcpu_hour": "Browser CPU",
-          "browser_gb_hour": "Browser 内存",
-          "runtime_idle_timeout_seconds": "Runtime 空闲超时",
-          "runtime_harness_gb": "Harness 会话内存",
-          "runtime_default_gb": "Runtime 会话内存（其他 Agent）",
-          "runtime_harness_vcpu": "Harness 会话 CPU",
-          "runtime_default_vcpu": "Runtime 会话 CPU（其他 Agent）",
-          "builtin_eval_input_tokens": "内置评估器每次评估的输入 Token",
-          "builtin_eval_output_tokens": "内置评估器每次评估的输出 Token"
-        },
-        "unit": {
-          "vcpu_hour": "vCPU 小时",
-          "gb_hour": "GB 小时",
-          "event": "事件",
-          "request": "次请求",
-          "call": "次调用",
-          "query": "次查询",
-          "1k_input_tokens": "1K 输入 Token",
-          "1k_output_tokens": "1K 输出 Token",
-          "evaluation": "次评估",
-          "seconds": "秒",
-          "gb_resident": "GB 常驻",
-          "vcpu_average": "vCPU 平均",
-          "tokens_per_evaluation": "Token / 次评估"
-        }
       }
     },
     "costs": {
@@ -9045,8 +8934,7 @@
       "desc": "这个工作区的 Agent 花了多少钱，以及平台在监控哪些阈值。",
       "tab": {
         "costs": "成本",
-        "alerts": "告警",
-        "budgets": "预算"
+        "alerts": "告警"
       },
       "forbiddenBody": "只有管理员可以查看成本和管理告警规则。",
       "range": {
@@ -10108,12 +9996,5 @@
     "source": {
       "console": "对话"
     }
-  },
-  "budgetRefusal": {
-    "exceeded": "已达到本月预算（已用 {{used}}，上限 {{limit}}）。预算将于 {{date}}（UTC 0 点）重置。",
-    "exceededPlain": "已达到本月预算。在预算重置或管理员提高你的上限之前，新的计费操作都会被拒绝。",
-    "modelUnpriced": "模型 {{model}} 还没有价格，请联系管理员在「模型」页面设置。",
-    "modelUnpricedUnknown": "平台还无法为这个 Agent 的模型计价，因此无法把它的用量计入你的预算，请联系管理员。",
-    "openModels": "设置价格"
   }
 }

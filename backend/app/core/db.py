@@ -108,7 +108,6 @@ def init_db(bind=None) -> None:
     bind = bind if bind is not None else engine
     # register these tables before create_all
     from app.coding import models as _coding_models  # noqa: F401
-    from app.models import budgets as _budgets  # noqa: F401
     from app.models import platform_settings as _platform_settings  # noqa: F401
     from app.models import video as _video_models  # noqa: F401
 
@@ -201,14 +200,6 @@ def _migrate(bind) -> None:
         if "permissions" not in existing:
             with bind.begin() as conn:
                 conn.execute(text("ALTER TABLE users ADD COLUMN permissions JSON"))
-        # spend budget assignment (services/budgets.py); NULL = no assignment
-        for column, ddl in (
-            ("budget_level_id", "ALTER TABLE users ADD COLUMN budget_level_id VARCHAR(32)"),
-            ("budget_override_usd", "ALTER TABLE users ADD COLUMN budget_override_usd FLOAT"),
-        ):
-            if column not in existing:
-                with bind.begin() as conn:
-                    conn.execute(text(ddl))
     if "eval_datasets" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("eval_datasets")}
         additions = {

@@ -1,5 +1,4 @@
 import type { ChatAttachmentMetadata, FeedbackVerdict } from "../../../lib/api";
-import type { BudgetRefusalCode } from "../../../lib/budgets";
 import type { PolicyDeny } from "../../../lib/policy-deny";
 import type { AuthAsk } from "../../../lib/user-grants";
 
@@ -19,8 +18,6 @@ export interface ChatMessage {
   verdict?: FeedbackVerdict | null;
   /** kind "policy": a Gateway tool call a Cedar policy denied */
   policy?: PolicyDeny;
-  /** kind "error": the send was refused for budget (402) — the row links to My usage */
-  budget?: BudgetRefusalCode;
 }
 
 /** Append a streamed delta. An auth card asked mid-answer sits after the open

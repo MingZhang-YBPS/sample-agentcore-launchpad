@@ -2,7 +2,6 @@
 // frame of `POST /api/chat/{id}` changes the turns on screen. Type-only imports
 // keep it loadable in the node test environment.
 import type { ChatStreamPayload } from "../../../lib/api";
-import type { BudgetRefusalCode } from "../../../lib/budgets";
 
 export type TurnRole = "user" | "agent" | "tool" | "notice" | "error";
 
@@ -11,8 +10,6 @@ export interface Turn {
   text: string;
   /** an agent bubble still receiving deltas */
   open?: boolean;
-  /** an `error` turn refused for budget (402): it links to My usage */
-  budget?: BudgetRefusalCode;
 }
 
 /** Turns kept on screen (one user message, agent reply, tool row, … each). */

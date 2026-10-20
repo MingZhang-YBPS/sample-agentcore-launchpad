@@ -8927,117 +8927,6 @@
           "name": "Skill Lab target (codex)",
           "desc": "The default model a Skill is evaluated on through the codex CLI. OpenAI only."
         }
-      },
-      "tab": {
-        "roles": "Model roles",
-        "prices": "Prices",
-        "rates": "AgentCore rates"
-      },
-      "prices": {
-        "title": "Model prices",
-        "sub": "USD per 1M tokens; a key matches every model id that contains it, the longest key wins",
-        "note": "One price table for the Spend page and the budgets. An override wins over launchpad.yaml, the daily refresher and the built-in prices, and applies at once on this deployment. While a model has no price, people with a budget are refused when they use it.",
-        "unpricedWarn": "{{count}} model(s) have no price: people with a budget cannot use them until you set one.",
-        "spansError": "Could not read the models seen in recent spans; only the models the ledger knows are listed.",
-        "add": "Add a price",
-        "addTitle": "Add a model price",
-        "editTitle": "Edit the model price",
-        "modelId": "Model ID or key",
-        "modelIdHint": "A full model id, an inference profile ARN, or a shorter key (such as claude-sonnet-5) that matches every id containing it.",
-        "modelIdInvalid": "Use letters, digits and . _ : / @ + - only, 2 to 200 characters.",
-        "unitNote": "Prices are USD per 1M tokens.",
-        "field": {
-          "input": "Input",
-          "output": "Output",
-          "cache_read": "Cache read",
-          "cache_write": "Cache write"
-        },
-        "hint": {
-          "cache_read": "Leave it empty for input × {{factor}}.",
-          "cache_write": "Leave it empty for input × {{factor}}."
-        },
-        "invalid": "Enter a price from 0 to {{max}}.",
-        "derivedPlaceholder": "Default {{value}}",
-        "derived": "input × {{factor}}",
-        "baseRates": "Without the override: input {{input}}, output {{output}}.",
-        "confirmGlobal": "This applies at once to every workspace and member on this deployment.",
-        "saved": "Price of {{model}} saved",
-        "resetDone": "{{model}}: override removed",
-        "resetTitle": "Remove the price override?",
-        "resetBody": "The key goes back to input {{input}} and output {{output}}.",
-        "resetBodyNone": "The key has no other price: once the override is removed, the model is unpriced again.",
-        "colModel": "Model",
-        "colUpdated": "Changed by",
-        "unpriced": "No price",
-        "setPrice": "Set price",
-        "search": "Search model id",
-        "empty": "No prices.",
-        "seenIn": {
-          "usage": "metered usage",
-          "agents": "agents",
-          "roles": "platform roles",
-          "spans": "spans (24 h)"
-        }
-      },
-      "rates": {
-        "note": "The public AgentCore fees (read 2026-10-15) and the calibration factors the estimates use. Runtime compute and built-in evaluator tokens are estimated from them and later reconciled.",
-        "ratesTitle": "Fee rates",
-        "ratesSub": "USD per unit",
-        "calibrationTitle": "Calibration",
-        "calibrationSub": "Factors the estimates multiply",
-        "colItem": "Item",
-        "colValue": "Value",
-        "colDefault": "Default",
-        "valueUsd": "USD per {{unit}}",
-        "defaultHint": "Default: {{value}}",
-        "invalid": "Enter a non-negative number.",
-        "saved": "{{name}} saved",
-        "resetDone": "{{name}} back to its default",
-        "key": {
-          "runtime_v1_vcpu_hour": "Runtime v1 CPU",
-          "runtime_v1_gb_hour": "Runtime v1 memory",
-          "runtime_v2_vcpu_hour": "Runtime v2 CPU",
-          "runtime_v2_gb_hour": "Runtime v2 memory",
-          "memory_event": "Memory short-term event",
-          "memory_retrieval": "Memory long-term retrieval",
-          "gateway_call": "Gateway invocation",
-          "gateway_search": "Gateway search",
-          "policy_authorization": "Policy authorization",
-          "web_search_query": "Web Search query",
-          "kb_query": "Knowledge base retrieval",
-          "kb_agentic_query": "Knowledge base agentic retrieval",
-          "evaluation_builtin_input_per_1k": "Built-in evaluator input (on-demand and online)",
-          "evaluation_builtin_output_per_1k": "Built-in evaluator output (on-demand and online)",
-          "evaluation_batch_input_per_1k": "Built-in evaluator input (batch)",
-          "evaluation_batch_output_per_1k": "Built-in evaluator output (batch)",
-          "evaluation_custom": "Custom evaluation",
-          "code_interpreter_vcpu_hour": "Code Interpreter CPU",
-          "code_interpreter_gb_hour": "Code Interpreter memory",
-          "browser_vcpu_hour": "Browser CPU",
-          "browser_gb_hour": "Browser memory",
-          "runtime_idle_timeout_seconds": "Runtime idle timeout",
-          "runtime_harness_gb": "Harness session memory",
-          "runtime_default_gb": "Runtime session memory (other agents)",
-          "runtime_harness_vcpu": "Harness session CPU",
-          "runtime_default_vcpu": "Runtime session CPU (other agents)",
-          "builtin_eval_input_tokens": "Built-in evaluator input tokens per evaluation",
-          "builtin_eval_output_tokens": "Built-in evaluator output tokens per evaluation"
-        },
-        "unit": {
-          "vcpu_hour": "vCPU-hour",
-          "gb_hour": "GB-hour",
-          "event": "event",
-          "request": "request",
-          "call": "call",
-          "query": "query",
-          "1k_input_tokens": "1K input tokens",
-          "1k_output_tokens": "1K output tokens",
-          "evaluation": "evaluation",
-          "seconds": "seconds",
-          "gb_resident": "GB resident",
-          "vcpu_average": "vCPU on average",
-          "tokens_per_evaluation": "tokens per evaluation"
-        }
       }
     },
     "costs": {
@@ -9045,8 +8934,7 @@
       "desc": "What this workspace's agents cost, and the thresholds the platform watches.",
       "tab": {
         "costs": "Spend",
-        "alerts": "Alerts",
-        "budgets": "Budgets"
+        "alerts": "Alerts"
       },
       "forbiddenBody": "Only administrators can view spend and manage alert rules.",
       "range": {
@@ -10108,12 +9996,5 @@
     "source": {
       "console": "Chat"
     }
-  },
-  "budgetRefusal": {
-    "exceeded": "Monthly budget reached ({{used}} of {{limit}}). It resets on {{date}} (00:00 UTC).",
-    "exceededPlain": "Monthly budget reached. New billable work is refused until the budget resets or an administrator raises your limit.",
-    "modelUnpriced": "Model {{model}} has no price yet — ask an administrator to set one on the Models page.",
-    "modelUnpricedUnknown": "The platform cannot price this agent's model, so its usage cannot be counted against your budget — ask an administrator.",
-    "openModels": "Set a price"
   }
 }

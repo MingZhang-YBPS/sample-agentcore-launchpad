@@ -1,7 +1,6 @@
 import { CheckCircle2, RotateCcw, XCircle } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { api, errorMessage, type ModelProbeCheck, type ModelProbeResult, type ModelRoleSetting } from "../../lib/api";
@@ -11,11 +10,7 @@ import { reloadModelDefaults, roleAccepts, roleModelOptions, STATIC_MODEL_DEFAUL
 import { MODEL_CATALOG } from "../../lib/models";
 import { fmtTime } from "../format";
 import { useLoad, useV2Toast } from "../hooks";
-import { Alert, Button, Card, type Column, Confirm, PageHeader, Select, SubTabs, Table, Tag } from "../ui";
-import { AgentCoreRatesView, PricesView } from "./models/Prices";
-
-type ModelsTab = "roles" | "prices" | "rates";
-const TABS: ModelsTab[] = ["roles", "prices", "rates"];
+import { Alert, Button, Card, type Column, Confirm, PageHeader, Select, Table, Tag } from "../ui";
 
 /** Sentinel option revealing the free-text model-id input. */
 const CUSTOM = "__custom__";
@@ -197,7 +192,7 @@ function RoleEditor({ role, onSaved }: { role: ModelRoleSetting; onSaved: (row: 
   );
 }
 
-function RolesView() {
+function ModelsManager() {
   const { t } = useTranslation();
   const loaded = useLoad(() => api.modelDefaults(), "v2-model-defaults");
   // rows replaced by a save / reset, over the loaded list
@@ -260,6 +255,7 @@ function RolesView() {
 
   return (
     <>
+      <PageHeader title={t("v2.models.title")} desc={t("v2.models.desc")} />
       <Alert tone="warn">
         <div className="v2-stack" style={{ gap: 4 }} data-testid="v2-models-notes">
           <span>{t("v2.models.noteGlobal")}</span>
@@ -282,29 +278,6 @@ function RolesView() {
   );
 }
 
-function ModelsManager() {
-  const { t } = useTranslation();
-  const [params, setParams] = useSearchParams();
-  const raw = params.get("view");
-  const view: ModelsTab = TABS.includes(raw as ModelsTab) ? (raw as ModelsTab) : "roles";
-  return (
-    <>
-      <PageHeader
-        title={t("v2.models.title")}
-        desc={t("v2.models.desc")}
-        tabs={
-          <SubTabs
-            value={view}
-            onChange={(next) => setParams(next === "roles" ? {} : { view: next })}
-            tabs={TABS.map((value) => ({ value, label: t(`v2.models.tab.${value}`) }))}
-          />
-        }
-      />
-      {view === "roles" ? <RolesView /> : view === "prices" ? <PricesView /> : <AgentCoreRatesView />}
-    </>
-  );
-}
-
 // display names for the provider families a role accepts
 const FAMILY_LABEL: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI" };
 const familyLabel = (f: string) => FAMILY_LABEL[f] ?? f;
@@ -315,8 +288,6 @@ const familyLabel = (f: string) => FAMILY_LABEL[f] ?? f;
  * user, the Studio fallback, Skill Lab, …), its effective value, a one-call Converse
  * probe in the hub's default workspace, and a console override (applied at once to
  * every workspace and member of this deployment, persisted in its ledger).
- * `?view=prices`: the model price editor (unpriced models first) the Spend page and
- * the budgets share; `?view=rates`: the AgentCore fee rates and calibration factors.
  */
 export function V2Models() {
   const { t } = useTranslation();
