@@ -10,9 +10,8 @@ Covered (routes + classes in app/routers/*.py and app/core/route_policy.py):
 
   departments      full create → read → patch → delete on a throwaway `e2e-…`
                    department; duplicate id → 409 `department.exists`; list shape.
-  project-groups   full create → get → patch → archive(delete) → unarchive →
-                   hard-cleanup on a throwaway group; duplicate id → 409
-                   `group.exists`.
+  project-groups   retired (folded into direct project memberships): the route
+                   answers 404.
   role-templates   read: the built-in templates and their permission keys (MEMBER).
   admins           read: the administrator list (ADMIN); a member gets 403.
   users            a member calling the admin-only `GET /api/users` gets 403
@@ -27,8 +26,8 @@ Covered (routes + classes in app/routers/*.py and app/core/route_policy.py):
 
 Everything this script creates is a throwaway named with the `e2e-` prefix and is
 removed in `finally`, even on failure. It never touches the seeded workshop objects
-(projects retail-service / travel-service, department customer-care, groups
-travel / retail, the `workshop-private` profile, the `workshop-files` storage entry,
+(projects retail-service / travel-service, department customer-care, the
+`workshop-private` profile, the `workshop-files` storage entry,
 users, release policy). No AWS CLI calls.
 
 Run:  cd backend && uv run python scripts/e2e_platform_structure.py --base URL
@@ -49,7 +48,6 @@ from _e2e_client import SESSION_COOKIE, e2e_client
 RUN = uuid.uuid4().hex[:6]
 PREFIX = "e2e-"
 DEPT_ID = f"{PREFIX}dept-{RUN}"
-GROUP_ID = f"{PREFIX}grp-{RUN}"
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -152,55 +150,12 @@ def cleanup_department(admin: httpx.Client) -> None:
         print(f"  (department cleanup: {code(res)})", flush=True)
 
 
-# ── project-groups: create → get → patch → archive → unarchive, negative ─────
+# ── project-groups: retired (commit 915addde) — the route is gone ────────────
 
-def test_project_groups(admin: httpx.Client) -> None:
+def test_project_groups_retired(admin: httpx.Client) -> None:
+    # groups were folded into direct project memberships; the API must not answer
     res = admin.get("/api/project-groups")
-    rows = body(res).get("groups") if res.status_code == 200 else None
-    check("project-groups.list", res.status_code == 200 and isinstance(rows, list),
-          f"{code(res)} n={len(rows) if isinstance(rows, list) else '?'}")
-
-    created = admin.post("/api/project-groups", json={
-        "id": GROUP_ID, "name": f"E2E group {RUN}", "description": "throwaway"})
-    data = body(created)
-    check("project-groups.create", created.status_code == 201 and data.get("id") == GROUP_ID,
-          f"{code(created)} id={data.get('id')}")
-
-    dup = admin.post("/api/project-groups", json={"id": GROUP_ID, "name": "dup"})
-    check("project-groups.create.duplicate_409", dup.status_code == 409
-          and body(dup).get("code") == "group.exists", code(dup))
-
-    got = admin.get(f"/api/project-groups/{GROUP_ID}")
-    check("project-groups.get", got.status_code == 200 and body(got).get("id") == GROUP_ID,
-          code(got))
-
-    patched = admin.patch(f"/api/project-groups/{GROUP_ID}",
-                          json={"description": "edited", "name": f"E2E group {RUN} v2"})
-    check("project-groups.patch", patched.status_code == 200
-          and body(patched).get("name") == f"E2E group {RUN} v2", code(patched))
-
-    archived = admin.delete(f"/api/project-groups/{GROUP_ID}")
-    adata = body(archived)
-    check("project-groups.archive", archived.status_code == 200
-          and (adata.get("archived") is True or adata.get("archived_at") is not None),
-          f"{code(archived)} archived={adata.get('archived')}")
-
-    unarchived = admin.post(f"/api/project-groups/{GROUP_ID}/unarchive")
-    udata = body(unarchived)
-    check("project-groups.unarchive", unarchived.status_code == 200
-          and (udata.get("archived") is False or udata.get("archived_at") is None),
-          f"{code(unarchived)} archived={udata.get('archived')}")
-
-
-def cleanup_project_group(admin: httpx.Client) -> None:
-    # archive is the only delete the API offers for a group; leave it archived
-    res = admin.get(f"/api/project-groups/{GROUP_ID}")
-    if res.status_code == 404:
-        return
-    if res.status_code == 200 and not body(res).get("archived"):
-        done = admin.delete(f"/api/project-groups/{GROUP_ID}")
-        if done.status_code != 200:
-            print(f"  (group cleanup archive: {code(done)})", flush=True)
+    check("project-groups.retired_404", res.status_code == 404, code(res))
 
 
 # ── role-templates (MEMBER read) ─────────────────────────────────────────────
@@ -346,13 +301,12 @@ def main() -> int:
         test_admins(admin)
         test_member_negatives(member)
         test_departments(admin)
-        test_project_groups(admin)
+        test_project_groups_retired(admin)
         test_network_profiles(admin)
         test_storage_mounts(admin)
         test_models(admin)
     finally:
         cleanup_department(admin)
-        cleanup_project_group(admin)
         admin.close()
         if member is not None:
             member.close()

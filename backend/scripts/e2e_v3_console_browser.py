@@ -76,8 +76,11 @@ def main() -> int:
                 print(f"        {line[:200]}")
 
         # V2 → V3 through the visible switch, not by typing a URL. V3 is the default,
-        # so /v2 forwards to its V3 twin until the browser has chosen V2
-        page.evaluate("localStorage.setItem('launchpad_ui_version', 'v2')")
+        # so /v2 forwards to its V3 twin until the browser has chosen V2. V2's own
+        # guided tour opens by itself on a first visit and its modal would cover the
+        # switch: mark it done, as browser scripts do (v2/onboarding/state.ts)
+        page.evaluate("localStorage.setItem('launchpad_ui_version', 'v2');"
+                      "localStorage.setItem('launchpad_v2_tour_done', '1')")
         page.goto(f"{args.ui}/v2", wait_until="networkidle")
         page.locator('[data-testid="v2-switch-v3"]').click()
         page.wait_for_url("**/v3", timeout=10000)

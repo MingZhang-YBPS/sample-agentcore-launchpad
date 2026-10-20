@@ -29,7 +29,7 @@ import time
 import uuid
 
 import httpx
-from _e2e_client import chat_sse, e2e_client
+from _e2e_client import bind_project_workspace, chat_sse, e2e_client
 
 RUN = uuid.uuid4().hex[:6]
 AGENT = f"rm-e2e-p34-{RUN}"
@@ -370,6 +370,9 @@ def release_path(admin: httpx.Client, agent_id: str) -> None:
         "region": "eu-central-1", "tier": "prod"})
     step("rel.target_registered", created.status_code in (200, 201),
          f"HTTP {created.status_code} region=eu-central-1 tier=prod")
+    # inside a project the target must be bound to it (the release stays in the project)
+    bound = bind_project_workspace(admin, TARGET_WS)
+    step("rel.target_bound", bound == 200, f"HTTP {bound}")
 
     bundle = admin.post(f"/api/agents/{agent_id}/release-bundles", json={}).json()
     step("rel.bundle", len(bundle.get("digest", "")) == 64, f"digest={bundle['digest'][:12]}…")
@@ -384,14 +387,18 @@ def release_path(admin: httpx.Client, agent_id: str) -> None:
                         params={"target_workspace_id": TARGET_WS})
     step("map.resolution_preview", preview.status_code == 200, f"HTTP {preview.status_code}")
 
+    # a placeholder KB id is owned by no project: only the workspace default project may
+    # map an unowned KB (another project would be wiring itself to a resource it does
+    # not own — `agent_access.foreign_kb_ids`), so the mapping CRUD runs there
+    in_default = {"X-Project": "default"}
     put = admin.put("/api/resource-mappings/kb/rm-e2e-policies",
-                    json={"resource_id": "KBE2EPLACEHOLDER"})
+                    json={"resource_id": "KBE2EPLACEHOLDER"}, headers=in_default)
     step("map.upsert", put.status_code in (200, 201), f"HTTP {put.status_code}")
-    listed = admin.get("/api/resource-mappings").json()
+    listed = admin.get("/api/resource-mappings", headers=in_default).json()
     rows = listed.get("mappings") or listed.get("items") or []
     step("map.listed", any(r.get("name") == "rm-e2e-policies" for r in rows),
          f"{len(rows)} mapping(s)")
-    admin.delete("/api/resource-mappings/kb/rm-e2e-policies")
+    admin.delete("/api/resource-mappings/kb/rm-e2e-policies", headers=in_default)
 
     asked = admin.post("/api/promotions", json={
         "bundle_id": bundle["id"], "target_workspace_id": TARGET_WS,
@@ -438,6 +445,7 @@ def cleanup(admin: httpx.Client, agent_id: str | None, alert_ids: list[str]) -> 
         res = admin.delete(f"/api/agents/{agent_id}")
         print(f"     delete agent {agent_id}: HTTP {res.status_code} "
               f"{res.json().get('aws_resource_deleted')}")
+    print(f"     unbind {TARGET_WS}: HTTP {bind_project_workspace(admin, TARGET_WS, bind=False)}")
     purge = admin.post(f"/api/workspaces/{TARGET_WS}/purge")
     print(f"     purge workspace {TARGET_WS}: HTTP {purge.status_code}")
 

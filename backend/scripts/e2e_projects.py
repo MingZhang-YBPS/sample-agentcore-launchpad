@@ -49,7 +49,7 @@ from typing import Any
 
 import boto3
 import httpx
-from _e2e_client import chat_sse, e2e_client
+from _e2e_client import E2E_DEPARTMENT_ID, chat_sse, e2e_client
 from botocore.exceptions import ClientError
 
 RUN = uuid.uuid4().hex[:6]
@@ -279,8 +279,11 @@ def cleanup(admin: httpx.Client) -> None:
 
 def structure(admin: httpx.Client, base: str) -> dict[str, httpx.Client]:
     for pid, name in ((PROJECT_A, "PJ e2e A"), (PROJECT_B, "PJ e2e B")):
+        # a project belongs to a department (422 `project.department_required`): the
+        # suite's own, which e2e_client ensured
         res = call(admin, "POST", "/api/projects",
-                   json={"id": pid, "name": f"{name} {RUN}", "workspaces": ["default"]})
+                   json={"id": pid, "name": f"{name} {RUN}", "workspaces": ["default"],
+                         "department_id": E2E_DEPARTMENT_ID})
         check(f"project.create[{pid[-8:]}]", res.status_code == 201, code(res), fatal=True)
         STATE["projects"].append(pid)
     memberships = {"user-a": PROJECT_A, "user-b": PROJECT_B}
@@ -738,7 +741,7 @@ def invoke_access(users: dict[str, httpx.Client], agent_id: str, arn: str) -> No
 
 def other_runtime(arn: str) -> str | None:
     """Any runtime but ours — only ever called with the role that must be refused."""
-    control = boto3.client("bedrock-agentcore-control")
+    control = boto3.client("bedrock-agentcore-control", region_name=arn.split(":")[3])
     for rt in control.list_agent_runtimes(maxResults=50).get("agentRuntimes", []):
         if rt.get("agentRuntimeArn") and rt["agentRuntimeArn"] != arn:
             return rt["agentRuntimeArn"]

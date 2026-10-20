@@ -38,7 +38,14 @@ import uuid
 from typing import Any
 
 import httpx
-from _e2e_client import chat_sse, e2e_client
+from _e2e_client import (
+    E2E_WORKSPACE,
+    add_project_member,
+    chat_sse,
+    e2e_client,
+    e2e_project_id,
+    pin_project,
+)
 
 RUN = uuid.uuid4().hex[:6]
 AGENT = f"dlc-e2e-{RUN}"
@@ -122,7 +129,16 @@ def account(admin: httpx.Client, base: str, who: str, workspace: str,
         patch["role"] = creds["role"]
     res = admin.patch(f"/api/users/{user_id}", json=patch)
     step(f"acct.{who}", res.status_code == 200, f"{creds['username']} · {sorted(perms)}")
-    return login(base, creds, workspace)
+    if workspace == E2E_WORKSPACE:
+        # the agent lives in the suite's business project: the same keys there, on the
+        # role a new account of this global role is suggested (what `inherit` reads)
+        add_project_member(admin, e2e_project_id(), user_id=user_id, overrides=perms,
+                           role_key="developer" if creds["role"] == "member"
+                           else "release_ops")
+    signed = login(base, creds, workspace)
+    if workspace == E2E_WORKSPACE:
+        pin_project(signed, e2e_project_id())
+    return signed
 
 
 def wait(predicate, timeout: int, every: int, label: str) -> Any:

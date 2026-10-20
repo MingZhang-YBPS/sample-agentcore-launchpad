@@ -32,7 +32,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import (
+    add_project_member,
+    bind_project_workspace,
+    e2e_client,
+    e2e_project_id,
+    pin_project,
+)
 
 RUN = uuid.uuid4().hex[:6]
 AGENT_NAME = f"rm-e2e-p2-{RUN}"
@@ -77,6 +83,10 @@ def account(client: httpx.Client, base: str, creds: dict, role: str) -> tuple[ht
         patch["role"] = role
     res = client.patch(f"/api/users/{user_id}", json=patch)
     step(f"acct.approve[{role}]", res.status_code == 200, f"HTTP {res.status_code}")
+    # new agents live in a business project: the suite's, with the role a new account
+    # of this global role is suggested there (developer / release_ops)
+    add_project_member(client, e2e_project_id(), user_id=user_id,
+                       role_key="developer" if role == "member" else "release_ops")
 
     signed = httpx.Client(base_url=base, timeout=120)
     login = signed.post(
@@ -88,6 +98,7 @@ def account(client: httpx.Client, base: str, creds: dict, role: str) -> tuple[ht
     signed.headers["Cookie"] = f"launchpad_session={token}"
     # pinned so a later second grant (the release target) never makes calls ambiguous
     signed.headers["X-Workspace"] = "default"
+    pin_project(signed, e2e_project_id())
     return signed, user_id
 
 
@@ -352,7 +363,12 @@ def promote(
          ungranted.status_code == 403 and ungranted.json().get("code") == "workspace.forbidden",
          f"HTTP {ungranted.status_code} code={ungranted.json().get('code')}")
 
-    # the legitimate hand-off: both people are granted on the environment it goes into
+    # the legitimate hand-off: both people are granted on the environment it goes into,
+    # and — inside a project — the target is bound to the project the release stays in
+    # (bound only now: a membership of a bound project reaches the workspace by itself,
+    # which would make the ungranted check above meaningless)
+    bound = bind_project_workspace(admin, TARGET_WS)
+    step("promo.target_bound", bound == 200, f"HTTP {bound}")
     for user_id in user_ids:
         res = admin.patch(f"/api/users/{user_id}", json={"workspaces": ["default", TARGET_WS]})
         step("promo.grant_target", res.status_code == 200, f"HTTP {res.status_code}")
@@ -413,6 +429,7 @@ def cleanup(admin: httpx.Client, agent_id: str | None, user_ids: list[str]) -> N
     if agent_id:
         gone = admin.delete(f"/api/agents/{agent_id}")
         print(f"     delete agent {agent_id}: HTTP {gone.status_code}")
+    print(f"     unbind {TARGET_WS}: HTTP {bind_project_workspace(admin, TARGET_WS, bind=False)}")
     purge = admin.post(f"/api/workspaces/{TARGET_WS}/purge")
     if purge.status_code not in (200, 204):
         purge = admin.delete(f"/api/workspaces/{TARGET_WS}")

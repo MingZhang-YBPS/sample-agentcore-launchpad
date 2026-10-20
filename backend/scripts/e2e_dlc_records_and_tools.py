@@ -4,8 +4,9 @@
 Read-only where the data is production state, a ledger-only create→get→delete cycle
 where that is safe, and no AWS writes anywhere. Covers, in order:
 
-  1. Agent-DLC records (READ-ONLY, header `X-Project: retail-service`) for the agent
-     ``lab-service-assistant`` (``e847f0d6dc2040eda07fb0bea54914bc``):
+  1. Agent-DLC records (READ-ONLY, header `X-Project: retail-service`) for the workshop
+     agent ``lab-service-assistant`` (or ``E2E_DLC_AGENT_ID``, else the first agent of
+     the project with a release record; SKIP when there is none yet):
        * ``GET /api/agents/{id}/release`` — the release payload carries ``waivers`` and
          ``records``. There is no ``/api/waivers`` list / get route in the API (waivers
          are only POST-created per agent and approve/reject/revoke); this payload and
@@ -60,7 +61,7 @@ from typing import Any
 
 import httpx
 
-AGENT_ID = "e847f0d6dc2040eda07fb0bea54914bc"  # lab-service-assistant
+AGENT_NAME = "lab-service-assistant"  # the workshop's agent, preferred when present
 PROJECT = "retail-service"
 WORKSPACE = "default"
 RUN = uuid.uuid4().hex[:6]
@@ -147,10 +148,35 @@ def login(base: str, user: str) -> httpx.Client:
 # ── 1. Agent-DLC records (read-only) ────────────────────────────────────────────
 
 
+def find_dlc_agent(admin: httpx.Client) -> str | None:
+    """The workshop agent whose release records are read: `E2E_DLC_AGENT_ID`, else
+    `lab-service-assistant`, else the first agent of the project with a release
+    record. None while the workshop has not reached its release chapter (a fresh
+    console has no workshop agent at all)."""
+    hp = {"X-Project": PROJECT}
+    if os.environ.get("E2E_DLC_AGENT_ID"):
+        return os.environ["E2E_DLC_AGENT_ID"]
+    res = admin.get("/api/agents", headers=hp)
+    agents = [a for a in (body(res).get("agents") or []) if a.get("status") != "deleted"]
+    agents.sort(key=lambda a: a.get("name") != AGENT_NAME)
+    for agent in agents:
+        listed = admin.get("/api/release-records", params={"agent_id": agent["id"]},
+                           headers=hp)
+        if listed.status_code == 200 and body(listed).get("records"):
+            return agent["id"]
+    return None
+
+
 def dlc_records(admin: httpx.Client) -> None:
     hp = {"X-Project": PROJECT}
+    agent_id = find_dlc_agent(admin)
+    if agent_id is None:
+        skip("release.payload", f"no agent with release records in {PROJECT} "
+             "(the workshop has not reached its release chapter on this console)")
+        return
+    print(f"── release records of agent {agent_id}", flush=True)
 
-    res = admin.get(f"/api/agents/{AGENT_ID}/release", headers=hp)
+    res = admin.get(f"/api/agents/{agent_id}/release", headers=hp)
     payload = body(res)
     waivers = payload.get("waivers") or []
     records = payload.get("records") or []
@@ -170,7 +196,7 @@ def dlc_records(admin: httpx.Client) -> None:
     # the K1 waiver: active, expiring 2026-11-01, consistent (approved has a signer)
     k1 = next((w for w in waivers if w.get("criterion_key") == "K1"), None)
     if k1 is None:
-        check("waiver.k1_active", False, "no K1 waiver on the agent")
+        skip("waiver.k1_active", "no K1 waiver on the agent (workshop step not done)")
     else:
         expires = str(k1.get("expires_on") or "")
         consistent = (k1.get("status") != "approved") or bool(k1.get("approved_by"))
@@ -188,7 +214,7 @@ def dlc_records(admin: httpx.Client) -> None:
           f"{len(records)} records, verdicts={sorted(v for v in verdicts if v)}")
 
     # /api/release-records?agent_id= — the list endpoint (agent_id is required)
-    res = admin.get("/api/release-records", params={"agent_id": AGENT_ID}, headers=hp)
+    res = admin.get("/api/release-records", params={"agent_id": agent_id}, headers=hp)
     listed = (body(res).get("records") or []) if res.status_code == 200 else []
     list_fields = all({"id", "decision", "requested_by", "decided_by", "gate_report"}
                       <= set(r) for r in listed) if listed else False
@@ -417,8 +443,7 @@ def main() -> int:
     admin = login(args.base, "admin")
     biz = login(args.base, "biz-owner")
     sme = login(args.base, "sme")
-    print(f"── base {args.base} · agent {AGENT_ID} · project {PROJECT} · run {RUN}",
-          flush=True)
+    print(f"── base {args.base} · project {PROJECT} · run {RUN}", flush=True)
     try:
         for leg in (
             lambda: dlc_records(admin),

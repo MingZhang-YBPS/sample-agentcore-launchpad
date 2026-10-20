@@ -15,7 +15,8 @@
 #
 # Order: small deploy smokes → the HR gateway agent (`gateway_tool --keep
 # --long-term-memory`) feeding observability / traces / chat_memory, then that
-# agent is deleted → evaluation → experiment + runtime canary → journeys and
+# agent is deleted → evaluation + experiment (on `eval-target`, deleted after) →
+# runtime canary → journeys and
 # roadmap phases → Skill Lab assets → scripts whose preconditions are probed
 # from the live env (a second / third workspace, a disposable policy gateway).
 #
@@ -36,8 +37,9 @@ SKIP=""
 LIST=0
 NETWORK_RETRIES="${E2E_NETWORK_RETRIES:-2}"
 HR_AGENT="e2e-gw-hr-assistant"
+EVAL_AGENT="eval-target"
 
-usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -72,6 +74,7 @@ eval_run|--base @BASE@
 online_eval|--base @BASE@
 eval_extended|--base @BASE@
 experiment|--base @BASE@
+@DELETE_EVAL_TARGET@|
 golden_path|--base @BASE@
 projects|--base @BASE@
 claude_sdk|--base @BASE@ --skip-local
@@ -116,6 +119,7 @@ if [ "$LIST" = 1 ]; then
   echo "run order:"
   echo "$PLAN" | sed '/^$/d' | while IFS='|' read -r name args; do
     [ "$name" = "@DELETE_HR_AGENT@" ] && name="(delete $HR_AGENT)"
+    [ "$name" = "@DELETE_EVAL_TARGET@" ] && name="(delete $EVAL_AGENT)"
     printf '  %-28s %s\n' "$name" "$args"
   done
   echo "never run here:"
@@ -233,8 +237,9 @@ run_one() {
   fi
 }
 
-delete_hr_agent() {
-  $PY - "$BASE" "$HR_AGENT" <<'PYEOF' > "$LOG_DIR/delete_hr_agent.log" 2>&1
+delete_agent() {
+  local agent="$1" log="$LOG_DIR/delete_$1.log"
+  $PY - "$BASE" "$agent" <<'PYEOF' > "$log" 2>&1
 import sys
 sys.path.insert(0, "scripts")
 from _e2e_client import e2e_client
@@ -246,14 +251,21 @@ for agent in client.get("/api/agents").json()["agents"]:
         print(f"deleted {agent['name']} ({agent['id']})")
 PYEOF
   local rc=$?
-  printf '── %-28s %s\n' "(delete $HR_AGENT)" "$([ $rc -eq 0 ] && echo ok || echo "FAILED — $LOG_DIR/delete_hr_agent.log")"
+  printf '── %-28s %s\n' "(delete $agent)" "$([ $rc -eq 0 ] && echo ok || echo "FAILED — $log")"
 }
 
 PLAN_FILE="$LOG_DIR/.plan"
 echo "$PLAN" | sed '/^$/d' > "$PLAN_FILE"
 while IFS='|' read -r name args; do
   if [ "$name" = "@DELETE_HR_AGENT@" ]; then
-    grep -q "^gateway_tool	PASS" "$RESULTS" && delete_hr_agent
+    grep -q "^gateway_tool	PASS" "$RESULTS" && delete_agent "$HR_AGENT"
+    continue
+  fi
+  if [ "$name" = "@DELETE_EVAL_TARGET@" ]; then
+    # eval_run deploys it; online_eval / eval_extended / experiment (which needs the
+    # traces the eval runs left) reuse it; nothing after needs it
+    grep -Eq "^(eval_run|online_eval|eval_extended|experiment)	" "$RESULTS" \
+      && delete_agent "$EVAL_AGENT"
     continue
   fi
   selected "$name" || continue

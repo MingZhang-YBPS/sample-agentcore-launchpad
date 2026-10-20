@@ -6,7 +6,9 @@ decision log the Governance UI renders.
 
 Policy is opt-in: a workspace whose Gateway has no Policy Engine attached cannot
 DENY anything, so the script reports a skipped precondition (exit 0) instead of
-asserting outcomes no Cedar policy decides.
+asserting outcomes no Cedar policy decides. An engine attached in LOG_ONLY mode (or
+holding no active enforcing policy) logs every decision and denies nothing, so the
+payout case is then expected to be ALLOWed.
 
 Run:  cd backend && uv run python scripts/e2e_policy.py
 """
@@ -15,6 +17,21 @@ import argparse
 import sys
 
 from _e2e_client import e2e_client
+
+
+def enforcing(client) -> bool:
+    """Whether the workspace's managed Gateway enforces: its engine is attached in
+    ENFORCE mode and holds at least one ACTIVE policy that is not LOG_ONLY itself."""
+    res = client.get("/api/governance/gateways")
+    res.raise_for_status()
+    gateway = next((g for g in res.json().get("gateways", []) if g.get("managed")), None)
+    engine = (gateway or {}).get("policy_engine") or {}
+    if engine.get("mode") != "ENFORCE":
+        return False
+    res = client.get(f"/api/governance/gateways/{gateway['id']}/policies")
+    res.raise_for_status()
+    return any(p.get("status") == "ACTIVE" and p.get("enforcement_mode") != "LOG_ONLY"
+               for p in res.json().get("policies", []))
 
 
 def main() -> int:
@@ -33,10 +50,18 @@ def main() -> int:
         print("SKIP precondition: no Policy Engine attached (opt-in)")
         return 0
 
+    # Only an ENFORCE engine holding an active policy can DENY. Governance attaches an
+    # engine in LOG_ONLY first (decisions are logged, every call is permitted), and a
+    # workshop console sits there until its policy chapter switches it on — then the
+    # payout call is expected to go through, not to be refused.
+    deny = "DENY" if enforcing(client) else "ALLOW"
+    if deny == "ALLOW":
+        print("  (engine is LOG_ONLY or holds no active policy: every call is permitted "
+              "and logged — expecting ALLOW for the payout)")
     cases = [
         ("demo", "hr-database___get_employee", {"employee_id": "EMP-1024"}, "ALLOW"),
         ("demo", "hr-database___create_payout", {"employee_id": "EMP-1024", "amount": 42},
-         "DENY"),
+         deny),
         ("admin", "hr-database___create_payout", {"employee_id": "EMP-1024", "amount": 42},
          "ALLOW"),
     ]

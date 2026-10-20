@@ -28,7 +28,7 @@ import time
 import uuid
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import e2e_client, e2e_project_id
 
 RUN = uuid.uuid4().hex[:6]
 # AgentCore runtime session ids must be ≥33 characters (the platform mints 64), so a
@@ -198,7 +198,9 @@ def anonymize_stream(client: httpx.Client, base: str, agent_id: str) -> None:
     with httpx.stream(
         "POST",
         f"{base}/api/chat/{agent_id}",
-        headers={"Cookie": client.headers.get("Cookie", ""), "Accept": "text/event-stream"},
+        headers={"Cookie": client.headers.get("Cookie", ""), "Accept": "text/event-stream",
+                 # a fresh request: carry the suite's project like the client does
+                 "X-Project": e2e_project_id()},
         json={"prompt": PII_PROMPT, "session_id": session("pii-stream")},
         timeout=180,
     ) as response:
