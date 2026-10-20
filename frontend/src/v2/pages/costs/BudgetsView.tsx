@@ -1,9 +1,7 @@
 // The Budgets tab of `/v2/costs` (admin): spend levels, every account's limit and spend
-// this period, spend with no account, the background reconciliation (measured span cost
-// and AgentCore fees, the Runtime calibration, a report-only Cost Explorer comparison) and
-// the per-unit estimates charged where a call reports no usage (an opaque runtime's turn,
-// the long-running jobs' units). Nothing is enforced until a level exists
-// (services/budgets.py).
+// this period, spend with no account, and the per-unit estimates charged where a call
+// reports no usage (an opaque runtime's turn, the long-running jobs' units). Nothing is
+// enforced until a level exists (services/budgets.py).
 import { RefreshCw, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -40,7 +38,6 @@ import {
 import { useBasisLabel, useSourceLabel } from "../usage/labels";
 import { SourceTable, UsageBar } from "../usage/UsageParts";
 import { AssignFields } from "./BudgetAssign";
-import { CalibrationCard, ReconcileCard } from "./ReconcileView";
 import {
   type AssignDraft,
   amountFromInput,
@@ -674,8 +671,6 @@ export function BudgetsView({ period, onPeriod }: { period: string; onPeriod: (p
   const levels = useLoad(() => api.budgetLevels(), `v2-budget-levels:${nonce}`);
   const people = useLoad(() => api.budgetPeople(period), `v2-budget-people:${period}:${nonce}`);
   const settingsLoad = useLoad(() => api.budgetSettings(), "v2-budget-settings");
-  // ledger-only: the status never calls AWS (the Cost Explorer report is a button)
-  const reconcile = useLoad(() => api.budgetReconcileStatus(), `v2-budget-reconcile:${nonce}`);
   const [settings, setSettings] = useState<BudgetSettings | null>(null);
   const shownSettings = settings ?? settingsLoad.data;
   const reload = () => setNonce((n) => n + 1);
@@ -737,11 +732,7 @@ export function BudgetsView({ period, onPeriod }: { period: string; onPeriod: (p
         <Kpi
           label={t("v2.budgets.kpiEstimated")}
           value={people.data ? fmtShare(summary.estimatedShare) : "—"}
-          sub={
-            reconcile.data?.last_tick
-              ? t("v2.budgets.kpiEstimatedReconciled", { when: fmtTime(reconcile.data.last_tick.finished_at) })
-              : t("v2.budgets.kpiEstimatedSub")
-          }
+          sub={t("v2.budgets.kpiEstimatedSub")}
           testId="v2-budget-kpi-estimated"
         />
       </div>
@@ -761,13 +752,6 @@ export function BudgetsView({ period, onPeriod }: { period: string; onPeriod: (p
         onChanged={reload}
       />
       <UnattributedCard rows={unattributed} />
-      <ReconcileCard
-        status={reconcile.data ?? null}
-        loading={reconcile.loading}
-        error={reconcile.error}
-        onRetry={reconcile.reload}
-      />
-      <CalibrationCard status={reconcile.data ?? null} />
       {shownSettings ? (
         <SettingsCard key={shownSettings.updated_at ?? "default"} settings={shownSettings} onSaved={setSettings} />
       ) : (

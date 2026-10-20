@@ -9021,10 +9021,7 @@
           "runtime_harness_vcpu": "Harness session CPU",
           "runtime_default_vcpu": "Runtime session CPU (other agents)",
           "builtin_eval_input_tokens": "Built-in evaluator input tokens per evaluation",
-          "builtin_eval_output_tokens": "Built-in evaluator output tokens per evaluation",
-          "code_interpreter_gb_hours_per_session": "Code Interpreter memory per tool session",
-          "code_interpreter_vcpu_hours_per_session": "Code Interpreter CPU per tool session",
-          "calibration_min_sessions": "Sessions before a measured Runtime factor applies"
+          "builtin_eval_output_tokens": "Built-in evaluator output tokens per evaluation"
         },
         "unit": {
           "vcpu_hour": "vCPU-hour",
@@ -9039,10 +9036,7 @@
           "seconds": "seconds",
           "gb_resident": "GB resident",
           "vcpu_average": "vCPU on average",
-          "tokens_per_evaluation": "tokens per evaluation",
-          "gb_hours_per_session": "GB-hours per session",
-          "vcpu_hours_per_session": "vCPU-hours per session",
-          "sessions": "sessions"
+          "tokens_per_evaluation": "tokens per evaluation"
         }
       }
     },

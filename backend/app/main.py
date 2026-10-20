@@ -62,14 +62,7 @@ from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
 from app.routers.videos import router as videos_router
 from app.routers.workspaces import router as workspaces_router
-from app.services import (
-    alert_scheduler,
-    budget_scheduler,
-    byoc_uploads,
-    local_exec,
-    model_settings,
-    rates,
-)
+from app.services import alert_scheduler, byoc_uploads, local_exec, model_settings, rates
 from app.services.attachment_body import AttachmentBodyCap
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
@@ -291,8 +284,6 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
         alert_scheduler.start()  # opt-in background alert checks (real server only)
-        # budget reconciliation: measured span cost + AgentCore fees (on by default)
-        budget_scheduler.start()
         # coding turns run in their microVMs whether or not a browser streams them:
         # the watcher settles them (usage, snapshot) and snapshots saved files
         coding_watcher.start()

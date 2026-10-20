@@ -9021,10 +9021,7 @@
           "runtime_harness_vcpu": "Harness 会话 CPU",
           "runtime_default_vcpu": "Runtime 会话 CPU（其他 Agent）",
           "builtin_eval_input_tokens": "内置评估器每次评估的输入 Token",
-          "builtin_eval_output_tokens": "内置评估器每次评估的输出 Token",
-          "code_interpreter_gb_hours_per_session": "每个 Code Interpreter 会话的内存",
-          "code_interpreter_vcpu_hours_per_session": "每个 Code Interpreter 会话的 CPU",
-          "calibration_min_sessions": "采用实测 Runtime 系数所需的会话数"
+          "builtin_eval_output_tokens": "内置评估器每次评估的输出 Token"
         },
         "unit": {
           "vcpu_hour": "vCPU 小时",
@@ -9039,10 +9036,7 @@
           "seconds": "秒",
           "gb_resident": "GB 常驻",
           "vcpu_average": "vCPU 平均",
-          "tokens_per_evaluation": "Token / 次评估",
-          "gb_hours_per_session": "GB 小时 / 会话",
-          "vcpu_hours_per_session": "vCPU 小时 / 会话",
-          "sessions": "个会话"
+          "tokens_per_evaluation": "Token / 次评估"
         }
       }
     },
