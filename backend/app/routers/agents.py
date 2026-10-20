@@ -43,6 +43,7 @@ from app.services import (
     agent_source,
     byoc_uploads,
     context_layer,
+    context_layer_gateway,
     creators,
     identity_providers,
     memory_ownership,
@@ -215,11 +216,15 @@ def _validate_tool_auth(spec: AgentSpec, ws: WorkspaceScope) -> None:
 
     Only reaches AWS when some tool carries auth, so an ordinary deploy's
     request path is unchanged. A spec attaching the COA context layer needs the
-    workspace to have one connected (``context_layer.not_connected``)."""
+    workspace to have one connected (``context_layer.not_connected``), and one in
+    gateway mode its managed COA gateway enabled (``context_layer.gateway_unavailable``,
+    ledger only; the deploy's generate stage checks again)."""
     if any(tool.auth is not None for tool in spec.tools):
         identity_providers.validate_tool_auth(control_client(ws.context), spec)
     if spec.context_layer is not None:
-        context_layer.require_connected(ws.id)
+        layer = context_layer.require_connected(ws.id)
+        if context_layer_support.via_gateway(spec) and context_layer.gateway_ref(layer) is None:
+            raise context_layer_gateway.gateway_unavailable()
     if spec.inbound_auth is not None:
         # A spec-pinned JWT config gets the same save-time discovery probe as
         # the workspace default, so a bad URL fails the request, not the deploy.
@@ -1044,7 +1049,12 @@ def invoke_agent(
     extra: dict[str, Any] = {"attachments": prepared} if prepared else {}
     if context_layer_support.attached(agent.spec):
         # a COA context layer acts as the signed-in member, never as a client-chosen actor
-        extra["runtime_user_id"] = require_identity(request).username
+        identity = require_identity(request)
+        extra["runtime_user_id"] = identity.username
+        if context_layer_support.uses_gateway(agent.spec):
+            # the managed gateway's consent gate mints the member's pool JWT for this role
+            extra["user_role"] = identity.role
+            extra["user_email"] = identity.email
     result = invoke_agent_text(
         agent, req.prompt, session_id=req.session_id,
         actor_id=scoped_actor(agent.id, req.actor_id),

@@ -40,6 +40,8 @@ def chat_stream(
     attachments: PreparedAttachments | None = None,
     bearer_token: str | None = None,
     console_user: bool = True,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
 
@@ -52,6 +54,10 @@ def chat_stream(
     the workspace M2M token or fails with a named error).
     ``console_user=False`` (public /v1) refuses as_user consent asks by name —
     see ``invoke._record_auth_sessions``.
+
+    ``user_role`` / ``user_email`` are the signed-in member's, for an agent whose
+    context layer runs in gateway mode (a Harness: ``invoke.harness_turn_overrides``; a
+    Strands runtime: ``invoke._runtime_gateway_gate``).
     """
     session_id = session_id or new_session_id()
     workspace = workspace if workspace is not None else context_for_workspace(
@@ -87,6 +93,8 @@ def chat_stream(
                 runtime_user_id=runtime_user_id,
                 gateway_access_token=gateway_access_token,
                 console_user=console_user,
+                user_role=user_role,
+                user_email=user_email,
             )
         else:
             invoke_kwargs: dict[str, Any] = {}
@@ -100,6 +108,10 @@ def chat_stream(
                 invoke_kwargs["bearer_token"] = bearer_token
             if not console_user:
                 invoke_kwargs["console_user"] = False
+            if user_role:
+                # a gateway-mode Strands agent's consent gate mints for this member
+                invoke_kwargs["user_role"] = user_role
+                invoke_kwargs["user_email"] = user_email
             yield from invoke_agent_events(
                 agent,
                 prompt,
@@ -130,6 +142,8 @@ def _harness_events(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     console_user: bool = True,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     params: dict[str, Any] = {
         "harnessArn": agent.arn,
@@ -142,9 +156,11 @@ def _harness_events(
     overrides = harness_turn_overrides(
         agent, workspace, gateway_access_token=gateway_access_token,
         runtime_user_id=runtime_user_id, console_user=console_user, session_id=session_id,
+        user_role=user_role, user_email=user_email,
     )
     if "auth_required" in overrides:
-        # COA consent first: the card is the whole turn, InvokeHarness never runs
+        # COA consent first (direct, or the managed gateway's preflight): the card is
+        # the whole turn, InvokeHarness never runs
         yield {"event": "auth_required", "data": overrides["auth_required"]}
         return
     params.update(overrides)
