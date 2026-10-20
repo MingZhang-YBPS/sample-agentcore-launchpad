@@ -798,6 +798,14 @@ def eval_cost(admin: httpx.Client, users: dict[str, httpx.Client], agent_id: str
             break
         print(f"     eval: transient AWS failure ({error[:120]}) — one more run", flush=True)
     cost = run.get("cost") or {}
+    if run.get("status") == "completed" and cost.get("kind") != "actual":
+        # the measured cost is recorded just after the run turns terminal
+        # (evaluation/run_cost.record) — until then the row shows the estimate
+        later = wait_for("measured run cost", lambda rid=run_id: (
+            lambda r: r if (r.get("cost") or {}).get("kind") == "actual" else None)(
+            body(call(a, "GET", f"/api/eval/runs/{rid}", project=PROJECT_A))),
+            timeout=180, every=15)
+        cost = (later or {}).get("cost") or cost
     check("eval.run_completed", run.get("status") == "completed",
           f"status={run.get('status')} error={(run.get('error') or '')[:240]}")
     check("eval.run_cost", cost.get("kind") == "actual" and isinstance(cost.get("usd"),
