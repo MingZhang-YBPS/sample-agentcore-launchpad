@@ -222,17 +222,18 @@ shots:
       - {wait: '[data-testid=project-create]'}
       - {fill: ['[data-testid=project-create] input.v3-input >> nth=0', '零售客服']}
       - {fill: ['[data-testid=project-create] input.v3-input.mono', 'retail-service']}
-      - {eval: "(() => { const f=document.querySelector('[data-testid=project-create]'); const set=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; const s=f.querySelectorAll('select'); set.call(s[0],'customer-care'); s[0].dispatchEvent(new Event('change',{bubbles:true})); setTimeout(()=>{ const s2=f.querySelectorAll('select'); set.call(s2[1],'retail'); s2[1].dispatchEvent(new Event('change',{bubbles:true})); },300); })()"}
-      - {sleep: 800}
+      # the department control is the V3 themed Select (a button + listbox), not a <select>
+      - {click: '[data-testid=project-create] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has-text("客服中心")'}
+      - {sleep: 500}
       - {fill: ['[data-testid=project-create] textarea', '零售与电商的智能客服，飞轮主线在这里']}
       - {click: '[data-testid=project-create] input[type=checkbox] >> nth=0'}
       - {sleep: 500}
     clip: .v3-modal
     margin: 40
     highlights:
-      - {n: 1, box: '[data-testid=project-create] select >> nth=0', badge: left}
-      - {n: 2, box: '[data-testid=project-create] select >> nth=1', badge: left}
-      - {n: 3, box: '[data-testid=project-create] input[type=checkbox] >> nth=0', badge: left}
+      - {n: 1, box: '[data-testid=project-create] button.v3-sel >> nth=0', badge: left}
+      - {n: 2, box: '[data-testid=project-create] input[type=checkbox] >> nth=0', badge: left}
 
   - name: 40-teams-members
     chapter: 10-prepare/40-teams
@@ -1638,19 +1639,22 @@ shots:
       - {fill: ['[data-testid=v3-user-create] input[name=username]', developer-2]}
       - {fill: ['[data-testid=v3-user-create] input[name=email]', developer-2@example.com]}
       - {click: {zh: '[data-testid=v3-user-projects] button:has-text("添加项目")', en: '[data-testid=v3-user-projects] button:has-text("Add project")'}}
-      - {select: ['[data-testid=v3-user-projects] select >> nth=0', 零售客服]}
-      - {select: ['[data-testid=v3-user-projects] select >> nth=1', {zh: 开发者, en: Developer}]}
+      # project and role are V3 themed Selects (a button + listbox), not <select>s
+      - {click: '[data-testid=v3-user-projects] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("零售客服"))'}
+      - {click: '[data-testid=v3-user-projects] button.v3-sel >> nth=1'}
+      - {click: {zh: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("开发者"))', en: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("Developer"))'}}
       - {sleep: 500}
     clip: '[role=dialog]'
     margin: 24
     highlights:
       - {n: 1, box: '[data-testid=v3-user-create] input[name=username]', badge: left}
       - {n: 2, box: '[data-testid=v3-user-create] input[name=email]', badge: right}
-      - {n: 3, box: '[data-testid=v3-user-create] select[name=role]', badge: left}
-      - {n: 4, box: '[data-testid=v3-user-create] select[name=expiry]', badge: right}
+      - {n: 3, box: '[data-testid=v3-user-create] label:has(> input[name=role]) button.v3-sel', badge: left}
+      - {n: 4, box: '[data-testid=v3-user-create] label:has(> input[name=expiry]) button.v3-sel', badge: right}
       - {n: 5, box: '[data-testid=v3-user-create] input[name=password-choice] >> nth=0', badge: left}
-      - {n: 6, box: '[data-testid=v3-user-projects] select >> nth=0', badge: left}
-      - {n: 7, box: '[data-testid=v3-user-projects] select >> nth=1', badge: right}
+      - {n: 6, box: '[data-testid=v3-user-projects] button.v3-sel >> nth=0', badge: left}
+      - {n: 7, box: '[data-testid=v3-user-projects] button.v3-sel >> nth=1', badge: right}
       - {n: 8, box: '[role=dialog] .v3-btn.primary', badge: top}
 
   - name: 90-organizer-users-create-password
@@ -1666,8 +1670,10 @@ shots:
       - {fill: ['[data-testid=v3-user-create] input[name=username]', developer-2]}
       - {fill: ['[data-testid=v3-user-create] input[name=email]', developer-2@example.com]}
       - {click: {zh: '[data-testid=v3-user-projects] button:has-text("添加项目")', en: '[data-testid=v3-user-projects] button:has-text("Add project")'}}
-      - {select: ['[data-testid=v3-user-projects] select >> nth=0', 零售客服]}
-      - {select: ['[data-testid=v3-user-projects] select >> nth=1', {zh: 开发者, en: Developer}]}
+      - {click: '[data-testid=v3-user-projects] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("零售客服"))'}
+      - {click: '[data-testid=v3-user-projects] button.v3-sel >> nth=1'}
+      - {click: {zh: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("开发者"))', en: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("Developer"))'}}
       - {click: '[role=dialog] .v3-btn.primary'}
       - {wait: '[data-testid=v3-one-time-password]'}
       - {save_value: ['[data-testid=v3-one-time-password]', '{env:LP_DEV2_PW_FILE}']}
@@ -1704,18 +1710,18 @@ shots:
     margin: 16
     highlights:
       - {n: 1, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^项目与角色")) tbody tr:has-text("零售客服")', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Projects and roles")) tbody tr:has-text("零售客服")'}, badge: left}
-      - {n: 2, box: {zh: 'main button:has-text("编辑项目与项目组")', en: 'main button:has-text("Edit projects and groups")'}, badge: left}
+      - {n: 2, box: {zh: 'main button:has-text("编辑项目")', en: 'main button:has-text("Edit projects")'}, badge: left}
 
   - name: 90-organizer-users-workspaces-dialog
     chapter: 90-appendix/10-organizer-deploy
-    status: replace   # admin, developer-2: the Edit projects and groups dialog (NOT saved)
+    status: replace   # admin, developer-2: the Edit projects dialog (NOT saved)
     account: admin
     path: /v3/users?view=detail&user=developer-2
     requires: [user:developer-2]
     wait: '.v3-usr-chip'
     actions:
       - {sleep: 1200}
-      - {click: {zh: 'main button:has-text("编辑项目与项目组")', en: 'main button:has-text("Edit projects and groups")'}}
+      - {click: {zh: 'main button:has-text("编辑项目")', en: 'main button:has-text("Edit projects")'}}
       - {wait: '[data-testid=v3-user-memberships]'}
       - {sleep: 500}
     clip: '[role=dialog]'
