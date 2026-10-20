@@ -1,5 +1,5 @@
-import type { BudgetNotice, BudgetStopReason, RunSnapshotRef } from "./api";
 import { evaluatorPolarity } from "./evaluators";
+import type { RunSnapshotRef } from "./api";
 
 export interface EvaluationDatasetInfo {
   id: string;
@@ -120,11 +120,6 @@ export interface EvaluationRunInfo {
   /** an operator stop is pending (in-memory flag; the row turns `stopped` once
    *  the worker/poller observes it). Absent on older backends. */
   stop_requested?: boolean;
-  /** `budget_exceeded`: stopped at a boundary because its creator's monthly spend budget
-   *  was reached (the sessions replayed so far are kept). Absent on older backends. */
-  stop_reason?: BudgetStopReason | null;
-  /** create response only: the run's forecast is more than the creator has left */
-  budget_notice?: BudgetNotice | null;
   queue_position: number | null;
   scores: EvaluationScore[];
   insights: InsightTrees;
@@ -375,10 +370,6 @@ export interface RunRecommendation {
     excluded_sessions?: { session_id: string; scenario_id: string }[];
   };
   error: string | null;
-  /** who asked for it — they pay for a 3rd-party provider's model calls (null for the
-   *  config admin / auth-disabled operator and older rows). Absent on older backends. */
-  requested_by?: string | null;
-  requested_by_name?: string | null;
   /** set once the recommended prompt was accepted into a new Harness version */
   accepted: {
     by: string;

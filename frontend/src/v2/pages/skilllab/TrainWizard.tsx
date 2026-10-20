@@ -10,7 +10,6 @@ import {
   type SkillLabStatus,
   type SkillLabTargetBackend,
 } from "../../../lib/api";
-import { rememberBudgetNotice } from "../../../lib/budgets";
 import { canSubmitJobs, trainRunEstimate, trainSplitCounts } from "../../../lib/skillLab";
 import { Alert, Button, Card, Field, FlowHeader, Select } from "../../ui";
 import { NumberField } from "./EvalWizard";
@@ -132,7 +131,6 @@ export function TrainWizard({ status }: { status: SkillLabStatus | null }) {
           ...(trainableFiles.length > 0 ? { trainable_files: trainableFiles } : {}),
         },
       });
-      rememberBudgetNotice(job.id, job.budget_notice);
       setParams({ tab: "train", view: "detail", id: job.id });
     } catch (err) {
       setError(errorMessage(err));

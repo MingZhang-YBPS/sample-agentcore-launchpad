@@ -20,7 +20,7 @@ import type {
 import type { ExperimentInfo } from "./experiments";
 import type { ModelSource, ReasoningEffort } from "./models";
 import type { ManagedVideo, ManagedVideoCatalog, VideoCatalog, VideoContent } from "./videos";
-import { type BudgetEstimateKey, budgetRefusalText, modelPricePath, notifyBudgetRefused } from "./budgets";
+import { budgetRefusalText, modelPricePath, notifyBudgetRefused } from "./budgets";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
 export interface AnnouncementContent {
@@ -790,11 +790,6 @@ export interface RuntimeCanaryInfo {
       traffic_attempts: {
         sent: number;
         failed: number;
-        /** calls (paired) or prompts (a legacy weighted Runtime attempt) never sent
-         *  because the caller's monthly spend budget was reached; with
-         *  `stop_reason: budget_exceeded` */
-        skipped?: number;
-        stop_reason?: BudgetStopReason | null;
         baseline_n: number;
         /** the primary evaluator's own sample count before this stage's traffic
          *  (legacy weighted Runtime attempts with a primary); the verdict waits for it
@@ -810,9 +805,7 @@ export interface RuntimeCanaryInfo {
          *  legacy weighted Runtime attempt split by the gateway */
         mode?: string;
         pairs?: { scenario_id: string; control_session_id: string | null;
-                  treatment_session_id: string | null; error?: string;
-                  /** `budget_exceeded`: the pair was never sent */
-                  skipped?: BudgetStopReason }[];
+                  treatment_session_id: string | null; error?: string }[];
       }[];
       verdict?: {
         verdict: string;
@@ -4129,11 +4122,6 @@ export interface SkillLabJobInfo {
   split: string;
   params: SkillLabJobParams;
   error: string | null;
-  /** `budget_exceeded`: its creator's monthly spend budget stopped it (a training job
-   *  between steps — resumable — or any job before it started). Absent on older backends. */
-  stop_reason?: BudgetStopReason | null;
-  /** create response only: the estimate is more than the creator has left this month */
-  budget_notice?: BudgetNotice | null;
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
@@ -5143,28 +5131,13 @@ export interface BudgetAssignment {
   unlimited: boolean;
 }
 
-/** One per-unit estimate key (`lib/budgets.ts` BUDGET_ESTIMATE_KEYS). */
-export type { BudgetEstimateKey };
-
-/** `GET/PUT /api/budgets/settings` — the per-unit estimates, their defaults and who changed them. */
-export type BudgetSettings = Record<BudgetEstimateKey, number> & {
-  defaults: Record<BudgetEstimateKey, number>;
+/** `GET/PUT /api/budgets/settings` — what one turn on an opaque runtime is charged. */
+export interface BudgetSettings {
+  opaque_turn_estimate_usd: number;
+  defaults: { opaque_turn_estimate_usd: number };
   updated_by: string | null;
   updated_at: string | null;
-};
-
-/** On a create response (eval run, Skill Lab job): the job's estimate is more than its
- *  budgeted payer has left this month. It is still allowed and stops at its next boundary. */
-export interface BudgetNotice {
-  estimate_usd: number;
-  remaining_usd: number;
-  limit_usd: number;
-  period: string;
-  resets_at: string;
 }
-
-/** Why a job stopped early: its payer's monthly spend budget was reached at a boundary. */
-export type BudgetStopReason = "budget_exceeded";
 
 /** USD per 1M tokens; a null cache rate means input × the cache factor. */
 export interface ModelPriceRates {
@@ -5710,8 +5683,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
   budgetSettings: () => request<BudgetSettings>("/api/budgets/settings"),
-  /** Only the keys sent change; `null` resets a key to its default. */
-  putBudgetSettings: (body: Partial<Record<BudgetEstimateKey, number | null>>) =>
+  /** `null` resets a key to its default. */
+  putBudgetSettings: (body: { opaque_turn_estimate_usd: number | null }) =>
     request<BudgetSettings>("/api/budgets/settings", { method: "PUT", body: JSON.stringify(body) }),
   /** Admin: the merged price map, the models with no price, and the cache factors. */
   modelPrices: () => request<ModelPriceTable>("/api/admin/model-prices"),

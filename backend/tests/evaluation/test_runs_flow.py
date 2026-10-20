@@ -30,8 +30,7 @@ def stub_environment(monkeypatch, batch_status="COMPLETED"):
     call_count = {"n": 0}
 
     def invoke_runtime_text(
-        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None,
-        on_usage=None,
+        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None
     ):
         call_count["n"] += 1
         return {"text": "42", "session_id": f"sess-{call_count['n']:03d}" + "x" * 30}
@@ -256,8 +255,7 @@ def test_harness_run_completes(client, monkeypatch):
     ])
     harness_calls = {"n": 0}
 
-    def invoke_harness_text(client_, arn, prompt, session_id=None, actor_id="default",
-                            on_usage=None):
+    def invoke_harness_text(client_, arn, prompt, session_id=None, actor_id="default"):
         harness_calls["n"] += 1
         return {"text": "ok", "session_id": f"hsess-{harness_calls['n']:03d}" + "x" * 30}
 
