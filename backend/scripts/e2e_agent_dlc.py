@@ -431,9 +431,12 @@ def main() -> int:
             if agent_id:
                 res = admin.delete(f"/api/agents/{agent_id}")
                 print(f"   delete agent {agent_id}: HTTP {res.status_code}")
-            for ds in reversed(datasets):
-                res = admin.delete(f"/api/eval/datasets/{ds}")
-                print(f"   delete dataset {ds}: HTTP {res.status_code}")
+            if datasets:
+                # a golden set and its splits go together through the golden route
+                # (admin only); the generic dataset delete refuses a golden row
+                # (409 dataset.golden_managed)
+                res = admin.delete(f"/api/golden-sets/{datasets[0]}")
+                print(f"   delete golden set {datasets[0]} (+ splits): HTTP {res.status_code}")
             for user_id in users:
                 res = admin.delete(f"/api/users/{user_id}")
                 print(f"   delete user {user_id}: HTTP {res.status_code}")
