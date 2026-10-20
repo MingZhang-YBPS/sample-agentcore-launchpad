@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { codingApi, type CodingProject, errorMessage } from "../../../lib/api";
+import { codingApi, type CodingRepo, errorMessage } from "../../../lib/api";
 import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
@@ -23,27 +23,27 @@ import {
   Table,
 } from "../../ui";
 import { RuntimeCard } from "./RuntimeCard";
-import { ProjectStatusTag } from "./common";
+import { RepoStatusTag } from "./common";
 import { useCodingDownload } from "./useCodingDownload";
 
 export const NAME_MAX = 80;
 export const DESCRIPTION_MAX = 500;
 
-/** Create (no `project`) or rename / re-describe a project. */
-export function ProjectFormModal({
-  project,
+/** Create (no `repo`) or rename / re-describe a repo. */
+export function RepoFormModal({
+  repo,
   open,
   onClose,
   onSaved,
 }: {
-  project?: CodingProject | null;
+  repo?: CodingRepo | null;
   open: boolean;
   onClose: () => void;
-  onSaved: (project: CodingProject) => void;
+  onSaved: (repo: CodingRepo) => void;
 }) {
   const { t } = useTranslation();
-  const [name, setName] = useState(project?.name ?? "");
-  const [description, setDescription] = useState(project?.description ?? "");
+  const [name, setName] = useState(repo?.name ?? "");
+  const [description, setDescription] = useState(repo?.description ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
@@ -56,9 +56,9 @@ export function ProjectFormModal({
     setBusy(true);
     setError(null);
     try {
-      const saved = project
-        ? await codingApi.updateProject(project.id, { name: trimmed, description: description.trim() })
-        : await codingApi.createProject({ name: trimmed, description: description.trim() || undefined });
+      const saved = repo
+        ? await codingApi.updateRepo(repo.id, { name: trimmed, description: description.trim() })
+        : await codingApi.createRepo({ name: trimmed, description: description.trim() || undefined });
       onSaved(saved);
     } catch (err) {
       setError(errorMessage(err));
@@ -70,14 +70,14 @@ export function ProjectFormModal({
   return (
     <Modal
       open={open}
-      title={t(project ? "v2.coding.form.editTitle" : "v2.coding.form.createTitle")}
+      title={t(repo ? "v2.coding.form.editTitle" : "v2.coding.form.createTitle")}
       onClose={onClose}
-      testId="v2-coding-project-form"
+      testId="v2-coding-repo-form"
       footer={
         <>
           <Button onClick={onClose}>{t("v2.common.cancel")}</Button>
-          <Button kind="primary" disabled={busy} onClick={() => void submit()} testId="v2-coding-project-save">
-            {t(project ? "v2.common.save" : "v2.common.create")}
+          <Button kind="primary" disabled={busy} onClick={() => void submit()} testId="v2-coding-repo-save">
+            {t(repo ? "v2.common.save" : "v2.common.create")}
           </Button>
         </>
       }
@@ -99,7 +99,7 @@ export function ProjectFormModal({
             aria-label={t("v2.coding.form.name")}
             onChange={(e) => setName(e.target.value)}
             autoFocus
-            data-testid="v2-coding-project-name"
+            data-testid="v2-coding-repo-name"
           />
         </Field>
         <Field
@@ -114,7 +114,7 @@ export function ProjectFormModal({
             placeholder={t("v2.coding.form.descriptionPlaceholder")}
             aria-label={t("v2.coding.form.description")}
             onChange={(e) => setDescription(e.target.value)}
-            data-testid="v2-coding-project-description"
+            data-testid="v2-coding-repo-description"
           />
         </Field>
       </form>
@@ -122,10 +122,10 @@ export function ProjectFormModal({
   );
 }
 
-/** The landing page: the runtime card, then the member's projects. Administrators
- *  can switch to every project in the workspace (list and delete only — a project's
+/** The landing page: the runtime card, then the member's repos. Administrators
+ *  can switch to every repo in the workspace (list and delete only — a repo's
  *  IDE stays its creator's). */
-export function ProjectList() {
+export function RepoList() {
   const { t } = useTranslation();
   const toast = useV2Toast();
   const [, setParams] = useSearchParams();
@@ -133,36 +133,36 @@ export function ProjectList() {
   const [scope, setScope] = useState<"mine" | "all">("mine");
   const all = isAdmin && scope === "all";
   const runtime = useLoad(() => codingApi.runtime(), "coding-runtime");
-  const projects = useLoad(() => codingApi.listProjects(all), `coding-projects:${all}`);
+  const repos = useLoad(() => codingApi.listRepos(all), `coding-repos:${all}`);
   const [q, setQ] = useState("");
   const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<CodingProject | null>(null);
-  const [deleting, setDeleting] = useState<CodingProject | null>(null);
+  const [editing, setEditing] = useState<CodingRepo | null>(null);
+  const [deleting, setDeleting] = useState<CodingRepo | null>(null);
   const [busy, setBusy] = useState(false);
   const { download, pending: downloadPending } = useCodingDownload();
   const ready = runtime.data?.status === "ready";
 
   const rows = useMemo(() => {
-    const list = projects.data?.projects ?? [];
+    const list = repos.data?.repos ?? [];
     const needle = q.trim().toLowerCase();
     return needle ? list.filter((p) => `${p.name} ${p.description} ${p.created_by_name ?? ""}`.toLowerCase().includes(needle)) : list;
-  }, [projects.data, q]);
+  }, [repos.data, q]);
   const paged = usePaged(rows, 12);
 
-  // "all" lists other members' projects too: only the caller's own open in the IDE.
+  // "all" lists other members' repos too: only the caller's own open in the IDE.
   // The server decides ownership (`owned`, by principal) — a display name is not an
   // identity (a config admin and a same-named user differ).
-  const owned = (p: CodingProject) => p.owned ?? !all;
-  const open = (p: CodingProject) => setParams({ view: "project", id: p.id });
+  const owned = (p: CodingRepo) => p.owned ?? !all;
+  const open = (p: CodingRepo) => setParams({ view: "repo", id: p.id });
 
   const remove = async () => {
     if (!deleting) return;
     setBusy(true);
     try {
-      await codingApi.deleteProject(deleting.id);
-      toast("success", t("v2.coding.projects.deleted", { name: deleting.name }));
+      await codingApi.deleteRepo(deleting.id);
+      toast("success", t("v2.coding.repos.deleted", { name: deleting.name }));
       setDeleting(null);
-      projects.reload();
+      repos.reload();
     } catch (err) {
       toast("error", errorMessage(err));
     } finally {
@@ -170,14 +170,14 @@ export function ProjectList() {
     }
   };
 
-  const columns: Column<CodingProject>[] = [
+  const columns: Column<CodingRepo>[] = [
     {
       key: "name",
-      title: t("v2.coding.projects.colName"),
+      title: t("v2.coding.repos.colName"),
       render: (p) => (
         <>
           {owned(p) ? (
-            <LinkButton onClick={() => open(p)} testId={`v2-coding-project-${p.name}`}>
+            <LinkButton onClick={() => open(p)} testId={`v2-coding-repo-${p.name}`}>
               {p.name}
             </LinkButton>
           ) : (
@@ -191,10 +191,10 @@ export function ProjectList() {
         </>
       ),
     },
-    { key: "status", title: t("v2.coding.projects.colStatus"), render: (p) => <ProjectStatusTag status={p.status} /> },
+    { key: "status", title: t("v2.coding.repos.colStatus"), render: (p) => <RepoStatusTag status={p.status} /> },
     {
       key: "agent",
-      title: t("v2.coding.projects.colAgent"),
+      title: t("v2.coding.repos.colAgent"),
       render: (p) =>
         p.agent_id ? (
           <Link to={`/v2/agents?view=detail&id=${encodeURIComponent(p.agent_id)}`} className="mono">
@@ -204,22 +204,22 @@ export function ProjectList() {
           <span className="v2-muted">—</span>
         ),
     },
-    ...(all ? [{ key: "creator", title: t("v2.common.creator"), render: (p: CodingProject) => creatorLabel(p) }] : []),
-    { key: "updated", title: t("v2.coding.projects.colUpdated"), className: "nowrap", render: (p) => fmtTime(p.updated_at) },
+    ...(all ? [{ key: "creator", title: t("v2.common.creator"), render: (p: CodingRepo) => creatorLabel(p) }] : []),
+    { key: "updated", title: t("v2.coding.repos.colUpdated"), className: "nowrap", render: (p) => fmtTime(p.updated_at) },
     {
       key: "ops",
       title: t("v2.common.actions"),
       className: "right",
       render: (p) => (
         <div className="v2-actions">
-          {owned(p) && <LinkButton onClick={() => open(p)}>{t("v2.coding.projects.open")}</LinkButton>}
-          {owned(p) && <LinkButton onClick={() => setEditing(p)}>{t("v2.coding.projects.rename")}</LinkButton>}
+          {owned(p) && <LinkButton onClick={() => open(p)}>{t("v2.coding.repos.open")}</LinkButton>}
+          {owned(p) && <LinkButton onClick={() => setEditing(p)}>{t("v2.coding.repos.rename")}</LinkButton>}
           {owned(p) && (
             <LinkButton
               onClick={() => void download(p.id)}
               disabled={!ready || downloadPending(p.id)}
-              title={!ready ? t("v2.coding.composer.runtimeNotReady") : t("v2.coding.download.projectHint")}
-              testId="v2-coding-download-project-row"
+              title={!ready ? t("v2.coding.composer.runtimeNotReady") : t("v2.coding.download.repoHint")}
+              testId="v2-coding-download-repo-row"
             >
               {downloadPending(p.id) && <Loader2 size={12} className="v2-coding-spin" aria-hidden="true" />}
               {t("v2.coding.download.button")}
@@ -228,7 +228,7 @@ export function ProjectList() {
           <LinkButton
             danger
             disabled={p.status === "running"}
-            title={p.status === "running" ? t("v2.coding.projects.runningNoDelete") : undefined}
+            title={p.status === "running" ? t("v2.coding.repos.runningNoDelete") : undefined}
             onClick={() => setDeleting(p)}
             testId={`v2-coding-delete-${p.name}`}
           >
@@ -243,78 +243,78 @@ export function ProjectList() {
     <>
       <PageHeader title={t("v2.coding.title")} desc={t("v2.coding.desc")} />
       <RuntimeCard runtime={runtime.data} loading={runtime.loading} error={runtime.error} reload={runtime.reload} />
-      <Card title={t("v2.coding.projects.title")}>
+      <Card title={t("v2.coding.repos.title")}>
         <div className="v2-toolbar">
-          <Button onClick={projects.reload}>{t("v2.common.refresh")}</Button>
+          <Button onClick={repos.reload}>{t("v2.common.refresh")}</Button>
           <Button kind="primary" onClick={() => setCreating(true)} testId="v2-coding-new">
             <Plus size={14} aria-hidden="true" />
-            {t("v2.coding.projects.new")}
+            {t("v2.coding.repos.new")}
           </Button>
           {isAdmin && (
             <Segmented
               value={scope}
               onChange={setScope}
-              ariaLabel={t("v2.coding.projects.scope")}
+              ariaLabel={t("v2.coding.repos.scope")}
               options={[
-                { value: "mine", label: t("v2.coding.projects.mine") },
-                { value: "all", label: t("v2.coding.projects.all") },
+                { value: "mine", label: t("v2.coding.repos.mine") },
+                { value: "all", label: t("v2.coding.repos.all") },
               ]}
             />
           )}
           <div className="end">
-            <SearchInput value={q} onChange={setQ} placeholder={t("v2.coding.projects.search")} testId="v2-coding-search" />
+            <SearchInput value={q} onChange={setQ} placeholder={t("v2.coding.repos.search")} testId="v2-coding-search" />
             <span className="v2-count">{t("v2.common.total", { count: rows.length })}</span>
           </div>
         </div>
-        {all && <Alert>{t("v2.coding.projects.allNote")}</Alert>}
+        {all && <Alert>{t("v2.coding.repos.allNote")}</Alert>}
         <Table
           columns={columns}
           rows={paged.slice}
           rowKey={(p) => p.id}
-          loading={projects.loading}
-          error={projects.error}
-          onRetry={projects.reload}
+          loading={repos.loading}
+          error={repos.error}
+          onRetry={repos.reload}
           empty={
-            projects.data?.projects.length ? (
-              t("v2.coding.projects.noMatch")
+            repos.data?.repos.length ? (
+              t("v2.coding.repos.noMatch")
             ) : (
               <>
-                <b>{t("v2.coding.projects.empty")}</b>
-                <div className="v2-coding-empty-body">{t("v2.coding.projects.emptyBody")}</div>
+                <b>{t("v2.coding.repos.empty")}</b>
+                <div className="v2-coding-empty-body">{t("v2.coding.repos.emptyBody")}</div>
               </>
             )
           }
-          testId="v2-coding-projects"
+          testId="v2-coding-repos"
         />
         <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={paged.setPage} />
       </Card>
       {creating && (
-        <ProjectFormModal
+        <RepoFormModal
           open
           onClose={() => setCreating(false)}
           onSaved={(p) => {
             setCreating(false);
-            toast("success", t("v2.coding.projects.created", { name: p.name }));
+            toast("success", t("v2.coding.repos.created", { name: p.name }));
             open(p);
           }}
         />
       )}
       {editing && (
-        <ProjectFormModal
+        <RepoFormModal
           open
-          project={editing}
+          repo={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            toast("success", t("v2.coding.projects.saved"));
-            projects.reload();
+            toast("success", t("v2.coding.repos.saved"));
+            repos.reload();
           }}
         />
       )}
       <Confirm
         open={deleting !== null}
-        title={t("v2.coding.projects.deleteTitle")}
-        body={t("v2.coding.projects.deleteBody", { name: deleting?.name ?? "" })}
+        title={t("v2.coding.repos.deleteTitle")}
+        body={t("v2.coding.repos.deleteBody", { name: deleting?.name ?? "" })}
         confirmLabel={t("v2.common.delete")}
         danger
         busy={busy}

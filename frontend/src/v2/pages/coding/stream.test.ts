@@ -49,7 +49,7 @@ describe("parseSseFrame", () => {
 describe("sseFrameBatches", () => {
   it("yields one batch per chunk, across split frames and CRLF", async () => {
     const res = streamed([
-      'event: status\ndata: {"project_status":"running"}\n\n: keep-alive\n\nid: 1\nevent: event\ndata: {"seq":1}\n\nid: 2\nevent: ev',
+      'event: status\ndata: {"repo_status":"running"}\n\n: keep-alive\n\nid: 1\nevent: event\ndata: {"seq":1}\n\nid: 2\nevent: ev',
       'ent\ndata: {"seq":2}\n\n',
       "event: reconnect\r\n\r\n",
     ]);
@@ -57,7 +57,7 @@ describe("sseFrameBatches", () => {
     for await (const batch of sseFrameBatches(res)) batches.push(batch.map((f) => [f.event, f.id, f.data]));
     expect(batches).toEqual([
       [
-        ["status", null, { project_status: "running" }],
+        ["status", null, { repo_status: "running" }],
         ["event", "1", { seq: 1 }],
       ],
       [["event", "2", { seq: 2 }]],
@@ -111,8 +111,8 @@ describe("reconnect policy", () => {
 });
 
 describe("isTerminalStreamError", () => {
-  it("stops on a gone project or runtime, retries everything else", () => {
-    expect(isTerminalStreamError("coding.project_not_found")).toBe(true);
+  it("stops on a gone repo or runtime, retries everything else", () => {
+    expect(isTerminalStreamError("coding.repo_not_found")).toBe(true);
     expect(isTerminalStreamError("coding.runtime_not_installed")).toBe(true);
     expect(isTerminalStreamError("http.401")).toBe(true);
     // the auth middleware's envelope codes, not only bare statuses

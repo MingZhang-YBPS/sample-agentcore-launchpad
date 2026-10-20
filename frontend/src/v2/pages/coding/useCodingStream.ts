@@ -7,9 +7,9 @@ import { afterStream, FLUSH_MS, isTerminalStreamError, shouldPause, sseFrameBatc
 /** The stream's connection state, for the run-status line. */
 export type StreamPhase = "connecting" | "live" | "retrying" | "paused" | "stopped";
 
-/** The first frame of every stream request: the ledger's view of the project. */
+/** The first frame of every stream request: the ledger's view of the repo. */
 export interface StreamStatus {
-  projectStatus: string | null;
+  repoStatus: string | null;
   activeTurnId: string | null;
 }
 
@@ -23,7 +23,7 @@ function statusOf(data: unknown): StreamStatus {
     const id = a.turn_id ?? a.turnId ?? a.id;
     activeTurnId = typeof id === "string" ? id : null;
   }
-  return { projectStatus: typeof d.project_status === "string" ? d.project_status : null, activeTurnId };
+  return { repoStatus: typeof d.repo_status === "string" ? d.repo_status : null, activeTurnId };
 }
 
 function isRecord(value: unknown): value is CodingEventRecord {
@@ -33,7 +33,7 @@ function isRecord(value: unknown): value is CodingEventRecord {
 }
 
 /**
- * The project's live conversation: one `GET …/events?after=<seq>` after another.
+ * The repo's live conversation: one `GET …/events?after=<seq>` after another.
  * A request replays everything after the cursor (compact history on the first one)
  * and then tails live; `reconnect`, a dropped connection or an error starts the next
  * request after the last applied seq (backoff on failures, `stream.ts`). A tab hidden
@@ -41,7 +41,7 @@ function isRecord(value: unknown): value is CodingEventRecord {
  * itself never depends on this connection.
  */
 export function useCodingStream(
-  projectId: string,
+  repoId: string,
   enabled: boolean,
   onRecords?: (records: CodingEventRecord[]) => void,
 ) {
@@ -124,7 +124,7 @@ export function useCodingStream(
         let terminal: string | null = null;
         try {
           setPhase(failures ? "retrying" : "connecting");
-          const res = await codingApi.events(projectId, cursor.current, controller.signal);
+          const res = await codingApi.events(repoId, cursor.current, controller.signal);
           if (cancelled) return;
           setPhase("live");
           for await (const batch of sseFrameBatches(res)) {
@@ -186,7 +186,7 @@ export function useCodingStream(
       window.clearInterval(pauseTimer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [projectId, enabled, nonce]);
+  }, [repoId, enabled, nonce]);
 
   /** Start streaming again after a terminal stop (the Retry action). */
   const restart = useCallback(() => {

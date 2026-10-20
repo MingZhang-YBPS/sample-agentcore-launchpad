@@ -1028,6 +1028,7 @@ def convert_agent(
 def invoke_agent(
     agent_id: str,
     req: InvokeRequest,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),

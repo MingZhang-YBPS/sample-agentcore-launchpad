@@ -67,15 +67,15 @@ def live_job(db: Session, workspace_id: str) -> Job | None:
     )
 
 
-def running_projects(db: Session, workspace_id: str) -> int:
-    """Projects with a turn in flight (or a start being claimed) — the uninstall
+def running_repos(db: Session, workspace_id: str) -> int:
+    """Repos with a turn in flight (or a start being claimed) — the uninstall
     refusal: removing the runtime would strand those turns."""
-    from app.coding.models import PROJECT_RUNNING, CodingProject
+    from app.coding.models import REPO_RUNNING, CodingRepo
 
     return (
-        db.query(CodingProject)
-        .filter(CodingProject.workspace_id == workspace_id,
-                CodingProject.status == PROJECT_RUNNING)
+        db.query(CodingRepo)
+        .filter(CodingRepo.workspace_id == workspace_id,
+                CodingRepo.status == REPO_RUNNING)
         .count()
     )
 
@@ -160,7 +160,7 @@ def execute_job(job_id: str) -> None:
             else:
                 keys = infra.uninstall_coding_runtime(ctx, workspace_id, log)
                 merge_workspace_resources(ctx, keys)
-                log("done", "coding runtime uninstalled (project snapshots kept)")
+                log("done", "coding runtime uninstalled (repo snapshots kept)")
             _finish(db, job_id, "succeeded")
         except Exception as exc:  # noqa: BLE001 — a job records its failure, never raises
             logger.warning("coding runtime job %s failed: %s\n%s", job_id, exc,

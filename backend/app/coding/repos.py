@@ -1,13 +1,13 @@
-"""Coding projects: the private-owner choke point, CRUD and the response shapes.
+"""Coding repos: the private-owner choke point, CRUD and the response shapes.
 
 **Access rule** (parent design §7.2, deliberately stricter than
-``resource_visibility``: a project is a live shell plus code). A project belongs
+``resource_visibility``: a repo is a live shell plus code). A repo belongs
 to the principal that created it (``assistant/principal.principal_of``) in every
-workspace visibility mode. Every by-id route resolves through ``project_in``; a
-foreign or missing id is ``404 coding.project_not_found`` — indistinguishable.
+workspace visibility mode. Every by-id route resolves through ``repo_in``; a
+foreign or missing id is ``404 coding.repo_not_found`` — indistinguishable.
 Administrators pass only where the route asks for it (``admin_ok=True``): the
 workspace-wide list (``?all=1``) and DELETE, for cleanup. They can never open a
-project's IDE, read its files, stream its events or run a turn in it.
+repo's IDE, read its files, stream its events or run a turn in it.
 """
 
 from __future__ import annotations
@@ -33,10 +33,10 @@ from . import runtime_client, s3urls, snapshots
 from .models import (
     DESCRIPTION_MAX,
     NAME_MAX,
-    PROJECT_DELETING,
-    PROJECT_IDLE,
-    PROJECT_RUNNING,
-    CodingProject,
+    REPO_DELETING,
+    REPO_IDLE,
+    REPO_RUNNING,
+    CodingRepo,
     CodingTurn,
 )
 
@@ -50,19 +50,19 @@ def now() -> datetime:
 
 
 def not_found() -> NotFoundError:
-    return NotFoundError("coding.project_not_found", "coding project not found")
+    return NotFoundError("coding.repo_not_found", "coding repo not found")
 
 
 def turn_running() -> AppError:
-    return AppError("coding.turn_running", "a turn is running in this project",
+    return AppError("coding.turn_running", "a turn is running in this repo",
                     status_code=409)
 
 
 # ── the choke point ─────────────────────────────────────────────────────────
 
 
-def owns(row: CodingProject | None, identity: Identity) -> bool:
-    """The caller's principal is the project's owner. A NULL owner matches nobody."""
+def owns(row: CodingRepo | None, identity: Identity) -> bool:
+    """The caller's principal is the repo's owner. A NULL owner matches nobody."""
     return (
         row is not None
         and row.owner_principal is not None
@@ -70,19 +70,19 @@ def owns(row: CodingProject | None, identity: Identity) -> bool:
     )
 
 
-def project_in(
+def repo_in(
     db: Session,
     workspace_id: str,
-    project_id: str,
+    repo_id: str,
     identity: Identity,
     *,
     admin_ok: bool = False,
-) -> CodingProject | None:
-    """The project when it lives in this workspace and the caller owns it — or,
+) -> CodingRepo | None:
+    """The repo when it lives in this workspace and the caller owns it — or,
     with ``admin_ok``, when the caller is an administrator. Else None."""
-    if not project_id:
+    if not repo_id:
         return None
-    row = db.get(CodingProject, project_id)
+    row = db.get(CodingRepo, repo_id)
     if row is None or row.workspace_id != workspace_id:
         return None
     if owns(row, identity):
@@ -92,11 +92,11 @@ def project_in(
     return None
 
 
-def require_project(
-    db: Session, workspace_id: str, project_id: str, identity: Identity, *,
+def require_repo(
+    db: Session, workspace_id: str, repo_id: str, identity: Identity, *,
     admin_ok: bool = False,
-) -> CodingProject:
-    row = project_in(db, workspace_id, project_id, identity, admin_ok=admin_ok)
+) -> CodingRepo:
+    row = repo_in(db, workspace_id, repo_id, identity, admin_ok=admin_ok)
     if row is None:
         raise not_found()
     return row
@@ -123,7 +123,7 @@ def _live_agents(db: Session, workspace_id: str, ids: set[str]) -> set[str]:
     return {row.id for row in rows}
 
 
-def project_out(row: CodingProject, identity: Identity, *,
+def repo_out(row: CodingRepo, identity: Identity, *,
                 live_agents: set[str] | None = None) -> dict[str, Any]:
     agent_id = row.agent_id
     if agent_id and live_agents is not None and agent_id not in live_agents:
@@ -133,7 +133,7 @@ def project_out(row: CodingProject, identity: Identity, *,
         "name": row.name,
         "description": row.description or "",
         # `deleting` is a transient claim of an in-flight DELETE: still idle to a reader
-        "status": PROJECT_RUNNING if row.status == PROJECT_RUNNING else PROJECT_IDLE,
+        "status": REPO_RUNNING if row.status == REPO_RUNNING else REPO_IDLE,
         "active_turn_id": row.active_turn_id,
         "model": row.model,
         "effort": row.effort,
@@ -162,19 +162,19 @@ def turn_out(row: CodingTurn) -> dict[str, Any]:
     }
 
 
-def detail_out(db: Session, row: CodingProject, identity: Identity) -> dict[str, Any]:
-    """The project + its newest ``TURNS_IN_DETAIL`` turns (oldest first)."""
+def detail_out(db: Session, row: CodingRepo, identity: Identity) -> dict[str, Any]:
+    """The repo + its newest ``TURNS_IN_DETAIL`` turns (oldest first)."""
     turns = (
         db.query(CodingTurn)
-        .filter(CodingTurn.project_id == row.id, CodingTurn.workspace_id == row.workspace_id)
+        .filter(CodingTurn.repo_id == row.id, CodingTurn.workspace_id == row.workspace_id)
         .order_by(CodingTurn.started_at.desc(), CodingTurn.id.desc())
         .limit(TURNS_IN_DETAIL)
         .all()
     )
     live = _live_agents(db, row.workspace_id or "", {row.agent_id} if row.agent_id else set())
-    out = project_out(row, identity, live_agents=live)
+    out = repo_out(row, identity, live_agents=live)
     out["turns"] = [turn_out(t) for t in reversed(turns)]
-    out["active_turn"] = row.active_turn_id if row.status == PROJECT_RUNNING else None
+    out["active_turn"] = row.active_turn_id if row.status == REPO_RUNNING else None
     return out
 
 
@@ -184,28 +184,28 @@ def detail_out(db: Session, row: CodingProject, identity: Identity) -> dict[str,
 def _clean_name(name: str) -> str:
     cleaned = " ".join((name or "").split())
     if not cleaned:
-        raise AppError("validation.invalid_request", "a project name is required",
+        raise AppError("validation.invalid_request", "a repo name is required",
                        status_code=422)
     return cleaned[:NAME_MAX]
 
 
-def list_projects(db: Session, workspace_id: str, identity: Identity, *,
-                  all_projects: bool = False) -> list[dict[str, Any]]:
-    """The caller's own projects; ``all_projects`` (administrators) every project
+def list_repos(db: Session, workspace_id: str, identity: Identity, *,
+                  all_repos: bool = False) -> list[dict[str, Any]]:
+    """The caller's own repos; ``all_repos`` (administrators) every repo
     of the workspace — for cleanup only (``owned`` tells the console which)."""
-    query = db.query(CodingProject).filter(CodingProject.workspace_id == workspace_id)
-    if not (all_projects and identity.is_admin):
-        query = query.filter(CodingProject.owner_principal == principal_of(identity))
-    rows = query.order_by(CodingProject.updated_at.desc(), CodingProject.id.desc()).all()
+    query = db.query(CodingRepo).filter(CodingRepo.workspace_id == workspace_id)
+    if not (all_repos and identity.is_admin):
+        query = query.filter(CodingRepo.owner_principal == principal_of(identity))
+    rows = query.order_by(CodingRepo.updated_at.desc(), CodingRepo.id.desc()).all()
     live = _live_agents(db, workspace_id, {r.agent_id for r in rows if r.agent_id})
-    return [project_out(r, identity, live_agents=live) for r in rows]
+    return [repo_out(r, identity, live_agents=live) for r in rows]
 
 
-def create_project(db: Session, workspace_id: str, identity: Identity, *, name: str,
-                   description: str = "") -> CodingProject:
+def create_repo(db: Session, workspace_id: str, identity: Identity, *, name: str,
+                   description: str = "") -> CodingRepo:
     """A ledger row only — no runtime call: the session starts at the first action."""
     stamp = now()
-    row = CodingProject(
+    row = CodingRepo(
         workspace_id=workspace_id,
         owner_principal=principal_of(identity),
         name=_clean_name(name),
@@ -221,8 +221,8 @@ def create_project(db: Session, workspace_id: str, identity: Identity, *, name: 
     return row
 
 
-def update_project(db: Session, row: CodingProject, *, name: str | None = None,
-                   description: str | None = None) -> CodingProject:
+def update_repo(db: Session, row: CodingRepo, *, name: str | None = None,
+                   description: str | None = None) -> CodingRepo:
     if name is not None:
         row.name = _clean_name(name)
     if description is not None:
@@ -233,18 +233,18 @@ def update_project(db: Session, row: CodingProject, *, name: str | None = None,
     return row
 
 
-def delete_project(db: Session, ctx: WorkspaceContext, row: CodingProject) -> None:
-    """Stop the project's runtime session (best effort), delete its snapshots and
+def delete_repo(db: Session, ctx: WorkspaceContext, row: CodingRepo) -> None:
+    """Stop the repo's runtime session (best effort), delete its snapshots and
     exports, then its rows. Refused while a turn runs. An S3 failure fails the
-    request (the user's code must not outlive the project silently); the rows stay
+    request (the user's code must not outlive the repo silently); the rows stay
     so the delete can be retried."""
-    project_id, workspace_id = row.id, row.workspace_id or ""
-    with snapshots.project_lock(project_id):
+    repo_id, workspace_id = row.id, row.workspace_id or ""
+    with snapshots.repo_lock(repo_id):
         # the claim (idle → deleting) shuts out a turn start for the whole delete
         claimed = db.execute(
-            update(CodingProject)
-            .where(CodingProject.id == project_id, CodingProject.status == PROJECT_IDLE)
-            .values(status=PROJECT_DELETING, updated_at=now())
+            update(CodingRepo)
+            .where(CodingRepo.id == repo_id, CodingRepo.status == REPO_IDLE)
+            .values(status=REPO_DELETING, updated_at=now())
             .execution_options(synchronize_session=False)
         ).rowcount
         db.commit()
@@ -256,28 +256,28 @@ def delete_project(db: Session, ctx: WorkspaceContext, row: CodingProject) -> No
                 rt.stop_runtime_session(data_client(ctx, read_timeout=60), runtime_arn=arn,
                                         session_id=row.session_id)
             except Exception as exc:  # noqa: BLE001 — an ended session is the goal anyway
-                logger.info("coding project %s: StopRuntimeSession: %s", project_id, exc)
+                logger.info("coding repo %s: StopRuntimeSession: %s", repo_id, exc)
         try:
-            s3urls.delete_project_prefix(ctx, workspace_id, project_id)
+            s3urls.delete_repo_prefix(ctx, workspace_id, repo_id)
         except Exception as exc:  # noqa: BLE001 — surfaced, the delete is retryable
-            logger.warning("coding project %s: snapshot delete failed: %s", project_id, exc)
+            logger.warning("coding repo %s: snapshot delete failed: %s", repo_id, exc)
             db.execute(
-                update(CodingProject)
-                .where(CodingProject.id == project_id,
-                       CodingProject.status == PROJECT_DELETING)
-                .values(status=PROJECT_IDLE)
+                update(CodingRepo)
+                .where(CodingRepo.id == repo_id,
+                       CodingRepo.status == REPO_DELETING)
+                .values(status=REPO_IDLE)
                 .execution_options(synchronize_session=False)
             )
             db.commit()
             raise AppError(
                 "coding.delete_failed",
-                f"the project's snapshots could not be deleted ({exc}); try again",
+                f"the repo's snapshots could not be deleted ({exc}); try again",
                 status_code=502,
             ) from exc
-        db.query(CodingTurn).filter(CodingTurn.project_id == project_id).delete(
+        db.query(CodingTurn).filter(CodingTurn.repo_id == repo_id).delete(
             synchronize_session=False
         )
-        db.query(CodingProject).filter(CodingProject.id == project_id).delete(
+        db.query(CodingRepo).filter(CodingRepo.id == repo_id).delete(
             synchronize_session=False
         )
         db.commit()

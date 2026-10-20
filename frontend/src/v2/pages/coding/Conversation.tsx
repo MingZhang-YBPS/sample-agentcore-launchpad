@@ -28,7 +28,7 @@ import { fmtTokens, usageBreakdown } from "./format";
  * summaries (open while streaming), commands with live output and exit code, file
  * changes (click → the Changes tab), MCP tool calls, plans, errors — and a per-turn
  * footer (model, effort, duration, tokens). Follows the tail unless scrolled up. A link
- * into the project in the agent's Markdown opens that file in the editor (`onOpenFile`,
+ * into the repo in the agent's Markdown opens that file in the editor (`onOpenFile`,
  * which must be stable: the turns and items are memoized).
  */
 export function Conversation({
@@ -367,8 +367,8 @@ function FileChangeCard({
                   <span className="mono">{label}</span>
                 </LinkButton>
               ) : (
-                // outside the project (codex wrote elsewhere in the microVM): no diff to show
-                <span className="mono v2-muted v2-coding-files-off" title={t("v2.coding.conversation.outsideProject")}>
+                // outside the repo (codex wrote elsewhere in the microVM): no diff to show
+                <span className="mono v2-muted v2-coding-files-off" title={t("v2.coding.conversation.outsideRepo")}>
                   {label}
                 </span>
               )}

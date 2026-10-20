@@ -17,7 +17,7 @@ os.environ["LAUNCHPAD_ALLOW_OPEN_CONSOLE"] = "true"
 # Manual refresh and price-merge behavior remain covered by test_model_prices.py.
 os.environ["LAUNCHPAD_MODEL_PRICES_REFRESH_HOURS"] = "0"
 # The coding watcher (on by default): it would invoke the coding runtime every
-# 15 s. tests/test_coding_projects.py drives run_once() / start() directly.
+# 15 s. tests/test_coding_repos.py drives run_once() / start() directly.
 os.environ["LAUNCHPAD_CODING_WATCHER_ENABLED"] = "false"
 
 # Isolate configuration reads before db/main bind settings or seed the default

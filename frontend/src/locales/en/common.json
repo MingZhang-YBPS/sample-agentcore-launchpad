@@ -2467,9 +2467,9 @@
     "context_layer.no_result": "COA found no answer to this question.",
     "context_layer.coa_rejected": "COA could not take this question.",
     "context_layer.invalid_namespace": "A COA namespace id is a UUID.",
-    "coding.project_not_found": "Project not found.",
+    "coding.repo_not_found": "Repository not found.",
     "coding.runtime_not_installed": "The Agent IDE runtime is not installed in this workspace.",
-    "coding.turn_running": "A turn is already running in this project.",
+    "coding.turn_running": "A turn is already running in this repository.",
     "coding.no_turn": "No turn is running.",
     "coding.file_conflict": "The file changed since you opened it.",
     "coding.path_invalid": "Invalid file path.",
@@ -2478,16 +2478,16 @@
     "coding.effort_invalid": "This reasoning effort is not supported.",
     "coding.prompt_too_long": "The prompt is too long (32 KB at most).",
     "coding.runtime_error": "The Agent IDE runtime did not answer. Try again.",
-    "coding.deploy_failed": "Deploying the project failed.",
-    "coding.restore_failed": "The project's saved snapshot could not be restored. Try again.",
-    "coding.delete_failed": "The project's saved files could not be deleted. Try again.",
+    "coding.deploy_failed": "Deploying the repository failed.",
+    "coding.restore_failed": "The repository's saved snapshot could not be restored. Try again.",
+    "coding.delete_failed": "The repository's saved files could not be deleted. Try again.",
     "coding.runtime_busy": "The Agent IDE runtime is being installed or uninstalled. Try again when it finishes.",
-    "coding.runtime_in_use": "A turn is still running in an Agent IDE project in this workspace. Wait for it to finish or interrupt it, then uninstall.",
+    "coding.runtime_in_use": "A turn is still running in an Agent IDE repository in this workspace. Wait for it to finish or interrupt it, then uninstall.",
     "context_layer.demo_param_scope": "The demo account parameter must be an SSM parameter under /<prefix>/launchpad/ of the connected COA deployment.",
     "context_layer.demo_param_invalid": "The demo account parameter is missing, is not a SecureString, or is not JSON with a username and password.",
     "context_layer.demo_unavailable": "This context layer has no demo account. An administrator sets one on the Context Layer page.",
-    "coding.file_not_found": "The file no longer exists in the project.",
-    "coding.download_too_large": "Too large to download: a file can be 200 MB at most, the project archive 50 MB.",
+    "coding.file_not_found": "The file no longer exists in the repository.",
+    "coding.download_too_large": "Too large to download: a file can be 200 MB at most, the repository archive 50 MB.",
     "coding.runtime_outdated": "The Agent IDE runtime is older than this console. An administrator can repair it from Agent IDE."
   },
   "chatPage": {
@@ -9550,8 +9550,8 @@
         "installStarted": "Install started. It takes a few minutes.",
         "uninstallStarted": "Uninstall started.",
         "uninstallTitle": "Uninstall the Agent IDE runtime?",
-        "uninstallBody": "The workspace's coding runtime and its role are deleted, and members cannot open or run their projects until it is installed again. Project snapshots are kept, so projects come back after a reinstall.",
-        "adminNotInstalled": "The Agent IDE runtime is not installed in this workspace. Install it once: it builds the runtime image and creates one platform-owned AgentCore Runtime that every member's projects share.",
+        "uninstallBody": "The workspace's coding runtime and its role are deleted, and members cannot open or run their repositories until it is installed again. Repository snapshots are kept, so repositories come back after a reinstall.",
+        "adminNotInstalled": "The Agent IDE runtime is not installed in this workspace. Install it once: it builds the runtime image and creates one platform-owned AgentCore Runtime that every member's repositories share.",
         "memberNotInstalled": "The Agent IDE runtime is not installed in this workspace yet. Ask an administrator to install it.",
         "failedAdmin": "The last install failed. Check the job log, then retry.",
         "failedMember": "The Agent IDE runtime is unavailable. Ask an administrator to repair it.",
@@ -9562,36 +9562,36 @@
         "arn": "Runtime ARN",
         "log": "Job log"
       },
-      "projects": {
-        "title": "Projects",
-        "new": "New project",
+      "repos": {
+        "title": "Repositories",
+        "new": "New repository",
         "mine": "Mine",
-        "all": "All projects",
-        "scope": "Projects shown",
-        "search": "Search projects",
-        "allNote": "Every project in this workspace. You can delete any project for cleanup, but only its creator can open its IDE.",
-        "colName": "Project",
+        "all": "All repositories",
+        "scope": "Repositories shown",
+        "search": "Search repositories",
+        "allNote": "Every repository in this workspace. You can delete any repository for cleanup, but only its creator can open its IDE.",
+        "colName": "Repository",
         "colStatus": "Status",
         "colAgent": "Deployed Agent",
         "colUpdated": "Updated",
         "open": "Open",
         "rename": "Edit",
-        "empty": "No projects yet",
-        "emptyBody": "Create a project, describe the agent you want, and the coding assistant builds it.",
-        "noMatch": "No projects match the search.",
-        "created": "Project {{name}} created",
-        "saved": "Project saved",
-        "deleted": "Project {{name}} deleted",
-        "deleteTitle": "Delete this project?",
+        "empty": "No repositories yet",
+        "emptyBody": "Create a repository, describe the agent you want, and the coding assistant builds it.",
+        "noMatch": "No repositories match the search.",
+        "created": "Repository {{name}} created",
+        "saved": "Repository saved",
+        "deleted": "Repository {{name}} deleted",
+        "deleteTitle": "Delete this repository?",
         "deleteBody": "Delete {{name}}? Its files, conversation and snapshots are removed. An Agent it deployed is kept.",
-        "runningNoDelete": "A turn is running. Interrupt it before deleting the project."
+        "runningNoDelete": "A turn is running. Interrupt it before deleting the repository."
       },
       "form": {
-        "createTitle": "New project",
-        "editTitle": "Edit project",
+        "createTitle": "New repository",
+        "editTitle": "Edit repository",
         "name": "Name",
         "namePlaceholder": "e.g. weather-assistant",
-        "nameHint": "Only you can see and open your projects.",
+        "nameHint": "Only you can see and open your repositories.",
         "nameRequired": "Enter a name.",
         "nameTooLong": "At most {{max}} characters.",
         "description": "Description",
@@ -9636,8 +9636,8 @@
       "ide": {
         "files": "Files",
         "noFiles": "No files yet",
-        "notFound": "Project {{id}} does not exist or is not yours.",
-        "backToList": "Back to projects",
+        "notFound": "Repository {{id}} does not exist or is not yours.",
+        "backToList": "Back to repositories",
         "openAgent": "Open Agent"
       },
       "layout": {
@@ -9667,7 +9667,7 @@
         "overwrite": "Overwrite",
         "binary": "Binary file, not shown.",
         "closeTab": "Close {{name}}",
-        "missing": "This file no longer exists in the project (the coding assistant may have deleted or moved it)."
+        "missing": "This file no longer exists in the repository (the coding assistant may have deleted or moved it)."
       },
       "changes": {
         "tab": "Changes",
@@ -9689,7 +9689,7 @@
       },
       "conversation": {
         "title": "Conversation",
-        "empty": "Describe the agent you want to build. The coding assistant writes the code, runs it and tests it in this project's microVM.",
+        "empty": "Describe the agent you want to build. The coding assistant writes the code, runs it and tests it in this repository's microVM.",
         "you": "You",
         "working": "Working…",
         "reasoning": "Reasoning",
@@ -9707,19 +9707,19 @@
         "other": "Activity: {{type}}",
         "effortOf": "effort {{effort}}",
         "tokens": "{{value}} tokens",
-        "outsideProject": "Outside the project — no diff to show"
+        "outsideRepo": "Outside the repository — no diff to show"
       },
       "markdown": {
         "openFile": "Open {{path}} in the editor",
         "openFileLine": "Open {{path}} at line {{line}}",
-        "linkOutside": "Points outside this project — not followed.",
+        "linkOutside": "Points outside this repository — not followed.",
         "linkBlocked": "Link not followed.",
         "image": "[image not loaded: {{alt}} {{src}}]"
       },
       "notice": {
         "appServerExited": "The coding assistant process restarted.",
         "serverRequestDeclined": "An approval request was declined automatically (commands run without approval):",
-        "restored": "The project was restored from its latest snapshot.",
+        "restored": "The repository was restored from its latest snapshot.",
         "threadResumeFailed": "The previous conversation could not be resumed; the coding assistant continues in a new thread without its earlier context."
       },
       "composer": {
@@ -9744,8 +9744,8 @@
         "file": "Download this file",
         "fileNamed": "Download {{name}}",
         "savedVersion": "Downloads the saved version. Save first to include your edits.",
-        "project": "Download project (.zip)",
-        "projectHint": "The project's files as a .zip: tracked and new files, without .git, ignored files or dependency folders.",
+        "repo": "Download repository (.zip)",
+        "repoHint": "The repository's files as a .zip: tracked and new files, without .git, ignored files or dependency folders.",
         "preparing": "Preparing the download…",
         "started": "Downloading {{name}}"
       },
@@ -9754,7 +9754,7 @@
         "redeploy": "Redeploy",
         "title": "Deploy as an Agent",
         "redeployTitle": "Redeploy the Agent",
-        "body": "Launchpad snapshots and exports this project and deploys it through the bring-your-own-code pipeline, with the same checks, IAM, registry and observability as an uploaded zip.",
+        "body": "Launchpad snapshots and exports this repository and deploys it through the bring-your-own-code pipeline, with the same checks, IAM, registry and observability as an uploaded zip.",
         "agentName": "Agent name",
         "agentNameHint": "3–48 characters: lowercase letters, digits and hyphens, starting with a letter.",
         "nameInvalid": "Use 3–48 lowercase letters, digits or hyphens, starting with a letter.",
@@ -9766,9 +9766,9 @@
           "container_source": "Dockerfile context"
         },
         "kindHint": {
-          "auto": "A Dockerfile at the project root builds a container; otherwise the project deploys as a Python code zip.",
+          "auto": "A Dockerfile at the repository root builds a container; otherwise the repository deploys as a Python code zip.",
           "code_zip": "Packaged as a Python code zip and run on the AgentCore Python runtime.",
-          "container_source": "Built by CodeBuild from the project's root Dockerfile into an ARM64 container."
+          "container_source": "Built by CodeBuild from the repository's root Dockerfile into an ARM64 container."
         },
         "entrypoint": "Entrypoint",
         "python": "Python version",
@@ -9777,13 +9777,13 @@
         "created": "Agent {{id}} created. Its deployment is running.",
         "updated": "Agent {{id}} is being redeployed.",
         "openAgent": "Open the Agent",
-        "redeployNote": "This project already deployed an Agent. Deploying again publishes a new version of it:",
+        "redeployNote": "This repository already deployed an Agent. Deploying again publishes a new version of it:",
         "noPermission": "You do not have permission to deploy Agents.",
         "whileRunning": "Wait for the running turn to finish.",
         "failure": {
-          "entrypoint_missing": "The project has no {{entrypoint}} at its root. Create it, or set the entrypoint to the file the agent serves from.",
-          "candidates": "Python files at the project root: {{files}}.",
-          "dockerfile_missing": "A Dockerfile context deploy needs a Dockerfile at the project root.",
+          "entrypoint_missing": "The repository has no {{entrypoint}} at its root. Create it, or set the entrypoint to the file the agent serves from.",
+          "candidates": "Python files at the repository root: {{files}}.",
+          "dockerfile_missing": "A Dockerfile context deploy needs a Dockerfile at the repository root.",
           "invalid_spec": "The deploy settings are not a valid Agent: {{errors}}"
         }
       }

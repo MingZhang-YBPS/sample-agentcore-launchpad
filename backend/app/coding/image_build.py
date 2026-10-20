@@ -34,7 +34,7 @@ BUILDSPEC_TEMPLATE = (
 SOURCE_ZIP_KEY = "builds/coding-runtime/source.zip"
 IMAGE_TAG_PREFIX = "coding-runtime-"
 # What the Dockerfile COPYs, and nothing else: tests, editor files and caches
-# must not change the tag (or a test edit would roll every project's microVM).
+# must not change the tag (or a test edit would roll every repo's microVM).
 CONTEXT_FILES = ("Dockerfile", "codex-config.toml")
 CONTEXT_DIRS = ("src", "templates")
 _SKIP_NAMES = {".DS_Store", "__pycache__", "node_modules"}

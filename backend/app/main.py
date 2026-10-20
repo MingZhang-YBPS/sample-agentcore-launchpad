@@ -215,7 +215,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(online_eval_router)
     app.include_router(eval_pipelines_router)  # V2 数据处理: sessions → datasets
     app.include_router(skill_lab_router)
-    app.include_router(coding_router)  # coding agent: runtime, projects, turns, files
+    app.include_router(coding_router)  # coding agent: runtime, repos, turns, files
     app.include_router(experiments_router)
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management

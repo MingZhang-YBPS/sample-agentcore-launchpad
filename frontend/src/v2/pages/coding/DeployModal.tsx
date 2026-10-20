@@ -8,7 +8,7 @@ import {
   codingApi,
   type CodingDeployRequest,
   type CodingDeployResult,
-  type CodingProject,
+  type CodingRepo,
 } from "../../../lib/api";
 import { Alert, Button, Field, Modal, Select } from "../../ui";
 import { deployFailureText } from "./deployError";
@@ -19,26 +19,26 @@ const KINDS: KindChoice[] = ["auto", "code_zip", "container_source"];
 const PYTHONS: ByocPythonVersion[] = ["PYTHON_3_13", "PYTHON_3_12", "PYTHON_3_11", "PYTHON_3_10"];
 
 /**
- * Hand the project to Launchpad: the backend snapshots and exports it, stages the
- * archive as a BYOC upload and creates an Agent — or, when the project already
+ * Hand the repo to Launchpad: the backend snapshots and exports it, stages the
+ * archive as a BYOC upload and creates an Agent — or, when the repo already
  * deployed one, redeploys that Agent — through the ordinary byoc pipeline. The deploy
  * itself runs as the Agent's job; this modal links to its detail page.
  */
 export function DeployModal({
-  project,
+  repo,
   open,
   onClose,
   onDeployed,
 }: {
-  project: CodingProject;
+  repo: CodingRepo;
   open: boolean;
   onClose: () => void;
   onDeployed: (result: CodingDeployResult) => void;
 }) {
   const { t } = useTranslation();
-  const redeploy = !!project.agent_id;
-  const [name, setName] = useState(() => agentNameFrom(project.name));
-  const [description, setDescription] = useState(project.description ?? "");
+  const redeploy = !!repo.agent_id;
+  const [name, setName] = useState(() => agentNameFrom(repo.name));
+  const [description, setDescription] = useState(repo.description ?? "");
   const [kind, setKind] = useState<KindChoice>("auto");
   const [entrypoint, setEntrypoint] = useState(BYOC_DEFAULT_ENTRYPOINT);
   const [python, setPython] = useState<ByocPythonVersion>("PYTHON_3_13");
@@ -62,7 +62,7 @@ export function DeployModal({
       body.python_version = python;
     }
     try {
-      const res = await codingApi.deploy(project.id, body);
+      const res = await codingApi.deploy(repo.id, body);
       setResult(res);
       onDeployed(res);
     } catch (err) {
@@ -109,8 +109,8 @@ export function DeployModal({
           {redeploy ? (
             <Alert>
               {t("v2.coding.deploy.redeployNote")}{" "}
-              <Link to={agentUrl(project.agent_id!)} className="mono">
-                {project.agent_id}
+              <Link to={agentUrl(repo.agent_id!)} className="mono">
+                {repo.agent_id}
               </Link>
             </Alert>
           ) : (

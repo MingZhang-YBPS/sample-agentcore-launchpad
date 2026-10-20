@@ -7,7 +7,7 @@ describe("languageFor", () => {
     expect(languageFor("main.py")).toBe("python");
     expect(languageFor("src/app.tsx")).toBe("typescript");
     expect(languageFor("server.mjs")).toBe("javascript");
-    expect(languageFor("pyproject.toml")).toBe("ini");
+    expect(languageFor("pyrepo.toml")).toBe("ini");
     expect(languageFor("config/app.YAML")).toBe("yaml");
     expect(languageFor("run.sh")).toBe("shell");
     expect(languageFor("data.json")).toBe("json");

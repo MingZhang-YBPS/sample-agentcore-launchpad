@@ -42,7 +42,7 @@ def _policy(models=MODELS) -> dict[str, Any]:
     return workspace_iam.coding_runtime_role_policy(ACCOUNT, REGION, REPO_ARN, models)
 
 
-def test_role_policy_grants_exactly_the_coding_models_and_the_default_project():
+def test_role_policy_grants_exactly_the_coding_models_and_the_default_repo():
     statements = {s["Sid"]: s for s in _policy()["Statement"]}
     assert set(statements) == {"EcrAuth", "EcrPull", "Logs", "CodingModels"}
     models = statements["CodingModels"]
@@ -54,7 +54,7 @@ def test_role_policy_grants_exactly_the_coding_models_and_the_default_project():
         f"arn:aws:bedrock:{REGION}:{ACCOUNT}:inference-profile/global.openai.gpt-6-sol",
         "arn:aws:bedrock:*::foundation-model/openai.gpt-6-astra",
         f"arn:aws:bedrock:{REGION}:{ACCOUNT}:inference-profile/global.openai.gpt-6-astra",
-        # bedrock-runtime /openai/v1 authorizes against the project too (live 2026-10-19)
+        # bedrock-runtime /openai/v1 authorizes against the repo too (live 2026-10-19)
         f"arn:aws:bedrock:{REGION}:{ACCOUNT}:project/default",
     ]
     assert statements["EcrPull"]["Resource"] == REPO_ARN

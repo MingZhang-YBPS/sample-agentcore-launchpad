@@ -1,4 +1,4 @@
-// Composer choices (model, reasoning effort) remembered per project in this browser,
+// Composer choices (model, reasoning effort) remembered per repo in this browser,
 // and the deploy-name default. Storage is a preference, never required: every access
 // is guarded, and a stored value the runtime no longer offers falls back to its default.
 
@@ -17,9 +17,9 @@ function storage(): Storage | null {
   }
 }
 
-export function loadPrefs(projectId: string): Partial<ComposerPrefs> {
+export function loadPrefs(repoId: string): Partial<ComposerPrefs> {
   try {
-    const raw = storage()?.getItem(`${KEY}:${projectId}`);
+    const raw = storage()?.getItem(`${KEY}:${repoId}`);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Partial<ComposerPrefs>;
     return {
@@ -31,9 +31,9 @@ export function loadPrefs(projectId: string): Partial<ComposerPrefs> {
   }
 }
 
-export function savePrefs(projectId: string, prefs: ComposerPrefs): void {
+export function savePrefs(repoId: string, prefs: ComposerPrefs): void {
   try {
-    storage()?.setItem(`${KEY}:${projectId}`, JSON.stringify(prefs));
+    storage()?.setItem(`${KEY}:${repoId}`, JSON.stringify(prefs));
   } catch {
     /* storage unavailable — the choice lasts until the page closes */
   }
@@ -46,9 +46,9 @@ export function pickOffered(stored: string | null | undefined, fallback: string,
   return offered[0];
 }
 
-/** A default Agent name for a project (`AGENT_NAME_RE`: `^[a-z][a-z0-9-]{2,47}$`). */
-export function agentNameFrom(projectName: string): string {
-  let slug = projectName
+/** A default Agent name for a repo (`AGENT_NAME_RE`: `^[a-z][a-z0-9-]{2,47}$`). */
+export function agentNameFrom(repoName: string): string {
+  let slug = repoName
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[^a-z0-9]+/g, "-")

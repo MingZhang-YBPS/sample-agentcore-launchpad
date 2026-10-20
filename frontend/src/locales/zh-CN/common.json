@@ -2467,9 +2467,9 @@
     "context_layer.no_result": "COA 没有找到这个问题的答案。",
     "context_layer.coa_rejected": "COA 无法处理这个问题。",
     "context_layer.invalid_namespace": "COA 命名空间 ID 是 UUID。",
-    "coding.project_not_found": "项目不存在。",
+    "coding.repo_not_found": "代码仓库不存在。",
     "coding.runtime_not_installed": "本工作区尚未安装 Agent IDE 运行时。",
-    "coding.turn_running": "该项目已有回合正在运行。",
+    "coding.turn_running": "该代码仓库已有回合正在运行。",
     "coding.no_turn": "没有正在运行的回合。",
     "coding.file_conflict": "打开该文件后，它已被修改。",
     "coding.path_invalid": "文件路径无效。",
@@ -2478,16 +2478,16 @@
     "coding.effort_invalid": "不支持该推理强度。",
     "coding.prompt_too_long": "提示词过长（最多 32 KB）。",
     "coding.runtime_error": "Agent IDE 运行时未响应，请重试。",
-    "coding.deploy_failed": "部署项目失败。",
-    "coding.restore_failed": "无法恢复项目保存的快照，请重试。",
-    "coding.delete_failed": "无法删除项目保存的文件，请重试。",
+    "coding.deploy_failed": "部署代码仓库失败。",
+    "coding.restore_failed": "无法恢复代码仓库保存的快照，请重试。",
+    "coding.delete_failed": "无法删除代码仓库保存的文件，请重试。",
     "coding.runtime_busy": "Agent IDE 运行时正在安装或卸载，请在完成后重试。",
-    "coding.runtime_in_use": "这个工作区的 Agent IDE 项目中还有正在运行的回合。请等它结束或中止后再卸载。",
+    "coding.runtime_in_use": "这个工作区的 Agent IDE 代码仓库中还有正在运行的回合。请等它结束或中止后再卸载。",
     "context_layer.demo_param_scope": "体验账号参数必须是所连接 COA 部署的 /<prefix>/launchpad/ 之下的 SSM 参数。",
     "context_layer.demo_param_invalid": "体验账号参数不存在、不是 SecureString，或不是包含 username 和 password 的 JSON。",
     "context_layer.demo_unavailable": "此上下文层没有体验账号，需由管理员在上下文层页面配置。",
-    "coding.file_not_found": "项目中已没有该文件。",
-    "coding.download_too_large": "文件过大，无法下载：单个文件最多 200 MB，项目压缩包最多 50 MB。",
+    "coding.file_not_found": "仓库中已没有该文件。",
+    "coding.download_too_large": "文件过大，无法下载：单个文件最多 200 MB，仓库压缩包最多 50 MB。",
     "coding.runtime_outdated": "Agent IDE 运行时的版本早于当前控制台，管理员可以在 Agent IDE 中修复它。"
   },
   "chatPage": {
@@ -9550,8 +9550,8 @@
         "installStarted": "已开始安装，需要几分钟。",
         "uninstallStarted": "已开始卸载。",
         "uninstallTitle": "卸载 Agent IDE 运行时？",
-        "uninstallBody": "将删除本工作区的 Agent IDE 运行时及其角色；在重新安装之前，成员无法打开或运行自己的项目。项目快照会保留，重新安装后项目即可恢复。",
-        "adminNotInstalled": "本工作区尚未安装 Agent IDE 运行时。只需安装一次：构建运行时镜像，并创建一个由平台托管、供所有成员项目共用的 AgentCore Runtime。",
+        "uninstallBody": "将删除本工作区的 Agent IDE 运行时及其角色；在重新安装之前，成员无法打开或运行自己的代码仓库。代码仓库快照会保留，重新安装后代码仓库即可恢复。",
+        "adminNotInstalled": "本工作区尚未安装 Agent IDE 运行时。只需安装一次：构建运行时镜像，并创建一个由平台托管、供所有成员的代码仓库共用的 AgentCore Runtime。",
         "memberNotInstalled": "本工作区尚未安装 Agent IDE 运行时，请联系管理员安装。",
         "failedAdmin": "上次安装失败。请查看任务日志后重试。",
         "failedMember": "Agent IDE 运行时不可用，请联系管理员修复。",
@@ -9562,36 +9562,36 @@
         "arn": "运行时 ARN",
         "log": "任务日志"
       },
-      "projects": {
-        "title": "项目",
-        "new": "新建项目",
+      "repos": {
+        "title": "代码仓库",
+        "new": "新建代码仓库",
         "mine": "我的",
-        "all": "全部项目",
+        "all": "全部仓库",
         "scope": "显示范围",
-        "search": "搜索项目",
-        "allNote": "本工作区的全部项目。你可以删除任意项目以做清理，但只有创建者能打开项目的 IDE。",
-        "colName": "项目",
+        "search": "搜索代码仓库",
+        "allNote": "本工作区的全部仓库。你可以删除任意代码仓库以做清理，但只有创建者能打开仓库的 IDE。",
+        "colName": "代码仓库",
         "colStatus": "状态",
         "colAgent": "已部署的 Agent",
         "colUpdated": "更新时间",
         "open": "打开",
         "rename": "编辑",
-        "empty": "还没有项目",
-        "emptyBody": "新建一个项目，描述你想要的 Agent，编码助手会把它构建出来。",
-        "noMatch": "没有匹配的项目。",
-        "created": "已创建项目 {{name}}",
-        "saved": "项目已保存",
-        "deleted": "已删除项目 {{name}}",
-        "deleteTitle": "删除该项目？",
+        "empty": "还没有代码仓库",
+        "emptyBody": "新建一个代码仓库，描述你想要的 Agent，编码助手会把它构建出来。",
+        "noMatch": "没有匹配的代码仓库。",
+        "created": "已创建代码仓库 {{name}}",
+        "saved": "代码仓库已保存",
+        "deleted": "已删除代码仓库 {{name}}",
+        "deleteTitle": "删除该代码仓库？",
         "deleteBody": "确定删除 {{name}}？其文件、对话和快照都会被删除；它部署的 Agent 会保留。",
-        "runningNoDelete": "有回合正在运行，请先中断再删除项目。"
+        "runningNoDelete": "有回合正在运行，请先中断再删除代码仓库。"
       },
       "form": {
-        "createTitle": "新建项目",
-        "editTitle": "编辑项目",
+        "createTitle": "新建代码仓库",
+        "editTitle": "编辑代码仓库",
         "name": "名称",
         "namePlaceholder": "例如 weather-assistant",
-        "nameHint": "只有你能看到和打开自己的项目。",
+        "nameHint": "只有你能看到和打开自己的代码仓库。",
         "nameRequired": "请输入名称。",
         "nameTooLong": "最多 {{max}} 个字符。",
         "description": "描述",
@@ -9636,8 +9636,8 @@
       "ide": {
         "files": "文件",
         "noFiles": "还没有文件",
-        "notFound": "项目 {{id}} 不存在，或不属于你。",
-        "backToList": "返回项目列表",
+        "notFound": "代码仓库 {{id}} 不存在，或不属于你。",
+        "backToList": "返回代码仓库列表",
         "openAgent": "打开 Agent"
       },
       "layout": {
@@ -9667,7 +9667,7 @@
         "overwrite": "覆盖",
         "binary": "二进制文件，不予显示。",
         "closeTab": "关闭 {{name}}",
-        "missing": "项目中已没有该文件（编码助手可能删除或移动了它）。"
+        "missing": "仓库中已没有该文件（编码助手可能删除或移动了它）。"
       },
       "changes": {
         "tab": "变更",
@@ -9689,7 +9689,7 @@
       },
       "conversation": {
         "title": "对话",
-        "empty": "描述你想构建的 Agent。编码助手会在本项目的 microVM 中编写代码、运行并测试。",
+        "empty": "描述你想构建的 Agent。编码助手会在本仓库的 microVM 中编写代码、运行并测试。",
         "you": "你",
         "working": "处理中…",
         "reasoning": "推理过程",
@@ -9707,19 +9707,19 @@
         "other": "活动：{{type}}",
         "effortOf": "推理强度 {{effort}}",
         "tokens": "{{value}} tokens",
-        "outsideProject": "位于项目之外，无差异可显示"
+        "outsideRepo": "位于仓库之外，无差异可显示"
       },
       "markdown": {
         "openFile": "在编辑器中打开 {{path}}",
         "openFileLine": "在编辑器中打开 {{path}} 第 {{line}} 行",
-        "linkOutside": "链接指向本项目之外，不会跟随。",
+        "linkOutside": "链接指向本仓库之外，不会跟随。",
         "linkBlocked": "不会跟随该链接。",
         "image": "[图片未加载：{{alt}} {{src}}]"
       },
       "notice": {
         "appServerExited": "编码助手进程已重启。",
         "serverRequestDeclined": "已自动拒绝一个审批请求（命令无需审批即可运行）：",
-        "restored": "已从最新快照恢复项目。",
+        "restored": "已从最新快照恢复代码仓库。",
         "threadResumeFailed": "无法恢复之前的对话；编码助手将在新会话中继续，不带之前的上下文。"
       },
       "composer": {
@@ -9744,8 +9744,8 @@
         "file": "下载该文件",
         "fileNamed": "下载 {{name}}",
         "savedVersion": "下载的是已保存的版本。先保存，下载才包含你的修改。",
-        "project": "下载项目（.zip）",
-        "projectHint": "将项目文件打包为 .zip：包含已跟踪和新建的文件，不含 .git、被忽略的文件和依赖目录。",
+        "repo": "下载代码仓库（.zip）",
+        "repoHint": "将仓库文件打包为 .zip：包含已跟踪和新建的文件，不含 .git、被忽略的文件和依赖目录。",
         "preparing": "正在准备下载…",
         "started": "正在下载 {{name}}"
       },
@@ -9754,7 +9754,7 @@
         "redeploy": "重新部署",
         "title": "部署为 Agent",
         "redeployTitle": "重新部署 Agent",
-        "body": "Launchpad 会为本项目创建快照并导出，再通过自带代码流水线部署；校验、IAM、注册表与可观测性都与上传 zip 相同。",
+        "body": "Launchpad 会为本仓库创建快照并导出，再通过自带代码流水线部署；校验、IAM、注册表与可观测性都与上传 zip 相同。",
         "agentName": "Agent 名称",
         "agentNameHint": "3–48 个字符：小写字母、数字和连字符，以字母开头。",
         "nameInvalid": "请使用 3–48 个小写字母、数字或连字符，并以字母开头。",
@@ -9766,9 +9766,9 @@
           "container_source": "Dockerfile 上下文"
         },
         "kindHint": {
-          "auto": "项目根目录有 Dockerfile 时构建容器，否则按 Python 代码 zip 部署。",
+          "auto": "仓库根目录有 Dockerfile 时构建容器，否则按 Python 代码 zip 部署。",
           "code_zip": "打包为 Python 代码 zip，运行在 AgentCore Python 运行时上。",
-          "container_source": "由 CodeBuild 根据项目根目录的 Dockerfile 构建为 ARM64 容器。"
+          "container_source": "由 CodeBuild 根据仓库根目录的 Dockerfile 构建为 ARM64 容器。"
         },
         "entrypoint": "入口文件",
         "python": "Python 版本",
@@ -9777,13 +9777,13 @@
         "created": "已创建 Agent {{id}}，部署正在进行。",
         "updated": "Agent {{id}} 正在重新部署。",
         "openAgent": "打开 Agent",
-        "redeployNote": "本项目已部署过一个 Agent，再次部署会为它发布新版本：",
+        "redeployNote": "本仓库已部署过一个 Agent，再次部署会为它发布新版本：",
         "noPermission": "你没有部署 Agent 的权限。",
         "whileRunning": "请等待正在运行的回合结束。",
         "failure": {
-          "entrypoint_missing": "项目根目录下没有 {{entrypoint}}。请先创建它，或把入口文件设为 Agent 实际提供服务的文件。",
-          "candidates": "项目根目录下的 Python 文件：{{files}}。",
-          "dockerfile_missing": "按 Dockerfile 上下文部署时，项目根目录下必须有 Dockerfile。",
+          "entrypoint_missing": "仓库根目录下没有 {{entrypoint}}。请先创建它，或把入口文件设为 Agent 实际提供服务的文件。",
+          "candidates": "仓库根目录下的 Python 文件：{{files}}。",
+          "dockerfile_missing": "按 Dockerfile 上下文部署时，仓库根目录下必须有 Dockerfile。",
           "invalid_spec": "部署设置不是有效的 Agent：{{errors}}"
         }
       }

@@ -1,12 +1,12 @@
-// Where a Markdown link written by the coding agent (or inside a project `.md` file)
-// may go. codex links project files absolutely, often with a line:
+// Where a Markdown link written by the coding agent (or inside a repo `.md` file)
+// may go. codex links repo files absolutely, often with a line:
 // `[main.py](/mnt/workspace/project/main.py#L12)`, `…/main.py:12`, `…/main.py:12:3`.
-// Followed as a browser navigation those are broken URLs, so a link into the project
+// Followed as a browser navigation those are broken URLs, so a link into the repo
 // opens the file in the IDE instead; http/https/mailto open in a new tab; everything
-// else (other schemes, paths outside the project, malformed escapes) stays inert text.
+// else (other schemes, paths outside the repo, malformed escapes) stays inert text.
 // Pure, so the rules are unit-tested.
 import { resolveArtifactPath } from "../../../lib/skillLabArtifacts";
-import { PROJECT_ROOT, projectPath } from "./paths";
+import { REPO_ROOT, repoPath } from "./paths";
 
 export type CodingLinkBlocked = "scheme" | "outside" | "malformed" | "empty";
 
@@ -31,8 +31,8 @@ const positive = (value: string | undefined): number | null => {
 
 /**
  * Classify `href` (as react-markdown hands it over: percent-encoded by remark) for a
- * document whose relative links resolve against `baseDir` (project-relative; `""` or
- * `.` = the project root, which is codex's cwd).
+ * document whose relative links resolve against `baseDir` (repo-relative; `""` or
+ * `.` = the repo root, which is codex's cwd).
  */
 export function classifyCodingHref(href: string | null | undefined, baseDir: string): CodingLinkTarget {
   const raw = (href ?? "").trim();
@@ -84,8 +84,8 @@ export function classifyCodingHref(href: string | null | undefined, baseDir: str
     const decoded = resolveArtifactPath("", rest);
     if (!decoded.ok) return blocked(decoded.reason);
     const absolute = `/${decoded.path}`;
-    const inside = projectPath(absolute);
-    if (inside === null) return blocked(absolute === PROJECT_ROOT ? "empty" : "outside");
+    const inside = repoPath(absolute);
+    if (inside === null) return blocked(absolute === REPO_ROOT ? "empty" : "outside");
     path = inside;
   } else {
     const base = baseDir

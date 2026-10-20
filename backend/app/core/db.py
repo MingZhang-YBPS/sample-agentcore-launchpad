@@ -56,7 +56,7 @@ WORKSPACE_SCOPED_TABLES = (
     "alert_rules",
     "spec_snapshots",
     "context_layers",
-    "coding_projects",
+    "coding_repos",
     "coding_turns",
 )
 
@@ -111,6 +111,8 @@ def init_db(bind=None) -> None:
     from app.models import platform_settings as _platform_settings  # noqa: F401
     from app.models import video as _video_models  # noqa: F401
 
+    # before create_all, or it would build an empty `coding_repos` beside the old table
+    _migrate_coding_repo_rename(bind)
     Base.metadata.create_all(bind=bind)
     _migrate(bind)
     # Seeding after the drift check so a database that is behind the models is
@@ -298,6 +300,62 @@ def _migrate(bind) -> None:
     _migrate_resource_creators_index(bind)
     _migrate_context_layer_index(bind)
     _migrate_branch_creators(bind)
+
+
+# Index names `create_all` gives the coding tables (`index=True` columns), keyed by
+# the name the same index had before the project → repo rename.
+_CODING_REPO_INDEXES = {
+    "ix_coding_projects_workspace_id": (
+        "ix_coding_repos_workspace_id", "coding_repos", "workspace_id"),
+    "ix_coding_projects_owner_principal": (
+        "ix_coding_repos_owner_principal", "coding_repos", "owner_principal"),
+    "ix_coding_projects_created_by": (
+        "ix_coding_repos_created_by", "coding_repos", "created_by"),
+    "ix_coding_turns_project_id": ("ix_coding_turns_repo_id", "coding_turns", "repo_id"),
+}
+
+
+def _migrate_coding_repo_rename(bind) -> None:
+    """The Agent IDE's per-user git working directory was a "project"; it is a
+    "repo" now (the organisational project is a different thing). Rename the
+    ledger in place so an existing deployment keeps its repos and turns:
+    ``coding_projects`` → ``coding_repos`` and ``coding_turns.project_id`` →
+    ``repo_id``, then give their indexes the names ``create_all`` would.
+
+    Runs BEFORE ``create_all`` (``init_db``); should ``create_all`` have built an
+    empty ``coding_repos`` beside the old table anyway, the empty one is dropped
+    first. Two tables that both hold rows are refused rather than guessed at.
+    Idempotent: a ledger without the old names is left alone."""
+    from sqlalchemy import inspect, text
+
+    tables = set(inspect(bind).get_table_names())
+    if "coding_projects" in tables:
+        if "coding_repos" in tables:
+            with bind.connect() as conn:
+                rows = conn.execute(text("SELECT COUNT(*) FROM coding_repos")).scalar()
+            if rows:
+                raise RuntimeError(
+                    "both coding_projects and coding_repos hold rows — merge them by hand "
+                    "before starting (coding_projects is the pre-rename table)"
+                )
+            with bind.begin() as conn:
+                conn.execute(text("DROP TABLE coding_repos"))
+        with bind.begin() as conn:
+            conn.execute(text("ALTER TABLE coding_projects RENAME TO coding_repos"))
+        tables = (tables - {"coding_projects"}) | {"coding_repos"}
+    if "coding_turns" in tables:
+        columns = {c["name"] for c in inspect(bind).get_columns("coding_turns")}
+        if "project_id" in columns and "repo_id" not in columns:
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE coding_turns RENAME COLUMN project_id TO repo_id"))
+    live = {t: {c["name"] for c in inspect(bind).get_columns(t)}
+            for t in ("coding_repos", "coding_turns") if t in tables}
+    with bind.begin() as conn:
+        for old, (new, table, column) in _CODING_REPO_INDEXES.items():
+            conn.execute(text(f"DROP INDEX IF EXISTS {old}"))
+            # a pre-workspace ledger gets workspace_id (and its index) from _migrate
+            if column in live.get(table, ()):
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {new} ON {table} ({column})"))
 
 
 def _migrate_creator_columns(bind) -> None:
@@ -840,7 +898,7 @@ def _migrate_workspace_columns(bind) -> None:
         "context_layers": "ALTER TABLE context_layers ADD COLUMN workspace_id VARCHAR(32)",
         # born with the column (the coding agent); listed so the scoped-tables drift
         # test holds and the index is ensured
-        "coding_projects": "ALTER TABLE coding_projects ADD COLUMN workspace_id VARCHAR(32)",
+        "coding_repos": "ALTER TABLE coding_repos ADD COLUMN workspace_id VARCHAR(32)",
         "coding_turns": "ALTER TABLE coding_turns ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)

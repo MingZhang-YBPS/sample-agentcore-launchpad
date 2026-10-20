@@ -9,7 +9,7 @@ function strings(value: unknown): string[] {
 /**
  * The deploy modal's copy for a failed deploy. `422 coding.deploy_failed` names why
  * in `detail.reason` (backend `app/coding/deploy.py`): `entrypoint_missing` (+
- * `entrypoint`, `candidates` — the Python files at the project root),
+ * `entrypoint`, `candidates` — the Python files at the repo root),
  * `dockerfile_missing` or `invalid_spec` (+ `errors`). The generic
  * `apiErrors.coding.deploy_failed` copy cannot say which, so the person would not
  * know what to fix. Every other failure keeps the shared localized message.

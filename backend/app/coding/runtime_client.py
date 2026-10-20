@@ -8,14 +8,19 @@ from the container — AgentCore turns a container 5xx into an opaque
 (``turn_running``, ``conflict``, ``path_invalid``, …) or one of this module's own
 codes for a call that never got a container answer.
 
-``project_call`` is the project-level entry every backend path uses: it refuses
+``repo_call`` is the repo-level entry every backend path uses: it refuses
 before any AWS call when the workspace has no runtime (``409
 coding.runtime_not_installed``) and folds ``restore_url`` — a fresh presigned GET
-of the project's newest snapshot — into every action, so a microVM whose session
+of the repo's newest snapshot — into every action, so a microVM whose session
 storage came back empty (runtime version update, 14-day idle expiry) restores the
-project before it handles anything. Ownership is the caller's (``projects``).
+repo before it handles anything. Ownership is the caller's (``repos``).
 ``api_error`` maps a ``CodingRuntimeError`` onto the console's ``coding.*``
 error envelope.
+
+The container (``image/src``) still calls a repo a "project" — its working
+directory ``/mnt/workspace/project``, its ``exportProject`` handler and some error
+messages. Installed runtimes depend on that, so it is unchanged; no action or
+payload key carries the word, so nothing on the wire needed renaming.
 """
 
 from __future__ import annotations
@@ -45,7 +50,7 @@ MIN_SESSION_ID_LEN = 33
 
 __all__ = [
     "CodingRuntimeError", "api_error", "call", "installed_runtime_arn", "new_session_id",
-    "project_call", "run",
+    "repo_call", "run",
 ]
 
 
@@ -116,7 +121,7 @@ def call(
     )
 
 
-# ── the project-level entry ─────────────────────────────────────────────────
+# ── the repo-level entry ─────────────────────────────────────────────────
 
 # container code → (console error code, HTTP status); anything else is a 502
 _API_ERRORS: dict[str, tuple[str, int]] = {
@@ -151,29 +156,29 @@ def require_runtime_arn(ctx: WorkspaceContext) -> str:
     return arn
 
 
-def project_call(
+def repo_call(
     ctx: WorkspaceContext,
-    project: Any,
+    repo: Any,
     action: str,
     *,
     read_timeout: float | None = None,
     client: Any = None,
     **payload: Any,
 ) -> Any:
-    """Run ``action`` on the project's session, restore URL folded in.
+    """Run ``action`` on the repo's session, restore URL folded in.
 
     Raises ``AppError(coding.runtime_not_installed)`` before any AWS call when the
     workspace has no runtime, and ``CodingRuntimeError`` when the action fails."""
     arn = require_runtime_arn(ctx)
-    if getattr(project, "snapshot_key", None):
+    if getattr(repo, "snapshot_key", None):
         try:
-            payload["restore_url"] = s3urls.presign_get(ctx, project.snapshot_key)
+            payload["restore_url"] = s3urls.presign_get(ctx, repo.snapshot_key)
         except Exception as exc:  # noqa: BLE001 — a signing failure is a call failure
             raise CodingRuntimeError(
                 RUNTIME_UNAVAILABLE, f"could not sign the snapshot restore URL: {exc}"
             ) from exc
     return call(
-        ctx, arn, project.session_id, action, read_timeout=read_timeout, client=client,
+        ctx, arn, repo.session_id, action, read_timeout=read_timeout, client=client,
         **payload,
     )
 
@@ -192,9 +197,9 @@ def api_error(exc: CodingRuntimeError) -> AppError:
     return AppError(code, exc.message, detail, status_code=status)
 
 
-def run(ctx: WorkspaceContext, project: Any, action: str, **payload: Any) -> Any:
-    """``project_call`` for a request handler: a failure is the console error."""
+def run(ctx: WorkspaceContext, repo: Any, action: str, **payload: Any) -> Any:
+    """``repo_call`` for a request handler: a failure is the console error."""
     try:
-        return project_call(ctx, project, action, **payload)
+        return repo_call(ctx, repo, action, **payload)
     except CodingRuntimeError as exc:
         raise api_error(exc) from exc

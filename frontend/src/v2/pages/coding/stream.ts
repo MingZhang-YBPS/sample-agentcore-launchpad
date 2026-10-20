@@ -119,7 +119,7 @@ export function resumeCursor(appliedSeq: number, frameId: string | null): number
 
 /** Error codes no retry can fix: the stream stops and the page says why. */
 const TERMINAL_CODES = new Set([
-  "coding.project_not_found",
+  "coding.repo_not_found",
   "coding.runtime_not_installed",
   // the console's auth envelope codes (routers/auth.py): a lapsed session or a
   // missing permission does not heal on retry

@@ -4,13 +4,11 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
-import { ApiError, codingApi, type CodingProjectDetail, type CodingTurnRow, errorMessage } from "../../../lib/api";
-import { budgetRefusalOf } from "../../../lib/budgets";
+import { ApiError, codingApi, type CodingRepoDetail, type CodingTurnRow, errorMessage } from "../../../lib/api";
 import { useLoad, useV2Toast } from "../../hooks";
-import { refreshMyUsageIfLimited } from "../../myUsage";
 import { Alert, Button, FlowHeader, LinkButton, Spin, Tag } from "../../ui";
 import { affectsFiles, type CodingEventRecord, liveTurn, turnChangedPaths, withLedgerTurns } from "./codingEvents";
-import { ProjectStatusTag } from "./common";
+import { RepoStatusTag } from "./common";
 import { Composer, type ComposerError } from "./Composer";
 import { Conversation } from "./Conversation";
 import { DeployModal } from "./DeployModal";
@@ -20,14 +18,14 @@ import { fmtClock } from "./format";
 import { PaneRail, PaneResizer, PanelToggle, type RailBadge } from "./IdePanels";
 import { type Panel, WORKBENCH_COMPACT } from "./layout";
 import { loadPrefs, pickOffered, savePrefs } from "./prefs";
-import { ProjectFormModal } from "./ProjectList";
+import { RepoFormModal } from "./RepoList";
 import { RuntimeCard } from "./RuntimeCard";
 import { useCodingDownload } from "./useCodingDownload";
 import { useCodingStream } from "./useCodingStream";
 import { useIdeLayout } from "./useIdeLayout";
 import { isDirty, useOpenFiles } from "./useOpenFiles";
 
-/** Ledger rows by codex turn id: the project detail wins over a just-started row. */
+/** Ledger rows by codex turn id: the repo detail wins over a just-started row. */
 function mergeRows(detail: CodingTurnRow[], pending: CodingTurnRow[]): CodingTurnRow[] {
   const known = new Set(detail.map((r) => r.turn_id));
   return [...detail, ...pending.filter((r) => !known.has(r.turn_id))];
@@ -49,13 +47,13 @@ function Elapsed({ since }: { since: number }) {
 }
 
 /**
- * One project's IDE: Files · Conversation (center) · Workbench (editor tabs + diffs).
+ * One repo's IDE: Files · Conversation (center) · Workbench (editor tabs + diffs).
  * The side panels collapse to rails and resize (`useIdeLayout`); opening a file from
  * anywhere brings the Workbench back. A turn runs in the coding runtime on its own; this
  * page only watches it (the event stream) and can interrupt it, so leaving or reloading
  * never stops a turn — reopening replays the history and resumes the live tail.
  */
-export function ProjectIde({ id }: { id: string }) {
+export function RepoIde({ id }: { id: string }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
   const [, setParams] = useSearchParams();
@@ -63,16 +61,16 @@ export function ProjectIde({ id }: { id: string }) {
   const runtime = useLoad(() => codingApi.runtime(), "coding-runtime");
   const detail = useLoad(
     () =>
-      codingApi.getProject(id).then(
-        (project): { project: CodingProjectDetail | null } => ({ project }),
+      codingApi.getRepo(id).then(
+        (repo): { repo: CodingRepoDetail | null } => ({ repo }),
         (err: unknown) => {
-          if (err instanceof ApiError && err.code === "coding.project_not_found") return { project: null };
+          if (err instanceof ApiError && err.code === "coding.repo_not_found") return { repo: null };
           throw err;
         },
       ),
-    `coding-project:${id}`,
+    `coding-repo:${id}`,
   );
-  const project = detail.data?.project ?? null;
+  const repo = detail.data?.repo ?? null;
   const reloadDetail = detail.reload;
   const ready = runtime.data?.status === "ready";
 
@@ -99,15 +97,14 @@ export function ProjectIde({ id }: { id: string }) {
         // the backend settles the turn (usage, snapshot) as it sees the completion
         window.clearTimeout(settleTimer.current);
         settleTimer.current = window.setTimeout(reloadDetail, 1500);
-        refreshMyUsageIfLimited();
       }
     },
     [bumpFiles, reloadDetail],
   );
 
-  const stream = useCodingStream(id, ready && project !== null, onRecords);
+  const stream = useCodingStream(id, ready && repo !== null, onRecords);
   const [pending, setPending] = useState<CodingTurnRow[]>([]);
-  const rows = useMemo(() => mergeRows(project?.turns ?? [], pending), [project, pending]);
+  const rows = useMemo(() => mergeRows(repo?.turns ?? [], pending), [repo, pending]);
   const view = useMemo(() => withLedgerTurns(stream.conversation, rows), [stream.conversation, rows]);
   const live = liveTurn(view);
   const [starting, setStarting] = useState(false);
@@ -115,11 +112,11 @@ export function ProjectIde({ id }: { id: string }) {
 
   // a new status frame that disagrees with the ledger row we hold → re-read the row
   // (read through a ref: a detail reload alone must not re-run this)
-  const ledgerStatus = useRef(project?.status);
-  ledgerStatus.current = project?.status;
+  const ledgerStatus = useRef(repo?.status);
+  ledgerStatus.current = repo?.status;
   const streamStatus = stream.status;
   useEffect(() => {
-    const status = streamStatus?.projectStatus;
+    const status = streamStatus?.repoStatus;
     if (status && ledgerStatus.current && status !== ledgerStatus.current) reloadDetail();
   }, [streamStatus, reloadDetail]);
 
@@ -223,7 +220,7 @@ export function ProjectIde({ id }: { id: string }) {
     [showPanel],
   );
 
-  // a Markdown link into the project (agent text, a `.md` preview): open that file,
+  // a Markdown link into the repo (agent text, a `.md` preview): open that file,
   // at the linked line when there is one (stable: the conversation rows are memoized)
   const openTab = openFiles.open;
   const openFile = useCallback(
@@ -243,8 +240,8 @@ export function ProjectIde({ id }: { id: string }) {
   const [effortChoice, setEffortChoice] = useState<string | null>(null);
   const models = runtime.data?.models ?? [];
   const efforts = runtime.data?.efforts ?? [];
-  const model = pickOffered(modelChoice ?? stored.model ?? project?.model, runtime.data?.default_model ?? "", models);
-  const effort = pickOffered(effortChoice ?? stored.effort ?? project?.effort, runtime.data?.default_effort ?? "", efforts);
+  const model = pickOffered(modelChoice ?? stored.model ?? repo?.model, runtime.data?.default_model ?? "", models);
+  const effort = pickOffered(effortChoice ?? stored.effort ?? repo?.effort, runtime.data?.default_effort ?? "", efforts);
   const choose = (next: { model?: string; effort?: string }) => {
     if (next.model) setModelChoice(next.model);
     if (next.effort) setEffortChoice(next.effort);
@@ -263,7 +260,7 @@ export function ProjectIde({ id }: { id: string }) {
       if (stream.phase === "stopped") stream.restart();
       return true;
     } catch (err) {
-      setComposerError({ text: errorMessage(err), budget: budgetRefusalOf(err) });
+      setComposerError({ text: errorMessage(err) });
       if (err instanceof ApiError && err.code === "coding.turn_running") reloadDetail();
       return false;
     } finally {
@@ -289,7 +286,7 @@ export function ProjectIde({ id }: { id: string }) {
   const [editing, setEditing] = useState(false);
   const back = () => setParams({});
 
-  /* ---------- downloads (a file, or the project as a zip) ---------- */
+  /* ---------- downloads (a file, or the repo as a zip) ---------- */
   const { download, pending: downloadPending } = useCodingDownload();
   const downloadFile = useCallback((path: string) => void download(id, path), [download, id]);
   const fileDownloading = useCallback((path: string) => downloadPending(id, path), [downloadPending, id]);
@@ -313,7 +310,7 @@ export function ProjectIde({ id }: { id: string }) {
       </>
     );
   }
-  if (!project) {
+  if (!repo) {
     return (
       <>
         <FlowHeader title={t("v2.coding.title")} onBack={back} />
@@ -361,36 +358,36 @@ export function ProjectIde({ id }: { id: string }) {
       <FlowHeader
         title={
           <span className="v2-coding-title">
-            {project.name}
-            <ProjectStatusTag status={running ? "running" : "idle"} />
+            {repo.name}
+            <RepoStatusTag status={running ? "running" : "idle"} />
             {live && live.startedAt !== null && <Elapsed key={live.turnId} since={live.startedAt} />}
           </span>
         }
         onBack={back}
         end={
           <>
-            {project.agent_id && (
-              <Link className="v2-btn sm" to={`/v2/agents?view=detail&id=${encodeURIComponent(project.agent_id)}`} data-testid="v2-coding-agent-link">
+            {repo.agent_id && (
+              <Link className="v2-btn sm" to={`/v2/agents?view=detail&id=${encodeURIComponent(repo.agent_id)}`} data-testid="v2-coding-agent-link">
                 {t("v2.coding.ide.openAgent")}
               </Link>
             )}
             <Button size="sm" onClick={() => setEditing(true)}>
               <Pencil size={13} aria-hidden="true" />
-              {t("v2.coding.projects.rename")}
+              {t("v2.coding.repos.rename")}
             </Button>
             <Button
               size="sm"
               disabled={!ready || zipping}
-              title={!ready ? t("v2.coding.composer.runtimeNotReady") : t("v2.coding.download.projectHint")}
+              title={!ready ? t("v2.coding.composer.runtimeNotReady") : t("v2.coding.download.repoHint")}
               onClick={() => void download(id)}
-              testId="v2-coding-download-project"
+              testId="v2-coding-download-repo"
             >
               {zipping ? (
                 <Loader2 size={13} className="v2-coding-spin" aria-hidden="true" />
               ) : (
                 <Download size={13} aria-hidden="true" />
               )}
-              {t(zipping ? "v2.coding.download.preparing" : "v2.coding.download.project")}
+              {t(zipping ? "v2.coding.download.preparing" : "v2.coding.download.repo")}
             </Button>
             <Button
               kind="primary"
@@ -401,7 +398,7 @@ export function ProjectIde({ id }: { id: string }) {
               testId="v2-coding-deploy"
             >
               <Rocket size={13} aria-hidden="true" />
-              {t(project.agent_id ? "v2.coding.deploy.redeploy" : "v2.coding.deploy.button")}
+              {t(repo.agent_id ? "v2.coding.deploy.redeploy" : "v2.coding.deploy.button")}
             </Button>
           </>
         }
@@ -427,7 +424,7 @@ export function ProjectIde({ id }: { id: string }) {
             data-testid="v2-coding-pane-files"
           >
             <FileTree
-              projectId={id}
+              repoId={id}
               version={filesVersion}
               activePath={active === CHANGES_TAB ? null : active}
               onOpen={(path) => openFile(path)}
@@ -504,7 +501,7 @@ export function ProjectIde({ id }: { id: string }) {
             data-testid="v2-coding-pane-workbench"
           >
             <EditorPane
-              projectId={id}
+              repoId={id}
               files={openFiles.files}
               active={active}
               onActivate={setActive}
@@ -538,20 +535,20 @@ export function ProjectIde({ id }: { id: string }) {
       )}
       {deploying && (
         <DeployModal
-          project={project}
+          repo={repo}
           open
           onClose={() => setDeploying(false)}
           onDeployed={() => reloadDetail()}
         />
       )}
       {editing && (
-        <ProjectFormModal
+        <RepoFormModal
           open
-          project={project}
+          repo={repo}
           onClose={() => setEditing(false)}
           onSaved={() => {
             setEditing(false);
-            toast("success", t("v2.coding.projects.saved"));
+            toast("success", t("v2.coding.repos.saved"));
             reloadDetail();
           }}
         />

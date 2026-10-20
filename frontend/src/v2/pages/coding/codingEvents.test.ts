@@ -199,7 +199,7 @@ describe("applyCodingEvents", () => {
     expect(moved.turns[0].items[0]).toMatchObject({ changes: [{ kind: "update", movePath: "b.py", openPath: "b.py", added: 1, removed: 1 }] });
   });
 
-  it("makes codex's absolute file-change paths project-relative", () => {
+  it("makes codex's absolute file-change paths repo-relative", () => {
     const state = applyCodingEvents(
       emptyConversation(),
       log(
@@ -234,7 +234,7 @@ describe("applyCodingEvents", () => {
         { path: "README.md", kind: "add", movePath: null, openPath: "README.md", added: 1 },
         // a move opens under its destination, as the Changes tab lists it
         { path: "src/a.py", kind: "update", movePath: "src/b.py", openPath: "src/b.py" },
-        // outside the project: shown as reported, nothing to open
+        // outside the repo: shown as reported, nothing to open
         { path: "/tmp/scratch.txt", kind: "add", movePath: null, openPath: null },
       ],
     });
@@ -415,7 +415,7 @@ describe("helpers", () => {
     expect(normalizeUsage({ inputTokens: 3, outputTokens: 4, totalTokens: 9 })).toMatchObject({ total: 9 });
   });
 
-  it("lists the project files a turn changed, once each", () => {
+  it("lists the repo files a turn changed, once each", () => {
     expect(turnChangedPaths(null)).toEqual([]);
     expect(turnChangedPaths(applyCodingEvents(emptyConversation(), fullTurnLog()).turns[0])).toEqual(["test_app.py"]);
     const state = applyCodingEvents(

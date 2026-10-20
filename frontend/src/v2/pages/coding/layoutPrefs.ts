@@ -1,5 +1,5 @@
 // The IDE layout (which side panels are collapsed, their widths) remembered per
-// browser — one layout for every project, unlike the per-project composer choices in
+// browser — one layout for every repo, unlike the per-repo composer choices in
 // `prefs.ts`. Storage is a preference, never required: every access is guarded, and a
 // stored value that is not a sane layout falls back to the default field by field.
 

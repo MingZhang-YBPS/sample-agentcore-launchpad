@@ -63,7 +63,7 @@ function dropSubtree(nodes: Record<string, TreeNode>, path: string): void {
 
 /**
  * Merge one listing of `dir` taken to `depth` levels. Entries are relative to the
- * project root; an entry not under `dir` is read as relative to it. Every directory
+ * repo root; an entry not under `dir` is read as relative to it. Every directory
  * the listing fully covers (`dir` itself, and its subdirectories above the depth
  * limit) gets exactly the listed children: entries gone from disk leave the tree with
  * their subtrees. Directories at the depth limit keep what they had.

@@ -6709,8 +6709,8 @@ export const v2KnowledgeApi = {
 };
 
 // ---- coding agent (remote web IDE over the platform coding runtime) ----
-/* `/api/coding/*` — parent task 10-19-coding-agent design §7.3. A project is private
- * to its creator: a foreign or missing id is `404 coding.project_not_found`. Every
+/* `/api/coding/*` — parent task 10-19-coding-agent design §7.3. A repo is private
+ * to its creator: a foreign or missing id is `404 coding.repo_not_found`. Every
  * non-GET answers with a JSON body (the client refuses an empty 2xx). */
 
 export type CodingRuntimeState = "not_installed" | "installing" | "ready" | "failed" | "uninstalling";
@@ -6738,25 +6738,25 @@ export interface CodingRuntimeStatus {
   default_effort: string;
 }
 
-export type CodingProjectStatus = "idle" | "running";
+export type CodingRepoStatus = "idle" | "running";
 
-export interface CodingProject {
+export interface CodingRepo {
   id: string;
   name: string;
   description: string;
-  status: CodingProjectStatus;
+  status: CodingRepoStatus;
   active_turn_id: string | null;
   model: string | null;
   effort: string | null;
-  /** the Agent this project deployed (redeploys update it) */
+  /** the Agent this repo deployed (redeploys update it) */
   agent_id: string | null;
   snapshot_at: string | null;
   created_at: string;
   updated_at: string;
   created_by: string | null;
   created_by_name: string | null;
-  /** the caller owns this project — only owned rows open in the IDE (an admin's
-   *  "all" view lists other members' projects for deletion only) */
+  /** the caller owns this repo — only owned rows open in the IDE (an admin's
+   *  "all" view lists other members' repos for deletion only) */
   owned?: boolean;
 }
 
@@ -6786,7 +6786,7 @@ export interface CodingTurnRow {
   completed_at: string | null;
 }
 
-export interface CodingProjectDetail extends CodingProject {
+export interface CodingRepoDetail extends CodingRepo {
   /** latest turns (≤ 20), oldest first */
   turns: CodingTurnRow[];
   /** codex id of the running turn, if any */
@@ -6794,7 +6794,7 @@ export interface CodingProjectDetail extends CodingProject {
 }
 
 export interface CodingTreeEntry {
-  /** relative to the project root, `/`-separated */
+  /** relative to the repo root, `/`-separated */
   path: string;
   dir: boolean;
   size: number | null;
@@ -6835,7 +6835,7 @@ export interface CodingDeployRequest {
  *  `Content-Disposition: attachment` (the browser saves it, the page stays). */
 export interface CodingDownload {
   url: string;
-  /** the name the browser saves it under (`<project>.zip` for the archive) */
+  /** the name the browser saves it under (`<repo>.zip` for the archive) */
   filename: string;
   size: number | null;
   /** seconds the URL stays valid (use it at once) */
@@ -6845,12 +6845,12 @@ export interface CodingDownload {
 export interface CodingDeployResult {
   agent_id: string;
   job_id: string;
-  /** true = a new Agent, false = a redeploy of the project's Agent */
+  /** true = a new Agent, false = a redeploy of the repo's Agent */
   created: boolean;
 }
 
-function codingPath(projectId: string, rest = ""): string {
-  return `/api/coding/projects/${encodeURIComponent(projectId)}${rest}`;
+function codingPath(repoId: string, rest = ""): string {
+  return `/api/coding/repos/${encodeURIComponent(repoId)}${rest}`;
 }
 
 export const codingApi = {
@@ -6860,17 +6860,16 @@ export const codingApi = {
     request<{ job_id: string; status: string }>("/api/coding/runtime/install", { method: "POST" }),
   uninstallRuntime: () =>
     request<{ job_id: string; status: string }>("/api/coding/runtime", { method: "DELETE" }),
-  /** Own projects; `all` (admins) lists every project in the workspace. */
-  listProjects: (all = false) =>
-    request<{ projects: CodingProject[] }>(`/api/coding/projects${all ? "?all=1" : ""}`),
-  createProject: (body: { name: string; description?: string }) =>
-    request<CodingProject>("/api/coding/projects", { method: "POST", body: JSON.stringify(body) }),
-  getProject: (id: string) => request<CodingProjectDetail>(codingPath(id)),
-  updateProject: (id: string, body: { name?: string; description?: string }) =>
-    request<CodingProject>(codingPath(id), { method: "PATCH", body: JSON.stringify(body) }),
-  deleteProject: (id: string) => request<{ deleted: boolean }>(codingPath(id), { method: "DELETE" }),
-  /** Starts a turn asynchronously (`409 coding.turn_running` while one runs; a `402
-   *  budget.*` refusal arrives as an `ApiError`). */
+  /** Own repos; `all` (admins) lists every repo in the workspace. */
+  listRepos: (all = false) =>
+    request<{ repos: CodingRepo[] }>(`/api/coding/repos${all ? "?all=1" : ""}`),
+  createRepo: (body: { name: string; description?: string }) =>
+    request<CodingRepo>("/api/coding/repos", { method: "POST", body: JSON.stringify(body) }),
+  getRepo: (id: string) => request<CodingRepoDetail>(codingPath(id)),
+  updateRepo: (id: string, body: { name?: string; description?: string }) =>
+    request<CodingRepo>(codingPath(id), { method: "PATCH", body: JSON.stringify(body) }),
+  deleteRepo: (id: string) => request<{ deleted: boolean }>(codingPath(id), { method: "DELETE" }),
+  /** Starts a turn asynchronously (`409 coding.turn_running` while one runs). */
   startTurn: (id: string, body: { prompt: string; model: string; effort: string }) =>
     request<CodingTurnRow>(codingPath(id, "/turns"), { method: "POST", body: JSON.stringify(body) }),
   interrupt: (id: string) =>
@@ -6900,7 +6899,7 @@ export const codingApi = {
     request<{ changes: CodingChange[] }>(codingPath(id, `/changes?scope=${scope}`)),
   diff: (id: string, scope: CodingChangeScope) =>
     request<{ diff: string }>(codingPath(id, `/diff?scope=${scope}`)),
-  /** One file (`path`, text or binary, ≤ 200 MB) or, without a path, the whole project
+  /** One file (`path`, text or binary, ≤ 200 MB) or, without a path, the whole repo
    *  as a zip (the deploy export's file set, ≤ 50 MB). `404 coding.file_not_found`,
    *  `413 coding.download_too_large`; allowed while a turn runs. */
   download: (id: string, path?: string) =>

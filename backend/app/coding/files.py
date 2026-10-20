@@ -1,10 +1,10 @@
-"""Workspace files of a coding project: thin proxies over the runtime actions.
+"""Workspace files of a coding repo: thin proxies over the runtime actions.
 
 The runtime's path guard is authoritative (it resolves real paths under the
-project, refuses symlink escapes and ``.git``); this layer refuses an obviously
+repo, refuses symlink escapes and ``.git``); this layer refuses an obviously
 bad path — absolute, ``..``, NUL, ``.git`` — before any runtime call, and shapes
 the answers to the console contract (parent design §7.3, console addenda 7–9).
-A ``turn`` view of a project that has not run a turn yet is empty, not an error.
+A ``turn`` view of a repo that has not run a turn yet is empty, not an error.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from app.core.errors import AppError
 from app.services.workspace import WorkspaceContext
 
 from . import runtime_client
-from .models import PROJECT_RUNNING, CodingProject
+from .models import REPO_RUNNING, CodingRepo
 from .runtime_client import CodingRuntimeError
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -54,12 +54,12 @@ def clean_path(path: str | None, *, allow_root: bool = False) -> str:
     return "/".join(parts)
 
 
-def tree(ctx: WorkspaceContext, project: CodingProject, path: str | None,
+def tree(ctx: WorkspaceContext, repo: CodingRepo, path: str | None,
          depth: int) -> dict[str, Any]:
     rel = clean_path(path, allow_root=True)
     try:
-        result = runtime_client.project_call(
-            ctx, project, "tree", path=rel, depth=max(1, min(int(depth), MAX_TREE_DEPTH))
+        result = runtime_client.repo_call(
+            ctx, repo, "tree", path=rel, depth=max(1, min(int(depth), MAX_TREE_DEPTH))
         ) or {}
     except CodingRuntimeError as exc:
         if exc.code == "not_found":  # the directory is gone: an empty listing
@@ -86,14 +86,14 @@ def _absent(rel: str) -> dict[str, Any]:
             "binary": False}
 
 
-def read_file(ctx: WorkspaceContext, project: CodingProject, path: str | None,
+def read_file(ctx: WorkspaceContext, repo: CodingRepo, path: str | None,
               rev: str | None) -> dict[str, Any]:
     rel = clean_path(path)
     payload: dict[str, Any] = {"path": rel}
     if rev:
         payload["rev"] = rev
     try:
-        result = runtime_client.project_call(ctx, project, "read_file", **payload) or {}
+        result = runtime_client.repo_call(ctx, repo, "read_file", **payload) or {}
     except CodingRuntimeError as exc:
         if exc.code == "no_turn" and rev == "turn":
             return _absent(rel)
@@ -111,7 +111,7 @@ def read_file(ctx: WorkspaceContext, project: CodingProject, path: str | None,
     }
 
 
-def write_file(db: Session, ctx: WorkspaceContext, project: CodingProject, *, path: str,
+def write_file(db: Session, ctx: WorkspaceContext, repo: CodingRepo, *, path: str,
                content: str, expected: dict[str, Any]) -> dict[str, Any]:
     """Save one file. ``expected`` is ``{"expected_sha256": hash | None}`` when the
     client sent the field (a hash = the file must still have it; None = it must
@@ -121,15 +121,15 @@ def write_file(db: Session, ctx: WorkspaceContext, project: CodingProject, *, pa
     if len(content.encode("utf-8")) > MAX_FILE_BYTES:
         raise AppError("coding.file_too_large", "the file is larger than 2 MB",
                        {"max_bytes": MAX_FILE_BYTES}, status_code=413)
-    if project.status == PROJECT_RUNNING:
-        raise AppError("coding.turn_running", "a turn is running in this project — "
+    if repo.status == REPO_RUNNING:
+        raise AppError("coding.turn_running", "a turn is running in this repo — "
                        "files are read-only until it ends", status_code=409)
-    result = runtime_client.run(ctx, project, "write_file", path=rel, content=content,
+    result = runtime_client.run(ctx, repo, "write_file", path=rel, content=content,
                                 **expected) or {}
     stamp = datetime.now(UTC)
     db.execute(
-        update(CodingProject)
-        .where(CodingProject.id == project.id)
+        update(CodingRepo)
+        .where(CodingRepo.id == repo.id)
         .values(dirty_at=stamp, updated_at=stamp)
         .execution_options(synchronize_session=False)
     )
@@ -138,9 +138,9 @@ def write_file(db: Session, ctx: WorkspaceContext, project: CodingProject, *, pa
             "size": result.get("size")}
 
 
-def changes(ctx: WorkspaceContext, project: CodingProject, scope: str) -> dict[str, Any]:
+def changes(ctx: WorkspaceContext, repo: CodingRepo, scope: str) -> dict[str, Any]:
     try:
-        result = runtime_client.project_call(ctx, project, "changes", scope=scope) or {}
+        result = runtime_client.repo_call(ctx, repo, "changes", scope=scope) or {}
     except CodingRuntimeError as exc:
         if exc.code == "no_turn":
             return {"scope": scope, "changes": []}
@@ -156,9 +156,9 @@ def changes(ctx: WorkspaceContext, project: CodingProject, scope: str) -> dict[s
     return {"scope": scope, "changes": out}
 
 
-def diff(ctx: WorkspaceContext, project: CodingProject, scope: str) -> dict[str, Any]:
+def diff(ctx: WorkspaceContext, repo: CodingRepo, scope: str) -> dict[str, Any]:
     try:
-        result = runtime_client.project_call(ctx, project, "diff", scope=scope) or {}
+        result = runtime_client.repo_call(ctx, repo, "diff", scope=scope) or {}
     except CodingRuntimeError as exc:
         if exc.code == "no_turn":
             return {"scope": scope, "diff": "", "truncated": False}

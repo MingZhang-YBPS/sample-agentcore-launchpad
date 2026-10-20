@@ -19,7 +19,7 @@ Steps (each asserts and prints what it saw):
 5. StopRuntimeSession → the same session comes back with its files and thread
    (session storage), on a new microVM (new boot id);
 6. a brand-new session given the snapshot's presigned GET as `restore_url`
-   restores the project before its first action.
+   restores the repo before its first action.
 """
 
 from __future__ import annotations
@@ -194,7 +194,7 @@ def main() -> int:
         check(fresh["restored"] is True, "a fresh session restored from the snapshot")
         check(fresh["thread_id"] == started["thread_id"], "restored state carries the thread")
         check(act(ws, restored_session, "read_file", path="hello.py",
-                  restore_url=restore_url).get("exists"), "restored project has hello.py")
+                  restore_url=restore_url).get("exists"), "restored repo has hello.py")
     finally:
         for sid in (session, restored_session):
             try:
