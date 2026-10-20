@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type ScorecardAgent, type ScorecardRun } from "../../../lib/api";
-import { rememberBudgetNotice } from "../../../lib/budgets";
 import type { EvaluationRunInfo } from "../../../lib/evaluation";
 import { useV2Toast } from "../../hooks";
 import { shortDate } from "../../scorecard";
@@ -25,8 +24,7 @@ function defaultName(t: TFunction, agent: ScorecardAgent, source: ScorecardRun):
 /**
  * 再评一次: evaluate the agent as it is now on the source run's own scope (the same
  * dataset and pinned version, or the same window) with the same evaluators — one
- * `POST /api/eval/runs/{id}/rerun`. The task name is editable; a budget notice on the
- * response is remembered for the new run's detail page, as the wizard does.
+ * `POST /api/eval/runs/{id}/rerun`. The task name is editable.
  */
 export function RerunDialog({
   agent,
@@ -57,9 +55,6 @@ export function RerunDialog({
     setError(null);
     try {
       const run = await api.rerunEvaluationRun(source.id, { name: trimmed.slice(0, NAME_MAX) });
-      // its estimate is more than the creator has left: the agent page and the new
-      // run's detail page say so
-      rememberBudgetNotice(run.id, run.budget_notice);
       toast("success", t("v2.scorecard.rerun.started", { name: run.name || trimmed }));
       onStarted(run);
     } catch (err) {

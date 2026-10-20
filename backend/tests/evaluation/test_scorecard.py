@@ -892,34 +892,12 @@ def test_rerun_on_a_dataset_hidden_since_is_refused_like_post_runs(ada, bob, sub
     assert submitted == []
 
 
-def test_rerun_refuses_a_payer_at_their_limit_like_post_runs(app, bob, submitted):
-    from tests.test_budget_jobs import _limit, _spent
-
-    bob_id, bob_client = bob
-    agent = _agent()
-    dataset = _dataset([{"prompt": "q"}], created_by=bob_id)
-    source = _run(agent, created_by=bob_id, dataset_id=dataset, dataset_name="ds")
-    _limit(bob_id, 1.0)
-    _spent(bob_id, 1.0)
-
-    rerun = bob_client.post(f"/api/eval/runs/{source}/rerun")
-    create = bob_client.post("/api/eval/runs", json={
-        "agent_id": agent, "dataset_id": dataset, "evaluators": EVALS, "wait_seconds": 0})
-    for res in (rerun, create):
-        assert res.status_code == 402, res.text
-        assert res.json()["code"] == "budget.exceeded"
-    assert rerun.json()["detail"] == create.json()["detail"]
-    assert submitted == []
-
-
 def test_rerun_route_is_classified():
-    from app.core.billing_policy import BILLING, SOURCE_EVAL, Billable
     from app.core.route_policy import PERM_EVAL_RUN, ROUTE_POLICY
 
     assert ROUTE_POLICY[("POST", "/api/eval/runs/{run_id}/rerun")] == PERM_EVAL_RUN
     assert ROUTE_POLICY[("GET", "/api/eval/scorecard")] == "member"
     assert ROUTE_POLICY[("GET", "/api/eval/runs/compare")] == "member"
-    assert BILLING[("POST", "/api/eval/runs/{run_id}/rerun")] == Billable(SOURCE_EVAL)
 
 
 def test_rerun_window_of_a_log_source_keeps_its_source(client, submitted, monkeypatch):
