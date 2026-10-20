@@ -19,6 +19,7 @@ import botocore.session
 import pytest
 from sqlalchemy import create_engine, select
 
+from app.coding.models import CodingProject
 from app.core import config as config_mod
 from app.core.db import Base, SessionLocal, engine
 from app.evaluation.models import EvalPipeline, EvalRecommendation, EvalRun
@@ -122,6 +123,10 @@ def _seed_every_kind() -> dict[str, str]:
         Job(id="job-purge", workspace_id="default", type="purge_assistant_conversation",
             status="queued"),
         Job(id="job-unknown", workspace_id="default", type="delete_agent", status="queued"),
+        Job(id="job-coding", workspace_id="default", type="coding_runtime_install",
+            status="running"),
+        Job(id="job-coding-done", workspace_id="default", type="coding_runtime_uninstall",
+            status="succeeded"),
         Job(id="job-done", workspace_id="default", type="deploy_agent", status="succeeded"),
         Job(id="job-unknown-done", workspace_id="default", type="delete_agent", status="failed"),
         _asset_op("op-run", "running"),
@@ -154,17 +159,23 @@ def _seed_every_kind() -> dict[str, str]:
         _conversation("conv-turn", active_turn=3,
                       active_turn_started_at=NOW - timedelta(minutes=5)),
         _conversation("conv-prep", preparation_token="tok"),
+        CodingProject(id="cp-run", workspace_id="default", owner_principal="user:u1",
+                      name="p", session_id="s-run".ljust(40, "x"), status="running",
+                      active_turn_id="turn-1"),
+        CodingProject(id="cp-idle", workspace_id="default", owner_principal="user:u1",
+                      name="q", session_id="s-idle".ljust(40, "x"), status="idle"),
     )
     return {
         "job-deploy": RESUMES, "job-boot": RESUMES, "job-uninst": RESUMES,
-        "job-purge": RESUMES, "job-unknown": UNHANDLED, "op-run": RESUMES,
+        "job-purge": RESUMES, "job-unknown": UNHANDLED, "job-coding": FAILS_INTERRUPTED,
+        "op-run": RESUMES,
         "run-batch": RECONCILES, "run-nobatch": FAILS_INTERRUPTED,
         "run-invoking": FAILS_INTERRUPTED, "exp-act": CLEARED_RETRY,
         "can-act": CLEARED_RETRY, "sl-train": FAILS_INTERRUPTED,
         "sl-eval": FAILS_INTERRUPTED, "pc-run": RECONCILES, "pc-pend": RECONCILES,
         "pipe-run": FAILS_ON_READ, "rec-provider": FAILS_ON_READ,
         "rec-agentcore": RESTART_SAFE, "conv-turn": FAILS_INTERRUPTED,
-        "conv-prep": CLEARED_RETRY,
+        "conv-prep": CLEARED_RETRY, "cp-run": RESTART_SAFE,
     }
 
 
@@ -187,6 +198,7 @@ def test_every_kind_lists_once_with_its_outcome_and_terminal_rows_are_absent():
     assert got == expected
     by_id = {i.id: i for i in items}
     assert by_id["job-unknown"].handled_by is None
+    assert by_id["job-coding"].handled_by == "sweep_coding_runtime_jobs"
     assert by_id["conv-turn"].age_seconds == pytest.approx(300)
     assert by_id["conv-turn"].status == "turn 3"
     assert "resumable on request" in by_id["sl-train"].label
