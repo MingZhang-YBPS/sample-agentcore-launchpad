@@ -142,10 +142,15 @@ class _Paginator:
 
 
 class StubIam(_Calls):
-    def __init__(self, roles: dict[str, list[dict]] | None = None, inline: dict | None = None):
+    def __init__(self, roles: dict[str, list[dict]] | None = None, inline: dict | None = None,
+                 documents: dict | None = None):
         super().__init__()
         self.roles = roles or {}  # name -> tags
         self.inline = inline or {}  # name -> inline policy names
+        self.documents = documents or {}  # (role, policy) -> policy document
+
+    def get_role_policy(self, RoleName, PolicyName):
+        return {"PolicyDocument": self.documents.get((RoleName, PolicyName), {})}
 
     def get_paginator(self, op):
         assert op == "list_roles"
@@ -361,6 +366,31 @@ def test_delete_credential_providers_by_name(monkeypatch):
     assert control.ops("delete_oauth2_credential_provider") == [
         {"name": teardown.GATEWAY_M2M_PROVIDER_NAME}
     ]
+
+
+def _telemetry_policy(region: str) -> dict:
+    return {"Statement": [{
+        "Sid": "Telemetry", "Effect": "Allow", "Action": ["logs:PutLogEvents"],
+        "Resource": [f"arn:aws:logs:{region}:123456789012:log-group:"
+                     "/aws/bedrock-agentcore/runtimes/*"],
+    }]}
+
+
+def test_agent_roles_of_another_region_are_not_swept(monkeypatch):
+    # IAM is account-global: a us-west-2 teardown must leave a us-east-1 agent's role
+    tag = [{"Key": teardown.agent_iam.MANAGED_TAG_KEY, "Value": "a"}]
+    here, there = "launchpad-agent-here-11111111", "launchpad-agent-there-22222222"
+    iam = StubIam(
+        roles={here: tag, there: tag, ORPHAN_ROLE: tag},
+        inline={here: ["launchpad-caps-here"], there: ["launchpad-caps-there"]},
+        documents={(here, "launchpad-caps-here"): _telemetry_policy("us-west-2"),
+                   (there, "launchpad-caps-there"): _telemetry_policy("us-east-1")},
+    )
+    _wire(monkeypatch, StubControl(), iam)
+    roles = [ident for kind, ident, _ in teardown.collect_targets("us-west-2")
+             if kind == "agent-role"]
+    # its own Region's role and the policy-less orphan go; the other Region's stays
+    assert roles == [ORPHAN_ROLE, here]
 
 
 def test_delete_agent_role_removes_inline_policies_first(monkeypatch):
