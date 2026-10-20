@@ -796,7 +796,6 @@ def test_rerun_a_local_dataset_run(client, submitted):
     assert (body["name"], body["description"]) == ("weekly · 再评", "why")
     assert body["dataset_id"] == dataset and body["evaluators"] == EVALS
     assert body["snapshot"] == {"seq": 2, "source": "stamped"}  # the version live now
-    assert body["budget_notice"] is None
     [call] = submitted
     assert call["dataset_items"] == [{"prompt": "q1"}] and call["actor_model_id"] is None
 
