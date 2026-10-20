@@ -612,7 +612,7 @@
  * not flash a row of flags. */
 .v3 .v3-why { position: relative; display: inline-flex; vertical-align: middle; }
 /* a field keeps its full width inside the wrapper */
-.v3 .v3-why:has(> input, > select, > textarea) { display: flex; flex: 1 1 auto; min-width: 0; }
+.v3 .v3-why:has(> input, > select, > textarea, > .v3-sel) { display: flex; flex: 1 1 auto; min-width: 0; }
 /* …but a checkbox or radio keeps its own size beside its label */
 .v3 .v3-why:has(> input[type="checkbox"], > input[type="radio"]) { display: inline-flex; flex: none; }
 /* a natively disabled field swallows the pointer; let the wrapper take the hover */

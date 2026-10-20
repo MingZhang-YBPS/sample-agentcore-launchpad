@@ -1575,7 +1575,8 @@ created_at, updated_at, role_arn}`；从不返回 `external_id`。删除或清�
 |---|---|---|---|---|
 | `DELETE` | `/api/agents/{agent_id}` | `perm:agents.delete` | project | `{deleted: true, agent_id, aws_resource_deleted}`。受 prod 保护。其架构助手会话正在清理时 `409 assistant.agent_clearing` |
 | `GET` | `/api/agents/discovery` | member | project | `{region, runtimes[…], harnesses[…], harness_scan_error}`：Workspace 账号中的 Runtime 与 Harness，被管理的标出管理它的 Agent；其他项目管理的 runtime 只显示“已被管理”。没有 Agent 管理的 runtime 只对持有 `agents.import` 的调用者列出 |
-| `POST` | `/api/agents/discovery/import` | `perm:agents.import` | project | 请求体 `{runtime_ids[], harness_ids[]}` → 按类型分桶的结果（已导入、已被管理、失败）。导入的 Agent 属于请求所在项目。受 prod 保护 |
+| `POST` | `/api/agents/discovery/import` | `perm:agents.import` | project | 请求体 `{runtime_ids[], harness_ids[], project_id?}` → 按类型分桶的结果（已导入、已被管理、失败）。导入的 Agent 属于请求所在的业务项目（见下文）。受 prod 保护 |
+| `GET` | `/api/agents/eligible-projects?permission=agents.deploy` | member | workspace | `{projects[{id, name, department_id, department_name, is_workspace_default}]}`：调用者持有 `permission`（`agents.deploy` / `agents.import` / `agents.convert`，否则 `422 agent.project_permission_invalid`）的业务项目（`active`、非 `default`、有部门）；管理员看到全部。供创建表单的项目选择器使用 |
 | `POST` | `/api/agent-skills/import` | `perm:agents.deploy` | project | 请求体 `{staging_id, selections[]}` → 部署向导可挂载的 `{name, path}` 条目（上传到按请求划分的 S3 前缀）。单项失败不中止整批。受 prod 保护 |
 | `GET` | `/api/agents/{agent_id}/snapshots` | member | project | `{snapshots[…]}`：台账中的 spec 快照，最新在前，不含 spec |
 | `GET` | `/api/agents/{agent_id}/snapshots/{seq}` | member | project | 单个快照，含 `spec` |
@@ -1584,6 +1585,16 @@ created_at, updated_at, role_arn}`；从不返回 `external_id`。删除或清�
 | `GET` | `/api/agents/{agent_id}/suggested-questions?lang=` | member | project | 试聊面板的 3–5 个起始问题；带缓存，模型失败时也不返回 500 |
 | `GET` | `/api/chat/{agent_id}/memory?session_id=` | member | project | 一个对话会话的记忆摘要，外加 `actor_id`（复合 actor `<agent>__<human>`）。`502 memory.unavailable` |
 | `POST` | `/api/chat/{agent_id}/feedback` | `perm:project.use` | project | 请求体 `{session_id, message_id, verdict: up\|down, comment?}` → `{message_id, verdict}`：记录控制台中的点赞 / 点踩 |
+
+**新 Agent 与其项目。** `POST /api/agents`（`AgentSpec.project_id`，不会存入 spec，重新发布时忽略）、
+`POST /api/agents/{agent_id}/convert`（可选请求体 `{project_id}`）、`POST /api/agents/discovery/import`
+与 `POST /api/assistant/architect/conversations/{id}/proposal/approve`（请求体中的 `project_id`）把新 Agent
+归入请求体的 `project_id`，否则归入请求所在项目。该项目必须是调用者可达、绑定到该工作区、`active`、
+不是工作区 `default` 项目且有部门的项目，调用者还要在其中持有该路由的权限键。拒绝：
+`422 agent.project_mismatch`（请求体与 `X-Project` 不一致）、`422 agent.project_required`、
+`422 agent.project_not_found`（不存在或不可达）、`422 agent.project_default_not_allowed`、
+`422 agent.project_archived`、`422 agent.project_no_department`——均带 `next: projects.open`。会创建目标
+Agent 的晋级对其在目标工作区中的项目执行同一规则（执行时 `422`，worker 中为失败的阶段）。系统预置不受此限。
 
 ### 发布包、发布申请与资源映射
 

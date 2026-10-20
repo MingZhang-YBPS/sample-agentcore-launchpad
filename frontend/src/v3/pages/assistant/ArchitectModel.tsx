@@ -14,6 +14,7 @@ import {
 } from "../../../lib/models";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Dialog, Notice, Panel, Stat } from "../../ui";
+import { Select } from "../../select";
 
 /** The system preset behind the architect assistant (`backend/app/system_agents/presets.py`). */
 export const ARCHITECT_KEY = "aws-agent-solution-architect";
@@ -81,15 +82,15 @@ function SwitchDialog({ preset, workspaceId, onClose, onSwitched }: {
         <p style={{ margin: 0 }}>{t("v3.assistant.model.dialogBody")}</p>
         <label className="v3-field">
           <span>{t("v3.assistant.model.source")}</span>
-          <select className="v3-select" value={source} onChange={(e) => pickSource(e.target.value as ModelSource)}>
+          <Select className="v3-select" value={source} onChange={(e) => pickSource(e.target.value as ModelSource)}>
             {SOURCES.map((value) => (
               <option key={value} value={value}>{t(`v2.agents.wizard.source.${value}`)}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="v3-field">
           <span>{t("v3.assistant.model.model")}</span>
-          <select
+          <Select
             className="v3-select"
             value={custom ? CUSTOM_MODEL_OPTION : modelId}
             onChange={(e) => {
@@ -106,7 +107,7 @@ function SwitchDialog({ preset, workspaceId, onClose, onSwitched }: {
               <option key={option.model_id} value={option.model_id}>{option.label}</option>
             ))}
             <option value={CUSTOM_MODEL_OPTION}>{t("v3.assistant.model.custom")}</option>
-          </select>
+          </Select>
         </label>
         {custom && (
           <label className="v3-field">

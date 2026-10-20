@@ -17,6 +17,7 @@ import { ago } from "../../format";
 import { useLoad } from "../../hooks";
 import { Btn, Chip, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { AUDIT_RANGES, type AuditRange, auditFilter, outcomeSignal, rangeFrom } from "./auditModel";
+import { Select } from "../../select";
 
 const PAGE = 50;
 
@@ -93,21 +94,21 @@ export function AuditTab({ project }: { project: ProjectDetail }) {
   return (
     <div style={{ display: "grid", gap: 12 }} data-testid="project-audit">
       <div className="v3-prj-filters">
-        <select className="v3-input" aria-label={t("v3.projects.audit.actor")} value={actor} onChange={(e) => setActor(e.target.value)}>
+        <Select className="v3-input" aria-label={t("v3.projects.audit.actor")} value={actor} onChange={(e) => setActor(e.target.value)}>
           <option value="">{t("v3.projects.audit.allActors")}</option>
           {facets.actors.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select className="v3-input" aria-label={t("v3.projects.audit.action")} value={action} onChange={(e) => setAction(e.target.value)}>
+        </Select>
+        <Select className="v3-input" aria-label={t("v3.projects.audit.action")} value={action} onChange={(e) => setAction(e.target.value)}>
           <option value="">{t("v3.projects.audit.allActions")}</option>
           {facets.actions.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select className="v3-input" aria-label={t("v3.projects.audit.range")} value={range} onChange={(e) => pickRange(e.target.value as AuditRange)}>
+        </Select>
+        <Select className="v3-input" aria-label={t("v3.projects.audit.range")} value={range} onChange={(e) => pickRange(e.target.value as AuditRange)}>
           {AUDIT_RANGES.map((r) => <option key={r} value={r}>{t(`v3.projects.audit.ranges.${r}`)}</option>)}
-        </select>
-        <select className="v3-input" aria-label={t("v3.projects.audit.outcome")} value={outcome} onChange={(e) => setOutcome(e.target.value as AuditOutcome | "")}>
+        </Select>
+        <Select className="v3-input" aria-label={t("v3.projects.audit.outcome")} value={outcome} onChange={(e) => setOutcome(e.target.value as AuditOutcome | "")}>
           <option value="">{t("v3.projects.audit.allOutcomes")}</option>
           {AUDIT_OUTCOMES.map((o) => <option key={o} value={o}>{t(`v3.projects.audit.outcomes.${o}`)}</option>)}
-        </select>
+        </Select>
         <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6 }}>
           <Btn kind="ghost" onClick={() => setTick((n) => n + 1)} title={t("v3.projects.reload")}><RefreshCw size={14} /></Btn>
           <Btn onClick={() => void download("csv")} disabled={busy !== null}><Download size={14} /> {t("v3.projects.audit.exportCsv")}</Btn>

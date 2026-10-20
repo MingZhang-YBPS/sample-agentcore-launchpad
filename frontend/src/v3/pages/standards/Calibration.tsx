@@ -23,6 +23,7 @@ import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, Panel, Skelet
 import { ConfusionMatrix } from "./charts";
 import { runNamed, runRefusal } from "./calibrationRunError";
 import { kappaSignal, stamp } from "./common";
+import { Select } from "../../select";
 
 const LABELS = ["pass", "fail", "inconclusive"] as const;
 
@@ -372,12 +373,12 @@ function RunListDialog({ agentId, agentName, criterionKey, selected, onClose, on
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input className="v3-input" style={{ flex: "1 1 220px" }} value={q} placeholder={t("v2.dlc.calibration.searchRun")}
             aria-label={t("v2.dlc.calibration.searchRun")} onChange={(e) => { setQ(e.target.value); reset(); }} />
-          <select className="v3-select" style={{ width: 140 }} value={since} aria-label={t("v2.dlc.calibration.colFinished")}
+          <Select className="v3-select" style={{ width: 140 }} value={since} aria-label={t("v2.dlc.calibration.colFinished")}
             onChange={(e) => { setSince(e.target.value as SinceFilter); reset(); }}>
             <option value="any">{t("v2.dlc.calibration.sinceAny")}</option>
             <option value="7">{t("v2.dlc.calibration.since7")}</option>
             <option value="30">{t("v2.dlc.calibration.since30")}</option>
-          </select>
+          </Select>
           <Filters value={source} onChange={(v) => { setSource(v); reset(); }}
             options={[
               { value: "all", label: t("v2.dlc.calibration.sourceAll") },
@@ -511,7 +512,7 @@ function RunPicker({ agentId, criterionKey, value, picked, pasting, onPasting, o
       <span>{t("v2.dlc.calibration.fromRun")}</span>
       <div style={{ display: "flex", gap: 8 }}>
         <Reasoned disabledReason={t("story.reason.pickCriterion")}>
-        <select className="v3-select mono" style={{ flex: 1, minWidth: 0 }} disabled={!ready}
+        <Select className="v3-select mono" style={{ flex: 1, minWidth: 0 }} disabled={!ready}
           value={pasting ? PASTE : known ? value : ""}
           onChange={(e) => {
             if (e.target.value === PASTE) { onPasting(true); onChange(""); return; }
@@ -527,7 +528,7 @@ function RunPicker({ agentId, criterionKey, value, picked, pasting, onPasting, o
             </optgroup>
           )}
           <option value={PASTE}>{t("v2.dlc.calibration.pasteRunId")}</option>
-        </select>
+        </Select>
         </Reasoned>
         <Btn size="sm" disabled={!ready} disabledReason={t("story.reason.pickCriterion")} onClick={onList}>{t("v2.dlc.calibration.pickFromList")}</Btn>
       </div>
@@ -631,10 +632,10 @@ function NewTask({ agentId, agentName, lineageId, criteriaKeys, people, initialR
           <div className="v3-grid c2">
             <label className="v3-field">
               <span>{t("v2.dlc.criteria.key")}</span>
-              <select className="v3-select" value={key} onChange={(e) => { setKey(e.target.value); setRefusal(null); }}>
+              <Select className="v3-select" value={key} onChange={(e) => { setKey(e.target.value); setRefusal(null); }}>
                 <option value="">{t("v2.dlc.calibration.pickCriterion")}</option>
                 {keys.map((k) => <option key={k} value={k}>{k}</option>)}
-              </select>
+              </Select>
             </label>
             <RunPicker agentId={agentId} criterionKey={key} value={runId} picked={picked}
               pasting={pasting} onPasting={setPasting} onList={() => setListing(true)}
@@ -670,10 +671,10 @@ function NewTask({ agentId, agentName, lineageId, criteriaKeys, people, initialR
           </div>
           <label className="v3-field">
             <span>{t("v2.dlc.calibration.adjudicator")}</span>
-            <select className="v3-select" value={adjudicator} onChange={(e) => setAdjudicator(e.target.value)}>
+            <Select className="v3-select" value={adjudicator} onChange={(e) => setAdjudicator(e.target.value)}>
               <option value="">{t("v2.dlc.calibration.noAdjudicator")}</option>
               {people.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
+            </Select>
             <small className="v3-hint">{t("v2.dlc.calibration.adjudicatorHint")}</small>
           </label>
         </div>

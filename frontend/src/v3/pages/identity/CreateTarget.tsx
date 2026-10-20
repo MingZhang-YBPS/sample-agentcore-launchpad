@@ -13,6 +13,7 @@ import {
 import { targetModes } from "../../../lib/obo";
 import { useLoad } from "../../hooks";
 import { Btn, Chip, Dialog, Filters, Notice } from "../../ui";
+import { Select } from "../../select";
 
 const TARGET_NAME_RE = /^([0-9a-zA-Z][-]?){1,100}$/;
 
@@ -129,12 +130,12 @@ export function CreateTarget({ onClose, onCreated }: { onClose: () => void; onCr
         )}
         <label className="v3-field">
           <span>{t("v2.connections.targets.colConnection")} *</span>
-          <select className="v3-select" value={connection} aria-invalid={!!err("connection")} onChange={(e) => setConnection(e.target.value)}>
+          <Select className="v3-select" value={connection} aria-invalid={!!err("connection")} onChange={(e) => setConnection(e.target.value)}>
             <option value="">{t("v2.common.choose")}</option>
             {usable.map((c) => (
               <option key={`${c.kind}:${c.name}`} value={`${c.kind}:${c.name}`}>{c.name} · {t(`identity.kind.${c.kind}`)}</option>
             ))}
-          </select>
+          </Select>
           {fieldErr("connection", source === "mcp" ? t("v2.connections.targets.mcpOauthOnly") : undefined)}
         </label>
         <div className="v3-field">
@@ -159,10 +160,10 @@ export function CreateTarget({ onClose, onCreated }: { onClose: () => void; onCr
           <div className="v3-grid c3">
             <label className="v3-field">
               <span>{t("identity.tools.keyIn")}</span>
-              <select className="v3-select" value={location} onChange={(e) => setLocation(e.target.value as typeof location)}>
+              <Select className="v3-select" value={location} onChange={(e) => setLocation(e.target.value as typeof location)}>
                 <option value="HEADER">{t("identity.tools.keyInHeader")}</option>
                 <option value="QUERY_PARAMETER">{t("identity.tools.keyInQuery")}</option>
-              </select>
+              </Select>
             </label>
             <label className="v3-field">
               <span>{t("identity.tools.keyName")}</span>

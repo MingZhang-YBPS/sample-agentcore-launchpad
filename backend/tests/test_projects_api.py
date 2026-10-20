@@ -17,6 +17,7 @@ from app.services import share_links as share_links_service
 from app.skill_lab import samples
 from app.skill_lab import tasksets as taskset_svc
 from app.skill_lab.models import SkillLabTaskset
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import (  # noqa: F401
     ADMIN,
     PEER,
@@ -47,7 +48,31 @@ def _epoch() -> int:
         db.close()
 
 
+ORG = "org"  # the department every helper-made project belongs to (it is required)
+
+
+def _department(department_id: str = ORG, *, archived: bool = False) -> str:
+    """An existing department (idempotent): a new project must name one."""
+    from datetime import UTC, datetime
+
+    from app.models.projects import Department
+
+    db = SessionLocal()
+    try:
+        row = db.get(Department, department_id)
+        if row is None:
+            row = Department(id=department_id, name=department_id.title())
+            db.add(row)
+        row.archived_at = datetime.now(UTC) if archived else None
+        db.commit()
+    finally:
+        db.close()
+    return department_id
+
+
 def _create(client, pid="alpha", **body):
+    if "department_id" not in body:
+        body["department_id"] = _department()
     res = client.post("/api/projects", json={
         "id": pid, "name": pid.title(), "workspaces": [WS], **body,
     })
@@ -88,7 +113,7 @@ def test_create_validates_and_journals(app):  # noqa: F811
     assert dup.status_code == 409 and dup.json()["code"] == "project.exists"
     assert admin.post("/api/projects", json={"id": "default", "name": "x",
                                              "workspaces": [WS]}).status_code == 409
-    missing = admin.post("/api/projects", json={"id": "beta", "name": "x",
+    missing = admin.post("/api/projects", json={"id": "beta", "name": "x", "department_id": ORG,
                                                 "workspaces": ["nowhere"]})
     assert missing.status_code == 404
     ids = [p["id"] for p in admin.get("/api/projects").json()["projects"]]
@@ -105,8 +130,41 @@ def test_create_validates_and_journals(app):  # noqa: F811
     assert {"project.create", "project.workspaces.bind", "project.update"} <= actions
 
 
+def test_a_project_requires_an_active_department(app):  # noqa: F811
+    """Department → project → member: a new project names an existing, active
+    department; a patch may move it but never clear it; a legacy project with none
+    lists under the `_none` filter."""
+    admin = _admin(app)
+    for body, code, status in (
+        ({}, "project.department_required", 422),
+        ({"department_id": ""}, "project.department_required", 422),
+        ({"department_id": "ghost"}, "department.not_found", 404),
+        ({"department_id": _department("old", archived=True)}, "department.archived", 409),
+    ):
+        res = admin.post("/api/projects", json={"id": "beta", "name": "b", "workspaces": [WS],
+                                                **body})
+        assert (res.status_code, res.json()["code"]) == (status, code), body
+    created = _create(admin, "beta")
+    assert created["department_id"] == ORG and "group_id" not in created
+    _department("other")
+    assert admin.patch("/api/projects/beta",
+                       json={"department_id": "other"}).json()["department_id"] == "other"
+    res = admin.patch("/api/projects/beta", json={"department_id": None})
+    assert (res.status_code, res.json()["code"]) == (422, "project.department_required")
+    res = admin.patch("/api/projects/beta", json={"department_id": "old"})
+    assert (res.status_code, res.json()["code"]) == (409, "department.archived")
+    # the default project has none; clearing nothing is a no-op, naming one assigns it
+    assert admin.patch("/api/projects/default",
+                       json={"department_id": None}).status_code == 200
+    none = [p["id"] for p in admin.get("/api/projects?department_id=_none").json()["projects"]]
+    assert "default" in none and "beta" not in none
+    assert admin.patch("/api/projects/default",
+                       json={"department_id": ORG}).json()["department_id"] == ORG
+
+
 def test_the_default_project_is_locked(app):  # noqa: F811
     admin = _admin(app)
+    _project("default")  # conftest binds only the business project here; bind it back
     res = admin.post("/api/projects/default/archive")
     assert res.status_code == 409 and res.json()["code"] == "project.default_locked"
     res = admin.put("/api/projects/default/workspaces", json={"unbind": [WS]})
@@ -193,8 +251,8 @@ def test_admin_access_view_lists_every_bound_project(world):
     view = world.admin.get("/api/me/access").json()
     assert view["is_admin"]
     ws = next(w for w in view["workspaces"] if w["workspace_id"] == WS)
-    assert ws["default_project_id"] == "default"
-    assert {p["id"] for p in ws["projects"]} >= {"default", "alpha"}
+    assert ws["default_project_id"] == TEST_PROJECT
+    assert {p["id"] for p in ws["projects"]} >= {TEST_PROJECT, "alpha"}
     assert all(p["bypass"] for p in ws["projects"])
 
 
@@ -308,10 +366,10 @@ def test_archive_revokes_links_disables_keys_and_freezes_writes(world):
 
 
 def test_transfer_moves_the_agent_and_its_derived_rows(world):
-    agent_id = _agent("mover", "default")
+    agent_id = _agent("mover", TEST_PROJECT)
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             session = ChatSession(workspace_id=WS, agent_id=agent_id, session_id="s" * 40)
             key = ApiKey(workspace_id=WS, name="k", prefix="lp_y", key_hash="k" * 64,
                          agent_ids=[agent_id])
@@ -320,7 +378,7 @@ def test_transfer_moves_the_agent_and_its_derived_rows(world):
             session_id, key_id = session.id, key.id
     finally:
         db.close()
-    res = world.admin.post("/api/projects/default/transfer", json={
+    res = world.admin.post(f"/api/projects/{TEST_PROJECT}/transfer", json={
         "kind": "agent", "resource_id": agent_id, "to_project_id": "alpha"})
     assert res.status_code == 200, res.text
     assert res.json()["rows"]["agents"] == 1 and res.json()["rows"]["chat_sessions"] == 1
@@ -333,8 +391,8 @@ def test_transfer_moves_the_agent_and_its_derived_rows(world):
             assert key.agent_ids == [] and key.enabled is False  # never "every agent"
     finally:
         db.close()
-    # the agent is now alpha's: moving it "from default" again is a 404
-    again = world.admin.post("/api/projects/default/transfer", json={
+    # the agent is now alpha's: moving it "from" the home project again is a 404
+    again = world.admin.post(f"/api/projects/{TEST_PROJECT}/transfer", json={
         "resource_id": agent_id, "to_project_id": "alpha"})
     assert again.status_code == 404
     _project("beta", workspaces=())
@@ -345,7 +403,7 @@ def test_transfer_moves_the_agent_and_its_derived_rows(world):
         "kind": "dataset", "resource_id": "x", "to_project_id": "beta",
     }).json()["code"] == "project.transfer_kind"
     assert _login(world.app, "olga").post("/api/projects/alpha/transfer", json={
-        "resource_id": agent_id, "to_project_id": "default"}).status_code == 403
+        "resource_id": agent_id, "to_project_id": TEST_PROJECT}).status_code == 403
 
 
 # ── Skill Lab samples on bind ─────────────────────────────────────────────────

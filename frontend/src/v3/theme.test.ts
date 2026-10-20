@@ -27,11 +27,11 @@ describe("resolveTheme (TH-1)", () => {
 });
 
 describe("parseChoice / readChoice", () => {
-  it("defaults to dark until someone chooses", () => {
-    expect(parseChoice(null)).toBe("dark");
-    expect(parseChoice(undefined)).toBe("dark");
-    expect(parseChoice("")).toBe("dark");
-    expect(parseChoice("sepia")).toBe("dark");
+  it("defaults to light until someone chooses", () => {
+    expect(parseChoice(null)).toBe("light");
+    expect(parseChoice(undefined)).toBe("light");
+    expect(parseChoice("")).toBe("light");
+    expect(parseChoice("sepia")).toBe("light");
     for (const c of THEME_CHOICES) expect(parseChoice(c)).toBe(c);
   });
   it("reads the stored choice under its key", () => {
@@ -40,9 +40,9 @@ describe("parseChoice / readChoice", () => {
     expect(readChoice(storage)).toBe("light");
     expect(seen).toEqual([THEME_KEY]);
   });
-  it("falls back to dark when storage is unavailable or throws", () => {
-    expect(readChoice(undefined)).toBe("dark");
-    expect(readChoice({ getItem: () => { throw new Error("SecurityError"); } })).toBe("dark");
+  it("falls back to light when storage is unavailable or throws", () => {
+    expect(readChoice(undefined)).toBe("light");
+    expect(readChoice({ getItem: () => { throw new Error("SecurityError"); } })).toBe("light");
   });
 });
 
@@ -98,8 +98,8 @@ describe("index.html pre-paint script", () => {
     }
   });
 
-  it("stays dark when storage throws or matchMedia is missing", () => {
-    expect(run("throw", true)).toBe("dark");
+  it("falls back to light when storage throws; 'system' without matchMedia is dark", () => {
+    expect(run("throw", false)).toBe("light");
     expect(run("system", true, false)).toBe("dark");
   });
 });

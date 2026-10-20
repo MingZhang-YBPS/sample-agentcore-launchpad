@@ -389,9 +389,9 @@ def test_evaluate_can_read_without_notifying(monkeypatch, ctx, client):
 
 
 def test_breached_reads_both_directions():
-    rule = SimpleNamespace(comparison="above", threshold=10.0)
+    rule = SimpleNamespace(comparison="above", threshold=10.0, project_id=None)
     assert alert_service.breached(rule, 11.0) and not alert_service.breached(rule, 10.0)
-    rule = SimpleNamespace(comparison="below", threshold=0.8)
+    rule = SimpleNamespace(comparison="below", threshold=0.8, project_id=None)
     assert alert_service.breached(rule, 0.7) and not alert_service.breached(rule, 0.8)
 
 
@@ -420,7 +420,7 @@ def test_month_to_date_uses_the_elapsed_month(monkeypatch, ctx):
     now = datetime.now(UTC)
     elapsed = int((now - now.replace(day=1, hour=0, minute=0, second=0, microsecond=0))
                   .total_seconds() // 3600)
-    assert seen["hours"] == max(1, min(720, elapsed or 1))
+    assert seen["hours"] == max(1, min(744, elapsed or 1))
 
 
 def _dashboard(traces: int, errors: int, p95: float) -> dict:

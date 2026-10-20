@@ -2191,7 +2191,8 @@ never returned. Deleting or purging a workspace also removes its project binding
 |---|---|---|---|---|
 | `DELETE` | `/api/agents/{agent_id}` | `perm:agents.delete` | project | `{deleted: true, agent_id, aws_resource_deleted}`. Prod-protected. `409 assistant.agent_clearing` while its conversation is being cleared |
 | `GET` | `/api/agents/discovery` | member | project | `{region, runtimes[…], harnesses[…], harness_scan_error}`: the Runtimes and Harnesses in the workspace account, each marked with the managing agent when one exists. Another project's managed runtime shows only that it is managed. Runtimes no agent manages are listed only for a caller holding `agents.import` |
-| `POST` | `/api/agents/discovery/import` | `perm:agents.import` | project | Body `{runtime_ids[], harness_ids[]}` → per-kind result buckets (imported, already managed, failed). Imported agents belong to the request's project. Prod-protected |
+| `POST` | `/api/agents/discovery/import` | `perm:agents.import` | project | Body `{runtime_ids[], harness_ids[], project_id?}` → per-kind result buckets (imported, already managed, failed). Imported agents belong to the request's business project (see below). Prod-protected |
+| `GET` | `/api/agents/eligible-projects?permission=agents.deploy` | member | workspace | `{projects[{id, name, department_id, department_name, is_workspace_default}]}`: the business projects (active, not `default`, with a department) where the caller holds `permission` (`agents.deploy` / `agents.import` / `agents.convert`, else `422 agent.project_permission_invalid`); an administrator sees all of them. Feeds the create form's project picker |
 | `POST` | `/api/agent-skills/import` | `perm:agents.deploy` | project | Body `{staging_id, selections[]}` → attachable `{name, path}` entries for the deploy wizard, uploaded to a per-request S3 prefix. A per-item failure does not abort the batch. Prod-protected |
 | `GET` | `/api/agents/{agent_id}/snapshots` | member | project | `{snapshots[…]}`: the ledger spec snapshots, newest first, without specs |
 | `GET` | `/api/agents/{agent_id}/snapshots/{seq}` | member | project | One snapshot with its `spec` |
@@ -2200,6 +2201,20 @@ never returned. Deleting or purging a workspace also removes its project binding
 | `GET` | `/api/agents/{agent_id}/suggested-questions?lang=` | member | project | Three to five starter questions for the try-chat panel; cached, never a 500 when the model fails |
 | `GET` | `/api/chat/{agent_id}/memory?session_id=` | member | project | The memory summary of one chat session plus `actor_id` (the compound `<agent>__<human>` actor). `502 memory.unavailable` |
 | `POST` | `/api/chat/{agent_id}/feedback` | `perm:project.use` | project | Body `{session_id, message_id, verdict: up\|down, comment?}` → `{message_id, verdict}`. Records console thumbs feedback |
+
+**New agents and their project.** `POST /api/agents` (`AgentSpec.project_id`, never
+stored in the spec and ignored on redeploy), `POST /api/agents/{agent_id}/convert`
+(optional body `{project_id}`), `POST /api/agents/discovery/import` and
+`POST /api/assistant/architect/conversations/{id}/proposal/approve` (`project_id` in the
+body) file the new agent under the body's `project_id`, else the request's project. The
+project must be reachable by the caller, bound to the workspace, `active`, not a
+workspace `default` project and carry a department, and the caller must hold the route's
+key there. Refusals: `422 agent.project_mismatch` (body and `X-Project` differ),
+`422 agent.project_required`, `422 agent.project_not_found` (missing or not reachable),
+`422 agent.project_default_not_allowed`, `422 agent.project_archived`,
+`422 agent.project_no_department` — each with `next: projects.open`. A promotion that
+creates its target agent applies the same rule to its project in the target workspace
+(`422` at execute, a failed stage in the worker). System presets are exempt.
 
 ### Release bundles, promotions and resource mappings
 

@@ -2,12 +2,13 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "../../../lib/api";
-import { type Department, departmentsApi, type Invitation } from "../../../lib/api/project-groups";
+import { type Department, departmentsApi, type Invitation } from "../../../lib/api/departments";
 import { projectsApi } from "../../../lib/api/projects";
 import { useLoad } from "../../hooks";
 import { Btn, Dialog, Notice } from "../../ui";
 import { useRoleLabel } from "../users/structure";
 import { parseCount } from "./model";
+import { Select } from "../../select";
 
 /**
  * Invite a new member account straight into one of the department's projects
@@ -80,16 +81,16 @@ export function InviteDialog({ dept, onClose }: { dept: Department; onClose: () 
           </label>
           <label className="v3-field">
             <span>{t("v3.departments.invite.project")}</span>
-            <select className="v3-select" value={projectId} onChange={(e) => setForm({ ...form, project_id: e.target.value })}>
+            <Select className="v3-select" value={projectId} onChange={(e) => setForm({ ...form, project_id: e.target.value })}>
               {(projects.data?.projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
-            </select>
+            </Select>
             {projects.data && projects.data.projects.length === 0 && <small className="v3-hint">{t("v3.departments.invite.noProject")}</small>}
           </label>
           <label className="v3-field">
             <span>{t("v3.users.access.role")}</span>
-            <select className="v3-select" value={form.role_key} onChange={(e) => setForm({ ...form, role_key: e.target.value })}>
+            <Select className="v3-select" value={form.role_key} onChange={(e) => setForm({ ...form, role_key: e.target.value })}>
               {(templates.data?.templates ?? []).map((tpl) => <option key={tpl.key} value={tpl.key}>{label(tpl.key)}</option>)}
-            </select>
+            </Select>
           </label>
           <label className="v3-field">
             <span>{t("v3.departments.invite.days", { max })}</span>

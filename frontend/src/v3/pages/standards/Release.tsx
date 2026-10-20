@@ -21,6 +21,7 @@ import { useLoad, useToast } from "../../hooks";
 import { firstReason } from "../../reasons";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { decisionSignal, gateSignal, stamp } from "./common";
+import { Select } from "../../select";
 
 function Waivers({ state, rows, onReload }: { state: ReleaseState; rows: GateRow[]; onReload: () => void }) {
   const { t } = useTranslation();
@@ -130,9 +131,9 @@ function Waivers({ state, rows, onReload }: { state: ReleaseState; rows: GateRow
             <Notice s="wait">{t("v2.dlc.waiver.neverRedline")}</Notice>
             <label className="v3-field">
               <span>{t("v2.dlc.criteria.key")}</span>
-              <select className="v3-select" value={form.criterion_key} onChange={(e) => setForm({ ...form, criterion_key: e.target.value })}>
+              <Select className="v3-select" value={form.criterion_key} onChange={(e) => setForm({ ...form, criterion_key: e.target.value })}>
                 {waivable.map((r) => <option key={r.key} value={r.key}>{`${r.key} — ${r.text}`}</option>)}
-              </select>
+              </Select>
             </label>
             <label className="v3-field">
               <span>{t("v2.dlc.waiver.reason")}</span>
@@ -235,9 +236,9 @@ function PolicyPanel() {
       <div className="v3-grid c3">
         <label className="v3-field">
           <span>{t("v2.dlc.policy.mode")}</span>
-          <select className="v3-select" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+          <Select className="v3-select" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
             {["direct", "gated"].map((m) => <option key={m} value={m}>{t(`v2.dlc.release.mode.${m}`)}</option>)}
-          </select>
+          </Select>
           <small className="v3-hint">{t("v2.dlc.policy.modeHint")}</small>
         </label>
         <label className="v3-field">

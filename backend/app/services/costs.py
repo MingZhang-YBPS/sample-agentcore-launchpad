@@ -291,9 +291,9 @@ def month_to_date_usd(
 ) -> float:
     """Spend since the first of the month, for the budget comparison.
 
-    Logs Insights ranges are relative, so this uses the hours elapsed this month capped
-    at the 30-day window the console offers — a budget check at 02:00 on the 1st looks at
-    two hours, which is correct, not a bug.
+    Logs Insights ranges are relative, so this uses the hours elapsed this month (at
+    most 744, a 31-day month) — a budget check at 02:00 on the 1st looks at two hours,
+    which is correct, not a bug.
 
     `project` counts only the spend attributed to that project (span attribute,
     inference profile, else the resolved agent — `_row_project`); the cached entry is
@@ -301,7 +301,7 @@ def month_to_date_usd(
     """
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    hours = max(1, min(720, int((now - month_start).total_seconds() // 3600) or 1))
+    hours = max(1, min(744, int((now - month_start).total_seconds() // 3600) or 1))
 
     def build() -> dict[str, Any]:
         from app.services.observability import build_agent_resolver

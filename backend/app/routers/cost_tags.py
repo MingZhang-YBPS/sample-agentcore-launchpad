@@ -12,8 +12,8 @@ Three surfaces, the logic in `services/billing_costs.py`:
 * `/api/costs/billing` — what AWS billed per `launchpad:project`, next to the
   estimate of `/api/costs` and classified like it (administrators, cost detail).
 * `/api/projects/{project_id}/cost-tags` and `/budget-basis` — a project's custom
-  cost tags (its owner, `project.members`) and its budget's basis (administrators
-  and its department administrator, like the quota it qualifies). Hub-global like
+  cost tags (its owner, `project.members`) and its budget's basis (platform
+  administrators only, like the monthly budget it qualifies). Hub-global like
   the rest of `/api/projects/{project_id}`; a non-member gets 404.
 """
 

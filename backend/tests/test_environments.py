@@ -8,12 +8,23 @@ from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.main import create_app
 from app.models.ledger import Agent, Deployment, Workspace
+from app.models.projects import ProjectWorkspace
 from app.routers import environments as environments_router
 from app.services import environments as env_service
 from app.services import users as users_service
 from app.services.promotion import bundle_digest
+from tests.conftest import TEST_PROJECT
 
 SPEC = {"name": "fleet-agent", "system_prompt": "v1", "model_id": "m"}
+
+
+def bind_test_project(db, ws_id: str) -> None:
+    """File ``ws_id`` under the suite's business project in place of the `default`
+    project its insert bound (models/projects `_bind_default_project`), as conftest
+    does for the `default` workspace: new agents may not land in `default`."""
+    db.query(ProjectWorkspace).filter_by(workspace_id=ws_id).delete()
+    db.add(ProjectWorkspace(project_id=TEST_PROJECT, workspace_id=ws_id,
+                            is_workspace_default=True))
 
 
 def add_workspace(ws_id: str, tier: str) -> None:
@@ -22,6 +33,8 @@ def add_workspace(ws_id: str, tier: str) -> None:
         if db.get(Workspace, ws_id) is None:
             db.add(Workspace(id=ws_id, name=ws_id.title(), account_id=f"7{len(ws_id):011d}",
                              region="us-west-2", bootstrap_status="ready", tier=tier))
+            db.flush()
+            bind_test_project(db, ws_id)
             db.commit()
     finally:
         db.close()

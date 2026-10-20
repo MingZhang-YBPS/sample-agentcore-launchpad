@@ -24,6 +24,7 @@ import { HostedV2 } from "./common";
 import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "./CostCard";
 import { detailUrl, isPassiveScope } from "./model";
+import { Select } from "../../select";
 
 /* Mirrors V2's TaskWizard (v2/pages/tasks/TaskWizard.tsx): the same draft, seed,
    validation, scope building and request — only the presentation is V3's. */
@@ -408,10 +409,10 @@ export function TaskWizard() {
                 </Field>
                 {!cloudwatch && (
                   <Field label={`${t("v2.tasks.colAgent")} *`} hint={agents.loading ? undefined : activeAgents.length === 0 ? t("v2.tasks.noAgents") : undefined}>
-                    <select className="v3-select" value={draft.agentId} onChange={(e) => set({ agentId: e.target.value, sessionIds: [], logSessionIds: [] })}>
+                    <Select className="v3-select" value={draft.agentId} onChange={(e) => set({ agentId: e.target.value, sessionIds: [], logSessionIds: [] })}>
                       <option value="">{t("v2.common.choose")}</option>
                       {activeAgents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                    </select>
+                    </Select>
                   </Field>
                 )}
               </div>
@@ -478,18 +479,18 @@ export function TaskWizard() {
                 ) : draft.source === "window" || draft.source === "logs" ? (
                   <Field label={draft.source === "logs" ? t("v2.tasks.logs.window") : t("v2.tasks.lookback")}
                     hint={draft.source === "logs" ? t("v2.tasks.logs.picked", { count: draft.logSessionIds.length }) : t("v2.tasks.lookbackHint")}>
-                    <select className="v3-select" value={String(draft.source === "logs" ? draft.logHours : draft.lookbackHours)}
+                    <Select className="v3-select" value={String(draft.source === "logs" ? draft.logHours : draft.lookbackHours)}
                       onChange={(e) => set(draft.source === "logs" ? { logHours: Number(e.target.value) } : { lookbackHours: Number(e.target.value) })}>
                       {LOOKBACKS.map((h) => <option key={h} value={String(h)}>{t("v2.tasks.hours", { count: h })}</option>)}
-                    </select>
+                    </Select>
                   </Field>
                 ) : draft.source === "dataset" ? (
                   <Field label={`${t("v2.tasks.dataset")} *`} hint={selectedDataset && !selectedDataset.has_ground_truth ? t("v2.tasks.noGroundTruth") : undefined}>
-                    <select className="v3-select" value={draft.dataset} onChange={(e) => set({ dataset: e.target.value })}>
+                    <Select className="v3-select" value={draft.dataset} onChange={(e) => set({ dataset: e.target.value })}>
                       <option value="">{t("v2.common.choose")}</option>
                       {draft.dataset && !selectedDataset && <option value={draft.dataset}>{draft.dataset}</option>}
                       {localDatasets.map((d) => <option key={d.id} value={d.id}>{`${d.name} · ${t("v2.datasets.items", { count: d.item_count })}`}</option>)}
-                    </select>
+                    </Select>
                   </Field>
                 ) : (
                   <small className="v3-hint">{t("v2.tasks.sessionsPicked", { count: draft.sessionIds.length })}</small>

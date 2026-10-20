@@ -354,11 +354,14 @@ class ConsoleInvoker:
 
     def invoke(self, ctx: MigrationContext, agent: Agent, prompt: str) -> str:
         from app.services.invoke import invoke_agent_text
+        from app.services.project_quotas import budget_exempt
 
-        result = invoke_agent_text(agent, prompt,
-                                   session_id=f"isolation-verify-{uuid.uuid4().hex}",
-                                   actor_id="isolation-verify", workspace=ctx.workspace,
-                                   console_user=False)
+        # a platform check of the migration, not the project's own use of its budget
+        with budget_exempt():
+            result = invoke_agent_text(agent, prompt,
+                                       session_id=f"isolation-verify-{uuid.uuid4().hex}",
+                                       actor_id="isolation-verify", workspace=ctx.workspace,
+                                       console_user=False)
         return str(result.get("text") or "")
 
 

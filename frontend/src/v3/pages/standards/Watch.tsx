@@ -25,6 +25,7 @@ import { BandChart, LadderChart } from "./charts";
 import { CompareCost } from "./CompareCost";
 import { dlcText, rate, stamp } from "./common";
 import { alertDetailText } from "../../../lib/alertDetail";
+import { Select } from "../../select";
 
 function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: string; onReload: () => void }) {
   const { t } = useTranslation();
@@ -59,9 +60,9 @@ function WatchConfig({ view, agentId, onReload }: { view: WatchView; agentId: st
         <label className="v3-field">
           <span>{t("v2.dlc.watch.every")}</span>
           <Reasoned disabledReason={readOnly}>
-            <select className="v3-select" value={form.every} disabled={!mayEdit} onChange={(e) => setForm({ ...form, every: e.target.value as "daily" | "weekly" })}>
+            <Select className="v3-select" value={form.every} disabled={!mayEdit} onChange={(e) => setForm({ ...form, every: e.target.value as "daily" | "weekly" })}>
               {["daily", "weekly"].map((v) => <option key={v} value={v}>{t(`v2.dlc.watch.${v}`)}</option>)}
-            </select>
+            </Select>
           </Reasoned>
         </label>
         <label className="v3-field">

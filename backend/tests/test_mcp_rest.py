@@ -36,7 +36,7 @@ from app.services import (
 )
 from app.services import users as users_service
 from app.services.agentcore import runtime as rt
-from tests.conftest import client_error, set_default_resources, ws_ctx
+from tests.conftest import TEST_PROJECT, client_error, set_default_resources, ws_ctx
 from tests.test_byoc import _client_router, _get_agent, _stage_ctx
 from tests.test_governance_policy_lifecycle import FakeControl, FakeIam
 from tests.test_mcp_servers import (  # noqa: F401 — `aws` is a fixture
@@ -544,7 +544,7 @@ def test_scaffold_with_nothing_reviewed_is_refused(world):
 
 
 def test_another_projects_server_answers_404(world):
-    theirs = _server("default")
+    theirs = _server(TEST_PROJECT)
     for client, path, body in ((world.dev, "health", None), (world.dev, "rollback", {}),
                                (world.steward, "policies/scaffold", {})):
         res = client.post(_url(theirs, path), json=body)
@@ -665,7 +665,7 @@ def test_lambda_validation_errors(world):
 
 def test_a_single_project_workspace_keeps_member_access(app, aws, monkeypatch):
     set_default_resources(RESOURCES)
-    dev, _ = _member(app, "dora", "developer", project="default")
+    dev, _ = _member(app, "dora", "developer", project=TEST_PROJECT)
     _client_router(monkeypatch, {"cognito-idp": aws.cognito, "s3": aws.s3,
                                  "lambda": _Lambda(), "iam": _Iam()})
     monkeypatch.setattr(gateway_tools, "control_client", lambda _ws=None: aws.control)
@@ -675,7 +675,7 @@ def test_a_single_project_workspace_keeps_member_access(app, aws, monkeypatch):
 
 def test_another_projects_lambda_target_answers_404(world):
     db = SessionLocal()
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         row = LambdaToolTarget(workspace_id=DEFAULT_WORKSPACE_ID, gateway_id="gw-1",
                                target_name="theirs", lambda_arn=LAMBDA_ARN, tool_schema=SCHEMA)
         db.add(row)

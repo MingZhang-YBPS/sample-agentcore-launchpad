@@ -77,6 +77,7 @@ import { useLoad } from "../hooks";
 import { ago } from "../format";
 import { StoryHeader } from "../story/StoryHeader";
 import { ApiKeysEntry } from "./agent/ApiKeysCard";
+import { Select } from "../select";
 import "./chat.css";
 import "./chatStatus.css";
 
@@ -567,7 +568,7 @@ export function V3Chat() {
       <aside className="v3-chat-side">
         <label className="v3-stat" style={{ display: "block" }}>
           <span className="label">{t("v3.chat.agent")}</span>
-          <select
+          <Select
             className="v3-select"
             style={{ marginTop: 8 }}
             value={agentId}
@@ -581,7 +582,7 @@ export function V3Chat() {
             {eligible.map((a) => (
               <option key={a.id} value={a.id}>{a.display_name || a.name}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <Btn onClick={fresh} disabled={!agentId}
           disabledReason={eligible.length === 0 ? stepReason(t, "build.create") : t("story.reason.pickAgent")}>

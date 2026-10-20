@@ -4,8 +4,9 @@ The one place project access is decided:
 
 * ``ROLE_TEMPLATES`` — built-in project roles, code constants (not rows), so a new
   permission key is granted by code the way ``users.DEFAULT_BY_ROLE`` grants one.
-* ``project_permissions`` — §3.4: direct role ∪ group role, then the direct row's
-  overrides; ``inherit`` reads the account's global keys.
+* ``project_permissions`` — §3.4: the direct role, then the row's overrides;
+  ``inherit`` reads the account's global keys. (Project groups are gone: the
+  hierarchy is department → project → member.)
 * ``AccessSnapshot`` — one query per user (all their memberships), cached in-process
   and dropped whenever ``access_epoch`` moves (bumped in the same transaction as
   every access-affecting write), so a revoked membership is gone on the next request.
@@ -14,7 +15,7 @@ The one place project access is decided:
 * ``has_data_bypass`` / ``can_manage_structure`` — the only places "an admin can"
   is decided for project data and structure (phase 3's steward changes just these);
   ``can_manage_structure(identity, department_id, db=db)`` adds the department
-  administrators of §11.1 for that department's projects and groups. A steward
+  administrators of §11.1 for that department's projects. A steward
   (§11.4) is the platform structure manager without data: ``has_data_bypass`` False,
   ``can_manage_structure`` True, and its snapshot always empty (no membership counts).
 * ``shared_for`` / ``shared_rows`` — what other projects shared with a project
@@ -166,10 +167,10 @@ def can_manage_structure(
     identity: Any, department_id: Any = _ANY_DEPARTMENT, *, db: Session | None = None,
 ) -> bool:
     """May manage structure. Without `department_id`: the platform's — departments,
-    workspaces, every project and group (platform administrators). With one (§11.1):
-    that department's projects and groups — an administrator, or one of the
-    department's administrators (`department_admins`; needs `db`). A project or group
-    with no department is the platform's only. Stewards (§11.4) manage all of it."""
+    workspaces, every project (platform administrators). With one (§11.1): that
+    department's projects — an administrator, or one of the department's
+    administrators (`department_admins`; needs `db`). A project with no department is
+    the platform's only. Stewards (§11.4) manage all of it."""
     if getattr(identity, "role", None) in PLATFORM_ROLES:
         return True
     if department_id is _ANY_DEPARTMENT or not department_id or db is None:
@@ -228,8 +229,6 @@ class Membership:
     workspaces: frozenset[str]
     workspace_defaults: frozenset[str]
     direct_role: str | None
-    group_role: str | None
-    group_id: str | None
     overrides: dict[str, bool] | None
     permissions: frozenset[str]
 
@@ -238,8 +237,6 @@ class Membership:
         out: list[tuple[str, str]] = []
         if self.direct_role:
             out.append(("direct", self.direct_role))
-        if self.group_role and self.group_id:
-            out.append((f"group:{self.group_id}", self.group_role))
         return tuple(out)
 
 
@@ -319,15 +316,12 @@ def _load_snapshot(
         return AccessSnapshot(user_id=user_id)
     rows = db.execute(
         text(
-            "SELECT p.id, p.name, p.status, p.is_default, p.group_id, pw.workspace_id,"
-            " pw.is_workspace_default, pm.role_key, pm.overrides, gm.role_key"
+            "SELECT p.id, p.name, p.status, p.is_default, pw.workspace_id,"
+            " pw.is_workspace_default, pm.role_key, pm.overrides"
             " FROM projects p"
             " JOIN project_workspaces pw ON pw.project_id = p.id"
-            " LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = :uid"
-            " LEFT JOIN project_groups g ON g.id = p.group_id AND g.archived_at IS NULL"
-            " LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = :uid"
+            " JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = :uid"
             " WHERE p.status IN ('active', 'archived')"
-            " AND (pm.user_id IS NOT NULL OR gm.user_id IS NOT NULL)"
         ),
         {"uid": user_id},
     ).fetchall()
@@ -342,10 +336,10 @@ def _load_snapshot(
             keys = perms if isinstance(perms, list) else _json_list(perms)
             custom.setdefault(pid, {})[key] = frozenset(keys) & ALL_PROJECT_KEYS
     grouped: dict[str, dict[str, Any]] = {}
-    for pid, name, status, is_default, group_id, ws, ws_default, direct, ovr, group_role in rows:
+    for pid, name, status, is_default, ws, ws_default, direct, ovr in rows:
         entry = grouped.setdefault(pid, {
-            "name": name, "status": status, "is_default": bool(is_default), "group_id": group_id,
-            "workspaces": set(), "defaults": set(), "direct": direct, "group": group_role,
+            "name": name, "status": status, "is_default": bool(is_default),
+            "workspaces": set(), "defaults": set(), "direct": direct,
             "overrides": ovr if isinstance(ovr, dict) else _json_dict(ovr),
         })
         entry["workspaces"].add(ws)
@@ -360,25 +354,19 @@ def _load_snapshot(
     }
     snapshot = AccessSnapshot(user_id=user_id)
     for pid, e in grouped.items():
-        if e["direct"] == INHERIT_ROLE and not e["group"]:
+        if e["direct"] == INHERIT_ROLE:
             e["workspaces"] &= direct_grants
             e["defaults"] &= direct_grants
             if not e["workspaces"]:
                 continue
         roles = custom.get(pid, {})
-        base: frozenset[str] = frozenset()
-        if e["direct"]:
-            base |= template_keys(
-                e["direct"], roles, account_role=role, account_overrides=overrides,
-            )
-        if e["group"]:
-            base |= template_keys(
-                e["group"], roles, account_role=role, account_overrides=overrides,
-            )
+        base = template_keys(
+            e["direct"], roles, account_role=role, account_overrides=overrides,
+        )
         snapshot.memberships[pid] = Membership(
             project_id=pid, name=e["name"], status=e["status"], is_default=e["is_default"],
             workspaces=frozenset(e["workspaces"]), workspace_defaults=frozenset(e["defaults"]),
-            direct_role=e["direct"], group_role=e["group"], group_id=e["group_id"],
+            direct_role=e["direct"],
             overrides=e["overrides"], permissions=apply_overrides(base, e["overrides"]),
         )
     return snapshot

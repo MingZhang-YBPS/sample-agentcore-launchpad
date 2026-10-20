@@ -10,7 +10,6 @@ export const STEWARD_STRUCTURE_PATHS: readonly string[] = [
   "/v3/users",
   "/v3/admins",
   "/v3/projects",
-  "/v3/project-groups",
   "/v3/departments",
   "/v2/workspaces",
   "/v3/workspaces",

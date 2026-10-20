@@ -24,7 +24,7 @@ from app.models.projects import Project, ProjectMember, ProjectWorkspace
 from app.schemas.agent import AgentSpec
 from app.services import access, mcp_reviews, mcp_servers
 from app.services import users as users_service
-from tests.conftest import set_default_resources, ws_ctx
+from tests.conftest import TEST_PROJECT, set_default_resources, ws_ctx
 from tests.test_byoc import _get_agent, _stage_ctx
 from tests.test_mcp_servers import (  # noqa: F401 — `aws` is a fixture
     FIND_ORDER,
@@ -428,7 +428,7 @@ def test_drift_check_withholds_a_changed_live_list(world):
 
 
 def test_another_projects_server_answers_404(world):
-    theirs = _server("default")
+    theirs = _server(TEST_PROJECT)
     _open_review(theirs)
     res = world.steward.get(_url(theirs))
     assert res.status_code == 404, res.text

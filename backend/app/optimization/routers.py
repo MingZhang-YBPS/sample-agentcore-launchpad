@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.assistant import purge as assistant_purge
+from app.core import billing_policy
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import current_project, project_context
@@ -311,6 +312,10 @@ def experiment_action(
     reason = service.stage_not_ready_reason(exp, req.action)
     if reason:
         raise AppError("experiment.stage_not_ready", reason, status_code=409)
+    # the project's monthly budget, for the actions that spend (core/billing_policy.py);
+    # verdict / cleanup and the other wind-down actions are never refused
+    billing_policy.gate_action(getattr(exp, "project_id", None), req.action,
+                               billing_policy.EXPERIMENT_BILLABLE_ACTIONS)
 
     # sync actions answer inline; async ones 202 into a background thread and
     # the client watches running_action/progress on the experiment itself

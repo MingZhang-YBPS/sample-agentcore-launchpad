@@ -12,6 +12,7 @@ from app.dlc import watch as watch_svc
 from app.models.dlc import WatchConfig
 from app.models.ledger import Agent, AlertRule
 from app.services import alerts as alert_service
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import _project
 
 WS = DEFAULT_WORKSPACE_ID
@@ -74,8 +75,8 @@ def test_a_watch_runs_as_its_agents_project(monkeypatch):
     # a config row left with a stale project (the agent moved): the agent decides
     db = SessionLocal()
     try:
-        db.execute(text("UPDATE watch_configs SET project_id = 'default' WHERE id = :i"),
-                   {"i": config_id})
+        db.execute(text("UPDATE watch_configs SET project_id = :p WHERE id = :i"),
+                   {"p": TEST_PROJECT, "i": config_id})
         db.commit()
     finally:
         db.close()
@@ -118,7 +119,7 @@ def test_an_archived_projects_watch_is_skipped_and_rescheduled(monkeypatch):
 
 
 def test_a_single_project_workspace_watch_runs_as_default(monkeypatch):
-    agent = _agent("solo", "default")
+    agent = _agent("solo", TEST_PROJECT)
     _watch(agent)
     ran: list[str | None] = []
     monkeypatch.setattr(watch_svc, "run_now", lambda db, config, **_: (
@@ -128,7 +129,7 @@ def test_a_single_project_workspace_watch_runs_as_default(monkeypatch):
         out = scheduler.run_due_watches(db)
     finally:
         db.close()
-    assert ran == ["default"] and out["skipped"] == []
+    assert ran == [TEST_PROJECT] and out["skipped"] == []
 
 
 # ── dlc.alerts ────────────────────────────────────────────────────────────────
@@ -141,7 +142,7 @@ def test_scheduled_alerts_read_each_rule_as_its_own_project(monkeypatch):
 
     _project("alpha")
     mine = _agent("mine", "alpha")
-    theirs = _agent("theirs", "default")
+    theirs = _agent("theirs", TEST_PROJECT)
     workspace_rule = _rule("online_quality", None)
     project_rule = _rule("online_quality", "alpha")
     seen: dict[str | None, set[str]] = {}

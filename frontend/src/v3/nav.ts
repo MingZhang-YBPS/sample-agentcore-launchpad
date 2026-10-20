@@ -1,4 +1,4 @@
-import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, KeySquare, Network, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
+import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, KeySquare, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -61,8 +61,8 @@ export const V3_ONLY: Record<string, V2NavItem[]> = {
 
 /**
  * V3-only pages placed right after a V2 entry rather than at the group's end:
- * Configure reads Users → Administrators → Projects → Project groups → Departments
- * (projects §7.9), all hub-global and administrator-only (phase 1) — the last three
+ * Configure reads Users → Administrators → Projects → Departments
+ * (projects §7.9), all hub-global and administrator-only (phase 1) — the last two
  * also a department administrator's (§11.1, `DEPARTMENT_ADMIN_ENTRIES`) — then
  * Project settings for an administrator or a `project.members` holder.
  */
@@ -70,7 +70,6 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
   "/v2/users": [
     { to: "/v3/admins", labelKey: "v3.admins.nav", icon: UserCog, admin: true },
     { to: "/v3/projects", labelKey: "v3.projects.title", icon: FolderKanban, admin: true },
-    { to: "/v3/project-groups", labelKey: "v3.groups.nav", icon: Network, admin: true },
     { to: "/v3/departments", labelKey: "v3.departments.nav", icon: Building2, admin: true },
     // a project owner's way in (§6.4): the current project's members and settings
     { to: "/v3/project-settings", labelKey: "v3.nav.projectSettings", icon: FolderCog, perm: "project.members" },
@@ -91,7 +90,7 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
 };
 
 /** `admin` entries a department administrator (non-empty `managed_departments`) sees too. */
-export const DEPARTMENT_ADMIN_ENTRIES: ReadonlySet<string> = new Set(["/v3/projects", "/v3/project-groups", "/v3/departments"]);
+export const DEPARTMENT_ADMIN_ENTRIES: ReadonlySet<string> = new Set(["/v3/projects", "/v3/departments"]);
 
 /**
  * The rail of a steward (organization admin, projects §11.4): the structure entries of
@@ -99,7 +98,7 @@ export const DEPARTMENT_ADMIN_ENTRIES: ReadonlySet<string> = new Set(["/v3/proje
  * Listed by their rail path (before the V3 twin mapping: `/v2/users` opens `/v3/users`).
  */
 export const STEWARD_ENTRIES: ReadonlySet<string> = new Set([
-  "/v2/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments",
+  "/v2/users", "/v3/admins", "/v3/projects", "/v3/departments",
   "/v2/workspaces", "/v3/models", "/v3/network", "/v3/storage",
 ]);
 

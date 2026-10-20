@@ -203,11 +203,8 @@ def granted_workspace_ids(db: Session, user_id: str) -> list[str]:
                 " JOIN projects p ON p.id = pw.project_id AND p.status IN ('active', 'archived')"
                 # an `inherit` row is the compatibility member of a default project: it
                 # follows the account's own grants, so it reaches nothing by itself
-                " LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = :u"
+                " JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = :u"
                 "  AND pm.role_key <> 'inherit'"
-                " LEFT JOIN project_groups g ON g.id = p.group_id AND g.archived_at IS NULL"
-                " LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = :u"
-                " WHERE pm.user_id IS NOT NULL OR gm.user_id IS NOT NULL"
             ),
             {"u": user_id},
         ).fetchall()

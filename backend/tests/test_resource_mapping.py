@@ -8,6 +8,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, ReleaseBundle, Workspace
 from app.services import promotion as promotion_service
 from app.services import resource_mapping as rm
+from tests.test_environments import bind_test_project
 
 SPEC = {
     "name": "hr-bot",
@@ -38,6 +39,8 @@ def db():
                 resources={"gateway_id": "gw-prod-default", "memory_id": "shared-prod"},
             )
         )
+        session.flush()
+        bind_test_project(session, "prod-ws")
         session.commit()
         yield session
     finally:

@@ -123,9 +123,9 @@ def is_managed(evaluator_id: str) -> bool:
 def _policy(
     db: Session, workspace: Workspace | None, project_id: str | None = None,
 ) -> dict[str, float | None]:
-    """The confirm threshold (the workspace policy's) and the per-run limit: the
-    smaller of the workspace's `eval_cost_max_usd` and the project's
-    `quotas.eval_run_max_usd` (projects §11.3)."""
+    """The confirm threshold and the per-run limit, both the workspace release
+    policy's (`eval_cost_confirm_usd`, `eval_cost_max_usd`). A project's one money
+    limit is its monthly budget, checked when the run starts (projects §11.3)."""
     from app.services import release_gates
 
     policy = (workspace.release_policy if workspace else None) or {}
@@ -447,7 +447,7 @@ def estimate(
         "confirm_usd": confirm_usd,
         "over_limit": bool(max_usd is not None and total > max_usd),
         "max_usd": max_usd,
-        # whose limit `max_usd` is: `project` (its quota) or `workspace` (release policy)
+        # whose limit `max_usd` is: `workspace` (the release policy), or None
         "max_source": limits["max_source"],
         # zero sessions cost nothing: "unpriced" means a model without a price
         "unpriced": invoked and bool(items) and agent_usd is None,
@@ -494,16 +494,6 @@ def assert_allowed(
     if not estimate_out:
         return
     if estimate_out.get("over_limit") and not is_admin:
-        if estimate_out.get("max_source") == "project":
-            # the project's quota binds: no override — an administrator would be
-            # refused too (`project.quota_exceeded`), so name the quota instead
-            raise AppError(
-                "run.cost_over_limit",
-                f"the estimated cost (${estimate_out['total_usd']}) exceeds this "
-                f"project's per-run evaluation limit (${estimate_out['max_usd']}) — "
-                "narrow the scope, or ask an administrator to raise the project's quota",
-                {"estimate": estimate_out, "quota": "eval_run_max_usd"}, status_code=409,
-            )
         raise AppError(
             "run.cost_over_limit",
             f"the estimated cost (${estimate_out['total_usd']}) exceeds this workspace's "

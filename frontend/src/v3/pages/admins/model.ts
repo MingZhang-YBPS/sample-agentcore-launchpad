@@ -51,7 +51,7 @@ export function validateAdminForm(form: CreateForm, reservedName?: string | null
  * grant or a membership (`users.admin_no_grants` / `users.steward_no_grants`).
  */
 export function adminCreateBody(form: CreateForm, type: PlatformType = "admin"): UserCreateWithProjects {
-  const body = createBody({ ...form, role: "admin", workspaces: [], projects: [], groups: [] });
+  const body = createBody({ ...form, role: "admin", workspaces: [], projects: [] });
   // the console's role type predates the steward; the backend takes it
   return type === "steward" ? { ...body, role: STEWARD_ROLE as UserCreateWithProjects["role"] } : body;
 }

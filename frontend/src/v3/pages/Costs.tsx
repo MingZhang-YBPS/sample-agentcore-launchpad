@@ -15,6 +15,7 @@ import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { BillingView } from "./cost-tags/BillingView";
 import { alertDetailText } from "../../lib/alertDetail";
+import { Select } from "../select";
 
 /* Spend is labelled an estimate everywhere, and models the price map cannot value
    are named rather than silently counted as free — the same rules as V2. */
@@ -312,13 +313,13 @@ function NewRuleDialog({ onClose, onDone }: { onClose: () => void; onDone: () =>
         <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-costs-rule-error" />
         <label className="v3-field">
           <span>{t("v2.alerts.kind")}</span>
-          <select className="v3-select" value={kind} onChange={(e) => {
+          <Select className="v3-select" value={kind} onChange={(e) => {
             const v = e.target.value as AlertKind;
             setKind(v);
             if (v !== "online_quality" && window === "30d") setWindow("7d");
           }}>
             {KINDS.map((value) => <option key={value} value={value}>{t(`v2.alerts.kindName.${value}`)}</option>)}
-          </select>
+          </Select>
           <small className="v3-hint">{t(`v2.alerts.kindHint.${kind}`)}</small>
         </label>
         <label className="v3-field">
@@ -333,9 +334,9 @@ function NewRuleDialog({ onClose, onDone }: { onClose: () => void; onDone: () =>
           {kind !== "cost_mtd_usd" && (
             <label className="v3-field">
               <span>{t("v2.alerts.window")}</span>
-              <select className="v3-select" value={window} onChange={(e) => setWindow(e.target.value)}>
+              <Select className="v3-select" value={window} onChange={(e) => setWindow(e.target.value)}>
                 {(kind === "online_quality" ? RANGES : DASHBOARD_RANGES).map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
+              </Select>
               <small className="v3-hint">{t("v2.alerts.windowHint")}</small>
             </label>
           )}

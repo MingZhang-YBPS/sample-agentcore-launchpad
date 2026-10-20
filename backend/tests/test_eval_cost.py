@@ -295,17 +295,20 @@ def test_record_keeps_an_earlier_final_record_when_asked(db, monkeypatch):
 
 
 def test_the_recorded_cost_counts_against_the_project_month(db, monkeypatch):
+    """Only the judges count here: the project's agent traffic is priced from its
+    traces, so a run's agent spend would be counted twice."""
     agent = _agent(db)
     monkeypatch.setattr(run_cost, "SPANS_READER", lambda *a: {})
-    run = _run(db, agent, cost_actual=_live(), cost_estimate={"total_usd": 5.0})
+    run = _run(db, agent, cost_actual=_live(),
+               cost_estimate={"total_usd": 5.0, "judge_usd": 2.0, "managed_usd": 1.0})
     with project_context(None):
-        before = project_quotas.run_spend_usd(db.get(EvalRun, run.id))
-    assert before == 5.0  # live record: the estimate still counts
+        before = project_quotas.run_judge_usd(db.get(EvalRun, run.id))
+    assert before == 3.0  # live record: the judges' estimate still counts
     out = run_cost.record(run.id, SimpleNamespace())
     db.expire_all()
     with project_context(None):
-        after = project_quotas.run_spend_usd(db.get(EvalRun, run.id))
-    assert after == pytest.approx(out["agent_usd"])
+        after = project_quotas.run_judge_usd(db.get(EvalRun, run.id))
+    assert after == pytest.approx(out["judge_usd"] + out["managed_evaluations_usd"])
 
 
 def test_execute_run_writes_live_then_final_cost(client, db, monkeypatch):

@@ -1,8 +1,47 @@
-import type { Department, DepartmentPatch, DepartmentSettings, DepartmentWorkspace } from "../../../lib/api/project-groups";
+import type { Department, DepartmentPatch, DepartmentSettings, DepartmentWorkspace } from "../../../lib/api/departments";
 
-/** A department can be deleted only while no project and no group names it (409 `department.in_use`). */
-export function deletable(d: Pick<Department, "project_count" | "group_count">): boolean {
-  return d.project_count === 0 && d.group_count === 0;
+/**
+ * Pure logic of the department pages (projects §7.10, §11.1). The backend
+ * re-checks everything; values are i18n keys.
+ */
+
+/** Same pattern as `models/projects.PROJECT_ID_PATTERN`. */
+export const STRUCTURE_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+
+export interface StructureForm {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export type StructureErrors = Partial<Record<"id" | "name", string>>;
+
+export function emptyStructureForm(): StructureForm {
+  return { id: "", name: "", description: "" };
+}
+
+/** The id is checked on create only — it never changes afterwards. */
+export function validateStructure(form: StructureForm, creating: boolean): StructureErrors {
+  const errors: StructureErrors = {};
+  if (creating && !STRUCTURE_ID_RE.test(form.id.trim())) errors.id = "v3.structure.form.err.id";
+  if (!form.name.trim()) errors.name = "v3.structure.form.err.name";
+  return errors;
+}
+
+/** A display name → a suggested id ("Risk Platform" → "risk-platform"); the admin may edit it. */
+export function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/-+$/g, "");
+}
+
+/** A department can be deleted only while no project names it (409 `department.in_use`). */
+export function deletable(d: Pick<Department, "project_count">): boolean {
+  return d.project_count === 0;
 }
 
 /* ── §11.1 department administrators: settings form and workspace choices ── */

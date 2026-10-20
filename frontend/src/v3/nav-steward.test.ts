@@ -10,7 +10,7 @@ describe("a steward's rail (projects §11.4)", () => {
   it("is Configure's structure entries alone — no business group", () => {
     expect(groups.map((g) => g.key)).toEqual(["admin"]);
     expect(tos).toEqual(expect.arrayContaining([
-      "/v3/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments",
+      "/v3/users", "/v3/admins", "/v3/projects", "/v3/departments",
       "/v3/workspaces", "/v3/models", "/v3/network", "/v3/storage",
     ]));
     expect(tos).not.toContain("/v3/fleet");

@@ -689,6 +689,11 @@ class AgentSpec(BaseModel):
     # redeploy. Whitespace is trimmed; blank reads back as None (display falls
     # back to ``name``).
     display_name: str | None = Field(default=None, min_length=1, max_length=64)
+    # The business project a NEW agent is filed under (services/agent_project): when
+    # omitted, the request's project (X-Project). Request-only — excluded from every
+    # dump, so it is never stored in the spec, and ignored on redeploy (an agent keeps
+    # its project).
+    project_id: str | None = Field(default=None, max_length=32, exclude=True)
     method: Method
     model_id: str = Field(default_factory=agent_default_model_id)
     # Defaults to "bedrock" for BACKWARD COMPATIBILITY, not because it is the
@@ -1282,11 +1287,20 @@ def _clean_resource_ids(ids: list[str], label: str) -> list[str]:
     return cleaned
 
 
+class ConvertRequest(BaseModel):
+    """Optional body of a Harness → Runtime conversion."""
+
+    # the business project the twin is filed under (services/agent_project)
+    project_id: str | None = Field(default=None, max_length=32)
+
+
 class RuntimeImportRequest(BaseModel):
     """One import call carries both discovered resource kinds; either may be empty."""
 
     runtime_ids: list[str] = []
     harness_ids: list[str] = []
+    # the business project new imports are filed under (services/agent_project)
+    project_id: str | None = Field(default=None, max_length=32)
 
     @model_validator(mode="after")
     def _unique_bounded_ids(self) -> "RuntimeImportRequest":

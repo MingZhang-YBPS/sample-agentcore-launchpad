@@ -15,9 +15,10 @@ from app.core.errors import AppError
 from app.core.project_scope import project_context
 from app.core.route_policy import PERM_PROJECT_USE, required_role
 from app.models.ledger import Agent
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import _project
 
-DEFAULT = {"X-Project": "default"}
+DEFAULT = {"X-Project": TEST_PROJECT}
 HOUR_MS = 3_600_000
 
 
@@ -28,7 +29,7 @@ def _seed(
     spec: dict | None = None,
     version: str = "2",
     workspace_id: str = DEFAULT_WORKSPACE_ID,
-    project: str | None = "default",
+    project: str | None = TEST_PROJECT,
 ) -> str:
     db = SessionLocal()
     try:
@@ -158,7 +159,7 @@ def test_cached_per_version_and_refresh_probes_again(client, probe):
     # a new deploy (version) is a new key
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             db.get(Agent, agent_id).version = "3"
             db.commit()
     finally:

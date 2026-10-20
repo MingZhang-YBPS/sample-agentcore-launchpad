@@ -9,6 +9,7 @@ import { useProject } from "../../../workspace/project-context";
 import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
 import { Btn, Dialog, Notice } from "../../ui";
+import { Select } from "../../select";
 
 /**
  * Move one agent — with every row derived from it — to another project bound to
@@ -87,26 +88,26 @@ export function TransferDialog({
         <p style={{ margin: 0 }}>{t("v3.projects.transfer.body")}</p>
         <label className="v3-field">
           <span>{t("v3.projects.transfer.workspace")}</span>
-          <select className="v3-input" value={workspaceId} onChange={(e) => pickWorkspace(e.target.value)}>
+          <Select className="v3-input" value={workspaceId} onChange={(e) => pickWorkspace(e.target.value)}>
             {project.workspaces.map((w) => <option key={w.workspace_id} value={w.workspace_id}>{w.name}</option>)}
-          </select>
+          </Select>
         </label>
         <label className="v3-field">
           <span>{t("v3.projects.transfer.agent")}</span>
           <Reasoned disabledReason={agents.loading ? null : t("v3.projects.transfer.noAgents")}>
-            <select className="v3-input" value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={movable.length === 0}>
+            <Select className="v3-input" value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={movable.length === 0}>
               <option value="">{agents.loading ? "…" : movable.length === 0 ? t("v3.projects.transfer.noAgents") : "—"}</option>
               {movable.map((a) => <option key={a.id} value={a.id}>{a.display_name || a.name} · {a.status}</option>)}
-            </select>
+            </Select>
           </Reasoned>
         </label>
         <label className="v3-field">
           <span>{t("v3.projects.transfer.target")}</span>
           <Reasoned disabledReason={targets.loading ? null : t("v3.projects.transfer.noTargets")}>
-            <select className="v3-input" value={target} onChange={(e) => setTarget(e.target.value)} disabled={others.length === 0}>
+            <Select className="v3-input" value={target} onChange={(e) => setTarget(e.target.value)} disabled={others.length === 0}>
               <option value="">{targets.loading ? "…" : others.length === 0 ? t("v3.projects.transfer.noTargets") : "—"}</option>
               {others.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
-            </select>
+            </Select>
           </Reasoned>
         </label>
         {agents.error && <Notice s="act"><ApiErrorDetail error={agents.failure ?? agents.error} /></Notice>}

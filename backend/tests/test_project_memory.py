@@ -22,7 +22,7 @@ from app.models.projects import Project
 from app.services import bootstrap, memory, project_memory
 from app.services import project_isolation as svc
 from app.services.workspace import WorkspaceContext
-from tests.conftest import client_error, set_default_resources
+from tests.conftest import TEST_PROJECT, client_error, set_default_resources
 from tests.test_project_scope import (  # noqa: F401
     _agent,
     _login,
@@ -246,7 +246,7 @@ def test_an_isolated_project_uses_its_memory_once_ready(alpha):
     with project_context("alpha"):
         assert memory.memory_id_or_none(ws) == OWN
     # another project, and a hub-global context, keep the workspace memory
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         assert memory.memory_id_or_none(ws) == SHARED
     with project_context(None):
         assert memory.memory_id_or_none(ws) == SHARED
@@ -261,7 +261,7 @@ def test_an_isolated_project_uses_its_memory_once_ready(alpha):
 def test_dual_read_admits_only_the_projects_own_agents(alpha):
     _memory_row("alpha", OWN)
     mine = _agent("alpha-agent", "alpha")
-    theirs = _agent("default-agent", "default")
+    theirs = _agent("default-agent", TEST_PROJECT)
     with project_context("alpha"):
         dual = project_memory.dual_read(_ws())
     assert dual is not None and dual.memory_id == SHARED
@@ -294,7 +294,7 @@ def test_dual_read_window_closes(alpha, detail, created_days_ago):
 def test_memory_reads_fall_back_to_the_shared_memory_for_own_actors(alpha, monkeypatch):
     _memory_row("alpha", OWN)
     mine = _agent("alpha-agent", "alpha")
-    theirs = _agent("default-agent", "default")
+    theirs = _agent("default-agent", TEST_PROJECT)
     old_event = {"eventId": "e-old"}
     data = StubData({
         OWN: {"list_events": lambda kw: {"events": []},

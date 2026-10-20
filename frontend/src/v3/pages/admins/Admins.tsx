@@ -19,6 +19,7 @@ import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, type Signal, S
 import { useUserActions } from "../users/actions";
 import { type CreateForm, oneTimePassword } from "../users/forms";
 import { adminCreateBody, demoteBlock, emptyAdminForm, type PlatformType, platformType, promotable, validateAdminForm } from "./model";
+import { Select } from "../../select";
 
 const STATE_SIGNAL: Record<ConsoleUser["state"], Signal> = { pending: "wait", active: "ok", expired: "act", disabled: "off" };
 
@@ -51,10 +52,10 @@ function DemoteDialog({ admin, busy, onCancel, onConfirm }: {
         </p>
         <label className="v3-field">
           <span>{t("v3.admins.demote.role")}</span>
-          <select className="v3-select" value={role} onChange={(e) => setRole(e.target.value as "member" | "operator")}>
+          <Select className="v3-select" value={role} onChange={(e) => setRole(e.target.value as "member" | "operator")}>
             <option value="member">{t("v2.users.role.member")}</option>
             <option value="operator">{t("v2.users.role.operator")}</option>
-          </select>
+          </Select>
         </label>
         {projects && projects.length === 0 && <Notice s="wait">{t("v3.admins.demote.noProjects")}</Notice>}
         {projects && projects.length > 0 && (
@@ -139,10 +140,10 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
       <form style={{ display: "grid", gap: 12 }} data-testid="v3-admin-add" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <label className="v3-field">
           <span>{t("v3.admins.col.type")}</span>
-          <select className="v3-select" value={type} data-testid="v3-admin-add-type" onChange={(e) => { setType(e.target.value as PlatformType); setError(null); }}>
+          <Select className="v3-select" value={type} data-testid="v3-admin-add-type" onChange={(e) => { setType(e.target.value as PlatformType); setError(null); }}>
             <option value="admin">{t("v3.admins.type.admin")}</option>
             <option value="steward">{t("v3.admins.type.steward")}</option>
-          </select>
+          </Select>
           {type === "steward" && <small className="v3-hint">{t("v3.steward.typeHint")}</small>}
         </label>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>{radio("promote")}{radio("create")}</div>
@@ -199,10 +200,10 @@ function AddAdminDialog({ reservedName, onClose, onDone }: {
             </div>
             <label className="v3-field">
               <span>{t("v2.users.col.validity")}</span>
-              <select className="v3-select" value={form.expiry} onChange={(e) => set("expiry", e.target.value as CreateForm["expiry"])}>
+              <Select className="v3-select" value={form.expiry} onChange={(e) => set("expiry", e.target.value as CreateForm["expiry"])}>
                 <option value="never">{t("usersPage.neverExpires")}</option>
                 <option value="days">{t("v3.users.create.expiryDays")}</option>
-              </select>
+              </Select>
               {form.expiry === "days" && (
                 <input className="v3-input" type="number" min={1} max={MAX_EXTEND_DAYS} value={form.days}
                   onChange={(e) => set("days", e.target.value)} aria-label={t("v2.users.extendDays")} />

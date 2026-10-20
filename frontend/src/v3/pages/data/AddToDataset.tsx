@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api, ApiError, errorMessage, type V2FromSessionsResult, type V2Range, type V2SkippedSession } from "../../../lib/api";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Dialog, Filters, Notice } from "../../ui";
+import { Select } from "../../select";
 
 /**
  * Turn observed sessions (the trajectories behind picked traces) into dataset
@@ -111,12 +112,12 @@ export function AddToDataset({
           {mode === "existing" ? (
             <label className="v3-field">
               <span>{t("v2.addToDataset.dataset")}</span>
-              <select className="v3-select" value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
+              <Select className="v3-select" value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
                 <option value="">{t("v3.data.choose")}</option>
                 {receivable.map((d) => (
                   <option key={d.id} value={d.id}>{`${d.name} · ${t("v2.datasets.items", { count: d.item_count })}`}</option>
                 ))}
-              </select>
+              </Select>
             </label>
           ) : (
             <>

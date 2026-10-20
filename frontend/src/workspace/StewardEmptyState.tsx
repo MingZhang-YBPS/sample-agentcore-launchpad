@@ -10,7 +10,6 @@ const LINKS: { to: string; labelKey: string }[] = [
   { to: "/v3/users", labelKey: "v3.steward.links.users" },
   { to: "/v3/admins", labelKey: "v3.steward.links.admins" },
   { to: "/v3/projects", labelKey: "v3.steward.links.projects" },
-  { to: "/v3/project-groups", labelKey: "v3.steward.links.groups" },
   { to: "/v3/departments", labelKey: "v3.steward.links.departments" },
   { to: "/v2/workspaces", labelKey: "v3.steward.links.workspaces" },
 ];

@@ -17,8 +17,11 @@ from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.main import create_app
 from app.models.ledger import Agent, AuditEvent, Deployment, Promotion, SpecSnapshot, Workspace
+from app.models.projects import ProjectWorkspace
+from app.services import access
 from app.services import promotion as promotion_service
 from app.services import users as users_service
+from tests.conftest import TEST_PROJECT
 
 ADMIN_CREDS = {"username": "release-admin", "password": "s3cret-pass"}
 DEV_CREDS = {
@@ -100,6 +103,20 @@ def _ensure_target_row() -> None:
             db.commit()
     finally:
         db.close()
+    _bind_target()
+
+
+def _bind_target() -> None:
+    """The release lands in the source agent's business project, so the target
+    workspace must be bound to it (promotion.assert_project_reaches)."""
+    db = SessionLocal()
+    try:
+        if db.get(ProjectWorkspace, (TEST_PROJECT, TARGET_WS["id"])) is None:
+            db.add(ProjectWorkspace(project_id=TEST_PROJECT, workspace_id=TARGET_WS["id"]))
+            access.bump_epoch(db)
+            db.commit()
+    finally:
+        db.close()
 
 
 def _member(app, creds, role: str, *, target_grant: bool = True) -> TestClient:
@@ -139,6 +156,7 @@ def admin(gated_app):
     with TestClient(gated_app, client=("127.0.0.1", 4321)) as client:
         assert client.post("/api/auth/login", json=ADMIN_CREDS).status_code == 200
         client.post("/api/workspaces", json=TARGET_WS)
+        _bind_target()
         yield client
 
 
@@ -401,6 +419,7 @@ def test_the_detail_diffs_the_bundle_against_the_target(admin, developer):
         db.add(
             Agent(
                 workspace_id=TARGET_WS["id"],
+                    project_id=TEST_PROJECT,
                 name=SPEC["name"],
                 method="harness",
                 status="active",
@@ -542,8 +561,9 @@ def _seed_victim(spec_overrides: dict) -> None:
     """The agent an attacker wants to read: same name, in the target workspace."""
     db = SessionLocal()
     try:
-        db.add(Agent(workspace_id=TARGET_WS["id"], name=SPEC["name"], method="harness",
-                     status="active", spec=dict(SPEC, **spec_overrides), version="9"))
+        db.add(Agent(workspace_id=TARGET_WS["id"], project_id=TEST_PROJECT, name=SPEC["name"],
+                     method="harness", status="active", spec=dict(SPEC, **spec_overrides),
+                     version="9"))
         db.commit()
     finally:
         db.close()

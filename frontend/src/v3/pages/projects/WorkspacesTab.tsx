@@ -14,6 +14,7 @@ import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { inUseRows } from "./model";
 import type { ProjectAbilities } from "./ProjectDetail";
+import { Select } from "../../select";
 
 /**
  * §6.3 "Workspaces": the bindings; an administrator binds, unbinds and makes the
@@ -78,10 +79,10 @@ export function WorkspacesTab({
     <div style={{ display: "grid", gap: 12 }} data-testid="project-workspaces">
       {abilities.structure && active && (
         <div className="v3-prj-filters">
-          <select className="v3-input" aria-label={t("v3.projects.workspaces.pick")} value={pick} onChange={(e) => setPick(e.target.value)}>
+          <Select className="v3-input" aria-label={t("v3.projects.workspaces.pick")} value={pick} onChange={(e) => setPick(e.target.value)}>
             <option value="">{t("v3.projects.workspaces.pick")}</option>
             {free.map((w) => <option key={w.id} value={w.id}>{w.region ? `${w.name} · ${w.region}` : w.name}</option>)}
-          </select>
+          </Select>
           <Btn kind="primary" busy={busy} disabled={!pick} disabledReason={t("story.reason.pickWorkspace")}
             onClick={() => void put({ bind: [pick] }, t("v3.projects.workspaces.bound", { workspace: free.find((w) => w.id === pick)?.name ?? pick }))}>
             <Link2 size={14} /> {t("v3.projects.workspaces.bind")}

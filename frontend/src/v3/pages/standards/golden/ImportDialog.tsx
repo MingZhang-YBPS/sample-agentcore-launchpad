@@ -27,6 +27,7 @@ import { useLoad } from "../../../hooks";
 import { Btn, Dialog, Notice } from "../../../ui";
 import { NO_CRITERIA, loadGoldenItems, loadServedCriteria } from "./served";
 import { downloadItems, downloadTemplate, fileStem, type TableFormat } from "./tables";
+import { Select } from "../../../select";
 
 const K = "v2.dlc.golden.import";
 const clip = (s: string, n = 48) => (s.length > n ? `${s.slice(0, n)}…` : s);
@@ -198,9 +199,9 @@ export function ImportDialog({
         </div>
         <label className="v3-field">
           <span>{t("v2.dlc.golden.caseTier")}</span>
-          <select className="v3-select" value={caseTier} onChange={(e) => setCaseTier(e.target.value as CaseTier)}>
+          <Select className="v3-select" value={caseTier} onChange={(e) => setCaseTier(e.target.value as CaseTier)}>
             {CASE_TIERS.map((c) => <option key={c} value={c}>{t(`v2.dlc.caseTier.${c}`)}</option>)}
-          </select>
+          </Select>
           <small className="v3-hint">{t(`${K}.tierFallback`)}</small>
         </label>
         <label className="v3-field">

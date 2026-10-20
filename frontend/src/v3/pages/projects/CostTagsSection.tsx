@@ -30,8 +30,7 @@ const FIXED = ["launchpad:project", "launchpad:workspace", "launchpad:agent-id",
  * Cost tags (cost-tags design §1.1 D-3, §1.4-4): the custom cost tags the platform
  * writes on the project's resources next to its own `launchpad:*` set — the owner's
  * (`project.members`) — and what the project's budget compares against, the estimate
- * or the billed cost — an administrator's or the department administrator's, like
- * the budget itself.
+ * or the billed cost — a platform administrator's only, like the monthly budget itself.
  */
 export function CostTagsSection({ project, abilities }: { project: ProjectDetail; abilities: ProjectAbilities }) {
   const { t } = useTranslation();
@@ -48,7 +47,7 @@ export function CostTagsSection({ project, abilities }: { project: ProjectDetail
   const active = project.status === "active";
   const editable = abilities.manage && active;
   const lock = projectLock(t, project, abilities.manage, permReason(t, "project.members"));
-  const basisEditable = abilities.structure && active;
+  const basisEditable = abilities.admin && active; // platform administrators only, like the budget
 
   if (loaded.loading && !view) return <Panel title={t("v3.costTags.project.title")}><Skeleton rows={3} /></Panel>;
   if (!view) {

@@ -13,6 +13,7 @@ import { ago } from "../../format";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import { jobSignal, slUrl } from "./signal";
+import { Select } from "../../select";
 
 /** Job status chip, with the queue position while it waits behind another job. */
 export function JobStatus({ job }: { job: SkillLabJobInfo }) {
@@ -163,11 +164,11 @@ export function JobTable({
           }))}
         />
         {skills.length > 1 && (
-          <select className="v3-select" style={{ width: 200 }} value={skill} onChange={(e) => setSkill(e.target.value)}
+          <Select className="v3-select" style={{ width: 200 }} value={skill} onChange={(e) => setSkill(e.target.value)}
             aria-label={t("skillLab.eval.col.skill")}>
             <option value="">{t("v3.skilllab.allSkills")}</option>
             {skills.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
+          </Select>
         )}
         <SearchBox value={q} onChange={setQ} placeholder={t("v2.skillLab.searchJobs")} />
       </div>

@@ -30,6 +30,7 @@ import { StoryPrereqs } from "../../story/Prereqs";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { TierChip } from "./charts";
 import { findingText, stamp } from "./common";
+import { Select } from "../../select";
 
 const METRICS = ["latency_p95_ms", "cost_per_success_usd", "tokens_per_session"] as const;
 
@@ -199,14 +200,14 @@ export function CriteriaIndex({
             </label>
             <label className="v3-field">
               <span>{t("v2.dlc.criteria.fromTemplate")}</span>
-              <select className="v3-select" value={template} onChange={(e) => setTemplate(e.target.value)}>
+              <Select className="v3-select" value={template} onChange={(e) => setTemplate(e.target.value)}>
                 <option value="">{t("v2.dlc.criteria.noTemplate")}</option>
                 {(templates.data?.sets ?? [])
                   .filter((s) => s.status === "published")
                   .map((s) => (
                     <option key={s.lineage_id} value={s.lineage_id}>{`${s.name} v${s.version}`}</option>
                   ))}
-              </select>
+              </Select>
               <small className="v3-hint">{t("v2.dlc.criteria.fromTemplateHint")}</small>
             </label>
             <ErrorCallout error={failure} params={{ agent_id: agentId ?? undefined }} onDismiss={() => setFailure(null)}
@@ -233,19 +234,19 @@ function RowEditor({ row, onChange, onRemove }: { row: CriterionInput; onChange:
         </label>
         <label className="v3-field">
           <span>{t("v2.dlc.criteria.dimension")}</span>
-          <select className="v3-select" value={row.dimension} onChange={(e) => set({ dimension: e.target.value as DlcDimension })}>
+          <Select className="v3-select" value={row.dimension} onChange={(e) => set({ dimension: e.target.value as DlcDimension })}>
             {DLC_DIMENSIONS.map((d) => <option key={d} value={d}>{t(`v2.dlc.dimension.${d}`)}</option>)}
-          </select>
+          </Select>
         </label>
         <label className="v3-field">
           <span>{t("v2.dlc.criteria.tier")}</span>
-          <select className="v3-select" value={row.tier} onChange={(e) => set({ tier: e.target.value as DlcTier })}>
+          <Select className="v3-select" value={row.tier} onChange={(e) => set({ tier: e.target.value as DlcTier })}>
             {DLC_TIERS.map((d) => <option key={d} value={d}>{t(`v2.dlc.tier.${d}`)}</option>)}
-          </select>
+          </Select>
         </label>
         <label className="v3-field">
           <span>{t("v2.dlc.criteria.executor")}</span>
-          <select className="v3-select" value={kind}
+          <Select className="v3-select" value={kind}
             onChange={(e) => {
               const v = e.target.value;
               set({
@@ -256,7 +257,7 @@ function RowEditor({ row, onChange, onRemove }: { row: CriterionInput; onChange:
             <option value="evaluator">{t("v2.dlc.criteria.executorEvaluator")}</option>
             <option value="metric">{t("v2.dlc.criteria.executorMetric")}</option>
             <option value="manual">{t("v2.dlc.criteria.executorManual")}</option>
-          </select>
+          </Select>
         </label>
       </div>
       <label className="v3-field">
@@ -276,10 +277,10 @@ function RowEditor({ row, onChange, onRemove }: { row: CriterionInput; onChange:
           <>
             <label className="v3-field">
               <span>{t("v2.dlc.criteria.metric")}</span>
-              <select className="v3-select" value={row.metric_rule?.metric ?? "latency_p95_ms"}
+              <Select className="v3-select" value={row.metric_rule?.metric ?? "latency_p95_ms"}
                 onChange={(e) => set({ metric_rule: { ...row.metric_rule, metric: e.target.value } })}>
                 {METRICS.map((m) => <option key={m} value={m}>{t(`v2.dlc.metric.${m}`)}</option>)}
-              </select>
+              </Select>
             </label>
             <label className="v3-field">
               <span>{t("v2.dlc.criteria.bound")}</span>
@@ -298,10 +299,10 @@ function RowEditor({ row, onChange, onRemove }: { row: CriterionInput; onChange:
         )}
         <label className="v3-field">
           <span>{t("v2.dlc.criteria.denominator")}</span>
-          <select className="v3-select" value={row.denominator ?? "sessions"}
+          <Select className="v3-select" value={row.denominator ?? "sessions"}
             onChange={(e) => set({ denominator: e.target.value as "sessions" | "turns" | "fields" })}>
             {["sessions", "turns", "fields"].map((d) => <option key={d} value={d}>{t(`v2.dlc.denominator.${d}`)}</option>)}
-          </select>
+          </Select>
         </label>
         <label className="v3-field">
           <span>{t("v2.dlc.criteria.passK")}</span>

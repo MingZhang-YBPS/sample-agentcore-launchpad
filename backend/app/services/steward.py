@@ -1,7 +1,7 @@
 """The structure-only platform administrator — "steward" (组织管理员), projects §11.4.
 
 A steward manages what an administrator manages *about the platform's shape* —
-accounts, departments, projects, groups, bindings, workspaces — and never its data:
+accounts, departments, projects, bindings, workspaces — and never its data:
 ``access.has_data_bypass`` is False for it, ``access.can_manage_structure`` True, it
 holds no grant or membership of its own, and ``core/route_policy.py`` refuses it every
 ``ADMIN_DATA`` route.
@@ -14,12 +14,14 @@ project *leaves a trace* instead:
    steward account (a steward is never a member);
 2. every membership change it makes is journaled (``steward.members.change``, naming
    the project) and noticed to the project's owners — the accounts holding
-   ``project.members`` there — through ``GET /api/steward/notices``; a group's
-   members (and a project moved into a group) count once per project of the group;
+   ``project.members`` there — through ``GET /api/steward/notices``;
 3. with ``platform_settings.steward_two_person = true`` its membership changes are
    *pending* until another steward, an administrator or one of the project's owners
-   confirms them (``POST /api/steward/pending/{id}/confirm``) — for a group's change,
-   an owner of every project of the group.
+   confirms them (``POST /api/steward/pending/{id}/confirm``).
+
+A pending change staged for a (since retired) project group can still be listed and
+rejected / withdrawn, never confirmed (409 ``steward.pending_group_retired``): its
+members now hold direct rows in each project, managed there.
 
 Notices and pending changes are small JSON documents in ``platform_settings`` rows
 (``steward.notice.<id>`` / ``steward.pending.<id>``): no new table, hub-global like
@@ -119,8 +121,8 @@ def _put(db: Session, prefix: str, doc: dict[str, Any], actor: Any) -> None:
 
 
 def owner_ids(db: Session, project: Any) -> list[str]:
-    """Active accounts holding `project.members` in the project (direct or through
-    its group) — the people a steward's change is noticed to and who may confirm it."""
+    """Active accounts holding `project.members` in the project — the people a
+    steward's change is noticed to and who may confirm it."""
     from app.services import projects as projects_service
 
     return sorted(
@@ -209,18 +211,15 @@ def acknowledge(db: Session, identity: Any, notice_id: str) -> None:
 
 def after_member_change(
     db: Session, actor: Any, project: Any, upsert: list[dict[str, Any]],
-    result: dict[str, list[str]], *, confirmed_by: Any = None, group_id: str | None = None,
+    result: dict[str, list[str]], *, confirmed_by: Any = None,
 ) -> None:
-    """A steward's applied membership change: journal + the owners' notice. With
-    `group_id` the change came through the project's group (a group member reaches
-    every project of the group, so each project's owners are told)."""
+    """A steward's applied membership change: journal + the owners' notice."""
     changed = set(result["added"]) | set(result["updated"])
     applied = [u for u in upsert if u["user_id"] in changed]
     changes = _changes(db, applied, result["removed"])
     if not changes:
         return
-    via = f" group:{group_id}" if group_id else ""
-    target = f"project:{project.id}{via} {_describe(changes)}"
+    target = f"project:{project.id} {_describe(changes)}"
     if confirmed_by is not None:
         target += f" confirmed_by:{confirmed_by.username}"
     journal(db, actor, "steward.members.change", target)
@@ -244,30 +243,9 @@ def request_change(
     return doc["id"]
 
 
-def request_group_change(
-    db: Session, actor: Any, group: Any, projects: list[Any], upsert: list[dict[str, Any]],
-    remove: list[str],
-) -> str:
-    """Two-person rule for a group's members: one pending change for the group,
-    noticed to the owners of each of its projects."""
-    doc = {
-        "id": uuid.uuid4().hex, "project_id": None, "group_id": group.id,
-        "group_name": group.name, "project_ids": sorted(p.id for p in projects),
-        "upsert": upsert, "remove": remove, "changes": _changes(db, upsert, remove),
-        "requested_by": actor.username, "requested_by_user_id": getattr(actor, "user_id", None),
-        "created_at": _now(),
-    }
-    _put(db, PENDING_PREFIX, doc, actor)
-    journal(db, actor, "steward.pending.request",
-            f"{_subject(doc)} pending:{doc['id']} {_describe(doc['changes'])}")
-    for project in projects:
-        notify_owners(db, actor, project, "pending", doc["changes"], pending_id=doc["id"])
-    return doc["id"]
-
-
 def _subject(doc: dict[str, Any]) -> str:
-    """What a pending change is about, for the journal: `project:<id>`, or a group's
-    `group:<id>` and each of its projects (so every project's audit view finds it)."""
+    """What a pending change is about, for the journal: `project:<id>`, or (a change
+    staged for a retired project group) `group:<id>` and each of its projects."""
     if doc.get("group_id"):
         return " ".join([f"group:{doc['group_id']}",
                          *(f"project:{pid}" for pid in doc.get("project_ids") or [])])
@@ -285,7 +263,7 @@ def _may_confirm(db: Session, identity: Any, doc: dict[str, Any]) -> bool:
     if access.has_data_bypass(identity) or is_steward(identity):
         return True
     memberships = access.snapshot_for(db, identity).memberships
-    # a group's change reaches all of its projects: an owner of every one of them
+    # a (retired) group's change reached all of its projects: an owner of every one
     project_ids = (doc.get("project_ids") or []) if doc.get("group_id") else [doc["project_id"]]
     return bool(project_ids) and all(
         (m := memberships.get(pid)) is not None and "project.members" in m.permissions
@@ -336,16 +314,11 @@ def confirm(db: Session, identity: Any, pending_id: str) -> dict[str, Any]:
         username=doc["requested_by"], user_id=doc.get("requested_by_user_id"), role=ROLE_STEWARD,
     )
     if doc.get("group_id"):
-        from app.services import project_groups
-
-        group = project_groups.get_group(db, doc["group_id"])
-        db.delete(row)
-        result = project_groups.upsert_members(
-            db, requester, group, doc["upsert"], doc["remove"], confirmed_by=identity,
-        )
-        journal(db, identity, "steward.pending.confirm",
-                f"{_subject(doc)} pending:{pending_id} requested_by:{doc['requested_by']}")
-        return {"pending_id": pending_id, "group_id": group.id, "project_id": None, **result}
+        raise AppError("steward.pending_group_retired",
+                       "this change was staged for a project group, and project groups are "
+                       "retired — reject it and change the projects' members directly",
+                       {"pending_id": pending_id, "group_id": doc["group_id"]},
+                       status_code=409)
     project = projects_service.get_project(db, doc["project_id"])
     db.delete(row)
     result = projects_service.upsert_members(

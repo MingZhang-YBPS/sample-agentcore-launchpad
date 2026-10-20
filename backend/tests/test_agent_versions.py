@@ -16,6 +16,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 from app.services.agentcore import harness as harness_api
 from app.services.agentcore import runtime as runtime_api
+from tests.conftest import TEST_PROJECT
 
 RUNTIME_ID = "hr_assistant-AbCdEf1234"
 HARNESS_ID = "hr-harness-XyZ987"
@@ -107,6 +108,7 @@ def _seed(
     try:
         row = Agent(
             workspace_id=workspace_id,
+            project_id=TEST_PROJECT,
             name=f"a-{method}",
             method=method,
             status=status,

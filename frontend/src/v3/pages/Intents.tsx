@@ -13,6 +13,7 @@ import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
+import { Select } from "../select";
 
 const DAYS = ["1", "7", "14", "30"] as const;
 type Days = (typeof DAYS)[number];
@@ -87,11 +88,11 @@ export function V3Intents() {
         sub={t("selfService.intents.desc")}
         end={
           <>
-            <select className="v3-select" style={{ width: 200 }} value={agentId} onChange={(e) => setAgentId(e.target.value)}
+            <Select className="v3-select" style={{ width: 200 }} value={agentId} onChange={(e) => setAgentId(e.target.value)}
               aria-label={t("selfService.common.agent")}>
               <option value="">{t("selfService.common.allAgents")}</option>
               {agents.map((a) => <option key={a.id} value={a.id}>{label(a.id)}</option>)}
-            </select>
+            </Select>
             <span className="v3-ins-nowrap">
               <Filters value={days} onChange={setDays}
                 options={DAYS.map((d) => ({ value: d, label: t("v3.intents.days", { count: Number(d) }) }))} />

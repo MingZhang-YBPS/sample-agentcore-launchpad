@@ -1,6 +1,5 @@
 import { useTranslation } from "react-i18next";
 
-import { useAuth } from "../../../auth/auth-context";
 import { type ProjectDetail, projectQuotasApi, projectsApi } from "../../../lib/api/projects";
 import { ago } from "../../format";
 import { useLoad } from "../../hooks";
@@ -38,8 +37,7 @@ function QuotaUsage({ projectId }: { projectId: string }) {
 /** Counts, bindings, owners, quota usage (§6.3 "Overview", §11.3). */
 export function OverviewTab({ project }: { project: ProjectDetail }) {
   const { t } = useTranslation();
-  const { isAdmin } = useAuth();
-  const names = useStructureNames(isAdmin);
+  const names = useStructureNames();
   const members = useLoad(() => projectsApi.members(project.id), `v3-project-overview:${project.id}:${project.member_count}`);
   const owners = projectOwners(members.data?.members ?? []);
 
@@ -56,8 +54,6 @@ export function OverviewTab({ project }: { project: ProjectDetail }) {
           <dl className="v3-prj-dl">
             <dt>{t("v3.projects.create.department")}</dt>
             <dd>{names.department(project.department_id) ?? "—"}</dd>
-            <dt>{t("v3.projects.create.group")}</dt>
-            <dd>{names.group(project.group_id) ?? "—"}</dd>
             <dt>{t("v3.projects.overview.createdBy")}</dt>
             <dd>{project.created_by_name ?? "—"}{project.created_at && <span className="v3-prj-muted"> · {ago(project.created_at)}</span>}</dd>
             {project.archived_at && (

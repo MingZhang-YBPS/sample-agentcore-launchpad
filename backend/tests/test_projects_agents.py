@@ -18,6 +18,7 @@ from app.services import agent_access, agent_names, creators
 from app.services.visibility import Viewer
 from app.services.workspace import context_for_workspace
 from app.system_agents import service as system_agents
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import (
     _agent,
     _login,
@@ -29,7 +30,7 @@ from tests.test_project_scope import (
 from tests.test_runtime_discovery import _detail, _mock_control
 
 ALPHA = {"X-Project": "alpha"}
-DEFAULT = {"X-Project": "default"}
+DEFAULT = {"X-Project": TEST_PROJECT}
 
 
 def _runtime_agent(name: str, pid: str, detail: dict, *, method: str = "zip_runtime") -> str:
@@ -63,7 +64,7 @@ def test_a_name_held_in_another_project_is_taken_but_unnamed():
     holder = _agent("shared-name", "alpha")
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             found = agent_names.live_holder(db, DEFAULT_WORKSPACE_ID, "shared-name")
             assert found is not None and found.id == holder
             assert agent_names.holder_id_for(db, Viewer.ALL, found) is None
@@ -191,7 +192,7 @@ def test_a_kb_of_another_project_cannot_be_pinned():
     ctx = context_for_workspace(DEFAULT_WORKSPACE_ID)
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             with pytest.raises(NotFoundError) as exc:
                 agent_access.check_pins(db, Viewer.ALL, ctx, _pin("KBALPHA"))
             assert exc.value.code == "kb.not_found"
@@ -212,7 +213,7 @@ def test_a_single_project_workspace_pins_any_kb():
     ctx = context_for_workspace(DEFAULT_WORKSPACE_ID)
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             agent_access.check_pins(db, Viewer.ALL, ctx, _pin("KBLOOSE"))
     finally:
         db.close()
@@ -236,7 +237,7 @@ def test_a_connection_of_another_project_reads_as_unknown():
     ws = MagicMock(id=DEFAULT_WORKSPACE_ID)
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             with pytest.raises(AppError) as exc:
                 agents_router._require_project_connections(db, spec, ws)
             assert exc.value.code == "identity.connection_unknown"
@@ -252,18 +253,18 @@ def test_a_connection_of_another_project_reads_as_unknown():
 def test_project_agents_is_an_allow_set_that_fails_closed():
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             single = agent_access.ProjectAgents(db, DEFAULT_WORKSPACE_ID)
             assert not single and single.allows("unknown") and single.allows_actor("default")
     finally:
         db.close()
     _project("alpha")
     a = _agent("pa-alpha", "alpha")
-    d = _agent("pa-default", "default")
+    d = _agent("pa-default", TEST_PROJECT)
     preset = _agent("pa-preset", None, system_key="aws-agent-solution-architect")
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             agents = agent_access.ProjectAgents(db, DEFAULT_WORKSPACE_ID)
             assert agents
             assert agents.allows(d) and agents.allows(preset) and not agents.allows(a)
@@ -326,7 +327,7 @@ def test_the_preset_squatter_is_named_only_inside_its_project():
         with project_context("alpha"):
             assert system_agents._holder_out(db, DEFAULT_WORKSPACE_ID, holder,
                                              is_admin=False) == named
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             assert system_agents._holder_out(db, DEFAULT_WORKSPACE_ID, holder,
                                              is_admin=False) == hidden
     finally:

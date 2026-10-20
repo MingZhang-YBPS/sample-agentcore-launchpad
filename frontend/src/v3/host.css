@@ -39,8 +39,8 @@
   --v2-font: var(--v3-body);
   --v2-mono: var(--v3-mono);
 
-  --v2-on-primary: var(--v3-on-ok);
-  --v2-primary-disabled: color-mix(in srgb, var(--v3-ok) 30%, transparent);
+  --v2-on-primary: var(--v3-on-primary);
+  --v2-primary-disabled: color-mix(in srgb, var(--v3-primary) 30%, transparent);
   --v2-danger-line: color-mix(in srgb, var(--v3-act) 45%, transparent);
   --v2-success-line: color-mix(in srgb, var(--v3-ok) 30%, transparent);
   --v2-warning-line: color-mix(in srgb, var(--v3-wait) 35%, transparent);
@@ -127,13 +127,13 @@
 .v3 .v3-host .v2-btn:hover:not(:disabled) { color: var(--v3-text); border-color: var(--v3-text-3); background: var(--v3-ink-hover); }
 .v3 .v3-host .v2-btn:disabled { background: var(--v3-ink-2); color: var(--v3-text-3); opacity: 0.6; }
 .v3 .v3-host .v2-btn.primary {
-  color: var(--v3-on-ok);
-  background: var(--v3-ok);
-  border-color: var(--v3-ok);
+  color: var(--v3-on-primary);
+  background: var(--v3-primary);
+  border-color: var(--v3-primary);
   font-weight: 650;
 }
-.v3 .v3-host .v2-btn.primary:hover:not(:disabled) { color: var(--v3-on-ok); background: var(--v3-ok-hover); border-color: var(--v3-ok-hover); box-shadow: 0 0 24px color-mix(in srgb, var(--v3-ok) 30%, transparent); }
-.v3 .v3-host .v2-btn.primary:disabled { color: color-mix(in srgb, var(--v3-on-ok) 70%, transparent); background: var(--v2-primary-disabled); border-color: transparent; }
+.v3 .v3-host .v2-btn.primary:hover:not(:disabled) { color: var(--v3-on-primary); background: var(--v3-primary-hover); border-color: var(--v3-primary-hover); box-shadow: 0 0 24px color-mix(in srgb, var(--v3-primary) 30%, transparent); }
+.v3 .v3-host .v2-btn.primary:disabled { color: color-mix(in srgb, var(--v3-on-primary) 70%, transparent); background: var(--v2-primary-disabled); border-color: transparent; }
 .v3 .v3-host .v2-btn.danger { color: var(--v3-act); border-color: color-mix(in srgb, var(--v3-act) 40%, transparent); background: var(--v3-act-dim); }
 .v3 .v3-host .v2-btn.soft { color: var(--v3-info); background: var(--v3-info-dim); border-color: transparent; }
 .v3 .v3-host .v2-input,
@@ -143,7 +143,7 @@
 .v3 .v3-host .v2-input:focus,
 .v3 .v3-host .v2-textarea:focus,
 .v3 .v3-host .v2-sel:focus-visible,
-.v3 .v3-host .v2-sel.open { border-color: var(--v3-ok); box-shadow: 0 0 0 3px var(--v3-ok-dim); }
+.v3 .v3-host .v2-sel.open { border-color: var(--v3-primary); box-shadow: 0 0 0 3px var(--v3-primary-dim); }
 .v3 .v3-host select option { background: var(--v3-ink-2); color: var(--v3-text); }
 .v3 .v3-host .v2-tag { font-family: var(--v3-mono); font-size: 11px; font-weight: 500; border-radius: 5px; }
 .v3 .v3-host .v2-alert { border: 1px solid var(--v3-line); }

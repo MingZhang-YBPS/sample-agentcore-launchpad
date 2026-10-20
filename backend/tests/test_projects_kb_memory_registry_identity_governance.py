@@ -39,6 +39,7 @@ from app.services import identity_providers as ip
 from app.services import users as users_service
 from app.services.creators import Creator
 from app.services.visibility import Viewer
+from tests.conftest import TEST_PROJECT
 
 WS = SimpleNamespace(id=DEFAULT_WORKSPACE_ID, resources={})
 ADMIN = {"username": "operator", "password": "s3cret-pass"}
@@ -98,7 +99,7 @@ def db():
 def test_kb_ownership_rows_follow_the_project_and_unowned_kbs_the_default(db):
     _project("alpha")
     _kb_owner("KB-A", "alpha")
-    _kb_owner("KB-D", "default")
+    _kb_owner("KB-D", TEST_PROJECT)
     items = [{"kb_id": k} for k in ("KB-A", "KB-D", "KB-LEGACY")]
     with project_context("alpha"):
         seen = [i["kb_id"] for i in kb_router.visible_kbs(db, DEFAULT_WORKSPACE_ID,
@@ -107,37 +108,37 @@ def test_kb_ownership_rows_follow_the_project_and_unowned_kbs_the_default(db):
         with pytest.raises(NotFoundError):
             kb_router._require_visible(db, WS, Viewer.ALL, "KB-D")
         kb_router._require_visible(db, WS, Viewer.ALL, "KB-A")
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         seen = [i["kb_id"] for i in kb_router.visible_kbs(db, DEFAULT_WORKSPACE_ID,
                                                           Viewer.ALL, items)]
         assert seen == ["KB-D", "KB-LEGACY"]
 
 
 def test_a_single_project_workspace_sees_every_kb(db):
-    _kb_owner("KB-D", "default")
+    _kb_owner("KB-D", TEST_PROJECT)
     items = [{"kb_id": "KB-D"}, {"kb_id": "KB-LEGACY"}]
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         assert kb_router.visible_kbs(db, DEFAULT_WORKSPACE_ID, Viewer.ALL, items) == items
 
 
 def test_record_is_idempotent_across_projects_and_files_ownerless_rows(db):
     _project("alpha")
     _kb_owner("KB-A", "alpha")
-    with project_context("default"):  # a retry from another project leaves alpha's row
+    with project_context(TEST_PROJECT):  # a retry from another project leaves alpha's row
         creators.record(db, DEFAULT_WORKSPACE_ID, creators.KB, "KB-A", Creator("u2", "bo"))
         creators.record(db, DEFAULT_WORKSPACE_ID, creators.KB, "KB-X", None)
     with project_context(None):
         rows = {r.resource_id: r for r in db.scalars(select(ResourceCreator))}
     assert rows["KB-A"].project_id == "alpha" and rows["KB-A"].created_by == "u1"
     # no principal, several projects: an ownership-only row, never the default by omission
-    assert rows["KB-X"].project_id == "default" and rows["KB-X"].created_by is None
+    assert rows["KB-X"].project_id == TEST_PROJECT and rows["KB-X"].created_by is None
 
 
 def test_the_kb_delete_guard_counts_every_project_and_masks_names(db):
     _project("alpha")
     _agent("alpha-agent", "alpha", {"knowledge_bases": [{"kb_id": "KB-D"}]})
-    _agent("default-agent", "default", {"knowledge_bases": [{"kb_id": "KB-D"}]})
-    with project_context("default"):
+    _agent("default-agent", TEST_PROJECT, {"knowledge_bases": [{"kb_id": "KB-D"}]})
+    with project_context(TEST_PROJECT):
         assert sorted(knowledge.attached_agents(WS, "KB-D")) == ["alpha-agent", "default-agent"]
         hidden = kb_router._hidden_names(db, Viewer.ALL, DEFAULT_WORKSPACE_ID)
         item = kb_router._mask_attached(
@@ -160,7 +161,7 @@ def _managed(memory_id: str, pid: str) -> None:
 def test_another_projects_memory_is_foreign_and_cannot_be_adopted(db):
     _project("alpha")
     _managed("mem-alpha", "alpha")
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         assert memory_ownership.foreign_ids(db, WS) == {"mem-alpha"}
         assert not memory_ownership.is_managed(db, WS, "mem-alpha")
         with pytest.raises(NotFoundError) as err:
@@ -176,8 +177,8 @@ def test_another_projects_memory_is_foreign_and_cannot_be_adopted(db):
 def test_the_memory_delete_guard_counts_every_project(db):
     _project("alpha")
     _agent("alpha-agent", "alpha", {"memory": {"memory_id": "mem-d"}})
-    mine = _agent("default-agent", "default", {"memory": {"memory_id": "mem-d"}})
-    with project_context("default"):
+    mine = _agent("default-agent", TEST_PROJECT, {"memory": {"memory_id": "mem-d"}})
+    with project_context(TEST_PROJECT):
         listed = memory_router._agents_by_memory(db, WS)["mem-d"]
         counted = memory_router._agents_by_memory(db, WS, every_project=True)["mem-d"]
     assert [a["id"] for a in listed] == [mine]
@@ -187,11 +188,11 @@ def test_the_memory_delete_guard_counts_every_project(db):
 def test_the_memory_delete_409_names_only_the_callers_agents(db, monkeypatch):
     _project("alpha")
     _agent("alpha-agent", "alpha", {"memory": {"memory_id": "mem-d"}})
-    _agent("default-agent", "default", {"memory": {"memory_id": "mem-d"}})
-    _managed("mem-d", "default")
+    _agent("default-agent", TEST_PROJECT, {"memory": {"memory_id": "mem-d"}})
+    _managed("mem-d", TEST_PROJECT)
     monkeypatch.setattr(memory_router, "_guard", MagicMock(side_effect=AssertionError))
     ws = SimpleNamespace(id=DEFAULT_WORKSPACE_ID, context=WS)
-    with project_context("default"), pytest.raises(AppError) as err:
+    with project_context(TEST_PROJECT), pytest.raises(AppError) as err:
         memory_router.delete_resource("mem-d", db=db, ws=ws, viewer=Viewer.ALL)
     assert err.value.code == "memory.in_use" and "2 agent(s)" in err.value.message
     assert [a["name"] for a in err.value.detail["agents"]] == ["default-agent"]
@@ -203,11 +204,11 @@ def test_the_memory_delete_409_names_only_the_callers_agents(db, monkeypatch):
 def test_a2a_records_of_another_projects_agents_are_hidden():
     _project("alpha")
     _agent("alpha-agent", "alpha", registry_record_id="rec-alpha")
-    _agent("default-agent", "default", registry_record_id="rec-default")
+    _agent("default-agent", TEST_PROJECT, registry_record_id="rec-default")
     _agent("preset", None, system_key="aws-agent-solution-architect",
            registry_record_id="rec-preset")
     records = [{"recordId": r} for r in ("rec-alpha", "rec-default", "rec-preset", "rec-mcp")]
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         kept = registry_router._visible_records(WS, Viewer.ALL, records)
         assert [r["recordId"] for r in kept] == ["rec-default", "rec-preset", "rec-mcp"]
         with pytest.raises(NotFoundError):
@@ -221,7 +222,7 @@ def test_skill_staging_is_bound_to_the_inspecting_project():
                                        "workspace_id": DEFAULT_WORKSPACE_ID,
                                        "project_id": "alpha"}
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             assert registry_router._staged_for("stg", WS) is None
         with project_context("alpha"):
             assert registry_router._staged_for("stg", WS) is not None
@@ -253,9 +254,9 @@ def _connection(name: str, pid: str) -> None:
 def test_another_projects_connection_is_not_listed_or_reachable(db):
     _project("alpha")
     _connection("alpha-idp", "alpha")
-    _connection("default-idp", "default")
+    _connection("default-idp", TEST_PROJECT)
     control = _control(oauth=("alpha-idp", "default-idp", "hand-made"))
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         listed = {i["name"]: i["source"] for i in ip.list_connections(control, db, WS.id)}
         assert listed == {"default-idp": "launchpad", "hand-made": "external"}
         with pytest.raises(NotFoundError):
@@ -269,7 +270,7 @@ def test_another_projects_connection_is_not_listed_or_reachable(db):
 def test_a_stale_row_of_another_project_frees_its_name(db):
     _project("alpha")
     _connection("team-idp", "alpha")  # deleted out-of-band: the vault no longer has it
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         ip._refuse_duplicate(_control(), db, WS.id, "oauth2", "team-idp")
     with project_context(None):
         assert db.query(IdentityProvider).count() == 0
@@ -277,11 +278,11 @@ def test_a_stale_row_of_another_project_frees_its_name(db):
 
 def test_the_connection_delete_guard_counts_every_project(db):
     _project("alpha")
-    _connection("team-idp", "default")
+    _connection("team-idp", TEST_PROJECT)
     tool = {"name": "t", "auth": {"connection": "team-idp"}}
     _agent("alpha-agent", "alpha", {"tools": [tool]})
-    _agent("default-agent", "default", {"tools": [tool]})
-    with project_context("default"), pytest.raises(AppError) as err:
+    _agent("default-agent", TEST_PROJECT, {"tools": [tool]})
+    with project_context(TEST_PROJECT), pytest.raises(AppError) as err:
         ip.delete_connection(_control(oauth=("team-idp",)), db, WS.id, "oauth2", "team-idp")
     assert err.value.code == "identity.connection_referenced"
     assert "2 agent(s)" in err.value.message
@@ -292,7 +293,7 @@ def test_a_gateway_target_cannot_bind_another_projects_connection():
     _project("alpha")
     _connection("alpha-idp", "alpha")
     control = MagicMock()
-    with project_context("default"), pytest.raises(NotFoundError) as err:
+    with project_context(TEST_PROJECT), pytest.raises(NotFoundError) as err:
         gateway_targets.create_target(
             control, {"gateway_id": "gw"}, name="t", description=None, source="mcp",
             openapi_schema=None, mcp_endpoint="https://x", connection="alpha-idp",
@@ -308,7 +309,7 @@ def test_consent_completes_and_revocations_reach_across_projects(db):
     with project_context("alpha"):
         oauth_sessions.record_pending(db, DEFAULT_WORKSPACE_ID, session_uri="urn:s1",
                                       provider="team-idp", user_id="ann", agent_id=agent_id)
-    with project_context("default"):  # the browser switched project meanwhile
+    with project_context(TEST_PROJECT):  # the browser switched project meanwhile
         done = oauth_sessions.complete(db, DEFAULT_WORKSPACE_ID, "urn:s1", caller="ann",
                                        data_client=MagicMock())
         assert done["completed"] is True
@@ -330,7 +331,7 @@ def test_deleting_a_connection_forgets_every_projects_grants(db):
         db.add(UserGrant(workspace_id=DEFAULT_WORKSPACE_ID, user_id="ann",
                          provider="team-idp", agent_id=agent_id))
         db.commit()
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         assert oauth_sessions.forget_connection(db, DEFAULT_WORKSPACE_ID, "team-idp") == 1
         db.commit()
 
@@ -347,7 +348,7 @@ def test_governance_rows_stay_workspace_level(db):
                             gateway_arn="arn", gateway_name="gw", operation="create",
                             operator="ann"))
         db.commit()
-    with project_context("default"):  # the other project reads the same log and lock
+    with project_context(TEST_PROJECT):  # the other project reads the same log and lock
         assert db.query(PolicyDecision).one().project_id is None
         assert db.query(PolicyChange).filter_by(status="pending").one().project_id is None
 
@@ -391,7 +392,7 @@ def test_a_trace_is_readable_only_through_a_session_of_the_project(app, monkeypa
                         lambda sid, ctx, lookback_hours: {"span_count": 0, "spans": []})
     _project("alpha")
     alpha_agent = _agent("alpha-agent", "alpha")
-    default_agent = _agent("default-agent", "default")
+    default_agent = _agent("default-agent", TEST_PROJECT)
     db = SessionLocal()
     try:
         for agent_id, sid in ((alpha_agent, "a" * 40), (default_agent, "d" * 40)):
@@ -413,7 +414,7 @@ def test_a_browser_demo_session_stops_only_from_its_project():
         save_profile=True, workspace_id=DEFAULT_WORKSPACE_ID, project_id="alpha",
     )
     try:
-        other = tools_router._stop_browser_demo_session("s1", DEFAULT_WORKSPACE_ID, "default")
+        other = tools_router._stop_browser_demo_session("s1", DEFAULT_WORKSPACE_ID, TEST_PROJECT)
         assert other == {"stopped": False, "profile_saved": None}
         client.stop.assert_not_called()
         mine = tools_router._stop_browser_demo_session("s1", DEFAULT_WORKSPACE_ID, "alpha")

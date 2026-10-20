@@ -54,7 +54,7 @@
 }
 .v3 .v3-shr-seg button strong { font-family: var(--v3-display); font-size: 13px; }
 .v3 .v3-shr-seg button small { color: var(--v3-text-3); font-size: 11.5px; }
-.v3 .v3-shr-seg button[aria-pressed="true"] { border-color: rgba(62, 240, 180, 0.55); background: var(--v3-ok-dim); }
+.v3 .v3-shr-seg button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--v3-primary) 55%, transparent); background: var(--v3-primary-dim); }
 .v3 .v3-shr-seg button:focus-visible { outline: 2px solid var(--v3-info); outline-offset: 2px; }
 .v3 .v3-shr-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
 .v3 .v3-shr-row2 { display: grid; grid-template-columns: 1fr 120px; gap: 12px; }

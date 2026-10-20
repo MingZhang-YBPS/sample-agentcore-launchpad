@@ -19,6 +19,7 @@ from app.models.ledger import Agent, ChatMessage, ChatSession, ShareLink
 from app.services import channels, intents
 from app.services.channels.base import Inbound
 from app.services.conversation_service import ConversationService
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import _project
 
 SESSION = "p" * 40
@@ -82,7 +83,7 @@ def test_a_preset_session_is_not_continued_from_another_project(fake_stream):
     assert first.status_code == 200, first.text
     again = client.post(f"/api/chat/{preset}",
                         json={"prompt": "more", "session_id": SESSION},
-                        headers={"X-Project": "default"})
+                        headers={"X-Project": TEST_PROJECT})
     assert again.status_code == 404
     assert again.json()["code"] == "chat.session_not_found"
     # the owning project continues it as before
@@ -156,10 +157,10 @@ def test_the_intent_cache_is_keyed_by_project(monkeypatch):
 
     monkeypatch.setattr(intents, "_model_groups", model)
     try:
-        for pid in ("alpha", "default", "alpha"):
+        for pid in ("alpha", TEST_PROJECT, "alpha"):
             with project_context(pid):
                 intents.intent_view(None, None, DEFAULT_WORKSPACE_ID, agent_id=None, days=7)
-        assert calls == ["alpha", "default"]  # the third call is alpha's cache hit
+        assert calls == ["alpha", TEST_PROJECT]  # the third call is alpha's cache hit
     finally:
         intents.reset_cache()
 
@@ -173,7 +174,7 @@ def test_studio_conversations_stay_in_the_project_that_opened_them(monkeypatch):
     run = asyncio.run
     with project_context("alpha"):
         mine = run(service.create_session(CreateConversationRequest(generated_code="x")))
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         theirs = run(service.create_session(CreateConversationRequest(generated_code="x")))
         listed = [s.session_id for s in run(service.get_sessions()).sessions]
         assert listed == [theirs.session_id]

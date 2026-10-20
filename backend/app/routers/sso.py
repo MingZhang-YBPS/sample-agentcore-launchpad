@@ -171,7 +171,7 @@ def _signed_in(
             "jit" if created else "",
             f"role:{changes['role']}" if changes["role"] else "",
             f"conflict:{changes['conflict']}" if changes["conflict"] else "",
-            *changes["projects"], *(f"group{g}" for g in changes["groups"]),
+            *changes["projects"],
         ) if part
     )
     _audit(LOGIN_ACTION,

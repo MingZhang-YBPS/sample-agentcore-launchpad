@@ -27,6 +27,7 @@ import { calibrateBlocker, calibrateUrl } from "../standards/calibrationLink";
 import { CopyId } from "./CopyId";
 import { CostCell } from "./CostCard";
 import { copyUrl, detailUrl, listCosts, rankTasks, runsWithoutCost, taskSignal } from "./model";
+import { Select } from "../../select";
 
 type Pending = { task: V2Task; action: "stop" | "pause" | "resume" | "delete" };
 const PAGE = 25;
@@ -229,14 +230,14 @@ export function TaskList() {
             { value: "insights", label: modeLabel("insights") },
           ]}
         />
-        <select className="v3-select" style={{ width: 150 }} value={source} onChange={(e) => setSource(e.target.value)} aria-label={t("v2.tasks.colSource")}>
+        <Select className="v3-select" style={{ width: 150 }} value={source} onChange={(e) => setSource(e.target.value)} aria-label={t("v2.tasks.colSource")}>
           <option value="">{t("v3.tasks.anySource")}</option>
           {TASK_SOURCES.map((s) => <option key={s} value={s}>{t(`v2.taskSource.${s}Short`)}</option>)}
-        </select>
-        <select className="v3-select" style={{ width: 170 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v2.tasks.colAgent")}>
+        </Select>
+        <Select className="v3-select" style={{ width: 170 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v2.tasks.colAgent")}>
           <option value="">{t("v3.tasks.anyAgent")}</option>
           {agents.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
+        </Select>
         <label style={{ display: "inline-flex", gap: 6, alignItems: "center", color: "var(--v3-text-2)" }}>
           <input type="checkbox" checked={calibratable} onChange={(e) => { setCalibratable(e.target.checked); setShown(PAGE); }} />
           <span>{t("v3.tasks.filterCalibratable")}</span>

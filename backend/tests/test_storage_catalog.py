@@ -12,7 +12,7 @@ from app.models.ledger import Agent
 from app.models.storage import StorageMount
 from app.schemas.agent import AgentSpec
 from app.services import storage_mounts as service
-from tests.conftest import client_error
+from tests.conftest import TEST_PROJECT, client_error
 from tests.test_project_scope import (
     _login,
     _member_of,
@@ -163,11 +163,11 @@ def test_edit_archive_and_the_in_use_guards(client, reader):
                                              "max_mode": "rw", "data_class": "shared_state"})
     patched = client.patch("/api/storage-mounts/state", json={"name": "Pipeline state"}).json()
     assert patched["name"] == "Pipeline state" and patched["status"] == "ok"
-    agent_id = _agent({"mounts": [{"storage_id": "state", "mode": "rw"}]}, "default")
+    agent_id = _agent({"mounts": [{"storage_id": "state", "mode": "rw"}]}, TEST_PROJECT)
     shown = client.get("/api/storage-mounts/state").json()
     assert shown["agents"][0]["agent_id"] == agent_id and shown["writers"] == 1
     assert shown["multi_writer"] is False
-    _agent({"mounts": [{"storage_id": "state", "mode": "rw"}]}, "default", name="fs-two")
+    _agent({"mounts": [{"storage_id": "state", "mode": "rw"}]}, TEST_PROJECT, name="fs-two")
     assert client.get("/api/storage-mounts/state/usage").json()["multi_writer"] is True
 
     lowered = client.patch("/api/storage-mounts/state", json={"max_mode": "ro"})
@@ -188,20 +188,22 @@ def test_edit_archive_and_the_in_use_guards(client, reader):
 def test_the_project_allowed_set(client, reader):
     client.post("/api/storage-mounts", json={"id": "datasets", "access_point_arn": S3_AP})
     client.post("/api/storage-mounts", json={"id": "skills", "access_point_arn": EFS_AP})
-    res = client.put("/api/storage-mounts/projects/default",
+    res = client.put(f"/api/storage-mounts/projects/{TEST_PROJECT}",
                      json={"storage_ids": ["datasets", "skills"]})
     assert res.status_code == 200, res.text
     assert [e["id"] for e in res.json()["storage"]] == ["datasets", "skills"]
     listed = {e["id"]: e for e in client.get("/api/storage-mounts").json()["storage"]}
-    assert listed["datasets"]["allowed"] and listed["datasets"]["projects"] == ["default"]
-    res = client.put("/api/storage-mounts/projects/default", json={"storage_ids": ["skills"]})
+    assert listed["datasets"]["allowed"] and listed["datasets"]["projects"] == [TEST_PROJECT]
+    res = client.put(f"/api/storage-mounts/projects/{TEST_PROJECT}",
+                     json={"storage_ids": ["skills"]})
     assert [e["id"] for e in res.json()["storage"]] == ["skills"]
-    unknown = client.put("/api/storage-mounts/projects/default", json={"storage_ids": ["nope"]})
+    unknown = client.put(f"/api/storage-mounts/projects/{TEST_PROJECT}",
+                         json={"storage_ids": ["nope"]})
     assert unknown.status_code == 404 and unknown.json()["code"] == "storage.not_found"
     nowhere = client.get("/api/storage-mounts/projects/not-bound-here")
     assert nowhere.status_code == 404 and nowhere.json()["code"] == "project.not_found"
     assert client.delete("/api/storage-mounts/skills").status_code == 204
-    assert client.get("/api/storage-mounts/projects/default").json()["storage"] == []
+    assert client.get(f"/api/storage-mounts/projects/{TEST_PROJECT}").json()["storage"] == []
 
 
 def test_an_entry_of_another_workspace_reads_as_missing(client, reader):
@@ -269,7 +271,7 @@ def test_a_member_sees_only_the_projects_allowed_storage(app):  # noqa: F811
     _register("mine")
     _register("theirs", EFS_AP)
     _allow("alpha", "mine")
-    _allow("default", "theirs")
+    _allow(TEST_PROJECT, "theirs")
     uid = _user("joan", grant=False)
     _member_of("alpha", uid)
     jo = _login(app, "joan")
@@ -284,7 +286,7 @@ def test_a_member_sees_only_the_projects_allowed_storage(app):  # noqa: F811
     assert jo.get("/api/storage-mounts/nope").json()["code"] == "storage.not_found"
 
     # another project's agents stay invisible in the usage view
-    _agent({"mounts": [{"storage_id": "mine", "mode": "ro"}]}, "default", name="other-agent")
+    _agent({"mounts": [{"storage_id": "mine", "mode": "ro"}]}, TEST_PROJECT, name="other-agent")
     own = _agent({"mounts": [{"storage_id": "mine", "mode": "ro"}]}, "alpha", name="own-agent")
     used = jo.get("/api/storage-mounts/mine/usage").json()
     assert [a["agent_id"] for a in used["agents"]] == [own]
@@ -293,7 +295,7 @@ def test_a_member_sees_only_the_projects_allowed_storage(app):  # noqa: F811
     card = jo.get(f"/api/storage-mounts/agents/{own}")
     assert card.status_code == 200, card.text
     assert card.json()["mounts"][0]["entry"]["name"] == "mine"
-    other = _agent({"mounts": []}, "default", name="hidden-agent")
+    other = _agent({"mounts": []}, TEST_PROJECT, name="hidden-agent")
     assert jo.get(f"/api/storage-mounts/agents/{other}").status_code == 404
 
     # writes and the allowed set are administrators'
@@ -311,7 +313,7 @@ def test_the_agent_card_lists_catalog_and_inline_mounts(client):
     agent_id = _agent({"session_storage": {"mount_path": "/mnt/workspace"},
                        "s3_files": [{"access_point_arn": S3_AP, "mount_path": "/mnt/raw"}],
                        "mounts": [{"storage_id": "datasets", "mode": "ro"},
-                                  {"storage_id": "gone", "mount_path": "/mnt/g"}]}, "default")
+                                  {"storage_id": "gone", "mount_path": "/mnt/g"}]}, TEST_PROJECT)
     card = client.get(f"/api/storage-mounts/agents/{agent_id}").json()
     assert card["version"] == "3" and card["session_storage"] == "/mnt/workspace"
     assert card["mounts"][0] == {

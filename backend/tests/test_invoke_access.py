@@ -25,9 +25,10 @@ from app.core.route_policy import (
 )
 from app.models.ledger import Agent, Workspace
 from app.services import invoke_access as svc
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import _login, _member_of, _project, _user, app  # noqa: F401
 
-DEFAULT = {"X-Project": "default"}
+DEFAULT = {"X-Project": TEST_PROJECT}
 ACCT = "111122223333"
 REGION = "us-west-2"
 RUNTIME_ARN = f"arn:aws:bedrock-agentcore:{REGION}:{ACCT}:runtime/lab-AbC123"
@@ -211,7 +212,7 @@ def test_inventory_csv_format():
 # ---- HTTP ----
 
 
-def _agent(name="lab", *, project="default", workspace_id=DEFAULT_WORKSPACE_ID, **fields) -> str:
+def _agent(name="lab", *, project=TEST_PROJECT, workspace_id=DEFAULT_WORKSPACE_ID, **fields) -> str:
     base = {"workspace_id": workspace_id, "name": name, "method": "zip_runtime",
             "status": "active", "resource_id": "lab-AbC123", "arn": RUNTIME_ARN, "spec": {}}
     db = SessionLocal()
@@ -270,36 +271,37 @@ def test_project_route_inventory_and_exports(client):
     harness = _agent("helper", method="harness", arn=HARNESS_ARN)
     _project("alpha")
     theirs = _agent("theirs", project="alpha")
-    res = client.get("/api/projects/default/invoke-access")
+    res = client.get(f"/api/projects/{TEST_PROJECT}/invoke-access")
     assert res.status_code == 200, res.text
     body = res.json()
     ids = {r["agent_id"] for r in body["inventory"]}
     assert ids == {ours, harness} and theirs not in ids
     assert {s["Sid"] for s in body["policy"]["Statement"]} == {"InvokeRuntimes",
                                                                "InvokeHarnesses"}
-    only = client.get(f"/api/projects/default/invoke-access?agents={ours}&qualifier=live").json()
+    only = client.get(
+        f"/api/projects/{TEST_PROJECT}/invoke-access?agents={ours}&qualifier=live").json()
     assert only["policy"]["Statement"] == [{
         "Sid": "InvokeRuntimes", "Effect": "Allow",
         "Action": ["bedrock-agentcore:InvokeAgentRuntime"],
         "Resource": [RUNTIME_ARN, f"{RUNTIME_ARN}/runtime-endpoint/live"]}]
     # an id of another project reads like a missing one
-    res = client.get(f"/api/projects/default/invoke-access?agents={ours},{theirs}")
+    res = client.get(f"/api/projects/{TEST_PROJECT}/invoke-access?agents={ours},{theirs}")
     assert res.status_code == 404 and res.json()["detail"]["agent_ids"] == [theirs]
-    exported = client.get("/api/projects/default/invoke-access?format=csv")
+    exported = client.get(f"/api/projects/{TEST_PROJECT}/invoke-access?format=csv")
     assert exported.status_code == 200 and exported.headers["content-type"].startswith("text/csv")
     assert "attachment" in exported.headers["content-disposition"]
     assert exported.text.splitlines()[0] == ",".join(svc.INVENTORY_FIELDS)
-    as_json = client.get("/api/projects/default/invoke-access?format=json")
-    assert json.loads(as_json.text)["project_id"] == "default"
-    assert client.get("/api/projects/default/invoke-access?format=xml").status_code == 400
+    as_json = client.get(f"/api/projects/{TEST_PROJECT}/invoke-access?format=json")
+    assert json.loads(as_json.text)["project_id"] == TEST_PROJECT
+    assert client.get(f"/api/projects/{TEST_PROJECT}/invoke-access?format=xml").status_code == 400
     assert client.get("/api/projects/nope/invoke-access").status_code == 404
 
 
 def test_project_route_non_member_answers_404(app):  # noqa: F811
     _project("alpha")
     _agent("theirs", project="alpha")
-    _member_of("default", _user("dev", grant=False), "developer")
+    _member_of(TEST_PROJECT, _user("dev", grant=False), "developer")
     dev = _login(app, "dev")
-    assert dev.get("/api/projects/default/invoke-access").status_code == 200
+    assert dev.get(f"/api/projects/{TEST_PROJECT}/invoke-access").status_code == 200
     res = dev.get("/api/projects/alpha/invoke-access")
     assert res.status_code == 404 and res.json()["code"] == "project.not_found"

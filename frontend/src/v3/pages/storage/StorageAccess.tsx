@@ -8,6 +8,7 @@ import { useWorkspace } from "../../../workspace/workspace-context";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Notice, Panel, Skeleton } from "../../ui";
+import { Select } from "../../select";
 
 /**
  * The per-project allowed set (storage-mounts §4.1, `PUT /api/storage-mounts/projects/{id}`):
@@ -64,9 +65,9 @@ export function StorageAccess({ entries, onSaved }: { entries: StorageEntry[]; o
         <div style={{ display: "grid", gap: 10 }} data-testid="v3-storage-access">
           <label className="v3-field">
             <span>{t("v3.storage.access.project")}</span>
-            <select className="v3-select" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <Select className="v3-select" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               {(projects.data?.projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
-            </select>
+            </Select>
           </label>
           {allowed.error && <Notice s="act">{allowed.error}</Notice>}
           {live.length === 0 ? <small className="v3-hint">{t("v3.storage.empty")}</small> : (

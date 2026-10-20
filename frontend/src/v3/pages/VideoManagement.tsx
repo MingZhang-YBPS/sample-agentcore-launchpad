@@ -12,6 +12,7 @@ import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Reasoned } from "../reason";
 import { Btn, Chip, Confirm, Empty, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
+import { Select } from "../select";
 
 const NEW = "new";
 const emptyVideo = (): VideoContent => ({
@@ -326,27 +327,27 @@ function Editor({
           <fieldset className="v3-vm-form" disabled={busy}>
             <label className="v3-field">
               <span>{t("videoManage.consoleVersion")} *</span>
-              <select className="v3-select" value={draft.console_version} onChange={(e) => update("console_version", e.target.value as ConsoleVersion)}>
+              <Select className="v3-select" value={draft.console_version} onChange={(e) => update("console_version", e.target.value as ConsoleVersion)}>
                 <option value="v2">{t("videos.version.v2")}</option>
                 <option value="classic">{t("videos.version.classic")}</option>
-              </select>
+              </Select>
             </label>
             <div className="v3-grid c2" style={{ alignItems: "start" }}>
               <label className="v3-field">
                 <span>{t("videoManage.category")} *</span>
-                <select className="v3-select" value={draft.category_id}
+                <Select className="v3-select" value={draft.category_id}
                   onChange={(e) => setDraft((prev) => ({ ...prev, category_id: e.target.value, section_id: "" }))}>
                   <option value="">{t("videoManage.chooseCategory")}</option>
                   {taxonomy.categories.map((c) => <option key={c.id} value={c.id}>{c.title[locale]}</option>)}
-                </select>
+                </Select>
               </label>
               <label className="v3-field">
                 <span>{t("videoManage.section")} *</span>
                 <Reasoned disabledReason={t("story.reason.pickArea")}>
-                  <select className="v3-select" value={draft.section_id} disabled={!draft.category_id} onChange={(e) => update("section_id", e.target.value)}>
+                  <Select className="v3-select" value={draft.section_id} disabled={!draft.category_id} onChange={(e) => update("section_id", e.target.value)}>
                     <option value="">{t("videoManage.chooseSection")}</option>
                     {sections.map((s) => <option key={s.id} value={s.id}>{s.title[locale]}</option>)}
-                  </select>
+                  </Select>
                 </Reasoned>
               </label>
             </div>

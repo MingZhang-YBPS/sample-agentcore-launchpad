@@ -18,6 +18,7 @@ import { type SettingsDraft, settingsDraft, settingsPatch } from "./model";
 import type { ProjectAbilities } from "./ProjectDetail";
 import { QuotasSection } from "./QuotasSection";
 import { useStructureNames } from "./useStructureNames";
+import { Select } from "../../select";
 
 /**
  * §6.3 "Settings": name / department / group and `sod_strict` are an
@@ -36,7 +37,7 @@ export function SettingsTab({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const names = useStructureNames(abilities.admin);
+  const names = useStructureNames();
   const { managedDepartments } = useProject();
   // a department administrator moves the project between the departments they administer
   const departments = abilities.admin ? names.departments : names.departments.filter((d) => managedDepartments.some((m) => m.id === d.id));
@@ -50,7 +51,6 @@ export function SettingsTab({
   const sodLock = projectLock(t, project, abilities.structure, t("v3.projects.settings.sodStrictAdmin"));
   const patch = settingsPatch(project, draft, abilities.structure);
   const set = (next: Partial<SettingsDraft>) => setDraft((prev) => ({ ...prev, ...next }));
-  const groups = names.groups.filter((g) => !draft.department_id || !g.department_id || g.department_id === draft.department_id);
 
   const save = async () => {
     if (!patch) return;
@@ -80,23 +80,13 @@ export function SettingsTab({
           <label className="v3-field">
             <span>{t("v3.projects.create.department")}</span>
             <Reasoned disabledReason={adminLock}>
-              <select className="v3-input" value={draft.department_id} disabled={!admin} onChange={(e) => set({ department_id: e.target.value })}>
-                {abilities.admin && <option value="">{t("v3.projects.none")}</option>}
+              <Select className="v3-input" value={draft.department_id} disabled={!admin} onChange={(e) => set({ department_id: e.target.value })}>
+                {!draft.department_id && <option value="">{t("v3.projects.none")}</option>}
                 {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 {draft.department_id && !departments.some((d) => d.id === draft.department_id) && (
                   <option value={draft.department_id}>{draft.department_id}</option>
                 )}
-              </select>
-            </Reasoned>
-          </label>
-          <label className="v3-field">
-            <span>{t("v3.projects.create.group")}</span>
-            <Reasoned disabledReason={adminLock}>
-              <select className="v3-input" value={draft.group_id} disabled={!admin} onChange={(e) => set({ group_id: e.target.value })}>
-                <option value="">{t("v3.projects.none")}</option>
-                {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                {draft.group_id && !groups.some((g) => g.id === draft.group_id) && <option value={draft.group_id}>{draft.group_id}</option>}
-              </select>
+              </Select>
             </Reasoned>
           </label>
           {!abilities.structure && <small className="v3-hint">{t("v3.projects.settings.adminOnly")}</small>}
@@ -114,11 +104,11 @@ export function SettingsTab({
           <label className="v3-field">
             <span>{t("v3.projects.settings.visibility")}</span>
             <Reasoned disabledReason={editLock}>
-              <select className="v3-input" value={draft.resource_visibility} disabled={!editable}
+              <Select className="v3-input" value={draft.resource_visibility} disabled={!editable}
                 onChange={(e) => set({ resource_visibility: e.target.value === "isolated" ? "isolated" : "shared" })}>
                 <option value="shared">{t("v3.projects.settings.visShared")}</option>
                 <option value="isolated">{t("v3.projects.settings.visIsolated")}</option>
-              </select>
+              </Select>
             </Reasoned>
             <small className="v3-hint">{t("v3.projects.settings.visibilityHint")}</small>
           </label>

@@ -20,6 +20,7 @@ from app.dlc import releases as release_svc
 from app.evaluation.models import EvalDataset
 from app.models.dlc import CriteriaSet, ReleaseRecord, Waiver
 from app.models.ledger import Agent
+from tests.conftest import TEST_PROJECT
 
 GUIDED = AppError("release.no_criteria", "publish a criteria set first", status_code=409,
                   next=[next_step("criteria.publish", agent_id="ag-1"),
@@ -175,7 +176,7 @@ def test_first_batch_codes_name_their_next_step(code, fn, action, params, needs)
 def _seed_db_rows():
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="gate-me", method="harness",
                           status="active", resource_id="h-1", version="2", spec={})
             db.add(agent)
@@ -196,7 +197,7 @@ def test_criteria_draft_exists_opens_the_draft():
     agent_id = _seed_db_rows()
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             err = _raises(lambda: criteria_svc.new_version(
                 db, DEFAULT_WORKSPACE_ID, "lin-d", actor="a"))
     finally:
@@ -209,7 +210,7 @@ def test_criteria_draft_exists_opens_the_draft():
 def test_over_http_a_gate_without_criteria_points_at_publishing_them(client):
     agent_id = _seed_db_rows()
     res = client.post(f"/api/agents/{agent_id}/release/evaluate", json={},
-                      headers={"X-Project": "default"})
+                      headers={"X-Project": TEST_PROJECT})
     assert res.status_code == 409, res.text
     body = res.json()
     assert body["code"] == "release.no_criteria"
@@ -222,7 +223,7 @@ def test_admission_without_a_golden_set_points_at_creating_one(client):
     agent_id = _seed_db_rows()
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             row = AdmissionCandidate(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
                                      source="feedback", source_ref="1")
             db.add(row)
@@ -230,7 +231,7 @@ def test_admission_without_a_golden_set_points_at_creating_one(client):
             cid = row.id
     finally:
         db.close()
-    res = client.post(f"/api/admission/{cid}/admit", headers={"X-Project": "default"},
+    res = client.post(f"/api/admission/{cid}/admit", headers={"X-Project": TEST_PROJECT},
                       json={"split": "dev", "expected_response": "x",
                             "expected_source": "annotator", "criteria_ids": [],
                             "case_tier": "known_good"})

@@ -10,6 +10,7 @@ import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
 import { Btn, Notice, Panel, Skeleton } from "../../ui";
+import { Select } from "../../select";
 
 /**
  * The per-project allowed set (§12.3, `PUT /api/network-profiles/projects/{id}`): which
@@ -71,9 +72,9 @@ export function ProjectAccess({ profiles, onSaved }: { profiles: NetworkProfile[
         <div style={{ display: "grid", gap: 10 }} data-testid="v3-network-access">
           <label className="v3-field">
             <span>{t("v3.network.access.project")}</span>
-            <select className="v3-select" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <Select className="v3-select" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               {(projects.data?.projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
-            </select>
+            </Select>
           </label>
           {allowed.error && <Notice s="act">{allowed.error}</Notice>}
           {live.length === 0 ? <small className="v3-hint">{t("v3.network.empty")}</small> : (

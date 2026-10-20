@@ -23,12 +23,14 @@ export interface SsoPublicProvider {
 
 export type SsoRole = "admin" | "steward" | "operator" | "member";
 export const SSO_ROLES: readonly SsoRole[] = ["member", "operator", "steward", "admin"];
-export type SsoMappingKind = "role" | "project" | "group";
+/** an IdP group maps onto a global role, or onto a project + role (a direct
+ *  membership); the retired `group` kind was migrated into `project` mappings */
+export type SsoMappingKind = "role" | "project";
 
 export interface SsoMapping {
   group: string;
   kind: SsoMappingKind;
-  /** a project id / project-group id; "" for a role mapping */
+  /** a project id; "" for a role mapping */
   target_id: string;
   /** a global role (role kind) or a project role template */
   role_key: string;

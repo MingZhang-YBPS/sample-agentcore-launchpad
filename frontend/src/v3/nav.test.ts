@@ -29,7 +29,7 @@ describe("hostedGroups", () => {
   it("places the people and structure pages right after Users (projects §7.9), for administrators only", () => {
     const admin = hostedGroups(true).find((g) => g.key === "admin")?.items.map((i) => i.to) ?? [];
     const at = admin.indexOf("/v3/users");
-    expect(admin.slice(at, at + 5)).toEqual(["/v3/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments"]);
+    expect(admin.slice(at, at + 4)).toEqual(["/v3/users", "/v3/admins", "/v3/projects", "/v3/departments"]);
     const member = hostedGroups(false).flatMap((g) => g.items.map((i) => i.to));
     expect(member.filter((to) => V3_AFTER["/v2/users"].some((i) => i.to === to))).toEqual([]);
   });
@@ -44,7 +44,7 @@ describe("hostedGroups", () => {
 
   it("shows Projects, Project groups and Departments to a department administrator (§11.1)", () => {
     const tos = hostedGroups(false, [], true).flatMap((g) => g.items.map((i) => i.to));
-    expect(tos).toEqual(expect.arrayContaining(["/v3/projects", "/v3/project-groups", "/v3/departments"]));
+    expect(tos).toEqual(expect.arrayContaining(["/v3/projects", "/v3/departments"]));
     expect(tos).not.toContain("/v3/users");
     expect(tos).not.toContain("/v3/admins");
     expect(tos).not.toContain("/v3/models");

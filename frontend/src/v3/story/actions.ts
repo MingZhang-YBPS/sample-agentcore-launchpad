@@ -59,6 +59,8 @@ export const NEXT_ACTIONS = {
   "workspace.fix_role": action("workspace.fix_role", (p) => at("/v3/workspaces", { id: p.workspace_id })),
   "users.open": action("users.open", () => "/v3/users"),
   "projects.open": action("projects.open", () => "/v3/projects"),
+  // a project's settings tab (its quotas and monthly budget, projects §11.3)
+  "project.settings": action("project.settings", (p) => at("/v3/projects", { id: p.project_id, tab: "settings" })),
   "models.open": action("models.open", () => "/v3/models"),
   "network.open": action("network.open", () => "/v3/network"),
   "storage.open": action("storage.open", () => "/v3/storage"),

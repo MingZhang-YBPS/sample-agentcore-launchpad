@@ -108,6 +108,49 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
+# The business project new agents land in (services/agent_project): a workspace's
+# `default` project may not hold a new agent, so the suite seeds one with a
+# department and binds it to the `default` workspace in place of `default` — the
+# workspace's one project, so header-less requests and ORM stamping both land there.
+# A test about the `default` project binds it back itself.
+TEST_DEPARTMENT = "dept-test"
+TEST_PROJECT = "proj-test"
+
+
+def _seed_test_business_project(bind) -> None:
+    from sqlalchemy import text
+
+    now = "2026-01-01 00:00:00.000000"
+    with bind.begin() as conn:
+        conn.execute(
+            text("INSERT INTO departments (id, name, description, created_at, updated_at)"
+                 " SELECT :d, 'Test department', '', :now, :now"
+                 " WHERE NOT EXISTS (SELECT 1 FROM departments WHERE id = :d)"),
+            {"d": TEST_DEPARTMENT, "now": now},
+        )
+        conn.execute(
+            text("INSERT INTO projects (id, name, description, department_id, status,"
+                 " is_default, created_at, updated_at)"
+                 " SELECT :p, 'Test project', '', :d, 'active', 0, :now, :now"
+                 " WHERE NOT EXISTS (SELECT 1 FROM projects WHERE id = :p)"),
+            {"p": TEST_PROJECT, "d": TEST_DEPARTMENT, "now": now},
+        )
+        conn.execute(text("DELETE FROM project_workspaces WHERE workspace_id = 'default'"
+                          " AND project_id = 'default'"))
+        conn.execute(
+            text("INSERT INTO project_workspaces (project_id, workspace_id,"
+                 " is_workspace_default, enabled_at)"
+                 " SELECT :p, 'default', 1, :now WHERE NOT EXISTS (SELECT 1 FROM"
+                 " project_workspaces WHERE project_id = :p AND workspace_id = 'default')"),
+            {"p": TEST_PROJECT, "now": now},
+        )
+
+
+@pytest.fixture(autouse=True, scope="session")
+def test_business_project():
+    _seed_test_business_project(engine)
+
+
 @pytest.fixture(autouse=True)
 def clean_tables():
     yield
@@ -123,9 +166,12 @@ def clean_tables():
     # access cache dropped: the wiped `access_epoch` restarts at 0, so a snapshot
     # cached by the previous test would otherwise look current.
     _seed_default_projects(engine)
-    from app.services import access
+    _seed_test_business_project(engine)
+    from app.services import access, project_quotas
 
     access.reset_cache_for_tests()
+    # the budget gate's month-to-date spend cache is keyed by project id
+    project_quotas.reset_cache_for_tests()
 
 
 @pytest.fixture(autouse=True)

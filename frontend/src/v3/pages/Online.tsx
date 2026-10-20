@@ -19,6 +19,7 @@ import { attentionOf, configSignal, modeOf } from "./online/common";
 import { OnlineDetail } from "./online/Detail";
 import { OnlineEditor } from "./online/Editor";
 import { onlineHref, useOnlineAction } from "./online/actions";
+import { Select } from "../select";
 
 function OnlineList() {
   const { t } = useTranslation();
@@ -148,10 +149,10 @@ function OnlineList() {
           ]}
         />
         {agents.length > 1 && (
-          <select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v3.online.agent")}>
+          <Select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v3.online.agent")}>
             <option value="">{t("v3.online.anyAgent")}</option>
             {agents.map((a) => <option key={a} value={a}>{a}</option>)}
-          </select>
+          </Select>
         )}
         <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 280 }}>
           <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />

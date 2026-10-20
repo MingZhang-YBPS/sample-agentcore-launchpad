@@ -23,6 +23,7 @@ import { Btn, Chip, Dialog, Empty, Lamp, Notice, Panel, Skeleton, Stat } from ".
 import { CoverageMatrix } from "./charts";
 import { biasText } from "./common";
 import { ImportDialog } from "./golden/ImportDialog";
+import { Select } from "../../select";
 
 const SPLITS: GoldenSplit[] = ["dev", "regression", "holdout"];
 
@@ -120,10 +121,10 @@ export function GoldenIndex({ lineages, onOpen }: { lineages: { value: string; l
             </label>
             <label className="v3-field">
               <span>{t("v2.dlc.golden.forCriteria")}</span>
-              <select className="v3-select" value={lineage} onChange={(e) => setLineage(e.target.value)}>
+              <Select className="v3-select" value={lineage} onChange={(e) => setLineage(e.target.value)}>
                 <option value="">{t("v2.dlc.golden.pickCriteria")}</option>
                 {lineages.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
-              </select>
+              </Select>
               <small className="v3-hint">{t("v2.dlc.golden.forCriteriaHint")}</small>
             </label>
             <ErrorCallout error={failure} onDismiss={() => setFailure(null)} data-testid="v3-golden-create-error" />

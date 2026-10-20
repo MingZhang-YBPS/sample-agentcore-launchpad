@@ -1,6 +1,5 @@
 import type { ConsoleRole } from "../../../lib/api";
 import type {
-  GroupMembershipInput,
   ProjectMembershipInput,
   ProjectUser,
   UserCreateWithProjects,
@@ -25,7 +24,7 @@ export const MIN_PASSWORD_LENGTH = 8;
 export type ExpiryChoice = "default" | "days" | "never";
 export type PasswordChoice = "generate" | "set";
 
-/** One project (or project-group) row of a dialog: the target id and a role key. */
+/** One project row of a dialog: the target id and a role key. */
 export interface MembershipRow {
   id: string;
   role: string;
@@ -41,7 +40,6 @@ export interface CreateForm {
   expiry: ExpiryChoice;
   days: string;
   projects: MembershipRow[];
-  groups: MembershipRow[];
 }
 
 export function emptyCreateForm(): CreateForm {
@@ -55,7 +53,6 @@ export function emptyCreateForm(): CreateForm {
     expiry: "default",
     days: "30",
     projects: [],
-    groups: [],
   };
 }
 
@@ -68,13 +65,13 @@ export function isPlatformRole(role: string | null | undefined): boolean {
   return role === "admin" || role === "steward";
 }
 
-export type CreateErrors = Partial<Record<"username" | "email" | "password" | "days" | "projects" | "groups", string>>;
+export type CreateErrors = Partial<Record<"username" | "email" | "password" | "days" | "projects", string>>;
 
 /**
  * A membership list's error key, or null: every row names a target and a role,
  * and no target twice (the backend refuses both).
  */
-export function validateMemberships(rows: MembershipRow[], kind: "projects" | "groups"): string | null {
+export function validateMemberships(rows: MembershipRow[], kind: "projects"): string | null {
   if (rows.some((row) => !row.id || !row.role)) return `v3.users.memberships.err.${kind}Incomplete`;
   const ids = rows.map((row) => row.id);
   if (new Set(ids).size !== ids.length) return `v3.users.memberships.err.${kind}Duplicate`;
@@ -83,10 +80,6 @@ export function validateMemberships(rows: MembershipRow[], kind: "projects" | "g
 
 export function projectItems(rows: MembershipRow[]): ProjectMembershipInput[] {
   return rows.map((row) => ({ project_id: row.id, role_key: row.role }));
-}
-
-export function groupItems(rows: MembershipRow[]): GroupMembershipInput[] {
-  return rows.map((row) => ({ group_id: row.id, role_key: row.role }));
 }
 
 export function validateCreate(form: CreateForm, reservedName?: string | null): CreateErrors {
@@ -102,9 +95,7 @@ export function validateCreate(form: CreateForm, reservedName?: string | null): 
   }
   if (!isPlatformRole(form.role)) {
     const projects = validateMemberships(form.projects, "projects");
-    const groups = validateMemberships(form.groups, "groups");
     if (projects) errors.projects = projects;
-    if (groups) errors.groups = groups;
   }
   return errors;
 }
@@ -127,7 +118,6 @@ export function createBody(form: CreateForm): UserCreateWithProjects {
   if (form.expiry === "days") body.valid_days = Number(form.days);
   if (form.expiry === "never") body.never_expires = true;
   if (!admin && form.projects.length > 0) body.projects = projectItems(form.projects);
-  if (!admin && form.groups.length > 0) body.groups = groupItems(form.groups);
   return body;
 }
 
@@ -138,7 +128,6 @@ export interface ApproveForm {
   /** legacy workspace grants: `default` joins the default project as `inherit` */
   workspaces: string[];
   projects: MembershipRow[];
-  groups: MembershipRow[];
 }
 
 export function emptyApproveForm(user: Pick<ProjectUser, "role" | "workspaces">): ApproveForm {
@@ -146,29 +135,25 @@ export function emptyApproveForm(user: Pick<ProjectUser, "role" | "workspaces">)
     role: (user.role as string) === "operator" ? "operator" : "member",
     workspaces: user.workspaces.length > 0 ? user.workspaces : [DEFAULT_GRANT],
     projects: [],
-    groups: [],
   };
 }
 
-export function validateApprove(form: ApproveForm): Partial<Record<"projects" | "groups", string>> {
-  const errors: Partial<Record<"projects" | "groups", string>> = {};
+export function validateApprove(form: ApproveForm): Partial<Record<"projects", string>> {
+  const errors: Partial<Record<"projects", string>> = {};
   const projects = validateMemberships(form.projects, "projects");
-  const groups = validateMemberships(form.groups, "groups");
   if (projects) errors.projects = projects;
-  if (groups) errors.groups = groups;
   return errors;
 }
 
 /**
  * `PATCH /api/users/{id}` of an approval: active, the grants as before, and the
- * projects / groups when any were chosen. `role` only when it changes, so an
+ * projects when any were chosen. `role` only when it changes, so an
  * approval without choices is the same request as before projects.
  */
 export function approveBody(form: ApproveForm, currentRole: ConsoleRole | "operator"): UserMembershipPatch {
   const body: UserMembershipPatch = { status: "active", workspaces: [...new Set(form.workspaces)] };
   if (form.role !== currentRole) body.role = form.role;
   if (form.projects.length > 0) body.projects = projectItems(form.projects);
-  if (form.groups.length > 0) body.groups = groupItems(form.groups);
   return body;
 }
 
@@ -189,20 +174,11 @@ export function directProjectRows(user: Pick<ProjectUser, "projects">): Membersh
   return rows;
 }
 
-export function groupRows(user: Pick<ProjectUser, "groups">): MembershipRow[] {
-  return (user.groups ?? []).map((g) => ({ id: g.id, role: g.role }));
-}
-
-/** `group:<id>` → the group id; `direct` → null. */
-export function sourceGroup(source: string): string | null {
-  return source.startsWith("group:") ? source.slice("group:".length) : null;
-}
-
 /* ── list filters in the URL (projects §7.4) ─────────────────────────────── */
 
 const ROLES = ["admin", "steward", "operator", "member"] as const;
 
-/** `?status= &q= &role= &project= &group= &page=` → the list request. */
+/** `?status= &q= &role= &project= &page=` → the list request. */
 export function listFilterFrom(params: URLSearchParams, pageSize: number): UserListFilter & { page: number } {
   const status = params.get("status");
   const role = params.get("role");
@@ -212,7 +188,6 @@ export function listFilterFrom(params: URLSearchParams, pageSize: number): UserL
     status: isStatusFilter(status) ? status : "all",
     role: (ROLES as readonly string[]).includes(role ?? "") ? (role as UserListFilter["role"]) : undefined,
     project: params.get("project") || undefined,
-    group: params.get("group") || undefined,
     limit: pageSize,
     offset: (page - 1) * pageSize,
     page,

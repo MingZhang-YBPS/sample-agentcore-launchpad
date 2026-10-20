@@ -8,6 +8,7 @@ import { Reasoned } from "../../reason";
 import { Btn, Dialog, Notice } from "../../ui";
 import { suggestedRole } from "./forms";
 import { type Structure, useProjectRoleOptions } from "./structure";
+import { Select } from "../../select";
 
 /**
  * "Add to project…" of the user list (projects §7.6): the selected accounts get a
@@ -72,16 +73,16 @@ export function BulkAddDialog({
         <small className="v3-hint">{users.map((u) => u.username).join(", ")}</small>
         <label className="v3-field">
           <span>{t("v3.users.access.project")}</span>
-          <select className="v3-select" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          <Select className="v3-select" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
             {structure.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          </Select>
         </label>
         <label className="v3-field">
           <span>{t("v3.users.access.role")}</span>
           <Reasoned disabledReason={t("story.reason.pickProject")}>
-            <select className="v3-select" value={chosenRole} onChange={(e) => setRole(e.target.value)} disabled={!projectId}>
+            <Select className="v3-select" value={chosenRole} onChange={(e) => setRole(e.target.value)} disabled={!projectId}>
               {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-            </select>
+            </Select>
           </Reasoned>
         </label>
         <small className="v3-hint">{t("v3.users.bulk.hint")}</small>

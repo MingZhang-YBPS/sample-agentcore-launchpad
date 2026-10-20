@@ -280,6 +280,7 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 | [docs/architecture.md](docs/architecture.md) | Platform ↔ AgentCore mapping, pipeline, invoke chain ([中文](docs/architecture.zh-CN.md)) |
 | [docs/api.md](docs/api.md) | Public `/v1` API reference ([中文](docs/api.zh-CN.md)) |
 | [docs/agent-dlc-design.md](docs/agent-dlc-design.md) | **Agent-DLC** — criteria tables, golden sets, judge calibration, the release gate ([中文](docs/agent-dlc-design.zh-CN.md)); turning it on: [setup](docs/setup.md#agent-dlc-turning-the-gate-on--打开放行门) |
+| [docs/guided-console-design.md](docs/guided-console-design.md) | **Guided console** — a next step and link on every error, reasons on disabled buttons, term cards that name the steps a term is used in ([中文](docs/guided-console-design.zh-CN.md)) |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Verified gotchas and timings ([中文](docs/troubleshooting.zh-CN.md)) |
 | [docs/teardown.md](docs/teardown.md) | Demo resources vs shared infra cleanup ([中文](docs/teardown.zh-CN.md)) |
 | [docs/cross-account-workspaces.md](docs/cross-account-workspaces.md) | Managing a workspace in another AWS account: the spoke role template, StackSets, the trust boundary |

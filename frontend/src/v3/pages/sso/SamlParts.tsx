@@ -9,6 +9,7 @@ import { useToast } from "../../hooks";
 import { Btn, Chip, Lamp, Notice, Panel } from "../../ui";
 import { type ProviderDraft, daysLeft, type DraftProblem, samlTestRows } from "./model";
 import { CopyPlate } from "./parts";
+import { Select } from "../../select";
 
 /** A certificate's expiry as a chip: ok, due within 30 days, or expired. */
 export function CertExpiry({ notAfter, error }: { notAfter?: string; error?: string }) {
@@ -181,11 +182,11 @@ export function SamlConnection({ provider, draft, problems, set }: {
       </label>
       <label className="v3-field">
         <span>{t("v3.sso.saml.nameIdFormat")}</span>
-        <select className="v3-select mono" value={draft.saml_name_id_format}
+        <Select className="v3-select mono" value={draft.saml_name_id_format}
           onChange={(e) => set("saml_name_id_format", e.target.value)}>
           <option value="">{t("v3.sso.saml.nameIdAny")}</option>
           {NAMEID_FORMATS.map((f) => <option key={f} value={f}>{f.split(":").at(-1)}</option>)}
-        </select>
+        </Select>
       </label>
       <div className="v3-sso-toggles">
         {([

@@ -20,6 +20,7 @@ import { GoldenCurator, GoldenIndex } from "./standards/Golden";
 import { Release } from "./standards/Release";
 import { Scorecard } from "./standards/Scorecard";
 import { Audit, Compare, Watch } from "./standards/Watch";
+import { Select } from "../select";
 
 /**
  * 判据 — the Agent-DLC workbench in V3. Everything is scoped to one agent (a
@@ -92,11 +93,11 @@ export function V3Standards() {
         title={t("v3.standards.title")}
         sub={t("v3.standards.sub")}
         end={
-          <select className="v3-select" style={{ minWidth: 220 }} value={agentId ?? ""} aria-label={t("v2.dlc.pickAgent")}
+          <Select className="v3-select" style={{ minWidth: 220 }} value={agentId ?? ""} aria-label={t("v2.dlc.pickAgent")}
             onChange={(e) => setParam("agent", e.target.value || null)}>
             <option value="">{t("v2.dlc.pickAgent")}</option>
             {activeAgents.map((a) => <option key={a.id} value={a.id}>{a.display_name || a.name}</option>)}
-          </select>
+          </Select>
         }
       />
       <Filters value={view} onChange={go} options={VIEWS.map((v) => ({ value: v, label: t(`v2.dlc.view.${v}`) }))} />

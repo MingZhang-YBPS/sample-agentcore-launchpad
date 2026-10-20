@@ -16,6 +16,7 @@ import { Btn, Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton } from "../../
 import { TraceView } from "../observability/TraceView";
 import { AddToDataset } from "./AddToDataset";
 import { asRange } from "./common";
+import { Select } from "../../select";
 
 const PAGE = 50;
 
@@ -79,10 +80,10 @@ export function TracesTab() {
             { value: "ok", label: t("v2.traces.ok"), s: "ok", count: all.length - errors },
           ]}
         />
-        <select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v3.data.agent")}>
+        <Select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v3.data.agent")}>
           <option value="">{t("v3.data.allAgents")}</option>
           {agents.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
+        </Select>
         <Btn kind="ghost" onClick={() => setForce((n) => n + 1)} title={t("v3.data.refresh")}><RefreshCw size={14} /></Btn>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
           <div style={{ position: "relative", width: 260 }}>

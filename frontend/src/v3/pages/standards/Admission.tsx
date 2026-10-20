@@ -16,6 +16,7 @@ import { dlcApi } from "../../../lib/api";
 import { type AdmissionCandidate, type AdmissionQueue, CASE_TIERS, type CaseTier, type Redaction, type WritableSplit } from "../../../lib/dlc";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, Panel, type Signal, Skeleton, Stat } from "../../ui";
+import { Select } from "../../select";
 
 const STATUSES = ["new", "admitted", "rejected", "duplicate"] as const;
 
@@ -98,15 +99,15 @@ function AdmitDialog({ candidate, criteriaKeys, onClose, onDone }: { candidate: 
           <label className="v3-field">
             <span>{t("v2.dlc.admission.split")}</span>
             {/* the holdout is never offered: it is written only by seed */}
-            <select className="v3-select" value={split} onChange={(e) => setSplit(e.target.value as WritableSplit)}>
+            <Select className="v3-select" value={split} onChange={(e) => setSplit(e.target.value as WritableSplit)}>
               {(["dev", "regression"] as WritableSplit[]).map((s) => <option key={s} value={s}>{t(`v2.dlc.split.${s}`)}</option>)}
-            </select>
+            </Select>
           </label>
           <label className="v3-field">
             <span>{t("v2.dlc.golden.caseTier")}</span>
-            <select className="v3-select" value={caseTier} onChange={(e) => setCaseTier(e.target.value as CaseTier)}>
+            <Select className="v3-select" value={caseTier} onChange={(e) => setCaseTier(e.target.value as CaseTier)}>
               {CASE_TIERS.map((c) => <option key={c} value={c}>{t(`v2.dlc.caseTier.${c}`)}</option>)}
-            </select>
+            </Select>
           </label>
           <div className="v3-field">
             <span>{t("v2.dlc.admission.criteria")}</span>

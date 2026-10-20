@@ -18,12 +18,12 @@ built-in one first. Paths are spelled out (no router prefix) because `/api/admin
 sits beside `/api/users`.
 
 Projects (design projects §7.4–§7.6, §7.10): every account row carries its
-`projects` (direct and group-sourced, with role and sources) and `groups`; the list
-filters by `role`, `project` and `group`; `POST`/`PATCH` take `projects` /
-`groups` (full replacement on PATCH, like `workspaces`), so an approval places a
-pending account into projects in the same transaction; `GET /api/users/{id}/access`
-is that account's `/api/me/access`; `POST /api/users/bulk/projects` puts several
-accounts into one project. They write the same rows as `PUT /api/projects/{id}/members`.
+`projects` (with role and sources); the list filters by `role` and `project`;
+`POST`/`PATCH` take `projects` (full replacement on PATCH, like `workspaces`), so an
+approval places a pending account into projects in the same transaction;
+`GET /api/users/{id}/access` is that account's `/api/me/access`;
+`POST /api/users/bulk/projects` puts several accounts into one project. They write
+the same rows as `PUT /api/projects/{id}/members`.
 
 Stewards (design projects §11.4) — structure-only platform administrators — use these
 routes too (`access.require_structure`), minus the platform roles: only an
@@ -63,13 +63,6 @@ class ProjectMembershipIn(BaseModel):
     overrides: dict[str, StrictBool] | None = None
 
 
-class GroupMembershipIn(BaseModel):
-    """One project-group membership (built-in templates only)."""
-
-    group_id: str = Field(min_length=1, max_length=32)
-    role_key: str = Field(min_length=1, max_length=32)
-
-
 def _memberships(items: list[BaseModel] | None) -> list[dict[str, Any]] | None:
     # exclude_unset: an item without `overrides` keeps the existing row's
     return None if items is None else [item.model_dump(exclude_unset=True) for item in items]
@@ -92,10 +85,9 @@ class UserPatch(BaseModel):
     # the per-user shape. `PUT /api/workspaces/{id}/grants` is the workspace-side
     # bulk one; both write only `user_workspaces`.
     workspaces: list[str] | None = None
-    # Full replacement of the direct project / group memberships (null clears them;
-    # the default project's `inherit` rows keep following `workspaces`).
+    # Full replacement of the direct project memberships (null clears them; the
+    # default project's `inherit` rows keep following `workspaces`).
     projects: list[ProjectMembershipIn] | None = None
-    groups: list[GroupMembershipIn] | None = None
 
     @model_validator(mode="after")
     def _require_one_field(self) -> "UserPatch":
@@ -122,7 +114,6 @@ class UserCreate(BaseModel):
     expires_at: datetime | None = None
     never_expires: StrictBool = False
     projects: list[ProjectMembershipIn] | None = None
-    groups: list[GroupMembershipIn] | None = None
 
 
 class BulkProjectAdd(BaseModel):
@@ -163,7 +154,6 @@ def create_user(
         created_by=identity.username,
         settings=get_settings(),
         projects=_memberships(req.projects),
-        groups=_memberships(req.groups),
         actor=identity,
     )
     _audit(
@@ -188,10 +178,8 @@ def list_users(
     offset: int = Query(default=0, ge=0),
     role: str | None = Query(default=None, max_length=16),
     project: str | None = Query(default=None, max_length=32),
-    group: str | None = Query(default=None, max_length=32),
-    # the design's spellings (§7.10), same meaning
+    # the design's spelling (§7.10), same meaning
     project_id: str | None = Query(default=None, max_length=32),
-    group_id: str | None = Query(default=None, max_length=32),
     db: Session = Depends(get_db),
     _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
@@ -202,15 +190,14 @@ def list_users(
             status_code=422,
         )
     project_filter = (project or project_id or "").strip() or None
-    group_filter = (group or group_id or "").strip() or None
     page = users_service.list_users(
         db, q=q, status=status, limit=limit, offset=offset,
-        role=role or None, project_id=project_filter, group_id=group_filter,
+        role=role or None, project_id=project_filter,
     )
     settings = get_settings()
     builtin = None
-    # the built-in admin holds no membership, so a project / group filter leaves it out
-    pinned = role in (None, "", users_service.ROLE_ADMIN) and not (project_filter or group_filter)
+    # the built-in admin holds no membership, so a project filter leaves it out
+    pinned = role in (None, "", users_service.ROLE_ADMIN) and not project_filter
     if pinned and users_service.builtin_admin_enabled(settings):
         # Outside `items`/`total` (it has no row to page over): the console pins it
         # first when it matches the same search and state filter.
@@ -262,8 +249,6 @@ def update_user(
         )
     if "projects" in sent:
         sent["projects"] = _memberships(patch.projects)
-    if "groups" in sent:
-        sent["groups"] = _memberships(patch.groups)
     generated = users_service.apply_patch(db, user, sent, get_settings(), actor=identity)
     fields = sorted(sent)
     if "password" in sent:
@@ -274,10 +259,10 @@ def update_user(
         fields = [f for f in fields if f != "workspaces"] + [
             f"workspaces={','.join(sorted(set(sent['workspaces'] or []))) or '-'}"
         ]
-    for name, key in (("projects", "project_id"), ("groups", "group_id")):
-        if name in sent:
-            listed = ",".join(f"{i[key]}:{i['role_key']}" for i in sent[name] or []) or "-"
-            fields = [f for f in fields if f != name] + [f"{name}={listed}"]
+    if "projects" in sent:
+        listed = ",".join(f"{i['project_id']}:{i['role_key']}"
+                          for i in sent["projects"] or []) or "-"
+        fields = [f for f in fields if f != "projects"] + [f"projects={listed}"]
     _audit(db, identity, "user.update", f"{user.username} ({user.id}) {' '.join(fields)}")
     if role_change:
         # the semantic event beside `user.update role=…`, so the audit filter finds
@@ -325,7 +310,7 @@ def get_user(
     db: Session = Depends(get_db),
     _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
-    """The detail page's account: the list row's shape (grants, projects, groups)."""
+    """The detail page's account: the list row's shape (grants, projects)."""
     if user_id == admin_credential.BUILTIN_ADMIN_ID:
         settings = get_settings()
         if not users_service.builtin_admin_enabled(settings):

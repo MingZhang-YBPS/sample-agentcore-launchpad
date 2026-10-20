@@ -226,9 +226,11 @@ def test_the_actor_id_columns_are_declared_to_migrate():
 
 # ── P1A-mig: the projects upgrade (design §8.2-§8.4, §9.4-4) ─────────────────────
 
+# (the retired `project_groups` / `group_members` are no longer mapped, so no ledger
+# gets them created any more)
 PROJECT_TABLES = (
     "departments", "projects", "project_workspaces", "project_roles", "project_members",
-    "project_groups", "group_members", "access_epoch",
+    "access_epoch",
 )
 M1, M_ORPHAN, M_OLD = 101, 102, 103  # chat_messages ids are integers
 

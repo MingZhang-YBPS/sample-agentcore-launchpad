@@ -28,6 +28,7 @@ import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat, Track } from "../ui";
 import { Grants } from "./workspaces/Grants";
+import { Select } from "../select";
 
 const STATUS_SIGNAL: Record<WorkspaceBootstrapStatus, Signal> = { registered: "wait", bootstrapping: "info", ready: "ok", failed: "act" };
 const TIER_SIGNAL: Record<WorkspaceTier, Signal | undefined> = { dev: undefined, staging: "wait", prod: "act" };
@@ -420,10 +421,10 @@ function WorkspaceDetail({ workspaceId }: { workspaceId: string }) {
         <Panel signal={TIER_SIGNAL[row.tier ?? "dev"]}>
           <div className="v3-stat">
             <div className="label">{t("v2.workspaces.field.tier")}</div>
-            <select className="v3-select v3-wsp-tier" value={row.tier ?? "dev"} disabled={busy}
+            <Select className="v3-select v3-wsp-tier" value={row.tier ?? "dev"} disabled={busy}
               onChange={(e) => pickTier(e.target.value as WorkspaceTier)} aria-label={t("v2.workspaces.field.tier")}>
               {WORKSPACE_TIERS.map((tier) => <option key={tier} value={tier}>{t(`v2.workspaces.tier.${tier}`)}</option>)}
-            </select>
+            </Select>
             <div className="foot">{t(`v2.workspaces.tierHint.${row.tier ?? "dev"}`)}</div>
           </div>
         </Panel>

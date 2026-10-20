@@ -15,7 +15,7 @@ from app.schemas.agent import AgentSpec
 from app.services import agent_iam
 from app.services import resource_mapping as rm
 from app.services import storage_mounts as service
-from tests.conftest import client_error, ws_ctx
+from tests.conftest import TEST_PROJECT, client_error, ws_ctx
 from tests.test_project_scope import _project
 from tests.test_storage_catalog import EFS_AP, MT_SG, S3_AP, VPC, _allow, _facts, _register
 
@@ -80,7 +80,7 @@ def _check(storage_id):
         db.close()
 
 
-def _preflight(spec, project_id="default"):
+def _preflight(spec, project_id=TEST_PROJECT):
     db = SessionLocal()
     try:
         return service.preflight_spec(db, ws_ctx(), spec, project_id)
@@ -104,7 +104,7 @@ def _by_check(report):
 def test_a_reachable_mount_passes(aws):
     _profile()
     _register("datasets")
-    _allow("default", "datasets")
+    _allow(TEST_PROJECT, "datasets")
     _check("datasets")
     report = _preflight(_spec_dict({"storage_id": "datasets", "mode": "ro"}))
     checks = _by_check(report)
@@ -136,7 +136,7 @@ def test_each_blocking_check(aws, change, check):
         finally:
             db.close()
     _register("datasets")
-    _allow("default", "datasets")
+    _allow(TEST_PROJECT, "datasets")
     _check("datasets")
     report = _preflight(_spec_dict({"storage_id": "datasets"}))
     assert report["status"] == "blocked"
@@ -147,7 +147,7 @@ def test_an_ec2_read_failure_degrades_to_warnings_and_the_profile_azs(aws):
     _profile(check_results=[{"check": "subnets.azs", "severity": "ok",
                              "details": {"azs": ["usw2-az1", "usw2-az3"]}}])
     _register("datasets")
-    _allow("default", "datasets")
+    _allow(TEST_PROJECT, "datasets")
     _check("datasets")
     aws["ec2"] = client_error("UnauthorizedOperation")
     checks = _by_check(_preflight(_spec_dict({"storage_id": "datasets"})))
@@ -162,7 +162,7 @@ def test_mode_status_and_shared_state(aws):
     _profile()
     _register("state", max_mode="rw", data_class="shared_state")
     _register("ref", EFS_AP)
-    _allow("default", "state", "ref")
+    _allow(TEST_PROJECT, "state", "ref")
     _check("state")
     report = _preflight(_spec_dict({"storage_id": "ref", "mode": "rw"}))
     checks = _by_check(report)
@@ -183,7 +183,7 @@ def test_mode_status_and_shared_state(aws):
 
 def test_no_network_or_a_hidden_entry(aws):
     _register("datasets")
-    _allow("default", "datasets")
+    _allow(TEST_PROJECT, "datasets")
     report = _preflight(_spec_dict({"storage_id": "datasets"}, network=None))
     assert report["status"] == "blocked"
     assert report["results"][0]["check"] == "storage.network"
@@ -198,13 +198,13 @@ def test_assert_preflight_refuses_with_409(aws):
     aws["ec2"] = _ec2(egress=False)
     _profile()
     _register("datasets")
-    _allow("default", "datasets")
+    _allow(TEST_PROJECT, "datasets")
     _check("datasets")
     db = SessionLocal()
     try:
         with pytest.raises(AppError) as caught:
             service.assert_preflight(db, ws_ctx(), _spec_dict({"storage_id": "datasets"}),
-                                     "default")
+                                     TEST_PROJECT)
     finally:
         db.close()
     assert caught.value.code == "storage.preflight_failed" and caught.value.status_code == 409
@@ -224,7 +224,7 @@ def test_the_check_with_a_default_profile_runs_the_cross_checks(aws):
 def test_the_preflight_route(client, aws):
     _profile()
     _register("datasets")
-    _allow("default", "datasets")
+    _allow(TEST_PROJECT, "datasets")
     _check("datasets")
     res = client.post("/api/storage-mounts/preflight", json={
         "mounts": [{"storage_id": "datasets"}], "network_profile_id": "np-0123456789ab",
@@ -240,10 +240,10 @@ def test_the_preflight_route(client, aws):
 
 def test_normalize_stamps_the_catalog_entry_and_replaces_client_values():
     _register("datasets", max_mode="rw")
-    _allow("default", "datasets")
+    _allow(TEST_PROJECT, "datasets")
     db = SessionLocal()
     try:
-        stored = service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, "default", _spec_dict(
+        stored = service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT, _spec_dict(
             {"storage_id": "datasets", "mode": "rw", "kind": "efs", "access_point_arn": EFS_AP}))
     finally:
         db.close()
@@ -259,25 +259,26 @@ def test_normalize_stamps_the_catalog_entry_and_replaces_client_values():
 def test_normalize_refuses_hidden_blocked_and_too_wide_mounts():
     _register("datasets")
     _register("broken", EFS_AP)
-    _allow("default", "broken")
+    _allow(TEST_PROJECT, "broken")
     db = SessionLocal()
     try:
         with pytest.raises(NotFoundError):
-            service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, "default",
+            service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT,
                                            _spec_dict({"storage_id": "datasets"}))
-        _allow("default", "datasets", "broken")
+        _allow(TEST_PROJECT, "datasets", "broken")
         with pytest.raises(AppError) as wide:
-            service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, "default",
+            service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT,
                                            _spec_dict({"storage_id": "datasets", "mode": "rw"}))
         assert wide.value.code == "storage.mode_exceeds_max" and wide.value.status_code == 400
         db.query(StorageMount).filter_by(id="broken").one().status = "blocked"
         db.commit()
         with pytest.raises(AppError) as blocked:
-            service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, "default",
+            service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT,
                                            _spec_dict({"storage_id": "broken"}))
         assert blocked.value.code == "storage.blocked"
         plain = {"name": "x", "filesystem": {"s3_files": []}}
-        assert service.normalize_spec_storage(db, DEFAULT_WORKSPACE_ID, "default", plain) is plain
+        assert service.normalize_spec_storage(
+            db, DEFAULT_WORKSPACE_ID, TEST_PROJECT, plain) is plain
     finally:
         db.close()
 

@@ -70,6 +70,7 @@ import { CopyId } from "./CopyId";
 import { OnlineCostCard, RunCostCard } from "./CostCard";
 import { copyUrl, outcomeSignal, scoreSignal, taskSignal } from "./model";
 import { permReason } from "../../reasons";
+import { Select } from "../../select";
 
 const POLL_MS = 8000;
 const RESULTS_PAGE = 20;
@@ -996,7 +997,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             flush
             end={
               data.kind === "online" ? (
-                <select
+                <Select
                   className="v3-select"
                   style={{ width: 130, height: 28 }}
                   value={range}
@@ -1008,7 +1009,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
                       {rangeLabel(t, r)}
                     </option>
                   ))}
-                </select>
+                </Select>
               ) : undefined
             }
           >

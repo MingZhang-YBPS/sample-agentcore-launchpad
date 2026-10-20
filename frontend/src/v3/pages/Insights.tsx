@@ -14,6 +14,7 @@ import { useLoad } from "../hooks";
 import { Btn, Filters, Notice, PageHead } from "../ui";
 import { loadInsights, MAX_RUNS, SCORE_BANDS, type ScoreBand } from "./insights/data";
 import { ClustersPanel, EvaluatorBars, FeedbackPanel, ResultsPanel, SummaryStats } from "./insights/parts";
+import { Select as Dropdown } from "../select";
 
 function Select({ label, value, onChange, options }: {
   label: string;
@@ -25,10 +26,10 @@ function Select({ label, value, onChange, options }: {
   return (
     <label className="v3-ins-select">
       <span>{label}</span>
-      <select className="v3-select" value={value} onChange={(e) => onChange(e.target.value)}>
+      <Dropdown className="v3-select" value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{t("v2.common.all")}</option>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
+      </Dropdown>
     </label>
   );
 }

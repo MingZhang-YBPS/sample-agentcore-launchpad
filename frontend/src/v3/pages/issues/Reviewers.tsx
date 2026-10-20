@@ -11,6 +11,7 @@ import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Lamp, Notice, Panel, type Signal, Skeleton } from "../../ui";
 import { useAgents } from "./common";
+import { Select } from "../../select";
 
 const STATE_SIGNAL: Record<ShareLinkInfo["state"], Signal> = { active: "ok", expired: "wait", revoked: "off", disabled: "off" };
 const EXPIRY_CHOICES = ["7", "30", "90", "never"] as const;
@@ -59,9 +60,9 @@ export function Reviewers() {
     <div style={{ display: "grid", gap: 16 }}>
       <ErrorCallout error={failed.error} params={{ agent_id: agentId || undefined }} onDismiss={failed.clear} data-testid="v3-reviewers-error" />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <select className="v3-select v3-iss-select" value={agentId} onChange={(e) => setPicked(e.target.value)} aria-label={t("selfService.common.agent")}>
+        <Select className="v3-select v3-iss-select" value={agentId} onChange={(e) => setPicked(e.target.value)} aria-label={t("selfService.common.agent")}>
           {agents.map((a) => <option key={a.id} value={a.id}>{label(a.id)}</option>)}
-        </select>
+        </Select>
         <span style={{ color: "var(--v3-text-3)", fontSize: 13 }}>{t("selfService.reviewers.explain")}</span>
       </div>
 
@@ -75,12 +76,12 @@ export function Reviewers() {
         >
           <input className="v3-input" style={{ flex: "1 1 240px" }} maxLength={64} value={name}
             placeholder={t("selfService.reviewers.namePlaceholder")} aria-label={t("selfService.reviewers.name")} onChange={(e) => setName(e.target.value)} />
-          <select className="v3-select" style={{ width: 150 }} value={expiry} aria-label={t("selfService.reviewers.expiry")}
+          <Select className="v3-select" style={{ width: 150 }} value={expiry} aria-label={t("selfService.reviewers.expiry")}
             onChange={(e) => setExpiry(e.target.value as (typeof EXPIRY_CHOICES)[number])}>
             {EXPIRY_CHOICES.map((c) => (
               <option key={c} value={c}>{c === "never" ? t("selfService.reviewers.never") : t("selfService.reviewers.inDays", { count: Number(c) })}</option>
             ))}
-          </select>
+          </Select>
           <Btn kind="primary" type="submit" busy={busy} disabled={!agentId} disabledReason={t("story.reason.pickAgent")}><Link2 size={14} /> {t("selfService.reviewers.create")}</Btn>
         </form>
         {created && (

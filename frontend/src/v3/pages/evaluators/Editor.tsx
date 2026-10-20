@@ -28,6 +28,7 @@ import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
 import { Btn, Chip, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { LEVELS } from "./common";
+import { Select } from "../../select";
 
 // Same rules as V2's editor (and the backend behind both).
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
@@ -234,23 +235,23 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
           {draft.definition !== "derived" && (
             <label className="v3-field">
               <span>{t("v2.evaluators.colLevel")}</span>
-              <select className="v3-select" value={draft.level} onChange={(e) => set({ level: e.target.value as EvaluatorLevel })}>
+              <Select className="v3-select" value={draft.level} onChange={(e) => set({ level: e.target.value as EvaluatorLevel })}>
                 {LEVELS.map((l) => <option key={l} value={l}>{t(`v2.level.${l}`)}</option>)}
-              </select>
+              </Select>
               <small className="v3-hint">{t("v2.evaluators.levelHint")}</small>
             </label>
           )}
           {draft.definition !== "code" && (
             <label className="v3-field">
               <span>{t("v2.evaluators.model")}</span>
-              <select className="v3-select" value={judgeCustom ? CUSTOM_MODEL_OPTION : draft.model_id} onChange={(e) => {
+              <Select className="v3-select" value={judgeCustom ? CUSTOM_MODEL_OPTION : draft.model_id} onChange={(e) => {
                 judgeTouched.current = true;
                 setJudgeCustom(e.target.value === CUSTOM_MODEL_OPTION);
                 if (e.target.value !== CUSTOM_MODEL_OPTION) set({ model_id: e.target.value });
               }}>
                 {models.map((m) => <option key={m} value={m}>{m}</option>)}
                 <option value={CUSTOM_MODEL_OPTION}>{t("models.picker.custom")}</option>
-              </select>
+              </Select>
               {judgeCustom && (
                 <input className="v3-input mono" value={draft.model_id}
                   placeholder={t("models.picker.customPlaceholder", { example: defaultJudgeModel(modelDefaults) })}
@@ -263,10 +264,10 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
             <label className="v3-field">
               <span>{t("v2.evaluators.base")}</span>
               <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
-                <select className="v3-select" value={draft.base_evaluator_id} disabled={editing} onChange={(e) => set({ base_evaluator_id: e.target.value })}>
+                <Select className="v3-select" value={draft.base_evaluator_id} disabled={editing} onChange={(e) => set({ base_evaluator_id: e.target.value })}>
                   <option value="">{t("v3.evaluators.choose")}</option>
                   {bases.map((b) => <option key={b.id} value={b.id}>{`${evaluatorLabel(t, b.id)} · ${b.id}`}</option>)}
-                </select>
+                </Select>
               </Reasoned>
             </label>
           )}

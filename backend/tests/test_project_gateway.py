@@ -39,6 +39,7 @@ from app.services import (
     project_gateway,
 )
 from app.services import project_isolation as svc
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import _member_of, _project, app  # noqa: F401
 from tests.test_route_policy import (  # noqa: F401
     MEMBER_CREDS,
@@ -645,7 +646,7 @@ def test_target_routes_stay_admin_only_until_every_project_is_isolated(two_proje
 
 
 def test_target_routes_are_the_projects_once_cedar_is_per_project(two_projects):
-    for pid in ("alpha", "default"):
+    for pid in ("alpha", TEST_PROJECT):
         _set_mode(pid, svc.MODE_ISOLATED)
         _ready(pid)
     _own("t-alpha", "alpha")

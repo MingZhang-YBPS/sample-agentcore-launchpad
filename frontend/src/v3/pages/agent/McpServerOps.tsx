@@ -14,6 +14,7 @@ import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Notice, type Signal } from "../../ui";
+import { Select } from "../../select";
 
 const HEALTH_SIGNAL: Record<McpHealthStatus, Signal> = {
   healthy: "ok",
@@ -217,11 +218,11 @@ export function McpServerOpsView({
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <strong>{t("mcpReview.ops.cedar")}</strong>
-        <select className="v3-input" value={mode} onChange={(e) => onMode(e.target.value as Mode)} aria-label={t("mcpReview.ops.mode")}>
+        <Select className="v3-input" value={mode} onChange={(e) => onMode(e.target.value as Mode)} aria-label={t("mcpReview.ops.mode")}>
           <option value="">{t("mcpReview.ops.modeKeep")}</option>
           <option value="LOG_ONLY">LOG_ONLY</option>
           <option value="ENFORCE">ENFORCE</option>
-        </select>
+        </Select>
         <span style={{ flex: 1 }} />
         <Btn size="sm" kind="ghost" disabled={busy} onClick={onPreview}>
           {t("mcpReview.ops.preview")}

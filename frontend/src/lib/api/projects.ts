@@ -54,8 +54,8 @@ export interface ProjectSummary {
   id: string;
   name: string;
   description: string;
+  /** null: a legacy project (or `default`) not yet assigned to a department */
   department_id: string | null;
-  group_id: string | null;
   status: ProjectStatus;
   /** the platform's default project (cannot be archived or unbound) */
   is_default: boolean;
@@ -78,9 +78,12 @@ export interface ProjectDetail extends ProjectSummary {
   can_manage: boolean;
 }
 
+/** the list filter for the projects with no department */
+export const NO_DEPARTMENT = "_none";
+
 export interface ProjectListFilter {
+  /** a department id, or `NO_DEPARTMENT` */
   department_id?: string;
-  group_id?: string;
   status?: ProjectStatus;
   workspace_id?: string;
   q?: string;
@@ -91,8 +94,8 @@ export interface ProjectCreate {
   id: string;
   name: string;
   description?: string;
-  department_id?: string | null;
-  group_id?: string | null;
+  /** required: an existing, active department (422 `project.department_required`) */
+  department_id: string;
   /** at least one */
   workspaces: string[];
   /** users.id of the initial owners */
@@ -103,8 +106,8 @@ export interface ProjectCreate {
 export interface ProjectPatch {
   name?: string;
   description?: string;
-  department_id?: string | null;
-  group_id?: string | null;
+  /** may move to another department, never be cleared */
+  department_id?: string;
   settings?: ProjectSettings | null;
 }
 
@@ -130,7 +133,7 @@ export interface BindingsResult {
 /* members */
 
 export interface ProjectRoleSource {
-  /** `direct` or `group:<group_id>` */
+  /** `direct` (the only source since project groups were retired) */
   source: string;
   role_key: string;
 }
@@ -148,7 +151,6 @@ export interface ProjectMember {
     added_by: string | null;
     added_at: string | null;
   } | null;
-  group: { group_id: string; role_key: string } | null;
   sources: ProjectRoleSource[];
   /** an administrator holds every key anyway */
   bypass: boolean;
@@ -492,58 +494,72 @@ export const projectAuditApi = {
   },
 };
 
-/* ── quotas and budgets (projects §11.3) ─────────────────────────────────────── */
+/* ── quotas and the monthly budget (projects §11.3) ───────────────────────────── */
 
 export type QuotaKey =
   | "max_agents"
   | "max_api_keys"
   | "max_concurrent_eval_runs"
-  | "eval_run_max_usd"
-  | "eval_monthly_usd_cap"
-  | "monthly_cost_alert_usd"
+  | "monthly_budget_usd"
   | "v1_rate_per_minute";
 export const QUOTA_KEYS: readonly QuotaKey[] = [
   "max_agents",
   "max_api_keys",
   "max_concurrent_eval_runs",
-  "eval_run_max_usd",
-  "eval_monthly_usd_cap",
-  "monthly_cost_alert_usd",
+  "monthly_budget_usd",
   "v1_rate_per_minute",
 ];
-/** block → 409 on create · queue → waits for a slot · alert → notifies only · throttle → 429 */
-export type QuotaEnforcement = "block" | "queue" | "alert" | "throttle";
+/** block → 409 on create · queue → waits for a slot · budget → billable work 409 once spent · throttle → 429 */
+export type QuotaEnforcement = "block" | "queue" | "budget" | "throttle";
 
 export interface QuotaItem {
   key: QuotaKey;
   unit: "count" | "usd";
   enforcement: QuotaEnforcement;
-  /** what the project stored (null = unset) */
+  /** what a platform administrator stored (null = unset) */
   project_value: number | null;
-  /** the department's cap, which the project value may not exceed */
-  department_cap: number | null;
-  /** the smaller of the two: what is enforced (null = no limit) */
+  /** what is enforced (null = no limit) */
   limit: number | null;
-  /** current usage; null where there is none to show (a per-run cap, the /v1 window) */
+  /** current usage (the budget: month-to-date spend); null where there is none to show */
   used: number | null;
-  /** the budget alert's last state and when it measured the spend */
+  /** the budget's basis and its 100 % alert rule's last state */
+  basis?: "estimate" | "billing";
   state?: "ok" | "firing" | "unknown";
-  checked_at?: string | null;
   workspace_id?: string;
+}
+
+/** The monthly budget this UTC calendar month; resets on the 1st at 00:00 UTC. */
+export interface ProjectBudget {
+  project_id: string;
+  budget_usd: number;
+  /** month-to-date spend; null when it could not be measured */
+  spent_usd: number | null;
+  remaining_usd: number | null;
+  /** spent / budget (may exceed 1: spend figures lag, a small overshoot is possible) */
+  fraction: number | null;
+  exhausted: boolean;
+  month_start: string;
+  reset_at: string;
+  measured_at: string | null;
+  detail: string;
+  basis: "estimate" | "billing";
 }
 
 export interface ProjectQuotas {
   project_id: string;
   department_id: string | null;
   quotas: Partial<Record<QuotaKey, number>>;
-  department_caps: Partial<Record<QuotaKey, number>>;
   items: QuotaItem[];
+  /** null when the project has no monthly budget */
+  budget: ProjectBudget | null;
+  budget_basis: "estimate" | "billing";
   month_start: string;
+  reset_at: string;
 }
 
 export const projectQuotasApi = {
   get: (projectId: string) => getJson<ProjectQuotas>(projectPath(projectId, "quotas")),
-  /** partial: a key set to null clears it; omitted keys stay */
+  /** partial: a key set to null clears it; omitted keys stay (platform administrators only) */
   put: (projectId: string, quotas: Partial<Record<QuotaKey, number | null>>) =>
     sendJson<ProjectQuotas>(projectPath(projectId, "quotas"), "PUT", { quotas }),
 };

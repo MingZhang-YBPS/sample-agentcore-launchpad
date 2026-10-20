@@ -31,7 +31,5 @@ export function refusalText(t: TFunction, refusal: CostRefusal): string {
   const est = refusal.estimate;
   const figure = `${usd(est?.total_usd)}${est?.period === "day" ? ` ${t("v3.evalCost.slashDay")}` : ""}`;
   if (refusal.kind === "confirm") return t("v3.evalCost.refusedConfirm", { usd: figure });
-  // the project's quota binds an administrator too: name it, promise no override
-  const key = est?.max_source === "project" ? "v3.evalCost.refusedOverProject" : "v3.evalCost.refusedOver";
-  return t(key, { usd: figure, max: usd(est?.max_usd) });
+  return t("v3.evalCost.refusedOver", { usd: figure, max: usd(est?.max_usd) });
 }

@@ -45,7 +45,7 @@ type ControlProps = {
 };
 
 /**
- * A native control with a reason: `<Reasoned disabledReason={…}><select disabled={…} /></Reasoned>`.
+ * A select or input with a reason: `<Reasoned disabledReason={…}><Select disabled={…} /></Reasoned>`.
  * Only a disabled child shows the reason; an enabled one renders as it is.
  */
 export function Reasoned({

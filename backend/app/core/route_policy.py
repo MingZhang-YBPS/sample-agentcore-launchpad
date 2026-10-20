@@ -141,6 +141,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # granted, revocable per user); reads and invoke are plain member ----
     ("GET", "/api/agents"): MEMBER,
     ("POST", "/api/agents"): PERM_AGENT_DEPLOY,
+    # the create flow's project picker: server-filtered to the caller's eligible projects
+    ("GET", "/api/agents/eligible-projects"): MEMBER,
     ("GET", "/api/agents/discovery"): MEMBER,
     ("POST", "/api/agents/discovery/import"): PERM_AGENT_IMPORT,
     # BYOC artifact staging is one half of a deploy, so it carries deploy perms
@@ -861,7 +863,7 @@ PROJECT_ADMIN_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/projects"): MEMBER,  # admins: all; anyone else: their own
     ("POST", "/api/projects"): ADMIN,
     ("GET", "/api/projects/{project_id}"): MEMBER,
-    # name / department / group are admin-only inside the handler; an owner edits
+    # name / department are admin-only inside the handler; an owner edits
     # the description and the owner-editable settings
     ("PATCH", "/api/projects/{project_id}"): PPERM_PROJECT_MEMBERS,
     ("POST", "/api/projects/{project_id}/archive"): ADMIN,
@@ -1087,6 +1089,8 @@ def is_workspace_scoped(method: str, path_format: str) -> bool:
 PROJECT_EXEMPT: frozenset[tuple[str, str]] = frozenset(
     {
         ("DELETE", "/api/system-agents/{preset_key}"),
+        # lists projects across the workspace for the caller (agent-project picker)
+        ("GET", "/api/agents/eligible-projects"),
         ("GET", "/api/audit"),
         ("GET", "/api/costs"),
         ("GET", "/api/costs/month-to-date"),
@@ -1391,19 +1395,12 @@ PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset({
     ("PUT", "/api/network-profiles/projects/{project_id}"),
 })
 
-# ---- project groups and departments (design projects §7.7, §7.10, P1F-group) ----
-# Hub-global like the rest of project structure. Every write is structure, so ADMIN
+# ---- departments (design projects §7.10) ----
+# Hub-global like the rest of project structure (department → project → member; the
+# former project groups are retired). Every write is structure, so ADMIN
 # (`access.can_manage_structure`); the department list is MEMBER — its names label
 # the project switcher's groups (§2.7) and it grants no access.
 PROJECT_STRUCTURE_ROUTES: dict[tuple[str, str], str] = {
-    ("GET", "/api/project-groups"): ADMIN,
-    ("POST", "/api/project-groups"): ADMIN,
-    ("GET", "/api/project-groups/{group_id}"): ADMIN,
-    ("PATCH", "/api/project-groups/{group_id}"): ADMIN,
-    ("DELETE", "/api/project-groups/{group_id}"): ADMIN,  # archives
-    ("POST", "/api/project-groups/{group_id}/unarchive"): ADMIN,
-    ("PUT", "/api/project-groups/{group_id}/members"): ADMIN,
-    ("PUT", "/api/project-groups/{group_id}/projects"): ADMIN,
     ("GET", "/api/departments"): MEMBER,
     ("POST", "/api/departments"): ADMIN,
     ("PATCH", "/api/departments/{department_id}"): ADMIN,
@@ -1412,7 +1409,7 @@ PROJECT_STRUCTURE_ROUTES: dict[tuple[str, str], str] = {
     ("DELETE", "/api/departments/{department_id}"): ADMIN,  # only while unused
 }
 ROUTE_POLICY.update(PROJECT_STRUCTURE_ROUTES)
-HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/project-groups", "/api/departments")
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/departments")
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_STRUCTURE_ROUTES)
 
 # ---- P1F-users: user management with projects (design projects §7.4–§7.6, §7.10) ----
@@ -1585,13 +1582,11 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_LIFECYCLE_ROUTES)
 # passes when the route's target belongs to a department they administer. The value
 # says where the target's department is read:
 #   project     — the path's `{project_id}` (projects.department_id)
-#   group       — the path's `{group_id}` (project_groups.department_id)
 #   department  — the path's `{department_id}`
 #   query       — the `department_id` query parameter (a list filtered to it)
 #   any         — the body names it: the caller administers some department, and the
-#                 handler checks the body's (`services/projects.create_project`,
-#                 `services/project_groups.create_group`)
-# Another department's project or group answers 404 (its existence is not theirs to
+#                 handler checks the body's (`services/projects.create_project`)
+# Another department's project answers 404 (its existence is not theirs to
 # learn); a caller who administers no department meets the route's own entry.
 # Appointing department administrators and opening workspaces stay ADMIN.
 DEPARTMENT_ADMIN_ROUTES: dict[tuple[str, str], str] = {
@@ -1605,14 +1600,6 @@ DEPARTMENT_ADMIN_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/projects/{project_id}/candidates"): "project",
     ("PUT", "/api/projects/{project_id}/roles/{role_key}"): "project",
     ("DELETE", "/api/projects/{project_id}/roles/{role_key}"): "project",
-    ("GET", "/api/project-groups"): "query",
-    ("POST", "/api/project-groups"): "any",
-    ("GET", "/api/project-groups/{group_id}"): "group",
-    ("PATCH", "/api/project-groups/{group_id}"): "group",
-    ("DELETE", "/api/project-groups/{group_id}"): "group",
-    ("POST", "/api/project-groups/{group_id}/unarchive"): "group",
-    ("PUT", "/api/project-groups/{group_id}/members"): "group",
-    ("PUT", "/api/project-groups/{group_id}/projects"): "group",  # the department's projects
     ("POST", "/api/departments/{department_id}/invitations"): "department",
 }
 DEPARTMENT_ROUTES: dict[tuple[str, str], str] = {
@@ -1630,7 +1617,7 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(DEPARTMENT_ROUTES)
 def department_admin_passes(request: Request, path_format: str) -> bool:
     """The `dadmin` overlay: True when a department administrator may call this route
     on this target; False to fall through to the route's own entry; 404 for another
-    department's project or group."""
+    department's project."""
     lookup = "GET" if request.method == "HEAD" else request.method
     where = DEPARTMENT_ADMIN_ROUTES.get((lookup, path_format))
     if where is None:
@@ -1657,11 +1644,6 @@ def department_admin_passes(request: Request, path_format: str) -> bool:
                     {"p": str(params.get("project_id") or "")},
                 ).first()
                 target, status = (found[0], found[1]) if found else (None, None)
-            elif where == "group":
-                target = db.execute(
-                    text("SELECT department_id FROM project_groups WHERE id = :g"),
-                    {"g": str(params.get("group_id") or "")},
-                ).scalar()
             elif where == "department":
                 target = str(params.get("department_id") or "")
             elif where == "query":
@@ -1686,10 +1668,6 @@ def department_admin_passes(request: Request, path_format: str) -> bool:
         pid = str(params.get("project_id") or "")
         raise NotFoundError("project.not_found", f"project '{pid}' not found",
                             {"project_id": pid})
-    if where == "group":
-        gid = str(params.get("group_id") or "")
-        raise NotFoundError("group.not_found", f"project group '{gid}' not found",
-                            {"group_id": gid})
     return False
 
 # ---- storage catalog (design storage-mounts §4, §5, §9, SM-2) ----
@@ -1740,21 +1718,19 @@ HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/system")
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SYSTEM_UPDATE_ROUTES)
 
 
-# ---- project quotas and budgets (projects design §11.3, G11-quota) ----
+# ---- project quotas and the monthly budget (projects design §11.3, G11-quota) ----
 # Hub-global under /api/projects like the rest of project administration. The read
-# (usage against limits) is every member's — a non-member gets 404 in the handler; the
-# project's department administrator sees it too. Setting quotas is an administrator's,
-# or the project's department administrator's through the `dadmin` overlay (another
-# department's project 404), never above the department's caps (in the handler).
+# (usage against limits, the budget's month-to-date spend, remaining and reset date)
+# is every member's — a non-member gets 404 in the handler; the project's department
+# administrator sees it too. Setting quotas and the budget is a platform
+# administrator's only: deliberately NO `dadmin` overlay (a department administrator
+# meets plain ADMIN and is refused), and the handler checks again.
 PROJECT_QUOTA_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/projects/{project_id}/quotas"): MEMBER,
     ("PUT", "/api/projects/{project_id}/quotas"): ADMIN,
 }
 ROUTE_POLICY.update(PROJECT_QUOTA_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_QUOTA_ROUTES)
-DEPARTMENT_ADMIN_ROUTES.update({
-    ("PUT", "/api/projects/{project_id}/quotas"): "project",
-})
 
 
 # ---- steward: the structure-only platform administrator (projects design §11.4,
@@ -1762,7 +1738,7 @@ DEPARTMENT_ADMIN_ROUTES.update({
 # Every `ADMIN` route is one of two kinds, and a steward (`users.role = steward`:
 # `access.can_manage_structure` True, `access.has_data_bypass` False) passes only the
 # first:
-#   ADMIN       structure — accounts, departments, projects, groups, bindings,
+#   ADMIN       structure — accounts, departments, projects, bindings,
 #               workspaces (with bootstrap), network / storage catalogs, platform
 #               settings and content;
 #   ADMIN_DATA  data — anything that shows or moves a project's business data
@@ -1812,7 +1788,7 @@ _STRUCTURE_ROUTES = (
     ("DELETE", "/api/users/{user_id}"),
     ("GET", "/api/users/{user_id}/access"),
     ("POST", "/api/users/{user_id}/sessions/revoke"),
-    # departments and groups (§7.7, §11.1)
+    # departments (§7.10, §11.1)
     ("POST", "/api/departments"),
     ("PATCH", "/api/departments/{department_id}"),
     ("DELETE", "/api/departments/{department_id}"),
@@ -1823,14 +1799,6 @@ _STRUCTURE_ROUTES = (
     ("GET", "/api/departments/{department_id}/workspaces"),
     ("PUT", "/api/departments/{department_id}/workspaces"),
     ("POST", "/api/departments/{department_id}/invitations"),
-    ("GET", "/api/project-groups"),
-    ("POST", "/api/project-groups"),
-    ("GET", "/api/project-groups/{group_id}"),
-    ("PATCH", "/api/project-groups/{group_id}"),
-    ("DELETE", "/api/project-groups/{group_id}"),
-    ("POST", "/api/project-groups/{group_id}/unarchive"),
-    ("PUT", "/api/project-groups/{group_id}/members"),
-    ("PUT", "/api/project-groups/{group_id}/projects"),
     # projects: create, bind, archive, isolation and provisioning, lifecycle status
     ("POST", "/api/projects"),
     ("POST", "/api/projects/{project_id}/archive"),
@@ -2141,8 +2109,9 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(SHARE_NOTICE_ROUTES)
 # account's Billing settings: data, a steward does not. The billing view is cost
 # detail like `/api/costs`: administrators, data. A project's custom cost tags are
 # its owner's (`pperm:project.members`, like its other owner settings; the department
-# administrator through `dadmin`); its budget's basis qualifies the budget quota and is
-# set by the same people as `PUT .../quotas` (structure). Hub-global under
+# administrator through `dadmin`); its budget's basis qualifies the monthly budget and
+# is set by the same people as `PUT .../quotas` — platform administrators only, no
+# `dadmin` overlay (structure). Hub-global under
 # `/api/projects`: a non-member 404s.
 COST_TAG_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/cost-tags"): ADMIN,
@@ -2165,7 +2134,6 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | {
 }
 DEPARTMENT_ADMIN_ROUTES.update({
     ("PUT", "/api/projects/{project_id}/cost-tags"): "project",
-    ("PUT", "/api/projects/{project_id}/budget-basis"): "project",
 })
 ADMIN_SPLIT.update({
     ("GET", "/api/cost-tags"): ADMIN,

@@ -2165,6 +2165,17 @@ namespaces / search / 抽取任务返回 `memory.actor_not_found`，共享的 `d
 名字唯一性仍是工作区级：S3 键、ECR tag、网关目标与注册记录都用 Agent 名，所以同一工作区的两个项目不能
 有同名 Agent。`agent.name_exists` 只在调用者能看到占用者时才给出它。
 
+**新 Agent 必须归属业务项目。** 每条非系统的创建路径——`POST /api/agents`、Harness → Runtime 转换、
+发现导入、架构助手批准、会创建目标 Agent 的晋级——都经过 `services/agent_project.py`：项目取请求体的
+`project_id`（同时发送 `X-Project` 时两者必须一致，否则 `422 agent.project_mismatch`），否则取请求所在项目；
+该项目必须是调用者可达、绑定到该工作区、`active`、不是工作区 `default` 项目且有 `department_id` 的项目，
+调用者还要在其中持有该路由的权限键。拒绝均为 `422`：`agent.project_required` / `agent.project_not_found`
+（不存在与不可达同码）/ `agent.project_default_not_allowed` / `agent.project_archived` /
+`agent.project_no_department`，下一步指向项目页。`Agent` 设置了 `__project_no_default_stamp__`，所以
+`before_flush` 不会再把一个新的非系统 Agent 静默归入 `default` 项目（抛 `ProjectStampError`）；系统预置仍是
+平台行（`project_id` 为 NULL），已在 `default` 中的 Agent 保持不变。V3 创建表单的“所属项目”选择器读取
+`GET /api/agents/eligible-projects`，它在服务端只列出调用者可以创建 Agent 的业务项目。
+
 ### 请求：路由策略与 `X-Project`
 
 `ROUTE_POLICY`（`app/core/route_policy.py`）为每条路由分类。除 `public` / `member` / `admin` /

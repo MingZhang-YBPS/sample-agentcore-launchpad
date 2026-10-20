@@ -523,7 +523,8 @@ def _empty_import_result() -> dict[str, list[dict[str, Any]]]:
 
 
 def import_runtimes(
-    control: Any, db: Session, runtime_ids: list[str], *, workspace_id: str
+    control: Any, db: Session, runtime_ids: list[str], *, workspace_id: str,
+    project_id: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Import selected Runtimes as externally-owned ledger rows (idempotent).
 
@@ -587,7 +588,9 @@ def import_runtimes(
         )
         if existing is None:
             existing = Agent(
-                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery"
+                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery",
+                # the validated business project (services/agent_project); None = stamp
+                project_id=project_id,
             )
             db.add(existing)
         existing.name = display_name
@@ -610,7 +613,8 @@ def import_runtimes(
 
 
 def import_harnesses(
-    control: Any, db: Session, harness_ids: list[str], *, workspace_id: str
+    control: Any, db: Session, harness_ids: list[str], *, workspace_id: str,
+    project_id: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Import managed Harnesses as externally-owned ledger rows (idempotent).
 
@@ -672,7 +676,9 @@ def import_harnesses(
         )
         if existing is None:
             existing = Agent(
-                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery"
+                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery",
+                # the validated business project (services/agent_project); None = stamp
+                project_id=project_id,
             )
             db.add(existing)
         existing.name = display_name

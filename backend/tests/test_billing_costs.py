@@ -108,8 +108,9 @@ def test_routes_are_classified():
     assert ROUTE_POLICY[("GET", "/api/projects/{project_id}/cost-tags")] == "member"
     assert ROUTE_POLICY[("PUT", "/api/projects/{project_id}/cost-tags")] == (
         "pperm:project.members")
-    assert DEPARTMENT_ADMIN_ROUTES[("PUT", "/api/projects/{project_id}/budget-basis")] == (
-        "project")
+    # the basis is set like the budget itself: platform administrators only
+    assert ROUTE_POLICY[("PUT", "/api/projects/{project_id}/budget-basis")] == "admin"
+    assert ("PUT", "/api/projects/{project_id}/budget-basis") not in DEPARTMENT_ADMIN_ROUTES
     assert ("PUT", "/api/projects/{project_id}/cost-tags") in WORKSPACE_EXEMPT
 
 
@@ -397,7 +398,7 @@ def test_budget_basis_api_and_quotas_view(world):
     assert res.json()["budget_basis"] == "billing"
     view = world.dev.get("/api/projects/alpha/quotas").json()
     assert view["budget_basis"] == "billing"
-    item = next(i for i in view["items"] if i["key"] == "monthly_cost_alert_usd")
+    item = next(i for i in view["items"] if i["key"] == "monthly_budget_usd")
     assert item["basis"] == "billing"
     world.admin.put("/api/projects/alpha/budget-basis", json={"basis": "estimate"})
     db = SessionLocal()

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.assistant import purge as assistant_purge
+from app.core import billing_policy
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import owned_get, project_context, visible_in_current_project
@@ -401,6 +402,10 @@ def runtime_canary_action(
     reason = canary_service.stage_not_ready_reason(row, req.action)
     if reason:
         raise AppError("canary.stage_not_ready", reason, status_code=409)
+    # the project's monthly budget, for the actions that spend (core/billing_policy.py);
+    # verdict / cleanup and the other wind-down actions are never refused
+    billing_policy.gate_action(getattr(row, "project_id", None), req.action,
+                               billing_policy.CANARY_BILLABLE_ACTIONS)
 
     if req.action == "setup":
         canary_service.assert_setup_available(row.id)

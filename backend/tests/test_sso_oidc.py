@@ -20,7 +20,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.main import create_app
 from app.models.ledger import AuditEvent, User
-from app.models.projects import GroupMember, Project, ProjectGroup, ProjectMember
+from app.models.projects import Project, ProjectMember
 from app.models.sso import ConsoleIdentityProvider, SsoLoginState
 from app.services import sso_oidc
 from app.services import users as users_service
@@ -392,17 +392,17 @@ class TestMappings:
         try:
             db.add(Project(id="alpha", name="Alpha", status="active"))
             db.add(Project(id="beta", name="Beta", status="active"))
-            db.add(ProjectGroup(id="g1", name="Group one"))
+            db.add(Project(id="gamma", name="Gamma", status="active"))
             db.commit()
         finally:
             db.close()
         _provider(mappings=[
             {"group": "ops", "kind": "role", "target_id": "", "role_key": "operator"},
             {"group": "dev", "kind": "project", "target_id": "alpha", "role_key": "developer"},
-            {"group": "dev", "kind": "group", "target_id": "g1", "role_key": "viewer"},
+            {"group": "dev", "kind": "project", "target_id": "gamma", "role_key": "viewer"},
         ])
 
-    def test_groups_map_to_role_projects_and_groups_each_login(self, gated, idp):
+    def test_groups_map_to_role_and_projects_each_login(self, gated, idp):
         self._seed()
         with TestClient(gated, client=("127.0.0.1", 4321)) as client:
             before = _epoch()
@@ -413,7 +413,7 @@ class TestMappings:
             db = SessionLocal()
             try:
                 assert db.get(ProjectMember, ("alpha", user.id)).role_key == "developer"
-                assert db.get(GroupMember, ("g1", user.id)).role_key == "viewer"
+                assert db.get(ProjectMember, ("gamma", user.id)).role_key == "viewer"
                 # an administrator's own membership in another project
                 db.add(ProjectMember(project_id="beta", user_id=user.id, role_key="viewer"))
                 db.commit()
@@ -426,7 +426,7 @@ class TestMappings:
             db = SessionLocal()
             try:
                 assert db.get(ProjectMember, ("alpha", user.id)) is None
-                assert db.get(GroupMember, ("g1", user.id)) is None
+                assert db.get(ProjectMember, ("gamma", user.id)) is None
                 assert db.get(ProjectMember, ("beta", user.id)) is not None
             finally:
                 db.close()
@@ -521,6 +521,10 @@ class TestAdministration:
         bad_role = admin.put("/api/admin/sso/providers/kc/mappings", json={"mappings": [
             {"group": "dev", "kind": "role", "role_key": "root"}]})
         assert bad_role.status_code == 400
+        # project groups are retired: an IdP group maps onto a project + role only
+        retired = admin.put("/api/admin/sso/providers/kc/mappings", json={"mappings": [
+            {"group": "dev", "kind": "group", "target_id": "g1", "role_key": "viewer"}]})
+        assert (retired.status_code, retired.json()["code"]) == (400, "sso.invalid_mappings")
         good = admin.put("/api/admin/sso/providers/kc/mappings", json={"mappings": [
             {"group": "dev", "kind": "project", "target_id": "default", "role_key": "viewer"}]})
         assert good.status_code == 200, good.text

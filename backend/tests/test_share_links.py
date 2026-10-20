@@ -21,6 +21,7 @@ from app.core.route_policy import (
 from app.main import create_app
 from app.models.ledger import Agent, ChatMessage, ChatSession, ShareLink, Workspace
 from app.services import share_links
+from tests.test_environments import bind_test_project
 
 ADMIN_CREDS = {"username": "operator", "password": "s3cret-pass"}
 
@@ -331,6 +332,8 @@ def test_the_link_row_names_the_workspace_not_the_header(client, seen):
     db = SessionLocal()
     db.add(Workspace(id="lab", name="lab", account_id="222233334444", region="us-east-2",
                      bootstrap_status="ready", resources={"artifacts_bucket": "lab-bucket"}))
+    db.flush()
+    bind_test_project(db, "lab")
     db.commit()
     db.close()
     lab_agent = make_agent(workspace_id="lab", name="lab-agent")
@@ -359,6 +362,8 @@ def test_a_link_cannot_be_pointed_at_another_workspaces_agent(client):
     db = SessionLocal()
     db.add(Workspace(id="lab", name="lab", account_id="222233334444", region="us-east-2",
                      bootstrap_status="ready"))
+    db.flush()
+    bind_test_project(db, "lab")
     db.commit()
     db.close()
     lab_agent = make_agent(workspace_id="lab")

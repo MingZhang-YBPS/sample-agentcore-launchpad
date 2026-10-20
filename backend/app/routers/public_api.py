@@ -32,7 +32,7 @@ from app.routers.apikeys import hash_key
 from app.schemas.agent import display_name_of
 from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.schemas.strands_builder import PROMPT_VARIABLE_RE
-from app.services import agent_access, visibility
+from app.services import agent_access, project_quotas, visibility
 from app.services import api_keys as api_keys_service
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
@@ -225,6 +225,9 @@ def v1_invoke_stream(
 ) -> StreamingResponse:
     agent = _active_agent(db, key, agent_id)
     refuse_assistant_session(agent, req.session_id)  # 404 before the stream opens
+    # the project's monthly budget: a plain 409 before the stream opens (the stream
+    # itself would end in an `error` event, services/chat.chat_stream)
+    project_quotas.assert_agent_budget(agent)
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )

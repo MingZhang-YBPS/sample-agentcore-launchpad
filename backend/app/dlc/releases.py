@@ -459,7 +459,7 @@ def start_evaluation(
     cost_svc.assert_allowed(estimate, confirmed=confirm_cost, is_admin=is_admin)
     from app.services import release_gates, storage_dlc
 
-    # the agent's project's evaluation quotas: per-run limit and monthly cap (§11.3)
+    # the agent's project's monthly budget (§11.3): a used-up budget refuses the run
     release_gates.assert_eval_budget(db, agent.project_id, estimate)
 
     writes = storage_dlc.require_write_confirmation(

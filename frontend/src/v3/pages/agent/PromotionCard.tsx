@@ -8,6 +8,7 @@ import type { AgentInfo } from "../../../lib/api";
 import { ago } from "../../format";
 import { useToast } from "../../hooks";
 import { Btn, Chip, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
+import { Select } from "../../select";
 
 /**
  * T20/T21 — freeze this publish as a bundle (idempotent), share it as a template,
@@ -83,11 +84,11 @@ export function PromotionCard({ agent, currentWorkspaceId }: { agent: AgentInfo;
           <div style={{ display: "grid", gap: 12 }}>
             <label className="v3-field">
               <span>{t("v3.agent.promotion.target")}</span>
-              <select className="v3-input" value={rel.target} onChange={(e) => rel.setTarget(e.target.value)}>
+              <Select className="v3-input" value={rel.target} onChange={(e) => rel.setTarget(e.target.value)}>
                 {rel.targets.map((w) => (
                   <option key={w.id} value={w.id}>{`${w.name} · ${w.id}${w.tier && w.tier !== "dev" ? ` (${w.tier})` : ""}`}</option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label className="v3-field">
               <span>{t("v3.agent.promotion.changeNote")}</span>

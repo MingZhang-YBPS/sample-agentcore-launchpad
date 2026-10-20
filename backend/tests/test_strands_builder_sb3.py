@@ -34,6 +34,7 @@ from app.templates.strands_agent import base_requirements, render_main_py
 from app.templates.strands_agent.builder import custom_tool_files, journal_root
 from tests import strands_builder_sb2_snapshots as sb2_snap
 from tests import strands_builder_sb3_snapshots as sb3_snap
+from tests.conftest import TEST_PROJECT
 from tests.strands_builder_snapshots import OLD_SPECS, dump, render
 from tests.test_project_scope import _login, _member_of, _project, _user, app  # noqa: F401
 
@@ -42,7 +43,7 @@ BASE = {"name": "sb3-agent", "method": "zip_runtime", "system_prompt": "Be brief
         "model_id": CLAUDE}
 REGION = "us-east-1"
 SB3_NAMES = ("custom_tools", "sandbox_tools", "code_interpreter_id")
-DEFAULT = {"X-Project": "default"}
+DEFAULT = {"X-Project": TEST_PROJECT}
 
 CLEAN = '''from strands import tool
 
@@ -241,7 +242,7 @@ def test_any_change_is_a_new_hash():
 # ── the ledger gate ──────────────────────────────────────────────────────────────
 
 
-def _gate(spec, *, project="default", allowed=(), interpreter=None):
+def _gate(spec, *, project=TEST_PROJECT, allowed=(), interpreter=None):
     db = SessionLocal()
     try:
         with project_context(project):
@@ -255,7 +256,7 @@ def _gate(spec, *, project="default", allowed=(), interpreter=None):
         db.close()
 
 
-def _approve(spec_tool, project="default"):
+def _approve(spec_tool, project=TEST_PROJECT):
     db = SessionLocal()
     try:
         with project_context(project):
@@ -300,9 +301,9 @@ def test_revoking_answers_404_outside_its_project():
     try:
         with pytest.raises(NotFoundError):
             svc.revoke(db, "alpha", tool.hash())
-        svc.revoke(db, "default", tool.hash())
+        svc.revoke(db, TEST_PROJECT, tool.hash())
         db.commit()
-        assert svc.approvals(db, "default") == {}
+        assert svc.approvals(db, TEST_PROJECT) == {}
     finally:
         db.close()
 
@@ -321,7 +322,7 @@ def test_sandbox_tools_need_the_workspace_setting_and_get_its_interpreter():
     assert "'team-ci-AbC123'" in render_main_py(gated)
 
 
-def _agent_row(spec: AgentSpec, project="default") -> str:
+def _agent_row(spec: AgentSpec, project=TEST_PROJECT) -> str:
     db = SessionLocal()
     try:
         with project_context(project):
@@ -339,7 +340,7 @@ def test_the_generate_stage_gates_and_stamps():
     agent_id = _agent_row(risky)
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             row = db.get(Agent, agent_id)
             with pytest.raises(AppError, match="approval"):
                 zip_runtime._gate_custom_tools(row, AgentSpec(**row.spec))
@@ -427,7 +428,7 @@ def test_the_sandbox_setting_route(client):
 
 
 def test_a_member_cannot_approve_or_open_the_sandbox(app):  # noqa: F811
-    _member_of("default", _user("dev", grant=False), "developer")
+    _member_of(TEST_PROJECT, _user("dev", grant=False), "developer")
     dev = _login(app, "dev")
     body = {"name": "disk_usage", "code": RISKY}
     assert dev.post("/api/custom-tools/check", json=body, headers=DEFAULT).status_code == 200

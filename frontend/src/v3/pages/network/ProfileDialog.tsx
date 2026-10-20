@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { errorMessage } from "../../../lib/api";
 import { type ProfileForm, validateProfile } from "../../../lib/api/networkProfiles";
 import { Btn, Dialog, Notice } from "../../ui";
+import { Select } from "../../select";
 
 /**
  * Create / edit a network profile: name, VPC, subnets (2-8, two AZs), security groups
@@ -81,15 +82,15 @@ export function ProfileDialog({
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <label className="v3-field">
             <span>{t("v3.network.col.purpose")}</span>
-            <select className="v3-select" value={form.purpose} onChange={(e) => set("purpose", e.target.value as ProfileForm["purpose"])}>
+            <Select className="v3-select" value={form.purpose} onChange={(e) => set("purpose", e.target.value as ProfileForm["purpose"])}>
               {(["agents", "tools", "both"] as const).map((v) => <option key={v} value={v}>{t(`v3.network.purpose.${v}`)}</option>)}
-            </select>
+            </Select>
           </label>
           <label className="v3-field">
             <span>{t("v3.network.form.internet")}</span>
-            <select className="v3-select" value={form.internet} onChange={(e) => set("internet", e.target.value as ProfileForm["internet"])}>
+            <Select className="v3-select" value={form.internet} onChange={(e) => set("internet", e.target.value as ProfileForm["internet"])}>
               {(["none", "nat"] as const).map((v) => <option key={v} value={v}>{t(`v3.network.internet.${v}`)}</option>)}
-            </select>
+            </Select>
           </label>
         </div>
         {field("reachable", t("v3.network.form.reachable"),

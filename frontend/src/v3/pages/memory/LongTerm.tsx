@@ -10,6 +10,7 @@ import { ago } from "../../format";
 import { Reasoned } from "../../reason";
 import { Btn, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { LoadMore, SourceBadge } from "./common";
+import { Select } from "../../select";
 
 const TOP_K = [3, 5, 10, 20];
 
@@ -134,14 +135,14 @@ export function LongTerm({
       <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-memory-longterm-error" />
       <Panel>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <select className="v3-select" style={{ width: 280 }} value={actorId ?? ""} aria-label={t("v3.memory.actor")}
+          <Select className="v3-select" style={{ width: 280 }} value={actorId ?? ""} aria-label={t("v3.memory.actor")}
             onChange={(e) => onSelectActor(e.target.value || null)}>
             <option value="">{t("v3.memory.pickActor")}</option>
             {actors.items.map((a) => <option key={a.actor_id} value={a.actor_id}>{actorText(t, a)}</option>)}
-          </select>
+          </Select>
           {actors.token && <Btn size="sm" kind="ghost" disabled={actors.loading} onClick={actors.loadMore}>{t("v3.memory.moreActors")}</Btn>}
           <Reasoned disabledReason={t("story.reason.pickActor")}>
-            <select className="v3-select" style={{ width: 300 }} value={strategyId ?? ""} disabled={!actorId} aria-label={t("v3.memory.strategy")}
+            <Select className="v3-select" style={{ width: 300 }} value={strategyId ?? ""} disabled={!actorId} aria-label={t("v3.memory.strategy")}
               onChange={(e) => onSelectStrategy(e.target.value || null)}>
               <option value="">{t("v3.memory.pickStrategy")}</option>
               {/* a placeholder in the MIDDLE of the path cannot be resolved from an actor alone */}
@@ -150,7 +151,7 @@ export function LongTerm({
                   {`${n.strategy_name ?? n.template}${n.resolvable ? (n.prefix ? ` — ${t("v3.memory.allSessions")}` : "") : ` — ${t("v3.memory.unresolvable")}`}`}
                 </option>
               ))}
-            </select>
+            </Select>
           </Reasoned>
           {selected && <span className="mono v3-mem-muted" style={{ fontSize: 12 }} title={selected.template}>{selected.namespace}{selected.prefix ? "/…" : ""}</span>}
           <span style={{ marginLeft: "auto" }}><Btn size="sm" kind="ghost" disabled={!usable}
@@ -171,9 +172,9 @@ export function LongTerm({
                 placeholder={t("v3.memory.searchPlaceholder")} aria-label={t("v3.memory.searchPlaceholder")} />
             </Reasoned>
           </div>
-          <select className="v3-select" style={{ width: 110 }} value={topK} onChange={(e) => setTopK(Number(e.target.value))} aria-label={t("v3.memory.topK")}>
+          <Select className="v3-select" style={{ width: 110 }} value={topK} onChange={(e) => setTopK(Number(e.target.value))} aria-label={t("v3.memory.topK")}>
             {TOP_K.map((k) => <option key={k} value={k}>{t("v3.memory.topKValue", { k })}</option>)}
-          </select>
+          </Select>
           <Btn kind="primary" type="submit" busy={searching} disabled={!actorId || !query.trim()}
             disabledReason={!actorId ? t("story.reason.pickActor") : t("story.reason.typeQuery")}>{t("v3.memory.search")}</Btn>
           {isSearch && <Btn kind="ghost" onClick={() => setResults(null)}>{t("v3.memory.backToList")}</Btn>}

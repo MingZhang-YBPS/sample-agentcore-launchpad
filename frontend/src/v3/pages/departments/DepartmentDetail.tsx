@@ -4,12 +4,13 @@ import { useTranslation } from "react-i18next";
 
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, type ConsoleUser } from "../../../lib/api";
-import { type Department, departmentsApi } from "../../../lib/api/project-groups";
+import { type Department, departmentsApi } from "../../../lib/api/departments";
 import { usersApi } from "../../../lib/api/users";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Dialog, Empty, Filters, Notice, Skeleton } from "../../ui";
 import { type SettingsErrors, settingsForm, settingsPatch, unopened } from "./model";
+import { Select } from "../../select";
 
 type Tab = "admins" | "workspaces" | "settings";
 
@@ -157,10 +158,10 @@ function WorkspacesTab({ dept }: { dept: Department }) {
       <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
         <label className="v3-field" style={{ flex: 1 }}>
           <span>{t("v3.departments.workspaces.open")}</span>
-          <select className="v3-select" value={pick} onChange={(e) => setPick(e.target.value)}>
+          <Select className="v3-select" value={pick} onChange={(e) => setPick(e.target.value)}>
             <option value="">{t("v3.departments.workspaces.choose")}</option>
             {choices.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.id})</option>)}
-          </select>
+          </Select>
         </label>
         <Btn kind="primary" busy={busy} disabled={!pick} disabledReason={t("story.reason.pickWorkspace")}
           onClick={() => void put({ add: [pick] }, "v3.departments.workspaces.opened", choices.find((w) => w.id === pick)?.name ?? pick)}>

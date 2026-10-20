@@ -22,6 +22,7 @@ import { ago, pct } from "../format";
 import { calibrateUrl } from "./standards/calibrationLink";
 import { dlcText } from "./standards/common";
 import { EstimateCostCard } from "./tasks/CostCard";
+import { Select } from "../select";
 
 const ROW_SIGNAL: Record<GateRow["verdict"], Signal> = {
   PASS: "ok",
@@ -260,10 +261,10 @@ export function V3Gate() {
         title={report ? t(`v3.gate.headline.${report.verdict}`) : pending ? t("v3.gate.headline.waiting") : t("v3.gate.headline.none")}
         sub={t("v3.gate.sub")}
         end={
-          <select className="v3-select" style={{ width: 260 }} value={agentId}
+          <Select className="v3-select" style={{ width: 260 }} value={agentId}
             onChange={(e) => setParams({ agent: e.target.value })} aria-label={t("v3.chat.agent")}>
             {active.map((a) => <option key={a.id} value={a.id}>{a.display_name || a.name}</option>)}
-          </select>
+          </Select>
         }
       />
 

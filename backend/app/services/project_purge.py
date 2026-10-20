@@ -612,7 +612,6 @@ def _stage_ledger(db: Session, job: Job, project_id: str) -> None:
 def _stage_finalize(db: Session, job: Job, row: Project) -> None:
     payload = job.payload or {}
     row.status = STATUS_DELETED
-    row.group_id = None
     row.updated_at = _now()
     state = lifecycle(row)
     deletion = dict(state.pop("deletion", None) or {})

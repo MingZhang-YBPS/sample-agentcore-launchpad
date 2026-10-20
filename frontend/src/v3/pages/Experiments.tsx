@@ -19,6 +19,7 @@ import { ago } from "../format";
 import { useLoad } from "../hooks";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { canarySignal, experimentSignal } from "./experiments/signal";
+import { Select } from "../select";
 
 type Mode = "configuration" | "canary";
 // same cadence as V2: the list follows runs that move on their own
@@ -123,10 +124,10 @@ function ExperimentBoard({ experiments, loading, error, reload }: {
             { value: "off", label: t("v2.experiments.status.cleaned"), s: "off", count: count("off") },
           ]}
         />
-        <select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v3.experiments.agent")}>
+        <Select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v3.experiments.agent")}>
           <option value="">{t("v3.experiments.allAgents")}</option>
           {agents.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
+        </Select>
         <div className="v3-exp-search">
           <Search size={14} aria-hidden="true" />
           <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("v3.experiments.search")} aria-label={t("v3.experiments.search")} />
@@ -253,10 +254,10 @@ function CanaryBoard({ canaries, loading, error, reload }: {
             { value: "off", label: t("v2.canary.status.cleaned"), s: "off", count: count("off") },
           ]}
         />
-        <select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v3.experiments.agent")}>
+        <Select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => setAgent(e.target.value)} aria-label={t("v3.experiments.agent")}>
           <option value="">{t("v3.experiments.allAgents")}</option>
           {agents.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
+        </Select>
         <div className="v3-exp-search">
           <Search size={14} aria-hidden="true" />
           <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("v3.experiments.search")} aria-label={t("v3.experiments.search")} />

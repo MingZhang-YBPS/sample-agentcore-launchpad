@@ -15,6 +15,7 @@ import { KeyPicker } from "./KeyPicker";
 import { useRoleLabel } from "./labels";
 import { keySlug, roleKeyError, sodRefusal } from "./model";
 import type { ProjectAbilities } from "./ProjectDetail";
+import { Select } from "../../select";
 
 /** §6.3 "Roles": the built-in templates (read-only) and this project's custom roles (§3.3). */
 export function RolesTab({
@@ -247,10 +248,10 @@ function RoleDialog({
         </label>
         <label className="v3-field">
           <span>{t("v3.projects.roles.basedOn")}</span>
-          <select className="v3-input" value={basedOn} onChange={(e) => pickTemplate(e.target.value)}>
+          <Select className="v3-input" value={basedOn} onChange={(e) => pickTemplate(e.target.value)}>
             <option value="">—</option>
             {roles.templates.map((r) => <option key={r.key} value={r.key}>{roleLabel(r.key)}</option>)}
-          </select>
+          </Select>
           <small className="v3-hint">{t("v3.projects.roles.basedOnHint")}</small>
         </label>
         <KeyPicker projectKeys={roles.project_keys} agentKeys={roles.agent_keys} value={keys} onChange={setKeys}

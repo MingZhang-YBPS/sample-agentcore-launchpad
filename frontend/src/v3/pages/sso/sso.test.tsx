@@ -174,7 +174,7 @@ describe("rendering", () => {
       <MappingRow
         row={{ group: "/dev", kind: "project", target_id: "alpha", role_key: "developer" }}
         index={0}
-        targets={{ projects: [{ id: "alpha", name: "Alpha" }], groups: [], roleTemplates: ["developer", "viewer"] }}
+        targets={{ projects: [{ id: "alpha", name: "Alpha" }], roleTemplates: ["developer", "viewer"] }}
         onChange={() => undefined}
         onRemove={() => undefined}
       />,

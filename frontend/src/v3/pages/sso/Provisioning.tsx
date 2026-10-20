@@ -10,6 +10,7 @@ import { useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
 import { Btn, Chip, Confirm, Lamp, Notice, Panel } from "../../ui";
 import { CopyPlate } from "./parts";
+import { Select } from "../../select";
 
 /**
  * SCIM provisioning for one provider (sso §2.4): the base URL, the bearer token —
@@ -105,10 +106,10 @@ export function ScimPanel({ provider, onScim, subject, onSubject }: {
           </div>
           <label className="v3-field v3-sso-claim">
             <span>{t("v3.sso.scim.subject")}</span>
-            <select className="v3-select mono" value={subject} onChange={(e) => onSubject(e.target.value as ScimBlock["subject"])}>
+            <Select className="v3-select mono" value={subject} onChange={(e) => onSubject(e.target.value as ScimBlock["subject"])}>
               <option value="userName">userName</option>
               <option value="externalId">externalId</option>
-            </select>
+            </Select>
           </label>
           <small className="v3-hint">{t("v3.sso.scim.subjectHint")}</small>
         </div>

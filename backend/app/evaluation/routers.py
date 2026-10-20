@@ -1767,8 +1767,7 @@ def create_run(
             cost_estimate, confirmed=req.confirm_cost,
             is_admin=require_identity(request).role == "admin",
         )
-    # the project's evaluation quotas (projects §11.3): the per-run limit against the
-    # estimate, and the monthly cap — which applies to an unpriced run too
+    # the project's monthly budget (projects §11.3): a used-up budget refuses the run
     from app.services import release_gates
 
     release_gates.assert_eval_budget(db, current_project(), cost_estimate)

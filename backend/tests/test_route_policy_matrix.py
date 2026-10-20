@@ -12,9 +12,10 @@ The expectation is derived from the entry's role string and the principal's fact
 so a new route is covered the moment it is classified. No HTTP, no handler, no AWS:
 one test per principal walks every route (~500 dependency calls on the test ledger).
 
-Ledger: workspace ``default`` holds two active projects, ``default`` (the workspace
-default) and ``alpha``; the ``single`` layout leaves only ``default``, which is where
-``infra`` falls back to the project's own key instead of admin-only.
+Ledger: workspace ``default`` holds two active projects, the suite's business project
+``proj-test`` (the workspace default, conftest ``TEST_PROJECT``) and ``alpha``; the
+``single`` layout leaves only ``proj-test``, which is where ``infra`` falls back to the
+project's own key instead of admin-only.
 """
 
 from dataclasses import dataclass, field
@@ -43,6 +44,7 @@ from app.models.ledger import User
 from app.routers import auth
 from app.routers.auth import Identity, granted_permissions
 from app.services import access
+from tests.conftest import TEST_PROJECT
 
 PATH_PROJECT = "alpha"  # what `{project_id}` names in a hub-global project route
 _PROBE = "route-policy-probe"
@@ -89,7 +91,7 @@ def _member(db, pid: str, uid: str, role: str) -> None:
 
 
 def _seed(layout: str) -> dict[str, Principal]:
-    """The ledger and the principals of one layout (`shared`: default + alpha)."""
+    """The ledger and the principals of one layout (`shared`: proj-test + alpha)."""
     db = SessionLocal()
     try:
         if layout == "shared":
@@ -104,9 +106,9 @@ def _seed(layout: str) -> dict[str, Principal]:
         # the default project's compatibility member: workspace grant + inherit row
         db.execute(text("INSERT INTO user_workspaces (user_id, workspace_id, created_at)"
                         " VALUES ('u-inherit', 'default', :n)"), {"n": _NOW})
-        _member(db, "default", "u-inherit", access.INHERIT_ROLE)
+        _member(db, TEST_PROJECT, "u-inherit", access.INHERIT_ROLE)
         if layout == "shared":
-            # reach `default` through alpha's binding alone (design D-6), no grant
+            # reach the workspace through alpha's binding alone (design D-6), no grant
             _member(db, PATH_PROJECT, "u-dev", "developer")
             _member(db, PATH_PROJECT, "u-viewer", "viewer")
             _member(db, PATH_PROJECT, "u-owner", "project_owner")
@@ -123,8 +125,8 @@ def _seed(layout: str) -> dict[str, Principal]:
         Principal("registered_admin", Identity(
             username="u-admin", role="admin", user_id="u-admin",
             permissions=granted_permissions(None, "admin"))),
-        Principal("inherit_member", _member_identity("u-inherit"), {"default": inherit},
-                  reaches_workspace=True, fallback_project="default"),
+        Principal("inherit_member", _member_identity("u-inherit"), {TEST_PROJECT: inherit},
+                  reaches_workspace=True, fallback_project=TEST_PROJECT),
         Principal("no_project", _member_identity("u-none")),
     ]
     if layout == "shared":
@@ -141,10 +143,10 @@ def _seed(layout: str) -> dict[str, Principal]:
             # addressing a project of the workspace they are not a member of
             Principal("developer_a_sends_default", _member_identity("u-dev"), dev,
                       reaches_workspace=True, fallback_project=PATH_PROJECT,
-                      header="default"),
+                      header=TEST_PROJECT),
             Principal("inherit_member_sends_alpha", _member_identity("u-inherit"),
-                      {"default": inherit}, reaches_workspace=True,
-                      fallback_project="default", header=PATH_PROJECT),
+                      {TEST_PROJECT: inherit}, reaches_workspace=True,
+                      fallback_project=TEST_PROJECT, header=PATH_PROJECT),
         ]
     return {p.name: p for p in principals}
 

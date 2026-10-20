@@ -28,7 +28,7 @@ from app.services import network_enforcement as enforcement
 from app.services import network_profiles as service
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
-from tests.conftest import client_error, ws_ctx
+from tests.conftest import TEST_PROJECT, client_error, ws_ctx
 from tests.test_network_profile_check import BODY, SG, SUBNETS, FakeEc2, _vpc
 from tests.test_project_scope import (
     _login,
@@ -58,7 +58,7 @@ def ec2(monkeypatch):
     pipeline.set_preflight_ec2(previous)
 
 
-def _profile(name: str = "core-vpc", *, status: str = "ok", project: str | None = "default",
+def _profile(name: str = "core-vpc", *, status: str = "ok", project: str | None = TEST_PROJECT,
              workspace: str = DEFAULT_WORKSPACE_ID) -> str:
     db = SessionLocal()
     try:
@@ -471,7 +471,7 @@ def test_network_route_hides_another_projects_agent(app):  # noqa: F811
             db.add(row)
             db.commit()
             alpha_agent = row.id
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             row = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="default-net",
                         status="active", method="harness", spec={"name": "default-net"})
             db.add(row)

@@ -8,16 +8,16 @@ import { useFailure } from "../../failure";
 import { useToast } from "../../hooks";
 import { Btn, Panel } from "../../ui";
 import { blankMapping, mappingProblems } from "./model";
+import { Select } from "../../select";
 
 export interface MappingTargets {
   projects: { id: string; name: string }[];
-  groups: { id: string; name: string }[];
   roleTemplates: string[];
 }
 
-const KINDS: readonly SsoMappingKind[] = ["role", "project", "group"];
+const KINDS: readonly SsoMappingKind[] = ["role", "project"];
 
-/** One rule: `IdP group  →  global role | project + role | project group + role`. */
+/** One rule: `IdP group  →  global role | project + role`. */
 export function MappingRow({ row, index, targets, onChange, onRemove }: {
   row: SsoMapping;
   index: number;
@@ -28,7 +28,7 @@ export function MappingRow({ row, index, targets, onChange, onRemove }: {
   const { t } = useTranslation();
   const problems = mappingProblems(row);
   const roles = row.kind === "role" ? [...SSO_ROLES] : targets.roleTemplates;
-  const options = row.kind === "project" ? targets.projects : row.kind === "group" ? targets.groups : [];
+  const options = row.kind === "project" ? targets.projects : [];
   return (
     <li className="v3-sso-map" data-kind={row.kind} data-testid={`sso-mapping-${index}`}>
       <span className="idx mono" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
@@ -55,7 +55,7 @@ export function MappingRow({ row, index, targets, onChange, onRemove }: {
         ))}
       </div>
       {row.kind !== "role" ? (
-        <select
+        <Select
           className="v3-select"
           value={row.target_id}
           aria-label={t(`v3.sso.mapping.kinds.${row.kind}`)}
@@ -67,9 +67,9 @@ export function MappingRow({ row, index, targets, onChange, onRemove }: {
           {row.target_id && !options.some((o) => o.id === row.target_id) && (
             <option value={row.target_id}>{row.target_id}</option>
           )}
-        </select>
+        </Select>
       ) : <span className="v3-sso-map-gap" aria-hidden="true" />}
-      <select
+      <Select
         className="v3-select"
         value={row.role_key}
         aria-label={t("v3.sso.mapping.role")}
@@ -81,7 +81,7 @@ export function MappingRow({ row, index, targets, onChange, onRemove }: {
           </option>
         ))}
         {!roles.includes(row.role_key) && <option value={row.role_key}>{row.role_key}</option>}
-      </select>
+      </Select>
       <button type="button" className="v3-btn ghost sm" onClick={onRemove} aria-label={t("v3.sso.mapping.remove")} title={t("v3.sso.mapping.remove")}>
         <X size={13} aria-hidden="true" />
       </button>

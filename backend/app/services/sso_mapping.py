@@ -10,8 +10,10 @@ console account and its access:
   `existing_only` refuses a subject that has no account yet. The email must pass the
   provider's domain list, else the console's registration rule.
 * **the mappings** (`[{group, kind, target_id, role_key}]`, in order) compute a
-  global role, project memberships (a role template or custom role) and project-group
-  memberships, re-applied at every login (D-3). Only what a mapping produced — rows in
+  global role and project memberships (a role template or custom role), re-applied
+  at every login (D-3). (The retired `group` kind — a project group — was rewritten
+  into `project` mappings by `core/db.flatten_project_groups`; one still stored would
+  be ignored.) Only what a mapping produced — rows in
   `sso_memberships`, the design's `source = idp:<id>` — is updated or removed; a
   membership an administrator added by hand is left alone, and so is a role or a
   membership role an administrator changed (manual wins; a role conflict is
@@ -45,9 +47,8 @@ from app.core.db import DEFAULT_WORKSPACE_ID
 from app.core.errors import AppError
 from app.models.ledger import User, UserWorkspace
 from app.models.platform_settings import PlatformSetting
-from app.models.projects import GroupMember, Project, ProjectGroup, ProjectMember
+from app.models.projects import Project, ProjectMember
 from app.models.sso import (
-    MEMBERSHIP_GROUP,
     MEMBERSHIP_PROJECT,
     MEMBERSHIP_ROLE,
     POLICY_EXISTING_ONLY,
@@ -60,7 +61,7 @@ from app.services import users as users_service
 
 logger = logging.getLogger(__name__)
 
-MAPPING_KINDS = (MEMBERSHIP_ROLE, MEMBERSHIP_PROJECT, MEMBERSHIP_GROUP)
+MAPPING_KINDS = (MEMBERSHIP_ROLE, MEMBERSHIP_PROJECT)
 MAX_MAPPINGS = 200
 
 
@@ -298,7 +299,7 @@ def validate_mappings(db: Session, value: Any) -> list[dict[str, Any]]:
                                f"role must be one of {', '.join(users_service.ROLES)}",
                                {"group": group})
             target = ""
-        elif kind == MEMBERSHIP_PROJECT:
+        else:  # a project and one of its roles: a direct membership
             project = db.get(Project, target) if target else None
             if project is None:
                 raise AppError("project.not_found", f"project '{target}' not found",
@@ -307,14 +308,6 @@ def validate_mappings(db: Session, value: Any) -> list[dict[str, Any]]:
                 raise AppError("project.role_unknown",
                                f"'{role_key}' is not a role of project '{target}'",
                                {"role_key": role_key, "project_id": target})
-        else:
-            if (db.get(ProjectGroup, target) if target else None) is None:
-                raise AppError("group.not_found", f"project group '{target}' not found",
-                               {"group_id": target}, status_code=404)
-            if role_key not in ROLE_TEMPLATES:
-                raise AppError("group.role_unknown",
-                               f"'{role_key}' is not a built-in role (groups take templates)",
-                               {"role_key": role_key, "group_id": target})
         items.append({"group": group, "kind": kind, "target_id": target, "role_key": role_key})
     return items
 
@@ -325,12 +318,11 @@ def _group_matches(mapping_group: str, groups: set[str]) -> bool:
 
 
 def compute(row: ConsoleIdentityProvider, groups: list[str]) -> dict[str, Any]:
-    """`{role, projects: {id: role_key}, groups: {id: role_key}}` from the mappings
-    the caller's groups match; the first match wins for each target."""
+    """`{role, projects: {id: role_key}}` from the mappings the caller's groups match;
+    the first match wins for each target."""
     held = set(groups)
     role: str | None = None
     projects: dict[str, str] = {}
-    project_groups: dict[str, str] = {}
     for item in row.mappings or []:
         if not _group_matches(str(item.get("group", "")), held):
             continue
@@ -339,10 +331,8 @@ def compute(row: ConsoleIdentityProvider, groups: list[str]) -> dict[str, Any]:
             role = role_key
         elif kind == MEMBERSHIP_PROJECT and target:
             projects.setdefault(target, role_key)
-        elif kind == MEMBERSHIP_GROUP and target:
-            project_groups.setdefault(target, role_key)
     default = row.default_role if row.default_role in users_service.ROLES else "member"
-    return {"role": role or default, "projects": projects, "groups": project_groups}
+    return {"role": role or default, "projects": projects}
 
 
 def _records(db: Session, idp_id: str, user_id: str, kind: str) -> dict[str, SsoMembership]:
@@ -365,15 +355,14 @@ def apply(
 
     wanted = compute(row, groups)
     actor = SsoActor(username=f"sso:{row.id}"[:64])
-    changes: dict[str, Any] = {"role": None, "projects": [], "groups": [], "conflict": None}
+    changes: dict[str, Any] = {"role": None, "projects": [], "conflict": None}
     changes["conflict"] = _apply_role(db, row, user, wanted["role"], actor, changes,
                                       created=created)
     if user.role not in users_service.PLATFORM_ROLES:
         # administrators reach every project by role and stewards none (§11.4): neither
         # holds membership rows, so a mapping writes none for them
         _apply_projects(db, row, user, wanted["projects"], actor, changes)
-        _apply_groups(db, row, user, wanted["groups"], actor, changes)
-    if changes["role"] or changes["projects"] or changes["groups"]:
+    if changes["role"] or changes["projects"]:
         bump_epoch(db)
     db.commit()
     db.refresh(user)
@@ -476,58 +465,6 @@ def _apply_projects(
                            row.id, project_id, user.id, err.code)
             continue
         changes["projects"].append(f"-{project_id}")
-
-
-def _apply_groups(
-    db: Session, row: ConsoleIdentityProvider, user: User, wanted: dict[str, str],
-    actor: SsoActor, changes: dict[str, Any],
-) -> None:
-    from app.services.audit import record_structure_event
-
-    records = _records(db, row.id, user.id, MEMBERSHIP_GROUP)
-
-    def journal(action: str, target: str) -> None:
-        record_structure_event(db=db, actor=actor.username, action=action, target=target,
-                               actor_user_id=None)
-
-    for group_id, role_key in sorted(wanted.items()):
-        group = db.get(ProjectGroup, group_id)
-        if group is None or group.archived_at is not None:
-            continue
-        existing = db.get(GroupMember, (group_id, user.id))
-        record = records.get(group_id)
-        if existing is not None and (record is None or existing.role_key != record.role_key):
-            if record is not None:
-                db.delete(record)
-            continue
-        if existing is None:
-            db.add(GroupMember(group_id=group_id, user_id=user.id, role_key=role_key,
-                               added_by=None))
-            journal("group.members.add",
-                    f"group:{group_id} user:{user.username} role:{role_key}")
-        elif existing.role_key != role_key:
-            existing.role_key = role_key
-            journal("group.members.update",
-                    f"group:{group_id} user:{user.username} role:{role_key}")
-        else:
-            continue
-        if record is None:
-            db.add(SsoMembership(idp_id=row.id, user_id=user.id, kind=MEMBERSHIP_GROUP,
-                                 target_id=group_id, role_key=role_key))
-        else:
-            record.role_key = role_key
-        changes["groups"].append(f"+{group_id}:{role_key}")
-    for group_id, record in sorted(records.items()):
-        if group_id in wanted:
-            continue
-        existing = db.get(GroupMember, (group_id, user.id))
-        db.delete(record)
-        if existing is None or existing.role_key != record.role_key:
-            continue
-        db.delete(existing)
-        journal("group.members.remove", f"group:{group_id} user:{user.username}")
-        changes["groups"].append(f"-{group_id}")
-    db.flush()
 
 
 def account_sso(db: Session, user: User) -> dict[str, Any] | None:

@@ -12,6 +12,7 @@ import app.deployer.harness  # noqa: F401 — registers the harness deploy metho
 import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
 from app.assistant.evaluation_assets import resume_operations as resume_evaluation_assets
 from app.assistant.service import clear_stale_turn_claims
+from app.core.billing_policy import enforce_budget
 from app.core.config import get_settings
 from app.core.db import init_db
 from app.core.errors import register_error_handlers
@@ -68,7 +69,6 @@ from app.routers.network_profiles import router as network_profiles_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
 from app.routers.project_audit import router as project_audit_router
-from app.routers.project_groups import router as project_groups_router
 from app.routers.project_isolation import router as project_isolation_router
 from app.routers.project_quotas import router as project_quotas_router
 from app.routers.projects import me_router as my_access_router
@@ -197,8 +197,10 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         redoc_url=None,
         openapi_url="/api/openapi.json",
         # Console authorization for every /api route lives in one auditable,
-        # default-deny table instead of per-route Depends(require_admin).
-        dependencies=[Depends(enforce_route_policy), Depends(bind_request_project)],
+        # default-deny table instead of per-route Depends(require_admin). A billable
+        # route then meets its project's monthly budget (core/billing_policy.py).
+        dependencies=[Depends(enforce_route_policy), Depends(bind_request_project),
+                      Depends(enforce_budget)],
     )
 
     if settings.run_mode == "prod":
@@ -271,7 +273,6 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(share_notices_router)  # the caller's ended-share notices (SHARE-2)
     app.include_router(role_templates_router)
     app.include_router(my_access_router)  # GET /api/me/access: the caller's projects + keys
-    app.include_router(project_groups_router)  # project groups: members + projects (§7.7)
     app.include_router(departments_router)  # departments (projects §2.1, §7.10)
     app.include_router(network_profiles_router)  # VPC network profiles (projects §12)
     app.include_router(storage_mounts_router)  # the storage catalog (storage-mounts §4)

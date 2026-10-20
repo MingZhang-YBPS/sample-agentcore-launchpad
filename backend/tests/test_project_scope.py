@@ -23,7 +23,10 @@ from app.models.ledger import Agent, ChatSession, Deployment
 from app.models.projects import Project, ProjectMember, ProjectWorkspace
 from app.services import access
 from app.services import users as users_service
+from tests.conftest import TEST_DEPARTMENT, TEST_PROJECT
 
+# the `default` workspace's one project (conftest): the "home" project of these tests
+HOME = TEST_PROJECT
 ADMIN = {"username": "operator", "password": "s3cret-pass"}
 PEER = ("127.0.0.1", 4321)
 
@@ -71,12 +74,16 @@ def test_custom_roles_and_overrides():
 # ── ledger helpers ────────────────────────────────────────────────────────────
 
 
-def _project(pid: str, *, workspaces=(DEFAULT_WORKSPACE_ID,), default=False) -> None:
+def _project(pid: str, *, workspaces=(DEFAULT_WORKSPACE_ID,), default=False,
+             department_id: str | None = TEST_DEPARTMENT) -> None:
+    """A business project (a department, so agents may be created in it) bound to
+    ``workspaces``; ``_project("default")`` binds the existing default project back."""
     db = SessionLocal()
     try:
         with project_context(None):
             if db.get(Project, pid) is None:
-                db.add(Project(id=pid, name=pid.upper(), status="active"))
+                db.add(Project(id=pid, name=pid.upper(), status="active",
+                               department_id=department_id))
             for ws in workspaces:
                 if db.get(ProjectWorkspace, (pid, ws)) is None:
                     db.add(ProjectWorkspace(project_id=pid, workspace_id=ws,
@@ -116,7 +123,7 @@ def _agent(name: str, pid: str | None, *, system_key: str | None = None) -> str:
 def test_reads_are_confined_to_the_current_project_and_platform_rows():
     _project("alpha")
     a = _agent("alpha-agent", "alpha")
-    d = _agent("default-agent", "default")
+    d = _agent("default-agent", HOME)
     preset = _agent("preset", None, system_key="aws-agent-solution-architect")
     db = SessionLocal()
     try:
@@ -133,7 +140,7 @@ def test_reads_are_confined_to_the_current_project_and_platform_rows():
 
 def test_owned_get_also_guards_an_identity_map_hit():
     _project("alpha")
-    d = _agent("default-agent", "default")
+    d = _agent("default-agent", HOME)
     db = SessionLocal()
     try:
         with project_context(None):
@@ -147,7 +154,7 @@ def test_owned_get_also_guards_an_identity_map_hit():
 def test_the_app_session_get_is_guarded_too():
     """`db.get` in request code needs no owned_get: SessionLocal's class re-checks it."""
     _project("alpha")
-    d = _agent("default-agent", "default")
+    d = _agent("default-agent", HOME)
     db = SessionLocal()
     try:
         with project_context(None):
@@ -161,7 +168,7 @@ def test_the_app_session_get_is_guarded_too():
 def test_bulk_update_and_delete_are_confined_too():
     _project("alpha")
     a = _agent("alpha-agent", "alpha")
-    d = _agent("default-agent", "default")
+    d = _agent("default-agent", HOME)
     db = SessionLocal()
     try:
         with project_context("alpha"):
@@ -180,7 +187,7 @@ def test_a_child_row_takes_its_parents_project():
     a = _agent("alpha-agent", "alpha")
     db = SessionLocal()
     try:
-        with project_context("default"):  # the parent wins over the current project
+        with project_context(HOME):  # the parent wins over the current project
             db.add(ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=a,
                                session_id="s" * 40, actor_id="river"))
             run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=a, agent_name="x",
@@ -228,7 +235,7 @@ def test_a_single_project_workspace_files_unscoped_rows_unambiguously():
                       mode="dataset", status="pending")
         db.add(run)
         db.commit()
-        assert run.project_id == "default"
+        assert run.project_id == HOME
     finally:
         db.close()
 
@@ -273,12 +280,12 @@ def test_resolution_rules():
     assert (scope.id, scope.bypass) == ("alpha", False)
     assert scope.can("project.use") and not scope.can("agents.deploy")
     with pytest.raises(NotFoundError) as err:
-        _resolve(_Who(uid), "default")  # bound here, but not theirs → 404, never 403
+        _resolve(_Who(uid), HOME)  # bound here, but not theirs → 404, never 403
     assert err.value.code == "project.not_found"
     with pytest.raises(NotFoundError):
         _resolve(_Who(uid), "no-such-project")
     admin = _resolve(_Who(None, "admin"))
-    assert (admin.id, admin.bypass) == ("default", True)
+    assert (admin.id, admin.bypass) == (HOME, True)
     assert _resolve(_Who(None, "admin"), "alpha").can("release.sign")
 
 
@@ -322,7 +329,7 @@ def _membership(uid: str) -> str | None:
     db = SessionLocal()
     try:
         return db.scalar(select(ProjectMember.role_key).where(
-            ProjectMember.project_id == "default", ProjectMember.user_id == uid))
+            ProjectMember.project_id == HOME, ProjectMember.user_id == uid))
     finally:
         db.close()
 
@@ -403,7 +410,7 @@ def _login(app, username: str) -> TestClient:
 def test_a_member_of_one_project_never_sees_another(app):
     _project("alpha")
     alpha_agent = _agent("alpha-agent", "alpha")
-    default_agent = _agent("default-agent", "default")
+    default_agent = _agent("default-agent", HOME)
     uid = _user("joan", grant=False)
     _member_of("alpha", uid)
     jo = _login(app, "joan")
@@ -411,12 +418,12 @@ def test_a_member_of_one_project_never_sees_another(app):
     assert "alpha-agent" in names and "default-agent" not in names
     assert jo.get(f"/api/agents/{default_agent}").status_code == 404
     assert jo.get(f"/api/agents/{alpha_agent}").status_code == 200
-    other = jo.get("/api/agents", headers={"X-Project": "default"})
+    other = jo.get("/api/agents", headers={"X-Project": HOME})
     assert other.status_code == 404 and other.json()["code"] == "project.not_found"
 
 
 def test_a_workshop_shaped_console_needs_no_project_header(app):
-    _agent("default-agent", "default")
+    _agent("default-agent", HOME)
     _user("kim")  # granted the default workspace, as the workshop seeds its accounts
     kim = _login(app, "kim")
     res = kim.get("/api/agents")
@@ -426,6 +433,6 @@ def test_a_workshop_shaped_console_needs_no_project_header(app):
     assert created.status_code in (200, 201), created.text
     db = SessionLocal()
     try:
-        assert db.execute(text("SELECT project_id FROM eval_datasets")).scalar_one() == "default"
+        assert db.execute(text("SELECT project_id FROM eval_datasets")).scalar_one() == HOME
     finally:
         db.close()

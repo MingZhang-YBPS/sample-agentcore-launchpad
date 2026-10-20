@@ -1363,6 +1363,7 @@ def _eval_run(**kw):
     db = SessionLocal()
     try:
         run = EvalRun(**{
+            "workspace_id": DEFAULT_WORKSPACE_ID,
             "agent_id": "a1", "agent_name": "agent", "mode": "insights",
             "status": "completed", "batch_eval_id": "be-123",
             "session_ids": ["s1", "s2"], **kw,
@@ -1565,7 +1566,7 @@ def test_recommend_action_threads_a_valid_source(client, monkeypatch):
         json={"action": "recommend", "recommend_types": ["system_prompt"],
               "recommend_source_run_id": run_id},
     )
-    assert res.status_code == 202
+    assert res.status_code == 202, res.text
     assert captured["source"]["run_id"] == run_id
     assert captured["source"]["kind"] == "batch_evaluation"
 

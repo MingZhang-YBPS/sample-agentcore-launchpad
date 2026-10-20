@@ -31,6 +31,7 @@ from app.core.route_policy import (
 from app.main import create_app
 from app.routers import auth
 from app.services import users as users_service
+from tests.conftest import TEST_PROJECT
 
 ADMIN_CREDS = {"username": "operator", "password": "s3cret-pass"}
 MEMBER_CREDS = {
@@ -378,8 +379,8 @@ def _set_default_role(role_key: str) -> None:
         db.execute(text("DELETE FROM project_members WHERE user_id = :u"), {"u": user.id})
         db.execute(
             text("INSERT INTO project_members (project_id, user_id, role_key, added_at)"
-                 " VALUES ('default', :u, :r, '2026-10-14 00:00:00')"),
-            {"u": user.id, "r": role_key},
+                 " VALUES (:p, :u, :r, '2026-10-14 00:00:00')"),
+            {"p": TEST_PROJECT, "u": user.id, "r": role_key},
         )
         access.bump_epoch(db)
         db.commit()
@@ -483,7 +484,7 @@ class TestProjectOwnedSkillRecords:
         db = SessionLocal()
         try:
             row = db.query(ResourceCreator).filter_by(resource_id="rec-skill-1").one()
-            assert (row.kind, row.project_id) == ("registry_skill", "default")
+            assert (row.kind, row.project_id) == ("registry_skill", TEST_PROJECT)
         finally:
             db.close()
         submit = member_session.post("/api/registry/records/rec-skill-1/action",

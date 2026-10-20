@@ -11,6 +11,7 @@ import { ago } from "../../format";
 import { useLoad } from "../../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import { useAgents } from "./common";
+import { Select } from "../../select";
 
 /**
  * Curated answers — an ordered list per agent: the first enabled rule that
@@ -56,9 +57,9 @@ export function AnswerRules() {
     <div style={{ display: "grid", gap: 16 }}>
       <ErrorCallout error={failed.error} params={{ agent_id: agentId || undefined }} onDismiss={failed.clear} data-testid="v3-answer-rules-error" />
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <select className="v3-select v3-iss-select" value={agentId} onChange={(e) => setPicked(e.target.value)} aria-label={t("selfService.common.agent")}>
+        <Select className="v3-select v3-iss-select" value={agentId} onChange={(e) => setPicked(e.target.value)} aria-label={t("selfService.common.agent")}>
           {agents.map((a) => <option key={a.id} value={a.id}>{label(a.id)}</option>)}
-        </select>
+        </Select>
         {data && (
           <Btn size="sm" kind={data.enabled ? undefined : "danger"} onClick={() => void act(() => ruleApi.setEnabled(agentId, !data.enabled))}>
             <Power size={13} /> {data.enabled === false ? t("selfService.answers.agentOff") : t("selfService.answers.agentOn")}
@@ -224,10 +225,10 @@ function RuleDialog({ agentId, rule, onClose, onSaved }: { agentId: string; rule
         </label>
         <label className="v3-field">
           <span>{t("selfService.answers.match")}</span>
-          <select className="v3-select" value={match} onChange={(e) => setMatch(e.target.value as "exact" | "contains")}>
+          <Select className="v3-select" value={match} onChange={(e) => setMatch(e.target.value as "exact" | "contains")}>
             <option value="exact">{t("selfService.answers.matchExact")}</option>
             <option value="contains">{t("selfService.answers.matchContains")}</option>
-          </select>
+          </Select>
           <small className="v3-hint">{t(`selfService.answers.hint_${match}`)}</small>
         </label>
         <label className="v3-field">

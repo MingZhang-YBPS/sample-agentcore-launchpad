@@ -2,14 +2,15 @@
  * Pure helpers of the project quotas section (projects design §11.3): the form's
  * draft (one text field per quota), the partial PUT it sends (changed keys only, an
  * emptied field clearing the quota), the input checks the backend repeats
- * (`services/projects.py::QUOTA_COUNTS`), and the signal a usage row shows.
+ * (`services/projects.py::QUOTA_COUNTS`), the signal a usage row shows, and the
+ * monthly budget's progress.
  */
-import { type ProjectQuotas, QUOTA_KEYS, type QuotaItem, type QuotaKey } from "../../../lib/api/projects";
+import { type ProjectBudget, type ProjectQuotas, QUOTA_KEYS, type QuotaItem, type QuotaKey } from "../../../lib/api/projects";
 import type { Signal } from "../../ui";
 
 export type QuotaDraft = Record<QuotaKey, string>;
 
-/** whole-number quotas and their bounds; the rest are USD amounts ≥ 0 */
+/** whole-number quotas and their bounds; the rest (the monthly budget) are USD amounts ≥ 0 */
 export const QUOTA_COUNT_BOUNDS: Partial<Record<QuotaKey, readonly [number, number]>> = {
   max_agents: [0, 10_000],
   max_api_keys: [0, 10_000],
@@ -38,15 +39,9 @@ export function parseQuota(key: QuotaKey, raw: string): number | null {
   return value >= 0 && value <= MAX_QUOTA_USD ? value : Number.NaN;
 }
 
-/** Keys whose field is not a valid value (or exceeds the department's cap). */
-export function quotaErrors(view: ProjectQuotas, draft: QuotaDraft): QuotaKey[] {
-  return QUOTA_KEYS.filter((key) => {
-    const value = parseQuota(key, draft[key]);
-    if (value === null) return false;
-    if (Number.isNaN(value)) return true;
-    const cap = view.department_caps[key];
-    return cap !== undefined && cap !== null && value > cap;
-  });
+/** Keys whose field is not a valid value. */
+export function quotaErrors(_view: ProjectQuotas, draft: QuotaDraft): QuotaKey[] {
+  return QUOTA_KEYS.filter((key) => Number.isNaN(parseQuota(key, draft[key]) ?? 0));
 }
 
 /** The PUT body: changed keys only (null clears); null when nothing changed or a field is invalid. */
@@ -64,7 +59,6 @@ export function quotaPatch(view: ProjectQuotas, draft: QuotaDraft): Partial<Reco
 /** ok under 80 %, wait from 80 %, act at or over the limit; off without a limit or usage. */
 export function usageSignal(item: QuotaItem): Signal {
   if (item.limit === null || item.used === null || item.used === undefined) return "off";
-  if (item.enforcement === "alert" && item.state === "firing") return "act";
   if (item.used >= item.limit) return "act";
   return item.used / item.limit >= 0.8 ? "wait" : "ok";
 }
@@ -88,4 +82,17 @@ export function usageBars(items: readonly QuotaItem[]): { item: QuotaItem; fract
       const fraction = limit <= 0 ? 1 : Math.min(1, Math.max(0, used / limit));
       return { item, fraction };
     });
+}
+
+/**
+ * The monthly budget's bar: how full (0–1, clamped; a zero budget is full), the
+ * signal (wait from 80 % — where the alert fires — act once spent), and whether
+ * billable work is refused. Null without a measured spend.
+ */
+export function budgetProgress(budget: ProjectBudget): { fraction: number; signal: Signal; blocked: boolean } | null {
+  if (budget.spent_usd === null) return null;
+  const raw = budget.budget_usd <= 0 ? 1 : budget.spent_usd / budget.budget_usd;
+  const fraction = Math.min(1, Math.max(0, raw));
+  const blocked = budget.spent_usd >= budget.budget_usd;
+  return { fraction, blocked, signal: blocked ? "act" : raw >= 0.8 ? "wait" : "ok" };
 }

@@ -11,6 +11,7 @@ import { useLoad } from "../../hooks";
 import { Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton } from "../../ui";
 import { type AgentOption, agentOptions } from "./agentOptions";
 import { CopyId, TraceStatus } from "./shared";
+import { Select } from "../../select";
 
 const PAGE = 50;
 
@@ -44,7 +45,7 @@ function Toolbar({
   const { t } = useTranslation();
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-      <select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => onAgent(e.target.value)} aria-label={t("v3.obs.agent")}>
+      <Select className="v3-select" style={{ width: 200 }} value={agent} onChange={(e) => onAgent(e.target.value)} aria-label={t("v3.obs.agent")}>
         <option value="">{t("v3.obs.allAgents")}</option>
         {agents.map((a) =>
           a.noSpans ? (
@@ -55,7 +56,7 @@ function Toolbar({
             <option key={a.value} value={a.value}>{a.label}</option>
           ),
         )}
-      </select>
+      </Select>
       {children}
       <div style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "center", flex: "1 1 260px", justifyContent: "flex-end" }}>
         <span className="v3-obs-cache">{count}</span>

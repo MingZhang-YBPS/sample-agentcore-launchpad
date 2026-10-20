@@ -17,6 +17,7 @@ import { AgentDetail } from "./agent/AgentDetail";
 import { BulkDeleteDialog } from "./agents-list/BulkDeleteDialog";
 import { RowMenu } from "./agents-list/RowMenu";
 import { bulkDeletable, liveSelection, opensDetail, rowChat, toggleSelection } from "./agents-list/rows";
+import { Select } from "../select";
 
 function AgentList() {
   const { t } = useTranslation();
@@ -109,9 +110,9 @@ function AgentList() {
       <div className="v3-list-summary">
         <span aria-live="polite">{agents.data ? t("v3.ux.results", { count: rows.length, total: all.length }) : t("v3.home.loading")}</span>
         <label><ArrowUpDown size={14} /> <span>{t("v3.ux.sort")}</span>
-          <select className="v3-input" value={sort} onChange={(e) => update("sort", e.target.value === "updated" ? "" : e.target.value)}>
+          <Select className="v3-input" value={sort} onChange={(e) => update("sort", e.target.value === "updated" ? "" : e.target.value)}>
             <option value="updated">{t("v3.ux.updatedFirst")}</option><option value="name">{t("v3.ux.nameOrder")}</option>
-          </select>
+          </Select>
         </label>
       </div>
       <Panel flush className="v3-agent-list">

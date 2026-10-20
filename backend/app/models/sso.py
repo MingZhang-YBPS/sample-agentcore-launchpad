@@ -49,7 +49,8 @@ ACCOUNT_POLICIES = (POLICY_JIT, POLICY_EXISTING_ONLY)
 # `sso_memberships.kind`
 MEMBERSHIP_ROLE = "role"  # target_id "" — the account's global role
 MEMBERSHIP_PROJECT = "project"
-MEMBERSHIP_GROUP = "group"
+# (the retired `group` kind — a project group — is migrated away at startup:
+# `core/db.flatten_project_groups`)
 
 
 class ConsoleIdentityProvider(Base):
@@ -77,7 +78,7 @@ class ConsoleIdentityProvider(Base):
     default_role: Mapped[str] = mapped_column(String(16), default="member")
     # an SSO account's validity is renewed to `now + valid_days` at every login
     valid_days: Mapped[int] = mapped_column(Integer, default=30)
-    # [{group, kind: role|project|group, target_id, role_key}] — evaluated in order
+    # [{group, kind: role|project, target_id, role_key}] — evaluated in order
     mappings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     # the last connection test: {ok, checked_at, ...}
     last_test: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)

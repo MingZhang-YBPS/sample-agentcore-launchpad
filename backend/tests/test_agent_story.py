@@ -26,9 +26,10 @@ from app.models.dlc import AdmissionCandidate, CriteriaSet, ReleaseRecord
 from app.models.ledger import Agent, AlertRule, ApiKey, ChatSession
 from app.models.selfservice import Issue
 from app.services import agent_story as story
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import _login, _member_of, _project, _user, app  # noqa: F401
 
-DEFAULT = {"X-Project": "default"}
+DEFAULT = {"X-Project": TEST_PROJECT}
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +46,7 @@ def fresh_cache(monkeypatch):
     story.reset_cache_for_tests()
 
 
-def _add(*rows, project: str | None = "default"):
+def _add(*rows, project: str | None = TEST_PROJECT):
     db = SessionLocal()
     try:
         with project_context(project):
@@ -58,7 +59,7 @@ def _add(*rows, project: str | None = "default"):
         db.close()
 
 
-def _agent(name="lab", *, project="default", workspace_id=DEFAULT_WORKSPACE_ID, **fields) -> str:
+def _agent(name="lab", *, project=TEST_PROJECT, workspace_id=DEFAULT_WORKSPACE_ID, **fields) -> str:
     base = {"workspace_id": workspace_id, "name": name, "method": "harness", "status": "active",
             "resource_id": "h-1", "version": "1", "spec": {}}
     return _add(Agent(**{**base, **fields}), project=project)[0]
@@ -225,7 +226,7 @@ def test_next_steps_filter_by_workshop_role(app, username, role, theirs):  # noq
     agent_id = _agent()
     _criteria_published(agent_id)
     uid = _user(username, grant=False)
-    _member_of("default", uid, role)
+    _member_of(TEST_PROJECT, uid, role)
     client = _login(app, username)
     res = client.get("/api/me/next-steps", headers=DEFAULT)
     assert res.status_code == 200, res.text
@@ -235,12 +236,12 @@ def test_next_steps_filter_by_workshop_role(app, username, role, theirs):  # noq
     assert bool(mine) is theirs and bool(waiting) is not theirs
     row = (mine or waiting)[0]
     assert row["step"] == "evaluate.criteria.sign" and row["roles"] == ["biz-owner"]
-    assert body["project_id"] == "default"
+    assert body["project_id"] == TEST_PROJECT
 
 
 def test_the_developer_owns_the_first_steps(app):  # noqa: F811
     agent_id = _agent()  # no conversation yet: build.chat
-    _member_of("default", _user("dev", grant=False), "developer")
+    _member_of(TEST_PROJECT, _user("dev", grant=False), "developer")
     body = _login(app, "dev").get("/api/me/next-steps", headers=DEFAULT).json()
     assert [r["step"] for r in body["mine"] if r["agent"]["id"] == agent_id] == ["build.chat"]
     assert body["roles"] == ["developer"]
@@ -259,7 +260,7 @@ def test_next_steps_stay_inside_the_callers_project(app):  # noqa: F811
     _project("alpha")
     theirs = _agent("alpha-agent", project="alpha")
     ours = _agent("default-agent")
-    _member_of("default", _user("dev", grant=False), "developer")
+    _member_of(TEST_PROJECT, _user("dev", grant=False), "developer")
     body = _login(app, "dev").get("/api/me/next-steps", headers=DEFAULT).json()
     ids = {r["agent"]["id"] for r in body["mine"] + body["waiting"]}
     assert ours in ids and theirs not in ids

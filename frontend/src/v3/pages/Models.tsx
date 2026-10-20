@@ -14,6 +14,7 @@ import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Notice, PageHead, Panel, Skeleton } from "../ui";
+import { Select } from "../select";
 
 const NONE = "";
 
@@ -104,7 +105,7 @@ function RoleRow({ role, onSaved }: { role: ModelSettingRole; onSaved: (row: Mod
       </td>
       <td style={{ minWidth: 280 }}>
         <div style={{ display: "grid", gap: 6 }}>
-          <select
+          <Select
             className="v3-select"
             aria-label={t("v3.models.pick")}
             data-testid={`v3-models-select-${role.field}`}
@@ -124,7 +125,7 @@ function RoleRow({ role, onSaved }: { role: ModelSettingRole; onSaved: (row: Mod
             ))}
             {draft && !options.includes(draft) && !custom && <option value={draft}>{draft}</option>}
             <option value={CUSTOM_MODEL_OPTION}>{t("models.picker.custom")}</option>
-          </select>
+          </Select>
           {custom && (
             <input
               className="v3-input mono"

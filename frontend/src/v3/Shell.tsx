@@ -56,6 +56,7 @@ import { GlossaryDialog } from "./onboarding/Glossary";
 import { openGlossary, requestTour, tourDone, useLaunchHidden, useTourRequest } from "./onboarding/state";
 import { Tour } from "./onboarding/Tour";
 import { DLC_TERMS } from "./story/terms";
+import { Select } from "./select";
 
 const RAIL_KEY = "launchpad_v3_rail_open";
 
@@ -122,14 +123,14 @@ function WorkspaceSwitch() {
   return (
     <label className="v3-ws" data-tier={current?.tier ?? "dev"} title={t("v3.top.workspace")}>
       <span className="v3-ws-label">{t("v3.top.workspace")}</span>
-      <select value={current?.id ?? ""} onChange={(e) => select(e.target.value)} aria-label={t("v3.top.workspace")}>
+      <Select className="" value={current?.id ?? ""} onChange={(e) => select(e.target.value)} aria-label={t("v3.top.workspace")}>
         {workspaces.map((ws) => (
           <option key={ws.id} value={ws.id}>
             {ws.name} · {ws.region}
             {ws.tier && ws.tier !== "dev" ? ` · ${ws.tier}` : ""}
           </option>
         ))}
-      </select>
+      </Select>
     </label>
   );
 }
@@ -173,7 +174,7 @@ function ProjectSwitch() {
   return (
     <label className="v3-ws" title={t("v3.project.label")} data-testid="v3-project-switch">
       <span className="v3-ws-label">{t("v3.project.label")}</span>
-      <select value={current?.id ?? ""} onChange={(e) => select(e.target.value)} aria-label={t("v3.project.label")}>
+      <Select className="" value={current?.id ?? ""} onChange={(e) => select(e.target.value)} aria-label={t("v3.project.label")}>
         {byDepartment ? (
           departments.map((g) => (
             <optgroup key={g.id ?? "-"} label={g.label ?? t("v3.project.noDepartment")}>{g.projects.map(option)}</optgroup>
@@ -186,7 +187,7 @@ function ProjectSwitch() {
             <optgroup label={t("v3.project.adminGroup")}>{adminAccess.map(option)}</optgroup>
           </>
         )}
-      </select>
+      </Select>
     </label>
   );
 }
@@ -202,7 +203,7 @@ function ProjectSwitch() {
 const HUB_GLOBAL = new Set([
   "/announcements", "/v2/announcements", "/v3/announcements", "/videos", "/v2/videos", "/v3/videos", "/v2/video-management", "/v3/video-management",
   // people and structure (projects §7.9): never bound to the workspace or project in the switcher
-  "/v3/users", "/v3/admins", "/v3/projects", "/v3/project-groups", "/v3/departments",
+  "/v3/users", "/v3/admins", "/v3/projects", "/v3/departments",
   // the console host itself (online-update): one installation, not a workspace
   "/v3/system-update",
 ]);

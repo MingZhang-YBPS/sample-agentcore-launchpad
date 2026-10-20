@@ -11,6 +11,7 @@ import {
 } from "../../../lib/api/storage";
 import { Reasoned } from "../../reason";
 import { Btn, Dialog, Notice } from "../../ui";
+import { Select } from "../../select";
 
 /**
  * Register / edit a storage entry (storage-mounts §4.4): only the access point ARN and
@@ -92,23 +93,23 @@ export function RegisterDialog({
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <label className="v3-field">
             <span>{t("v3.storage.form.maxMode")}</span>
-            <select className="v3-select" value={form.max_mode} onChange={(e) => set("max_mode", e.target.value as StorageForm["max_mode"])}>
+            <Select className="v3-select" value={form.max_mode} onChange={(e) => set("max_mode", e.target.value as StorageForm["max_mode"])}>
               {STORAGE_MODES.map((m) => <option key={m} value={m}>{t(`v3.storage.mode.${m}`)}</option>)}
-            </select>
+            </Select>
           </label>
           <label className="v3-field">
             <span>{t("v3.storage.form.dataClass")}</span>
-            <select className="v3-select" value={form.data_class} onChange={(e) => set("data_class", e.target.value as StorageForm["data_class"])}>
+            <Select className="v3-select" value={form.data_class} onChange={(e) => set("data_class", e.target.value as StorageForm["data_class"])}>
               {STORAGE_DATA_CLASSES.map((c) => <option key={c} value={c}>{t(`v3.storage.dataClass.${c}`)}</option>)}
-            </select>
+            </Select>
           </label>
         </div>
         <label className="v3-field">
           <span>{t("v3.storage.form.profile")}</span>
-          <select className="v3-select" value={form.network_profile_id} onChange={(e) => set("network_profile_id", e.target.value)}>
+          <Select className="v3-select" value={form.network_profile_id} onChange={(e) => set("network_profile_id", e.target.value)}>
             <option value="">{t("v3.storage.form.noProfile")}</option>
             {profiles.filter((p) => !p.archived_at).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
-          </select>
+          </Select>
           <small className="v3-hint">{t("v3.storage.form.profileHint")}</small>
         </label>
         {form.max_mode === "rw" && <Notice s="info">{t("v3.storage.form.rwHint")}</Notice>}

@@ -39,6 +39,7 @@ import { Btn, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "../tasks/CostCard";
 import { onlineHref } from "./actions";
+import { Select } from "../../select";
 
 /** canonical order, whatever the click order */
 function toggleOrdered<T extends string>(all: readonly T[], picked: T[], value: T): T[] {
@@ -54,22 +55,22 @@ function FilterRows({ filters, onChange }: { filters: FilterDraft[]; onChange: (
         <div key={i} className="v3-onl-filter">
           <input className="v3-input mono" value={f.key} placeholder="session.id" aria-label={t("v2.online.filterKey")}
             onChange={(e) => set(i, { key: e.target.value })} />
-          <select className="v3-select" value={f.operator} aria-label={t("v2.online.filterOperator")}
+          <Select className="v3-select" value={f.operator} aria-label={t("v2.online.filterOperator")}
             onChange={(e) => set(i, { operator: e.target.value as FilterDraft["operator"] })}>
             {OPERATORS.map((op) => <option key={op} value={op}>{op}</option>)}
-          </select>
-          <select className="v3-select" value={f.kind} aria-label={t("v2.online.filterKind")}
+          </Select>
+          <Select className="v3-select" value={f.kind} aria-label={t("v2.online.filterKind")}
             onChange={(e) => {
               const kind = e.target.value as FilterKind;
               set(i, { kind, value: kind === "boolean" ? "true" : "" });
             }}>
             {(["string", "number", "boolean"] as FilterKind[]).map((k) => <option key={k} value={k}>{t(`v2.online.kind.${k}`)}</option>)}
-          </select>
+          </Select>
           {f.kind === "boolean" ? (
-            <select className="v3-select" value={f.value} aria-label={t("v2.online.filterValue")} onChange={(e) => set(i, { value: e.target.value })}>
+            <Select className="v3-select" value={f.value} aria-label={t("v2.online.filterValue")} onChange={(e) => set(i, { value: e.target.value })}>
               <option value="true">true</option>
               <option value="false">false</option>
-            </select>
+            </Select>
           ) : (
             <input className="v3-input" type={f.kind === "number" ? "number" : "text"} value={f.value}
               aria-label={t("v2.online.filterValue")} onChange={(e) => set(i, { value: e.target.value })} />
@@ -215,10 +216,10 @@ export function OnlineEditor({ id }: { id: string | null }) {
             {editing ? (
               <input className="v3-input" value={row?.agent_name ?? row?.agent_id ?? "—"} readOnly />
             ) : (
-              <select className="v3-select" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+              <Select className="v3-select" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
                 <option value="">{t("v2.common.choose")}</option>
                 {eligible.map((a) => <option key={a.id} value={a.id}>{`${a.name} · ${a.method}`}</option>)}
-              </select>
+              </Select>
             )}
             <small className="v3-hint">{editing ? t("v2.online.agentFixed") : t("v2.online.agentHint")}</small>
           </label>

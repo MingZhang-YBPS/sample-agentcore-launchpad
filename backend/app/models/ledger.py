@@ -97,6 +97,9 @@ class UserWorkspace(Base):
 
 class Agent(ProjectShared, Base):
     __tablename__ = "agents"
+    # a new agent names its business project (services/agent_project); the stamp never
+    # files one under a workspace `default` project silently
+    __project_no_default_stamp__ = True
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)

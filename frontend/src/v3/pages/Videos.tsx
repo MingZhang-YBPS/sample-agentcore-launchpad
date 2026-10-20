@@ -18,6 +18,7 @@ import {
 } from "../../lib/videos";
 import { Reasoned } from "../reason";
 import { Btn, Chip, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../ui";
+import { Select } from "../select";
 
 /* ── library ─────────────────────────────────────────────────────────────── */
 
@@ -100,10 +101,10 @@ function Library({
         <label className="v3-vid-section">
           <span>{t("videoManage.section")}</span>
           <Reasoned disabledReason={t("story.reason.pickArea")}>
-            <select className="v3-select" value={section ?? ""} disabled={!category} onChange={(e) => onFilter("section", e.target.value)}>
+            <Select className="v3-select" value={section ?? ""} disabled={!category} onChange={(e) => onFilter("section", e.target.value)}>
               <option value="">{t("videos.all")}</option>
               {sectionOptions.map((item) => <option key={item.id} value={item.id}>{item.title[locale]}</option>)}
-            </select>
+            </Select>
           </Reasoned>
         </label>
         <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 300 }}>

@@ -28,6 +28,7 @@ from app.models.ledger import (
 from app.services import fleet as fleet_service
 from app.services import marketplace as marketplace_service
 from app.services import users as users_service
+from tests.test_environments import bind_test_project
 
 ADMIN_CREDS = {"username": "fleet-admin", "password": "s3cret-pass"}
 MEMBER_CREDS = {
@@ -137,6 +138,8 @@ def _workspace(ws_id: str, status: str = "ready", tier: str = "dev") -> None:
                 resources={},
             )
         )
+        db.flush()
+        bind_test_project(db, ws_id)
         db.commit()
     finally:
         db.close()

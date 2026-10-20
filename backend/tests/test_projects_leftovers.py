@@ -20,6 +20,7 @@ from app.models.ledger import Agent
 from app.models.projects import Project, ProjectWorkspace
 from app.services import access
 from app.services.conversation_service import ConversationService, SessionCaller
+from tests.conftest import TEST_PROJECT
 
 WS = SimpleNamespace(id=DEFAULT_WORKSPACE_ID)
 ADA = SessionCaller(DEFAULT_WORKSPACE_ID, "ada")
@@ -67,19 +68,19 @@ def stub_interpreter(monkeypatch):
     monkeypatch.setattr(get_settings(), "studio_exec_python", sys.executable)
 
 
-def _create(svc: ConversationService, caller: SessionCaller, pid: str = "default") -> str:
+def _create(svc: ConversationService, caller: SessionCaller, pid: str = TEST_PROJECT) -> str:
     with project_context(pid):
         session = asyncio.run(svc.create_session(
             CreateConversationRequest(generated_code="print('x')"), caller))
     return session.session_id
 
 
-def _listed(svc: ConversationService, caller: SessionCaller, pid: str = "default") -> set[str]:
+def _listed(svc: ConversationService, caller: SessionCaller, pid: str = TEST_PROJECT) -> set[str]:
     with project_context(pid):
         return {s.session_id for s in asyncio.run(svc.get_sessions(caller)).sessions}
 
 
-def _refused(svc: ConversationService, sid: str, caller: SessionCaller, pid: str = "default"):
+def _refused(svc: ConversationService, sid: str, caller: SessionCaller, pid: str = TEST_PROJECT):
     with project_context(pid):
         for call in (
             svc.get_session_history(sid, caller),
@@ -99,7 +100,7 @@ def test_a_member_sees_only_their_own_sessions(stub_interpreter):
     assert _listed(svc, ADA) == {ada}
     assert _listed(svc, BOB) == {bob}
     _refused(svc, ada, BOB)
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         history = asyncio.run(svc.get_session_history(ada, ADA))
     assert history.session.session_id == ada
     assert ada in svc.sessions  # the refused delete removed nothing
@@ -114,7 +115,7 @@ def test_an_admin_sees_every_session_of_the_project_only(stub_interpreter):
     assert _listed(svc, ADMIN, pid="alpha") == {alpha}
     _refused(svc, alpha, ADMIN)  # another project's: missing even to an admin
     _refused(svc, ada, ADA, pid="alpha")
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         assert asyncio.run(svc.delete_session(bob, ADMIN))["message"]
     assert bob not in svc.sessions
 
@@ -166,13 +167,13 @@ def summaries(monkeypatch):
 
 def test_config_names_never_cross_projects(summaries):
     _project("alpha")
-    _online_row("default", _agent("d", "default"), "cfg-default")
+    _online_row(TEST_PROJECT, _agent("d", TEST_PROJECT), "cfg-default")
     _online_row("alpha", _agent("a", "alpha"), "cfg-alpha")
     db = SessionLocal()
     try:
         with project_context("alpha"):
             alpha = online.config_names(WS, object(), db)
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             default = online.config_names(WS, object(), db)
             assert online.config_names(WS, object(), db) is default  # cached per project
     finally:
@@ -185,7 +186,7 @@ def test_config_names_never_cross_projects(summaries):
 def test_config_names_unfenced_in_a_single_project_workspace(summaries):
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             names = online.config_names(WS, object(), db)
     finally:
         db.close()
@@ -198,11 +199,11 @@ def test_config_names_unfenced_in_a_single_project_workspace(summaries):
 def test_online_agent_check_answers_404_for_missing_or_foreign_agents():
     _project("alpha")
     alpha_agent = _agent("a", "alpha")
-    stopped = _agent("s", "default", status="failed")
-    live = _agent("d", "default")
+    stopped = _agent("s", TEST_PROJECT, status="failed")
+    live = _agent("d", TEST_PROJECT)
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             for agent_id in ("nope", alpha_agent):
                 with pytest.raises(NotFoundError) as info:
                     _agent_in(db, WS, agent_id)

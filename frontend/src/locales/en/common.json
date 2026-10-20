@@ -2321,6 +2321,13 @@
     "skill_lab.attachment_path_conflict": "A generated task both declares an attached document and defines the same path inline.",
     "skill_lab.snapshot_exists": "This job already has an immutable input snapshot.",
     "agent.name_exists": "An agent with this name already exists",
+    "agent.project_required": "A new agent must belong to a business project. Choose one.",
+    "agent.project_not_found": "That project was not found in this workspace, or you are not a member of it.",
+    "agent.project_mismatch": "The chosen project differs from the project this request runs in. Reload the page and choose again.",
+    "agent.project_default_not_allowed": "New agents cannot be created in the workspace default project. Choose a business project.",
+    "agent.project_archived": "That project is archived. Choose an active project.",
+    "agent.project_no_department": "That project belongs to no department yet. Assign it a department, or choose another project.",
+    "agent.project_permission_invalid": "This permission does not create agents.",
     "apikey.creator_offboarded": "This key cannot be re-enabled: the account that created it was deleted, disabled, expired, or lost access to this workspace. Mint a new key instead.",
     "agent.method_not_available": "This creation method ships in a later phase",
     "agent.not_active": "The agent is not active yet",
@@ -2538,7 +2545,6 @@
     "users.not_found": "That user does not exist.",
     "user.not_found": "That user does not exist.",
     "department.not_found": "That department does not exist.",
-    "group.not_found": "That project group does not exist.",
     "project.not_found": "That project does not exist, or you are not a member of it.",
     "project.invalid_id": "A project id is 2–32 lowercase letters, digits or '-'.",
     "project.exists": "A project with that id already exists.",
@@ -2550,7 +2556,6 @@
     "project.workspace_default": "This project is that workspace's default — make another project the default first.",
     "project.workspace_in_use": "That workspace still holds this project's agents, runs or keys — move or delete them first.",
     "project.member_conflict": "A user cannot be added and removed in the same request.",
-    "project.member_from_group": "This access comes from the project's group — manage it there.",
     "project.member_not_found": "That user is not a direct member of this project.",
     "project.self_membership": "You cannot change your own membership — ask another owner or an administrator.",
     "project.role_unknown": "That role is not defined in this project.",
@@ -2589,7 +2594,7 @@
     "project.sod_conflict": "This project separates duties: the change would give one member both sides of a separated pair of permissions. Split the duties between different members.",
     "department.exists": "A department with this ID already exists.",
     "department.archived": "That department is archived — unarchive it or choose another.",
-    "department.in_use": "This department still owns projects or groups — move or archive them first.",
+    "department.in_use": "This department still owns projects — move or archive them first.",
     "department.admin_conflict": "A user cannot be added and removed as a department administrator in the same request.",
     "department.admin_not_found": "That user is not an administrator of this department.",
     "department.setting_invalid": "A department setting is invalid: can_create_users is true or false, max_projects and user_validity_max_days are positive whole numbers (null restores the default).",
@@ -2616,17 +2621,7 @@
     "mapping.invalid_kind": "That resource mapping kind is not supported.",
     "mapping.invalid_name": "A logical name is 1-64 lowercase letters, digits, '.', '_' or '-'.",
     "mapping.invalid_resource_id": "That resource ID is not valid for this mapping kind.",
-    "group.exists": "A project group with this ID already exists.",
-    "group.archived": "That project group is archived — unarchive it or choose another.",
-    "group.member_conflict": "A user cannot be added and removed in the same request.",
-    "group.member_not_found": "That user is not a member of this group.",
-    "group.project_conflict": "A project cannot be added and removed in the same request.",
-    "group.project_in_other_group": "That project is already in another group — remove it there first (a project is in at most one group).",
-    "group.project_not_found": "That project is not in this group.",
-    "group.role_invalid": "A group grants built-in role templates only — custom roles are per project.",
-    "group.role_unknown": "That is not a built-in role — a group membership takes a built-in template only.",
     "structure.invalid_status": "Unknown status filter — use active or archived.",
-    "users.invalid_groups": "The group memberships are invalid — a group membership names a group and a built-in role, with no permission overrides.",
     "users.invalid_bulk": "Choose at least one account, and no more than the bulk limit per request.",
     "network.public_not_allowed": "This workspace requires every agent to run in a network profile — choose one.",
     "network_profile.check_failed": "The workspace's VPC could not be read for this check. Confirm the workspace role can describe VPCs, subnets and security groups, then try again.",
@@ -2666,7 +2661,7 @@
     "steward.notice_not_found": "This notice no longer exists.",
     "steward.pending_not_found": "This change is no longer waiting: it was confirmed, rejected or withdrawn.",
     "project.steward_member": "An organization admin is never a project member.",
-    "users.steward_no_grants": "An organization admin manages structure only: it holds no workspace grant, project or group membership.",
+    "users.steward_no_grants": "An organization admin manages structure only: it holds no workspace grant or project membership.",
     "storage.write_confirm_required": "This run writes into production shared storage — confirm it, or evaluate in a DEV workspace that registers the same storage on staging data.",
     "admission.decided": "This candidate is already decided.",
     "admission.expected_source": "The expected answer must be written or confirmed by a person.",
@@ -2711,7 +2706,7 @@
     "dataset.golden_managed_why": "A golden set and its splits change only on the golden set page — admit, move or retire items there — so provenance and the holdout seal are kept.",
     "golden.delete_busy": "An evaluation is still running on this golden set.",
     "golden.delete_busy_why": "Wait for it to finish or stop it, then delete the golden set.",
-    "annotation.closed": "A decided labelling task cannot be deleted.",
+    "annotation.closed": "This annotation task is closed.",
     "annotation.closed_why": "It is the evidence of that calibration verdict; to calibrate again, create a new task.",
     "golden.item_not_found": "Sample not found in this golden set.",
     "golden.not_found": "Golden set not found.",
@@ -2782,7 +2777,6 @@
     "annotation.bad_items": "Every item needs a unique ref.",
     "annotation.bad_label": "This label is not one of the allowed labels.",
     "annotation.bad_purpose": "Unknown annotation task purpose.",
-    "annotation.closed": "This annotation task is closed.",
     "annotation.item_not_found": "This item is not part of the annotation task.",
     "annotation.link_label": "Name the person this link is for.",
     "annotation.links_not_allowed": "Annotation links cannot be created for this task right now.",
@@ -3024,7 +3018,6 @@
     "governance.rollback_unavailable": "No audited policy snapshot is available to roll back to.",
     "governance.shared_engine_changed": "The Gateways sharing this Policy Engine changed — review the impact again.",
     "governance.target_not_synchronizable": "This Gateway target cannot be synchronized.",
-    "group.invalid_id": "This group id is not valid.",
     "guardrail.blocked": "The guardrail blocked this content.",
     "guardrail.create_failed": "The guardrail could not be created.",
     "http.400": "The request was not valid.",
@@ -3138,7 +3131,7 @@
     "project.not_provisioned": "The project's resources are not provisioned in this workspace yet — provisioning must finish first.",
     "project.provisioning_in_progress": "Provisioning is still running in this workspace.",
     "project.purge_running": "The purge of this project is running.",
-    "project.quota_above_department": "This quota exceeds the department's cap.",
+    "project.budget_exhausted": "This project's monthly budget is used up. Billable work resumes when the budget resets on the 1st (UTC) — or ask a platform administrator to raise it in the project's settings.",
     "project.quota_exceeded": "This project's quota is used up.",
     "promotion.agent_not_active": "Only an active agent can be bundled for release.",
     "promotion.already_executing": "This promotion is already executing.",
@@ -3338,7 +3331,9 @@
     "workspace.invalid_grant_filter": "Unknown grant filter.",
     "workspace.invalid_grant_targets": "Some accounts cannot hold a workspace grant (unknown, or an administrator, who reaches every workspace).",
     "workspace.prod_protected": "This is a production workspace — its agents are changed through a release, not directly.",
-    "workspace.tier_change_unconfirmed": "Changing the tier changes who may modify this workspace's agents — confirm to continue."
+    "workspace.tier_change_unconfirmed": "Changing the tier changes who may modify this workspace's agents — confirm to continue.",
+    "project.department_required": "A project belongs to a department — pick an existing, active one.",
+    "steward.pending_group_retired": "This change was staged for a project group, and project groups are retired — reject it and change the projects' members directly."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -11466,7 +11461,9 @@
       }
     },
     "common": {
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "searchOptions": "Search…",
+      "noMatch": "No matching options"
     },
     "kb": {
       "eyebrow": "Knowledge",
@@ -11542,6 +11539,14 @@
       "required": "required",
       "noKb": "No ready knowledge base in this workspace yet.",
       "errKb": "This scenario answers from your documents: mount at least one knowledge base.",
+      "project": {
+        "label": "Project",
+        "placeholder": "Choose a business project",
+        "hint": "Every new agent belongs to a business project of a department; the workspace default project cannot hold new agents.",
+        "none": "You have no business project here you can create agents in. Ask a department administrator to add you to one, or create one.",
+        "open": "Open projects",
+        "err": "Choose the project this agent belongs to."
+      },
       "carries": "Deploys with",
       "longTerm": "long-term memory",
       "carriesHint": "tools, model and limits are in the full form",
@@ -12763,9 +12768,7 @@
         "role": "Global role",
         "anyRole": "Any role",
         "project": "Project",
-        "anyProject": "Any project",
-        "group": "Project group",
-        "anyGroup": "Any group"
+        "anyProject": "Any project"
       },
       "bulk": {
         "open_one": "Add {{count}} to project…",
@@ -12788,44 +12791,33 @@
       },
       "memberships": {
         "projects": "Projects",
-        "groups": "Project groups",
         "projectsNone": "No project yet — the account joins the default project through the workspace grant only.",
-        "groupsNone": "Not in any project group.",
         "projectsTarget": "Project",
-        "groupsTarget": "Project group",
         "projectsAdd": "Add project",
-        "groupsAdd": "Add project group",
         "role": "Role",
         "remove": "Remove",
         "legacy": "Legacy workspace grants (advanced)",
         "legacyHint": "A granted “default” workspace joins the default project with the inherited global role — what workshops use.",
-        "open": "Edit projects and groups",
-        "title": "Projects and groups · {{username}}",
-        "body": "The direct project memberships and the project groups of this account. Saving replaces both lists; access changes on the next request.",
+        "open": "Edit projects",
+        "title": "Projects · {{username}}",
+        "body": "The direct project memberships of this account. Saving replaces the list; access changes on the next request.",
         "inheritHint": "The default project's “inherits global role” membership follows the workspace grant and is not edited here.",
         "save": "Save",
-        "saved": "Projects and groups of {{username}} saved",
+        "saved": "Projects of {{username}} saved",
         "err": {
           "projectsIncomplete": "Pick a project and a role on every row.",
-          "projectsDuplicate": "A project appears twice.",
-          "groupsIncomplete": "Pick a group and a role on every row.",
-          "groupsDuplicate": "A group appears twice."
+          "projectsDuplicate": "A project appears twice."
         }
       },
       "access": {
         "projectsTitle": "Projects and roles",
-        "groupsTitle": "Project groups",
         "reachTitle": "Workspaces (reachable)",
         "reachSub": "From the projects and the grants",
         "project": "Project",
         "role": "Effective role",
-        "source": "Source",
         "keys": "Keys",
-        "direct": "Direct ({{role}})",
-        "fromGroup": "Group “{{group}}” ({{role}})",
         "allProjects": "All (administrator)",
         "noProjects": "Not a member of any project — this account cannot open any project.",
-        "noGroups": "Not in any project group.",
         "archived": "archived",
         "grantOnly": "Granted directly; no reachable project",
         "via": "via {{projects}}",
@@ -13233,7 +13225,6 @@
       },
       "filter": {
         "department": "Department",
-        "group": "Project group",
         "status": "Status",
         "workspace": "Workspace",
         "all": "All"
@@ -13241,7 +13232,6 @@
       "col": {
         "name": "Project",
         "department": "Department",
-        "group": "Project group",
         "workspaces": "Workspaces",
         "members": "Members",
         "agents": "Agents",
@@ -13253,7 +13243,6 @@
         "idHint": "2-32 lowercase letters, digits or -; cannot be changed later",
         "name": "Name",
         "department": "Department",
-        "group": "Project group",
         "description": "Description",
         "workspaces": "Enable in workspaces",
         "workspacesRequired": "Pick at least one workspace.",
@@ -13261,7 +13250,8 @@
         "owners": "Project owners",
         "ownersSearch": "Search users…",
         "submit": "Create",
-        "done": "Project {{name}} created"
+        "done": "Project {{name}} created",
+        "pickDepartment": "Pick a department…"
       },
       "bind": {
         "title": "Bind a project to {{workspace}}",
@@ -13296,7 +13286,7 @@
         "createdBy": "Created by",
         "archivedAt": "Archived",
         "usage": "Quota usage",
-        "noQuota": "No limit is set for this project. Set quotas on the Settings tab."
+        "noQuota": "No limit is set for this project. A platform administrator sets quotas and the monthly budget on the Settings tab."
       },
       "archive": {
         "action": "Archive",
@@ -13328,27 +13318,17 @@
         "role": "Role",
         "search": "Search members",
         "empty": "No member matches.",
-        "source": {
-          "all": "Any source",
-          "direct": "Direct",
-          "group": "From a group"
-        },
-        "sourceDirect": "Direct",
-        "sourceGroup": "Group {{group}}",
         "col": {
           "member": "Member",
           "roles": "Effective roles",
-          "source": "Source",
           "overrides": "Overrides",
           "keys": "Keys"
         },
         "admin": "admin",
         "edit": "Edit",
-        "inGroup": "Managed in the group",
-        "addDirect": "Add direct role",
         "self": "You cannot change your own membership",
         "removeTitle": "Remove member",
-        "removeBody": "Remove {{name}}'s direct membership of {{project}}? Access through a project group stays.",
+        "removeBody": "Remove {{name}}'s membership of {{project}}?",
         "removed": "{{name}} removed",
         "added": "{{name}} added",
         "updated": "{{name}} updated",
@@ -13356,7 +13336,6 @@
         "candidatesHint": "Search by username or email",
         "noCandidates": "No active account matches.",
         "isMember": "already a member",
-        "directOverGroup": "Their group already gives them {{role}}; a direct role adds to it (the union).",
         "customize": "Adjust keys for this member (overrides)",
         "inheritHint": "This role follows the account's global role and permissions; overrides are kept as they are.",
         "strictNotice": "This project separates duties strictly: a change that gives someone both sides of a pair (deploy + sign releases, manage + sign criteria) is refused."
@@ -13445,7 +13424,7 @@
       "settings": {
         "general": "General",
         "access": "Access",
-        "adminOnly": "Name, department and project group are changed by a platform administrator.",
+        "adminOnly": "Name and department are changed by a platform administrator.",
         "visibility": "Resource visibility",
         "visShared": "Shared — members see each other's resources",
         "visIsolated": "Isolated — members see only their own resources",
@@ -13549,36 +13528,48 @@
         }
       },
       "quotas": {
-        "title": "Quotas and budgets",
-        "sub": "Usage against this project's limits. The limit is the smaller of the project's value and its department's cap; an empty field means no project value. Spend figures are estimates with a few minutes' delay, so the money caps are soft.",
+        "title": "Quotas and monthly budget",
+        "sub": "Usage against this project's limits. Only a platform administrator sets them; an empty field means no limit.",
         "col": {
           "quota": "Quota",
           "used": "Used",
           "limit": "Limit",
-          "department": "Department cap",
           "project": "Project value"
         },
         "key": {
           "max_agents": "Agents",
           "max_api_keys": "Enabled API keys",
           "max_concurrent_eval_runs": "Concurrent evaluation runs",
-          "eval_run_max_usd": "Cost per evaluation run (USD)",
-          "eval_monthly_usd_cap": "Evaluation spend this month (USD)",
-          "monthly_cost_alert_usd": "Monthly cost alert (USD)",
+          "monthly_budget_usd": "Monthly budget (USD)",
           "v1_rate_per_minute": "/v1 calls per minute (all keys)"
         },
         "enforcement": {
           "block": "Refused when over the limit",
           "queue": "Further runs wait for a slot",
-          "alert": "Alerts only, never blocks",
+          "budget": "Billable work is refused once spent",
           "throttle": "Calls over the limit get 429"
+        },
+        "budget": {
+          "title": "Monthly budget (USD)",
+          "none": "No monthly budget: this project's billable work is not limited.",
+          "spent": "Spent this month",
+          "remaining": "Remaining",
+          "of": "{{spent}} of {{budget}}",
+          "reset": "Resets on the 1st of each month (UTC) — next on {{date}}.",
+          "exhausted": "The budget is used up: chat, invokes, deploys, evaluation runs, experiments, Skill Lab and other billable work of this project are refused until {{date}} (UTC) or an administrator raises the budget.",
+          "warning": "80% or more of the budget is spent — an alert has fired.",
+          "notMeasured": "The month's spend could not be measured yet; work is not blocked until it is.",
+          "lag": "Spend comes from {{basis}} and trails by minutes (billed cost: up to a day); work already running is not stopped, so a small overshoot is possible.",
+          "basis": {
+            "estimate": "the token × price estimate",
+            "billing": "the billed cost"
+          }
         },
         "unlimited": "No limit",
         "unset": "Not set",
         "firing": "Over budget",
-        "notMeasured": "Not measured yet: the budget alert reads the spend on its next pass.",
-        "invalid": "Not a valid value, or above the department cap.",
-        "readOnly": "Only an administrator or this project's department administrator can change quotas.",
+        "invalid": "Not a valid value.",
+        "readOnly": "Only a platform administrator can change quotas and the monthly budget.",
         "save": "Save quotas",
         "saved": "Quotas of {{name}} saved"
       },
@@ -13806,45 +13797,16 @@
       },
       "breakGlass": "Lost the built-in administrator's password? Reset it on the instance with scripts/reset_admin_password.py, or set LAUNCHPAD_AUTH_ADMIN_PASSWORD_OVERRIDE_DISABLED=true to go back to the configured one."
     },
-    "groups": {
-      "nav": "Project groups",
-      "eyebrow": "Structure · project groups",
-      "title": "Project groups",
-      "sub": "A group's members reach every project in the group with the group's role; direct project members are not affected.",
-      "create": "New project group",
+    "structure": {
       "edit": "Edit",
       "archive": "Archive",
       "unarchive": "Unarchive",
-      "empty": "No project group",
-      "emptyBody": "Group projects that share a team, then add the team once.",
-      "notFound": "Project group {{id}} was not found.",
-      "noDepartment": "No department",
       "status": {
         "active": "Active",
         "archived": "Archived",
         "all": "All"
       },
-      "col": {
-        "group": "Group",
-        "department": "Department",
-        "projects": "Projects",
-        "members": "Members"
-      },
-      "tab": {
-        "projects": "Projects",
-        "members": "Members"
-      },
-      "created": "Project group {{name}} created",
-      "saved": "Project group {{name}} saved",
-      "archived": "Project group {{name}} archived ({{keys}} API keys disabled)",
-      "unarchived": "Project group {{name}} unarchived",
-      "archivedNotice": "This group is archived: its members no longer reach its projects through it.",
-      "archiveTitle": "Archive {{name}}?",
-      "archiveBody_one": "The access {{count}} member got through this group stops; the projects keep their group and direct members keep their access.",
-      "archiveBody_other": "The access {{count}} members got through this group stops; the projects keep their group and direct members keep their access.",
       "form": {
-        "createTitle": "New project group",
-        "editTitle": "Edit project group",
         "name": "Name",
         "id": "ID",
         "description": "Description",
@@ -13856,55 +13818,21 @@
           "id": "2-32 lowercase letters, digits or hyphens, starting with a letter or digit.",
           "name": "Enter a name."
         }
-      },
-      "projects": {
-        "sub": "Group members see a project the moment it joins; when it leaves, the access the group gave is revoked.",
-        "none": "No project in this group yet.",
-        "pick": "Pick a project…",
-        "add": "Add to group",
-        "inOther": "in group {{group}}",
-        "added": "Project added to the group",
-        "remove": "Remove from group",
-        "removed": "Project removed from the group",
-        "removeTitle": "Remove {{name}} from the group?",
-        "removeBody_one": "This revokes the access {{count}} member got through this group; direct members are not affected.",
-        "removeBody_other": "This revokes the access {{count}} members got through this group; direct members are not affected."
-      },
-      "members": {
-        "none": "No member yet.",
-        "add": "Add members",
-        "addTitle": "Add members to {{name}}",
-        "addSubmit_one": "Add {{count}} member",
-        "addSubmit_other": "Add {{count}} members",
-        "picked": "Selected: {{names}}",
-        "templatesOnly": "Groups take built-in roles only; custom roles belong to one project.",
-        "needProject": "Add a project to the group first — accounts are searched through one of its projects.",
-        "addedMany_one": "{{count}} member added",
-        "addedMany_other": "{{count}} members added",
-        "updated": "Role of {{username}} updated",
-        "remove": "Remove from group",
-        "removed": "{{username}} removed from the group",
-        "removeTitle": "Remove {{username}} from the group?",
-        "removeBody_one": "They lose the access this group gave them in {{count}} project; a direct membership stays.",
-        "removeBody_other": "They lose the access this group gave them in {{count}} projects; a direct membership stays.",
-        "sod_one": "Combined duties in {{count}} project",
-        "sod_other": "Combined duties in {{count}} projects"
       }
     },
     "departments": {
       "nav": "Departments",
       "eyebrow": "Structure · departments",
       "title": "Departments",
-      "sub": "Departments label projects and project groups and group the project switcher. Each one can have its own administrators, who manage its projects and groups in the workspaces opened to it.",
+      "sub": "Every project belongs to a department, and departments group the project switcher. Each one can have its own administrators, who manage its projects in the workspaces opened to it.",
       "create": "New department",
       "delete": "Delete",
       "empty": "No department",
-      "emptyBody": "Add one, then pick it on a project or a project group.",
-      "inUse": "Still named by a project or a group — archive it instead",
+      "emptyBody": "Add one, then pick it on a project.",
+      "inUse": "Still named by a project — archive it instead",
       "col": {
         "department": "Department",
         "projects": "Projects",
-        "groups": "Groups",
         "workspaces": "Open workspaces"
       },
       "form": {
@@ -13917,9 +13845,9 @@
       "unarchived": "Department {{name}} unarchived",
       "deleted": "Department {{name}} deleted",
       "archiveTitle": "Archive {{name}}?",
-      "archiveBody": "{{name}} is hidden from new choices; projects and groups that name it keep it.",
+      "archiveBody": "{{name}} is hidden from new choices; projects that name it keep it.",
       "deleteTitle": "Delete {{name}}?",
-      "deleteBody": "{{name}} is removed for good. No project or group names it.",
+      "deleteBody": "{{name}} is removed for good. No project names it.",
       "manage": "Administrators & workspaces",
       "detail": {
         "title": "Department {{name}}",
@@ -13931,7 +13859,7 @@
         "settings": "Settings"
       },
       "admins": {
-        "hint": "Department administrators create the department's projects, manage their members, roles and groups, and bind them to the open workspaces. They see no project data unless they add themselves as a member — that is journaled.",
+        "hint": "Department administrators create the department's projects, manage their members and roles, and bind them to the open workspaces. They see no project data unless they add themselves as a member — that is journaled.",
         "empty": "No department administrator",
         "add": "Add an administrator",
         "remove": "Remove",
@@ -13963,7 +13891,7 @@
       },
       "mine": {
         "title": "My departments",
-        "sub": "The departments you administer: their projects and groups are yours to manage under Projects and Project groups.",
+        "sub": "The departments you administer: their projects are yours to manage under Projects.",
         "noWorkspace": "none yet — ask an administrator"
       },
       "invite": {
@@ -14313,7 +14241,7 @@
       }
     },
     "steward": {
-      "typeHint": "An organization admin manages structure only — accounts, departments, projects, groups, bindings and workspaces — and never sees project data.",
+      "typeHint": "An organization admin manages structure only — accounts, departments, projects, bindings and workspaces — and never sees project data.",
       "addWarning": "An organization admin cannot enter projects: every membership change it makes is journaled and noticed to the project's owners.",
       "demoteBody": "{{username}} loses the organization admin role and with it the structure pages.",
       "readOnly": "Your role manages structure only: administrators and organization admins are added and changed by an administrator.",
@@ -14326,13 +14254,12 @@
         "heading": "Structure only",
         "meta": "Signed in as {{username}} (organization admin)",
         "title": "Your role manages structure only",
-        "body": "An organization admin manages accounts, departments, projects, groups and workspaces, and does not access any project's data. Use the configuration pages below."
+        "body": "An organization admin manages accounts, departments, projects and workspaces, and does not access any project's data. Use the configuration pages below."
       },
       "links": {
         "users": "Users",
         "admins": "Administrators",
         "projects": "Projects",
-        "groups": "Project groups",
         "departments": "Departments",
         "workspaces": "Workspaces"
       },
@@ -14705,8 +14632,7 @@
         "kind": "Grants",
         "kinds": {
           "role": "Global role",
-          "project": "Project",
-          "group": "Project group"
+          "project": "Project"
         },
         "pick": "Choose…",
         "role": "Role",
@@ -15160,7 +15086,6 @@
       "compareDearer": "dearer ▸",
       "refusedConfirm": "The server priced this evaluation at {{usd}}, above the confirm threshold. Tick the confirmation on the estimate card and submit again.",
       "refusedOver": "The server priced this evaluation at {{usd}}, over this workspace's limit ({{max}}). Narrow the scope, or ask an administrator to submit it.",
-      "refusedOverProject": "The server priced this evaluation at {{usd}}, over this project's per-run evaluation limit ({{max}}). Narrow the scope, or ask an administrator to raise the project's quota.",
       "rungTitle": "Cost per run",
       "rungSub": "Each run on the ladder: measured cost, else its estimate, and the change against the run before.",
       "rungSpan": "First run {{first}} → latest {{latest}}",
@@ -15730,7 +15655,6 @@
       "simulatedDataset": "A simulated dataset is generated on the fly: its rows cannot be picked or copied.",
       "fixedOnceCreated": "This is fixed once it has been created.",
       "twoScalePoints": "A rating scale needs at least two points.",
-      "archivedGroup": "The group is archived: unarchive it first to change it.",
       "pickProject": "Choose a project first.",
       "pickPeople": "Pick at least one person first.",
       "pickRole": "Choose a role first.",
@@ -15781,7 +15705,6 @@
       "maxEvaluators": "At most {{count}} evaluators per task.",
       "firstStep": "This is the first step.",
       "publishingNow": "It is still publishing: wait for that to finish.",
-      "pickGroup": "Choose a project group first.",
       "allListed": "Every one is already in the list."
     }
   },
@@ -15813,6 +15736,7 @@
     "workspace.fix_role": "Fix the workspace role",
     "users.open": "Open Users",
     "projects.open": "Open projects",
+    "project.settings": "Open the project's settings",
     "models.open": "Open model settings",
     "network.open": "Open network profiles",
     "storage.open": "Open storage"

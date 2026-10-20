@@ -31,7 +31,6 @@ import {
   sodPairsIn,
   sodRefusal,
   SOD_PAIRS,
-  sourceGroup,
 } from "./model";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -40,7 +39,7 @@ const read = (p: string) => readFileSync(resolve(here, p), "utf-8");
 function member(over: Partial<ProjectMember> = {}): ProjectMember {
   return {
     user_id: "u1", username: "zhang", email: "z***@corp.com", account_role: "member", status: "active",
-    direct: { role_key: "developer", overrides: {}, added_by: null, added_at: null }, group: null,
+    direct: { role_key: "developer", overrides: {}, added_by: null, added_at: null },
     sources: [{ source: "direct", role_key: "developer" }], bypass: false, permissions: [], sod_conflicts: [],
     ...over,
   };
@@ -48,7 +47,7 @@ function member(over: Partial<ProjectMember> = {}): ProjectMember {
 
 function project(over: Partial<ProjectDetail> = {}): ProjectDetail {
   return {
-    id: "risk", name: "Risk", description: "", department_id: null, group_id: null, status: "active",
+    id: "risk", name: "Risk", description: "", department_id: null, status: "active",
     is_default: false, settings: {}, created_by: null, created_by_name: null, created_at: null, updated_at: null,
     archived_at: null, workspaces: [], member_count: 0, agent_count: 0, my_permissions: [], can_manage: false, ...over,
   };
@@ -149,28 +148,21 @@ describe("roles and overrides", () => {
 describe("member rows", () => {
   const opts = { canManage: true, isAdmin: false, me: "owner" };
 
-  it("lets a manager edit a direct row, not their own, and points group rows at the group", () => {
+  it("lets a manager edit a row, not their own", () => {
     expect(memberRowState(member(), opts)).toBe("editable");
     expect(memberRowState(member({ username: "owner" }), opts)).toBe("self");
     expect(memberRowState(member({ username: "owner" }), { ...opts, isAdmin: true })).toBe("editable");
-    expect(memberRowState(member({ direct: null }), opts)).toBe("group");
     expect(memberRowState(member(), { ...opts, canManage: false })).toBe("readonly");
   });
 
-  it("filters by role, source and text", () => {
+  it("filters by role and text", () => {
     const rows = [
       member(),
-      member({
-        user_id: "u2", username: "zhao", direct: null, group: { group_id: "risk-platform", role_key: "developer" },
-        sources: [{ source: "group:risk-platform", role_key: "developer" }],
-      }),
+      member({ user_id: "u2", username: "zhao" }),
       member({ user_id: "u3", username: "li", sources: [{ source: "direct", role_key: "biz_owner" }] }),
     ];
-    expect(filterMembers(rows, { role: "developer", source: "all", q: "" }).map((m) => m.user_id)).toEqual(["u1", "u2"]);
-    expect(filterMembers(rows, { role: "all", source: "group", q: "" }).map((m) => m.user_id)).toEqual(["u2"]);
-    expect(filterMembers(rows, { role: "all", source: "direct", q: "LI" }).map((m) => m.user_id)).toEqual(["u3"]);
-    expect(sourceGroup("group:risk-platform")).toBe("risk-platform");
-    expect(sourceGroup("direct")).toBeNull();
+    expect(filterMembers(rows, { role: "developer", q: "" }).map((m) => m.user_id)).toEqual(["u1", "u2"]);
+    expect(filterMembers(rows, { role: "all", q: "LI" }).map((m) => m.user_id)).toEqual(["u3"]);
   });
 
   it("lists the owners", () => {
@@ -191,12 +183,13 @@ describe("settings patch", () => {
     expect(settingsPatch(p, draft, false)).toEqual({ description: "y", settings: { resource_visibility: "isolated" } });
   });
 
-  it("sends an administrator structure and sod_strict, empties as null", () => {
-    const withOrg = project({ department_id: "retail", group_id: "g1" });
-    const draft = { ...settingsDraft(withOrg), name: " New ", department_id: "", group_id: "", sod_strict: true };
+  it("sends an administrator structure and sod_strict, never a cleared department", () => {
+    const withOrg = project({ department_id: "retail" });
+    const draft = { ...settingsDraft(withOrg), name: " New ", department_id: "wealth", sod_strict: true };
     expect(settingsPatch(withOrg, draft, true)).toEqual({
-      name: "New", department_id: null, group_id: null, settings: { sod_strict: true },
+      name: "New", department_id: "wealth", settings: { sod_strict: true },
     });
+    expect(settingsPatch(withOrg, { ...settingsDraft(withOrg), department_id: "" }, true)).toBeNull();
   });
 });
 

@@ -6,7 +6,7 @@ names label the project switcher's groups, design §2.7); every write is `ADMIN`
 to a department included — except the invitation, which the department's own
 administrators may send when its `settings.can_create_users` allows. A department
 grants no access, so none of this moves the access epoch. The logic lives in
-`services/project_groups.py`.
+`services/project_groups.py` (departments only; the module name is historical).
 """
 
 from typing import Any
@@ -100,7 +100,7 @@ def unarchive_department(
 def delete_department(
     department_id: str, request: Request, db: Session = Depends(get_db),
 ) -> None:
-    """Only while no project and no group names it (409 `department.in_use`)."""
+    """Only while no project names it (409 `department.in_use`)."""
     row = svc.get_department(db, department_id)
     svc.delete_department(db, require_identity(request), row)
     db.commit()

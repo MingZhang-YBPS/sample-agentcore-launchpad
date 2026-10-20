@@ -15,9 +15,9 @@ import {
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
-import { Btn, Chip, Confirm, Dialog, Empty, Filters, Notice, Panel, Skeleton } from "../../ui";
+import { Btn, Chip, Confirm, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { KeyPicker } from "./KeyPicker";
-import { useRoleLabel, useSourceLabel } from "./labels";
+import { useRoleLabel } from "./labels";
 import {
   applyOverrides,
   assignableRoles,
@@ -25,17 +25,16 @@ import {
   memberRowState,
   overridesFor,
   roleKeys,
-  type SourceFilter,
   sodRefusal,
 } from "./model";
 import type { ProjectAbilities } from "./ProjectDetail";
 import { StewardSection } from "./StewardSection";
-import { useStructureNames } from "./useStructureNames";
+import { Select } from "../../select";
 
 /**
- * §7.8: direct and group members, their effective keys and the combined-duties
- * hint; a manager adds, edits and removes direct rows. Group rows are managed on
- * the group; nobody but an administrator changes their own row (§3.6).
+ * §7.8: the members, their effective keys and the combined-duties hint; a manager
+ * adds, edits and removes rows; nobody but an administrator changes their own row
+ * (§3.6).
  */
 export function MembersTab({
   project,
@@ -53,17 +52,14 @@ export function MembersTab({
   const [tick, setTick] = useState(0);
   const members = useLoad(() => projectsApi.members(project.id), `v3-project-members:${project.id}:${tick}`);
   const roles = useLoad(() => projectsApi.roles(project.id), `v3-project-roles:${project.id}`);
-  const names = useStructureNames(abilities.admin);
   const roleLabel = useRoleLabel(roles.data?.custom);
-  const sourceLabel = useSourceLabel(names.group);
   const [role, setRole] = useState("all");
-  const [source, setSource] = useState<SourceFilter>("all");
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState<ProjectMember | "new" | null>(null);
   const [removing, setRemoving] = useState<ProjectMember | null>(null);
   const [busy, setBusy] = useState(false);
   const all = useMemo(() => members.data?.members ?? [], [members.data]);
-  const rows = useMemo(() => filterMembers(all, { role, source, q }), [all, role, source, q]);
+  const rows = useMemo(() => filterMembers(all, { role, q }), [all, role, q]);
   const strict = members.data?.sod_strict ?? false;
   const canWrite = abilities.manage && project.status === "active";
   const reload = () => {
@@ -92,19 +88,10 @@ export function MembersTab({
       <StewardSection projectId={project.id} abilities={abilities} onChanged={reload} />
       {strict && <Notice s="info">{t("v3.projects.members.strictNotice")}</Notice>}
       <div className="v3-prj-filters">
-        <select className="v3-input" aria-label={t("v3.projects.members.role")} value={role} onChange={(e) => setRole(e.target.value)}>
+        <Select className="v3-input" aria-label={t("v3.projects.members.role")} value={role} onChange={(e) => setRole(e.target.value)}>
           <option value="all">{t("v3.projects.members.role")}: {t("v3.projects.filter.all")}</option>
           {roles.data && assignableRoles(roles.data).map((r) => <option key={r.key} value={r.key}>{roleLabel(r.key)}</option>)}
-        </select>
-        <Filters
-          value={source}
-          onChange={setSource}
-          options={[
-            { value: "all", label: t("v3.projects.members.source.all") },
-            { value: "direct", label: t("v3.projects.members.source.direct") },
-            { value: "group", label: t("v3.projects.members.source.group") },
-          ]}
-        />
+        </Select>
         <div className="v3-prj-search">
           <Search size={14} aria-hidden="true" />
           <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)}
@@ -127,7 +114,6 @@ export function MembersTab({
               <tr>
                 <th>{t("v3.projects.members.col.member")}</th>
                 <th>{t("v3.projects.members.col.roles")}</th>
-                <th>{t("v3.projects.members.col.source")}</th>
                 <th>{t("v3.projects.members.col.overrides")}</th>
                 <th className="num">{t("v3.projects.members.col.keys")}</th>
                 <th />
@@ -159,7 +145,6 @@ export function MembersTab({
                         )}
                       </span>
                     </td>
-                    <td>{m.sources.map((s) => sourceLabel(s.source)).join(" · ")}</td>
                     <td className="mono">
                       {overrides.length === 0 ? "—" : overrides.map(([k, on]) => `${on ? "+" : "−"}${k}`).join(" ")}
                     </td>
@@ -169,12 +154,6 @@ export function MembersTab({
                         <span style={{ display: "inline-flex", gap: 6 }}>
                           <Btn size="sm" onClick={() => setEditing(m)}><Pencil size={12} /> {t("v3.projects.members.edit")}</Btn>
                           <Btn size="sm" kind="danger" onClick={() => setRemoving(m)} disabled={busy}><Trash2 size={12} /> {t("v3.projects.remove")}</Btn>
-                        </span>
-                      )}
-                      {state === "group" && (
-                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                          <span className="v3-prj-muted">{t("v3.projects.members.inGroup")}</span>
-                          <Btn size="sm" onClick={() => setEditing(m)}>{t("v3.projects.members.addDirect")}</Btn>
                         </span>
                       )}
                       {state === "self" && <span className="v3-prj-muted">{t("v3.projects.members.self")}</span>}
@@ -238,7 +217,7 @@ function MemberDialog({
   const toast = useToast();
   const roleLabel = useRoleLabel(roles.custom);
   const options = assignableRoles(roles);
-  const initialRole = member?.direct?.role_key ?? member?.group?.role_key ?? (options.find((o) => o.key === "developer")?.key ?? options[0]?.key ?? "viewer");
+  const initialRole = member?.direct?.role_key ?? (options.find((o) => o.key === "developer")?.key ?? options[0]?.key ?? "viewer");
   const [target, setTarget] = useState<{ user_id: string; username: string } | null>(
     member ? { user_id: member.user_id, username: member.username ?? member.user_id } : null,
   );
@@ -315,14 +294,11 @@ function MemberDialog({
             </div>
           </div>
         )}
-        {member && !member.direct && member.group && (
-          <Notice s="info">{t("v3.projects.members.directOverGroup", { role: roleLabel(member.group.role_key) })}</Notice>
-        )}
         <label className="v3-field">
           <span>{t("v3.projects.members.role")}</span>
-          <select className="v3-input" value={roleKey} onChange={(e) => pickRole(e.target.value)}>
+          <Select className="v3-input" value={roleKey} onChange={(e) => pickRole(e.target.value)}>
             {options.map((o) => <option key={o.key} value={o.key}>{roleLabel(o.key)}</option>)}
-          </select>
+          </Select>
         </label>
         {base === null ? (
           <small className="v3-hint">{t("v3.projects.members.inheritHint")}</small>

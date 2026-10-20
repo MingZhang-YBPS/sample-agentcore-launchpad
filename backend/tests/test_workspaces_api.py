@@ -20,6 +20,7 @@ from app.main import create_app
 from app.models.ledger import Agent, Job, PolicyChange, UserWorkspace, Workspace
 from app.routers.workspaces import _referencing_rows
 from app.services import users as users_service
+from tests.conftest import TEST_PROJECT
 
 ADMIN_CREDS = {"username": "operator", "password": "s3cret-pass"}
 MEMBER_CREDS = {
@@ -246,7 +247,8 @@ class TestRenameAndDelete:
         db = SessionLocal()
         try:
             agent = Agent(
-                workspace_id=NEW["id"], name="resident", method="zip_runtime", status="active"
+                workspace_id=NEW["id"], name="resident", method="zip_runtime", status="active",
+                project_id=TEST_PROJECT,
             )
             db.add(agent)
             db.commit()
@@ -577,7 +579,8 @@ class TestPurge:
         db = SessionLocal()
         try:
             agent = Agent(
-                workspace_id=NEW["id"], name="resident", method="zip_runtime", status="active"
+                workspace_id=NEW["id"], name="resident", method="zip_runtime", status="active",
+                project_id=TEST_PROJECT,
             )
             db.add(agent)
             db.commit()
@@ -679,7 +682,8 @@ class TestPurge:
         try:
             db.add(Job(workspace_id=neighbour["id"], type="workspace_bootstrap", status="failed"))
             db.add(Job(workspace_id=DEFAULT_WORKSPACE_ID, type="deploy", status="succeeded"))
-            db.add(Agent(workspace_id=neighbour["id"], name="theirs", method="zip_runtime"))
+            db.add(Agent(workspace_id=neighbour["id"], name="theirs", method="zip_runtime",
+                         project_id=TEST_PROJECT))
             db.commit()
         finally:
             db.close()

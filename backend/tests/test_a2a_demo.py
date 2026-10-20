@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
+from tests.conftest import TEST_PROJECT
 
 SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "frontdesk_agent" / "main.py"
 
@@ -13,7 +14,7 @@ SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "frontdesk_agent" / "
 def _mk_agent(**kw) -> str:
     db = SessionLocal()
     agent = Agent(**{
-        "workspace_id": DEFAULT_WORKSPACE_ID,
+        "workspace_id": DEFAULT_WORKSPACE_ID, "project_id": TEST_PROJECT,
         "name": "front-desk", "method": "zip_runtime", "status": "active",
         "arn": "arn:aws:bedrock-agentcore:us-west-2:1:runtime/fd-1",
         "spec": {"system_prompt": "s"}, **kw,

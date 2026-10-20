@@ -16,7 +16,7 @@ describe("users API with projects", () => {
   it("encodes paths and filters", async () => {
     expect(userPath("u/1", "access")).toBe("/api/users/u%2F1/access");
     const calls = stubFetch({ items: [], total: 0, limit: 50, offset: 0 });
-    await usersApi.list({ status: "all", project: "alpha", group: "", role: "member" });
+    await usersApi.list({ status: "all", project: "alpha", q: "", role: "member" });
     await usersApi.list();
     expect(calls()[0][0]).toBe("/api/users?project=alpha&role=member");
     expect(calls()[1][0]).toBe("/api/users");

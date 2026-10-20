@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
  * The palette lives in v3.css (`[data-theme="light"] .v3`); this module only picks
  * which one is on. The attribute sits on <html> so the tiny script in index.html
  * can set it before first paint — keep that script's logic in step with
- * `resolveTheme` (theme.test.ts runs it against this module). Dark stays the
+ * `resolveTheme` (theme.test.ts runs it against this module). Light is the
  * default until someone chooses; "system" follows `prefers-color-scheme`. */
 
 export type ThemeChoice = "light" | "dark" | "system";
@@ -16,7 +16,7 @@ export const THEME_CHOICES: readonly ThemeChoice[] = ["light", "dark", "system"]
 const LIGHT_QUERY = "(prefers-color-scheme: light)";
 
 export function parseChoice(raw: string | null | undefined): ThemeChoice {
-  return raw === "light" || raw === "dark" || raw === "system" ? raw : "dark";
+  return raw === "light" || raw === "dark" || raw === "system" ? raw : "light";
 }
 
 export function resolveTheme(choice: ThemeChoice, systemLight: boolean): Theme {
@@ -28,7 +28,7 @@ export function readChoice(storage: Pick<Storage, "getItem"> | undefined = safeS
   try {
     return parseChoice(storage?.getItem(THEME_KEY));
   } catch {
-    return "dark";
+    return "light";
   }
 }
 

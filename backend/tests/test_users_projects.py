@@ -1,9 +1,9 @@
 """User management with projects (projects design §7.4–§7.6, §7.10, P1F-users).
 
-`POST` / `PATCH /api/users` with `projects` / `groups` (the approval flow places a
-pending account into projects in the same transaction), the default project's
-`inherit` row still following `workspaces`, the list's `projects` / `groups` fields
-and its `role` / `project` / `group` filters, `GET /api/users/{id}` and
+`POST` / `PATCH /api/users` with `projects` (the approval flow places a pending
+account into projects in the same transaction), the default project's `inherit` row
+still following `workspaces`, the list's `projects` field and its `role` / `project`
+filters, `GET /api/users/{id}` and
 `/api/users/{id}/access`, the bulk `POST /api/users/bulk/projects`, and an admin's
 membership rows kept across a promotion and back."""
 
@@ -12,8 +12,9 @@ from sqlalchemy import select
 
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import AuditEvent, User
-from app.models.projects import GroupMember, Project, ProjectGroup, ProjectMember
+from app.models.projects import ProjectMember
 from app.services import access
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import (  # noqa: F401
     ADMIN,
     PEER,
@@ -35,35 +36,11 @@ def _admin(app):  # noqa: F811
     return client
 
 
-def _group(gid: str, *projects: str, archived: bool = False) -> None:
-    from datetime import UTC, datetime
-
-    db = SessionLocal()
-    try:
-        db.add(ProjectGroup(id=gid, name=gid.upper(),
-                            archived_at=datetime.now(UTC) if archived else None))
-        for pid in projects:
-            db.get(Project, pid).group_id = gid
-        access.bump_epoch(db)
-        db.commit()
-    finally:
-        db.close()
-
-
 def _rows(user_id: str) -> dict[str, str]:
     db = SessionLocal()
     try:
         return {m.project_id: m.role_key for m in db.scalars(
             select(ProjectMember).where(ProjectMember.user_id == user_id))}
-    finally:
-        db.close()
-
-
-def _group_rows(user_id: str) -> dict[str, str]:
-    db = SessionLocal()
-    try:
-        return {m.group_id: m.role_key for m in db.scalars(
-            select(GroupMember).where(GroupMember.user_id == user_id))}
     finally:
         db.close()
 
@@ -95,22 +72,27 @@ def admin(app):  # noqa: F811
 # ── create ────────────────────────────────────────────────────────────────────
 
 
-def test_create_places_the_account_into_projects_and_groups(admin):
-    _group("risk", "beta")
-    body = _new(admin, "zhang", projects=[{"project_id": "alpha", "role_key": "developer"}],
-                groups=[{"group_id": "risk", "role_key": "viewer"}])
+def test_create_places_the_account_into_projects(admin):
+    body = _new(admin, "zhang", projects=[{"project_id": "alpha", "role_key": "developer"},
+                                          {"project_id": "beta", "role_key": "viewer"}])
     # workspaces omitted ⇒ `default` and its `inherit` row, as before
     assert body["workspaces"] == [WS]
-    assert _rows(body["id"]) == {"alpha": "developer", "default": "inherit"}
-    assert _group_rows(body["id"]) == {"risk": "viewer"}
+    assert _rows(body["id"]) == {"alpha": "developer", "beta": "viewer", TEST_PROJECT: "inherit"}
     projects = {p["id"]: p for p in body["projects"]}
-    assert body["projects"][0]["id"] == "default"  # the default project first
+    # a `default` project would sort first; the suite's workspace project is a
+    # business project, so the list is by name
+    assert [p["id"] for p in body["projects"]] == ["alpha", "beta", TEST_PROJECT]
     assert projects["alpha"]["role"] == "developer"
     assert projects["alpha"]["sources"] == [{"source": "direct", "role_key": "developer"}]
-    assert projects["beta"]["sources"] == [{"source": "group:risk", "role_key": "viewer"}]
-    assert body["groups"] == [{"id": "risk", "name": "RISK", "role": "viewer",
-                               "archived": False}]
-    assert {"project.members.add", "group.members.add", "user.create"} <= set(_actions())
+    assert "groups" not in body  # project groups are retired
+    assert {"project.members.add", "user.create"} <= set(_actions())
+
+
+def test_the_default_project_lists_first(admin):
+    _project("default")  # bound back next to the suite's business project
+    body = _new(admin, "liwei", projects=[{"project_id": "alpha", "role_key": "developer"},
+                                       {"project_id": "default", "role_key": "viewer"}])
+    assert [p["id"] for p in body["projects"]][0] == "default"
 
 
 def test_create_refuses_a_bad_item_and_writes_nothing(admin):
@@ -132,15 +114,6 @@ def test_create_refuses_a_bad_item_and_writes_nothing(admin):
         "username": "ghost", "email": "ghost@acme-corp.com", "password": "sufficient-pass",
         "projects": [{"project_id": "alpha", "role_key": "inherit"}]})
     assert res.status_code == 400 and res.json()["code"] == "project.role_unknown"
-    _group("risk")
-    res = admin.post("/api/users", json={
-        "username": "ghost", "email": "ghost@acme-corp.com", "password": "sufficient-pass",
-        "groups": [{"group_id": "risk", "role_key": "custom_role"}]})
-    assert res.status_code == 400 and res.json()["code"] == "group.role_unknown"
-    res = admin.post("/api/users", json={
-        "username": "ghost", "email": "ghost@acme-corp.com", "password": "sufficient-pass",
-        "groups": [{"group_id": "nope", "role_key": "viewer"}]})
-    assert res.status_code == 404 and res.json()["code"] == "group.not_found"
     db = SessionLocal()
     try:
         assert db.scalars(select(User).where(User.username_key == "ghost")).first() is None
@@ -157,14 +130,6 @@ def test_an_admin_is_created_without_memberships(admin):
     assert res.status_code == 400 and res.json()["code"] == "users.admin_no_grants"
 
 
-def test_joining_an_archived_group_is_refused(admin):
-    _group("old", archived=True)
-    res = admin.post("/api/users", json={
-        "username": "late", "email": "late@acme-corp.com", "password": "sufficient-pass",
-        "groups": [{"group_id": "old", "role_key": "viewer"}]})
-    assert res.status_code == 409 and res.json()["code"] == "group.archived"
-
-
 # ── approval and PATCH ────────────────────────────────────────────────────────
 
 
@@ -177,11 +142,10 @@ def test_approval_places_a_pending_account_into_projects(admin, app):  # noqa: F
         db.commit()
     finally:
         db.close()
-    _group("risk", "beta")
     res = admin.patch(f"/api/users/{uid}", json={
         "status": "active",
-        "projects": [{"project_id": "alpha", "role_key": "developer"}],
-        "groups": [{"group_id": "risk", "role_key": "sme"}],
+        "projects": [{"project_id": "alpha", "role_key": "developer"},
+                     {"project_id": "beta", "role_key": "sme"}],
     })
     assert res.status_code == 200, res.text
     body = res.json()
@@ -199,14 +163,14 @@ def test_approval_places_a_pending_account_into_projects(admin, app):  # noqa: F
             select(AuditEvent.target).where(AuditEvent.action == "user.update")))
     finally:
         db.close()
-    assert any("projects=alpha:developer" in t and "groups=risk:sme" in t for t in targets)
+    assert any("projects=alpha:developer,beta:sme" in t for t in targets)
 
 
 def test_the_workshop_approval_still_joins_the_default_project(admin):
     uid = _user("workshop", grant=False)
     res = admin.patch(f"/api/users/{uid}", json={"status": "active", "workspaces": [WS]})
     assert res.status_code == 200
-    assert _rows(uid) == {"default": "inherit"}
+    assert _rows(uid) == {TEST_PROJECT: "inherit"}
     assert res.json()["projects"][0]["role"] == "inherit"
 
 
@@ -216,18 +180,18 @@ def test_patch_projects_replaces_the_direct_rows_but_spares_inherit(admin):
     res = admin.patch(f"/api/users/{uid}", json={
         "projects": [{"project_id": "beta", "role_key": "viewer"}]})
     assert res.status_code == 200
-    assert _rows(uid) == {"beta": "viewer", "default": "inherit"}
+    assert _rows(uid) == {"beta": "viewer", TEST_PROJECT: "inherit"}
     # naming the default project replaces its `inherit` role
     admin.patch(f"/api/users/{uid}", json={
-        "projects": [{"project_id": "default", "role_key": "release_ops"}]})
-    assert _rows(uid) == {"default": "release_ops"}
+        "projects": [{"project_id": TEST_PROJECT, "role_key": "release_ops"}]})
+    assert _rows(uid) == {TEST_PROJECT: "release_ops"}
     # null clears every direct row except a grant's `inherit` one
     admin.patch(f"/api/users/{uid}", json={"projects": None})
     assert _rows(uid) == {}
     admin.patch(f"/api/users/{uid}", json={"workspaces": []})
     admin.patch(f"/api/users/{uid}", json={"workspaces": [WS]})
     admin.patch(f"/api/users/{uid}", json={"projects": []})
-    assert _rows(uid) == {"default": "inherit"}
+    assert _rows(uid) == {TEST_PROJECT: "inherit"}
     assert "project.members.remove" in _actions()
 
 
@@ -252,18 +216,6 @@ def test_patch_keeps_overrides_unless_sent(admin):
         db.close()
 
 
-def test_patch_groups_replaces_the_group_rows(admin):
-    _group("g1")
-    _group("g2")
-    uid = _new(admin, "grp", groups=[{"group_id": "g1", "role_key": "viewer"}])["id"]
-    admin.patch(f"/api/users/{uid}", json={"groups": [
-        {"group_id": "g1", "role_key": "developer"}, {"group_id": "g2", "role_key": "sme"}]})
-    assert _group_rows(uid) == {"g1": "developer", "g2": "sme"}
-    admin.patch(f"/api/users/{uid}", json={"groups": []})
-    assert _group_rows(uid) == {}
-    assert {"group.members.update", "group.members.remove"} <= set(_actions())
-
-
 def test_a_bad_patch_item_rolls_back_the_whole_patch(admin):
     uid = _new(admin, "atomic")["id"]
     res = admin.patch(f"/api/users/{uid}", json={
@@ -271,7 +223,7 @@ def test_a_bad_patch_item_rolls_back_the_whole_patch(admin):
         "projects": [{"project_id": "alpha", "role_key": "developer"},
                      {"project_id": "beta", "role_key": "no_such_role"}]})
     assert res.status_code == 400
-    assert _rows(uid) == {"default": "inherit"}
+    assert _rows(uid) == {TEST_PROJECT: "inherit"}
     assert admin.get(f"/api/users/{uid}").json()["status"] == "active"
 
 
@@ -284,24 +236,23 @@ def test_the_builtin_admin_takes_no_memberships(admin):
 def test_promotion_keeps_the_rows_and_demotion_restores_them(admin):
     uid = _new(admin, "promo", projects=[{"project_id": "alpha", "role_key": "developer"}])["id"]
     assert admin.patch(f"/api/users/{uid}", json={"role": "admin"}).status_code == 200
-    assert _rows(uid) == {"alpha": "developer", "default": "inherit"}
+    assert _rows(uid) == {"alpha": "developer", TEST_PROJECT: "inherit"}
     detail = admin.get(f"/api/users/{uid}/access").json()
     projects = {p["id"]: p for w in detail["workspaces"] for p in w["projects"]}
     # every project by role; the kept row still shows where alpha would come from
-    assert detail["is_admin"] and {"default", "alpha", "beta"} <= set(projects)
+    assert detail["is_admin"] and {TEST_PROJECT, "alpha", "beta"} <= set(projects)
     assert projects["beta"]["bypass"] and not projects["alpha"]["bypass"]
     assert sorted(projects["alpha"]["permissions"]) == sorted(access.ALL_PROJECT_KEYS)
     assert admin.patch(f"/api/users/{uid}", json={"role": "member"}).status_code == 200
-    assert _rows(uid) == {"alpha": "developer", "default": "inherit"}
+    assert _rows(uid) == {"alpha": "developer", TEST_PROJECT: "inherit"}
 
 
 # ── list, detail, access ──────────────────────────────────────────────────────
 
 
-def test_list_filters_by_project_group_and_role(admin):
-    _group("risk", "beta")
+def test_list_filters_by_project_and_role(admin):
     a = _new(admin, "aaa", projects=[{"project_id": "alpha", "role_key": "developer"}])["id"]
-    b = _new(admin, "bbb", groups=[{"group_id": "risk", "role_key": "viewer"}])["id"]
+    b = _new(admin, "bbb", projects=[{"project_id": "beta", "role_key": "viewer"}])["id"]
     op = _new(admin, "ccc", role="operator")["id"]
 
     def ids(**params):
@@ -310,18 +261,15 @@ def test_list_filters_by_project_group_and_role(admin):
         return {row["id"] for row in res.json()["items"]}, res.json()
 
     assert ids(project="alpha")[0] == {a}
-    assert ids(project_id="beta")[0] == {b}  # through the group
-    assert ids(group="risk")[0] == {b}
+    assert ids(project_id="beta")[0] == {b}
     assert ids(role="operator")[0] == {op}
     found, page = ids(project="alpha")
     assert page["builtin"] is None  # no membership to match
     assert ids()[1]["builtin"] is not None
     row = next(r for r in admin.get("/api/users").json()["items"] if r["id"] == a)
-    assert [p["id"] for p in row["projects"]] == ["default", "alpha"]
+    assert [p["id"] for p in row["projects"]] == ["alpha", TEST_PROJECT]  # by name
     res = admin.get("/api/users", params={"project": "nowhere"})
     assert res.status_code == 404 and res.json()["code"] == "project.not_found"
-    res = admin.get("/api/users", params={"group": "nowhere"})
-    assert res.status_code == 404 and res.json()["code"] == "group.not_found"
     assert admin.get("/api/users", params={"role": "boss"}).status_code == 422
 
 
@@ -329,7 +277,7 @@ def test_detail_and_access(admin, app):  # noqa: F811
     uid = _new(admin, "dee", projects=[{"project_id": "alpha", "role_key": "viewer"}])["id"]
     detail = admin.get(f"/api/users/{uid}")
     assert detail.status_code == 200
-    assert {p["id"] for p in detail.json()["projects"]} == {"default", "alpha"}
+    assert {p["id"] for p in detail.json()["projects"]} == {TEST_PROJECT, "alpha"}
     assert admin.get("/api/users/nobody").status_code == 404
     assert admin.get("/api/users/builtin-admin").json()["builtin"] is True
 
@@ -338,15 +286,15 @@ def test_detail_and_access(admin, app):  # noqa: F811
     body = res.json()
     assert body["user_id"] == uid and body["state"] == "active" and not body["is_admin"]
     projects = {p["id"]: p for w in body["workspaces"] for p in w["projects"]}
-    assert set(projects) == {"default", "alpha"}
+    assert set(projects) == {TEST_PROJECT, "alpha"}
     assert projects["alpha"]["permissions"] == []  # viewer
-    assert "agents.deploy" in projects["default"]["permissions"]  # inherit = member keys
+    assert "agents.deploy" in projects[TEST_PROJECT]["permissions"]  # inherit = member keys
     # the same map the account sees for itself
     assert _login(app, "dee").get("/api/me/access").json()["workspaces"] == body["workspaces"]
 
     builtin = admin.get("/api/users/builtin-admin/access").json()
     assert builtin["is_admin"] and {p["id"] for w in builtin["workspaces"]
-                                    for p in w["projects"]} >= {"default", "alpha", "beta"}
+                                    for p in w["projects"]} >= {TEST_PROJECT, "alpha", "beta"}
     assert admin.get("/api/users/nobody/access").status_code == 404
 
 
@@ -404,6 +352,6 @@ def test_workspace_grants_still_drive_the_default_project(admin):
     uid = _user("grantee", grant=False)
     res = admin.put(f"/api/workspaces/{WS}/grants", json={"grant": [uid]})
     assert res.status_code == 200, res.text
-    assert _rows(uid) == {"default": "inherit"}
+    assert _rows(uid) == {TEST_PROJECT: "inherit"}
     admin.put(f"/api/workspaces/{WS}/grants", json={"revoke": [uid]})
     assert _rows(uid) == {}

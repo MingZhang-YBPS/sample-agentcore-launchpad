@@ -759,38 +759,22 @@ def eval_cost(admin: httpx.Client, users: dict[str, httpx.Client], agent_id: str
     check("eval.estimate_range", res.status_code == 200 and rng.get("low") is not None
           and rng["low"] <= rng.get("mid", 0) <= rng.get("high", 0),
           f"{code(res)} total={est.get('total_usd')} range={rng}")
-    total = est.get("total_usd")
-    if total and total > 0:
-        res = set_quota(admin, PROJECT_A, {"eval_run_max_usd": round(total / 100, 6) or 1e-6})
-        check("quota.set_eval_run_max", res.status_code == 200, code(res))
-        res = call(a, "POST", "/api/eval/runs", project=PROJECT_A, json={
-            "agent_id": agent_id, "dataset_id": dataset_id, "evaluators": evaluators})
-        data = body(res)
-        est_detail = (data.get("detail") or {}).get("estimate") or {}
-        # a member meets the merged per-run limit first (`run.cost_over_limit`, the code
-        # the wizards read); it must name the project's quota, not promise an override
-        check("quota.eval_refused", res.status_code == 409 and data.get("code") ==
-              "run.cost_over_limit" and est_detail.get("max_source") == "project"
-              and "override" not in (data.get("message") or ""),
-              f"{code(res)} max_source={est_detail.get('max_source')} "
-              f"message={(data.get('message') or '')[:90]!r}")
-        if res.status_code == 201:
-            print(f"     unexpected run {data.get('id')} started")
-        # an administrator passes the workspace limit but never the project's quota
-        res = call(admin, "POST", "/api/eval/runs", project=PROJECT_A, json={
-            "agent_id": agent_id, "dataset_id": dataset_id, "evaluators": evaluators,
-            "confirm_cost": True})
-        data = body(res)
-        check("quota.eval_refused_admin", res.status_code == 409 and data.get("code") ==
-              "project.quota_exceeded" and (data.get("detail") or {}).get("quota") ==
-              "eval_run_max_usd", f"{code(res)} {data.get('detail')}")
-        if res.status_code == 201:
-            print(f"     unexpected admin run {data.get('id')} started")
-        res = call(admin, "PUT", f"/api/projects/{PROJECT_A}/quotas",
-                   json={"quotas": {"eval_run_max_usd": None}})
-        check("quota.eval_restored", res.status_code == 200, code(res))
-    else:
-        skip("quota.eval_refused", f"estimate unpriced (total={total}) — a cap cannot refuse it")
+    # the monthly budget is the one money limit: a zero budget is spent from the start,
+    # so even an administrator's run is refused until the budget is cleared
+    res = set_quota(admin, PROJECT_A, {"monthly_budget_usd": 0})
+    check("quota.set_monthly_budget", res.status_code == 200, code(res))
+    res = call(admin, "POST", "/api/eval/runs", project=PROJECT_A, json={
+        "agent_id": agent_id, "dataset_id": dataset_id, "evaluators": evaluators,
+        "confirm_cost": True})
+    data = body(res)
+    check("quota.eval_refused_by_budget", res.status_code == 409 and data.get("code") ==
+          "project.budget_exhausted" and (data.get("detail") or {}).get("budget_usd") == 0,
+          f"{code(res)} {data.get('detail')}")
+    if res.status_code == 201:
+        print(f"     unexpected admin run {data.get('id')} started")
+    res = call(admin, "PUT", f"/api/projects/{PROJECT_A}/quotas",
+               json={"quotas": {"monthly_budget_usd": None}})
+    check("quota.budget_restored", res.status_code == 200, code(res))
     run: dict = {}
     for attempt in range(2):
         res = call(a, "POST", "/api/eval/runs", project=PROJECT_A, json={

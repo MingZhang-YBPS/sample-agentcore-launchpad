@@ -15,6 +15,7 @@ from app.models.ledger import Agent
 from app.models.network import NetworkProfile, ProjectNetworkProfile, legacy_profile_id
 from app.schemas.agent import AgentSpec, NetworkProfileRef, VpcNetwork
 from app.services import network_profiles as service
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import (
     _login,
     _member_of,
@@ -126,7 +127,7 @@ def test_bad_profiles_are_refused(client, bad):
 
 def test_a_profile_in_use_cannot_be_archived(client):
     pid = client.post("/api/network-profiles", json=BODY).json()["id"]
-    agent_id = _agent_with_network({"profile_id": pid}, "default")
+    agent_id = _agent_with_network({"profile_id": pid}, TEST_PROJECT)
     res = client.delete(f"/api/network-profiles/{pid}")
     assert res.status_code == 409 and res.json()["code"] == "network_profile.in_use"
     assert client.get(f"/api/network-profiles/{pid}").json()["agents"] == 1
@@ -146,24 +147,24 @@ def test_a_profile_in_use_cannot_be_archived(client):
 def test_admin_sets_a_projects_allowed_set_and_default(client):
     a = client.post("/api/network-profiles", json=BODY).json()["id"]
     b = client.post("/api/network-profiles", json={**BODY, "name": "other"}).json()["id"]
-    res = client.put("/api/network-profiles/projects/default",
+    res = client.put(f"/api/network-profiles/projects/{TEST_PROJECT}",
                      json={"profile_ids": [a, b], "default_profile_id": b})
     assert res.status_code == 200, res.text
     assert {p["id"] for p in res.json()["profiles"]} == {a, b}
     assert res.json()["default_profile_id"] == b
     listed = {p["id"]: p for p in client.get("/api/network-profiles").json()["profiles"]}
     assert listed[a]["allowed"] and not listed[a]["is_default"] and listed[b]["is_default"]
-    assert listed[b]["projects"] == [{"project_id": "default", "is_default": True}]
+    assert listed[b]["projects"] == [{"project_id": TEST_PROJECT, "is_default": True}]
 
     # replace semantics
-    res = client.put("/api/network-profiles/projects/default", json={"profile_ids": [a]})
+    res = client.put(f"/api/network-profiles/projects/{TEST_PROJECT}", json={"profile_ids": [a]})
     assert [p["id"] for p in res.json()["profiles"]] == [a]
     assert res.json()["default_profile_id"] is None
 
-    bad_default = client.put("/api/network-profiles/projects/default",
+    bad_default = client.put(f"/api/network-profiles/projects/{TEST_PROJECT}",
                              json={"profile_ids": [a], "default_profile_id": b})
     assert bad_default.status_code == 400
-    unknown = client.put("/api/network-profiles/projects/default",
+    unknown = client.put(f"/api/network-profiles/projects/{TEST_PROJECT}",
                          json={"profile_ids": ["np-000000000000"]})
     assert unknown.status_code == 404 and unknown.json()["code"] == "network_profile.not_found"
     nowhere = client.get("/api/network-profiles/projects/not-bound-here")
@@ -171,7 +172,7 @@ def test_admin_sets_a_projects_allowed_set_and_default(client):
 
     # archiving drops the profile from every allowed set
     assert client.delete(f"/api/network-profiles/{a}").status_code == 204
-    assert client.get("/api/network-profiles/projects/default").json()["profiles"] == []
+    assert client.get(f"/api/network-profiles/projects/{TEST_PROJECT}").json()["profiles"] == []
 
 
 def test_a_profile_of_another_workspace_reads_as_missing(client):
@@ -214,7 +215,7 @@ def test_a_member_sees_only_the_projects_allowed_profiles(app):  # noqa: F811
     mine = _admin_profile("alpha-net")
     theirs = _admin_profile("default-net")
     _allow("alpha", mine, default=mine)
-    _allow("default", theirs)
+    _allow(TEST_PROJECT, theirs)
     uid = _user("joan", grant=False)
     _member_of("alpha", uid)
     jo = _login(app, "joan")
@@ -254,19 +255,19 @@ def test_a_member_with_no_allowed_profiles_sees_none(app):  # noqa: F811
 def test_usable_profile_needs_the_allowed_set_and_a_passing_preflight():
     _project("alpha")
     pid = _admin_profile("gate")
-    _allow("default", pid)
+    _allow(TEST_PROJECT, pid)
     db = SessionLocal()
     try:
-        assert service.usable_profile(db, DEFAULT_WORKSPACE_ID, "default", pid).id == pid
+        assert service.usable_profile(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT, pid).id == pid
         with pytest.raises(NotFoundError):
             service.usable_profile(db, DEFAULT_WORKSPACE_ID, "alpha", pid)
         db.get(NetworkProfile, pid).status = "warn"
         db.commit()
-        assert service.usable_profile(db, DEFAULT_WORKSPACE_ID, "default", pid)
+        assert service.usable_profile(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT, pid)
         db.get(NetworkProfile, pid).status = "blocked"
         db.commit()
         with pytest.raises(AppError) as exc:
-            service.usable_profile(db, DEFAULT_WORKSPACE_ID, "default", pid)
+            service.usable_profile(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT, pid)
         assert exc.value.code == "network_profile.blocked"
     finally:
         db.close()
@@ -313,7 +314,7 @@ def test_inline_networks_are_admin_only_and_land_on_a_legacy_profile():
         assert service.normalize_spec_network(
             db, DEFAULT_WORKSPACE_ID, "alpha", out, is_admin=False, actor="joan") == out
         with pytest.raises(NotFoundError):
-            service.normalize_spec_network(db, DEFAULT_WORKSPACE_ID, "default", out,
+            service.normalize_spec_network(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT, out,
                                            is_admin=False, actor="joan")
         public = {"name": "a", "network": None}
         assert service.normalize_spec_network(
@@ -353,10 +354,10 @@ def test_startup_moves_inline_networks_onto_legacy_profiles_once():
     a = _agent_with_network(inline, "alpha", name="byo-a")
     # same network in another order: the same profile, allowed in both projects
     b = _agent_with_network({"subnets": list(reversed(SUBNETS)), "security_groups": SGS},
-                            "default", name="byo-b")
-    other = _agent_with_network({"subnets": SUBNETS[:1], "security_groups": SGS}, "default",
+                            TEST_PROJECT, name="byo-b")
+    other = _agent_with_network({"subnets": SUBNETS[:1], "security_groups": SGS}, TEST_PROJECT,
                                 name="byo-c")
-    public = _agent_with_network(None, "default", name="public")
+    public = _agent_with_network(None, TEST_PROJECT, name="public")
 
     counts = db_module.convert_inline_networks(engine)
     assert counts == {"agents": 3, "profiles": 2, "bindings": 3}
@@ -377,7 +378,7 @@ def test_startup_moves_inline_networks_onto_legacy_profiles_once():
         assert row.vpc_id is None and row.name == pid
         bound = set(db.scalars(select(ProjectNetworkProfile.project_id)
                                .where(ProjectNetworkProfile.profile_id == pid)))
-        assert bound == {"alpha", "default"}
+        assert bound == {"alpha", TEST_PROJECT}
         # deploy behaviour is unchanged: the profile resolves to the old subnets / SGs
         assert service.resolve_vpc(db, DEFAULT_WORKSPACE_ID, _spec_of(a)["network"]) == {
             "subnets": SUBNETS, "security_groups": SGS,
@@ -398,7 +399,7 @@ def test_startup_moves_inline_networks_onto_legacy_profiles_once():
 
 
 def test_init_db_runs_the_conversion(client):
-    _agent_with_network({"subnets": SUBNETS, "security_groups": SGS}, "default")
+    _agent_with_network({"subnets": SUBNETS, "security_groups": SGS}, TEST_PROJECT)
     db_module.init_db()
     db = SessionLocal()
     try:

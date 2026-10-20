@@ -4766,6 +4766,22 @@ Name uniqueness stays workspace-wide: S3 keys, ECR tags, gateway targets and reg
 records use the agent name, so two projects of one workspace cannot hold the same
 agent name. `agent.name_exists` names the holder only when the caller can see it.
 
+**New agents belong to a business project.** Every non-system creation path —
+`POST /api/agents`, a Harness → Runtime conversion, a discovery import, the architect's
+approve, and a promotion that creates its target — goes through
+`services/agent_project.py`: the project is the body's `project_id` (it must equal an
+`X-Project` header sent alongside, else `422 agent.project_mismatch`), else the request's
+project, and it must be reachable by the caller, bound to the workspace, `active`, not a
+workspace `default` project, and carry a `department_id`; the caller must hold the
+route's key there. Refusals are `422` `agent.project_required` / `agent.project_not_found`
+(missing and unreachable share it) / `agent.project_default_not_allowed` /
+`agent.project_archived` / `agent.project_no_department`, with the projects page as the
+next step. `Agent` sets `__project_no_default_stamp__`, so `before_flush` never files a
+new non-system agent under `default` silently (`ProjectStampError`); system presets stay
+platform rows (`project_id` NULL) and agents already in `default` keep it. The V3 create
+form's project picker reads `GET /api/agents/eligible-projects`, which lists, server-side,
+only the business projects the caller may create agents in.
+
 ### Requests: route roles and `X-Project`
 
 `ROUTE_POLICY` (`app/core/route_policy.py`) classifies every route. Besides

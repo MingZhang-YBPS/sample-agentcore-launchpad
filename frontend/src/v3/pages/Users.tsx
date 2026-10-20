@@ -23,6 +23,7 @@ import { BulkAddDialog } from "./users/BulkAdd";
 import { isPlatformRole, listFilterFrom } from "./users/forms";
 import { GrantChip } from "./users/GrantChip";
 import { useRoleLabel, useStructure } from "./users/structure";
+import { Select } from "../select";
 
 const STATE_SIGNAL: Record<UserState, Signal> = { pending: "wait", active: "ok", expired: "act", disabled: "off" };
 
@@ -96,7 +97,7 @@ function UserList() {
   const query = filter.q ?? "";
   const list = useLoad(
     () => usersApi.list(filter),
-    `v3-users:${status}:${query}:${filter.role ?? ""}:${filter.project ?? ""}:${filter.group ?? ""}:${page}`,
+    `v3-users:${status}:${query}:${filter.role ?? ""}:${filter.project ?? ""}:${page}`,
   );
   const stats = useLoad(() => api.userStats(), "v3-users-stats");
   const structure = useStructure();
@@ -109,7 +110,6 @@ function UserList() {
   const actions = useUserActions(reload, stats.data?.valid_days ?? 7, structure);
   // the project columns, filters and bulk action once the platform has more than the default project
   const multi = structure.multiProject;
-  const liveGroups = structure.groups.filter((g) => !g.archived);
   const setParam = (key: string, value: string | null) =>
     setParams(
       (prev) => {
@@ -211,26 +211,18 @@ function UserList() {
             ...USER_STATES.map((v) => ({ value: v, label: t(`v2.users.state.${v}`), s: STATE_SIGNAL[v] })),
           ]}
         />
-        <select className="v3-select" style={{ width: "auto" }} value={filter.role ?? ""} aria-label={t("v3.users.filter.role")}
+        <Select className="v3-select" style={{ width: "auto" }} value={filter.role ?? ""} aria-label={t("v3.users.filter.role")}
           onChange={(e) => setParam("role", e.target.value || null)}>
           <option value="">{t("v3.users.filter.anyRole")}</option>
           {(["admin", "steward", "operator", "member"] as const).map((r) => <option key={r} value={r}>{t(`v2.users.role.${r}`)}</option>)}
-        </select>
+        </Select>
         {(multi || filter.project) && (
-          <select className="v3-select" style={{ width: "auto" }} value={filter.project ?? ""} aria-label={t("v3.users.filter.project")}
+          <Select className="v3-select" style={{ width: "auto" }} value={filter.project ?? ""} aria-label={t("v3.users.filter.project")}
             onChange={(e) => setParam("project", e.target.value || null)}>
             <option value="">{t("v3.users.filter.anyProject")}</option>
             {structure.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             {filter.project && !structure.projects.some((p) => p.id === filter.project) && <option value={filter.project}>{filter.project}</option>}
-          </select>
-        )}
-        {(liveGroups.length > 0 || filter.group) && (
-          <select className="v3-select" style={{ width: "auto" }} value={filter.group ?? ""} aria-label={t("v3.users.filter.group")}
-            onChange={(e) => setParam("group", e.target.value || null)}>
-            <option value="">{t("v3.users.filter.anyGroup")}</option>
-            {liveGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            {filter.group && !liveGroups.some((g) => g.id === filter.group) && <option value={filter.group}>{filter.group}</option>}
-          </select>
+          </Select>
         )}
         <div style={{ marginLeft: "auto", position: "relative", flex: "1 1 200px", maxWidth: 300 }}>
           <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: "var(--v3-text-3)" }} aria-hidden="true" />
@@ -529,7 +521,7 @@ function UserDetail({ username }: { username: string }) {
         </div>
       </div>
 
-      {(structure.multiProject || (user.groups ?? []).length > 0 || (user.projects ?? []).some((p) => !p.is_default)) && (
+      {(structure.multiProject || (user.projects ?? []).some((p) => !p.is_default)) && (
         <AccessPanel user={user} access={access.data} loading={access.loading} error={access.error} busy={busy}
           onEdit={() => actions.openMemberships(user)} />
       )}
@@ -598,11 +590,10 @@ function UserDetail({ username }: { username: string }) {
  * agent permissions and workspace grants. Same calls and confirmations as V2;
  * members never fire the admin-only requests.
  *
- * Projects (§7.4–§7.6): the list filters by `?role=`, `?project=`, `?group=`; once
- * the platform has a project besides the default one, rows show their projects
- * (role), can be selected for "add to project…", and create / approve choose
- * projects and groups. The detail adds the account's projects with their sources,
- * its groups and reachable workspaces (`GET /api/users/{id}/access`), and a forced
+ * Projects (§7.4–§7.6): the list filters by `?role=`, `?project=`; once the
+ * platform has a project besides the default one, rows show their projects (role),
+ * can be selected for "add to project…", and create / approve choose projects. The
+ * detail adds the account's projects with their roles and reachable workspaces (`GET /api/users/{id}/access`), and a forced
  * sign-out. A single-project hub keeps the dialogs and columns it had.
  */
 export function V3Users() {

@@ -26,10 +26,11 @@ from app.models.assistant import (
     EvaluationAssetOperation,
 )
 from app.models.ledger import Agent, Job, ResourceCreator, User, Workspace
-from app.models.projects import GroupMember, Project, ProjectGroup, ProjectMember, ProjectWorkspace
+from app.models.projects import Project, ProjectMember, ProjectWorkspace
 from app.services import access, creators
 from app.services import users as users_service
 from app.services.visibility import Viewer
+from tests.conftest import TEST_PROJECT
 
 ADMIN = {"username": "operator", "password": "s3cret-pass"}
 PEER = ("127.0.0.1", 4321)
@@ -108,8 +109,8 @@ class _Who:
 
 def test_private_sessions_hide_every_other_projects_assistant_turns():
     _project("alpha")
-    _conversation("default", "user:bob", "s-default-bob")
-    _conversation("default", "user:ann", "s-default-ann")
+    _conversation(TEST_PROJECT, "user:bob", "s-default-bob")
+    _conversation(TEST_PROJECT, "user:ann", "s-default-ann")
     _conversation("alpha", "user:ann", "s-alpha-ann")
     db = SessionLocal()
     try:
@@ -129,10 +130,10 @@ def test_private_sessions_hide_every_other_projects_assistant_turns():
 
 
 def test_a_single_project_console_keeps_its_own_sessions_visible():
-    _conversation("default", "user:ann", "s-ann")
+    _conversation(TEST_PROJECT, "user:ann", "s-ann")
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             private = PrivateSessions(db, DEFAULT_WORKSPACE_ID, "user:ann")
             assert private.visible("s-ann")
     finally:
@@ -141,10 +142,10 @@ def test_a_single_project_console_keeps_its_own_sessions_visible():
 
 def test_clearing_refusal_sees_a_purge_job_of_any_project():
     _project("alpha")
-    cid = _conversation("default", "user:ann")
+    cid = _conversation(TEST_PROJECT, "user:ann")
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="kid", method="harness",
                           status="active", spec={"name": "kid"})
             db.add(agent)
@@ -189,7 +190,7 @@ def _operation(pid: str, cid: str, *, name: str, status: str = "succeeded",
 
 def test_evaluator_names_stay_unique_across_projects():
     _project("alpha")
-    _operation("default", _conversation("default", "user:ann"), name="tone")
+    _operation(TEST_PROJECT, _conversation(TEST_PROJECT, "user:ann"), name="tone")
     db = SessionLocal()
     try:
         with project_context("alpha"):
@@ -254,7 +255,7 @@ def test_project_can_reads_the_project_role_not_the_account():
         assert who.can("agents.deploy")  # the account would allow it
         assert not project_can(db, who, DEFAULT_WORKSPACE_ID, "agents.deploy", "alpha")
         assert project_can(db, who, DEFAULT_WORKSPACE_ID, "project.use", "alpha")
-        assert not project_can(db, who, DEFAULT_WORKSPACE_ID, "project.use", "default")
+        assert not project_can(db, who, DEFAULT_WORKSPACE_ID, "project.use", TEST_PROJECT)
         with project_context("alpha"):  # by default: the current project
             assert not project_can(db, who, DEFAULT_WORKSPACE_ID, "agents.deploy")
         assert project_can(db, who, DEFAULT_WORKSPACE_ID, "agents.deploy", None)
@@ -293,7 +294,7 @@ def test_the_claim_predicate_uses_the_project_role():
         with project_context("alpha"):
             predicate = assets._authorized_user(db, uid, DEFAULT_WORKSPACE_ID)
             assert db.scalar(select(predicate)) is False
-        _member_of("default", uid, "developer")
+        _member_of(TEST_PROJECT, uid, "developer")
         db.execute(text("UPDATE project_members SET role_key = 'developer' "
                         "WHERE user_id = :u AND project_id = 'alpha'"), {"u": uid})
         access.bump_epoch(db)
@@ -320,7 +321,7 @@ def test_the_catalog_drops_another_projects_knowledge_bases():
         with project_context("alpha"):
             kept = service.restrict_catalog(db, DEFAULT_WORKSPACE_ID, Viewer.ALL, catalog)
             assert [k["kb_id"] for k in kept["knowledge_bases"]] == ["kb-alpha"]
-        with project_context("default"):  # an unowned KB is the default project's
+        with project_context(TEST_PROJECT):  # an unowned KB is the default project's
             kept = service.restrict_catalog(db, DEFAULT_WORKSPACE_ID, Viewer.ALL, catalog)
             assert [k["kb_id"] for k in kept["knowledge_bases"]] == ["kb-unowned"]
         with project_context(None):  # workers: unrestricted, as before
@@ -357,19 +358,15 @@ def test_deleting_a_workspace_drops_its_project_bindings():
         db.close()
 
 
-def test_deleting_a_user_drops_their_project_and_group_memberships():
+def test_deleting_a_user_drops_their_project_memberships():
     _project("alpha")
     uid = _user("vic", grant=True)
     _member_of("alpha", uid)
     db = SessionLocal()
     try:
-        db.add(ProjectGroup(id="g1", name="G1"))
-        db.add(GroupMember(group_id="g1", user_id=uid, role_key="developer"))
-        db.commit()
         users_service.delete_user(db, db.get(User, uid))
-        for table in ("project_members", "group_members"):
-            assert db.scalar(text(f"SELECT COUNT(*) FROM {table} WHERE user_id = :u"),  # noqa: S608
-                             {"u": uid}) == 0
+        assert db.scalar(text("SELECT COUNT(*) FROM project_members WHERE user_id = :u"),
+                         {"u": uid}) == 0
     finally:
         db.close()
 

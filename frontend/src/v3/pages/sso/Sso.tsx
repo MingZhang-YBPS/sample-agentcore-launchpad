@@ -6,7 +6,6 @@ import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
 import { ErrorCallout } from "../../../components/ErrorCallout";
-import { projectGroupsApi } from "../../../lib/api/project-groups";
 import { projectsApi } from "../../../lib/api/projects";
 import { PRIMARY_PRESETS, ssoApi, type SsoLogin, type SsoPreset, SSO_ROLES } from "../../../lib/api/sso";
 import {
@@ -38,6 +37,7 @@ import {
 import { CopyPlate, PresetMark } from "./parts";
 import { LoginPageSwitch, ScimPanel } from "./Provisioning";
 import { SamlConnection, SamlExchange, SamlTestPanel } from "./SamlParts";
+import { Select } from "../../select";
 
 export { CopyPlate, PresetMark } from "./parts";
 
@@ -399,10 +399,10 @@ function ProviderDetail({ provider, presets, targets, onChanged, onDeleted }: {
             <div className="v3-sso-pair">
               <label className="v3-field">
                 <span>{t("v3.sso.field.defaultRole")}</span>
-                <select className="v3-select" value={draft.default_role}
+                <Select className="v3-select" value={draft.default_role}
                   onChange={(e) => set("default_role", e.target.value as ProviderDraft["default_role"])}>
                   {SSO_ROLES.map((role) => <option key={role} value={role}>{t(`v3.sso.role.${role}`)}</option>)}
-                </select>
+                </Select>
               </label>
               <label className="v3-field">
                 <span>{t("v3.sso.field.validDays")}</span>
@@ -496,13 +496,11 @@ export function V3Sso() {
   }, [loaded.data]);
   const enabledCount = items.filter((item) => item.enabled).length;
   const projects = useLoad(() => projectsApi.list({ status: "active" }), "sso-projects");
-  const groups = useLoad(() => projectGroupsApi.list({ status: "active" }), "sso-groups");
   const templates = useLoad(() => projectsApi.roleTemplates(), "sso-role-templates");
   const targets: MappingTargets = useMemo(() => ({
     projects: (projects.data?.projects ?? []).map((p) => ({ id: p.id, name: p.name })),
-    groups: (groups.data?.groups ?? []).map((g) => ({ id: g.id, name: g.name })),
     roleTemplates: (templates.data?.templates ?? []).map((r) => r.key),
-  }), [projects.data, groups.data, templates.data]);
+  }), [projects.data, templates.data]);
 
   const current = items.find((item) => item.id === selected) ?? items[0] ?? null;
   const replace = (next: Provider) => {

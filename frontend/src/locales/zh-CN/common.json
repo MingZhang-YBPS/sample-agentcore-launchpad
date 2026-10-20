@@ -2321,6 +2321,13 @@
     "skill_lab.attachment_path_conflict": "某个生成的任务既声明了附件，又在同一路径内联定义了文件。",
     "skill_lab.snapshot_exists": "该作业已有不可变输入快照。",
     "agent.name_exists": "同名 Agent 已存在",
+    "agent.project_required": "新智能体必须归属一个业务项目，请先选择项目。",
+    "agent.project_not_found": "在这个工作空间中找不到该项目，或你不是该项目的成员。",
+    "agent.project_mismatch": "所选项目与本次请求所在的项目不一致，请刷新页面后重新选择。",
+    "agent.project_default_not_allowed": "工作空间的默认项目不能创建新智能体，请选择一个业务项目。",
+    "agent.project_archived": "该项目已归档，请选择一个活跃的项目。",
+    "agent.project_no_department": "该项目尚未归属任何部门。请先为它指定部门，或选择其他项目。",
+    "agent.project_permission_invalid": "该权限不能用于创建智能体。",
     "apikey.creator_offboarded": "无法重新启用此密钥：创建它的账号已被删除、停用、过期，或已失去此工作空间的访问权限。请新建密钥。",
     "agent.method_not_available": "该创建方式将在后续阶段开放",
     "agent.not_active": "Agent 尚未处于运行状态",
@@ -2538,7 +2545,6 @@
     "users.not_found": "该用户不存在。",
     "user.not_found": "该用户不存在。",
     "department.not_found": "该部门不存在。",
-    "group.not_found": "该项目组不存在。",
     "project.not_found": "该项目不存在，或你不是其成员。",
     "project.invalid_id": "项目 ID 须为 2–32 个小写字母、数字或“-”。",
     "project.exists": "已存在相同 ID 的项目。",
@@ -2550,7 +2556,6 @@
     "project.workspace_default": "该项目是该工作区的默认项目，请先将其他项目设为默认。",
     "project.workspace_in_use": "该工作区仍有此项目的智能体、运行或密钥，请先迁移或删除。",
     "project.member_conflict": "同一请求中不能同时添加和移除同一用户。",
-    "project.member_from_group": "该访问权限来自项目组，请在项目组中管理。",
     "project.member_not_found": "该用户不是此项目的直接成员。",
     "project.self_membership": "不能修改自己的成员身份，请让其他所有者或管理员操作。",
     "project.role_unknown": "此项目中没有该角色。",
@@ -2589,7 +2594,7 @@
     "project.sod_conflict": "该项目要求职责分离：此变更会让同一成员同时持有一对需分离的权限。请把这些职责分给不同的成员。",
     "department.exists": "已存在该 ID 的部门。",
     "department.archived": "该部门已归档，请先恢复或选择其他部门。",
-    "department.in_use": "该部门下仍有项目或项目组，请先移走或归档它们。",
+    "department.in_use": "该部门下仍有项目，请先移走或归档它们。",
     "department.admin_conflict": "同一请求中不能同时添加并移除同一位部门管理员。",
     "department.admin_not_found": "该用户不是此部门的管理员。",
     "department.setting_invalid": "部门设置无效：can_create_users 须为 true 或 false，max_projects 与 user_validity_max_days 须为正整数（null 表示恢复默认）。",
@@ -2616,17 +2621,7 @@
     "mapping.invalid_kind": "不支持该资源映射类型。",
     "mapping.invalid_name": "逻辑名称须为 1-64 个小写字母、数字、“.”、“_”或“-”。",
     "mapping.invalid_resource_id": "该资源 ID 对此映射类型无效。",
-    "group.exists": "已存在该 ID 的项目组。",
-    "group.archived": "该项目组已归档，请先恢复或选择其他项目组。",
-    "group.member_conflict": "同一请求中不能同时添加和移除同一用户。",
-    "group.member_not_found": "该用户不是此项目组的成员。",
-    "group.project_conflict": "同一请求中不能同时添加和移除同一项目。",
-    "group.project_in_other_group": "该项目已属于另一个项目组，请先从那里移除（一个项目最多属于一个项目组）。",
-    "group.project_not_found": "该项目不在此项目组中。",
-    "group.role_invalid": "项目组只能授予内置角色模板；自定义角色仅限单个项目。",
-    "group.role_unknown": "这不是内置角色；项目组成员只能使用内置模板。",
     "structure.invalid_status": "未知的状态筛选，请使用 active 或 archived。",
-    "users.invalid_groups": "项目组成员设置无效：每条成员关系只需指定项目组和内置角色，不带权限覆盖。",
     "users.invalid_bulk": "请至少选择一个账号，且单次不超过批量上限。",
     "network.public_not_allowed": "该工作区要求所有 Agent 都运行在网络配置中，请选择一个。",
     "network_profile.check_failed": "本次检查无法读取工作区的 VPC。请确认工作区角色有权查看 VPC、子网和安全组后重试。",
@@ -2666,7 +2661,7 @@
     "steward.notice_not_found": "该通知已不存在。",
     "steward.pending_not_found": "该变更已不在等待中：已被确认、拒绝或撤回。",
     "project.steward_member": "组织管理员不能成为项目成员。",
-    "users.steward_no_grants": "组织管理员只管理结构：不持有工作区授权、项目或项目组成员资格。",
+    "users.steward_no_grants": "组织管理员只管理结构：不持有工作区授权或项目成员资格。",
     "storage.write_confirm_required": "本次运行会写入生产共享存储：请确认，或在登记了同名存储（指向预发数据）的 DEV 工作区中评估。",
     "admission.decided": "这个候选样本已经判定过了。",
     "admission.expected_source": "预期答案必须由人撰写或确认。",
@@ -2711,7 +2706,7 @@
     "dataset.golden_managed_why": "黄金集及其切分只能在黄金集页面里准入、移动或退役样本，这样才能保留来源记录和留出集的封存。",
     "golden.delete_busy": "还有评估在使用这个黄金集。",
     "golden.delete_busy_why": "等它跑完或先停止，再删除黄金集。",
-    "annotation.closed": "已判定的标注任务不能删除。",
+    "annotation.closed": "该标注任务已关闭。",
     "annotation.closed_why": "它是这次校准结论的证据；要重新校准，新建一个任务。",
     "golden.item_not_found": "黄金集里找不到这个样本。",
     "golden.not_found": "找不到这个黄金集。",
@@ -2782,7 +2777,6 @@
     "annotation.bad_items": "每个条目都需要唯一的 ref。",
     "annotation.bad_label": "该标签不在允许的标签之内。",
     "annotation.bad_purpose": "未知的标注任务用途。",
-    "annotation.closed": "该标注任务已关闭。",
     "annotation.item_not_found": "该条目不属于此标注任务。",
     "annotation.link_label": "请填写该链接的接收人。",
     "annotation.links_not_allowed": "当前无法为该任务创建标注链接。",
@@ -3024,7 +3018,6 @@
     "governance.rollback_unavailable": "没有可回滚的已审计策略快照。",
     "governance.shared_engine_changed": "共享该策略引擎的网关已变更——请重新审阅影响。",
     "governance.target_not_synchronizable": "该网关目标无法同步。",
-    "group.invalid_id": "该分组 ID 无效。",
     "guardrail.blocked": "护栏拦截了该内容。",
     "guardrail.create_failed": "无法创建护栏。",
     "http.400": "请求无效。",
@@ -3138,7 +3131,7 @@
     "project.not_provisioned": "项目在该工作区中的资源尚未创建完成——请等待资源创建完成。",
     "project.provisioning_in_progress": "该工作区的资源创建仍在进行。",
     "project.purge_running": "该项目的清除正在进行。",
-    "project.quota_above_department": "该配额超过了部门上限。",
+    "project.budget_exhausted": "本项目的月度预算已用完。计费操作将在每月 1 日（UTC）预算重置后恢复，也可以请平台管理员在项目设置中提高预算。",
     "project.quota_exceeded": "该项目的配额已用完。",
     "promotion.agent_not_active": "只有运行中的 Agent 才能打包发布。",
     "promotion.already_executing": "该晋级已在执行中。",
@@ -3338,7 +3331,9 @@
     "workspace.invalid_grant_filter": "未知的授权筛选条件。",
     "workspace.invalid_grant_targets": "部分账号不能获得工作区授权（账号不存在，或是可访问所有工作区的管理员）。",
     "workspace.prod_protected": "这是生产工作区——其 Agent 只能通过发布变更，不能直接修改。",
-    "workspace.tier_change_unconfirmed": "更改级别会改变谁可以修改该工作区的 Agent——请确认后继续。"
+    "workspace.tier_change_unconfirmed": "更改级别会改变谁可以修改该工作区的 Agent——请确认后继续。",
+    "project.department_required": "项目必须属于一个部门，请选择一个现有且未归档的部门。",
+    "steward.pending_group_retired": "此变更是为项目组提交的，而项目组已下线，请拒绝它，并直接修改各项目的成员。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -11466,7 +11461,9 @@
       }
     },
     "common": {
-      "cancel": "取消"
+      "cancel": "取消",
+      "searchOptions": "搜索…",
+      "noMatch": "无匹配选项"
     },
     "kb": {
       "eyebrow": "知识",
@@ -11542,6 +11539,14 @@
       "required": "必选",
       "noKb": "这个工作区还没有就绪的知识库。",
       "errKb": "这个场景基于你的文档回答：至少挂载一个知识库。",
+      "project": {
+        "label": "所属项目",
+        "placeholder": "选择一个业务项目",
+        "hint": "每个新智能体都归属于某个部门的业务项目；工作空间的默认项目不能再创建新智能体。",
+        "none": "你在这里还没有可以创建智能体的业务项目。请部门管理员把你加入一个项目，或新建一个项目。",
+        "open": "前往项目页",
+        "err": "请选择这个智能体所属的项目。"
+      },
       "carries": "部署时带上",
       "longTerm": "长期记忆",
       "carriesHint": "工具、模型和限额在完整表单中设置",
@@ -12763,9 +12768,7 @@
         "role": "全局角色",
         "anyRole": "全部角色",
         "project": "项目",
-        "anyProject": "全部项目",
-        "group": "项目组",
-        "anyGroup": "全部项目组"
+        "anyProject": "全部项目"
       },
       "bulk": {
         "open_one": "批量加入项目（{{count}}）…",
@@ -12788,44 +12791,33 @@
       },
       "memberships": {
         "projects": "项目",
-        "groups": "项目组",
         "projectsNone": "还没有项目——此账号只通过工作区授权加入默认项目。",
-        "groupsNone": "不在任何项目组中。",
         "projectsTarget": "项目",
-        "groupsTarget": "项目组",
         "projectsAdd": "添加项目",
-        "groupsAdd": "添加项目组",
         "role": "角色",
         "remove": "移除",
         "legacy": "遗留工作区授权（高级）",
         "legacyHint": "勾选 “default” 工作区即以“继承全局角色”加入默认项目——workshop 的做法。",
-        "open": "编辑项目与项目组",
-        "title": "项目与项目组 · {{username}}",
-        "body": "此账号的直接项目成员资格和所在项目组。保存会整体替换这两个列表；下一次请求即生效。",
+        "open": "编辑项目",
+        "title": "项目 · {{username}}",
+        "body": "此账号的直接项目成员资格。保存会整体替换该列表；下一次请求即生效。",
         "inheritHint": "默认项目的“继承全局角色”成员资格随工作区授权变化，不在这里编辑。",
         "save": "保存",
-        "saved": "已保存 {{username}} 的项目与项目组",
+        "saved": "已保存 {{username}} 的项目",
         "err": {
           "projectsIncomplete": "每一行都要选择项目和角色。",
-          "projectsDuplicate": "同一个项目出现了两次。",
-          "groupsIncomplete": "每一行都要选择项目组和角色。",
-          "groupsDuplicate": "同一个项目组出现了两次。"
+          "projectsDuplicate": "同一个项目出现了两次。"
         }
       },
       "access": {
         "projectsTitle": "项目与角色",
-        "groupsTitle": "项目组",
         "reachTitle": "工作区（可达）",
         "reachSub": "来自项目与授权",
         "project": "项目",
         "role": "有效角色",
-        "source": "来源",
         "keys": "权限数",
-        "direct": "直接（{{role}}）",
-        "fromGroup": "来自项目组「{{group}}」（{{role}}）",
         "allProjects": "全部（管理员）",
         "noProjects": "不属于任何项目——此账号进不了任何项目。",
-        "noGroups": "不在任何项目组中。",
         "archived": "已归档",
         "grantOnly": "直接授权；没有可达的项目",
         "via": "来自：{{projects}}",
@@ -13233,7 +13225,6 @@
       },
       "filter": {
         "department": "部门",
-        "group": "项目组",
         "status": "状态",
         "workspace": "工作区",
         "all": "全部"
@@ -13241,7 +13232,6 @@
       "col": {
         "name": "项目",
         "department": "部门",
-        "group": "项目组",
         "workspaces": "工作区",
         "members": "成员",
         "agents": "Agent",
@@ -13253,7 +13243,6 @@
         "idHint": "2–32 位小写字母、数字或 -；创建后不能修改",
         "name": "名称",
         "department": "部门",
-        "group": "项目组",
         "description": "描述",
         "workspaces": "启用到工作区",
         "workspacesRequired": "至少选择一个工作区。",
@@ -13261,7 +13250,8 @@
         "owners": "项目负责人",
         "ownersSearch": "搜索用户…",
         "submit": "创建",
-        "done": "已创建项目 {{name}}"
+        "done": "已创建项目 {{name}}",
+        "pickDepartment": "选择部门…"
       },
       "bind": {
         "title": "为 {{workspace}} 绑定项目",
@@ -13296,7 +13286,7 @@
         "createdBy": "创建人",
         "archivedAt": "归档时间",
         "usage": "配额用量",
-        "noQuota": "这个项目还没有设置上限，可在「设置」页签设置配额。"
+        "noQuota": "这个项目还没有设置上限，平台管理员可在「设置」页签设置配额和月度预算。"
       },
       "archive": {
         "action": "归档",
@@ -13328,27 +13318,17 @@
         "role": "角色",
         "search": "搜索成员",
         "empty": "没有符合条件的成员。",
-        "source": {
-          "all": "全部来源",
-          "direct": "直接",
-          "group": "来自项目组"
-        },
-        "sourceDirect": "直接",
-        "sourceGroup": "组「{{group}}」",
         "col": {
           "member": "成员",
           "roles": "有效角色",
-          "source": "来源",
           "overrides": "覆盖",
           "keys": "权限键"
         },
         "admin": "管理员",
         "edit": "编辑",
-        "inGroup": "在组里管理",
-        "addDirect": "加直接角色",
         "self": "不能修改自己的成员资格",
         "removeTitle": "移除成员",
-        "removeBody": "移除 {{name}} 在 {{project}} 的直接成员资格？通过项目组获得的访问保留。",
+        "removeBody": "移除 {{name}} 在 {{project}} 的成员资格？",
         "removed": "已移除 {{name}}",
         "added": "已添加 {{name}}",
         "updated": "已更新 {{name}}",
@@ -13356,7 +13336,6 @@
         "candidatesHint": "按用户名或邮箱搜索",
         "noCandidates": "没有匹配的活跃账号。",
         "isMember": "已是成员",
-        "directOverGroup": "TA 的项目组已给予 {{role}}；直接角色在此之上叠加（取并集）。",
         "customize": "为该成员调整权限键（覆盖）",
         "inheritHint": "该角色跟随账号的全局角色与权限；已有覆盖保持不变。",
         "strictNotice": "该项目严格分离职责：使某人同时持有一对职责两端（部署 + 签发放行、管理判据 + 签署判据）的改动会被拒绝。"
@@ -13445,7 +13424,7 @@
       "settings": {
         "general": "常规",
         "access": "访问",
-        "adminOnly": "名称、部门和项目组由平台管理员修改。",
+        "adminOnly": "名称和部门由平台管理员修改。",
         "visibility": "资源可见性",
         "visShared": "共享——成员互相可见资源",
         "visIsolated": "隔离——成员只看到自己的资源",
@@ -13549,36 +13528,48 @@
         }
       },
       "quotas": {
-        "title": "配额与预算",
-        "sub": "本项目的用量与上限。生效上限取项目值与部门上限中的较小者；留空表示项目未设置。花费为估算值，有几分钟延迟，金额上限是软上限。",
+        "title": "配额与月度预算",
+        "sub": "本项目的用量与上限。只有平台管理员可以设置；留空表示不限。",
         "col": {
           "quota": "配额",
           "used": "已用",
           "limit": "上限",
-          "department": "部门上限",
           "project": "项目值"
         },
         "key": {
           "max_agents": "Agent 数",
           "max_api_keys": "启用的 API Key 数",
           "max_concurrent_eval_runs": "并发评估运行数",
-          "eval_run_max_usd": "单次评估运行花费（美元）",
-          "eval_monthly_usd_cap": "本月评估花费（美元）",
-          "monthly_cost_alert_usd": "月度成本告警（美元）",
+          "monthly_budget_usd": "月度预算（USD）",
           "v1_rate_per_minute": "/v1 每分钟调用数（全部 Key）"
         },
         "enforcement": {
           "block": "超出上限时拒绝",
           "queue": "超出的运行排队等待",
-          "alert": "只告警，不阻断",
+          "budget": "花完后拒绝计费操作",
           "throttle": "超出的调用返回 429"
+        },
+        "budget": {
+          "title": "月度预算（USD）",
+          "none": "未设置月度预算：本项目的计费操作不受限制。",
+          "spent": "本月已花费",
+          "remaining": "剩余",
+          "of": "{{spent}} / {{budget}}",
+          "reset": "每月 1 日（UTC）重置，下次重置：{{date}}。",
+          "exhausted": "预算已用完：本项目的对话、调用、部署、评估运行、实验、Skill Lab 等计费操作将被拒绝，直到 {{date}}（UTC）重置或管理员提高预算。",
+          "warning": "已花费预算的 80% 以上，已触发告警。",
+          "notMeasured": "本月花费暂时无法测量；测量到之前不会阻断操作。",
+          "lag": "花费来自{{basis}}，有几分钟延迟（账单成本最多延迟一天）；已在运行的工作不会被中断，因此可能略微超出预算。",
+          "basis": {
+            "estimate": "Token × 单价估算",
+            "billing": "账单成本"
+          }
         },
         "unlimited": "不限",
         "unset": "未设置",
         "firing": "超出预算",
-        "notMeasured": "尚未测量：预算告警下一轮评估时读取花费。",
-        "invalid": "取值无效，或超过部门上限。",
-        "readOnly": "只有平台管理员或本项目所属部门的管理员可以修改配额。",
+        "invalid": "取值无效。",
+        "readOnly": "只有平台管理员可以修改配额和月度预算。",
         "save": "保存配额",
         "saved": "已保存 {{name}} 的配额"
       },
@@ -13806,45 +13797,16 @@
       },
       "breakGlass": "忘记内置管理员密码？在实例上运行 scripts/reset_admin_password.py 重置，或设置 LAUNCHPAD_AUTH_ADMIN_PASSWORD_OVERRIDE_DISABLED=true 恢复配置文件中的密码。"
     },
-    "groups": {
-      "nav": "项目组",
-      "eyebrow": "组织 · 项目组",
-      "title": "项目组",
-      "sub": "项目组成员以组的角色进入组内全部项目；项目的直接成员不受影响。",
-      "create": "新建项目组",
+    "structure": {
       "edit": "编辑",
       "archive": "归档",
       "unarchive": "取消归档",
-      "empty": "没有项目组",
-      "emptyBody": "把同一团队的项目放进一个组，团队只需添加一次。",
-      "notFound": "找不到项目组 {{id}}。",
-      "noDepartment": "无部门",
       "status": {
         "active": "活跃",
         "archived": "已归档",
         "all": "全部"
       },
-      "col": {
-        "group": "组",
-        "department": "部门",
-        "projects": "项目",
-        "members": "成员"
-      },
-      "tab": {
-        "projects": "项目",
-        "members": "成员"
-      },
-      "created": "已创建项目组 {{name}}",
-      "saved": "已保存项目组 {{name}}",
-      "archived": "已归档项目组 {{name}}（禁用 {{keys}} 个 API Key）",
-      "unarchived": "已取消归档项目组 {{name}}",
-      "archivedNotice": "此组已归档：成员不再经由本组进入组内项目。",
-      "archiveTitle": "归档 {{name}}？",
-      "archiveBody_one": "{{count}} 名成员经由本组获得的访问将停止；项目仍属于本组，直接成员不受影响。",
-      "archiveBody_other": "{{count}} 名成员经由本组获得的访问将停止；项目仍属于本组，直接成员不受影响。",
       "form": {
-        "createTitle": "新建项目组",
-        "editTitle": "编辑项目组",
         "name": "名称",
         "id": "ID",
         "description": "描述",
@@ -13856,55 +13818,21 @@
           "id": "2-32 位小写字母、数字或连字符，以字母或数字开头。",
           "name": "请输入名称。"
         }
-      },
-      "projects": {
-        "sub": "项目加入组后，组成员立即可见；移出时，组带来的访问随即撤销。",
-        "none": "组里还没有项目。",
-        "pick": "选择项目…",
-        "add": "加入本组",
-        "inOther": "在项目组 {{group}} 中",
-        "added": "项目已加入本组",
-        "remove": "移出本组",
-        "removed": "项目已移出本组",
-        "removeTitle": "把 {{name}} 移出本组？",
-        "removeBody_one": "将撤销 {{count}} 人经由本组获得的访问；直接成员不受影响。",
-        "removeBody_other": "将撤销 {{count}} 人经由本组获得的访问；直接成员不受影响。"
-      },
-      "members": {
-        "none": "还没有成员。",
-        "add": "添加成员",
-        "addTitle": "向 {{name}} 添加成员",
-        "addSubmit_one": "添加 {{count}} 人",
-        "addSubmit_other": "添加 {{count}} 人",
-        "picked": "已选择：{{names}}",
-        "templatesOnly": "项目组只能使用内置角色；自定义角色属于单个项目。",
-        "needProject": "请先为项目组添加一个项目——账号通过其中的项目来搜索。",
-        "addedMany_one": "已添加 {{count}} 名成员",
-        "addedMany_other": "已添加 {{count}} 名成员",
-        "updated": "已更新 {{username}} 的角色",
-        "remove": "移出本组",
-        "removed": "已把 {{username}} 移出本组",
-        "removeTitle": "把 {{username}} 移出本组？",
-        "removeBody_one": "此人将失去本组在 {{count}} 个项目中给予的访问；直接成员资格保留。",
-        "removeBody_other": "此人将失去本组在 {{count}} 个项目中给予的访问；直接成员资格保留。",
-        "sod_one": "在 {{count}} 个项目中职责合并",
-        "sod_other": "在 {{count}} 个项目中职责合并"
       }
     },
     "departments": {
       "nav": "部门",
       "eyebrow": "组织 · 部门",
       "title": "部门",
-      "sub": "部门为项目和项目组标注归属，并在项目切换器中分组。每个部门可以有自己的部门管理员，在为部门开放的工作区内管理本部门的项目和项目组。",
+      "sub": "每个项目都属于一个部门，部门也是项目切换器中的分组。每个部门可以有自己的部门管理员，在为部门开放的工作区内管理本部门的项目。",
       "create": "新建部门",
       "delete": "删除",
       "empty": "没有部门",
-      "emptyBody": "先添加部门，再在项目或项目组上选择它。",
-      "inUse": "仍有项目或项目组使用它——请改为归档",
+      "emptyBody": "先添加部门，再在项目上选择它。",
+      "inUse": "仍有项目使用它——请改为归档",
       "col": {
         "department": "部门",
         "projects": "项目",
-        "groups": "项目组",
         "workspaces": "开放的工作区"
       },
       "form": {
@@ -13917,9 +13845,9 @@
       "unarchived": "已取消归档部门 {{name}}",
       "deleted": "已删除部门 {{name}}",
       "archiveTitle": "归档 {{name}}？",
-      "archiveBody": "{{name}} 不再出现在新的选择中；已使用它的项目和项目组保留不变。",
+      "archiveBody": "{{name}} 不再出现在新的选择中；已使用它的项目保留不变。",
       "deleteTitle": "删除 {{name}}？",
-      "deleteBody": "{{name}} 将被永久删除。没有项目或项目组使用它。",
+      "deleteBody": "{{name}} 将被永久删除。没有项目使用它。",
       "manage": "管理员与工作区",
       "detail": {
         "title": "部门 {{name}}",
@@ -13931,7 +13859,7 @@
         "settings": "设置"
       },
       "admins": {
-        "hint": "部门管理员可以创建本部门的项目，管理其成员、角色和项目组，并把项目绑定到开放的工作区。除非把自己加为成员（会单独记入审计），否则看不到项目数据。",
+        "hint": "部门管理员可以创建本部门的项目，管理其成员和角色，并把项目绑定到开放的工作区。除非把自己加为成员（会单独记入审计），否则看不到项目数据。",
         "empty": "暂无部门管理员",
         "add": "添加管理员",
         "remove": "移除",
@@ -13963,7 +13891,7 @@
       },
       "mine": {
         "title": "我的部门",
-        "sub": "你管理的部门：可在“项目”和“项目组”中管理这些部门的项目和项目组。",
+        "sub": "你管理的部门：可在“项目”中管理这些部门的项目。",
         "noWorkspace": "暂无——请联系平台管理员"
       },
       "invite": {
@@ -14313,7 +14241,7 @@
       }
     },
     "steward": {
-      "typeHint": "组织管理员只管理结构——账号、部门、项目、项目组、绑定和工作区——不访问任何项目数据。",
+      "typeHint": "组织管理员只管理结构——账号、部门、项目、绑定和工作区——不访问任何项目数据。",
       "addWarning": "组织管理员不能加入项目：它的每一次成员变更都会写入审计，并通知该项目负责人。",
       "demoteBody": "{{username}} 将失去组织管理员角色，也就失去配置页面。",
       "readOnly": "你的角色只管理结构：管理员和组织管理员由管理员添加和修改。",
@@ -14326,13 +14254,12 @@
         "heading": "只管理结构",
         "meta": "已登录：{{username}}（组织管理员）",
         "title": "你的角色只管理结构，不访问项目数据",
-        "body": "组织管理员管理账号、部门、项目、项目组和工作区，不访问任何项目的业务数据。请使用下面的配置页面。"
+        "body": "组织管理员管理账号、部门、项目和工作区，不访问任何项目的业务数据。请使用下面的配置页面。"
       },
       "links": {
         "users": "用户",
         "admins": "管理员",
         "projects": "项目",
-        "groups": "项目组",
         "departments": "部门",
         "workspaces": "工作区"
       },
@@ -14705,8 +14632,7 @@
         "kind": "授予",
         "kinds": {
           "role": "全局角色",
-          "project": "项目",
-          "group": "项目组"
+          "project": "项目"
         },
         "pick": "请选择……",
         "role": "角色",
@@ -15160,7 +15086,6 @@
       "compareDearer": "更贵 ▸",
       "refusedConfirm": "服务端预估本次评估 {{usd}}，超过确认阈值。请在预估卡片上勾选确认后再提交。",
       "refusedOver": "服务端预估本次评估 {{usd}}，超过本工作区上限（{{max}}）。请缩小范围，或请管理员提交。",
-      "refusedOverProject": "服务端预估本次评估 {{usd}}，超过本项目的单次评估上限（{{max}}）。请缩小范围，或请管理员提高项目配额。",
       "rungTitle": "每次运行的花费",
       "rungSub": "阶梯上的每次运行：实测花费（未实测时为预估），以及相对上一次的变化。",
       "rungSpan": "首次 {{first}} → 最近 {{latest}}",
@@ -15730,7 +15655,6 @@
       "simulatedDataset": "模拟数据集是即时生成的，不能勾选或复制其中的行。",
       "fixedOnceCreated": "创建后就不能再修改。",
       "twoScalePoints": "评分刻度至少需要两档。",
-      "archivedGroup": "这个分组已归档，请先取消归档再修改。",
       "pickProject": "请先选择一个项目。",
       "pickPeople": "请先至少选择一个人。",
       "pickRole": "请先选择一个角色。",
@@ -15781,7 +15705,6 @@
       "maxEvaluators": "每个任务最多 {{count}} 个评估器。",
       "firstStep": "这已经是第一步。",
       "publishingNow": "它仍在发布中，请等发布完成。",
-      "pickGroup": "请先选择一个项目分组。",
       "allListed": "已经全部在列表里了。"
     }
   },
@@ -15813,6 +15736,7 @@
     "workspace.fix_role": "去修工作区角色",
     "users.open": "去用户页",
     "projects.open": "去项目页",
+    "project.settings": "去项目设置",
     "models.open": "去模型设置",
     "network.open": "去网络配置档",
     "storage.open": "去存储目录"

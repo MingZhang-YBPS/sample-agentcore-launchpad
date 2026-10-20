@@ -471,7 +471,7 @@ def test_a_transfer_run_removes_the_old_projects_cost_tags():
     department on the runtime, still billing it to alpha's cost center — the run
     must take them off."""
     ids = _world()  # alpha: department risk, CostCenter 1234
-    _project("beta")
+    _project("beta", department_id=None)  # no department: alpha's comes off
     db = SessionLocal()
     try:
         source = db.get(Project, "alpha")
@@ -492,7 +492,7 @@ def test_a_transfer_run_removes_the_old_projects_cost_tags():
 
 def test_a_key_the_target_also_carries_is_rewritten_not_removed():
     ids = _world()
-    _project("beta")
+    _project("beta", department_id=None)
     db = SessionLocal()
     try:
         db.get(Project, "beta").settings = {"cost_tags": {"CostCenter": "9999"}}

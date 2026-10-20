@@ -12,6 +12,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.main import create_app
 from app.models.ledger import Agent, Deployment, ReleaseBundle, SpecSnapshot, Workspace
 from app.services import release_export
+from tests.test_environments import bind_test_project
 
 _CLI_PATH = Path(__file__).resolve().parents[1] / "scripts" / "launchpad.py"
 _spec = importlib.util.spec_from_file_location("launchpad_cli", _CLI_PATH)
@@ -29,6 +30,8 @@ def add_workspace(ws_id: str, tier: str = "dev") -> None:
         if db.get(Workspace, ws_id) is None:
             db.add(Workspace(id=ws_id, name=ws_id, account_id=f"9{abs(hash(ws_id)) % 10**11:011d}",
                              region="us-west-2", bootstrap_status="ready", tier=tier))
+            db.flush()
+            bind_test_project(db, ws_id)
             db.commit()
     finally:
         db.close()

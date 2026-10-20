@@ -128,11 +128,8 @@ const V3Projects = lazy(() => import("./v3/pages/projects/Projects").then((m) =>
 const V3ProjectSettings = lazy(() =>
   import("./v3/pages/projects/Projects").then((m) => ({ default: m.V3ProjectSettings })),
 );
-// Configure → Administrators / Project groups / Departments (projects §7.9)
+// Configure → Administrators / Departments (projects §7.9)
 const V3Admins = lazy(() => import("./v3/pages/admins/Admins").then((m) => ({ default: m.V3Admins })));
-const V3ProjectGroups = lazy(() =>
-  import("./v3/pages/groups/ProjectGroups").then((m) => ({ default: m.V3ProjectGroups })),
-);
 const V3Departments = lazy(() =>
   import("./v3/pages/departments/Departments").then((m) => ({ default: m.V3Departments })),
 );
@@ -398,7 +395,8 @@ export default function App() {
                 <Route path="users" element={<V3Users />} />
                 <Route path="admins" element={<V3Admins />} />
                 <Route path="sso" element={<V3Sso />} />
-                <Route path="project-groups" element={<V3ProjectGroups />} />
+                {/* project groups were retired (department → project → member) */}
+                <Route path="project-groups" element={<Navigate to="/v3/projects" replace />} />
                 <Route path="departments" element={<V3Departments />} />
                 <Route path="workspaces" element={<V3Workspaces />} />
                 <Route path="network" element={<V3NetworkProfiles />} />

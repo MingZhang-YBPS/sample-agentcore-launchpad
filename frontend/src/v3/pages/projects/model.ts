@@ -116,38 +116,28 @@ export function applyOverrides(roleKeySet: readonly string[], overrides: Record<
 }
 
 /**
- * What the Members tab offers on a row (§7.8): a manager edits and removes direct
- * rows; a group-only row is managed on the group (a direct row can still be added
- * on top); nobody but an administrator changes their own membership (§3.6).
+ * What the Members tab offers on a row (§7.8): a manager edits and removes rows;
+ * nobody but an administrator changes their own membership (§3.6).
  */
-export type MemberRowState = "editable" | "group" | "self" | "readonly";
+export type MemberRowState = "editable" | "self" | "readonly";
 
 export function memberRowState(
-  member: Pick<ProjectMember, "username" | "direct">,
+  member: Pick<ProjectMember, "username">,
   opts: { canManage: boolean; isAdmin: boolean; me: string | null },
 ): MemberRowState {
   if (!opts.canManage) return "readonly";
   if (!opts.isAdmin && opts.me !== null && member.username === opts.me) return "self";
-  return member.direct ? "editable" : "group";
+  return "editable";
 }
 
-/** `group:<id>` → the group id; null for a direct source. */
-export function sourceGroup(source: string): string | null {
-  return source.startsWith("group:") ? source.slice("group:".length) : null;
-}
-
-export type SourceFilter = "all" | "direct" | "group";
-
-/** The Members tab's filters: role (any source), source, and a search on name / email. */
+/** The Members tab's filters: role and a search on name / email. */
 export function filterMembers(
   members: readonly ProjectMember[],
-  filter: { role: string; source: SourceFilter; q: string },
+  filter: { role: string; q: string },
 ): ProjectMember[] {
   const needle = filter.q.trim().toLowerCase();
   return members.filter((m) => {
     if (filter.role !== "all" && !m.sources.some((s) => s.role_key === filter.role)) return false;
-    if (filter.source === "direct" && !m.direct) return false;
-    if (filter.source === "group" && !m.group) return false;
     return !needle || `${m.username ?? ""} ${m.email ?? ""} ${m.user_id}`.toLowerCase().includes(needle);
   });
 }
@@ -161,7 +151,6 @@ export interface SettingsDraft {
   name: string;
   description: string;
   department_id: string;
-  group_id: string;
   resource_visibility: "shared" | "isolated";
   sod_strict: boolean;
 }
@@ -171,7 +160,6 @@ export function settingsDraft(project: ProjectDetail): SettingsDraft {
     name: project.name,
     description: project.description ?? "",
     department_id: project.department_id ?? "",
-    group_id: project.group_id ?? "",
     resource_visibility: project.settings?.resource_visibility === "isolated" ? "isolated" : "shared",
     sod_strict: Boolean(project.settings?.sod_strict),
   };
@@ -179,7 +167,7 @@ export function settingsDraft(project: ProjectDetail): SettingsDraft {
 
 /**
  * The PATCH a Settings save sends: only the changed fields, and only the ones the
- * caller may change — name / department / group and `sod_strict` are an
+ * caller may change — name / department and `sod_strict` are an
  * administrator's (the backend refuses them from an owner); description and
  * `resource_visibility` are the owner's too. Null when nothing changed.
  */
@@ -188,8 +176,8 @@ export function settingsPatch(project: ProjectDetail, draft: SettingsDraft, isAd
   const patch: ProjectPatch = {};
   if (isAdmin) {
     if (draft.name.trim() && draft.name.trim() !== before.name) patch.name = draft.name.trim();
-    if (draft.department_id !== before.department_id) patch.department_id = draft.department_id || null;
-    if (draft.group_id !== before.group_id) patch.group_id = draft.group_id || null;
+    // a department is never cleared, only moved
+    if (draft.department_id && draft.department_id !== before.department_id) patch.department_id = draft.department_id;
   }
   if (draft.description !== before.description) patch.description = draft.description;
   const settings: ProjectSettings = {};

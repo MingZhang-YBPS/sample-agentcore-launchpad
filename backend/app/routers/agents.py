@@ -31,6 +31,7 @@ from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import (
     AgentSpec,
     ByocPythonVersion,
+    ConvertRequest,
     InvokeRequest,
     InvokeResponse,
     RuntimeImportRequest,
@@ -42,6 +43,7 @@ from app.services import (
     agent_iam,
     agent_identity,
     agent_names,
+    agent_project,
     agent_templates,
     agent_tools,
     byoc_uploads,
@@ -359,8 +361,15 @@ def create_agent(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    # the business project the agent is filed under (body project_id or X-Project),
+    # validated before anything else — it becomes the request's project from here on
+    project_id = agent_project.resolve_agent_project(
+        request, db, ws.id, spec.project_id, "agents.deploy",
+    )
     # the project's agent quota (projects §11.3), before any AWS read
     project_quotas.assert_capacity(db, current_project(), "max_agents")
+    # a deploy spends: the filed-under project's monthly budget (core/billing_policy)
+    project_quotas.assert_budget(db, project_id)
     spec = _stored_network(db, ws, request, spec)
     # inline S3 Files / EFS mounts are an administrator's (storage-mounts D-2)
     mount_policy.assert_inline_mounts_allowed(
@@ -406,6 +415,7 @@ def create_agent(
         method=spec.method,
         status="deploying",
         spec=spec.model_dump(),
+        project_id=project_id,
     )
     # the creating account (ownership, display and TTFA); server-derived, never from
     # the spec — `owner` stays the provenance label
@@ -459,6 +469,27 @@ def list_agent_templates() -> dict[str, Any]:
     return {"templates": agent_templates.catalogue()}
 
 
+@router.get("/agents/eligible-projects")
+def list_eligible_projects(
+    request: Request,
+    permission: str = "agents.deploy",
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The business projects the caller may file a new agent under (the create
+    flow's project picker): active, non-default, with a department, and holding
+    ``permission`` (one of the creation keys) for the caller — server-filtered, so a
+    project the caller cannot create in is never listed."""
+    if permission not in agent_project.CREATE_PERMISSIONS:
+        raise AppError(
+            "agent.project_permission_invalid",
+            f"permission must be one of {list(agent_project.CREATE_PERMISSIONS)}",
+            status_code=422,
+        )
+    identity = require_identity(request)
+    return {"projects": agent_project.eligible_projects(db, identity, ws.id, permission)}
+
+
 @router.get("/agents/discovery")
 def discover_runtimes(
     request: Request,
@@ -486,15 +517,23 @@ def discover_runtimes(
 @router.post("/agents/discovery/import")
 def import_discovered_runtimes(
     req: RuntimeImportRequest,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    """Import selected Runtimes and/or Harnesses; result rows are keyed by kind."""
+    """Import selected Runtimes and/or Harnesses; result rows are keyed by kind.
+    New rows are filed under the request's business project (``project_id`` /
+    ``X-Project``, services/agent_project)."""
+    project_id = agent_project.resolve_agent_project(
+        request, db, ws.id, req.project_id, "agents.import",
+    )
     control = control_client(ws.context)
-    result = import_runtimes(control, db, req.runtime_ids, workspace_id=ws.id)
+    result = import_runtimes(
+        control, db, req.runtime_ids, workspace_id=ws.id, project_id=project_id,
+    )
     for bucket, rows in import_harnesses(
-        control, db, req.harness_ids, workspace_id=ws.id
+        control, db, req.harness_ids, workspace_id=ws.id, project_id=project_id,
     ).items():
         result[bucket].extend(rows)
     # the project's max_agents quota (projects §11.3), counted after the flush: a
@@ -1131,6 +1170,7 @@ def switch_inbound_auth(
 def convert_agent(
     agent_id: str,
     request: Request,
+    body: ConvertRequest | None = None,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -1141,9 +1181,17 @@ def convert_agent(
     bundle contract onto the entrypoint (so experiments can A/B it — the
     export alone would no-op, same as the harness), and deploys the result
     through the standard zip pipeline. The source harness is untouched.
+    The twin is filed under the request's business project (optional body
+    ``project_id``, which must match ``X-Project`` when both are sent).
     """
     from app.deployer.zip_runtime import platform_requirements
     from app.services import harness_convert as hc
+
+    project_id = agent_project.resolve_agent_project(
+        request, db, ws.id, body.project_id if body else None, "agents.convert",
+    )
+    # the twin's deploy spends: its project's monthly budget (core/billing_policy)
+    project_quotas.assert_budget(db, project_id)
 
     source = _agent_in(db, ws, agent_id, viewer)
     if source is None or source.status == "deleted":
@@ -1218,7 +1266,7 @@ def convert_agent(
 
     agent = Agent(
         workspace_id=ws.id, name=spec.name, method=spec.method, status="deploying",
-        spec=spec.model_dump(),
+        spec=spec.model_dump(), project_id=project_id,
     )
     # the twin is a new agent: its creator is the converter, not the source's
     creators.stamp(agent, Creator.of_request(request))

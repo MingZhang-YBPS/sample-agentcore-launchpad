@@ -612,7 +612,14 @@ def invoke_agent_text(
     and the answer before it is returned. The text is the answer that is screened:
     an ``output_schema`` agent's parsed ``structured`` object is dropped, never
     returned unscreened.
+
+    The agent's project's monthly budget is checked first (409
+    ``project.budget_exhausted``, ``project_quotas.assert_budget``): every entrance
+    — console, ``/v1``, channels — is refused here, before any model call.
     """
+    from app.services.project_quotas import assert_agent_budget
+
+    assert_agent_budget(agent)
     tool_approvals = _turn_approvals(tool_approvals, console_user)
     screen = guardrail.guardrail_config(agent.spec)
     if screen:

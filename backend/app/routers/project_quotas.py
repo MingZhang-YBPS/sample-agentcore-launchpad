@@ -1,10 +1,10 @@
-"""A project's quotas and budgets (projects design §11.3, G11-quota).
+"""A project's quotas and monthly budget (projects design §11.3, G11-quota).
 
 Hub-global like the rest of `/api/projects/{project_id}`: the project is the path's.
 The read is every member's (and the project's department administrator's), with
-usage — a non-member gets 404 here (`visible_project`). The write is an
-administrator's, or the project's department administrator's through the `dadmin`
-overlay (`core/route_policy.py`), never above the department's caps. The logic is in
+usage and the budget's month-to-date spend, remaining and reset date — a non-member
+gets 404 here (`visible_project`). The write is a platform administrator's only (no
+department overlay, `core/route_policy.py`). The logic is in
 `services/project_quotas.py`.
 """
 

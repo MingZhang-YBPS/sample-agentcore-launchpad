@@ -34,8 +34,8 @@ class ProjectCreate(BaseModel):
     id: str = Field(min_length=2, max_length=32)
     name: str = Field(min_length=1, max_length=64)
     description: str = Field(default="", max_length=2000)
+    # required (422 `project.department_required`): an existing, active department
     department_id: str | None = Field(default=None, max_length=32)
-    group_id: str | None = Field(default=None, max_length=32)
     workspaces: list[str] = Field(min_length=1, max_length=50)
     owners: list[str] = Field(default_factory=list, max_length=50)  # users.id
     settings: dict[str, Any] | None = None
@@ -44,8 +44,8 @@ class ProjectCreate(BaseModel):
 class ProjectPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=64)
     description: str | None = Field(default=None, max_length=2000)
+    # may move to another department, never be cleared
     department_id: str | None = Field(default=None, max_length=32)
-    group_id: str | None = Field(default=None, max_length=32)
     settings: dict[str, Any] | None = None
 
 
@@ -105,8 +105,8 @@ def role_templates() -> dict[str, Any]:
 @router.get("")
 def list_projects(
     request: Request,
+    # a department id, or `_none` for the projects with no department
     department_id: str | None = Query(default=None, max_length=32),
-    group_id: str | None = Query(default=None, max_length=32),
     status: str | None = Query(default=None, max_length=16),
     workspace_id: str | None = Query(default=None, max_length=32),
     q: str | None = Query(default=None, max_length=64),
@@ -114,7 +114,7 @@ def list_projects(
 ) -> dict[str, Any]:
     identity = require_identity(request)
     return {"projects": svc.list_projects(
-        db, identity, department_id=department_id, group_id=group_id, status=status,
+        db, identity, department_id=department_id, status=status,
         workspace_id=workspace_id, q=q,
     )}
 
@@ -126,7 +126,7 @@ def create_project(
     identity = require_identity(request)
     row = svc.create_project(
         db, identity, project_id=body.id, name=body.name, description=body.description,
-        department_id=body.department_id, group_id=body.group_id,
+        department_id=body.department_id,
         workspaces=body.workspaces, owners=body.owners, settings=body.settings,
     )
     db.commit()

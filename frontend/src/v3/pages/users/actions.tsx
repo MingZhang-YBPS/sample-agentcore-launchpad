@@ -20,8 +20,6 @@ import {
   directProjectRows,
   emptyApproveForm,
   emptyCreateForm,
-  groupItems,
-  groupRows,
   isPlatformRole,
   type MembershipRow,
   oneTimePassword,
@@ -33,6 +31,7 @@ import {
 import { GrantChip } from "./GrantChip";
 import { LegacyGrants, MembershipRows } from "./Memberships";
 import { type Structure, useProjectRoleOptions, useStructure } from "./structure";
+import { Select } from "../../select";
 
 /** Account actions that change access, so each one asks first. */
 export type ConfirmKind = "delete" | "disable" | "reject" | "reset" | "role" | "sessions";
@@ -40,11 +39,11 @@ export type ConfirmKind = "delete" | "disable" | "reject" | "reset" | "role" | "
 /**
  * Every account write of the page — the same PATCH / DELETE calls, bodies and
  * confirmations as V2's `useUserActions`, with V3 dialogs: approve with workspace
- * grants and (projects §7.5) projects and groups, create with projects (§7.4),
- * edit one account's projects and groups, forced logout, custom extension, the
+ * grants and (projects §7.5) projects, create with projects (§7.4), edit one
+ * account's projects, forced logout, custom extension, the
  * confirmations, and the one-time generated password.
  *
- * `structure` (projects, groups, templates) is the page's when it has one loaded;
+ * `structure` (projects, templates) is the page's when it has one loaded;
  * otherwise it is fetched while a dialog that needs it is open.
  */
 export function useUserActions(onChanged: () => void, validDays = 7, structure?: Structure) {
@@ -64,7 +63,6 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
   const [approveTouched, setApproveTouched] = useState(false);
   const [memberTarget, setMemberTarget] = useState<ProjectUser | null>(null);
   const [memberProjects, setMemberProjects] = useState<MembershipRow[]>([]);
-  const [memberGroups, setMemberGroups] = useState<MembershipRow[]>([]);
   const [reset, setReset] = useState<{ username: string; password: string; kind: "created" | "reset" } | null>(null);
   const [creating, setCreating] = useState<CreateForm | null>(null);
   const [createTouched, setCreateTouched] = useState(false);
@@ -78,16 +76,14 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
     [...(creating?.projects ?? []), ...(approving?.projects ?? []), ...memberProjects].map((row) => row.id),
     shape.templates,
   );
-  const groupRoleOptions = () => shape.templates.map((key) => ({ key, label: t(`v3.project.roles.${key}`, { defaultValue: key }) }));
   const projectTargets = shape.projects.map((p) => ({ id: p.id, name: p.name }));
-  const groupTargets = shape.groups.filter((g) => !g.archived).map((g) => ({ id: g.id, name: g.name }));
-  const showMemberships = shape.multiProject || groupTargets.length > 0;
+  const showMemberships = shape.multiProject;
 
   const patch = async (user: ConsoleUser, body: UserPatchBody | UserMembershipPatch, successKey: string) => {
     setBusyId(user.id);
     try {
       failed.clear();
-      const updated = await (Object.keys(body).some((k) => k === "projects" || k === "groups")
+      const updated = await (Object.keys(body).some((k) => k === "projects")
         ? usersApi.update(user.id, body as UserMembershipPatch)
         : api.updateUser(user.id, body as UserPatchBody));
       const once = oneTimePassword(updated, "reset");
@@ -148,25 +144,22 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
     void patch(target, body, "usersPage.approved");
   };
 
-  /** Edit one account's direct project rows and its groups (full replacement, §7.10). */
+  /** Edit one account's direct project rows (full replacement, §7.10). */
   const openMemberships = (user: ProjectUser) => {
     setMemberProjects(directProjectRows(user));
-    setMemberGroups(groupRows(user));
     setMemberTarget(user);
   };
   const closeMemberships = () => {
     setMemberTarget(null);
     setMemberProjects([]);
-    setMemberGroups([]);
   };
   const memberErrors = {
     projects: validateMemberships(memberProjects, "projects"),
-    groups: validateMemberships(memberGroups, "groups"),
   };
   const submitMemberships = () => {
-    if (!memberTarget || memberErrors.projects || memberErrors.groups) return;
+    if (!memberTarget || memberErrors.projects) return;
     const target = memberTarget;
-    void patch(target, { projects: projectItems(memberProjects), groups: groupItems(memberGroups) }, "v3.users.memberships.saved")
+    void patch(target, { projects: projectItems(memberProjects) }, "v3.users.memberships.saved")
       .then((ok) => ok && closeMemberships());
   };
 
@@ -204,7 +197,7 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
     try {
       const body = createBody(creating);
       // the base call unless memberships ride along: the same request as before projects
-      const created = body.projects || body.groups ? await usersApi.create(body) : await api.createUser(body);
+      const created = body.projects ? await usersApi.create(body) : await api.createUser(body);
       setCreating(null);
       toast("ok", t("v3.users.create.created", { username: created.username }));
       setReset(oneTimePassword(created, "created"));
@@ -297,20 +290,20 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
               <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
                 <label className="v3-field">
                   <span>{t("v2.users.col.role")}</span>
-                  <select className="v3-select" name="role" value={creating.role} onChange={(e) => setField("role", e.target.value as ConsoleRole)}>
+                  <Select className="v3-select" name="role" value={creating.role} onChange={(e) => setField("role", e.target.value as ConsoleRole)}>
                     {createRoles.map((role) => (
                       <option key={role} value={role}>{t(`v2.users.role.${role}`)}</option>
                     ))}
-                  </select>
+                  </Select>
                   <small className="v3-hint">{t(`v3.users.create.roleHint.${creating.role}`)}</small>
                 </label>
                 <label className="v3-field">
                   <span>{t("v2.users.col.validity")}</span>
-                  <select className="v3-select" name="expiry" value={creating.expiry} onChange={(e) => setField("expiry", e.target.value as CreateForm["expiry"])}>
+                  <Select className="v3-select" name="expiry" value={creating.expiry} onChange={(e) => setField("expiry", e.target.value as CreateForm["expiry"])}>
                     <option value="default">{t("v3.users.create.expiryDefault", { count: validDays })}</option>
                     <option value="days">{t("v3.users.create.expiryDays")}</option>
                     <option value="never">{t("usersPage.neverExpires")}</option>
-                  </select>
+                  </Select>
                   {creating.expiry === "days" && (
                     <input className="v3-input" name="days" type="number" min={1} max={MAX_EXTEND_DAYS} value={creating.days}
                       onChange={(e) => setField("days", e.target.value)} aria-label={t("v2.users.extendDays")} aria-invalid={createErrors.days ? true : undefined} />
@@ -340,10 +333,6 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
                 <>
                   <MembershipRows kind="projects" rows={creating.projects} onChange={(rows) => setField("projects", rows)}
                     targets={projectTargets} rolesFor={roleOptions} error={createErrors.projects} />
-                  {groupTargets.length > 0 && (
-                    <MembershipRows kind="groups" rows={creating.groups} onChange={(rows) => setField("groups", rows)}
-                      targets={groupTargets} rolesFor={groupRoleOptions} error={createErrors.groups} />
-                  )}
                 </>
               )}
               <LegacyGrants multiProject={showMemberships && !isPlatformRole(creating.role)}>
@@ -466,17 +455,13 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
                 <>
                   <label className="v3-field">
                     <span>{t("v2.users.col.role")}</span>
-                    <select className="v3-select" value={approving.role}
+                    <Select className="v3-select" value={approving.role}
                       onChange={(e) => setApproving({ ...approving, role: e.target.value as ApproveForm["role"] })}>
                       {(["member", "operator"] as const).map((role) => <option key={role} value={role}>{t(`v2.users.role.${role}`)}</option>)}
-                    </select>
+                    </Select>
                   </label>
                   <MembershipRows kind="projects" rows={approving.projects} onChange={(rows) => setApproving({ ...approving, projects: rows })}
                     targets={projectTargets} rolesFor={roleOptions} error={approveTouched ? validateApprove(approving).projects : null} />
-                  {groupTargets.length > 0 && (
-                    <MembershipRows kind="groups" rows={approving.groups} onChange={(rows) => setApproving({ ...approving, groups: rows })}
-                      targets={groupTargets} rolesFor={groupRoleOptions} error={approveTouched ? validateApprove(approving).groups : null} />
-                  )}
                 </>
               )}
               <LegacyGrants multiProject={showMemberships}>
@@ -497,7 +482,7 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
                   <small className="v3-hint">{t("v2.users.approveHint")}</small>
                 </div>
               </LegacyGrants>
-              {approving.workspaces.length === 0 && approving.projects.length === 0 && approving.groups.length === 0 && (
+              {approving.workspaces.length === 0 && approving.projects.length === 0 && (
                 <Notice s="wait">{t("v2.users.approveNoGrant")}</Notice>
               )}
             </div>
@@ -512,7 +497,7 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
             foot={
               <>
                 <Btn kind="ghost" disabled={busyId !== null} onClick={closeMemberships}>{t("v3.common.cancel")}</Btn>
-                <Btn kind="primary" busy={busyId !== null} disabled={Boolean(memberErrors.projects || memberErrors.groups)}
+                <Btn kind="primary" busy={busyId !== null} disabled={Boolean(memberErrors.projects)}
                   disabledReason={t("story.reason.fixErrors")} onClick={submitMemberships}>
                   {t("v3.users.memberships.save")}
                 </Btn>
@@ -523,8 +508,6 @@ export function useUserActions(onChanged: () => void, validDays = 7, structure?:
               <p style={{ margin: 0 }}>{t("v3.users.memberships.body")}</p>
               <MembershipRows kind="projects" rows={memberProjects} onChange={setMemberProjects}
                 targets={projectTargets} rolesFor={roleOptions} error={memberErrors.projects} busy={busyId !== null} />
-              <MembershipRows kind="groups" rows={memberGroups} onChange={setMemberGroups}
-                targets={groupTargets} rolesFor={groupRoleOptions} error={memberErrors.groups} busy={busyId !== null} />
               <small className="v3-hint">{t("v3.users.memberships.inheritHint")}</small>
             </div>
           </Dialog>

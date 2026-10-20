@@ -8,6 +8,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.services import observability as obs
+from tests.conftest import TEST_PROJECT
 
 from .conftest import ws_ctx
 
@@ -1462,7 +1463,7 @@ def test_session_transcript_endpoint_skips_logs_insights(client, mocked_aws, mon
 
     db = SessionLocal()
     foreign = Agent(workspace_id="other-ws", name="x", method="harness",
-                    status="active", resource_id="x-1")
+                    status="active", resource_id="x-1", project_id=TEST_PROJECT)
     db.add(foreign)
     db.commit()
     foreign_id = foreign.id

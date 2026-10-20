@@ -26,6 +26,7 @@ from app.services.visibility import Viewer
 from app.skill_lab import samples, task_assets
 from app.skill_lab import tasksets as taskset_svc
 from app.skill_lab.models import SkillLabTaskset
+from tests.conftest import TEST_PROJECT
 
 WS = SimpleNamespace(id=DEFAULT_WORKSPACE_ID)
 RUNTIMES = "/aws/bedrock-agentcore/runtimes/"
@@ -71,10 +72,10 @@ def _cloud_dataset(pid: str, cloud_id: str) -> str:
 
 
 def test_cloud_datasets_follow_their_rows_across_projects():
-    _cloud_dataset("default", "cd-default")
+    _cloud_dataset(TEST_PROJECT, "cd-default")
     db = SessionLocal()
     try:
-        with project_context("default"):  # one project: every cloud dataset as before
+        with project_context(TEST_PROJECT):  # one project: every cloud dataset as before
             hidden = eval_routers._cloud_hidden(db, WS, Viewer.ALL)
             assert not hidden("cd-default") and not hidden("cd-console-made")
         _project("alpha")
@@ -86,7 +87,7 @@ def test_cloud_datasets_follow_their_rows_across_projects():
             assert hidden("cd-console-made")  # unattributed: the workspace default's
             with pytest.raises(NotFoundError):
                 eval_routers._require_cloud_visible(db, WS, "cd-default", Viewer.ALL)
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             hidden = eval_routers._cloud_hidden(db, WS, Viewer.ALL)
             assert hidden("cd-alpha") and not hidden("cd-console-made")
     finally:
@@ -101,11 +102,11 @@ def _online_row(pid: str, agent_id: str, config_id: str) -> None:
 
 def test_online_configs_belong_to_their_ledger_or_parent_project():
     _project("alpha")
-    default_agent = _agent("d", "default")
+    default_agent = _agent("d", TEST_PROJECT)
     alpha_agent = _agent("a", "alpha")
-    _online_row("default", default_agent, "cfg-default")
+    _online_row(TEST_PROJECT, default_agent, "cfg-default")
     _online_row("alpha", alpha_agent, "cfg-alpha")
-    exp = _add("default", Experiment(workspace_id=DEFAULT_WORKSPACE_ID, name="e",
+    exp = _add(TEST_PROJECT, Experiment(workspace_id=DEFAULT_WORKSPACE_ID, name="e",
                                      agent_id=default_agent, agent_name="d"))
     db = SessionLocal()
     try:
@@ -120,7 +121,7 @@ def test_online_configs_belong_to_their_ledger_or_parent_project():
             # another project's ledger config is refused before any AWS call
             with pytest.raises(NotFoundError):
                 online.get_config(db, WS, "cfg-default", control=object())
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             assert online._ProjectConfigs.load(db, WS).decide(
                 "other", f"exp_{exp[:8]}_ctl") is True
     finally:
@@ -130,7 +131,7 @@ def test_online_configs_belong_to_their_ledger_or_parent_project():
 def test_online_configs_are_unfenced_in_a_single_project_workspace():
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             assert not several_projects(db, DEFAULT_WORKSPACE_ID)
             assert online._ProjectConfigs.load(db, WS) is None
     finally:
@@ -139,9 +140,9 @@ def test_online_configs_are_unfenced_in_a_single_project_workspace():
 
 def test_online_list_drops_another_projects_and_unmatched_external_configs(monkeypatch):
     _project("alpha")
-    default_agent = _agent("d", "default")
+    default_agent = _agent("d", TEST_PROJECT)
     _agent("a", "alpha", resource_id="alpharun-abc123")
-    _online_row("default", default_agent, "cfg-default")
+    _online_row(TEST_PROJECT, default_agent, "cfg-default")
     summaries = [
         {"onlineEvaluationConfigId": cid, "onlineEvaluationConfigName": name}
         for cid, name in (("cfg-default", "oe_d"), ("ext-alpha", "console_a"),
@@ -170,16 +171,16 @@ def test_online_list_drops_another_projects_and_unmatched_external_configs(monke
 
 
 def test_the_fence_names_another_projects_telemetry():
-    _agent("own", "default", resource_id="ownrun-aaa111")
+    _agent("own", TEST_PROJECT, resource_id="ownrun-aaa111")
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             fence = ProjectFence(db, DEFAULT_WORKSPACE_ID)
             assert not fence.closed and fence.allows_service("anything.DEFAULT")
         _project("alpha")
         access.reset_cache_for_tests()
         _agent("theirs", "alpha", resource_id="theirrun-bbb222")
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             fence = ProjectFence(db, DEFAULT_WORKSPACE_ID)
             assert fence.closed
             assert fence.foreign_log_group(f"{RUNTIMES}theirrun-bbb222-DEFAULT")
@@ -259,8 +260,8 @@ def test_an_experiment_action_runs_as_the_experiments_project(monkeypatch):
 
 def test_the_running_experiment_slot_is_workspace_wide_but_unnamed(monkeypatch):
     _project("alpha")
-    agent = _agent("d", "default")
-    exp = _add("default", Experiment(workspace_id=DEFAULT_WORKSPACE_ID, name="secret-exp",
+    agent = _agent("d", TEST_PROJECT)
+    exp = _add(TEST_PROJECT, Experiment(workspace_id=DEFAULT_WORKSPACE_ID, name="secret-exp",
                                      agent_id=agent, agent_name="d", status="running"))
     db = SessionLocal()
     try:
@@ -273,7 +274,7 @@ def test_the_running_experiment_slot_is_workspace_wide_but_unnamed(monkeypatch):
             assert err.value.code == "experiment.already_running"
             assert "secret-exp" not in err.value.message
             assert opt_service._other_project_test(f"exp_{exp[:8]}_bundle")
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             with pytest.raises(AppError) as err:
                 opt_routers.create_experiment(
                     opt_routers.ExperimentCreate(agent_id="whatever"), None, db, WS,
@@ -288,8 +289,8 @@ def test_the_running_experiment_slot_is_workspace_wide_but_unnamed(monkeypatch):
 
 def test_gateway_busy_details_hide_another_projects_test_name():
     _project("alpha")
-    agent = _agent("d", "default")
-    exp = _add("default", Experiment(workspace_id=DEFAULT_WORKSPACE_ID, name="e",
+    agent = _agent("d", TEST_PROJECT)
+    exp = _add(TEST_PROJECT, Experiment(workspace_id=DEFAULT_WORKSPACE_ID, name="e",
                                      agent_id=agent, agent_name="d"))
     tests = [{"abTestId": "t1", "name": f"exp_{exp[:8]}_bundle", "gatewayArn": "gw",
               "executionStatus": "RUNNING"}]
@@ -298,7 +299,7 @@ def test_gateway_busy_details_hide_another_projects_test_name():
         opt_service.assert_gateway_available("gw", data)
     assert err.value.detail["active_tests"] == [
         {"id": None, "name": None, "execution_status": "RUNNING"}]
-    with project_context("default"), pytest.raises(AppError) as err:
+    with project_context(TEST_PROJECT), pytest.raises(AppError) as err:
         opt_service.assert_gateway_available("gw", data)
     assert err.value.detail["active_tests"][0]["name"] == f"exp_{exp[:8]}_bundle"
 
@@ -326,19 +327,19 @@ def test_every_project_gets_its_own_sample_task_sets(tasksets_dir):
         for row in rows:
             assert row.sample
             by_project[row.project_id] = by_project.get(row.project_id, 0) + 1
-        assert by_project == {"default": 3, "alpha": 3}
+        assert by_project == {TEST_PROJECT: 3, "alpha": 3}
     finally:
         db.close()
 
 
 def test_staged_task_assets_are_keyed_by_project_only_with_several(tmp_path, monkeypatch):
     monkeypatch.setattr(task_assets, "STAGING_DIR", tmp_path / "staging")
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         single = task_assets._staging_root(DEFAULT_WORKSPACE_ID)
     assert single == task_assets._staging_root(DEFAULT_WORKSPACE_ID)  # as before
     _project("alpha")
     access.reset_cache_for_tests()
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         default_root = task_assets._staging_root(DEFAULT_WORKSPACE_ID)
     with project_context("alpha"):
         alpha_root = task_assets._staging_root(DEFAULT_WORKSPACE_ID)

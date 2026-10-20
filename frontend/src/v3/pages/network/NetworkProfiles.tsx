@@ -166,10 +166,10 @@ export function V3NetworkProfiles() {
                           onClick={() => void run(p, () => networkApi.probe(p.id), "v3.network.probeStarted")}>
                           <Radar size={13} /> {t("v3.network.probe")}
                         </Btn>
-                        <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setEditing(p)}><Pencil size={13} /> {t("v3.groups.edit")}</Btn>
+                        <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setEditing(p)}><Pencil size={13} /> {t("v3.structure.edit")}</Btn>
                         <Btn size="sm" kind="ghost" busy={busy} disabled={(p.agents ?? 0) > 0}
                           disabledReason={t("v3.network.inUse", { count: p.agents ?? 0 })}
-                          title={t("v3.groups.archive")} aria-label={t("v3.groups.archive")}
+                          title={t("v3.structure.archive")} aria-label={t("v3.structure.archive")}
                           onClick={() => setArchiving(p)}>
                           <Archive size={13} />
                         </Btn>
@@ -204,7 +204,7 @@ export function V3NetworkProfiles() {
       {archiving && (
         <Confirm
           title={t("v3.network.archiveTitle", { name: archiving.name })}
-          confirmLabel={t("v3.groups.archive")}
+          confirmLabel={t("v3.structure.archive")}
           cancelLabel={t("v3.common.cancel")}
           danger
           busy={busyId !== null}

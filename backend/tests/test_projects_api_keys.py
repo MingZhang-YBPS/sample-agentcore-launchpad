@@ -20,6 +20,7 @@ from app.models.projects import ProjectMember
 from app.services import access, visibility
 from app.services import api_keys as api_keys_service
 from app.services.visibility import Viewer
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import (  # noqa: F401
     ADMIN,
     PEER,
@@ -118,7 +119,7 @@ def world(app):  # noqa: F811
     return {
         "joan": joan, "mei": mei,
         "alpha_agent": _agent("alpha-agent", "alpha"),
-        "default_agent": _agent("default-agent", "default"),
+        "default_agent": _agent("default-agent", TEST_PROJECT),
     }
 
 
@@ -128,13 +129,13 @@ def world(app):  # noqa: F811
 def test_a_key_is_stamped_with_the_current_project_and_listed_only_there(app, world):  # noqa: F811
     mei = _login(app, "mei")
     alpha_key = _mint(mei, ALPHA)
-    default_key = _mint(mei, {"X-Project": "default"})
+    default_key = _mint(mei, {"X-Project": TEST_PROJECT})
     assert alpha_key["project_id"] == "alpha"
-    assert default_key["project_id"] == "default"
+    assert default_key["project_id"] == TEST_PROJECT
     assert _row(alpha_key["id"]).project_id == "alpha"
 
     assert set(_listed(mei, ALPHA)) == {alpha_key["id"]}
-    assert set(_listed(mei, {"X-Project": "default"})) == {default_key["id"]}
+    assert set(_listed(mei, {"X-Project": TEST_PROJECT})) == {default_key["id"]}
     # the admin, too, sees one project at a time
     admin = _admin(app)
     assert set(_listed(admin, ALPHA)) == {alpha_key["id"]}
@@ -144,7 +145,7 @@ def test_a_key_is_stamped_with_the_current_project_and_listed_only_there(app, wo
 def test_another_projects_key_id_reads_as_missing(app, world):  # noqa: F811
     mei = _login(app, "mei")
     alpha_key = _mint(mei, ALPHA)
-    here = {"X-Project": "default"}
+    here = {"X-Project": TEST_PROJECT}
     for method, path in (
         ("POST", f"/api/apikeys/{alpha_key['id']}/disable"),
         ("POST", f"/api/apikeys/{alpha_key['id']}/enable"),
@@ -194,11 +195,11 @@ def test_v1_lists_and_invokes_only_the_keys_project(app, world, stub_invoke):  #
 def test_a_single_project_key_runs_as_the_default_project(app, stub_invoke):  # noqa: F811
     _user("solo")
     solo = _login(app, "solo")
-    agent = _agent("solo-agent", "default")
+    agent = _agent("solo-agent", TEST_PROJECT)
     raw = _mint(solo)["key"]
     assert {a["id"] for a in _v1(app, raw).json()["agents"]} == {agent}
     assert _v1(app, raw, f"/v1/agents/{agent}/invoke", "POST").status_code == 200
-    assert stub_invoke == [("invoke", "default")]
+    assert stub_invoke == [("invoke", TEST_PROJECT)]
 
 
 def test_usage_rows_carry_the_keys_project(app, world):  # noqa: F811
@@ -249,7 +250,7 @@ def test_a_creator_removed_from_the_project_is_refused_at_use(app, world):  # no
 def test_membership_removal_disables_in_the_same_transaction(app, world):  # noqa: F811
     mei = _login(app, "mei")
     alpha_key = _mint(mei, ALPHA)
-    default_key = _mint(mei, {"X-Project": "default"})
+    default_key = _mint(mei, {"X-Project": TEST_PROJECT})
     _remove_member("alpha", world["mei"], disable=True)
 
     assert _row(alpha_key["id"]).enabled is False
@@ -269,31 +270,12 @@ def test_user_paths_disable_keys_across_projects(app, world):  # noqa: F811
     """`users.delete_user` / a disable reach the account's keys in every project."""
     mei = _login(app, "mei")
     alpha_key = _mint(mei, ALPHA)
-    default_key = _mint(mei, {"X-Project": "default"})
+    default_key = _mint(mei, {"X-Project": TEST_PROJECT})
     admin = _admin(app)
     assert admin.patch(f"/api/users/{world['mei']}", json={"status": "disabled"}).status_code \
         == 200
     assert _row(alpha_key["id"]).enabled is False
     assert _row(default_key["id"]).enabled is False
-
-
-def test_a_group_member_keeps_the_key_through_the_group(app, world):  # noqa: F811
-    """Reach through a project group counts as membership (design §2.4)."""
-    db = SessionLocal()
-    try:
-        db.execute(text("INSERT INTO project_groups (id, name, description, created_at, updated_at)"
-                        " VALUES ('risk', 'Risk', '', '2026-01-01', '2026-01-01')"))
-        db.execute(text("UPDATE projects SET group_id = 'risk' WHERE id = 'alpha'"))
-        db.execute(text("INSERT INTO group_members (group_id, user_id, role_key, added_at)"
-                        " VALUES ('risk', :u, 'developer', '2026-01-01')"), {"u": world["joan"]})
-        access.bump_epoch(db)
-        db.commit()
-    finally:
-        db.close()
-    joan = _login(app, "joan")
-    minted = _mint(joan, ALPHA)
-    _remove_member("alpha", world["joan"], disable=False)  # the direct row only
-    assert _v1(app, minted["key"]).status_code == 200
 
 
 # ── the project itself ───────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import type { NextStepNote } from "../../story/flow";
 import { useNextStep } from "../../story/useNextStep";
 import { Btn, Chip, Empty, Filters, Lamp, Notice, Panel, Skeleton, Stat } from "../../ui";
 import { hours, issueSignal, useAgents } from "./common";
+import { Select } from "../../select";
 
 type StatusFilter = IssueStatus | "all";
 
@@ -92,11 +93,11 @@ export function IssueBox() {
             { value: "all", label: t("v3.issues.all"), count: summary?.total },
           ]}
         />
-        <select className="v3-select v3-iss-select" value={agentId} onChange={(e) => setAgentId(e.target.value)}
+        <Select className="v3-select v3-iss-select" value={agentId} onChange={(e) => setAgentId(e.target.value)}
           aria-label={t("selfService.common.agent")}>
           <option value="">{t("selfService.common.allAgents")}</option>
           {agents.map((a) => <option key={a.id} value={a.id}>{label(a.id)}</option>)}
-        </select>
+        </Select>
         <Btn kind="ghost" size="sm" onClick={reload} title={t("v3.issues.refresh")}><RefreshCw size={14} /></Btn>
       </div>
 
@@ -259,10 +260,10 @@ function IssueBench({ id, onChanged, onClose }: { id: string; onChanged: () => v
               </label>
               <label className="v3-field">
                 <span>{t("selfService.answers.match")}</span>
-                <select className="v3-select" value={match} onChange={(e) => setMatch(e.target.value as "exact" | "contains")}>
+                <Select className="v3-select" value={match} onChange={(e) => setMatch(e.target.value as "exact" | "contains")}>
                   <option value="exact">{t("selfService.answers.matchExact")}</option>
                   <option value="contains">{t("selfService.answers.matchContains")}</option>
-                </select>
+                </Select>
               </label>
               <label className="v3-field">
                 <span>{t("selfService.answers.answer")}</span>

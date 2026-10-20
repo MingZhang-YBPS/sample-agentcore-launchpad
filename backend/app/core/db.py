@@ -247,6 +247,11 @@ def init_db(bind=None) -> None:
     _adopt_unscoped_account_audit_rows(bind)
     assert_every_row_has_a_workspace(bind)
     _seed_default_projects(bind)
+    flatten_project_groups(bind)
+    # the retired money quotas fold into `monthly_budget_usd`; department caps go
+    from app.services.project_quotas import migrate_budget_quotas
+
+    migrate_budget_quotas(bind)
     _backfill_sod_user_ids(bind)
     assert_every_row_has_a_project(bind)
     convert_inline_networks(bind)
@@ -1760,6 +1765,111 @@ def _seed_default_projects(bind) -> None:
             ),
             {"k": PROJECTS_MIGRATION_MARKER, "now": now},
         )
+
+
+def flatten_project_groups(bind) -> dict[str, int]:
+    """Fold the retired project groups into direct project memberships.
+
+    The hierarchy is department → project → member. For every ACTIVE group, each
+    `group_members` row becomes a direct `project_members` row (same `role_key`, no
+    overrides) in every live project whose `group_id` is that group — unless the user
+    already holds a direct row there, which wins. An archived group gave no access, so
+    its rows are not migrated. Then every `projects.group_id` is cleared.
+
+    Console SSO (sso §2.3) follows the same rule: a stored IdP-group mapping of the
+    retired kind `group` becomes one `project` mapping (same role) per project of that
+    active group (an archived or empty group's mapping is dropped), and a login-managed
+    `sso_memberships` record of kind `group` becomes a `project` record for each
+    project where this migration created the user's direct row — so a later login that
+    no longer carries the IdP group still removes it, and a row an administrator had
+    added by hand stays theirs.
+
+    Idempotent (a re-run finds no `group_id`, group mapping or group record left) and
+    runs at every startup. The `project_groups` / `group_members` tables and the
+    `projects.group_id` column are left in place, unmapped, so a rollback still finds
+    them; nothing reads them."""
+    from sqlalchemy import inspect, text
+
+    out = {"members": 0, "projects": 0, "mappings": 0, "sso_records": 0}
+    inspector = inspect(bind)
+    live = set(inspector.get_table_names())
+    if not {"projects", "project_members", "project_groups", "group_members"} <= live:
+        return out
+    if "group_id" not in {c["name"] for c in inspector.get_columns("projects")}:
+        return out
+    sso = {"identity_providers_console", "sso_memberships"} <= live
+    now = _now_sql()
+    with bind.begin() as conn:
+        group_projects: dict[str, list[str]] = {}
+        for gid, pid in conn.execute(text(
+            "SELECT g.id, p.id FROM projects p"
+            " JOIN project_groups g ON g.id = p.group_id AND g.archived_at IS NULL"
+            " WHERE p.status IN ('active', 'archived') ORDER BY p.id"
+        )).fetchall():
+            group_projects.setdefault(gid, []).append(pid)
+        if sso:
+            for idp_id, raw in conn.execute(
+                text("SELECT id, mappings FROM identity_providers_console")
+            ).fetchall():
+                mappings = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                if not any(isinstance(m, dict) and m.get("kind") == "group" for m in mappings):
+                    continue
+                rewritten = []
+                for item in mappings:
+                    if not (isinstance(item, dict) and item.get("kind") == "group"):
+                        rewritten.append(item)
+                        continue
+                    for pid in group_projects.get(str(item.get("target_id") or ""), []):
+                        rewritten.append({**item, "kind": "project", "target_id": pid})
+                conn.execute(text("UPDATE identity_providers_console SET mappings = :m"
+                                  " WHERE id = :id"),
+                             {"m": json.dumps(rewritten), "id": idp_id})
+                out["mappings"] += 1
+            # before the members insert: only rows this migration creates become the
+            # mapping's (an existing direct row is an administrator's)
+            records = conn.execute(text(
+                "SELECT s.idp_id, s.user_id, s.target_id, s.role_key FROM sso_memberships s"
+                " WHERE s.kind = 'group'"
+            )).fetchall()
+            for idp_id, user_id, gid, role_key in records:
+                held = conn.execute(text(
+                    "SELECT role_key FROM group_members WHERE group_id = :g AND user_id = :u"
+                ), {"g": gid, "u": user_id}).scalar()
+                for pid in group_projects.get(gid, []) if held == role_key else []:
+                    conn.execute(text(
+                        "INSERT INTO sso_memberships (idp_id, user_id, kind, target_id,"
+                        " role_key, conflict, updated_at)"
+                        " SELECT :i, :u, 'project', :p, :r, NULL, :now"
+                        " WHERE NOT EXISTS (SELECT 1 FROM project_members"
+                        "  WHERE project_id = :p AND user_id = :u)"
+                        " AND NOT EXISTS (SELECT 1 FROM sso_memberships WHERE idp_id = :i"
+                        "  AND user_id = :u AND kind = 'project' AND target_id = :p)"
+                    ), {"i": idp_id, "u": user_id, "p": pid, "r": role_key, "now": now})
+            out["sso_records"] = len(records)
+            conn.execute(text("DELETE FROM sso_memberships WHERE kind = 'group'"))
+        out["projects"] = int(conn.execute(
+            text("SELECT COUNT(*) FROM projects WHERE group_id IS NOT NULL")
+        ).scalar_one())
+        if out["projects"]:
+            out["members"] = int(conn.execute(
+                text(
+                    "INSERT INTO project_members (project_id, user_id, role_key, overrides,"
+                    " added_by, added_at)"
+                    " SELECT p.id, gm.user_id, gm.role_key, NULL, gm.added_by, :now"
+                    " FROM projects p"
+                    " JOIN project_groups g ON g.id = p.group_id AND g.archived_at IS NULL"
+                    " JOIN group_members gm ON gm.group_id = g.id"
+                    " JOIN users u ON u.id = gm.user_id AND u.role <> 'steward'"
+                    " WHERE p.status IN ('active', 'archived')"
+                    " AND NOT EXISTS (SELECT 1 FROM project_members pm"
+                    "  WHERE pm.project_id = p.id AND pm.user_id = gm.user_id)"
+                ),
+                {"now": now},
+            ).rowcount or 0)
+            conn.execute(text("UPDATE projects SET group_id = NULL WHERE group_id IS NOT NULL"))
+        if any(out.values()):
+            conn.execute(text("UPDATE access_epoch SET value = value + 1 WHERE id = 1"))
+    return out
 
 
 def unprojected_row_counts(bind) -> dict[str, int]:

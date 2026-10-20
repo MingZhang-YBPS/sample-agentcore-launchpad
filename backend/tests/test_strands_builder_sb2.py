@@ -30,6 +30,7 @@ from app.services import agent_iam, agent_tools
 from app.templates.strands_a2a_agent import render_a2a_main_py
 from app.templates.strands_agent import base_requirements, render_main_py
 from tests import strands_builder_sb2_snapshots as sb2_snap
+from tests.conftest import TEST_PROJECT
 from tests.strands_builder_snapshots import OLD_SPECS, dump, render
 from tests.test_project_scope import _project
 
@@ -200,7 +201,7 @@ def test_agent_tools_grant_exactly_their_runtimes():
 # ── ledger resolution ────────────────────────────────────────────────────────────
 
 
-def _agent_row(name, *, project="default", workspace_id=DEFAULT_WORKSPACE_ID, **fields) -> str:
+def _agent_row(name, *, project=TEST_PROJECT, workspace_id=DEFAULT_WORKSPACE_ID, **fields) -> str:
     base = {"workspace_id": workspace_id, "name": name, "method": "zip_runtime",
             "status": "active", "arn": ARN, "spec": {"protocol": "http"},
             "inbound_auth_mode": "iam"}
@@ -215,7 +216,7 @@ def _agent_row(name, *, project="default", workspace_id=DEFAULT_WORKSPACE_ID, **
         db.close()
 
 
-def _resolve(spec, *, project="default", agent_id=None):
+def _resolve(spec, *, project=TEST_PROJECT, agent_id=None):
     db = SessionLocal()
     try:
         with project_context(project):
@@ -279,7 +280,7 @@ def test_a_use_share_of_another_projects_agent_resolves(monkeypatch):
     _project("alpha")
     lent = _agent_row("lent", project="alpha")
     monkeypatch.setattr(agent_tools, "_shared_agent_ids",
-                        lambda db, pid: frozenset({lent}) if pid == "default" else frozenset())
+                        lambda db, pid: frozenset({lent}) if pid == TEST_PROJECT else frozenset())
     refs = _resolve(_ref_spec(lent))
     assert refs[0]["runtime_arn"] == ARN and refs[0]["shared_from"] == "alpha"
 
@@ -289,7 +290,7 @@ def test_generate_stage_writes_resolved_refs_back(monkeypatch):
     caller = _agent_row("caller", spec={**_ref_spec(helper, runtime_arn=ARN2).model_dump()})
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             row = db.get(Agent, caller)
             spec = zip_runtime._resolve_agent_tools(row, AgentSpec(**row.spec))
             assert spec.agent_tools[0].runtime_arn == ARN

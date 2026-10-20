@@ -33,6 +33,7 @@ import {
   statusSignal,
   typedKind,
 } from "./sharesModel";
+import { Select } from "../../select";
 
 const KIND_ICON: Record<ShareKind, typeof BookOpen> = {
   knowledge_base: BookOpen,
@@ -361,10 +362,10 @@ function GrantDialog({
         <div className="v3-shr-row2">
           <label className="field">
             {t("v3.projects.shares.field.workspace")}
-            <select className="v3-input" value={draft.workspace_id}
+            <Select className="v3-input" value={draft.workspace_id}
               onChange={(e) => set({ workspace_id: e.target.value, resource_id: "", grantee_project_id: "" })}>
               {project.workspaces.map((w) => <option key={w.workspace_id} value={w.workspace_id}>{w.name || w.workspace_id}</option>)}
-            </select>
+            </Select>
           </label>
           <label className="field">
             {t("v3.projects.shares.field.days")}
@@ -393,7 +394,7 @@ function GrantDialog({
             <label className="field">
               {t("v3.projects.shares.field.resource")}
               {resources.length > 0 && (
-                <select className="v3-input" value={resources.some((r) => r.id === draft.resource_id) ? draft.resource_id : ""}
+                <Select className="v3-input" value={resources.some((r) => r.id === draft.resource_id) ? draft.resource_id : ""}
                   onChange={(e) => {
                     const picked = resources.find((r) => r.id === e.target.value);
                     set({ resource_id: e.target.value, resource_name: picked?.name ?? "" });
@@ -402,7 +403,7 @@ function GrantDialog({
                   {resources.map((r) => (
                     <option key={r.id} value={r.id}>{r.name}{r.detail ? ` · ${r.detail}` : ""}</option>
                   ))}
-                </select>
+                </Select>
               )}
               {typedKind(draft.kind) && (
                 <input className="v3-input mono" value={draft.resource_id} placeholder={t("v3.projects.shares.typedId")}
@@ -414,13 +415,13 @@ function GrantDialog({
             </label>
             <label className="field">
               {t("v3.projects.shares.field.grantee")}
-              <select className="v3-input" value={draft.grantee_project_id}
+              <Select className="v3-input" value={draft.grantee_project_id}
                 onChange={(e) => set({ grantee_project_id: e.target.value })}>
                 <option value="">{t("v3.projects.shares.pick")}</option>
                 {options.grantees.map((g) => (
                   <option key={g.id} value={g.id}>{g.name} ({g.id}){g.cross_department ? ` · ${t("v3.projects.shares.crossShort")}` : ""}</option>
                 ))}
-              </select>
+              </Select>
             </label>
             {grantee?.cross_department && <Notice s="wait">{t("v3.projects.shares.crossDepartment")}</Notice>}
             <div className="field" style={{ display: "grid", gap: 6, fontSize: 12.5, color: "var(--v3-text-2)" }}>

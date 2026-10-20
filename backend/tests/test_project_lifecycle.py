@@ -19,6 +19,7 @@ from app.models.platform_settings import PlatformSetting
 from app.models.projects import Project, ProjectMember, ProjectWorkspace
 from app.services import inflight, project_purge
 from app.services.audit import record_audit_event
+from tests.conftest import TEST_DEPARTMENT, TEST_PROJECT
 from tests.test_project_scope import (  # noqa: F401
     ADMIN,
     PEER,
@@ -61,12 +62,13 @@ def world(app, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setattr(project_purge, "_spawn", project_purge.run_purge)
     admin = _admin(app)
     res = admin.post("/api/projects", json={"id": "alpha", "name": "Alpha",
-                                            "workspaces": [WS]})
+                                            "workspaces": [WS],
+                                            "department_id": TEST_DEPARTMENT})
     assert res.status_code == 201, res.text
     dev = _user("dev", grant=False)
     _member_of("alpha", dev)
     a1, a2 = _agent("alpha-one", "alpha"), _agent("alpha-two", "alpha")
-    keep = _agent("default-agent", "default")
+    keep = _agent("default-agent", TEST_PROJECT)
     db = SessionLocal()
     try:
         with project_context("alpha"):
@@ -142,7 +144,7 @@ def test_an_archived_project_is_read_only_everywhere(world):
         res = getattr(world.admin, method)(path, json=body)
         assert res.status_code == 409 and res.json()["code"] == "project.archived", path
     res = world.admin.post("/api/projects/alpha/transfer",
-                           json={"resource_id": world.a1, "to_project_id": "default"})
+                           json={"resource_id": world.a1, "to_project_id": TEST_PROJECT})
     assert res.status_code == 409
 
 
@@ -204,7 +206,8 @@ def test_the_request_writes_the_export_and_starts_the_cooling_off(world):
     assert res.status_code == 200 and res.content == path.read_bytes()
     # an export id of another project, or an unknown one, reads as missing
     res = world.admin.post("/api/projects", json={"id": "beta", "name": "Beta",
-                                                  "workspaces": [WS]})
+                                                  "workspaces": [WS],
+                                                  "department_id": TEST_DEPARTMENT})
     assert res.status_code == 201
     assert world.admin.get(f"/api/projects/beta/exports/{export['id']}").status_code == 404
     assert world.admin.get("/api/projects/alpha/exports/" + "0" * 32).status_code == 404

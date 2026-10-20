@@ -28,9 +28,11 @@ from app.models.ledger import (
     ReleaseBundle,
     Workspace,
 )
+from app.models.projects import ProjectWorkspace
+from app.services import access, promotion_exec, release_gates
 from app.services import promotion as promotion_service
-from app.services import promotion_exec, release_gates
 from app.services import users as users_service
+from tests.conftest import TEST_PROJECT
 
 ADMIN_CREDS = {"username": "exec-admin", "password": "s3cret-pass"}
 MEMBER_CREDS = {
@@ -70,6 +72,7 @@ def admin(gated_app):
         assert client.post("/api/auth/login", json=ADMIN_CREDS).status_code == 200
         assert client.post("/api/workspaces", json=TARGET).status_code in (200, 201)
         _target(bootstrap_status="ready", resources={"execution_role_arn": "arn:aws:iam::4:role/x"})
+        _bind_target()
         yield client
 
 
@@ -150,6 +153,19 @@ def world(monkeypatch, clock):
     return calls
 
 
+def _bind_target() -> None:
+    """The release lands in the bundle's business project, so the target workspace
+    must be bound to it (agent_project.check_agent_project)."""
+    db = SessionLocal()
+    try:
+        if db.get(ProjectWorkspace, (TEST_PROJECT, TARGET["id"])) is None:
+            db.add(ProjectWorkspace(project_id=TEST_PROJECT, workspace_id=TARGET["id"]))
+            access.bump_epoch(db)
+            db.commit()
+    finally:
+        db.close()
+
+
 def _target(**fields) -> None:
     db = SessionLocal()
     try:
@@ -168,7 +184,7 @@ def seed_bundle(
     score: float | None = 0.9,
     artifact: dict | None = None,
 ) -> str:
-    """A bundle in `default` with (optionally) a completed evaluation run pinned to it."""
+    """A bundle in the test project with (optionally) a completed evaluation run pinned to it."""
     db = SessionLocal()
     try:
         agent = Agent(
@@ -648,8 +664,8 @@ def seed_running_target(method: str = "zip_runtime") -> None:
     try:
         db.add(
             Agent(
-                workspace_id=TARGET["id"], name=NAME, method=method, status="active",
-                spec=spec("old", method), version="7",
+                workspace_id=TARGET["id"], project_id=TEST_PROJECT, name=NAME,
+                method=method, status="active", spec=spec("old", method), version="7",
                 arn="arn:aws:bedrock-agentcore:us-west-1:4:runtime/rt-old", resource_id="rt-old",
             )
         )

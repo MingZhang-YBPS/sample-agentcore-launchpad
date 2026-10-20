@@ -9,6 +9,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, Deployment, User, Workspace
 from app.services import users as users_service
 from app.services.ttfa import compute_ttfa
+from tests.conftest import TEST_PROJECT
 from tests.test_users_api import (  # noqa: F401 — fixtures
     ADMIN,
     MEMBER,
@@ -44,7 +45,7 @@ def _deploy(owner: str, ended: datetime, status="succeeded", workspace=DEFAULT_W
     try:
         agent = Agent(
             workspace_id=workspace, name=f"a-{owner}-{ended.timestamp():.0f}-{status}",
-            method="harness", status="active", spec={}, owner=owner,
+            method="harness", status="active", spec={}, owner=owner, project_id=TEST_PROJECT,
             created_by_name=created_by_name,
         )
         db.add(agent)

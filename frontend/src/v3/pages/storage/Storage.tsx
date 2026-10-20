@@ -150,7 +150,7 @@ export function V3Storage() {
       {archiving && (
         <Confirm
           title={t("v3.storage.archiveTitle", { name: archiving.name })}
-          confirmLabel={t("v3.groups.archive")}
+          confirmLabel={t("v3.structure.archive")}
           cancelLabel={t("v3.common.cancel")}
           danger
           busy={busyId !== null}
@@ -229,9 +229,9 @@ export function StorageTable({
               <td style={{ width: 1, whiteSpace: "nowrap" }}>
                 <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                   <Btn size="sm" kind="ghost" disabled={busy} onClick={() => onCheck(e)}><ShieldCheck size={13} /> {t("v3.storage.check")}</Btn>
-                  <Btn size="sm" kind="ghost" disabled={busy} onClick={() => onEdit(e)}><Pencil size={13} /> {t("v3.groups.edit")}</Btn>
+                  <Btn size="sm" kind="ghost" disabled={busy} onClick={() => onEdit(e)}><Pencil size={13} /> {t("v3.structure.edit")}</Btn>
                   <Btn size="sm" kind="ghost" busy={busy} disabled={agents > 0} disabledReason={t("v3.storage.inUse", { count: agents })}
-                    title={t("v3.groups.archive")} aria-label={t("v3.groups.archive")}
+                    title={t("v3.structure.archive")} aria-label={t("v3.structure.archive")}
                     onClick={() => onArchive(e)}>
                     <Archive size={13} />
                   </Btn>

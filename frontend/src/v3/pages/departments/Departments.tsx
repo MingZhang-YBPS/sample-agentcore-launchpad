@@ -7,18 +7,17 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { ErrorCallout } from "../../../components/ErrorCallout";
-import { type Department, departmentsApi, type StructureStatus } from "../../../lib/api/project-groups";
+import { type Department, departmentsApi, type StructureStatus } from "../../../lib/api/departments";
 import { useFailure } from "../../failure";
 import { useLoad, useToast } from "../../hooks";
 import { Btn, Chip, Confirm, Empty, Filters, Notice, PageHead, Panel, Skeleton } from "../../ui";
-import { emptyStructureForm } from "../groups/model";
-import { StructureDialog } from "../groups/StructureDialog";
 import { DepartmentDetail } from "./DepartmentDetail";
 import { InviteDialog } from "./InviteDialog";
-import { deletable } from "./model";
+import { deletable, emptyStructureForm } from "./model";
+import { StructureDialog } from "./StructureDialog";
 
 /**
- * Departments (projects §7.7, §7.9, §11.1): they label projects and groups and group
+ * Departments (projects §7.9, §7.10, §11.1): they label projects and group
  * the project switcher. A platform administrator creates, edits, archives / unarchives
  * and deletes them, and per department appoints its administrators, opens workspaces
  * to it and sets its limits (`DepartmentDetail`). A department administrator sees the
@@ -62,7 +61,6 @@ function MyDepartments() {
               <th>{t("v3.departments.col.department")}</th>
               <th>{t("v3.departments.col.workspaces")}</th>
               <th className="num">{t("v3.departments.col.projects")}</th>
-              <th className="num">{t("v3.departments.col.groups")}</th>
               <th />
             </tr>
           </thead>
@@ -74,7 +72,6 @@ function MyDepartments() {
                   <td><div className="v3-name"><div><b>{m.name}</b><small className="mono">{m.id}</small></div></div></td>
                   <td className="mono">{m.workspaces.length ? m.workspaces.join(", ") : <span className="v3-usr-muted">{t("v3.departments.mine.noWorkspace")}</span>}</td>
                   <td className="num">{d?.project_count ?? "—"}</td>
-                  <td className="num">{d?.group_count ?? "—"}</td>
                   <td style={{ width: 1, whiteSpace: "nowrap" }}>
                     <Btn size="sm" kind="ghost" disabled={!d?.settings.can_create_users}
                       disabledReason={d ? t("v3.departments.invite.disabled") : t("story.reason.notLoaded")}
@@ -140,7 +137,7 @@ function AdminDepartments() {
       <Filters
         value={status}
         onChange={(v) => setParams(v === "active" ? {} : { status: v })}
-        options={(["active", "archived", "all"] as const).map((v) => ({ value: v, label: t(`v3.groups.status.${v}`) }))}
+        options={(["active", "archived", "all"] as const).map((v) => ({ value: v, label: t(`v3.structure.status.${v}`) }))}
       />
       <Panel flush>
         {list.loading && !list.data ? (
@@ -154,9 +151,8 @@ function AdminDepartments() {
             <thead>
               <tr>
                 <th>{t("v3.departments.col.department")}</th>
-                <th>{t("v3.groups.form.description")}</th>
+                <th>{t("v3.structure.form.description")}</th>
                 <th className="num">{t("v3.departments.col.projects")}</th>
-                <th className="num">{t("v3.departments.col.groups")}</th>
                 <th />
               </tr>
             </thead>
@@ -167,22 +163,21 @@ function AdminDepartments() {
                   <tr key={d.id}>
                     <td>
                       <div className="v3-name"><div><b>{d.name}</b><small className="mono">{d.id}</small></div></div>
-                      {d.archived && <Chip>{t("v3.groups.status.archived")}</Chip>}
+                      {d.archived && <Chip>{t("v3.structure.status.archived")}</Chip>}
                     </td>
                     <td className="v3-usr-muted">{d.description || "—"}</td>
                     <td className="num">{d.project_count}</td>
-                    <td className="num">{d.group_count}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                         <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setManaging(d)}><Users size={13} /> {t("v3.departments.manage")}</Btn>
-                        <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setEditing(d)}><Pencil size={13} /> {t("v3.groups.edit")}</Btn>
+                        <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setEditing(d)}><Pencil size={13} /> {t("v3.structure.edit")}</Btn>
                         {d.archived ? (
                           <Btn size="sm" kind="ghost" disabled={busy} onClick={() => void run(d, () => departmentsApi.unarchive(d.id), "v3.departments.unarchived")}>
-                            <ArchiveRestore size={13} /> {t("v3.groups.unarchive")}
+                            <ArchiveRestore size={13} /> {t("v3.structure.unarchive")}
                           </Btn>
                         ) : (
                           <Btn size="sm" kind="ghost" disabled={busy} onClick={() => setConfirm({ kind: "archive", dept: d })}>
-                            <Archive size={13} /> {t("v3.groups.archive")}
+                            <Archive size={13} /> {t("v3.structure.archive")}
                           </Btn>
                         )}
                         <Btn size="sm" kind="ghost" busy={busy} disabled={!deletable(d)} disabledReason={t("v3.departments.inUse")}
@@ -203,9 +198,8 @@ function AdminDepartments() {
       {managing && <DepartmentDetail dept={managing} onClose={() => setManaging(null)} onChanged={list.reload} />}
       {editing && (
         <StructureDialog
-          kind="department"
           creating={editing === "new"}
-          initial={editing === "new" ? emptyStructureForm() : { id: editing.id, name: editing.name, description: editing.description, department_id: "" }}
+          initial={editing === "new" ? emptyStructureForm() : { id: editing.id, name: editing.name, description: editing.description }}
           onClose={() => setEditing(null)}
           onSubmit={async (form) => {
             if (editing === "new") await departmentsApi.create({ id: form.id, name: form.name, description: form.description });
@@ -218,7 +212,7 @@ function AdminDepartments() {
       {confirm && (
         <Confirm
           title={t(confirm.kind === "archive" ? "v3.departments.archiveTitle" : "v3.departments.deleteTitle", { name: confirm.dept.name })}
-          confirmLabel={t(confirm.kind === "archive" ? "v3.groups.archive" : "v3.departments.delete")}
+          confirmLabel={t(confirm.kind === "archive" ? "v3.structure.archive" : "v3.departments.delete")}
           cancelLabel={t("v3.common.cancel")}
           danger
           busy={busyId !== null}

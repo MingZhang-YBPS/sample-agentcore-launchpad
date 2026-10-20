@@ -18,6 +18,7 @@ from app.services import network_preflight as preflight
 from app.services import network_profiles as service
 from app.services import promotion_exec
 from app.services import resource_mapping as rm
+from tests.test_environments import bind_test_project
 from tests.test_network_profile_check import REGION, SG, SUBNETS, FakeEc2, _check, _vpc
 
 TARGET = "prod-ws"
@@ -295,6 +296,8 @@ def target_ws():
     try:
         db.add(Workspace(id=TARGET, name="Prod", account_id="444455556677", region=REGION,
                          tier="prod", bootstrap_status="ready", resources={}))
+        db.flush()
+        bind_test_project(db, TARGET)
         db.commit()
         _profile(db)  # the source's profile
         _profile(db, "np-prod00000001", workspace=TARGET, name="prod-vpc")

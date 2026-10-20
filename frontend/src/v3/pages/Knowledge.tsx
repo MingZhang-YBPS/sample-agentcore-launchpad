@@ -46,6 +46,7 @@ import {
   type TrackNode,
 } from "../ui";
 import { Term } from "../onboarding/Glossary";
+import { Select } from "../select";
 
 /* Same cadence and guards as V2's detail page, whose create-flow automation this
    page now carries (a KB created in the hosted V2 form lands here). */
@@ -317,9 +318,9 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
           <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)} disabled={!ready}
             placeholder={t("knowledge.detail.playground.queryPlaceholder")} aria-label={t("knowledge.detail.playground.query")} />
         </Reasoned>
-        <select className="v3-select" style={{ width: 96 }} value={n} onChange={(e) => setN(Number(e.target.value))} aria-label={t("v3.kb.resultCount")}>
+        <Select className="v3-select" style={{ width: 96 }} value={n} onChange={(e) => setN(Number(e.target.value))} aria-label={t("v3.kb.resultCount")}>
           {[3, 5, 10, 20, 50, KB_QUERY_MAX_RESULTS].map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
+        </Select>
         <Btn kind="primary" type="submit" busy={busy} disabled={!ready || !q.trim()}
           disabledReason={!ready ? t("v3.kb.retrieveNotReady") : t("story.reason.typeQuery")}><Search size={14} /> {t("v3.kb.search2")}</Btn>
       </form>

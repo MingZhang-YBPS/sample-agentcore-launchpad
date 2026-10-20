@@ -25,6 +25,7 @@ from app.services import access, promotion_exec
 from app.services import promotion as promotion_service
 from app.services import resource_mapping as mapping_service
 from app.services import users as users_service
+from tests.conftest import TEST_PROJECT
 
 ADMIN = {"username": "operator", "password": "s3cret-pass"}
 PEER = ("127.0.0.1", 4321)
@@ -50,7 +51,7 @@ def _project(pid: str, *, workspaces=(DEFAULT_WORKSPACE_ID,)) -> None:
         db.close()
 
 
-def _target_ws(*, bind=("default",)) -> None:
+def _target_ws(*, bind=(TEST_PROJECT,)) -> None:
     db = SessionLocal()
     try:
         db.add(Workspace(id=TARGET, name="Target", account_id="444455556677",
@@ -144,8 +145,8 @@ def test_the_worker_thread_runs_every_stage_as_the_releases_project(monkeypatch)
 
 def test_resolve_refuses_a_target_name_held_by_another_project():
     _project("alpha", workspaces=(DEFAULT_WORKSPACE_ID,))
-    _target_ws(bind=("default", "alpha"))
-    _agent("ship", "default", ws=TARGET)  # the target's `ship` is the default project's
+    _target_ws(bind=(TEST_PROJECT, "alpha"))
+    _agent("ship", TEST_PROJECT, ws=TARGET)  # the target's `ship` is the default project's
     agent = _agent("ship", "alpha")
     bundle_id = _bundle(agent, "ship")
     promotion_id = _promotion(bundle_id)
@@ -160,8 +161,8 @@ def test_resolve_refuses_a_target_name_held_by_another_project():
 
 def test_gates_and_holder_flag_another_projects_name_without_showing_it():
     _project("alpha")
-    _target_ws(bind=("default", "alpha"))
-    _agent("ship", "default", ws=TARGET)
+    _target_ws(bind=(TEST_PROJECT, "alpha"))
+    _agent("ship", TEST_PROJECT, ws=TARGET)
     agent = _agent("ship", "alpha")
     bundle_id = _bundle(agent, "ship")
     db = SessionLocal()
@@ -172,8 +173,8 @@ def test_gates_and_holder_flag_another_projects_name_without_showing_it():
             assert holder is None and foreign
             gates = promotion_service.evaluate_gates(db, bundle, db.get(Workspace, TARGET))
             assert "target_agent" in gates["blocking_failures"]
-        with project_context("default"):
-            holder, foreign = promotion_service.target_holder(db, TARGET, "ship", "default")
+        with project_context(TEST_PROJECT):
+            holder, foreign = promotion_service.target_holder(db, TARGET, "ship", TEST_PROJECT)
             assert holder is not None and not foreign
     finally:
         db.close()
@@ -181,8 +182,8 @@ def test_gates_and_holder_flag_another_projects_name_without_showing_it():
 
 def test_a_busy_target_counts_other_projects_but_names_only_ours():
     _project("alpha")
-    _target_ws(bind=("default", "alpha"))
-    theirs = _promotion(_bundle(_agent("ship", "default"), "ship"), status="executing")
+    _target_ws(bind=(TEST_PROJECT, "alpha"))
+    theirs = _promotion(_bundle(_agent("ship", TEST_PROJECT), "ship"), status="executing")
     mine_bundle = _bundle(_agent("ship-a", "alpha"), "ship")
     mine = _promotion(mine_bundle)
     db = SessionLocal()
@@ -211,7 +212,7 @@ def _scope(pid: str, *, is_default: bool = False) -> access.ProjectScope:
 
 def test_a_target_not_bound_to_the_project_reads_as_not_found():
     _project("alpha")
-    _target_ws(bind=("default",))
+    _target_ws(bind=(TEST_PROJECT,))
     admin = SimpleNamespace(user_id=None, role="admin")
     db = SessionLocal()
     try:
@@ -219,7 +220,7 @@ def test_a_target_not_bound_to_the_project_reads_as_not_found():
             promotion_service.assert_project_reaches(db, admin, TARGET, _scope("alpha"), "GET")
         assert err.value.code == "project.not_found"
         promotion_service.assert_project_reaches(
-            db, admin, TARGET, _scope("default", is_default=True), "GET")
+            db, admin, TARGET, _scope(TEST_PROJECT, is_default=True), "GET")
         # an exempt route (no project) and the request's own workspace are not re-checked
         promotion_service.assert_project_reaches(db, admin, TARGET, None, "GET")
         promotion_service.assert_project_reaches(
@@ -264,7 +265,7 @@ def test_a_project_mapping_overrides_the_workspace_default_and_never_rewrites_it
                                               mapping_service.list_mappings(
                                                   db, DEFAULT_WORKSPACE_ID))}
             assert scopes == {"project", "workspace"}
-        with project_context("default"):  # another project falls back to the default
+        with project_context(TEST_PROJECT):  # another project falls back to the default
             out = mapping_service.resolve_spec(
                 db, spec, source_workspace_id=None, target_workspace_id=DEFAULT_WORKSPACE_ID)
             assert out.spec["knowledge_bases"][0]["kb_id"] == "DEFAULTKB1"
@@ -318,7 +319,7 @@ def _task(agent_id: str | None, **extra) -> dict:
 
 def test_an_annotation_task_cannot_be_filed_under_another_projects_agent(app):
     _project("alpha")
-    theirs = _agent("their-agent", "default")
+    theirs = _agent("their-agent", TEST_PROJECT)
     mine = _agent("my-agent", "alpha")
     client = _alpha_member(app, "lena")
     res = client.post("/api/annotation-tasks", json=_task(theirs))
@@ -337,10 +338,10 @@ def test_an_annotation_task_cannot_be_filed_under_another_projects_agent(app):
 
 def test_a_golden_set_cannot_name_another_projects_criteria_lineage(app):
     _project("alpha")
-    agent = _agent("their-agent", "default")
+    agent = _agent("their-agent", TEST_PROJECT)
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             row = CriteriaSet(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent,
                               lineage_id="lin-theirs", version=1, kind="agent", name="x")
             db.add(row)
@@ -383,7 +384,7 @@ def test_the_audit_trail_filters_by_project(app):
     _project("alpha")
     db = SessionLocal()
     try:
-        for pid, action in (("alpha", "a.one"), ("default", "d.one"), (None, "w.one")):
+        for pid, action in (("alpha", "a.one"), (TEST_PROJECT, "d.one"), (None, "w.one")):
             with project_context(pid):
                 record_audit_event(workspace_id=DEFAULT_WORKSPACE_ID, actor="x",
                                    action=action, target="t", db=db)
@@ -411,7 +412,7 @@ def test_a_scheduled_watch_of_an_archived_project_is_skipped(monkeypatch):
 
     _project("alpha")
     agent = _agent("watched", "alpha")
-    live = _agent("live", "default")
+    live = _agent("live", TEST_PROJECT)
     db = SessionLocal()
     try:
         for agent_id in (agent, live):
@@ -429,7 +430,7 @@ def test_a_scheduled_watch_of_an_archived_project_is_skipped(monkeypatch):
         out = scheduler.run_due_watches(db)
     finally:
         db.close()
-    assert ran == [(live, "default")]
+    assert ran == [(live, TEST_PROJECT)]
     assert out["skipped"] == [{"agent_id": agent, "reason": "project.archived"}]
 
 
@@ -439,7 +440,7 @@ def test_mapping_writes_through_the_api_respect_scope_and_ownership(app):
     _project("alpha")
     db = SessionLocal()
     try:
-        for pid, kb in (("default", "THEIRKB001"), ("alpha", "ALPHAKB001")):
+        for pid, kb in ((TEST_PROJECT, "THEIRKB001"), ("alpha", "ALPHAKB001")):
             with project_context(pid):
                 db.add(ResourceCreator(workspace_id=DEFAULT_WORKSPACE_ID,
                                        kind="knowledge_base", resource_id=kb))

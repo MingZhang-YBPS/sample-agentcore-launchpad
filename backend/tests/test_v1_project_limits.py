@@ -20,6 +20,7 @@ from app.models.ledger import ApiKey, Workspace
 from app.models.projects import Project
 from app.services import api_keys as api_keys_service
 from app.services import inbound_auth
+from tests.conftest import TEST_DEPARTMENT, TEST_PROJECT
 from tests.test_project_scope import _login, app  # noqa: F401
 from tests.test_projects_api_keys import (  # noqa: F401
     ALPHA,
@@ -118,7 +119,7 @@ def test_project_rate_limit_reads_the_quota(app, world):  # noqa: F811
 def test_v1_enforces_the_project_window_across_keys(app, world):  # noqa: F811
     mei = _login(app, "mei")
     first, second = _mint(mei, ALPHA), _mint(mei, ALPHA)
-    default_key = _mint(mei, {"X-Project": "default"})
+    default_key = _mint(mei, {"X-Project": TEST_PROJECT})
     _set_settings("alpha", {"quotas": {"v1_rate_per_minute": 2}})
 
     assert _v1(app, first["key"]).status_code == 200
@@ -185,7 +186,7 @@ def test_an_isolated_projects_default_stands_in_for_the_workspaces(app, world): 
             spec = {"inbound_auth": {"mode": "iam"}}
             assert inbound_auth.resolve_for_agent(_agent_stub("alpha", spec), db).mode == "iam"
             # another project, the default one, and a stand-in without a project
-            for pid in ("default", None):
+            for pid in (TEST_PROJECT, None):
                 resolved = inbound_auth.resolve_for_agent(_agent_stub(pid), db)
                 assert resolved.jwt.discovery_url == WS_JWT["jwt"]["discovery_url"]
             # isolated with no own default: the workspace's
@@ -275,7 +276,7 @@ def test_an_owner_may_not_set_them(app, world):  # noqa: F811
 
 def test_create_accepts_them(app, world):  # noqa: F811
     res = _admin(app).post("/api/projects", json={
-        "id": "gamma", "name": "Gamma", "workspaces": [WS],
+        "id": "gamma", "name": "Gamma", "workspaces": [WS], "department_id": TEST_DEPARTMENT,
         "settings": {"quotas": {"v1_rate_per_minute": 30}},
     })
     assert res.status_code in (200, 201), res.text

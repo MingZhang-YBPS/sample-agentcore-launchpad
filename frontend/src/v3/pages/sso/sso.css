@@ -435,7 +435,7 @@
   .v3 .v3-sso-loginpage > .v3-sso-toggle { grid-column: 1 / -1; }
   .v3 .v3-sso-map { grid-template-columns: 24px minmax(0, 1fr) 30px; }
   .v3 .v3-sso-map .arrow, .v3 .v3-sso-map-gap { display: none; }
-  .v3 .v3-sso-map > :is(.v3-sso-kind, select) { grid-column: 2; }
+  .v3 .v3-sso-map > :is(.v3-sso-kind, .v3-sel) { grid-column: 2; }
 }
 @media (max-width: 860px) {
   .v3 .v3-sso-layout { grid-template-columns: minmax(0, 1fr); }

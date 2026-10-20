@@ -1,7 +1,7 @@
 """Performance of the per-request project resolution (design §5.11, §9.3-6).
 
 Synthetic ledger at the design's size: 1,000 users × 200 projects, every user with
-10 memberships (9 direct + 1 group that bundles 10 projects), a few custom roles,
+10 direct memberships, a few custom roles,
 projects bound to 1–2 of 4 workspaces. Rows go in with bulk SQL, not the ORM.
 
 Budget (§5.11): a cached ``resolve_project`` costs the epoch PK reads only — p95
@@ -29,8 +29,7 @@ from app.services import access
 USERS = 1000
 PROJECTS = 200
 WORKSPACES = 4
-GROUP_SIZE = 10  # projects per group → 20 groups
-DIRECT_PER_USER = 9  # + 1 group membership = 10 memberships each
+DIRECT_PER_USER = 10  # memberships each
 SAMPLES = int(os.environ.get("LAUNCHPAD_PERF_SAMPLES", "300"))
 
 CACHED_P95_MS = 2.0
@@ -54,12 +53,10 @@ def _user_id(i: int) -> str:
 
 def _seed() -> None:
     rnd = random.Random(1469)
-    projects, binds, roles, members, group_members, user_ws = [], [], [], [], [], []
-    groups = [{"id": f"perf-g{g:02d}", "name": f"G{g}", "now": _NOW}
-              for g in range(PROJECTS // GROUP_SIZE)]
+    projects, binds, roles, members, user_ws = [], [], [], [], []
     for i in range(PROJECTS):
         pid = _project_id(i)
-        projects.append({"id": pid, "name": pid.upper(), "group_id": f"perf-g{i // GROUP_SIZE:02d}",
+        projects.append({"id": pid, "name": pid.upper(),
                          "status": "archived" if i % 25 == 0 else "active", "now": _NOW})
         first = i % WORKSPACES
         binds.append({"p": pid, "ws": _ws(first), "d": 0, "now": _NOW})
@@ -75,16 +72,12 @@ def _seed() -> None:
             members.append({"p": _project_id(i), "u": uid, "r": rnd.choice(_ROLES),
                             "o": '{"agents.delete": false}' if u % 7 == 0 else None,
                             "now": _NOW})
-        group_members.append({"g": groups[u % len(groups)]["id"], "u": uid, "r": "developer",
-                              "now": _NOW})
         for w in rnd.sample(range(WORKSPACES), 2):
             user_ws.append({"u": uid, "ws": _ws(w), "now": _NOW})
     with engine.begin() as conn:
-        conn.execute(text("INSERT INTO project_groups (id, name, description, created_at,"
-                          " updated_at) VALUES (:id, :name, '', :now, :now)"), groups)
-        conn.execute(text("INSERT INTO projects (id, name, description, group_id, status,"
+        conn.execute(text("INSERT INTO projects (id, name, description, status,"
                           " is_default, created_at, updated_at)"
-                          " VALUES (:id, :name, '', :group_id, :status, 0, :now, :now)"), projects)
+                          " VALUES (:id, :name, '', :status, 0, :now, :now)"), projects)
         conn.execute(text("INSERT INTO project_workspaces (project_id, workspace_id,"
                           " is_workspace_default, enabled_at) VALUES (:p, :ws, :d, :now)"), binds)
         conn.execute(text("INSERT INTO project_roles (project_id, key, name, permissions,"
@@ -92,8 +85,6 @@ def _seed() -> None:
                      roles)
         conn.execute(text("INSERT INTO project_members (project_id, user_id, role_key,"
                           " overrides, added_at) VALUES (:p, :u, :r, :o, :now)"), members)
-        conn.execute(text("INSERT INTO group_members (group_id, user_id, role_key, added_at)"
-                          " VALUES (:g, :u, :r, :now)"), group_members)
         conn.execute(text("INSERT INTO user_workspaces (user_id, workspace_id, created_at)"
                           " VALUES (:u, :ws, :now)"), user_ws)
         conn.execute(text("UPDATE access_epoch SET value = value + 1 WHERE id = 1"))
@@ -132,8 +123,7 @@ def ledger():
 
 def test_the_synthetic_ledger_has_the_design_shape(ledger):
     snapshot = access.snapshot_for(ledger, _identity(0))
-    # 9 direct + a 10-project group, overlapping at most 9 → 10..19 projects
-    assert 10 <= len(snapshot.memberships) <= DIRECT_PER_USER + GROUP_SIZE
+    assert len(snapshot.memberships) == DIRECT_PER_USER
     counts = ledger.execute(text(
         "SELECT (SELECT COUNT(*) FROM project_members WHERE user_id LIKE 'perf-%'),"
         " (SELECT COUNT(*) FROM projects WHERE id LIKE 'perf-%')"
@@ -193,5 +183,4 @@ def test_a_bumped_epoch_is_seen_on_the_next_call_at_scale(ledger):
     access.bump_epoch(ledger)
     ledger.commit()
     still = access.snapshot_for(ledger, _identity(3)).memberships.get(pid)
-    # the project may still come through the user's group; never through the dropped row
-    assert still is None or still.direct_role is None
+    assert still is None  # the dropped row was the only way in

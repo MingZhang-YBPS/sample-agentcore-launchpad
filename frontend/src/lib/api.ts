@@ -18,9 +18,9 @@ import type { ExperimentInfo } from "./experiments";
 import type { McpServerOps } from "./api/mcpReviews";
 import type { ModelSource, ReasoningEffort } from "./models";
 import type { StrandsSpecFields } from "./strands-builder";
-import type { UserGroup, UserProject } from "./api/users";
+import type { UserProject } from "./api/users";
 import type { ManagedVideo, ManagedVideoCatalog, VideoCatalog, VideoContent } from "./videos";
-import { WORKSPACE_HEADER } from "./workspace-header";
+import { PROJECT_HEADER, WORKSPACE_HEADER } from "./workspace-header";
 
 export interface AnnouncementContent {
   title: string;
@@ -927,6 +927,9 @@ export interface AgentSpecInput extends StrandsSpecFields {
   name: string;
   /** Optional human label, 1–64 chars, trimmed; editable on redeploy (unlike `name`). */
   display_name?: string;
+  /** The business project a NEW agent is filed under (`services/agent_project`);
+   *  omitted ⇒ the request's `X-Project`. Never stored in the spec; ignored on redeploy. */
+  project_id?: string;
   method: string;
   model_id?: string;
   /** Hosting surface of model_id. Omitted ⇒ backend defaults to "bedrock". */
@@ -1217,6 +1220,25 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
 function pinnedWorkspace(workspaceId?: string | null): Record<string, string> | undefined {
   return workspaceId ? { [WORKSPACE_HEADER]: workspaceId } : undefined;
 }
+
+/** Explicit `X-Project` for a create call that names its project in the body: the
+ *  backend refuses a body `project_id` that differs from the header (422
+ *  `agent.project_mismatch`), and the fetch wrapper keeps a header the caller set. */
+function pinnedProject(projectId?: string | null): Record<string, string> | undefined {
+  return projectId ? { [PROJECT_HEADER]: projectId } : undefined;
+}
+
+/** A project the create flow may file a new agent under (`GET /api/agents/eligible-projects`). */
+export interface EligibleAgentProject {
+  id: string;
+  name: string;
+  department_id: string;
+  department_name: string | null;
+  is_workspace_default: boolean;
+}
+
+/** The route keys that create an agent; the picker lists projects holding one. */
+export type AgentCreatePermission = "agents.deploy" | "agents.import" | "agents.convert";
 
 /** `headers` is narrowed to a plain record so the merge below is exhaustive. */
 type RequestInitJson = Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
@@ -3896,8 +3918,6 @@ export interface ConsoleUser {
   password_changed_at?: string | null;
   /** project memberships, on the routes that list them (`GET /api/users`, `/api/users/{id}`) */
   projects?: UserProject[];
-  /** user-group memberships, on the same routes */
-  groups?: UserGroup[];
   /** where the account signs in (sso §2.7): the console's password, or an identity provider */
   source?: "local" | "sso";
   external_idp_id?: string | null;
@@ -5557,7 +5577,13 @@ export const api = {
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>("/api/agents", {
       method: "POST",
       body: JSON.stringify(spec),
+      headers: pinnedProject(spec.project_id),
     }),
+  /** Server-filtered: the business projects the caller may create an agent in. */
+  agentEligibleProjects: (permission: AgentCreatePermission = "agents.deploy") =>
+    request<{ projects: EligibleAgentProject[] }>(
+      `/api/agents/eligible-projects?permission=${encodeURIComponent(permission)}`,
+    ),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
   /** T10: the wizard's scenario-template gallery (static, hub-global). */
   agentTemplates: () => request<{ templates: AgentTemplateInfo[] }>("/api/agent-templates"),
@@ -5716,10 +5742,18 @@ export const api = {
       { method: "POST", body: JSON.stringify({ revision }) },
     ),
   /** The only executor: names the exact revision + content hash that was shown. */
-  assistantApproveProposal: (id: string, revision: number, contentHash: string) =>
+  assistantApproveProposal: (id: string, revision: number, contentHash: string, projectId?: string) =>
     request<AssistantApproveResult>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/proposal/approve`,
-      { method: "POST", body: JSON.stringify({ revision, content_hash: contentHash }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          revision,
+          content_hash: contentHash,
+          ...(projectId ? { project_id: projectId } : {}),
+        }),
+        headers: pinnedProject(projectId),
+      },
     ),
   /* ── SE-047 evaluation-assets plan (private to the conversation owner) ──
      Every call pins the workspace the panel is DISPLAYING (`X-Workspace`), so a
@@ -5788,15 +5822,23 @@ export const api = {
     ),
   discoverRuntimes: () =>
     request<RuntimeDiscoveryResponse>("/api/agents/discovery"),
-  importRuntimes: (runtimeIds: string[], harnessIds: string[] = []) =>
+  importRuntimes: (runtimeIds: string[], harnessIds: string[] = [], projectId?: string) =>
     request<RuntimeImportResult>("/api/agents/discovery/import", {
       method: "POST",
-      body: JSON.stringify({ runtime_ids: runtimeIds, harness_ids: harnessIds }),
+      body: JSON.stringify({
+        runtime_ids: runtimeIds,
+        harness_ids: harnessIds,
+        ...(projectId ? { project_id: projectId } : {}),
+      }),
+      headers: pinnedProject(projectId),
     }),
-  convertAgent: (id: string) =>
+  /** The twin is filed under `projectId` (when given) or the request's project. */
+  convertAgent: (id: string, projectId?: string) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
       `/api/agents/${id}/convert`,
-      { method: "POST" },
+      projectId
+        ? { method: "POST", body: JSON.stringify({ project_id: projectId }), headers: pinnedProject(projectId) }
+        : { method: "POST" },
     ),
   /** Runtime twins converted from this agent (ledger read, newest first). */
   listAgentConversions: (id: string) =>

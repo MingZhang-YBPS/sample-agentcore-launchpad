@@ -24,6 +24,7 @@ from app.services import observability, visibility
 from app.services.observability import ProjectAgents
 from app.services.visibility import Viewer
 from app.services.workspace import WorkspaceContext
+from tests.conftest import TEST_PROJECT
 from tests.test_project_scope import _login, _member_of, _project, _user, app  # noqa: F401
 
 WS = DEFAULT_WORKSPACE_ID
@@ -70,10 +71,10 @@ def _allow(pid: str | None, *, bypass: bool = False) -> ProjectAgents:
 
 
 def test_a_single_project_workspace_keeps_every_row():
-    _runtime("solo", "default")
+    _runtime("solo", TEST_PROJECT)
     rows = [{"service": "solo_rt.DEFAULT", "session_id": None},
             {"service": "nobody.DEFAULT", "session_id": "s" * 40}]
-    allow = _allow("default")
+    allow = _allow(TEST_PROJECT)
     assert not allow
     assert allow.keep_rows(rows) == rows
     assert allow.service_filter() == ""
@@ -83,7 +84,7 @@ def test_a_single_project_workspace_keeps_every_row():
 def test_rows_are_kept_by_project_preset_or_admin_only():
     _project("alpha")
     mine = _runtime("mine", "alpha")
-    theirs = _runtime("theirs", "default")
+    theirs = _runtime("theirs", TEST_PROJECT)
     _runtime("preset", None, system_key="aws-agent-solution-architect")
     _chat(theirs, "t" * 40)
     _chat(mine, "m" * 40)
@@ -105,11 +106,11 @@ def test_rows_are_kept_by_project_preset_or_admin_only():
 
 def test_session_ownership_reads_every_ledger_source():
     _project("alpha")
-    theirs = _runtime("theirs", "default")
+    theirs = _runtime("theirs", TEST_PROJECT)
     _chat(theirs, "c" * 40)
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             db.add(EvalRun(workspace_id=WS, agent_id=theirs, agent_name="theirs",
                            mode="dataset", status="completed", session_ids=["e" * 40]))
             db.commit()
@@ -119,14 +120,14 @@ def test_session_ownership_reads_every_ledger_source():
     assert allow.session_verdict("c" * 40) is False
     assert allow.session_verdict("e" * 40) is False
     assert allow.session_verdict("u" * 40) is None
-    assert _allow("default").session_verdict("e" * 40) is True
+    assert _allow(TEST_PROJECT).session_verdict("e" * 40) is True
 
 
 def test_the_dashboard_filter_names_the_projects_runtimes():
     _project("alpha")
     assert _allow("alpha").service_filter() is None  # no runtime: nothing to count
     _runtime("mine", "alpha")
-    _runtime("theirs", "default")
+    _runtime("theirs", TEST_PROJECT)
     line = _allow("alpha").service_filter()
     assert "mine_rt" in line and "theirs_rt" not in line
     assert line.startswith("\n| filter resource.attributes.service.name like /")
@@ -135,7 +136,7 @@ def test_the_dashboard_filter_names_the_projects_runtimes():
 def test_the_dashboard_is_narrowed_and_cached_per_project(monkeypatch, ctx):
     _project("alpha")
     _runtime("mine", "alpha")
-    _runtime("theirs", "default")
+    _runtime("theirs", TEST_PROJECT)
     observability.reset_cache()
     seen: list[str] = []
 
@@ -149,7 +150,7 @@ def test_the_dashboard_is_narrowed_and_cached_per_project(monkeypatch, ctx):
     with project_context("alpha"):
         observability.get_dashboard("24h", ctx)
         observability.get_dashboard("24h", ctx)  # cached per project
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         observability.get_dashboard("24h", ctx)
     assert len(seen) == 3
     assert "service.name like" not in seen[0]
@@ -171,25 +172,25 @@ def test_view_caches_carry_the_project(monkeypatch, ctx):
     try:
         with project_context("alpha"):
             observability.list_traces("24h", db, ctx)
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             observability.list_traces("24h", db, ctx)
             observability.list_traces("24h", db, ctx)
     finally:
         db.close()
-    assert calls == ["alpha", "default"]
+    assert calls == ["alpha", TEST_PROJECT]
     observability.reset_cache()
 
 
 def test_the_resolver_can_attribute_across_projects():
     _project("alpha")
-    _runtime("theirs", "default")
+    _runtime("theirs", TEST_PROJECT)
     db = SessionLocal()
     try:
         with project_context("alpha"):
             assert observability.build_agent_resolver(db, WS)("theirs_rt.DEFAULT") is None
             found = observability.build_agent_resolver(db, WS, all_projects=True)(
                 "theirs_rt.DEFAULT")
-            assert found is not None and found.project_id == "default"
+            assert found is not None and found.project_id == TEST_PROJECT
     finally:
         db.close()
 
@@ -206,7 +207,7 @@ def _alpha_member(app):  # noqa: F811
 
 def test_a_member_never_sees_another_projects_sessions(app, monkeypatch):  # noqa: F811
     mine = _runtime("mine", "alpha")
-    theirs = _runtime("theirs", "default")
+    theirs = _runtime("theirs", TEST_PROJECT)
     _chat(theirs, "t" * 40)
     _chat(mine, "m" * 40)
     ana = _alpha_member(app)
@@ -243,7 +244,7 @@ def test_a_member_never_sees_another_projects_sessions(app, monkeypatch):  # noq
 
 def test_an_unattributed_session_detail_is_decided_by_its_spans(app, monkeypatch):  # noqa: F811
     _runtime("mine", "alpha")
-    _runtime("theirs", "default")
+    _runtime("theirs", TEST_PROJECT)
     ana = _alpha_member(app)
 
     def session(service):
@@ -260,7 +261,7 @@ def test_another_projects_custom_evaluator_reads_as_missing():
     _project("alpha")
     db = SessionLocal()
     try:
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             db.add(ResourceCreator(workspace_id=WS, kind="evaluator", resource_id="theirs-ev"))
             db.commit()
         with project_context("alpha"):
@@ -268,7 +269,7 @@ def test_another_projects_custom_evaluator_reads_as_missing():
                 obs_router._refuse_foreign_evaluators(db, WS, ["theirs-ev"])
             # AWS-managed evaluators belong to every project
             obs_router._refuse_foreign_evaluators(db, WS, ["Builtin.Helpfulness"])
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             obs_router._refuse_foreign_evaluators(db, WS, ["theirs-ev"])
     finally:
         db.close()
@@ -289,7 +290,7 @@ def test_hidden_aws_ids_hide_another_projects_ids_for_every_viewer():
             # no row = the workspace default project's
             assert visibility.hidden_aws_ids(Viewer.ALL, db, WS, "knowledge_base", ids) == {
                 "kb-legacy"}
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             assert visibility.hidden_aws_ids(Viewer.ALL, db, WS, "knowledge_base", ids) == {
                 "kb-a"}
         assert visibility.hidden_aws_ids(Viewer.ALL, db, WS, "knowledge_base", ids) == set()
@@ -331,7 +332,7 @@ def _stub_costs(monkeypatch):
 def test_costs_narrow_to_one_project(monkeypatch, ctx):
     _project("alpha")
     mine = _runtime("mine", "alpha")
-    theirs = _runtime("theirs", "default")
+    theirs = _runtime("theirs", TEST_PROJECT)
     _chat(mine, "m" * 40, actor="ana")
     _chat(theirs, "t" * 40, actor="bo")
     _stub_costs(monkeypatch)
@@ -352,13 +353,13 @@ def test_costs_narrow_to_one_project(monkeypatch, ctx):
 def test_month_to_date_per_project(monkeypatch, ctx):
     _project("alpha")
     _runtime("mine", "alpha")
-    _runtime("theirs", "default")
+    _runtime("theirs", TEST_PROJECT)
     _stub_costs(monkeypatch)
     db = SessionLocal()
     try:
         assert cost_service.month_to_date_usd(db, ctx) == pytest.approx(21.0)
         assert cost_service.month_to_date_usd(db, ctx, project="alpha") == pytest.approx(3.0)
-        assert cost_service.month_to_date_usd(db, ctx, project="default") == pytest.approx(15.0)
+        assert cost_service.month_to_date_usd(db, ctx, project=TEST_PROJECT) == pytest.approx(15.0)
     finally:
         db.close()
 
@@ -369,7 +370,8 @@ def test_costs_refuse_a_project_not_bound_here():
         with pytest.raises(NotFoundError) as err:
             alerts_router._bound_project(db, SimpleNamespace(id=WS), "nope")
         assert err.value.code == "project.not_found"
-        assert alerts_router._bound_project(db, SimpleNamespace(id=WS), "default") == "default"
+        bound = alerts_router._bound_project(db, SimpleNamespace(id=WS), TEST_PROJECT)
+        assert bound == TEST_PROJECT
     finally:
         db.close()
 
@@ -393,10 +395,10 @@ def test_a_rule_is_workspace_level_unless_scoped_to_a_project():
         project_rule = _create(alerts_router.RuleCreate(kind="error_rate", threshold=0.1,
                                                         scope="project"))
         other = _create(alerts_router.RuleCreate(kind="error_rate", threshold=0.1,
-                                                 scope="project", project_id="default"))
+                                                 scope="project", project_id=TEST_PROJECT))
     assert (workspace_rule["scope"], workspace_rule["project_id"]) == ("workspace", None)
     assert (project_rule["scope"], project_rule["project_id"]) == ("project", "alpha")
-    assert other["project_id"] == "default"
+    assert other["project_id"] == TEST_PROJECT
     db = SessionLocal()
     try:
         with project_context(None):
@@ -423,8 +425,8 @@ def test_a_rule_reads_its_value_as_its_own_project(monkeypatch, ctx):
 def test_the_fleet_counts_per_project_and_filters():
     _project("alpha")
     _runtime("mine", "alpha")
-    _runtime("theirs", "default")
-    _runtime("theirs2", "default")
+    _runtime("theirs", TEST_PROJECT)
+    _runtime("theirs2", TEST_PROJECT)
     db = SessionLocal()
     try:
         with project_context("alpha"):  # unscoped whatever the caller's console is in
@@ -432,7 +434,7 @@ def test_the_fleet_counts_per_project_and_filters():
         row = next(r for r in fleet["workspaces"] if r["id"] == WS)
         assert row["agents_active"] == 3
         per = {p["id"]: p["agents_active"] for p in row["projects"]}
-        assert per == {"default": 2, "alpha": 1}
+        assert per == {TEST_PROJECT: 2, "alpha": 1}
         narrowed = fleet_service.fleet_overview(db, project="alpha")
         row = next(r for r in narrowed["workspaces"] if r["id"] == WS)
         assert row["agents_active"] == 1 and [p["id"] for p in row["projects"]] == ["alpha"]
@@ -442,7 +444,7 @@ def test_the_fleet_counts_per_project_and_filters():
 
 def test_only_the_publishing_project_withdraws_a_template():
     _project("alpha")
-    theirs = _runtime("theirs", "default")
+    theirs = _runtime("theirs", TEST_PROJECT)
     db = SessionLocal()
     try:
         row = SharedTemplate(source_workspace_id=WS, agent_id=theirs, title="t")
@@ -453,7 +455,7 @@ def test_only_the_publishing_project_withdraws_a_template():
             with pytest.raises(Exception) as err:
                 fleet_router.unpublish_template(row.id, db, SimpleNamespace(id=WS), member)
             assert getattr(err.value, "code", None) == "marketplace.not_yours"
-        with project_context("default"):
+        with project_context(TEST_PROJECT):
             assert fleet_router.unpublish_template(
                 row.id, db, SimpleNamespace(id=WS), member) == {"deleted": row.id}
     finally:

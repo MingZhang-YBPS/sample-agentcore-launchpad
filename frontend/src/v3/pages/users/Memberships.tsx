@@ -6,6 +6,7 @@ import { Reasoned } from "../../reason";
 import { Btn } from "../../ui";
 import { type MembershipRow, suggestedRole } from "./forms";
 import type { RoleOption } from "./structure";
+import { Select } from "../../select";
 
 /** The legacy workspace grants: folded under "advanced" once the platform has projects. */
 export function LegacyGrants({ multiProject, children }: { multiProject: boolean; children: ReactNode }) {
@@ -23,8 +24,8 @@ export function LegacyGrants({ multiProject, children }: { multiProject: boolean
 }
 
 /**
- * Rows of "target + role" with add / remove — the project and project-group blocks
- * of the create, approve and edit dialogs (projects §7.4, §7.5).
+ * Rows of "target + role" with add / remove — the project block of the create,
+ * approve and edit dialogs (projects §7.4, §7.5).
  */
 export function MembershipRows({
   kind,
@@ -35,7 +36,7 @@ export function MembershipRows({
   error,
   busy,
 }: {
-  kind: "projects" | "groups";
+  kind: "projects";
   rows: MembershipRow[];
   onChange: (rows: MembershipRow[]) => void;
   targets: { id: string; name: string }[];
@@ -57,7 +58,7 @@ export function MembershipRows({
         const roles = row.id ? rolesFor(row.id) : [];
         return (
           <div key={index} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <select className="v3-select" style={{ flex: "2 1 180px" }} value={row.id} disabled={busy}
+            <Select className="v3-select" style={{ flex: "2 1 180px" }} value={row.id} disabled={busy}
               aria-label={t(`v3.users.memberships.${kind}Target`)}
               onChange={(e) => {
                 const options = rolesFor(e.target.value);
@@ -67,14 +68,14 @@ export function MembershipRows({
               {targets.map((target) => (
                 <option key={target.id} value={target.id} disabled={target.id !== row.id && taken.has(target.id)}>{target.name}</option>
               ))}
-            </select>
-            <Reasoned disabledReason={busy ? null : t(kind === "projects" ? "story.reason.pickProject" : "story.reason.pickGroup")}>
-              <select className="v3-select" style={{ flex: "1 1 140px" }} value={row.role} disabled={busy || !row.id}
+            </Select>
+            <Reasoned disabledReason={busy ? null : t("story.reason.pickProject")}>
+              <Select className="v3-select" style={{ flex: "1 1 140px" }} value={row.role} disabled={busy || !row.id}
                 aria-label={t("v3.users.memberships.role")} onChange={(e) => set(index, { role: e.target.value })}>
                 <option value="">—</option>
                 {roles.map((role) => <option key={role.key} value={role.key}>{role.label}</option>)}
                 {row.role && !roles.some((role) => role.key === row.role) && <option value={row.role}>{row.role}</option>}
-              </select>
+              </Select>
             </Reasoned>
             <Btn size="sm" kind="ghost" busy={busy} title={t("v3.users.memberships.remove")} aria-label={t("v3.users.memberships.remove")}
               onClick={() => onChange(rows.filter((_, i) => i !== index))}>

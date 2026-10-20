@@ -24,6 +24,7 @@ from app.services import observability, project_telemetry
 from app.services.agentcore import runtime as rt
 from app.services.observability import ProjectAgents
 from app.services.workspace import WorkspaceContext
+from tests.conftest import TEST_DEPARTMENT, TEST_PROJECT
 from tests.test_project_scope import _project  # noqa: F401
 
 WS = DEFAULT_WORKSPACE_ID
@@ -106,7 +107,7 @@ def test_a_shared_project_deploys_exactly_as_before():
                      env={"A": "1"})
     with project_context("alpha"):
         env = runtime_environment(spec, {}, agent_id="a1")
-    with project_context("default"):
+    with project_context(TEST_PROJECT):
         assert runtime_environment(spec, {}) == env
     assert project_telemetry.ENV_OTEL_RESOURCE_ATTRIBUTES not in env
     assert project_telemetry.tags_from_environment(env) == {}
@@ -303,7 +304,8 @@ def test_the_harness_request_of_an_isolated_project(monkeypatch, ctx):
     logs: list[str] = []
     out = harness_deployer._attribute_to_project(_stage_ctx(ctx, logs), agent, params)
     assert out["tags"] == {"launchpad:project": "alpha", "launchpad:agent-id": agent.id,
-                           "launchpad:workspace": WS, "launchpad:managed-by": "launchpad"}
+                           "launchpad:workspace": WS, "launchpad:managed-by": "launchpad",
+                           "launchpad:department": TEST_DEPARTMENT}
     assert out["environmentVariables"]["A"] == "1"
     assert "launchpad.project=alpha" in out["environmentVariables"]["OTEL_RESOURCE_ATTRIBUTES"]
     assert out["model"]["bedrockModelConfig"] == {"modelId": PROFILE_ARN,
@@ -320,7 +322,8 @@ def test_a_shared_projects_harness_request_only_gains_its_cost_tags(ctx):
     assert {k: v for k, v in out.items() if k != "tags"} == params  # no span attributes
     assert out["tags"] == {"launchpad:project": "alpha", "launchpad:workspace": WS,
                            "launchpad:agent-id": agent.id,
-                           "launchpad:managed-by": "launchpad"}
+                           "launchpad:managed-by": "launchpad",
+                           "launchpad:department": TEST_DEPARTMENT}
 
 
 def test_the_harness_is_tagged_after_an_update_best_effort():
@@ -344,13 +347,13 @@ def test_an_isolated_projects_dashboard_filters_on_the_span_attribute():
     allow = ProjectAgents(SessionLocal(), WS, "alpha")
     assert allow.service_filter() == '\n| filter resource.attributes.launchpad.project = "alpha"'
     _runtime("mine", "alpha")
-    _runtime("theirs", "default")
+    _runtime("theirs", TEST_PROJECT)
     line = ProjectAgents(SessionLocal(), WS, "alpha").service_filter()
     assert line.startswith('\n| filter resource.attributes.launchpad.project = "alpha" or ')
     assert "not ispresent(resource.attributes.launchpad.project)" in line
     assert "mine_rt" in line and "theirs_rt" not in line
     # a shared project keeps the service-name filter
-    shared = ProjectAgents(SessionLocal(), WS, "default").service_filter()
+    shared = ProjectAgents(SessionLocal(), WS, TEST_PROJECT).service_filter()
     assert shared.startswith("\n| filter resource.attributes.service.name like /")
 
 

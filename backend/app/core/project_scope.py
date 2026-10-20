@@ -69,6 +69,9 @@ class _ProjectColumn:
     __project_parent__: ClassVar[tuple[str, tuple[str, ...]] | None] = None
     # set by `register_shareable` (§11.2): reads also see rows shared with the project
     __project_shareable__: ClassVar[bool] = False
+    # a new (non-platform) row of this model is never *stamped* into a workspace
+    # `default` project — its writer names the project (agents: services/agent_project)
+    __project_no_default_stamp__: ClassVar[bool] = False
 
     def project_platform_row(self) -> bool:
         """True for a row that is platform-level by nature and stays NULL (shared only)."""
@@ -309,6 +312,13 @@ def _default_project(session: Session) -> str | None:
     return found[0] if found else None
 
 
+def _is_default_project(session: Session, pid: str) -> bool:
+    found = session.connection().execute(
+        text("SELECT is_default FROM projects WHERE id = :id"), {"id": pid},
+    ).first()
+    return pid == "default" or bool(found and found[0])
+
+
 def _refuse_shared_writes(session: Session, pid: str) -> None:
     """A share never grants a write (§11.2): changing or deleting a row the current
     project reaches only through one fails as if the row were missing."""
@@ -356,6 +366,12 @@ def _stamp_new_rows(session: Session, _flush_context: Any, _instances: Any) -> N
                 or _CURRENT_PROJECT.get()
                 or _sole_workspace_project(session, getattr(obj, "workspace_id", None))
             )
+            if pid and type(obj).__project_no_default_stamp__ and _is_default_project(
+                    session, pid):
+                raise ProjectStampError(
+                    f"new {type(obj).__name__} would be filed under the default project "
+                    f"'{pid}' — set its project_id to a business project explicitly"
+                )
             if pid:
                 obj.project_id = pid
             elif isinstance(obj, ProjectOwned):

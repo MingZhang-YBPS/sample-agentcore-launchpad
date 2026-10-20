@@ -277,21 +277,25 @@ CANARY = CanaryOps()
 
 
 def _invoke(agent_id: str, prompt: str, workspace: WorkspaceContext) -> str:
-    """One prompt to the target agent through the shared invoke chain."""
+    """One prompt to the target agent through the shared invoke chain. The budget
+    was checked when the execution started (`POST .../execute`): the smoke turn of a
+    running job is not refused mid-way."""
     from app.services.invoke import invoke_agent_text
+    from app.services.project_quotas import budget_exempt
 
     db = SessionLocal()
     try:
         agent = db.get(Agent, agent_id)
         if agent is None:
             raise StageFailed("the target agent no longer exists")
-        result = invoke_agent_text(
-            agent,
-            prompt,
-            session_id=f"promo-smoke-{uuid.uuid4().hex}",
-            actor_id="promotion-smoke",
-            workspace=workspace,
-        )
+        with budget_exempt():
+            result = invoke_agent_text(
+                agent,
+                prompt,
+                session_id=f"promo-smoke-{uuid.uuid4().hex}",
+                actor_id="promotion-smoke",
+                workspace=workspace,
+            )
     finally:
         db.close()
     return str(result.get("text") or "")
@@ -350,6 +354,8 @@ def _stage_resolve(run: Run) -> pipeline.StageResult:
             ).first()
         if existing is not None and existing.system_key:
             raise StageFailed("the target agent is a system-managed preset")
+        if existing is None:
+            _require_agent_project(db, run.project_id, target.id)
         if existing is not None and run.project_id and existing.project_id != run.project_id:
             raise StageFailed("the name is used by another project in the target")
         if existing is not None and existing.method != bundle.method:
@@ -447,6 +453,17 @@ def _canary_verdict_for(run: Run, existing: Agent | None, bundle: ReleaseBundle)
     return None
 
 
+def _require_agent_project(db, project_id: str | None, workspace_id: str) -> None:
+    """A new target agent obeys the agent-project rule (services/agent_project): the
+    run's project must be a business project bound to the target workspace."""
+    from app.services import agent_project
+
+    try:
+        agent_project.check_agent_project(db, project_id, workspace_id)
+    except AppError as exc:
+        raise StageFailed(f"{exc.code}: {exc.message}") from exc
+
+
 def _stage_provision(run: Run) -> pipeline.StageResult:
     execution = _execution(run.promotion_id)
     if execution.get("provisioned"):
@@ -473,6 +490,8 @@ def _stage_provision(run: Run) -> pipeline.StageResult:
         run.log(f"canary not applicable: {reason}")
         previous_spec: dict[str, Any] | None = None
         if existing is None:
+            # a promotion that creates its target files it like any new agent
+            _require_agent_project(db, run.project_id, run.target_id)
             agent = Agent(
                 workspace_id=run.target_id,
                 name=bundle.agent_name,
@@ -1099,6 +1118,18 @@ def assert_target_free(db, promotion: Promotion, bundle: ReleaseBundle) -> None:
         )
 
 
+def _target_holds(db, target_workspace_id: str, bundle: ReleaseBundle) -> bool:
+    """The target workspace already runs a live agent of the bundle's name."""
+    with project_context(None):  # names are workspace-wide
+        return db.scalars(
+            select(Agent.id).where(
+                Agent.workspace_id == target_workspace_id,
+                Agent.name == bundle.agent_name,
+                Agent.status != "deleted",
+            )
+        ).first() is not None
+
+
 def admit(
     db,
     promotion: Promotion,
@@ -1118,6 +1149,14 @@ def admit(
     from app.services import resource_mapping
 
     bundle = db.get(ReleaseBundle, bundle_id)
+    if bundle is not None and not _target_holds(db, promotion.target_workspace_id, bundle):
+        # the run would create its target agent: refuse before any job (422), the same
+        # agent-project rule every other creation path obeys
+        from app.services import agent_project
+
+        agent_project.check_agent_project(
+            db, promotion.project_id, promotion.target_workspace_id,
+        )
     if bundle is not None:
         resource_mapping.assert_network_mapped(
             db, bundle.spec or {}, source_workspace_id=bundle.workspace_id,

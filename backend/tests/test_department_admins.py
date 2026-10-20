@@ -1,7 +1,7 @@
 """Department administrators (projects design §11.1, G11-dept): appointing them and
 opening workspaces (platform administrators only), what a department administrator
 may do inside their department (projects, bindings to open workspaces, members,
-roles, groups, invitations) and the overreach matrix outside it (another
+roles, invitations) and the overreach matrix outside it (another
 department's project 404, platform settings 403, an unopened workspace 403), the
 self-membership journal line, `departments.settings` and its migration."""
 
@@ -48,7 +48,7 @@ def _workspace(ws_id: str) -> None:
 def world(app):  # noqa: F811
     """retail (dana administers it; `default` open to it) and logistics; workspace
     `lab` exists but is opened to nobody. shop is retail's, truck logistics', misc
-    has no department; groups retail-g and log-g."""
+    has no department (a legacy row: a new project must name one)."""
     admin = _admin(app)
     _workspace("lab")
     dana, ola = _user("dana", grant=False), _user("ola", grant=False)
@@ -58,9 +58,12 @@ def world(app):  # noqa: F811
     _create(admin, "shop", department_id="retail")
     _create(admin, "truck", department_id="logistics")
     _create(admin, "misc")
-    for gid, did in (("retail-g", "retail"), ("log-g", "logistics")):
-        assert admin.post("/api/project-groups", json={"id": gid, "name": gid,
-                                                       "department_id": did}).status_code == 201
+    db = SessionLocal()
+    try:
+        db.execute(text("UPDATE projects SET department_id = NULL WHERE id = 'misc'"))
+        db.commit()
+    finally:
+        db.close()
     res = admin.put("/api/departments/retail/admins", json={"add": [dana]})
     assert res.status_code == 200, res.text
     assert admin.put("/api/departments/retail/workspaces", json={"add": [WS]}
@@ -121,17 +124,15 @@ def test_a_department_admin_creates_projects_in_open_workspaces_only(world):
         return dana.post("/api/projects", json={"id": pid, "name": pid, "workspaces": [WS],
                                                 **body})
 
-    made = create("shop2", department_id="retail", group_id="retail-g", owners=[world.ola])
+    made = create("shop2", department_id="retail", owners=[world.ola])
     assert made.status_code == 201, made.text
     assert made.json()["can_manage"] is True and made.json()["my_permissions"] == []
     cases = {
         "other department": (create("x1", department_id="logistics"),
                              403, "department.not_managed"),
-        "no department": (create("x2"), 403, "department.not_managed"),
+        "no department": (create("x2"), 422, "project.department_required"),
         "unopened workspace": (create("x3", department_id="retail", workspaces=["lab"]),
                                403, "department.workspace_not_open"),
-        "another department's group": (create("x4", department_id="retail", group_id="log-g"),
-                                       404, "group.not_found"),
         "platform settings": (create("x5", department_id="retail",
                                      settings={"quotas": {"v1_rate_per_minute": 5}}),
                               403, "project.setting_forbidden"),
@@ -183,14 +184,13 @@ def test_another_departments_project_is_404(world, method, path, body):
 
 def test_a_department_admin_manages_their_departments_project(world):
     dana = world.dana
-    res = dana.patch("/api/projects/shop", json={"name": "Shop front", "group_id": "retail-g",
+    res = dana.patch("/api/projects/shop", json={"name": "Shop front",
                                                   "settings": {"sod_strict": True}})
     assert res.status_code == 200, res.text
-    assert res.json()["name"] == "Shop front" and res.json()["group_id"] == "retail-g"
+    assert res.json()["name"] == "Shop front"
     for body, status, code in (
         ({"department_id": "logistics"}, 403, "department.not_managed"),
-        ({"department_id": None}, 403, "department.not_managed"),
-        ({"group_id": "log-g"}, 404, "group.not_found"),
+        ({"department_id": None}, 422, "project.department_required"),
         ({"settings": {"inbound_auth_default": None}}, 403, "project.setting_forbidden"),
     ):
         res = dana.patch("/api/projects/shop", json=body)
@@ -251,43 +251,6 @@ def test_a_department_admin_with_the_owner_key_elsewhere_keeps_it(world):
     assert world.dana.post("/api/projects/truck/archive").status_code == 404
 
 
-# ── groups ────────────────────────────────────────────────────────────────────
-
-
-def test_a_department_admin_manages_their_departments_groups(world):
-    dana = world.dana
-    listed = dana.get("/api/project-groups?department_id=retail")
-    assert listed.status_code == 200
-    assert [g["id"] for g in listed.json()["groups"]] == ["retail-g"]
-    assert dana.get("/api/project-groups").status_code == 403  # unfiltered: the platform's
-    assert dana.get("/api/project-groups?department_id=logistics").status_code == 403
-    made = dana.post("/api/project-groups", json={"id": "retail-2", "name": "R2",
-                                                  "department_id": "retail"})
-    assert made.status_code == 201, made.text
-    for body in ({"id": "xa", "name": "x"}, {"id": "xb", "name": "x",
-                                            "department_id": "logistics"}):
-        res = dana.post("/api/project-groups", json=body)
-        assert (res.status_code, res.json()["code"]) == (403, "department.not_managed")
-    assert dana.patch("/api/project-groups/retail-2", json={"name": "R two"}).status_code == 200
-    moved = dana.patch("/api/project-groups/retail-2", json={"department_id": None})
-    assert (moved.status_code, moved.json()["code"]) == (403, "department.not_managed")
-    put = dana.put("/api/project-groups/retail-g/projects", json={"add": ["shop"]})
-    assert put.status_code == 200 and put.json()["added"] == ["shop"]
-    for pid in ("truck", "misc"):
-        res = dana.put("/api/project-groups/retail-g/projects", json={"add": [pid]})
-        assert (res.status_code, res.json()["code"]) == (404, "project.not_found"), pid
-    res = dana.put("/api/project-groups/retail-g/members",
-                   json={"upsert": [{"user_id": world.ola, "role_key": "developer"}]})
-    assert res.status_code == 200
-    assert dana.delete("/api/project-groups/retail-2").status_code == 200
-    assert dana.post("/api/project-groups/retail-2/unarchive").status_code == 200
-    for method, path in (("GET", ""), ("PATCH", ""), ("DELETE", ""), ("POST", "/unarchive"),
-                         ("PUT", "/members"), ("PUT", "/projects")):
-        res = dana.request(method, f"/api/project-groups/log-g{path}",
-                           json={} if method in ("PATCH", "PUT") else None)
-        assert (res.status_code, res.json()["code"]) == (404, "group.not_found"), path
-
-
 # ── invitations and settings ──────────────────────────────────────────────────
 
 
@@ -300,7 +263,7 @@ def test_invitations_follow_the_departments_settings(world):
         "settings": {"can_create_users": True, "user_validity_max_days": 30}})
     assert res.status_code == 200
     assert res.json()["settings"] == {"can_create_users": True, "max_projects": None,
-                                      "quotas": None, "user_validity_max_days": 30}
+                                      "user_validity_max_days": 30}
     bad = world.admin.patch("/api/departments/retail", json={"settings": {"nope": 1}})
     assert (bad.status_code, bad.json()["code"]) == (400, "department.setting_invalid")
     long = dana.post("/api/departments/retail/invitations", json={**body, "valid_days": 60})
@@ -369,8 +332,8 @@ def test_every_dadmin_route_is_classified_hub_global_and_admin_or_pperm():
         assert key in WORKSPACE_EXEMPT, key
         role = ROUTE_POLICY[key]
         assert role == ADMIN or role.startswith(PPERM_PREFIX), key
-        assert where in ("project", "group", "department", "query", "any"), key
-        if where in ("project", "group", "department"):
+        assert where in ("project", "department", "query", "any"), key
+        if where in ("project", "department"):
             assert "{" + f"{where}_id" + "}" in key[1], key
 
 

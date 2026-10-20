@@ -211,6 +211,9 @@ class RevisionRef(BaseModel):
 
 class ApproveRequest(RevisionRef):
     content_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    # the business project the new agent is filed under (services/agent_project);
+    # omitted = the request's project (X-Project)
+    project_id: str | None = Field(default=None, max_length=32)
 
 
 @router.get("")
@@ -442,6 +445,13 @@ def approve_proposal(
     from app.deployer.pipeline import live_deploy_worker, start_deploy_async
 
     require_permission(request, service.PERMISSION_DEPLOY)  # belt and braces
+    # the new agent's business project (body or X-Project), validated before the
+    # conversation is read: it becomes the request's project from here on
+    from app.services import agent_project
+
+    agent_project.resolve_agent_project(
+        request, db, ws.id, req.project_id, service.PERMISSION_DEPLOY,
+    )
     identity = _caller(request)
     row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     outcome = service.approve_proposal(

@@ -3,18 +3,18 @@
 The write side of the access model that ``services.access`` reads: projects, their
 workspace bindings, members, custom roles, and moving an agent between projects.
 
-Every write that changes who reaches what — members, roles, bindings, status, the
-project's group — bumps ``access_epoch`` in the SAME transaction and journals a
-structure event (``audit.record_structure_event``), so the next request in every
-process sees it and the journal cannot disagree with the ledger. Commits are the
-caller's (the router), like ``services/users.py``.
+Every write that changes who reaches what — members, roles, bindings, status —
+bumps ``access_epoch`` in the SAME transaction and journals a structure event
+(``audit.record_structure_event``), so the next request in every process sees it and
+the journal cannot disagree with the ledger. Commits are the caller's (the router),
+like ``services/users.py``.
 
 Ids of projects the caller cannot see answer 404 ``project.not_found`` (design §5.4),
 never 403: a project's existence can itself be sensitive.
 
 A department administrator (§11.1) manages the structure of their department's
 projects without being a member: they see those projects (not their data), create
-them in the workspaces opened to the department, rename / regroup / archive them and
+them in the workspaces opened to the department, rename / archive them and
 manage their members and roles. ``core/route_policy.py`` lets them reach the routes;
 the checks that need the body (department, workspaces, settings) are here.
 """
@@ -34,9 +34,7 @@ from app.models.ledger import Agent, ApiKey, Job, User, Workspace
 from app.models.projects import (
     PROJECT_ID_PATTERN,
     Department,
-    GroupMember,
     Project,
-    ProjectGroup,
     ProjectMember,
     ProjectRole,
     ProjectWorkspace,
@@ -81,12 +79,16 @@ QUOTA_COUNTS: dict[str, tuple[int, int]] = {
     "max_concurrent_eval_runs": (1, 100),
     api_keys_service.PROJECT_RATE_KEY: (1, api_keys_service.MAX_RATE_PER_MINUTE),
 }
-# …and dollar amounts (≥ 0, a run's estimate and the month's spend compared against them)
-QUOTA_USD = frozenset({"eval_run_max_usd", "eval_monthly_usd_cap", "monthly_cost_alert_usd"})
+# …and the one dollar amount (≥ 0): the monthly budget, against the month-to-date spend
+# (services/project_quotas.py; the only money limit — no department or per-person cap)
+QUOTA_USD = frozenset({"monthly_budget_usd"})
 MAX_QUOTA_USD = 10_000_000
 QUOTA_KEYS = frozenset(QUOTA_COUNTS) | QUOTA_USD
 _VISIBILITY = ("shared", "isolated")
 CANDIDATE_LIMIT = 20
+# the list filter for projects with no department (legacy rows, the `default` project);
+# never a department id (`_` is outside the slug charset)
+NO_DEPARTMENT = "_none"
 TRANSFER_KINDS = ("agent",)
 # combined duties (design §3.6): one person holding both sides of a pair in one project
 # is flagged in the member views, and refused where the project sets `sod_strict`. The
@@ -212,7 +214,6 @@ def project_view(
         "name": row.name,
         "description": row.description or "",
         "department_id": row.department_id,
-        "group_id": row.group_id,
         "status": row.status,
         "is_default": bool(row.is_default),
         "settings": dict(row.settings or {}),
@@ -229,8 +230,7 @@ def project_view(
 
 def list_projects(
     db: Session, identity: Any, *, department_id: str | None = None,
-    group_id: str | None = None, status: str | None = None,
-    workspace_id: str | None = None, q: str | None = None,
+    status: str | None = None, workspace_id: str | None = None, q: str | None = None,
 ) -> list[dict[str, Any]]:
     """Administrators and stewards (§11.4, structure and counts only): every project
     (filterable); anyone else: their own."""
@@ -241,10 +241,10 @@ def list_projects(
         # a department administrator also lists their department's projects (§11.1)
         query = query.where(or_(Project.id.in_(mine), Project.department_id.in_(managed))
                             if managed else Project.id.in_(mine))
-    if department_id:
+    if department_id == NO_DEPARTMENT:
+        query = query.where(Project.department_id.is_(None))
+    elif department_id:
         query = query.where(Project.department_id == department_id)
-    if group_id:
-        query = query.where(Project.group_id == group_id)
     if status and status != "all":
         query = query.where(Project.status == status)
     elif not status:
@@ -268,21 +268,24 @@ def list_projects(
 # ── create / update / archive ─────────────────────────────────────────────────
 
 
-def _check_org(db: Session, department_id: str | None, group_id: str | None) -> None:
-    if department_id:
-        department = db.get(Department, department_id)
-        if department is None:
-            raise NotFoundError("department.not_found",
-                                f"department '{department_id}' not found",
-                                {"department_id": department_id})
-        if department.archived_at is not None:
-            raise AppError("department.archived", f"department '{department_id}' is archived",
-                           {"department_id": department_id}, status_code=409)
-    if group_id:
-        group = db.get(ProjectGroup, group_id)
-        if group is None or group.archived_at is not None:
-            raise NotFoundError("group.not_found", f"project group '{group_id}' not found",
-                                {"group_id": group_id})
+def _department_required() -> AppError:
+    return AppError("project.department_required",
+                    "a project belongs to a department — name an existing, active one",
+                    {"field": "department_id"}, status_code=422)
+
+
+def _check_department(db: Session, department_id: str | None) -> None:
+    """The project's department: required, existing and not archived."""
+    if not department_id:
+        raise _department_required()
+    department = db.get(Department, department_id)
+    if department is None:
+        raise NotFoundError("department.not_found",
+                            f"department '{department_id}' not found",
+                            {"department_id": department_id})
+    if department.archived_at is not None:
+        raise AppError("department.archived", f"department '{department_id}' is archived",
+                       {"department_id": department_id}, status_code=409)
 
 
 def _check_settings(settings: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
@@ -412,21 +415,14 @@ def _workspace(db: Session, workspace_id: str) -> Workspace:
     return row
 
 
-def _check_department_scope(
-    db: Session, identity: Any, department_id: str | None, group_id: str | None,
-) -> None:
-    """A department administrator's project stays in a department they administer,
-    and its group (if any) is one of that department's (§11.1)."""
+def _check_department_scope(db: Session, identity: Any, department_id: str | None) -> None:
+    """A department administrator's project stays in a department they administer
+    (§11.1)."""
     if not access.can_manage_structure(identity, department_id, db=db):
         raise AppError("department.not_managed",
                        "a department administrator works inside their own department — "
                        "name one you administer",
                        {"department_id": department_id}, status_code=403)
-    if group_id:
-        group = db.get(ProjectGroup, group_id)
-        if group is None or group.department_id != department_id:
-            raise NotFoundError("group.not_found", f"project group '{group_id}' not found",
-                                {"group_id": group_id})
 
 
 def _check_open_workspaces(db: Session, department_id: str | None, workspaces: list[str]) -> None:
@@ -460,11 +456,12 @@ def _check_project_limit(db: Session, department_id: str | None) -> None:
 
 def create_project(
     db: Session, identity: Any, *, project_id: str, name: str, description: str = "",
-    department_id: str | None = None, group_id: str | None = None,
+    department_id: str | None = None,
     workspaces: list[str], owners: list[str] | None = None,
     settings: dict[str, Any] | None = None,
 ) -> Project:
-    """A new project bound to `workspaces`, with `owners` as its project owners."""
+    """A new project in `department_id` (required: existing and active), bound to
+    `workspaces`, with `owners` as its project owners."""
     if not _PROJECT_ID.match(project_id):
         raise AppError("project.invalid_id",
                        "project id must be 2-32 lowercase letters, digits or '-'",
@@ -474,10 +471,10 @@ def create_project(
                        {"project_id": project_id}, status_code=409)
     if not workspaces:
         raise AppError("project.workspaces_required", "bind the project to at least one workspace")
-    _check_org(db, department_id, group_id)
+    _check_department(db, department_id)
     platform = access.can_manage_structure(identity)
     if not platform:
-        _check_department_scope(db, identity, department_id or None, group_id or None)
+        _check_department_scope(db, identity, department_id)
         _check_open_workspaces(db, department_id, workspaces)
         _check_project_limit(db, department_id)
     clean = _check_settings(settings or {}, ADMIN_SETTINGS if platform else DEPARTMENT_SETTINGS)
@@ -485,7 +482,7 @@ def create_project(
         _workspace(db, ws)
     row = Project(
         id=project_id, name=name.strip(), description=description or "",
-        department_id=department_id or None, group_id=group_id or None,
+        department_id=department_id,
         status=STATUS_ACTIVE_PROJECT, is_default=False,
         settings=_merge_settings({}, clean) or None,
         created_by=getattr(identity, "user_id", None), created_by_name=identity.username,
@@ -510,23 +507,25 @@ def create_project(
 def update_project(
     db: Session, identity: Any, row: Project, fields: dict[str, Any],
 ) -> Project:
-    """Name / department / group are structure (administrators, and the department's
+    """Name / department are structure (administrators, and the department's
     administrators inside their department); description and the owner-editable
-    settings are the project's own (`project.members`)."""
+    settings are the project's own (`project.members`). A department can be changed
+    but never cleared (a legacy project with none keeps none until one is named)."""
     structure = access.can_manage_structure(identity)
     department = not structure and can_manage(db, identity, row)
-    admin_fields = {"name", "department_id", "group_id"} & set(fields)
+    admin_fields = {"name", "department_id"} & set(fields)
     if admin_fields and not (structure or department):
         raise AppError("auth.forbidden",
                        f"only an administrator may change {sorted(admin_fields)}",
                        {"fields": sorted(admin_fields)}, status_code=403)
-    if "department_id" in fields or "group_id" in fields:
-        _check_org(db, fields.get("department_id"), fields.get("group_id"))
+    if "department_id" in fields and not fields["department_id"]:
+        if row.department_id:
+            raise _department_required()
+        fields = {k: v for k, v in fields.items() if k != "department_id"}  # stays unset
+    if "department_id" in fields and fields["department_id"] != row.department_id:
+        _check_department(db, fields["department_id"])
         if department:
-            _check_department_scope(
-                db, identity, fields.get("department_id", row.department_id) or None,
-                fields.get("group_id") or None,  # a group named now: the department's
-            )
+            _check_department_scope(db, identity, fields["department_id"])
     tag_keys_before = _project_tag_keys(row)
     changed: list[str] = []
     for key in ("name", "description", "department_id"):
@@ -536,10 +535,6 @@ def update_project(
                     ("" if key == "description" else None))
             changed.append(key)
     was_strict = sod_strict(row)
-    group_moved = "group_id" in fields and (fields["group_id"] or None) != row.group_id
-    if group_moved:
-        row.group_id = fields["group_id"] or None
-        changed.append("group_id")
     if "settings" in fields and fields["settings"] is not None:
         clean = _check_settings(fields["settings"], ADMIN_SETTINGS if structure
                                 else DEPARTMENT_SETTINGS if department else OWNER_SETTINGS)
@@ -557,14 +552,10 @@ def update_project(
         cost_tags.schedule_retag(db, project_id=row.id, reason="project_update",
                                  remove_keys=tag_keys_before - _project_tag_keys(row),
                                  **_retag_actor(identity))
-    if group_moved or (sod_strict(row) and not was_strict):
-        # a new group's roles, or strictness switched on, must not leave a combined duty
+    if sod_strict(row) and not was_strict:
+        # strictness switched on must not leave a combined duty
         db.flush()
         enforce_sod(db, row)
-    if group_moved:
-        # the old group's members lose the project, the new group's gain it
-        access.bump_epoch(db)
-        api_keys_service.disable_offboarded_keys_in_project(db, row.id)
     _journal(db, identity, "project.update", f"project:{row.id} {','.join(changed)}")
     return row
 
@@ -837,12 +828,12 @@ def custom_roles(db: Session, project_id: str) -> dict[str, ProjectRole]:
     )}
 
 
-def _check_role_key(db: Session, row: Project, role_key: str, *, group: bool = False) -> None:
+def _check_role_key(db: Session, row: Project, role_key: str) -> None:
     if role_key in access.ROLE_TEMPLATES:
         return
-    if not group and role_key == access.INHERIT_ROLE and row.is_default:
+    if role_key == access.INHERIT_ROLE and row.is_default:
         return  # the compatibility role exists in the default project only (§3.5)
-    if not group and role_key in custom_roles(db, row.id):
+    if role_key in custom_roles(db, row.id):
         return
     raise AppError("project.role_unknown", f"'{role_key}' is not a role of project '{row.id}'",
                    {"role_key": role_key, "project_id": row.id})
@@ -858,51 +849,32 @@ def _check_overrides(overrides: dict[str, Any] | None) -> dict[str, bool] | None
     return {k: bool(v) for k, v in sorted(overrides.items())}
 
 
-def _group_rows(db: Session, row: Project) -> dict[str, GroupMember]:
-    if not row.group_id:
-        return {}
-    group = db.get(ProjectGroup, row.group_id)
-    if group is None or group.archived_at is not None:
-        return {}
-    return {g.user_id: g for g in db.scalars(
-        select(GroupMember).where(GroupMember.group_id == row.group_id)
-    )}
-
-
 def effective_keys(
-    user: User | None, direct: ProjectMember | None, group: GroupMember | None,
-    roles: dict[str, frozenset[str]],
+    user: User | None, direct: ProjectMember | None, roles: dict[str, frozenset[str]],
 ) -> frozenset[str]:
-    """§3.4 for one member: direct ∪ group, then the direct row's overrides."""
-    role = user.role if user else "member"
-    overrides = user.permissions if user else None
-    base: frozenset[str] = frozenset()
-    for role_key in (direct.role_key if direct else None, group.role_key if group else None):
-        if role_key:
-            base |= access.template_keys(role_key, roles, account_role=role,
-                                         account_overrides=overrides)
-    return access.apply_overrides(base, direct.overrides if direct else None)
+    """§3.4 for one member: the direct role, then the row's overrides."""
+    if direct is None:
+        return frozenset()
+    base = access.template_keys(
+        direct.role_key, roles, account_role=user.role if user else "member",
+        account_overrides=user.permissions if user else None,
+    )
+    return access.apply_overrides(base, direct.overrides)
 
 
 def members_view(db: Session, row: Project, *, full_email: bool) -> list[dict[str, Any]]:
-    """Direct and group members with their sources and effective keys."""
+    """The project's (direct) members with their effective keys."""
     direct = {m.user_id: m for m in db.scalars(
         select(ProjectMember).where(ProjectMember.project_id == row.id)
     )}
-    groups = _group_rows(db, row)
-    ids = sorted(set(direct) | set(groups))
+    ids = sorted(direct)
     users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(ids)))} if ids else {}
     roles = {k: frozenset(r.permissions or []) & access.ALL_PROJECT_KEYS
              for k, r in custom_roles(db, row.id).items()}
     out = []
     for uid in ids:
-        user, d, g = users.get(uid), direct.get(uid), groups.get(uid)
-        sources = []
-        if d:
-            sources.append({"source": "direct", "role_key": d.role_key})
-        if g:
-            sources.append({"source": f"group:{g.group_id}", "role_key": g.role_key})
-        keys = effective_keys(user, d, g, roles)
+        user, d = users.get(uid), direct[uid]
+        keys = effective_keys(user, d, roles)
         out.append({
             "user_id": uid,
             "username": user.username if user else None,
@@ -913,9 +885,8 @@ def members_view(db: Session, row: Project, *, full_email: bool) -> list[dict[st
                 "role_key": d.role_key, "overrides": d.overrides or {},
                 "added_by": d.added_by,
                 "added_at": d.added_at.isoformat() if d.added_at else None,
-            } if d else None,
-            "group": {"group_id": g.group_id, "role_key": g.role_key} if g else None,
-            "sources": sources,
+            },
+            "sources": [{"source": "direct", "role_key": d.role_key}],
             # an administrator holds every key anyway; the row is kept for a demotion
             "bypass": bool(user and user.role == ROLE_ADMIN),
             "permissions": sorted(keys),
@@ -945,8 +916,7 @@ def project_conflicts(
     direct = {m.user_id: m for m in db.scalars(
         select(ProjectMember).where(ProjectMember.project_id == row.id)
     )}
-    groups = _group_rows(db, row)
-    ids = set(direct) | set(groups)
+    ids = set(direct)
     if user_ids is not None:
         ids &= user_ids
     if not ids:
@@ -957,7 +927,7 @@ def project_conflicts(
     out = []
     for uid in sorted(ids):
         user = users.get(uid)
-        pairs = sod_conflicts(effective_keys(user, direct.get(uid), groups.get(uid), roles))
+        pairs = sod_conflicts(effective_keys(user, direct.get(uid), roles))
         if pairs:
             out.append({"user_id": uid, "username": user.username if user else None,
                         "pairs": pairs})
@@ -1023,10 +993,6 @@ def _check_member_targets(
         _check_overrides(item.get("overrides"))
     for uid in remove:
         if db.get(ProjectMember, (row.id, uid)) is None:
-            if uid in _group_rows(db, row):
-                raise AppError("project.member_from_group",
-                               "this access comes from the project's group — manage it there",
-                               {"user_id": uid, "group_id": row.group_id}, status_code=409)
             raise NotFoundError("project.member_not_found",
                                 f"user '{uid}' is not a direct member", {"user_id": uid})
 
@@ -1035,8 +1001,8 @@ def upsert_members(
     db: Session, identity: Any, row: Project, upsert: list[dict[str, Any]],
     remove: list[str], *, check_self: bool = True, confirmed_by: Any = None,
 ) -> dict[str, list[str]]:
-    """Add / update direct members and remove direct rows. Group-sourced access is
-    managed on the group; removing someone with no direct row is a 404.
+    """Add / update direct members and remove direct rows; removing someone with no
+    row is a 404.
 
     A steward's change (§11.4) is journaled and noticed to the project's owners; under
     `steward_two_person` it is staged instead (`pending: [id]`, nothing applied) until
@@ -1077,10 +1043,6 @@ def upsert_members(
     for uid in remove:
         existing = db.get(ProjectMember, (row.id, uid))
         if existing is None:
-            if uid in _group_rows(db, row):
-                raise AppError("project.member_from_group",
-                               "this access comes from the project's group — manage it there",
-                               {"user_id": uid, "group_id": row.group_id}, status_code=409)
             raise NotFoundError("project.member_not_found",
                                 f"user '{uid}' is not a direct member", {"user_id": uid})
         user = db.get(User, uid)
@@ -1428,7 +1390,7 @@ def access_view(db: Session, identity: Any) -> dict[str, Any]:
         # §11.4: structure without data — the console's "structure only" empty state
         "is_steward": steward_service.is_steward(identity),
         # §11.1: what the console shows a department administrator (their department's
-        # projects and groups, and where they may bind)
+        # projects, and where they may bind)
         "managed_departments": _managed_view(db, identity),
         "workspaces": out,
     }

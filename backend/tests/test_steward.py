@@ -27,6 +27,7 @@ from app.models.projects import ProjectMember
 from app.routers.auth import Identity
 from app.services import access
 from app.services import users as users_service
+from tests.conftest import TEST_DEPARTMENT, TEST_PROJECT
 from tests.test_project_scope import _login, _user, app  # noqa: F401
 from tests.test_projects_api import _admin, _create
 
@@ -101,10 +102,10 @@ def test_becoming_a_steward_clears_every_grant_and_membership(world):
     res = world.admin.put("/api/projects/shop/members",
                           json={"upsert": [{"user_id": uid, "role_key": "developer"}]})
     assert res.status_code == 200, res.text
-    assert uid in _direct_members("shop") and uid in _direct_members("default")
+    assert uid in _direct_members("shop") and uid in _direct_members(TEST_PROJECT)
     res = world.admin.patch(f"/api/users/{uid}", json={"role": STEWARD})
     assert res.status_code == 200, res.text
-    assert uid not in _direct_members("shop") | _direct_members("default")
+    assert uid not in _direct_members("shop") | _direct_members(TEST_PROJECT)
     assert res.json()["workspaces"] == []
     assert _targets("steward.access_cleared") == [f"user:mia ({uid}) rows=3"]
     assert _targets("steward.grant") == [f"user:mia ({uid}) role=steward"]
@@ -171,7 +172,7 @@ def test_a_member_still_meets_both_kinds_as_admin_only(app):  # noqa: F811
 
 def test_structure_reads_answer_200_and_data_403_404_over_http(world):
     sam = world.sam
-    for path in ("/api/users", "/api/users/stats", "/api/admins", "/api/project-groups",
+    for path in ("/api/users", "/api/users/stats", "/api/admins",
                  "/api/projects", "/api/projects/shop", "/api/projects/shop/members",
                  "/api/projects/shop/roles", "/api/projects/shop/lifecycle",
                  "/api/projects/shop/candidates", f"/api/users/{world.olivia_id}",
@@ -180,7 +181,7 @@ def test_structure_reads_answer_200_and_data_403_404_over_http(world):
                  "/api/departments", "/api/audit", "/api/fleet", "/api/inbox"):
         res = sam.get(path)
         assert res.status_code == 200, (path, res.text)
-    assert {p["id"] for p in sam.get("/api/projects").json()["projects"]} >= {"default", "shop"}
+    assert {p["id"] for p in sam.get("/api/projects").json()["projects"]} >= {TEST_PROJECT, "shop"}
     # data: the ADMIN_DATA routes, the project audit view, and the project-scoped surface
     # (audit, fleet and inbox answer it their structure part — tests/test_wire_b.py)
     for path in ("/api/costs", "/api/overview/ttfa"):
@@ -254,6 +255,7 @@ def test_a_steward_cannot_join_a_project(world):
                   json={"upsert": [{"user_id": world.sam_id, "role_key": "viewer"}]})
     assert (res.status_code, res.json()["code"]) == (403, "project.self_membership")
     res = sam.post("/api/projects", json={"id": "mine", "name": "Mine", "workspaces": [WS],
+                                          "department_id": TEST_DEPARTMENT,
                                           "owners": [world.sam_id]})
     assert (res.status_code, res.json()["code"]) == (403, "project.self_membership")
     # nor can anyone make another steward a member

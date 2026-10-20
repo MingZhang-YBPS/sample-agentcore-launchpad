@@ -120,6 +120,11 @@ def chat_stream(
     buffered: list[str] = []
     try:
         refuse_assistant_session(agent, session_id)
+        # the project's monthly budget (projects §11.3): a used-up budget ends the
+        # stream with an `error` event (project.budget_exhausted), before the model
+        from app.services.project_quotas import assert_agent_budget
+
+        assert_agent_budget(agent)
         had_attachments = bool(attachments)
         if screen:
             prompt = guardrail.screen(

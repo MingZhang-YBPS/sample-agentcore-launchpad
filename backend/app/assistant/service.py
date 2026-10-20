@@ -3057,6 +3057,8 @@ def approve_proposal(
             status="deploying",
             spec=spec.model_dump(),
             owner=approver.username,
+            # the business project the route validated (services/agent_project)
+            project_id=current_project(),
         )
         # the approver (possibly a collaborator, not the conversation owner) created it
         creators.stamp(agent, Creator.of(approver))

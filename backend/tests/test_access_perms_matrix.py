@@ -6,17 +6,17 @@ Two layers, both exhaustive over the inputs that decide a member's keys:
   parametrized over every built-in template × every account role × a set of override
   shapes (none, empty, all-deny, all-grant, approver grant, single deny, project keys,
   unknown keys);
-* the snapshot (``access.load_snapshot``) on a real ledger: direct role × group role
-  (every template, ``inherit``, a custom role, or absent), then the direct row's
-  overrides, custom roles per project, archived groups and projects, the ``inherit``
-  row's workspace rule, and the epoch-checked cache.
+* the snapshot (``access.load_snapshot``) on a real ledger: the direct role (every
+  template, ``inherit`` or a custom role), then the row's overrides, custom roles per
+  project, archived projects, the ``inherit`` row's workspace rule, and the
+  epoch-checked cache. (Project groups are retired: the direct row is the only
+  source.)
 
 Expected values are derived here from the role defaults and the template table rather
 than read back from the code under test, so a change to the union / override order
 fails loudly.
 """
 
-import itertools
 import json
 from types import SimpleNamespace
 
@@ -243,14 +243,10 @@ class TestApplyOverrides:
         assert isinstance(out, frozenset) and "project.write" not in base
 
 
-# ── the snapshot: direct ∪ group, then overrides (real ledger) ───────────────
+# ── the snapshot: the direct role, then overrides (real ledger) ──────────────
 
 _NOW = "2026-10-15 00:00:00.000000"
-_ROLE_SOURCES = [None, *TEMPLATES, INHERIT_ROLE, CUSTOM_KEY]
-_UNION_CASES = [
-    (direct, group) for direct, group in itertools.product(_ROLE_SOURCES, _ROLE_SOURCES)
-    if direct or group
-]
+_ROLE_SOURCES = [*TEMPLATES, INHERIT_ROLE, CUSTOM_KEY]
 
 
 def _user(db, uid: str, role: str = "member", permissions: dict | None = None) -> None:
@@ -259,20 +255,13 @@ def _user(db, uid: str, role: str = "member", permissions: dict | None = None) -
     db.flush()
 
 
-def _project(db, pid: str, *, workspace: str = "default", status: str = "active",
-             group: str | None = None) -> None:
-    db.execute(text("INSERT INTO projects (id, name, description, status, is_default, group_id,"
-                    " created_at, updated_at) VALUES (:p, :p, '', :s, 0, :g, :n, :n)"),
-               {"p": pid, "s": status, "g": group, "n": _NOW})
+def _project(db, pid: str, *, workspace: str = "default", status: str = "active") -> None:
+    db.execute(text("INSERT INTO projects (id, name, description, status, is_default,"
+                    " created_at, updated_at) VALUES (:p, :p, '', :s, 0, :n, :n)"),
+               {"p": pid, "s": status, "n": _NOW})
     db.execute(text("INSERT INTO project_workspaces (project_id, workspace_id,"
                     " is_workspace_default, enabled_at) VALUES (:p, :w, 0, :n)"),
                {"p": pid, "w": workspace, "n": _NOW})
-
-
-def _group(db, gid: str, *, archived: bool = False) -> None:
-    db.execute(text("INSERT INTO project_groups (id, name, description, created_at, updated_at,"
-                    " archived_at) VALUES (:g, :g, '', :n, :n, :a)"),
-               {"g": gid, "n": _NOW, "a": _NOW if archived else None})
 
 
 def _direct(db, pid: str, uid: str, role: str, overrides: dict | None = None) -> None:
@@ -280,11 +269,6 @@ def _direct(db, pid: str, uid: str, role: str, overrides: dict | None = None) ->
                     " added_at) VALUES (:p, :u, :r, :o, :n)"),
                {"p": pid, "u": uid, "r": role,
                 "o": json.dumps(overrides) if overrides is not None else None, "n": _NOW})
-
-
-def _in_group(db, gid: str, uid: str, role: str) -> None:
-    db.execute(text("INSERT INTO group_members (group_id, user_id, role_key, added_at)"
-                    " VALUES (:g, :u, :r, :n)"), {"g": gid, "u": uid, "r": role, "n": _NOW})
 
 
 def _custom_role(db, pid: str, key: str, keys) -> None:
@@ -311,34 +295,27 @@ def db():
 
 class TestSnapshotUnion:
     @pytest.mark.parametrize("project_shape", sorted(PROJECT_OVERRIDES))
-    def test_direct_union_group_then_overrides(self, db, project_shape):
-        """Every (direct, group) pair at once: one project + group per pair, one
-        snapshot, so the whole product costs a single ledger seed."""
+    def test_direct_role_then_overrides(self, db, project_shape):
+        """Every role source at once: one project per role, one snapshot, so the whole
+        set costs a single ledger seed."""
         overrides = PROJECT_OVERRIDES[project_shape]
         _user(db, "u1")
-        _grant(db, "u1")  # an inherit-only row reaches only granted workspaces
+        _grant(db, "u1")  # an inherit row reaches only granted workspaces
         cases = {}
-        for i, (direct, group) in enumerate(_UNION_CASES):
-            pid, gid = f"p{i}", f"g{i}"
-            _group(db, gid)
-            _project(db, pid, group=gid)
+        for i, direct in enumerate(_ROLE_SOURCES):
+            pid = f"p{i}"
+            _project(db, pid)
             _custom_role(db, pid, CUSTOM_KEY, CUSTOM_KEYS)
-            if direct:
-                _direct(db, pid, "u1", direct, overrides)
-            if group:
-                _in_group(db, gid, "u1", group)
-            cases[pid] = (direct, group, gid)
+            _direct(db, pid, "u1", direct, overrides)
+            cases[pid] = direct
         snap = access.load_snapshot(db, "u1", "member", None)
         assert set(snap.memberships) == set(cases)
-        for pid, (direct, group, gid) in cases.items():
+        for pid, direct in cases.items():
             membership = snap.memberships[pid]
-            base = _role_keys(direct, "member", None) | _role_keys(group, "member", None)
-            # overrides live on the direct row only
-            expected = _expected_overrides(base, overrides if direct else None)
-            assert membership.permissions == expected, (direct, group)
-            assert (membership.direct_role, membership.group_role) == (direct, group)
-            sources = dict(membership.role_sources)
-            assert sources.get("direct") == direct and sources.get(f"group:{gid}") == group
+            expected = _expected_overrides(_role_keys(direct, "member", None), overrides)
+            assert membership.permissions == expected, direct
+            assert membership.direct_role == direct
+            assert dict(membership.role_sources) == {"direct": direct}
 
     @pytest.mark.parametrize("role", MEMBER_ROLES)
     @pytest.mark.parametrize("shape", sorted(ACCOUNT_OVERRIDES))
@@ -350,15 +327,6 @@ class TestSnapshotUnion:
         _direct(db, "alpha", "u1", INHERIT_ROLE)
         snap = access.load_snapshot(db, "u1", role, overrides)
         assert snap.memberships["alpha"].permissions == _expected_inherit(role, overrides)
-
-    def test_a_group_key_denied_on_the_direct_row_is_gone(self, db):
-        _user(db, "u1")
-        _group(db, "g1")
-        _project(db, "alpha", group="g1")
-        _direct(db, "alpha", "u1", "sme", {"mcp.approve": False})
-        _in_group(db, "g1", "u1", "tool_steward")  # the group brings mcp.approve
-        perms = access.load_snapshot(db, "u1", "member", None).memberships["alpha"].permissions
-        assert "mcp.approve" not in perms and "project.use" in perms
 
     def test_custom_roles_are_per_project(self, db):
         _user(db, "u1")
@@ -389,18 +357,6 @@ class TestSnapshotUnion:
         perms = access.load_snapshot(db, "u1", "member", None).memberships["alpha"].permissions
         assert perms == frozenset({"project.use"})
 
-    def test_an_archived_group_confers_nothing(self, db):
-        _user(db, "u1")
-        _group(db, "g1", archived=True)
-        _project(db, "alpha", group="g1")
-        _project(db, "beta", group="g1")
-        _direct(db, "beta", "u1", "viewer")
-        _in_group(db, "g1", "u1", "developer")
-        snap = access.load_snapshot(db, "u1", "member", None)
-        assert "alpha" not in snap.memberships
-        assert snap.memberships["beta"].permissions == frozenset()
-        assert snap.memberships["beta"].group_role is None
-
     def test_an_archived_project_keeps_its_keys_and_says_so(self, db):
         _user(db, "u1")
         _project(db, "alpha", status="archived")
@@ -417,15 +373,6 @@ class TestSnapshotUnion:
         _grant(db, "u1")
         snap = access.load_snapshot(db, "u1", "member", None)
         assert snap.memberships["alpha"].workspaces == frozenset({"default"})
-
-    def test_inherit_with_a_group_reaches_without_a_grant(self, db):
-        _user(db, "u1")
-        _group(db, "g1")
-        _project(db, "alpha", group="g1")
-        _direct(db, "alpha", "u1", INHERIT_ROLE)
-        _in_group(db, "g1", "u1", "sme")
-        perms = access.load_snapshot(db, "u1", "member", None).memberships["alpha"].permissions
-        assert perms == inherit_keys("member", None) | ROLE_TEMPLATES["sme"].keys
 
     def test_no_membership_no_entry(self, db):
         _user(db, "u1")

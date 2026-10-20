@@ -61,12 +61,19 @@ WINDOWS = ("1h", "6h", "24h", "7d", "30d")
 # Error rate and latency come from the observability dashboard, which has no 30-day range.
 DASHBOARD_KINDS = ("error_rate", "latency_p95_ms")
 DASHBOARD_WINDOWS = ("1h", "6h", "24h", "7d")
-# A project's `quotas.monthly_cost_alert_usd` (projects §11.3) is kept as one ordinary
-# `cost_mtd_usd` rule of the project, named this, in the project's home workspace (its
-# workspace-default binding, else the first): it reads the project's spend across every
-# workspace it is bound to, and is (re)written from the quota — never blocks anything.
+# A project's `quotas.monthly_budget_usd` (projects §11.3) is kept as two ordinary
+# `cost_mtd_usd` rules of the project, in the project's home workspace (its
+# workspace-default binding, else the first): one at 80 % of the budget, one at 100 %.
+# Each reads the project's month-to-date spend across every workspace it is bound to
+# (`project_quotas.cached_spend`, the gate's figure), fires once per month as the
+# spend crosses it (the month-to-date value falls back to ~0 on the 1st), and is
+# (re)written from the budget — removed when the budget is cleared. The rules only
+# notify; the block itself is `project_quotas.assert_budget`.
 BUDGET_RULE_NAME = "project monthly budget"
+BUDGET_WARN_RULE_NAME = "project monthly budget 80%"
 BUDGET_RULE_CREATOR = "quota"
+# rule name → the fraction of the budget it fires at
+BUDGET_RULES: dict[str, float] = {BUDGET_WARN_RULE_NAME: 0.8, BUDGET_RULE_NAME: 1.0}
 
 
 def validate(kind: str, comparison: str, window: str, threshold: float) -> None:
@@ -175,36 +182,12 @@ def _project_cost_value(
     db: Session, workspace: WorkspaceContext, project_id: str
 ) -> tuple[float | None, str]:
     """A budget rule's value: the project's month-to-date spend in every workspace it
-    is bound to (`workspace` is the rule's own; the others are rebuilt from their ids)."""
+    is bound to, on its budget basis (`workspace` is the rule's own) — the same cached
+    figure the budget gate reads, so both rules and the gate cost one measurement."""
     from app.services import project_quotas
-    from app.services.workspace import context_for_workspace
 
-    total = 0.0
-    parts = []
-    # the project's budget basis (CT-2): the estimate, or what AWS billed
-    basis = "month-to-date estimate from the price map"
-    for ws_id in _project_workspaces(db, project_id):
-        try:
-            ctx = workspace if ws_id == workspace.id else context_for_workspace(ws_id)
-        except Exception as exc:  # noqa: BLE001
-            return None, f"could not read workspace {ws_id}: {type(exc).__name__}"
-        several = _several_projects(db, ws_id)
-        usd, detail = project_quotas.budget_spend(db, ctx, project_id, several=several)
-        if usd is None:
-            return None, f"{ws_id}: {detail}"
-        basis = detail
-        total += usd
-        parts.append(f"{ws_id} ${usd:.2f}")
-    return round(total, 4), basis + (
-        f" ({', '.join(parts)})" if len(parts) > 1 else "")
-
-
-def _project_workspaces(db: Session, project_id: str) -> list[str]:
-    from app.models.projects import ProjectWorkspace
-
-    with project_context(None):
-        return sorted(db.scalars(select(ProjectWorkspace.workspace_id).where(
-            ProjectWorkspace.project_id == project_id)))
+    usd, detail, _ = project_quotas.cached_spend(db, project_id, workspace=workspace)
+    return usd, detail
 
 
 def _several_projects(db: Session, workspace_id: str) -> bool:
@@ -214,6 +197,8 @@ def _several_projects(db: Session, workspace_id: str) -> bool:
 
 
 def breached(rule: AlertRule, value: float) -> bool:
+    if is_budget_rule(rule):
+        return value >= rule.threshold  # reaching 80 % / 100 % of the budget is the event
     return value > rule.threshold if rule.comparison == "above" else value < rule.threshold
 
 
@@ -325,12 +310,12 @@ def evaluate_rules(
 
 
 def is_budget_rule(rule: AlertRule) -> bool:
-    return bool(rule.project_id) and rule.name == BUDGET_RULE_NAME \
+    return bool(rule.project_id) and rule.name in BUDGET_RULES \
         and rule.created_by == BUDGET_RULE_CREATOR
 
 
 def budget_rule(db: Session, project_id: str) -> AlertRule | None:
-    """The project's budget rule, in whichever workspace it lives."""
+    """The project's 100 % budget rule, in whichever workspace it lives."""
     with project_context(None):
         rows = db.scalars(select(AlertRule).where(
             AlertRule.project_id == project_id, AlertRule.name == BUDGET_RULE_NAME,
@@ -353,39 +338,44 @@ def _home_workspace(db: Session, project_id: str) -> str | None:
 
 
 def sync_budget_rule(db: Session, project_id: str) -> AlertRule | None:
-    """Make the project's budget rule match `quotas.monthly_cost_alert_usd`: create it
-    in the home workspace, move it there, retune its threshold, or remove it when the
-    quota is cleared. What someone set on the rule (a webhook, disabling it) stays."""
+    """Make the project's budget rules match `quotas.monthly_budget_usd`: create the
+    80 % and 100 % rules in the home workspace, move them there, retune their
+    thresholds when the budget changes, or remove them when it is cleared. What
+    someone set on a rule (a webhook, disabling it) stays. Returns the 100 % rule."""
     from app.models.projects import Project
-    from app.services.project_quotas import limit_of
+    from app.services.project_quotas import BUDGET_KEY, limit_of
 
+    out: AlertRule | None = None
     with project_context(None):
         project = db.get(Project, project_id)
-        threshold = limit_of(db, project_id, "monthly_cost_alert_usd") if project else None
-        rows = list(db.scalars(select(AlertRule).where(
-            AlertRule.project_id == project_id, AlertRule.name == BUDGET_RULE_NAME,
-            AlertRule.created_by == BUDGET_RULE_CREATOR).order_by(AlertRule.created_at)))
-        home = _home_workspace(db, project_id) if threshold is not None else None
-        keep = rows[0] if rows and home is not None else None
-        for extra in rows[1:] if keep is not None else rows:
-            db.delete(extra)
-        if home is None:
-            db.flush()
-            return None
-        if keep is None:
-            keep = AlertRule(workspace_id=home, project_id=project_id, kind="cost_mtd_usd",
-                             name=BUDGET_RULE_NAME, comparison="above", window="30d",
-                             threshold=float(threshold), created_by=BUDGET_RULE_CREATOR)
-            db.add(keep)
-        else:
-            if keep.workspace_id != home:
-                keep.workspace_id = home
-                keep.state = STATE_UNKNOWN
-            if keep.threshold != float(threshold):
-                keep.threshold = float(threshold)
-                keep.state = STATE_UNKNOWN  # re-judged (and re-notified) on the next pass
+        budget = limit_of(db, project_id, BUDGET_KEY) if project else None
+        home = _home_workspace(db, project_id) if budget is not None else None
+        for name, fraction in BUDGET_RULES.items():
+            rows = list(db.scalars(select(AlertRule).where(
+                AlertRule.project_id == project_id, AlertRule.name == name,
+                AlertRule.created_by == BUDGET_RULE_CREATOR).order_by(AlertRule.created_at)))
+            keep = rows[0] if rows and home is not None else None
+            for extra in rows[1:] if keep is not None else rows:
+                db.delete(extra)
+            if home is None or budget is None:
+                continue
+            threshold = round(float(budget) * fraction, 4)
+            if keep is None:
+                keep = AlertRule(workspace_id=home, project_id=project_id, kind="cost_mtd_usd",
+                                 name=name, comparison="above", window="30d",
+                                 threshold=threshold, created_by=BUDGET_RULE_CREATOR)
+                db.add(keep)
+            else:
+                if keep.workspace_id != home:
+                    keep.workspace_id = home
+                    keep.state = STATE_UNKNOWN
+                if keep.threshold != threshold:
+                    keep.threshold = threshold
+                    keep.state = STATE_UNKNOWN  # re-judged (and re-notified) on the next pass
+            if name == BUDGET_RULE_NAME:
+                out = keep
         db.flush()
-    return keep
+    return out
 
 
 def sync_budget_rules(db: Session, workspace_id: str) -> None:
@@ -397,18 +387,16 @@ def sync_budget_rules(db: Session, workspace_id: str) -> None:
         bound = set(db.scalars(select(ProjectWorkspace.project_id).where(
             ProjectWorkspace.workspace_id == workspace_id)))
         ruled = set(db.scalars(select(AlertRule.project_id).where(
-            AlertRule.workspace_id == workspace_id, AlertRule.name == BUDGET_RULE_NAME,
+            AlertRule.workspace_id == workspace_id, AlertRule.name.in_(list(BUDGET_RULES)),
             AlertRule.created_by == BUDGET_RULE_CREATOR)))
         candidates = sorted(p for p in bound | ruled if p)
         if not candidates:
             return
         rows = db.scalars(select(Project).where(Project.id.in_(candidates))).all()
-    from app.services.project_quotas import department_caps, project_values
+    from app.services.project_quotas import BUDGET_KEY, project_values
 
     for row in rows:
-        quota = project_values(row).get("monthly_cost_alert_usd")
-        cap = department_caps(db, row).get("monthly_cost_alert_usd")
-        if quota is not None or cap is not None or row.id in ruled:
+        if project_values(row).get(BUDGET_KEY) is not None or row.id in ruled:
             sync_budget_rule(db, row.id)
 
 
@@ -459,7 +447,7 @@ def rule_out(rule: AlertRule, skipped: str | None = None) -> dict[str, Any]:
         # NULL = a workspace-level rule, measured across every project
         "scope": "project" if rule.project_id else "workspace",
         "project_id": rule.project_id,
-        # kept from the project's `quotas.monthly_cost_alert_usd` (§11.3)
+        # kept from the project's `quotas.monthly_budget_usd` (§11.3): 80 % and 100 %
         "budget": is_budget_rule(rule),
         "created_by": rule.created_by,
         "created_at": rule.created_at.isoformat() if rule.created_at else None,

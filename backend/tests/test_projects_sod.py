@@ -1,7 +1,7 @@
 """Combined duties in a project (projects design §3.6, D-22, P1F-sod): the member
 views flag one person holding both sides of an SoD pair, `settings.sod_strict`
 refuses such assignments (409 `project.sod_conflict`) on the project's members, its
-custom roles, its group's members and projects, and when strictness is switched on;
+custom roles, and when strictness is switched on;
 the refusal leaves nothing behind. Owners still cannot change their own membership."""
 
 from types import SimpleNamespace
@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.db import SessionLocal
-from app.models.projects import GroupMember, ProjectMember
+from app.models.projects import ProjectMember
 from app.services import projects as projects_service
 from tests.test_project_scope import (  # noqa: F401
     _login,
@@ -30,13 +30,12 @@ def _row(model, key):
 
 @pytest.fixture
 def world(app):  # noqa: F811
-    """alpha (lenient) and strict (sod_strict), olga owning both; a group `ops` holding
-    strict; zed a developer, rita a release operator."""
+    """alpha (lenient) and strict (sod_strict), olga owning both; zed a developer,
+    rita a release operator."""
     admin = _admin(app)
     olga, zed, rita = (_user(n, grant=False) for n in ("olga", "zed", "rita"))
     _create(admin, "alpha", owners=[olga])
     _create(admin, "strict", owners=[olga], settings={"sod_strict": True})
-    admin.post("/api/project-groups", json={"id": "ops", "name": "Ops"})
     return SimpleNamespace(admin=admin, olga=olga, zed=zed, rita=rita, app=app)
 
 
@@ -84,49 +83,6 @@ def test_a_strict_project_refuses_a_combined_direct_role(world):
     res = _put(olga, "strict", world.zed, "biz_owner", {"criteria.manage": False})
     assert res.status_code == 200 and res.json()["sod_strict"] is True
     assert _member(olga, "strict", world.zed)["sod_conflicts"] == []
-
-
-def test_strict_counts_the_group_role_too(world):
-    """Direct release_ops + the group's developer = deploy + sign: refused both ways."""
-    admin = world.admin
-    assert admin.put("/api/project-groups/ops/projects",
-                     json={"add": ["strict"]}).status_code == 200
-    assert admin.put("/api/project-groups/ops/members", json={
-        "upsert": [{"user_id": world.rita, "role_key": "developer"}]}).status_code == 200
-    olga = _login(world.app, "olga")
-    res = _put(olga, "strict", world.rita, "release_ops")
-    assert res.status_code == 409 and res.json()["code"] == "project.sod_conflict"
-    # the other way round: a direct release operator joins the group as a developer
-    assert _put(olga, "strict", world.zed, "release_ops").status_code == 200
-    res = admin.put("/api/project-groups/ops/members", json={
-        "upsert": [{"user_id": world.zed, "role_key": "developer"}]})
-    assert res.status_code == 409 and res.json()["code"] == "project.sod_conflict"
-    assert res.json()["detail"]["project_id"] == "strict"
-    assert _row(GroupMember, ("ops", world.zed)) is None
-    # sme in the group is fine
-    assert admin.put("/api/project-groups/ops/members", json={
-        "upsert": [{"user_id": world.zed, "role_key": "sme"}]}).status_code == 200
-
-
-def test_putting_a_strict_project_into_a_group_is_checked(world):
-    admin = world.admin
-    olga = _login(world.app, "olga")
-    assert _put(olga, "strict", world.zed, "release_ops").status_code == 200
-    admin.put("/api/project-groups/ops/members",
-              json={"upsert": [{"user_id": world.zed, "role_key": "developer"}]})
-    res = admin.put("/api/project-groups/ops/projects", json={"add": ["strict"]})
-    assert res.status_code == 409 and res.json()["code"] == "project.sod_conflict"
-    res = admin.patch("/api/projects/strict", json={"group_id": "ops"})
-    assert res.status_code == 409
-    assert admin.get("/api/projects/strict").json()["group_id"] is None
-    # a lenient project joins, and the group view flags the combination
-    assert admin.put("/api/project-groups/ops/projects",
-                     json={"add": ["alpha"]}).status_code == 200
-    assert _put(olga, "alpha", world.zed, "release_ops").status_code == 200
-    detail = admin.get("/api/project-groups/ops").json()
-    zed = next(m for m in detail["members"] if m["user_id"] == world.zed)
-    assert zed["sod_conflicts"] == [{"project_id": "alpha", "strict": False,
-                                     "pairs": [["agents.deploy", "release.sign"]]}]
 
 
 def test_switching_strict_on_is_refused_while_a_combination_exists(world):

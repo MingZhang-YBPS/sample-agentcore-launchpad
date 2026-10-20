@@ -6,10 +6,8 @@ import {
   directProjectRows,
   emptyApproveForm,
   emptyCreateForm,
-  groupRows,
   listFilterFrom,
   oneTimePassword,
-  sourceGroup,
   suggestedRole,
   validateApprove,
   validateCreate,
@@ -84,17 +82,16 @@ describe("memberships (projects §7.4, §7.5)", () => {
   it("flags incomplete and duplicate rows", () => {
     expect(validateMemberships([{ id: "alpha", role: "developer" }], "projects")).toBeNull();
     expect(validateMemberships([{ id: "alpha", role: "" }], "projects")).toBe("v3.users.memberships.err.projectsIncomplete");
-    expect(validateMemberships([{ id: "g1", role: "viewer" }, { id: "g1", role: "developer" }], "groups")).toBe("v3.users.memberships.err.groupsDuplicate");
+    expect(validateMemberships([{ id: "g1", role: "viewer" }, { id: "g1", role: "developer" }], "projects")).toBe("v3.users.memberships.err.projectsDuplicate");
     expect(validateCreate({ ...valid, projects: [{ id: "", role: "developer" }] }).projects).toBe("v3.users.memberships.err.projectsIncomplete");
     // an administrator's rows are ignored (it holds none)
     expect(validateCreate({ ...valid, role: "admin", projects: [{ id: "", role: "" }] }).projects).toBeUndefined();
   });
 
-  it("sends projects and groups only when chosen, never for an administrator", () => {
+  it("sends projects only when chosen, never for an administrator", () => {
     expect(createBody(valid)).not.toHaveProperty("projects");
-    const body = createBody({ ...valid, projects: [{ id: "alpha", role: "developer" }], groups: [{ id: "risk", role: "viewer" }] });
+    const body = createBody({ ...valid, projects: [{ id: "alpha", role: "developer" }] });
     expect(body.projects).toEqual([{ project_id: "alpha", role_key: "developer" }]);
-    expect(body.groups).toEqual([{ group_id: "risk", role_key: "viewer" }]);
     expect(createBody({ ...valid, role: "admin", projects: [{ id: "alpha", role: "developer" }] })).not.toHaveProperty("projects");
   });
 
@@ -109,21 +106,17 @@ describe("memberships (projects §7.4, §7.5)", () => {
       role: "operator",
       projects: [{ project_id: "alpha", role_key: "release_ops" }],
     });
-    expect(validateApprove({ ...form, groups: [{ id: "", role: "" }] }).groups).toBe("v3.users.memberships.err.groupsIncomplete");
+    expect(validateApprove({ ...form, projects: [{ id: "", role: "" }] }).projects).toBe("v3.users.memberships.err.projectsIncomplete");
   });
 
   it("edits direct rows only, leaving the default project's inherit row to the grants", () => {
     const user = {
       projects: [
         { id: "default", name: "Default", status: "active" as const, is_default: true, role: "inherit", sources: [{ source: "direct", role_key: "inherit" }] },
-        { id: "alpha", name: "Alpha", status: "active" as const, is_default: false, role: "developer", sources: [{ source: "direct", role_key: "release_ops" }, { source: "group:risk", role_key: "developer" }] },
-        { id: "beta", name: "Beta", status: "active" as const, is_default: false, role: "viewer", sources: [{ source: "group:risk", role_key: "viewer" }] },
+        { id: "alpha", name: "Alpha", status: "active" as const, is_default: false, role: "release_ops", sources: [{ source: "direct", role_key: "release_ops" }] },
       ],
     };
     expect(directProjectRows(user)).toEqual([{ id: "alpha", role: "release_ops" }]);
-    expect(groupRows({ groups: [{ id: "risk", name: "Risk", role: "developer", archived: false }] })).toEqual([{ id: "risk", role: "developer" }]);
-    expect(sourceGroup("group:risk")).toBe("risk");
-    expect(sourceGroup("direct")).toBeNull();
   });
 
   it("suggests the template of the global role", () => {
@@ -137,11 +130,11 @@ describe("memberships (projects §7.4, §7.5)", () => {
 
 describe("listFilterFrom", () => {
   it("reads the URL filters and ignores unknown values", () => {
-    expect(listFilterFrom(new URLSearchParams("status=pending&role=operator&project=alpha&group=risk&q=li&page=3"), 25)).toEqual({
-      q: "li", status: "pending", role: "operator", project: "alpha", group: "risk", limit: 25, offset: 50, page: 3,
+    expect(listFilterFrom(new URLSearchParams("status=pending&role=operator&project=alpha&q=li&page=3"), 25)).toEqual({
+      q: "li", status: "pending", role: "operator", project: "alpha", limit: 25, offset: 50, page: 3,
     });
     expect(listFilterFrom(new URLSearchParams("status=bogus&role=root"), 25)).toEqual({
-      q: undefined, status: "all", role: undefined, project: undefined, group: undefined, limit: 25, offset: 0, page: 1,
+      q: undefined, status: "all", role: undefined, project: undefined, limit: 25, offset: 0, page: 1,
     });
   });
 });

@@ -13,6 +13,7 @@ import { firstReason } from "../../reasons";
 import { Btn, Chip, Dialog, Empty, Lamp, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { isProjectId, slugFromName } from "./model";
 import { useStructureNames } from "./useStructureNames";
+import { Select } from "../../select";
 
 function StatusChip({ status }: { status: ProjectStatus }) {
   const { t } = useTranslation();
@@ -30,7 +31,7 @@ export function ProjectList() {
   const [q, setQ] = useState("");
   const [creating, setCreating] = useState(false);
   const [tick, setTick] = useState(0);
-  const names = useStructureNames(isAdmin);
+  const names = useStructureNames();
   const query = { ...filter, q: q.trim() || undefined };
   const list = useLoad(() => projectsApi.list(query), `v3-projects:${JSON.stringify(query)}:${tick}`);
   const rows = list.data?.projects ?? [];
@@ -54,29 +55,22 @@ export function ProjectList() {
       />
 
       <div className="v3-prj-filters" data-testid="projects-filters">
-        <select className="v3-input" aria-label={t("v3.projects.filter.department")} value={filter.department_id ?? ""}
+        <Select className="v3-input" aria-label={t("v3.projects.filter.department")} value={filter.department_id ?? ""}
           onChange={(e) => set({ department_id: e.target.value || undefined })}>
           <option value="">{t("v3.projects.filter.department")}: {t("v3.projects.filter.all")}</option>
           {names.departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
-        {canCreate && (
-          <select className="v3-input" aria-label={t("v3.projects.filter.group")} value={filter.group_id ?? ""}
-            onChange={(e) => set({ group_id: e.target.value || undefined })}>
-            <option value="">{t("v3.projects.filter.group")}: {t("v3.projects.filter.all")}</option>
-            {names.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-          </select>
-        )}
-        <select className="v3-input" aria-label={t("v3.projects.filter.status")} value={filter.status ?? ""}
+        </Select>
+        <Select className="v3-input" aria-label={t("v3.projects.filter.status")} value={filter.status ?? ""}
           onChange={(e) => set({ status: (e.target.value || undefined) as ProjectStatus | undefined })}>
           <option value="">{t("v3.projects.filter.status")}: {t("v3.projects.filter.all")}</option>
           <option value="active">{t("v3.projects.status.active")}</option>
           <option value="archived">{t("v3.projects.status.archived")}</option>
-        </select>
-        <select className="v3-input" aria-label={t("v3.projects.filter.workspace")} value={filter.workspace_id ?? ""}
+        </Select>
+        <Select className="v3-input" aria-label={t("v3.projects.filter.workspace")} value={filter.workspace_id ?? ""}
           onChange={(e) => set({ workspace_id: e.target.value || undefined })}>
           <option value="">{t("v3.projects.filter.workspace")}: {t("v3.projects.filter.all")}</option>
           {names.workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-        </select>
+        </Select>
         <div className="v3-prj-search">
           <Search size={14} aria-hidden="true" />
           <input className="v3-input" value={q} onChange={(e) => setQ(e.target.value)}
@@ -98,7 +92,6 @@ export function ProjectList() {
                 <th />
                 <th>{t("v3.projects.col.name")}</th>
                 <th>{t("v3.projects.col.department")}</th>
-                <th>{t("v3.projects.col.group")}</th>
                 <th>{t("v3.projects.col.workspaces")}</th>
                 <th className="num">{t("v3.projects.col.members")}</th>
                 <th className="num">{t("v3.projects.col.agents")}</th>
@@ -118,7 +111,6 @@ export function ProjectList() {
                     </div>
                   </td>
                   <td>{names.department(p.department_id) ?? <span className="v3-prj-muted">—</span>}</td>
-                  <td>{names.group(p.group_id) ?? <span className="v3-prj-muted">—</span>}</td>
                   <td className="mono">{p.workspaces.map((w) => w.name).join(", ") || "—"}</td>
                   <td className="num">{p.member_count}</td>
                   <td className="num">{p.agent_count}</td>
@@ -172,19 +164,19 @@ function CreateProjectDialog({
   const toast = useToast();
   const { isAdmin } = useAuth();
   const { refresh, managedDepartments } = useProject();
-  const names = useStructureNames(isAdmin);
+  const names = useStructureNames();
   const [id, setId] = useState("");
   const [idTouched, setIdTouched] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  // a department administrator picks one of their departments (required), then its open workspaces
+  // every project belongs to a department (required); a department administrator picks
+  // one of their own, then its open workspaces
   const [departmentId, setDepartmentId] = useState(isAdmin ? "" : (managedDepartments[0]?.id ?? ""));
   const departments = isAdmin ? names.departments : names.departments.filter((d) => managedDepartments.some((m) => m.id === d.id));
   const openWs = managedDepartments.find((d) => d.id === departmentId)?.workspaces ?? [];
   const wsChoices = isAdmin
     ? names.workspaces
     : openWs.map((id) => names.workspaces.find((w) => w.id === id) ?? { id, name: id, region: "", tier: undefined });
-  const [groupId, setGroupId] = useState("");
   const [workspaces, setWorkspaces] = useState<string[]>(initialWorkspace ? [initialWorkspace] : []);
   const [owners, setOwners] = useState<Pick<ConsoleUser, "id" | "username">[]>([]);
   const [ownerQ, setOwnerQ] = useState("");
@@ -195,11 +187,9 @@ function CreateProjectDialog({
     `v3-projects:owners:${ownerQ.trim()}`,
   );
   const suggestions = (users.data?.items ?? []).filter((u) => u.role !== "admin" && !owners.some((o) => o.id === u.id));
-  // a group belongs to at most one department: offer the ones that fit
-  const groups = names.groups.filter((g) => !departmentId || !g.department_id || g.department_id === departmentId);
   const idValid = isProjectId(id);
   const chosen = workspaces.filter((ws) => isAdmin || openWs.includes(ws));
-  const valid = idValid && name.trim() !== "" && chosen.length > 0 && (isAdmin || departmentId !== "");
+  const valid = idValid && name.trim() !== "" && chosen.length > 0 && departmentId !== "";
 
   const onName = (value: string) => {
     setName(value);
@@ -214,7 +204,7 @@ function CreateProjectDialog({
     setError(null);
     try {
       const row = await projectsApi.create({
-        id, name: name.trim(), description, department_id: departmentId || null, group_id: groupId || null,
+        id, name: name.trim(), description, department_id: departmentId,
         workspaces: chosen, owners: owners.map((o) => o.id),
       });
       if (isAdmin && makeDefault && initialWorkspace && chosen.includes(initialWorkspace)) {
@@ -265,19 +255,12 @@ function CreateProjectDialog({
           <small className={id !== "" && !idValid ? "v3-err" : "v3-hint"}>{t("v3.projects.create.idHint")}</small>
         </label>
         <label className="v3-field">
-          <span>{t("v3.projects.create.department")}</span>
-          <select className="v3-input" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
-            {isAdmin && <option value="">{t("v3.projects.none")}</option>}
+          <span>{t("v3.projects.create.department")}*</span>
+          <Select className="v3-input" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
+            {isAdmin && <option value="">{t("v3.projects.create.pickDepartment")}</option>}
             {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             {!isAdmin && departmentId && !departments.some((d) => d.id === departmentId) && <option value={departmentId}>{departmentId}</option>}
-          </select>
-        </label>
-        <label className="v3-field">
-          <span>{t("v3.projects.create.group")}</span>
-          <select className="v3-input" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
-            <option value="">{t("v3.projects.none")}</option>
-            {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-          </select>
+          </Select>
         </label>
         <label className="v3-field">
           <span>{t("v3.projects.create.description")}</span>

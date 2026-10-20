@@ -27,6 +27,7 @@ from app.services import (
     project_quotas,
 )
 from app.services import costs as cost_service
+from tests.conftest import TEST_PROJECT
 from tests.test_chat_api import delta_events, make_active_agent
 from tests.test_project_iam import StubIam, _agent_row, _probe_spec, _settings, _workspace
 from tests.test_strands_builder_sb3 import RISKY, _tool
@@ -106,7 +107,7 @@ def test_the_backfill_routes_start_and_show_a_run(client, monkeypatch):
 def test_a_rename_starts_its_retag_after_the_commit(client, monkeypatch):
     started: list[str] = []
     monkeypatch.setattr(cost_tags, "start_backfill_async", started.append)
-    res = client.patch("/api/projects/default", json={"name": "Default renamed"})
+    res = client.patch(f"/api/projects/{TEST_PROJECT}", json={"name": "Test renamed"})
     assert res.status_code == 200, res.text
     db = SessionLocal()
     try:
@@ -120,12 +121,13 @@ def test_a_rename_starts_its_retag_after_the_commit(client, monkeypatch):
 def test_a_custom_tag_change_starts_its_retag(client, monkeypatch):
     started: list[str] = []
     monkeypatch.setattr(cost_tags, "start_backfill_async", started.append)
-    res = client.put("/api/projects/default/cost-tags",
+    res = client.put(f"/api/projects/{TEST_PROJECT}/cost-tags",
                      json={"cost_tags": {"CostCenter": "1234"}})
     assert res.status_code == 200, res.text
     assert len(started) == 1
     # unchanged: nothing to re-tag
-    client.put("/api/projects/default/cost-tags", json={"cost_tags": {"CostCenter": "1234"}})
+    client.put(f"/api/projects/{TEST_PROJECT}/cost-tags",
+               json={"cost_tags": {"CostCenter": "1234"}})
     assert len(started) == 1
 
 
@@ -140,14 +142,14 @@ def test_the_budget_rule_reads_billed_cost_when_the_project_chose_it(monkeypatch
     db = SessionLocal()
     try:
         ctx = ws_ctx(id=WS)
-        assert alerts._project_cost_value(db, ctx, "default") == (
+        assert alerts._project_cost_value(db, ctx, TEST_PROJECT) == (
             1.0, "month-to-date estimate from the price map")
         with project_context(None):
-            row = db.get(Project, "default")
-            project_quotas.update_budget_basis(db, SimpleNamespace(username="admin"), row,
-                                               "billing")
+            row = db.get(Project, TEST_PROJECT)
+            admin = SimpleNamespace(username="admin", role="admin")
+            project_quotas.update_budget_basis(db, admin, row, "billing")
             db.commit()
-        usd, detail = alerts._project_cost_value(db, ctx, "default")
+        usd, detail = alerts._project_cost_value(db, ctx, TEST_PROJECT)
         assert usd == 7.5 and detail.startswith("month-to-date billed cost")
     finally:
         db.close()
@@ -183,13 +185,17 @@ def test_saving_an_unapproved_custom_tool_is_refused(client):
 # ── EC: the measured total, the run payload, passive and online limits ───────
 
 
-def test_a_final_run_counts_its_full_measured_total():
-    run = SimpleNamespace(status="completed", cost_estimate={"total_usd": 9.0},
-                          cost_actual={"final": True, "agent_usd": 1.0, "total_usd": 1.6})
-    assert project_quotas.run_spend_usd(run) == 1.6
-    live = SimpleNamespace(status="running", cost_estimate={"total_usd": 9.0},
+def test_a_final_run_counts_its_measured_judges():
+    # the agent traffic is in the price-map estimate already: a run adds its judges
+    run = SimpleNamespace(status="completed", cost_estimate={"judge_usd": 9.0},
+                          cost_actual={"final": True, "agent_usd": 1.0, "judge_usd": 0.5,
+                                       "managed_evaluations_usd": 0.1, "total_usd": 1.6})
+    assert project_quotas.run_judge_usd(run) == pytest.approx(0.6)
+    live = SimpleNamespace(status="running", cost_estimate={"judge_usd": 2.0, "managed_usd": 1.0},
                            cost_actual={"final": False, "live": {"total_usd": 0.4}})
-    assert project_quotas.run_spend_usd(live) == 9.0
+    assert project_quotas.run_judge_usd(live) == 3.0
+    failed = SimpleNamespace(status="failed", cost_estimate={"judge_usd": 2.0}, cost_actual={})
+    assert project_quotas.run_judge_usd(failed) == 0.0
 
 
 def test_the_run_payload_carries_its_cost_summary():

@@ -191,71 +191,53 @@ def effective_policy(target: Workspace) -> dict[str, Any]:
 def eval_cost_max_usd(
     db: Session, workspace: Workspace | None, project_id: str | None,
 ) -> float | None:
-    """The per-run evaluation cost limit: the workspace policy's `eval_cost_max_usd`
-    and the project's `quotas.eval_run_max_usd` (projects §11.3), the smaller one."""
+    """The per-run evaluation cost limit: the workspace release policy's
+    `eval_cost_max_usd` (a project has no per-run money limit — its one money limit
+    is the monthly budget, `project_quotas.assert_budget`)."""
     return eval_cost_limit(db, workspace, project_id)[0]
 
 
 def eval_cost_limit(
     db: Session, workspace: Workspace | None, project_id: str | None,
 ) -> tuple[float | None, str | None]:
-    """`(limit, source)`: the per-run limit and whose it is — `project` when the
-    project's quota is the binding one (an administrator cannot override that one,
-    only raise the quota), `workspace` for the release policy's, None without one."""
-    from app.services.project_quotas import limit_of
-
+    """`(limit, source)`: the workspace release policy's per-run limit and `workspace`,
+    or `(None, None)` without one. `project_id` is accepted for the callers' symmetry."""
     policy = (workspace.release_policy if workspace is not None else None) or {}
     ws_limit = policy.get("eval_cost_max_usd")
-    project_limit = limit_of(db, project_id, "eval_run_max_usd")
-    candidates = [(float(v), source) for v, source in
-                  ((project_limit, "project"), (ws_limit, "workspace")) if v is not None]
-    if not candidates:
+    if ws_limit is None:
         return None, None
-    return min(candidates, key=lambda c: c[0])
+    return float(ws_limit), "workspace"
 
 
 def assert_eval_budget(
-    db: Session, project_id: str | None, estimate: dict[str, Any] | None,
+    db: Session, project_id: str | None, estimate: dict[str, Any] | None = None,
 ) -> None:
-    """Refuse a gate (or any) evaluation the project's quotas do not allow: its
-    estimate over `eval_run_max_usd`, or this month's evaluation spend plus it over
-    `eval_monthly_usd_cap` (409 `project.quota_exceeded`). Nothing without quotas."""
-    from app.services.project_quotas import assert_eval_cost
+    """Refuse a gate (or any) evaluation of a project whose monthly budget is used up
+    (409 `project.budget_exhausted`). The run's estimate is not added: the budget is
+    checked when work starts, never mid-run (a small overshoot is accepted)."""
+    from app.services.project_quotas import assert_budget
 
-    total = (estimate or {}).get("total_usd")
-    assert_eval_cost(db, project_id, float(total) if total is not None else None)
+    assert_budget(db, project_id)
 
 
 def project_budget_gate(db: Session, project_id: str | None) -> dict[str, Any] | None:
-    """Advisory: the project's month so far against its budgets — the spend its budget
-    alert last measured (no billed read here) and this month's evaluation spend. None
-    when the project sets neither, so a project without quotas shows no extra gate."""
-    from app.services import alerts
-    from app.services.project_quotas import eval_month_usd, limit_of
+    """Advisory: the project's month so far against its monthly budget. None when the
+    project has no budget, so a project without one shows no extra gate."""
+    from app.services.project_quotas import budget_status
 
-    if not project_id:
+    status = budget_status(db, project_id) if project_id else None
+    if status is None:
         return None
-    budget = limit_of(db, project_id, "monthly_cost_alert_usd")
-    eval_cap = limit_of(db, project_id, "eval_monthly_usd_cap")
-    if budget is None and eval_cap is None:
-        return None
-    ok, details = True, []
-    out: dict[str, Any] = {"key": "project_budget", "project_id": project_id}
-    if budget is not None:
-        rule = alerts.budget_rule(db, project_id)
-        spent = rule.last_value if rule is not None else None
-        out.update(budget_usd=budget, spent_usd=spent)
-        if spent is None:
-            details.append(f"monthly budget ${budget:g}: spend not measured yet")
-        else:
-            ok = ok and spent <= budget
-            details.append(f"${spent:.2f} of the ${budget:g} monthly budget spent")
-    if eval_cap is not None:
-        eval_spent = eval_month_usd(db, project_id)
-        out.update(eval_cap_usd=eval_cap, eval_spent_usd=eval_spent)
-        ok = ok and eval_spent <= eval_cap
-        details.append(f"evaluations ${eval_spent:.2f} of ${eval_cap:g} this month")
-    return {**out, "ok": ok, "detail": "; ".join(details)}
+    out: dict[str, Any] = {"key": "project_budget", "project_id": project_id,
+                           "budget_usd": status["budget_usd"],
+                           "spent_usd": status["spent_usd"],
+                           "reset_at": status["reset_at"]}
+    spent = status["spent_usd"]
+    if spent is None:
+        return {**out, "ok": True,
+                "detail": f"monthly budget ${status['budget_usd']:g}: spend not measured yet"}
+    return {**out, "ok": not status["exhausted"],
+            "detail": f"${spent:.2f} of the ${status['budget_usd']:g} monthly budget spent"}
 
 
 # ── deploy window ────────────────────────────────────────────────────────────────

@@ -28,7 +28,12 @@ def _now() -> datetime:
 
 
 class Department(Base):
-    """Organizational owner of projects (and, in phase 3, a unit of delegation)."""
+    """Organizational owner of projects (and, in phase 3, a unit of delegation).
+
+    The hierarchy is exactly department → project → member. The former project
+    groups (`project_groups` / `group_members`, and `projects.group_id`) are no longer
+    mapped: `core/db.flatten_project_groups` folds them into direct memberships at
+    startup and leaves the old tables in place for rollback safety."""
 
     __tablename__ = "departments"
 
@@ -45,7 +50,7 @@ class Department(Base):
 
 class DepartmentAdmin(Base):
     """A department administrator (design §11.1): manages the structure of the
-    department's projects and groups. Grants no data access by itself."""
+    department's projects. Grants no data access by itself."""
 
     __tablename__ = "department_admins"
     __table_args__ = (Index("ix_department_admins_user", "user_id"),)
@@ -72,17 +77,14 @@ class Project(Base):
     """The data + permission boundary: an agent and all its business data belong to one."""
 
     __tablename__ = "projects"
-    __table_args__ = (
-        Index("ix_projects_department", "department_id"),
-        Index("ix_projects_group", "group_id"),
-    )
+    __table_args__ = (Index("ix_projects_department", "department_id"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
     description: Mapped[str] = mapped_column(Text, default="")
+    # required for every new project (the built-in `default` and legacy rows may be
+    # NULL: "no department" until an administrator assigns one)
     department_id: Mapped[str | None] = mapped_column(String(32), default=None)
-    # 0..1 project group (design D-5)
-    group_id: Mapped[str | None] = mapped_column(String(32), default=None)
     # active | archived (phase 1); deleting arrives with phase 3's lifecycle
     status: Mapped[str] = mapped_column(String(16), default="active")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -146,35 +148,6 @@ class ProjectMember(Base):
     role_key: Mapped[str] = mapped_column(String(32))
     # {key: bool}: same semantics as users.permissions (explicit entries only)
     overrides: Mapped[dict[str, bool] | None] = mapped_column(JSON, default=None)
-    added_by: Mapped[str | None] = mapped_column(String(32), default=None)
-    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-
-
-class ProjectGroup(Base):
-    """An access bundle: puts its members into every project in the group at once."""
-
-    __tablename__ = "project_groups"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    name: Mapped[str] = mapped_column(String(64))
-    description: Mapped[str] = mapped_column(Text, default="")
-    department_id: Mapped[str | None] = mapped_column(String(32), default=None)
-    created_by: Mapped[str | None] = mapped_column(String(32), default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-
-
-class GroupMember(Base):
-    """A user's role in a project group — applies to every project in it."""
-
-    __tablename__ = "group_members"
-    __table_args__ = (Index("ix_group_members_user", "user_id"),)
-
-    group_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    # built-in template keys only: custom roles are per project
-    role_key: Mapped[str] = mapped_column(String(32))
     added_by: Mapped[str | None] = mapped_column(String(32), default=None)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
