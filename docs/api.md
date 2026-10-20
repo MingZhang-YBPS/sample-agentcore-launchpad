@@ -241,6 +241,17 @@ The deployer passes the primary id to the runtime as env `MODEL_ID` and the
 full list as env `ALLOWED_MODEL_IDS` (comma-separated, primary first) — for
 either variable, a value already in `spec.env` wins.
 
+## Console Agents API — code view
+
+`GET /api/agents/{agent_id}/source` is the read-only view behind the agent's **Code**
+page (`/v2/agents?view=source&id=`). It never re-renders a template: it reads back what
+AWS holds for the agent, so a template change after the last deploy cannot make the
+view disagree with what runs. Member route; the agent must be visible to the caller.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/source` | `{agent_id, name, method, kind: code\|harness_config\|image, origin, files[{path, size, content, truncated, omitted: null\|binary\|budget}], files_total, ledger_version, deployment_status, …}`. **`zip_runtime` / `studio`** (`origin: deployed_package`): `GetAgentRuntime` names the S3 zip the Runtime runs; ranged GETs read only its central directory and the platform's files (the entrypoint, `requirements.txt`, `requirements.lock`, a conversion's `code_bundle` files, `skills/…`), never the installed dependencies; adds `entrypoint`, `runtime_version`, `package_updated_at`. **`container`** (`build_context`): `builds/{name}/source.zip`, the context CodeBuild last built from. **`byoc`** `code_zip` / `container_source` (`upload`): the member's staged upload, root prefix stripped, plus `artifact_kind`, `original_filename`, `uploaded_by`, `uploaded_at`, `sha256`; `container_image` → `kind: image` with `image_uri` / `image_digest` and no files. **`harness`** (`harness_config`): `GetHarness` projected through an allow-list (no `arn`, execution role, environment, environment artifact/variables or authorizer), tool header values, OAuth `customParameters` values and URL query strings masked; adds `harness_version`, `config`. Contents are capped at 512 KiB per file (`truncated`) and 4 MiB per response (`omitted: budget`); `?path=<listed path>` reads that one file regardless of the budget (unknown path → 404 `agent.source_file_not_found`). `deployment_status` is the latest deployment's; anything but `succeeded` means the live version may still run earlier code. No source → 409 `agent.source_unavailable` with `detail.reason` ∈ `method` (e.g. imported runtimes), `no_resource`, `deleted`, `gone` (resource or package missing), `not_code`, `unreadable`, `no_bucket`. Never mutates anything |
+
 ## Console Agents API — versions and endpoints
 
 `GET /api/agents/{agent_id}/versions` is the read-only AWS view behind the agent
@@ -938,6 +949,80 @@ system presets are creator-unknown, hence shared):
 
 KB force-delete still strips the KB from every mounting agent.
 
+## Console Models API
+
+The platform's own model roles (see [setup.md](setup.md#choosing-models)).
+Hub-global — not workspace-scoped; overrides live in this deployment's ledger
+(`platform_settings`) and apply at once, with no restart.
+
+| Method | Path | Role | Body / response |
+|---|---|---|---|
+| `GET` | `/api/model-defaults` | member | `{"roles": [{role, model_id, default, overridden, constraint, allow_empty, needs_tools, updated_by, updated_at}]}` — one row per role; `model_id` is the effective value (console override > `LAUNCHPAD_*` env > `launchpad.yaml` > built-in), `default` what a reset returns to, `constraint` the accepted model families (`["anthropic"]`, …; `null` = any) |
+| `PUT` | `/api/admin/models/{role}` | admin | body `{"model_id": "<id>"}` (`""` only where `allow_empty`); response: the role's row. `404 models.unknown_role`; `400 models.invalid_id` / `models.empty` / `models.wrong_family` / `models.no_tool_use` |
+| `DELETE` | `/api/admin/models/{role}` | admin | Removes the override (idempotent); response: the role's row, back on its default. `404 models.unknown_role` |
+| `POST` | `/api/admin/models/probe` | admin | body `{"model_id": "<id>", "check": "converse" \| "tool_use"}` — one small real Converse call (with a tool definition for `tool_use`) in the hub's default workspace; creates nothing. Response `{ok, model_id, check, region, latency_ms, stop_reason}` or, on an AWS error, `{ok: false, …, error_code, message}` (still `200`). `400 models.invalid_id` |
+
+A member gets `403 auth.forbidden` on the three admin routes.
+
+## Console Costs and Alerts API
+
+Estimated spend and threshold alert rules (the V2 page `/v2/costs`). Every route is
+**admin**; a member gets `403 auth.forbidden`. Workspace-scoped: spend is read from the
+workspace's account and region, and rules live in the ledger's `alert_rules` table.
+
+Spend is span tokens × the price map (`model_prices`, see [setup.md](setup.md#choosing-models)),
+so every figure is an estimate. A model missing from the map adds tokens but no dollars and
+is named in `unpriced_models`. Spans of **every** runtime in the account and region count:
+a service that matches no agent in this console has `known: false` (another stack on the
+same AWS account, or a deleted agent) and is still in the total. Spend by person joins the
+span `session.id` to the console's Chat sessions; `/v1` and evaluation traffic have none
+and land in the unattributed row (`actor: "—"`, `attributed: false`). Results are cached
+for 60 s per workspace and range; `force=true` bypasses the cache.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/costs` | `?range=1h\|6h\|24h\|7d\|30d` (default `24h`) `&force=` → `{range, hours, generated_at, total_est_cost_usd, by_agent[{service, agent_id, agent_name, display_name, known, tokens, llm_calls, sessions, est_cost_usd}], by_actor[{actor, attributed, sessions, tokens, est_cost_usd}], unpriced_models[], estimate, cache}`. Another range → `422 costs.bad_range`; a Logs Insights failure or timeout → `502 observability.query_failed` |
+| `GET` | `/api/costs/month-to-date` | `?force=` → `{workspace_id, est_cost_usd, hours, unpriced_models[], estimate: true}` — spend since 00:00 UTC on the 1st, over at most 720 h |
+| `GET` | `/api/alerts` | Ledger read, no AWS call → `{rules[], firing, kinds[]}` |
+| `POST` | `/api/alerts` | body `{kind, threshold, name?, comparison?, window?, enabled?, webhook_url?}` → `201` rule. `comparison` defaults to the kind's natural direction |
+| `PATCH` | `/api/alerts/{id}` | body: any of `{name, threshold, window, enabled, webhook_url}`; only the fields sent change, and `webhook_url: null` or `""` removes the webhook. `kind` and `comparison` are fixed. Unknown id or another workspace's rule → `404 alert.not_found` |
+| `DELETE` | `/api/alerts/{id}` | `{deleted: id}`; `404 alert.not_found` |
+| `POST` | `/api/alerts/evaluate` | Re-reads every enabled rule now and records the state → `{workspace_id, evaluated_at, rules[], firing, unknown}`. **Never notifies**, whatever the query string |
+
+A rule: `{id, kind, name, comparison, threshold, window, enabled, has_webhook, state, last_value,
+last_detail, last_checked_at, last_fired_at, last_notified_at, created_by, created_by_name,
+created_at, updated_at}`. The webhook URL is write-only — responses carry `has_webhook`.
+`state` is `ok`, `firing` or `unknown`; a value that cannot be read (no traffic, a failed
+query) is `unknown`, never `ok`. `last_fired_at` is when the rule last *started* firing
+(the current or last episode); `last_notified_at` is the last delivery attempt.
+
+| `kind` | Value | Direction | Window |
+|---|---|---|---|
+| `error_rate` | failed traces / traces, 0–1 | above | the rule's `window`, `1h`–`7d` |
+| `latency_p95_ms` | p95 trace latency, ms | above | the rule's `window`, `1h`–`7d` |
+| `online_quality` | online-evaluation mean, 0–1 | below | fixed 24 h (`window` ignored) |
+| `spend_usd` | estimated spend, USD | above | the rule's `window`, `1h`–`30d` |
+| `cost_mtd_usd` | estimated spend since the UTC month start, USD | above | the month (`window` ignored) |
+
+Validation errors (`400`): `alert.unknown_kind`, `alert.bad_comparison`,
+`alert.comparison_never_fires` (the inverse direction), `alert.bad_window`,
+`alert.bad_threshold` (negative or not finite, or `error_rate` / `online_quality` outside
+0–1 — an error rate is a fraction, `0.05` = 5 %).
+
+**Webhooks.** One generic https JSON webhook per rule; a Slack or Feishu incoming webhook
+renders its `text`. The body is `{text, workspace_id, rule_id, kind, value, threshold,
+comparison, detail}`. It is posted only by the background check (the DLC scheduler's
+60-second tick, `app/dlc/scheduler.py`, evaluates alert rules every 5 minutes under a
+`scheduler_claims` row, so one backend process runs each pass), once per firing episode (a transition into `firing`); the outcome is appended
+to `last_detail`. A manual re-check that sees the transition first posts nothing, and the
+next background pass still sends that episode's notification — as it does when a webhook is
+added to a rule that is already firing. The URL is checked on save and again on every send:
+`alert.webhook_not_https`, `alert.webhook_credentials` (user or password in the URL),
+`alert.webhook_invalid`, `alert.webhook_unresolvable`, `alert.webhook_non_public` (any
+resolved address is private, loopback, link-local, reserved, multicast or unspecified,
+IPv4-mapped IPv6 included). The request goes to the address that was checked, redirects are
+not followed, the timeout is 5 s, and the response body is never read.
+
 ## Console Knowledge Bases API
 
 `/api/knowledge-bases/*` backs the Knowledge Bases console (console 04) over
@@ -979,6 +1064,66 @@ AWS `ClientError` goes through the global mapping above (`aws.validation`,
 `aws.conflict`, …). A workspace whose resource map has no `kb_role_arn` (create)
 or no `artifacts_bucket` (uploads) has not been bootstrapped and raises a `500`
 naming the missing key.
+
+## Console Context Layer API (COA)
+
+`/api/context-layer/*` connects a workspace to one COA (Context Ontology
+Accelerator) deployment and reads COA **as the signed-in member**. The ledger
+`context_layers` row holds identifiers only; runtime status, the callback
+registration and agent OAuth are read live. No COA token, client secret or
+consent session uri is ever in a response; an authorization URL goes only to the
+member it was minted for. See [identity.md](identity.md) §7.7.
+
+| Method | Path | Policy | Result |
+|---|---|---|---|
+| `GET` | `/api/context-layer` | member | `{connected, can_manage}`, plus when connected: `{name, prefix, env, region, console_url, api_endpoint, issuer, mcp_runtime_arn, serve_runtime_arn, connection, console_workload, runtimes: {mcp, serve}, ready, agent_oauth_enabled, callback_registered, authorization: {status: none\|pending\|authorized\|revoked, authorized_at, identity?}, demo_account: {available, username}, sign_out_url, referenced_by, probe_errors}`. `authorization.identity` is present while authorized: `demo` \| `own` \| `null` (unknown), the vaulted token's `sub` compared with the demo account's (one vault read when not cached, which never starts a consent). `sign_out_url` is COA's web-client `/logout` (null before a re-connect discovered the web client). Administrators also get `callback_url`, `agent_client_id`, `user_pool_id`, `callback_context_key` (`agentOauthCallbackUrls`) and `demo_account_param` (the parameter name). A live probe that failed reads `null` and is listed in `probe_errors`; the demo account's password is never in it |
+| `PUT` | `/api/context-layer` | admin | `{prefix, env="dev", region, connection?, demo_account_param?}` → discover from SSM `/<prefix>/*` + the `<prefix>-<env>-{api,web,auth}` stack outputs (COA region), check both runtimes are READY, create the OAuth2 Connection `coa-<prefix>` (or adopt `connection` / an existing `coa-<prefix>` whose client id is the COA agent client), ensure the console workload identity `launchpad-console-<workspace>`, upsert the row. `demo_account_param` names the shared COA demo account's SSM SecureString: it must be under `/<prefix>/launchpad/` (`422 context_layer.demo_param_scope`, before any AWS call) and parse to `{username, password}` (`409 context_layer.demo_param_invalid`, `detail.problem` = `not_found` \| `not_secure_string` \| `bad_shape`, never the value); `""` clears it, omitted keeps the current one. Answers the status |
+| `DELETE` | `/api/context-layer` | admin | Forget the layer → `{disconnected, connection, console_workload}`; the Connection and the workload identity stay. `409 context_layer.referenced` (with `detail.referenced_by`) while an agent attaches it |
+| `POST` | `/api/context-layer/authorize` | member | Body `{account?: demo\|own}` (optional). The caller's consent: `{authorized: true, connection}` when the vault holds their COA token, else `{authorized: false, authorization_url, connection}` (single-use; `/auth/return` binds it). `account: "demo"` is refused without a demo account (`404 context_layer.demo_unavailable`) and logged. The consent request is the same for every choice and never carries `customParameters` (the token vault keys a token by them, so a consent made with any would be invisible to every reader): nothing is prefilled at COA's login page, and a browser signed in to COA consents as that session's user |
+| `GET` | `/api/context-layer/demo-account` | member | `{available, username, connection}` (all null/false when nothing is connected): the ledger plus the cached parameter, no other AWS call. The Chat consent card matches its ask's provider against `connection` |
+| `POST` | `/api/context-layer/demo-account/reveal` | member | `{username, password}` with `Cache-Control: no-store`; logged with the Launchpad username, never the password. `404 context_layer.demo_unavailable` when none is configured, `409 context_layer.not_connected` when nothing is connected |
+| `POST` | `/api/context-layer/revoke` | member | Force re-consent for the caller on the layer's Connection (`user_token_revocations`) → `{revoked, provider, agents}` |
+| `GET` | `/api/context-layer/namespaces` | member | COA `GET /namespaces` as the caller → `{namespaces: [{namespace_id, name, display_name, description, owner, status, source_count, created_at, updated_at}]}` |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}` | member | COA `GET /namespaces/{id}` as the caller → `{namespace: {…the same fields}}`. `namespace_id` must be a UUID (422 otherwise; COA is never called) |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/sources` | member | COA `GET …/sources` (every page) → `{namespace_id, sources: [{source_id, name, source_type, source_subtype, status, tables_discovered, created_at, updated_at}]}`. COA's epoch times read back as RFC 3339; statuses are COA's, verbatim |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/metrics` | member | COA `GET …/metrics` (every page) → `{namespace_id, metrics: [{name, description, unit, return_type, default_time_grain, synonyms, dialects: [{dialect, expression}], source_table, data_source_id}]}`: only what COA returns to the caller |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/ontology` | member | COA `GET …/ontologies` plus one `GET …/graph/ontology-overview?ontology_id=` per ontology (at most 8, 200 classes each) → `{namespace_id, ontologies: [{ontology_id, title, description, ontology_type, status, class_count, property_count, updated_at}], classes: [{uri, label, description, ontology_id, ontology}], failed: [ontology_id], truncated}`. An overview COA could not answer is listed in `failed`; the rest still show |
+| `GET` | `/api/context-layer/health` | member | `{runtimes: {mcp, serve}, ready, authorization_required, coa: {status, components: [{key, status}]} \| null, coa_error: {code, status} \| null, probe_errors}`: `GetAgentRuntime` in the COA region plus COA `GET /system-health` as the caller. Without consent COA is not called (`authorization_required: true`) |
+| `POST` | `/api/context-layer/playground` | member | `{namespace_id, query (≤ 4000), session_id?, mode?: standard\|deep-reasoning, strategy?: best\|ontop\|nl_to_sql\|ontop_first\|nl_to_sql_first\|deep-reasoning}` → **SSE**. Proxies COA's Serve runtime (`stream: true`) as the caller. Events: `step {name, status, duration_ms, tool, detail}`, `token {text}`, `done {answer, tier, confidence, rationale, columns, rows (≤ 200), row_count, rows_truncated, partial, guardrail_blocked, data_sources, citations, total_ms, session_id}`, `error {code, message, status, coa_error}`, and `auth_required {provider, tool: "context_layer", url, scopes, agent_id: ""}` when the caller has not consented (then the stream ends). `: keep-alive` comments while COA is silent. `session_id` from `done` continues COA's conversation. Not connected, a vault failure or a bad body answer as ordinary errors before any stream |
+
+Every non-GET route is `FREE` in the billing table, the playground included: COA's
+own spend is in COA's account and is not metered by Launchpad.
+
+`AgentSpec.context_layer` = `{namespace_id (UUID), namespace_name?}` attaches one
+namespace to a `harness` or HTTP `zip_runtime` agent. Any other method, protocol
+`a2a`, `code`/`code_bundle`, or a tool named `coa` answers `422
+validation.invalid_request` with an error row of type
+`context_layer.unsupported_method`; a create or redeploy while no layer is
+connected answers `409 context_layer.not_connected`. A COA-attached agent on `/v1`
+answers `409 identity.as_user_requires_console` (an `error` event on the stream).
+`POST /api/agents/{id}/invoke` on a COA-attached agent whose caller has not
+consented yet answers `409 context_layer.authorization_required` (it has no consent
+card); Chat shows its `auth_required` card instead.
+
+Error codes: `context_layer.not_connected` (409), `context_layer.authorization_required`
+(409, `detail.authorization_url`), `context_layer.forbidden` (403 — COA refused: no
+grant), `context_layer.reauthorize` (409 — COA rejected the token; the next fetch
+forces consent. Not 401, which would end the console session),
+`context_layer.upstream` (502 / 504 — COA 429, 5xx or timeout),
+`context_layer.coa_not_found` (404 — COA has no such namespace or item, or hides it
+from the caller), `context_layer.invalid_namespace` (422 — not a UUID),
+`context_layer.referenced`
+(409), `context_layer.unsupported_method` (422 — also an evaluation replay or a
+conversion of a COA-attached agent), `context_layer.not_found` (404 — no SSM
+parameters or stack), `context_layer.agent_oauth_disabled` (409),
+`context_layer.cross_account` (422), `context_layer.runtime_not_ready` (409),
+`context_layer.discovery_failed` (502), `context_layer.connection_mismatch` (422),
+`context_layer.connection_not_found` (404), `context_layer.identity_failed` (502 —
+the token vault refused; the detail names the step and the AWS code only),
+`context_layer.invalid_request` (422). A COA refusal's `detail` may carry
+`coa_message` (COA's own message, at most 200 characters) and `status`. The
+playground's `error` events add `context_layer.no_result` (COA found no answer) and
+`context_layer.coa_rejected` (another 4xx, e.g. an ambiguous question).
 
 ## Console Memory API
 
@@ -1040,11 +1185,11 @@ console sends as `runtimeSessionId` is the one the ledger tracks.
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`); `{prompt?, attachments?, session_id?, retry_of?}` (`retry_of`: see *Retrying a failed turn* below), a missing id starts a new session; message text or at least one attachment is required. `as_user?: bool` (JWT-inbound agents only): `true` sends the signed-in user's Cognito JWT, `false` the workspace M2M token, omitted = the user JWT when a pool sign-in exists, else M2M; `409 chat.as_user_unavailable` when `true` without a pool sign-in. `meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`; the Memory actor is `scoped_actor` in both cases. `auth_required` `{provider, tool, scopes[], url, agent_id}` is an as_user (3LO) consent ask from a tool: `url` is the single-use authorization URL (the console links it only when it is `https:`), the `sessionUri` stays server-side, and the answer keeps streaming around it. History keeps the ask as a `role: "auth"` row (`text` = the Connection, `name` = the tool) **without** the URL, so a restored ask can only be retried; poll `GET /api/identity/grants/{connection}/status` to see when consent completes. `policy_denied` (Harness; payload under *Streaming invoke*) is kept as a `role: "policy"` row (`text` = the reason, `name` = the tool) and restored as the V2 Chat policy-deny card, which then links to the Governance landing page rather than a specific gateway. Console-only status events (chat-streaming S2; the public `/v1` stream and the share page never send them): `meta.started_at` and `tool.started_at` (epoch ms), `phase {phase: starting\|waiting_model\|streaming}`, `thinking {}` (a Harness is reasoning; throttled, never the reasoning text), `tool_end {id, status: success\|error\|denied, duration_ms}` (a code runtime's open tool is ended by the next event), a named `heartbeat {elapsed_ms}` in every quiet stretch (`/v1` keeps the `: keep-alive` comment), and `usage {input_tokens, output_tokens, total_tokens, model_calls}` once at the end when the runtime reports it |
+| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`), plus `saved {message_id}` right before the event that closes a persisted answer (tool / error / done, or the stream's end without `done`) — the id thumbs feedback attaches to; `/v1` streams never carry it; `{prompt?, attachments?, session_id?, retry_of?}` (`retry_of`: see *Retrying a failed turn* below), a missing id starts a new session; message text or at least one attachment is required. `as_user?: bool` (JWT-inbound agents only): `true` sends the signed-in user's Cognito JWT, `false` the workspace M2M token, omitted = the user JWT when a pool sign-in exists, else M2M; `409 chat.as_user_unavailable` when `true` without a pool sign-in. `meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`; the Memory actor is `scoped_actor` in both cases. `auth_required` `{provider, tool, scopes[], url, agent_id}` is an as_user (3LO) consent ask from a tool: `url` is the single-use authorization URL (the console links it only when it is `https:`), the `sessionUri` stays server-side, and the answer keeps streaming around it. History keeps the ask as a `role: "auth"` row (`text` = the Connection, `name` = the tool) **without** the URL, so a restored ask can only be retried; poll `GET /api/identity/grants/{connection}/status` to see when consent completes. `policy_denied` (Harness; payload under *Streaming invoke*) is kept as a `role: "policy"` row (`text` = the reason, `name` = the tool) and restored as the V2 Chat policy-deny card, which then links to the Governance landing page rather than a specific gateway. Console-only status events (chat-streaming S2; the public `/v1` stream and the share page never send them): `meta.started_at` and `tool.started_at` (epoch ms), `phase {phase: starting\|waiting_model\|streaming}`, `thinking {}` (a Harness is reasoning; throttled, never the reasoning text), `tool_end {id, status: success\|error\|denied, duration_ms}` (a code runtime's open tool is ended by the next event), a named `heartbeat {elapsed_ms}` in every quiet stretch (`/v1` keeps the `: keep-alive` comment), and `usage {input_tokens, output_tokens, total_tokens, model_calls}` once at the end when the runtime reports it |
 | `GET` | `/api/chat/{agent_id}/turns/{turn_id}/events?after=` | Resume a running console turn (see *Disconnect-safe turns* below): the turn's events after SSE id `after` (`0` = the whole turn), then the live ones, closing when the turn has ended. A `gap {after, first_seq}` comes first when some of those events already left the buffer. `404 chat.turn_not_found` once the turn is gone from this process, or for a turn of another agent, workspace or project; `GET …/history` then has what the ledger saved |
 | `POST` | `/api/chat/{agent_id}/turns/{turn_id}/stop` | The stop button: ends a running turn. The upstream is closed, and the partial answer and an `interrupted: stopped by the user` row are saved. Answers `{turn_id, stopped}` once the worker has recorded the stop (at most about 5 s), so the session's next turn is accepted at once. `stopped: false` when the turn had already ended |
 | `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
-| `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order |
+| `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order; each carries its ledger `id` and the caller's own `verdict` (`up`/`down`/`null`) |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |
 
 **Disconnect-safe turns.** A console chat turn runs on a background worker, not in
@@ -1243,6 +1388,18 @@ on a run whose batch is still STOPPING).
 `description` (≤ 1000) — console V2 lists runs as named evaluation tasks — and every
 run row carries them (null on unnamed runs) plus `updated_at`.
 
+Every run row (list, detail, create, stop, recheck, re-run) also carries `snapshot`:
+the agent version the run evaluated, `{seq, source}` with `seq` the agent's spec
+snapshot number (`#N` on the Agent page). `source` is `stamped` (recorded at submit:
+the newest snapshot that had reached AWS — one still deploying is not what the run
+invokes), `inferred` (an older row, read from the snapshot timeline: the newest
+snapshot deployed by the time the run was created, else the oldest) or `observed` (a
+time-window / chosen-session / log-stream run, whose sessions predate the run: the
+version live when it was made). `null` for a log-source run, an agent with no
+deployed snapshot, or a run older than every snapshot when a deployment of the agent
+succeeded between the run and the oldest snapshot (the version it evaluated is
+unknown). Inferred versions are never written back.
+
 Before creating a run or invoking an agent, known managed code rules are compared
 with the target Agent's actual `tools`, `knowledge_bases` and `skills`. An
 unqualified zero-call rule or exact empty tool sequence against mounted resources
@@ -1255,10 +1412,13 @@ their display names.
 |---|---|---|
 | `GET` | `/api/eval/runs?limit&offset&mode&agent_id` | Newest-first page `{runs, total, limit, offset}` |
 | `GET` | `/api/eval/runs/{run_id}` | One run (scores / insight trees / `batch_eval_id` / `budget_stops` — dataset scenarios that ended on the agent's own budget and are scored as they stand, `[{scenario_id, session_id, code, stop_reason}]` / `scenario_failures` — simulated persona scenarios skipped after their retries while the rest of the run went on, `[{scenario_id, retries, code, error}]` (the run fails only when every scenario failed) / `session_failures` — for a batch that ended COMPLETED_WITH_ERRORS, `{total, failed, kind, sessions: [{session_id, index, kind, error_type, message}]}` where `kind` is `telemetry_incomplete` (missing/incomplete-span errors only: the traces never fully reached CloudWatch, re-evaluating cannot recover them), `evaluator_error`, `mixed` or `unknown`, `index` the 1-based scenario position; null on a clean run or a row finished before it existed, backfilled the first time its results are read / `error` / `stop_requested`). |
+| `GET` | `/api/eval/scorecard?agent_id=` | **Agent scorecards**, ledger-only (no AWS call) → `{runs, agents, truncated}`. `runs` = the workspace's evaluator-mode runs the viewer may see (insights runs excluded; under workspace isolation the run's creator rule applies, and runs of an agent hidden from the viewer are dropped), the newest 1000, oldest first (`truncated: true` when older ones were left out): `{id, name, agent_key, status, error, created_at, updated_at, evaluators, scores, sessions, scope, dataset_name, dataset_version, benchmark, snapshot, created_by_name}`. `agent_key` = the agent id, or `logs:<service_name>` for a log-source run. `scope`: `dataset` \| `cloud` \| `window` \| `sessions` \| `logs`. `benchmark` = `{kind, key, label, dataset_id, revision, size}`: a local dataset is `dataset` / `ds:<id>`, labelled with its current name (the name stored on the run when the dataset is gone or hidden from the viewer), with `revision` = the fingerprint of the items the run replayed (16 hex of sha256 over the normalized scenarios; null on older rows); a cloud dataset is `cloud` / `cloud:<id>` with `revision` `v<N>` (pinned) or `draft:<fingerprint>`; every passive run (window, sessions, logs) is the agent's `live` benchmark (`key: "live"`, null label/revision). `size` = the replayed scenario count. `agents` (newest evaluation first) = `{key, agent_id, name, method, log_source, deleted, current_seq, versions: [{seq, aws_version, created_at, created_by_name, note}]}` — `current_seq` is the newest deployed snapshot; a deleted agent keeps its runs under the stored name with an empty timeline. With `agent_id` the read narrows to that agent (listed even before its first run when visible) and each version adds `changes`: the diff groups (`prompt`, `model`, `tools`, …) against the newest deployed snapshot before it |
+| `GET` | `/api/eval/runs/compare-pair?a=&b=` | **Two runs side by side** → `{runs: {a, b}, alignment, alignment_reason, cases, results, config}`. Both must be terminal evaluator runs (else 422 `run.compare_unsupported`); a run that is missing, of another workspace or hidden → 404 `run.not_found`. `runs.*` = the run payload plus its `benchmark`. `alignment`: `scenario` (both runs recorded which scenario each session replayed — `EvalRun.scenario_map`), `order` (an older run without that map, paired by position only when it skipped no scenario and has exactly one session per scenario of its dataset's current items, or of its pinned cloud version) or `none` with `alignment_reason` (`live_traffic`, `different_benchmark`, `scenarios_skipped`, `session_count_mismatch`, `dataset_unavailable` — gone, unreadable or hidden from the viewer): overall scores only, and no results are read. When aligned, `cases` = `[{scenario_id, input, a: {session_id, results} \| null, b: …}]` in B's scenario order, then A-only ones (`input` ≤ 200 chars), with each side's judge records from its batch results stream (one read per side, as `GET /runs/{id}/results`); `results` = `{a: {available, reason?, detail?, truncated?}, b: …}` — a side that cannot be read degrades alone (its cases carry empty `results`). `config` = `{agent_id, from_seq, to_seq, between: [{seq, aws_version, note, created_at, created_by_name}]}` when both versions are known and differ (`between` = the snapshots after the lower seq up to the higher), `{same: true, agent_id, seq}` on one version, `null` when a version is unknown, the agents differ or the agent is hidden from the viewer. The diff itself is `GET /api/agents/{id}/snapshots/diff?from_seq=&to_seq=` |
 | `GET` | `/api/eval/runs/{run_id}/results` | **Per-session judgements** of a terminal evaluators run — `{available, sessions: [{session_id, results: [{evaluator_id, level, score, label, explanation, error_type, error_message}]}], count, truncated}`. The row only stores per-evaluator averages; the judge's explanation of every score lives in the batch's own results log stream (`GetBatchEvaluation.outputConfig.cloudWatchConfig`, the same `gen_ai.evaluation.result` records the online-evaluation views read), which this route reads on demand and never persists. Sessions follow the run's `session_ids` order. `available=false` + `reason` (`insights_run` \| `no_batch` \| `run_active` \| `stream_missing` \| `unreadable` + `detail`) instead of an error when there is nothing to read. Unknown → 404 `run.not_found` |
 | `POST` | `/api/eval/runs` | Start a run (exactly one scope: `dataset_id` \| `cloud_dataset_id` \| `session_ids` \| `lookback_hours`) → 201. `session_source: "logs"` (display only, `session_ids` scope only — else 422 `run.session_source_scope`) records the scope as `dataset_name` `logs:<n>`, like `window:<N>h`. **Target**: exactly one of `agent_id` or `log_source {service_name, log_group_names[1..10]}` (else 422 `run.target_required`). A `log_source` run evaluates telemetry already in CloudWatch with no platform agent behind it (e.g. an agent not hosted on AgentCore Runtime): the batch's `cloudWatchLogs` source is `serviceNames: [service_name]` + `logGroupNames` as given, only passive scopes apply (`session_ids` / `lookback_hours`; a dataset scope → 422 `run.log_source_scope`), and every log group must exist (422 `run.log_group_missing`, `detail.missing`). The row echoes `log_source` with `agent_id: ""` and `agent_name` = the service name. A `cloud_dataset_id` scope may add `dataset_version` (a published version number such as `"2"`, never `DRAFT`; omitted = the draft): the version must exist in `ListDatasetVersions` (else 422 `run.dataset_version_unknown`, no run row) and `GetDataset` / `ListDatasetExamples` read that snapshot. `dataset_version` with any other scope → 422 `run.dataset_version_scope`. Every run row echoes `dataset_version` (`null` for draft, local, session and window runs). A BYOC code zip deployed without the ADOT launcher whose endpoint has written no span in 14 days → 400 `eval.no_telemetry` (`detail.service_name`), before any run row exists. |
 | `POST` | `/api/eval/runs/{run_id}/stop` | **Stop an active run** → 202 with the run. A run whose batch exists on AWS (`batch_eval_id` set) is stopped with `StopBatchEvaluation`: the batch goes `STOPPING → STOPPED`, the sessions already judged keep their results, and the poller records the run as `stopped` with those partial scores / insight trees and `error = "stopped by operator"`. A run still `queued` is cancelled locally (the worker skips it, AWS is never called) and returns `stopped` at once. A run replaying its dataset or waiting for telemetry (no batch yet) stops between prompts and never calls `StartBatchEvaluation`. Terminal runs (`completed` / `failed` / `stopped`) → 409 `run.not_active`; unknown → 404 `run.not_found`. `DeleteBatchEvaluation` is deliberately not exposed — the ledger keeps the partial results AWS would drop |
 | `POST` | `/api/eval/runs/{run_id}/recheck` | `eval.run` — **Re-read a failed run's batch from AWS** → 202 with the run. For a `failed` run that started a batch (`batch_eval_id` set) — or a partially failed `completed` evaluator run with no `session_failures` yet, which re-finishing backfills: one `GetBatchEvaluation`; a terminal batch settles the row exactly as the poller would have (e.g. `completed` with scores, or `failed` with the batch's own reason), a batch still running puts the row back to `evaluating` with a fresh poller. Reads only — nothing is re-run or billed. Other runs → 409 `run.not_recheckable`; unknown → 404 `run.not_found`. Every batch wait is bounded by `eval_batch_wait_s` (default 7200 s, 30 s polls); a run that outlives it fails with "batch evaluation still <STATUS> after the N-minute wait" and can be re-checked from the V2 task detail |
+| `POST` | `/api/eval/runs/{run_id}/rerun` | `eval.run`, billable — **Evaluate the run's target again** on the same scope → 201 with the new run, started exactly as `POST /api/eval/runs` would start it: the same validation, visibility and project budget gate (409 `project.budget_exhausted`). Body `{name?}` (1–64; default `<source name> · 再评`). The same target (agent or `log_source`), evaluators and description, and the same dataset (a cloud run's pinned `dataset_version` stays pinned, the draft stays the draft — the examples are read again) or the same window length (`window:<N>h` → `lookback_hours: N`). A simulated-persona dataset plays the user with the platform's current actor model (`actor_model_id` on the Models page). A chosen-session or log-stream run (it would only re-score the same sessions) and an insights run → 422 `run.rerun_unsupported`; unknown → 404 `run.not_found` |
 | `DELETE` | `/api/eval/runs/{run_id}` | `eval.run` — **Remove a run that produced no result** (`failed` / `stopped`) from the ledger → `{deleted, run_id, status, aws_batch_left_in_place}`. Only the row goes: a batch evaluation that reached AWS is left as it is (AWS stays the source of truth; the row was the console's pointer and the answer names it). `completed` runs are the evaluation history and active runs must be stopped first → 409 `run.not_deletable`; unknown → 404 `run.not_found`. The Evaluation runs table and the assistant's NEXT STEPS history show ✕ on such rows |
 | `GET` | `/api/eval/runs/{run_id}/recommendation-inputs` | **What a recommendation from this run would revise** → `{source, system_prompt, tools: [{name, description, origin}], notes, evaluators, default_evaluator, eligible, reason_code}`. `source: "harness"` = a Managed Harness read live (`GetHarness`: the system prompt, each `inline_function` description, and every attached `agentcore_gateway`'s target tool schemas named `<target>___<tool>`, all narrowed by the Harness `allowedTools`); `"spec"` = the Launchpad agent spec (prompt + discoverable tools); `"manual"` = nothing readable (BYOC without a prompt, CloudWatch-sourced runs, deleted agents) — the console then requires both inputs. `notes` names what could not be read (`remote_mcp_runtime_only`, `gateway_unreadable`, and `harness_unreadable` when the run outlived its Harness or GetHarness is denied — the inputs then fall back to the spec / manual instead of failing). `evaluators` = every evaluator the job can optimize toward, as `[{id, name, level, group: run|builtin|third_party|custom, recommended}]`: the run's own first, then the devguide's two recommended targets (`Builtin.GoalSuccessRate` / `Builtin.Helpfulness`, `recommended: true`), then AWS built-ins, third-party managed evaluators and this account's ACTIVE custom ones (each custom judge read back with `GetEvaluator`). `excluded_evaluators` = `[{id, reason}]` for what cannot be a target — `lower_is_better` (penalty scores), `ground_truth` (trajectory matchers, judges reading `{expected_response}` & friends, managed reference-reading code evaluators), `categorical` (non-numeric judge scale), `unavailable` (the run's evaluator no longer exists). `POST` applies the same rules (422 `recommendation.evaluator_<reason>`). `tools_eligible` is false for a run without session ids (a time-window run) |
 | `GET` | `/api/eval/runs/{run_id}/recommendations` | Recommendations started from this run, newest first → `{recommendations: [{id, kind, recommendation_id, status, input_source, system_prompt, evaluator, tools, skipped_tools, result, error, …}]}`. Each non-terminal row is refreshed with one `GetRecommendation` on read (no background poller); a job that ends without text reads as `FAILED` with AWS's own error. A tool job refused because some tools never appear in the traces is restarted **once** without them (`skipped_tools`) |
@@ -1491,7 +1651,8 @@ Online scores also surface where sessions are looked at:
 | Method | Path | Result |
 |---|---|---|
 | `GET` | `/api/observability/sessions/{session_id}` | The session detail carries `online_scores: {configs[{config_id, config_name, owner, agent{id,name}?, records[{time, evaluator_id, level, score, label, explanation, trace_id}]}], total, unavailable, configs_exist}` — every config's result records for that session (agent-owned blocks first), read with one prefix `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` query. Fail-soft: a results-query failure sets `unavailable: true` and never removes traces or transcript; `configs_exist` is whether the workspace has an agent-owned config (the UI hides the block when neither results nor configs exist) |
-| `GET` | `/api/observability/sessions/{session_id}/transcript` | Conversation only — `{session_id, transcript}` with the same `transcript` shape as the session detail, and **no** Logs Insights query (the V2 evaluation result drawer's read). Optional `agent_id` attributes a session no ledger row claims (an id from another workspace is ignored). Eval-run sessions with no memory events rebuild turns from the runtime's otel-rt-logs content records — for a harness, from its backing runtime's log group (`harness_<name>-<id>-DEFAULT`), which is the only copy when the harness has memory disabled |
+| `GET` | `/api/observability/sessions/{session_id}/transcript` | Conversation only — `{session_id, transcript}` with the same `transcript` shape as the session detail, and **no** Logs Insights query (the V2 evaluation result drawer's read). Optional `agent_id` attributes a session no ledger row claims (an id from another workspace is ignored); optional `since` (ISO time of its first span) then lets a session with nothing in Memory rebuild its turns from that agent's runtime content logs — the session detail passes its own first-span time the same way. Eval-run sessions with no memory events rebuild turns from the runtime's otel-rt-logs content records — for a harness, from its backing runtime's log group (`harness_<name>-<id>-DEFAULT`), which is the only copy when the harness has memory disabled |
+| `POST` | `/api/observability/session-previews` | A read (POST only to carry per-session start times). Body `{sessions: [{session_id, first?}] (1–20), agent_id?}` → `{previews: [{session_id, available, reason, input, output, user_turns}]}` — each session's first user input and last agent reply (each clipped to 600 characters) and its user-turn count, from the same sources as `/transcript` read in parallel, without the long-term record count (the V2 task wizard's Agent-trajectory picker, one page per call). `agent_id` attributes sessions no ledger row claims; `first` (the session list's first-span time) lets such a session fall back to that agent's runtime content logs. A session the caller may not see, or whose read fails, keeps its row with `available: false` and a `reason` (`not_found` · `read_failed` · `not_platform_session` · `memory_unavailable` · `no_turns`) |
 | `GET` | `/api/overview/online-quality` | ONLINE QUALITY · 24h tile: `{range: "24h", mean, scores, sessions, agents, configs, evaluators[{evaluator_id, mean, count, polarity}], cached}` — count-weighted mean over every (evaluator, agent-owned config) pair with lower-is-better evaluators inverted (`1 − mean`), so the tile always reads higher-is-better; `evaluators[].mean` stays raw; `configs` counts the workspace's agent-owned configs (ledger) and `agents` the agents that scored, so "configured, nothing judged yet" is distinguishable from "no config". 120 s per-workspace cache with single-flight, `force=true` bypasses; a workspace without agent-owned configs answers the empty payload without any AWS call |
 
 ## Console Observability API — on-demand session scoring
@@ -1570,6 +1731,49 @@ a missing one. `scope` is always `reported`: observed usage over the tasks that
 reported it — not a billing total; no cost is estimated. Legacy results written
 before usage capture show every side as `missing_rows == rows` with `null`
 counters.
+
+## Console Agent IDE API
+
+The coding console (`/v2/coding`) over the platform coding runtime (see
+[architecture](architecture.md#agent-ide--a-remote-web-ide-over-codex-on-agentcore)).
+A repo is **private to its creator in every visibility mode**: a foreign or
+missing id is `404 coding.repo_not_found` on every by-id route; administrators
+reach other members' repos only through `GET /repos?all=1` and `DELETE`.
+Every 2xx answers JSON. A route that needs the runtime answers `409
+coding.runtime_not_installed` before any AWS call when the workspace has none.
+
+| Method | Path | Policy | Result |
+|---|---|---|---|
+| `GET` | `/api/coding/runtime` | member | `{installed, status: not_installed\|installing\|ready\|failed\|uninstalling, runtime_arn (admins), image_tag, job: {id, type, status, error, log_tail[] (admins)} \| null, models[], efforts[], default_model, default_effort, repair_recommended}` |
+| `POST` | `/api/coding/runtime/install` | admin | Install or repair → `202 {job_id, status}`; `409 coding.runtime_busy` while an uninstall runs |
+| `DELETE` | `/api/coding/runtime` | admin | Uninstall → `202 {job_id, status}`; `409 coding.runtime_in_use` while any repo runs a turn (snapshots are kept) |
+| `GET` | `/api/coding/repos` | member | `{repos: [repo]}` — the caller's own; `?all=1` (admins) every repo of the workspace, `owned` telling which |
+| `POST` | `/api/coding/repos` | member | Body `{name (≤ 80), description? (≤ 500)}` → `201 repo` (no runtime call) |
+| `GET` | `/api/coding/repos/{repo_id}` | member (owner) | `repo` + `turns[]` (the newest 20, oldest first) + `active_turn` (codex turn id or null) |
+| `PATCH` | `/api/coding/repos/{repo_id}` | member (owner) | Body `{name?, description?}` → `repo` |
+| `DELETE` | `/api/coding/repos/{repo_id}` | member (owner or admin) | Stops the runtime session (best effort), deletes the repo's snapshots, exports, downloads and rows → `{deleted: true}`; `409 coding.turn_running` while a turn runs; `502 coding.delete_failed` when S3 refused (retryable) |
+| `POST` | `/api/coding/repos/{repo_id}/turns` | member (owner) | Body `{prompt, model?, effort?}` → `202` turn row (`status: running`); the turn runs on in the microVM. `409 coding.turn_running`, `422 coding.model_invalid` / `coding.effort_invalid`, `413 coding.prompt_too_long` (> 32 KB), `409 coding.runtime_busy` (uninstalling), `502 coding.runtime_error` |
+| `POST` | `/api/coding/repos/{repo_id}/interrupt` | member (owner) | `{interrupted: bool}` (false when no turn runs) |
+| `GET` | `/api/coding/repos/{repo_id}/events` | member (owner) | SSE, `?after=<seq>` or `Last-Event-ID`: `event: status {repo_status, active_turn}` first; each record `id: <seq>` + `event: event` + `data: {seq, ts, method, params}`; `: keep-alive`; `event: reconnect {}` after 25 min; `event: error {code, message}` then the end |
+| `GET` | `/api/coding/repos/{repo_id}/tree` | member (owner) | `?path=<dir>&depth=1..4` → `{path, entries: [{path (root-relative), dir, size, symlink?}], truncated}`; a vanished directory lists empty |
+| `GET` | `/api/coding/repos/{repo_id}/file` | member (owner) | `?path=&rev=head\|turn` (none = working tree) → `{path, exists, content, sha256, size, binary}`; binary → `content: null`; absent → `exists: false` |
+| `PUT` | `/api/coding/repos/{repo_id}/file` | member (owner) | Body `{path, content, expected_sha256?}` (omitted = overwrite; a hash = must still match; null = must not exist) → `{path, sha256, size}`; `409 coding.file_conflict` `detail: {sha256}`, `409 coding.turn_running`, `413 coding.file_too_large` (> 2 MB) |
+| `GET` | `/api/coding/repos/{repo_id}/changes` | member (owner) | `?scope=worktree\|turn` → `{scope, changes: [{path, status: A\|M\|D\|R, old_path?}]}` (empty before the first turn) |
+| `GET` | `/api/coding/repos/{repo_id}/diff` | member (owner) | `?scope=` → `{scope, diff, truncated}` |
+| `POST` | `/api/coding/repos/{repo_id}/download` | member (owner) | Body `{path?}`: a path = that one file (text or binary, ≤ 200 MB), none = the whole repo as `<repo>.zip` (the deploy export's file set: tracked + untracked-not-ignored, no `.git`, no dependency dirs; ≤ 50 MB) → `{url, filename, size, expires_in}` — a presigned S3 GET valid `expires_in` (300) s that answers `Content-Disposition: attachment` (RFC 5987 `filename*`). Allowed while a turn runs. `404 coding.file_not_found`, `413 coding.download_too_large` (`detail: {max_bytes, size?}`), `422 coding.path_invalid` (also a directory), `409 coding.runtime_outdated` (a runtime installed before file downloads: repair it) |
+| `POST` | `/api/coding/repos/{repo_id}/deploy` | `perm:agents.deploy` (owner) | Body `{agent_name?, description?, artifact_kind?: code_zip\|container_source, entrypoint?, python_version?}` → `202 {agent_id, job_id, created}`; creates a `byoc` Agent (creator = caller) or re-publishes the repo's Agent. `409 coding.turn_running`, `422 coding.deploy_failed` with `detail.reason` = `dockerfile_missing` (no root `Dockerfile` for `container_source`) \| `entrypoint_missing` (+ `entrypoint`, `candidates`) \| `invalid_spec` (+ `errors`), `413 byoc.upload_too_large` (an export over the 250 MiB BYOC zip cap, refused before the download), plus every `POST /api/agents` / redeploy refusal (`agent.name_exists`, `agent.deploy_in_progress`, …) |
+
+`repo` = `{id, name, description, status: idle|running, active_turn_id, model,
+effort, agent_id (null once that Agent is deleted), snapshot_at, created_at,
+updated_at, created_by, created_by_name, owned}`; a turn row = `{id, turn_id,
+thread_id, prompt (first 2000 chars), model, effort, status: running|completed|
+interrupted|failed|abandoned, error, usage, started_at, completed_at}` with
+`usage` = `{input, cached_input, cache_write, output, reasoning_output}` (codex
+counts: `input` includes the cached and cache-write tokens, `output` the
+reasoning tokens). Timestamps are naive-UTC ISO strings. Path errors are `422
+coding.path_invalid` (absolute, `..`, NUL, `.git`) and never reach the runtime;
+other runtime failures are `502 coding.runtime_error` (`detail.runtime_code`)
+or `502 coding.restore_failed` when the repo's snapshot could not be restored.
 
 ## Console Accounts API
 

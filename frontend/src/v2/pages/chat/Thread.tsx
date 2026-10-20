@@ -99,13 +99,15 @@ export function Thread({
                 {(["up", "down"] as const).map((verdict) => {
                   const Icon = verdict === "up" ? ThumbsUp : ThumbsDown;
                   const active = msg.verdict === verdict;
+                  const label = t(verdict === "up" ? "v2.chat.thumbUp" : "v2.chat.thumbDown");
                   return (
                     <button
                       key={verdict}
                       type="button"
                       className={active ? `v2-chat-thumb on ${verdict}` : "v2-chat-thumb"}
                       aria-pressed={active}
-                      title={t(verdict === "up" ? "v2.chat.thumbUp" : "v2.chat.thumbDown")}
+                      aria-label={label}
+                      title={label}
                       onClick={() => onRate(i, active ? "none" : verdict)}
                       data-testid={`thumb-${verdict}`}
                     >

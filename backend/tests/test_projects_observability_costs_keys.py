@@ -234,7 +234,8 @@ def test_a_member_never_sees_another_projects_sessions(app, monkeypatch):  # noq
         res = ana.get(path)
         assert res.status_code == 404 and res.json()["code"] == "observability.session_not_found"
     monkeypatch.setattr(obs_router.observability, "get_session_transcript",
-                        lambda sid, db, ws, agent_id=None: {"session_id": sid, "transcript": {}})
+                        lambda sid, db, ws, agent_id=None, **_kw: {"session_id": sid,
+                                                                   "transcript": {}})
     ok = ana.get(f"/api/observability/sessions/{'u' * 40}/transcript?agent_id={mine}")
     assert ok.status_code == 200, ok.text
     res = ana.post(f"/api/observability/sessions/{'t' * 40}/evaluate",

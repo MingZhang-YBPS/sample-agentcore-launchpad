@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type V2Range } from "../../../lib/api";
 import { coverageInfo, hasInsightTrees, runCoverage } from "../../../lib/evaluation";
+import { previousComparable } from "../../compare";
 import { fmtTime, RANGES, rangeLabel } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
@@ -13,6 +14,7 @@ import { rowsFromOnline, rowsFromRun, summarize } from "../../results";
 import { RunCoverageNote, RunCoverageTag } from "../../RunCoverage";
 import { sourceLabel, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, taskItemLabel, type TaskKind, type V2Task } from "../../tasks";
 import { Alert, Button, Card, Confirm, Descriptions, FilterSelect, FlowHeader, Spin, Tag } from "../../ui";
+import { backState, backTarget, returnPath } from "./back";
 import { RunRecommendations } from "./RunRecommendations";
 
 const POLL_MS = 8000;
@@ -37,6 +39,8 @@ function useTask(kind: TaskKind, id: string) {
 export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const initialOutcome = params.get("outcome") === "error" ? "error" : "";
   const toast = useV2Toast();
   const { can } = useAuth();
@@ -81,6 +85,21 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   }, [legacyPartial, resultsRead, reloadTask]);
   const summary = useMemo(() => summarize(rows), [rows]);
 
+  // "compare with the previous run": the newest earlier completed, scored run of the same
+  // agent on the same benchmark, read from the ledger-only scorecard. A log-source run
+  // has no agent id, so it reads the whole scorecard and matches on its `agent_key`.
+  const comparable =
+    data?.kind === "run" && data.mode === "evaluators" && data.run?.status === "completed" && data.run.scores.length > 0;
+  const previous = useLoad(
+    async () => {
+      const run = data?.run;
+      if (!comparable || !run) return null;
+      const card = await api.evaluationScorecard(run.agent_id ? { agent_id: run.agent_id } : {});
+      return previousComparable(card.runs, run.id);
+    },
+    `task-previous:${kind}:${id}:${comparable ? "on" : "off"}`,
+  );
+
   const act = async () => {
     if (!confirm || !data) return;
     setBusy(true);
@@ -102,6 +121,7 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   if (!data) return null;
 
   const mayRun = can("eval.run");
+  const previousRun = previous.data;
   const coverage = data.kind === "run" && data.run ? runCoverage(data.run) : null;
   const recheck = async () => {
     if (data.kind !== "run") return;
@@ -134,7 +154,16 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
           {t("v2.tasks.resume")}
         </Button>
       )}
-      <Button disabled={!mayRun} onClick={() => setParams({ view: "new", from: `${data.kind}:${data.id}` })}>
+      {comparable && previousRun && (
+        <Button
+          title={t("v2.compare.prevHint", { name: previousRun.name || previousRun.id, time: fmtTime(previousRun.created_at) })}
+          onClick={() => setParams({ view: "compare", a: previousRun.id, b: data.id })}
+          testId="v2-compare-prev"
+        >
+          {t("v2.compare.prev")}
+        </Button>
+      )}
+      <Button disabled={!mayRun} onClick={() => setParams({ view: "new", from: `${data.kind}:${data.id}` }, { state: backState(location.search) })}>
         {t("v2.tasks.copy")}
       </Button>
       <Button kind="primary" onClick={() => task.reload()}>
@@ -152,7 +181,11 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
             {coverage ? <RunCoverageTag coverage={coverage} /> : <Tag tone={STATUS_TONE[data.status]}>{statusLabel(t, data.status)}</Tag>}
           </span>
         }
-        onBack={() => setParams({})}
+        onBack={() => {
+          const outside = returnPath(location.state);
+          if (outside) navigate(outside);
+          else setParams(backTarget(location.state));
+        }}
         end={actions}
       />
       {coverage && data.run ? (

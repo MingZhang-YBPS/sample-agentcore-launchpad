@@ -425,7 +425,7 @@ def test_tool_roles_probe_tool_use():
     ("moonshot.kimi-k2-thinking", True), ("global.zai.glm-5.3", True),
     ("global.moonshotai.kimi-k3", True), ("us.deepseek.r1-v1:0", True),
     ("global.openai.gpt-6-sol", True),  # from its Bedrock model card
-    ("global.openai.gpt-6-luna", False),
+    ("global.openai.gpt-6-luna", True),  # main's built-in Luna price
 ])
 def test_deepseek_and_kimi_prices(model_id, priced):
     from app.services.observability import match_price

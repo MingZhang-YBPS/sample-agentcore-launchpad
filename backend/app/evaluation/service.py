@@ -40,11 +40,13 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import run_cost, simulation, telemetry
+from app.evaluation import run_cost, scorecard, simulation, telemetry
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import (
     ground_truth_metadata,
+    input_preview,
+    items_fingerprint,
     normalize_scenarios,
     scenario_prompts,
 )
@@ -325,6 +327,17 @@ def _run_agent_name(run_id: str) -> str:
     try:
         run = db.get(EvalRun, run_id)
         return run.agent_name if run else ""
+    finally:
+        db.close()
+
+
+def _live_snapshot_seq(agent_id: str | None) -> int | None:
+    """The agent's newest deployed snapshot seq, read now (None without an agent)."""
+    if not agent_id:
+        return None
+    db = SessionLocal()
+    try:
+        return scorecard.newest_deployed_seq(db, agent_id)
     finally:
         db.close()
 
@@ -636,7 +649,15 @@ def execute_run(
             # 0 tokens for 600 s) must not discard the other personas' sessions.
             # The run fails only when no scenario produced a session.
             scenario_failures: list[dict[str, str]] = []
-            _update(run_id, status="invoking")
+            # session → the scenario it replayed (`EvalRun.scenario_map`), so two runs
+            # of one dataset can be compared case by case; a skipped persona has none
+            scenario_map: dict[str, dict[str, str]] = {}
+            # the version this replay invokes, read again now: a deploy that finished
+            # while the run waited in the queue is what runs (submit_run's stamp stays
+            # when there is no deployed snapshot)
+            live_seq = _live_snapshot_seq(agent_id)
+            _update(run_id, status="invoking",
+                    **({"agent_snapshot_seq": live_seq} if live_seq is not None else {}))
             plan = [
                 (scenario, attempt_no)
                 for scenario in scenarios
@@ -705,6 +726,8 @@ def execute_run(
                     continue
                 session_ids.append(sid)
                 watermark_sid = sid
+                scenario_map[sid] = {"scenario_id": attempt["scenario_id"],
+                                     "input": input_preview(scenario)}
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
                 attempts.append({
                     "scenario_id": str(scenario.get("scenario_id") or "unknown"),
@@ -717,7 +740,8 @@ def execute_run(
                 })
                 _update(run_id, session_ids=list(session_ids),
                         budget_stops=list(budget_stops) or None,
-                        attempts=list(attempts), cost_actual=live_spend.session_done())
+                        attempts=list(attempts), cost_actual=live_spend.session_done(),
+                        scenario_map=dict(scenario_map))
             if not session_ids:
                 first = scenario_failures[0] if scenario_failures else {}
                 raise RuntimeError(
@@ -1235,6 +1259,17 @@ def submit_run(
         log_groups = list(log_source["log_group_names"])
         log_group = log_groups[0]
     else:
+        if dataset_items and (agent.spec or {}).get("context_layer"):
+            # a replay invokes with no signed-in console user, so a COA context
+            # layer would have nobody to act as: refused by name, not run tool-less
+            raise AppError(
+                "context_layer.unsupported_method",
+                "evaluation replays cannot invoke an agent with a COA context layer — "
+                "they run without a signed-in console user to act as in COA; evaluate "
+                "its existing Chat sessions instead",
+                {"reason": "evaluation", "agent_id": agent.id},
+                status_code=422,
+            )
         if dataset_items and agent.inbound_auth_mode == "jwt":
             # replay turns Bearer-invoke with the workspace M2M token; an agent on
             # another IdP refuses it, so say so before a run row is created
@@ -1258,6 +1293,8 @@ def submit_run(
     # runs list can render "window · Nh" without a schema change.
     if lookback_hours and not dataset_name:
         dataset_name = f"window:{lookback_hours}h"
+    # what a replay replays (a cloud run also keeps `dataset_version`)
+    fingerprint = items_fingerprint(dataset_items)
     db = SessionLocal()
     try:
         run = EvalRun(
@@ -1285,6 +1322,10 @@ def submit_run(
             split=split,
             cost_estimate=cost_estimate,
             evaluator_set_hash=evaluator_set_hash(evaluators),
+            # the version the run evaluates: the newest snapshot that reached AWS
+            agent_snapshot_seq=scorecard.newest_deployed_seq(db, agent.id) if agent else None,
+            dataset_fingerprint=fingerprint[0] if fingerprint else None,
+            dataset_size=fingerprint[1] if fingerprint else None,
         )
         creators.stamp(run, creator)
         db.add(run)

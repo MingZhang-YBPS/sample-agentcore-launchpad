@@ -16,6 +16,9 @@ os.environ["LAUNCHPAD_ALLOW_OPEN_CONSOLE"] = "true"
 # after 90 seconds, makes network requests and races tests that replace price YAML.
 # Manual refresh and price-merge behavior remain covered by test_model_prices.py.
 os.environ["LAUNCHPAD_MODEL_PRICES_REFRESH_HOURS"] = "0"
+# The coding watcher (on by default): it would invoke the coding runtime every
+# 15 s. tests/test_coding_repos.py drives run_once() / start() directly.
+os.environ["LAUNCHPAD_CODING_WATCHER_ENABLED"] = "false"
 
 # Docker-backend tests assert literal `docker ...` argv; pin the container CLI so
 # "auto" resolution does not pick finch on a host without docker. The resolver's

@@ -12,6 +12,9 @@ Scope (reverse creation order, dependents before the shared substrate):
      engine's policies would block the next deployment's identically named ones
   3. Credential providers launchpad-office-facts-key (API key) and
      launchpad-gw-m2m (OAuth2), matched by exact name
+  3b. Console workload identities launchpad-console-* (the COA context layer's
+     token-vault identity, one per workspace; the Connection it used is a
+     Connection like any other and is deleted from the console)
   4. Per-agent IAM roles: launchpad-agent-* carrying the launchpad:agent-id
      tag. Every per-agent role is tagged at creation, so this matches the roles
      of agents you have not deleted yet as well as the orphans a failed agent
@@ -21,6 +24,9 @@ Scope (reverse creation order, dependents before the shared substrate):
   6. AgentCore registry (launchpad-registry) — records must be gone first
   7. Skill Lab exec worker (launchpad_skill_lab_worker runtime + its IAM role);
      its image tags and the skill-lab/ S3 prefix live in stack-owned ECR/S3
+  7b. Coding runtime (launchpad_coding_runtime runtime + its IAM role, runtime
+     first); its image tags and the coding/ repo snapshots live in
+     stack-owned ECR/S3
   8. CDK stack launchpad-base (S3 bucket auto-empties, ECR force-deletes)
 
 Out of scope: X-Ray Transaction Search (account-wide, shared observability)
@@ -44,6 +50,7 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 from app.services import agent_iam  # noqa: E402
 from app.services import bootstrap as bs  # noqa: E402
 from app.services.agentcore import policy as policy_api  # noqa: E402
+from app.services.context_layer import CONSOLE_WORKLOAD_PREFIX  # noqa: E402
 from app.services.gateway_bootstrap import (  # noqa: E402
     API_KEY_PROVIDER_NAME,
     GATEWAY_M2M_PROVIDER_NAME,
@@ -152,6 +159,25 @@ def _credential_provider_targets(control) -> list[tuple[str, str, str]]:
     return targets
 
 
+def _console_workload_targets(control) -> list[tuple[str, str, str]]:
+    """The COA context layer's console workload identities (launchpad-console-*).
+    Runtime-owned workload identities are named after their runtime and never match."""
+    targets: list[tuple[str, str, str]] = []
+    kwargs: dict = {"maxResults": 20}
+    while True:
+        page = control.list_workload_identities(**kwargs)
+        for identity in page.get("workloadIdentities", []):
+            name = identity.get("name", "")
+            if name.startswith(CONSOLE_WORKLOAD_PREFIX):
+                targets.append(
+                    ("console-workload", name, identity.get("workloadIdentityArn", ""))
+                )
+        token = page.get("nextToken")
+        if not token:
+            return targets
+        kwargs = {"maxResults": 20, "nextToken": token}
+
+
 def _agent_role_targets(iam) -> list[tuple[str, str, str]]:
     """Per-agent execution roles: `launchpad-agent-*` **and** tagged
     `launchpad:agent-id`. Both are required — the tag alone is what separates
@@ -194,6 +220,7 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
     targets.extend(_gateway_targets(control))
     targets.extend(_policy_engine_targets(control))
     targets.extend(_credential_provider_targets(control))
+    targets.extend(_console_workload_targets(control))
     targets.extend(_agent_role_targets(iam))
 
     memories = control.list_memories(maxResults=100).get("memories", [])
@@ -214,7 +241,8 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
 
     # Paginated: an account past one page of runtimes would otherwise keep the
     # worker (and its role) behind after the stack is gone.
-    for runtime in rt.list_runtimes(control):
+    runtimes = rt.list_runtimes(control)
+    for runtime in runtimes:
         if runtime.get("agentRuntimeName") == WORKER_RUNTIME_NAME:
             targets.append(
                 ("skill-lab-runtime", runtime["agentRuntimeId"], runtime["agentRuntimeArn"])
@@ -223,6 +251,23 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
     try:
         role = iam.get_role(RoleName=role_name)
         targets.append(("skill-lab-role", role_name, role["Role"]["Arn"]))
+    except Exception:
+        pass
+
+    # Coding runtime (runtime before its role: deleting the role under a live
+    # runtime can wedge the runtime's own deletion).
+    from app.coding.infra import RUNTIME_NAME as CODING_RUNTIME_NAME
+    from app.services.workspace_iam import CODING_RUNTIME_ROLE_BASE
+
+    for runtime in runtimes:
+        if runtime.get("agentRuntimeName") == CODING_RUNTIME_NAME:
+            targets.append(
+                ("coding-runtime", runtime["agentRuntimeId"], runtime["agentRuntimeArn"])
+            )
+    coding_role = regional_role_name(CODING_RUNTIME_ROLE_BASE, region)
+    try:
+        role = iam.get_role(RoleName=coding_role)
+        targets.append(("coding-role", coding_role, role["Role"]["Arn"]))
     except Exception:
         pass
 
@@ -239,6 +284,26 @@ def _delete_role(iam, role_name: str) -> None:
     for policy in iam.list_role_policies(RoleName=role_name)["PolicyNames"]:
         iam.delete_role_policy(RoleName=role_name, PolicyName=policy)
     iam.delete_role(RoleName=role_name)
+
+
+def _wait_runtime_gone(control, runtime_id: str, timeout_s: int) -> None:
+    """Runtime deletion is asynchronous; its role must outlive it. Bounded wait."""
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            control.get_agent_runtime(agentRuntimeId=runtime_id)
+        except Exception as exc:
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+            if code == "ResourceNotFoundException":
+                return
+            raise
+        if time.time() >= deadline:
+            # no identifier in the message: teardown targets share one list with
+            # credential-provider names, so CodeQL treats every identifier as sensitive
+            print("  warning: the coding runtime is still deleting; continuing")
+            return
+        # Deliberate polling interval; the deadline above bounds the loop.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
 
 
 def _wait_targets_gone(control, gateway_id: str, timeout_s: int) -> None:
@@ -303,6 +368,8 @@ def delete_target(kind: str, identifier: str, region: str) -> None:
         control.delete_api_key_credential_provider(name=identifier)
     elif kind == "oauth2-provider":
         control.delete_oauth2_credential_provider(name=identifier)
+    elif kind == "console-workload":
+        control.delete_workload_identity(name=identifier)
     elif kind == "agent-role":
         _delete_role(bs._client("iam", region), identifier)
     elif kind == "memory":
@@ -322,6 +389,13 @@ def delete_target(kind: str, identifier: str, region: str) -> None:
 
         rt.delete_runtime(control, identifier)
     elif kind == "skill-lab-role":
+        _delete_role(bs._client("iam", region), identifier)
+    elif kind == "coding-runtime":
+        from app.services.agentcore import runtime as rt
+
+        rt.delete_runtime(control, identifier)
+        _wait_runtime_gone(control, identifier, timeout_s=600)
+    elif kind == "coding-role":
         _delete_role(bs._client("iam", region), identifier)
     elif kind == "cdk-stack":
         subprocess.run(

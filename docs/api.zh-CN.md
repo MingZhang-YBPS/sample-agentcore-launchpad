@@ -563,6 +563,73 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 知识库强制删除仍会从每个挂载它的 Agent 上移除该知识库。
 
+## 控制台模型 API / Console Models API
+
+平台自身的模型角色（见 [setup.zh-CN.md](setup.zh-CN.md#选择模型)）。属于中心全局——不按
+workspace 划分；覆盖设置保存在本部署的账本（`platform_settings`）中，立即生效、无需重启。
+
+| 方法 | 路径 | 角色 | 请求体 / 响应 |
+|---|---|---|---|
+| `GET` | `/api/model-defaults` | member | `{"roles": [{role, model_id, default, overridden, constraint, allow_empty, needs_tools, updated_by, updated_at}]}`——每个角色一行；`model_id` 为生效值（控制台覆盖 > `LAUNCHPAD_*` 环境变量 > `launchpad.yaml` > 内置值），`default` 为恢复默认后的值，`constraint` 为可接受的模型家族（`["anthropic"]` 等；`null` = 不限） |
+| `PUT` | `/api/admin/models/{role}` | admin | 请求体 `{"model_id": "<id>"}`（仅 `allow_empty` 的角色可为 `""`）；响应为该角色的行。`404 models.unknown_role`；`400 models.invalid_id` / `models.empty` / `models.wrong_family` / `models.no_tool_use` |
+| `DELETE` | `/api/admin/models/{role}` | admin | 删除覆盖（幂等）；响应为该角色恢复默认后的行。`404 models.unknown_role` |
+| `POST` | `/api/admin/models/probe` | admin | 请求体 `{"model_id": "<id>", "check": "converse" \| "tool_use"}`——在中心的默认工作区发起一次小型真实 Converse 调用（`tool_use` 带一个工具定义），不创建任何资源。响应 `{ok, model_id, check, region, latency_ms, stop_reason}`；AWS 报错时为 `{ok: false, …, error_code, message}`（仍为 `200`）。`400 models.invalid_id` |
+
+成员调用三个管理员路由会得到 `403 auth.forbidden`。
+
+## 控制台成本与告警 API / Console Costs and Alerts API
+
+估算花费与阈值告警规则（V2 页面 `/v2/costs`）。所有路由均为 **admin**；成员调用返回
+`403 auth.forbidden`。按 Workspace 隔离：花费读取该 Workspace 的账号与区域，规则保存在台账的
+`alert_rules` 表中。
+
+花费 = span token × 价格表（`model_prices`，见 [setup.zh-CN.md](setup.zh-CN.md#选择模型)），
+因此所有数字都是估算值。价格表里没有的模型只计 token、不计金额，并列在 `unpriced_models` 中。
+账号与区域内**所有**运行时的 span 都会计入：与本控制台任何 Agent 都不匹配的服务标记为
+`known: false`（同一 AWS 账号上的另一套部署，或已删除的 Agent），仍计入总额。按人统计把 span 的
+`session.id` 与控制台的 Chat 会话关联；`/v1` 与评估流量没有会话，归入未归属行（`actor: "—"`，
+`attributed: false`）。结果按 Workspace 与时间范围缓存 60 秒；`force=true` 跳过缓存。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/costs` | `?range=1h\|6h\|24h\|7d\|30d`（默认 `24h`）`&force=` → `{range, hours, generated_at, total_est_cost_usd, by_agent[{service, agent_id, agent_name, display_name, known, tokens, llm_calls, sessions, est_cost_usd}], by_actor[{actor, attributed, sessions, tokens, est_cost_usd}], unpriced_models[], estimate, cache}`。其他范围 → `422 costs.bad_range`；Logs Insights 失败或超时 → `502 observability.query_failed` |
+| `GET` | `/api/costs/month-to-date` | `?force=` → `{workspace_id, est_cost_usd, hours, unpriced_models[], estimate: true}`——自当月 1 日 00:00 UTC 起的花费，最多 720 小时 |
+| `GET` | `/api/alerts` | 只读台账，不调用 AWS → `{rules[], firing, kinds[]}` |
+| `POST` | `/api/alerts` | body `{kind, threshold, name?, comparison?, window?, enabled?, webhook_url?}` → `201` 规则。`comparison` 默认取该类型的自然方向 |
+| `PATCH` | `/api/alerts/{id}` | body 为 `{name, threshold, window, enabled, webhook_url}` 中任意字段；只修改传入的字段，`webhook_url: null` 或 `""` 删除 webhook。`kind` 与 `comparison` 不可改。未知 id 或其他 Workspace 的规则 → `404 alert.not_found` |
+| `DELETE` | `/api/alerts/{id}` | `{deleted: id}`；`404 alert.not_found` |
+| `POST` | `/api/alerts/evaluate` | 立即重新读取所有已启用的规则并记录状态 → `{workspace_id, evaluated_at, rules[], firing, unknown}`。无论查询参数如何，**从不发送通知** |
+
+规则：`{id, kind, name, comparison, threshold, window, enabled, has_webhook, state, last_value,
+last_detail, last_checked_at, last_fired_at, last_notified_at, created_by, created_by_name,
+created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webhook`。`state` 为 `ok`、
+`firing` 或 `unknown`；读不到的值（无流量、查询失败）记为 `unknown`，绝不记为 `ok`。
+`last_fired_at` 是规则最近一次*开始*触发的时间（当前或上一次触发期），`last_notified_at` 是最近一次
+发送尝试的时间。
+
+| `kind` | 值 | 方向 | 时间窗口 |
+|---|---|---|---|
+| `error_rate` | 失败 trace / trace 总数，0–1 | above | 规则的 `window`，`1h`–`7d` |
+| `latency_p95_ms` | trace P95 延迟，毫秒 | above | 规则的 `window`，`1h`–`7d` |
+| `online_quality` | 在线评估均值，0–1 | below | 固定 24 小时（忽略 `window`） |
+| `spend_usd` | 估算花费，美元 | above | 规则的 `window`，`1h`–`30d` |
+| `cost_mtd_usd` | 自 UTC 月初起的估算花费，美元 | above | 当月（忽略 `window`） |
+
+校验错误（`400`）：`alert.unknown_kind`、`alert.bad_comparison`、`alert.comparison_never_fires`
+（相反方向）、`alert.bad_window`、`alert.bad_threshold`（负数或非有限数，或 `error_rate` /
+`online_quality` 超出 0–1——错误率是比例，`0.05` 即 5%）。
+
+**Webhook。** 每条规则一个通用 https JSON webhook；Slack 或飞书的传入 webhook 会显示其中的
+`text`。请求体为 `{text, workspace_id, rule_id, kind, value, threshold, comparison, detail}`。
+只有后台检查会发送（DLC 调度器 `app/dlc/scheduler.py` 的 60 秒心跳每 5 分钟评估一次告警规则，
+并通过 `scheduler_claims` 行保证每次只由一个后端进程执行），每个触发期（进入 `firing`）只发送
+一次；结果追加到 `last_detail`。如果是手动重新检查先发现了状态变化，它不会发送，下一次后台检查
+仍会补发这一次通知；给已在触发中的规则新加 webhook 时也一样。URL 在保存时和每次发送时都会检查：`alert.webhook_not_https`、
+`alert.webhook_credentials`（URL 中带用户名或密码）、`alert.webhook_invalid`、
+`alert.webhook_unresolvable`、`alert.webhook_non_public`（任一解析地址为私有、回环、链路本地、
+保留、组播或未指定地址，含 IPv4 映射的 IPv6）。请求直接发往检查过的地址，不跟随重定向，超时 5 秒，
+且从不读取响应体。
+
 ## 控制台知识库 API / Console Knowledge Bases API
 
 `/api/knowledge-bases/*` 支撑知识库控制台（控制台 04），底层是 Bedrock 的*托管*知识库
@@ -599,6 +666,60 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 例如索引仍在构建）。其余任何 AWS `ClientError` 都走上文的全局映射（`aws.validation`、
 `aws.conflict` 等）。资源映射里没有 `kb_role_arn`（创建）或没有 `artifacts_bucket`
 （上传）的工作区尚未完成引导，会返回点明缺失键的 `500`。
+
+## 控制台上下文层 API（COA）/ Console Context Layer API
+
+`/api/context-layer/*` 把工作区连接到一个 COA（Context Ontology Accelerator）部署，并
+**以当前登录成员的身份**读取 COA。账本 `context_layers` 行只存标识；运行时状态、回调登记
+和 Agent OAuth 均实时读取。响应中永远不出现 COA 令牌、客户端密钥或授权会话 uri；授权 URL
+只返回给为其签发的成员本人。详见 [identity.md](identity.md) §7.7。
+
+| 方法 | 路径 | 策略 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/context-layer` | member | `{connected, can_manage}`；已连接时另含 `{name, prefix, env, region, console_url, api_endpoint, issuer, mcp_runtime_arn, serve_runtime_arn, connection, console_workload, runtimes: {mcp, serve}, ready, agent_oauth_enabled, callback_registered, authorization: {status: none\|pending\|authorized\|revoked, authorized_at, identity?}, demo_account: {available, username}, sign_out_url, referenced_by, probe_errors}`。已授权时带 `authorization.identity`：`demo` \| `own` \| `null`（未知），即令牌库中令牌的 `sub` 与体验账号的比较结果（未缓存时读一次令牌库，且不会发起授权）。`sign_out_url` 是 COA Web 客户端的 `/logout`（重新连接发现 Web 客户端之前为 null）。管理员还会拿到 `callback_url`、`agent_client_id`、`user_pool_id`、`callback_context_key`（`agentOauthCallbackUrls`）和 `demo_account_param`（参数名）。失败的实时探测读作 `null`，并列入 `probe_errors`；其中永远不含体验账号的密码 |
+| `PUT` | `/api/context-layer` | admin | `{prefix, env="dev", region, connection?, demo_account_param?}` → 从 SSM `/<prefix>/*` 与 `<prefix>-<env>-{api,web,auth}` 栈输出（COA 区域）发现部署，确认两个运行时均为 READY，创建 OAuth2 Connection `coa-<prefix>`（或采用 `connection`／已存在且客户端 id 为 COA Agent 客户端的 `coa-<prefix>`），确保控制台工作负载身份 `launchpad-console-<workspace>`，并写入账本行。`demo_account_param` 指定共享 COA 体验账号的 SSM SecureString：必须位于 `/<prefix>/launchpad/` 之下（否则在任何 AWS 调用之前返回 `422 context_layer.demo_param_scope`），且能解析为 `{username, password}`（否则返回 `409 context_layer.demo_param_invalid`，`detail.problem` 为 `not_found` \| `not_secure_string` \| `bad_shape`，从不包含参数值）；`""` 表示清除，省略则保留当前值。响应为状态 |
+| `DELETE` | `/api/context-layer` | admin | 断开上下文层 → `{disconnected, connection, console_workload}`；Connection 与工作负载身份保留。仍有 Agent 挂载时返回 `409 context_layer.referenced`（`detail.referenced_by`） |
+| `POST` | `/api/context-layer/authorize` | member | 请求体 `{account?: demo\|own}`（可选）。调用者本人的授权：令牌库已有其 COA 令牌时返回 `{authorized: true, connection}`，否则返回 `{authorized: false, authorization_url, connection}`（一次性；由 `/auth/return` 完成绑定）。未配置体验账号时，`account: "demo"` 返回 `404 context_layer.demo_unavailable`，否则记录该选择。无论选择哪个账号，授权请求都相同，且从不携带 `customParameters`（令牌库按它们区分令牌，带上任何参数完成的授权都无法被读取）：COA 登录页不会预填内容，浏览器已登录 COA 时会以该会话的用户完成授权 |
+| `GET` | `/api/context-layer/demo-account` | member | `{available, username, connection}`（未连接时为 false／null）：只读账本和缓存的参数，不做其他 AWS 调用。Chat 授权卡片用 `connection` 与其请求的提供方比对 |
+| `POST` | `/api/context-layer/demo-account/reveal` | member | `{username, password}`，带 `Cache-Control: no-store`；记录 Launchpad 用户名，从不记录密码。未配置体验账号时返回 `404 context_layer.demo_unavailable`，未连接时返回 `409 context_layer.not_connected` |
+| `POST` | `/api/context-layer/revoke` | member | 对调用者在该 Connection 上强制重新授权（`user_token_revocations`）→ `{revoked, provider, agents}` |
+| `GET` | `/api/context-layer/namespaces` | member | 以调用者身份调用 COA `GET /namespaces` → `{namespaces: [{namespace_id, name, display_name, description, owner, status, source_count, created_at, updated_at}]}` |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}` | member | 以调用者身份调用 COA `GET /namespaces/{id}` → `{namespace: {…同上字段}}`。`namespace_id` 必须是 UUID（否则返回 422，且不调用 COA） |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/sources` | member | COA `GET …/sources`（读完所有分页）→ `{namespace_id, sources: [{source_id, name, source_type, source_subtype, status, tables_discovered, created_at, updated_at}]}`。COA 的 epoch 时间转为 RFC 3339；状态原样保留 |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/metrics` | member | COA `GET …/metrics`（读完所有分页）→ `{namespace_id, metrics: [{name, description, unit, return_type, default_time_grain, synonyms, dialects: [{dialect, expression}], source_table, data_source_id}]}`：只包含 COA 返回给调用者的内容 |
+| `GET` | `/api/context-layer/namespaces/{namespace_id}/ontology` | member | COA `GET …/ontologies`，再对每个本体调用一次 `GET …/graph/ontology-overview?ontology_id=`（最多 8 个，每个 200 个类）→ `{namespace_id, ontologies: [{ontology_id, title, description, ontology_type, status, class_count, property_count, updated_at}], classes: [{uri, label, description, ontology_id, ontology}], failed: [ontology_id], truncated}`。COA 未能返回的本体概览列入 `failed`，其余照常显示 |
+| `GET` | `/api/context-layer/health` | member | `{runtimes: {mcp, serve}, ready, authorization_required, coa: {status, components: [{key, status}]} \| null, coa_error: {code, status} \| null, probe_errors}`：COA 区域的 `GetAgentRuntime`，加上以调用者身份调用的 COA `GET /system-health`。未授权时不调用 COA（`authorization_required: true`） |
+| `POST` | `/api/context-layer/playground` | member | `{namespace_id, query（≤ 4000）, session_id?, mode?: standard\|deep-reasoning, strategy?: best\|ontop\|nl_to_sql\|ontop_first\|nl_to_sql_first\|deep-reasoning}` → **SSE**。以调用者身份代理 COA 的 Serve 运行时（`stream: true`）。事件：`step {name, status, duration_ms, tool, detail}`、`token {text}`、`done {answer, tier, confidence, rationale, columns, rows（≤ 200）, row_count, rows_truncated, partial, guardrail_blocked, data_sources, citations, total_ms, session_id}`、`error {code, message, status, coa_error}`；调用者未授权时为 `auth_required {provider, tool: "context_layer", url, scopes, agent_id: ""}`，随后流结束。COA 静默时发送 `: keep-alive` 注释。`done` 中的 `session_id` 用于延续 COA 对话。未连接、令牌库失败或请求体无效时，在任何流开始之前以普通错误返回 |
+
+所有非 GET 路由在计费表中都是 `FREE`，Playground 也一样：COA 自身的开销记在 COA 的账号上，
+不由 Launchpad 计量。
+
+`AgentSpec.context_layer` = `{namespace_id（UUID）, namespace_name?}`，为 `harness` 或
+HTTP `zip_runtime` Agent 挂载一个命名空间。其他方式、`a2a` 协议、`code`/`code_bundle`，或
+名为 `coa` 的工具，都会返回 `422 validation.invalid_request`，错误行类型为
+`context_layer.unsupported_method`；未连接上下文层时创建或重新发布返回
+`409 context_layer.not_connected`。挂载了 COA 的 Agent 在 `/v1` 上返回
+`409 identity.as_user_requires_console`（流式调用为一个 `error` 事件）。
+调用者尚未授权时，对挂载了 COA 的 Agent 调用 `POST /api/agents/{id}/invoke` 返回
+`409 context_layer.authorization_required`（该接口没有授权卡片）；Chat 则显示
+`auth_required` 授权卡片。
+
+错误码：`context_layer.not_connected`（409）、`context_layer.authorization_required`
+（409，`detail.authorization_url`）、`context_layer.forbidden`（403——COA 拒绝：无授权）、
+`context_layer.reauthorize`（409——COA 拒绝了该令牌，下次获取会强制重新授权。不用 401，
+否则会结束控制台会话）、`context_layer.upstream`（502／504——COA 429、5xx 或超时）、
+`context_layer.coa_not_found`（404——COA 中没有该命名空间或条目，或不向调用者开放）、
+`context_layer.invalid_namespace`（422——不是 UUID）、
+`context_layer.referenced`（409）、`context_layer.unsupported_method`（422——也用于对挂载
+COA 的 Agent 做评估回放或转换）、`context_layer.not_found`（404——SSM 参数或栈不存在）、
+`context_layer.agent_oauth_disabled`（409）、`context_layer.cross_account`（422）、
+`context_layer.runtime_not_ready`（409）、`context_layer.discovery_failed`（502）、
+`context_layer.connection_mismatch`（422）、`context_layer.connection_not_found`（404）、
+`context_layer.identity_failed`（502——令牌库拒绝；detail 只含步骤与 AWS 错误码）、
+`context_layer.invalid_request`（422）。COA 拒绝时，`detail` 可能带有 `coa_message`（COA
+自身的消息，最多 200 个字符）和 `status`。Playground 的 `error` 事件另有
+`context_layer.no_result`（COA 没有找到答案）和 `context_layer.coa_rejected`（其他 4xx，例如
+问题有歧义）。
 
 ## 控制台 Memory API / Console Memory API
 
@@ -647,7 +768,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
-| `POST` | `/api/chat/{agent_id}` | 一轮对话，SSE 形式（`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`）；`{prompt, session_id?, as_user?, retry_of?}`（`retry_of` 见下文“重试失败的轮次”），不带 id 即开启新会话。`as_user`（仅 JWT 入站智能体）：`true` 发送登录用户的 Cognito JWT，`false` 使用工作区 M2M 令牌，省略时有用户池登录则用用户 JWT，否则用 M2M；未经用户池登录却传 `true` 返回 `409 chat.as_user_unavailable`。`meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`；两种情况下 Memory actor 都是 `scoped_actor`。`auth_required` `{provider, tool, scopes[], url, agent_id}` 是工具发起的 as_user（3LO）授权请求：`url` 为一次性授权 URL（控制台仅在其为 `https:` 时显示链接），`sessionUri` 留在服务端，回答会在其前后继续流式输出。历史中该请求保存为不含 URL 的 `role: "auth"` 行（`text` 为凭证名，`name` 为工具），因此恢复后只能重试；轮询 `GET /api/identity/grants/{connection}/status` 可得知授权何时完成。`policy_denied`（Harness；字段见“流式调用”）保存为 `role: "policy"` 行（`text` 为原因，`name` 为工具），恢复后显示为 V2 Chat 的策略拦截卡片，此时链接指向治理首页而非某个网关。仅控制台的状态事件（chat-streaming S2；公开 `/v1` 流与分享页从不发送）：`meta.started_at` 与 `tool.started_at`（epoch 毫秒）、`phase {phase: starting\|waiting_model\|streaming}`、`thinking {}`（Harness 正在推理；有节流，从不含推理文本）、`tool_end {id, status: success\|error\|denied, duration_ms}`（代码运行时未结束的工具由下一个事件结束）、每段静默期发送的具名 `heartbeat {elapsed_ms}`（`/v1` 仍是 `: keep-alive` 注释），以及运行时报告用量时在末尾发送一次的 `usage {input_tokens, output_tokens, total_tokens, model_calls}` |
+| `POST` | `/api/chat/{agent_id}` | 一轮对话，SSE 形式（`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`），另在一条已落账的回答收尾事件（tool / error / done，或没有 `done` 时的流结束）之前发出 `saved {message_id}`，供点赞/点踩关联；`/v1` 流不带此事件；`{prompt, session_id?, as_user?, retry_of?}`（`retry_of` 见下文“重试失败的轮次”），不带 id 即开启新会话。`as_user`（仅 JWT 入站智能体）：`true` 发送登录用户的 Cognito JWT，`false` 使用工作区 M2M 令牌，省略时有用户池登录则用用户 JWT，否则用 M2M；未经用户池登录却传 `true` 返回 `409 chat.as_user_unavailable`。`meta.inbound = {mode: jwt, caller: user_jwt\|m2m}`；两种情况下 Memory actor 都是 `scoped_actor`。`auth_required` `{provider, tool, scopes[], url, agent_id}` 是工具发起的 as_user（3LO）授权请求：`url` 为一次性授权 URL（控制台仅在其为 `https:` 时显示链接），`sessionUri` 留在服务端，回答会在其前后继续流式输出。历史中该请求保存为不含 URL 的 `role: "auth"` 行（`text` 为凭证名，`name` 为工具），因此恢复后只能重试；轮询 `GET /api/identity/grants/{connection}/status` 可得知授权何时完成。`policy_denied`（Harness；字段见“流式调用”）保存为 `role: "policy"` 行（`text` 为原因，`name` 为工具），恢复后显示为 V2 Chat 的策略拦截卡片，此时链接指向治理首页而非某个网关。仅控制台的状态事件（chat-streaming S2；公开 `/v1` 流与分享页从不发送）：`meta.started_at` 与 `tool.started_at`（epoch 毫秒）、`phase {phase: starting\|waiting_model\|streaming}`、`thinking {}`（Harness 正在推理；有节流，从不含推理文本）、`tool_end {id, status: success\|error\|denied, duration_ms}`（代码运行时未结束的工具由下一个事件结束）、每段静默期发送的具名 `heartbeat {elapsed_ms}`（`/v1` 仍是 `: keep-alive` 注释），以及运行时报告用量时在末尾发送一次的 `usage {input_tokens, output_tokens, total_tokens, model_calls}` |
 | `POST` | `/api/agents/{agent_id}/inbound-auth` | `agent.deploy`——`202 {agent, job_id, deployment_id}`。请求体 `{inbound_auth: {mode: iam\|jwt, jwt?} \| null}`（`null` 取消固定，改为继承工作区默认值）。以替换后的固定值重新发布已存规格：对同一 Runtime 执行 UpdateAgentRuntime，产生新版本。`422 agent.inbound_auth_unsupported`（harness／A2A 不支持 JWT）、`422 agent.inbound_auth_invalid`、`409 agent.deploy_in_progress` |
 | `GET` | `/api/identity/inbound-auth/default` | 成员——`{workspace_id, default: {mode: iam\|jwt, jwt?}, configured, cognito, cognito_issuer}`；`configured=false` 表示隐式 IAM；`cognito` 是面向工作区用户池的现成 JWT 配置，引导前为 null；`cognito_issuer` 是该用户池的 issuer（控制台、`/v1` 与评估所出示令牌的 issuer），无用户池时为 null |
 | `PUT` | `/api/identity/inbound-auth/default` | `identity.manage`——请求体 `{mode, jwt?: {discovery_url, allowed_clients[], allowed_audience[], allowed_scopes[], custom_claims[], source_connection?}}` → 同 GET 形状。`source_connection` 仅用于展示，不进入授权器配置。持久化前先探测发现文档（`422 identity.discovery_unreachable`／`identity.discovery_invalid`）。已部署的智能体在重新部署前保持原授权器 |
@@ -664,7 +785,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | `GET` | `/api/chat/{agent_id}/turns/{turn_id}/events?after=` | 恢复跟随一个仍在运行的控制台轮次（见下文“断线不丢的轮次”）：先返回 SSE id `after` 之后的事件（`0` = 整轮），再返回实时事件，轮次结束后关闭。若其中部分事件已离开缓冲区，先发一个 `gap {after, first_seq}`。轮次已不在本进程中，或属于其他 Agent、Workspace 或项目时返回 `404 chat.turn_not_found`；此时 `GET …/history` 中是台账已保存的内容 |
 | `POST` | `/api/chat/{agent_id}/turns/{turn_id}/stop` | 停止按钮：结束一个运行中的轮次。上游被关闭，已生成的部分回答与一条 `interrupted: stopped by the user` 行会被保存。工作线程记录停止后（最多约 5 秒）返回 `{turn_id, stopped}`，因此该会话的下一轮会被立即接受。轮次已结束时 `stopped: false` |
 | `GET` | `/api/chat/{agent_id}/sessions` | 该 agent 可回放的会话：`{session_id, actor_id, turns, last_at, ended_at, preview}`——`ended_at` 在控制台显式结束 runtime 会话后写入，仍存活或只是空闲时为 `null` |
-| `GET` | `/api/chat/{agent_id}/history?session_id=` | 某会话已渲染的对话条目，按回放顺序 |
+| `GET` | `/api/chat/{agent_id}/history?session_id=` | 某会话已渲染的对话条目，按回放顺序；每条带台账 `id` 和调用者自己的 `verdict`（`up`/`down`/`null`） |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **结束会话**——数据面 `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`。AWS 回 `ResourceNotFoundException`（会话早已结束或因空闲过期）时 `already_ended: true`，视为成功而非错误。台账行保留（历史仍可回放）并打上 `ended_at`；之后若在同一 id 下再发一轮，会开启新的 runtime 会话并清掉该标记。只有 runtime 支撑的 agent 才可结束（`zip_runtime`、`studio`、`container`、已发现的 runtime）；托管 Harness——无论自建还是导入——没有结束会话的操作，返回 409 `chat.session_stop_unsupported`，`detail.reason_code` 为 `harness`。其他 agent 或其他 workspace 的会话返回 404 `chat.session_not_found`。撑过 botocore 重试仍然出现的 `RetryableConflictException` 映射为 409 `aws.conflict` |
 
 **断线不丢的轮次。** 控制台的一轮对话运行在后台工作线程上，而不在 HTTP 响应里（`app/services/chat_turns.py`，chat-streaming §5.2）。工作线程读取上游、持久化对话条目，并把每个事件按 `seq` 编号发布到该轮的内存缓冲区。`POST /api/chat/{agent_id}` 的响应只是这个缓冲区的第一个订阅者；浏览器离开后，轮次继续运行并继续保存。
@@ -757,6 +878,16 @@ tools/toolkits/skills/knowledge_bases 与 `a2a` 协议。部署时服务端会�
 因此编辑后的列表在下次部署生效。部署器把主模型 ID 以环境变量 `MODEL_ID`、完整
 列表以环境变量 `ALLOWED_MODEL_IDS`（逗号分隔，主模型在前）传入运行时——两个变量
 只要 `spec.env` 已自行设置就以用户值优先。
+
+## 控制台 Agent API——代码视图 / Console Agents API
+
+`GET /api/agents/{agent_id}/source` 是 Agent「代码」页（`/v2/agents?view=source&id=`）背后的只读视图。
+它从不重新渲染模板，而是读回 AWS 上这个 Agent 实际持有的内容，所以上次部署之后模板有变化，也不会让视图
+和运行中的代码对不上。成员路由，调用者必须能看到这个 Agent。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/source` | `{agent_id, name, method, kind: code\|harness_config\|image, origin, files[{path, size, content, truncated, omitted: null\|binary\|budget}], files_total, ledger_version, deployment_status, …}`。**`zip_runtime` / `studio`**（`origin: deployed_package`）：由 `GetAgentRuntime` 找到 Runtime 运行的 S3 zip，用范围请求只读取中央目录和平台自己的文件（入口文件、`requirements.txt`、`requirements.lock`、转换导出的 `code_bundle` 文件、`skills/…`），不读安装的依赖；附带 `entrypoint`、`runtime_version`、`package_updated_at`。**`container`**（`build_context`）：`builds/{name}/source.zip`，即 CodeBuild 最近一次构建用的上下文。**`byoc`** 的 `code_zip` / `container_source`（`upload`）：成员上传的原始包（去掉顶层目录），附带 `artifact_kind`、`original_filename`、`uploaded_by`、`uploaded_at`、`sha256`；`container_image` 返回 `kind: image`，带 `image_uri` / `image_digest`，没有文件。**`harness`**（`harness_config`）：`GetHarness` 经白名单投影（不含 `arn`、执行角色、环境、环境制品/变量和认证配置），工具请求头的值、OAuth `customParameters` 的值和 URL 查询串打码；附带 `harness_version`、`config`。内容每个文件最多 512 KiB（`truncated`），每次响应最多 4 MiB（`omitted: budget`）；`?path=<列表中的路径>` 不受响应预算限制，单独读取该文件（路径不存在返回 404 `agent.source_file_not_found`）。`deployment_status` 是最近一次部署的状态，不是 `succeeded` 时，运行中的版本可能还是之前的代码。没有代码时返回 409 `agent.source_unavailable`，`detail.reason` 取 `method`（如导入的 Runtime）、`no_resource`、`deleted`、`gone`（资源或代码包已不存在）、`not_code`、`unreadable`、`no_bucket`。不改变任何状态 |
 
 ## 控制台 Agent API——版本与端点 / Console Agents API
 
@@ -869,14 +1000,19 @@ Pipeline 的数据源也可以读取 **CloudWatch 日志组**（`source.type = "
 
 `POST /api/eval/runs` 还接受可选的 `name`（1–64）与 `description`（≤ 1000）——控制台 V2 以命名的评估任务列出运行——每一行都带这两个字段（未命名时为 null）以及 `updated_at`。
 
+每个运行行（列表、详情、创建、停止、重新检查、再评一次）还带 `snapshot`：该运行评估的 Agent 版本，`{seq, source}`，`seq` 是 Agent 配置快照的序号（Agent 页面上的「快照 #N」）。`source` 取 `stamped`（提交时记录：已部署到 AWS 的最新快照——仍在部署中的快照并不是运行实际调用的版本）、`inferred`（旧行，按快照时间线推断：运行创建时已部署的最新快照，没有则取最早的快照）或 `observed`（时间窗口 / 选定会话 / 日志流运行，其会话早于运行本身：取运行创建时线上的版本）。日志来源运行、没有已部署快照的 Agent，以及早于所有快照、且在该运行与最早快照之间 Agent 又成功部署过的运行（无法确定评估的是哪个版本）为 `null`。推断出的版本从不回写。
+
 | Method | Path | 用途 |
 |---|---|---|
 | `GET` | `/api/eval/runs?limit&offset&mode&agent_id` | 最新在前的分页 `{runs, total, limit, offset}` |
 | `GET` | `/api/eval/runs/{run_id}` | 单个运行(分数 / insight 树 / `batch_eval_id` / `scenario_failures`——重试后仍失败而被跳过的模拟用户场景，其余场景照常运行，`[{scenario_id, retries, code, error}]`（所有场景都失败时运行才失败）/ `session_failures`——批次以 COMPLETED_WITH_ERRORS 结束时为 `{total, failed, kind, sessions: [{session_id, index, kind, error_type, message}]}`，`kind` 取 `telemetry_incomplete`（只有缺失或不完整 span 的错误：追踪数据没有完整到达 CloudWatch，重新评估也无法恢复）、`evaluator_error`、`mixed` 或 `unknown`，`index` 为从 1 开始的场景序号；无错误的运行或早于该字段的行为 null，首次读取其结果时补齐 / `error` / `stop_requested`)。 |
+| `GET` | `/api/eval/scorecard?agent_id=` | **Agent 评分卡**，只读账本（不调用 AWS）→ `{runs, agents, truncated}`。`runs` = 工作空间中查看者可见的评估器模式运行（不含 insights 运行；工作空间隔离时按运行创建者的规则过滤，且查看者看不到的 Agent 的运行会被去掉），取最新的 1000 个，按时间正序（截断了更早的运行时 `truncated: true`）：`{id, name, agent_key, status, error, created_at, updated_at, evaluators, scores, sessions, scope, dataset_name, dataset_version, benchmark, snapshot, created_by_name}`。`agent_key` 为 Agent id，日志来源运行为 `logs:<service_name>`。`scope`：`dataset` \| `cloud` \| `window` \| `sessions` \| `logs`。`benchmark` = `{kind, key, label, dataset_id, revision, size}`：本地数据集为 `dataset` / `ds:<id>`，label 为其当前名称（数据集已删除或对查看者隐藏时为运行上存储的名称），`revision` 为运行所回放用例的指纹（对规范化后的场景做 sha256 取前 16 位十六进制；旧行为 null）；云端数据集为 `cloud` / `cloud:<id>`，`revision` 为 `v<N>`（固定版本）或 `draft:<fingerprint>`；所有被动运行（时间窗口、会话、日志）都归入该 Agent 的 `live` 基准（`key: "live"`，label / revision 为 null）。`size` 为回放的场景数。`agents`（按最近评估倒序）= `{key, agent_id, name, method, log_source, deleted, current_seq, versions: [{seq, aws_version, created_at, created_by_name, note}]}`——`current_seq` 是已部署的最新快照；已删除的 Agent 保留其运行，使用存储的名称，版本时间线为空。带 `agent_id` 时只读该 Agent（可见时即使还没有运行也会列出），每个版本另带 `changes`：相对其之前已部署的最新快照的差异分组（`prompt`、`model`、`tools` 等） |
+| `GET` | `/api/eval/runs/compare-pair?a=&b=` | **并排比较两次运行** → `{runs: {a, b}, alignment, alignment_reason, cases, results, config}`。两次运行都必须是已结束的评估器运行（否则 422 `run.compare_unsupported`）；不存在、属于其他工作空间或被隐藏 → 404 `run.not_found`。`runs.*` 为运行行加上其 `benchmark`。`alignment`：`scenario`（两次运行都记录了每个会话回放的场景——`EvalRun.scenario_map`）、`order`（没有该映射的旧运行，仅当它没有跳过任何场景、且会话数恰好等于其数据集当前用例（或其固定的云端版本）的场景数时按位置配对）或 `none` 并附 `alignment_reason`（`live_traffic`、`different_benchmark`、`scenarios_skipped`、`session_count_mismatch`、`dataset_unavailable`——已删除、无法读取或对查看者隐藏）：只比较总体分数，不读取任何结果。对齐时，`cases` = `[{scenario_id, input, a: {session_id, results} \| null, b: …}]`，按 B 的场景顺序排列，其后是只有 A 有的场景（`input` ≤ 200 个字符），每一侧的评审记录来自其批量评估结果流（每侧读取一次，与 `GET /runs/{id}/results` 相同）；`results` = `{a: {available, reason?, detail?, truncated?}, b: …}`——某一侧无法读取时只影响该侧（其用例的 `results` 为空）。两个版本都已知且不同时，`config` = `{agent_id, from_seq, to_seq, between: [{seq, aws_version, note, created_at, created_by_name}]}`（`between` 为较小序号之后直到较大序号的快照）；同一版本时为 `{same: true, agent_id, seq}`；版本未知、不是同一个 Agent 或该 Agent 对查看者隐藏时为 `null`。差异本身由 `GET /api/agents/{id}/snapshots/diff?from_seq=&to_seq=` 提供 |
 | `GET` | `/api/eval/runs/{run_id}/results` | **终态评估器运行的逐会话评审记录** —— `{available, sessions: [{session_id, results: [{evaluator_id, level, score, label, explanation, error_type, error_message}]}], count, truncated}`。账本行只保存每个评估器的平均分;每个分数背后评审模型给出的理由只存在于批次自己的结果日志流中(`GetBatchEvaluation.outputConfig.cloudWatchConfig`,与在线评估视图读取的 `gen_ai.evaluation.result` 记录同族),该路由按需读取、绝不持久化。会话顺序与运行的 `session_ids` 一致。无可读内容时返回 `available=false` + `reason`(`insights_run` \| `no_batch` \| `run_active` \| `stream_missing` \| `unreadable` + `detail`)而非错误。不存在 → 404 `run.not_found` |
 | `POST` | `/api/eval/runs` | 启动运行(范围四选一:`dataset_id` \| `cloud_dataset_id` \| `session_ids` \| `lookback_hours`)→ 201。`session_source: "logs"`（仅用于展示，只能搭配 `session_ids` 范围，否则 422 `run.session_source_scope`）把范围记为 `dataset_name` `logs:<n>`，与 `window:<N>h` 相同。**评估对象**：`agent_id` 与 `log_source {service_name, log_group_names[1..10]}` 二选一（否则 422 `run.target_required`）。`log_source` 运行评估已在 CloudWatch 中、背后没有平台 Agent 的遥测（例如未托管在 AgentCore Runtime 上的 Agent）：批量评估的 `cloudWatchLogs` 数据源即 `serviceNames: [service_name]` 加所给的 `logGroupNames`，只支持被动范围（`session_ids` / `lookback_hours`；数据集范围 → 422 `run.log_source_scope`），且每个日志组必须存在（422 `run.log_group_missing`，`detail.missing`）。运行行回显 `log_source`，`agent_id` 为 `""`，`agent_name` 为服务名称。`cloud_dataset_id` 范围可附带 `dataset_version`(已发布版本号,如 `"2"`,绝不是 `DRAFT`;省略即草稿):版本必须存在于 `ListDatasetVersions`(否则 422 `run.dataset_version_unknown`,不创建运行行),`GetDataset` / `ListDatasetExamples` 读取该快照。`dataset_version` 搭配其他范围 → 422 `run.dataset_version_scope`。每个运行行都回显 `dataset_version`(草稿、本地、session 与时间窗口运行为 `null`)。不带 ADOT 启动器部署的 BYOC 代码 zip，若其端点 14 天内没有任何 Span → 400 `eval.no_telemetry`（`detail.service_name`），在创建运行行之前返回。|
 | `POST` | `/api/eval/runs/{run_id}/stop` | **停止活跃运行** → 202 返回该运行。批次已在 AWS 上存在(`batch_eval_id` 非空)时调用 `StopBatchEvaluation`:批次经 `STOPPING → STOPPED`,已评判的会话保留结果,轮询器把运行记为 `stopped`,附带这些部分分数 / insight 树以及 `error = "stopped by operator"`。仍在 `queued` 的运行在本地取消(worker 出队时跳过,不调用 AWS),立即返回 `stopped`。正在回放数据集或等待遥测(尚无批次)的运行在提示词之间停止,绝不会调用 `StartBatchEvaluation`。终态运行(`completed` / `failed` / `stopped`)→ 409 `run.not_active`;不存在 → 404 `run.not_found`。刻意不暴露 `DeleteBatchEvaluation`——账本保留的部分结果 AWS 会丢弃 |
 | `POST` | `/api/eval/runs/{run_id}/recheck` | `eval.run`——**重新从 AWS 读取失败运行的批次** → 202 返回该运行。适用于已启动批次（`batch_eval_id` 非空）的 `failed` 运行，以及尚无 `session_failures` 的部分失败 `completed` 评估器运行（重新落定时补齐）：调用一次 `GetBatchEvaluation`；批次已终态时按轮询器的方式落定该行（例如带分数的 `completed`，或带批次自身原因的 `failed`），仍在运行时该行回到 `evaluating` 并重新开始轮询。只读——不会重新运行，也不产生费用。其他运行 → 409 `run.not_recheckable`；不存在 → 404 `run.not_found`。每次批次等待都受 `eval_batch_wait_s` 限制（默认 7200 秒，每 30 秒轮询一次）；超时的运行以「batch evaluation still <STATUS> after the N-minute wait」失败，可在 V2 任务详情中重新检查 |
+| `POST` | `/api/eval/runs/{run_id}/rerun` | `eval.run`，计费——**在相同范围上再次评估该运行的对象** → 201 返回新运行，与 `POST /api/eval/runs` 的启动方式完全相同：相同的校验、可见性和项目预算门禁（409 `project.budget_exhausted`）。请求体 `{name?}`（1–64；默认 `<原名称> · 再评`）。评估对象（Agent 或 `log_source`）、评估器和描述保持不变，数据集也相同（云端运行固定的 `dataset_version` 仍然固定，草稿仍是草稿——用例会重新读取），或使用相同的时间窗口长度（`window:<N>h` → `lookback_hours: N`）。模拟用户数据集使用平台当前的用户模拟模型（模型页面上的 `actor_model_id`）。选定会话或日志流运行（只会重复给同一批会话打分）以及 insights 运行 → 422 `run.rerun_unsupported`；不存在 → 404 `run.not_found` |
 | `DELETE` | `/api/eval/runs/{run_id}` | `eval.run`——**移除没有产出结果的运行**（`failed` / `stopped`）的账本行 → `{deleted, run_id, status, aws_batch_left_in_place}`。只删账本行：已到达 AWS 的批量评估保持不动（AWS 仍是事实来源，该行只是控制台的指针，响应里会指明）。`completed` 运行是评估历史，活跃运行须先停止 → 409 `run.not_deletable`；不存在 → 404 `run.not_found`。评估页运行表和助手 NEXT STEPS 历史在这类行上显示 ✕ |
 | `GET` | `/api/eval/runs/{run_id}/recommendation-inputs` | **基于该运行的优化建议将改写的内容** → `{source, system_prompt, tools: [{name, description, origin}], notes, evaluators, default_evaluator, eligible, reason_code}`。`source: "harness"` = 实时读取 Managed Harness（`GetHarness`：系统提示词、每个 `inline_function` 的描述，以及每个 `agentcore_gateway` 的 target 工具 schema，命名为 `<target>___<tool>`，均按 Harness `allowedTools` 过滤）；`"spec"` = Launchpad Agent 配置（提示词 + 可发现的工具）；`"manual"` = 无可读内容（无提示词的 BYOC、CloudWatch 来源的运行、已删除的 Agent），控制台要求用户填写两项输入。`notes` 列出无法读取的内容（`remote_mcp_runtime_only`、`gateway_unreadable`，以及运行比其 Harness 存在更久或 GetHarness 被拒绝时的 `harness_unreadable`——此时输入回退到配置 / 手动输入，而不是报错）。`evaluators` = 所有可作为优化目标的评估器，形如 `[{id, name, level, group: run|builtin|third_party|custom, recommended}]`：该运行自身的评估器在前，其后是开发者指南推荐的两个目标（`Builtin.GoalSuccessRate` / `Builtin.Helpfulness`，`recommended: true`），再是 AWS 内置、第三方托管评估器和本账号 ACTIVE 的自定义评估器（每个自定义评审都用 `GetEvaluator` 读取配置）。`excluded_evaluators` = `[{id, reason}]`，列出不能作为目标的评估器：`lower_is_better`（惩罚型分数）、`ground_truth`（轨迹匹配器、读取 `{expected_response}` 等占位符的评审、读取参考答案的托管代码评估器）、`categorical`（非数值评分）、`unavailable`（该运行用过但已不存在）。`POST` 使用相同规则（422 `recommendation.evaluator_<reason>`）。没有会话 id 的运行（时间窗口运行）`tools_eligible` 为 false |
 | `GET` | `/api/eval/runs/{run_id}/recommendations` | 从该运行启动的优化建议，最新在前 → `{recommendations: [{id, kind, recommendation_id, status, input_source, system_prompt, evaluator, tools, skipped_tools, result, error, …}]}`。每次读取时对未终态的行调用一次 `GetRecommendation` 刷新（无后台轮询）；结束但没有产出文本的任务显示为 `FAILED` 并附 AWS 自身的错误。工具任务若因部分工具未出现在 trace 中被拒绝，会剔除这些工具后**重试一次**（`skipped_tools`） |
@@ -1073,7 +1209,8 @@ ledger 只存标识。列表返回 workspace 账号内全部配置并按 `owner`
 | Method | Path | Result |
 |---|---|---|
 | `GET` | `/api/observability/sessions/{session_id}` | 会话详情附带 `online_scores: {configs[{config_id, config_name, owner, agent{id,name}?, records[{time, evaluator_id, level, score, label, explanation, trace_id}]}], total, unavailable, configs_exist}`——该会话在所有配置下的结果记录(agent 持有的块排在最前),用一条前缀 `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` 查询读取。失败降级:结果查询失败只置 `unavailable: true`,绝不影响追踪与对话记录;`configs_exist` 表示 workspace 是否有 agent 持有的配置(结果与配置都没有时 UI 隐藏该区块) |
-| `GET` | `/api/observability/sessions/{session_id}/transcript` | 只取对话内容——返回 `{session_id, transcript}`，`transcript` 结构与会话详情相同，**不**跑 Logs Insights 查询（V2 评估结果抽屉用它）。可选 `agent_id` 用于归属没有账本记录的会话（其他 workspace 的 id 会被忽略）。没有 Memory 事件的评估会话从 runtime 的 otel-rt-logs 内容记录重建对话；Harness 读其 backing runtime 的日志组（`harness_<name>-<id>-DEFAULT`），关闭记忆的 Harness 只有这一份记录 |
+| `GET` | `/api/observability/sessions/{session_id}/transcript` | 只取对话内容——返回 `{session_id, transcript}`，`transcript` 结构与会话详情相同，**不**跑 Logs Insights 查询（V2 评估结果抽屉用它）。可选 `agent_id` 用于归属没有账本记录的会话（其他 workspace 的 id 会被忽略）；再加上可选的 `since`（其首个 span 的 ISO 时间），Memory 中没有内容的会话可从该 Agent 的 runtime 内容日志重建对话——会话详情也以自身的首个 span 时间这样回退。没有 Memory 事件的评估会话从 runtime 的 otel-rt-logs 内容记录重建对话；Harness 读其 backing runtime 的日志组（`harness_<name>-<id>-DEFAULT`），关闭记忆的 Harness 只有这一份记录 |
+| `POST` | `/api/observability/session-previews` | 只读（用 POST 只是为了携带每个会话的开始时间）。请求体 `{sessions: [{session_id, first?}]（1–20 个）, agent_id?}` → `{previews: [{session_id, available, reason, input, output, user_turns}]}`——每个会话的首条用户输入、最后一条 Agent 回复（各截断至 600 字符）与用户轮次数。数据来源与 `/transcript` 相同，并行读取，但不统计长期记忆记录（V2 创建评估任务里「Agent 轨迹」选择器用它，每次读一页）。`agent_id` 用于归属没有账本记录的会话；`first`（会话列表中的首个 span 时间）让这类会话可回退到该 Agent 的 runtime 内容日志。调用方无权查看或读取失败的会话仍保留该行，`available: false` 并给出 `reason`（`not_found` · `read_failed` · `not_platform_session` · `memory_unavailable` · `no_turns`） |
 | `GET` | `/api/overview/online-quality` | 「在线质量 · 24h」tile:`{range: "24h", mean, scores, sessions, agents, configs, evaluators[{evaluator_id, mean, count, polarity}], cached}`——对每个 (evaluator, agent 持有配置) 组合按计数加权求均值,lower-is-better 的 evaluator 取 `1 − mean`,因此 tile 始终「越高越好」;`evaluators[].mean` 保持原始值;`configs` 统计 workspace 内 agent 持有的配置数(账本),`agents` 统计有评分的 agent 数,因此「已配置但尚无评分」与「没有配置」可区分。按 workspace 缓存 120 秒并单飞,`force=true` 绕过;没有 agent 持有配置的 workspace 直接返回空载荷,不调用 AWS |
 
 ## 控制台可观测 API——会话即时评分 / Console Observability API
@@ -1136,6 +1273,33 @@ counter_complete{<counter>: bool}}`。
 都已上报，`complete` 也为 false）。没有任何一行上报的计数是未知，本身不会让拆分变成部分。`scope`
 恒为 `reported`：这是对上报了用量的任务的观测统计——不是计费总额，也不做任何费用估算。在用量
 采集之前写出的旧结果，每一侧都表现为 `missing_rows == rows` 且计数全为 `null`。
+
+## 控制台 Agent IDE API / Console Agent IDE API
+
+基于平台 Agent IDE 运行时的 Agent IDE（`/v2/coding`，参见[架构](architecture.zh-CN.md#agent-ide--基于-agentcore-上-codex-的远程-web-ide)）。代码仓库在**任何可见性模式下都只属于创建者**：所有按 id 访问的路由上，他人的或不存在的 id 都是 `404 coding.repo_not_found`；管理员只能通过 `GET /repos?all=1` 和 `DELETE` 接触他人的代码仓库。所有 2xx 都返回 JSON。需要运行时的路由在 workspace 未安装运行时时，会在任何 AWS 调用前返回 `409 coding.runtime_not_installed`。
+
+| 方法 | 路径 | 策略 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/coding/runtime` | member | `{installed, status, runtime_arn（仅管理员）, image_tag, job（log_tail 仅管理员）, models[], efforts[], default_model, default_effort, repair_recommended}` |
+| `POST` | `/api/coding/runtime/install` | admin | 安装或修复 → `202 {job_id, status}` |
+| `DELETE` | `/api/coding/runtime` | admin | 卸载 → `202 {job_id, status}`；有代码仓库正在运行回合时返回 `409 coding.runtime_in_use`（快照保留） |
+| `GET` | `/api/coding/repos` | member | `{repos: [repo]}`——调用者自己的代码仓库；`?all=1`（管理员）返回本 workspace 全部代码仓库，`owned` 标明归属 |
+| `POST` | `/api/coding/repos` | member | 请求体 `{name（≤ 80）, description?（≤ 500）}` → `201 repo`（不调用运行时） |
+| `GET` | `/api/coding/repos/{repo_id}` | member（所有者） | `repo` + `turns[]`（最新 20 个，按时间正序）+ `active_turn` |
+| `PATCH` | `/api/coding/repos/{repo_id}` | member（所有者） | 请求体 `{name?, description?}` → `repo` |
+| `DELETE` | `/api/coding/repos/{repo_id}` | member（所有者或管理员） | 停止运行时会话（尽力而为），删除代码仓库的快照、导出文件、下载文件和台账行 → `{deleted: true}`；回合运行中返回 `409 coding.turn_running`；S3 拒绝时返回 `502 coding.delete_failed`（可重试） |
+| `POST` | `/api/coding/repos/{repo_id}/turns` | member（所有者） | 请求体 `{prompt, model?, effort?}` → `202` 回合行（`status: running`）。`409 coding.turn_running`、`422 coding.model_invalid` / `coding.effort_invalid`、`413 coding.prompt_too_long`（> 32 KB）、`409 coding.runtime_busy`（卸载中）、`502 coding.runtime_error` |
+| `POST` | `/api/coding/repos/{repo_id}/interrupt` | member（所有者） | `{interrupted: bool}` |
+| `GET` | `/api/coding/repos/{repo_id}/events` | member（所有者） | SSE，`?after=<seq>` 或 `Last-Event-ID`：先发 `event: status {repo_status, active_turn}`；每条记录为 `id: <seq>` + `event: event`；`: keep-alive`；25 分钟后 `event: reconnect`；失败时 `event: error {code, message}` 后结束 |
+| `GET` | `/api/coding/repos/{repo_id}/tree` | member（所有者） | `?path=&depth=1..4` → `{path, entries: [{path（相对根目录）, dir, size, symlink?}], truncated}` |
+| `GET` | `/api/coding/repos/{repo_id}/file` | member（所有者） | `?path=&rev=head\|turn` → `{path, exists, content, sha256, size, binary}` |
+| `PUT` | `/api/coding/repos/{repo_id}/file` | member（所有者） | 请求体 `{path, content, expected_sha256?}` → `{path, sha256, size}`；`409 coding.file_conflict`（`detail: {sha256}`）、`409 coding.turn_running`、`413 coding.file_too_large` |
+| `GET` | `/api/coding/repos/{repo_id}/changes` | member（所有者） | `?scope=worktree\|turn` → `{scope, changes: [{path, status, old_path?}]}` |
+| `GET` | `/api/coding/repos/{repo_id}/diff` | member（所有者） | `?scope=` → `{scope, diff, truncated}` |
+| `POST` | `/api/coding/repos/{repo_id}/download` | member（所有者） | 请求体 `{path?}`：给出路径 = 下载该文件（文本或二进制，≤ 200 MB），不给 = 整个代码仓库打包为 `<repo>.zip`（与部署导出相同的文件集合：已跟踪和未被忽略的未跟踪文件，不含 `.git` 和依赖目录；≤ 50 MB）→ `{url, filename, size, expires_in}`——有效期 `expires_in`（300）秒的预签名 S3 GET，应答带 `Content-Disposition: attachment`（RFC 5987 `filename*`）。回合运行期间也可用。`404 coding.file_not_found`、`413 coding.download_too_large`（`detail: {max_bytes, size?}`）、`422 coding.path_invalid`（目录也是）、`409 coding.runtime_outdated`（运行时安装于支持文件下载之前：修复即可） |
+| `POST` | `/api/coding/repos/{repo_id}/deploy` | `perm:agents.deploy`（所有者） | 请求体 `{agent_name?, description?, artifact_kind?, entrypoint?, python_version?}` → `202 {agent_id, job_id, created}`；创建 `byoc` Agent（创建者为调用者）或重新发布代码仓库已有的 Agent。`409 coding.turn_running`、`422 coding.deploy_failed`（`detail.reason` = `dockerfile_missing` \| `entrypoint_missing`（附 `entrypoint`、`candidates`） \| `invalid_spec`（附 `errors`））、`413 byoc.upload_too_large`（导出超过 250 MiB 的 BYOC zip 上限，下载前即拒绝），以及 `POST /api/agents` / 重新部署的全部拒绝 |
+
+`usage` = `{input, cached_input, cache_write, output, reasoning_output}`（codex 计数：`input` 包含缓存命中与缓存写入，`output` 包含推理 token）。时间戳是不带时区的 UTC ISO 字符串。路径错误为 `422 coding.path_invalid`，不会到达运行时；其他运行时失败为 `502 coding.runtime_error`，快照恢复失败为 `502 coding.restore_failed`。
 
 ## 控制台账户 API / Console Accounts API
 

@@ -167,7 +167,8 @@
     "videos": "Video introductions",
     "announcements": "Announcements",
     "connections": "Outbound credentials",
-    "myConnections": "My authorizations"
+    "myConnections": "My authorizations",
+    "contextLayer": "Context layer"
   },
   "videos": {
     "kicker": "// LEARN",
@@ -2334,6 +2335,8 @@
     "agent.invoke_not_supported": "This Runtime is not available for invocation",
     "agent.redeploy_external": "Discovered runtimes are externally owned and cannot be re-published",
     "agent.not_found": "Agent not found",
+    "agent.source_unavailable": "No code is available for this agent",
+    "agent.source_file_not_found": "The file is not in this agent's source",
     "videos.not_found": "Video not found",
     "videos.conflict": "This video changed. Reload it before saving or publishing.",
     "chat.session_stop_unsupported": "This agent's sessions cannot be ended from the console — a Harness has no session-stop operation",
@@ -2773,6 +2776,10 @@
     "alert.not_found": "Alert rule not found.",
     "alert.unknown_kind": "Unknown alert kind.",
     "alert.webhook_not_https": "A webhook URL must start with https://.",
+    "alert.webhook_invalid": "The webhook URL is not a valid URL with a host.",
+    "alert.webhook_credentials": "A webhook URL must not contain a user name or password.",
+    "alert.webhook_unresolvable": "The webhook host does not resolve.",
+    "alert.webhook_non_public": "The webhook host resolves to a private or otherwise non-public address.",
     "annotation.annotators": "Calibration needs at least two independent annotators.",
     "annotation.bad_items": "Every item needs a unique ref.",
     "annotation.bad_label": "This label is not one of the allowed labels.",
@@ -2949,6 +2956,48 @@
     "dataset.invalid_jsonl": "A line of the JSONL file is not valid JSON.",
     "dataset.kind_immutable": "A dataset's kind cannot change — replacement items must keep the same shape.",
     "dataset.not_found": "Dataset not found.",
+    "context_layer.not_connected": "This workspace has no connected COA context layer. An administrator connects one on the Context layer page.",
+    "context_layer.authorization_required": "Authorize Launchpad to read COA as you first.",
+    "context_layer.forbidden": "COA refused this: you have no grant for it in COA.",
+    "context_layer.reauthorize": "COA no longer accepts your authorization. Authorize again.",
+    "context_layer.upstream": "COA did not answer correctly. Try again later.",
+    "context_layer.referenced": "Agents still attach the context layer. Detach it from them first.",
+    "context_layer.unsupported_method": "This agent cannot use a COA context layer.",
+    "context_layer.not_found": "No COA deployment was found with this prefix, env and region.",
+    "context_layer.agent_oauth_disabled": "The COA deployment has no agent OAuth client. Deploy COA with the agentOauthCallbackUrls context first.",
+    "context_layer.cross_account": "The COA deployment must be in this workspace's AWS account.",
+    "context_layer.runtime_not_ready": "A COA runtime is not READY yet.",
+    "context_layer.discovery_failed": "Launchpad could not read the COA deployment.",
+    "context_layer.connection_mismatch": "That Connection does not hold the COA agent OAuth client.",
+    "context_layer.connection_not_found": "No OAuth2 Connection with that name exists in this workspace.",
+    "context_layer.identity_failed": "AgentCore Identity could not provide your COA token.",
+    "context_layer.invalid_request": "The prefix, env or region is not valid.",
+    "context_layer.coa_not_found": "COA has no such namespace or item, or does not show it to you.",
+    "context_layer.no_result": "COA found no answer to this question.",
+    "context_layer.coa_rejected": "COA could not take this question.",
+    "context_layer.invalid_namespace": "A COA namespace id is a UUID.",
+    "coding.repo_not_found": "Repository not found.",
+    "coding.runtime_not_installed": "The Agent IDE runtime is not installed in this workspace.",
+    "coding.turn_running": "A turn is already running in this repository.",
+    "coding.no_turn": "No turn is running.",
+    "coding.file_conflict": "The file changed since you opened it.",
+    "coding.path_invalid": "Invalid file path.",
+    "coding.file_too_large": "The file is too large (2 MB at most).",
+    "coding.model_invalid": "The Agent IDE runtime does not offer this model.",
+    "coding.effort_invalid": "This reasoning effort is not supported.",
+    "coding.prompt_too_long": "The prompt is too long (32 KB at most).",
+    "coding.runtime_error": "The Agent IDE runtime did not answer. Try again.",
+    "coding.deploy_failed": "Deploying the repository failed.",
+    "coding.restore_failed": "The repository's saved snapshot could not be restored. Try again.",
+    "coding.delete_failed": "The repository's saved files could not be deleted. Try again.",
+    "coding.runtime_busy": "The Agent IDE runtime is being installed or uninstalled. Try again when it finishes.",
+    "coding.runtime_in_use": "A turn is still running in an Agent IDE repository in this workspace. Wait for it to finish or interrupt it, then uninstall.",
+    "context_layer.demo_param_scope": "The demo account parameter must be an SSM parameter under /<prefix>/launchpad/ of the connected COA deployment.",
+    "context_layer.demo_param_invalid": "The demo account parameter is missing, is not a SecureString, or is not JSON with a username and password.",
+    "context_layer.demo_unavailable": "This context layer has no demo account. An administrator sets one on the Context Layer page.",
+    "coding.file_not_found": "The file no longer exists in the repository.",
+    "coding.download_too_large": "Too large to download: a file can be 200 MB at most, the repository archive 50 MB.",
+    "coding.runtime_outdated": "The Agent IDE runtime is older than this console. An administrator can repair it from Agent IDE.",
     "dataset.not_synced": "This dataset has no live AWS copy — sync it to AWS first.",
     "dataset.publish_failed": "Publishing the dataset version failed.",
     "dataset.sync_failed": "AWS rejected the dataset sync.",
@@ -3228,6 +3277,7 @@
     "run.not_active": "This run already ended and cannot be stopped.",
     "run.not_deletable": "Only failed or stopped runs can be removed — stop an active run first; completed runs are kept as evidence.",
     "run.not_found": "Evaluation run not found.",
+    "run.rerun_unsupported": "Only a dataset replay or a time-window evaluator run can be evaluated again.",
     "run.not_recheckable": "Only a failed run that started a batch evaluation can be rechecked.",
     "run.not_snapshotable": "Only a completed run tied to a criteria table can be snapshotted.",
     "run.repeats_range": "Repeats is out of range.",
@@ -3263,7 +3313,22 @@
     "skill_lab.taskgen_duplicate_id": "The edited ids are not unique.",
     "skill_lab.taskgen_empty_selection": "No generated tasks selected — keep at least one row to save.",
     "snapshot.not_found": "Snapshot not found.",
+    "snapshot.never_deployed": "This snapshot never deployed successfully, so it is not a known-good rollback target.",
     "snapshot.spec_invalid": "This snapshot's spec no longer validates against the current schema.",
+    "snapshot.stale_reference": "This snapshot mounts knowledge bases that no longer exist.",
+    "snapshot.diff_side_required": "Name at least one snapshot to compare.",
+    "budget.level_in_use": "People are still assigned to this level. Move them to another level first.",
+    "budget.level_name_taken": "A level with this name already exists.",
+    "budget.level_not_found": "This budget level no longer exists.",
+    "budget.invalid_amount": "Enter a non-negative amount within the allowed range.",
+    "budget.invalid_level_name": "A level name needs 1 to 64 characters.",
+    "budget.invalid_period": "The month must look like YYYY-MM.",
+    "rates.unknown_key": "This rate is not known to the server.",
+    "rates.price_incomplete": "A price needs at least an input and an output rate.",
+    "rates.invalid_value": "Rates must be finite, non-negative numbers within the allowed range.",
+    "rates.invalid_model_id": "This is not a valid model id.",
+    "rates.override_not_found": "This model has no console price override.",
+    "run.compare_unsupported": "Only finished evaluator runs can be compared: insights runs and runs still in progress cannot.",
     "sso.discovery_incomplete": "The identity provider's discovery document is incomplete.",
     "sso.idp_bad_response": "The identity provider did not answer with JSON.",
     "sso.idp_http_error": "The identity provider answered with an HTTP error.",
@@ -4266,11 +4331,12 @@
     "candidatePromptPlaceholder": "Edit the system prompt for the candidate version…",
     "candidateCode": "CANDIDATE CODE (studio)",
     "candidateCodePlaceholder": "Edit the studio agent code for the candidate version…",
-    "candidateHint": "The candidate version is minted from this agent's current spec plus your edits below. Production keeps serving the current version until you promote.",
+    "candidateHint": "The candidate version is minted from this agent's current spec plus your edits below. Until you promote, it only receives the current ramp stage's share of this agent's live traffic.",
     "versionFraming": "current v{{current}} → candidate v{{candidate}}",
     "eligibilityHint": "Only active HTTP AgentCore Runtime agents can be canaried. Disabled reasons come from the backend capability contract.",
     "experimentalOnly": "The weights below split REAL production traffic for this agent through a dedicated canary gateway. Promote and roll back really change what production serves.",
     "setup": "SET UP 90/10",
+    "setupAt": "SET UP {{weights}}",
     "setupIncomplete": "Setup did not finish. The dedicated gateway and stable endpoint exist, but the candidate A/B test does not — production still serves the current version. Setup cannot be retried on this canary: roll back, clean up, then create a new one.",
     "running": "RUNNING…",
     "retry": "RETRY",
@@ -4333,11 +4399,12 @@
       "note": "The candidate winning advances directly. Ties and non-significant results require override; the current version winning and insufficient evidence remain blocked."
     },
     "completeEarly": "Complete now (skip 1/99)",
-    "completeEarlyHint": "Harness canary: its traffic is Dataset replay, so the 1/99 stage would send almost every session to the treatment without adding comparative evidence. On this verdict you can complete straight away — the A/B test stops and production stays on the new version; a tie or a non-significant result needs your explicit confirmation. You can also keep ramping to 1/99.",
+    "completeEarlyHint": "Test traffic is paired Dataset replay: every question already went to both versions, so the 1/99 stage would add no comparative evidence. On this verdict you can complete straight away — the A/B test stops and production serves the candidate version; a tie or a non-significant result needs your explicit confirmation. You can also keep ramping to 1/99.",
     "plan": {
       "title": "Ramp plan",
       "first": "Run the 90/10 traffic + verdict stage first",
       "firstHint": "Untick to start at 50/50: the treatment is already production DEFAULT, so 90/10 caps no exposure and only starves the treatment of samples.",
+      "firstHintRuntime": "Untick to start at 50/50: half of this agent's live platform traffic reaches the candidate as soon as setup finishes. Test traffic is paired at every stage, so 90/10 costs one more round, not samples.",
       "half": "50/50 traffic + verdict (required)",
       "last": "1/99: decided after the 50/50 verdict"
     },
@@ -5709,7 +5776,31 @@
       "tooManyEvaluators": "{{n}} evaluators are ready but one batch evaluation applies at most {{max}} — open New Run and deselect the ones that overlap (the run is otherwise identical).",
       "remove": "Remove this failed run from the history",
       "removedToast": "Run {{id}} removed",
-      "meanScoreCoverage": "normalized mean {{mean}} over {{n}} evaluator(s), from {{scored}}/{{total}} sessions"
+      "meanScoreCoverage": "normalized mean {{mean}} over {{n}} evaluator(s), from {{scored}}/{{total}} sessions",
+      "titleAgain": "Offline evaluation",
+      "historyHead": "Evaluations of this agent on this Dataset ({{n}})",
+      "latest": "Latest composite",
+      "openScorecard": "Open in the scorecard",
+      "colRun": "Run",
+      "colScore": "Composite",
+      "coverageSub": "from {{scored}}/{{total}} sessions",
+      "sameVersion": "Same-version re-run",
+      "sameVersionHint": "The difference from this version's previous run: only the evaluation's own noise, not a version change",
+      "regression": "Regressed",
+      "compareVersion": "Compare with previous version",
+      "compareRun": "Compare with previous run",
+      "compareHint": "Compare case by case with run {{id}} ({{version}})",
+      "caption": "Composite = the normalized mean of the {{n}} evaluator(s) every run used (higher is better). A change compares with the newest run of an earlier version; a same-version re-run compares with that version's previous run.",
+      "captionNoCore": "These runs share no evaluator, so there is no comparable composite.",
+      "more": "Showing the newest {{shown}} of {{n}} runs.",
+      "moreLink": "See all in the scorecard",
+      "otherBenches": "This agent has {{count}} more evaluation(s) on other Datasets.",
+      "breakdown": "Evaluator breakdown ({{count}})",
+      "breakdownSub": "One column per agent version, averaged when a version ran more than once; the newest column shows the change from the previous version.",
+      "breakdownMore": "{{count}} earlier version(s) are in the scorecard.",
+      "colEvaluator": "Evaluator",
+      "scorecardError": "Could not read the evaluation history: {{message}}",
+      "breakdownUnrecorded": "{{count}} run(s) from before the version records are not in the breakdown."
     },
     "iterate": {
       "title": "Read the scores and the traces, then iterate",
@@ -6184,6 +6275,13 @@
       "view": "View",
       "yes": "Yes"
     },
+    "attention": {
+      "dismiss": "Dismiss",
+      "restore": "Restore",
+      "dismissedCount": "Dismissed {{count}}",
+      "dismissedList": "Dismissed items",
+      "localHint": "Dismissals are kept in this browser only, for 30 days; an item shows again once its status changes"
+    },
     "range": {
       "1h": "Last 1 hour",
       "6h": "Last 6 hours",
@@ -6212,11 +6310,13 @@
       "evaluators": "Evaluators",
       "experiments": "A/B experiments",
       "online": "Online evaluation",
+      "models": "Models",
       "showExpert": "Show all modules",
       "showBusiness": "Show essentials only",
       "promotions": "Releases",
       "environments": "Environments",
       "costs": "Spend & alerts",
+      "coding": "Agent IDE",
       "fleet": "Fleet",
       "issues": "Issue box",
       "intents": "Intent view",
@@ -6387,7 +6487,9 @@
           "container": "Other Agent SDK",
           "containerDesc": "Bring an agent SDK with its own loop (e.g. Claude Agent SDK); built by CodeBuild into an ARM64 container.",
           "byoc": "Bring your own code",
-          "byocDesc": "Upload your own agent code (zip or Dockerfile context) or point at an existing ECR image; the platform packages, deploys and operates it."
+          "byocDesc": "Upload your own agent code (zip or Dockerfile context) or point at an existing ECR image; the platform packages, deploys and operates it.",
+          "coding": "Agent IDE",
+          "codingDesc": "Describe the agent and a codex coding assistant writes, runs and tests any code for it in an AgentCore microVM, from a browser IDE; the result deploys as bring-your-own-code."
         },
         "recommended": "Recommended",
         "classicForm": "Full form",
@@ -6588,8 +6690,12 @@
             "ingestFailed": "Ingestion failed",
             "failed": "Creation failed",
             "unknown": "Checking status"
-          }
+          },
+          "keptNote": "A knowledge base created here stays in your workspace knowledge base list, even if you remove it from this agent or leave the wizard. Delete it there when you no longer need it.",
+          "keptLink": "Open knowledge bases",
+          "busyBlock": "The knowledge base is still being created and its files uploaded. You can deploy once this finishes."
         },
+        "codingBadge": "Opens the IDE",
         "resourceName": "Resource name",
         "guardrail": {
           "title": "PII protection",
@@ -6664,6 +6770,59 @@
           "unbound": "Unbound"
         }
       },
+      "source": {
+        "open": "Code",
+        "title": "Code · {{name}}",
+        "metaTitle": "Source",
+        "origin": "Read from",
+        "origins": {
+          "deployed_package": "Deployed package",
+          "build_context": "Container build context",
+          "upload": "Uploaded package",
+          "harness": "Harness configuration",
+          "image": "Container image"
+        },
+        "originSub": {
+          "deployed_package": "The code package the AgentCore Runtime runs; installed dependencies are not listed.",
+          "build_context": "The build context CodeBuild last built this agent's image from.",
+          "upload": "The package the member uploaded; the dependencies installed at deploy time are not listed."
+        },
+        "entrypoint": "Entrypoint",
+        "runtimeVersion": "Runtime version",
+        "packagedAt": "Packaged at",
+        "uploadFile": "Uploaded file",
+        "uploadedBy": "Uploaded by",
+        "fileCount": "Files",
+        "filesCapped": "Showing {{shown}} of {{total}}",
+        "filesTitle": "Files",
+        "noFiles": "The package contains no files to show.",
+        "truncated": "Truncated",
+        "binary": "Binary file — not previewed.",
+        "binaryTag": "binary",
+        "budget": "Left out of the first response to keep it small.",
+        "loadFile": "Load this file",
+        "copy": "Copy",
+        "copied": "Copied",
+        "copyFailed": "Copy failed — the browser blocked clipboard access",
+        "stale": "The latest deployment is {{status}}, so the running version may still use the previous code.",
+        "harnessNote": "A Harness is an agent loop managed by AgentCore and has no code. Below is its configuration as AWS reports it (GetHarness). Its execution role, environment and authorizer are not shown, and header values are masked.",
+        "harnessTitle": "Harness configuration",
+        "harnessSub": "Version {{version}}",
+        "imageNote": "This agent was deployed from an existing container image, so the platform holds no source code for it.",
+        "imageTitle": "Container image",
+        "imageUri": "Image",
+        "imageDigest": "Digest",
+        "unavailable": {
+          "method": "The platform holds no code for agents of this type (for example, imported runtimes).",
+          "no_resource": "The agent has not been deployed yet. Its code appears once a deploy has created it on AWS.",
+          "deleted": "The agent has been deleted.",
+          "gone": "The code package or AWS resource is no longer available.",
+          "not_code": "This Runtime is not deployed from a code package.",
+          "unreadable": "The stored package could not be read as a zip archive.",
+          "no_bucket": "This workspace has no artifacts bucket. Run its bootstrap first.",
+          "other": "No code is available for this agent."
+        }
+      },
       "prodLocked": "This is a production workspace: agents cannot be created, edited or deleted here directly — changes must arrive through promotion.",
       "progress": {
         "harness": "Preparing your agent — about 30 seconds",
@@ -6676,6 +6835,7 @@
         "elapsed": "Elapsed {{time}}",
         "done": "Ready in {{time}}",
         "failed": "Your agent could not be deployed. The technical log below shows what went wrong.",
+        "failedAt": "Your agent could not be deployed (failed at stage: {{stage}}). The technical log below shows what went wrong.",
         "technical": "Technical log"
       },
       "tryChat": {
@@ -6685,6 +6845,8 @@
         "placeholder": "Ask your agent something…",
         "send": "Send",
         "thinking": "Thinking…",
+        "tool": "Used tool {{name}}",
+        "needsChat": "This step needs a sign-in or a policy decision that only the full Chat console can show. Open the conversation in Chat to continue.",
         "openChat": "Open in the full Chat console"
       },
       "integration": {
@@ -6704,22 +6866,36 @@
         "copy": "Copy",
         "copied": "Snippet copied.",
         "copyFailed": "Could not copy to the clipboard.",
-        "keyHint": "Create keys, optionally limited to this agent, with an expiry and a rate limit, from the API keys panel in the Chat console."
+        "keyHint": "Create keys, optionally limited to this agent, with an expiry and a rate limit, from the API keys panel in the Chat console.",
+        "keysLink": "Manage API keys"
       },
       "snapshots": {
         "title": "Snapshots",
         "sub": "The full configuration saved at every publish. Compare any two, or roll back by re-publishing an older one.",
+        "colAwsVersion": "AWS version",
         "by": "Published by",
         "note": "Note",
         "current": "Current",
+        "empty": "No snapshots yet. One is saved at every publish.",
         "pick": "Select snapshot {{seq}} to compare",
         "compare": "Compare selected",
+        "compareHint": "Tick two snapshots to compare them.",
         "rollback": "Roll back",
         "rollbackTitle": "Roll back to snapshot {{seq}}?",
+        "rollbackWarn": "This is a real redeploy: the agent is re-published with the snapshot's configuration as a new AWS version (nothing is reverted in place), and a new snapshot is saved. On a shared AWS account the change reaches every console that uses this agent.",
+        "rollbackChanges": "What changes from the current configuration to snapshot #{{seq}}:",
+        "rollbackSame": "Snapshot #{{seq}} is the same as the current configuration; rolling back re-publishes it.",
+        "rollbackConfirm": "Roll back and redeploy",
+        "rollingBack": "Starting…",
         "rollbackBody": "This re-publishes snapshot {{seq}}'s configuration as a new version. Nothing is reverted on AWS; the current configuration stays in the snapshot list.",
         "rolledBack": "Re-publishing snapshot {{seq}}.",
         "diffTitle": "Snapshot {{from}} → {{to}}",
         "noChanges": "These snapshots are identical.",
+        "before": "Before",
+        "after": "After",
+        "absent": "(not set)",
+        "elided": "{{length}} characters, too long to show inline.",
+        "showFull": "Show full text",
         "group": {
           "prompt": "Prompt",
           "model": "Model",
@@ -6734,6 +6910,20 @@
           "added": "added",
           "removed": "removed",
           "changed": "changed"
+        },
+        "state": {
+          "deployed": "Deployed",
+          "deploying": "Deploying",
+          "failed": "Failed",
+          "not_deployed": "Not deployed"
+        },
+        "noteKind": {
+          "baseline": "Baseline (configuration before snapshots)",
+          "rollback": "Rollback to #{{seq}}",
+          "canaryPromoted": "Canary promoted",
+          "canaryRolledBack": "Canary rolled back",
+          "inboundAuth": "Inbound auth switched",
+          "recommendation": "Recommendation accepted"
         }
       }
     },
@@ -7152,6 +7342,27 @@
       "dataset": "Dataset",
       "noGroundTruth": "This dataset has no expected outputs; ground-truth evaluators cannot score it",
       "sessionsPicked": "{{count}} session(s) selected — pick them in the preview below",
+      "sessions": {
+        "title": "Pick sessions",
+        "sub": "This agent's sessions observed in the last 7 days — each with its first input and last reply",
+        "hint": "{{count}} sessions observed in the last 7 days. Input is the session's first user message, Output the agent's last reply; View opens the whole conversation.",
+        "colInput": "Input",
+        "colOutput": "Output",
+        "traces": "{{count}} traces",
+        "turns": "{{count}} turns",
+        "noContent": "No conversation recorded",
+        "readFailed": "Could not read the conversation",
+        "noReply": "(no reply)",
+        "search": "Search session ID",
+        "selectAll": "Select all ({{count}})",
+        "selectNone": "Clear selection",
+        "onlyPicked": "Selected only",
+        "picked": "{{count}} sessions selected",
+        "emptyFiltered": "No sessions match the filters",
+        "detailTitle": "Session",
+        "pick": "Select this session",
+        "unpick": "Deselect"
+      },
       "preview": "Data preview",
       "previewSub": "From the selected data source",
       "previewPickAgent": "Select an agent to preview its data",
@@ -7256,7 +7467,12 @@
       "repeatsHint": "1 = run each scenario once.",
       "confirmCost": "I accept the estimated cost of ${{usd}}",
       "actorModel": "User actor model",
-      "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached."
+      "actorModelHint": "Simulated-persona dataset: this Bedrock model plays each user against the agent until the goal is met or max_turns is reached.",
+      "attention": {
+        "title": "Failed — needs a look",
+        "sub": "Runs that failed in the last 7 days, until a later run of the same agent and dataset succeeds; and failed online evaluations",
+        "empty": "No evaluation task has failed."
+      }
     },
     "taskStatus": {
       "queued": "Queued",
@@ -7303,6 +7519,292 @@
       "insightsWait": "Insight clusters appear once the task completes.",
       "insightsEmpty": "This task produced no insight clusters.",
       "scenarioFailures": "{{count}} simulated scenario(s) still failed after retries and were skipped (not scored); the others were evaluated: {{list}}"
+    },
+    "compare": {
+      "title": "Compare evaluation runs",
+      "swap": "Swap A / B",
+      "addRegressed": "Regressions to dataset",
+      "addRegressedHint": "Add B's {{count}} regressed session(s) to a dataset",
+      "addRegressedNone": "No regressed cases on the current basis",
+      "addRegressedUnaligned": "The runs are not aligned case by case, so there are no regressed cases",
+      "openRun": "Open task",
+      "sessions": "Sessions: {{count}}",
+      "sep": ", ",
+      "sideNote": "{{side}}: {{note}}",
+      "composite": "Composite",
+      "basis": "Basis",
+      "live": "Live traffic",
+      "flat": "≈ Flat",
+      "flatHint": "Changed by less than 0.02",
+      "prev": "Compare with previous",
+      "prevHint": "Compare with the previous completed run on the same benchmark: {{name}} ({{time}})",
+      "version": {
+        "stamped": "#{{seq}}",
+        "stampedHint": "The agent version recorded when the run was submitted: snapshot #{{seq}}",
+        "inferred": "≈ #{{seq}} inferred",
+        "inferredHint": "An older run recorded no version; inferred from the run time as snapshot #{{seq}}",
+        "observed": "#{{seq}} observed",
+        "observedHint": "Scores existing sessions, which may span versions; #{{seq}} was live when the run was created",
+        "none": "No version",
+        "noneHint": "A log-source run has no platform version, the agent has no successfully deployed snapshot, or the run predates the version snapshots and the agent was deployed again after it",
+        "unrecorded": "Before version records",
+        "unrecordedHint": "This run predates the agent's version snapshots and the agent was deployed again after it, so which version it evaluated is unknown; comparisons treat it as older than every numbered version."
+      },
+      "notice": {
+        "scenario": "Comparable: the same dataset {{name}}, with {{count}} case(s) aligned by scenario ID.",
+        "order": "Aligned by order: an older run did not record which case each session replayed, so its sessions are matched to the dataset's {{count}} case(s) by position.",
+        "revision": "The runs replayed different revisions of the dataset: only the {{shared}} case(s) both have are compared, and {{only}} more are on one side only.",
+        "revisionAll": "The runs replayed different revisions of the dataset: only the {{shared}} case(s) both have are compared, and a case may have been edited in between.",
+        "partial": "{{count}} case(s) have a session in one run only (for example a skipped simulated user) and are not compared.",
+        "live": "Live-traffic runs score different sessions, so only overall scores are compared. Replay a dataset to compare case by case.",
+        "benchmark": "The runs used different datasets ({{a}} / {{b}}): overall scores are only indicative, and cases are not compared.",
+        "unaligned": "Cases cannot be aligned: {{why}}. Only overall scores are compared.",
+        "agents": "The runs evaluated different agents ({{a}} / {{b}}).",
+        "evaluators": "{{list}}: used by one run only, not compared."
+      },
+      "unaligned": {
+        "scenarios_skipped": "a simulated-user scenario was skipped, so sessions cannot be matched to cases",
+        "session_count_mismatch": "the session count differs from the dataset's current case count (the dataset may have changed)",
+        "dataset_unavailable": "the dataset is deleted, unreadable, or not visible to you",
+        "no_dataset": "the run has no dataset",
+        "unaligned": "the runs' sessions cannot be paired"
+      },
+      "kpi": {
+        "composite": "Composite",
+        "noShared": "No evaluator scored both runs",
+        "sharedCount": "Over {{count}} shared evaluator(s)",
+        "cases": "Case changes",
+        "casesValue": "{{down}} down · {{up}} up",
+        "basis": "Basis: {{basis}}"
+      },
+      "cls": {
+        "down": "Regressed",
+        "up": "Improved",
+        "same": "Unchanged",
+        "unscored": "No score",
+        "onlyA": "A only",
+        "onlyB": "B only"
+      },
+      "filter": {
+        "all": "All {{count}}",
+        "down": "Regressed {{count}}",
+        "up": "Improved {{count}}",
+        "same": "Unchanged {{count}}"
+      },
+      "config": {
+        "title": "Configuration change",
+        "range": "#{{from}} → #{{to}}",
+        "same": "Both runs evaluated #{{seq}}, so the configuration did not change: the score difference comes from the randomness of the agent's output and the judges, and works as a noise baseline.",
+        "unknown": "At least one run's agent version is unknown (a log-source run, or an agent with no deployed snapshot), so there is no configuration change to show.",
+        "otherAgent": "The runs evaluated different agents, so there is no configuration change to compare.",
+        "hidden": "This agent's publish history is not visible to you.",
+        "backwards": "A's version is newer than B's: below is the change from #{{from}} back to #{{to}}.",
+        "publishes": "Publishes in between",
+        "changes": "Differences"
+      },
+      "cases": {
+        "title": "Case by case",
+        "subScenario": "Aligned by scenario ID; scores read higher-is-better, and a change of 0.1 or more counts as improved or regressed",
+        "subOrder": "Aligned by session order; scores read higher-is-better, and a change of 0.1 or more counts as improved or regressed",
+        "filterLabel": "Filter by change",
+        "colCase": "Case",
+        "colChange": "Change",
+        "empty": "No cases of this kind",
+        "unreadableHint": "The overall scores above still come from the two run records."
+      },
+      "case": {
+        "judges": "Judges",
+        "noSession": "This run has no session for this case.",
+        "noResults": "No scores were read for this session.",
+        "notCompared": "Not compared"
+      }
+    },
+    "scorecard": {
+      "tabs": {
+        "agents": "By agent",
+        "all": "All tasks"
+      },
+      "desc": "How each agent's scores moved across its evaluations. Runs on the same dataset form one trend line.",
+      "listHint": "One row per agent: the latest score is taken from the benchmark it completed the most runs on",
+      "search": "Search agent / benchmark",
+      "agentCount": "{{count}} agent(s)",
+      "empty": "No agent has been evaluated yet. Create an evaluation task and it is summarized here by agent.",
+      "emptyFiltered": "No agent matches",
+      "truncated": "Only the newest 1000 runs are included; older ones are left out.",
+      "col": {
+        "agent": "Agent",
+        "main": "Main benchmark",
+        "latest": "Composite",
+        "vsPrev": "vs previous",
+        "trend": "Trend",
+        "evals": "Evaluations",
+        "lastEval": "Last run",
+        "avg": "Mean score",
+        "pick": "Compare",
+        "version": "Version",
+        "benchSource": "Benchmark · data source"
+      },
+      "current": "Current #{{seq}}",
+      "currentShort": "Current",
+      "deleted": "Deleted",
+      "noVersion": "No platform version",
+      "versionLine": "Version {{version}}",
+      "versionShort": {
+        "stamped": "#{{seq}}",
+        "inferred": "≈ #{{seq}}",
+        "observed": "≈ #{{seq}}"
+      },
+      "vs": {
+        "version": "vs #{{seq}}",
+        "run": "vs previous run"
+      },
+      "reason": {
+        "noCompleted": "No completed run yet",
+        "single": "Only 1 run",
+        "differentDatasets": "Each run used a different dataset",
+        "noEarlierVersion": "No earlier version on this benchmark",
+        "noSharedScore": "The two runs have no score on a common evaluator, so their composites cannot be compared"
+      },
+      "reasonShort": {
+        "noCompleted": "None completed",
+        "single": "Only 1 run",
+        "differentDatasets": "Different datasets",
+        "noEarlierVersion": "No earlier version",
+        "noSharedScore": "No shared score"
+      },
+      "counts": {
+        "runs_one": "{{count}} run",
+        "runs_other": "{{count}} runs",
+        "versions_one": "{{count}} version",
+        "versions_other": "{{count}} versions",
+        "benches_one": "{{count}} benchmark",
+        "benches_other": "{{count}} benchmarks"
+      },
+      "sparkLabel": "Composite trend: {{values}}",
+      "listSep": ", ",
+      "benchKind": {
+        "dataset": "Local dataset",
+        "cloud": "Cloud dataset",
+        "live": "Time window / sessions / logs"
+      },
+      "benchRuns": "{{count}} run(s)",
+      "benchSize": "{{count}} case(s)",
+      "liveTag": "Live traffic",
+      "attention": {
+        "title": "Needs a look",
+        "sub": "A new version's composite fell by 0.05 or more, or one evaluator fell by 0.1 or more; and runs that failed in the last 7 days, until a later run on the same benchmark succeeds",
+        "empty": "No regression and no failed evaluation run.",
+        "emptyNone": "No agent has been evaluated yet.",
+        "regressionComposite": "{{agent}} #{{to}}: the composite is {{by}} below #{{from}}",
+        "regressionEvaluator": "{{agent}} #{{to}}: {{evaluator}} is {{by}} below #{{from}}",
+        "pending": "The dataset changed, to confirm",
+        "change": "{{name}} {{a}} → {{b}}",
+        "failed": "{{agent}}: evaluation run failed: {{name}}",
+        "openCompare": "Compare"
+      },
+      "agent": {
+        "title": "Agent evaluations",
+        "notFound": "No evaluation record of this agent. It may have been deleted, or you cannot see it.",
+        "detail": "Agent details",
+        "compareTwo": "Compare two",
+        "compareTwoHint": "Pick two runs on the chart or in the run list first",
+        "noRuns": "This agent has no evaluation run yet.",
+        "deletedNote": "This agent was deleted: its runs are kept, and it cannot be evaluated again."
+      },
+      "kpi": {
+        "latest": "Latest composite · {{bench}}",
+        "vs": "vs #{{seq}} ({{date}})",
+        "vsRun": "vs the previous run ({{date}})",
+        "current": "Current version",
+        "published": "Published {{date}} by {{name}}",
+        "publishedNoName": "Published {{date}}",
+        "noVersionLog": "A log source has no platform version",
+        "noDeployed": "No successfully deployed snapshot",
+        "benchRuns": "Runs on this benchmark",
+        "runsUnit": "runs · {{count}} version(s)",
+        "unfinished": "{{count}} not completed",
+        "allDone": "All completed",
+        "lastEval": "Last evaluated"
+      },
+      "trend": {
+        "title": "Score trend",
+        "sub": "Pick a benchmark: only runs on the same dataset form a line",
+        "live": "Each live-traffic evaluation scores different sessions, so the line shows the overall trend only and cases cannot be compared one by one. Versions are observed from when the sessions ran and may span versions (marked ≈).",
+        "few": "This benchmark has {{count}} completed run(s), not enough for a trend. Use Re-evaluate to score the current version on the same data with the same evaluators.",
+        "caption": "Composite = the mean of the evaluators every run of this benchmark used ({{list}}), all scores oriented so higher is better. Runs are evenly spaced in order, not to time scale; the shaded bands are agent versions and a dashed line marks a change of the dataset's content.",
+        "captionNoCore": "The runs of this benchmark share no evaluator, so there is no composite. Runs are evenly spaced in order; the shaded bands are agent versions and a dashed line marks a change of the dataset's content.",
+        "empty": "This benchmark has no run to draw yet.",
+        "pickHint": "Click two runs on the chart, or tick two in the run list below, to compare them.",
+        "pickB": "Pick one more run as B",
+        "clear": "Clear",
+        "compare": "Compare these two"
+      },
+      "chart": {
+        "aria": "{{bench}} score trend: {{points}}",
+        "ariaPoint": "{{date}} {{series}} {{score}}",
+        "ariaPending": "{{date}} {{status}}",
+        "ariaSep": "; ",
+        "revision": "Dataset changed",
+        "revisionSizes": "Dataset changed ({{from}} → {{to}} cases)",
+        "first": "First",
+        "pending": "{{status}}, no score yet",
+        "noScores": "Completed without a score",
+        "pick": "Click to pick for compare",
+        "unpick": "Click to unpick"
+      },
+      "matrix": {
+        "title": "Version × evaluator",
+        "sub": "A version run several times shows the mean; each change is against the next row, the previous version",
+        "version": "Agent version",
+        "runs": "Runs",
+        "composite": "Composite",
+        "compareWith": "Compare #{{seq}}",
+        "more": "{{count}} more evaluator(s) are shown on the trend only"
+      },
+      "runs": {
+        "title": "Runs",
+        "sub": "This agent's evaluation runs",
+        "onlyBench": "Current benchmark only",
+        "pickLabel": "Pick {{name}} for compare",
+        "pickDisabled": "Only completed runs with scores can be compared",
+        "empty": "No run"
+      },
+      "rerun": {
+        "action": "Re-evaluate",
+        "title": "Re-evaluate",
+        "intro": "Evaluate the agent's current version with the data and evaluators of the last run. The result becomes the next point on the trend.",
+        "agent": "Agent",
+        "agentValue": "{{name}} · current #{{seq}}",
+        "data": "Data",
+        "evaluators": "Evaluators",
+        "defaultName": "{{bench}} · #{{seq}} · {{date}}",
+        "defaultNameNoVersion": "{{bench}} · {{date}}",
+        "draft": "draft",
+        "note": "The run records the version it evaluates (#{{seq}}). To change the dataset or the evaluators, use the full wizard.",
+        "noteNoVersion": "To change the data or the evaluators, use the full wizard.",
+        "wizard": "Edit in the wizard",
+        "start": "Start evaluation",
+        "starting": "Submitting…",
+        "started": "Evaluation task submitted: {{name}}",
+        "block": {
+          "deleted": "The agent was deleted and cannot be evaluated again",
+          "noRun": "This benchmark has no completed run to repeat yet",
+          "unsupported": "Only a dataset replay or a time-window run can be evaluated again: re-scoring the same chosen sessions would only measure judge noise"
+        }
+      },
+      "filter": {
+        "status": "Status",
+        "statusActive": "In use",
+        "method": "Method",
+        "hiddenDeleted_one": "{{count}} deleted agent hidden",
+        "hiddenDeleted_other": "{{count}} deleted agents hidden",
+        "change": {
+          "down": "Regressed",
+          "up": "Improved",
+          "minor": "Minor change",
+          "none": "No comparison"
+        }
+      }
     },
     "outcome": {
       "passed": "Passed",
@@ -7599,6 +8101,15 @@
         "filterKey": "Filter keys use letters, digits, dot, underscore or hyphen",
         "filterValue": "Every filter needs a valid value",
         "description": "Description is at most 200 characters"
+      },
+      "attention": {
+        "title": "Needs attention",
+        "empty": "No online evaluation has failed, is settling or watches an agent twice.",
+        "why": {
+          "failed": "failed",
+          "duplicate": "duplicate",
+          "settling": "settling"
+        }
       }
     },
     "experiments": {
@@ -7662,7 +8173,13 @@
       "cleanupHint": "Deletes the experiment's bundles, temporary target, A/B test and online evaluators; the shared gateway stays.",
       "legacyCanaryWeights": "Champion {{c}}% · challenger {{t1}}% · stage {{stage}}/3",
       "notReached": "Not reached before the experiment ended.",
-      "notPromoted": "Not promoted"
+      "notPromoted": "Not promoted",
+      "attention": {
+        "title": "In flight or waiting on you",
+        "empty": "No experiment is running or waiting on a decision.",
+        "decide": "A verdict is in: promote or clean up",
+        "decideCleanup": "Waiting on you to clean up"
+      }
     },
     "dlc": {
       "title": "Standards",
@@ -8487,6 +9004,7 @@
       "pipeline": "Ramp flow",
       "sourceExp": "Source experiment",
       "targets": "Targets",
+      "perArmN": "n={{n}} · current {{control}} / candidate {{treatment}}",
       "paired": {
         "budgetStop": "budget stop",
         "meanDiff": "Mean difference",
@@ -8515,6 +9033,12 @@
         "change": "Change evaluators",
         "confirm": "Both versions are scored by {{evaluators}}; the verdict is decided by {{primary}}.",
         "none": "Pick at least one evaluator"
+      },
+      "attention": {
+        "title": "In flight or waiting on you",
+        "empty": "No canary is ramping or waiting on a decision.",
+        "decide": "A verdict is in: ramp on, complete or roll back",
+        "none": "No canary has been started yet."
       }
     },
     "chat": {
@@ -9098,6 +9622,10 @@
         "flowSub": "The routing agent's own trace",
         "request": "Request",
         "response": "Response"
+      },
+      "attention": {
+        "title": "Waiting on approval",
+        "empty": "Nothing is waiting on approval."
       }
     },
     "governance": {
@@ -9347,7 +9875,20 @@
         "connecting": "Connecting live view…",
         "noSession": "No active browser session"
       },
-      "testIdentity": "Identity"
+      "testIdentity": "Identity",
+      "attention": {
+        "title": "Needs attention",
+        "allClear": "Every gateway is READY, its targets are healthy and no Policy Engine is missing.",
+        "notReady": "{{name}} is not ready",
+        "engineMissing": "{{name}} points at a deleted Policy Engine",
+        "logOnly": "{{name}} only logs decisions",
+        "logOnlyHint": "The Policy Engine is in LOG_ONLY: denials are recorded but nothing is blocked.",
+        "targets_one": "{{name}}: {{count}} target not healthy",
+        "targets_other": "{{name}}: {{count}} targets not healthy",
+        "inspect": "Inspect",
+        "fix": "Fix",
+        "review": "Review"
+      }
     },
     "assistant": {
       "clear": "Clear",
@@ -9427,7 +9968,17 @@
       "trainLoop": "Training loop",
       "trainProgress": "Training progress",
       "uploaded": "Uploaded",
-      "genRecords": "AI generation jobs"
+      "genRecords": "AI generation jobs",
+      "attention": {
+        "title": "Needs attention",
+        "empty": "No job is queued, running, failed or interrupted.",
+        "noJobs": "No Skill Lab job yet.",
+        "type": {
+          "eval": "Evaluation",
+          "train": "Optimization",
+          "taskgen": "AI generation"
+        }
+      }
     },
     "users": {
       "trendTitle": "Registrations",
@@ -9692,6 +10243,11 @@
         "sharedHint": "Shared: every member sees every resource in this workspace (the default).",
         "isolatedHint": "Isolated: a member sees only what they created, plus resources created by an admin or with an unknown creator. Admins always see everything. Applies to knowledge bases, memories, eval datasets, pipelines, tasks, online evals and custom evaluators, A/B experiments, canaries, Skill Lab and agents: a member cannot chat with, invoke (also via their /v1 API key) or observe another member's agent, and manages only the API keys they created.",
         "saved": "Member visibility saved. It applies from the next request."
+      },
+      "attention": {
+        "title": "Needs you",
+        "empty": "Every workspace is bootstrapped or bootstrapping.",
+        "failedHint": "The bootstrap failed — open it to see the stage and resume."
       }
     },
     "announcements": {
@@ -10016,7 +10572,8 @@
       "confirmTitle": "Revoke {{connection}}?",
       "confirmBody_one": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grant listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
       "confirmBody_other": "The next call through {{connection}} will ask you to sign in and consent again, for every agent ({{count}} grants listed). Tokens already issued by the provider stay valid until they expire; revoke the app at the provider to end them immediately.",
-      "noPermission": "Your account lacks the identity.grant permission: you can view your grants but not complete or revoke them."
+      "noPermission": "Your account lacks the identity.grant permission: you can view your grants but not complete or revoke them.",
+      "contextLayerConsole": "Context layer (console)"
     },
     "promotions": {
       "title": "Releases",
@@ -10196,10 +10753,23 @@
       "desc": "What this workspace is costing, and the thresholds it watches.",
       "tab": {
         "spend": "Spend",
-        "alerts": "Alerts"
+        "alerts": "Alerts",
+        "costs": "Spend"
       },
+      "forbiddenBody": "Only administrators can view spend and manage alert rules.",
+      "range": {
+        "1h": "Last 1 hour",
+        "6h": "Last 6 hours",
+        "24h": "Last 24 hours",
+        "7d": "Last 7 days",
+        "30d": "Last 30 days"
+      },
+      "generatedAt": "Computed {{time}}",
+      "note": "All figures are estimates: span tokens × the platform price table. Direct /v1 API traffic and evaluation runs have no console chat session, so they show as unattributed. Spans of every runtime in this account and Region are counted, including agents not in this console.",
       "kpiTotal": "Estimated cost",
       "kpiTokens": "Tokens",
+      "kpiSessions": "Sessions",
+      "kpiSessionsSub": "Sessions with spans in this window",
       "kpiAgents": "Agents with traffic",
       "estimate": "Estimate, from the price map",
       "window": "Last {{range}}",
@@ -10210,6 +10780,7 @@
       "colAgent": "Agent",
       "colActor": "Person",
       "colCost": "Estimated cost",
+      "notInConsole": "not in this console",
       "colTokens": "Tokens",
       "colCalls": "Model calls",
       "colSessions": "Sessions",
@@ -10218,7 +10789,10 @@
       "empty": "No traffic in this window.",
       "refresh": "Re-read",
       "refreshing": "Re-reading…",
-      "unpriced": "These models burned tokens the price map cannot value, so they add no dollars: {{models}}"
+      "unpriced": "These models burned tokens the price map cannot value, so they add no dollars: {{models}}",
+      "kpiMtd": "Month to date",
+      "mtdSub": "Since the 1st, UTC ({{hours}} h)",
+      "mtdError": "Could not read month to date"
     },
     "alerts": {
       "listTitle": "Rules",
@@ -10230,24 +10804,46 @@
       "empty": "No rules yet.",
       "new": "New rule",
       "newTitle": "New alert rule",
+      "editTitle": "Edit alert rule",
       "create": "Create",
       "created": "Rule created",
+      "saved": "Rule saved",
       "deleted": "Rule deleted",
+      "enabled": "Rule enabled",
+      "disabled": "Rule disabled",
+      "enable": "Enable",
+      "disable": "Disable",
       "delete": "Delete",
       "toggle": "Enable or disable",
       "recheck": "Re-check now",
+      "rechecking": "Checking…",
       "rechecked": "Re-checked · {{firing}} firing",
+      "confirmDeleteTitle": "Delete alert rule",
+      "confirmDeleteBody": "Delete the rule \"{{name}}\"? This cannot be undone.",
       "colRule": "Rule",
+      "colCondition": "Fires when",
       "colState": "State",
       "colValue": "Last value",
       "colChecked": "Last checked",
+      "colWebhook": "Webhook",
+      "lastFired": "fired {{time}}",
+      "lastNotified": "sent {{time}}",
       "kind": "What to watch",
       "name": "Name",
+      "nameHint": "Optional. Defaults to the kind.",
       "window": "Window",
       "windowHint": "How much recent traffic the value is measured over.",
+      "windowFixed24h": "Last 24 hours (fixed)",
+      "windowMonth": "Month to date",
       "threshold": "Fire when {{direction}} {{unit}}",
+      "thresholdHint": "The rule fires when the measured value crosses this.",
       "webhook": "Webhook (optional)",
       "webhookHint": "An https JSON hook — a Slack or Feishu incoming hook already is one. Notifies once when the rule starts firing.",
+      "webhookMode": {
+        "keep": "Keep the current webhook",
+        "replace": "Replace the webhook",
+        "remove": "Remove the webhook"
+      },
       "direction": {
         "above": "above",
         "below": "below"
@@ -10262,13 +10858,761 @@
         "error_rate": "Error rate",
         "latency_p95_ms": "p95 latency",
         "online_quality": "Online quality",
+        "spend_usd": "Spend in window",
         "cost_mtd_usd": "Spend this month"
       },
       "kindHint": {
         "error_rate": "Share of traces that failed, as a percentage.",
         "latency_p95_ms": "95th percentile end-to-end latency, in milliseconds.",
         "online_quality": "Mean online evaluation score, 0 to 1. Fires when it drops.",
+        "spend_usd": "Estimated spend over the rule's window, in US dollars.",
         "cost_mtd_usd": "Estimated spend since the first of the month, in dollars."
+      }
+    },
+    "usage": {
+      "title": "My usage",
+      "desc": "What you spent on this platform in a calendar month (UTC), against your monthly budget.",
+      "userMenu": "Account menu of {{name}}",
+      "open": "My usage",
+      "dismiss": "Dismiss",
+      "bannerWarn": "You have used {{percent}} of your monthly budget ({{used}} of {{limit}}). It resets on {{date}}.",
+      "bannerExceeded": "Monthly budget reached ({{used}} of {{limit}}). New billable work is refused until {{date}}, or until an administrator raises your limit.",
+      "period": "Month",
+      "thisMonth": "{{period}} (this month)",
+      "overBody": "You have reached your monthly budget. Chat, API calls, evaluations and other billable work are refused until {{date}} (00:00 UTC), or until an administrator raises your limit. Work that is already running finishes.",
+      "warnBody": "You have used 80% or more of your monthly budget. It resets on {{date}} (00:00 UTC).",
+      "basis": {
+        "override": "An administrator set a personal monthly amount for you; it replaces your level's budget.",
+        "level": "Your monthly budget comes from your level {{level}}.",
+        "default_level": "You have no level of your own, so the default level {{level}} applies.",
+        "unlimited": "No budget applies to you: you have no level and there is no default level.",
+        "exempt_admin": "Administrators have no spend limit unless an administrator assigns them a level.",
+        "exempt_principal": "This sign-in has no user account (the configured administrator, or a console with sign-in turned off), so no budget applies."
+      },
+      "kpiLimit": "Monthly budget",
+      "levelSub": "Level {{level}}",
+      "kpiUsed": "Used",
+      "estimatedSub": "{{share}} of it estimated",
+      "kpiRemaining": "Remaining",
+      "kpiResets": "Resets on",
+      "resetsSub": "00:00 UTC on the 1st",
+      "kpiPeriod": "Month",
+      "progress": "Budget used",
+      "percentUsed": "Share of the monthly budget used",
+      "unlimited": "Unlimited",
+      "bySource": "By source",
+      "bySourceSub": "Where the spend came from",
+      "colSource": "Source",
+      "colSpend": "Spend",
+      "colEstimated": "Of which estimated",
+      "colEvents": "Charges",
+      "empty": "No spend in this month.",
+      "note": "Spend is model tokens at the platform price table plus AgentCore fees. Where a call reports no usage (some runtimes, long evaluation jobs), an estimate is charged and later replaced by the measured cost, so a total can still move afterwards.",
+      "source": {
+        "chat": "Chat",
+        "v1": "API (/v1)",
+        "invoke": "Direct invoke",
+        "architect": "Architect assistant",
+        "eval": "Evaluations",
+        "experiment": "Experiments",
+        "canary": "Canary releases",
+        "skill_lab": "Skill Lab",
+        "observability": "Session evaluation",
+        "codegen": "Studio AI fix",
+        "knowledge": "Knowledge bases",
+        "tools": "Tools and sandboxes",
+        "studio": "Studio",
+        "governance": "Governance",
+        "models_probe": "Model probes",
+        "coding": "Agent IDE"
+      },
+      "jobNotice": "This job's estimated cost ({{estimate}}) is more than what is left of your monthly budget ({{remaining}}). It runs anyway, and stops at its next safe point once the budget is reached. The budget resets on {{date}}.",
+      "stop": {
+        "run": "Stopped by the spend budget: the monthly budget of the person who started this run was reached, so it stopped at its next safe point, before replaying more or starting the judges. The sessions replayed so far are kept, unscored.",
+        "traffic": "Cut short by the spend budget: the monthly budget of the person who sent this traffic was reached, so {{count}} more were not sent. What was already answered is kept.",
+        "train": "Stopped by the spend budget: the monthly budget of the person who started this job was reached, so training stopped after its last completed step. Resume it once the budget resets or an administrator raises the limit.",
+        "notStarted": "Not started: the monthly budget of the person who started this job was reached while it waited in the queue. Submit it again once the budget resets or an administrator raises the limit."
+      }
+    },
+    "budgets": {
+      "note": "A level is a USD budget per calendar month (UTC). Members without a level fall into the default level, or are unlimited when there is none; administrators are unlimited unless you assign them a level. At or over the limit, new billable work is refused; work already running finishes.",
+      "notEnforced": "There are no levels yet, so nothing is enforced: usage is recorded but nobody is refused. Create a level and assign people, or mark one as the default.",
+      "resetsOn": "Resets on {{date}} (00:00 UTC)",
+      "kpiTotal": "Spend in the month",
+      "kpiBudgeted": "People with a limit",
+      "kpiBudgetedSub": "Accounts a limit applies to",
+      "kpiOver": "At or over the limit",
+      "kpiOverSub": "{{count}} more at 80% or above",
+      "kpiEstimated": "Estimated share",
+      "kpiEstimatedSub": "Charged as an estimate, to be replaced by measured cost",
+      "levelsTitle": "Levels",
+      "levelsSub": "One monthly USD budget each; at most one is the default",
+      "levelsEmpty": "No levels yet.",
+      "newLevel": "New level",
+      "editLevel": "Edit level",
+      "levelName": "Name",
+      "levelNamePlaceholder": "e.g. Standard",
+      "monthlyBudget": "Monthly budget (USD)",
+      "monthlyBudgetHint": "Per person, per calendar month (UTC).",
+      "default": "Default",
+      "defaultHint": "Members with no level of their own get this level. Administrators never fall into it.",
+      "makeDefault": "Default level for members without one",
+      "amountInvalid": "Enter an amount from 0 to 1,000,000.",
+      "levelSaved": "Level {{name}} saved",
+      "levelCreated": "Level {{name}} created",
+      "levelDeleted": "Level {{name}} deleted",
+      "defaultSet": "{{name}} is now the default level",
+      "defaultCleared": "{{name}} is no longer the default level",
+      "setDefault": "Make default",
+      "unsetDefault": "Unset default",
+      "colLevel": "Level",
+      "colMonthly": "Monthly budget",
+      "colAssigned": "Assigned",
+      "assignedPlusDefault": "{{count}} + default",
+      "deleteTitle": "Delete level {{name}}?",
+      "deleteBody": "A level can only be deleted once nobody is assigned to it, so no one silently falls to the default level or becomes unlimited.",
+      "deleteAssigned": "{{count}} account(s) are assigned to this level; move them to another level first.",
+      "deleteDefault": "This is the default level: members without a level become unlimited once it is gone.",
+      "peopleTitle": "People",
+      "peopleSub": "Every account's limit and spend in the month",
+      "peopleEmpty": "No accounts.",
+      "search": "Search username",
+      "colPerson": "Person",
+      "colLimit": "Limit",
+      "colUsed": "Used",
+      "colRemaining": "Remaining",
+      "colEstimated": "Estimated",
+      "colTopSource": "Top source",
+      "roleAdmin": "Administrator",
+      "roleMember": "Member",
+      "status": {
+        "pending": "Pending",
+        "active": "Active",
+        "disabled": "Disabled"
+      },
+      "assign": "Change",
+      "assignTitle": "Budget of {{name}}",
+      "assigned": "Budget of {{name}} saved",
+      "level": "Level",
+      "noLevel": "No level",
+      "levelHintAdmin": "Administrators are unlimited unless they have a level or a personal amount.",
+      "levelHintDefault": "With no level, the default level {{level}} applies.",
+      "levelHintNone": "With no level, no budget applies (there is no default level).",
+      "override": "Personal amount (USD per month)",
+      "overrideHint": "Replaces the level's budget for this person only. Leave it empty for none.",
+      "overridePlaceholder": "None",
+      "clear": "Clear",
+      "effective": "Effective limit",
+      "basis": {
+        "override": "Personal amount",
+        "level": "Level {{level}}",
+        "default_level": "Default level {{level}}",
+        "unlimited": "Unlimited: no level and no default",
+        "exempt_admin": "Administrator: unlimited",
+        "exempt_principal": "No account: unlimited"
+      },
+      "unattributedTitle": "Spend with no account",
+      "unattributedSub": "The configured administrator, the operator of a console with sign-in off, API keys with no recorded creator, and deleted accounts; never limited",
+      "colPrincipal": "Charged to",
+      "deletedAccount": "Deleted account",
+      "unknownPrincipal": "Unknown",
+      "settingsTitle": "Estimates",
+      "settingsSub": "Charged where a call reports no usage, until reconciliation replaces it",
+      "turnEstimate": "Per turn on an opaque runtime (USD)",
+      "turnEstimateHint": "Charged for each turn on a runtime that reports no token usage (Strands zip, BYOC, Studio, A2A). Default {{value}}.",
+      "estimateInvalid": "Enter an amount from 0 to {{max}}.",
+      "estimateSaved": "Estimate saved",
+      "estimateReset": "Estimate back to its default",
+      "resetDefault": "Reset to default",
+      "updated": "Changed by {{who}} at {{when}}",
+      "userCardTitle": "Spend budget",
+      "userCardSub": "one budget across every workspace",
+      "openBudgets": "All budgets",
+      "currentLine": "This month: {{used}} of {{limit}}",
+      "kpiEstimatedReconciled": "Charged as an estimate · last reconciled {{when}}",
+      "reconcile": {
+        "title": "Reconciliation",
+        "sub": "Every {{minutes}} min, measured span cost replaces estimates and AgentCore fees are charged per person",
+        "health": {
+          "off": "Switched off",
+          "waiting": "Not run yet",
+          "failing": "Failing",
+          "lagging": "Behind",
+          "ok": "Up to date"
+        },
+        "offNote": "Reconciliation is switched off on this server (LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false). Estimates stay charged, opaque runtimes are never measured, and AgentCore fees (Runtime compute, Memory, Gateway, Web Search, evaluations) are not charged until it is back on.",
+        "lastRun": "Last run",
+        "never": "Never",
+        "lag": "Behind by",
+        "lagValue": "{{count}} min",
+        "pending": "Sessions waiting",
+        "lastTick": "Last tick",
+        "lastTickValue": "{{sessions}} sessions, {{rows}} rows, {{superseded}} estimates replaced, {{seconds}} s",
+        "replaced": "Estimates replaced this month",
+        "paused": "Online evaluations paused",
+        "failures": "The last tick had {{count}} failed part(s); each is read again on the next tick:",
+        "byKind": "Spend by kind, {{period}}",
+        "byKindHint": "Measured: exact counts and span tokens. Estimated: turn and job estimates not reconciled yet, Runtime compute (session lifetime plus the idle tail, × the calibrated factors) and built-in evaluator tokens.",
+        "byKindEmpty": "Nothing charged this month.",
+        "colKind": "Kind",
+        "colTotal": "Total",
+        "colMeasured": "Measured",
+        "colEstimated": "Estimated share",
+        "agentcoreFee": "AgentCore fee"
+      },
+      "kind": {
+        "tokens": "Model tokens",
+        "turn_estimate": "Turn estimates",
+        "job_estimate": "Job estimates",
+        "runtime_compute": "Runtime compute",
+        "evaluation_builtin": "Built-in evaluations",
+        "evaluation_custom": "Custom evaluations",
+        "web_search": "Web Search",
+        "memory_event": "Memory events",
+        "memory_retrieval": "Memory retrievals",
+        "gateway_call": "Gateway and Policy calls",
+        "kb_query": "Knowledge base queries",
+        "code_interpreter": "Code Interpreter"
+      },
+      "calibration": {
+        "title": "Runtime calibration",
+        "sub": "Hourly, per runtime: the AWS memory and CPU metrics ÷ the billable session-hours in spans. A measured factor replaces the seed once {{count}} sessions back it.",
+        "lastRun": "Last calibrated the hour from {{hour}} (at {{when}}): {{samples}} runtime sample(s)",
+        "neverRun": "Not calibrated yet: every runtime uses the seeds on the Models page.",
+        "failures": "{{count}} workspace(s) could not be calibrated:",
+        "empty": "No measured factors yet.",
+        "colRuntime": "Runtime",
+        "colGb": "GB resident",
+        "colVcpu": "vCPU",
+        "colSessions": "Samples",
+        "colUsed": "Applied",
+        "harness": "Harness",
+        "runtime": "Runtime agent",
+        "seed": "seed {{value}}",
+        "sessionsValue": "{{sessions}} sessions, {{hours}} h",
+        "used": "Measured",
+        "seedUsed": "Seed (too few sessions)",
+        "loadReport": "Compare with Cost Explorer",
+        "refreshReport": "Refresh comparison",
+        "reportNote": "Report only. Cost Explorer covers the whole AWS account: every region and every console that shares it (for example prod and prod2), so it is expected to be higher than this console's ledger. It never charges anyone. Each refresh costs $0.01 per account; results are cached for an hour.",
+        "account": "Account {{account}} ({{regions}})",
+        "accountError": "Cost Explorer could not be read: {{error}}",
+        "totals": "This console's ledger {{ledger}} · Cost Explorer {{bill}} for the account · ledger share {{share}}",
+        "colCategory": "Category",
+        "colLedger": "This console's ledger",
+        "colCostExplorer": "Cost Explorer (whole account)",
+        "reportEmpty": "No AgentCore fees this month.",
+        "generated": "Read at {{when}}",
+        "generatedCached": "Read at {{when}} (cached)",
+        "category": {
+          "runtime": "Runtime compute",
+          "evaluations_builtin": "Built-in evaluations",
+          "evaluations_custom": "Custom evaluations",
+          "web_search": "Web Search",
+          "memory": "Memory",
+          "gateway": "Gateway and Policy",
+          "knowledge_base": "Knowledge bases",
+          "code_interpreter": "Code Interpreter",
+          "browser": "Browser",
+          "other": "Other",
+          "overhead": "Workspace overhead (never charged to people)"
+        }
+      }
+    },
+    "contextLayer": {
+      "title": "Context layer",
+      "desc": "The COA (Context Ontology Accelerator) deployment this workspace reads governed context from. Agents and this page call COA as you, so COA's grants decide what you see.",
+      "notConnected": "Not connected",
+      "askAdmin": "No COA deployment is connected to this workspace. Ask an administrator to connect one.",
+      "deployment": "Deployment",
+      "openConsole": "Open COA console",
+      "region": "Region",
+      "connection": "Connection",
+      "apiEndpoint": "REST endpoint",
+      "connectedBy": "Connected by",
+      "updatedAt": "Updated",
+      "callbackMissing": "Launchpad's OAuth callback is not registered on the COA agent client, so consent cannot finish. Add it to the agentOauthCallbackUrls context of COA's deploy.",
+      "agentOauthOff": "The COA deployment no longer has its agent OAuth client.",
+      "myAuth": "My authorization",
+      "myAuthSub": "Launchpad acts as you in COA only after you authorize it once.",
+      "agents": "Agents using it",
+      "hiddenAgent": "an agent you cannot see",
+      "health": {
+        "mcp": "MCP runtime",
+        "serve": "Serve runtime",
+        "agentOauth": "Agent OAuth",
+        "callback": "Callback registered",
+        "unknown": "Unknown"
+      },
+      "connect": {
+        "intro": "Name the COA deployment by its stack prefix, env and region. Launchpad discovers everything else and creates the OAuth2 Connection.",
+        "prefix": "Stack prefix",
+        "prefixHint": "The prefix COA was deployed with, e.g. coa-w2.",
+        "env": "Env",
+        "region": "COA region",
+        "regionHint": "It may differ from this workspace's region.",
+        "connection": "Existing Connection (optional)",
+        "connectionHint": "Leave empty to create coa-<prefix>, or name an OAuth2 Connection that already holds the COA agent client.",
+        "submit": "Connect",
+        "reconnect": "Re-connect",
+        "busy": "Connecting…",
+        "done": "Context layer connected.",
+        "demoParam": "Demo account SSM parameter (optional)",
+        "demoParamHint": "The SecureString written by samples/coa-demo/demo_account.py ensure, under /<prefix>/launchpad/. Every member can reveal its username and password. Leave empty to offer no demo account.",
+        "demoProblem": {
+          "not_found": "The demo account parameter does not exist in the COA region.",
+          "not_secure_string": "The demo account parameter is not a SecureString.",
+          "bad_shape": "The demo account parameter is not JSON with a non-empty username and password."
+        }
+      },
+      "disconnect": {
+        "action": "Disconnect",
+        "title": "Disconnect the context layer?",
+        "body": "Agents can no longer attach it. The Connection {{connection}} and the console workload identity stay, and can be deleted under Outbound credentials or by teardown.",
+        "done": "Context layer disconnected.",
+        "refused": "Agents still attach the context layer: {{agents}}. Detach it from them first."
+      },
+      "auth": {
+        "none": "Not authorized",
+        "pending": "Pending",
+        "authorized": "Authorized",
+        "revoked": "Revoked",
+        "authorize": "Authorize",
+        "reauthorize": "Authorize again",
+        "waiting": "Finish signing in to COA in the new tab…",
+        "open": "Open COA sign-in",
+        "revoke": "Revoke",
+        "revokedToast": "Revoked. The next COA call asks you to sign in again.",
+        "myConnections": "My authorizations",
+        "since": "Authorized at {{at}}"
+      },
+      "namespaces": {
+        "title": "Namespaces",
+        "sub": "What COA lets you see",
+        "needAuth": "Authorize first to list the namespaces COA lets you see.",
+        "empty": "COA shows you no namespace.",
+        "colName": "Name",
+        "colId": "ID",
+        "colStatus": "Status",
+        "colSources": "Sources",
+        "emptyHint": "Namespaces and their grants are created by your COA administrator in the COA console. Once you have a grant, the namespace shows up here.",
+        "browse": "Browse"
+      },
+      "wizard": {
+        "title": "Context layer (COA)",
+        "sub": "Governed metrics, ontology and documents, read as whoever chats with the agent",
+        "notConnected": "This agent attaches a COA namespace, but the workspace has no connected context layer.",
+        "authHint": "Only needed to pick from a list: the agent asks each person for their own authorization.",
+        "namespace": "Namespace",
+        "pickHint": "One namespace per agent. Its id goes into the agent's instructions.",
+        "manualHint": "Authorize to pick from the namespaces you can see, or paste a namespace id.",
+        "badId": "A namespace id is a UUID.",
+        "none": "None",
+        "namePlaceholder": "Display name (optional)",
+        "remove": "Remove",
+        "module": "Open the Context layer page",
+        "noteHarness": "Each chat turn carries the asking member's COA token. Without their authorization, Chat shows a consent card first. The public /v1 API cannot call this agent.",
+        "noteStrands": "The agent fetches each member's COA token itself. Each member authorizes it once in Chat. The public /v1 API cannot call this agent."
+      },
+      "openInCoa": "Open in COA",
+      "errors": {
+        "authorize": "Authorize Launchpad to read COA as you first.",
+        "reauthorize": "COA no longer accepts your authorization. Authorize again to continue.",
+        "forbidden": "COA refused this: you have no grant for it. Grants are managed by your COA administrator in the COA console.",
+        "notFound": "COA has no such namespace or item, or does not show it to you."
+      },
+      "gate": {
+        "connectFirst": "No COA deployment is connected yet. Connect one on the overview first.",
+        "authorizeFirst": "This page reads COA as you. Authorize Launchpad once to continue."
+      },
+      "services": {
+        "title": "COA services",
+        "sub": "COA's own dependency health, as COA reports it to you",
+        "dynamodb": "DynamoDB",
+        "neptune_kg": "Knowledge graph (Neptune)",
+        "opensearch": "Vector search (OpenSearch)",
+        "graph_store": "Ontology graph store",
+        "vector_store": "Ontology vector store",
+        "bedrock_embeddings": "Bedrock embeddings",
+        "description_llm": "Description model"
+      },
+      "namespace": {
+        "basic": "Namespace",
+        "owner": "Owner",
+        "description": "Description"
+      },
+      "tabs": {
+        "sources": "Sources",
+        "metrics": "Metrics",
+        "ontology": "Ontology"
+      },
+      "sources": {
+        "title": "Sources",
+        "sub": "Databases and documents COA reads for this namespace",
+        "empty": "This namespace has no sources yet. Sources are connected in the COA console.",
+        "colName": "Name",
+        "colType": "Type",
+        "colStatus": "Status",
+        "colTables": "Tables",
+        "colUpdated": "Updated"
+      },
+      "metrics": {
+        "title": "Governed metrics",
+        "sub": "Agents prefer these definitions over their own calculation",
+        "empty": "This namespace has no governed metrics yet. Metrics are defined in the COA console.",
+        "colName": "Metric",
+        "colUnit": "Unit",
+        "colSynonyms": "Synonyms",
+        "colDialects": "Expression",
+        "colTable": "Source table"
+      },
+      "ontology": {
+        "title": "Ontology",
+        "sub": "The classes COA knows in this namespace",
+        "classCount": "{{count}} classes",
+        "failed": "COA could not list the classes of {{count}} ontologies. Try again later.",
+        "truncated": "Only part of the ontology is listed here. Open it in COA to see everything.",
+        "search": "Filter classes",
+        "empty": "This namespace has no ontology classes yet. Ontologies are induced or uploaded in the COA console.",
+        "colClass": "Class",
+        "colDescription": "Description",
+        "colOntology": "Ontology"
+      },
+      "playground": {
+        "title": "Playground",
+        "openCoa": "COA playground",
+        "reset": "New conversation",
+        "you": "You",
+        "streaming": "Answering",
+        "thinking": "COA is working on it…",
+        "tierHint": "The COA tier that answered: T1 governed metric, T2 generated SQL, T3 documents and graph",
+        "confidence": "Confidence {{pct}}%",
+        "partial": "Partial",
+        "guardrail": "Blocked by guardrail",
+        "stopped": "Stopped",
+        "citations": "Sources ({{count}})",
+        "steps": "Trace ({{count}} steps)",
+        "rows": "{{count}} rows",
+        "rowsTruncated": "Showing {{shown}} of {{count}} rows",
+        "pickNamespace": "Choose a namespace",
+        "needNamespace": "Choose a namespace to ask about.",
+        "mode": "Mode",
+        "modeHint": "Deep reasoning runs COA's multi-step loop. It is slower.",
+        "modeStandard": "Standard",
+        "modeDeep": "Deep reasoning",
+        "strategy": "SQL strategy",
+        "strategyHint": "Which engine answers structured questions.",
+        "strategyDefault": "COA default",
+        "empty": "Ask a question about this namespace. COA answers with what your grants allow.",
+        "placeholder": "e.g. How many employees does each department have?",
+        "send": "Ask",
+        "stop": "Stop",
+        "hint": "Enter sends, Shift+Enter adds a line. COA answers as you, and follow-up questions continue the same conversation."
+      },
+      "attach": {
+        "action": "Attach to agent",
+        "title": "Attach {{name}} to an agent",
+        "noPermission": "You do not have permission to deploy agents.",
+        "newTitle": "New agent",
+        "newHint": "Opens the agent wizard with this namespace already selected.",
+        "newHarness": "New Harness agent",
+        "newStrands": "New Strands agent",
+        "existingTitle": "Existing agent",
+        "existingHint": "Harness and HTTP Strands agents you can redeploy. Saving publishes a new version.",
+        "agent": "Agent",
+        "pick": "Choose an agent",
+        "none": "You have no Harness or HTTP Strands agent you can redeploy.",
+        "replaces": "This agent attaches {{name}} now. Saving replaces it with this namespace.",
+        "already": "This agent already attaches this namespace.",
+        "openEditor": "Open its editor"
+      },
+      "demo": {
+        "tag": "Demo account",
+        "useOwn": "Authorize with my COA account",
+        "useDemo": "Authorize with the demo account",
+        "notice": "A read-only demo account shared by every member. It reaches only the namespaces a COA administrator opened to it. Anyone else who signs in to COA as the demo account can see the questions asked under it, so don't enter anything sensitive.",
+        "username": "Username",
+        "password": "Password",
+        "show": "Show",
+        "hide": "Hide",
+        "copy": "Copy",
+        "copied": "Copied.",
+        "copyFailed": "Could not copy. Select the text and copy it yourself.",
+        "signInHint": "Copy this username and password into COA's sign-in page.",
+        "chatLink": "No COA account? Use the demo account",
+        "chatHint": "Open the authorization page and sign in with this username and password.",
+        "switchToOwn": "Switch to my account",
+        "otherSession": "Is your browser already signed in to another COA account? Sign out of COA first:",
+        "wrongDemo": "This consent used the COA account your browser was already signed in with, not the demo account. Sign out of COA with the steps below, then authorize again.",
+        "wrongOwn": "This consent still used the demo account, because your browser's COA session was still signed in. Sign out of COA with the steps below, then authorize again.",
+        "guide": {
+          "titleOwn": "Switch to my own COA account",
+          "titleDemo": "Switch to the demo account",
+          "intro": "COA reuses the account your browser is signed in with, so switching takes three steps:",
+          "revoke": "Revoke the current authorization.",
+          "signOut": "Sign out of COA. It opens in a new tab and ends on the COA console.",
+          "signOutAction": "Sign out of COA",
+          "signOutManual": "Sign out in the COA console",
+          "authorizeOwn": "Authorize again and sign in with your own COA account.",
+          "authorizeDemo": "Authorize again and sign in with the demo account."
+        }
+      }
+    },
+    "coding": {
+      "title": "Agent IDE",
+      "desc": "Build an agent in a browser IDE: a codex coding assistant writes, runs and tests the code in an AgentCore microVM, and Launchpad deploys the result as an ordinary Agent.",
+      "runtime": {
+        "title": "Agent IDE runtime",
+        "status": {
+          "not_installed": "Not installed",
+          "installing": "Installing",
+          "ready": "Ready",
+          "failed": "Failed",
+          "uninstalling": "Uninstalling"
+        },
+        "install": "Install",
+        "retryInstall": "Retry install",
+        "repair": "Repair",
+        "uninstall": "Uninstall",
+        "installStarted": "Install started. It takes a few minutes.",
+        "uninstallStarted": "Uninstall started.",
+        "uninstallTitle": "Uninstall the Agent IDE runtime?",
+        "uninstallBody": "The workspace's coding runtime and its role are deleted, and members cannot open or run their repositories until it is installed again. Repository snapshots are kept, so repositories come back after a reinstall.",
+        "adminNotInstalled": "The Agent IDE runtime is not installed in this workspace. Install it once: it builds the runtime image and creates one platform-owned AgentCore Runtime that every member's repositories share.",
+        "memberNotInstalled": "The Agent IDE runtime is not installed in this workspace yet. Ask an administrator to install it.",
+        "failedAdmin": "The last install failed. Check the job log, then retry.",
+        "failedMember": "The Agent IDE runtime is unavailable. Ask an administrator to repair it.",
+        "installingNote": "Installing: building the image and creating the runtime. This page refreshes on its own.",
+        "uninstallingNote": "Uninstalling the Agent IDE runtime…",
+        "models": "Models",
+        "image": "Image",
+        "arn": "Runtime ARN",
+        "log": "Job log"
+      },
+      "repos": {
+        "title": "Repositories",
+        "new": "New repository",
+        "mine": "Mine",
+        "all": "All repositories",
+        "scope": "Repositories shown",
+        "search": "Search repositories",
+        "allNote": "Every repository in this workspace. You can delete any repository for cleanup, but only its creator can open its IDE.",
+        "colName": "Repository",
+        "colStatus": "Status",
+        "colAgent": "Deployed Agent",
+        "colUpdated": "Updated",
+        "open": "Open",
+        "rename": "Edit",
+        "empty": "No repositories yet",
+        "emptyBody": "Create a repository, describe the agent you want, and the coding assistant builds it.",
+        "noMatch": "No repositories match the search.",
+        "created": "Repository {{name}} created",
+        "saved": "Repository saved",
+        "deleted": "Repository {{name}} deleted",
+        "deleteTitle": "Delete this repository?",
+        "deleteBody": "Delete {{name}}? Its files, conversation and snapshots are removed. An Agent it deployed is kept.",
+        "runningNoDelete": "A turn is running. Interrupt it before deleting the repository."
+      },
+      "form": {
+        "createTitle": "New repository",
+        "editTitle": "Edit repository",
+        "name": "Name",
+        "namePlaceholder": "e.g. weather-assistant",
+        "nameHint": "Only you can see and open your repositories.",
+        "nameRequired": "Enter a name.",
+        "nameTooLong": "At most {{max}} characters.",
+        "description": "Description",
+        "descriptionPlaceholder": "What should this agent do? (optional)",
+        "descriptionHint": "{{count}} / {{max}}"
+      },
+      "status": {
+        "idle": "Idle",
+        "running": "Running"
+      },
+      "turnStatus": {
+        "inProgress": "Running",
+        "completed": "Completed",
+        "interrupted": "Interrupted",
+        "failed": "Failed",
+        "abandoned": "Abandoned"
+      },
+      "itemStatus": {
+        "inProgress": "Running",
+        "completed": "Done",
+        "failed": "Failed",
+        "declined": "Declined"
+      },
+      "changeKind": {
+        "add": "Added",
+        "update": "Modified",
+        "delete": "Deleted"
+      },
+      "effort": {
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "xhigh": "Extra high"
+      },
+      "usage": {
+        "input": "input",
+        "cached": "cached",
+        "cacheWrite": "cache write",
+        "output": "output",
+        "reasoning": "reasoning"
+      },
+      "ide": {
+        "files": "Files",
+        "noFiles": "No files yet",
+        "notFound": "Repository {{id}} does not exist or is not yours.",
+        "backToList": "Back to repositories",
+        "openAgent": "Open Agent"
+      },
+      "layout": {
+        "workbench": "Editor & changes",
+        "collapseFiles": "Collapse the file panel",
+        "expandFiles": "Expand the file panel",
+        "collapseWorkbench": "Collapse the editor panel",
+        "expandWorkbench": "Expand the editor panel",
+        "resizeFiles": "Resize the file panel",
+        "resizeWorkbench": "Resize the editor panel",
+        "resizeHint": "Drag, or use ←/→ (Shift for bigger steps), to resize. Double-click to reset.",
+        "openTabs": "Open files: {{count}}",
+        "turnChanges": "Changed in the last turn: {{count}}"
+      },
+      "editor": {
+        "unsaved": "Unsaved",
+        "readOnlyRunning": "Read-only while a turn runs",
+        "view": "View",
+        "source": "Source",
+        "preview": "Preview",
+        "saving": "Saving…",
+        "saveHint": "Save (⌘/Ctrl+S)",
+        "saved": "Saved {{path}}",
+        "conflict": "The coding assistant changed this file since you opened it. Reload it to drop your edits, or overwrite the newer version with yours.",
+        "changedOnDisk": "This file changed on disk while you had unsaved edits.",
+        "reload": "Reload",
+        "overwrite": "Overwrite",
+        "binary": "Binary file, not shown.",
+        "closeTab": "Close {{name}}",
+        "missing": "This file no longer exists in the repository (the coding assistant may have deleted or moved it)."
+      },
+      "changes": {
+        "tab": "Changes",
+        "scope": "Diff scope",
+        "turn": "Last turn",
+        "worktree": "Uncommitted",
+        "count": "Changed: {{count}}",
+        "files": "Changed files",
+        "copyPatch": "Copy patch",
+        "copied": "Patch copied",
+        "emptyTurn": "The last turn changed no files.",
+        "emptyWorktree": "No uncommitted changes.",
+        "status": {
+          "A": "Added",
+          "M": "Modified",
+          "D": "Deleted",
+          "R": "Renamed"
+        }
+      },
+      "conversation": {
+        "title": "Conversation",
+        "empty": "Describe the agent you want to build. The coding assistant writes the code, runs it and tests it in this repository's microVM.",
+        "you": "You",
+        "working": "Working…",
+        "reasoning": "Reasoning",
+        "reasoningLive": "Reasoning…",
+        "command": "Command",
+        "running": "Running",
+        "exit": "exit {{code}}",
+        "noOutput": "No output",
+        "waitingOutput": "Waiting for output…",
+        "truncated": "… earlier output truncated",
+        "fileChanges": "Changed files ({{count}})",
+        "openDiff": "Show the diff",
+        "plan": "Plan",
+        "retrying": "{{message}} (retrying)",
+        "other": "Activity: {{type}}",
+        "effortOf": "effort {{effort}}",
+        "tokens": "{{value}} tokens",
+        "outsideRepo": "Outside the repository — no diff to show"
+      },
+      "markdown": {
+        "openFile": "Open {{path}} in the editor",
+        "openFileLine": "Open {{path}} at line {{line}}",
+        "linkOutside": "Points outside this repository — not followed.",
+        "linkBlocked": "Link not followed.",
+        "image": "[image not loaded: {{alt}} {{src}}]"
+      },
+      "notice": {
+        "appServerExited": "The coding assistant process restarted.",
+        "serverRequestDeclined": "An approval request was declined automatically (commands run without approval):",
+        "restored": "The repository was restored from its latest snapshot.",
+        "threadResumeFailed": "The previous conversation could not be resumed; the coding assistant continues in a new thread without its earlier context."
+      },
+      "composer": {
+        "placeholder": "Describe what to build or change (Enter to send, Shift+Enter for a new line)",
+        "model": "Model",
+        "effort": "Reasoning effort",
+        "hint": "Runs in the background: you can leave this page.",
+        "send": "Send",
+        "sending": "Starting…",
+        "interrupt": "Interrupt",
+        "interrupting": "Interrupting…",
+        "runtimeNotReady": "The Agent IDE runtime is not ready.",
+        "tooLong": "The prompt is over {{max}} KB."
+      },
+      "stream": {
+        "connecting": "Connecting…",
+        "retrying": "Reconnecting…",
+        "paused": "Paused while the tab is hidden"
+      },
+      "download": {
+        "button": "Download",
+        "file": "Download this file",
+        "fileNamed": "Download {{name}}",
+        "savedVersion": "Downloads the saved version. Save first to include your edits.",
+        "repo": "Download repository (.zip)",
+        "repoHint": "The repository's files as a .zip: tracked and new files, without .git, ignored files or dependency folders.",
+        "preparing": "Preparing the download…",
+        "started": "Downloading {{name}}"
+      },
+      "deploy": {
+        "button": "Deploy as Agent",
+        "redeploy": "Redeploy",
+        "title": "Deploy as an Agent",
+        "redeployTitle": "Redeploy the Agent",
+        "body": "Launchpad snapshots and exports this repository and deploys it through the bring-your-own-code pipeline, with the same checks, IAM, registry and observability as an uploaded zip.",
+        "agentName": "Agent name",
+        "agentNameHint": "3–48 characters: lowercase letters, digits and hyphens, starting with a letter.",
+        "nameInvalid": "Use 3–48 lowercase letters, digits or hyphens, starting with a letter.",
+        "description": "Description",
+        "artifactKind": "Artifact",
+        "kind": {
+          "auto": "Detect automatically",
+          "code_zip": "Code zip (Python)",
+          "container_source": "Dockerfile context"
+        },
+        "kindHint": {
+          "auto": "A Dockerfile at the repository root builds a container; otherwise the repository deploys as a Python code zip.",
+          "code_zip": "Packaged as a Python code zip and run on the AgentCore Python runtime.",
+          "container_source": "Built by CodeBuild from the repository's root Dockerfile into an ARM64 container."
+        },
+        "entrypoint": "Entrypoint",
+        "python": "Python version",
+        "submit": "Deploy",
+        "deploying": "Deploying…",
+        "created": "Agent {{id}} created. Its deployment is running.",
+        "updated": "Agent {{id}} is being redeployed.",
+        "openAgent": "Open the Agent",
+        "redeployNote": "This repository already deployed an Agent. Deploying again publishes a new version of it:",
+        "noPermission": "You do not have permission to deploy Agents.",
+        "whileRunning": "Wait for the running turn to finish.",
+        "failure": {
+          "entrypoint_missing": "The repository has no {{entrypoint}} at its root. Create it, or set the entrypoint to the file the agent serves from.",
+          "candidates": "Python files at the repository root: {{files}}.",
+          "dockerfile_missing": "A Dockerfile context deploy needs a Dockerfile at the repository root.",
+          "invalid_spec": "The deploy settings are not a valid Agent: {{errors}}"
+        }
       }
     },
     "environments": {
@@ -10404,6 +11748,196 @@
       "readDetailHint": "Read this batch evaluation's results from AWS again to fill in why sessions were not scored. Read-only: nothing is re-run or billed.",
       "readDetailDone": "Failure details read",
       "notComparable": "These runs left different scenarios unscored, so their means are not directly comparable."
+    },
+    "navMode": {
+      "showBusiness": "Show essentials only",
+      "showExpert": "Show all pages",
+      "hint": "A sidebar filter only: every page still opens by URL"
+    },
+    "glossary": {
+      "title": "Glossary",
+      "search": "Find a term",
+      "none": "No term matches"
+    },
+    "palette": {
+      "label": "Command palette",
+      "search": "Search",
+      "placeholder": "Search pages, agents and terms…",
+      "group": {
+        "page": "Pages",
+        "agent": "Agents",
+        "glossary": "Glossary",
+        "help": "Help"
+      },
+      "openAgent": "Open {{name}}",
+      "chatWith": "Chat with {{name}}",
+      "openGlossary": "Open the glossary",
+      "openVideos": "Watch the demo videos",
+      "takeTour": "Take the console tour",
+      "none": "Nothing matches",
+      "move": "move",
+      "run": "open",
+      "close": "close",
+      "loadingAgents": "Loading agents…"
+    },
+    "help": {
+      "label": "Help",
+      "palette": "Command palette",
+      "tour": "Take the tour",
+      "launch": "Launch checklist",
+      "glossary": "Glossary",
+      "videos": "Demo videos"
+    },
+    "onboard": {
+      "launch": {
+        "title": "Launch checklist",
+        "launched": "Launched",
+        "allDone": "This workspace builds, runs, evaluates and watches its agents.",
+        "progress": "{{done}}/{{total}} done",
+        "next": "Next:",
+        "done": "Done",
+        "expand": "Show the steps",
+        "collapse": "Fold the steps away",
+        "hideHint": "Hide the checklist for this workspace (the help menu brings it back)",
+        "askAdmin": "Ask an administrator",
+        "workspace": "Workspace ready",
+        "workspaceHint": "The AWS account and region this console works in, bootstrapped.",
+        "workspaceHintMember": "An administrator bootstraps the AWS account and region this console works in.",
+        "workspaceCta": "Check it",
+        "agent": "First agent live",
+        "agentHint": "A managed Harness agent deploys in about 30 seconds, no code.",
+        "agentCta": "Create one",
+        "chat": "Talk to it",
+        "chatHint": "One conversation gives you a trace, tokens and cost to look at.",
+        "chatCta": "Open chat",
+        "evaluate": "Score it",
+        "evaluateHint": "Run evaluators over real sessions or a dataset to see where it falls short.",
+        "evaluateCta": "Run an evaluation",
+        "online": "Watch live traffic",
+        "onlineHint": "Score a sample of new sessions as they arrive, so a drop in quality shows up by itself.",
+        "onlineCta": "Set up online evaluation"
+      },
+      "tour": {
+        "label": "Console tour",
+        "counter": "{{n}} of {{total}}",
+        "skip": "Skip",
+        "back": "Back",
+        "next": "Next",
+        "done": "Got it",
+        "end": "End the tour",
+        "cmdkTitle": "One keystroke to anywhere",
+        "cmdkBody": "Press {{shortcut}} (or /) and type: a page, an agent, an action, or a word you don't know. It is the fastest way through this console.",
+        "launchTitle": "Your launch checklist",
+        "launchBody": "Five steps from an empty workspace to an agent whose live traffic is scored. Each step ticks itself off from what actually exists; hide it once you no longer need it.",
+        "statsTitle": "The workspace at a glance",
+        "statsBody": "Live agents, sessions in the last 24 hours, registry assets, the evaluation pass rate and online quality. A dash means there is nothing to count yet.",
+        "agentsTitle": "Recent deployments",
+        "agentsBody": "The newest agents with their status; a deploy that is still moving or stuck shows the stage it is on. Open one for its details, endpoint and versions.",
+        "healthTitle": "Service status",
+        "healthBody": "Each AgentCore service this console uses, and whether it is ready in this workspace. A row links to the page that sets it up.",
+        "modulesTitle": "Every module, grouped",
+        "modulesBody": "Development, runtime, evaluation, learning and configuration. Groups fold away, and the switch at the bottom shows only the everyday modules or all of them.",
+        "helpTitle": "Help is always here",
+        "helpBody": "Replay this tour, bring back the launch checklist, or open the glossary and the demo videos from this button."
+      }
+    },
+    "models": {
+      "title": "Models",
+      "desc": "The models the platform itself calls or pre-selects. An override applies at once, with no restart.",
+      "roles": "Model roles",
+      "noteGlobal": "A change applies at once to every workspace and member on this deployment; each deployment keeps its own overrides. Precedence: console override > LAUNCHPAD_* environment > launchpad.yaml > built-in default.",
+      "noteJudge": "Changing the judge makes evaluation scores incomparable with earlier runs.",
+      "noteStored": "Existing agents, evaluators and installed presets keep the model ids they were created with; only new ones pick up a change.",
+      "forbiddenBody": "Only administrators can view and change the platform's models.",
+      "col": {
+        "role": "Role",
+        "current": "Effective model",
+        "change": "Change"
+      },
+      "overridden": "Overridden",
+      "isDefault": "Default",
+      "defaultValue": "Default:",
+      "updated": "Changed by {{who}} at {{when}}",
+      "none": "None",
+      "custom": "Custom model ID…",
+      "customPlaceholder": "e.g. {{example}}",
+      "invalid": "This role does not accept this model id.",
+      "familyOnly": "{{families}} only",
+      "needsTools": "Needs tool use",
+      "pick": "Model for {{role}}",
+      "probe": "Probe",
+      "probing": "Probing…",
+      "probeOk": "OK · {{ms}} ms · {{region}}",
+      "probeFail": "{{code}}: {{message}} ({{region}})",
+      "check": {
+        "converse": "Converse",
+        "tool_use": "Tool use"
+      },
+      "save": "Save",
+      "reset": "Reset to default",
+      "resetHint": "Remove the console override; the role returns to its default.",
+      "saved": "{{role}}: saved",
+      "resetDone": "{{role}}: back to the default",
+      "confirmSaveTitle": "Change the {{role}} model?",
+      "confirmSaveBody": "{{model}} becomes the {{role}} model.",
+      "confirmResetTitle": "Reset {{role}} to its default?",
+      "confirmResetBody": "{{role}} goes back to {{model}}.",
+      "confirmGlobal": "This applies immediately to every workspace and member on this deployment.",
+      "confirmProbeFailed": "The last probe of this model failed in the default workspace. You can still save it.",
+      "role": {
+        "agent_default_model_id": {
+          "name": "Agent default",
+          "desc": "What a new agent on native Bedrock starts on in the wizard, and what an agent created through the API without a model gets."
+        },
+        "claude_sdk_model_id": {
+          "name": "Claude Agent SDK default",
+          "desc": "The default of the Other Agent SDK entrance (Claude Agent SDK), and of a container agent created without a model. Claude only."
+        },
+        "judge_model_id": {
+          "name": "Evaluation judge",
+          "desc": "The default judge model of a new LLM evaluator, and of the evaluators the assistant drafts."
+        },
+        "judge_fallback_model_id": {
+          "name": "Judge fallback",
+          "desc": "Retried when AgentCore Evaluation refuses the judge model. None: the refusal surfaces."
+        },
+        "assistant_model_id": {
+          "name": "Assistant proposals",
+          "desc": "The model the architect assistant proposes for a new agent."
+        },
+        "architect_model_id": {
+          "name": "Architect preset",
+          "desc": "The model of the system architect preset when an administrator installs or repairs it."
+        },
+        "actor_model_id": {
+          "name": "Simulated user (actor)",
+          "desc": "Plays the user of a simulated-persona evaluation run; it must accept forced tool choice."
+        },
+        "studio_fallback_model_id": {
+          "name": "Studio fallback",
+          "desc": "What a Studio canvas node without a model generates; the agent's execution role is scoped to it as well."
+        },
+        "codegen_model": {
+          "name": "Studio AI Fix",
+          "desc": "The coding agent behind Studio local debug's AI Fix. Claude only."
+        },
+        "prompt_opt_default_model_id": {
+          "name": "Prompt optimisation",
+          "desc": "The default reflection model of an experiment's prompt optimisation."
+        },
+        "skill_lab_judge_model_id": {
+          "name": "Skill Lab judge",
+          "desc": "Grades Skill Lab tasks: OpenAI models run on the codex CLI, Claude on the Claude CLI."
+        },
+        "skill_lab_target_model_id": {
+          "name": "Skill Lab target (Claude)",
+          "desc": "The default model a Skill is evaluated on through the Claude CLI. Claude only."
+        },
+        "skill_lab_codex_target_model_id": {
+          "name": "Skill Lab target (codex)",
+          "desc": "The default model a Skill is evaluated on through the codex CLI. OpenAI only."
+        }
+      }
     }
   },
   "identity": {
@@ -10561,6 +12095,7 @@
     "mcp": "Model Context Protocol — an open standard for connecting agents to external tools and data.",
     "cedarPolicy": "A rule in the Cedar language that allows or denies what an agent's tools may do, checked on every call.",
     "knowledgeBase": "A searchable store of your documents that the agent looks things up in, so it answers with your own facts.",
+    "contextLayer": "Governed business context from a connected COA deployment: metrics, an ontology and documents that agents read as the person chatting, within that person's COA grants.",
     "memory": "Lets the agent remember the current conversation and, optionally, long-term facts about each user.",
     "evaluator": "A scoring rule, often an LLM judge, that rates agent answers for qualities such as correctness or helpfulness.",
     "onlineEvaluation": "Continuously scores a sample of live conversations so quality drops show up early.",
@@ -10581,6 +12116,7 @@
       "mcp": "MCP",
       "cedarPolicy": "Cedar policy",
       "knowledgeBase": "Knowledge base",
+      "contextLayer": "Context layer",
       "memory": "Memory",
       "evaluator": "Evaluator",
       "onlineEvaluation": "Online evaluation",
@@ -10656,10 +12192,13 @@
     "up": "Thumbs up",
     "down": "Thumbs down",
     "toDataset": "Bad cases → dataset ({{count}})",
+    "toDatasetHint": "Adds the down-rated sessions of this range. Sessions whose trace is gone are skipped, and the result says how many.",
     "empty": "No thumbs-down feedback yet.",
+    "colAgent": "Agent",
     "colVerdict": "Verdict",
     "colQuestion": "Question",
     "colAnswer": "Answer",
+    "colWho": "Rated by",
     "colComment": "Comment",
     "colSource": "From",
     "openSession": "Open session",

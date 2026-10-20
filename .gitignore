@@ -18,6 +18,7 @@
 !/samples/hr-policy-demo/
 !/samples/research-demo/
 !/samples/mcp_stdio_bridge/
+!/samples/coa-demo/
 /docs/issues/
 .playwright-cli/
 # --- python ---

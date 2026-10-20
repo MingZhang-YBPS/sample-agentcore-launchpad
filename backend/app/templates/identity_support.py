@@ -14,11 +14,13 @@ What is baked into the generated source is identifiers only: Connection
 """
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from app.schemas.agent import AgentSpec, ToolRef
+from app.templates import context_layer_support
 
 IDENTITY_TEMPLATE = Path(__file__).with_name("identity_tools.py.tmpl")
 
@@ -54,8 +56,23 @@ def referenced_connections(spec: AgentSpec) -> dict[str, str]:
     return {tool.auth.connection: tool.auth.kind for tool in spec.tools if tool.auth is not None}
 
 
-def _baked_tool(tool: ToolRef) -> dict[str, Any]:
-    """One entry of the IDENTITY_AUTH_TOOLS literal. Flat, JSON-safe, no secrets."""
+def gates_turn(spec: AgentSpec, tool: ToolRef) -> bool:
+    """Whether a pending consent for ``tool`` ends the turn before the model runs:
+    only the context layer's COA tool (the agent's fact source, a reserved name).
+    Any other as_user MCP server just sits the turn out until the user consents."""
+    return (
+        spec.context_layer is not None
+        and tool.name == context_layer_support.TOOL_NAME
+        and tool.type == "mcp"
+        and tool.auth is not None
+        and tool.auth.mode == "as_user"
+    )
+
+
+def _baked_tool(tool: ToolRef, *, gate: bool = False) -> dict[str, Any]:
+    """One entry of the IDENTITY_AUTH_TOOLS literal. Flat, JSON-safe, no secrets.
+    ``gates_turn`` is baked only when true, so a spec without the context layer
+    renders byte-identical code (V3's old-spec guarantee)."""
     config = tool.config or {}
     auth = tool.auth
     return {
@@ -73,7 +90,24 @@ def _baked_tool(tool: ToolRef) -> dict[str, Any]:
         "audience": (auth.audience or "") if auth else "",
         "key_in": auth.api_key.in_ if auth and auth.api_key else "header",
         "key_name": auth.api_key.name if auth and auth.api_key else "Authorization",
+        **({"gates_turn": True} if gate else {}),
     }
+
+
+def uses_turn_gate(spec: AgentSpec) -> bool:
+    """Whether any tool of the spec ends the turn at a pending consent — only a spec
+    with the context layer attached. Without one the generated code carries no
+    turn-gate code at all."""
+    return any(gates_turn(spec, tool) for tool in auth_tools(spec))
+
+
+_TURN_GATE = re.compile(r"^#\[turn-gate\]\n(.*?)^#\[/turn-gate\]\n", re.DOTALL | re.MULTILINE)
+
+
+def apply_turn_gate(source: str, gated: bool) -> str:
+    """Keep (``gated``) or drop the ``#[turn-gate]`` … ``#[/turn-gate]`` sections of a
+    template; the marker lines themselves never reach the generated code."""
+    return _TURN_GATE.sub(lambda m: m.group(1) if gated else "", source)
 
 
 def render_identity_source(spec: AgentSpec) -> str:
@@ -81,8 +115,11 @@ def render_identity_source(spec: AgentSpec) -> str:
     tools = auth_tools(spec)
     if not tools:
         return ""
-    source = IDENTITY_TEMPLATE.read_text(encoding="utf-8").strip()
-    return source.replace(_MARKER, repr([_baked_tool(tool) for tool in tools]))
+    source = apply_turn_gate(
+        IDENTITY_TEMPLATE.read_text(encoding="utf-8"), uses_turn_gate(spec)
+    ).strip()
+    baked = [_baked_tool(tool, gate=gates_turn(spec, tool)) for tool in tools]
+    return source.replace(_MARKER, repr(baked))
 
 
 def outbound_auth_env(spec: AgentSpec) -> str:
@@ -121,11 +158,23 @@ def uses_as_user(spec: AgentSpec) -> bool:
     return bool(as_user_connections(spec))
 
 
-def as_user_connections_stored(spec_dict: Mapping[str, Any] | None) -> list[str]:
+def as_user_connections_stored(
+    spec_dict: Mapping[str, Any] | None, context_layer_connection: str | None = None
+) -> list[str]:
     """Raw-dict variant for the invoke hot path (a stored spec may predate the
     current schema; the revocation lookup must still see it). Reads both the
-    v2 ``{connection, mode}`` and the earlier fork's ``{provider, flow}`` shape."""
+    v2 ``{connection, mode}`` and the earlier fork's ``{provider, flow}`` shape.
+
+    A runtime that attaches the COA context layer deploys one as_user tool on the
+    layer's Connection without naming it in the stored spec; the caller passes that
+    Connection (``context_layer_connection``) so its revocation is honoured too."""
     names: set[str] = set()
+    if (
+        context_layer_connection
+        and (spec_dict or {}).get("method") != "harness"
+        and context_layer_support.attached(spec_dict)
+    ):
+        names.add(context_layer_connection)
     for tool in (spec_dict or {}).get("tools") or []:
         auth = tool.get("auth") if isinstance(tool, dict) else None
         if not isinstance(auth, dict):

@@ -171,7 +171,9 @@ const V2Experiments = lazy(() =>
 const V2Assistant = lazy(() => import("./v2/pages/Assistant").then((m) => ({ default: m.V2Assistant })));
 const V2Registry = lazy(() => import("./v2/pages/Registry").then((m) => ({ default: m.V2Registry })));
 const V2KnowledgeBases = lazy(() => import("./v2/pages/KnowledgeBases").then((m) => ({ default: m.V2KnowledgeBases })));
+const V2ContextLayer = lazy(() => import("./v2/pages/ContextLayer").then((m) => ({ default: m.V2ContextLayer })));
 const V2SkillLab = lazy(() => import("./v2/pages/SkillLab").then((m) => ({ default: m.V2SkillLab })));
+const V2Coding = lazy(() => import("./v2/pages/coding/Coding").then((m) => ({ default: m.V2Coding })));
 const V2Chat = lazy(() => import("./v2/pages/Chat").then((m) => ({ default: m.V2Chat })));
 const V2Observability = lazy(() => import("./v2/pages/Observability").then((m) => ({ default: m.V2Observability })));
 const V2Memory = lazy(() => import("./v2/pages/Memory").then((m) => ({ default: m.V2Memory })));
@@ -445,7 +447,9 @@ export default function App() {
                 <Route path="assistant" element={<V2Assistant />} />
                 <Route path="registry" element={<V2Registry />} />
                 <Route path="knowledge-bases" element={<V2KnowledgeBases />} />
+                <Route path="context-layer" element={<V2ContextLayer />} />
                 <Route path="skill-lab" element={<V2SkillLab />} />
+                <Route path="coding" element={<V2Coding />} />
                 <Route path="chat" element={<V2Chat />} />
                 <Route path="observability" element={<V2Observability />} />
                 <Route path="memory" element={<V2Memory />} />

@@ -33,15 +33,16 @@ the precondition probes and restart side-effect traps the table below does not.
 | Backend lint + tests (parallel, as the gate runs them) | `cd backend && uv run ruff check . && uv run pytest -q -n auto` |
 | Single backend test (serial — omit `-n`) | `cd backend && uv run pytest tests/test_agents_api.py::test_name -q` |
 | Frontend lint / typecheck / unit tests / build | `cd frontend && npm run lint && npx tsc --noEmit && npm test && npm run build` |
+| Coding runtime server tests (Node, fake app-server, no AWS) | `cd backend/app/coding/image && node --test 'test/*.test.mjs'` |
 | i18n key parity (en ↔ zh-CN) | `python3 scripts/i18n_check.py` |
 | zh-CN full-width punctuation (`--fix` to convert) | `python3 scripts/i18n_zh_punct.py --check` |
 
-`scripts/verify.sh` (= `make verify`) is the canonical gate: backend ruff+pytest, infra
-ruff+pytest, a `start.py`/`stop.sh` lint + syntax check, frontend
-eslint+tsc+vitest+vite-build, i18n parity, and zh-CN full-width punctuation. It must
-pass before any change is considered complete. The gate runs the backend suite in
-parallel via `pytest-xdist` (`-n auto`, ~1 min on 8 cores instead of ~6.4 min);
-`-n` is deliberately **not** in `addopts`, so one named test stays serial.
+`scripts/verify.sh` (= `make verify`) is the canonical gate: backend ruff+pytest, the
+coding runtime's `node --test` suite, infra ruff+pytest, a `start.py`/`stop.sh` lint +
+syntax check, frontend eslint+tsc+vitest+vite-build, i18n parity, and zh-CN full-width
+punctuation. It must pass before any change is considered complete. The gate runs the
+backend suite in parallel via `pytest-xdist` (`-n auto`, ~1 min on 8 cores instead of
+~6.4 min); `-n` is deliberately **not** in `addopts`, so one named test stays serial.
 
 **`backend/tests/` vs `backend/scripts/e2e_*.py`:** `tests/` are hermetic unit tests
 (SQLite is redirected to a temp DB in `conftest.py`; AWS is stubbed) and run in
@@ -141,9 +142,9 @@ the same backend, both routed in `src/App.tsx`:
 - **V2 (the default)** — `/v2/*` under `src/v2/` (`V2Shell.tsx`, its own component kit
   in `v2/ui.tsx`, styles scoped under `.v2` / `body.v2-body` in `v2/v2.css`): Home,
   Agents, Eval (data / tasks / insights / evaluators / online / experiments), Assistant
-  (the architect), Registry, Knowledge Bases, Skill Lab, Chat, Observability, Memory,
-  Governance, Users, Workspaces, Connections, Announcements, Videos. New UI work lands
-  here.
+  (the architect), Registry, Knowledge Bases, Context Layer (COA), Skill Lab, Chat,
+  Observability, Memory, Governance, Users, Workspaces, Connections, Announcements,
+  Videos. New UI work lands here.
 - **Classic** — the original routes (`/agents`, `/create/studio`, `/registry`, `/chat`,
   `/evaluation`, …). Once V2 is chosen (`lib/ui-version.ts` / `useUiVersion()`), they
   render inside `<V2Shell classic />`, and classic URLs that have a native V2 page

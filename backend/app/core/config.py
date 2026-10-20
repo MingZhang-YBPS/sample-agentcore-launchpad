@@ -362,6 +362,27 @@ class Settings(BaseSettings):
     # Same mirror/parity contract for the codex CLI (`ARG CODEX_CLI_VERSION`).
     skill_lab_worker_codex_version: str = "0.155.1"
 
+    # Coding agent (app/coding): the models a coding turn may pick, all invoked by
+    # codex's built-in `amazon-bedrock-runtime` provider (bedrock-runtime
+    # /openai/v1, SigV4 with the coding runtime's role — never Mantle). The
+    # runtime role's model grant is derived from this list at install, so adding a
+    # model needs a repair (re-install) before a turn can use it.
+    coding_models: list[str] = [
+        "global.openai.gpt-6.1-sol",
+        "global.openai.gpt-6-sol",
+        "global.openai.gpt-6-astra",
+    ]
+    coding_default_model: str = "global.openai.gpt-6-sol"
+    # codex reasoning effort per turn (`turn/start.effort`)
+    coding_efforts: list[str] = ["low", "medium", "high", "xhigh"]
+    coding_default_effort: str = "medium"
+    # The coding watcher thread (`app.coding.watcher`): settles turns no browser is
+    # streaming and snapshots saved files. On by default — a turn runs in its
+    # microVM whether or not anyone watches it; LAUNCHPAD_CODING_WATCHER_ENABLED=
+    # false is the off switch (the hermetic suite uses it).
+    coding_watcher_enabled: bool = True
+    coding_watcher_interval_s: int = 15
+
     # Advisory USD-per-1M-token prices for observability cost estimates.
     # Keys are substring-matched against gen_ai.request.model ids; unknown
     # models report tokens with a null cost. Overridable in launchpad.yaml,
@@ -394,29 +415,33 @@ class Settings(BaseSettings):
         "glm-5": {"input": 1.00, "output": 3.20},
         "glm-4.7": {"input": 0.60, "output": 2.20},
         "glm-4.7-flash": {"input": 0.07, "output": 0.40},
-        # OpenAI GPT-6 Sol (the default judge / assistant model), from the model card
-        # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html
-        # (Standard tier, short context <= 272K input tokens, read 2026-10-12): Global
-        # CRIS $2.00 in / $10.00 out / $0.20 cache read / $2.50 cache write; US Geo
-        # CRIS and Mantle in-Region carry the 10% premium ($2.20 / $11.00 / $0.22 /
-        # $2.75). Long-context requests (> 272K) bill double input and 1.5x output and
-        # are not modelled. The bare Mantle id `openai.gpt-6-sol` matches the global
-        # key (a substring map cannot tell it from `global.`), so its estimate is 10%
-        # low. Not yet on the pricing page or in the Price List API (2026-10-12).
+        # OpenAI GPT-6 on Bedrock (Standard tier, short context). The unprefixed
+        # keys are the Global CRIS price; US Geo CRIS and Mantle in-Region carry the
+        # 10% premium. Sol from its Bedrock model card (read 2026-10-12), Astra and
+        # Luna from litellm's global.* entries (2026-10-14). The bare Mantle id
+        # `openai.gpt-6-sol` matches the global key (a substring map cannot tell it
+        # from `global.`), so its estimate is 10% low until the refresher writes the
+        # exact id. Long-context (> 272K input) pricing is not modelled.
         "gpt-6-sol": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
         "us.openai.gpt-6-sol": {
             "input": 2.20, "output": 11.00, "cache_read": 0.22, "cache_write": 2.75,
         },
-        # DeepSeek / Moonshot Kimi on Bedrock (Standard tier, on-demand, US East
-        # N. Virginia), read 2026-10-12 from https://aws.amazon.com/bedrock/pricing/
-        # and cross-checked with the AWS Price List API (service AmazonBedrock,
-        # us-east-1). Page and API agree for DeepSeek v3.2 and Kimi K2.5 / K2
-        # Thinking. The page lists no DeepSeek V3.1 (deepseek.v3-v1:0, us-west-2
-        # only), DeepSeek R1 or Kimi K3, so those numbers are the Price List API's
-        # (R1: USE1-DeepSeek-R1-*; V3.1: USW2-DeepSeek-V3.1-*; K3: the
-        # moonshotai.kimi-k3 *-global-standard / *-standard SKUs, the US profile
-        # carrying the 10% regional premium). Longest key wins, so the US Kimi K3
-        # profile gets its own entry over the global one.
+        "gpt-6-astra": {
+            "input": 10.00, "output": 50.00, "cache_read": 1.00, "cache_write": 12.50,
+        },
+        "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+        # GPT-6.1 Sol: litellm's global./us. bedrock_converse entries (read 2026-10-14);
+        # the Price List API carries no GPT-6 rows. Not a substring of `gpt-6-sol` (nor
+        # the reverse), so each family keeps its own rate.
+        "gpt-6.1-sol": {"input": 2.00, "output": 10.00, "cache_read": 0.10, "cache_write": 2.50},
+        "us.openai.gpt-6.1-sol": {
+            "input": 2.20, "output": 11.00, "cache_read": 0.11, "cache_write": 2.75,
+        },
+        # DeepSeek / Moonshot Kimi on Bedrock (Standard tier, on-demand, US East),
+        # read 2026-10-12 from https://aws.amazon.com/bedrock/pricing/ and the AWS
+        # Price List API (service AmazonBedrock, us-east-1); litellm agrees
+        # (2026-10-14). Longest key wins, so the US Kimi K3 profile gets its own
+        # entry over the global one.
         "deepseek.v3.2": {"input": 0.62, "output": 1.85},
         "deepseek.v3-v1": {"input": 0.58, "output": 1.68},
         "deepseek.r1": {"input": 1.35, "output": 5.40},

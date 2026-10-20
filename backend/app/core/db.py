@@ -20,7 +20,8 @@ class Base(DeclarativeBase):
 DEFAULT_WORKSPACE_ID = "default"
 
 # Every table whose rows belong to one (account, region) environment. `users`,
-# `workspaces`, `user_workspaces`, `announcements`, and video tables are hub-global.
+# `workspaces`, `user_workspaces`, `announcements`, video tables and
+# `platform_settings` are hub-global.
 WORKSPACE_SCOPED_TABLES = (
     "agents",
     "deployments",
@@ -90,6 +91,10 @@ WORKSPACE_SCOPED_TABLES = (
     # cross-project sharing grants (models/shares.py, projects §11.2): a share never
     # leaves its workspace
     "resource_shares",
+    # the COA context layer and the Agent IDE's repos/turns (main)
+    "context_layers",
+    "coding_repos",
+    "coding_turns",
 )
 
 # Project boundary (design §4). STRICT rows always belong to one project; SHARED rows
@@ -215,6 +220,7 @@ def init_db(bind=None) -> None:
     """
     bind = bind if bind is not None else engine
     # every model module, so an out-of-process caller (scripts/) gets every table
+    from app.coding import models as _coding_models  # noqa: F401 — Agent IDE repos/turns
     from app.evaluation import models as _eval_models  # noqa: F401
     from app.models import announcement as _announcement_models  # noqa: F401
     from app.models import assistant as _assistant_models  # noqa: F401
@@ -235,6 +241,8 @@ def init_db(bind=None) -> None:
     from app.optimization import models as _optimization_models  # noqa: F401
     from app.skill_lab import models as _skill_lab_models  # noqa: F401
 
+    # before create_all, or it would build an empty `coding_repos` beside the old table
+    _migrate_coding_repo_rename(bind)
     Base.metadata.create_all(bind=bind)
     _migrate(bind)
     # Seeding after the drift check so a database that is behind the models is
@@ -422,6 +430,12 @@ def _migrate(bind) -> None:
             ("attempts", "ALTER TABLE eval_runs ADD COLUMN attempts JSON"),
             ("session_failures", "ALTER TABLE eval_runs ADD COLUMN session_failures JSON"),
             ("scenario_failures", "ALTER TABLE eval_runs ADD COLUMN scenario_failures JSON"),
+            # scorecard stamps (evaluation/scorecard.py): NULL on older rows
+            ("agent_snapshot_seq", "ALTER TABLE eval_runs ADD COLUMN agent_snapshot_seq INTEGER"),
+            ("dataset_fingerprint",
+             "ALTER TABLE eval_runs ADD COLUMN dataset_fingerprint VARCHAR(16)"),
+            ("dataset_size", "ALTER TABLE eval_runs ADD COLUMN dataset_size INTEGER"),
+            ("scenario_map", "ALTER TABLE eval_runs ADD COLUMN scenario_map JSON"),
         ):
             if column not in existing:
                 with bind.begin() as conn:
@@ -493,6 +507,7 @@ def _migrate(bind) -> None:
     _migrate_api_key_lifecycle_columns(bind)
     _migrate_creator_columns(bind)
     _migrate_resource_creators_index(bind)
+    _migrate_context_layer_index(bind)
     _migrate_project_columns(bind)
     _migrate_template_project_column(bind)
     _migrate_actor_user_id_columns(bind)
@@ -701,6 +716,62 @@ def _migrate_template_project_column(bind) -> None:
             )
 
 
+# Index names `create_all` gives the coding tables (`index=True` columns), keyed by
+# the name the same index had before the project → repo rename.
+_CODING_REPO_INDEXES = {
+    "ix_coding_projects_workspace_id": (
+        "ix_coding_repos_workspace_id", "coding_repos", "workspace_id"),
+    "ix_coding_projects_owner_principal": (
+        "ix_coding_repos_owner_principal", "coding_repos", "owner_principal"),
+    "ix_coding_projects_created_by": (
+        "ix_coding_repos_created_by", "coding_repos", "created_by"),
+    "ix_coding_turns_project_id": ("ix_coding_turns_repo_id", "coding_turns", "repo_id"),
+}
+
+
+def _migrate_coding_repo_rename(bind) -> None:
+    """The Agent IDE's per-user git working directory was a "project"; it is a
+    "repo" now (the organisational project is a different thing). Rename the
+    ledger in place so an existing deployment keeps its repos and turns:
+    ``coding_projects`` → ``coding_repos`` and ``coding_turns.project_id`` →
+    ``repo_id``, then give their indexes the names ``create_all`` would.
+
+    Runs BEFORE ``create_all`` (``init_db``); should ``create_all`` have built an
+    empty ``coding_repos`` beside the old table anyway, the empty one is dropped
+    first. Two tables that both hold rows are refused rather than guessed at.
+    Idempotent: a ledger without the old names is left alone."""
+    from sqlalchemy import inspect, text
+
+    tables = set(inspect(bind).get_table_names())
+    if "coding_projects" in tables:
+        if "coding_repos" in tables:
+            with bind.connect() as conn:
+                rows = conn.execute(text("SELECT COUNT(*) FROM coding_repos")).scalar()
+            if rows:
+                raise RuntimeError(
+                    "both coding_projects and coding_repos hold rows — merge them by hand "
+                    "before starting (coding_projects is the pre-rename table)"
+                )
+            with bind.begin() as conn:
+                conn.execute(text("DROP TABLE coding_repos"))
+        with bind.begin() as conn:
+            conn.execute(text("ALTER TABLE coding_projects RENAME TO coding_repos"))
+        tables = (tables - {"coding_projects"}) | {"coding_repos"}
+    if "coding_turns" in tables:
+        columns = {c["name"] for c in inspect(bind).get_columns("coding_turns")}
+        if "project_id" in columns and "repo_id" not in columns:
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE coding_turns RENAME COLUMN project_id TO repo_id"))
+    live = {t: {c["name"] for c in inspect(bind).get_columns(t)}
+            for t in ("coding_repos", "coding_turns") if t in tables}
+    with bind.begin() as conn:
+        for old, (new, table, column) in _CODING_REPO_INDEXES.items():
+            conn.execute(text(f"DROP INDEX IF EXISTS {old}"))
+            # a pre-workspace ledger gets workspace_id (and its index) from _migrate
+            if column in live.get(table, ()):
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {new} ON {table} ({column})"))
+
+
 def _migrate_creator_columns(bind) -> None:
     """The creator of every user-managed resource (`app.services.creators`):
     `created_by` (`users.id`, indexed — visibility filters on it) and
@@ -829,6 +900,23 @@ def _migrate_resource_creators_index(bind) -> None:
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_resource_creators_workspace_kind_resource "
                 "ON resource_creators (workspace_id, kind, resource_id)"
+            )
+        )
+
+
+def _migrate_context_layer_index(bind) -> None:
+    """One COA context layer per workspace (`context_layers`). `create_all` builds
+    the unique index with the table; this keeps a ledger whose table lost it
+    honest. Runs after `_migrate_workspace_columns` because it spans `workspace_id`."""
+    from sqlalchemy import inspect, text
+
+    if "context_layers" not in inspect(bind).get_table_names():
+        return
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_context_layers_workspace "
+                "ON context_layers (workspace_id)"
             )
         )
 
@@ -1373,6 +1461,13 @@ def _migrate_workspace_columns(bind) -> None:
         "project_storage_mounts": (
             "ALTER TABLE project_storage_mounts ADD COLUMN workspace_id VARCHAR(32)"
         ),
+        # born with the column (the COA context layer); listed so the scoped-tables
+        # drift test holds and the index is ensured
+        "context_layers": "ALTER TABLE context_layers ADD COLUMN workspace_id VARCHAR(32)",
+        # born with the column (the coding agent); listed so the scoped-tables drift
+        # test holds and the index is ensured
+        "coding_repos": "ALTER TABLE coding_repos ADD COLUMN workspace_id VARCHAR(32)",
+        "coding_turns": "ALTER TABLE coding_turns ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

@@ -100,9 +100,9 @@ real, runnable code in this repo.
 | **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. Governance manages **Gateway rate limits** (GA Aug 2026) on managed Gateways — `ListGatewayRateLimits` / `CreateGatewayRateLimit` / `UpdateGatewayRateLimit` / `DeleteGatewayRateLimit` behind the RATE LIMITS panel of the gateway detail, validated server-side and journaled in `policy_changes`. |
 | **Identity** | Token vault backing the gateway — an OAuth2 provider (agent outbound auth) and an API-key provider. Members with `identity.manage` manage workspace **Connections** (console label: **Outbound credentials** / 出站凭证; OAuth2 / API-key credential providers; secrets go to AWS only) and Gateway targets bound to one (`credentialProviderConfigurations`, as-agent M2M or API key) from the v2 admin Outbound credentials module (`/v2/connections`, `?view=targets`) over `/api/identity/*`; agent specs reference a Connection per tool through `ToolRef.auth`, and the read-only 身份 page (`/v2/agents?view=identity&id=`) reads the agent's workload identity, inbound mode and downstreams back from AWS. **Inbound auth** (P3): a Runtime is IAM (SigV4) *or* a `customJWTAuthorizer`, one at a time; resolution is `spec.inbound_auth` > workspace default (`Workspace.settings.inbound_auth_default`) > IAM, snapshotted on the agent row per deploy, and every Create/UpdateAgentRuntime echoes the authorizer (UpdateAgentRuntime resets an omitted one). `POST /api/agents/{id}/inbound-auth` switches in place (same ARN, new version). Every JWT editor (wizard, workspace default, the agent page's editable switch dialog) can take the discovery URL from an OAuth2 Connection (`GET /api/identity/connections/oidc-sources`, never its outbound client id) and warns when the issuer is not the workspace pool's: platform invokes present workspace-Cognito tokens, so the invoke chain refuses such an agent up front with `agent.inbound_issuer_mismatch`. JWT agents are invoked over the data-plane HTTPS endpoint with a bearer — Chat's *invoke as me* sends the signed-in user's Cognito JWT, otherwise the workspace M2M token — while the Memory actor stays `scoped_actor(agent, human)` either way. `obo` Gateway targets use `grantType: TOKEN_EXCHANGE` against a Connection carrying `onBehalfOfTokenExchangeConfig` (a CUSTOM_JWT gateway and an RFC 8693 / RFC 7523 IdP required; Cognito refused with 422; a Connection issuer that differs from the gateway's inbound issuer returns a non-blocking `warnings[]` entry). Design and service-model findings: [identity.md](identity.md). |
 | **Registry** | The GA `agent-registry` service hosts `launchpad-registry`, cataloguing A2A agents, MCP servers, and AGENT_SKILLS. `services/agentcore/registry.py` translates the GA `AGENT/MCP/SKILL` and `data/dataSchemaVersion` model into the stable Launchpad descriptor contract; other AgentCore services remain under `bedrock-agentcore`. GA uniqueness is `(name, recordVersion)`, so newly created records use type-qualified initial versions (`1.0.0-a2a`, `1.0.0-mcp`, `1.0.0-skill`) and content edits preserve the suffix. Every deploy auto-creates and submits an A2A record when Registry is available. In accounts whose SCP/IAM policy denies Registry setup, bootstrap records the capability as unavailable, Registry-only APIs return 503, and the deploy pipeline skips only the register stage; Runtime/Harness deployment remains usable. Governance can import one existing AgentCore Gateway as one MCP record containing the Gateway endpoint and its complete discovered tool catalog; legacy per-target records remain until an explicit retirement after the Gateway record is APPROVED. Registry approval controls catalog visibility, not Gateway authorization. `GET /api/registry/attachables` reports catalog status separately from Harness attachability and resolves Gateway auth server-side. For an A2A record owned by a deployed Launchpad A2A agent, the Registry drawer's LIVE CARD reads the card the runtime serves right now (`GET /api/registry/records/{id}/live-agent-card` → data-plane `GetAgentCard` on the ledger's `Agent.arn`, the session AWS opens is ended at once) and diffs it against the record's stored card; the live card is never persisted — AWS stays the source of truth. Both cards read their `version` from one platform constant, `A2A_CARD_VERSION` in `services/agentcore/registry.py`: the A2A runtime template passes it to Strands `A2AServer(version=...)` at package time and `build_a2a_card` stamps it on the record at register time, so the two agree by construction. It is deliberately **not** the AgentCore runtime version (`Agent.version`, shown in VERSIONS & ENDPOINTS) — that is assigned by Create/UpdateAgentRuntime only after the template has been rendered, so the card cannot carry it. A2A agents published before this constant existed still serve Strands' default `0.0.1` against a record `version` of `1`; the diff flags them until their next re-publish (re-render + re-register), which converges both sides. The Registry page has two views over the same registry: the **publisher list** (`GET /api/registry/records` → control-plane `ListRegistryRecords`, every record in every state) and the **consumer view** (`?view=discoverable`, `GET /api/registry/records/discoverable` → data-plane `ListDiscoverableRegistryRecords`, paginated to completion) — what a consumer or agent with data-plane access actually discovers. Discovery summaries carry no `descriptors`; opening a row reads the full record. Once the consumer view has been fetched in a page session, every control-plane record absent from it is chipped NOT DISCOVERABLE (DRAFT / PENDING_APPROVAL / REJECTED / DEPRECATED are the expected cases) — the diff, not the list, is the point. |
-| **Policy** | Governance discovers existing MCP Gateways live, persists opt-in management through Launchpad-owned Gateway tags, and manages one attached Policy Engine plus Cedar policies. Initial Engine attachment mode is operator-selected (`ENFORCE` by default, `LOG_ONLY` available); new policies still start `LOG_ONLY`. A Gateway that references an Engine deleted out-of-band is surfaced as an explicit dangling state — reads keep the stale ARN visible, policy mutations return 409, and create-and-attach replaces the reference. ACTIVE edits create LOG_ONLY candidates, promotion and rollback use conservative ordering, and later Gateway transitions to `ENFORCE` require evidence or a typed zero-evidence override. Authenticated Chat calls to `launchpad-gw` use a server-minted Cognito user JWT, so Cedar `OAuthUser` tags such as `username` and `cognito:groups` reflect the signed-in console identity instead of the agent's M2M client. ZIP Runtime receives it in the sensitive invoke payload; Harness receives an invocation-scoped authenticated `remote_mcp` tool. Public API/evaluation traffic and an auth-disabled local console remain M2M. When such a Harness call is denied at call time (a rule with a `context.input` condition — a scope-only deny instead filters the tool out of `tools/list`, so the model never calls it), the Harness returns the Gateway's denial as an error `toolResult`; Chat recognises its signature (`services/policy_denials.py`, shared with Policy Test) and streams `policy_denied`, which V2 Chat shows as a policy-deny card beside the as_user consent card and persists as a `policy` history row. ZIP Runtime agents do not forward tool results yet. Every mutation is journaled locally while AWS remains the source of current state. |
+| **Policy** | Governance discovers existing MCP Gateways live, persists opt-in management through Launchpad-owned Gateway tags, and manages one attached Policy Engine plus Cedar policies. Initial Engine attachment mode is operator-selected (`ENFORCE` by default, `LOG_ONLY` available); new policies still start `LOG_ONLY`. A Gateway that references an Engine deleted out-of-band is surfaced as an explicit dangling state — reads keep the stale ARN visible, policy mutations return 409, and create-and-attach replaces the reference. ACTIVE edits create LOG_ONLY candidates, promotion and rollback use conservative ordering, and later Gateway transitions to `ENFORCE` require evidence or a typed zero-evidence override. Authenticated Chat calls to `launchpad-gw` use a server-minted Cognito user JWT, so Cedar `OAuthUser` tags such as `username` and `cognito:groups` reflect the signed-in console identity instead of the agent's M2M client. ZIP Runtime receives it in the sensitive invoke payload; Harness receives an invocation-scoped authenticated `remote_mcp` tool. A second CUSTOM_JWT Gateway gets the same treatment when it already admits these tokens (`services/user_gateways.py`): its authorizer's discovery URL is the workspace pool's, `allowedClients` holds both the console client and the M2M client, it has no `allowedAudience` (Cognito access tokens carry none), and no interceptor sets `passRequestHeaders`. Such a Gateway is Harness-attachable with the workspace M2M provider, and each logged-in Harness turn re-reads it and swaps it for a `remote_mcp` tool under its configured alias carrying the user JWT; one that no longer qualifies, or cannot be read, keeps its M2M identity. This is what lets a dedicated Gateway with *as user* (3LO) targets see the human instead of the agent. Public API/evaluation traffic and an auth-disabled local console remain M2M. When such a Harness call is denied at call time (a rule with a `context.input` condition — a scope-only deny instead filters the tool out of `tools/list`, so the model never calls it), the Harness returns the Gateway's denial as an error `toolResult`; Chat recognises its signature (`services/policy_denials.py`, shared with Policy Test) and streams `policy_denied`, which V2 Chat shows as a policy-deny card beside the as_user consent card and persists as a `policy` history row. ZIP Runtime agents do not forward tool results yet. Every mutation is journaled locally while AWS remains the source of current state. |
 | **Evaluation** | Real `StartBatchEvaluation` / insights over CloudWatch traces. A run's scope is exactly one of: a **dataset** (replay items — multi-turn scenarios replay sequentially in one session), explicit **session ids**, or a **time window** (`lookback_hours` 1–336 — passive: no new invocations, `filterConfig.timeRange` over existing traffic). 14 general prompt-template evaluators (12 trace/session plus 2 ordinary tool-call), 2 skill `TOOL_CALL` prompt-template evaluators, and 3 ground-truth-only programmatic `Builtin.Trajectory*Match` session matchers (selectable only on dataset runs whose scenarios define `expected_trajectory`) plus **custom evaluators** with full CRUD on the `?view=evaluators` sub-page in three definitions — **LLM-as-a-judge** (`llmAsAJudge`: instructions with placeholders, numerical rating scale, Bedrock judge model), **derived** (`derived`: a Builtin/ThirdParty base evaluator's prompt on a chosen model) and **code-based** (`codeBased.lambdaConfig`: a Lambda function ARN in the workspace Region plus a 1–300 s timeout, default 60; no instructions, scale or model). Every definition needs `level` on `CreateEvaluator`. The judge model defaults to `global.openai.gpt-6-sol` (judge and derived, console and assistant evaluation assets); `CreateEvaluator`/`UpdateEvaluator` test-call the model with a fixed `max_output_tokens=10` that GPT-6 refuses (it needs ≥ 16, and an explicit `inferenceConfig.maxTokens` does not change the probe), so exactly that `ValidationException` is retried once on `global.anthropic.claude-sonnet-5-5` and the reply's `model_fallback` (`{requested, used, reason}`) says so — the assistant's materializer records the fallback and its own client token on the resource before the retry, so a resumed operation rebuilds the same request. The console detail projection carries `definition: judge|derived|code`; `UpdateEvaluator` is a full-config replace, so an update payload must be of the evaluator's own kind — a judge payload against a code-based evaluator (or any other cross-kind pair) is refused with `evaluator.definition_mismatch` instead of silently converting it. A code-based evaluator's Lambda receives `{schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs, evaluationTarget}` and answers `{label, value?, explanation?}` or `{errorCode, errorMessage}` (300 s / 6 MB limits); the console manages **no IAM** for it — the evaluation execution role that batch/online runs pass as `evaluationExecutionRoleArn` needs `lambda:InvokeFunction` + `lambda:GetFunction` on the function and the function's resource policy must allow `bedrock-agentcore.amazonaws.com`, both stated as a hint under the ARN field. Code-based evaluators are selectable wherever custom evaluators are (batch runs, experiments, online configs). When the account listing fails (`ListEvaluators` AccessDenied on a spoke role, throttling, a non-AWS error), `GET /api/eval/evaluators` still answers the builtins and adds `custom_unavailable: {code, message}` (the mapped `aws.*` / `workspace.assume_role_failed` code or `evaluators.list_failed`, with a generic message — never the raw AWS text), logged once as a warning; the evaluator pages show it as a banner and the V2 pickers as an inline note, so a failed listing never reads as an account without custom evaluators. Insights runs pick a subset of the three analysis types (failure analysis / user intent / execution summary). Datasets live in SQLite as devguide scenarios (`?view=datasets` sub-page: scenario editor, JSON/JSONL import) and sync one-way to AWS Dataset resources (`AGENTCORE_EVALUATION_PREDEFINED_V1`): the first sync creates the dataset (`CreateDataset`), every later sync edits that dataset's **DRAFT** in place (`ListDatasetExamples` → `DeleteDatasetExamples` → `AddDatasetExamples`, each polled through `UPDATING` to `ACTIVE`) so the dataset id and its published versions survive; **PUBLISH VERSION** (`CreateDatasetVersion`) snapshots the draft as an immutable numbered version and flips `draftStatus` from `MODIFIED` to `UNMODIFIED`. The row's `cloud` blob caches id/ARN/status plus `draft_status`, `example_count` and the version list (`ListDatasetVersions`); cloud-only datasets show the same read-only and can publish too, and a single published version can be deleted (`DeleteDataset` with `datasetVersion`). A cloud-dataset run may **pin a published version** (`dataset_version`, validated against `ListDatasetVersions` before the run row exists; `GetDataset` and `ListDatasetExamples` then read that snapshot so the replayed scenarios and ground truth are exactly the version's); the draft is the default, and the pinned version is stored on the run and shown as `· v<N>` in the runs list. A recorded copy that AWS no longer knows (`ResourceNotFoundException`) or that was deleted through the console is re-created on the next sync; scenario ground truth (assertions / expected responses / expected trajectory) is injected into batch runs via `evaluationMetadata.sessionMetadata`. A dataset scenario whose invocation hits a transient upstream error (a mid-stream `runtimeClientError` / `internalServerException`, throttling, a 5xx, or a Harness stream that ended without answering — `harness.incomplete_response` right after a tool step (stop reason `tool_result` / `tool_use`) or with neither a stop event nor any text, where the agent never ran) is replayed in a fresh session up to `TRANSIENT_SCENARIO_RETRIES` (2) more times before the run fails; a Harness execution timeout (a model call that never returns holds the scenario silent until the agent budget runs out) is replayed once (`TIMEOUT_SCENARIO_RETRIES`). A scenario that then still ends on the agent's own budget — the timeout again, or an iteration / token limit (`harness.execution_limit`) — is the agent's result for that scenario, not a run failure: its session is kept and scored as it stands, and the run row records it in `budget_stops` (`[{scenario_id, session_id, code, stop_reason}]`, shown as a notice on the V2 task detail). Any other error still fails the run, naming the scenario — except for a **simulated persona** scenario: the SDK executor swallows the agent call's exception, so `simulation.run_simulated_scenario` re-raises that original exception (a Harness timeout then gets its one replay like a replayed scenario), and a persona that still fails is **skipped** — recorded in `scenario_failures` (`[{scenario_id, retries, code, error}]`, a notice on the V2 task detail) while the other personas run and are scored; the run fails only when no scenario produced a session (live 2026-10-10: one Harness GPT-6 call that returned 0 tokens for 600 s had discarded all six personas of a run). The V2 task wizard accepts simulated datasets and asks for the user actor model (`actor_model_id`) when one is picked. Runs execute through a bounded-concurrency queue — up to `eval_max_concurrent_runs` at once (default 5, capped at 5 to match the AWS active-batch-evaluations account quota); excess runs queue instead of failing. Lower the cap when other consumers in the same account need headroom. An operator can **stop** any active run from the Runs page (`POST /api/eval/runs/{id}/stop`): a run whose batch exists on AWS is stopped with `StopBatchEvaluation` (STOPPING → STOPPED — the sessions already judged keep their results, which the poller records as partial scores), a run still queued is cancelled locally before it ever reaches AWS, and a run replaying its dataset stops between prompts without calling `StartBatchEvaluation`. All three end in the terminal ledger status `stopped` (never `failed`) with the reason "stopped by operator"; `DeleteBatchEvaluation` is not exposed. The run row stores only the per-evaluator **averages** (`evaluatorSummaries.statistics.averageScore`, each with its judgement `count` = `totalEvaluated`; AWS leaves `statistics` empty for a code-based evaluator, so that evaluator's mean is computed from the batch's results stream when the run finishes), and the architect's next-steps card shows the polarity-normalized, count-weighted mean of them (`runMeanScore`) — the same number as the task detail's normalized mean over every result; the **judge's explanation of every score** lives in the batch's own results log stream (`GetBatchEvaluation.outputConfig.cloudWatchConfig` → `run-<batchId>` in `/aws/bedrock-agentcore/evaluations/batch-evaluations/results/default`, `gen_ai.evaluation.result` records), which the Runs page reads on demand for the selected terminal run (`GET /api/eval/runs/{id}/results`, never persisted) and renders as a SESSION RESULTS panel — per session, one row per judgement (evaluator, level, score, label, expandable explanation; a span-level evaluator yields one row per tool call) with a link to the Observability session detail. **Online evaluation** (`?view=online`): one AgentCore `OnlineEvaluationConfig` per agent + evaluator set scores a sampled share (0.01–100 %) of live sessions after a session-idle timeout, no new invocations; results land in `/aws/bedrock-agentcore/evaluations/results/<configId>` (also EMF metrics under `Bedrock-AgentCore/Evaluations`) and the console aggregates them with Logs Insights (per-evaluator mean / labels / trend / recent records with judge explanations). The page lists **every** config in the workspace account classified by owner — `agent` (Launchpad-created, full control), `experiment` (`exp_*`/`can_*` arms, read-only), `external` (pause/resume/delete only). Update always sends the complete `rule` because AWS replaces it wholesale; create refuses a never-invoked agent (AWS validates the log group exists). A config runs in one of two **modes**: `scores` (evaluators) or `insights` (1–3 insight types + optional DAILY/WEEKLY/MONTHLY clustering — AWS forbids both on one config); insights configs produce **reports** (batch evaluations sourced from the config: AWS-scheduled on the clustering cadence, or RUN REPORT NOW from the console through the run queue), attributed via `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource` and rendered with the same insight-cluster trees as the Runs page; a report covers only the sessions the config sampled. Online scores also surface where sessions are looked at: the Observability session detail carries an ONLINE EVALUATION block (every config's result records for that session, owner-classified, fail-soft — a results-query failure never hides traces) and the Overview has an **ONLINE QUALITY · 24h** tile (polarity-normalised, count-weighted mean over the workspace's agent-owned configs, 120 s cache, no AWS call while no config exists). Both read all results log groups at once through `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])`. A third, **on-demand** mode scores one session synchronously through the data-plane `Evaluate` API from the Observability session detail (SCORE NOW: ≤5 evaluators, ≤10 results per call, nothing persisted) — for probing a custom evaluator or one suspicious session, where a batch run would be the durable answer. **Recommendations from a run** (V2 task detail): a completed run seeds `StartRecommendation` scoped to its sessions — the system-prompt job pins `agentTraces.batchEvaluation` to its batch (unless the run has red-team sessions: golden tests the architect marked `adversarial` — injections, nonpublic-information requests, pressure for prohibited advice — whose content makes AgentCore refuse the whole recommendation — those sessions are left out, the others' spans go inline, and the row records `result.excluded_sessions`; the scenarios stay in the evaluation), the tool-description job (which refuses a batch source) gets the same sessions' spans inline; a Managed Harness's inputs are read live from `GetHarness` (+ its Gateway target tool schemas, narrowed by `allowedTools`), other agents fall back to the spec, then to required operator input. Rows (`eval_recommendations`) hold the job id + confirmed inputs and are refreshed from `GetRecommendation` on read. The console shows, per kind, only the newest recommendation and any accepted one; superseded attempts (typically one AWS refused before a retry succeeded) collapse under an "earlier recommendations (n)" toggle (`splitRecommendations`), so a stale FAILED card never sits next to the result. The system prompt may instead come from the registered `gepa_lite` provider (`provider` + `model_id` on the create request): the experiment RECOMMEND stage's reflective pipeline over the run's own batch-results stream and session transcripts, run on a background thread with a `provider-` pointer instead of an AWS id (a row a restart left non-terminal reads as interrupted) — the fallback when the AgentCore job refuses the input (its prompt-attack protection rejects some ordinary Chinese system prompts outright). A completed system-prompt recommendation of a Managed Harness run can be **accepted** from the task detail as well as from the architect's step 3: the operator reviews the prompt in an editable dialog and the reviewed text is what re-publishes the Harness (`accept` body `system_prompt`; `accepted.edited` records an edit). |
-| **Optimization** | Recommendations → configuration bundles → gateway A/B (config-bundle 50/50) → target-based canary → verdict → promote → cleanup. The system-prompt recommendation is **pluggable**: the AgentCore job by default, or a 3rd-party provider (`gepa_lite` — one GEPA-style reflective round over the pinned evaluation run's per-session judge scores, explanations and transcripts, on an operator-chosen Bedrock Converse model) that bypasses `StartRecommendation` and its content filter; its prompt still becomes the treatment configuration bundle, so the A/B measures it like any other. Dataset replay at the traffic stage posts prompts concurrently (at most `TRAFFIC_MAX_CONCURRENCY` = 10 in flight, `LAUNCHPAD_TRAFFIC_CONCURRENCY` dials it down); one prompt is one session is one arm, so the split is unaffected. Every replay (and a canary's live gateway route) sends `X-Amzn-Bedrock-AgentCore-Runtime-User-Id`, which the Gateway forwards as `runtimeUserId`: without it the runtime gets no workload access token, and a twin whose tools need an outbound Identity token (its Gateway MCP client) errors on every session, leaving the A/B test with no scores. |
+| **Optimization** | Recommendations → configuration bundles → gateway A/B (config-bundle 50/50) → target-based canary → verdict → promote → cleanup. The system-prompt recommendation is **pluggable**: the AgentCore job by default, or a 3rd-party provider (`gepa_lite` — one GEPA-style reflective round over the pinned evaluation run's per-session judge scores, explanations and transcripts, on an operator-chosen Bedrock Converse model) that bypasses `StartRecommendation` and its content filter; its prompt still becomes the treatment configuration bundle, so the A/B measures it like any other. Dataset replay at the traffic stage posts prompts concurrently (at most `TRAFFIC_MAX_CONCURRENCY` = 10 in flight, `LAUNCHPAD_TRAFFIC_CONCURRENCY` dials it down); one prompt is one session is one arm, so the split is unaffected. A canary's replay is paired instead: each prompt goes to both versions (see Console V2 below). Every replay (and a canary's live gateway route) sends `X-Amzn-Bedrock-AgentCore-Runtime-User-Id`, which the Gateway forwards as `runtimeUserId`: without it the runtime gets no workload access token, and a twin whose tools need an outbound Identity token (its Gateway MCP client) errors on every session, leaving the A/B test with no scores. |
 | **Observability** | CloudWatch Logs Insights over both telemetry layouts: legacy traces in `aws/spans`, and unified traces/logs/prompts in `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>`. Span records are rendered as a per-session rail. |
 | **Builtin Tools** | Code Interpreter (`aws.codeinterpreter.v1`) runs operator-editable Python in an inline execution demo. Browser accepts an operator-editable navigation URL, starts a five-minute `1280x720` session, and returns a server-generated SigV4 Live View URL rendered by the official `BrowserLiveView` DCV component. The operator can use the managed browser or select an existing READY custom Browser with `browserSigning.enabled` for Web Bot Auth, restore an existing Browser Profile, and explicitly opt into saving Profile state before stop. Explicit stop and backend expiry both release retained sessions. |
 
@@ -239,12 +239,40 @@ from the configured level down to `manylinux2014`.
 
 Caller-supplied `spec.requirements` must additionally be pinned at *schema*
 validation (`app/schemas/requirements.py`), so the console rejects a range before a
-build starts. The platform's own lists keep their ranges — the
-`MANTLE_EXTRA_REQUIREMENTS` comment explains that pip is meant to intersect two
+build starts. Each entry must be a single ASCII line without control characters
+or a marker starting with `-`; this check runs before stripping markers, so a
+valid pin cannot hide a second requirements-file line such as `--index-url`.
+Both pin resolution and lock compilation repeat the check before writing their
+input files, including for older stored specs. The platform's own lists keep their
+ranges — the `MANTLE_EXTRA_REQUIREMENTS` comment explains that pip is meant to intersect two
 specs for the same project — and the lock is what makes the resolved set
 reproducible. Harness conversion is the one place the platform derives
 requirements from somewhere else (the source Harness's `pyproject.toml`), so it
-resolves those ranges to pins rather than being exempted from the rule.
+resolves those ranges to pins rather than being exempted from the rule. It also
+records the ranges themselves on `spec.requirement_ranges` (plain
+`name[extras] <specifiers> [; marker]` lines only — URLs, VCS references, options
+and control characters are refused, so the field cannot widen the build's index
+boundary), and re-publishes from either console carry the field.
+
+Those pins were resolved against the platform's lists *as they stood at conversion
+time*, and the platform's own pins move (`boto3>=1.43.66` forcing
+`botocore>=1.43.66`; `strands-agents==1.47.0` capping `mcp<2.0.0`). Every zip build of
+an agent spec — the package stage and the canary's candidate/restore mint — goes
+through `zip_runtime.build_agent_zip`. When the lock fails for a **conversion twin**
+(`spec.source_harness` set), it re-resolves the twin's pins once against the
+*current* platform lists — from the recorded range of each project, or, for a twin
+converted before ranges were recorded, from the bare `name[extras]` — and retries the
+lock. Pins that still lock are never re-resolved. The job log names each changed pin
+(`mcp==2.1.1 → mcp==1.30.0`). The healed pins are persisted where each caller's
+contract allows: the package stage writes them to `agent.spec.requirements` (so the
+as-deployed snapshot names them); canary setup writes them to the candidate's
+`artifacts.edited_spec` (the mint never writes the agent row; promotion copies that
+spec); canary rollback writes them to the agent row with the restored version and
+records a `canary rolled back` snapshot. A non-twin spec is never re-resolved. If a
+lock still fails, the error names the agent's own conflicting pin(s) and the platform
+requirement uv cites against them (with an "update or remove" fix for a non-twin);
+for a twin whose source ranges no longer fit, it says so. Failures that name no pin of
+the agent's own (no usable wheel, unknown package) read exactly as before.
 
 **Container images are scanned, and deployed by digest.** ECR scans on push. After
 the build, `_stage_package` resolves the pushed tag to its immutable digest,
@@ -291,6 +319,11 @@ The `/agents/new` picker shows four cards, in this order:
 | 2 | **Strands Studio** | `zip_runtime` | 方式C — Strands template on the zip fast path; the card's nested link opens the `/create/studio` canvas, which deploys as method `studio` |
 | 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
 | 4 | **Bring Your Own Code** | `byoc` | user-written agent code uploaded as a zip (direct-code runtime or Dockerfile → CodeBuild) or referenced as an existing private-ECR image — see [BYOC](#byoc--bring-your-own-code) |
+
+The V2 wizard adds a fifth card, **Agent IDE**, which is not a method of its
+own: it opens the coding console (`/v2/coding`), where a codex agent builds the
+project and the result deploys as `byoc` — see
+[Agent IDE](#agent-ide--a-remote-web-ide-over-codex-on-agentcore).
 
 Discovery of existing runtimes and harnesses is not a deploy method: it has its
 own page at `/agents/import` (see below), reachable from the list header and
@@ -2426,6 +2459,148 @@ so canary leftovers are noticed. It is strictly read-only: it never re-points
 `DEFAULT` and never creates, updates or deletes an endpoint; the canary owns those
 operations.
 
+### Code view (read-only)
+
+The agent detail's **Code** button opens `/v2/agents?view=source&id=`, backed by
+`GET /api/agents/{agent_id}/source` (`services/agent_source.py`). Generated code is never
+stored in the ledger and the view never re-renders it; it reads back what AWS holds:
+
+- **`zip_runtime` / `studio`** — `GetAgentRuntime`'s `codeConfiguration` names the zip the
+  Runtime runs. The package is mostly pip-installed dependencies, so the service reads it
+  over ranged S3 GETs (the central directory plus the members it shows) and lists only the
+  platform's files: the entrypoint, `requirements.txt` / `requirements.lock`, a
+  conversion's `code_bundle` files and the bundled `skills/`.
+- **`container`** (方式A) — the build context CodeBuild last built from,
+  `builds/{name}/source.zip`.
+- **`byoc`** — `code_zip` / `container_source` show the member's staged upload
+  (`byoc/{workspace}/{upload_id}/source.zip`), i.e. their files without the dependencies
+  the package stage installed; `container_image` has no source, so the page shows the
+  image URI and digest.
+- **`harness`** — a managed loop has no code. The page shows `GetHarness` projected
+  through an allow-list with the same rule as the versions view (no execution role,
+  environment, artifact location or authorizer), with tool header values, OAuth
+  `customParameters` values and URL query strings masked.
+
+Contents are capped per file and per response; a file left out for the budget is
+fetched alone with `?path=`. When the latest deployment did not succeed the page warns
+that the live version may still run the earlier code. Imported runtimes and rows with
+no AWS resource answer 409 `agent.source_unavailable` with a `detail.reason` the page
+translates.
+
+### Spec snapshots and rollback
+
+`Agent.spec` is overwritten on every publish, so on its own the ledger cannot say what an
+agent looked like two edits ago. `services/snapshots.py` keeps one row per publish in
+`spec_snapshots`, a workspace-scoped table with a per-agent `seq`:
+
+- **One write site.** `deployer.pipeline.create_deployment` records the snapshot in the
+  same transaction as the Deployment and Job rows, including callers that commit
+  themselves. So no publish path can forget it: create, redeploy, recommendation accept,
+  the inbound-auth switch, convert, experiment promote, architect approve and preset
+  releases. A resumed job never passes through there again. The two canary paths that
+  change the spec without a deployment, the Runtime promote and the Harness rollback,
+  record their own row, stamped with the version they leave live.
+- **The spec as deployed.** On success, `_finish` stamps the AWS version and replaces the
+  stored spec with the agent's spec at that moment. A stage may rewrite it mid-job (the
+  architect's harness stage pins `spec.skills` to immutable copies), and a rollback must
+  re-deploy what ran. A failed publish keeps `aws_version` null and cannot be a rollback
+  target.
+- **Baselines.** At startup, every active, non-discovered agent with an AWS resource and
+  no snapshot gets #1, `note: "baseline"`, holding its current spec. That makes today's
+  configuration a rollback target right after the first edit.
+- **The diff** compares nested fields by dotted path, lists by membership, and code,
+  bundles, Studio flows and the system prompt whole. It groups each change (prompt, model,
+  tools, skills, knowledge bases, memory, guardrail). Bodies over 2 KB come back as their
+  length.
+- **Rollback re-publishes a stored spec through the ordinary redeploy path**
+  (`republish_agent`), so it needs the same `agents.deploy` permission and passes the same
+  guards. It mints a **new** AWS version and a new snapshot; the console never reverts an
+  AWS version in place. It also refuses, before any deploy call, a snapshot that never
+  deployed, a spec that no longer validates, and a knowledge base it would re-add that is
+  gone. The pin check skips admins and shared workspaces, so it would not catch that. On
+  shared AWS (prod and prod2) a rollback changes the agent for every console.
+- **A rollback rebuilds from references, not from stored artifacts.** Code methods rebuild
+  from the spec, and a BYOC zip is re-read from its staged upload. A BYOC `container_image`
+  given by **tag** re-deploys whatever the tag points at now: the old `byoc.provenance`
+  digest in the snapshot is a record, and the generate stage re-stamps it. A missing upload
+  or image fails the job at that stage, as a redeploy would.
+
+### Evaluation scorecards
+
+The evaluation views can read one agent's scores across its runs: which version each run
+evaluated, what it was measured on, and how two runs line up case by case.
+`app/evaluation/scorecard.py` holds the rules; the routes are `GET /api/eval/scorecard`,
+`GET /api/eval/runs/compare-pair` and `POST /api/eval/runs/{id}/rerun` (see the API reference).
+
+- **Stamps on the run row.** `submit_run`, the one place a run row is created, records
+  `agent_snapshot_seq` (the newest spec snapshot that reached AWS — a snapshot still
+  deploying is not what the run invokes) and, for a replay, `dataset_fingerprint` (16 hex of
+  sha256 over the normalized scenarios, key order irrelevant) with `dataset_size`. The
+  replay loop writes `scenario_map` (`{session_id: {scenario_id, input}}`) as each session
+  lands; a skipped persona has no entry. All four columns are nullable and older rows keep
+  them null.
+- **Versions on read.** Every run payload carries `snapshot {seq, source}`: `stamped`, or
+  for an older row `inferred` from the snapshot timeline (the newest snapshot whose deploy
+  ended by the run's creation, else the oldest), or `observed` for a passive scope, whose
+  sessions predate the run. Nothing inferred is written back.
+  - A run older than every snapshot (the startup baseline came later) gets the oldest one
+    only when no deployment of the agent succeeded between the run and that snapshot.
+  - Otherwise its version is unknown and `snapshot` is null. The console labels it
+    早于版本记录 and compares it as older than every numbered version, so an accepted
+    recommendation from before the snapshots reads as a version change, not a re-run.
+- **Benchmarks.** A local dataset (revision = the fingerprint), a cloud dataset (revision =
+  the pinned version or the draft's fingerprint) or the agent's live traffic, which groups
+  every window, chosen-session and log-stream run. Trends only connect runs of one
+  benchmark; the composite and regression math stays in the console, which owns evaluator
+  polarity.
+- **Compare.** Two replays of one benchmark pair sessions by scenario id. A legacy run
+  without a map is paired by position only when it skipped no scenario and has one session
+  per scenario of its dataset's items; anything else compares overall scores
+  and reads no results. The configuration change between the two versions comes from the
+  snapshots diff route. A per-session result record is keyed by evaluator id — the
+  evaluator ARN's id tail when the record carries one, else the evaluation name
+  (`agentcore_eval.normalize_result_record` → `_record_evaluator_id`) — the same key as
+  the run's `scores`, so a custom judge (whose evaluation name is not its id) fills its
+  per-case columns.
+- **Re-run** rebuilds a `RunCreate` from the source run (same target, evaluators, dataset
+  and pinned version, or window length) and goes through the same `_start_run` as
+  `POST /api/eval/runs`, so validation, visibility and budget checks cannot drift apart.
+  Chosen-session and log-stream runs are refused: re-scoring the same sessions would only
+  measure judge noise.
+- **Isolation.** The scorecard filters runs by their creator and drops runs of hidden agents
+  in SQL, before its 1000-run cap. Compare withholds a hidden agent's publish history and
+  never reads a hidden dataset's items. A hidden dataset is labelled with the name stored
+  on the run.
+- **Console.** The V2 task page renders the compare as `?view=compare&a=&b=`
+  (`v2/pages/tasks/RunCompare.tsx`, with the pure rules in `v2/compare.ts`). It shows one KPI
+  per shared evaluator plus a composite over the evaluators both runs scored, the
+  comparability notice, and the configuration change (the Agent page's `DiffBody` between the
+  two snapshots). When the runs are aligned it adds a per-case table, classed by the
+  normalized change on the chosen basis (0.1 or more is improved or regressed). A completed,
+  scored run's detail offers 与上一次对比: the newest earlier completed run of the same agent
+  and benchmark, read from the scorecard.
+- **按 Agent tab.** `/v2/eval/tasks` now opens on 按 Agent (`AgentScoreList`); the run list
+  moved to `?tab=all`. Each agent row shows its main benchmark (the one with the most
+  completed runs), the latest composite, and the change against the previous *version's*
+  latest run on that benchmark, or the reason there is none.
+  - The composite is over the evaluators every completed run of that benchmark includes.
+  - 需要关注 lists regressions: the composite down 0.05 or more, or one evaluator down 0.1
+    or more. It shows a dataset change as 待确认, and also lists failed runs.
+  - `?view=agent&key=` (`AgentScorecard`) draws the benchmark's trend in run order, with
+    snapshot version bands and dataset-revision markers. It adds a version × evaluator
+    table, the agent's runs with A/B picks for compare, and 再评一次 through
+    `POST /api/eval/runs/{id}/rerun`.
+  - The rules live in `v2/scorecard.ts` and `pages/tasks/scorecardAttention.ts`.
+- **The architect's step 2.** NEXT STEPS step 2 (`v2/pages/assistant/RunHistory.tsx`) reads
+  the agent's scorecard and treats its runs on the plan's Dataset as one benchmark, with the
+  same rules as above. It shows the latest composite against the previous version and a
+  sparkline, then the newest five runs, each with its version, composite and change.
+  - A same-version re-run is compared with that version's previous run and marked as noise.
+  - A version change that regresses by the rule above is tagged 退步.
+  - A collapsed evaluator × version breakdown shows the newest four versions.
+  - Its links to the scorecard, the run detail and the compare page all return to the
+    conversation on Back (`returnState` in `pages/tasks/back.ts`).
+
 ## The invoke chain
 
 The Chat playground (`/api/chat/{id}`) and the public API
@@ -2973,14 +3148,27 @@ through the same backend routes and permission checks as the classic pages.
   `/<target>/*`, so no session is ever attributed or scored), the gateway role is authorised as
   `InvokeAgentRuntime` on the harness ARN (CDK grants that plus `InvokeHarness` on
   `harness/*`), and the Harness spans carry the gateway's `routing_experiment_variant_name`,
-  so `GetABTest` reports per-variant results. Dataset replay into a Harness canary is
-  **paired** instead (`canary_harness.PAIRED_MODE`): every question is sent to BOTH
-  endpoints (InvokeHarness with `qualifier`, a fresh session per side, transient errors
-  retried once, a failed side recorded on the pair — a side that ended on the agent's own
-  budget, a timeout after its retry or an iteration / token limit, keeps its pair and is
-  scored as it stands, marked "budget stop" in the per-question table, while any other
-  failure leaves the pair out), so the gateway's random split never
-  hands the two versions different question mixes and repeating a set is not needed. The
+  so `GetABTest` reports per-variant results. Dataset replay into a canary of **either
+  kind** is **paired** instead (`canary_harness.PAIRED_MODE`,
+  `canary_service._paired_traffic`): every question is sent to BOTH endpoints — a Harness
+  through InvokeHarness with `qualifier`, a Runtime canary through InvokeAgentRuntime with
+  `qualifier` = its stable (current version) or treatment (candidate) named endpoint, so
+  the call lands in that endpoint's own log group and is scored by the per-endpoint online
+  eval. Each side gets a fresh session, the canary traffic runtime user id and an
+  agent-scoped synthetic memory actor (`scoped_actor(agent, "canary-traffic")`); at most
+  `TRAFFIC_MAX_CONCURRENCY` calls run at once, transient errors are retried once, a budget
+  stop skips whole pairs, and a failed side is recorded on the pair (a side that ended on
+  the agent's own budget, a timeout after its retry or an iteration / token limit, keeps
+  its pair and is scored as it stands, marked "budget stop" in the per-question table,
+  while any other failure leaves the pair out). The gateway's random split therefore never
+  hands the two versions different question mixes (issue #298: a weighted 50-prompt
+  replay at 90/10 left a Runtime candidate 2 sessions), and repeating a set is not needed.
+  Only real platform traffic still goes through the gateway, at the stage weights, so the
+  ramp keeps limiting how much of it reaches the candidate. A Runtime arm call is metered
+  per call: exact tokens when the runtime reports usage, otherwise the agent's turn
+  estimate as a `job_estimate`. A Runtime round recorded before paired replay (a
+  weighted attempt, no `mode`) keeps its `GetABTest` verdict; new traffic in such a round
+  appends a paired attempt, and the verdict then reads only the paired attempts. The
   verdict reads both sessions' scores from the two arms' online-evaluation results
   (100 % sampling on each endpoint, no variant filter) by session id, waits until 90 % of
   the pairs are scored (30 min cap; judge lag ≈ 10 min), and compares per evaluator: both
@@ -2995,25 +3183,41 @@ through the same backend routes and permission checks as the classic pages.
   GoalSuccessRate), the others stay on the page as reference. Paired scores are keyed by
   the evaluator ARN's id tail (a custom judge's evaluation name is not its id), the 90 %
   wait covers the configured evaluators, and one with no score by the cap is reported as
-  unscored (an unscored primary is `insufficient-data`). Without a primary the verdict
-  rule is unchanged (`compute_verdict`). More evidence means more questions
+  unscored (an unscored primary is `insufficient-data`). Without a primary the
+  aggregate decides (`compute_verdict`). Either way a winner or a tie needs at least
+  `min_n` (3) samples on **each** arm — the primary on its own counts, the aggregate on
+  the largest count per arm over its evaluators (they score the same sessions, so a sum
+  would let 2 sessions × 2 evaluators pass as 4) — and the verdict reports `n_control` /
+  `n_treatment` next to the combined `n`; otherwise it is `insufficient-n`. The gate is
+  shared with configuration-bundle experiments; a combined `2 × min_n` gate used to let
+  47 control + 2 treatment sessions through, and the sign over 2 sessions decided. A
+  paired verdict has equal arms, so it needs 3 pairs. More evidence means more questions
   in the dataset, not more passes. Complete is ledger-only (treatment is
-  already `DEFAULT`) and, unlike a Runtime canary, may run straight from **50/50** on a
-  `treatment-wins` or `tie` verdict (`canary_service.early_complete_allowed`; a tie or a
+  already `DEFAULT`) and may run straight from **50/50** on a `treatment-wins` or `tie`
+  verdict that came from paired replay — any verdict of the two for a Harness canary,
+  while a Runtime 50/50 verdict from the legacy weighted path does not qualify
+  (`canary_service.early_complete_allowed`, exposed as `early_complete_allowed` on the
+  canary API output so the console reads the rule instead of re-deriving it; a tie or a
   non-significant win still needs the override, control-wins and insufficient evidence
-  stay blocked): the architect's canary is fed by Dataset replay, so 1/99 would only
-  replay into the treatment without new comparative evidence. Its 90/10 stage is
-  optional too: the create request's `start_stage: 1` (the 放量计划 checkbox on
-  `canary=new` and in the architect's step 4; ticked = run 90/10, the default on
-  `canary=new`, while the architect's step 4 starts unticked, i.e. at 50/50) opens the A/B
-  test at 50/50, since with `DEFAULT` already on the treatment 90/10 caps no exposure and
-  only starves the treatment of samples; a Runtime canary refuses it
-  (`canary.start_stage_harness_only`). `setup.start_stage` and
-  `complete.completed_at_stage` record where it opened and left, and the detail page
-  marks the stages outside that range skipped. Rollback re-publishes the control version's behaviour (GetHarness
-  at that version → UpdateHarness, a new version); cleanup also deletes both Harness
-  endpoints and the trace delivery. While one is live, non-streaming platform invokes
-  of the agent go through its gateway (fallback: the control endpoint). The architect's
+  stay blocked): paired replay already gave both versions every question, so 1/99 would
+  only replay the same questions into the same two endpoints without new comparative
+  evidence. The 90/10 stage is
+  optional too, for both kinds: the create request's `start_stage: 1` (the 放量计划
+  checkbox on `canary=new` and in the architect's step 4; ticked = run 90/10, the default
+  on `canary=new`, while the architect's step 4 starts unticked, i.e. at 50/50) opens the
+  A/B test at 50/50; `start_stage` > 1 is a 422. For a Harness, `DEFAULT` already serves
+  the treatment, so 90/10 caps no exposure and only starves the treatment of samples. For
+  a Runtime canary it is an opt-in with a real cost, which the unticked checkbox warns
+  about: as soon as the A/B test exists, the gateway route sends half of the agent's
+  platform invokes to the never-served candidate; with paired replay, running 90/10
+  first costs one more round, not samples. A Runtime canary stores the choice as
+  `artifacts.start_stage` (only when > 0), a Harness under `artifacts.harness`.
+  `setup.start_stage` and `complete.completed_at_stage` record where it opened and left,
+  and the detail page marks the stages outside that range skipped. A Harness rollback
+  re-publishes the control version's behaviour (GetHarness at that version →
+  UpdateHarness, a new version); its cleanup also deletes both Harness endpoints and the
+  trace delivery. While a Harness canary is live, non-streaming platform invokes of the
+  agent go through its gateway (fallback: the control endpoint). The architect's
   next-steps panel (`v2/pages/assistant/NextSteps.tsx`) drives this as step 3 (AI
   recommendations — AgentCore or `gepa_lite` — from a chosen clean run of the agent on any
   dataset, the newest by default, with the other runs' recommendations, an accepted one
@@ -3072,6 +3276,16 @@ through the same backend routes and permission checks as the classic pages.
   session owns are hidden behind a toggle and never selectable. The picked
   sessions start an ordinary `session_ids` run (no agent invocation), tagged
   `session_source: "logs"` so the list shows the source as 日志.
+- **Agent 轨迹 data source** (`v2/pages/tasks/SessionPicker.tsx`): the agent's
+  sessions observed in the last 7 days (`/api/observability/sessions`), each row
+  showing the session's first user input and last agent reply so a session is
+  picked by content. Previews load one page (10 rows) per
+  `POST /api/observability/session-previews` call — the transcript sources read in
+  parallel (chat ledger, Memory, eval content logs; for a session no ledger row
+  claims, the agent's runtime content logs from its first span on), no long-term
+  record count. 全选 picks every row the status / session-id / selected-only
+  filters leave, the header checkbox the page; 查看 opens the whole conversation
+  in a drawer that can also (de)select the session.
 - **Evaluation target: platform agent or CloudWatch telemetry.** A task can
   evaluate an agent that is not a platform agent (for example one not hosted on
   AgentCore Runtime) straight from its CloudWatch telemetry
@@ -3681,6 +3895,120 @@ canvas and `protocol="a2a"`.
 teardown sweeps it by name together with its targets — see
 [teardown.md](teardown.md).
 
+## Context layer (COA)
+
+`/v2/context-layer` connects a workspace to one **COA** (Context Ontology
+Accelerator) deployment — a separately deployed product with governed metrics, an
+induced ontology, a document knowledge graph and access-controlled SQL over source
+data. Launchpad never deploys or tears COA down, and never creates COA users,
+grants or namespaces: authoring stays in the COA console (the page links to it;
+COA forbids framing). Everything is read **as the signed-in member**, so COA's
+per-user grants decide what an agent may see.
+
+- **Connect** (`services/context_layer.py`, admin): discovery reads SSM
+  `/<prefix>/*` and the `<prefix>-<env>-{api,web,auth}` stack outputs in the COA
+  region (`replace(workspace, region=…)`, which may differ from the workspace's),
+  refuses a cross-account deployment, a missing agent OAuth client or a runtime
+  that is not READY, then creates or adopts the OAuth2 Connection for COA's agent
+  client and ensures the console workload identity `launchpad-console-<workspace>`.
+  The `context_layers` row (one per workspace) holds identifiers only.
+- **Tokens** (`services/context_layer_tokens.py`): a member's COA token comes only
+  from the token vault, through the console workload identity, and lives only in
+  process memory and on requests to COA — the custody exception documented in
+  [identity.md](identity.md) §7.7.
+- **Agents** (`AgentSpec.context_layer = {namespace_id, namespace_name}`; pure
+  helpers in `templates/context_layer_support.py`):
+  - *Harness*: the deploy adds a prompt addendum (namespace id + tool guidance)
+    and no COA tool. Each console turn (`services/invoke.harness_turn_overrides`)
+    re-reads the deployed tools, appends a `remote_mcp` server `coa` pointing at
+    COA's MCP runtime with the member's bearer, and adds `@coa` to
+    `allowedTools`. No consent yet ⇒ the turn is an `auth_required` event and
+    InvokeHarness never runs.
+  - *Strands* (`zip_runtime`, HTTP): every deploy stage builds from
+    `context_layer.deploy_spec`, which expands the ref into one `as_user` MCP tool
+    on the layer's Connection plus the addendum — the template, the execution
+    role, the environment and the return-URL allow-list all read that one
+    expansion, and the stored spec keeps only the ref. The baked tool carries
+    `gates_turn`: when the member has not consented yet, the generated runtime
+    emits the `auth_required` card and ends the turn without invoking the model —
+    the same outcome as a Harness turn. Any other `as_user` MCP server only sits
+    the turn out until its consent (the model still answers). A runtime picks
+    this up on its next deploy.
+  - `/v1`, evaluation replays, canary / A-B and Harness conversion refuse a
+    COA-attached agent: none of them has a console user to act as.
+- **Module** (`routers/context_layer.py`, page `frontend/src/v2/pages/ContextLayer.tsx`
+  + `contextLayer/`, expert-mode nav only). The status is read once and shared by
+  three `?view=` sub-pages:
+  - *overview*: the deployment card (live runtime / callback / agent-OAuth probes),
+    the member's authorization (authorize / revoke), the namespaces COA lets them
+    see, and COA's own `/system-health` (`GET /api/context-layer/health`). Admins
+    connect, re-connect or disconnect here. Not connected: members are told to ask
+    an admin. No consent: an authorize call to action and **no COA call**. No
+    namespaces: grants come from the COA admin, with a link to the COA console.
+  - `namespace&id=<uuid>[&tab=sources|metrics|ontology]`: the namespace as COA
+    shows it, with tabs for sources (type, status, tables), governed metrics
+    (unit, synonyms, per-dialect expressions) and ontology classes (one
+    `graph/ontology-overview` per ontology, at most 8 read concurrently, 200
+    classes each). Each tab deep-links into the matching COA console route
+    (`/namespaces/{id}/sources|metrics|ontology/graph`): authoring stays in COA.
+    "Attach to agent" opens the V2 wizard (new Harness or Strands agent) or an
+    existing agent's editor with `context_ns` / `context_name` prefilled; saving is
+    the ordinary create / redeploy.
+  - `playground[&ns=<uuid>]`: one question at a time to COA's **Serve runtime**
+    (`services/context_layer_playground.py`). The backend proxies
+    `POST <serve invocations URL>` with `stream: true`, the member's bearer and a
+    runtime session id stable per member + namespace (`lp-` + 40 hex), and
+    normalizes COA's frames into `step`, `token`, `done` (answer, tier, confidence,
+    up to 200 result rows, COA's `sessionId` for the next turn) and `error`
+    (`context_layer.*`) events, with `: keep-alive` comments while COA is silent.
+    It never sets COA's `includeDebugInfo`, and never forwards the generated SQL
+    (`queryUsed`), because COA withholds it by default: it exposes internal schema. Missing consent is one `auth_required` event, the same card Chat
+    shows. The upstream is an `httpx.AsyncClient` stream inside the response
+    generator, so a client disconnect closes COA's connection. The read timeout
+    is 180 s against COA's 170 s budget.
+  - COA REST reads (`services/context_layer_api.py`) are allowlisted projections
+    (`schemas/context_layer.py`), never a passthrough. Errors map COA 401 to
+    `context_layer.reauthorize` (409), 403 to `forbidden`, 404 to `coa_not_found`,
+    and 429 / 5xx / timeout to `upstream`, with at most 200 characters of COA's own
+    message.
+- **Demo account** (`services/context_layer_demo.py`). Most members have no COA
+  account (COA users are admin-created only), so an operator creates one shared,
+  read-only account with `samples/coa-demo/demo_account.py` (Cognito user + group
+  `launchpad-demo`, whose COA grant survives re-creating the user) and stores
+  `{username, password, sub}` as an SSM SecureString under
+  `/<coa prefix>/launchpad/` in the COA region. The admin names it on the connect
+  form; the row keeps the name only, and the backend never creates or changes COA
+  users.
+  - Any member may reveal it (`POST …/demo-account/reveal`, `no-store`, logged by
+    member) on 我的授权 or on a Chat consent card for the layer's Connection. The
+    member then types it at COA's own login page through the ordinary consent:
+    Launchpad never signs in for anyone and never falls back to the account, and
+    each member keeps their own vault binding. The consent carries no
+    `customParameters` for any account choice: the token vault keys a token by
+    them, so a consent made with `login_hint` would land in a vault slot that the
+    broker, the Harness override, the playground and every Strands runtime never
+    read. Nothing is prefilled at COA's login page; the panel's copy buttons are
+    the way.
+  - A browser that still holds a COA session consents silently as that user
+    (COA's classic hosted UI ignores `prompt=login`, which Launchpad could not send
+    anyway). So the status compares the vaulted
+    token's `sub` with the account's (`authorization.identity: demo | own`), and the
+    page guides a switch: revoke, sign out of COA (`sign_out_url`, COA's web-client
+    `/logout`, which clears the session for every client on the domain), authorize
+    again. A consent that resolved to the other account than the one chosen opens
+    that guide by itself.
+  - The password lives in SSM, in backend memory for at most 300 s (a rotated
+    password shows within 5 minutes), in the reveal response and in the member's
+    browser while the panel is open. The `/<prefix>/launchpad/` scope keeps the
+    reveal from reading any other secret.
+- **Limits.** COA cannot be framed (`X-Frame-Options: DENY`), so every authoring
+  link opens a new tab. COA's REST data layer caps at 29 s, which is why questions
+  go to the streaming Serve runtime and not to `POST /namespaces/{id}/query`. `/v1`
+  answers 409 for COA-attached agents; canary / A-B, evaluation replays and
+  Harness conversion refuse them, because none of them has a console user to act
+  as. COA's spend is in COA's account: the playground is `FREE` in the billing
+  table and Launchpad does not meter it.
+
 ## The Memory console (console 05)
 
 `/memory` is a **read-only** window onto the shared `launchpad_memory` singleton
@@ -3844,6 +4172,21 @@ detail links back (`OPEN IN CHAT ↗`); `service.name` values are mapped to
 platform agent names via the ledger (`resource_id` base-name match, raw name
 fallback).
 
+**Span message formats.** Trace detail normalizes both combined
+`body.input/output.messages` envelopes (Strands, Harness, and native Claude)
+and Bedrock's individual `gen_ai.*.message` / `gen_ai.choice` events. The
+individual system, user, assistant, and tool messages describe the request
+history; `gen_ai.choice` contains the current completion and its finish reason.
+Strands envelopes may also carry a separate `tool.result` beside `message`.
+MCP tool-call spans expose their own `gen_ai.tool.call.arguments` and
+`gen_ai.tool.call.result` attributes through the same input/output panel when
+content events have not populated that side. Every projection stays attached
+to its original span: a child never inherits its parent's prompt or response.
+Message, block, and text limits keep this a bounded inspection view.
+Session provenance is collected independently from recognized content events,
+including events beyond display limits or with unrenderable payloads, so
+truncation cannot weaken the trace's privacy checks.
+
 **On-demand scoring (SCORE NOW).** The session detail can score the session
 right now with 1–5 evaluators (built-in, third-party managed or custom — the
 same list the run wizard offers) through the AgentCore **data-plane
@@ -3866,6 +4209,62 @@ session whose spans have not landed yet answers **409
 CloudWatch a couple of minutes after the invoke). Use it to test a custom
 evaluator or investigate one session; a stored, repeatable score is the batch
 run's job (below).
+
+### Spend attribution and threshold alerts
+
+**Spend.** The dashboard already estimates cost per model from the `model_prices` map;
+what it cannot answer is *who spent it*. `services/costs.py` adds two breakdowns over the
+same spans (`SPANS_SOURCE`, the dashboard's `_IS_LLM_FIELDS` token logic): **by agent**,
+from one Logs Insights query grouped by the span's runtime service name, and **by person**,
+from per-session tokens joined to `ChatSession.actor_id`. Sessions the console never
+opened (direct `/v1` traffic, evaluation replays) land in an explicit unattributed row
+rather than being dropped, and a service name that matches no ledger agent is still
+reported (`known: false`) and counted — an imported or deleted agent, or another stack on
+the same AWS account (prod and prod2 share one), spent real money. Every figure is an
+estimate: each row is priced at its latest model's rate, and a model missing from the price
+map adds tokens but no dollars and is named in `unpriced_models` (tokens under no model id
+as `(unknown model)`), so the total is never quietly short. A non-Bedrock provider (Mantle
+`openai.*`) emits only the Strands wrapper span, which the dashboard's token logic drops as
+a duplicate; a row with no provider tokens is priced on its wrapper tokens instead, the same
+fallback the dashboard's tokens-by-model uses (measured on dev 2026-10-14: five such services
+over 30 days had shown 0 tokens). The per-person query is sorted by output tokens before its
+1000-session cap, so the sessions that fall off are the smallest, not an arbitrary set. Month to date is a relative window from 00:00 UTC on the 1st, capped at
+720 h. Results go through the dashboard's 60 s cache. The scan is account-wide, so its
+duration grows with all span volume in the region, not with this console's agents
+(measured 2026-10-14: 34 s for 30 days on us-east-1, against the 55 s query deadline).
+
+**Alerts.** An `alert_rules` row (workspace-scoped) is a threshold on a value the
+platform already computes: `error_rate` and `latency_p95_ms` from the dashboard
+aggregates, `online_quality` from the online-evaluation mean, `spend_usd` and
+`cost_mtd_usd` from the cost report. No new telemetry path. The properties that matter:
+
+- **A direction that could never fire is refused** (`alert.comparison_never_fires`):
+  quality is bad when it drops, an error rate when it rises. The create route defaults the
+  comparison.
+- **An unreadable value is `unknown`, never `ok`.** No traffic in the window, or a failed
+  query, records `unknown` with the reason.
+- **A transition notifies, not a state.** `state` lives on the row, so a rule that stays
+  firing does not re-notify: one notification per firing episode, which starts at
+  `last_fired_at`. A manual re-check that sees the transition first records it without
+  posting, and the next background pass still delivers it (`last_notified_at` older than
+  `last_fired_at` = owed), so clicking "Re-check now" during an incident cannot silence the
+  webhook. A failed delivery is recorded in `last_detail` and never hides the breach.
+- **Delivery is one generic https JSON webhook**, which a Slack or Feishu incoming hook
+  already is, so the platform stores no channel credentials. `services/webhook_safety.py`
+  checks the URL on save and again on every send (https only, no credentials in the URL,
+  every resolved address public — IPv4-mapped IPv6 judged as its IPv4 address), connects
+  to the address it checked, refuses redirects, times out after 5 s and never reads the
+  response body.
+- **Only the background check notifies.** `POST /api/alerts/evaluate` (the console's
+  "Re-check now") records state but never posts, so opening the page cannot page anyone.
+  The background check is the DLC scheduler's 60-second tick (`app/dlc/scheduler.py`,
+  `evaluate_alerts`, every 5 minutes): it evaluates every workspace's rules with
+  notification on, and its `scheduler_claims` row keeps a second backend process on the
+  same ledger from running the same pass.
+
+Every route is **admin**: the per-person breakdown names who spent what, and an
+online-quality value is an aggregate over all agents, which a member in an isolated
+workspace must not see. The V2 page is `/v2/costs` (`?view=costs|alerts`).
 
 ## Workspaces — multi-account/multi-region environments
 
@@ -5240,6 +5639,117 @@ complete breakdown. `scope` is always `reported`: this is observed usage over
 the tasks that reported it — not a billing total, and the console shows no cost
 estimate. The console renders it as a TOKEN USAGE table under the result tiles
 and per task in the expanded row, with a dash for every unknown counter.
+
+## Agent IDE — a remote web IDE over codex on AgentCore
+
+The fifth way to build an agent (parent task `10-19-coding-agent`): a member opens
+a repo in the browser IDE (`/v2/coding`, `?view=repo&id=`), converses with a
+codex agent that writes, runs and tests code inside an AgentCore microVM, and hands
+the finished repo to Launchpad, which deploys it through the existing `byoc`
+pipeline — the result is an ordinary governed Agent.
+
+**Runtime (platform-owned, admin-installed).** One AgentCore Runtime per workspace,
+`launchpad_coding_runtime`, image source in `backend/app/coding/image/` (zero-
+dependency Node 22 server driving `codex app-server` over stdio JSON-RPC; codex
+pinned, the Agent Toolkit for AWS plugins baked in). Models go through codex's
+built-in `amazon-bedrock-runtime` provider (bedrock-runtime `/openai/v1`, SigV4 —
+never Mantle); selectable models `Settings.coding_models`, reasoning effort per
+turn. The execution role grants only ECR pull, its log group and
+`bedrock:InvokeModel*` on the coding models + `project/default`: any shell in the
+microVM can read those credentials, so the role has **no S3**. Session storage is
+mounted at `/mnt/workspace` (1 GB, wiped by a runtime version update and after 14
+idle days); codex's SQLite and dependency dirs live on local disk. Installed,
+repaired and uninstalled only by an administrator (`/api/coding/runtime*`, a
+`Job`), never on startup or on a read; resource keys `coding_runtime_*` (outside
+`REQUIRED_RESOURCE_KEYS`).
+
+**Action protocol.** Every backend call is one short `InvokeAgentRuntime`
+(`app/coding/runtime_client.call`) carrying `{action, …}` and answering
+`{ok, result | error{code}}`: `status`, `start_turn`, `interrupt`, `events`
+(seq-numbered event-log long-poll, `compact` drops deltas of completed items),
+`tree`, `read_file` (`rev: head | turn`), `write_file` (`expected_sha256`),
+`changes`, `diff`, `snapshot` / `export` / `upload_file` (to a presigned PUT). Every app-server
+notification lands in `.launchpad/events.jsonl` on session storage, so readers
+fetch by seq and a reload, a reconnect or a backend restart loses nothing.
+
+**Repos (`backend/app/coding/`).** Ledger `coding_repos` + `coding_turns`
+(workspace-scoped). A repo is **private to its creator in every visibility
+mode** — deliberately stricter than `resource_visibility`, since a repo is a
+live shell plus code: ownership binds to the immutable principal
+(`assistant/principal.principal_of` → `user:<id>` | `config-admin` |
+`local-operator`), and every by-id route resolves through
+`repos.repo_in` (foreign or missing → `404 coding.repo_not_found`).
+Administrators list every repo (`?all=1`) and delete any, but never open an
+IDE, read files, stream events or run a turn in someone else's repo. Each
+repo owns one stable `runtimeSessionId` (64 chars, minted at create); repos
+never share a session. A repo is the member's git working directory on the
+coding runtime — not the organisational project. Inside the microVM it still
+lives at `/mnt/workspace/project` (the runtime image's layout, unchanged for
+installed runtimes and their snapshots); a ledger from before the rename
+(`coding_projects`, `coding_turns.project_id`) is renamed in place on startup
+(`core/db._migrate_coding_repo_rename`).
+
+**Turns are asynchronous.** `POST …/turns` claims the repo (`UPDATE … WHERE
+status='idle'` — one turn per repo), starts the turn in the microVM and returns
+the `running` turn row at once; the turn runs under `/ping HealthyBusy` (≤ 8 h),
+so leaving or reloading the page, or restarting the backend, never stops it.
+`POST …/interrupt` interrupts it. A runtime turn the ledger lost (the backend
+died between the runtime's answer and its commit) is adopted on the next start.
+
+**Event stream (SSE).** `GET …/events?after=<seq>` (or `Last-Event-ID`) sends a
+`status` frame, then each event-log record as `id: <seq>` / `event: event`,
+keep-alive comments, `reconnect` after 25 min and `error {code, message}` on a
+failure (`app/coding/stream.py`). **Idle mode:** once the replay is drained and
+the runtime runs no turn, the stream polls the *ledger* every 2 s instead of the
+runtime, so an open IDE tab never keeps an idle microVM (billed memory) alive past
+its 15-minute idle timeout; it switches back to runtime long-polls when a new turn
+is claimed. The route serves the stream as an async body whose blocking steps run
+in worker threads while the idle pauses await on the event loop, so an open idle
+tab holds none of the shared worker pool's threads.
+
+**Settlement, durability.** The runtime appends `launchpad/turnUsage`
+(or `launchpad/turnAbandoned`) right after a turn ends. Whoever sees it first —
+the SSE proxy or the **watcher** (`app/coding/watcher.py`, one daemon thread,
+every 15 s, `LAUNCHPAD_CODING_WATCHER_ENABLED`) — settles it with `UPDATE
+coding_turns SET settled_at=…, usage=… WHERE … AND settled_at IS NULL`; only the
+winner requests a snapshot. The turn row keeps codex's counts as reported
+(`inputTokens` includes cached and cache-write tokens, `outputTokens` includes
+reasoning). The watcher also abandons a turn the runtime no longer runs (its
+session storage came back from an older snapshot) or one past the 8-hour
+lifetime, releases dead start claims and snapshots saved files (30 s debounce).
+Snapshots go to `s3://<artifacts>/coding/<ws>/<repo>/snapshots/<ts>.tgz`
+through backend-minted presigned URLs (newest 3 kept); every action carries the
+newest snapshot's presigned GET as `restore_url`, so a microVM whose session
+storage came back empty restores the repo before anything else.
+
+**Files.** The IDE reads the tree, file contents (working tree, `HEAD` or the
+latest turn's baseline), changes and unified diffs, and saves files with an
+optimistic `expected_sha256` (`409 coding.file_conflict` carries the current
+hash); saves are refused while a turn runs. Paths are checked in the backend
+(absolute, `..`, NUL, `.git`) before any call, and authoritatively by the
+runtime's path guard.
+
+**Downloads.** `POST …/download` (owner-only, allowed while a turn runs) hands the
+browser one file (`{path}`, text or binary, ≤ 200 MB) or the whole repo as
+`<repo>.zip` (no `path`: the deploy export's file set, ≤ 50 MB). The bytes never
+pass through `InvokeAgentRuntime`: the backend mints a presigned PUT under
+`coding/<ws>/<repo>/downloads/<ts>-<rand>/`, the runtime uploads the file
+(`upload_file`) or the zip (`export`) to it, and the backend answers a presigned GET
+that lives 5 minutes and carries `Content-Disposition: attachment` (an ASCII
+`filename` plus the RFC 5987 UTF-8 `filename*`), so the browser saves it in place
+(`app/coding/downloads.py`). Download objects older than 15 minutes are pruned at
+the repo's next download; deleting the repo deletes its whole prefix.
+
+**Deploy handoff.** `POST …/deploy` (`perm:agents.deploy`) snapshots the repo,
+has the runtime zip its files to a presigned PUT, downloads it and stages it with
+`byoc_uploads.stage_upload` (the same checks as a member upload), then creates a
+`byoc` Agent stamped with the caller (`routers.agents.start_create`, the code
+behind `POST /api/agents`) or re-publishes the repo's existing Agent
+(`republish_agent`, the code behind redeploy). The export's size is checked
+against the 250 MiB BYOC zip cap before the download (the microVM runs arbitrary
+code). A root `Dockerfile` selects
+`container_source`, otherwise `code_zip` (`main.py`). The repo's `AGENTS.md`
+tells the coding agent the BYOC contract.
 
 ## The SQLite ledger and job/event model
 

@@ -70,11 +70,14 @@ def test_architect_preset_has_a_1500_second_budget():
     assert ARCHITECT.timeout_seconds == 1500
 
 
-def test_a_proposal_without_a_model_gets_the_wizard_default_not_the_spec_fallback():
-    """The architect proposes the Create Agent default (GPT-6 Sol on native Bedrock);
-    AgentSpec's own default stays what a stored spec without a model_id means."""
+def test_a_proposal_without_a_model_gets_the_wizard_default_not_the_spec_fallback(
+    monkeypatch,
+):
+    """The architect proposes the assistant default (GPT-6 Sol on native Bedrock);
+    AgentSpec's own default (V3: agent_default_model_id) is a separate role."""
     from app.assistant import service
     from app.assistant.proposal import PROPOSAL_DEFAULT_MODEL_ID
+    from app.core.config import get_settings
     from app.deployer.harness import model_config
     from app.schemas.agent import DEFAULT_MODEL_ID
 
@@ -84,5 +87,8 @@ def test_a_proposal_without_a_model_gets_the_wizard_default_not_the_spec_fallbac
     assert mapped.method == "harness" and mapped.model_source == "bedrock"
     assert model_config(mapped)["apiFormat"] == "converse_stream"
     assert DEFAULT_MODEL_ID != PROPOSAL_DEFAULT_MODEL_ID
+    monkeypatch.setattr(get_settings(), "agent_default_model_id", "us.amazon.nova-pro-v1:0")
+    assert ProposalContent(name="ordinary-agent", system_prompt="x").model_id == (
+        PROPOSAL_DEFAULT_MODEL_ID)
     # the model-facing protocol announces the same default
     assert f"`{PROPOSAL_DEFAULT_MODEL_ID}` / `\"bedrock\"`" in service.PROTOCOL_PREAMBLE

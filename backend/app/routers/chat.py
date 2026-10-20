@@ -34,7 +34,7 @@ from app.services.invoke import (
 )
 from app.services.runtime_discovery import require_invoke_capability
 from app.services.visibility import Viewer, require_viewer
-from app.templates import gateway_support
+from app.templates import context_layer_support, gateway_support
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -370,6 +370,9 @@ def chat(
     needs_gateway_identity = (
         gateway_support.runtime_user_id(agent.spec, identity.username) is not None
     )
+    # A COA context layer acts as the signed-in member, so the turn names them — on
+    # a Harness too, whose COA token the backend fetches for exactly this username.
+    names_user = needs_gateway_identity or context_layer_support.attached(agent.spec)
     gateway_access_token = (
         policy_identity.gateway_user_token(
             ws.context,
@@ -395,7 +398,7 @@ def chat(
         stream_kwargs: dict[str, Any] = {}
         if prepared:
             stream_kwargs["attachments"] = prepared
-        if needs_gateway_identity:
+        if names_user:
             stream_kwargs["runtime_user_id"] = identity.username
         if gateway_access_token:
             stream_kwargs["gateway_access_token"] = gateway_access_token
@@ -624,7 +627,10 @@ def session_history(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    """Replay a session's thread exactly as it was rendered (int pk = order)."""
+    """Replay a session's thread exactly as it was rendered (int pk = order).
+
+    Each item carries its `id`; answers also carry the caller's thumbs `verdict`
+    (`up` / `down` / null), so a reloaded thread restores the thumb state."""
     _agent_in(db, ws, agent_id, viewer)
     rows = (
         db.query(ChatMessage)

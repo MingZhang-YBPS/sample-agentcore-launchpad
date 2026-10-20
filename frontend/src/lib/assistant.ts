@@ -286,11 +286,11 @@ export function proposalDefaultModel(source: ModelSource): string {
 }
 
 export function proposalDraftFrom(content: AssistantProposal["content"]): ProposalEditDraft {
+  const source = (content.model_source as ModelSource) ?? "bedrock";
   return {
     name: String(content.name ?? ""),
-    // a proposal without a model means the assistant's configured default
-    model_id: String(content.model_id ?? currentModelDefaults().assistant_model_id),
-    model_source: (content.model_source as ModelSource) ?? "bedrock",
+    model_id: String(content.model_id ?? proposalDefaultModel(source)),
+    model_source: source,
     system_prompt: String(content.system_prompt ?? ""),
     tools: Array.isArray(content.tools) ? content.tools.map(String) : [],
     native_tools: Array.isArray(content.native_tools)

@@ -1,11 +1,11 @@
 import { type Node, type Edge } from '@xyflow/react';
 import { generateGraphCode, MANTLE_ATTACHMENT_ADAPTER } from './graph-code-generator';
 import {
-  studioFallbackModelId,
   gptBedrockModelConfig,
   isBedrockOpenAiGpt,
   MANTLE_PROVIDER,
   mantleModelArgs,
+  studioFallbackModelId,
 } from './models';
 
 interface CodeGenerationResult {

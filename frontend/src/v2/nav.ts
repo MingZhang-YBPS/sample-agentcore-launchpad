@@ -15,6 +15,7 @@ import {
   Layers3,
   ListChecks,
   MessagesSquare,
+  Network,
   PlayCircle,
   Radar,
   Route,
@@ -25,6 +26,7 @@ import {
   Sparkles,
   SquareStack,
   Scale,
+  SquareTerminal,
   Target,
   Users,
   Wallet,
@@ -85,8 +87,12 @@ export const V2_NAV: V2NavGroup[] = [
         business: true,
         also: ["/agents", "/create/studio"],
       },
+      // a member's remote coding repos, deployed through byoc; in the pared-down sidebar too
+      { to: "/v2/coding", labelKey: "v2.nav.coding", icon: SquareTerminal, v2: true, business: true },
       { to: "/v2/registry", labelKey: "nav.registry", icon: SquareStack, v2: true, hintKey: "glossary.registry" },
       { to: "/v2/knowledge-bases", labelKey: "nav.knowledgeBases", icon: LibraryBig, v2: true, business: true, hintKey: "glossary.knowledgeBase" },
+      // the COA context layer this workspace is connected to; in the pared-down sidebar too
+      { to: "/v2/context-layer", labelKey: "nav.contextLayer", icon: Network, v2: true, business: true, hintKey: "glossary.contextLayer" },
     ],
   },
   {

@@ -6,6 +6,8 @@
 app/core/config.py | * | the single source of the built-in defaults and the price table
 app/optimization/providers/registry.py | * | display labels for known ids, not defaults
 app/services/model_prices.py | anthropic.claude-x | docstring example of a price key
+app/services/model_prices.py | openai.x | docstring example of a source name's model segment
+app/services/model_prices.py | us.zai.glm-5.3 | docstring example of a regional price key
 app/services/model_settings.py | global.anthropic.x | docstring example of model_family()
 app/services/model_settings.py | anthropic.x | docstring example of model_family()
 app/skill_lab/runner.py | us.openai.gpt-6-sol | docstring example of codex routing

@@ -282,8 +282,9 @@ The v2 page is `/v2/agents?view=identity&id=<agent>`.
 
 An `as_user` downstream is called with **the end user's own token**. That token
 comes from a one-time consent at the IdP and is kept in the AgentCore Identity
-token vault under (workload identity, user). Launchpad never sees it. The ledger
-holds only derived progress: pending sessions, grants and revocations.
+token vault under (workload identity, user). Launchpad never sees it, with one
+documented exception: the COA context layer (§7.7). The ledger holds only derived
+progress: pending sessions, grants and revocations.
 
 ### 7.1 The four legs
 
@@ -487,6 +488,115 @@ Sources (AWS devguide, `https://docs.aws.amazon.com/bedrock-agentcore/latest/dev
 [identity-create-consent-portal-console](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity-create-consent-portal-console.html),
 and the AWS ML blog post
 [Manage end-user OAuth consent for AI agents with Amazon Bedrock AgentCore](https://aws.amazon.com/blogs/machine-learning/manage-end-user-oauth-consent-for-ai-agents-with-amazon-bedrock-agentcore/).
+
+### 7.7 COA context layer: the console workload identity
+
+The COA context layer (`/api/context-layer`, `services/context_layer*.py`) connects
+a workspace to one Context Ontology Accelerator deployment. COA accepts only tokens
+from its own Cognito pool, and its **agent OAuth client** (a confidential 3LO
+client) is the only client a platform may act for a user with. Connecting:
+
+- creates (or adopts by name) one OAuth2 Connection holding that client, default
+  name `coa-<prefix>`. The client secret is read from `DescribeUserPoolClient`
+  during the connect request and passed straight to
+  `CreateOauth2CredentialProvider`; it is never stored, logged or returned;
+- ensures the **console workload identity** `launchpad-console-<workspace>` in the
+  workspace region, with `allowedResourceOauth2ReturnUrls ⊇ [oauth_return_url]`.
+  Unlike an agent's identity, no runtime owns it: Launchpad creates it, and
+  `scripts/teardown.py` sweeps every `launchpad-console-*` identity.
+
+The Connection's callback URL must be registered on the COA agent client, through
+the `agentOauthCallbackUrls` context of COA's own deploy. `GET /api/context-layer`
+reads `callback_registered` live and shows the URL to administrators only.
+
+**Who uses which identity.**
+
+| Caller | Workload identity | Vault user | Grant row |
+|---|---|---|---|
+| The Context Layer page (`/api/context-layer/*` COA reads) | console | console username | `agent_id=""`, `tool="context_layer"` |
+| A Harness agent with `spec.context_layer` | console | console username (Chat's `runtimeUserId`) | the same console grant |
+| A Strands (`zip_runtime`) agent with `spec.context_layer` | the agent's own runtime identity | console username | `agent_id=<agent>`, per agent (§7.1) |
+
+A Strands agent's deploy expands `context_layer` into one `as_user` MCP tool named
+`coa` on the layer's Connection, so its path is exactly §7.1–§7.3, with one
+difference: while that consent is pending the turn ends at the card, and the model
+is not invoked (the tool is baked with `gates_turn`). Without COA the agent has
+no facts to answer from, and an answer written without the tool reads as "you
+have no access". A Harness turn without the consent is never invoked either. A Harness has no
+tool-level auth, so the backend fetches the member's token and adds it to that
+turn's `InvokeHarness.tools` as a `remote_mcp` server (`Authorization: Bearer …`),
+with `@coa` in `allowedTools`.
+
+**The custody exception (D1).** For the console identity, the *backend* holds a
+member's COA token. The rules (`services/context_layer_tokens.py`):
+
+1. **Source.** Only `GetResourceOauth2Token(oauth2Flow=USER_FEDERATION)`, presenting
+   `GetWorkloadAccessTokenForUserId(console workload, userId=<console username>)`.
+2. **Sinks.** Process memory, and outbound requests to the COA deployment: its REST
+   API, its Serve runtime, and its MCP runtime URL inside an InvokeHarness tools
+   override. Never the ledger, a log line, an SSE event, an API response, an
+   exception or a trace. Errors name the COA status code only.
+3. **Cache.** In process, keyed (workspace, username), until `exp − 120 s`. A cached
+   token is used only while no revocation is in force.
+4. **Revocation.** The existing `user_token_revocations` (user, Connection) row:
+   the next fetch sends `forceAuthentication=true` until the console grant is
+   re-authorized. Revoking under 我的授权 or on the Context Layer page also drops the
+   cache entry. A COA 401 drops the entry and forces consent until the member
+   consents again.
+5. **Consent.** The four legs of §7.1, with `agent_id=""`. `customState` is
+   `{kind: "context_layer"}` from the page (so `/auth/return` goes back to
+   `/v2/context-layer`) or `{agent_id, tool, session_id}` from a Chat turn. The Chat
+   auth card polls `grants/{connection}/status?agent_id=<harness agent>`, which
+   reads the console grant for a Harness agent on the layer.
+
+**Refusals.** `/v1` never acts as anyone in COA: a COA-attached agent answers
+`identity.as_user_requires_console` (409) before any vault call, even when a token is
+vaulted. Evaluation replays, canary / A-B setup (`reason_code: "context-layer"`) and
+Harness → runtime conversion refuse COA-attached agents, because none of them has a
+signed-in console user to act as. A Connection the layer uses cannot be deleted
+while the layer is connected, and disconnecting is refused while an agent attaches
+the layer.
+
+**The shared demo account (a deliberate exception to "one person, one COA
+identity").** COA users are admin-created only, so most members have none. An
+operator creates one read-only COA account (`samples/coa-demo/demo_account.py`) and
+stores its credentials as an SSM SecureString under `/<coa prefix>/launchpad/`; an
+admin names that parameter on the connect form (`services/context_layer_demo.py`).
+The rules:
+
+1. **The member chooses it, every time.** Any member may reveal the credentials
+   (`POST /api/context-layer/demo-account/reveal`, `Cache-Control: no-store`, logged
+   with the Launchpad username), then signs in with them at COA's own login page
+   through the ordinary consent above. Launchpad never signs in on anyone's behalf
+   and never falls back to the account. `authorize {account: "demo"}` only checks
+   that an account exists and logs the choice. **No consent ever carries
+   `customParameters`:** the token vault keys a token by them (live, 2026-10-20), so
+   a consent made with `{login_hint}` lands in a vault slot that the broker, the
+   Harness override, the playground and every Strands runtime (all without them)
+   never read. The username is not prefilled; the panel's copy buttons are the way.
+2. **Bindings stay per member.** The vault binding is still (console workload,
+   console username), so revoking one member's demo consent touches nobody else.
+   COA, however, sees one principal for every demo user: its audit log and its
+   playground history are shared, which the console says next to the credentials.
+   Launchpad's reveal and consent logs carry the member.
+3. **Custody.** The password lives in SSM, in backend memory for at most 300 s, in the
+   reveal response and in the member's browser while the panel is open. Never the
+   ledger, a log line, a status payload or an error (`DemoAccount` hides it from
+   `repr`). The `/<prefix>/launchpad/` scope stops the reveal from reading any other
+   secret in the account.
+4. **Which account consented.** A browser that still holds a COA session consents
+   silently as that session's user (COA's classic hosted UI ignores `prompt=login`,
+   which Launchpad cannot send anyway).
+   The status therefore decodes the vaulted token's `sub` (unverified, compare only)
+   against the account's (`authorization.identity`), and the console guides a
+   switch: revoke, COA sign-out (the web client's `/logout`, which clears the session
+   for every client on the Cognito domain; `logout_uri` must match a LogoutURL
+   exactly, trailing slash included), authorize again.
+5. **Accepted residual risk.** Anyone holding the password can change it or delete
+   the account through COA's direct-sign-in clients, which COA's own tooling needs.
+   Recovery is the script's `ensure`; the COA grant is to the group
+   `launchpad-demo`, so it survives a re-created user. `rotate --signout` ends every
+   demo consent (`AdminUserGlobalSignOut` revokes the refresh tokens the vault holds).
 
 ## 8. P3: identity passthrough
 

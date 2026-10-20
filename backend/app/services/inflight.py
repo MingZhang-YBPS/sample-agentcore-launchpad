@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
+from app.coding.models import CodingRepo
 from app.evaluation.agentcore_eval import REC_TERMINAL
 from app.evaluation.models import EvalPipeline, EvalRecommendation, EvalRun
 from app.evaluation.recommendations import PROVIDER_JOB_PREFIX
@@ -71,6 +72,7 @@ ASSISTANT_PREPARATION = "assistant_preparation"
 SYSTEM_UPDATE_PREPARE = "system_update_prepare"
 # a deleted agent whose AWS teardown was deferred (`agents.teardown_pending_at`)
 AGENT_TEARDOWN = "agent_teardown"
+CODING_TURN = "coding_turn"
 
 # Every call in the `if resume_jobs:` block of `create_app`, by the name main.py
 # calls it, with the inventory kinds it settles. Hooks that touch no ledger row map
@@ -86,6 +88,7 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     "resume_interrupted_runs": (EVAL_RUN,),
     "clear_stale_running_actions": (EXPERIMENT_ACTION,),
     "sweep_skill_lab_jobs": (SKILL_LAB_JOB,),
+    "sweep_coding_runtime_jobs": (JOB,),
     "clear_stale_canary_actions": (CANARY_ACTION,),
     "reconcile_policy_changes": (POLICY_CHANGE,),
     "local_exec.reap_orphan_containers":
@@ -99,6 +102,7 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     # online update (OU-1): resumes a `preparing` system_updates row's build from its
     # checkpoints and reads the updater's apply.result
     "resume_system_updates": (SYSTEM_UPDATE_PREPARE,),
+    "coding_watcher.start": (CODING_TURN,),
 }
 
 # Subsystems that fail an interrupted row only when it is next read — a startup
@@ -112,6 +116,14 @@ _JOB_ACTIVE = ("queued", "running")
 _ASSET_OP_ACTIVE = ("queued", "running")  # resume_operations
 _SKILL_LAB_ACTIVE = ("queued", "running")  # sweep_interrupted_jobs
 _POLICY_ACTIVE = ("pending", "running")  # reconcile_policy_changes
+
+
+def failed_at_startup_job_types() -> dict[str, str]:
+    """`Job.type` values a startup hook fails as interrupted (not resumed), with
+    the hook that does it."""
+    from app.coding import install as coding_install
+
+    return {t: "sweep_coding_runtime_jobs" for t in coding_install.JOB_TYPES}
 
 
 def resumable_job_types() -> frozenset[str]:
@@ -239,6 +251,7 @@ def collect_inflight(
 
     resumable = resumable_job_types()
     retried = retry_job_types()
+    failed_at_startup = failed_at_startup_job_types()
     for r in reader.rows(Job, ["id", "workspace_id", "type", "status", "updated_at"],
                          lambda m: m.status.in_(_JOB_ACTIVE)):
         if r.type in resumable:
@@ -248,6 +261,10 @@ def collect_inflight(
             add(JOB, r.id, r.workspace_id, r.status,
                 f"{r.type} — stops; retrying it continues from its checkpoints",
                 r.updated_at, CLEARED_RETRY, retried[r.type])
+        elif r.type in failed_at_startup:
+            add(JOB, r.id, r.workspace_id, r.status,
+                f"{r.type} — its thread dies; failed, the admin runs it again",
+                r.updated_at, FAILS_INTERRUPTED, failed_at_startup[r.type])
         else:
             add(JOB, r.id, r.workspace_id, r.status,
                 f"{r.type} — no resume starter: the row stays {r.status} forever",
@@ -345,6 +362,13 @@ def collect_inflight(
             f"deleted agent {r.name} — AWS still holds its resource; the Agent-DLC "
             "tick's teardown sweep keeps retrying the delete", r.teardown_pending_at,
             RESTART_SAFE, "dlc.scheduler.sweep_deleted_resources")
+    for r in reader.rows(CodingRepo, ["id", "workspace_id", "name", "active_turn_id",
+                                      "updated_at"],
+                         lambda m: m.status == "running"):
+        add(CODING_TURN, r.id, r.workspace_id, f"turn {r.active_turn_id or '(starting)'}",
+            f"coding repo {r.name} — the turn runs on in its microVM; the watcher "
+            "settles it after the restart", r.updated_at, RESTART_SAFE,
+            "coding_watcher.start")
 
     if skipped is not None:
         skipped.extend(reader.skipped)

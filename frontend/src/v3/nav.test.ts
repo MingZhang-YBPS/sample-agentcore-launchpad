@@ -21,6 +21,11 @@ describe("hostedGroups", () => {
     expect(items.find((i) => i.labelKey === "v3.nav.create")?.to).toBe("/v3/create");
   });
 
+  it("lists the Agent IDE and the context layer for members in the build group", () => {
+    const build = hostedGroups(false).find((g) => g.items.some((i) => i.to === "/v2/coding"));
+    expect(build?.items.map((i) => i.to)).toEqual(expect.arrayContaining(["/v2/coding", "/v2/context-layer"]));
+  });
+
   it("lists the V3-only Models page in the admin group, for administrators only", () => {
     expect(hostedGroups(true).find((g) => g.key === "admin")?.items.map((i) => i.to)).toContain("/v3/models");
     expect(hostedGroups(false).flatMap((g) => g.items.map((i) => i.to))).not.toContain("/v3/models");

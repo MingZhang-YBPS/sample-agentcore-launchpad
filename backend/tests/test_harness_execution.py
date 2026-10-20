@@ -379,6 +379,7 @@ def test_real_endpoints_preserve_late_harness_failure(
     if entrance in {"chat", "public-stream"}:
         assert response.status_code == 200  # status was sent before the stream failed
         events = _without_status(sse_events(response))
+        # V3's chat_ledger `saved` event is dropped by sse_events (bookkeeping)
         assert [event["event"] for event in events] == ["meta", "delta", "error"]
         assert events[1]["data"] == {"text": "partial answer"}
         error = events[-1]["data"]

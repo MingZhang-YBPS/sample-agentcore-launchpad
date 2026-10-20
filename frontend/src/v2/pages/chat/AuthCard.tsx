@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, type UserGrantStatus } from "../../../lib/api";
-import { type AuthAsk, authCardView, pollGrant, safeAuthUrl } from "../../../lib/user-grants";
+import { type AuthAsk, authCardView, canPollGrant, pollGrant, safeAuthUrl } from "../../../lib/user-grants";
 import { Button, Tag } from "../../ui";
+import { DemoAccountOffer } from "../contextLayer/DemoAccount";
 
 /**
  * as_user (3LO) consent card in the Chat thread. A live card links the
@@ -12,7 +13,8 @@ import { Button, Tag } from "../../ui";
  * finished at the IdP (the `/auth/return` page binds the token), then flips to
  * authorized and enables the retry. A card restored from history can only
  * retry: the retry re-runs the prompt that triggered the ask, which asks again
- * when consent is still missing.
+ * when consent is still missing. An ask for the COA context layer's Connection
+ * also offers the layer's shared demo account, for members with no COA account.
  */
 export function AuthCard({
   ask,
@@ -35,15 +37,16 @@ export function AuthCard({
   const view = authCardView({ live, status, expired, retryPrompt, retryDisabled });
   const authorized = view.phase === "authorized";
 
+  const pollable = canPollGrant(ask);
   useEffect(() => {
-    if (!ask.agent_id) return;
+    if (!pollable) return;
     return pollGrant({
       check: () => api.userTokenStatus(ask.provider, ask.agent_id),
       live,
       onStatus: setStatus,
       onExpired: () => setExpired(true),
     });
-  }, [ask.provider, ask.agent_id, live]);
+  }, [ask.provider, ask.agent_id, pollable, live]);
 
   const tone = authorized ? "green" : view.phase === "expired" ? "gray" : "orange";
   const label = t(
@@ -113,6 +116,7 @@ export function AuthCard({
           </Button>
         )}
       </div>
+      {!authorized && <DemoAccountOffer provider={ask.provider} />}
     </div>
   );
 }

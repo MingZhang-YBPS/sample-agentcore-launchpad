@@ -31,9 +31,10 @@ MAX_BATCH_EVALUATORS = 10
 # whose model fails exactly that probe is created on the fallback model instead and the
 # caller is told, so the default switches over by itself once the service accepts GPT-6
 # (re-measured 2026-10-12, us-east-1: GPT-6 Sol and GLM-5.3 are both accepted now).
-# Both ids are settings (judge_model_id / judge_fallback_model_id, env
-# LAUNCHPAD_JUDGE_MODEL_ID / LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID) so an account without
-# OpenAI or Anthropic access can switch them; an empty fallback disables the retry.
+# Both ids are settings (judge_model_id / judge_fallback_model_id: env
+# LAUNCHPAD_JUDGE_MODEL_ID / LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID, launchpad.yaml or the
+# admin Models page), read per call, so an account without OpenAI or Anthropic access
+# can switch them; an empty fallback disables the retry.
 
 
 def judge_default_model_id() -> str:
@@ -498,9 +499,14 @@ def normalize_result_record(attrs: dict[str, Any]) -> dict[str, Any]:
     plus the evaluation level (Session / Trace / Span; a span-level evaluator
     writes one record per tool call, so a session can carry several rows for
     one evaluator). A failed judgement has ``error_type``/``error_message`` and
-    no score."""
+    no score.
+
+    ``evaluator_id`` is the evaluator ARN's id tail when the record carries one
+    (:func:`_record_evaluator_id`): a custom judge's evaluation name is not its id
+    (``drone_store_business_rules`` vs ``drone_store_business_rules-vNDtnlGl7J``),
+    and the run's ``scores`` — which run compare matches against — key by id."""
     return {
-        "evaluator_id": str(attrs.get("gen_ai.evaluation.name")),
+        "evaluator_id": _record_evaluator_id(attrs) or str(attrs.get("gen_ai.evaluation.name")),
         "level": attrs.get("aws.bedrock_agentcore.evaluation_level"),
         "score": _score_value(attrs.get("gen_ai.evaluation.score.value")),
         "label": attrs.get("gen_ai.evaluation.score.label"),

@@ -56,12 +56,13 @@ export function isHeartbeat(event: string): boolean {
  * closes the connection — and ends the frames. A console turn runs on in the
  * background after that (chat-streaming §5.2): the stop button also calls
  * `stopChatTurn`. `seq` is the frame's SSE `id` (the console chat numbers every
- * event but heartbeats), what `resumeChat` continues after.
+ * event but heartbeats), what `resumeChat` continues after. `T` is the data shape
+ * the caller expects — Chat's by default; the Context Layer playground names its own.
  */
-export async function* sseEvents(
+export async function* sseEvents<T = ChatStreamFrame>(
   res: Response,
   { heartbeats = false, signal }: { heartbeats?: boolean; signal?: AbortSignal } = {},
-): AsyncGenerator<{ event: string; data: ChatStreamFrame; seq?: number }> {
+): AsyncGenerator<{ event: string; data: T; seq?: number }> {
   const reader = res.body!.getReader();
   const cancel = () => void reader.cancel().catch(() => undefined);
   if (signal?.aborted) cancel();
@@ -97,7 +98,7 @@ export async function* sseEvents(
           }
         }
         if (!data || (!heartbeats && isHeartbeat(event))) continue;
-        const parsed = { event, data: JSON.parse(data) as ChatStreamFrame };
+        const parsed = { event, data: JSON.parse(data) as T };
         yield seq === undefined ? parsed : { ...parsed, seq };
       }
     }

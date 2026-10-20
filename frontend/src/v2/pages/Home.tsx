@@ -8,6 +8,7 @@ import { useAuth } from "../../auth/auth-context";
 import { api, type TtfaInfo } from "../../lib/api";
 import { fmtTime } from "../format";
 import { useLoad } from "../hooks";
+import { LaunchChecklist } from "../onboarding/LaunchChecklist";
 import { sortTasks, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, type V2Task } from "../tasks";
 import { Button, Card, type Column, Kpi, LinkButton, PageHeader, Table, Tag } from "../ui";
 import { AnnouncementBoard } from "./home/AnnouncementBoard";
@@ -44,7 +45,6 @@ function useTick(ms: number): number {
   return tick;
 }
 
-// the lifecycle strip: create → debug → observe → evaluate → optimise → govern
 const LIFECYCLE = [
   { key: "create", to: "/v2/agents?view=new" },
   { key: "chat", to: "/v2/chat" },
@@ -121,7 +121,7 @@ export function V2Home() {
       {firstRun ? (
         <FirstAgentHero />
       ) : (
-        <div className="v2-kpis">
+        <div className="v2-kpis" data-tour="stats">
           <Kpi
             label={t("v2.home.kpi.agents")}
             value={active ?? "—"}
@@ -170,6 +170,7 @@ export function V2Home() {
       <div className="v2-home-grid">
         <div className="v2-home-main">
           <Inbox isAdmin={isAdmin} tick={slow} />
+          {list && list.length > 0 && <LaunchChecklist agents={list} tasks={tasks.data} />}
           <Card
             title={t("v2.home.flowTitle")}
             sub={t("v2.home.flowSub")}
@@ -191,7 +192,10 @@ export function V2Home() {
               ))}
             </div>
           </Card>
-          <RecentAgents agents={list} loading={agents.data === null && !agents.error} error={agents.error} onRetry={agents.reload} />
+          {/* tour anchors wrap the cards: Card forwards only a testId */}
+          <div className="v2-home-slot" data-tour="agents">
+            <RecentAgents agents={list} loading={agents.data === null && !agents.error} error={agents.error} onRetry={agents.reload} />
+          </div>
           <Card
             title={t("v2.home.recentTasks")}
             flush
@@ -218,7 +222,9 @@ export function V2Home() {
         </div>
         <aside className="v2-home-rail">
           <AnnouncementBoard />
-          <ServiceHealth info={info} error={overview.error} onRetry={overview.reload} activeAgents={active} />
+          <div className="v2-home-slot" data-tour="health">
+            <ServiceHealth info={info} error={overview.error} onRetry={overview.reload} activeAgents={active} />
+          </div>
         </aside>
       </div>
     </>

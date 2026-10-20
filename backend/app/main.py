@@ -12,6 +12,9 @@ import app.deployer.harness  # noqa: F401 — registers the harness deploy metho
 import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
 from app.assistant.evaluation_assets import resume_operations as resume_evaluation_assets
 from app.assistant.service import clear_stale_turn_claims
+from app.coding import watcher as coding_watcher
+from app.coding.install import sweep_interrupted_jobs as sweep_coding_runtime_jobs
+from app.coding.routers import router as coding_router
 from app.core.billing_policy import enforce_budget
 from app.core.config import get_settings
 from app.core.db import init_db
@@ -45,6 +48,7 @@ from app.routers.channels import console_router as channel_links_router
 from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
+from app.routers.context_layer import router as context_layer_router
 from app.routers.conversations import router as conversations_router
 from app.routers.cost_tags import router as cost_tags_router
 from app.routers.custom_tools import router as custom_tools_router
@@ -247,6 +251,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(system_agents_router)
     app.include_router(assistant_router)  # architect assistant (SE-039)
     app.include_router(knowledge_router)  # managed knowledge bases + retrieval playground
+    app.include_router(context_layer_router)  # the connected COA deployment + member consent
     app.include_router(chat_router)
     app.include_router(memory_router)  # read-only short-/long-term memory console
     app.include_router(memory_resources_router)  # memory resource lifecycle (create/delete)
@@ -259,6 +264,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(online_eval_router)
     app.include_router(eval_pipelines_router)  # V2 数据处理: sessions → datasets
     app.include_router(skill_lab_router)
+    app.include_router(coding_router)  # coding agent: runtime, repos, turns, files
     app.include_router(experiments_router)
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management
@@ -332,6 +338,9 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         # skill-lab jobs are child subprocesses — a restart killed them; fail
         # the rows honestly (resume_pending_jobs cannot see this table)
         sweep_skill_lab_jobs()
+        # coding-runtime install/uninstall jobs run on a thread a restart killed;
+        # fail them honestly (each step is idempotent: the admin re-runs it)
+        sweep_coding_runtime_jobs()
         stale_canaries = clear_stale_canary_actions()
         if stale_canaries:
             logging.getLogger("launchpad").info(
@@ -359,6 +368,9 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         from app.dlc.scheduler import start as start_dlc_scheduler
 
         start_dlc_scheduler()
+        # coding turns run in their microVMs whether or not a browser streams them:
+        # the watcher settles them (usage, snapshot) and snapshots saved files
+        coding_watcher.start()
 
     app.add_api_route("/api/health", health, methods=["GET"])
 

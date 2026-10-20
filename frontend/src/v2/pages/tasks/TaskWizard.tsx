@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 import { api, dlcApi, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
 import { evalCostApi, usd } from "../../../lib/api/evalCost";
@@ -31,9 +31,11 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { backTarget } from "./back";
 import { LogSourceFields } from "./LogSourceFields";
 import { LogStreamPicker } from "./LogStreamPicker";
 import { isPassiveSource, passiveEstimateBody } from "./passiveCost";
+import { SessionPicker } from "./SessionPicker";
 
 type Source = "window" | "sessions" | "logs" | "dataset";
 /** What is evaluated: a platform agent, or CloudWatch telemetry with no agent behind it. */
@@ -148,6 +150,7 @@ interface Handoff {
 export function TaskWizard() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const toast = useV2Toast();
   const from = params.get("from");
   const handoff: Handoff = {
@@ -168,6 +171,8 @@ export function TaskWizard() {
   const [submitting, setSubmitting] = useState(false);
   const [evalLevel, setEvalLevel] = useState("");
   const [evalQ, setEvalQ] = useState("");
+  // bumped by the trajectory picker's refresh: re-reads past the 60 s session cache
+  const [sessionsForce, setSessionsForce] = useState(0);
 
   // The actor is seeded before the configured defaults may have arrived: adopt the
   // configured actor (whichever comes last, seed or defaults) unless the user picked one.
@@ -191,8 +196,11 @@ export function TaskWizard() {
   const activeAgents = useMemo(() => (agents.data?.agents ?? []).filter((a) => a.status === "active"), [agents.data]);
   const agent = activeAgents.find((a) => a.id === draft?.agentId) ?? null;
   const sessions = useLoad(
-    () => (draft && (draft.source === "sessions" || draft.source === "window") && agent ? api.obsSessions(SESSION_RANGE) : Promise.resolve(null)),
-    `wizard-sessions:${draft?.source}:${agent?.id ?? ""}`,
+    () =>
+      draft && (draft.source === "sessions" || draft.source === "window") && agent
+        ? api.obsSessions(SESSION_RANGE, sessionsForce > 0)
+        : Promise.resolve(null),
+    `wizard-sessions:${draft?.source}:${agent?.id ?? ""}:${sessionsForce}`,
   );
   const agentSessions = useMemo(
     () => (sessions.data?.sessions ?? []).filter((s) => agent && s.agent === agent.name),
@@ -289,7 +297,8 @@ export function TaskWizard() {
           confirm_cost: draft.confirmCost,
         });
         toast("success", t("v2.tasks.createdOnline"));
-        setParams({ view: "detail", kind: "online", id: cfg.config_id });
+        // the new task's Back returns to where the wizard was opened from
+        setParams({ view: "detail", kind: "online", id: cfg.config_id }, { state: location.state });
       } else {
         const scope =
           draft.source === "window"
@@ -315,7 +324,7 @@ export function TaskWizard() {
           ...storageFlag(confirm),
         }));
         toast("success", t("v2.tasks.createdRun"));
-        setParams({ view: "detail", kind: "run", id: run.id });
+        setParams({ view: "detail", kind: "run", id: run.id }, { state: location.state });
       }
     } catch (err) {
       const refusal = costRefusal(err);
@@ -361,7 +370,7 @@ export function TaskWizard() {
     <>
       <FlowHeader
         title={t("v2.tasks.newTitle")}
-        onBack={() => setParams({})}
+        onBack={() => setParams(backTarget(location.state))}
         steps={
           <Steps
             steps={[t("v2.tasks.stepData"), draft.mode === "insights" ? t("v2.tasks.stepInsights") : t("v2.tasks.stepEvaluators")]}
@@ -582,8 +591,14 @@ export function TaskWizard() {
           </Card>
 
           <Card
-            title={draft.source === "logs" ? t("v2.tasks.logs.title") : t("v2.tasks.preview")}
-            sub={draft.source === "logs" ? t(cloudwatch ? "v2.tasks.cw.logsSub" : "v2.tasks.logs.sub") : t("v2.tasks.previewSub")}
+            title={draft.source === "logs" ? t("v2.tasks.logs.title") : draft.source === "sessions" && !cloudwatch ? t("v2.tasks.sessions.title") : t("v2.tasks.preview")}
+            sub={
+              draft.source === "logs"
+                ? t(cloudwatch ? "v2.tasks.cw.logsSub" : "v2.tasks.logs.sub")
+                : draft.source === "sessions" && !cloudwatch
+                  ? t("v2.tasks.sessions.sub")
+                  : t("v2.tasks.previewSub")
+            }
           >
             {cloudwatch && !cwReady ? (
               <p className="v2-muted">{t("v2.tasks.cw.previewPick")}</p>
@@ -667,38 +682,23 @@ export function TaskWizard() {
               ) : (
                 <p className="v2-muted">{t("v2.tasks.previewPickDataset")}</p>
               )
+            ) : draft.source === "sessions" ? (
+              <SessionPicker
+                agentId={agent?.id ?? ""}
+                sessions={agentSessions}
+                loading={sessions.loading}
+                error={sessions.error}
+                onRefresh={() => setSessionsForce((n) => n + 1)}
+                selected={draft.sessionIds}
+                onChange={(sessionIds) => set({ sessionIds })}
+              />
             ) : draft.strategy === "continuous" ? (
               <Alert>{t("v2.tasks.previewContinuous", { rate: draft.sampling })}</Alert>
             ) : (
               <>
-                {draft.source === "window" && (
-                  <Alert>{t("v2.tasks.previewWindow", { count: windowSessions.length, hours: draft.lookbackHours })}</Alert>
-                )}
+                <Alert>{t("v2.tasks.previewWindow", { count: windowSessions.length, hours: draft.lookbackHours })}</Alert>
                 <Table
                   columns={[
-                    ...(draft.source === "sessions"
-                      ? [
-                          {
-                            key: "sel",
-                            title: "",
-                            width: 36,
-                            render: (s: (typeof agentSessions)[number]) => (
-                              <input
-                                type="checkbox"
-                                aria-label={s.session_id}
-                                checked={draft.sessionIds.includes(s.session_id)}
-                                onChange={() =>
-                                  set({
-                                    sessionIds: draft.sessionIds.includes(s.session_id)
-                                      ? draft.sessionIds.filter((id) => id !== s.session_id)
-                                      : [...draft.sessionIds, s.session_id],
-                                  })
-                                }
-                              />
-                            ),
-                          },
-                        ]
-                      : []),
                     { key: "sid", title: t("v2.traces.colSession"), render: (s: (typeof agentSessions)[number]) => <span className="mono">{s.session_id}</span> },
                     { key: "traces", title: t("v2.pipelines.traceCount"), className: "num", render: (s: (typeof agentSessions)[number]) => s.traces },
                     {
@@ -708,7 +708,7 @@ export function TaskWizard() {
                     },
                     { key: "last", title: t("v2.pipelines.lastActive"), className: "nowrap", render: (s: (typeof agentSessions)[number]) => fmtTime(s.last) },
                   ]}
-                  rows={(draft.source === "window" ? windowSessions : agentSessions).slice(0, draft.source === "sessions" ? 50 : 8)}
+                  rows={windowSessions.slice(0, 8)}
                   rowKey={(s) => s.session_id}
                   loading={sessions.loading}
                   error={sessions.error}

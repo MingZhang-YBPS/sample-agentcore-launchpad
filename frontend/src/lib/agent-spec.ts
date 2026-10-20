@@ -2,7 +2,8 @@
  * The agent creation wizard's pure form model — shared by the classic wizard
  * (`pages/CreateAgent.tsx`) and the native V2 wizard (`v2/pages/agents/`), so both
  * consoles post the exact same `AgentSpecInput` for the same inputs and apply the
- * same per-method validation. Nothing here renders or talks to the network.
+ * same per-method validation. Nothing here renders or talks to the network; the
+ * model a form seeds reads the already-loaded platform defaults (`model-defaults.ts`).
  */
 import type {
   AgentSdk,
@@ -11,6 +12,7 @@ import type {
   ConnectionKind,
   ByocConfigInput,
   ByocPythonVersion,
+  ContextLayerRef,
   HarnessNativeTool,
   InboundAuth,
   Toolkit,
@@ -535,7 +537,48 @@ export interface AgentForm {
    *  none set. A loaded agent always carries its stored values, so a re-publish
    *  from either console keeps them. */
   strands?: StrandsForm;
+  /**
+   * The COA context-layer namespace (harness + HTTP zip_runtime). Optional for the
+   * same reason as `inbound`: a form that does not own it (the classic wizard) omits
+   * `context_layer`, so a re-publish carries the stored ref; the V2 wizard always
+   * states it (`null` ⇒ none).
+   */
+  contextLayer?: ContextLayerChoice | null;
 }
+
+/** The namespace a form attaches; `namespaceName` is display-only. */
+export interface ContextLayerChoice {
+  namespaceId: string;
+  namespaceName: string;
+}
+
+/** COA namespace ids are UUIDs (the backend refuses anything else). */
+export const NAMESPACE_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** Where a context layer can be wired: a Harness, or an HTTP Strands runtime. */
+export const contextLayerSupported = (form: Pick<AgentForm, "method" | "protocol">) =>
+  form.method === "harness" || (form.method === "zip_runtime" && form.protocol === "http");
+
+/** The spec's `context_layer`: omitted when the form does not own it, `null` when
+ *  nothing is attached (or the method cannot carry one), else the ref. */
+export function contextLayerSpec(form: AgentForm): Pick<AgentSpecInput, "context_layer"> {
+  if (form.contextLayer === undefined) return {};
+  const choice = form.contextLayer;
+  if (!choice || !contextLayerSupported(form) || !choice.namespaceId.trim()) return { context_layer: null };
+  return {
+    context_layer: {
+      namespace_id: choice.namespaceId.trim(),
+      ...(choice.namespaceName.trim() ? { namespace_name: choice.namespaceName.trim() } : {}),
+    },
+  };
+}
+
+/** A typed-in namespace id must be a UUID before the form can submit. */
+export const contextLayerValid = (form: AgentForm) =>
+  !form.contextLayer ||
+  !contextLayerSupported(form) ||
+  !form.contextLayer.namespaceId.trim() ||
+  NAMESPACE_ID_RE.test(form.contextLayer.namespaceId.trim());
 
 /** The fresh form a new agent starts on (the classic wizard's `resetForm`). */
 export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
@@ -581,13 +624,14 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   byocPython: "PYTHON_3_13",
   byocInstallReqs: true,
   byocRawContract: false,
-  byocModels: [defaultModelFor(sourceForMethod(method))],
+  byocModels: [defaultModelForMethod("byoc", sourceForMethod(method))],
   byocEnvRows: [],
   byocDescription: "",
   authTools: [],
   inbound: "inherit",
   inboundJwt: { ...EMPTY_JWT_FORM },
   strands: emptyStrandsForm(),
+  contextLayer: null,
 });
 
 /** Spec fields read back when an existing agent is loaded into the form. */
@@ -627,6 +671,7 @@ export interface StoredAgentSpec {
   network?: { subnets?: string[]; security_groups?: string[]; profile_id?: string } | null;
   byoc?: ByocConfigInput;
   inbound_auth?: InboundAuth | null;
+  context_layer?: ContextLayerRef | null;
 }
 
 /** What a loaded agent contributes besides the form itself: the gateway configs and
@@ -715,6 +760,9 @@ export function formFromStoredSpec(
   }
   form.authTools = tools.filter(isAuthTool).map(authRowFromStored);
   if (method === "zip_runtime") form.strands = strandsFormFromSpec(raw);
+  form.contextLayer = spec.context_layer?.namespace_id
+    ? { namespaceId: spec.context_layer.namespace_id, namespaceName: spec.context_layer.namespace_name ?? "" }
+    : null;
   const inbound = choiceFromSpec(spec.inbound_auth);
   form.inbound = inbound.choice;
   form.inboundJwt = inbound.form;
@@ -1011,6 +1059,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
       ? { allowed_tools: form.allowedTools, native_tools: form.nativeTools }
       : {}),
     ...inboundAuthSpec(form),
+    ...contextLayerSpec(form),
     ...(method === "container" && form.mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: form.mcpServers.trim() } }
       : {}),
@@ -1031,7 +1080,8 @@ export const buildAgentSpec = (form: AgentForm, cat: AgentFormCatalogs): AgentSp
 
 /**
  * Spec fields no form input owns: a converted agent's exported code and its
- * provenance, extra requirements, tool-description overrides, a canvas artifact.
+ * provenance, extra requirements (and, on a converted agent, the source Harness's
+ * ranges they were resolved from), tool-description overrides, a canvas artifact.
  * A re-publish replaces the stored spec wholesale (`POST /api/agents/{id}/redeploy`),
  * so without these a converted agent silently lost its exported code bundle and was
  * rebuilt from the template.
@@ -1039,9 +1089,12 @@ export const buildAgentSpec = (form: AgentForm, cat: AgentFormCatalogs): AgentSp
 export const REPUBLISH_CARRIED_FIELDS = [
   "code",
   "code_bundle",
+  "context_layer", // the classic wizard has no context-layer input; the V2 form states it
   "conversion_notes",
   // the classic wizard has no inbound input; the V2 form states it (null ⇒ inherit)
   "inbound_auth",
+  // a converted agent's re-resolve input when the platform's pins move past its own
+  "requirement_ranges",
   "requirements",
   "source_harness",
   "studio_flow",
@@ -1286,6 +1339,7 @@ export function agentFormValid(
   if (!authToolsValid(form, opts.connections)) return false;
   if (!inboundValid(form)) return false;
   if (!networkValid(form)) return false;
+  if (!contextLayerValid(form)) return false;
   if (form.method === "byoc") {
     return AGENT_NAME_RE.test(form.name) && byocValid(form) && !opts.byocUploading;
   }

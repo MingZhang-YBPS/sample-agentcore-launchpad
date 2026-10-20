@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import current_project, project_context
-from app.models.ledger import Agent, IdentityProvider
+from app.models.ledger import Agent, ContextLayer, IdentityProvider
 from app.schemas.inbound_auth import (
     discovery_url_for_issuer,
     issuer_from_discovery_url,
@@ -221,6 +221,17 @@ def _references(
     every_project: bool = False,
 ) -> list[dict[str, str]]:
     refs = referencing_agents(db, workspace_id, name, every_project=every_project)
+    # The connected COA context layer authenticates through one Connection, and the
+    # agents attaching the layer reach COA through it without naming it in a tool.
+    layer = (
+        db.query(ContextLayer)
+        .filter(ContextLayer.workspace_id == workspace_id, ContextLayer.connection == name)
+        .first()
+    )
+    if layer is not None:
+        refs.append({
+            "type": "context_layer", "id": layer.id, "name": f"{layer.prefix}-{layer.env}",
+        })
     refs.extend(
         {"type": "gateway_target", "id": t["target_id"], "name": t["name"]}
         for t in bound_targets
@@ -391,6 +402,12 @@ def _refuse_foreign(db: Session, workspace_id: str, kind: str, name: str) -> Non
         raise NotFoundError(
             "identity.connection_not_found", f"no {kind} connection named {name!r}"
         )
+
+
+def ledger_client_id(db: Session, workspace_id: str, name: str) -> str | None:
+    """The client id the audit row recorded for an OAuth2 Connection, if any."""
+    row = _ledger_row(db, workspace_id, KIND_OAUTH2, name)
+    return row.client_id if row is not None else None
 
 
 def list_connections(

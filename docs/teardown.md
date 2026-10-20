@@ -38,11 +38,14 @@ roles, including the orphans a failed agent deletion can leave behind:
 ```
 Gateway targets of launchpad-gw / launchpad-kb-gw     # dependents of the gateways
    → Gateways launchpad-gw, launchpad-kb-gw             # matched by name; waits for targets to drop out
+     → Cedar Policy Engines Launchpad created for them  # policies first
       → Credential providers                            # launchpad-office-facts-key (API key), launchpad-gw-m2m (OAuth2)
+        → Console workload identities                   # launchpad-console-* (the COA context layer)
          → Per-agent IAM roles                          # launchpad-agent-* AND tagged launchpad:agent-id
             → AgentCore memory  (launchpad_memory-*)
                → AgentCore registry (launchpad-registry)   # records deleted first
                   → Skill Lab worker runtime + its IAM role
+                   → Coding runtime launchpad_coding_runtime + its IAM role   # runtime first
                      → CDK stack launchpad-base             # S3 auto-empties, ECR force-deletes
 ```
 
@@ -87,6 +90,14 @@ Notes:
   its "Policy Engine managed from Launchpad for …" description). Policy names are
   unique across the account and Region, so a leftover engine would otherwise
   block the next deployment's identically named policies.
+- Console workload identities `launchpad-console-<workspace>` are the token-vault
+  identities the COA context layer creates when an admin connects a COA
+  deployment (`/v2/context-layer`, see [identity.md](identity.md) §7.7). Every
+  identity with that name prefix is swept; a runtime's own workload identity is
+  named after the runtime and never matches. The layer's OAuth2 Connection
+  (default `coa-<prefix>`) is an ordinary Connection: disconnect the layer, then
+  delete it under Outbound credentials. COA itself is a separate product and is
+  never touched.
 - Deployed agent runtimes are demo-scoped (section 1) and are not touched by
   the script; deleting your demo agents first keeps the shared-infra teardown
   clean. X-Ray Transaction Search is account-wide shared

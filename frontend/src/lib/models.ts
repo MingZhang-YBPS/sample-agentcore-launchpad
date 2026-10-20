@@ -28,7 +28,8 @@ export interface ModelOption {
  */
 export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
   // `defaultModelFor` takes the first OFFERED entry, so ORDER PICKS THE DEFAULT
-  // (for the Claude Agent SDK, the first Claude entry). Terra leads
+  // (for the Claude Agent SDK, the first Claude entry) — on Mantle; a native Bedrock
+  // form seeds the platform's configured default instead (`defaultModelForMethod`). Terra leads
   // because Mantle's catalogue differs per region and Terra/Luna are in both
   // us-east-1 and us-west-2 while Sol is us-east-1 only. A Sol default made the
   // Harness entrance fail on a us-west-2 deployment with `404 … The model
@@ -56,6 +57,13 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
     { model_id: "zai.glm-5", label: "GLM-5", api_format: "converse_stream" },
     { model_id: "zai.glm-4.7", label: "GLM-4.7", api_format: "converse_stream" },
     { model_id: "global.openai.gpt-6-sol", label: "GPT-6 Sol (global)", api_format: "converse_stream" },
+    // GPT-6.1 Sol and GLM 5.3: global profiles probed (Converse + tool use) in
+    // us-west-2 and us-east-1, 2026-10-14.
+    {
+      model_id: "global.openai.gpt-6.1-sol",
+      label: "GPT-6.1 Sol (global)",
+      api_format: "converse_stream",
+    },
     { model_id: "global.openai.gpt-6-astra", label: "GPT-6 Astra (global)", api_format: "converse_stream" },
     { model_id: "global.openai.gpt-6-luna", label: "GPT-6 Luna (global)", api_format: "converse_stream" },
     {
@@ -83,6 +91,11 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
     { model_id: "moonshot.kimi-k2-thinking", label: "Kimi K2 Thinking", api_format: "converse_stream" },
     { model_id: "deepseek.v3.2", label: "DeepSeek V3.2", api_format: "converse_stream" },
     { model_id: "deepseek.v3-v1:0", label: "DeepSeek V3.1", api_format: "converse_stream" },
+    {
+      model_id: "global.amazon.nova-2-lite-v1:0",
+      label: "Nova 2 Lite (global)",
+      api_format: "converse_stream",
+    },
     // OpenAI GPT-5.6 Sol through the native Bedrock US cross-region inference
     // profile (Converse) — the system architect preset's default (backend
     // `system_agents/presets.py`), kept so its configure page stays on a listed id.

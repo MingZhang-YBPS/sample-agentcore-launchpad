@@ -91,6 +91,24 @@
       "path": "/v2/knowledge-bases"
     },
     {
+      "id": "coding",
+      "categoryId": "build",
+      "title": {
+        "en": "Agent IDE",
+        "zh-CN": "Agent IDE"
+      },
+      "path": "/v2/coding"
+    },
+    {
+      "id": "context-layer",
+      "categoryId": "build",
+      "title": {
+        "en": "Context layer",
+        "zh-CN": "上下文层"
+      },
+      "path": "/v2/context-layer"
+    },
+    {
       "id": "chat",
       "categoryId": "run",
       "title": {

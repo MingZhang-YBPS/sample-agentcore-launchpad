@@ -4,7 +4,11 @@ import i18n from "../i18n";
 import type { KBSourceBody, KnowledgeBaseDetail } from "../pages/KnowledgeBases";
 import type {
   EvaluationRunInfo,
+  EvaluationRunResultRow,
   EvaluationRunResults,
+  EvaluationRunResultsReason,
+  EvaluationRunStatus,
+  EvaluationScore,
   ExperimentReadiness,
   InsightTrees,
   LogSource,
@@ -528,6 +532,47 @@ export interface AgentVersionsInfo {
   canary_endpoints: string[];
 }
 
+/** One file of `GET /api/agents/{id}/source`. `content` is null when the file was left
+ *  out: `binary`, or `budget` (the response cap; read it alone with `?path=`). */
+export interface AgentSourceFile {
+  path: string;
+  size: number;
+  content: string | null;
+  truncated: boolean;
+  omitted: "binary" | "budget" | null;
+}
+
+/** The read-only CODE view: what AWS runs for the agent (`kind: "code"`), a Harness's
+ *  allow-listed configuration (`harness_config`), or the image a BYOC agent was
+ *  deployed from (`image`, no files). */
+export interface AgentSourceInfo {
+  agent_id: string;
+  name: string;
+  method: string;
+  kind: "code" | "harness_config" | "image";
+  /** deployed_package = the zip the Runtime runs · build_context = 方式A's CodeBuild
+   *  input · upload = the member's BYOC upload · harness / image */
+  origin: "deployed_package" | "build_context" | "upload" | "harness" | "image";
+  files: AgentSourceFile[];
+  /** files in the source; the listing stops at a cap */
+  files_total: number;
+  ledger_version: string | null;
+  /** the latest deployment's status — anything but succeeded may mean older code runs */
+  deployment_status: string | null;
+  entrypoint?: string | null;
+  runtime_version?: string | null;
+  package_updated_at?: string | null;
+  artifact_kind?: string | null;
+  original_filename?: string | null;
+  uploaded_by?: string | null;
+  uploaded_at?: string | null;
+  sha256?: string | null;
+  harness_version?: string | null;
+  config?: Record<string, unknown>;
+  image_uri?: string | null;
+  image_digest?: string | null;
+}
+
 /** One row of `GET /api/agents/{id}/snapshots` (T18); `spec` only on the single-fetch. */
 export interface SpecSnapshotInfo {
   seq: number;
@@ -540,10 +585,20 @@ export interface SpecSnapshotInfo {
   spec?: Record<string, unknown>;
 }
 
+export type SpecChangeGroup =
+  | "prompt"
+  | "model"
+  | "tools"
+  | "skills"
+  | "knowledge_bases"
+  | "memory"
+  | "guardrail"
+  | "other";
+
 export interface SpecChange {
   /** dotted path, e.g. `memory.long_term` */
   field: string;
-  group: "prompt" | "model" | "tools" | "skills" | "knowledge_bases" | "memory" | "guardrail" | "other";
+  group: SpecChangeGroup;
   kind: "added" | "removed" | "changed";
   before: unknown;
   after: unknown;
@@ -643,7 +698,7 @@ export interface RuntimeCanaryMetric {
     pValue?: number | null;
     percentChange?: number | null;
     isSignificant?: boolean;
-    /** paired replay (Harness canary): questions scored on both sides and the
+    /** paired replay (either canary kind): questions scored on both sides and the
      *  per-question outcome from the candidate's side (polarity-aware) */
     pairs?: number;
     meanDiff?: number;
@@ -655,7 +710,7 @@ export interface RuntimeCanaryMetric {
   paired?: boolean;
 }
 
-/** One replayed question of a paired Harness canary verdict. */
+/** One replayed question of a paired canary verdict (Harness or Runtime). */
 export interface CanaryPairRow {
   scenario_id: string | null;
   prompt: string | null;
@@ -682,6 +737,10 @@ export interface RuntimeCanaryInfo {
   progress: string | null;
   error: string | null;
   created_at: string | null;
+  /** server-owned rule (`canary_service.early_complete_allowed`): the canary may
+   *  `complete` straight from 50/50 on its current verdict — a treatment-wins or tie
+   *  from paired replay (either kind), or any Harness verdict. Absent on older servers. */
+  early_complete_allowed?: boolean;
   artifacts: {
     /** absent ⇒ a Runtime canary (candidate minted from an edited spec) */
     kind?: "harness";
@@ -695,6 +754,9 @@ export interface RuntimeCanaryInfo {
     };
     /** Harness canaries A/B two existing versions */
     harness?: { control_version: string; treatment_version: string; start_stage?: number };
+    /** a Runtime canary created to open at 50/50 (only stored when > 0; a Harness
+     *  canary keeps it under `harness.start_stage`) */
+    start_stage?: number;
     edited_spec?: Record<string, unknown>;
     /** the evaluators BOTH arms are scored by (chosen at create); absent on rows
      *  created before the choice existed — those use the default pair */
@@ -716,7 +778,7 @@ export interface RuntimeCanaryInfo {
       test_name?: string;
       ab_test_id?: string;
       ramp_stage?: number;
-      // the stage setup opened at (1 ⇒ a Harness canary skipped 90/10); absent = 0
+      // the stage setup opened at (1 ⇒ the canary skipped 90/10, either kind); absent = 0
       start_stage?: number;
       weights?: Record<string, number>;
       v_candidate?: string;
@@ -745,7 +807,8 @@ export interface RuntimeCanaryInfo {
         failed: number;
         baseline_n: number;
         /** the primary evaluator's own sample count before this stage's traffic
-         *  (runtime canaries with a primary); the verdict waits for it to grow */
+         *  (legacy weighted Runtime attempts with a primary); the verdict waits for it
+         *  to grow */
         primary_baseline_n?: number;
         dataset_id?: string;
         dataset_name?: string;
@@ -753,7 +816,8 @@ export interface RuntimeCanaryInfo {
         // diagnostic breakdown of the send (e.g. {"200": 47, "429": 3});
         // absent on attempts recorded before the concurrent send landed
         status_counts?: Record<string, number>;
-        /** "paired": a Harness canary sent every question to BOTH versions */
+        /** "paired": every question went to BOTH versions (either kind); absent ⇒ a
+         *  legacy weighted Runtime attempt split by the gateway */
         mode?: string;
         pairs?: { scenario_id: string; control_session_id: string | null;
                   treatment_session_id: string | null; error?: string }[];
@@ -761,7 +825,12 @@ export interface RuntimeCanaryInfo {
       verdict?: {
         verdict: string;
         avg_delta?: number;
+        /** both arms' samples combined */
         n?: number;
+        /** per-arm samples; a winner or tie needs at least `min_n` (3) on EACH arm,
+         *  otherwise the verdict is `insufficient-n`. Absent on older verdicts */
+        n_control?: number;
+        n_treatment?: number;
         significant?: boolean;
         baseline_n?: number;
         reason?: string;
@@ -784,7 +853,7 @@ export interface RuntimeCanaryInfo {
       ab_test_status: string;
       completed_at: string;
       promoted_version?: string;
-      // ramp stage `complete` ran at; < 2 ⇒ a Harness canary completed early from 50/50
+      // ramp stage `complete` ran at; < 2 ⇒ the canary completed early from 50/50
       completed_at_stage?: number;
     };
     rollback?: {
@@ -990,6 +1059,9 @@ export interface AgentSpecInput extends StrandsSpecFields {
   /** Inbound auth of this agent's Runtime. Omitted ⇒ inherit the workspace
    * default at deploy time; an explicit value pins the agent. */
   inbound_auth?: InboundAuth | null;
+  /** The COA namespace the agent reads governed context from (harness + HTTP
+   * zip_runtime); `null` detaches it. Omitted ⇒ a re-publish carries the stored ref. */
+  context_layer?: ContextLayerRef | null;
   /** Runtime protocol; "mcp" hosts a byoc artifact as an MCP server. Omitted ⇒ "http". */
   protocol?: "http" | "a2a" | "mcp";
   /** required iff protocol="mcp": the Gateway target the server's tools appear under */
@@ -2900,6 +2972,19 @@ export interface ObsSessionTranscript {
   transcript: ObsTranscript;
 }
 
+/** `GET /api/observability/session-previews` — one trajectory-picker row:
+ *  the first user input and last agent reply (clipped server-side), or
+ *  `available: false` with a `reason` (`not_found` · `read_failed` ·
+ *  `not_platform_session` · `memory_unavailable` · `no_turns`). */
+export interface ObsSessionPreview {
+  session_id: string;
+  available: boolean;
+  reason: string | null;
+  input: string | null;
+  output: string | null;
+  user_turns: number;
+}
+
 export interface ObsSessionDetail {
   session_id: string;
   range: string;
@@ -3295,6 +3380,238 @@ export interface CompleteOauthSessionResult {
   agent_id: string;
   agent_name: string | null;
   tool: string;
+}
+
+/* ── COA context layer (`/api/context-layer`) ── */
+
+/** The caller's own console grant for the layer's Connection. */
+export type ContextLayerAuthStatus = "none" | "pending" | "authorized" | "revoked";
+
+/** Whose COA account a consent used: the shared demo account, or the member's own. */
+export type ContextLayerIdentity = "demo" | "own";
+
+/** The layer's shared COA demo account, as any member sees it (never the password). */
+export interface ContextLayerDemoAccount {
+  available: boolean;
+  username: string | null;
+}
+
+/** `GET /api/context-layer/demo-account` — plus the layer's Connection, which a Chat
+ *  consent card matches its ask's provider against. */
+export interface ContextLayerDemoInfo extends ContextLayerDemoAccount {
+  connection: string | null;
+}
+
+/** `POST /api/context-layer/demo-account/reveal` (`Cache-Control: no-store`). Keep it
+ *  in component state only: never storage, never a log. */
+export interface ContextLayerDemoCredentials {
+  username: string;
+  password: string;
+}
+
+/** `GET /api/context-layer`. Everything past `can_manage` is present only when
+ *  `connected`; the callback/client fields only for administrators. Live probes
+ *  that failed read `null` (unknown), never false. No secret is ever included. */
+export interface ContextLayerStatus {
+  connected: boolean;
+  can_manage: boolean;
+  name?: string;
+  prefix?: string;
+  env?: string;
+  region?: string;
+  console_url?: string;
+  api_endpoint?: string;
+  issuer?: string;
+  mcp_runtime_arn?: string;
+  serve_runtime_arn?: string;
+  connection?: string;
+  console_workload?: string;
+  runtimes?: { mcp: string | null; serve: string | null };
+  ready?: boolean;
+  agent_oauth_enabled?: boolean | null;
+  callback_registered?: boolean | null;
+  /** `identity` only while authorized: whose COA account the vaulted token is
+   *  (null = unknown, e.g. no demo account to compare with) */
+  authorization?: { status: ContextLayerAuthStatus; authorized_at: string | null; identity?: ContextLayerIdentity | null };
+  demo_account?: ContextLayerDemoAccount;
+  /** COA's web-client `/logout` (ends the COA browser session); null when unknown */
+  sign_out_url?: string | null;
+  /** agents attaching the layer; a hidden agent keeps its slot with null id/name */
+  referenced_by?: { type: string; id: string | null; name: string | null }[];
+  created_by_name?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  probe_errors?: { probe: string; code: string }[];
+  // administrators only
+  callback_url?: string | null;
+  agent_client_id?: string | null;
+  user_pool_id?: string | null;
+  callback_context_key?: string;
+  /** the demo account's SSM parameter name (never its value) */
+  demo_account_param?: string | null;
+}
+
+export interface ContextLayerConnectInput {
+  prefix: string;
+  env: string;
+  region: string;
+  /** adopt an existing OAuth2 Connection; omitted ⇒ create (or re-adopt) `coa-<prefix>` */
+  connection?: string | null;
+  /** the demo account's SSM parameter, under `/<prefix>/launchpad/`; "" clears it */
+  demo_account_param?: string | null;
+}
+
+export interface ContextLayerAuthorizeResult {
+  authorized: boolean;
+  /** single-use, only when `authorized` is false */
+  authorization_url?: string;
+  connection: string;
+}
+
+/** One namespace COA lets the signed-in member see. `description` and `owner`
+ *  come with the list and the single read alike (both may be null). */
+export interface ContextLayerNamespace {
+  namespace_id: string;
+  name: string;
+  display_name: string | null;
+  description?: string | null;
+  owner?: string | null;
+  status: string | null;
+  source_count: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** `GET /api/context-layer/namespaces/{id}/sources` — every source type. COA
+ *  statuses are passed through verbatim (an unknown one renders as-is). */
+export interface ContextLayerSource {
+  source_id: string;
+  name: string;
+  source_type: string | null;
+  source_subtype: string | null;
+  status: string | null;
+  tables_discovered: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** One governed metric (`GET …/metrics`): only what COA returns to the member. */
+export interface ContextLayerMetric {
+  name: string;
+  description: string;
+  unit: string | null;
+  return_type: string | null;
+  default_time_grain: string | null;
+  synonyms: string[];
+  dialects: { dialect: string; expression: string }[];
+  source_table: string | null;
+  data_source_id: string | null;
+}
+
+export interface ContextLayerOntology {
+  ontology_id: string;
+  title: string;
+  description: string | null;
+  ontology_type: string | null;
+  status: string | null;
+  class_count: number | null;
+  property_count: number | null;
+  updated_at: string | null;
+}
+
+export interface ContextLayerOntologyClass {
+  uri: string;
+  label: string;
+  description: string | null;
+  ontology_id: string;
+  /** the owning ontology's title */
+  ontology: string;
+}
+
+/** `GET …/ontology`: the namespace's ontologies and their classes. `failed` lists
+ *  ontologies whose overview COA could not answer; `truncated` = more classes (or
+ *  ontologies) exist than were read. */
+export interface ContextLayerOntologyView {
+  namespace_id: string;
+  ontologies: ContextLayerOntology[];
+  classes: ContextLayerOntologyClass[];
+  failed: string[];
+  truncated: boolean;
+}
+
+/** `GET /api/context-layer/health`. `coa` is COA's own `/system-health` read as
+ *  the member — null without consent (`authorization_required`) or when COA
+ *  refused (`coa_error`). A runtime probe that failed reads `null`. */
+export interface ContextLayerHealth {
+  runtimes: { mcp: string | null; serve: string | null };
+  ready: boolean;
+  authorization_required: boolean;
+  coa: { status: string | null; components: { key: string; status: string | null }[] } | null;
+  coa_error: { code: string; status: number | null } | null;
+  probe_errors: { probe: string; code: string }[];
+}
+
+export type ContextLayerMode = "standard" | "deep-reasoning";
+export type ContextLayerStrategy =
+  | "best"
+  | "ontop"
+  | "nl_to_sql"
+  | "ontop_first"
+  | "nl_to_sql_first"
+  | "deep-reasoning";
+
+/** `POST /api/context-layer/playground` body. `session_id` is COA's conversation
+ *  id from the previous turn's `done` (omitted ⇒ a new conversation). */
+export interface ContextLayerPlaygroundInput {
+  namespace_id: string;
+  query: string;
+  session_id?: string | null;
+  mode?: ContextLayerMode | null;
+  strategy?: ContextLayerStrategy | null;
+}
+
+/** Playground SSE events (the backend's normalization of COA Serve frames). */
+export interface ContextLayerStepEvent {
+  name: string;
+  status: string;
+  duration_ms: number | null;
+  tool: string | null;
+  detail: string | null;
+}
+
+export interface ContextLayerDoneEvent {
+  answer: string | null;
+  tier: number | null;
+  confidence: number | null;
+  rationale: string | null;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  rows_truncated: boolean;
+  partial: boolean;
+  guardrail_blocked: boolean;
+  data_sources: string[];
+  citations: { name: string | null; text: string | null; score: number | null }[];
+  total_ms: number | null;
+  session_id: string | null;
+}
+
+export interface ContextLayerErrorEvent {
+  code: string;
+  message: string;
+  status: number | null;
+  coa_error: string | null;
+}
+
+/** `/api/context-layer/namespaces/{id}{rest}` — the id is one encoded path segment. */
+function contextNsPath(id: string, rest = ""): string {
+  return `/api/context-layer/namespaces/${encodeURIComponent(id)}${rest}`;
+}
+
+/** `AgentSpec.context_layer`: one COA namespace (harness + HTTP zip_runtime). */
+export interface ContextLayerRef {
+  namespace_id: string;
+  namespace_name?: string;
 }
 
 export interface ConsentPortalInfo {
@@ -5032,6 +5349,160 @@ export interface SharedTemplateInfo {
   updated_at: string | null;
 }
 
+/* ── evaluation scorecards: run versions, benchmarks, two-run compare ─────
+ * `backend/app/evaluation/scorecard.py`. Ledger facts only: the composite score and
+ * the regression math stay in the console (`v2/compare.ts`), which owns polarity. */
+
+/** How a run's agent version is known: `stamped` at submit, `inferred` for an older
+ *  row from the snapshot timeline, `observed` for a passive scope (a time window,
+ *  chosen sessions, log streams), whose sessions predate the run. */
+export type RunSnapshotSource = "stamped" | "inferred" | "observed";
+
+/** The agent version a run evaluated: `seq` = the spec snapshot number (`#N` on the
+ *  Agent page). Null for a log-source run or an agent with no deployed snapshot. */
+export interface RunSnapshotRef {
+  seq: number;
+  source: RunSnapshotSource;
+}
+
+/** What a run was measured on: one local dataset (`ds:<id>`), one cloud dataset
+ *  (`cloud:<id>`), or the agent's live traffic (`live`, every passive run). */
+export interface RunBenchmark {
+  kind: "dataset" | "cloud" | "live";
+  key: string;
+  /** the local dataset's current name, else the name stored on the run; null for live */
+  label: string | null;
+  dataset_id: string | null;
+  /** fingerprint (local), `v<N>` / `draft:<fingerprint>` (cloud); null when unknown */
+  revision: string | null;
+  /** the replayed scenario count; null when unknown */
+  size: number | null;
+}
+
+/** One run of `GET /api/eval/runs/compare-pair`: the run payload plus its benchmark. */
+export type RunCompareRun = EvaluationRunInfo & { benchmark: RunBenchmark };
+
+/** One side of a compared case: the session that replayed it and its judge records
+ *  (empty when that side's results stream could not be read). */
+export interface RunCompareSide {
+  session_id: string;
+  results: EvaluationRunResultRow[];
+}
+
+/** One scenario of two aligned runs; a side is null when that run has no session for it. */
+export interface RunCompareCase {
+  scenario_id: string;
+  /** the scenario's first user input, ≤ 200 chars */
+  input: string;
+  a: RunCompareSide | null;
+  b: RunCompareSide | null;
+}
+
+export type RunCompareAlignment = "scenario" | "order" | "none";
+
+/** Why two runs compare overall scores only (`alignment: "none"`). */
+export type RunCompareAlignmentReason =
+  | "live_traffic"
+  | "different_benchmark"
+  | "scenarios_skipped"
+  | "session_count_mismatch"
+  | "dataset_unavailable"
+  | "no_dataset"
+  | "unaligned";
+
+/** Whether one side's per-session results could be read. */
+export interface RunCompareResultsStatus {
+  available: boolean;
+  reason?: EvaluationRunResultsReason;
+  detail?: string;
+  truncated?: boolean;
+}
+
+/** A snapshot between the two compared versions (after the lower seq, up to the higher). */
+export interface RunCompareBetween {
+  seq: number;
+  aws_version: string | null;
+  note: string | null;
+  created_at: string | null;
+  created_by_name: string | null;
+}
+
+/** The agent's configuration change between the two runs' versions. Null when a version
+ *  is unknown, the runs are of different agents, or the agent is hidden from the viewer. */
+export type RunCompareConfig =
+  | { agent_id: string; from_seq: number; to_seq: number; between: RunCompareBetween[]; same?: undefined }
+  | { same: true; agent_id: string; seq: number }
+  | null;
+
+/** `GET /api/eval/runs/compare-pair?a=&b=`. */
+export interface RunCompare {
+  runs: { a: RunCompareRun; b: RunCompareRun };
+  alignment: RunCompareAlignment;
+  alignment_reason: RunCompareAlignmentReason | null;
+  /** B's scenario order, then the scenarios only A has; empty when not aligned */
+  cases: RunCompareCase[];
+  /** null when not aligned (no results are read) */
+  results: { a: RunCompareResultsStatus; b: RunCompareResultsStatus } | null;
+  config: RunCompareConfig;
+}
+
+/** One run of `GET /api/eval/scorecard` (evaluator-mode runs only). */
+export interface ScorecardRun {
+  id: string;
+  name: string | null;
+  /** the agent id, or `logs:<service_name>` for a log-source run */
+  agent_key: string;
+  status: EvaluationRunStatus;
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  evaluators: string[];
+  scores: EvaluationScore[];
+  /** the run's session count */
+  sessions: number;
+  scope: "dataset" | "cloud" | "window" | "sessions" | "logs";
+  /** the scope as stored (`window:24h`, `cloud:<name>`, …) */
+  dataset_name: string | null;
+  dataset_version: string | null;
+  benchmark: RunBenchmark;
+  snapshot: RunSnapshotRef | null;
+  created_by_name: string | null;
+}
+
+/** One spec snapshot of a scorecard agent's timeline. */
+export interface ScorecardVersion {
+  seq: number;
+  aws_version: string | null;
+  created_at: string | null;
+  created_by_name: string | null;
+  note: string | null;
+  /** with `agent_id` only: the diff groups against the deployed snapshot before it */
+  changes?: SpecChangeGroup[];
+}
+
+export interface ScorecardAgent {
+  key: string;
+  /** null for a log-source run's service */
+  agent_id: string | null;
+  name: string;
+  method: string | null;
+  log_source: LogSource | null;
+  deleted: boolean;
+  /** the newest deployed snapshot */
+  current_seq: number | null;
+  versions: ScorecardVersion[];
+}
+
+/** `GET /api/eval/scorecard?agent_id=` — ledger-only, no AWS call. */
+export interface EvaluationScorecard {
+  /** the newest 1000, oldest first */
+  runs: ScorecardRun[];
+  /** newest evaluation first */
+  agents: ScorecardAgent[];
+  /** older runs were left out */
+  truncated: boolean;
+}
+
 /** T28 — estimated spend for a window, attributed. */
 export interface CostRow {
   service: string;
@@ -5332,6 +5803,34 @@ export const api = {
    *  nothing to read yet. */
   evaluationRunResults: (runId: string) =>
     request<EvaluationRunResults>(`/api/eval/runs/${encodeURIComponent(runId)}/results`),
+  /** `GET /api/eval/runs/compare-pair?a=&b=` — two finished evaluator runs side by side: how
+   *  their sessions align, the per-case judge records when aligned (≤ 2 AWS reads, each
+   *  side degrading alone) and the snapshots between their versions. 422
+   *  `run.compare_unsupported` for an insights or still-active run. */
+  compareEvaluationRuns: (a: string, b: string) => {
+    const q = new URLSearchParams({ a, b });
+    return request<RunCompare>(`/api/eval/runs/compare-pair?${q.toString()}`);
+  },
+  /** `GET /api/eval/scorecard?agent_id=` — the workspace's scored runs the viewer may
+   *  see, each with its benchmark and version, plus their agents' snapshot timelines.
+   *  Ledger-only; `agent_id` narrows to one agent and adds each version's diff groups. */
+  evaluationScorecard: (params: { agent_id?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.agent_id) q.set("agent_id", params.agent_id);
+    const qs = q.toString();
+    return request<EvaluationScorecard>(`/api/eval/scorecard${qs ? `?${qs}` : ""}`);
+  },
+  /** `POST /api/eval/runs/{id}/rerun` (201) — evaluate the run's target again, as it is
+   *  now, on the run's own scope: the same local dataset, the same cloud dataset and
+   *  pinned version, or the same window length, with the same evaluators. Same checks
+   *  and project budget gate as `POST /runs`. 422 `run.rerun_unsupported` for chosen
+   *  sessions / log streams / insights; 400 `agent.not_active`; 404 `run.not_found` /
+   *  `dataset.not_found`; 409 `project.budget_exhausted`. */
+  rerunEvaluationRun: (runId: string, body: { name?: string } = {}) =>
+    request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/rerun`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   /** `GET /api/eval/runs/{id}/recommendation-inputs` — the current system prompt +
    *  tool descriptions a recommendation from this run would revise, and where they
    *  came from (a Managed Harness is read live; other agents fall back to the spec,
@@ -5860,6 +6359,10 @@ export const api = {
   getAgent: (id: string, workspaceId?: string | null) =>
     request<AgentInfo>(`/api/agents/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
+  agentSource: (id: string, path?: string) =>
+    request<AgentSourceInfo>(
+      `/api/agents/${id}/source${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+    ),
   agentMcp: (id: string) => request<McpServerStatus>(`/api/agents/${id}/mcp`),
   // T20/T21 — release bundles and promotions
   createReleaseBundle: (id: string, body: { snapshot_seq?: number; note?: string } = {}) =>
@@ -6054,6 +6557,61 @@ export const api = {
       `/api/identity/grants/${encodeURIComponent(connection)}`,
       { method: "DELETE" },
     ),
+  getContextLayer: () => request<ContextLayerStatus>("/api/context-layer"),
+  connectContextLayer: (input: ContextLayerConnectInput) =>
+    request<ContextLayerStatus>("/api/context-layer", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  disconnectContextLayer: () =>
+    request<{ disconnected: boolean; connection: string; console_workload: string }>(
+      "/api/context-layer",
+      { method: "DELETE" },
+    ),
+  /** `account` is an explicit choice ("demo" needs a demo account on the layer). The
+   *  consent is the same for every choice: COA uses whichever session the browser holds,
+   *  or asks for credentials — nothing is prefilled. */
+  authorizeContextLayer: (account?: ContextLayerIdentity) =>
+    request<ContextLayerAuthorizeResult>("/api/context-layer/authorize", {
+      method: "POST",
+      ...(account ? { body: JSON.stringify({ account }) } : {}),
+    }),
+  getContextLayerDemoAccount: () => request<ContextLayerDemoInfo>("/api/context-layer/demo-account"),
+  revealContextLayerDemoAccount: () =>
+    request<ContextLayerDemoCredentials>("/api/context-layer/demo-account/reveal", {
+      method: "POST",
+      cache: "no-store",
+    }),
+  revokeContextLayer: () =>
+    request<{ revoked: boolean; provider: string; agents: number }>(
+      "/api/context-layer/revoke",
+      { method: "POST" },
+    ),
+  listContextLayerNamespaces: () =>
+    request<{ namespaces: ContextLayerNamespace[] }>("/api/context-layer/namespaces"),
+  getContextLayerNamespace: (id: string) =>
+    request<{ namespace: ContextLayerNamespace }>(contextNsPath(id)),
+  listContextLayerSources: (id: string) =>
+    request<{ namespace_id: string; sources: ContextLayerSource[] }>(contextNsPath(id, "/sources")),
+  listContextLayerMetrics: (id: string) =>
+    request<{ namespace_id: string; metrics: ContextLayerMetric[] }>(contextNsPath(id, "/metrics")),
+  getContextLayerOntology: (id: string) => request<ContextLayerOntologyView>(contextNsPath(id, "/ontology")),
+  getContextLayerHealth: () => request<ContextLayerHealth>("/api/context-layer/health"),
+  /** `POST /api/context-layer/playground` — the raw SSE response (read it with
+   *  `sseEvents`). A non-2xx answer (not connected, a vault failure, a bad body)
+   *  throws an `ApiError` before any stream; COA's own refusals arrive as `error`
+   *  events and missing consent as one `auth_required` event. */
+  contextLayerPlayground: async (body: ContextLayerPlaygroundInput, signal?: AbortSignal): Promise<Response> => {
+    const path = "/api/context-layer/playground";
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) await parseResponse<never>(path, res);
+    return res;
+  },
   getConsentPortal: () =>
     request<{ gateway_id: string | null; portal: ConsentPortalInfo | null }>(
       "/api/identity/consent-portal",
@@ -6072,9 +6630,11 @@ export const api = {
   getRuntimeCanary: (id: string) =>
     request<RuntimeCanaryInfo>(`/api/runtime-canaries/${id}`),
   /** Runtime agents send `candidate` (the edit to mint); a Harness sends
-   *  `harness_versions` — control (an earlier version) vs treatment (the latest) —
-   *  and may open at 50/50 with `start_stage: 1` (skip 90/10). Both kinds may choose
-   *  their evaluators and a primary evaluator that decides the verdict. */
+   *  `harness_versions` — control (an earlier version) vs treatment (the latest).
+   *  Either kind may open at 50/50 with `start_stage: 1` (skip 90/10; a Runtime
+   *  canary then sends half of its live platform traffic to the candidate as soon
+   *  as setup finishes), and may choose its evaluators and a primary evaluator that
+   *  decides the verdict. */
   createRuntimeCanary: (input: {
     agent_id: string;
     candidate?: {
@@ -6425,13 +6985,21 @@ export const api = {
     request<ObsSessionDetail>(
       `/api/observability/sessions/${encodeURIComponent(sessionId)}?${obsQuery(range, force)}`,
     ),
-  /** Conversation only, no span query — `agentId` attributes an unclaimed session. */
-  obsSessionTranscript: (sessionId: string, agentId?: string | null) =>
-    request<ObsSessionTranscript>(
-      `/api/observability/sessions/${encodeURIComponent(sessionId)}/transcript${
-        agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""
-      }`,
-    ),
+  /** Conversation only, no span query — `agentId` attributes an unclaimed session,
+   *  `since` (its first span) lets one with nothing in Memory read the agent's content logs. */
+  obsSessionTranscript: (sessionId: string, agentId?: string | null, since?: string | null) => {
+    const query = new URLSearchParams([...(agentId ? [["agent_id", agentId]] : []), ...(since ? [["since", since]] : [])]).toString();
+    return request<ObsSessionTranscript>(
+      `/api/observability/sessions/${encodeURIComponent(sessionId)}/transcript${query ? `?${query}` : ""}`,
+    );
+  },
+  /** First input / last output of up to 20 sessions (`first` = the session list's
+   *  first-span time) — one picker page per call; a read, POSTed for the body. */
+  obsSessionPreviews: (sessions: { session_id: string; first: string | null }[], agentId?: string | null) =>
+    request<{ previews: ObsSessionPreview[] }>("/api/observability/session-previews", {
+      method: "POST",
+      body: JSON.stringify({ sessions, ...(agentId ? { agent_id: agentId } : {}) }),
+    }),
   obsEvaluateSession: (sessionId: string, body: ObsSessionScoreBody) =>
     request<ObsSessionScore>(
       `/api/observability/sessions/${encodeURIComponent(sessionId)}/evaluate`,
@@ -7542,3 +8110,205 @@ export interface ReleasePolicyView {
   policy: Record<string, unknown>;
   effective: Record<string, unknown>;
 }
+// ---- coding agent (remote web IDE over the platform coding runtime) ----
+/* `/api/coding/*` — parent task 10-19-coding-agent design §7.3. A repo is private
+ * to its creator: a foreign or missing id is `404 coding.repo_not_found`. Every
+ * non-GET answers with a JSON body (the client refuses an empty 2xx). */
+
+export type CodingRuntimeState = "not_installed" | "installing" | "ready" | "failed" | "uninstalling";
+
+/** The install / uninstall job behind the runtime card (`log_tail`: admins only). */
+export interface CodingRuntimeJob {
+  id: string;
+  type: string;
+  status: string;
+  error: string | null;
+  /** administrators only */
+  log_tail?: string[];
+}
+
+/** `GET /api/coding/runtime` — the workspace's platform-owned coding runtime. */
+export interface CodingRuntimeStatus {
+  installed: boolean;
+  status: CodingRuntimeState;
+  runtime_arn: string | null;
+  image_tag: string | null;
+  job: CodingRuntimeJob | null;
+  models: string[];
+  efforts: string[];
+  default_model: string;
+  default_effort: string;
+}
+
+export type CodingRepoStatus = "idle" | "running";
+
+export interface CodingRepo {
+  id: string;
+  name: string;
+  description: string;
+  status: CodingRepoStatus;
+  active_turn_id: string | null;
+  model: string | null;
+  effort: string | null;
+  /** the Agent this repo deployed (redeploys update it) */
+  agent_id: string | null;
+  snapshot_at: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  created_by_name: string | null;
+  /** the caller owns this repo — only owned rows open in the IDE (an admin's
+   *  "all" view lists other members' repos for deletion only) */
+  owned?: boolean;
+}
+
+export type CodingTurnStatus = "running" | "completed" | "interrupted" | "failed" | "abandoned";
+
+/** Ledger token usage of a settled turn. */
+export interface CodingTurnUsage {
+  input?: number;
+  cached_input?: number;
+  cache_write?: number;
+  output?: number;
+  reasoning_output?: number;
+}
+
+/** One ledger turn (`coding_turns`); `turn_id` is codex's id, the event stream's key. */
+export interface CodingTurnRow {
+  id: string;
+  turn_id: string | null;
+  thread_id?: string | null;
+  prompt: string;
+  model: string;
+  effort: string;
+  status: CodingTurnStatus;
+  error: string | null;
+  usage: CodingTurnUsage | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface CodingRepoDetail extends CodingRepo {
+  /** latest turns (≤ 20), oldest first */
+  turns: CodingTurnRow[];
+  /** codex id of the running turn, if any */
+  active_turn?: string | null;
+}
+
+export interface CodingTreeEntry {
+  /** relative to the repo root, `/`-separated */
+  path: string;
+  dir: boolean;
+  size: number | null;
+}
+
+/** Working tree (omitted), `HEAD`, or the tree the latest turn started from. */
+export type CodingFileRev = "head" | "turn";
+
+/** A file read. `exists: false` (absent at that revision, or deleted from the working
+ *  tree) carries no content, hash, size or binary flag; a binary file has no content. */
+export interface CodingFile {
+  path?: string;
+  content?: string | null;
+  sha256?: string | null;
+  size?: number | null;
+  binary?: boolean;
+  exists?: boolean;
+}
+
+export type CodingChangeScope = "turn" | "worktree";
+export type CodingChangeStatus = "A" | "M" | "D" | "R";
+
+export interface CodingChange {
+  path: string;
+  status: CodingChangeStatus;
+  old_path?: string | null;
+}
+
+export interface CodingDeployRequest {
+  agent_name?: string;
+  description?: string;
+  artifact_kind?: "code_zip" | "container_source";
+  entrypoint?: string;
+  python_version?: ByocPythonVersion;
+}
+
+/** `POST …/download` — a short-lived presigned S3 GET that answers with
+ *  `Content-Disposition: attachment` (the browser saves it, the page stays). */
+export interface CodingDownload {
+  url: string;
+  /** the name the browser saves it under (`<repo>.zip` for the archive) */
+  filename: string;
+  size: number | null;
+  /** seconds the URL stays valid (use it at once) */
+  expires_in: number;
+}
+
+export interface CodingDeployResult {
+  agent_id: string;
+  job_id: string;
+  /** true = a new Agent, false = a redeploy of the repo's Agent */
+  created: boolean;
+}
+
+function codingPath(repoId: string, rest = ""): string {
+  return `/api/coding/repos/${encodeURIComponent(repoId)}${rest}`;
+}
+
+export const codingApi = {
+  runtime: () => request<CodingRuntimeStatus>("/api/coding/runtime"),
+  /** Install or repair (202 + job); re-read `runtime()` for the progress. */
+  installRuntime: () =>
+    request<{ job_id: string; status: string }>("/api/coding/runtime/install", { method: "POST" }),
+  uninstallRuntime: () =>
+    request<{ job_id: string; status: string }>("/api/coding/runtime", { method: "DELETE" }),
+  /** Own repos; `all` (admins) lists every repo in the workspace. */
+  listRepos: (all = false) =>
+    request<{ repos: CodingRepo[] }>(`/api/coding/repos${all ? "?all=1" : ""}`),
+  createRepo: (body: { name: string; description?: string }) =>
+    request<CodingRepo>("/api/coding/repos", { method: "POST", body: JSON.stringify(body) }),
+  getRepo: (id: string) => request<CodingRepoDetail>(codingPath(id)),
+  updateRepo: (id: string, body: { name?: string; description?: string }) =>
+    request<CodingRepo>(codingPath(id), { method: "PATCH", body: JSON.stringify(body) }),
+  deleteRepo: (id: string) => request<{ deleted: boolean }>(codingPath(id), { method: "DELETE" }),
+  /** Starts a turn asynchronously (`409 coding.turn_running` while one runs). */
+  startTurn: (id: string, body: { prompt: string; model: string; effort: string }) =>
+    request<CodingTurnRow>(codingPath(id, "/turns"), { method: "POST", body: JSON.stringify(body) }),
+  interrupt: (id: string) =>
+    request<{ interrupted: boolean }>(codingPath(id, "/interrupt"), { method: "POST" }),
+  /** `GET …/events?after=<seq>` — the raw SSE response (`v2/pages/coding/stream.ts`
+   *  parses it); a non-2xx answer throws an `ApiError` before any stream. */
+  events: async (id: string, after: number, signal?: AbortSignal): Promise<Response> => {
+    const path = codingPath(id, `/events?after=${Math.max(0, Math.floor(after))}`);
+    const res = await fetch(path, { headers: { Accept: "text/event-stream" }, signal });
+    if (!res.ok) await parseResponse<never>(path, res);
+    return res;
+  },
+  tree: (id: string, path = ".", depth = 1) =>
+    request<{ entries: CodingTreeEntry[] }>(
+      codingPath(id, `/tree?${new URLSearchParams({ path, depth: String(depth) }).toString()}`),
+    ),
+  readFile: (id: string, path: string, rev?: CodingFileRev) => {
+    const q = new URLSearchParams({ path });
+    if (rev) q.set("rev", rev);
+    return request<CodingFile>(codingPath(id, `/file?${q.toString()}`));
+  },
+  /** `409 coding.file_conflict` (detail `{sha256}`) when the file changed since
+   *  `expected_sha256`; `409 coding.turn_running` while a turn runs. */
+  writeFile: (id: string, body: { path: string; content: string; expected_sha256?: string | null }) =>
+    request<{ sha256: string }>(codingPath(id, "/file"), { method: "PUT", body: JSON.stringify(body) }),
+  changes: (id: string, scope: CodingChangeScope) =>
+    request<{ changes: CodingChange[] }>(codingPath(id, `/changes?scope=${scope}`)),
+  diff: (id: string, scope: CodingChangeScope) =>
+    request<{ diff: string }>(codingPath(id, `/diff?scope=${scope}`)),
+  /** One file (`path`, text or binary, ≤ 200 MB) or, without a path, the whole repo
+   *  as a zip (the deploy export's file set, ≤ 50 MB). `404 coding.file_not_found`,
+   *  `413 coding.download_too_large`; allowed while a turn runs. */
+  download: (id: string, path?: string) =>
+    request<CodingDownload>(codingPath(id, "/download"), {
+      method: "POST",
+      body: JSON.stringify(path === undefined ? {} : { path }),
+    }),
+  deploy: (id: string, body: CodingDeployRequest) =>
+    request<CodingDeployResult>(codingPath(id, "/deploy"), { method: "POST", body: JSON.stringify(body) }),
+};

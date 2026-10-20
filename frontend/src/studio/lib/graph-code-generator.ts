@@ -1,11 +1,11 @@
 import { type Node, type Edge } from '@xyflow/react';
 import { validateGraphStructure } from './graph-validator';
 import {
-  studioFallbackModelId,
   gptBedrockModelConfig,
   isBedrockOpenAiGpt,
   MANTLE_PROVIDER,
   mantleModelArgs,
+  studioFallbackModelId,
 } from './models';
 
 // Shared by both canvas generators. Keep the SDK override limited to inline files.

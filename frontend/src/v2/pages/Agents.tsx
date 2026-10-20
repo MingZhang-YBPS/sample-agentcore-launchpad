@@ -1,5 +1,5 @@
 import { Download, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -10,6 +10,7 @@ import {
   type AgentInfo,
   type AgentVersionsInfo,
   api,
+  type ContextLayerRef,
   type DeploymentInfo,
   errorMessage,
   type InboundAuth,
@@ -27,6 +28,7 @@ import {
 import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
 import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
+import { AgentSource } from "./agents/AgentSource";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
 import { AgentWizard } from "./agents/AgentWizard";
 import { IntegrationCard } from "./agents/IntegrationCard";
@@ -35,6 +37,14 @@ import { SnapshotsCard } from "./agents/SnapshotsCard";
 import { ToolsCard } from "./agents/ToolsCard";
 import { TryChat } from "./agents/TryChat";
 import { v2EditPath } from "./agents/classicUrl";
+import {
+  type AgentsListFilters,
+  listOnly,
+  parseListParams,
+  withView,
+  writeListParams,
+} from "./agents/agentsListParams";
+import "./agents/agents.css";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
   Alert,
@@ -85,6 +95,8 @@ const STAGE_TONE: Record<StageInfo["status"], TagTone> = {
 const editPath = v2EditPath;
 
 const EDITABLE_METHODS: Method[] = ["harness", "zip_runtime", "container", "byoc"];
+/** Methods the CODE view (`?view=source`) has a source for — `services/agent_source`. */
+const SOURCE_METHODS = new Set<string>(["harness", "zip_runtime", "studio", "container", "byoc"]);
 
 /** `?view=edit&id=` — reads the agent fresh, then opens the wizard on its stored spec. */
 function AgentEdit({ id }: { id: string }) {
@@ -190,18 +202,24 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
 function AgentList() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const { can } = useAuth();
   const perms = useAgentPermissions();
   const { data, loading, error, reload } = useLoad(() => api.listAgents(), "agents");
   const actions = useAgentActions(() => reload());
-  const [method, setMethod] = useState("");
-  const [status, setStatus] = useState("");
-  const [q, setQ] = useState("");
+  // filters live in the URL (defaults omitted) so Back from a detail and a reload keep them
+  const { method, status, q } = parseListParams(params);
 
   const agents = useMemo(() => data?.agents ?? [], [data]);
-  const methods = useMemo(() => [...new Set(agents.map((a) => a.method))].sort(), [agents]);
-  const statuses = useMemo(() => [...new Set(agents.map((a) => a.status))].sort(), [agents]);
+  // a filter from the URL stays pickable (and labelled) even when no agent matches it
+  const methods = useMemo(
+    () => [...new Set([...agents.map((a) => a.method), ...(method ? [method] : [])])].sort(),
+    [agents, method],
+  );
+  const statuses = useMemo(
+    () => [...new Set([...agents.map((a) => a.status), ...(status ? [status] : [])])].sort(),
+    [agents, status],
+  );
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return agents.filter((a) => {
@@ -211,6 +229,10 @@ function AgentList() {
     });
   }, [agents, method, status, q]);
   const paged = usePaged(rows, 12);
+  const filter = (patch: Partial<AgentsListFilters>) => {
+    setParams((prev) => writeListParams(prev, { ...parseListParams(prev), ...patch }), { replace: true });
+    paged.setPage(1);
+  };
   const count = (s: string) => agents.filter((a) => a.status === s).length;
 
   // a deploy in flight moves on its own: refresh the list until it settles
@@ -221,7 +243,8 @@ function AgentList() {
     return () => window.clearInterval(timer);
   }, [deploying, reload]);
 
-  const open = (a: AgentInfo) => setParams({ view: "detail", id: a.id });
+  // a normal (pushed) navigation: browser Back returns to this filtered list
+  const open = (a: AgentInfo) => setParams((prev) => withView(prev, "detail", a.id));
 
   const columns: Column<AgentInfo>[] = [
     {
@@ -336,18 +359,18 @@ function AgentList() {
             label={t("v2.agents.colMethod")}
             value={method}
             allLabel={t("v2.common.all")}
-            onChange={setMethod}
+            onChange={(v) => filter({ method: v as AgentsListFilters["method"] })}
             options={methods.map((m) => ({ value: m, label: methodLabel(m) }))}
           />
           <FilterSelect
             label={t("v2.agents.colStatus")}
             value={status}
             allLabel={t("v2.common.all")}
-            onChange={setStatus}
+            onChange={(v) => filter({ status: v as AgentsListFilters["status"] })}
             options={statuses.map((s) => ({ value: s, label: t(`status.${s}`, { defaultValue: s }) }))}
           />
           <div className="end">
-            <SearchInput value={q} onChange={setQ} placeholder={t("v2.agents.search")} testId="v2-agents-search" />
+            <SearchInput value={q} onChange={(v) => filter({ q: v })} placeholder={t("v2.agents.search")} testId="v2-agents-search" />
             <span className="v2-count">{t("v2.common.total", { count: rows.length })}</span>
           </div>
         </div>
@@ -500,14 +523,14 @@ function AgentDetail({ id }: { id: string }) {
   const perms = useAgentPermissions();
   const { agent, job, error, deploying, reload } = useAgentDetail(id);
   const actions = useAgentActions((action, target) => {
-    if (action === "deleted") setParams({});
-    else setParams({ view: "detail", id: target.id });
+    if (action === "deleted") setParams((prev) => listOnly(prev));
+    else setParams((prev) => withView(prev, "detail", target.id));
   });
 
   if (error && !agent) {
     return (
       <>
-        <FlowHeader title={id} onBack={() => setParams({})} />
+        <FlowHeader title={id} onBack={() => setParams((prev) => listOnly(prev))} />
         <Alert tone="error">{error}</Alert>
       </>
     );
@@ -516,6 +539,7 @@ function AgentDetail({ id }: { id: string }) {
 
   const spec = (agent.spec ?? {}) as Record<string, unknown>;
   const deployment = agent.deployments?.[0] ?? agent.deployment ?? null;
+  const contextRef = spec.context_layer as ContextLayerRef | null | undefined;
   const source = spec.source_harness as { agent_name?: string } | undefined;
   const notes = (spec.conversion_notes as Record<string, string> | undefined) ?? {};
   const byoc = agent.method === "byoc" ? ((spec.byoc as ByocSummary | undefined) ?? null) : null;
@@ -537,7 +561,7 @@ function AgentDetail({ id }: { id: string }) {
             </Tag>
           </span>
         }
-        onBack={() => setParams({})}
+        onBack={() => setParams((prev) => listOnly(prev))}
         end={
           <>
             <Button onClick={() => reload()}>{t("v2.common.refresh")}</Button>
@@ -546,8 +570,13 @@ function AgentDetail({ id }: { id: string }) {
             )}
             <Button onClick={() => navigate("/v2/observability")}>{t("v2.agents.observability")}</Button>
             {agent.method !== "discovered_runtime" && (
-              <Button onClick={() => setParams({ view: "identity", id: agent.id })} testId="v2-agent-identity-open">
+              <Button onClick={() => setParams((prev) => withView(prev, "identity", agent.id))} testId="v2-agent-identity-open">
                 {t("v2.agents.identity.open")}
+              </Button>
+            )}
+            {SOURCE_METHODS.has(agent.method) && agent.status !== "deleted" && (
+              <Button onClick={() => setParams((prev) => withView(prev, "source", agent.id))} testId="v2-agent-source-open">
+                {t("v2.agents.source.open")}
               </Button>
             )}
             {perms.canConvert(agent) && (
@@ -677,13 +706,28 @@ function AgentDetail({ id }: { id: string }) {
           )}
         </Card>
       )}
+      {contextRef?.namespace_id && (
+        <Card title={t("v2.contextLayer.wizard.title")} testId="v2-agent-context-layer">
+          <Descriptions
+            items={[
+              { label: t("v2.contextLayer.wizard.namespace"), value: contextRef.namespace_name || "—" },
+              { label: t("v2.contextLayer.namespaces.colId"), value: <span className="mono">{contextRef.namespace_id}</span> },
+              {
+                label: t("v2.contextLayer.title"),
+                value: <Link to="/v2/context-layer">{t("v2.contextLayer.wizard.module")}</Link>,
+              },
+            ]}
+          />
+        </Card>
+      )}
       {actions.dialog}
     </>
   );
 }
 
-/** Agent management (native V2): list, `?view=detail&id=`, `?view=new` (the
- *  creation wizard for Harness / Strands / other SDK / bring-your-own-code, with
+/** Agent management (native V2): list, `?view=detail&id=`, `?view=source&id=` (the
+ *  read-only code view), `?view=new` (the creation wizard for Harness / Strands /
+ *  other SDK / bring-your-own-code, with
  *  the classic `method=` / `gateway=` / `skill=` prefills) and `?view=edit&id=` (the
  *  same wizard as a re-publish editor); importing and the system presets open the
  *  classic flows inside the V2 shell. */
@@ -695,5 +739,6 @@ export function V2Agents() {
   if (view === "new") return <AgentWizard />;
   if (view === "edit" && id) return <AgentEdit key={id} id={id} />;
   if (view === "identity" && id) return <AgentIdentity key={id} id={id} />;
+  if (view === "source" && id) return <AgentSource key={id} id={id} />;
   return <AgentList />;
 }

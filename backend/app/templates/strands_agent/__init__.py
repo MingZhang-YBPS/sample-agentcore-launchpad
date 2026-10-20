@@ -11,8 +11,10 @@ from app.templates.attachment_support import render_attachment_source
 from app.templates.gateway_support import render_gateway_source, uses_gateway
 from app.templates.identity_support import (
     IDENTITY_TEMPLATE,
+    apply_turn_gate,
     render_identity_source,
     uses_identity,
+    uses_turn_gate,
 )
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
@@ -41,7 +43,7 @@ def _identity_source(spec: AgentSpec) -> str:
     if source or spec.model_provider is None:
         return source
     return (
-        IDENTITY_TEMPLATE.read_text(encoding="utf-8")
+        apply_turn_gate(IDENTITY_TEMPLATE.read_text(encoding="utf-8"), False)
         .strip()
         .replace("__LAUNCHPAD_IDENTITY_TOOLS__", "[]")
     )
@@ -55,8 +57,13 @@ def _notices_fn(spec: AgentSpec) -> str:
 
 
 def render_main_py(spec: AgentSpec) -> str:
-    # SB-1 builder markers first: their lines vanish for a spec that sets none
-    source = apply_builder((TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8"), spec)
+    # SB-1 builder markers first: their lines vanish for a spec that sets none.
+    # The COA turn gate renders only for a spec with the context layer attached,
+    # so every older spec keeps rendering byte-identical code.
+    source = apply_turn_gate(
+        apply_builder((TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8"), spec),
+        uses_turn_gate(spec),
+    )
     kbs = mounted_kbs(spec)
     # Both KB tools land in DEFAULT_TOOL_DESCRIPTIONS so the config-bundle A/B
     # contract can tune each one; spec overrides still win (they merge after).
@@ -95,6 +102,7 @@ def render_main_py(spec: AgentSpec) -> str:
             else 'lambda _stack, _session_id="", _force_reauth=(): []',
         )
         .replace("__LAUNCHPAD_IDENTITY_NOTICES_FN__", _notices_fn(spec))
+        .replace("__LAUNCHPAD_IDENTITY_GATED_FN__", "identity_turn_gated")
         .replace("__LAUNCHPAD_TOOLKIT_TOOLS__", toolkit_tools)
         .replace(
             "__LAUNCHPAD_TOOLKIT_TOOL_DESCRIPTIONS__",

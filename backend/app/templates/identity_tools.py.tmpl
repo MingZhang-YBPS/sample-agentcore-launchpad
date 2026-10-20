@@ -18,6 +18,12 @@
 #     `auth_required` stream event) and answers the model with a structured
 #     auth-required result — it never polls or blocks the turn. The platform
 #     binds the token after consent (CompleteResourceTokenAuth, the 4th leg).
+#[turn-gate]
+#     One exception: a tool baked with `gates_turn` (the context layer's COA
+#     server, the agent's fact source) ends the turn at the card instead — the
+#     entrypoint never invokes the model without it, as the platform does for a
+#     Harness turn.
+#[/turn-gate]
 # The workload identity token is the one the Runtime injects into the request
 # (`WorkloadAccessToken` → BedrockAgentCoreContext); the platform sends
 # runtimeUserId whenever a tool carries auth, so it is present. The
@@ -27,6 +33,9 @@
 # "body", "headers", "connection", "kind", "mode", "scopes", "audience",
 # "key_in", "key_name"}] — no secrets, only the Connection NAME the vault
 # resolves.
+#[turn-gate]
+# A spec with the context layer also bakes "gates_turn" on its COA tool.
+#[/turn-gate]
 IDENTITY_AUTH_TOOLS = __LAUNCHPAD_IDENTITY_TOOLS__
 
 IDENTITY_WORKLOAD_NAME = os.environ.get("LAUNCHPAD_WORKLOAD_NAME", "")
@@ -47,6 +56,11 @@ _IDENTITY_AUTH_NOTICES: list = []
 # exchange must send forceAuthentication=true.
 _IDENTITY_SESSION = {"id": "", "force_reauth": frozenset()}
 
+#[turn-gate]
+# Names of the `gates_turn` tools awaiting the user's consent this turn.
+_IDENTITY_GATED: list = []
+
+#[/turn-gate]
 # Sentinel: the user must authorize at the IdP before this tool can run.
 IDENTITY_AUTH_REQUIRED = "__identity_auth_required__"
 
@@ -57,6 +71,13 @@ def identity_drain_auth_notices() -> list:
     return notices
 
 
+#[turn-gate]
+def identity_turn_gated() -> bool:
+    """True when a `gates_turn` tool awaits consent: the turn ends at the card."""
+    return bool(_IDENTITY_GATED)
+
+
+#[/turn-gate]
 def _id_log(message: str) -> None:
     print(f"[launchpad-identity] {message}", flush=True)
 
@@ -399,6 +420,10 @@ def _identity_mcp_client(spec: dict):
         # the notice is queued; this server's tools are absent this turn and
         # appear on the retry after the user consents
         _id_log(f"mcp tool {spec['name']} awaiting user authorization")
+#[turn-gate]
+        if spec.get("gates_turn"):
+            _IDENTITY_GATED.append(spec["name"])
+#[/turn-gate]
         return None
     if credential is None:
         return None
@@ -438,6 +463,9 @@ def identity_tools(stack, session_id: str = "", force_reauth=()) -> list:
     _IDENTITY_SESSION["id"] = str(session_id or "")
     _IDENTITY_SESSION["force_reauth"] = frozenset(str(c) for c in (force_reauth or ()))
     _IDENTITY_AUTH_NOTICES.clear()
+#[turn-gate]
+    _IDENTITY_GATED.clear()
+#[/turn-gate]
     tools: list = []
     for spec in IDENTITY_AUTH_TOOLS:
         try:

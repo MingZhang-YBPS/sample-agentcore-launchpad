@@ -50,6 +50,8 @@ SOURCE_CODEGEN = "codegen"
 SOURCE_TOOLS = "tools"
 SOURCE_GOVERNANCE = "governance"
 SOURCE_MODELS_PROBE = "models_probe"
+SOURCE_CODING = "coding"
+SOURCE_CONTEXT_LAYER = "context_layer"
 
 
 @dataclass(frozen=True)
@@ -70,7 +72,8 @@ FREE = Free()
 
 # The prefixes whose every mutating route is classified (the guard test's scope).
 BILLABLE_PREFIXES = (
-    "/api/agents", "/api/assistant", "/api/chat", "/api/conversations", "/api/demos",
+    "/api/agents", "/api/assistant", "/api/chat", "/api/coding", "/api/context-layer",
+    "/api/conversations", "/api/demos",
     "/api/eval", "/api/execute", "/api/experiments", "/api/fix-code", "/api/golden-sets",
     "/api/governance", "/api/knowledge-bases", "/api/mcp-servers", "/api/memory",
     "/api/model-probe", "/api/observability", "/api/promotions", "/api/registry",
@@ -142,6 +145,27 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("POST", "/api/chat/{agent_id}/feedback"): FREE,
     ("POST", "/api/chat/{agent_id}/sessions/{session_id}/stop"): FREE,
     ("POST", "/api/chat/{agent_id}/turns/{turn_id}/stop"): FREE,
+    # ---- the Agent IDE (app/coding): a turn runs codex on Bedrock in the coding
+    # runtime; install builds that runtime (CodeBuild); deploy hands the repo to the
+    # byoc pipeline (start_create / republish_agent). The rest is repo CRUD ----
+    ("POST", "/api/coding/runtime/install"): Billable(SOURCE_DEPLOY),
+    ("DELETE", "/api/coding/runtime"): FREE,
+    ("POST", "/api/coding/repos"): FREE,
+    ("DELETE", "/api/coding/repos/{repo_id}"): FREE,
+    ("PATCH", "/api/coding/repos/{repo_id}"): FREE,
+    ("POST", "/api/coding/repos/{repo_id}/deploy"): Billable(SOURCE_DEPLOY),
+    ("POST", "/api/coding/repos/{repo_id}/download"): FREE,
+    ("PUT", "/api/coding/repos/{repo_id}/file"): FREE,
+    ("POST", "/api/coding/repos/{repo_id}/interrupt"): FREE,
+    ("POST", "/api/coding/repos/{repo_id}/turns"): Billable(SOURCE_CODING),
+    # ---- the COA context layer: connecting, consent and the demo account are
+    # bookkeeping; the playground runs a COA agent turn (model tokens) ----
+    ("PUT", "/api/context-layer"): FREE,
+    ("DELETE", "/api/context-layer"): FREE,
+    ("POST", "/api/context-layer/authorize"): FREE,
+    ("POST", "/api/context-layer/demo-account/reveal"): FREE,
+    ("POST", "/api/context-layer/playground"): Billable(SOURCE_CONTEXT_LAYER),
+    ("POST", "/api/context-layer/revoke"): FREE,
     # ---- Studio local debug and the AI fix: model calls on the host ----
     ("POST", "/api/conversations"): FREE,
     ("DELETE", "/api/conversations/{session_id}"): FREE,
@@ -189,8 +213,12 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("POST", "/api/eval/runs/{run_id}/recommendations"): Billable(SOURCE_EVAL),
     ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept"): FREE,
     ("PUT", "/api/eval/runs/{run_id}/recommendations/{rec_id}/edit"): FREE,
+    # a new run of the same scope: bills exactly as POST /api/eval/runs
+    ("POST", "/api/eval/runs/{run_id}/rerun"): Billable(SOURCE_EVAL),
     ("POST", "/api/eval/runs/{run_id}/stop"): FREE,
     ("POST", "/api/observability/prices/refresh"): FREE,
+    # transcript previews for the task wizard: a read, POST only for the body
+    ("POST", "/api/observability/session-previews"): FREE,
     ("POST", "/api/observability/sessions/{session_id}/evaluate"): Billable(SOURCE_EVAL),
     # ---- golden sets: curation only ----
     ("POST", "/api/golden-sets"): FREE,

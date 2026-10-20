@@ -16,6 +16,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
@@ -25,6 +26,7 @@ from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.core.project_scope import current_project, project_context
 from app.evaluation.models import EvalRun
@@ -34,6 +36,16 @@ from app.optimization.models import Experiment
 from app.services import inference_profiles, memory, memory_ownership
 from app.services.agentcore import evaluation as agentcore_evaluation
 from app.services.agentcore.client import data_client
+from app.services.observability_messages import (
+    GEN_AI_MESSAGE_EVENTS,
+    MESSAGE_SPANS_CAP,
+    message_event_session_ids,
+    parse_message_events,
+    span_attribute_messages,
+)
+from app.services.observability_messages import (
+    MESSAGE_TEXT_CAP as MESSAGE_TEXT_CAP,
+)
 from app.services.project_telemetry import ATTR_PROJECT
 from app.services.workspace import WorkspaceContext
 
@@ -60,11 +72,11 @@ QUERY_DEADLINE_SECONDS = 55
 NANOS_PER_MS = 1_000_000
 # A trace's entry span. AgentCore Runtime and Harness invocations never export a
 # parentless span: even `POST /invocations` carries the caller's parentSpanId
-# (measured on the test hub, 2026-10-10 — zero parentless spans over 7 days, one
-# `POST /invocations` per trace). Filtering on "no parent" alone therefore
-# counted no traces at all, so the dashboard read 0 traffic and the p95 alert
-# stayed unknown. Parentless spans still count, for OTel sources that do emit a
-# true root.
+# (measured 2026-10-14: zero parentless spans on the us-east-1 hub over 24h, so
+# "no parent" alone counted no traces there). Parentless spans still count, for
+# OTel sources that emit a true root. A trace can hold two `POST /invocations`
+# spans (a Harness and its backing runtime), so anything that counts traces must
+# aggregate per traceId first (see the dashboard queries).
 ROOT_SPAN_FILTER = '(not ispresent(parentSpanId) or name = "POST /invocations")'
 
 # Anthropic-convention multipliers applied when a price entry has no explicit
@@ -394,6 +406,8 @@ def q_root_spans(trace_ids: list[str] | None = None, limit: int = 3 * TRACE_LIMI
     # `trace_ids` narrows the scan to those traces (an unfiltered roots query
     # over 7d is the slow half of a session view, and its newest-N cap can miss
     # an older session's roots entirely).
+    # A trace may have two root rows; the consumer keys them by traceId over this
+    # newest-first list, so the earliest-starting (outermost) root wins.
     filters = ["ispresent(startTimeUnixNano)", ROOT_SPAN_FILTER]
     if trace_ids is not None:
         for trace_id in trace_ids:
@@ -434,9 +448,11 @@ def q_dashboard_series(range_key: str, scope: str = "") -> str:
 {SPANS_SOURCE}{scope}
 | filter ispresent(startTimeUnixNano) and {ROOT_SPAN_FILTER}
 | fields strcontains(status.code, "ERROR") as is_error
-| stats count(*) as traces, sum(is_error) as errors,
-        pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
-  by bin({BIN_BY_RANGE[range_key]}) as bucket
+| stats max(durationNano) as dur, max(is_error) as err
+  by traceId, bin({BIN_BY_RANGE[range_key]}) as bucket
+| stats count(*) as traces, sum(err) as errors,
+        pct(dur, 50) as p50_nano, pct(dur, 95) as p95_nano
+  by bucket
 | sort bucket asc
 | limit 200
 """
@@ -447,8 +463,9 @@ def q_dashboard_totals(scope: str = "") -> str:
 {SPANS_SOURCE}{scope}
 | filter ispresent(startTimeUnixNano) and {ROOT_SPAN_FILTER}
 | fields strcontains(status.code, "ERROR") as is_error
-| stats count(*) as traces, sum(is_error) as errors,
-        pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
+| stats max(durationNano) as dur, max(is_error) as err by traceId
+| stats count(*) as traces, sum(err) as errors,
+        pct(dur, 50) as p50_nano, pct(dur, 95) as p95_nano
 """
 
 
@@ -561,9 +578,14 @@ def q_trace_message_events(trace_id: str) -> str:
     # SDKs emit gen_ai message events (prompts/completions) as OTel log
     # records correlated to spans via traceId/spanId.
     _require(TRACE_ID_RE, trace_id, "trace id")
+    event_names = json.dumps(GEN_AI_MESSAGE_EVENTS)
     return f"""
 filter traceId = "{trace_id}"
-| fields @message, spanId
+| fields jsonParse(@message) as record
+| filter ispresent(record.body.input.messages) or ispresent(record.body.output.messages)
+    or record.eventName in {event_names} or record.attributes.`event.name` in {event_names}
+| fields @message, spanId, @timestamp
+| sort @timestamp asc
 | limit 200
 """
 
@@ -1115,118 +1137,6 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
     }
 
 
-# ── gen_ai message events (prompts / completions per span) ─────────────────
-
-MESSAGE_TEXT_CAP = 2000
-MESSAGES_PER_SIDE = 20
-BLOCKS_PER_MESSAGE = 20
-
-
-def _parse_content_blocks(raw: Any) -> list[dict[str, Any]]:
-    """Message content arrives as a JSON string of content blocks
-    ([{"text"}, {"toolUse"}, {"toolResult"}]); normalize + truncate."""
-    if not isinstance(raw, str):
-        return []
-    try:
-        blocks = json.loads(raw)
-    except ValueError:
-        return [{"type": "text", "text": raw[:MESSAGE_TEXT_CAP]}]
-    if not isinstance(blocks, list):
-        blocks = [blocks]
-    out: list[dict[str, Any]] = []
-    for block in blocks[:BLOCKS_PER_MESSAGE]:
-        if not isinstance(block, dict):
-            out.append({"type": "text", "text": str(block)[:MESSAGE_TEXT_CAP]})
-        elif "text" in block:
-            out.append({"type": "text", "text": str(block["text"])[:MESSAGE_TEXT_CAP]})
-        elif "toolUse" in block:
-            use = block["toolUse"] or {}
-            out.append({
-                "type": "tool_use",
-                "name": use.get("name"),
-                "input": json.dumps(use.get("input"), ensure_ascii=False)[:500],
-            })
-        elif "toolResult" in block:
-            result = block["toolResult"] or {}
-            out.append({
-                "type": "tool_result",
-                "status": result.get("status"),
-                "text": json.dumps(result.get("content"), ensure_ascii=False)[:500],
-            })
-        else:
-            out.append({"type": "other",
-                        "text": json.dumps(block, ensure_ascii=False)[:300]})
-    return out
-
-
-def _normalize_messages(messages: Any) -> list[dict[str, Any]]:
-    if not isinstance(messages, list):
-        return []
-    out = []
-    for message in messages[:MESSAGES_PER_SIDE]:
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        finish = None
-        if isinstance(content, str):  # some scopes emit the payload directly
-            blocks = _parse_content_blocks(content)
-        elif isinstance(content, dict):
-            blocks = _parse_content_blocks(
-                content.get("content") or content.get("message")
-            )
-            finish = content.get("finish_reason")
-        else:
-            continue
-        if not blocks:
-            continue
-        entry: dict[str, Any] = {"role": message.get("role"), "blocks": blocks}
-        if finish:
-            entry["finish_reason"] = finish
-        out.append(entry)
-    return out
-
-
-def parse_message_events(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
-    """spanId → {input: [...], output: [...]} from runtime OTel log records."""
-    by_span: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        try:
-            record = json.loads(row.get("@message", ""))
-            span_id = record.get("spanId")
-            body = record.get("body")
-            if not span_id or not isinstance(body, dict):
-                continue
-            entry = by_span.setdefault(span_id, {})
-            # Provenance survives normalization: the session id a content event was
-            # recorded under (a correlated span may carry none) is what the privacy
-            # boundary filters on, before AND after the cache.
-            resource = record.get("resource") if isinstance(record.get("resource"), dict) else {}
-            candidates = [
-                (record.get("attributes") or {}).get("session.id")
-                if isinstance(record.get("attributes"), dict) else None,
-                (resource.get("attributes") or {}).get("session.id")
-                if isinstance(resource.get("attributes"), dict) else None,
-                resource.get("session.id"),
-            ]
-            sids = entry.setdefault("session_ids", [])
-            for sid in candidates:
-                if isinstance(sid, str) and sid and sid not in sids:
-                    sids.append(sid)  # EVERY contributing event's id, not only the first
-            if sids and not entry.get("session_id"):
-                entry["session_id"] = sids[0]
-            for side in ("input", "output"):
-                payload = body.get(side)
-                if not entry.get(side) and isinstance(payload, dict):
-                    normalized = _normalize_messages(payload.get("messages"))
-                    if normalized:
-                        entry[side] = normalized
-        except (TypeError, ValueError, AttributeError):
-            continue  # malformed record — message events are best-effort
-        if len(by_span) >= 50:
-            break
-    return {k: v for k, v in by_span.items() if v.get("input") or v.get("output")}
-
-
 def _span_log_groups(raw_spans: list[dict[str, Any]]) -> list[str]:
     groups: set[str] = set()
     for span in raw_spans:
@@ -1540,6 +1450,7 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
         # gen_ai message events (prompts/completions) live in the agents' own
         # runtime log groups, referenced by the spans themselves; best-effort.
         messages_by_span: dict[str, dict[str, Any]] = {}
+        event_session_ids: set[str] = set()
         log_groups = _span_log_groups(raw_spans)
         if log_groups:
             try:
@@ -1547,16 +1458,25 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
                     {"events": q_trace_message_events(trace_id)},
                     hours, logs=logs, log_groups=log_groups, workspace=workspace,
                 )["events"]
+                event_session_ids = message_event_session_ids(event_rows)
                 messages_by_span = parse_message_events(event_rows)
             except Exception:  # best-effort enrichment — never fail the trace
                 messages_by_span = {}
+        message_span_ids = set(messages_by_span)
         for span in spans:
-            span["messages"] = messages_by_span.get(span["span_id"] or "")
+            messages = dict(messages_by_span.get(span["span_id"] or "") or {})
+            if messages or len(message_span_ids) < MESSAGE_SPANS_CAP:
+                for side, payload in span_attribute_messages(span["attributes"]).items():
+                    if not messages.get(side):
+                        messages[side] = payload
+                if messages:
+                    message_span_ids.add(span["span_id"])
+            span["messages"] = messages or None
         # Every session id this trace's spans OR content events were recorded under.
         session_ids = sorted({
             sid for sid in (
                 [s["attributes"].get("session.id") for s in spans]
-                + [sid for m in messages_by_span.values() for sid in (m.get("session_ids") or [])]
+                + list(event_session_ids)
             ) if isinstance(sid, str) and sid
         })
         # Strands emits each LLM call as a wrapper span (system=strands-agents)
@@ -1745,12 +1665,24 @@ def get_session(session_id: str, range_key: str, db: Session,
         session_id,
         workspace,
         agent=_agent_from_traces(db, workspace.id, payload["traces"]),
+        started_at=_iso_datetime(payload["summary"]["first"]),
     )
     return {**payload, "transcript": transcript}
 
 
+def _iso_datetime(value: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
 def get_session_transcript(
-    session_id: str, db: Session, workspace: WorkspaceContext, agent_id: str | None = None
+    session_id: str,
+    db: Session,
+    workspace: WorkspaceContext,
+    agent_id: str | None = None,
+    started_at: datetime | None = None,
 ) -> dict[str, Any]:
     """The session's conversation alone — no Logs Insights pass.
 
@@ -1765,7 +1697,9 @@ def get_session_transcript(
             agent = None
     return {
         "session_id": session_id,
-        "transcript": session_transcript(db, session_id, workspace, agent=agent),
+        "transcript": session_transcript(
+            db, session_id, workspace, agent=agent, started_at=started_at
+        ),
     }
 
 
@@ -2163,7 +2097,11 @@ def _experiment_for_session(
 
 
 def _external_transcript(
-    db: Session, session_id: str, workspace: WorkspaceContext, agent: Agent | None
+    db: Session,
+    session_id: str,
+    workspace: WorkspaceContext,
+    agent: Agent | None,
+    started_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Transcript for a session that is in NO platform ledger — experiment
     gateway traffic, a `/v1` caller, or any other direct runtime invoke.
@@ -2171,7 +2109,13 @@ def _external_transcript(
     Memory has no "which actor owns this session" lookup, so probe a bounded
     candidate set: the traced agent's scoped actors first (unambiguous), then
     the bare "default" actor that the gateway→runtime hop leaves in place.
+    Nothing in Memory (a harness with memory disabled, a runtime-backed agent)
+    and the session's start known: the agent's runtime content logs, the same
+    records StartBatchEvaluation reads.
     """
+    turns: list[dict[str, Any]] = []
+    actor_id: str | None = None
+    origin = "memory"
     try:
         candidates = (
             memory.list_actor_ids(workspace, prefix=f"{agent.id}{memory.SCOPE_SEP}")
@@ -2179,34 +2123,46 @@ def _external_transcript(
             else []
         )
         candidates.append("default")
-        for actor_id in candidates:
+        for candidate in candidates:
             turns = _turns_from_events(
-                memory.list_events(workspace, actor_id, session_id, 100)
+                memory.list_events(workspace, candidate, session_id, 100)
             )
-            if not turns:
-                continue
-            experiment = _experiment_for_session(db, workspace.id, session_id)
-            return {
-                "available": True,
-                "actor_id": actor_id,
-                "agent_id": agent.id if agent else None,
-                "agent_name": agent.name if agent else None,
-                "source": "experiment" if experiment else "external",
-                "origin": "memory",
-                "run_id": None,
-                "experiment_id": experiment.id if experiment else None,
-                "experiment_name": experiment.name if experiment else None,
-                "turns": turns,
-                # Long-term namespaces are keyed on the actor alone, and these
-                # actors are shared across agents/runs — the count would say
-                # nothing about this session (same reason eval skips it).
-                "long_term_records": None,
-            }
+            if turns:
+                actor_id = candidate
+                break
     except Exception:
-        # Memory unreachable / not bootstrapped: this session was already
-        # unattributable, so degrade to the plain empty state.
+        # Memory unreachable / not bootstrapped: the session was already
+        # unattributable — only the content logs below can still say something.
+        turns = []
+    if not turns and agent is not None and started_at is not None:
+        try:
+            log_group = _eval_content_log_group(agent, workspace)
+            if log_group:
+                turns = eval_turns_from_content_logs(
+                    log_group, session_id, started_at, workspace
+                )
+                origin = "logs"
+        except Exception:
+            turns = []
+    if not turns:
         return dict(NOT_PLATFORM_SESSION)
-    return dict(NOT_PLATFORM_SESSION)
+    experiment = _experiment_for_session(db, workspace.id, session_id)
+    return {
+        "available": True,
+        "actor_id": actor_id,
+        "agent_id": agent.id if agent else None,
+        "agent_name": agent.name if agent else None,
+        "source": "experiment" if experiment else "external",
+        "origin": origin,
+        "run_id": None,
+        "experiment_id": experiment.id if experiment else None,
+        "experiment_name": experiment.name if experiment else None,
+        "turns": turns,
+        # Long-term namespaces are keyed on the actor alone, and these
+        # actors are shared across agents/runs — the count would say
+        # nothing about this session (same reason eval skips it).
+        "long_term_records": None,
+    }
 
 
 def session_transcript(
@@ -2214,7 +2170,14 @@ def session_transcript(
     session_id: str,
     workspace: WorkspaceContext,
     agent: Agent | None = None,
+    *,
+    started_at: datetime | None = None,
+    long_term: bool = True,
 ) -> dict[str, Any]:
+    """`started_at` — the session's first span — lets a session no ledger row
+    claims fall back to the agent's content logs; `long_term=False` skips the
+    chat session's long-term record count (two Memory reads a preview row does
+    not show)."""
     row = (
         db.query(ChatSession)
         .filter(
@@ -2227,7 +2190,7 @@ def session_transcript(
     if row is None and run is None:
         # Not chat, not eval — try memory directly (`agent` comes from the
         # session's traces, which is the only agent signal such sessions carry).
-        return _external_transcript(db, session_id, workspace, agent)
+        return _external_transcript(db, session_id, workspace, agent, started_at)
     if row is not None:
         agent = db.get(Agent, row.agent_id)
         # Memory is written under an agent-scoped actor (memory.scoped_actor);
@@ -2303,13 +2266,13 @@ def session_transcript(
             )
             if turns:
                 origin = "logs"
-    # Long-term records only make sense for chat sessions — an eval session's
-    # actor is either single-use or the shared bare "default" one, whose
-    # namespaces aggregate across every agent's runs.
-    long_term = None
-    if row is not None and readable:
+    # Long-term records only make sense for chat sessions — eval traffic all
+    # shares the bare "default" actor, so its namespaces aggregate across
+    # every agent's runs and say nothing about this session.
+    long_term_records = None
+    if row is not None and readable and long_term:
         try:
-            long_term = sum(
+            long_term_records = sum(
                 len(
                     memory.list_records(
                         workspace,
@@ -2331,7 +2294,77 @@ def session_transcript(
         "origin": origin,
         "run_id": run.id if run else None,
         "turns": turns,
-        "long_term_records": long_term,
+        "long_term_records": long_term_records,
+    }
+
+
+# ── Session previews (the task wizard's trajectory picker) ──────────────────
+
+MAX_PREVIEW_SESSIONS = 20
+PREVIEW_WORKERS = 8
+PREVIEW_TEXT_CAP = 600
+
+
+def session_transcripts(
+    sessions: dict[str, datetime | None],
+    workspace: WorkspaceContext,
+    agent_id: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Each session's transcript (no long-term count), read in parallel.
+
+    `sessions` maps a session id to its first span time (the content-log
+    fallback's start, see `session_transcript`). Same sources as the single
+    read — chat ledger, Memory, content logs — one worker per session with its
+    own DB session (a SQLAlchemy Session is not thread-safe). `agent_id`
+    attributes sessions no ledger row claims; another workspace's id is dropped.
+    One session's failed read degrades to an unavailable transcript, never
+    fails the batch.
+    """
+    def one(session_id: str) -> dict[str, Any]:
+        db = SessionLocal()
+        try:
+            agent = db.get(Agent, agent_id) if agent_id else None
+            if agent is not None and agent.workspace_id != workspace.id:
+                agent = None
+            return session_transcript(
+                db, session_id, workspace, agent=agent,
+                started_at=sessions[session_id], long_term=False,
+            )
+        except Exception:
+            return {"available": False, "reason": "read_failed"}
+        finally:
+            db.close()
+
+    ids = list(sessions)
+    if not ids:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(PREVIEW_WORKERS, len(ids))) as pool:
+        return dict(zip(ids, pool.map(one, ids), strict=True))
+
+
+def transcript_preview(session_id: str, transcript: dict[str, Any]) -> dict[str, Any]:
+    """One picker row: the first user input and the last agent reply (a thread
+    list's "first input / last output"), clipped, plus the user-turn count."""
+    turns = (transcript.get("turns") or []) if transcript.get("available") else []
+
+    def texts(role: str) -> list[str]:
+        return [
+            str(turn.get("text") or "").strip()
+            for turn in turns
+            if str(turn.get("role") or "").lower() == role and str(turn.get("text") or "").strip()
+        ]
+
+    inputs, replies = texts("user"), texts("assistant")
+    reason = None
+    if not inputs and not replies:
+        reason = transcript.get("reason") or "no_turns"
+    return {
+        "session_id": session_id,
+        "available": reason is None,
+        "reason": reason,
+        "input": inputs[0][:PREVIEW_TEXT_CAP] if inputs else None,
+        "output": replies[-1][:PREVIEW_TEXT_CAP] if replies else None,
+        "user_turns": len(inputs),
     }
 
 
@@ -2382,7 +2415,6 @@ def evaluate_session(
     # a managed code evaluator whose rules read reference inputs cannot score a live
     # session (no ground truth here) — refused before any span read or Evaluate call
     from app.assistant.evaluation_assets import managed_reference_gap
-    from app.core.db import SessionLocal
 
     _db = SessionLocal()
     try:

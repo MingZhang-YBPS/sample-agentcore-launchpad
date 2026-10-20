@@ -8,9 +8,10 @@ import json
 import logging
 from collections.abc import Iterator
 from contextvars import ContextVar
+from dataclasses import replace
 from typing import Any
 
-from botocore.exceptions import ClientError, ReadTimeoutError
+from botocore.exceptions import BotoCoreError, ClientError, ReadTimeoutError
 
 from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, aws_error_code
@@ -21,10 +22,11 @@ from app.harness_tool_access import (
 )
 from app.models.ledger import Agent
 from app.optimization import canary_harness, canary_service
-from app.services import answer_rules, guardrail, oauth_sessions
+from app.services import answer_rules, guardrail, oauth_sessions, user_gateways
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
+from app.services.agentcore import policy as gateway_api
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import (
     HEARTBEAT_METHODS,
@@ -39,7 +41,7 @@ from app.services.runtime_discovery import (
     require_invoke_capability,
 )
 from app.services.workspace import WorkspaceContext, context_for_workspace
-from app.templates import gateway_support
+from app.templates import context_layer_support, gateway_support
 from app.templates.identity_support import as_user_connections_stored
 
 logger = logging.getLogger(__name__)
@@ -75,13 +77,23 @@ def _pending_force_reauth(agent: Agent, user_id: str | None) -> list[str]:
     spec gate keeps it free for every agent without an as_user tool."""
     if not user_id:
         return []
+    layered = context_layer_support.attached(agent.spec)
     connections = as_user_connections_stored(agent.spec)
-    if not connections:
+    if not connections and not layered:
         return []
     from app.core.db import SessionLocal
 
     db = SessionLocal()
     try:
+        if layered:
+            # the COA tool's Connection is the workspace layer's, not named in the spec
+            from app.services import context_layer
+
+            connections = as_user_connections_stored(
+                agent.spec, context_layer.connection_for(db, agent.workspace_id)
+            )
+        if not connections:
+            return []
         return oauth_sessions.pending_revocations(
             db,
             agent.workspace_id,
@@ -277,29 +289,79 @@ def _agent_workspace(
     return workspace if workspace is not None else context_for_workspace(agent.workspace_id)
 
 
+def _user_trusting_gateways(
+    configured: list[dict[str, Any]], workspace: WorkspaceContext,
+) -> dict[str, str]:
+    """Gateway ARN -> MCP URL for configured Gateways (besides launchpad-gw) that may
+    carry the signed-in user's token this turn.
+
+    A candidate is a deployed ``agentcore_gateway`` tool authenticated with the
+    workspace M2M provider — the only outbound auth the platform maps for a
+    CUSTOM_JWT Gateway. Each one is re-read now, not trusted from deploy time: a
+    Gateway whose authorizer or interceptors changed since deploy stops receiving the
+    user token and keeps its configured M2M identity. A read failure does the same.
+    """
+    resources = workspace.resources
+    provider = resources.get("oauth_provider_arn")
+    result: dict[str, str] = {}
+    for tool in configured:
+        if tool.get("type") != "agentcore_gateway":
+            continue
+        cfg = (tool.get("config") or {}).get("agentCoreGateway") or {}
+        arn = str(cfg.get("gatewayArn") or "")
+        oauth = (cfg.get("outboundAuth") or {}).get("oauth") or {}
+        if not arn or arn == resources.get("gateway_arn") or not provider:
+            continue
+        if oauth.get("providerArn") != provider or arn == resources.get("kb_gateway_arn"):
+            continue
+        parts = arn.split(":")
+        region, gateway_id = parts[3], arn.rsplit("/", 1)[-1]
+        ctx = workspace if region == workspace.region else replace(workspace, region=region)
+        try:
+            gateway = gateway_api.get_gateway(control_client(ctx), gateway_id)
+        except (ClientError, BotoCoreError) as exc:
+            logger.warning("user gateway %s unreadable, keeping M2M identity: %s", arn, exc)
+            continue
+        if gateway.get("gatewayArn") == arn and gateway.get("gatewayUrl") and \
+                user_gateways.trusts_workspace_users(gateway, resources):
+            result[arn] = str(gateway["gatewayUrl"])
+    return result
+
+
 def harness_user_overrides(
-    agent: Agent, workspace: WorkspaceContext, access_token: str,
+    agent: Agent, workspace: WorkspaceContext, access_token: str | None,
+    *, coa_tool: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Pair invocation ToolConfigs with selectors using their actual names."""
+    """Pair invocation ToolConfigs with selectors using their actual names.
+
+    ``access_token`` (the signed-in user's workspace-pool JWT) swaps the user-trusting
+    Gateways; ``coa_tool`` (``context_layer_support.harness_tool``) adds the COA MCP
+    server carrying the member's COA token, and ``@coa`` to the selectors. With a COA
+    tool the deployed configuration is always read back, so the override REPLACES
+    nothing it should keep (KB gateway, registry MCP servers, inline functions)."""
     spec = agent.spec or {}
     explicit = spec.get("allowed_tools")
     configured: list[dict[str, Any]] | None = None
     detail: dict[str, Any] = {}
     has_gateways = any(tool.get("type") == "gateway" for tool in spec.get("tools") or [])
-    if has_gateways or (
+    if coa_tool is not None or has_gateways or (
         explicit is not None and any(p.startswith("@") or "/" in p for p in explicit)
     ):
         # The spec's Gateway label is not its resolved Harness alias. Read the
         # deployed aliases and preserve other Gateways' resolved auth configs.
         detail = hc.get_harness(control_client(workspace), agent.resource_id)
         configured = detail.get("tools") or []
-        tools = hc.user_authenticated_tools(
-            spec, workspace.resources, access_token, configured_tools=configured,
-            workspace_id=workspace.id,
-        )
+        if access_token:
+            tools = hc.user_authenticated_tools(
+                spec, workspace.resources, access_token, configured_tools=configured,
+                workspace_id=workspace.id,
+                user_gateways=_user_trusting_gateways(configured, workspace),
+            )
+        else:  # the COA tool alone: every deployed tool exactly as configured
+            tools = [dict(tool) for tool in configured]
     else:
         tools = hc.user_authenticated_tools(
-            spec, workspace.resources, access_token, workspace_id=workspace.id,
+            spec, workspace.resources, access_token or "", workspace_id=workspace.id,
         )
     if len({tool["name"] for tool in tools}) != len(tools):
         raise ValueError("authenticated Gateway alias conflicts with another configured tool")
@@ -335,7 +397,54 @@ def harness_user_overrides(
         if before.get("type") == "agentcore_gateway" and after.get("type") == "remote_mcp"
     }
     allowed = qualify_remote_selectors(allowed, swapped)
+    if coa_tool is not None:
+        if any(tool["name"] == coa_tool["name"] for tool in tools):
+            raise ValueError(
+                f"a deployed tool is already named {coa_tool['name']!r}, the COA context "
+                "layer's tool name — rename it and re-publish the agent"
+            )
+        tools = [*tools, coa_tool]
+        # one selector exposes all six COA tools (the model sees coa_<tool>);
+        # appended after any remap, so an explicit list keeps its own patterns
+        if context_layer_support.HARNESS_SELECTOR not in allowed:
+            allowed = [*allowed, context_layer_support.HARNESS_SELECTOR]
     return {"tools": tools, "allowedTools": allowed}
+
+
+def harness_turn_overrides(
+    agent: Agent,
+    workspace: WorkspaceContext,
+    *,
+    gateway_access_token: str | None = None,
+    runtime_user_id: str | None = None,
+    console_user: bool = True,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """The per-turn ``InvokeHarness`` overrides: ``{tools, allowedTools}``, ``{}``
+    when the deployed configuration applies unchanged, or ``{"auth_required":
+    notice}`` when the member must consent to COA before the turn can run.
+
+    An agent without a context layer gets exactly what it always got. One with a
+    layer fetches the member's COA token (``context_layer_tokens``) for
+    ``runtime_user_id`` — the signed-in console username — and fails closed with
+    ``identity.as_user_requires_console`` when there is none (``/v1``, evaluation).
+    """
+    if not context_layer_support.attached(agent.spec):
+        if gateway_access_token:
+            return harness_user_overrides(agent, workspace, gateway_access_token)
+        return {}
+    from app.services import context_layer_tokens
+
+    grant = context_layer_tokens.turn_token(
+        workspace, runtime_user_id, console_user=console_user,
+        agent_id=agent.id, session_id=session_id or "",
+    )
+    if isinstance(grant, context_layer_tokens.AuthNeeded):
+        return {"auth_required": context_layer_tokens.auth_notice(grant, agent.id)}
+    return harness_user_overrides(
+        agent, workspace, gateway_access_token,
+        coa_tool=context_layer_support.harness_tool(grant.layer.mcp_url, grant.value),
+    )
 
 
 def _invoke_via_stable_endpoint(
@@ -724,11 +833,21 @@ def _dispatch_invoke(
         harness_kwargs: dict[str, Any] = {}
         if runtime_user_id:
             harness_kwargs["runtime_user_id"] = runtime_user_id
-        if gateway_access_token:
-            overrides = harness_user_overrides(agent, workspace, gateway_access_token)
+        overrides = harness_turn_overrides(
+            agent, workspace, gateway_access_token=gateway_access_token,
+            runtime_user_id=runtime_user_id, console_user=console_user, session_id=session_id,
+        )
+        if "auth_required" in overrides:
+            # the consent the member owes COA: nothing is invoked this turn
+            asks = [overrides["auth_required"]]
+            return {"text": "", "session_id": session_id or hc.new_session_id(),
+                    "auth_required": asks}
+        if overrides:
             harness_kwargs["tools"] = overrides["tools"]
             harness_kwargs["allowed_tools"] = overrides["allowedTools"]
-        route = canary_service.active_canary_route(agent.id)
+        # a COA token only ever travels to COA: never through a canary gateway
+        layered = context_layer_support.attached(agent.spec)
+        route = None if layered else canary_service.active_canary_route(agent.id)
         if route is not None and route.get("kind") == "harness":
             return _invoke_harness_via_canary(
                 route, prompt, session_id, actor_id, workspace, harness_kwargs,

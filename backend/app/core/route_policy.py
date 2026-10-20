@@ -153,6 +153,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/agents/{agent_id}/identity"): MEMBER,
     ("GET", "/api/agents/{agent_id}/mcp"): MEMBER,  # live Gateway read-back
     ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
+    ("GET", "/api/agents/{agent_id}/source"): MEMBER,  # read-only code / harness config
     ("GET", "/api/agents/{agent_id}/conversions"): MEMBER,  # ledger read: runtime twins
     ("DELETE", "/api/agents/{agent_id}"): PERM_AGENT_DELETE,
     ("POST", "/api/agents/{agent_id}/convert"): PERM_AGENT_CONVERT,
@@ -337,6 +338,25 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs"): MEMBER,
     ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): PERM_PROJECT_WRITE,
     ("POST", "/api/knowledge-bases/{kb_id}/query"): PERM_PROJECT_USE,  # retrieval playground
+    # ---- COA context layer: connecting a deployment creates a Connection (a vaulted
+    # client secret) and a workload identity, so it is ADMIN; a member's own
+    # consent, revocation and COA reads (as that member) are participation in the
+    # project (project.use — the playground spends its budget) ----
+    ("GET", "/api/context-layer"): MEMBER,
+    ("PUT", "/api/context-layer"): ADMIN,
+    ("DELETE", "/api/context-layer"): ADMIN,
+    ("POST", "/api/context-layer/authorize"): PERM_PROJECT_USE,
+    ("POST", "/api/context-layer/revoke"): PERM_PROJECT_USE,
+    # the shared demo account: any member may reveal it (each reveal is logged)
+    ("GET", "/api/context-layer/demo-account"): MEMBER,
+    ("POST", "/api/context-layer/demo-account/reveal"): PERM_PROJECT_USE,
+    ("GET", "/api/context-layer/namespaces"): MEMBER,
+    ("GET", "/api/context-layer/namespaces/{namespace_id}"): MEMBER,
+    ("GET", "/api/context-layer/namespaces/{namespace_id}/sources"): MEMBER,
+    ("GET", "/api/context-layer/namespaces/{namespace_id}/metrics"): MEMBER,
+    ("GET", "/api/context-layer/namespaces/{namespace_id}/ontology"): MEMBER,
+    ("GET", "/api/context-layer/health"): MEMBER,
+    ("POST", "/api/context-layer/playground"): PERM_PROJECT_USE,
     # ---- governance ----
     # the workspace's PII guardrail preset (T12): reading it is a member's business
     # (the wizard shows whether it exists); creating the real Bedrock resource is not
@@ -409,10 +429,16 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/queue"): MEMBER,
     ("GET", "/api/eval/runs"): MEMBER,
     ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
+    # agent scorecards: ledger reads. The two-run evaluator compare lives at
+    # `/runs/compare-pair`: `/runs/compare` is V3's fix ladder (`?runs=`, dlc router)
+    ("GET", "/api/eval/scorecard"): MEMBER,
+    ("GET", "/api/eval/runs/compare-pair"): MEMBER,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
     ("GET", "/api/eval/runs/{run_id}/results"): MEMBER,
     ("POST", "/api/eval/runs/{run_id}/stop"): PERM_EVAL_RUN,
     ("POST", "/api/eval/runs/{run_id}/recheck"): PERM_EVAL_RUN,
+    # starts a new run of the same scope — the same grant as POST /runs
+    ("POST", "/api/eval/runs/{run_id}/rerun"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/{run_id}/recommendation-inputs"): MEMBER,
     ("GET", "/api/eval/runs/{run_id}/recommendations"): MEMBER,
     # starts billable AWS recommendation jobs — same revocable grant as a run
@@ -435,6 +461,33 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/online/{config_id}/reports"): MEMBER,
     ("POST", "/api/eval/online/{config_id}/reports"): PERM_EVAL_RUN,
     ("GET", "/api/eval/online/{config_id}/reports/{batch_id}"): MEMBER,
+    # ---- coding agent: the platform-owned coding runtime. Its status is a member
+    # read; install/repair and uninstall create or delete the workspace's runtime +
+    # role on an operator's explicit request (like system presets), so ADMIN ----
+    ("GET", "/api/coding/runtime"): MEMBER,
+    ("POST", "/api/coding/runtime/install"): ADMIN,
+    ("DELETE", "/api/coding/runtime"): ADMIN,
+    # ---- coding agent: a member's own repos. Every by-id route resolves through
+    # the private-owner choke point (app/coding/repos.repo_in: someone else's
+    # repo is 404 in every visibility mode); admins reach other members' repos
+    # only through `?all=1` and DELETE. Writes are participation in the caller's
+    # project (project.use: a turn spends its budget); deploying hands the repo to
+    # the byoc pipeline, so it carries the same permission as any deploy ----
+    ("GET", "/api/coding/repos"): MEMBER,
+    ("POST", "/api/coding/repos"): PERM_PROJECT_USE,
+    ("GET", "/api/coding/repos/{repo_id}"): MEMBER,
+    ("PATCH", "/api/coding/repos/{repo_id}"): PERM_PROJECT_USE,
+    ("DELETE", "/api/coding/repos/{repo_id}"): PERM_PROJECT_USE,
+    ("POST", "/api/coding/repos/{repo_id}/turns"): PERM_PROJECT_USE,
+    ("POST", "/api/coding/repos/{repo_id}/interrupt"): PERM_PROJECT_USE,
+    ("GET", "/api/coding/repos/{repo_id}/events"): MEMBER,
+    ("GET", "/api/coding/repos/{repo_id}/tree"): MEMBER,
+    ("GET", "/api/coding/repos/{repo_id}/file"): MEMBER,
+    ("PUT", "/api/coding/repos/{repo_id}/file"): PERM_PROJECT_USE,
+    ("GET", "/api/coding/repos/{repo_id}/changes"): MEMBER,
+    ("GET", "/api/coding/repos/{repo_id}/diff"): MEMBER,
+    ("POST", "/api/coding/repos/{repo_id}/download"): PERM_PROJECT_USE,  # a read; POST body
+    ("POST", "/api/coding/repos/{repo_id}/deploy"): PERM_AGENT_DEPLOY,
     # ---- skill lab: local task assets/task sets + Runtime-backed jobs ----
     ("GET", "/api/skill-lab/status"): MEMBER,
     ("POST", "/api/skill-lab/task-assets"): PERM_PROJECT_WRITE,
@@ -708,6 +761,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/observability/sessions"): MEMBER,
     ("GET", "/api/observability/sessions/{session_id}"): MEMBER,
     ("GET", "/api/observability/sessions/{session_id}/transcript"): MEMBER,
+    ("POST", "/api/observability/session-previews"): PERM_PROJECT_USE,  # a read; POST body
     # on-demand Evaluate: a judge inference, persists nothing
     ("POST", "/api/observability/sessions/{session_id}/evaluate"): PERM_PROJECT_WRITE,
     ("GET", "/api/observability/traces"): MEMBER,
@@ -942,6 +996,9 @@ PROD_PROTECTED: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/agents"),  # create / deploy
         ("POST", "/api/agents/discovery/import"),
         ("POST", "/api/agents/uploads"),  # BYOC artifact staging
+        # the Agent IDE's deploy handoff creates / re-publishes a byoc Agent through
+        # start_create / republish_agent — POST /api/agents and redeploy by another door
+        ("POST", "/api/coding/repos/{repo_id}/deploy"),
         ("DELETE", "/api/agents/{agent_id}"),
         ("POST", "/api/agents/{agent_id}/convert"),
         ("POST", "/api/agents/{agent_id}/redeploy"),  # edit = redeploy
@@ -1885,6 +1942,12 @@ _DATA_ROUTES = (
     ("POST", "/api/system-agents/{preset_key}/install"),
     ("POST", "/api/system-agents/{preset_key}/skill-registration"),
     ("DELETE", "/api/system-agents/{preset_key}"),
+    # the Agent IDE's coding runtime + role, and the connected COA deployment (its
+    # Connection and console workload identity): workspace runtime, like presets
+    ("POST", "/api/coding/runtime/install"),
+    ("DELETE", "/api/coding/runtime"),
+    ("PUT", "/api/context-layer"),
+    ("DELETE", "/api/context-layer"),
     ("POST", "/api/memory/resources/{memory_id}/adopt"),
     ("POST", "/api/governance/guardrail"),
     ("PUT", "/api/release-policies/{workspace_id}"),

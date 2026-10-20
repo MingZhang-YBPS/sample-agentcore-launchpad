@@ -46,8 +46,10 @@ class _Calls:
 class StubControl(_Calls):
     """bedrock-agentcore-control with a configurable account."""
 
-    def __init__(self, *, gateways=(), targets=None, api_key_providers=(), oauth_providers=(),
-                 engines=(), engine_tags=None, policies=None, attached=None):
+    def __init__(
+        self, *, gateways=(), targets=None, api_key_providers=(), oauth_providers=(),
+        engines=(), engine_tags=None, policies=None, attached=None, workload_identities=(),
+    ):
         super().__init__()
         self.engines = list(engines)
         self.engine_tags = dict(engine_tags or {})  # engine arn -> tags
@@ -57,6 +59,7 @@ class StubControl(_Calls):
         self.targets = dict(targets or {})  # gateway_id -> [target summaries]
         self.api_key_providers = list(api_key_providers)
         self.oauth_providers = list(oauth_providers)
+        self.workload_identities = list(workload_identities)
 
     # --- listings -----------------------------------------------------------
     def list_gateways(self, **kwargs):
@@ -98,6 +101,13 @@ class StubControl(_Calls):
     def list_memories(self, **kwargs):
         return {"memories": []}
 
+    def list_workload_identities(self, **kwargs):
+        # two pages, to prove the walk follows nextToken
+        if kwargs.get("nextToken") is None and len(self.workload_identities) > 1:
+            return {"workloadIdentities": self.workload_identities[:1], "nextToken": "p2"}
+        start = 1 if kwargs.get("nextToken") else 0
+        return {"workloadIdentities": self.workload_identities[start:]}
+
     def list_agent_runtimes(self, **kwargs):
         return {"agentRuntimes": []}
 
@@ -113,6 +123,9 @@ class StubControl(_Calls):
 
     def delete_oauth2_credential_provider(self, **kwargs):
         return self._record("delete_oauth2_credential_provider", **kwargs)
+
+    def delete_workload_identity(self, **kwargs):
+        return self._record("delete_workload_identity", **kwargs)
 
 
 class StubRegistryControl:
@@ -414,3 +427,76 @@ def test_delete_policy_engine_removes_policies_first(monkeypatch):
     assert control.ops("delete_policy_engine") == [{"policyEngineId": "pe-1"}]
     order = [op for op, _ in control.calls]
     assert order.index("delete_policy_engine") > order.index("delete_policy")
+def test_collect_targets_sweeps_only_console_workload_identities(monkeypatch):
+    """The COA context layer's console workload identities, across pages; a
+    runtime's own workload identity (named after the runtime) is never matched."""
+    control = StubControl(workload_identities=[
+        {"name": "launchpad-console-default", "workloadIdentityArn": "arn:wi/console"},
+        {"name": "hr_agent_ab12cd-Xy12345678", "workloadIdentityArn": "arn:wi/runtime"},
+        {"name": "launchpad-console-acct2", "workloadIdentityArn": "arn:wi/console2"},
+    ])
+    _wire(monkeypatch, control, StubIam())
+    targets = teardown.collect_targets("us-west-2")
+    assert [t for t in targets if t[0] == "console-workload"] == [
+        ("console-workload", "launchpad-console-default", "arn:wi/console"),
+        ("console-workload", "launchpad-console-acct2", "arn:wi/console2"),
+    ]
+
+    teardown.delete_target("console-workload", "launchpad-console-default", "us-west-2")
+    assert control.ops("delete_workload_identity") == [{"name": "launchpad-console-default"}]
+
+
+class _RuntimesControl(StubControl):
+    """An account holding the Skill Lab worker, the coding runtime and a member agent."""
+
+    def __init__(self, gets_until_gone: int = 1):
+        super().__init__()
+        self.gets_until_gone = gets_until_gone
+
+    def list_agent_runtimes(self, **kwargs):
+        return {"agentRuntimes": [
+            {"agentRuntimeName": "launchpad_skill_lab_worker", "agentRuntimeId": "sl-1",
+             "agentRuntimeArn": "arn:rt/sl-1"},
+            {"agentRuntimeName": "launchpad_coding_runtime", "agentRuntimeId": "cr-1",
+             "agentRuntimeArn": "arn:rt/cr-1"},
+            {"agentRuntimeName": "member_agent", "agentRuntimeId": "ma-1",
+             "agentRuntimeArn": "arn:rt/ma-1"},
+        ]}
+
+    def delete_agent_runtime(self, **kwargs):
+        return self._record("delete_agent_runtime", **kwargs)
+
+    def get_agent_runtime(self, **kwargs):
+        self._record("get_agent_runtime", **kwargs)
+        self.gets_until_gone -= 1
+        if self.gets_until_gone < 0:
+            from botocore.exceptions import ClientError
+
+            raise ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "GetAgentRuntime")
+        return {"status": "DELETING"}
+
+
+class _RolesIam(StubIam):
+    def get_role(self, RoleName):
+        if RoleName in ("launchpad-skill-lab-worker", "launchpad-coding-runtime"):
+            return {"Role": {"Arn": f"arn:aws:iam::111122223333:role/{RoleName}"}}
+        raise Exception("NoSuchEntity")
+
+
+def test_collect_targets_includes_the_coding_runtime_before_its_role(monkeypatch):
+    control = _RuntimesControl()
+    _wire(monkeypatch, control, _RolesIam())
+    kinds = [(kind, ident) for kind, ident, _ in teardown.collect_targets("us-west-2")]
+    assert ("coding-runtime", "cr-1") in kinds
+    assert ("coding-role", "launchpad-coding-runtime") in kinds
+    assert kinds.index(("coding-runtime", "cr-1")) < kinds.index(
+        ("coding-role", "launchpad-coding-runtime"))
+    assert not [k for k in kinds if k[1] == "ma-1"], "member agents are out of scope"
+
+
+def test_delete_coding_runtime_waits_until_it_is_gone(monkeypatch):
+    control = _RuntimesControl(gets_until_gone=2)
+    _wire(monkeypatch, control, _RolesIam())
+    teardown.delete_target("coding-runtime", "cr-1", "us-west-2")
+    assert control.ops("delete_agent_runtime") == [{"agentRuntimeId": "cr-1"}]
+    assert len(control.ops("get_agent_runtime")) == 3  # DELETING, DELETING, gone

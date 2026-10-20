@@ -44,9 +44,11 @@ from app.services import (
     agent_identity,
     agent_names,
     agent_project,
+    agent_source,
     agent_templates,
     agent_tools,
     byoc_uploads,
+    context_layer,
     creators,
     custom_tools,
     identity_providers,
@@ -81,6 +83,7 @@ from app.services.visibility import Viewer, require_viewer
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.system_agents import service as system_agents
 from app.system_agents.presets import is_reserved_name
+from app.templates import context_layer_support
 
 logger = logging.getLogger("launchpad.agents")
 
@@ -226,13 +229,16 @@ def _validate_tool_auth(db: Session, spec: AgentSpec, ws: WorkspaceScope) -> Non
     """Every tool auth block names a live Connection of the declared kind.
 
     Only reaches AWS when some tool carries auth, so an ordinary deploy's
-    request path is unchanged."""
+    request path is unchanged. A spec attaching the COA context layer needs the
+    workspace to have one connected (``context_layer.not_connected``)."""
     if any(tool.auth is not None for tool in spec.tools):
         identity_providers.validate_tool_auth(control_client(ws.context), spec)
     if spec.model_provider is not None:
         _validate_model_provider(control_client(ws.context), spec)
     if any(tool.auth is not None for tool in spec.tools) or spec.model_provider is not None:
         _require_project_connections(db, spec, ws)
+    if spec.context_layer is not None:
+        context_layer.require_connected(ws.id)
     if spec.inbound_auth is not None:
         # A spec-pinned JWT config gets the same save-time discovery probe as
         # the workspace default, so a bad URL fails the request, not the deploy.
@@ -361,6 +367,22 @@ def create_agent(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    return start_create(
+        db, ws, spec, request=request, creator=Creator.of_request(request), viewer=viewer,
+    )
+
+
+def start_create(
+    db: Session, ws: WorkspaceScope, spec: AgentSpec, *, request: Request,
+    creator: Creator | None, viewer: Viewer = Viewer.ALL,
+) -> dict[str, Any]:
+    """The create guards + a deploy job for a new agent stamped with ``creator`` —
+    shared by ``POST /api/agents`` and the coding agent's deploy handoff
+    (``app/coding/deploy.py``), so an agent deployed from the coding console is an
+    ordinary governed Agent by construction: filed under a business project, inside
+    its quota and monthly budget. ``request`` carries that project (body project_id
+    or X-Project) and the caller's identity. ``viewer`` decides which KB / memory
+    pins the caller may use and whether a name holder's id is disclosed."""
     # the business project the agent is filed under (body project_id or X-Project),
     # validated before anything else — it becomes the request's project from here on
     project_id = agent_project.resolve_agent_project(
@@ -419,7 +441,7 @@ def create_agent(
     )
     # the creating account (ownership, display and TTFA); server-derived, never from
     # the spec — `owner` stays the provenance label
-    creators.stamp(agent, Creator.of_request(request))
+    creators.stamp(agent, creator)
     db.add(agent)
     db.flush()
     # counted again with this row in: a concurrent creator of the last slot loses here
@@ -799,6 +821,33 @@ def get_agent_mcp(
     return mcp_servers.server_status(ws.context, agent)
 
 
+@router.get("/agents/{agent_id}/source")
+def get_agent_source(
+    agent_id: str,
+    path: str | None = None,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """Read-only CODE view: the code AWS runs (or a Harness's configuration).
+
+    ``path`` reads one listed file the response budget left out. 409
+    ``agent.source_unavailable`` when the platform holds no code for the agent
+    (see ``services/agent_source``)."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    latest = _latest_deployment(db, agent.id)
+    return agent_source.agent_source(
+        control_client(ws.context),
+        ws.context.client("s3"),
+        ws.context,
+        agent,
+        path=path,
+        deployment_status=latest.status if latest else None,
+    )
+
+
 @router.get("/agents/{agent_id}/identity")
 def get_agent_identity(
     agent_id: str,
@@ -1123,6 +1172,7 @@ class InboundAuthSwitch(BaseModel):
 def switch_inbound_auth(
     agent_id: str,
     body: InboundAuthSwitch,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -1163,7 +1213,10 @@ def switch_inbound_auth(
             )},
             status_code=422,
         ) from exc
-    return _start_redeploy(db, ws, agent, spec, viewer=viewer)
+    return _start_redeploy(
+        db, ws, agent, spec, actor=require_identity(request).username,
+        note="inbound auth switched", viewer=viewer,
+    )
 
 
 @router.post("/agents/{agent_id}/convert", status_code=202)
@@ -1198,6 +1251,15 @@ def convert_agent(
         raise NotFoundError("agent.not_found", "agent not found")
     system_agents.refuse_system_mutation(source, "convert")
     assistant_purge.refuse_while_clearing(source.id, "convert")
+    if context_layer_support.attached(source.spec):
+        # the exported code carries no COA tool, and a code_bundle spec cannot attach one
+        raise AppError(
+            "context_layer.unsupported_method",
+            "an agent with a COA context layer cannot be converted to a runtime — the "
+            "exported code would lose the context layer",
+            {"reason": "conversion"},
+            status_code=422,
+        )
     if source.method != "harness" or source.status != "active":
         raise AppError(
             "agent.convert_unsupported",
@@ -1282,6 +1344,7 @@ def convert_agent(
 def invoke_agent(
     agent_id: str,
     req: InvokeRequest,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
@@ -1294,7 +1357,10 @@ def invoke_agent(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
     started = time.monotonic()
-    extra = {"attachments": prepared} if prepared else {}
+    extra: dict[str, Any] = {"attachments": prepared} if prepared else {}
+    if context_layer_support.attached(agent.spec):
+        # a COA context layer acts as the signed-in member, never as a client-chosen actor
+        extra["runtime_user_id"] = require_identity(request).username
     # A sync request sends nothing until the answer exists: past the deadline it
     # answers a readable 504 naming the session and the streaming route instead
     # of being cut off by the proxy (services/sync_deadline.py).
@@ -1314,6 +1380,24 @@ def invoke_agent(
         if upstream is None:
             raise
         raise upstream from exc
+    coa_asks = [
+        ask for ask in result.get("auth_required") or []
+        if ask.get("tool") in (context_layer_support.GRANT_TOOL, context_layer_support.TOOL_NAME)
+    ]
+    if coa_asks and context_layer_support.attached(agent.spec):
+        # this response has no consent card: name the missing consent instead of
+        # answering with the empty text of a turn that never reached COA
+        raise AppError(
+            "context_layer.authorization_required",
+            "authorize Launchpad to act as you in COA first (from Chat or the Context "
+            "Layer page), then retry",
+            {
+                "authorization_url": coa_asks[0].get("url"),
+                "connection": coa_asks[0].get("provider"),
+                "agent_id": agent.id,
+            },
+            status_code=409,
+        )
     return InvokeResponse(
         answered_by=result.get("answered_by", "model"),
         text=result["text"],

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.agent import AgentSpec
+from app.templates import context_layer_support
 
 GATEWAY_TEMPLATE = Path(__file__).with_name("gateway_tools.py.tmpl")
 
@@ -88,14 +89,17 @@ def runtime_user_id(spec: Mapping[str, Any] | None, actor_id: str = "default") -
 
     Also sent when any tool carries an ``auth`` block (tool-level outbound auth,
     ``templates/identity_support``): the token exchange those tools perform needs
-    the same Runtime-injected workload token the Gateway client uses, and when
-    the spec has a ``model_provider`` (SB-2; its key is read the same way).
+    the same Runtime-injected workload token the Gateway client uses; when the
+    spec has a ``model_provider`` (SB-2; its key is read the same way); and for a
+    runtime that attaches the COA context layer, whose deploy expands it into one
+    such tool (``context_layer_support``). A Harness reaches COA through the
+    backend's console workload instead, so its spec does not count.
     """
     tools = (spec or {}).get("tools") or []
     needs_token = any(
         isinstance(tool, dict) and (tool.get("type") == "gateway" or tool.get("auth"))
         for tool in tools
-    )
+    ) or ((spec or {}).get("method") != "harness" and context_layer_support.attached(spec))
     # SB-2: a direct model provider reads its api_key through the token vault,
     # which needs the same Runtime-injected workload token.
     needs_token = needs_token or bool((spec or {}).get("model_provider"))

@@ -63,7 +63,7 @@ English: [architecture.md](architecture.md)
 | **Registry** | GA 的 `agent-registry` 服务托管 `launchpad-registry`，编目 A2A Agent、MCP 服务器与 AGENT_SKILLS。`services/agentcore/registry.py` 把 GA 的 `AGENT/MCP/SKILL` 与 `data/dataSchemaVersion` 模型翻译成稳定的 Launchpad descriptor 契约；其他 AgentCore 服务仍在 `bedrock-agentcore` 之下。GA 的唯一性约束是 `(name, recordVersion)`，因此新建记录使用带类型后缀的初始版本（`1.0.0-a2a`、`1.0.0-mcp`、`1.0.0-skill`），内容编辑会保留该后缀。Registry 可用时，每次部署都会自动创建并提交一条 A2A 记录。在 SCP/IAM 策略拒绝 Registry 初始化的账号中，bootstrap 会把该能力记为不可用，仅属于 Registry 的 API 返回 503，部署管道只跳过 register 阶段；Runtime/Harness 部署仍然可用。控制台也支持手动注册——外部远程 MCP 服务器(streamable-http URL)与技能(SKILL.md → 制品桶)——并驱动完整生命周期:提交 → 批准/驳回(REJECTED 仍可改判批准)、下架(终态——已实测,之后只能删除)、删除。注册中心同时是**挂载目录**:`GET /api/registry/attachables` 只向创建向导提供 APPROVED 的 MCP/技能记录,MCP 记录按 URL 分流——共享网关 URL 挂为 `agentcore_gateway`(OAuth),其他 URL 挂为 `remote_mcp`(暂不带鉴权)——技能按其 s3 路径经 `skills[{path}]` 挂载。治理页可以把一个既有的 AgentCore Gateway 导入为**一条** MCP 记录，其中包含 Gateway 端点与它完整的已发现工具目录；旧的按 target 逐条的记录会一直保留，直到该 Gateway 记录 APPROVED 之后被显式下架。Registry 的批准控制的是目录可见性，而不是 Gateway 授权。`GET /api/registry/attachables` 会把目录状态与 Harness 可挂载性分开报告，并在服务端解析 Gateway 鉴权方式。对于已部署 Launchpad A2A Agent 所拥有的 A2A 记录，Registry 抽屉的「实时名片」会读取运行时此刻实际提供的名片（`GET /api/registry/records/{id}/live-agent-card` → 以账本中的 `Agent.arn` 调用数据面 `GetAgentCard`，AWS 为此打开的会话随即结束），并与记录中存储的名片做对比；实时名片不落账本——AWS 始终是事实来源。两份名片的 `version` 都来自同一个平台常量——`services/agentcore/registry.py` 中的 `A2A_CARD_VERSION`：A2A 运行时模板在打包阶段把它传给 Strands `A2AServer(version=...)`，`build_a2a_card` 在注册阶段把它写进记录，因此两边从构造上就是一致的。它**不是** AgentCore 运行时版本（`Agent.version`，显示在「版本与端点」面板）——运行时版本由 Create/UpdateAgentRuntime 在模板渲染完成之后才分配，名片无法携带。在该常量出现之前发布的 A2A Agent 仍会提供 Strands 默认的 `0.0.1`，而记录里是 `1`；对比会持续标出差异，直到下一次重新发布（重新渲染 + 重新注册）让两边收敛。Registry 页面对同一个注册中心提供两种视图：**发布者列表**（`GET /api/registry/records` → 控制面 `ListRegistryRecords`，包含所有状态的全部记录）与**消费者视图**（`?view=discoverable`，`GET /api/registry/records/discoverable` → 数据面 `ListDiscoverableRegistryRecords`，按 `nextToken` 翻页到底）——即拥有数据面访问权限的消费者或 Agent 实际能发现的记录。发现摘要不含 `descriptors`，点开某一行才读取完整记录。在同一页面会话中拉取过消费者视图后，凡不在其中的控制面记录都会打上「不可发现」标签（DRAFT / PENDING_APPROVAL / REJECTED / DEPRECATED 是预期情形）——两份列表的差异才是这项功能的意义。 |
 | **Policy** | 挂接到网关的 Cedar 策略引擎,初始挂载模式由操作员选择(默认 `ENFORCE`,可选 `LOG_ONLY`);deny 决策会带上作出判定的 policy id。Harness 的一次调用在调用时被拒(带 `context.input` 条件的规则;不带条件的拒绝会直接把工具从 `tools/list` 中过滤掉)时,Chat 识别其返回的错误 `toolResult`(`services/policy_denials.py`,与 Policy Test 共用),推送 `policy_denied`,V2 Chat 在 as_user 授权卡片旁显示策略拦截卡片,并保存为 `policy` 历史行;ZIP Runtime 暂不转发工具结果。支持 NL → Cedar 策略生成。引用已被删除的引擎时,治理页面显式展示失效引用而不是报错,策略变更返回 409,创建并挂载会替换该引用。 |
 | **Evaluation** | 基于 CloudWatch trace 的真实 `StartBatchEvaluation` / insights。运行范围三选一:**数据集**(回放条目——多轮 scenario 在同一 session 内顺序回放)、显式 **session id 列表**、或**时间窗口**(`lookback_hours` 1–336——被动模式:不产生新调用,用 `filterConfig.timeRange` 圈定既有流量)。14 个通用提示词模板评估器(12 个 trace/session 级和 2 个普通工具调用级)、2 个技能 `TOOL_CALL` 提示词模板评估器,外加 3 个仅限真值的程序化 `Builtin.Trajectory*Match` session 级匹配器(仅当数据集 scenario 定义了 `expected_trajectory` 时可选),以及在 `?view=evaluators` 子页支持完整 CRUD 的**自定义评估器**，共三种定义——**LLM 评审**（`llmAsAJudge`：带占位符的指令、数值量表、Bedrock 评审模型）、**派生**（`derived`：在所选模型上运行某个 Builtin/ThirdParty 基础评估器的提示词）与**代码评估器**（`codeBased.lambdaConfig`：位于 workspace 同区域的 Lambda 函数 ARN 加 1–300 秒超时，默认 60；没有指令、量表与模型）。任何定义在 `CreateEvaluator` 上都必须带 `level`。评审模型默认 `global.openai.gpt-6-sol`（LLM 评审与派生评估器，控制台与助手评估资产均如此）；`CreateEvaluator`/`UpdateEvaluator` 会以固定的 `max_output_tokens=10` 试调模型，而 GPT-6 要求 ≥ 16（显式设置 `inferenceConfig.maxTokens` 也不改变该试调），因此仅对这一种 `ValidationException` 改用 `global.anthropic.claude-sonnet-5-5` 重试一次，并在返回的 `model_fallback`（`{requested, used, reason}`）中说明——助手的资产物化会在重试前把回退信息及其独立的 client token 记到资源上，恢复中断的操作时重建的请求与之完全一致。控制台详情投影带 `definition: judge|derived|code`；`UpdateEvaluator` 为全量配置替换，因此更新载荷必须与评估器自身的类型一致——用评审载荷更新代码评估器（或任何跨类型组合）会被 `evaluator.definition_mismatch` 拒绝，而不是被静默转换。代码评估器的 Lambda 接收 `{schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs, evaluationTarget}`，返回 `{label, value?, explanation?}` 或 `{errorCode, errorMessage}`（限制 300 秒 / 6 MB）；控制台**不管理其 IAM**——批量/在线运行作为 `evaluationExecutionRoleArn` 传入的评估执行角色需要对该函数拥有 `lambda:InvokeFunction` + `lambda:GetFunction` 权限，且函数的资源策略须允许 `bedrock-agentcore.amazonaws.com`，两点都以提示形式写在 ARN 字段下方。代码评估器在所有可选自定义评估器的地方（批量运行、实验、在线配置）均可选用。账号列举失败时（spoke 角色上 `ListEvaluators` 被拒、限流或非 AWS 错误），`GET /api/eval/evaluators` 仍返回内置评估器，并附加 `custom_unavailable: {code, message}`（映射后的 `aws.*` / `workspace.assume_role_failed` 代码或 `evaluators.list_failed`，消息为通用文案——绝不回显原始 AWS 文本），并记录一次 warning 日志；评估器页面以横幅、V2 选择器以行内提示展示，列举失败绝不会被当成账号没有自定义评估器。洞察运行可在三种分析类型(失败归因/用户意图/执行摘要)中任选子集。数据集以 devguide scenario 形式存于 SQLite(`?view=datasets` 子页:scenario 编辑器、JSON/JSONL 导入),一键单向同步为 AWS Dataset 资源(`AGENTCORE_EVALUATION_PREDEFINED_V1`):首次同步创建数据集(`CreateDataset`),之后每次同步都原地编辑该数据集的**草稿(DRAFT)**(`ListDatasetExamples` → `DeleteDatasetExamples` → `AddDatasetExamples`,每步经 `UPDATING` 轮询到 `ACTIVE`),因此数据集 id 与已发布版本得以保留;**发布版本**(`CreateDatasetVersion`)把草稿快照为不可变的编号版本,并把 `draftStatus` 从 `MODIFIED` 翻为 `UNMODIFIED`。行上的 `cloud` blob 缓存 id/ARN/状态以及 `draft_status`、`example_count` 与版本列表(`ListDatasetVersions`);仅云端的数据集以只读方式展示同样信息并同样可发布,单个已发布版本可删除(带 `datasetVersion` 的 `DeleteDataset`)。云端数据集运行可**固定到某个已发布版本**(`dataset_version`,在创建运行行之前先对照 `ListDatasetVersions` 校验;随后 `GetDataset` 与 `ListDatasetExamples` 读取该快照,回放的 scenario 与真值即该版本的内容);默认使用草稿,固定的版本记录在运行上并在运行列表显示为 `· v<N>`。已记录的副本若 AWS 已不认识(`ResourceNotFoundException`)或已经控制台删除,下次同步会重新创建;scenario 真值(断言/期望回复/期望轨迹)经 `evaluationMetadata.sessionMetadata` 注入批量评估。数据集场景调用遇到上游偶发错误(流中途的 `runtimeClientError` / `internalServerException`、限流、5xx,或 Harness 循环在工具步骤后中断、没有作答——stop reason 为 `tool_result` / `tool_use` 的 `harness.incomplete_response`)时,会在新会话中重放该场景,最多再试 `TRANSIENT_SCENARIO_RETRIES`(2)次,之后才让运行失败;Harness 的预算停止(超时、执行上限)不重试,失败的运行会注明场景。**模拟用户**场景例外：SDK 执行器会吞掉 Agent 调用的异常，因此 `simulation.run_simulated_scenario` 重新抛出原始异常（Harness 超时于是同样重放一次），重试后仍失败的人设场景会被**跳过**——记入 `scenario_failures`（`[{scenario_id, retries, code, error}]`，V2 任务详情显示提示），其余人设照常运行并计分；只有没有任何场景产出会话时运行才失败（2026-10-10 实测：一次 Harness GPT-6 调用 600 秒未输出任何 token，曾让一次运行的六个人设全部作废）。V2 任务向导可选择模拟用户数据集，选中后需指定扮演用户的模型（`actor_model_id`）。账户单批次锁与队列语义不变。操作员可在运行页**停止**任意活跃运行(`POST /api/eval/runs/{id}/stop`):批次已在 AWS 上存在的运行用 `StopBatchEvaluation` 停止(STOPPING → STOPPED——已评判的会话保留结果,轮询器记为部分分数),仍在排队的运行在到达 AWS 之前于本地取消,正在回放数据集的运行在提示词之间停止且不会调用 `StartBatchEvaluation`。三种情形都以终态 `stopped` 结束(绝不记为 `failed`),原因为「stopped by operator」;不暴露 `DeleteBatchEvaluation`。运行行只保存每个评估器的**平均分**(`evaluatorSummaries.statistics.averageScore`,并带上它覆盖的评分条数 `count` = `totalEvaluated`;AWS 对代码评估器不给 `statistics`,运行结束时改从批次结果日志流计算该评估器的均值);架构助手下一步卡片显示的是按极性归一化、按条数加权的均分(`runMeanScore`),与任务详情按全部结果计算的归一化均分一致;**每个分数背后评审模型给出的理由**只存在于批次自己的结果日志流中(`GetBatchEvaluation.outputConfig.cloudWatchConfig` → `/aws/bedrock-agentcore/evaluations/batch-evaluations/results/default` 下的 `run-<batchId>`,`gen_ai.evaluation.result` 记录),Runs 页面在选中终态运行时按需读取(`GET /api/eval/runs/{id}/results`,绝不持久化),渲染为「会话结果」面板 —— 按会话分组,每条评审一行(评估器、层级、得分、标签、可展开的理由;span 级评估器每次工具调用一行),并链接到可观测性的会话详情。 **在线评估**(`?view=online`):每个 agent + evaluator 集合对应一个 AgentCore `OnlineEvaluationConfig`,按采样比例(0.01–100 %)在会话空闲超时后对真实会话打分,不产生新的调用;结果写入 `/aws/bedrock-agentcore/evaluations/results/<configId>`(同时以 EMF 指标落到 `Bedrock-AgentCore/Evaluations`),控制台用 Logs Insights 聚合(每个 evaluator 的均值 / 标签分布 / 趋势 / 带 judge 解释的最近记录)。页面列出 workspace 账号内**全部**配置并按归属分类:`agent`(本控制台创建,可全操作)、`experiment`(`exp_*`/`can_*` 实验 arm,只读)、`external`(仅暂停/恢复/删除)。Update 始终发送完整 `rule`(AWS 整体替换),从未被调用过的 agent 创建时会被拒绝(AWS 校验日志组存在)。 配置有两种**模式**:`scores`(evaluators)或 `insights`(1–3 种洞察类型 + 可选的 DAILY/WEEKLY/MONTHLY 聚类——AWS 不允许同一配置两者兼有);insights 配置产出**报告**(以配置为数据源的批量评估:AWS 按聚类周期定期生成,或从控制台「立即出报告」经运行队列发起),通过 `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource` 归属,并复用运行页的洞察聚类树渲染;报告只覆盖该配置采样过的会话。 在线评分同时出现在查看会话的地方:可观测性的会话详情带一个「在线评估」区块(该会话在所有配置下的结果记录,按归属分类,失败降级——结果查询失败不会影响追踪),概览页新增 **在线质量 · 24h** tile(对 workspace 内 agent 持有配置做极性归一、按计数加权的均值,120 秒缓存,没有配置时不调用 AWS)。二者都通过 `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` 一次读取全部结果日志组。第三种**即时**模式从可观测会话详情同步调用数据面 `Evaluate` API 对单个会话打分(SCORE NOW:≤5 个 evaluator、每次调用 ≤10 条结果、不持久化)——用于试跑自定义 evaluator 或排查某个可疑会话;需要留档的分数仍由批量运行给出。 **基于运行的优化建议**（V2 任务详情）：已完成的运行以其会话为范围启动 `StartRecommendation`：系统提示词任务以其批次作为 `agentTraces.batchEvaluation`（若运行中有红线测试会话——架构助手标为 `adversarial` 的黄金测试，如注入、索取未公开信息、施压要求越界建议，其内容会让 AgentCore 拒绝整条推荐——则排除这些会话、内联传入其余会话的 span，并在行上记录 `result.excluded_sessions`；这些场景仍参与评估），工具描述任务（不接受批次来源）内联传入相同会话的 span；Managed Harness 的输入实时读取自 `GetHarness`（及其 Gateway target 工具 schema，按 `allowedTools` 过滤），其他 Agent 先回退到配置，再要求用户必填输入。`eval_recommendations` 行保存任务 id 与确认后的输入，读取时从 `GetRecommendation` 刷新。系统提示词也可以改由已注册的 `gepa_lite` 提供方生成（创建请求带 `provider` 与 `model_id`）：复用实验 RECOMMEND 阶段的反思流程，读取该运行自己的批次结果流与会话记录，在后台线程中执行，行上以 `provider-` 指针代替 AWS 推荐 id（重启后仍未结束的行会显示为已中断）——AgentCore 任务拒绝输入时可用它兜底（其提示词攻击防护会把部分正常的中文系统提示词直接拒掉）。Managed Harness 运行的已完成系统提示词建议，既可在架构助手第 3 步、也可在任务详情页**接受**：先在可编辑的对话框中审阅提示词，用审阅后的文本重新发布 Harness（`accept` 请求体 `system_prompt`；`accepted.edited` 记录是否经过修改）。 |
-| **Optimization** | 推荐 → 配置捆绑(configuration bundles)→ 网关 A/B(config-bundle 50/50)→ target-based canary → verdict → promote → cleanup。系统提示词推荐**可插拔**:默认走 AgentCore 推荐任务,也可选第三方 provider(`gepa_lite`——对所固定评估运行的逐会话 judge 分数、解释与对话记录做一轮 GEPA 式反思,模型为操作员选择的 Bedrock Converse 模型;同一轮反思也可改写 Agent 自带工具的描述),绕开 `StartRecommendation` 及其内容过滤;产出的提示词与工具描述仍写入 treatment 配置捆绑,由后续 A/B 测试衡量。发送流量阶段的数据集回放为并发发送(在途请求上限 `TRAFFIC_MAX_CONCURRENCY` = 10,可用 `LAUNCHPAD_TRAFFIC_CONCURRENCY` 下调);一条 prompt 即一个 session 即一个分组,因此不影响分流。 |
+| **Optimization** | 推荐 → 配置捆绑(configuration bundles)→ 网关 A/B(config-bundle 50/50)→ target-based canary → verdict → promote → cleanup。系统提示词推荐**可插拔**:默认走 AgentCore 推荐任务,也可选第三方 provider(`gepa_lite`——对所固定评估运行的逐会话 judge 分数、解释与对话记录做一轮 GEPA 式反思,模型为操作员选择的 Bedrock Converse 模型;同一轮反思也可改写 Agent 自带工具的描述),绕开 `StartRecommendation` 及其内容过滤;产出的提示词与工具描述仍写入 treatment 配置捆绑,由后续 A/B 测试衡量。发送流量阶段的数据集回放为并发发送(在途请求上限 `TRAFFIC_MAX_CONCURRENCY` = 10,可用 `LAUNCHPAD_TRAFFIC_CONCURRENCY` 下调);一条 prompt 即一个 session 即一个分组,因此不影响分流。金丝雀的回放则改为成对进行：每条 prompt 同时发给两个版本。 |
 | **Observability** | 通过 CloudWatch Logs Insights 同时读取两种遥测布局：旧版 trace 位于 `aws/spans`，统一后的 trace、日志和 prompt 位于 `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>`。Span 记录按 session 渲染为链路面板。 |
 | **内置工具(Builtin Tools)** | Code Interpreter(`aws.codeinterpreter.v1`)与 Browser(`aws.browser.v1`)各有一个可运行的演示端点。 |
 
@@ -174,10 +174,29 @@ aarch64、glibc 2.34,因此最高可加载 `manylinux_2_34` 的 wheel;官方文�
 `manylinux2014` 的完整标签阶梯。
 
 调用方提供的 `spec.requirements` 还会在 **schema** 校验阶段被要求固定版本
-(`app/schemas/requirements.py`),因此控制台会在构建启动前就拒掉范围写法。平台自带的
+（`app/schemas/requirements.py`），因此控制台会在构建启动前就拒掉范围写法。每项必须是单行 ASCII，
+不含控制字符，也不能带以 `-` 开头的环境标记；检查发生在剥离标记之前，防止合法的固定版本后面藏有
+`--index-url` 等第二行 requirements 文件内容。固定版本解析和 lock 编译在写入输入文件前也会重复
+检查，覆盖旧版已存储的 spec。平台自带的
 清单保留范围——`MANTLE_EXTRA_REQUIREMENTS` 的注释解释了 pip 本就应当对同一个项目的两条
 规格求交集——可复现性由 lock 提供。Harness 转换是平台唯一一处从别处派生依赖的地方(源
-Harness 的 `pyproject.toml`),所以它把那些范围解析成固定版本,而不是被豁免于该规则。
+Harness 的 `pyproject.toml`),所以它把那些范围解析成固定版本,而不是被豁免于该规则。它还会把这些
+范围本身记录在 `spec.requirement_ranges` 上（只接受纯粹的 `name[extras] <specifiers> [; marker]`
+行——URL、VCS 引用、选项与控制字符一律拒绝，因此该字段无法扩大构建的包索引边界），两个控制台的重新发布都会
+带上该字段。
+
+这些固定版本是针对*转换当时*的平台清单解析出来的，而平台自己的版本约束会变（`boto3>=1.43.66` 迫使
+`botocore>=1.43.66`；`strands-agents==1.47.0` 把 `mcp` 限制在 `<2.0.0`）。Agent spec 的每一次 zip
+构建——package 阶段，以及金丝雀的候选/恢复版本铸造——都经过 `zip_runtime.build_agent_zip`。当**转换副本**
+（设置了 `spec.source_harness`）的锁定失败时，它会针对*当前*平台清单把副本的固定版本重新解析一次——每个项目
+优先用记录下来的范围；对于记录范围之前转换的副本，则用裸的 `name[extras]`——然后重试锁定。仍能锁定的固定
+版本绝不重新解析。任务日志会逐个列出改动的固定版本（`mcp==2.1.1 → mcp==1.30.0`）。修复后的固定版本按各调用方
+的约定持久化：package 阶段写入 `agent.spec.requirements`（因此“部署时 spec”快照记录的就是它们）；金丝雀
+setup 写入候选版本的 `artifacts.edited_spec`（铸造绝不写 Agent 行，晋升时会复制该 spec）；金丝雀回滚把它们
+与恢复后的版本一起写入 Agent 行，并记录一条 `canary rolled back` 快照。非转换副本的 spec 绝不重新解析。若锁定
+仍然失败，错误会指出 Agent 自身冲突的固定版本以及 uv 指出的与之冲突的平台依赖（非转换副本还会附上“更新或
+移除”的修复建议）；对于源范围已不再适配的转换副本，错误会直接说明这一点。没有涉及 Agent 自身固定版本的失败
+（没有可用的 wheel、包不存在）与之前的报错完全一致。
 
 **容器镜像会被扫描,并按 digest 部署。** ECR 在推送时扫描。构建完成后
 `_stage_package` 把推送出的标签解析为不可变 digest、记录到 `Deployment` 行上,并在镜像
@@ -1320,6 +1339,107 @@ Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` �
 会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
 从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
 
+### 代码视图（只读）
+
+Agent 详情的「代码」按钮打开 `/v2/agents?view=source&id=`，背后是
+`GET /api/agents/{agent_id}/source`（`services/agent_source.py`）。生成的代码从不存进台账，视图也从不重新
+渲染，而是读回 AWS 上实际持有的内容：
+
+- **`zip_runtime` / `studio`**——`GetAgentRuntime` 的 `codeConfiguration` 指向 Runtime 运行的 zip。
+  代码包里大部分是 pip 安装的依赖，所以服务用 S3 范围请求读取（中央目录加上要显示的文件），只列出平台
+  自己的文件：入口文件、`requirements.txt` / `requirements.lock`、转换导出的 `code_bundle` 文件，以及
+  打包进去的 `skills/`。
+- **`container`**（方式A）——CodeBuild 最近一次构建用的上下文 `builds/{name}/source.zip`。
+- **`byoc`**——`code_zip` / `container_source` 显示成员上传的原始包
+  （`byoc/{workspace}/{upload_id}/source.zip`），也就是成员自己的文件，不含打包阶段安装的依赖；
+  `container_image` 没有源代码，页面显示镜像地址和 digest。
+- **`harness`**——托管的 Agent 循环没有代码。页面显示 `GetHarness` 的白名单投影，规则与版本视图相同
+  （不含执行角色、环境、制品位置和认证配置），工具请求头的值、OAuth `customParameters` 的值和 URL 查询串
+  都会打码。
+
+内容按文件和按响应都有上限，因预算省略的文件可以用 `?path=` 单独读取。最近一次部署没有成功时，页面会
+提示运行中的版本可能还是之前的代码。导入的 Runtime 和没有 AWS 资源的行返回 409
+`agent.source_unavailable`，页面按 `detail.reason` 显示对应说明。
+
+### 配置快照与回滚
+
+`Agent.spec` 每次发布都会被覆盖，所以仅靠账本说不清一个 Agent 两次修改之前是什么样子。
+`services/snapshots.py` 在 `spec_snapshots`（按 Workspace 隔离、每个 Agent 有自己的 `seq`）中为每次发布
+保留一行：
+
+- **只有一个写入点。** `deployer.pipeline.create_deployment` 在与 Deployment、Job 行相同的事务里记录快照
+  （包括自行提交的调用方），因此没有哪条发布路径会漏掉它：创建、重新部署、采纳推荐、切换入站鉴权、转换、
+  实验推广、架构助手批准与预置发布。恢复执行的任务不会再经过这里。两条不经部署就修改配置的金丝雀路径
+  （Runtime 推广与 Harness 回滚）会各自记录一行，并写入它们上线的版本。
+- **记录实际部署的配置。** 发布成功时，`_finish` 写入 AWS 版本，并把保存的配置替换为 Agent 此刻的配置。
+  某个阶段可能在任务中途改写配置（架构助手的 harness 阶段会把 `spec.skills` 固定到不可变副本），回滚必须
+  重新部署真正运行过的内容。发布失败的快照 `aws_version` 为空，不能作为回滚目标。
+- **基线。** 启动时，每个有 AWS 资源、活跃、不是导入运行时、且没有快照的 Agent 会获得 #1（`note: "baseline"`），
+  内容为它当前的配置。这样第一次修改之后，当前配置马上就能作为回滚目标。
+- **差异**按点分路径比较嵌套字段，按成员比较列表，代码、代码包、Studio 流程与系统提示词整体比较；每处变化都
+  归入一个分组（提示词、模型、工具、技能、知识库、Memory、护栏）。超过 2 KB 的内容只返回长度。
+- **回滚通过普通的重新部署路径（`republish_agent`）重新发布保存的配置**，因此需要同样的 `agents.deploy`
+  权限并经过同样的校验。它会生成一个**新的** AWS 版本和一份新快照；控制台从不原地回退 AWS 版本。在调用任何
+  部署接口之前，它还会拒绝：从未部署成功的快照、已无法通过校验的配置，以及要重新挂载的已删除知识库（绑定
+  检查对管理员和共享 Workspace 不生效，所以拦不住这一点）。在共用的 AWS 上（prod 与 prod2），一次回滚会
+  改变所有控制台里的这个 Agent。
+- **回滚按引用重新构建，而不是取回保存的产物。** 代码类方式按配置重新构建，BYOC 代码包从暂存的上传中重新
+  读取。按**标签**引用的 BYOC `container_image` 会部署该标签此刻指向的镜像：快照里旧的 `byoc.provenance`
+  摘要只是记录，generate 阶段会重新写入。上传或镜像已不存在时，任务会像重新部署一样在该阶段失败。
+
+### 评估评分卡
+
+评估视图可以读出一个 Agent 在多次运行中的得分：每次运行评估的是哪个版本、用什么基准衡量，以及两次运行
+如何逐个用例对齐。规则集中在 `app/evaluation/scorecard.py`；路由为 `GET /api/eval/scorecard`、
+`GET /api/eval/runs/compare-pair` 与 `POST /api/eval/runs/{id}/rerun`（见 API 参考）。
+
+- **运行行上的记录。** `submit_run` 是创建运行行的唯一位置，它记录 `agent_snapshot_seq`（已部署到 AWS 的最新
+  配置快照——仍在部署中的快照并不是运行实际调用的版本），回放运行还记录 `dataset_fingerprint`（对规范化后的
+  场景做 sha256 取前 16 位十六进制，与键的顺序无关）和 `dataset_size`。回放循环在每个会话完成时写入
+  `scenario_map`（`{session_id: {scenario_id, input}}`）；被跳过的模拟用户场景没有条目。四列都可为空，旧行
+  保持为空。
+- **读取时的版本。** 每个运行载荷都带 `snapshot {seq, source}`：`stamped`；旧行按快照时间线 `inferred`
+  （运行创建时已完成部署的最新快照，没有则取最早的快照）；被动范围为 `observed`，因为其会话早于运行本身。
+  推断结果从不回写。
+  - 早于所有快照的运行（启动时的基线快照是后来补的）：只有在该运行与最早快照之间 Agent 没有成功部署过，
+    才取最早的快照。
+  - 否则版本未知，`snapshot` 为 null。控制台标为“早于版本记录”，比较时视为比所有已编号版本都早；因此快照
+    上线前采纳推荐带来的变化显示为版本变化，而不是同版本重跑。
+- **基准。** 本地数据集（revision 为指纹）、云端数据集（revision 为固定的版本或草稿的指纹），或该 Agent 的
+  线上流量——所有时间窗口、选定会话和日志流运行都归入这一项。趋势只连接同一基准的运行；综合分和退步判断
+  留在控制台中计算，因为评估器的方向由控制台掌握。
+- **对比。** 同一基准的两次回放按场景 id 配对会话。没有映射的旧运行，只有在没有跳过任何场景、且每个场景
+  恰好一个会话时才按位置配对；其他情况只比较总体分数，不读取结果。两个版本之间的配置变化来自
+  快照差异路由。逐会话的结果记录按评估器 id 归属——记录带评估器 ARN 时取 ARN 末尾的 id，否则取评估名称
+  （`agentcore_eval.normalize_result_record` → `_record_evaluator_id`），与运行的 `scores` 使用同一个键，
+  因此自定义评审（其评估名称不等于 id）的逐用例列能显示分数。
+- **再评一次**根据源运行重建 `RunCreate`（相同的对象、评估器、数据集及固定版本，或时间窗口长度），并与
+  `POST /api/eval/runs` 走同一个 `_start_run`，因此校验、可见性和预算检查不会出现分歧。选定会话和日志流
+  运行会被拒绝：给同一批会话重新打分只会测出评审模型的随机性。
+- **隔离。** 评分卡在 SQL 中按创建者过滤运行，并去掉被隐藏 Agent 的运行，然后才应用 1000 条的上限。对比不
+  展示被隐藏 Agent 的发布历史，也从不读取被隐藏数据集的用例。被隐藏的数据集使用运行上存储的名称。
+- **控制台。** V2 评估任务页以 `?view=compare&a=&b=` 展示对比（`v2/pages/tasks/RunCompare.tsx`，纯逻辑在
+  `v2/compare.ts`）：每个共同评估器一张指标卡，外加按两次都打了分的评估器计算的综合分；可比性提示；配置
+  变化（复用 Agent 页的 `DiffBody`，在两个快照之间比较）。两次运行对齐时还有逐用例表格，按所选依据的归一化
+  分数变化分类（变化 ≥ 0.1 记为改进或退步）。已完成且有分数的运行详情页提供“与上一次对比”，目标是评分卡中
+  同一 Agent、同一基准上更早的最近一次完成运行。
+- **按 Agent 标签。** `/v2/eval/tasks` 现在默认打开“按 Agent”（`AgentScoreList`），运行列表移到 `?tab=all`。
+  每个 Agent 一行，显示主基准（完成运行最多的那个）、最新综合分，以及与该基准上**上一版本**最近一次运行相比的
+  变化；没有可比的运行时说明原因。
+  - 综合分只取该基准每次完成运行都用到的评估器。
+  - “需要关注”列出退步（综合分降 0.05 及以上，或任一评估器降 0.1 及以上）；数据集有变化时显示为“待确认”，
+    同时也列出失败的运行。
+  - `?view=agent&key=`（`AgentScorecard`）按运行先后画出该基准的趋势，标出快照版本分段和数据集变化。页面另有
+    版本 × 评估器表、可勾选 A/B 去对比的运行记录，以及通过 `POST /api/eval/runs/{id}/rerun` 发起的“再评一次”。
+  - 规则在 `v2/scorecard.ts` 与 `pages/tasks/scorecardAttention.ts`。
+- **架构助手第 2 步。** “下一步”第 2 步（`v2/pages/assistant/RunHistory.tsx`）读取该 Agent 的评分卡，把它在
+  方案 Dataset 上的运行当作一个基准，规则与上面相同。先显示最新综合分与上一版本相比的变化和迷你趋势线，再列出最近
+  5 次运行，每行带版本、综合分和变化。
+  - 同版本重跑只与该版本的上一次运行比较，并标为噪声。
+  - 按上面的规则退步的版本变化标为“退步”。
+  - 默认收起的“评估器明细”按评估器 × 版本列出最近 4 个版本。
+  - 指向评分卡、运行详情和对比页的链接，在这些页面点“返回”都会回到该对话（`pages/tasks/back.ts` 的 `returnState`）。
+
 ## 调用链
 
 Chat 交互页面(`/api/chat/{id}`)与公开 API(`/v1/agents/{id}/invoke` +
@@ -1637,7 +1757,7 @@ DCV live-view chunk（它本来就是懒加载的，见 `pages/governance/ToolsV
 - **V2 中的经典模块。** 经典路由组通过 `App.tsx` 中的 `ConsoleShell` 渲染：默认是经典 `<Shell />`，选择 V2 后改为 `<V2Shell classic />`。因此 `/chat`、`/agents/…`、`/registry` 在两套控制台中 URL 不变，模块间链接无需改动，切换时停留在当前页面（只有没有经典对应页的原生 `/v2` 页面会回到 `/`）。经典页面的样式完全基于 `theme/tokens.css` 中的变量（原先写死的底色与叠加色也改为变量：`--field`、`--code-bg`、`--on-amber`、`--amber-rgb`、`--tint-rgb`、`--bg-rgb` 等）；`v2/v2-classic.css` 在 `body.v2-body` 上把这些变量改指向 V2 配色（使挂载到 body 的提示与弹窗同样生效），并在经典页面的内容容器 `.v2-classic` 下做形状微调。
 - **样式隔离。** `v2/v2.css` 的所有规则都限定在 `.v2`（外壳根节点）或 `body.v2-body` 下；后者仅在 V2 外壳挂载期间加到 `<body>` 上，用于屏蔽经典版的深色背景与噪点。经典主题不受影响；V2 使用自己的组件库（`v2/ui.tsx`：按钮、标签、筛选下拉、搜索、表格与分页、卡片、向导步骤、弹窗、抽屉、描述列表、KPI、提示），不复用经典组件。
 - **Agent 管理（原生）。** `/v2/agents`（`v2/pages/Agents.tsx`）列出工作区内的 Agent，每行按经典版的权限规则显示操作；`?view=detail&id=` 展示基本信息、五阶段部署流水线与任务日志（部署中自动轮询）、AWS 版本与端点、BYOC 制品、转换来源和知识库；`?view=new` 是创建向导（`v2/pages/agents/AgentWizard.tsx`）。向导完整配置**托管 Harness**，提交的 `AgentSpecInput` 与经典向导为该方式构建的完全一致（目录数据来自 `registryAttachables()`、托管知识库列表与记忆资源）；Strands、其他 Agent SDK 与自带代码转到经典向导 `/agents/new?method=…`，经典向导据此直接打开已预选该方式的配置步骤。编辑、导入、系统预置与 Studio 画布仍使用经典页面。选择 V2 后，经典的 `/agents` 与 `/agents/:id` 会重定向到原生页面（`App.tsx` 中的 `AgentsRoute`），因此其他模块的链接以及经典向导部署后的跳转都会落到原生页面。
-- **在线评估与实验（原生）。** `/v2/eval/online`（`v2/pages/Online.tsx`，共享规则在 `v2/online.ts`）管理全部在线评估配置，包括归属于 Agent、实验对照组（只读）与外部创建的配置，覆盖评分和洞察两种模式：列表支持按模式、归属、执行状态筛选，配置处于 CREATING/UPDATING/DELETING 时自动轮询；详情页在评分模式下展示服务端按评估器聚合的结果、趋势与评判记录，在洞察模式下展示定时与按需生成的洞察报告（抽屉查看详情）；新建与编辑表单支持过滤条件，保存时只提交变更的字段（`api.v2UpdateOnlineConfig`，PATCH）。`/v2/eval/experiments`（`v2/pages/Experiments.tsx`）重做了配置实验：列表、`?view=new`（选择 Agent、轨迹就绪度、基线评估）以及 `?view=detail&id=`，每个步骤一张阶段卡片（推荐 → Bundle → 网关/A-B → 流量 → 判定/发布 → 清理），提交的操作与经典页面相同。已清理或失败的实验仍以只读方式展示每个阶段的结果（推荐对比、Bundle、网关/A-B、流量、判定指标、清理记录）：这些都是账本中的产物（`Experiment.artifacts`，按阶段合并写入，清理时不会删除），不依赖读取 AWS。每个实验的推荐选项状态放在 `lib/experiments.ts`，与经典页面共用。运行时金丝雀是第一个、也是默认的标签（`mode=canary`；配置实验标签为 `mode=configuration`，其 `?view=new|detail` 子页面无需 `mode` 即可打开；`v2/pages/canary/`）：包括列表、`canary=new`（选择当前版本 Agent，编辑候选版本提示词或 Studio 代码，并接收实验发布后传来的 `champion=` / `sourceExp=`），以及 `canary=<id>` 详情页：设置阶段加上每个放量档位一张卡片（90/10 → 50/50 → 1/99：发送流量、判定、放量或全量发布，未达显著时需二次确认），另有回滚与清理。**Harness 金丝雀**（`artifacts.kind = "harness"`，`optimization/canary_harness.py`）不铸造候选版本，而是对同一个托管 Harness 的两个已有版本作 A/B：`canary=new` 选择对照版本（默认第一个）与最新版本（`DEFAULT` 已在服务它）对比。Harness ARN 不能作为 `http.agentcoreRuntime` Gateway 目标（该字段校验 `runtime/` ARN），因此 Setup 固定两个 Harness 端点（`ctl<id6>` → 对照，`trt<id6>` → 实验），各用一个 HTTP **passthrough** 目标接入（`protocolType CUSTOM`，经网关角色以 SigV4 `bedrock-agentcore` 签名，端点为 `https://bedrock-agentcore.<region>.amazonaws.com/harnesses/invoke`，`harnessArn` 与 `qualifier` 作为静态查询参数），为专属网关开启追踪投递，并用该端点遥测上的在线评估为每个变体打分（`service.name = harness_<harnessName>.<endpoint>`，日志组 `/aws/bedrock-agentcore/runtimes/<backingRuntimeId>-<endpoint>`，会预先创建，因为 CreateOnlineEvaluationConfig 不接受不存在的日志组）。2026-09-30 实测：客户端把 InvokeHarness 的 JSON 请求体 POST 到 `<gatewayUrl>/<target>/`（加 `/invocations` 会 404；末尾的斜杠不可省略：裸的 `/<target>` 虽然也返回 200，但会绕过 A/B 测试的 `gatewayFilter` `/<target>/*`，所有会话都不会被归属和打分）；网关角色以 harness ARN 上的 `InvokeAgentRuntime` 鉴权（CDK 在 `harness/*` 上授予它和 `InvokeHarness`）；Harness 的 span 带有网关的 `routing_experiment_variant_name`，因此 `GetABTest` 能给出分变体结果。向 Harness 金丝雀回放数据集时改为**成对**进行（`canary_harness.PAIRED_MODE`）：每道题同时发给两个端点（带 `qualifier` 的 InvokeHarness，每侧一个新会话，偶发错误重试一次，失败的一侧记在该题上），网关的随机分流不会再让两个版本拿到不同的题目组合，也不需要重复回放同一份数据集。判定按会话 id 从两个变体的在线评估结果中读取分数（每个端点 100% 采样、不按变体过滤），等到 90% 的题两侧都打完分（上限 30 分钟，评审延迟约 10 分钟），再按评估器比较：两侧均值、平均差、候选版本更好/更差/持平的题数（考虑评估器方向），以及双侧配对符号翻转检验的 p 值（非零差值不超过 16 个时精确枚举，更多时用固定种子的蒙特卡罗）；逐题明细随判定保存。两类金丝雀都在创建时选择评估器（`online_evaluators`，默认 GoalSuccessRate + Helpfulness；可选内置评估器和不依赖标准答案、使用数值评分的自定义评审，最多 10 个，不合规时在写入任何记录前返回 400），并可指定一个 `primary_evaluator`，由它单独决定判定的胜负、显著性和样本量——V2 的创建流程总会带上它（默认取第一个选中的自定义评审，否则取 GoalSuccessRate），其余评估器在页面上作为参考。成对分数按评估器 ARN 末尾的 id 归属（自定义评审的评估名称不等于其 id），90% 的等待覆盖所配置的全部评估器，到上限仍无分数的评估器会标为未评分（主判定评估器未评分时判定为 `insufficient-data`）。不指定主判定评估器时，判定规则不变（`compute_verdict`）。要更多证据，应增加数据集里的题目，而不是增加回放次数。全量发布只改台账（实验版本已是 `DEFAULT`），并且与 Runtime 金丝雀不同，可以在 **50/50** 判定为 `treatment-wins` 或 `tie` 后直接执行（`canary_service.early_complete_allowed`；平局或不显著的胜出仍需二次确认，对照胜出和证据不足仍被阻止）：架构助手的金丝雀流量来自 Dataset 回放，1/99 只会把回放几乎全部送进实验版本，并不增加对比证据。90/10 一档同样可选：创建请求带 `start_stage: 1`（`canary=new` 和架构助手第 4 步中的“放量计划”复选框；`canary=new` 默认勾选即先跑 90/10，架构助手第 4 步默认不勾选、直接从 50/50 开始）时，A/B 测试直接以 50/50 开启——实验版本已是 `DEFAULT`，90/10 并不限制影响范围，只会让实验组样本很少；Runtime 金丝雀拒绝该参数（`canary.start_stage_harness_only`）。`setup.start_stage` 与 `complete.completed_at_stage` 记录从哪一档开始、从哪一档完成，详情页把范围之外的档位标为已跳过；回滚会重新发布对照版本的行为（按该版本 GetHarness → UpdateHarness，生成新版本）；清理还会删除两个 Harness 端点和追踪投递。金丝雀运行期间，平台对该 Agent 的非流式调用经由其网关（失败时回退到对照端点）。架构助手的“下一步”面板（`v2/pages/assistant/NextSteps.tsx`）把它作为第 3 步（基于该 Agent 在任意数据集上的一次无错误运行生成 AI 优化建议——AgentCore 或 `gepa_lite`，默认最新一次；其他运行生成的建议——包括已接受的——列在下方；接受时先在可编辑的对话框里审阅提示词，再用审阅后的文本以新版本重新发布 Harness）和第 4 步中的“金丝雀实验”（`HarnessCanary.tsx`）。选择 V2 后，经典的 `/evaluation?view=online|experiment` 会映射到这两个页面（`App.tsx` 中的 `EvaluationRoute`，`oe=`/`exp=` 转为 `view=detail&id=`）；V2 侧边栏不再进入经典评估页及其分区导航。
+- **在线评估与实验（原生）。** `/v2/eval/online`（`v2/pages/Online.tsx`，共享规则在 `v2/online.ts`）管理全部在线评估配置，包括归属于 Agent、实验对照组（只读）与外部创建的配置，覆盖评分和洞察两种模式：列表支持按模式、归属、执行状态筛选，配置处于 CREATING/UPDATING/DELETING 时自动轮询；详情页在评分模式下展示服务端按评估器聚合的结果、趋势与评判记录，在洞察模式下展示定时与按需生成的洞察报告（抽屉查看详情）；新建与编辑表单支持过滤条件，保存时只提交变更的字段（`api.v2UpdateOnlineConfig`，PATCH）。`/v2/eval/experiments`（`v2/pages/Experiments.tsx`）重做了配置实验：列表、`?view=new`（选择 Agent、轨迹就绪度、基线评估）以及 `?view=detail&id=`，每个步骤一张阶段卡片（推荐 → Bundle → 网关/A-B → 流量 → 判定/发布 → 清理），提交的操作与经典页面相同。已清理或失败的实验仍以只读方式展示每个阶段的结果（推荐对比、Bundle、网关/A-B、流量、判定指标、清理记录）：这些都是账本中的产物（`Experiment.artifacts`，按阶段合并写入，清理时不会删除），不依赖读取 AWS。每个实验的推荐选项状态放在 `lib/experiments.ts`，与经典页面共用。运行时金丝雀是第一个、也是默认的标签（`mode=canary`；配置实验标签为 `mode=configuration`，其 `?view=new|detail` 子页面无需 `mode` 即可打开；`v2/pages/canary/`）：包括列表、`canary=new`（选择当前版本 Agent，编辑候选版本提示词或 Studio 代码，并接收实验发布后传来的 `champion=` / `sourceExp=`），以及 `canary=<id>` 详情页：设置阶段加上每个放量档位一张卡片（90/10 → 50/50 → 1/99：发送流量、判定、放量或全量发布，未达显著时需二次确认），另有回滚与清理。**Harness 金丝雀**（`artifacts.kind = "harness"`，`optimization/canary_harness.py`）不铸造候选版本，而是对同一个托管 Harness 的两个已有版本作 A/B：`canary=new` 选择对照版本（默认第一个）与最新版本（`DEFAULT` 已在服务它）对比。Harness ARN 不能作为 `http.agentcoreRuntime` Gateway 目标（该字段校验 `runtime/` ARN），因此 Setup 固定两个 Harness 端点（`ctl<id6>` → 对照，`trt<id6>` → 实验），各用一个 HTTP **passthrough** 目标接入（`protocolType CUSTOM`，经网关角色以 SigV4 `bedrock-agentcore` 签名，端点为 `https://bedrock-agentcore.<region>.amazonaws.com/harnesses/invoke`，`harnessArn` 与 `qualifier` 作为静态查询参数），为专属网关开启追踪投递，并用该端点遥测上的在线评估为每个变体打分（`service.name = harness_<harnessName>.<endpoint>`，日志组 `/aws/bedrock-agentcore/runtimes/<backingRuntimeId>-<endpoint>`，会预先创建，因为 CreateOnlineEvaluationConfig 不接受不存在的日志组）。2026-09-30 实测：客户端把 InvokeHarness 的 JSON 请求体 POST 到 `<gatewayUrl>/<target>/`（加 `/invocations` 会 404；末尾的斜杠不可省略：裸的 `/<target>` 虽然也返回 200，但会绕过 A/B 测试的 `gatewayFilter` `/<target>/*`，所有会话都不会被归属和打分）；网关角色以 harness ARN 上的 `InvokeAgentRuntime` 鉴权（CDK 在 `harness/*` 上授予它和 `InvokeHarness`）；Harness 的 span 带有网关的 `routing_experiment_variant_name`，因此 `GetABTest` 能给出分变体结果。向**两类**金丝雀回放数据集时都改为**成对**进行（`canary_harness.PAIRED_MODE`，`canary_service._paired_traffic`）：每道题同时发给两个端点——Harness 用带 `qualifier` 的 InvokeHarness；Runtime 金丝雀用 InvokeAgentRuntime，`qualifier` 为其 stable（当前版本）或 treatment（候选版本）命名端点，调用因此落在该端点自己的日志组中，由按端点配置的在线评估打分。每侧一个新会话，带金丝雀流量的 runtime user id 和按 Agent 隔离的合成记忆 actor（`scoped_actor(agent, "canary-traffic")`）；同时在途的调用不超过 `TRAFFIC_MAX_CONCURRENCY`，偶发错误重试一次，预算终止时整对跳过，失败的一侧记在该题上。网关的随机分流因此不会再让两个版本拿到不同的题目组合（issue #298：在 90/10 下按权重回放 50 条 prompt，Runtime 候选版本只拿到 2 个会话），也不需要重复回放同一份数据集。只有真实平台流量仍经网关按当前档位的权重分流，因此放量仍能限制真实流量进入候选版本的比例。Runtime 一侧的调用逐次计费：运行时报告用量时按实际 token 计，否则按该 Agent 的单轮估算记一条 `job_estimate`。成对回放上线前记录的 Runtime 轮次（按权重发送、没有 `mode` 的流量记录）仍按 `GetABTest` 判定；在这样的轮次中追加流量会新增一条成对记录，此后判定只读取成对记录。判定按会话 id 从两个变体的在线评估结果中读取分数（每个端点 100% 采样、不按变体过滤），等到 90% 的题两侧都打完分（上限 30 分钟，评审延迟约 10 分钟），再按评估器比较：两侧均值、平均差、候选版本更好/更差/持平的题数（考虑评估器方向），以及双侧配对符号翻转检验的 p 值（非零差值不超过 16 个时精确枚举，更多时用固定种子的蒙特卡罗）；逐题明细随判定保存。两类金丝雀都在创建时选择评估器（`online_evaluators`，默认 GoalSuccessRate + Helpfulness；可选内置评估器和不依赖标准答案、使用数值评分的自定义评审，最多 10 个，不合规时在写入任何记录前返回 400），并可指定一个 `primary_evaluator`，由它单独决定判定的胜负、显著性和样本量——V2 的创建流程总会带上它（默认取第一个选中的自定义评审，否则取 GoalSuccessRate），其余评估器在页面上作为参考。成对分数按评估器 ARN 末尾的 id 归属（自定义评审的评估名称不等于其 id），90% 的等待覆盖所配置的全部评估器，到上限仍无分数的评估器会标为未评分（主判定评估器未评分时判定为 `insufficient-data`）。不指定主判定评估器时，由全部评估器的聚合结果判定（`compute_verdict`）。两种方式下，只有**每一侧**都至少有 `min_n`（3）个样本时才能判出胜负或平局——主判定评估器看它自己的样本数，聚合判定看各评估器中每一侧的最大样本数（它们评的是同一批会话，相加会把 2 个会话 × 2 个评估器算成 4 个）——判定在合计的 `n` 旁同时给出 `n_control` / `n_treatment`；否则为 `insufficient-n`。该门槛与配置捆绑实验共用；此前按合计 `2 × min_n` 判断，对照 47 个、实验 2 个会话也能通过，由 2 个会话的正负决定胜负。成对判定两侧样本数相同，因此需要 3 对。要更多证据，应增加数据集里的题目，而不是增加回放次数。全量发布只改台账（实验版本已是 `DEFAULT`），并且可以在 **50/50** 由成对回放得出 `treatment-wins` 或 `tie` 后直接执行——Harness 金丝雀不论判定来自哪种回放都可以，Runtime 金丝雀在 50/50 由旧的按权重路径得出的判定则不行（`canary_service.early_complete_allowed`，并作为 `early_complete_allowed` 出现在金丝雀 API 输出中，控制台直接读取该规则而不自行推导；平局或不显著的胜出仍需二次确认，对照胜出和证据不足仍被阻止）：成对回放已让两个版本回答了每一道题，1/99 只会把同一批题再回放给同样两个端点，并不增加对比证据。90/10 一档对两类金丝雀同样可选：创建请求带 `start_stage: 1`（`canary=new` 和架构助手第 4 步中的“放量计划”复选框；`canary=new` 默认勾选即先跑 90/10，架构助手第 4 步默认不勾选、直接从 50/50 开始）时，A/B 测试直接以 50/50 开启；`start_stage` 大于 1 返回 422。对 Harness，实验版本已是 `DEFAULT`，90/10 并不限制影响范围，只会让实验组样本很少。对 Runtime 金丝雀，这是有实际代价的可选项，取消勾选时页面会给出警告：A/B 测试一建立，网关路由就会把该 Agent 一半的平台调用送进从未服务过生产的候选版本；在成对回放下，先跑 90/10 只多一轮，不会减少样本。Runtime 金丝雀把该选择存为 `artifacts.start_stage`（仅在大于 0 时写入），Harness 存在 `artifacts.harness` 下。`setup.start_stage` 与 `complete.completed_at_stage` 记录从哪一档开始、从哪一档完成，详情页把范围之外的档位标为已跳过。Harness 金丝雀回滚会重新发布对照版本的行为（按该版本 GetHarness → UpdateHarness，生成新版本），清理还会删除两个 Harness 端点和追踪投递。Harness 金丝雀运行期间，平台对该 Agent 的非流式调用经由其网关（失败时回退到对照端点）。架构助手的“下一步”面板（`v2/pages/assistant/NextSteps.tsx`）把它作为第 3 步（基于该 Agent 在任意数据集上的一次无错误运行生成 AI 优化建议——AgentCore 或 `gepa_lite`，默认最新一次；其他运行生成的建议——包括已接受的——列在下方；接受时先在可编辑的对话框里审阅提示词，再用审阅后的文本以新版本重新发布 Harness）和第 4 步中的“金丝雀实验”（`HarnessCanary.tsx`）。选择 V2 后，经典的 `/evaluation?view=online|experiment` 会映射到这两个页面（`App.tsx` 中的 `EvaluationRoute`，`oe=`/`exp=` 转为 `view=detail&id=`）；V2 侧边栏不再进入经典评估页及其分区导航。
 - **原生 V2 页面。** 工作台（`/v2`）、Agent 管理（见上）与 Agent 评估模块：数据中心 `/v2/eval/data`（Agent 轨迹 = 可观测轨迹及轨迹 / 会话详情、数据集及记录编辑，以及“复制所选到新数据集”——按原样复制所选记录，含断言、每一轮与期望工具轨迹，并写入 `metadata.copied_from`——数据处理 Pipeline）、评估任务 `/v2/eval/tasks`、评估总览 `/v2/eval/insights`、评估器 `/v2/eval/evaluators`。子页面遵循控制台约定，用同一路由的 `?view=` 状态表示（`view=new|detail|edit|trace|dataset|pipeline…`）。侧边栏其余入口（Agent 开发、运行、实验、系统管理）是在 V2 外壳中渲染的经典模块，直到完成原生重做。
 - **评估任务统一两类资源**（`v2/tasks.ts`）：批量评估运行是*历史*任务（时间窗口、手选会话或数据集回放，一次性评估；`name` / `description` 存在运行行上）；Agent 所属、scores 模式的在线评估配置是*持续*任务（采样比例、会话超时；其 description 作为任务名）。状态统一映射为排队中 / 运行中 / 已完成 / 失败 / 已停止 / 已暂停。历史任务可选评估类型：评估器打分，或洞察（失败归因 / 用户意图 / 执行摘要，即经典版新建运行的洞察模式，`POST /api/eval/runs` 的 `mode: "insights"`）。洞察任务的详情展示运行的聚类结果而非分数；聚类至少需要 3 个会话，因此手选会话必须不少于 3 个，时间窗口或数据集不足时给出提示。持续洞察仍在在线评估页面创建（它带有报告周期）。任务列表把评估类型单独作为一列（并提供筛选）；为保持在八列以内，运行策略放在数据来源下方、更新时间放在创建时间下方，操作列固定在右侧。
 - **数据处理 ·「运行日志」数据源**（`v2/pages/data/LogSource.tsx`，后端 `app/evaluation/pipeline_logs.py`）：Pipeline 可以读取 1–10 个 CloudWatch 日志组而非已观测的轨迹，从而纳入不产生 OTel span（或只写自有 JSON 日志）的 Agent。向导因此多出「格式转换」一步：内嵌在 Pipeline 中的格式转换规则——`genai`（OTel GenAI 内容记录，读取方式与会话对话相同）、`message`（会话 / 角色 / 文本字段）或 `exchange`（输入 / 输出字段），字段一律为 JSON 点路径，不支持用户正则——旁边是 `POST /api/eval/pipelines/preview-logs` 给出的实时预览（原始记录与转换后的会话并排展示、按原因统计的解析失败、字段路径提示），由运行时使用的同一转换器生成。转换后的轮次原样进入轨迹提取器（`log-<session>` 场景、`metadata.source = "logs"`，数据集列表中来源显示为「运行日志」）。日志只能用于构建数据集：AgentCore Evaluation 只读取 OTel span，自定义格式的日志永远不会被直接评估，而是成为在平台 Agent 上回放的问题与参考回答。两种数据源都可以只保存输入（`processing.keep_replies: false`）。
@@ -1873,6 +1993,88 @@ ingestion 失败时才暴露。
 `launchpad-kb-gw` 属于「引导邻接」而非引导创建，因此拆除脚本按名字连同它的目标一起
 清扫——见 [teardown.zh-CN.md](teardown.zh-CN.md)。
 
+## 上下文层（COA）
+
+`/v2/context-layer` 把工作区连接到一个 **COA**（Context Ontology Accelerator）部署——一个
+独立部署的产品，提供受治理的指标、归纳出的本体、文档知识图谱，以及对源数据受访问控制的
+SQL。Launchpad 从不部署或销毁 COA，也从不创建 COA 用户、授权或命名空间：编写工作留在 COA
+控制台（页面提供跳转链接；COA 禁止被内嵌）。所有读取都**以当前登录成员的身份**进行，因此
+Agent 能看到什么由 COA 的逐用户授权决定。
+
+- **连接**（`services/context_layer.py`，管理员）：在 COA 区域（`replace(workspace,
+  region=…)`，可与工作区区域不同）读取 SSM `/<prefix>/*` 和 `<prefix>-<env>-{api,web,auth}`
+  栈输出；拒绝跨账号部署、缺少 Agent OAuth 客户端或运行时未 READY 的情况；然后为 COA 的
+  Agent 客户端创建或采用 OAuth2 Connection，并确保控制台工作负载身份
+  `launchpad-console-<workspace>`。`context_layers` 行（每个工作区一行）只存标识。
+- **令牌**（`services/context_layer_tokens.py`）：成员的 COA 令牌只来自令牌库，经由控制台
+  工作负载身份获取，只存在于进程内存和发往 COA 的请求中——即
+  [identity.md](identity.md) §7.7 记录的托管例外。
+- **Agent**（`AgentSpec.context_layer = {namespace_id, namespace_name}`；纯函数在
+  `templates/context_layer_support.py`）：
+  - *Harness*：部署时只追加一段提示词（命名空间 id 与工具指引），不部署 COA 工具。每轮控制台
+    对话（`services/invoke.harness_turn_overrides`）重新读取已部署的工具，追加一个指向 COA
+    MCP 运行时、携带成员 bearer 的 `remote_mcp` 服务 `coa`，并在 `allowedTools` 中加入
+    `@coa`。尚未授权时，该轮就是一个 `auth_required` 事件，InvokeHarness 不会执行。
+  - *Strands*（HTTP `zip_runtime`）：每个部署阶段都基于 `context_layer.deploy_spec` 构建，它把
+    引用展开为该层 Connection 上的一个 `as_user` MCP 工具并追加提示词——模板、执行角色、
+    环境变量与返回 URL 白名单都读取这一次展开，存储的 spec 只保留引用。烘焙进代码的这个工具带
+    `gates_turn` 标记：成员尚未授权时，生成的运行时只发出 `auth_required` 授权卡片并结束该轮，
+    不调用模型——与 Harness 的结果一致。其他 `as_user` MCP 服务在授权前只是本轮不可用，模型照常
+    作答。已部署的运行时在下次部署后生效。
+  - `/v1`、评估回放、金丝雀／A-B 实验与 Harness 转换都拒绝挂载 COA 的 Agent：它们都没有可代表
+    的控制台用户。
+- **模块**（`routers/context_layer.py`，页面 `frontend/src/v2/pages/ContextLayer.tsx` 与
+  `contextLayer/`，仅在专家模式导航中出现）。状态只读取一次，由三个 `?view=` 子页面共用：
+  - *概览*：部署卡片（实时运行时／回调／Agent OAuth 探测）、成员本人的授权（授权／撤销）、
+    COA 允许其查看的命名空间，以及 COA 自身的 `/system-health`
+    （`GET /api/context-layer/health`）。管理员在此连接、重新连接或断开。未连接时，成员会被
+    提示联系管理员；未授权时，显示授权入口且**不调用 COA**；没有命名空间时，说明授权由 COA
+    管理员授予，并附 COA 控制台链接。
+  - `namespace&id=<uuid>[&tab=sources|metrics|ontology]`：COA 所呈现的命名空间，分为数据源
+    （类型、状态、表数）、受治理指标（单位、同义词、各方言表达式）和本体类（每个本体一次
+    `graph/ontology-overview`，最多并发读取 8 个本体，每个 200 个类）三个标签页。每个标签页
+    都深链到对应的 COA 控制台路由（`/namespaces/{id}/sources|metrics|ontology/graph`）：编写
+    工作留在 COA。“挂到 Agent”会打开 V2 创建向导（新建 Harness 或 Strands Agent），或打开
+    已有 Agent 的编辑器，并预填 `context_ns`／`context_name`；保存即普通的创建／重新发布。
+  - `playground[&ns=<uuid>]`：每次向 COA 的 **Serve 运行时**提一个问题
+    （`services/context_layer_playground.py`）。后端以 `stream: true`、成员的 bearer 和按成员
+    + 命名空间固定的运行时会话 id（`lp-` + 40 位十六进制）代理
+    `POST <serve invocations URL>`，并把 COA 的帧规范化为 `step`、`token`、`done`（答案、
+    层级、置信度、最多 200 行结果、供下一轮使用的 COA `sessionId`）和 `error`
+    （`context_layer.*`）事件；COA 静默时发送 `: keep-alive` 注释。后端从不设置 COA 的
+    `includeDebugInfo`，也从不转发生成的 SQL（`queryUsed`）：COA 默认不返回它，因为它会暴露内部
+    schema。未授权时只有一个
+    `auth_required` 事件，与 Chat 的授权卡片相同。上游是响应生成器内部的
+    `httpx.AsyncClient` 流，客户端断开时会关闭到 COA 的连接。读超时为 180 秒，COA 自身预算为
+    170 秒。
+  - COA REST 读取（`services/context_layer_api.py`）返回白名单投影
+    （`schemas/context_layer.py`），从不透传。错误映射：COA 401 → `context_layer.reauthorize`
+    （409），403 → `forbidden`，404 → `coa_not_found`，429／5xx／超时 → `upstream`，最多附带
+    200 个字符的 COA 原始消息。
+- **体验账号**（`services/context_layer_demo.py`）：多数成员没有 COA 账号（COA 用户只能由管理员
+  创建），因此由运维用 `samples/coa-demo/demo_account.py` 创建一个共享的只读账号（Cognito 用户 +
+  用户组 `launchpad-demo`，COA 授权给用户组，重建用户后仍然有效），并把
+  `{username, password, sub}` 作为 SSM SecureString 存在 COA 区域的 `/<coa prefix>/launchpad/`
+  之下。管理员在连接表单中填写参数名；账本行只存参数名，后端从不创建或修改 COA 用户。
+  - 任何成员都可以在“我的授权”或该层 Connection 的 Chat 授权卡片上查看它
+    （`POST …/demo-account/reveal`，`no-store`，按成员记录日志），然后通过普通授权流程，在 COA
+    自己的登录页输入：Launchpad 从不代任何人登录，也从不悄悄回退到体验账号，每个成员各自保留
+    自己的令牌库绑定。无论选择哪个账号，授权请求都不带 `customParameters`：令牌库按它们区分令牌，
+    带 `login_hint` 完成的授权会落入令牌代理、Harness 覆盖、试用台和所有 Strands 运行时都读不到的
+    令牌库槽位。因此 COA 登录页不会预填任何内容，请用面板上的复制按钮。
+  - 浏览器中仍有 COA 会话时，会以该用户静默完成授权（COA 的经典托管登录页会忽略 `prompt=login`，
+    而 Launchpad 本来也无法发送它）。
+    因此状态会把令牌库中令牌的 `sub` 与体验账号的比较（`authorization.identity: demo | own`），
+    页面引导切换：撤销、退出 COA 登录（`sign_out_url`，即 COA Web 客户端的 `/logout`，会清除该
+    域名下所有客户端的会话）、重新授权。如果授权结果不是所选的账号，会自动打开这份引导。
+  - 密码只存在于 SSM、后端内存（最多 300 秒，轮换后的密码 5 分钟内生效）、查看接口的响应，以及
+    面板打开期间成员的浏览器中。`/<prefix>/launchpad/` 范围限制保证查看接口无法读取其他密钥。
+- **限制**：COA 不允许被内嵌（`X-Frame-Options: DENY`），所以所有编写链接都在新标签页打开。
+  COA 的 REST 数据层上限为 29 秒，因此提问走流式 Serve 运行时，而不是
+  `POST /namespaces/{id}/query`。挂载 COA 的 Agent 在 `/v1` 上返回 409；金丝雀／A-B、评估回放
+  与 Harness 转换都会拒绝它们，因为都没有可代表的控制台用户。COA 的开销记在 COA 的账号上：
+  Playground 在计费表中是 `FREE`，Launchpad 不计量。
+
 ## 记忆控制台(控制台 05)
 
 `/memory` 是共享 `launchpad_memory` 单例的**只读**视图
@@ -2014,6 +2216,48 @@ Logs Insights 查询(`filter ispresent(scope.name) and attributes.session.id =
 **409 `observability.session_spans_missing`** 并附就绪提示(调用完成后 span 需要
 几分钟才会到达 CloudWatch)。适合试跑自定义 evaluator 或排查某个会话;需要留档、
 可复现的分数请用下文的批量运行。
+
+### 花费归属与阈值告警
+
+**花费。** 仪表盘已经能按 `model_prices` 价格表估算每个模型的花费，但回答不了*是谁花的*。
+`services/costs.py` 在同一批 span（`SPANS_SOURCE`，沿用仪表盘的 `_IS_LLM_FIELDS` token
+逻辑）上增加两种拆分：**按 Agent**——一条按 span 的运行时服务名分组的 Logs Insights 查询；
+**按人**——按会话统计 token，再关联 `ChatSession.actor_id`。控制台从未打开过的会话（直接的
+`/v1` 流量、评估回放）进入明确的“未归属”行，而不是被丢弃；与台账中任何 Agent 都不匹配的服务名
+仍会列出（`known: false`）并计入总额——导入或已删除的 Agent、同一 AWS 账号上的另一套部署
+（prod 与 prod2 共用一个账号）都真实花了钱。所有数字都是估算：每行按其最近一个模型的单价计价，
+价格表里没有的模型只计 token、不计金额，并列在 `unpriced_models` 中（没有模型 id 的 token 记为
+`(unknown model)`），因此总额不会悄悄偏少。非 Bedrock 的提供方（Mantle `openai.*`）只产生 Strands
+包装 span，而仪表盘的 token 逻辑会把它当作重复项丢弃；没有提供方 token 的行改按包装 span 的 token
+计价，与仪表盘按模型统计 token 时的回退规则相同（2026-10-14 在 dev 上实测：30 天内有五个这样的服务
+此前显示为 0 token）。按人统计的查询在 1000 个会话的上限之前先按输出 token 排序，因此被截掉的是用量最小的会话，而不是任意一批。
+本月至今是从当月 1 日 00:00 UTC 起的相对窗口，最长 720 小时。结果走仪表盘的 60 秒缓存。查询扫描
+整个账号，耗时随该区域全部 span 量增长，而不是随本控制台的 Agent 数量增长（2026-10-14 实测：
+us-east-1 上 30 天范围耗时 34 秒，查询截止时间为 55 秒）。
+
+**告警。** 一条 `alert_rules` 记录（按 Workspace 隔离）是对平台已能计算的某个值设定的阈值：
+`error_rate` 与 `latency_p95_ms` 来自仪表盘汇总，`online_quality` 来自在线评估均值，
+`spend_usd` 与 `cost_mtd_usd` 来自花费报表。没有新的遥测通路。关键性质：
+
+- **永远不会触发的方向会被拒绝**（`alert.comparison_never_fires`）：质量是下降才算坏，错误率是
+  上升才算坏。创建路由会自动取默认方向。
+- **读不到的值记为 `unknown`，绝不记为 `ok`。** 窗口内无流量或查询失败时记为 `unknown` 并附原因。
+- **通知的是状态变化，而不是状态本身。** `state` 保存在记录上，持续触发的规则不会反复通知：每个
+  触发期只通知一次，触发期从 `last_fired_at` 开始。如果是手动重新检查先发现了状态变化，它只记录、
+  不发送，下一次后台检查仍会补发（`last_notified_at` 早于 `last_fired_at` 即为待发），因此在事故
+  期间点击“立即重新检查”不会让 webhook 失声。发送失败记录在 `last_detail` 中，不会掩盖告警本身。
+- **投递方式是一个通用的 https JSON webhook**——Slack 或飞书的传入 webhook 本身就是这种形式，
+  因此平台不保存任何渠道凭证。`services/webhook_safety.py` 在保存时和每次发送时都检查 URL（仅
+  https、URL 中不带凭证、所有解析地址都必须是公网地址——IPv4 映射的 IPv6 按其 IPv4 地址判断），
+  直接连接检查过的地址，拒绝重定向，5 秒超时，且从不读取响应体。
+- **只有后台检查会发送通知。** `POST /api/alerts/evaluate`（控制台的“立即重新检查”）只记录
+  状态、从不发送，因此打开页面不会惊动任何人。后台检查即 DLC 调度器的 60 秒心跳
+  （`app/dlc/scheduler.py` 的 `evaluate_alerts`，每 5 分钟一次）：它在开启通知的情况下评估
+  每个 Workspace 的规则，并通过 `scheduler_claims` 行保证同一台账上的第二个后端进程不会
+  重复执行同一次检查。
+
+所有路由都是 **admin**：按人拆分会暴露谁花了多少钱，而在线质量值是所有 Agent 的汇总，隔离模式
+Workspace 中的成员不应看到。V2 页面为 `/v2/costs`（`?view=costs|alerts`）。
 
 ## Workspaces —— 多账号/多区域环境
 
@@ -2430,6 +2674,28 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 恒为 `reported`：这是对上报了用量的任务的观测统计——不是计费总额，控制台也不给出任何费用估算。
 控制台在结果磁贴下方以「TOKEN 用量」表格展示，并在展开的任务行中逐任务展示，未知计数一律显示为
 破折号。
+
+## Agent IDE —— 基于 AgentCore 上 codex 的远程 Web IDE
+
+第五种构建 Agent 的方式（父任务 `10-19-coding-agent`）：成员在浏览器 IDE（`/v2/coding`，`?view=repo&id=`）中打开代码仓库，与在 AgentCore microVM 内编写、运行和测试代码的 codex Agent 对话，然后把完成的代码仓库交给 Launchpad，通过现有的 `byoc` 管道部署——结果是一个普通的、受治理的 Agent。
+
+**运行时（平台所有，管理员安装）。** 每个 workspace 一个 AgentCore Runtime `launchpad_coding_runtime`，镜像源码在 `backend/app/coding/image/`（零依赖的 Node 22 服务，通过 stdio JSON-RPC 驱动 `codex app-server`；codex 版本固定，内置 Agent Toolkit for AWS 插件）。模型走 codex 内置的 `amazon-bedrock-runtime` provider（bedrock-runtime `/openai/v1`，SigV4——不走 Mantle）；可选模型为 `Settings.coding_models`，每个回合可选推理强度。执行角色只授予 ECR 拉取、自己的日志组以及对编码模型和 `project/default` 的 `bedrock:InvokeModel*`：microVM 中的任何 shell 都能读到这些凭证，所以角色**没有 S3 权限**。会话存储挂载在 `/mnt/workspace`（1 GB；运行时版本更新后以及闲置 14 天后会被清空）；codex 的 SQLite 和依赖目录放在本地磁盘。只由管理员安装、修复和卸载（`/api/coding/runtime*`，一个 `Job`），绝不在启动或读取时安装；资源键 `coding_runtime_*`（不在 `REQUIRED_RESOURCE_KEYS` 中）。
+
+**动作协议。** 后端的每次调用都是一次短的 `InvokeAgentRuntime`（`app/coding/runtime_client.call`），请求为 `{action, …}`，应答为 `{ok, result | error{code}}`：`status`、`start_turn`、`interrupt`、`events`（按 seq 编号的事件日志长轮询，`compact` 会丢弃已完成条目的增量）、`tree`、`read_file`（`rev: head | turn`）、`write_file`（`expected_sha256`）、`changes`、`diff`、`snapshot` / `export` / `upload_file`（上传到预签名 PUT）。每条 app-server 通知都写入会话存储上的 `.launchpad/events.jsonl`，读取方按 seq 获取，因此刷新、重连或后端重启都不会丢失任何内容。
+
+**代码仓库（`backend/app/coding/`）。** 台账 `coding_repos` + `coding_turns`（workspace 作用域）。代码仓库在**任何可见性模式下都只属于创建者**——刻意比 `resource_visibility` 更严格，因为代码仓库是一个在线 shell 加代码：所有权绑定到不可变的主体（`assistant/principal.principal_of` → `user:<id>` | `config-admin` | `local-operator`），所有按 id 访问的路由都经过 `repos.repo_in`（他人的或不存在的 → `404 coding.repo_not_found`）。管理员可以列出全部代码仓库（`?all=1`）并删除任意代码仓库，但绝不能打开他人代码仓库的 IDE、读取文件、订阅事件或运行回合。每个代码仓库拥有一个稳定的 `runtimeSessionId`（64 个字符，创建时生成）；代码仓库之间从不共享会话。代码仓库是成员在编码运行时上的 git 工作目录，不是组织架构里的项目。在 microVM 内它仍位于 `/mnt/workspace/project`（运行时镜像的目录布局，为已安装的运行时及其快照保持不变）；改名之前的台账（`coding_projects`、`coding_turns.project_id`）会在启动时原地改名（`core/db._migrate_coding_repo_rename`）。
+
+**回合是异步的。** `POST …/turns` 认领代码仓库（`UPDATE … WHERE status='idle'`——每个代码仓库同时只有一个回合），在 microVM 中启动回合并立即返回 `running` 状态的回合行；回合在 `/ping HealthyBusy` 下运行（≤ 8 小时），所以离开或刷新页面、重启后端都不会中断它。`POST …/interrupt` 中断回合。台账丢失的运行时回合（后端在运行时应答与提交之间崩溃）会在下一次启动时被接管。
+
+**事件流（SSE）。** `GET …/events?after=<seq>`（或 `Last-Event-ID`）先发送 `status` 帧，然后以 `id: <seq>` / `event: event` 发送每条事件日志记录，空闲时发送 keep-alive 注释，25 分钟后发送 `reconnect`，失败时发送 `error {code, message}`（`app/coding/stream.py`）。**空闲模式：**回放读完且运行时没有在跑回合后，事件流每 2 秒轮询一次*台账*而不是运行时，这样打开着的 IDE 标签页不会让空闲的 microVM（按内存计费）在 15 分钟空闲超时后继续存活；一旦有新回合被认领，就切回运行时长轮询。路由以异步响应体提供事件流：阻塞的步骤在工作线程中执行，空闲时的等待则在事件循环上进行，所以打开着的空闲标签页不会占用共享工作线程池中的线程。
+
+**结算与持久化。** 回合结束后，运行时立即追加 `launchpad/turnUsage`（或 `launchpad/turnAbandoned`）。先看到它的一方——SSE 代理或 **watcher**（`app/coding/watcher.py`，一个守护线程，每 15 秒一次，`LAUNCHPAD_CODING_WATCHER_ENABLED`）——用 `UPDATE coding_turns SET settled_at=…, usage=… WHERE … AND settled_at IS NULL` 结算；只有胜出者请求快照。回合行按 codex 上报的原样记录计数（`inputTokens` 包含缓存命中和缓存写入的 token，`outputTokens` 包含推理 token）。watcher 还会把运行时已不再运行的回合（会话存储从较旧的快照恢复）或超过 8 小时生命周期的回合标记为 abandoned，释放失效的启动认领，并为保存过的文件做快照（30 秒防抖）。快照通过后端签发的预签名 URL 写到 `s3://<artifacts>/coding/<ws>/<repo>/snapshots/<ts>.tgz`（保留最新 3 份）；每个动作都携带最新快照的预签名 GET 作为 `restore_url`，所以会话存储被清空的 microVM 会先恢复代码仓库再做其他事。
+
+**文件。** IDE 读取目录树、文件内容（工作区、`HEAD` 或最近一个回合的基线）、变更列表和统一 diff，并以乐观的 `expected_sha256` 保存文件（`409 coding.file_conflict` 携带当前哈希）；回合运行期间拒绝保存。路径在任何调用前先由后端检查（绝对路径、`..`、NUL、`.git`），运行时的路径守卫是最终判定。
+
+**下载。** `POST …/download`（仅所有者，回合运行期间也可用）把单个文件（`{path}`，文本或二进制，≤ 200 MB）或整个代码仓库打包成 `<repo>.zip`（不传 `path`：与部署导出相同的文件集合，≤ 50 MB）交给浏览器。字节从不经过 `InvokeAgentRuntime`：后端在 `coding/<ws>/<repo>/downloads/<ts>-<rand>/` 下签发预签名 PUT，运行时把文件（`upload_file`）或 zip（`export`）上传上去，后端再返回一个有效期 5 分钟、带 `Content-Disposition: attachment`（ASCII 的 `filename` 加 RFC 5987 的 UTF-8 `filename*`）的预签名 GET，浏览器就地保存文件（`app/coding/downloads.py`）。超过 15 分钟的下载对象会在该代码仓库下一次下载时清理；删除代码仓库会删除其整个前缀。
+
+**部署交接。** `POST …/deploy`（`perm:agents.deploy`）先为代码仓库做快照，让运行时把代码仓库文件打成 zip 上传到预签名 PUT，再下载并用 `byoc_uploads.stage_upload` 暂存（与成员上传相同的检查），然后创建一个以调用者为创建者的 `byoc` Agent（`routers.agents.start_create`，即 `POST /api/agents` 背后的代码），或重新发布该代码仓库已有的 Agent（`republish_agent`，即重新部署背后的代码）。下载导出文件前会先按 250 MiB 的 BYOC zip 上限检查其大小（microVM 中运行的是任意代码）。仓库根目录有 `Dockerfile` 时选 `container_source`，否则选 `code_zip`（`main.py`）。代码仓库的 `AGENTS.md` 会告诉编码 Agent BYOC 约定。
 
 ## SQLite 台账与 job/event 模型
 

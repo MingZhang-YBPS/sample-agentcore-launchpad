@@ -18,7 +18,7 @@ from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import project_context
 from app.models.ledger import PolicyChange
 from app.routers.auth import enabled as auth_enabled
-from app.services import registry_console
+from app.services import registry_console, user_gateways
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client, iam_client
 from app.services.workspace import WorkspaceContext, context_for_workspace
@@ -130,6 +130,8 @@ def _attachability(
         gateway.get("gatewayId") == resources.get("gateway_id")
         and resources.get("oauth_provider_arn")
     ):
+        return {"attachable": True, "reason": None, "auth_type": "oauth"}
+    if user_gateways.trusts_workspace_users(gateway, resources):
         return {"attachable": True, "reason": None, "auth_type": "oauth"}
     if authorizer == "CUSTOM_JWT":
         return {

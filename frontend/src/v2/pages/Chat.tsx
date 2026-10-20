@@ -96,7 +96,8 @@ const MEMORY_TAG = {
 /**
  * 对话调试 — live SSE chat with any active agent, over the same invoke chain as
  * the public `/v1` API. Deep links: `?agent=<id>` preselects the agent,
- * `&session=<id>` replays and resumes that conversation.
+ * `&session=<id>` replays and resumes that conversation, `&tab=api` opens the
+ * inspector on its API panel (where keys are created).
  */
 export function V2Chat() {
   const { t } = useTranslation();
@@ -145,7 +146,7 @@ export function V2Chat() {
   const [memory, setMemory] = useState<ChatMemorySummary | null>(null);
   const [trace, setTrace] = useState<ChatTraceInfo | null>(null);
   const [traceBusy, setTraceBusy] = useState(false);
-  const [tab, setTab] = useState<InspectorTab>("trace");
+  const [tab, setTab] = useState<InspectorTab>(() => (params.get("tab") === "api" ? "api" : "trace"));
   const [sharing, setSharing] = useState(false);
   // chat-streaming S2: what the running turn is doing, its timer and its stop
   const turn = useChatTurn();

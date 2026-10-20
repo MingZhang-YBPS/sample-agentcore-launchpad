@@ -167,7 +167,8 @@
     "videos": "视频介绍",
     "announcements": "公告管理",
     "connections": "出站凭证",
-    "myConnections": "我的授权"
+    "myConnections": "我的授权",
+    "contextLayer": "上下文层"
   },
   "videos": {
     "kicker": "// 学习",
@@ -2334,6 +2335,8 @@
     "agent.invoke_not_supported": "该 Runtime 当前不可调用",
     "agent.redeploy_external": "发现导入的 Runtime 由外部管理，不能重新发布",
     "agent.not_found": "未找到该 Agent",
+    "agent.source_unavailable": "此 Agent 没有可查看的代码",
+    "agent.source_file_not_found": "此 Agent 的代码中没有这个文件",
     "videos.not_found": "视频不存在",
     "videos.conflict": "视频已被其他操作修改，请重新加载后再保存或发布。",
     "chat.session_stop_unsupported": "无法从控制台结束该 Agent 的会话——Harness 没有结束会话的操作",
@@ -2773,6 +2776,10 @@
     "alert.not_found": "未找到该告警规则。",
     "alert.unknown_kind": "未知的告警类型。",
     "alert.webhook_not_https": "Webhook URL 必须以 https:// 开头。",
+    "alert.webhook_invalid": "Webhook 地址无效，或缺少主机名。",
+    "alert.webhook_credentials": "Webhook 地址中不能包含用户名或密码。",
+    "alert.webhook_unresolvable": "无法解析 Webhook 的主机名。",
+    "alert.webhook_non_public": "Webhook 的主机名解析到了私有或其他非公网地址。",
     "annotation.annotators": "校准至少需要两名独立的标注人。",
     "annotation.bad_items": "每个条目都需要唯一的 ref。",
     "annotation.bad_label": "该标签不在允许的标签之内。",
@@ -2949,6 +2956,48 @@
     "dataset.invalid_jsonl": "JSONL 文件中有一行不是有效的 JSON。",
     "dataset.kind_immutable": "数据集类型不能更改——替换的条目必须保持相同结构。",
     "dataset.not_found": "未找到该数据集。",
+    "context_layer.not_connected": "此工作区尚未连接 COA 上下文层。请管理员在上下文层页面连接。",
+    "context_layer.authorization_required": "请先授权 Launchpad 以你的身份读取 COA。",
+    "context_layer.forbidden": "COA 拒绝了此操作：你在 COA 中没有相应授权。",
+    "context_layer.reauthorize": "COA 不再接受你的授权，请重新授权。",
+    "context_layer.upstream": "COA 未正常响应，请稍后重试。",
+    "context_layer.referenced": "仍有 Agent 挂载上下文层，请先解除挂载。",
+    "context_layer.unsupported_method": "此 Agent 不能使用 COA 上下文层。",
+    "context_layer.not_found": "找不到对应前缀、环境和区域的 COA 部署。",
+    "context_layer.agent_oauth_disabled": "该 COA 部署没有 Agent OAuth 客户端。请先带上 agentOauthCallbackUrls 上下文部署 COA。",
+    "context_layer.cross_account": "COA 部署必须位于此工作区的 AWS 账号中。",
+    "context_layer.runtime_not_ready": "COA 运行时尚未就绪（READY）。",
+    "context_layer.discovery_failed": "Launchpad 无法读取该 COA 部署。",
+    "context_layer.connection_mismatch": "该出站凭证不是 COA 的 Agent OAuth 客户端。",
+    "context_layer.connection_not_found": "此工作区中没有该名称的 OAuth2 出站凭证。",
+    "context_layer.identity_failed": "AgentCore Identity 无法提供你的 COA 令牌。",
+    "context_layer.invalid_request": "前缀、环境或区域无效。",
+    "context_layer.coa_not_found": "COA 中没有该命名空间或条目，或者不向你开放。",
+    "context_layer.no_result": "COA 没有找到这个问题的答案。",
+    "context_layer.coa_rejected": "COA 无法处理这个问题。",
+    "context_layer.invalid_namespace": "COA 命名空间 ID 是 UUID。",
+    "coding.repo_not_found": "代码仓库不存在。",
+    "coding.runtime_not_installed": "本工作区尚未安装 Agent IDE 运行时。",
+    "coding.turn_running": "该代码仓库已有回合正在运行。",
+    "coding.no_turn": "没有正在运行的回合。",
+    "coding.file_conflict": "打开该文件后，它已被修改。",
+    "coding.path_invalid": "文件路径无效。",
+    "coding.file_too_large": "文件过大（最多 2 MB）。",
+    "coding.model_invalid": "Agent IDE 运行时不提供该模型。",
+    "coding.effort_invalid": "不支持该推理强度。",
+    "coding.prompt_too_long": "提示词过长（最多 32 KB）。",
+    "coding.runtime_error": "Agent IDE 运行时未响应，请重试。",
+    "coding.deploy_failed": "部署代码仓库失败。",
+    "coding.restore_failed": "无法恢复代码仓库保存的快照，请重试。",
+    "coding.delete_failed": "无法删除代码仓库保存的文件，请重试。",
+    "coding.runtime_busy": "Agent IDE 运行时正在安装或卸载，请在完成后重试。",
+    "coding.runtime_in_use": "这个工作区的 Agent IDE 代码仓库中还有正在运行的回合。请等它结束或中止后再卸载。",
+    "context_layer.demo_param_scope": "体验账号参数必须是所连接 COA 部署的 /<prefix>/launchpad/ 之下的 SSM 参数。",
+    "context_layer.demo_param_invalid": "体验账号参数不存在、不是 SecureString，或不是包含 username 和 password 的 JSON。",
+    "context_layer.demo_unavailable": "此上下文层没有体验账号，需由管理员在上下文层页面配置。",
+    "coding.file_not_found": "仓库中已没有该文件。",
+    "coding.download_too_large": "文件过大，无法下载：单个文件最多 200 MB，仓库压缩包最多 50 MB。",
+    "coding.runtime_outdated": "Agent IDE 运行时的版本早于当前控制台，管理员可以在 Agent IDE 中修复它。",
     "dataset.not_synced": "该数据集在 AWS 上没有副本——请先同步到 AWS。",
     "dataset.publish_failed": "发布数据集版本失败。",
     "dataset.sync_failed": "AWS 拒绝了数据集同步。",
@@ -3228,6 +3277,7 @@
     "run.not_active": "该运行已结束，无法停止。",
     "run.not_deletable": "只能删除失败或已停止的运行——请先停止进行中的运行；已完成的运行会作为证据保留。",
     "run.not_found": "未找到该评估运行。",
+    "run.rerun_unsupported": "只有数据集回放或时间窗的评估器运行可以再评一次。",
     "run.not_recheckable": "只有已启动批量评估的失败运行才能重新检查。",
     "run.not_snapshotable": "只有已完成且关联判据表的运行才能生成快照。",
     "run.repeats_range": "重复次数超出范围。",
@@ -3263,7 +3313,22 @@
     "skill_lab.taskgen_duplicate_id": "编辑后的 ID 不唯一。",
     "skill_lab.taskgen_empty_selection": "未选择任何生成的任务——至少保留一行才能保存。",
     "snapshot.not_found": "未找到该快照。",
+    "snapshot.never_deployed": "该快照从未部署成功，不能作为可靠的回滚目标。",
     "snapshot.spec_invalid": "该快照的配置已不符合当前结构。",
+    "snapshot.stale_reference": "该快照挂载的知识库已不存在。",
+    "snapshot.diff_side_required": "至少需要指定一份快照进行对比。",
+    "budget.level_in_use": "仍有成员被分配到这个级别，请先把他们移到其他级别。",
+    "budget.level_name_taken": "已存在同名的级别。",
+    "budget.level_not_found": "这个预算级别已不存在。",
+    "budget.invalid_amount": "请输入允许范围内的非负金额。",
+    "budget.invalid_level_name": "级别名称需要 1 到 64 个字符。",
+    "budget.invalid_period": "月份格式应为 YYYY-MM。",
+    "rates.unknown_key": "服务端不认识这个费率。",
+    "rates.price_incomplete": "价格至少需要输入和输出两项单价。",
+    "rates.invalid_value": "费率必须是允许范围内的有限非负数。",
+    "rates.invalid_model_id": "这不是有效的模型 ID。",
+    "rates.override_not_found": "这个模型没有控制台价格覆盖。",
+    "run.compare_unsupported": "只能对比已结束的评估器运行：洞察任务和仍在运行的任务不能对比。",
     "sso.discovery_incomplete": "身份提供方的发现文档不完整。",
     "sso.idp_bad_response": "身份提供方返回的不是 JSON。",
     "sso.idp_http_error": "身份提供方返回了 HTTP 错误。",
@@ -4266,11 +4331,12 @@
     "candidatePromptPlaceholder": "编辑候选版本的系统提示词……",
     "candidateCode": "候选版本代码（studio）",
     "candidateCodePlaceholder": "编辑候选版本的 studio Agent 代码……",
-    "candidateHint": "候选版本会基于该 Agent 当前的 spec 加上你下方的编辑铸造而成；在你执行推广之前，生产始终服务当前版本。",
+    "candidateHint": "候选版本会基于该 Agent 当前的 spec 加上你下方的编辑铸造而成；在你执行推广之前，它只承接当前放量档位所分配的该 Agent 真实流量。",
     "versionFraming": "当前版本 v{{current}} → 候选版本 v{{candidate}}",
     "eligibilityHint": "只有活跃的 HTTP AgentCore Runtime Agent 可做金丝雀；禁用原因由后端能力合同统一提供。",
     "experimentalOnly": "下方权重会通过一个专属金丝雀网关，把该 Agent 的真实生产流量按比例分流。推广与回滚都会真正改变生产所服务的版本。",
     "setup": "设置 90/10",
+    "setupAt": "设置 {{weights}}",
     "setupIncomplete": "Setup 未完成：专属网关与 stable 端点已创建，但候选版本的 A/B 测试尚未建立——生产仍服务当前版本。该金丝雀无法重试 Setup：请先回滚并清理，然后重新创建。",
     "running": "运行中…",
     "retry": "重试",
@@ -4333,11 +4399,12 @@
       "note": "候选版本显著获胜可直接继续；平局或未达显著需显式覆盖；当前版本获胜或证据不足会继续阻断。"
     },
     "completeEarly": "直接完成（跳过 1/99）",
-    "completeEarlyHint": "Harness 金丝雀的流量来自 Dataset 回放，1/99 一档几乎会把所有会话都送进实验版本，并不会增加对比证据。在当前判定下可以直接完成——A/B 测试停止，生产继续使用新版本；平局或未达显著时需人工确认。也可以继续放量到 1/99。",
+    "completeEarlyHint": "测试流量是成对的 Dataset 回放：每道题都已同时发给两个版本，1/99 一档并不会增加对比证据。在当前判定下可以直接完成——A/B 测试停止，生产改为服务候选版本；平局或未达显著时需人工确认。也可以继续放量到 1/99。",
     "plan": {
       "title": "放量计划",
       "first": "先跑 90/10 流量与判定",
       "firstHint": "取消后直接从 50/50 开始：实验版本已是生产默认版本，90/10 并不限制影响范围，只会让实验组样本很少。",
+      "firstHintRuntime": "取消后直接从 50/50 开始：设置完成后，该 Agent 一半的真实平台流量会立即进入候选版本。测试流量在每一档都成对回放，因此先跑 90/10 只多一轮，不会减少样本。",
       "half": "50/50 流量与判定（必经）",
       "last": "1/99：在 50/50 判定后再决定是否需要"
     },
@@ -5709,7 +5776,31 @@
       "tooManyEvaluators": "已就绪 {{n}} 个评估器，但一次批量评估最多应用 {{max}} 个——请打开「新建运行」取消勾选重叠的评估器（其余参数完全相同）。",
       "remove": "从历史中移除这条失败的运行",
       "removedToast": "已移除运行 {{id}}",
-      "meanScoreCoverage": "{{n}} 个评估器归一化均分 {{mean}}（基于 {{scored}}/{{total}} 个会话）"
+      "meanScoreCoverage": "{{n}} 个评估器归一化均分 {{mean}}（基于 {{scored}}/{{total}} 个会话）",
+      "titleAgain": "离线评估",
+      "historyHead": "该 Agent 在此 Dataset 上的评估（共 {{n}} 次）",
+      "latest": "最新综合分",
+      "openScorecard": "在评分卡中打开",
+      "colRun": "运行",
+      "colScore": "综合分",
+      "coverageSub": "基于 {{scored}}/{{total}} 个会话",
+      "sameVersion": "同版本重跑",
+      "sameVersionHint": "与同一版本上一次运行的差，只反映评估本身的波动，不算版本变化",
+      "regression": "退步",
+      "compareVersion": "对比上一版本",
+      "compareRun": "对比上一次",
+      "compareHint": "与运行 {{id}}（{{version}}）逐用例对比",
+      "caption": "综合分 = 每次运行都用到的 {{n}} 个评估器的归一化均分（越高越好）。变化与更早版本的最近一次运行比较；同版本重跑只与该版本的上一次比较。",
+      "captionNoCore": "这些运行没有共同的评估器，算不出可比较的综合分。",
+      "more": "此处只列最近 {{shown}} 次，共 {{n}} 次。",
+      "moreLink": "在评分卡中查看全部",
+      "otherBenches": "该 Agent 在其他 Dataset 上另有 {{count}} 次评估。",
+      "breakdown": "评估器明细（{{count}} 个）",
+      "breakdownSub": "每列一个 Agent 版本，同一版本跑了多次时取平均；最新一列标出与上一版本的变化。",
+      "breakdownMore": "更早的 {{count}} 个版本见评分卡。",
+      "colEvaluator": "评估器",
+      "scorecardError": "读取评估记录失败：{{message}}",
+      "breakdownUnrecorded": "早于版本记录的 {{count}} 次运行不在明细中。"
     },
     "iterate": {
       "title": "查看分数与追踪，然后迭代",
@@ -6184,6 +6275,13 @@
       "view": "查看",
       "yes": "是"
     },
+    "attention": {
+      "dismiss": "忽略",
+      "restore": "恢复",
+      "dismissedCount": "已忽略 {{count}}",
+      "dismissedList": "已忽略的条目",
+      "localHint": "忽略记录只保存在本浏览器，保留 30 天；条目状态变化后会重新显示"
+    },
     "range": {
       "1h": "近 1 小时",
       "6h": "近 6 小时",
@@ -6212,11 +6310,13 @@
       "evaluators": "评估器",
       "experiments": "A/B实验",
       "online": "在线评估",
+      "models": "模型",
       "showExpert": "显示全部模块",
       "showBusiness": "仅显示常用模块",
       "promotions": "发布",
       "environments": "环境对比",
       "costs": "成本与告警",
+      "coding": "Agent IDE",
       "fleet": "多环境总览",
       "issues": "问题箱",
       "intents": "意图视图",
@@ -6387,7 +6487,9 @@
           "container": "其他 Agent SDK",
           "containerDesc": "使用自带 Agent 循环的 SDK（如 Claude Agent SDK），由 CodeBuild 构建为 ARM64 容器。",
           "byoc": "自带代码",
-          "byocDesc": "上传自己的 Agent 代码（zip 或 Dockerfile 上下文），或指定已有 ECR 镜像；平台负责打包、部署与运维。"
+          "byocDesc": "上传自己的 Agent 代码（zip 或 Dockerfile 上下文），或指定已有 ECR 镜像；平台负责打包、部署与运维。",
+          "coding": "Agent IDE",
+          "codingDesc": "描述你要的 Agent，codex 编码助手在浏览器 IDE 背后的 AgentCore microVM 中编写、运行并测试任意代码；结果按自带代码方式部署。"
         },
         "recommended": "推荐",
         "classicForm": "完整表单",
@@ -6588,8 +6690,12 @@
             "ingestFailed": "索引失败",
             "failed": "创建失败",
             "unknown": "正在检查状态"
-          }
+          },
+          "keptNote": "在这里创建的知识库会保留在工作区的知识库列表中，即使你将它从此 Agent 中移除或离开向导也不会删除。不再需要时，请到知识库页面删除。",
+          "keptLink": "打开知识库",
+          "busyBlock": "知识库仍在创建并上传文件。完成后即可部署。"
         },
+        "codingBadge": "打开 IDE",
         "resourceName": "资源名称",
         "guardrail": {
           "title": "PII 防护",
@@ -6664,6 +6770,59 @@
           "unbound": "未绑定"
         }
       },
+      "source": {
+        "open": "代码",
+        "title": "代码 · {{name}}",
+        "metaTitle": "来源",
+        "origin": "读取自",
+        "origins": {
+          "deployed_package": "部署包",
+          "build_context": "容器构建上下文",
+          "upload": "上传的代码包",
+          "harness": "Harness 配置",
+          "image": "容器镜像"
+        },
+        "originSub": {
+          "deployed_package": "AgentCore Runtime 实际运行的代码包，不列出安装的依赖。",
+          "build_context": "CodeBuild 最近一次构建此 Agent 镜像时使用的构建上下文。",
+          "upload": "成员上传的代码包，不列出部署时安装的依赖。"
+        },
+        "entrypoint": "入口文件",
+        "runtimeVersion": "Runtime 版本",
+        "packagedAt": "打包时间",
+        "uploadFile": "上传文件",
+        "uploadedBy": "上传人",
+        "fileCount": "文件数",
+        "filesCapped": "显示 {{shown}} / {{total}} 个",
+        "filesTitle": "文件",
+        "noFiles": "代码包里没有可显示的文件。",
+        "truncated": "已截断",
+        "binary": "二进制文件，不预览。",
+        "binaryTag": "二进制",
+        "budget": "为控制首次加载的大小，这个文件没有随列表一起返回。",
+        "loadFile": "加载此文件",
+        "copy": "复制",
+        "copied": "已复制",
+        "copyFailed": "复制失败：浏览器禁止访问剪贴板",
+        "stale": "最近一次部署{{status}}，运行中的版本可能还是之前的代码。",
+        "harnessNote": "Harness 是由 AgentCore 托管的 Agent 循环，没有代码。下面是 AWS 返回的配置（GetHarness），不显示执行角色、环境和认证配置，请求头的值已打码。",
+        "harnessTitle": "Harness 配置",
+        "harnessSub": "版本 {{version}}",
+        "imageNote": "此 Agent 使用已有的容器镜像部署，平台没有它的源代码。",
+        "imageTitle": "容器镜像",
+        "imageUri": "镜像",
+        "imageDigest": "Digest",
+        "unavailable": {
+          "method": "平台没有这类 Agent 的代码（例如导入的 Runtime）。",
+          "no_resource": "此 Agent 还没有部署，部署在 AWS 上创建资源后才能查看代码。",
+          "deleted": "此 Agent 已删除。",
+          "gone": "代码包或 AWS 资源已不存在。",
+          "not_code": "此 Runtime 不是从代码包部署的。",
+          "unreadable": "存储的代码包无法作为 zip 读取。",
+          "no_bucket": "此工作区没有制品桶，请先完成初始化。",
+          "other": "此 Agent 没有可查看的代码。"
+        }
+      },
       "prodLocked": "这是生产工作区：不能在此直接创建、编辑或删除 Agent，变更须通过晋升流程进入。",
       "progress": {
         "harness": "正在准备你的智能体，约需 30 秒",
@@ -6676,6 +6835,7 @@
         "elapsed": "已用时 {{time}}",
         "done": "已就绪，用时 {{time}}",
         "failed": "你的智能体部署失败。下方的技术日志显示了出错原因。",
+        "failedAt": "你的 Agent 部署失败：「{{stage}}」阶段出错。下方的技术日志显示了出错原因。",
         "technical": "技术日志"
       },
       "tryChat": {
@@ -6685,6 +6845,8 @@
         "placeholder": "向你的智能体提问……",
         "send": "发送",
         "thinking": "思考中……",
+        "tool": "调用了工具 {{name}}",
+        "needsChat": "这一步需要授权登录，或涉及只有完整对话页才能展示的策略判定。请在对话页打开这段对话继续。",
         "openChat": "在完整对话控制台中打开"
       },
       "integration": {
@@ -6704,22 +6866,36 @@
         "copy": "复制",
         "copied": "示例代码已复制。",
         "copyFailed": "无法复制到剪贴板。",
-        "keyHint": "可在对话控制台的 API 密钥面板创建密钥，并可限定为仅限本智能体、设置有效期与速率限制。"
+        "keyHint": "可在对话控制台的 API 密钥面板创建密钥，并可限定为仅限本智能体、设置有效期与速率限制。",
+        "keysLink": "管理 API 密钥"
       },
       "snapshots": {
         "title": "配置快照",
         "sub": "每次发布时保存的完整配置。可任选两份对比，也可通过重新发布旧快照来回滚。",
+        "colAwsVersion": "AWS 版本",
         "by": "发布人",
         "note": "备注",
         "current": "当前",
+        "empty": "暂无快照。每次发布都会保存一份。",
         "pick": "选择快照 {{seq}} 用于对比",
         "compare": "对比所选",
+        "compareHint": "勾选两份快照即可对比。",
         "rollback": "回滚",
         "rollbackTitle": "回滚到快照 {{seq}}？",
+        "rollbackWarn": "这是一次真实的重新部署：Agent 会以该快照的配置作为新的 AWS 版本重新发布（不会原地回退），并保存一份新快照。在共享的 AWS 账号上，此变更会影响所有使用该 Agent 的控制台。",
+        "rollbackChanges": "从当前配置变为快照 #{{seq}} 时的变更：",
+        "rollbackSame": "快照 #{{seq}} 与当前配置相同，回滚会将其重新发布。",
+        "rollbackConfirm": "回滚并重新部署",
+        "rollingBack": "正在启动…",
         "rollbackBody": "这会把快照 {{seq}} 的配置作为新版本重新发布。AWS 上不会回退任何内容，当前配置仍保留在快照列表中。",
         "rolledBack": "正在重新发布快照 {{seq}}。",
         "diffTitle": "快照 {{from}} → {{to}}",
         "noChanges": "这两份快照完全相同。",
+        "before": "变更前",
+        "after": "变更后",
+        "absent": "（未设置）",
+        "elided": "共 {{length}} 个字符，过长未直接显示。",
+        "showFull": "显示全文",
         "group": {
           "prompt": "提示词",
           "model": "模型",
@@ -6734,6 +6910,20 @@
           "added": "新增",
           "removed": "移除",
           "changed": "变更"
+        },
+        "state": {
+          "deployed": "已部署",
+          "deploying": "部署中",
+          "failed": "失败",
+          "not_deployed": "未部署"
+        },
+        "noteKind": {
+          "baseline": "基线（启用快照前的配置）",
+          "rollback": "回滚到 #{{seq}}",
+          "canaryPromoted": "金丝雀已全量发布",
+          "canaryRolledBack": "金丝雀已回滚",
+          "inboundAuth": "切换了入站认证",
+          "recommendation": "采纳了推荐"
         }
       }
     },
@@ -7152,6 +7342,27 @@
       "dataset": "数据集",
       "noGroundTruth": "该数据集没有预期输出，依赖标准答案的评估器无法打分",
       "sessionsPicked": "已选择 {{count}} 个会话，请在下方预览中勾选",
+      "sessions": {
+        "title": "选择会话",
+        "sub": "近 7 天内观测到的该 Agent 会话，附首条输入与最后一条回复",
+        "hint": "近 7 天内观测到 {{count}} 个会话。「输入」为会话的首条用户消息，「输出」为 Agent 的最后一条回复；点击「查看」阅读完整对话。",
+        "colInput": "输入",
+        "colOutput": "输出",
+        "traces": "{{count}} 条轨迹",
+        "turns": "{{count}} 轮",
+        "noContent": "没有对话记录",
+        "readFailed": "对话读取失败",
+        "noReply": "（无回复）",
+        "search": "搜索会话 ID",
+        "selectAll": "全选（{{count}}）",
+        "selectNone": "清空选择",
+        "onlyPicked": "仅看已选",
+        "picked": "已选择 {{count}} 个会话",
+        "emptyFiltered": "没有符合筛选条件的会话",
+        "detailTitle": "会话详情",
+        "pick": "选择此会话",
+        "unpick": "取消选择"
+      },
       "preview": "数据预览",
       "previewSub": "来自所选数据源",
       "previewPickAgent": "选择评测 Agent 后可预览数据",
@@ -7256,7 +7467,12 @@
       "repeatsHint": "1 表示每条用例只跑一次。",
       "confirmCost": "我接受预估成本 ${{usd}}",
       "actorModel": "扮演用户的模型",
-      "actorModelHint": "模拟用户数据集：由该 Bedrock 模型扮演每位用户与 Agent 对话，直到达成目标或达到轮次上限。"
+      "actorModelHint": "模拟用户数据集：由该 Bedrock 模型扮演每位用户与 Agent 对话，直到达成目标或达到轮次上限。",
+      "attention": {
+        "title": "失败——需要查看",
+        "sub": "近 7 天失败的运行，同一 Agent 和数据集之后有运行成功即不再列出；以及失败的在线评估",
+        "empty": "没有失败的评估任务。"
+      }
     },
     "taskStatus": {
       "queued": "排队中",
@@ -7303,6 +7519,292 @@
       "insightsWait": "任务完成后展示洞察聚类。",
       "insightsEmpty": "该任务未产出洞察聚类。",
       "scenarioFailures": "{{count}} 个模拟用户场景重试后仍失败，已跳过（不计分），其余场景照常评估：{{list}}"
+    },
+    "compare": {
+      "title": "对比评估运行",
+      "swap": "交换 A / B",
+      "addRegressed": "退步用例加入数据集",
+      "addRegressedHint": "把 B 的 {{count}} 个退步用例会话加入数据集",
+      "addRegressedNone": "当前依据下没有退步用例",
+      "addRegressedUnaligned": "两次运行没有逐用例对齐，找不出退步用例",
+      "openRun": "查看任务",
+      "sessions": "{{count}} 个会话",
+      "sep": "、",
+      "sideNote": "{{side}}：{{note}}",
+      "composite": "综合",
+      "basis": "判断依据",
+      "live": "线上流量",
+      "flat": "≈ 持平",
+      "flatHint": "变化小于 0.02",
+      "prev": "与上一次对比",
+      "prevHint": "与同一基准上一次完成的运行对比：{{name}}（{{time}}）",
+      "version": {
+        "stamped": "#{{seq}}",
+        "stampedHint": "提交运行时记录的 Agent 版本：快照 #{{seq}}",
+        "inferred": "≈ #{{seq}} 推断",
+        "inferredHint": "旧运行没有记录版本，按运行时间推断为快照 #{{seq}}",
+        "observed": "#{{seq}} 观测",
+        "observedHint": "评估的是已有会话，可能跨版本；#{{seq}} 是运行创建时在线的版本",
+        "none": "无版本",
+        "noneHint": "日志源运行没有平台版本；Agent 没有部署成功的快照；或运行早于版本快照、之后 Agent 又部署过",
+        "unrecorded": "早于版本记录",
+        "unrecordedHint": "这次运行早于 Agent 的版本快照，且之后 Agent 又部署过，无法确定它评估的是哪个版本；比较时视为比所有已编号版本都早。"
+      },
+      "notice": {
+        "scenario": "可比：同一数据集 {{name}}，{{count}} 条用例按用例 ID 一一对齐。",
+        "order": "按顺序对齐：较早的运行没有记录每个会话回放的用例，按会话顺序与数据集的 {{count}} 条用例对应。",
+        "revision": "两次运行回放的数据集内容不同：只比两边都有的 {{shared}} 条用例，另有 {{only}} 条只在一边。",
+        "revisionAll": "两次运行回放的数据集内容不同：只比两边都有的 {{shared}} 条用例，其间用例内容可能改过。",
+        "partial": "{{count}} 条用例只在一次运行里有会话（例如被跳过的模拟用户场景），不参与对比。",
+        "live": "线上流量的两次评估看的是不同的会话，只对比整体得分。要逐用例看，请用数据集回放。",
+        "benchmark": "两次运行用的数据集不同（{{a}} / {{b}}），只能参考整体得分，不能逐用例对比。",
+        "unaligned": "无法逐用例对齐：{{why}}。只对比整体得分。",
+        "agents": "两次运行评估的是不同的 Agent（{{a}} / {{b}}）。",
+        "evaluators": "{{list}} 只在一次运行里用到，不参与对比。"
+      },
+      "unaligned": {
+        "scenarios_skipped": "有模拟用户场景被跳过，无法确定每个会话对应的用例",
+        "session_count_mismatch": "会话数与数据集当前的用例数不一致，数据集可能改过",
+        "dataset_unavailable": "数据集已删除、无法读取或你无权查看",
+        "no_dataset": "运行没有关联数据集",
+        "unaligned": "两次运行的会话无法配对"
+      },
+      "kpi": {
+        "composite": "综合分",
+        "noShared": "没有两次运行都打了分的评估器",
+        "sharedCount": "基于 {{count}} 个共同评估器",
+        "cases": "用例变化",
+        "casesValue": "{{down}} 退步 · {{up}} 改进",
+        "basis": "依据：{{basis}}"
+      },
+      "cls": {
+        "down": "退步",
+        "up": "改进",
+        "same": "不变",
+        "unscored": "无分数",
+        "onlyA": "仅 A",
+        "onlyB": "仅 B"
+      },
+      "filter": {
+        "all": "全部 {{count}}",
+        "down": "退步 {{count}}",
+        "up": "改进 {{count}}",
+        "same": "不变 {{count}}"
+      },
+      "config": {
+        "title": "配置变化",
+        "range": "#{{from}} → #{{to}}",
+        "same": "两次运行都是 #{{seq}}，配置没有变化：得分差异来自 Agent 输出和评委打分的随机性，可以当作噪声基线。",
+        "unknown": "至少一次运行的 Agent 版本未知（日志源运行，或 Agent 没有部署成功的快照），无法给出配置变化。",
+        "otherAgent": "两次运行评估的是不同的 Agent，没有可对比的配置变化。",
+        "hidden": "你看不到这个 Agent 的发布历史。",
+        "backwards": "A 的版本比 B 新：下面是从 #{{from}} 回到 #{{to}} 的变化。",
+        "publishes": "期间的发布",
+        "changes": "配置差异"
+      },
+      "cases": {
+        "title": "逐用例对比",
+        "subScenario": "按用例 ID 对齐；分数统一为越高越好，变化 ≥ 0.1 记为改进或退步",
+        "subOrder": "按会话顺序对齐；分数统一为越高越好，变化 ≥ 0.1 记为改进或退步",
+        "filterLabel": "按变化筛选",
+        "colCase": "用例",
+        "colChange": "变化",
+        "empty": "没有这类用例",
+        "unreadableHint": "上方的整体得分仍来自两次运行的记录。"
+      },
+      "case": {
+        "judges": "评委意见",
+        "noSession": "这次运行没有这个用例的会话。",
+        "noResults": "没有读到这个会话的评分。",
+        "notCompared": "不参与对比"
+      }
+    },
+    "scorecard": {
+      "tabs": {
+        "agents": "按 Agent",
+        "all": "全部任务"
+      },
+      "desc": "看每个 Agent 经过多次评估后的得分变化。同一数据集的运行连成趋势线。",
+      "listHint": "每个 Agent 一行：最新得分取它完成运行最多的基准",
+      "search": "搜索 Agent / 基准",
+      "agentCount": "共 {{count}} 个 Agent",
+      "empty": "还没有评估过的 Agent。新建一个评估任务后，这里会按 Agent 汇总。",
+      "emptyFiltered": "没有符合条件的 Agent",
+      "truncated": "只包含最近 1000 次运行，更早的运行未列出。",
+      "col": {
+        "agent": "Agent",
+        "main": "主基准",
+        "latest": "最新综合分",
+        "vsPrev": "较上一版本",
+        "trend": "趋势",
+        "evals": "评估",
+        "lastEval": "最近评估",
+        "avg": "平均分",
+        "pick": "对比",
+        "version": "版本",
+        "benchSource": "基准 · 数据来源"
+      },
+      "current": "当前 #{{seq}}",
+      "currentShort": "当前",
+      "deleted": "已删除",
+      "noVersion": "无平台版本",
+      "versionLine": "版本 {{version}}",
+      "versionShort": {
+        "stamped": "#{{seq}}",
+        "inferred": "≈ #{{seq}}",
+        "observed": "≈ #{{seq}}"
+      },
+      "vs": {
+        "version": "较 #{{seq}}",
+        "run": "较上一次"
+      },
+      "reason": {
+        "noCompleted": "暂无完成的运行",
+        "single": "只有 1 次运行",
+        "differentDatasets": "各次运行用的数据集不同",
+        "noEarlierVersion": "同一基准下没有更早的版本",
+        "noSharedScore": "两次运行没有共同评估器的得分，无法比较综合分"
+      },
+      "reasonShort": {
+        "noCompleted": "暂无完成运行",
+        "single": "仅 1 次运行",
+        "differentDatasets": "数据集不同",
+        "noEarlierVersion": "无更早版本",
+        "noSharedScore": "无共同评分"
+      },
+      "counts": {
+        "runs_one": "{{count}} 次",
+        "runs_other": "{{count}} 次",
+        "versions_one": "{{count}} 个版本",
+        "versions_other": "{{count}} 个版本",
+        "benches_one": "{{count}} 个基准",
+        "benches_other": "{{count}} 个基准"
+      },
+      "sparkLabel": "综合分趋势：{{values}}",
+      "listSep": "，",
+      "benchKind": {
+        "dataset": "本地数据集",
+        "cloud": "云端数据集",
+        "live": "时间窗 / 指定会话 / 日志"
+      },
+      "benchRuns": "{{count}} 次运行",
+      "benchSize": "{{count}} 条用例",
+      "liveTag": "真实流量",
+      "attention": {
+        "title": "需要关注",
+        "sub": "新版本综合分降 0.05 以上，或单个评估器降 0.1 以上；以及近 7 天失败、同一基准之后尚无成功运行的评估",
+        "empty": "没有退步或失败的评估运行。",
+        "emptyNone": "还没有评估过的 Agent。",
+        "regressionComposite": "{{agent}} #{{to}} 的综合分比 #{{from}} 低 {{by}}",
+        "regressionEvaluator": "{{agent}} #{{to}} 的{{evaluator}}比 #{{from}} 低 {{by}}",
+        "pending": "数据集已变化，待确认",
+        "change": "{{name}} {{a}} → {{b}}",
+        "failed": "{{agent}} 的评估运行失败：{{name}}",
+        "openCompare": "查看对比"
+      },
+      "agent": {
+        "title": "Agent 评估",
+        "notFound": "找不到这个 Agent 的评估记录。它可能已被删除，或你无权查看。",
+        "detail": "Agent 详情",
+        "compareTwo": "对比两次",
+        "compareTwoHint": "先在图上或运行记录里选两次运行",
+        "noRuns": "这个 Agent 还没有评估运行。",
+        "deletedNote": "这个 Agent 已删除：历史运行保留，不能再评。"
+      },
+      "kpi": {
+        "latest": "最新综合分 · {{bench}}",
+        "vs": "较 #{{seq}}（{{date}}）",
+        "vsRun": "较上一次（{{date}}）",
+        "current": "当前版本",
+        "published": "{{date}} 由 {{name}} 发布",
+        "publishedNoName": "{{date}} 发布",
+        "noVersionLog": "日志源没有平台版本",
+        "noDeployed": "没有部署成功的快照",
+        "benchRuns": "本基准运行",
+        "runsUnit": "次 · {{count}} 个版本",
+        "unfinished": "其中 {{count}} 次未完成",
+        "allDone": "全部已完成",
+        "lastEval": "最近评估"
+      },
+      "trend": {
+        "title": "得分趋势",
+        "sub": "选择基准：同一数据集的运行才连成线",
+        "live": "线上流量每次评估的会话都不同，曲线只反映整体趋势，不能逐用例对比。版本按会话发生的时间观测，可能跨版本，标为“≈”。",
+        "few": "这个基准只有 {{count}} 次完成的运行，还画不出趋势。点“再评一次”，用同样的数据和评估器评估当前版本。",
+        "caption": "综合分 = 这个基准每次运行都用到的评估器（{{list}}）的平均分，分数统一为越高越好。横轴按运行先后等距排列，不按时间比例；底色分段是 Agent 版本，竖虚线是数据集内容变化。",
+        "captionNoCore": "这个基准的各次运行没有共同的评估器，画不出综合分。横轴按运行先后等距排列；底色分段是 Agent 版本，竖虚线是数据集内容变化。",
+        "empty": "这个基准还没有可画的运行。",
+        "pickHint": "在图上点两次运行，或在下方运行记录里勾选两条，就可以对比。",
+        "pickB": "再选一次运行作为 B",
+        "clear": "清除",
+        "compare": "对比这两次"
+      },
+      "chart": {
+        "aria": "{{bench}} 得分趋势：{{points}}",
+        "ariaPoint": "{{date}} {{series}} {{score}}",
+        "ariaPending": "{{date}} {{status}}",
+        "ariaSep": "；",
+        "revision": "数据集变化",
+        "revisionSizes": "数据集变化（{{from}} → {{to}} 条）",
+        "first": "首次",
+        "pending": "{{status}}，还没有得分",
+        "noScores": "已完成，但没有得分",
+        "pick": "点击选中，用于对比",
+        "unpick": "点击取消选择"
+      },
+      "matrix": {
+        "title": "版本 × 评估器",
+        "sub": "同一版本跑了多次时取平均；变化都和下一行的上一版本比",
+        "version": "Agent 版本",
+        "runs": "运行",
+        "composite": "综合",
+        "compareWith": "对比 #{{seq}}",
+        "more": "另有 {{count}} 个评估器只在趋势图里显示"
+      },
+      "runs": {
+        "title": "运行记录",
+        "sub": "这个 Agent 的评估运行",
+        "onlyBench": "只看当前基准",
+        "pickLabel": "选择「{{name}}」进行对比",
+        "pickDisabled": "只能对比已完成并有得分的运行",
+        "empty": "没有运行"
+      },
+      "rerun": {
+        "action": "再评一次",
+        "title": "再评一次",
+        "intro": "用上一次的数据和评估器评估 Agent 的当前版本。结果会成为趋势图上的下一个点。",
+        "agent": "Agent",
+        "agentValue": "{{name}} · 当前 #{{seq}}",
+        "data": "数据",
+        "evaluators": "评估器",
+        "defaultName": "{{bench}} · #{{seq}} · {{date}}",
+        "defaultNameNoVersion": "{{bench}} · {{date}}",
+        "draft": "草稿",
+        "note": "运行会记下被评估的版本（#{{seq}}）。要换数据集或评估器，请用完整的新建向导。",
+        "noteNoVersion": "要换数据或评估器，请用完整的新建向导。",
+        "wizard": "在向导中修改",
+        "start": "开始评估",
+        "starting": "正在提交…",
+        "started": "已提交评估任务：{{name}}",
+        "block": {
+          "deleted": "Agent 已删除，不能再评",
+          "noRun": "这个基准还没有完成的运行可以照着再评",
+          "unsupported": "只有数据集回放和时间窗运行可以再评一次：重新评同一批会话只会测出评委打分的噪声"
+        }
+      },
+      "filter": {
+        "status": "状态",
+        "statusActive": "使用中",
+        "method": "创建方式",
+        "change": {
+          "down": "退步",
+          "up": "改进",
+          "minor": "小幅变化",
+          "none": "无可比"
+        },
+        "hiddenDeleted_one": "已隐藏 {{count}} 个已删除 Agent",
+        "hiddenDeleted_other": "已隐藏 {{count}} 个已删除 Agent"
+      }
     },
     "outcome": {
       "passed": "通过",
@@ -7599,6 +8101,15 @@
         "filterKey": "过滤键只能包含字母、数字、点、下划线或连字符",
         "filterValue": "每条过滤条件都需要有效的值",
         "description": "描述最多 200 个字符"
+      },
+      "attention": {
+        "title": "需要关注",
+        "empty": "没有失败、变更中或重复评判同一个 Agent 的在线评估。",
+        "why": {
+          "failed": "失败",
+          "duplicate": "重复",
+          "settling": "变更中"
+        }
       }
     },
     "experiments": {
@@ -7662,7 +8173,13 @@
       "cleanupHint": "删除实验创建的 Bundle、临时 Target、A/B 测试和在线评估器；共享的实验网关会保留。",
       "legacyCanaryWeights": "基准版 {{c}}% · 挑战者 {{t1}}% · 第 {{stage}}/3 阶段",
       "notReached": "实验结束前未进行到这一步。",
-      "notPromoted": "未发布"
+      "notPromoted": "未发布",
+      "attention": {
+        "title": "进行中或等你决定",
+        "empty": "没有进行中或等待决定的实验。",
+        "decide": "已有判定：发布或清理",
+        "decideCleanup": "等你清理"
+      }
     },
     "dlc": {
       "title": "判据",
@@ -8487,6 +9004,7 @@
       "pipeline": "放量流程",
       "sourceExp": "来源实验",
       "targets": "Target",
+      "perArmN": "n={{n}} · 当前版本 {{control}} / 候选版本 {{treatment}}",
       "paired": {
         "budgetStop": "预算终止",
         "meanDiff": "平均差",
@@ -8515,6 +9033,12 @@
         "change": "修改评估器",
         "confirm": "两个版本都由 {{evaluators}} 打分；判定由 {{primary}} 决定。",
         "none": "请至少选择一个评估器"
+      },
+      "attention": {
+        "title": "进行中或等你决定",
+        "empty": "没有正在放量或等待决定的金丝雀。",
+        "decide": "已有判定：继续放量、全量发布或回滚",
+        "none": "还没有启动过金丝雀。"
       }
     },
     "chat": {
@@ -9098,6 +9622,10 @@
         "flowSub": "路由 Agent 自身的轨迹",
         "request": "请求",
         "response": "响应"
+      },
+      "attention": {
+        "title": "等待审批",
+        "empty": "没有等待审批的记录。"
       }
     },
     "governance": {
@@ -9347,7 +9875,20 @@
         "connecting": "正在连接实时画面…",
         "noSession": "当前没有浏览器会话"
       },
-      "testIdentity": "身份"
+      "testIdentity": "身份",
+      "attention": {
+        "title": "需要处理",
+        "allClear": "所有 Gateway 都处于 READY，目标都健康，也没有缺失的策略引擎。",
+        "notReady": "{{name}} 未就绪",
+        "engineMissing": "{{name}} 指向一个已删除的策略引擎",
+        "logOnly": "{{name}} 只记录决策",
+        "logOnlyHint": "策略引擎处于 LOG_ONLY：拒绝会被记录，但不会拦截任何调用。",
+        "targets_one": "{{name}}：{{count}} 个目标不健康",
+        "targets_other": "{{name}}：{{count}} 个目标不健康",
+        "inspect": "查看",
+        "fix": "修复",
+        "review": "审阅"
+      }
     },
     "assistant": {
       "clear": "清除",
@@ -9427,7 +9968,17 @@
       "trainLoop": "训练循环",
       "trainProgress": "训练进度",
       "uploaded": "上传",
-      "genRecords": "AI 生成记录"
+      "genRecords": "AI 生成记录",
+      "attention": {
+        "title": "需要关注",
+        "empty": "没有排队、运行中、失败或已中断的作业。",
+        "noJobs": "还没有技能实验室作业。",
+        "type": {
+          "eval": "评估",
+          "train": "优化",
+          "taskgen": "AI 生成"
+        }
+      }
     },
     "users": {
       "trendTitle": "注册趋势",
@@ -9692,6 +10243,11 @@
         "sharedHint": "共享：每位成员都能看到此工作空间的全部资源（默认）。",
         "isolatedHint": "隔离：成员只能看到自己创建的资源，以及管理员创建或创建者未知的资源；管理员始终可见全部。适用于知识库、记忆、评估数据集、数据处理、评估任务、在线评估与自定义评估器、A/B 实验、金丝雀发布、Skill Lab 和 Agent：成员无法与他人的 Agent 对话、调用（包括通过自己的 /v1 API 密钥）或查看其可观测性与记忆详情，且只能管理自己创建的 API 密钥。",
         "saved": "成员可见性已保存，从下一次请求起生效。"
+      },
+      "attention": {
+        "title": "需要你处理",
+        "empty": "所有工作区都已初始化或正在初始化。",
+        "failedHint": "初始化失败——打开查看失败的阶段并继续执行。"
       }
     },
     "announcements": {
@@ -10016,7 +10572,8 @@
       "confirmTitle": "撤销 {{connection}}？",
       "confirmBody_one": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
       "confirmBody_other": "此后通过 {{connection}} 的下一次调用都会请你重新登录并授权，对所有 Agent 生效（当前列出 {{count}} 条授权）。提供方已签发的令牌在过期前仍然有效；如需立即失效，请到提供方撤销该应用。",
-      "noPermission": "你的账号没有 identity.grant 权限：可以查看自己的授权，但不能完成或撤销授权。"
+      "noPermission": "你的账号没有 identity.grant 权限：可以查看自己的授权，但不能完成或撤销授权。",
+      "contextLayerConsole": "上下文层（控制台）"
     },
     "promotions": {
       "title": "发布",
@@ -10196,10 +10753,23 @@
       "desc": "这个工作区花了多少钱，以及平台在盯哪些阈值。",
       "tab": {
         "spend": "成本",
-        "alerts": "告警"
+        "alerts": "告警",
+        "costs": "成本"
       },
+      "forbiddenBody": "只有管理员可以查看成本和管理告警规则。",
+      "range": {
+        "1h": "最近 1 小时",
+        "6h": "最近 6 小时",
+        "24h": "最近 24 小时",
+        "7d": "最近 7 天",
+        "30d": "最近 30 天"
+      },
+      "generatedAt": "计算于 {{time}}",
+      "note": "所有数字都是估算：span 的 Token 数 × 平台价格表。直接调用 /v1 API 的流量和评估运行没有控制台对话会话，因此显示为未归集。统计范围是本账号、本区域内所有运行时的 span，包括不在本控制台中的 Agent。",
       "kpiTotal": "预估花费",
       "kpiTokens": "Token 数",
+      "kpiSessions": "会话数",
+      "kpiSessionsSub": "该时间窗内有 span 的会话",
       "kpiAgents": "有流量的 Agent",
       "estimate": "依据价格表估算",
       "window": "最近 {{range}}",
@@ -10210,6 +10780,7 @@
       "colAgent": "Agent",
       "colActor": "成员",
       "colCost": "预估花费",
+      "notInConsole": "不在本控制台中",
       "colTokens": "Token 数",
       "colCalls": "模型调用次数",
       "colSessions": "会话数",
@@ -10218,7 +10789,10 @@
       "empty": "该时间窗内没有流量。",
       "refresh": "重新读取",
       "refreshing": "正在重新读取……",
-      "unpriced": "以下模型消耗了 Token，但价格表中没有对应单价，因此不计入金额：{{models}}"
+      "unpriced": "以下模型消耗了 Token，但价格表中没有对应单价，因此不计入金额：{{models}}",
+      "kpiMtd": "本月至今",
+      "mtdSub": "自本月 1 日起（UTC，{{hours}} 小时）",
+      "mtdError": "无法读取本月至今的花费"
     },
     "alerts": {
       "listTitle": "规则",
@@ -10230,24 +10804,46 @@
       "empty": "还没有规则。",
       "new": "新建规则",
       "newTitle": "新建告警规则",
+      "editTitle": "编辑告警规则",
       "create": "创建",
       "created": "规则已创建",
+      "saved": "规则已保存",
       "deleted": "规则已删除",
+      "enabled": "规则已启用",
+      "disabled": "规则已停用",
+      "enable": "启用",
+      "disable": "停用",
       "delete": "删除",
       "toggle": "启用或停用",
       "recheck": "立即重新检查",
+      "rechecking": "正在检查……",
       "rechecked": "已重新检查，{{firing}} 条触发中",
+      "confirmDeleteTitle": "删除告警规则",
+      "confirmDeleteBody": "确定删除规则“{{name}}”吗？此操作不可撤销。",
       "colRule": "规则",
+      "colCondition": "触发条件",
       "colState": "状态",
       "colValue": "最近数值",
       "colChecked": "最近检查时间",
+      "colWebhook": "Webhook",
+      "lastFired": "触发于 {{time}}",
+      "lastNotified": "通知于 {{time}}",
       "kind": "监控对象",
       "name": "名称",
+      "nameHint": "可选，默认使用监控对象的名称。",
       "window": "时间窗",
       "windowHint": "以多长时间内的流量来计算该数值。",
+      "windowFixed24h": "最近 24 小时（固定）",
+      "windowMonth": "本月至今",
       "threshold": "{{direction}} {{unit}} 时触发",
+      "thresholdHint": "测得的数值越过这个阈值时，规则触发。",
       "webhook": "Webhook（可选）",
       "webhookHint": "一个 https JSON 钩子——Slack 或飞书的 incoming hook 本身就是。规则从正常转为触发时通知一次。",
+      "webhookMode": {
+        "keep": "保留当前 Webhook",
+        "replace": "替换 Webhook",
+        "remove": "移除 Webhook"
+      },
       "direction": {
         "above": "高于",
         "below": "低于"
@@ -10262,13 +10858,761 @@
         "error_rate": "错误率",
         "latency_p95_ms": "p95 延迟",
         "online_quality": "在线质量",
+        "spend_usd": "时间窗内花费",
         "cost_mtd_usd": "本月花费"
       },
       "kindHint": {
         "error_rate": "失败链路占全部链路的百分比。",
         "latency_p95_ms": "端到端延迟的 95 分位，单位毫秒。",
         "online_quality": "在线评估平均分，0 到 1。分数下跌时触发。",
+        "spend_usd": "规则时间窗内的预估花费，单位美元。",
         "cost_mtd_usd": "本月 1 日以来的预估花费，单位美元。"
+      }
+    },
+    "usage": {
+      "title": "我的用量",
+      "desc": "你在一个自然月（UTC）内在本平台的花费，以及你的月度预算。",
+      "userMenu": "{{name}} 的账号菜单",
+      "open": "我的用量",
+      "dismiss": "关闭",
+      "bannerWarn": "你已用掉月度预算的 {{percent}}（已用 {{used}}，上限 {{limit}}）。预算将于 {{date}} 重置。",
+      "bannerExceeded": "已达到本月预算（已用 {{used}}，上限 {{limit}}）。在 {{date}} 之前，或在管理员提高你的上限之前，新的计费操作都会被拒绝。",
+      "period": "月份",
+      "thisMonth": "{{period}}（本月）",
+      "overBody": "你已达到本月预算。在 {{date}}（UTC 0 点）之前，或在管理员提高你的上限之前，对话、API 调用、评估和其他计费操作都会被拒绝。已经在运行的工作会继续完成。",
+      "warnBody": "你已用掉月度预算的 80% 或更多。预算将于 {{date}}（UTC 0 点）重置。",
+      "basis": {
+        "override": "管理员为你设置了个人月度额度，它会替代你所在级别的预算。",
+        "level": "你的月度预算来自你的级别 {{level}}。",
+        "default_level": "你没有单独的级别，因此适用默认级别 {{level}}。",
+        "unlimited": "你没有预算限制：你没有级别，也没有默认级别。",
+        "exempt_admin": "管理员没有花费上限，除非有管理员为其分配了级别。",
+        "exempt_principal": "当前登录没有用户账号（配置的管理员，或关闭了登录的控制台），因此没有预算限制。"
+      },
+      "kpiLimit": "月度预算",
+      "levelSub": "级别 {{level}}",
+      "kpiUsed": "已用",
+      "estimatedSub": "其中 {{share}} 为估算",
+      "kpiRemaining": "剩余",
+      "kpiResets": "重置日期",
+      "resetsSub": "每月 1 日 UTC 0 点",
+      "kpiPeriod": "月份",
+      "progress": "预算用量",
+      "percentUsed": "已用月度预算的比例",
+      "unlimited": "不限",
+      "bySource": "按来源",
+      "bySourceSub": "花费来自哪里",
+      "colSource": "来源",
+      "colSpend": "花费",
+      "colEstimated": "其中估算",
+      "colEvents": "计费次数",
+      "empty": "这个月没有花费。",
+      "note": "花费 = 模型 Token 数 × 平台价格表，加上 AgentCore 费用。调用没有上报用量时（部分运行时、长时间的评估任务），会先按估算计费，之后再用实测成本替换，因此合计金额事后仍可能变动。",
+      "source": {
+        "chat": "对话",
+        "v1": "API（/v1）",
+        "invoke": "直接调用",
+        "architect": "架构助手",
+        "eval": "评估",
+        "experiment": "实验",
+        "canary": "金丝雀发布",
+        "skill_lab": "Skill Lab",
+        "observability": "会话评估",
+        "codegen": "Studio AI 修复",
+        "knowledge": "知识库",
+        "tools": "工具与沙箱",
+        "studio": "Studio",
+        "governance": "治理",
+        "models_probe": "模型探测",
+        "coding": "Agent IDE"
+      },
+      "jobNotice": "这个任务的预估费用（{{estimate}}）超过了你本月剩余的预算（{{remaining}}）。它仍会运行，预算用完后会在下一个安全节点停止。预算将于 {{date}} 重置。",
+      "stop": {
+        "run": "已因消费预算停止：发起这次运行的人本月预算已用完，运行在下一个安全节点停止，不再继续回放，也不会启动评估。已回放的会话都会保留，但不会评分。",
+        "traffic": "已因消费预算提前结束：发送这批流量的人本月预算已用完，还有 {{count}} 条没有发送。已得到回复的部分都会保留。",
+        "train": "已因消费预算停止：发起这个任务的人本月预算已用完，训练在最近一个完成的步骤之后停止。预算重置或管理员提高上限后，可以继续运行。",
+        "notStarted": "未启动：这个任务排队期间，发起人本月预算已用完。预算重置或管理员提高上限后，请重新提交。"
+      }
+    },
+    "budgets": {
+      "note": "级别就是每个自然月（UTC）的美元预算。没有级别的成员归入默认级别；没有默认级别时不限。管理员不限，除非你为其分配级别。达到或超过上限后，新的计费操作会被拒绝；已经在运行的工作会继续完成。",
+      "notEnforced": "目前还没有级别，因此不做任何限制：会记录用量，但不会拒绝任何人。创建级别并分配成员，或把某个级别设为默认级别。",
+      "resetsOn": "将于 {{date}}（UTC 0 点）重置",
+      "kpiTotal": "本月花费",
+      "kpiBudgeted": "有上限的人数",
+      "kpiBudgetedSub": "适用上限的账号",
+      "kpiOver": "达到或超过上限",
+      "kpiOverSub": "另有 {{count}} 人已用到 80% 以上",
+      "kpiEstimated": "估算占比",
+      "kpiEstimatedSub": "按估算计费，之后由实测成本替换",
+      "levelsTitle": "级别",
+      "levelsSub": "每个级别一个月度美元预算；最多一个默认级别",
+      "levelsEmpty": "还没有级别。",
+      "newLevel": "新建级别",
+      "editLevel": "编辑级别",
+      "levelName": "名称",
+      "levelNamePlaceholder": "例如：标准",
+      "monthlyBudget": "月度预算（USD）",
+      "monthlyBudgetHint": "每人每个自然月（UTC）。",
+      "default": "默认",
+      "defaultHint": "没有单独级别的成员使用这个级别。管理员不会归入默认级别。",
+      "makeDefault": "作为没有级别的成员的默认级别",
+      "amountInvalid": "请输入 0 到 1,000,000 之间的金额。",
+      "levelSaved": "级别 {{name}} 已保存",
+      "levelCreated": "级别 {{name}} 已创建",
+      "levelDeleted": "级别 {{name}} 已删除",
+      "defaultSet": "{{name}} 已设为默认级别",
+      "defaultCleared": "{{name}} 不再是默认级别",
+      "setDefault": "设为默认",
+      "unsetDefault": "取消默认",
+      "colLevel": "级别",
+      "colMonthly": "月度预算",
+      "colAssigned": "已分配",
+      "assignedPlusDefault": "{{count}} + 默认",
+      "deleteTitle": "删除级别 {{name}}？",
+      "deleteBody": "只有没有人被分配到某个级别时才能删除它，这样不会有人悄悄落入默认级别或变成不限。",
+      "deleteAssigned": "有 {{count}} 个账号被分配到这个级别，请先把他们移到其他级别。",
+      "deleteDefault": "这是默认级别：删除后，没有级别的成员将变为不限。",
+      "peopleTitle": "成员",
+      "peopleSub": "本月每个账号的上限和花费",
+      "peopleEmpty": "没有账号。",
+      "search": "搜索用户名",
+      "colPerson": "成员",
+      "colLimit": "上限",
+      "colUsed": "已用",
+      "colRemaining": "剩余",
+      "colEstimated": "估算",
+      "colTopSource": "主要来源",
+      "roleAdmin": "管理员",
+      "roleMember": "成员",
+      "status": {
+        "pending": "待审批",
+        "active": "正常",
+        "disabled": "已禁用"
+      },
+      "assign": "修改",
+      "assignTitle": "{{name}} 的预算",
+      "assigned": "{{name}} 的预算已保存",
+      "level": "级别",
+      "noLevel": "无级别",
+      "levelHintAdmin": "管理员不限，除非为其设置了级别或个人额度。",
+      "levelHintDefault": "没有级别时，适用默认级别 {{level}}。",
+      "levelHintNone": "没有级别时不限（当前没有默认级别）。",
+      "override": "个人额度（USD / 月）",
+      "overrideHint": "只替代这个人的级别预算。留空表示不设置。",
+      "overridePlaceholder": "无",
+      "clear": "清除",
+      "effective": "生效上限",
+      "basis": {
+        "override": "个人额度",
+        "level": "级别 {{level}}",
+        "default_level": "默认级别 {{level}}",
+        "unlimited": "不限：没有级别，也没有默认级别",
+        "exempt_admin": "管理员：不限",
+        "exempt_principal": "无账号：不限"
+      },
+      "unattributedTitle": "无账号的花费",
+      "unattributedSub": "配置的管理员、关闭了登录的控制台的操作者、没有记录创建者的 API Key，以及已删除的账号；从不受限",
+      "colPrincipal": "计入",
+      "deletedAccount": "已删除的账号",
+      "unknownPrincipal": "未知",
+      "settingsTitle": "估算",
+      "settingsSub": "调用没有上报用量时按估算计费，之后由对账替换",
+      "turnEstimate": "不透明运行时每轮费用（USD）",
+      "turnEstimateHint": "运行时不上报 Token 用量时（Strands zip、BYOC、Studio、A2A），每轮按这个金额计费。默认 {{value}}。",
+      "estimateInvalid": "请输入 0 到 {{max}} 之间的金额。",
+      "estimateSaved": "估算已保存",
+      "estimateReset": "估算已恢复默认",
+      "resetDefault": "恢复默认",
+      "updated": "{{who}} 于 {{when}} 修改",
+      "userCardTitle": "花费预算",
+      "userCardSub": "所有工作区共用一份预算",
+      "openBudgets": "全部预算",
+      "currentLine": "本月：已用 {{used}}，上限 {{limit}}",
+      "kpiEstimatedReconciled": "按估算计费 · 上次对账 {{when}}",
+      "reconcile": {
+        "title": "对账",
+        "sub": "每 {{minutes}} 分钟一次：用实测的 span 成本替换估算，并把 AgentCore 费用计入每个人",
+        "health": {
+          "off": "已关闭",
+          "waiting": "尚未运行",
+          "failing": "失败",
+          "lagging": "滞后",
+          "ok": "已同步"
+        },
+        "offNote": "此服务器已关闭对账（LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false）。估算会一直计费，不透明的运行时不会被实测，AgentCore 费用（Runtime 计算、Memory、Gateway、Web Search、评估）在重新开启之前都不会计费。",
+        "lastRun": "上次运行",
+        "never": "从未运行",
+        "lag": "落后",
+        "lagValue": "{{count}} 分钟",
+        "pending": "待对账的会话",
+        "lastTick": "上次对账",
+        "lastTickValue": "{{sessions}} 个会话，写入 {{rows}} 行，替换 {{superseded}} 条估算，耗时 {{seconds}} 秒",
+        "replaced": "本月被替换的估算",
+        "paused": "已暂停的在线评估",
+        "failures": "上次对账有 {{count}} 个部分失败，下次对账会重新读取：",
+        "byKind": "按类型的花费，{{period}}",
+        "byKindHint": "实测：精确计数和 span Token。估算：尚未对账的轮次和任务估算、Runtime 计算（会话时长加空闲尾段，× 校准系数）以及内置评估器 Token。",
+        "byKindEmpty": "本月没有任何计费。",
+        "colKind": "类型",
+        "colTotal": "合计",
+        "colMeasured": "实测",
+        "colEstimated": "估算占比",
+        "agentcoreFee": "AgentCore 费用"
+      },
+      "kind": {
+        "tokens": "模型 Token",
+        "turn_estimate": "轮次估算",
+        "job_estimate": "任务估算",
+        "runtime_compute": "Runtime 计算",
+        "evaluation_builtin": "内置评估",
+        "evaluation_custom": "自定义评估",
+        "web_search": "Web Search",
+        "memory_event": "Memory 事件",
+        "memory_retrieval": "Memory 检索",
+        "gateway_call": "Gateway 和 Policy 调用",
+        "kb_query": "知识库查询",
+        "code_interpreter": "Code Interpreter"
+      },
+      "calibration": {
+        "title": "Runtime 校准",
+        "sub": "每小时按运行时计算：AWS 内存和 CPU 指标 ÷ span 中的计费会话小时数。实测系数有 {{count}} 个会话支撑后才会替换种子值。",
+        "lastRun": "上次校准的是从 {{hour}} 开始的一小时（于 {{when}}）：{{samples}} 个运行时样本",
+        "neverRun": "尚未校准：所有运行时都使用模型页上的种子值。",
+        "failures": "{{count}} 个工作区无法校准：",
+        "empty": "还没有实测系数。",
+        "colRuntime": "运行时",
+        "colGb": "常驻 GB",
+        "colVcpu": "vCPU",
+        "colSessions": "样本",
+        "colUsed": "采用",
+        "harness": "Harness",
+        "runtime": "Runtime Agent",
+        "seed": "种子值 {{value}}",
+        "sessionsValue": "{{sessions}} 个会话，{{hours}} 小时",
+        "used": "实测值",
+        "seedUsed": "种子值（会话不足）",
+        "loadReport": "与 Cost Explorer 对比",
+        "refreshReport": "刷新对比",
+        "reportNote": "仅供参考。Cost Explorer 覆盖整个 AWS 账号：所有区域，以及共用该账号的所有控制台（例如 prod 和 prod2），因此通常会高于本控制台的账本。它不会向任何人计费。每次刷新每个账号花费 $0.01，结果缓存一小时。",
+        "account": "账号 {{account}}（{{regions}}）",
+        "accountError": "无法读取 Cost Explorer：{{error}}",
+        "totals": "本控制台账本 {{ledger}} · 该账号的 Cost Explorer {{bill}} · 账本占比 {{share}}",
+        "colCategory": "类别",
+        "colLedger": "本控制台账本",
+        "colCostExplorer": "Cost Explorer（整个账号）",
+        "reportEmpty": "本月没有 AgentCore 费用。",
+        "generated": "读取于 {{when}}",
+        "generatedCached": "读取于 {{when}}（缓存）",
+        "category": {
+          "runtime": "Runtime 计算",
+          "evaluations_builtin": "内置评估",
+          "evaluations_custom": "自定义评估",
+          "web_search": "Web Search",
+          "memory": "Memory",
+          "gateway": "Gateway 和 Policy",
+          "knowledge_base": "知识库",
+          "code_interpreter": "Code Interpreter",
+          "browser": "Browser",
+          "other": "其他",
+          "overhead": "工作区开销（从不计入个人）"
+        }
+      }
+    },
+    "contextLayer": {
+      "title": "上下文层",
+      "desc": "此工作区读取受治理上下文的 COA（Context Ontology Accelerator）部署。Agent 和本页面都以你的身份调用 COA，因此你能看到什么由 COA 的授权决定。",
+      "notConnected": "未连接",
+      "askAdmin": "此工作区尚未连接 COA 部署。请联系管理员连接。",
+      "deployment": "部署",
+      "openConsole": "打开 COA 控制台",
+      "region": "区域",
+      "connection": "出站凭证",
+      "apiEndpoint": "REST 端点",
+      "connectedBy": "连接人",
+      "updatedAt": "更新时间",
+      "callbackMissing": "Launchpad 的 OAuth 回调地址尚未登记到 COA 的 Agent 客户端，授权无法完成。请把它加入 COA 部署的 agentOauthCallbackUrls 上下文。",
+      "agentOauthOff": "该 COA 部署已没有 Agent OAuth 客户端。",
+      "myAuth": "我的授权",
+      "myAuthSub": "你授权一次后，Launchpad 才会以你的身份访问 COA。",
+      "agents": "使用它的 Agent",
+      "hiddenAgent": "你无权查看的 Agent",
+      "health": {
+        "mcp": "MCP 运行时",
+        "serve": "Serve 运行时",
+        "agentOauth": "Agent OAuth",
+        "callback": "回调已登记",
+        "unknown": "未知"
+      },
+      "connect": {
+        "intro": "按栈前缀、环境和区域指定 COA 部署，其余信息由 Launchpad 自动发现，并创建 OAuth2 出站凭证。",
+        "prefix": "栈前缀",
+        "prefixHint": "部署 COA 时使用的前缀，例如 coa-w2。",
+        "env": "环境",
+        "region": "COA 区域",
+        "regionHint": "可以与此工作区的区域不同。",
+        "connection": "已有出站凭证（可选）",
+        "connectionHint": "留空则创建 coa-<prefix>；也可以填写已持有 COA Agent 客户端的 OAuth2 出站凭证。",
+        "submit": "连接",
+        "reconnect": "重新连接",
+        "busy": "连接中…",
+        "done": "上下文层已连接。",
+        "demoParam": "体验账号 SSM 参数（可选）",
+        "demoParamHint": "由 samples/coa-demo/demo_account.py ensure 写入的 SecureString，必须位于 /<prefix>/launchpad/ 之下。所有成员都能查看其中的用户名和密码。留空则不提供体验账号。",
+        "demoProblem": {
+          "not_found": "COA 区域中不存在该体验账号参数。",
+          "not_secure_string": "该体验账号参数不是 SecureString。",
+          "bad_shape": "该体验账号参数不是包含非空 username 和 password 的 JSON。"
+        }
+      },
+      "disconnect": {
+        "action": "断开连接",
+        "title": "断开上下文层？",
+        "body": "断开后 Agent 无法再挂载它。出站凭证 {{connection}} 和控制台工作负载身份会保留，可在出站凭证页删除，或通过 teardown 删除。",
+        "done": "上下文层已断开。",
+        "refused": "仍有 Agent 挂载上下文层：{{agents}}。请先解除挂载。"
+      },
+      "auth": {
+        "none": "未授权",
+        "pending": "待完成",
+        "authorized": "已授权",
+        "revoked": "已撤销",
+        "authorize": "授权",
+        "reauthorize": "重新授权",
+        "waiting": "请在新标签页中完成 COA 登录…",
+        "open": "打开 COA 登录",
+        "revoke": "撤销",
+        "revokedToast": "已撤销。下次调用 COA 时会要求你重新登录。",
+        "myConnections": "我的授权",
+        "since": "授权于 {{at}}"
+      },
+      "namespaces": {
+        "title": "命名空间",
+        "sub": "COA 允许你查看的范围",
+        "needAuth": "请先授权，再列出 COA 允许你查看的命名空间。",
+        "empty": "COA 没有向你开放任何命名空间。",
+        "colName": "名称",
+        "colId": "ID",
+        "colStatus": "状态",
+        "colSources": "数据源",
+        "emptyHint": "命名空间及其授权由 COA 管理员在 COA 控制台中创建。获得授权后，命名空间会出现在这里。",
+        "browse": "浏览"
+      },
+      "wizard": {
+        "title": "上下文层（COA）",
+        "sub": "受治理的指标、本体和文档，以对话者本人的身份读取",
+        "notConnected": "此 Agent 挂载了 COA 命名空间，但工作区尚未连接上下文层。",
+        "authHint": "只在从列表中选择时需要：Agent 会请每个人分别授权。",
+        "namespace": "命名空间",
+        "pickHint": "每个 Agent 一个命名空间，其 ID 会写入 Agent 的指令。",
+        "manualHint": "授权后可从你能看到的命名空间中选择，也可以直接粘贴命名空间 ID。",
+        "badId": "命名空间 ID 是 UUID。",
+        "none": "无",
+        "namePlaceholder": "显示名称（可选）",
+        "remove": "移除",
+        "module": "打开上下文层页面",
+        "noteHarness": "每轮对话都携带提问者本人的 COA 令牌；未授权时，对话中会先出现授权卡片。公开 /v1 API 无法调用此 Agent。",
+        "noteStrands": "Agent 会自行获取每位成员的 COA 令牌，每位成员在对话中授权一次即可。公开 /v1 API 无法调用此 Agent。"
+      },
+      "openInCoa": "在 COA 中打开",
+      "errors": {
+        "authorize": "请先授权 Launchpad 以你的身份读取 COA。",
+        "reauthorize": "COA 已不再接受你的授权，请重新授权后继续。",
+        "forbidden": "COA 拒绝了此操作：你没有相应授权。授权由 COA 管理员在 COA 控制台中管理。",
+        "notFound": "COA 中没有该命名空间或条目，或者不向你开放。"
+      },
+      "gate": {
+        "connectFirst": "尚未连接 COA 部署，请先在概览页连接。",
+        "authorizeFirst": "本页面以你的身份读取 COA。请先授权 Launchpad 一次。"
+      },
+      "services": {
+        "title": "COA 服务",
+        "sub": "COA 向你报告的自身依赖健康状况",
+        "dynamodb": "DynamoDB",
+        "neptune_kg": "知识图谱（Neptune）",
+        "opensearch": "向量检索（OpenSearch）",
+        "graph_store": "本体图存储",
+        "vector_store": "本体向量存储",
+        "bedrock_embeddings": "Bedrock 向量化",
+        "description_llm": "描述生成模型"
+      },
+      "namespace": {
+        "basic": "命名空间",
+        "owner": "所有者",
+        "description": "描述"
+      },
+      "tabs": {
+        "sources": "数据源",
+        "metrics": "指标",
+        "ontology": "本体"
+      },
+      "sources": {
+        "title": "数据源",
+        "sub": "COA 为此命名空间读取的数据库和文档",
+        "empty": "此命名空间还没有数据源。数据源在 COA 控制台中连接。",
+        "colName": "名称",
+        "colType": "类型",
+        "colStatus": "状态",
+        "colTables": "表数",
+        "colUpdated": "更新时间"
+      },
+      "metrics": {
+        "title": "受治理指标",
+        "sub": "Agent 会优先使用这些定义，而不是自行计算",
+        "empty": "此命名空间还没有受治理指标。指标在 COA 控制台中定义。",
+        "colName": "指标",
+        "colUnit": "单位",
+        "colSynonyms": "同义词",
+        "colDialects": "表达式",
+        "colTable": "源表"
+      },
+      "ontology": {
+        "title": "本体",
+        "sub": "COA 在此命名空间中掌握的类",
+        "classCount": "{{count}} 个类",
+        "failed": "COA 未能列出 {{count}} 个本体的类，请稍后重试。",
+        "truncated": "这里只列出了本体的一部分。在 COA 中打开可查看全部内容。",
+        "search": "筛选类",
+        "empty": "此命名空间还没有本体类。本体在 COA 控制台中归纳或上传。",
+        "colClass": "类",
+        "colDescription": "描述",
+        "colOntology": "本体"
+      },
+      "playground": {
+        "title": "试问",
+        "openCoa": "COA 试问页",
+        "reset": "新对话",
+        "you": "你",
+        "streaming": "回答中",
+        "thinking": "COA 正在处理…",
+        "tierHint": "作答的 COA 层级：T1 受治理指标，T2 生成 SQL，T3 文档与图谱",
+        "confidence": "置信度 {{pct}}%",
+        "partial": "部分结果",
+        "guardrail": "已被护栏拦截",
+        "stopped": "已停止",
+        "citations": "参考来源（{{count}}）",
+        "steps": "执行轨迹（{{count}} 步）",
+        "rows": "{{count}} 行",
+        "rowsTruncated": "显示 {{count}} 行中的 {{shown}} 行",
+        "pickNamespace": "选择命名空间",
+        "needNamespace": "请选择要提问的命名空间。",
+        "mode": "模式",
+        "modeHint": "深度推理会运行 COA 的多步推理循环，速度较慢。",
+        "modeStandard": "标准",
+        "modeDeep": "深度推理",
+        "strategy": "SQL 策略",
+        "strategyHint": "由哪个引擎回答结构化问题。",
+        "strategyDefault": "COA 默认",
+        "empty": "就此命名空间提一个问题。COA 会在你的授权范围内作答。",
+        "placeholder": "例如：每个部门各有多少名员工？",
+        "send": "提问",
+        "stop": "停止",
+        "hint": "Enter 发送，Shift+Enter 换行。COA 以你的身份作答，追问会延续同一段对话。"
+      },
+      "attach": {
+        "action": "挂到 Agent",
+        "title": "把 {{name}} 挂到 Agent",
+        "noPermission": "你没有部署 Agent 的权限。",
+        "newTitle": "新建 Agent",
+        "newHint": "打开 Agent 创建向导，并已选好此命名空间。",
+        "newHarness": "新建 Harness Agent",
+        "newStrands": "新建 Strands Agent",
+        "existingTitle": "已有 Agent",
+        "existingHint": "你可以重新发布的 Harness 和 HTTP Strands Agent。保存后会发布新版本。",
+        "agent": "Agent",
+        "pick": "选择 Agent",
+        "none": "你没有可重新发布的 Harness 或 HTTP Strands Agent。",
+        "replaces": "此 Agent 当前挂载的是 {{name}}，保存后将替换为此命名空间。",
+        "already": "此 Agent 已挂载此命名空间。",
+        "openEditor": "打开编辑器"
+      },
+      "demo": {
+        "tag": "体验账号",
+        "useOwn": "用我的 COA 账号授权",
+        "useDemo": "用体验账号授权",
+        "notice": "所有成员共用的只读体验账号，仅能访问 COA 管理员开放给它的命名空间。在体验账号下的提问，其他使用体验账号的人在 COA 中可以看到，请勿输入敏感信息。",
+        "username": "用户名",
+        "password": "密码",
+        "show": "显示",
+        "hide": "隐藏",
+        "copy": "复制",
+        "copied": "已复制。",
+        "copyFailed": "无法复制，请手动选中后复制。",
+        "signInHint": "把以上用户名和密码复制到 COA 登录页。",
+        "chatLink": "没有 COA 账号？使用体验账号",
+        "chatHint": "打开授权页面，用以上用户名和密码登录。",
+        "switchToOwn": "切换为我的账号",
+        "otherSession": "浏览器已登录了另一个 COA 账号？请先退出 COA 登录：",
+        "wrongDemo": "这次授权用的是浏览器中已登录的 COA 账号，而不是体验账号。请按下面的步骤退出 COA 登录，然后重新授权。",
+        "wrongOwn": "浏览器中的 COA 会话仍然登录着体验账号，所以这次授权用的还是体验账号。请按下面的步骤退出 COA 登录，然后重新授权。",
+        "guide": {
+          "titleOwn": "切换为我自己的 COA 账号",
+          "titleDemo": "改用体验账号",
+          "intro": "COA 会沿用浏览器中已登录的账号，所以切换需要三步：",
+          "revoke": "撤销当前授权。",
+          "signOut": "退出 COA 登录。它会在新标签页中打开，完成后停在 COA 控制台。",
+          "signOutAction": "退出 COA 登录",
+          "signOutManual": "在 COA 控制台中退出登录",
+          "authorizeOwn": "重新授权，并用你自己的 COA 账号登录。",
+          "authorizeDemo": "重新授权，并用体验账号登录。"
+        }
+      }
+    },
+    "coding": {
+      "title": "Agent IDE",
+      "desc": "在浏览器 IDE 中构建 Agent：codex 编码助手在 AgentCore microVM 中编写、运行并测试代码，Launchpad 再把结果部署为普通 Agent。",
+      "runtime": {
+        "title": "Agent IDE 运行时",
+        "status": {
+          "not_installed": "未安装",
+          "installing": "安装中",
+          "ready": "就绪",
+          "failed": "失败",
+          "uninstalling": "卸载中"
+        },
+        "install": "安装",
+        "retryInstall": "重新安装",
+        "repair": "修复",
+        "uninstall": "卸载",
+        "installStarted": "已开始安装，需要几分钟。",
+        "uninstallStarted": "已开始卸载。",
+        "uninstallTitle": "卸载 Agent IDE 运行时？",
+        "uninstallBody": "将删除本工作区的 Agent IDE 运行时及其角色；在重新安装之前，成员无法打开或运行自己的代码仓库。代码仓库快照会保留，重新安装后代码仓库即可恢复。",
+        "adminNotInstalled": "本工作区尚未安装 Agent IDE 运行时。只需安装一次：构建运行时镜像，并创建一个由平台托管、供所有成员的代码仓库共用的 AgentCore Runtime。",
+        "memberNotInstalled": "本工作区尚未安装 Agent IDE 运行时，请联系管理员安装。",
+        "failedAdmin": "上次安装失败。请查看任务日志后重试。",
+        "failedMember": "Agent IDE 运行时不可用，请联系管理员修复。",
+        "installingNote": "安装中：正在构建镜像并创建运行时，本页会自动刷新。",
+        "uninstallingNote": "正在卸载 Agent IDE 运行时…",
+        "models": "模型",
+        "image": "镜像",
+        "arn": "运行时 ARN",
+        "log": "任务日志"
+      },
+      "repos": {
+        "title": "代码仓库",
+        "new": "新建代码仓库",
+        "mine": "我的",
+        "all": "全部仓库",
+        "scope": "显示范围",
+        "search": "搜索代码仓库",
+        "allNote": "本工作区的全部仓库。你可以删除任意代码仓库以做清理，但只有创建者能打开仓库的 IDE。",
+        "colName": "代码仓库",
+        "colStatus": "状态",
+        "colAgent": "已部署的 Agent",
+        "colUpdated": "更新时间",
+        "open": "打开",
+        "rename": "编辑",
+        "empty": "还没有代码仓库",
+        "emptyBody": "新建一个代码仓库，描述你想要的 Agent，编码助手会把它构建出来。",
+        "noMatch": "没有匹配的代码仓库。",
+        "created": "已创建代码仓库 {{name}}",
+        "saved": "代码仓库已保存",
+        "deleted": "已删除代码仓库 {{name}}",
+        "deleteTitle": "删除该代码仓库？",
+        "deleteBody": "确定删除 {{name}}？其文件、对话和快照都会被删除；它部署的 Agent 会保留。",
+        "runningNoDelete": "有回合正在运行，请先中断再删除代码仓库。"
+      },
+      "form": {
+        "createTitle": "新建代码仓库",
+        "editTitle": "编辑代码仓库",
+        "name": "名称",
+        "namePlaceholder": "例如 weather-assistant",
+        "nameHint": "只有你能看到和打开自己的代码仓库。",
+        "nameRequired": "请输入名称。",
+        "nameTooLong": "最多 {{max}} 个字符。",
+        "description": "描述",
+        "descriptionPlaceholder": "这个 Agent 要做什么？（可选）",
+        "descriptionHint": "{{count}} / {{max}}"
+      },
+      "status": {
+        "idle": "空闲",
+        "running": "运行中"
+      },
+      "turnStatus": {
+        "inProgress": "运行中",
+        "completed": "已完成",
+        "interrupted": "已中断",
+        "failed": "失败",
+        "abandoned": "已丢弃"
+      },
+      "itemStatus": {
+        "inProgress": "运行中",
+        "completed": "完成",
+        "failed": "失败",
+        "declined": "已拒绝"
+      },
+      "changeKind": {
+        "add": "新增",
+        "update": "修改",
+        "delete": "删除"
+      },
+      "effort": {
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "xhigh": "极高"
+      },
+      "usage": {
+        "input": "输入",
+        "cached": "缓存命中",
+        "cacheWrite": "缓存写入",
+        "output": "输出",
+        "reasoning": "推理"
+      },
+      "ide": {
+        "files": "文件",
+        "noFiles": "还没有文件",
+        "notFound": "代码仓库 {{id}} 不存在，或不属于你。",
+        "backToList": "返回代码仓库列表",
+        "openAgent": "打开 Agent"
+      },
+      "layout": {
+        "workbench": "编辑器与变更",
+        "collapseFiles": "收起文件面板",
+        "expandFiles": "展开文件面板",
+        "collapseWorkbench": "收起编辑器面板",
+        "expandWorkbench": "展开编辑器面板",
+        "resizeFiles": "调整文件面板宽度",
+        "resizeWorkbench": "调整编辑器面板宽度",
+        "resizeHint": "拖动或按 ←/→ 调整宽度（按住 Shift 步长更大）；双击恢复默认宽度。",
+        "openTabs": "已打开文件：{{count}}",
+        "turnChanges": "上一回合变更：{{count}}"
+      },
+      "editor": {
+        "unsaved": "未保存",
+        "readOnlyRunning": "回合运行期间只读",
+        "view": "视图",
+        "source": "源码",
+        "preview": "预览",
+        "saving": "保存中…",
+        "saveHint": "保存（⌘/Ctrl+S）",
+        "saved": "已保存 {{path}}",
+        "conflict": "打开该文件后，编码助手修改了它。重新加载会丢弃你的修改；覆盖则用你的版本替换较新的版本。",
+        "changedOnDisk": "你有未保存的修改时，该文件在磁盘上被修改了。",
+        "reload": "重新加载",
+        "overwrite": "覆盖",
+        "binary": "二进制文件，不予显示。",
+        "closeTab": "关闭 {{name}}",
+        "missing": "仓库中已没有该文件（编码助手可能删除或移动了它）。"
+      },
+      "changes": {
+        "tab": "变更",
+        "scope": "差异范围",
+        "turn": "上一回合",
+        "worktree": "未提交",
+        "count": "变更：{{count}}",
+        "files": "变更文件",
+        "copyPatch": "复制补丁",
+        "copied": "补丁已复制",
+        "emptyTurn": "上一回合没有修改文件。",
+        "emptyWorktree": "没有未提交的变更。",
+        "status": {
+          "A": "新增",
+          "M": "修改",
+          "D": "删除",
+          "R": "重命名"
+        }
+      },
+      "conversation": {
+        "title": "对话",
+        "empty": "描述你想构建的 Agent。编码助手会在本仓库的 microVM 中编写代码、运行并测试。",
+        "you": "你",
+        "working": "处理中…",
+        "reasoning": "推理过程",
+        "reasoningLive": "推理中…",
+        "command": "命令",
+        "running": "运行中",
+        "exit": "退出码 {{code}}",
+        "noOutput": "无输出",
+        "waitingOutput": "等待输出…",
+        "truncated": "… 较早的输出已截断",
+        "fileChanges": "变更文件（{{count}}）",
+        "openDiff": "查看差异",
+        "plan": "计划",
+        "retrying": "{{message}}（重试中）",
+        "other": "活动：{{type}}",
+        "effortOf": "推理强度 {{effort}}",
+        "tokens": "{{value}} tokens",
+        "outsideRepo": "位于仓库之外，无差异可显示"
+      },
+      "markdown": {
+        "openFile": "在编辑器中打开 {{path}}",
+        "openFileLine": "在编辑器中打开 {{path}} 第 {{line}} 行",
+        "linkOutside": "链接指向本仓库之外，不会跟随。",
+        "linkBlocked": "不会跟随该链接。",
+        "image": "[图片未加载：{{alt}} {{src}}]"
+      },
+      "notice": {
+        "appServerExited": "编码助手进程已重启。",
+        "serverRequestDeclined": "已自动拒绝一个审批请求（命令无需审批即可运行）：",
+        "restored": "已从最新快照恢复代码仓库。",
+        "threadResumeFailed": "无法恢复之前的对话；编码助手将在新会话中继续，不带之前的上下文。"
+      },
+      "composer": {
+        "placeholder": "描述要构建或修改的内容（Enter 发送，Shift+Enter 换行）",
+        "model": "模型",
+        "effort": "推理强度",
+        "hint": "在后台运行：你可以离开本页。",
+        "send": "发送",
+        "sending": "启动中…",
+        "interrupt": "中断",
+        "interrupting": "中断中…",
+        "runtimeNotReady": "Agent IDE 运行时尚未就绪。",
+        "tooLong": "提示词超过 {{max}} KB。"
+      },
+      "stream": {
+        "connecting": "连接中…",
+        "retrying": "重新连接中…",
+        "paused": "标签页隐藏期间已暂停"
+      },
+      "download": {
+        "button": "下载",
+        "file": "下载该文件",
+        "fileNamed": "下载 {{name}}",
+        "savedVersion": "下载的是已保存的版本。先保存，下载才包含你的修改。",
+        "repo": "下载代码仓库（.zip）",
+        "repoHint": "将仓库文件打包为 .zip：包含已跟踪和新建的文件，不含 .git、被忽略的文件和依赖目录。",
+        "preparing": "正在准备下载…",
+        "started": "正在下载 {{name}}"
+      },
+      "deploy": {
+        "button": "部署为 Agent",
+        "redeploy": "重新部署",
+        "title": "部署为 Agent",
+        "redeployTitle": "重新部署 Agent",
+        "body": "Launchpad 会为本仓库创建快照并导出，再通过自带代码流水线部署；校验、IAM、注册表与可观测性都与上传 zip 相同。",
+        "agentName": "Agent 名称",
+        "agentNameHint": "3–48 个字符：小写字母、数字和连字符，以字母开头。",
+        "nameInvalid": "请使用 3–48 个小写字母、数字或连字符，并以字母开头。",
+        "description": "描述",
+        "artifactKind": "制品类型",
+        "kind": {
+          "auto": "自动识别",
+          "code_zip": "代码 zip（Python）",
+          "container_source": "Dockerfile 上下文"
+        },
+        "kindHint": {
+          "auto": "仓库根目录有 Dockerfile 时构建容器，否则按 Python 代码 zip 部署。",
+          "code_zip": "打包为 Python 代码 zip，运行在 AgentCore Python 运行时上。",
+          "container_source": "由 CodeBuild 根据仓库根目录的 Dockerfile 构建为 ARM64 容器。"
+        },
+        "entrypoint": "入口文件",
+        "python": "Python 版本",
+        "submit": "部署",
+        "deploying": "部署中…",
+        "created": "已创建 Agent {{id}}，部署正在进行。",
+        "updated": "Agent {{id}} 正在重新部署。",
+        "openAgent": "打开 Agent",
+        "redeployNote": "本仓库已部署过一个 Agent，再次部署会为它发布新版本：",
+        "noPermission": "你没有部署 Agent 的权限。",
+        "whileRunning": "请等待正在运行的回合结束。",
+        "failure": {
+          "entrypoint_missing": "仓库根目录下没有 {{entrypoint}}。请先创建它，或把入口文件设为 Agent 实际提供服务的文件。",
+          "candidates": "仓库根目录下的 Python 文件：{{files}}。",
+          "dockerfile_missing": "按 Dockerfile 上下文部署时，仓库根目录下必须有 Dockerfile。",
+          "invalid_spec": "部署设置不是有效的 Agent：{{errors}}"
+        }
       }
     },
     "environments": {
@@ -10404,6 +11748,196 @@
       "readDetailHint": "从 AWS 重新读取这次批量评估的结果，补齐未评分会话的原因。只读，不重新运行，也不产生费用。",
       "readDetailDone": "已读取失败明细",
       "notComparable": "各次运行未评分的场景不同，均分不能直接对比。"
+    },
+    "navMode": {
+      "showBusiness": "只显示常用入口",
+      "showExpert": "显示全部页面",
+      "hint": "只筛选侧边栏：所有页面仍可通过 URL 打开"
+    },
+    "glossary": {
+      "title": "术语表",
+      "search": "查找术语",
+      "none": "没有匹配的术语"
+    },
+    "palette": {
+      "label": "命令面板",
+      "search": "搜索",
+      "placeholder": "搜索页面、Agent 和术语……",
+      "group": {
+        "page": "页面",
+        "agent": "Agent",
+        "glossary": "术语表",
+        "help": "帮助"
+      },
+      "openAgent": "打开 {{name}}",
+      "chatWith": "与 {{name}} 对话",
+      "openGlossary": "打开术语表",
+      "openVideos": "观看演示视频",
+      "takeTour": "开始控制台导览",
+      "none": "没有匹配项",
+      "move": "移动",
+      "run": "打开",
+      "close": "关闭",
+      "loadingAgents": "正在加载 Agent……"
+    },
+    "help": {
+      "label": "帮助",
+      "palette": "命令面板",
+      "tour": "开始导览",
+      "launch": "上线清单",
+      "glossary": "术语表",
+      "videos": "演示视频"
+    },
+    "onboard": {
+      "launch": {
+        "title": "上线清单",
+        "launched": "已上线",
+        "allDone": "这个工作区已经能构建、运行、评估 Agent，并持续评估线上流量。",
+        "progress": "已完成 {{done}}/{{total}}",
+        "next": "下一步：",
+        "done": "已完成",
+        "expand": "展开步骤",
+        "collapse": "收起步骤",
+        "hideHint": "在这个工作区隐藏清单（可从帮助菜单重新打开）",
+        "askAdmin": "请联系管理员",
+        "workspace": "工作区就绪",
+        "workspaceHint": "这个控制台所使用的 AWS 账号和区域，已完成初始化。",
+        "workspaceHintMember": "由管理员为这个控制台所使用的 AWS 账号和区域完成初始化。",
+        "workspaceCta": "查看",
+        "agent": "首个 Agent 上线",
+        "agentHint": "托管 Harness Agent 约 30 秒上线，无需写代码。",
+        "agentCta": "创建一个",
+        "chat": "和它对话",
+        "chatHint": "一次对话就能看到链路、Token 和花费。",
+        "chatCta": "打开对话",
+        "evaluate": "给它打分",
+        "evaluateHint": "用评估器跑一遍真实会话或数据集，看看哪里还不够好。",
+        "evaluateCta": "运行评估",
+        "online": "持续评估线上流量",
+        "onlineHint": "对新到的会话抽样打分，质量下降时你会第一时间看到。",
+        "onlineCta": "配置在线评估"
+      },
+      "tour": {
+        "label": "控制台导览",
+        "counter": "{{n}} / {{total}}",
+        "skip": "跳过",
+        "back": "上一步",
+        "next": "下一步",
+        "done": "知道了",
+        "end": "结束导览",
+        "cmdkTitle": "一个快捷键到达任何地方",
+        "cmdkBody": "按 {{shortcut}}（或 /）然后输入：页面、Agent、操作，或者一个你不认识的词。这是在控制台里移动最快的方式。",
+        "launchTitle": "你的上线清单",
+        "launchBody": "从空工作区到一个线上流量持续被打分的 Agent，一共五步。每一步都会根据实际情况自动打勾；不再需要时可以把它隐藏。",
+        "statsTitle": "工作区概况",
+        "statsBody": "运行中的 Agent、近 24 小时的会话、注册资产、评估通过率和在线质量。显示“—”表示暂时还没有可统计的内容。",
+        "agentsTitle": "最近部署",
+        "agentsBody": "最新的 Agent 及其状态；仍在部署或卡住的会显示当前所处的阶段。打开一个即可查看详情、端点和版本。",
+        "healthTitle": "服务状态",
+        "healthBody": "这个控制台用到的每个 AgentCore 服务，以及它在当前工作区是否就绪。每一行都链接到配置它的页面。",
+        "modulesTitle": "所有模块，按组排列",
+        "modulesBody": "开发、运行、评估、学习和配置。分组可以折叠；底部的开关可以只显示常用入口，或显示全部页面。",
+        "helpTitle": "帮助随时都在",
+        "helpBody": "可以从这个按钮重新开始导览、找回上线清单，或打开术语表和演示视频。"
+      }
+    },
+    "models": {
+      "title": "模型",
+      "desc": "平台自身调用或预选的模型。覆盖设置立即生效，无需重启。",
+      "roles": "模型角色",
+      "noteGlobal": "修改会立即作用于本部署的所有工作区和成员；每个部署各自保存覆盖设置。优先级：控制台覆盖 > LAUNCHPAD_* 环境变量 > launchpad.yaml > 内置默认值。",
+      "noteJudge": "更换评审模型后，评估分数与之前的运行不再可比。",
+      "noteStored": "已有的 Agent、评估器和已安装的预设保留创建时的模型 ID；只有新建的才会采用修改。",
+      "forbiddenBody": "只有管理员可以查看和修改平台模型。",
+      "col": {
+        "role": "角色",
+        "current": "生效模型",
+        "change": "修改"
+      },
+      "overridden": "已覆盖",
+      "isDefault": "默认",
+      "defaultValue": "默认值：",
+      "updated": "{{who}} 于 {{when}} 修改",
+      "none": "无",
+      "custom": "自定义模型 ID…",
+      "customPlaceholder": "例如 {{example}}",
+      "invalid": "该角色不接受此模型 ID。",
+      "familyOnly": "仅限 {{families}}",
+      "needsTools": "需要工具调用",
+      "pick": "{{role}}的模型",
+      "probe": "探测",
+      "probing": "探测中…",
+      "probeOk": "正常 · {{ms}} ms · {{region}}",
+      "probeFail": "{{code}}：{{message}}（{{region}}）",
+      "check": {
+        "converse": "Converse",
+        "tool_use": "工具调用"
+      },
+      "save": "保存",
+      "reset": "恢复默认",
+      "resetHint": "移除控制台覆盖，角色恢复为默认值。",
+      "saved": "{{role}}：已保存",
+      "resetDone": "{{role}}：已恢复默认",
+      "confirmSaveTitle": "修改{{role}}的模型？",
+      "confirmSaveBody": "{{model}} 将成为{{role}}的模型。",
+      "confirmResetTitle": "将{{role}}的模型恢复为默认值？",
+      "confirmResetBody": "{{role}}的模型将恢复为 {{model}}。",
+      "confirmGlobal": "此修改立即作用于本部署的所有工作区和成员。",
+      "confirmProbeFailed": "该模型在默认工作区的最近一次探测失败。仍可保存。",
+      "role": {
+        "agent_default_model_id": {
+          "name": "Agent 默认模型",
+          "desc": "新建 Agent 在原生 Bedrock 下的预选模型；通过 API 创建且未指定模型的 Agent 也使用它。"
+        },
+        "claude_sdk_model_id": {
+          "name": "Claude Agent SDK 默认模型",
+          "desc": "“其他 Agent SDK”入口（Claude Agent SDK）的默认模型，未指定模型的容器 Agent 也使用它。仅限 Claude。"
+        },
+        "judge_model_id": {
+          "name": "评估评审模型",
+          "desc": "新建 LLM 评估器的默认评审模型，助手起草的评估器也使用它。"
+        },
+        "judge_fallback_model_id": {
+          "name": "评审回退模型",
+          "desc": "AgentCore Evaluation 拒绝评审模型时改用它重试。无：直接报出拒绝原因。"
+        },
+        "assistant_model_id": {
+          "name": "助手方案模型",
+          "desc": "架构助手为新 Agent 推荐的模型。"
+        },
+        "architect_model_id": {
+          "name": "架构师预设模型",
+          "desc": "管理员安装或修复系统架构师预设时使用的模型。"
+        },
+        "actor_model_id": {
+          "name": "模拟用户（actor）",
+          "desc": "在模拟人格评估运行中扮演用户；必须支持强制工具调用（tool choice）。"
+        },
+        "studio_fallback_model_id": {
+          "name": "Studio 回退模型",
+          "desc": "Studio 画布中未指定模型的节点所生成的模型；Agent 的执行角色也按它授权。"
+        },
+        "codegen_model": {
+          "name": "Studio AI 修复",
+          "desc": "Studio 本地调试中 AI 修复所用的编码 Agent。仅限 Claude。"
+        },
+        "prompt_opt_default_model_id": {
+          "name": "提示词优化",
+          "desc": "实验中提示词优化的默认反思模型。"
+        },
+        "skill_lab_judge_model_id": {
+          "name": "Skill Lab 评审模型",
+          "desc": "为 Skill Lab 任务评分：OpenAI 模型走 codex CLI，Claude 走 Claude CLI。"
+        },
+        "skill_lab_target_model_id": {
+          "name": "Skill Lab 目标模型（Claude）",
+          "desc": "通过 Claude CLI 评估 Skill 时的默认模型。仅限 Claude。"
+        },
+        "skill_lab_codex_target_model_id": {
+          "name": "Skill Lab 目标模型（codex）",
+          "desc": "通过 codex CLI 评估 Skill 时的默认模型。仅限 OpenAI。"
+        }
+      }
     }
   },
   "identity": {
@@ -10561,6 +12095,7 @@
     "mcp": "模型上下文协议（MCP），连接 Agent 与外部工具和数据的开放标准。",
     "cedarPolicy": "用 Cedar 语言编写的规则，决定 Agent 的工具能做什么、不能做什么，每次调用都会校验。",
     "knowledgeBase": "可检索的文档库，Agent 从中查找资料，用你自己的内容作答。",
+    "contextLayer": "来自已连接 COA 部署的受治理业务上下文：指标、本体和文档。Agent 以对话者本人的身份、在其 COA 授权范围内读取。",
     "memory": "让 Agent 记住当前对话，并可选地记住每位用户的长期信息。",
     "evaluator": "评分规则（通常是 LLM 评审），从正确性、有用性等维度给 Agent 的回答打分。",
     "onlineEvaluation": "持续抽样给线上真实对话打分，尽早发现质量下滑。",
@@ -10581,6 +12116,7 @@
       "mcp": "MCP",
       "cedarPolicy": "Cedar 策略",
       "knowledgeBase": "知识库",
+      "contextLayer": "上下文层",
       "memory": "记忆",
       "evaluator": "评估器",
       "onlineEvaluation": "在线评估",
@@ -10656,10 +12192,13 @@
     "up": "点赞",
     "down": "点踩",
     "toDataset": "坏案例 → 数据集（{{count}}）",
+    "toDatasetHint": "加入该时间范围内被点踩的会话。链路已不存在的会话会被跳过，结果中会显示跳过的数量。",
     "empty": "暂无点踩反馈。",
+    "colAgent": "Agent",
     "colVerdict": "评价",
     "colQuestion": "问题",
     "colAnswer": "回答",
+    "colWho": "评价人",
     "colComment": "评论",
     "colSource": "来源",
     "openSession": "打开会话",

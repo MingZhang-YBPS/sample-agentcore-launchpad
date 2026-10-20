@@ -380,6 +380,12 @@ PARAMS: dict[str, Any] = {
     "generation_id": lambda i: "gen-0001",
     "batch_id": lambda i: "batch-0001",
     "ds_id": lambda i: "DS00000001",
+    # Agent IDE repos are private to their owner (never project rows): any
+    # well-formed id another member holds reads as missing
+    "repo_id": lambda i: "c" * 32,
+    # a COA namespace (UUID, digits only so the ghost id stays well-formed) — the
+    # workspace's context layer, read through the platform's COA connection
+    "namespace_id": lambda i: "00000000-0000-4000-8000-000000000001",
 }
 
 # (path, param) → a value where one name means different rows on different routes

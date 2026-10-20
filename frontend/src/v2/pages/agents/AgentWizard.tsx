@@ -16,6 +16,7 @@ import {
   authToolIssues,
   buildAgentSpec,
   byocIssues,
+  contextLayerValid,
   defaultModelForMethod,
   emptyAgentForm,
   entrypointAfterUpload,
@@ -64,6 +65,9 @@ import { NetworkSection } from "./NetworkSection";
 import { TemplateGallery } from "./TemplateGallery";
 import { formFromSharedTemplate, formFromTemplate } from "./templateForms";
 import { GuardrailCard, MemoryCard, ModelCard, type SectionProps, SkillsKbCard, type WizardCatalogs, type WizardUi } from "./wizardKit";
+import { contextPrefill } from "../contextLayer/attach";
+import { sectionVisible } from "../contextLayer/state";
+import { ContextLayerSection } from "./ContextLayerSection";
 import { IdentityCard } from "./IdentityCard";
 import { InboundCard } from "./InboundAuthFields";
 import { ConversationOutputCard, ModelParamsCard, PromptTemplateCard, StrandsGroup } from "./StrandsSections";
@@ -120,6 +124,9 @@ function initialDraft(params: URLSearchParams): Draft {
   if (method === "zip_runtime" && params.get("protocol") === "a2a") form.protocol = "a2a";
   if (gateway) form.selectedGateway = [gateway];
   if (skill) form.skills = [skill];
+  // "Attach to agent" from the Context Layer page (`context_ns` / `context_name`)
+  const context = contextPrefill(params);
+  if (context) form.contextLayer = context;
   return {
     form,
     step: isMethod(method) || gateway || skill ? 1 : 0,
@@ -135,9 +142,12 @@ function keepNetwork(cur: AgentForm, next: AgentForm): AgentForm {
   return { ...next, networkProfileId: cur.networkProfileId, networkVpc: cur.networkVpc };
 }
 
-/** An existing agent loaded for a re-publish: straight to the configure step. */
-function editDraft(agent: AgentInfo): Draft {
+/** An existing agent loaded for a re-publish: straight to the configure step. A
+ *  `context_ns` prefill (Context Layer "attach") replaces its stored namespace. */
+function editDraft(agent: AgentInfo, params: URLSearchParams): Draft {
   const { form, extras } = formFromStoredSpec(agent.method as AgentMethod, agent.name, agent.spec);
+  const context = contextPrefill(params);
+  if (context) form.contextLayer = context;
   return { form, step: 1, extras };
 }
 
@@ -163,7 +173,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const { can } = useAuth();
   const prodLock = useProdLock();
   const canDeploy = can("agents.deploy") && !prodLock.locked;
-  const [initial] = useState(() => (edit ? editDraft(edit) : initialDraft(params)));
+  const [initial] = useState(() => (edit ? editDraft(edit, params) : initialDraft(params)));
   const [step, setStep] = useState(initial.step);
   const [form, setForm] = useState<AgentForm>(initial.form);
   const [ui, setUi] = useState<Omit<WizardUi, "customSkills">>({
@@ -316,6 +326,9 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const connections = connectionsLoad.data?.connections ?? null;
   // what an "inherit" choice resolves to at deploy; a failed read reads as IAM
   const inboundDefault = useLoad(() => api.getInboundAuthDefault(), "inbound-default");
+  // the workspace's COA context layer + the member's own authorization; a failed
+  // read hides the section unless the stored spec already attaches a namespace
+  const contextStatus = useLoad(() => api.getContextLayer(), "context-layer");
   const cat: WizardCatalogs = useMemo(
     () => ({
       loading: attachables.loading,
@@ -344,6 +357,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     gatewayTargets: cat.gatewayTargets,
     remoteMcp: cat.remoteMcp,
     storedGatewayConfig: initial.extras?.storedGatewayConfig ?? {},
+    // the inline KB is not in the catalog (loaded once, ACTIVE only): its ref comes
+    // from the record so the spec still carries its name
     kbInfo: (id) =>
       resolveKb(id, cat.kbCatalog, [
         ...(initial.extras?.specKbs ?? []),
@@ -355,7 +370,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   // source's catalog default.
   // `forMethod` is the method being switched to — `method` still holds the old one.
   const applySource = (source: ModelSource, forMethod: AgentMethod = method) => {
-    set({ modelSource: source, modelId: defaultModelForMethod(forMethod, source), byocModels: [defaultModelFor(source)] });
+    const modelId = defaultModelForMethod(forMethod, source);
+    set({ modelSource: source, modelId, byocModels: [defaultModelFor(source)] });
     setUi((prev) => ({ ...prev, customModel: false }));
   };
   const pickMethod = (next: AgentMethod) => {
@@ -414,6 +430,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
     const out: Record<string, string> = {};
     if (!AGENT_NAME_RE.test(form.name)) out.name = t("v2.agents.wizard.errName");
     if (!inboundValid(form)) out.inbound = "inbound";
+    if (!contextLayerValid(form)) out.contextLayer = "contextLayer";
     if (form.authTools.length) {
       const auth = authToolIssues(form, connections);
       if (auth.unsupported || auth.catalogPending || Object.keys(auth.rows).length) out.identity = "identity";
@@ -504,6 +521,15 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       kbSlot={kbNote === undefined ? undefined : kbField(kbNote)}
     />
   );
+  const contextCard = sectionVisible(contextStatus.data, form) ? (
+    <ContextLayerSection
+      form={form}
+      set={set}
+      status={contextStatus.data}
+      onStatusChanged={contextStatus.reload}
+      touched={touched}
+    />
+  ) : null;
   const inboundCard = (
     <InboundCard
       form={form}
@@ -608,6 +634,15 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
                   testId={`v2-agent-method-${m}`}
                 />
               ))}
+              {/* not a form method: the coding console builds the project, then deploys it as byoc */}
+              <OptionCard
+                title={t("v2.agents.wizard.method.coding")}
+                desc={t("v2.agents.wizard.method.codingDesc")}
+                on={false}
+                onClick={() => navigate("/v2/coding")}
+                badge={<Tag tone="outline">{t("v2.agents.wizard.codingBadge")}</Tag>}
+                testId="v2-agent-method-coding"
+              />
             </div>
           </Card>
           <Card title={t("v2.agents.wizard.otherWays")}>
@@ -690,6 +725,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           {modelCard({ knobs: true })}
           <HarnessToolsCard {...section} />
           {skillsKb(t("create.configure.kbNote"))}
+          {contextCard}
           <FilesystemCard form={form} set={set} touched={touched} />
           <MemoryCard {...section} loop />
           <GuardrailCard form={form} set={set} />
@@ -737,6 +773,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
                       />
                     )}
                     {skillsKb(t("create.configure.kbNoteDirect"))}
+                    {contextCard}
                   </>
                 )}
                 {group === "behaviour" && (

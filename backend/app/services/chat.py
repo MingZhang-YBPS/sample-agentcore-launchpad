@@ -22,7 +22,7 @@ from app.services.agentcore.harness import new_session_id
 from app.services.attachments import PreparedAttachments
 from app.services.invoke import (
     NATIVE_STREAM_METHODS,
-    harness_user_overrides,
+    harness_turn_overrides,
     invoke_agent_events,
 )
 from app.services.runtime_discovery import is_discovered_harness
@@ -158,6 +158,7 @@ def chat_stream(
                 runtime_user_id=runtime_user_id,
                 gateway_access_token=gateway_access_token,
                 thinking=status_events,
+                console_user=console_user,
             )
         else:
             invoke_kwargs: dict[str, Any] = {}
@@ -243,6 +244,7 @@ def _harness_events(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     thinking: bool = False,
+    console_user: bool = True,
 ) -> Iterator[dict[str, Any]]:
     """Map one InvokeHarness stream onto chat events.
 
@@ -259,8 +261,16 @@ def _harness_events(
     }
     if runtime_user_id:
         params["runtimeUserId"] = runtime_user_id
-    if gateway_access_token:
-        params.update(harness_user_overrides(agent, workspace, gateway_access_token))
+    overrides = harness_turn_overrides(
+        agent, workspace, gateway_access_token=gateway_access_token,
+        runtime_user_id=runtime_user_id, console_user=console_user, session_id=session_id,
+    )
+    if "auth_required" in overrides:
+        # COA consent first: the card is the whole turn, InvokeHarness never runs
+        yield {"event": "auth_required", "data": overrides["auth_required"]}
+        return
+    params.update(overrides)
+    # a gated agent serves production through its `live` endpoint (the release gate)
     from app.services.invoke import production_endpoint
 
     params.update(production_endpoint(agent))

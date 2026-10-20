@@ -6,7 +6,8 @@ import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, Modal, Spin, Table } from "../../ui";
 
-function ChangeRow({ change }: { change: SpecChange }) {
+/** One field-level change; also rendered by the evaluation compare page (`tasks/RunCompare.tsx`). */
+export function ChangeRow({ change }: { change: SpecChange }) {
   const { t } = useTranslation();
   const listy = change.added !== undefined && change.removed !== undefined;
   return (
