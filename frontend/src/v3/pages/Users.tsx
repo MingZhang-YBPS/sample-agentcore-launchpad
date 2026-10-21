@@ -532,21 +532,26 @@ function UserDetail({ username }: { username: string }) {
       >
         {isAdminRole ? (
           <span className="v3-usr-muted">{t("v2.users.allByRole")}</span>
-        ) : isStewardRole ? (
-          <span className="v3-usr-muted">{t("v3.steward.typeHint")}</span>
         ) : (
-          <div className="v3-usr-chips">
-            {AGENT_PERMISSIONS.map((key) => {
-              const granted = user.permissions?.[key] !== false;
-              return (
-                <GrantChip key={key} on={granted} busy={busy} title={key}
-                  onClick={() => void actions.patch(user, { permissions: togglePermission(user.permissions, key, !granted) }, "usersPage.permissionsUpdated")}>
-                  {t(`v2.users.perm.${key.replace(".", "_")}`)}
-                  <small className="mono">{key}</small>
-                </GrantChip>
-              );
-            })}
-          </div>
+          <>
+            {isStewardRole && <span className="v3-usr-muted">{t("v3.steward.typeHint")}</span>}
+            <div className="v3-usr-chips">
+              {/* a steward holds no agent key, only the organization-level budget key */}
+              {(isStewardRole ? (["budget.manage"] as const) : AGENT_PERMISSIONS).map((key) => {
+                const granted = user.permissions?.[key] !== false;
+                return (
+                  <GrantChip key={key} on={granted} busy={busy} title={key}
+                    onClick={() => void actions.patch(user, { permissions: togglePermission(user.permissions, key, !granted) }, "usersPage.permissionsUpdated")}>
+                    {t(`v2.users.perm.${key.replace(".", "_")}`)}
+                    <small className="mono">{key}</small>
+                  </GrantChip>
+                );
+              })}
+            </div>
+            <p className="v3-usr-muted v3-usr-hint" data-testid="v3-users-budget-hint">
+              {t("v2.users.budgetManageHint")}
+            </p>
+          </>
         )}
       </Panel>
 

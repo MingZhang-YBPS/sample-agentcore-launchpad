@@ -10016,6 +10016,7 @@
       "roleSub": "administrators manage accounts, workspaces and every console module",
       "permTitle": "Agent permissions",
       "permSub": "click to grant or revoke; members hold every capability by default",
+      "budgetManageHint": "Manage budgets covers organization-level budgets only: an organization administrator holding it sets department budgets and every project's budget. Department administrators don't need it — they set the budgets of their own departments' projects by default — and for any other member it has no effect.",
       "wsTitle": "Workspace access",
       "wsSub": "click to grant or revoke; administrators reach every workspace by role",
       "approveHint": "The account can only use the workspaces granted here; you can change them later.",

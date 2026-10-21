@@ -167,6 +167,11 @@ export function UserDetail({ username }: { username: string }) {
             })}
           </div>
         )}
+        {!isAdminRole && (
+          <p className="v2-muted" style={{ margin: "10px 0 0", fontSize: 12 }} data-testid="v2-users-budget-hint">
+            {t("v2.users.budgetManageHint")}
+          </p>
+        )}
       </Card>
 
       <Card title={t("v2.users.wsTitle")} sub={t("v2.users.wsSub")} testId="v2-users-workspaces">

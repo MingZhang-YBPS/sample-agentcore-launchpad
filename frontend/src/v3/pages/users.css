@@ -10,6 +10,7 @@
 .v3 .v3-usr-trend .bar { width: 100%; min-height: 2px; border-radius: 3px; background: linear-gradient(180deg, var(--v3-info), color-mix(in srgb, var(--v3-info) 35%, transparent)); }
 .v3 .v3-usr-trend .d { font-family: var(--v3-mono); font-size: 10px; color: var(--v3-text-3); white-space: nowrap; }
 .v3 .v3-usr-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.v3 .v3-usr-hint { margin: 10px 0 0; font-size: 12px; line-height: 1.5; }
 .v3 .v3-usr-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px;
   border: 1px solid var(--v3-line-2); background: var(--v3-ink-1); color: var(--v3-text-2);
