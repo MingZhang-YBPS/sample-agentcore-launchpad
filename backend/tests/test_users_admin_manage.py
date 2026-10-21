@@ -118,7 +118,7 @@ class TestCreate:
         # an approved registration's permission set: the member role defaults
         assert body["permissions"] == {
             key: key in users_service.default_permissions("member")
-            for key in users_service.AGENT_PERMISSIONS
+            for key in users_service.ACCOUNT_PERMISSIONS
         }
         # never stored, logged or listed in clear
         db = SessionLocal()

@@ -537,12 +537,15 @@ def update_quotas(db: Session, identity: Any, row: Project, quotas: dict[str, An
     if BUDGET_KEY in clean:
         from app.services import department_budgets
 
+        old_budget = _number(project_values(row).get(BUDGET_KEY))
+        if _number(clean[BUDGET_KEY]) != old_budget:
+            department_budgets.require_project_budget(db, identity, row.department_id)
         department_budgets.check_allocation(
             db, project_id=row.id, old_department=row.department_id,
             new_department=row.department_id,
-            old_budget=_number(project_values(row).get(BUDGET_KEY)),
+            old_budget=old_budget,
             new_budget=_number(clean[BUDGET_KEY]), old_overrun=allow_overrun(row),
-            new_overrun=allow_overrun(row), platform=True)
+            new_overrun=allow_overrun(row))
     merged = projects_svc._merge_settings(row.settings or {}, {"quotas": clean})
     if merged == (row.settings or {}):
         return row

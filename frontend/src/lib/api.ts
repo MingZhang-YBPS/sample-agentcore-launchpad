@@ -3699,7 +3699,11 @@ export type AgentPermission =
   | "golden.admit"
   | "judge.calibrate"
   | "waiver.approve"
-  | "release.sign";
+  | "release.sign"
+  // account-only (not a project key): the budget authority. Where it reaches comes
+  // from the identity — organization level for admin / steward, the departments a
+  // department administrator administers.
+  | "budget.manage";
 
 export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.deploy",
@@ -3718,6 +3722,7 @@ export const AGENT_PERMISSIONS: AgentPermission[] = [
   "judge.calibrate",
   "waiver.approve",
   "release.sign",
+  "budget.manage",
 ];
 
 /**

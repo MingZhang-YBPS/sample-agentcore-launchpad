@@ -179,5 +179,5 @@ def test_permissions_patch_rejects_unknown_keys_and_non_booleans(sessions):
     row = next(item for item in listed if item["id"] == user_id)
     assert row["permissions"] == {
         key: key in users_service.default_permissions(users_service.ROLE_MEMBER)
-        for key in users_service.AGENT_PERMISSIONS
+        for key in users_service.ACCOUNT_PERMISSIONS
     }

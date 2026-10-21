@@ -2608,11 +2608,10 @@
     "department.not_managed": "部门管理员只能在自己管理的部门内操作，请选择你管理的部门。",
     "department.budget_overallocated": "超出部门月度预算：部门内各项目预算之和不能超过部门预算。请降低其他项目的预算，或请平台管理员提高部门预算。",
     "department.budget_below_allocated": "部门内各项目已分配的预算高于该值，请先降低项目预算。",
-    "department.budget_unset": "该部门尚未设置可分配的月度预算，请先由平台管理员设置部门预算。",
     "department.budget_invalid": "部门预算须为不小于 0 的美元金额（null 表示清除）；allow_overrun 须为 true 或 false。",
     "department.overrun_disabled": "该部门不允许项目超支，请先由平台管理员为部门开启。",
     "department.overrun_in_use": "该部门仍有项目开启了允许超支，请先关闭这些项目的开关。",
-    "department.setting_forbidden": "只有平台管理员可以设置部门预算。",
+    "budget.forbidden": "设置预算需要「管理预算」权限：组织级（平台管理员或组织管理员）可设置部门预算和所有项目预算，部门级（部门管理员）只能设置本部门项目的预算。请联系管理员在“用户”页授予。",
     "department.project_limit": "该部门的项目数已达上限，请归档项目或联系平台管理员调高上限。",
     "department.invitations_disabled": "该部门不允许部门管理员创建账号，请联系平台管理员。",
     "project.isolation_requires_per_agent_role": "该项目已隔离：其智能体需要各自的执行角色。请开启按智能体角色（或重新部署，使运行时报告其角色）。",
@@ -5199,7 +5198,8 @@
       "judge_calibrate": "判定校准",
       "waiver_approve": "批准豁免",
       "release_sign": "签署放行",
-      "mcp_approve": "审批 MCP 工具"
+      "mcp_approve": "审批 MCP 工具",
+      "budget_manage": "管理预算"
     },
     "extendTitle": "延长有效期",
     "extendBody": "为 {{username}} 增加多少天？",
@@ -10096,7 +10096,8 @@
         "judge_calibrate": "判定校准",
         "waiver_approve": "批准豁免",
         "release_sign": "签署放行",
-        "mcp_approve": "审批 MCP 工具"
+        "mcp_approve": "审批 MCP 工具",
+        "budget_manage": "管理预算"
       }
     },
     "workspaces": {
@@ -13783,13 +13784,15 @@
         "overrunFor": "允许 {{name}} 超支",
         "overrunLocked": "部门不允许超支",
         "problem": {
-          "overallocated": "超出部门剩余可分配的预算",
-          "unset": "部门尚未设置可分配的预算"
+          "overallocated": "超出部门剩余可分配的预算"
         },
         "noDepartments": "没有可显示的部门",
         "alert": "{{name}} 已于 {{when}} 越过月度预算的 {{level}}%。",
-        "unsetPlatform": "该部门尚未设置预算：请先在下方设置，部门管理员才能分配。",
-        "unsetDepartment": "该部门尚未设置预算：需要平台管理员先设置，你才能分配。",
+        "unsetPlatform": "该部门未设置预算，本部门项目预算的分配不受限制。在下方设置后，各项目预算之和不能超过部门预算。",
+        "unsetDepartment": "该部门未设置预算，本部门项目预算的分配不受限制。",
+        "unlimited": "不限",
+        "readOnly": "你可以查看预算，但没有修改权限：需要「管理预算」权限，请联系管理员在“用户”页授予。",
+        "noBudgetPermission": "需要「管理预算」权限",
         "projectsTitle": "项目",
         "noProjects": "该部门没有项目",
         "total": "本月合计",

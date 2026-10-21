@@ -2608,11 +2608,10 @@
     "department.not_managed": "Department administrators work inside their own department — pick a department you administer.",
     "department.budget_overallocated": "That does not fit the department's monthly budget: its projects' budgets together may not exceed it. Lower another project's budget, or ask a platform administrator to raise the department's.",
     "department.budget_below_allocated": "The department's projects already have more budget allocated than this — lower their budgets first.",
-    "department.budget_unset": "This department has no monthly budget to allocate from yet — a platform administrator sets the department's budget first.",
     "department.budget_invalid": "A department budget is an amount from 0 USD (or null to clear it); allow_overrun is true or false.",
     "department.overrun_disabled": "This department does not allow its projects to overrun their budget — a platform administrator turns that on for the department first.",
     "department.overrun_in_use": "Some projects of this department still allow overrun — turn theirs off first.",
-    "department.setting_forbidden": "Only a platform administrator sets a department's budget.",
+    "budget.forbidden": "Setting a budget needs the Manage budgets permission: at the organization level (a platform or organization administrator) it covers department budgets and every project's; at the department level (a department administrator) only the department's projects. Ask an administrator to grant it on the Users page.",
     "department.project_limit": "This department has reached its project limit — archive a project or ask a platform administrator to raise the limit.",
     "department.invitations_disabled": "This department does not let its administrators create accounts — ask a platform administrator.",
     "project.isolation_requires_per_agent_role": "This project is isolated: its agents need their own execution role. Turn per-agent roles on (or redeploy so the runtime reports its role).",
@@ -5199,7 +5198,8 @@
       "judge_calibrate": "DECIDE CALIBRATION",
       "waiver_approve": "APPROVE WAIVERS",
       "release_sign": "SIGN RELEASES",
-      "mcp_approve": "APPROVE MCP TOOLS"
+      "mcp_approve": "APPROVE MCP TOOLS",
+      "budget_manage": "MANAGE BUDGETS"
     },
     "extendTitle": "Extend validity",
     "extendBody": "Add how many days to {{username}}'s account?",
@@ -10096,7 +10096,8 @@
         "judge_calibrate": "Decide calibration",
         "waiver_approve": "Approve waivers",
         "release_sign": "Sign releases",
-        "mcp_approve": "Approve MCP tools"
+        "mcp_approve": "Approve MCP tools",
+        "budget_manage": "Manage budgets"
       }
     },
     "workspaces": {
@@ -13783,13 +13784,15 @@
         "overrunFor": "Let {{name}} overrun",
         "overrunLocked": "The department does not allow overrun",
         "problem": {
-          "overallocated": "Does not fit the department's remaining budget",
-          "unset": "The department has no budget to allocate yet"
+          "overallocated": "Does not fit the department's remaining budget"
         },
         "noDepartments": "No department to show",
         "alert": "{{name}} crossed {{level}} % of its monthly budget on {{when}}.",
-        "unsetPlatform": "This department has no budget: set one below before its administrators can allocate.",
-        "unsetDepartment": "This department has no budget yet: a platform administrator sets one before you can allocate.",
+        "unsetPlatform": "This department has no budget, so its projects' budgets are not limited. Once you set one below, their sum may not exceed it.",
+        "unsetDepartment": "This department has no budget, so its projects' budgets are not limited.",
+        "unlimited": "Unlimited",
+        "readOnly": "You can view these budgets but not change them: that needs the Manage budgets permission, which an administrator grants on the Users page.",
+        "noBudgetPermission": "Needs the Manage budgets permission",
         "projectsTitle": "Projects",
         "noProjects": "No project in this department",
         "total": "Total this month",

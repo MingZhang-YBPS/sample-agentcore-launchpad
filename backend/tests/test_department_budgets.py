@@ -43,7 +43,8 @@ def _spend(monkeypatch, usd):
 @pytest.fixture
 def world(app):  # noqa: F811
     """retail (dana administers it): alpha (dev a developer), alpha2; ops (olga
-    administers it): gamma. The built-in `default` project has no department."""
+    administers it): gamma. The built-in `default` project has no department. Both
+    department administrators hold `budget.manage` (granted, never by role)."""
     admin = _admin(app)
     dana, olga, dev = (_user(n, grant=False) for n in ("dana", "olga", "dev"))
     for dept in ("retail", "ops"):
@@ -55,9 +56,17 @@ def world(app):  # noqa: F811
     _member_of("alpha", dev)
     assert admin.put("/api/departments/retail/admins", json={"add": [dana]}).status_code == 200
     assert admin.put("/api/departments/ops/admins", json={"add": [olga]}).status_code == 200
+    for uid in (dana, olga):
+        _grant_budget(admin, uid)
     project_quotas.clear_spend_cache()
     return SimpleNamespace(admin=admin, dana=_login(app, "dana"), olga=_login(app, "olga"),
-                           dev=_login(app, "dev"))
+                           dev=_login(app, "dev"), dev_id=dev, dana_id=dana)
+
+
+def _grant_budget(admin, user_id: str, granted: bool = True) -> None:
+    res = admin.patch(f"/api/users/{user_id}", json={"permissions": {"budget.manage": granted}})
+    assert res.status_code == 200, res.text
+    assert res.json()["permissions"]["budget.manage"] is granted
 
 
 def _journal(action: str) -> list[str]:
@@ -197,19 +206,78 @@ def test_moving_a_project_needs_room_in_the_new_department(world):
                              json={"department_id": "retail"}).status_code == 200
 
 
-def test_a_department_without_a_budget_cannot_be_allocated_by_its_admin(world):
-    res = world.dana.put("/api/projects/alpha/budget", json={"monthly_budget_usd": 10})
-    assert res.status_code == 409 and res.json()["code"] == "department.budget_unset"
-    # a platform administrator still can, unconstrained (the behaviour before)
-    assert world.admin.put("/api/projects/alpha/budget",
-                           json={"monthly_budget_usd": 10}).status_code == 200
-    # the department administrator may lower or clear it
+def test_a_department_without_a_budget_is_unlimited(world):
+    # no department budget: the department administrator allocates without a ceiling
     assert world.dana.put("/api/projects/alpha/budget",
-                          json={"monthly_budget_usd": 5}).status_code == 200
-    assert world.dana.put("/api/projects/alpha/budget",
-                          json={"monthly_budget_usd": 6}).status_code == 409
-    assert world.dana.put("/api/projects/alpha/budget",
-                          json={"monthly_budget_usd": None}).status_code == 200
+                          json={"monthly_budget_usd": 10_000}).status_code == 200
+    assert world.dana.put("/api/projects/alpha2/budget",
+                          json={"monthly_budget_usd": 50_000}).status_code == 200
+    assert world.admin.put("/api/projects/gamma/budget",
+                           json={"monthly_budget_usd": 7}).status_code == 200
+    body = world.dana.get("/api/departments/retail/budget").json()
+    assert (body["monthly_budget_usd"], body["allocated_usd"], body["unallocated_usd"]) == (
+        None, 60_000.0, None)
+    # a ceiling set later may not go below what is allocated
+    res = world.admin.put("/api/departments/retail/budget", json={"monthly_budget_usd": 100})
+    assert res.status_code == 409 and res.json()["code"] == "department.budget_below_allocated"
+
+
+# ── budget.manage: one key, the identity decides the level ────────────────────
+
+
+def test_budget_writes_need_budget_manage(app, world):  # noqa: F811
+    # a department administrator without the key: refused, on every budget path
+    _grant_budget(world.admin, world.dana_id, granted=False)
+    dana = _login(app, "dana")
+    res = dana.put("/api/projects/alpha/budget", json={"monthly_budget_usd": 10})
+    assert res.status_code == 403 and res.json()["code"] == "budget.forbidden"
+    assert res.json()["detail"]["permission"] == "budget.manage"
+    assert dana.get("/api/budgets/me").json()["budget_scope"] is None
+    # ...yet still reads the department page (viewing is not a budget operation)
+    assert dana.get("/api/departments/retail/budget").status_code == 200
+    # the key without a department to administer reaches nothing either
+    _grant_budget(world.admin, world.dev_id)
+    dev = _login(app, "dev")
+    assert dev.put("/api/projects/alpha/budget",
+                   json={"monthly_budget_usd": 10}).status_code == 403
+    me = dev.get("/api/budgets/me").json()
+    assert (me["budget_scope"], me["budget_departments"]) == (None, [])
+
+
+def test_the_identity_decides_the_level_of_budget_manage(app, world):  # noqa: F811
+    from tests.test_project_scope import _user as make_user
+
+    # a department administrator: their department's projects, never its ceiling
+    me = world.dana.get("/api/budgets/me").json()
+    assert (me["budget_scope"], me["budget_departments"]) == ("department", ["retail"])
+    assert world.dana.put("/api/departments/retail/budget",
+                          json={"monthly_budget_usd": 100}).status_code == 403
+    assert world.dana.put("/api/projects/gamma/budget",
+                          json={"monthly_budget_usd": 1}).status_code == 404
+    # an organization administrator (steward): no budget authority until granted...
+    steward_id = make_user("sam", role="steward", grant=False)
+    sam = _login(app, "sam")
+    assert sam.get("/api/budgets/me").json()["budget_scope"] is None
+    res = sam.put("/api/departments/retail/budget", json={"monthly_budget_usd": 100})
+    assert res.status_code == 403 and res.json()["code"] == "budget.forbidden"
+    assert sam.put("/api/projects/default/budget",
+                   json={"monthly_budget_usd": 5}).status_code == 403
+    res = sam.put("/api/projects/alpha/quotas", json={"quotas": {"monthly_budget_usd": 5}})
+    assert res.status_code == 403 and res.json()["code"] == "budget.forbidden"
+    # ...the other quotas stay structure, open to a steward without the key
+    assert sam.put("/api/projects/alpha/quotas",
+                   json={"quotas": {"max_agents": 3}}).status_code == 200
+    # ...then the organization level: every department and every project
+    _grant_budget(world.admin, steward_id)
+    sam = _login(app, "sam")
+    assert sam.get("/api/budgets/me").json()["budget_scope"] == "platform"
+    assert sam.put("/api/departments/retail/budget",
+                   json={"monthly_budget_usd": 100}).status_code == 200
+    for pid in ("alpha", "gamma", "default"):
+        assert sam.put(f"/api/projects/{pid}/budget",
+                       json={"monthly_budget_usd": 5}).status_code == 200, pid
+    # a platform administrator holds the key by role
+    assert world.admin.get("/api/budgets/me").json()["budget_scope"] == "platform"
 
 
 def test_an_over_allocated_legacy_department_can_be_brought_back_under(world):
@@ -386,7 +454,8 @@ def test_department_alerts_fire_once_at_80_and_100_percent(world, monkeypatch):
             ("retail", 80), ("retail", 100)]
     assert world.olga.get("/api/budgets/me").json()["alerts"] == []
     assert world.dev.get("/api/budgets/me").json() == {
-        "platform": False, "departments": [], "alerts": []}
+        "platform": False, "departments": [], "alerts": [], "budget_scope": None,
+        "budget_departments": []}
 
 
 def test_a_new_month_re_arms_the_department_lines(world, monkeypatch):

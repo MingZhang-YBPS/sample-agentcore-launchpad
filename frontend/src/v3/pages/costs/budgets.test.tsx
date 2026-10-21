@@ -6,11 +6,13 @@ import i18n from "../../../i18n";
 import type { BudgetsMe, DepartmentCostView, PlatformCostView } from "../../../lib/api/budgets";
 import type { ProjectQuotas } from "../../../lib/api/projects";
 import { hostedGroups } from "../../nav";
-import { allocationProblem, costViews, linesLabel, parseBudget, pickView, spendSignal } from "./budgetModel";
+import { allocationProblem, budgetRights, costViews, linesLabel, parseBudget, pickView, spendSignal } from "./budgetModel";
 import { DepartmentBudgetPanel, PlatformBudgetPanel, ProjectBudgetPanel } from "./BudgetViews";
 
 const render = (node: JSX.Element) => renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>);
-const me = (over: Partial<BudgetsMe> = {}): BudgetsMe => ({ platform: false, departments: [], alerts: [], ...over });
+const me = (over: Partial<BudgetsMe> = {}): BudgetsMe => ({
+  platform: false, departments: [], alerts: [], budget_scope: null, budget_departments: [], ...over,
+});
 
 const LINES_OFF = [
   { kind: "warn" as const, fraction: 0.8, usd: 80 },
@@ -78,13 +80,21 @@ describe("the budget model", () => {
 
   it("checks an allocation against the department's remaining budget", () => {
     const view = department();
-    expect(allocationProblem(view, "beta", 50, false)).toBeNull(); // 50 + 50 = 100
-    expect(allocationProblem(view, "beta", 51, false)).toBe("overallocated");
-    expect(allocationProblem(view, "beta", 5, false)).toBeNull(); // lowering always fits
-    expect(allocationProblem(view, "beta", null, false)).toBeNull();
-    const unset = department({ monthly_budget_usd: null });
-    expect(allocationProblem(unset, "beta", 30, false)).toBe("unset");
-    expect(allocationProblem(unset, "beta", 30, true)).toBeNull(); // a platform administrator
+    expect(allocationProblem(view, "beta", 50)).toBeNull(); // 50 + 50 = 100
+    expect(allocationProblem(view, "beta", 51)).toBe("overallocated");
+    expect(allocationProblem(view, "beta", 5)).toBeNull(); // lowering always fits
+    expect(allocationProblem(view, "beta", null)).toBeNull();
+    // a department without a budget is unlimited
+    expect(allocationProblem(department({ monthly_budget_usd: null }), "beta", 1e6)).toBeNull();
+  });
+
+  it("derives the budget rights from budget.manage and the identity", () => {
+    expect(budgetRights(me(), "retail")).toEqual({ setDepartment: false, allocate: false });
+    expect(budgetRights(me({ budget_scope: "platform" }), "retail")).toEqual({ setDepartment: true, allocate: true });
+    const dadmin = me({ budget_scope: "department", budget_departments: ["retail"] });
+    expect(budgetRights(dadmin, "retail")).toEqual({ setDepartment: false, allocate: true });
+    expect(budgetRights(dadmin, "ops")).toEqual({ setDepartment: false, allocate: false });
+    expect(budgetRights(null, "retail")).toEqual({ setDepartment: false, allocate: false });
   });
 
   it("labels the 80/100 and 80/105/110 lines and colours the spend", () => {
@@ -126,17 +136,23 @@ describe("the budget pages", () => {
     expect(render(<ProjectBudgetPanel view={quotas({ budget: null })} />)).toContain("This project has no monthly budget");
   });
 
-  it("shows a department's allocation, and its editor only to a platform administrator", () => {
+  it("shows a department's allocation, its editor only at the organization level, and read-only rows without budget.manage", () => {
     const view = department({ alerts: [{ department_id: "retail", name: "Retail", level: 80, fired_at: "2026-10-20T00:00:00Z", spent_usd: 80, budget_usd: 100 }] });
-    const dept = render(<DepartmentBudgetPanel view={view} platform={false} onSaved={() => {}} />);
+    const dadmin = { setDepartment: false, allocate: true };
+    const dept = render(<DepartmentBudgetPanel view={view} rights={dadmin} onSaved={() => {}} />);
     expect(dept).toContain("$70.00");
     expect(dept).toContain("$30.00");
     expect(dept).toContain("Retail crossed 80 % of its monthly budget on 2026-10-20.");
     expect(dept).toContain("v3-costs-department-row-alpha");
     expect(dept).not.toContain("v3-costs-department-editor");
-    expect(render(<DepartmentBudgetPanel view={view} platform onSaved={() => {}} />)).toContain("v3-costs-department-editor");
-    expect(render(<DepartmentBudgetPanel view={department({ monthly_budget_usd: null, unallocated_usd: null })} platform={false} onSaved={() => {}} />))
-      .toContain("a platform administrator sets one before you can allocate");
+    expect(dept).not.toContain("Manage budgets permission, which");
+    expect(render(<DepartmentBudgetPanel view={view} rights={{ setDepartment: true, allocate: true }} onSaved={() => {}} />)).toContain("v3-costs-department-editor");
+    const unset = render(<DepartmentBudgetPanel view={department({ monthly_budget_usd: null, unallocated_usd: null })} rights={dadmin} onSaved={() => {}} />);
+    expect(unset).toContain("its projects&#x27; budgets are not limited");
+    expect(unset).toContain("Unlimited");
+    const viewer = render(<DepartmentBudgetPanel view={view} rights={{ setDepartment: false, allocate: false }} onSaved={() => {}} />);
+    expect(viewer).toContain("Manage budgets permission, which");
+    expect(viewer).not.toContain("v3-costs-department-editor");
   });
 
   it("shows the platform page with the departments and the platform line", () => {

@@ -73,6 +73,8 @@ ROLE_MEMBER = "member"
 # A member holds every key by default; `users.permissions` stores only explicit
 # denials. Admins (and the config-driven built-in admin) implicitly hold all.
 AGENT_PERMISSIONS = users_service.AGENT_PERMISSIONS
+# ...plus the account-only keys (`budget.manage`): what an account can hold
+ACCOUNT_PERMISSIONS = users_service.ACCOUNT_PERMISSIONS
 
 
 def granted_permissions(
@@ -87,7 +89,7 @@ def granted_permissions(
     defaults = users_service.default_permissions(role)
     return frozenset(
         key
-        for key in AGENT_PERMISSIONS
+        for key in ACCOUNT_PERMISSIONS
         if (overrides or {}).get(key, key in defaults)
     )
 
@@ -101,7 +103,7 @@ class Identity:
     email: str | None = None
     account_expires_at: datetime | None = None
     user_id: str | None = None  # None for the config-driven admin
-    permissions: frozenset[str] = frozenset(AGENT_PERMISSIONS)
+    permissions: frozenset[str] = frozenset(ACCOUNT_PERMISSIONS)
     # "sso" for an account that signs in through a console identity provider (sso
     # §2.2): no local password, so the top bar hides "change password"
     account_source: str = "local"

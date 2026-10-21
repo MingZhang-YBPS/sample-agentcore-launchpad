@@ -5376,13 +5376,19 @@ the UTC calendar month.
   back under its ceiling. The department's overrun switch (default off) gates its
   projects' switches (`409 department.overrun_disabled`); turning it off while projects
   use theirs is refused with their list (`409 department.overrun_in_use`).
-- **Who allocates** — a department administrator of the project's department, or any
-  platform administrator, sets the project's budget and switch (`PUT
-  /api/projects/{id}/budget`, the `dadmin` overlay). A department with no budget has
-  nothing to allocate: its administrators cannot raise a project's budget (`409
-  department.budget_unset`); platform administrators set it unconstrained, as before
-  department budgets existed. A project with no department (`default`) stays the
-  platform's. The other quotas (`PUT …/quotas`) stay platform-only. Budget writes are
+- **Who allocates** — budget writes take one account key, `budget.manage`
+  (`users.PLATFORM_PERMISSIONS`; admins hold it by role, everyone else only when an
+  administrator grants it on the Users page). The identity decides its level
+  (`department_budgets.budget_scope`): a platform role (admin / steward) holding it
+  works at the organization level — department ceilings and switches, and every
+  project's budget, department-less ones (`default`) included; a department
+  administrator holding it works at the department level — the budgets and switches of
+  the projects of the departments they administer (`PUT /api/projects/{id}/budget`,
+  the `dadmin` overlay), never the department's own ceiling. Without it the write is
+  `403 budget.forbidden`, on every path that can change a budget (the budget routes,
+  `PUT …/quotas`, a project's settings). A department with no budget is unlimited: its
+  projects' budgets are allocated without a ceiling. The other quotas (`PUT …/quotas`)
+  stay platform structure. Budget writes are
   outside `BILLABLE_PREFIXES`, so they are never gated themselves, and are journalled
   as `project.budget.update` / `department.budget.update`.
 - **Department alerts** — at the end of each alert evaluation pass,

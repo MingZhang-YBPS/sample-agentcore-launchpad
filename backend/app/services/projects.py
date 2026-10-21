@@ -482,11 +482,12 @@ def create_project(
     if budget is not None:
         from app.services import department_budgets
 
-        # a budget set at creation is allocated from the department like any other
+        # a budget set at creation is the budget authority's, and is allocated from
+        # the department like any other
+        department_budgets.require_project_budget(db, identity, department_id)
         department_budgets.check_allocation(
             db, project_id=project_id, old_department=None, new_department=department_id,
-            old_budget=None, new_budget=float(budget), old_overrun=False, new_overrun=False,
-            platform=platform)
+            old_budget=None, new_budget=float(budget), old_overrun=False, new_overrun=False)
     for ws in workspaces:
         _workspace(db, ws)
     row = Project(
@@ -560,14 +561,17 @@ def update_project(
     if not changed:
         return row
     if "department_id" in changed or "settings" in changed:
+        after_budget = department_budgets.project_budget(row)
+        if after_budget != before["budget"] or pq.allow_overrun(row) != before["overrun"]:
+            # a budget set through the settings is the budget authority's
+            department_budgets.require_project_budget(db, identity, row.department_id)
         # moving into a department, or a budget set through the settings, must fit
         # the (new) department's allocation and overrun rules (department_budgets)
         department_budgets.check_allocation(
             db, project_id=row.id, old_department=before["department"],
             new_department=row.department_id, old_budget=before["budget"],
-            new_budget=department_budgets.project_budget(row),
-            old_overrun=before["overrun"], new_overrun=pq.allow_overrun(row),
-            platform=structure)
+            new_budget=after_budget,
+            old_overrun=before["overrun"], new_overrun=pq.allow_overrun(row))
     row.updated_at = _now()
     if RETAG_FIELDS & set(changed) or ("settings" in changed and (
             (fields["settings"] or {}).keys() & {"cost_tags"})):

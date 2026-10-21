@@ -86,6 +86,11 @@ export interface BudgetsMe {
   platform: boolean;
   departments: { id: string; name: string }[];
   alerts: DepartmentBudgetAlert[];
+  /** where the caller may set budgets (`budget.manage` + identity): every department
+   *  and project ("platform"), the projects of `budget_departments` ("department"),
+   *  or nowhere (null) */
+  budget_scope: "platform" | "department" | null;
+  budget_departments: string[];
 }
 
 export const budgetsApi = {

@@ -185,7 +185,11 @@ def test_role_defaults_separate_building_from_releasing():
     assert "agents.deploy" in member and "promotion.approve" not in member
     # an operator releases what others built: approval yes, editing no
     assert "promotion.approve" in ops and "agents.deploy" not in ops
-    assert set(admin) == set(users_service.AGENT_PERMISSIONS)
+    assert set(admin) == set(users_service.ACCOUNT_PERMISSIONS)
+    # budget.manage is granted by role to nobody but admins
+    assert "budget.manage" not in member and "budget.manage" not in ops
+    assert "budget.manage" not in users_service.default_permissions(
+        users_service.ROLE_STEWARD)
 
 
 def test_an_operator_cannot_deploy_but_can_reach_the_review_surface(operator):

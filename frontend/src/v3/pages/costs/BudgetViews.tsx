@@ -4,13 +4,13 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
-import { type BudgetProjectRow, budgetsApi, type DepartmentCostView, type PlatformCostView } from "../../../lib/api/budgets";
+import { type BudgetProjectRow, type BudgetsMe, budgetsApi, type DepartmentCostView, type PlatformCostView } from "../../../lib/api/budgets";
 import { type BudgetLine, projectQuotasApi, type ProjectQuotas } from "../../../lib/api/projects";
 import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
 import { Select } from "../../select";
 import { Btn, Chip, Empty, Lamp, Notice, Panel, Skeleton, Spark, Stat } from "../../ui";
-import { allocationProblem, linesLabel, parseBudget, percent, spendSignal } from "./budgetModel";
+import { allocationProblem, budgetRights, linesLabel, parseBudget, percent, spendSignal } from "./budgetModel";
 
 function usd(value: number | null | undefined): string {
   if (value == null) return "—";
@@ -85,7 +85,7 @@ export function ProjectBudgetPanel({ view }: { view: ProjectQuotas }) {
       {dept && (
         <Panel title={t("v3.costs.budget.departmentTitle", { name: dept.name })}>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }} data-testid="v3-costs-project-department">
-            <span><span className="v3-hint">{t("v3.costs.budget.departmentBudget")}</span> <b className="mono">{dept.monthly_budget_usd == null ? t("v3.costs.budget.unset") : usd(dept.monthly_budget_usd)}</b></span>
+            <span><span className="v3-hint">{t("v3.costs.budget.departmentBudget")}</span> <b className="mono">{dept.monthly_budget_usd == null ? t("v3.costs.budget.unlimited") : usd(dept.monthly_budget_usd)}</b></span>
             <span><span className="v3-hint">{t("v3.costs.budget.allocated")}</span> <b className="mono">{usd(dept.allocated_usd)}</b></span>
             <span><span className="v3-hint">{t("v3.costs.budget.overrun")}</span> <b>{dept.allow_overrun ? t("v3.costs.budget.allowed") : t("v3.costs.budget.notAllowed")}</b></span>
           </div>
@@ -150,8 +150,8 @@ function DepartmentEditor({ view, onSaved }: { view: DepartmentCostView; onSaved
   );
 }
 
-function ProjectRow({ view, row, platform, onSaved }: {
-  view: DepartmentCostView; row: BudgetProjectRow; platform: boolean; onSaved: () => void;
+function ProjectRow({ view, row, canEdit, onSaved }: {
+  view: DepartmentCostView; row: BudgetProjectRow; canEdit: boolean; onSaved: () => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -165,7 +165,9 @@ function ProjectRow({ view, row, platform, onSaved }: {
   }, [row]);
   const value = parseBudget(text);
   const active = row.status === "active";
-  const problem = value === undefined ? null : allocationProblem(view, row.project_id, value, platform);
+  const editable = active && canEdit;
+  const lockedReason = !canEdit ? t("v3.costs.budget.noBudgetPermission") : t("story.reason.projectArchived");
+  const problem = value === undefined ? null : allocationProblem(view, row.project_id, value);
   const changed = value !== undefined && (value !== row.budget_usd || overrun !== row.allow_overrun);
   const overrunLocked = !view.allow_overrun && !row.allow_overrun;
   const save = async () => {
@@ -193,9 +195,9 @@ function ProjectRow({ view, row, platform, onSaved }: {
         {error != null && <div><ApiErrorDetail error={error} /></div>}
       </td>
       <td>
-        <Reasoned disabledReason={t("story.reason.projectArchived")}>
+        <Reasoned disabledReason={lockedReason}>
           <input className="v3-input mono" inputMode="decimal" style={{ maxWidth: 120 }} value={text}
-            placeholder={t("v3.costs.budget.unset")} disabled={!active}
+            placeholder={t("v3.costs.budget.unset")} disabled={!editable}
             aria-label={t("v3.costs.budget.projectBudgetFor", { name: row.name })}
             aria-invalid={value === undefined || problem !== null}
             onChange={(e) => setText(e.target.value)} />
@@ -212,8 +214,8 @@ function ProjectRow({ view, row, platform, onSaved }: {
       </td>
       <td>
         <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-          <Reasoned disabledReason={!active ? t("story.reason.projectArchived") : t("v3.costs.budget.overrunLocked")}>
-            <input type="checkbox" checked={overrun} disabled={!active || overrunLocked}
+          <Reasoned disabledReason={!editable ? lockedReason : t("v3.costs.budget.overrunLocked")}>
+            <input type="checkbox" checked={overrun} disabled={!editable || overrunLocked}
               aria-label={t("v3.costs.budget.overrunFor", { name: row.name })}
               onChange={(e) => setOverrun(e.target.checked)} />
           </Reasoned>
@@ -221,8 +223,8 @@ function ProjectRow({ view, row, platform, onSaved }: {
         </label>
       </td>
       <td>
-        <Btn size="sm" busy={busy} disabled={!active || !changed || problem !== null}
-          disabledReason={!active ? t("story.reason.projectArchived")
+        <Btn size="sm" busy={busy} disabled={!editable || !changed || problem !== null}
+          disabledReason={!editable ? lockedReason
             : problem ? t(`v3.costs.budget.problem.${problem}`) : t("story.reason.noChanges")}
           onClick={() => void save()}><Save size={13} /> {t("v3.costs.budget.save")}</Btn>
       </td>
@@ -233,13 +235,14 @@ function ProjectRow({ view, row, platform, onSaved }: {
 /**
  * A department's budget page — its administrators' and the platform's: the ceiling,
  * what is allocated and unallocated, the month's spend and trend, and each project's
- * budget and overrun switch (editable here, within the ceiling). Only a platform
- * administrator edits the department's own budget and switch.
+ * budget and overrun switch (editable here, within the ceiling, for a caller holding
+ * `budget.manage` there). Only the organization level edits the department's own
+ * budget and switch; a department without a budget is unlimited.
  */
-export function DepartmentBudgetView({ departments, platform }: {
+export function DepartmentBudgetView({ departments, me }: {
   departments: readonly { id: string; name: string }[];
-  /** a platform administrator (or steward): may set the department's budget */
-  platform: boolean;
+  /** `GET /api/budgets/me`: where the caller may set budgets */
+  me: Pick<BudgetsMe, "budget_scope" | "budget_departments"> | null | undefined;
 }) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
@@ -260,11 +263,11 @@ export function DepartmentBudgetView({ departments, platform }: {
   );
   if (loaded.loading && !view) return <div style={{ display: "grid", gap: 16 }}>{picker}<Panel><Skeleton rows={4} /></Panel></div>;
   if (!view) return <div style={{ display: "grid", gap: 16 }}>{picker}<Notice s="act"><ApiErrorDetail error={loaded.failure ?? loaded.error} /></Notice></div>;
-  return <div style={{ display: "grid", gap: 16 }}>{picker}<DepartmentBudgetPanel view={view} platform={platform} onSaved={refresh} /></div>;
+  return <div style={{ display: "grid", gap: 16 }}>{picker}<DepartmentBudgetPanel view={view} rights={budgetRights(me, id)} onSaved={refresh} /></div>;
 }
 
-export function DepartmentBudgetPanel({ view, platform, onSaved }: {
-  view: DepartmentCostView; platform: boolean; onSaved: () => void;
+export function DepartmentBudgetPanel({ view, rights, onSaved }: {
+  view: DepartmentCostView; rights: { setDepartment: boolean; allocate: boolean }; onSaved: () => void;
 }) {
   const { t } = useTranslation();
   const trend = view.trend.map((p) => p.spent_usd ?? 0);
@@ -276,7 +279,7 @@ export function DepartmentBudgetPanel({ view, platform, onSaved }: {
         </Notice>
       ))}
       <div className="v3-grid c4">
-        <Panel><Stat label={t("v3.costs.budget.departmentBudget")} value={view.monthly_budget_usd == null ? t("v3.costs.budget.unset") : usd(view.monthly_budget_usd)}
+        <Panel><Stat label={t("v3.costs.budget.departmentBudget")} value={view.monthly_budget_usd == null ? t("v3.costs.budget.unlimited") : usd(view.monthly_budget_usd)}
           foot={t("v3.costs.budget.resets", { date: view.reset_at.slice(0, 10) })} /></Panel>
         <Panel><Stat label={t("v3.costs.budget.allocated")} value={usd(view.allocated_usd)} /></Panel>
         <Panel><Stat label={t("v3.costs.budget.unallocated")} value={usd(view.unallocated_usd)} /></Panel>
@@ -286,9 +289,10 @@ export function DepartmentBudgetPanel({ view, platform, onSaved }: {
         </Panel>
       </div>
       {view.monthly_budget_usd == null && (
-        <Notice s="wait">{platform ? t("v3.costs.budget.unsetPlatform") : t("v3.costs.budget.unsetDepartment")}</Notice>
+        <Notice s="info">{rights.setDepartment ? t("v3.costs.budget.unsetPlatform") : t("v3.costs.budget.unsetDepartment")}</Notice>
       )}
-      {platform && <DepartmentEditor view={view} onSaved={onSaved} />}
+      {!rights.allocate && <Notice s="info">{t("v3.costs.budget.readOnly")}</Notice>}
+      {rights.setDepartment && <DepartmentEditor view={view} onSaved={onSaved} />}
       <Panel flush title={t("v3.costs.budget.projectsTitle")}>
         {view.projects.length === 0 ? <Empty title={t("v3.costs.budget.noProjects")} /> : (
           <div className="v3-table-scroll">
@@ -304,7 +308,7 @@ export function DepartmentBudgetPanel({ view, platform, onSaved }: {
                 </tr>
               </thead>
               <tbody>
-                {view.projects.map((row) => <ProjectRow key={row.project_id} view={view} row={row} platform={platform} onSaved={onSaved} />)}
+                {view.projects.map((row) => <ProjectRow key={row.project_id} view={view} row={row} canEdit={rights.allocate} onSaved={onSaved} />)}
               </tbody>
             </table>
           </div>
@@ -362,7 +366,7 @@ export function PlatformBudgetPanel({ view }: { view: PlatformCostView }) {
                       <Link to={`/v3/costs?view=department&id=${encodeURIComponent(d.department_id)}`}><b>{d.name}</b></Link>
                       {d.archived && <> <Chip>{t("v3.costs.budget.archived")}</Chip></>}
                     </td>
-                    <td className="num mono">{d.monthly_budget_usd == null ? t("v3.costs.budget.unset") : usd(d.monthly_budget_usd)}</td>
+                    <td className="num mono">{d.monthly_budget_usd == null ? t("v3.costs.budget.unlimited") : usd(d.monthly_budget_usd)}</td>
                     <td className="num mono">{usd(d.allocated_usd)}</td>
                     <td className="num"><span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                       <Lamp s={spendSignal(fraction)} /><span className="mono">{usd(d.spent_usd)}</span></span></td>

@@ -142,7 +142,7 @@ def serialize_builtin(db: Session, settings: Settings | None = None) -> dict:
         "login_count": 0,
         "first_login_at": None,
         "created_by": "config",
-        "permissions": dict.fromkeys(users_service.AGENT_PERMISSIONS, True),
+        "permissions": dict.fromkeys(users_service.ACCOUNT_PERMISSIONS, True),
         "workspaces": [],
         "builtin": True,
         "password_source": password_source(db, current),

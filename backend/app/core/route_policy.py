@@ -1799,11 +1799,11 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_QUOTA_ROUTES)
 # Budgets are project budgets; a department's budget only caps what its projects may
 # be allocated (`services/department_budgets.py`). Hub-global, like the rest of
 # project structure:
-#   PUT  /api/projects/{id}/budget      the project's budget + overrun switch — a
-#        platform administrator, or the project's department administrator
-#        (`dadmin` overlay "project"); structure (a steward may)
-#   PUT  /api/departments/{id}/budget   the department's ceiling + switch — platform
-#        administrators only, no overlay; structure
+#   PUT  /api/projects/{id}/budget      the project's budget + overrun switch — the
+#        `budget.manage` key at the organization level, or as the project's
+#        department administrator (`dadmin` overlay "project"); checked in the handler
+#   PUT  /api/departments/{id}/budget   the department's ceiling + switch —
+#        `budget.manage` at the organization level (admin / steward), no overlay
 #   GET  /api/departments/{id}/budget   the department cost page — platform
 #        administrators and that department's administrators (overlay
 #        "department"); budget figures are structure like a project's quotas read

@@ -10,7 +10,6 @@ import { ErrorCallout } from "../../components/ErrorCallout";
 import { useAuth } from "../../auth/auth-context";
 import { type AlertKind, type AlertRuleInfo, api } from "../../lib/api";
 import { budgetsApi } from "../../lib/api/budgets";
-import { isSteward } from "../../lib/api/steward";
 import { useProject } from "../../workspace/project-context";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
@@ -470,7 +469,7 @@ function AlertsView() {
  */
 export function V3Costs() {
   const { t } = useTranslation();
-  const { isAdmin, role } = useAuth();
+  const { isAdmin } = useAuth();
   const project = useProject();
   const [params, setParams] = useSearchParams();
   const me = useLoad(() => budgetsApi.me().catch(() => null), "v3-costs-budgets-me");
@@ -506,7 +505,7 @@ export function V3Costs() {
       {view === "spend" ? (basis === "billing" ? <BillingView /> : <SpendView />)
         : view === "alerts" ? <AlertsView />
         : view === "project" && project.current ? <ProjectBudgetView projectId={project.current.id} />
-        : view === "department" ? <DepartmentBudgetView departments={me.data?.departments ?? []} platform={isAdmin || isSteward(role)} />
+        : view === "department" ? <DepartmentBudgetView departments={me.data?.departments ?? []} me={me.data} />
         : view === "platform" ? <PlatformBudgetView />
         : me.loading ? <Panel><Skeleton rows={3} /></Panel>
         : <Panel><Empty title={t("v3.costs.budget.nothing")} /></Panel>}

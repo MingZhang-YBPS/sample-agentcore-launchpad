@@ -55,20 +55,32 @@ export function parseBudget(text: string): number | null | undefined {
 }
 
 /**
+ * What the caller may change on a department's page, from `GET /api/budgets/me`
+ * (the backend enforces the same): the department's own budget and switch at the
+ * organization level only; its projects' budgets at the organization level, or as an
+ * administrator of that department — both need the `budget.manage` key.
+ */
+export function budgetRights(me: Pick<BudgetsMe, "budget_scope" | "budget_departments"> | null | undefined,
+  departmentId: string): { setDepartment: boolean; allocate: boolean } {
+  const platform = me?.budget_scope === "platform";
+  const department = me?.budget_scope === "department" && (me.budget_departments ?? []).includes(departmentId);
+  return { setDepartment: platform, allocate: platform || department };
+}
+
+/**
  * Why a project's new budget would be refused by its department, before asking the
- * backend (409 `department.budget_overallocated` / `department.budget_unset`):
- * `null` when it fits. Only an increase is checked, like the backend.
+ * backend (409 `department.budget_overallocated`): `null` when it fits. Only an
+ * increase is checked, like the backend; a department without a budget is unlimited.
  */
 export function allocationProblem(
   view: Pick<DepartmentCostView, "monthly_budget_usd" | "projects">,
   projectId: string,
   next: number | null,
-  platform: boolean,
-): "overallocated" | "unset" | null {
+): "overallocated" | null {
   const row = view.projects.find((p) => p.project_id === projectId);
   const current = row?.budget_usd ?? null;
   if (next === null || (current !== null && next <= current)) return null;
-  if (view.monthly_budget_usd === null) return platform ? null : "unset";
+  if (view.monthly_budget_usd === null) return null;
   const others = view.projects
     .filter((p) => p.project_id !== projectId)
     .reduce((sum, p) => sum + (p.budget_usd ?? 0), 0);

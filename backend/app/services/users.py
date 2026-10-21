@@ -58,6 +58,18 @@ AGENT_PERMISSIONS = (
     "release.sign",
 )
 
+# Account keys that are NOT project keys (never in a project role, an `inherit`
+# membership or a project's permission set). `budget.manage` is the budget authority
+# (projects §11.3): the key says *whether* an account may set budgets, the identity
+# says *where* — a platform role (admin / steward) at the organization level (every
+# department's ceiling and switch, every project's budget), a department
+# administrator inside the departments they administer (their projects' budgets and
+# switches). Granted by role to nobody but admins; an administrator grants it to
+# named accounts on the Users page.
+PLATFORM_PERMISSIONS = ("budget.manage",)
+# every key an account can hold (`users.permissions`, `/api/auth/status`)
+ACCOUNT_PERMISSIONS = (*AGENT_PERMISSIONS, *PLATFORM_PERMISSIONS)
+
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
 ROLE_MEMBER = "member"
@@ -100,7 +112,7 @@ DEFAULT_BY_ROLE: dict[str, frozenset[str]] = {
 def default_permissions(role: str) -> frozenset[str]:
     """The keys a role holds before any per-user override."""
     if role == ROLE_ADMIN:
-        return frozenset(AGENT_PERMISSIONS)
+        return frozenset(ACCOUNT_PERMISSIONS)
     return DEFAULT_BY_ROLE.get(role, DEFAULT_BY_ROLE[ROLE_MEMBER])
 
 # --- password hashing -------------------------------------------------------
@@ -348,7 +360,7 @@ def effective_permissions(user: User) -> dict[str, bool]:
             user.role == ROLE_ADMIN
             or (overrides[key] if key in overrides else key in defaults)
         )
-        for key in AGENT_PERMISSIONS
+        for key in ACCOUNT_PERMISSIONS
     }
 
 
@@ -1039,7 +1051,7 @@ def _normalized_permissions(value: Any, role: str = ROLE_MEMBER) -> dict[str, bo
         return None
     if not isinstance(value, dict):
         raise AppError("users.invalid_permissions", "permissions must be an object")
-    unknown = sorted(set(value) - set(AGENT_PERMISSIONS))
+    unknown = sorted(set(value) - set(ACCOUNT_PERMISSIONS))
     if unknown:
         raise AppError(
             "users.invalid_permissions",

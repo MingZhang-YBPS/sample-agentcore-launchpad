@@ -20,14 +20,16 @@ with. There is no per-person budget. A department adds two things on top:
   have theirs on is refused with their list (409 `department.overrun_in_use`) rather
   than silently flipping them.
 
-**Who allocates.** A department administrator of the project's department (or any
-platform administrator) sets the project's budget and overrun switch
-(`PUT /api/projects/{id}/budget`). A department with **no budget** has nothing to
-allocate: its administrators cannot give a project a budget (409
-`department.budget_unset`; lowering or clearing one still passes), only a platform
-administrator can, unconstrained — the behaviour before department budgets
-existed. A project with no department (the built-in `default`) is the platform's
-alone, as before.
+**Who allocates.** Budget writes take the account key `budget.manage`
+(`users.PLATFORM_PERMISSIONS`); the caller's identity decides its reach
+(`budget_scope`): a platform role (admin / steward) holding it works at the
+organization level — every department's ceiling and switch, every project's budget,
+the department-less ones (the built-in `default`) included; a department
+administrator holding it works at the department level — the budgets and switches of
+the projects of the departments they administer, never the department's own ceiling.
+Without the key nobody but an admin (who holds every key) sets a budget. A department
+with **no budget** is unlimited: its projects' budgets are allocated without a
+ceiling, by either level.
 
 **Department alerts.** At the end of every alert evaluation pass
 (`alerts.evaluate_rules`), each budgeted department with a project bound to that
@@ -124,6 +126,61 @@ def department_summary(db: Session, department_id: str | None) -> dict[str, Any]
             if ceiling is not None else None}
 
 
+# ── who may set budgets ───────────────────────────────────────────────────────
+
+BUDGET_PERMISSION = "budget.manage"
+SCOPE_PLATFORM = "platform"
+SCOPE_DEPARTMENT = "department"
+
+
+def _holds_key(identity: Any) -> bool:
+    can = getattr(identity, "can", None)
+    if callable(can):
+        return bool(can(BUDGET_PERMISSION))
+    return getattr(identity, "role", None) == "admin"
+
+
+def budget_scope(db: Session, identity: Any) -> tuple[str | None, frozenset[str]]:
+    """`(level, departments)`: `("platform", ∅)` for a platform role holding
+    `budget.manage`, `("department", the departments they administer)` for a
+    department administrator holding it, `(None, ∅)` otherwise."""
+    if not _holds_key(identity):
+        return None, frozenset()
+    if access.can_manage_structure(identity):
+        return SCOPE_PLATFORM, frozenset()
+    managed = access.managed_departments(db, identity)
+    return (SCOPE_DEPARTMENT, managed) if managed else (None, frozenset())
+
+
+def _forbidden(message: str, detail: dict[str, Any]) -> AppError:
+    return AppError("budget.forbidden", message,
+                    {**detail, "permission": BUDGET_PERMISSION}, status_code=403)
+
+
+def require_project_budget(db: Session, identity: Any, department_id: str | None) -> str:
+    """The caller may set budgets of a project in `department_id` (None: a
+    department-less project, organization level only). Returns the level."""
+    level, departments = budget_scope(db, identity)
+    if level == SCOPE_PLATFORM:
+        return level
+    if level == SCOPE_DEPARTMENT and department_id and department_id in departments:
+        return level
+    raise _forbidden(
+        "setting a project's budget needs the budget.manage permission, at the "
+        "organization level or as an administrator of the project's department",
+        {"department_id": department_id})
+
+
+def require_platform_budget(identity: Any) -> None:
+    """The caller sets budgets at the organization level (a department's ceiling and
+    switch): a platform role holding `budget.manage`."""
+    if not (_holds_key(identity) and access.can_manage_structure(identity)):
+        raise _forbidden(
+            "setting a department's budget needs the budget.manage permission at the "
+            "organization level (a platform administrator or organization administrator)",
+            {})
+
+
 # ── the allocation rules ──────────────────────────────────────────────────────
 
 
@@ -143,11 +200,11 @@ def _overallocated(department_id: str, budget: float, allocated: float,
 def check_allocation(
     db: Session, *, project_id: str, old_department: str | None,
     new_department: str | None, old_budget: float | None, new_budget: float | None,
-    old_overrun: bool, new_overrun: bool, platform: bool,
+    old_overrun: bool, new_overrun: bool,
 ) -> None:
     """Refuse a project change that breaks its (new) department's budget rules. Only
     what the change *adds* is checked: lowering or clearing a budget, or turning
-    overrun off, always passes."""
+    overrun off, always passes. A department without a budget is unlimited."""
     if not new_department:
         return  # no department: the platform's alone, no ceiling
     with project_context(None):
@@ -169,13 +226,7 @@ def check_allocation(
         return
     ceiling = budget["monthly_budget_usd"]
     if ceiling is None:
-        if platform:
-            return  # nothing to allocate from: platform administrators set it freely
-        raise AppError(
-            "department.budget_unset",
-            f"department '{new_department}' has no monthly budget to allocate from: a "
-            "platform administrator sets the department's budget first",
-            {"department_id": new_department, "project_id": project_id}, status_code=409)
+        return  # no department budget: allocation is unlimited
     others = allocated_usd(db, new_department, exclude=project_id)
     if others + new_budget > float(ceiling) + _EPS:
         raise _overallocated(new_department, float(ceiling), others, new_budget)
@@ -203,13 +254,14 @@ def _check_flag(value: Any, code: str) -> bool:
 def update_project_budget(
     db: Session, identity: Any, row: Project, fields: dict[str, Any],
 ) -> Project:
-    """Set / clear a project's monthly budget and its overrun switch: a platform
-    administrator, or an administrator of the project's department. Journalled as
-    `project.budget.update`; the alert rules follow."""
+    """Set / clear a project's monthly budget and its overrun switch: `budget.manage`
+    at the organization level, or as an administrator of the project's department.
+    Journalled as `project.budget.update`; the alert rules follow."""
     if not projects_svc.can_manage(db, identity, row):
         raise AppError("project.setting_forbidden",
                        "a platform administrator or the project's department administrator "
                        "sets its budget", {"keys": sorted(fields)}, status_code=403)
+    require_project_budget(db, identity, row.department_id)
     if row.status != projects_svc.STATUS_ACTIVE_PROJECT:
         raise AppError("project.archived", f"project '{row.id}' is archived",
                        {"project_id": row.id}, status_code=409)
@@ -228,7 +280,7 @@ def update_project_budget(
     check_allocation(db, project_id=row.id, old_department=row.department_id,
                      new_department=row.department_id, old_budget=old_budget,
                      new_budget=new_budget, old_overrun=old_overrun,
-                     new_overrun=new_overrun, platform=access.can_manage_structure(identity))
+                     new_overrun=new_overrun)
     changed = []
     clean: dict[str, Any] = {}
     if new_budget != old_budget:
@@ -255,12 +307,10 @@ def update_project_budget(
 def update_department_budget(
     db: Session, identity: Any, row: Department, fields: dict[str, Any],
 ) -> Department:
-    """Set / clear a department's monthly budget and its overrun switch — platform
-    administrators only. Journalled as `department.budget.update`."""
-    if not access.can_manage_structure(identity):
-        raise AppError("department.setting_forbidden",
-                       "only a platform administrator sets a department's budget",
-                       {"department_id": row.id}, status_code=403)
+    """Set / clear a department's monthly budget and its overrun switch —
+    `budget.manage` at the organization level. Journalled as
+    `department.budget.update`."""
+    require_platform_budget(identity)
     unknown = sorted(set(fields) - {"monthly_budget_usd", "allow_overrun"})
     if unknown:
         raise AppError("department.budget_invalid", f"unknown budget fields: {unknown}",
@@ -609,6 +659,12 @@ def me_view(db: Session, identity: Any) -> dict[str, Any]:
             rows = list(db.scalars(select(Department).where(
                 Department.id.in_(sorted(managed))).order_by(Department.name))) \
                 if managed else []
+    level, budget_departments = budget_scope(db, identity)
     return {"platform": platform,
             "departments": [{"id": r.id, "name": r.name} for r in rows],
-            "alerts": _alerts(db, rows)}
+            "alerts": _alerts(db, rows),
+            # where the caller may set budgets (`budget.manage` + identity): None,
+            # "platform" (every department and project) or "department" (the
+            # projects of `budget_departments`)
+            "budget_scope": level,
+            "budget_departments": sorted(budget_departments)}
