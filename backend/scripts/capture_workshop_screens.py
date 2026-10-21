@@ -371,7 +371,8 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
                 page.wait_for_timeout(400)
         page.mouse.move(vw - 2, vh - 2)
         if ctx.relabel:
-            page.evaluate(RELABEL_JS, {"from": ctx.relabel[0], "to": ctx.relabel[1]})
+            for src, dst in relabel_pairs(*ctx.relabel):
+                page.evaluate(RELABEL_JS, {"from": src, "to": dst})
         if probe is not None:
             probe.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(probe / f"{shot['name']}.{lang}.png"), full_page=True)
@@ -414,6 +415,26 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
 
 def _as_list(v: Any) -> list[str]:
     return v if isinstance(v, list) else [v]
+
+
+def relabel_pairs(actual: str, shown: str) -> list[tuple[str, str]]:
+    """What --display-region rewrites: the region itself (which also covers AZ names
+    such as us-west-2a and ARNs) and the AZ-id prefix (usw2-az1 -> use1-az1)."""
+    pairs = [(actual, shown)]
+    a, s = _az_prefix(actual), _az_prefix(shown)
+    if a and s and a != s:
+        pairs.append((a + "-az", s + "-az"))
+    return pairs
+
+
+def _az_prefix(region: str) -> str | None:
+    """us-east-1 -> use1, ap-southeast-2 -> apse2, eu-central-1 -> euc1."""
+    m = re.fullmatch(r"([a-z]{2})-([a-z]+)-(\d+)", region)
+    if not m:
+        return None
+    area, direction, n = m.groups()
+    short = "".join(w[0] for w in re.findall(r"north|south|east|west|central", direction))
+    return f"{area}{short}{n}" if short else None
 
 
 def crop_rect(rect: dict[str, float], drawn: list[dict[str, float]]) -> dict[str, float]:

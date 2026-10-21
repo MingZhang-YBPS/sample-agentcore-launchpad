@@ -170,3 +170,10 @@ def test_relabel_shows_the_workshop_region_in_text_and_inputs():
     finally:
         browser.close()
         pw.stop()
+
+
+def test_relabel_pairs_cover_the_region_and_its_az_ids():
+    assert cws.relabel_pairs("us-west-2", "us-east-1") == [
+        ("us-west-2", "us-east-1"), ("usw2-az", "use1-az")]
+    assert cws.relabel_pairs("us-east-1", "us-east-1")[1:] == []
+    assert cws._az_prefix("ap-southeast-2") == "apse2"

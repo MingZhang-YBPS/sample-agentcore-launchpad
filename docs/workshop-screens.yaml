@@ -289,14 +289,16 @@ shots:
     status: new   # retail-service allows workshop-private as default (bound in the walk)
     account: admin
     path: /v3/network
-    wait: '[data-testid=v3-network-access] select'
+    wait: '[data-testid=v3-network-access] button.v3-sel'
     actions:
-      - {eval: "(() => { const s = document.querySelector('[data-testid=v3-network-access] select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(s,'retail-service'); s.dispatchEvent(new Event('change',{bubbles:true})); })()"}
+      # the project control is the V3 themed Select (a button + listbox), not a <select>
+      - {click: '[data-testid=v3-network-access] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has-text("retail-service")'}
       - {sleep: 1500}
     clip: '[data-testid=v3-network-access]'
     margin: 48
     highlights:
-      - {n: 1, box: '[data-testid=v3-network-access] select', badge: left}
+      - {n: 1, box: '[data-testid=v3-network-access] button.v3-sel >> nth=0', badge: left}
       - {n: 2, box: '[data-testid=v3-network-access] tr:has-text("workshop-private")', badge: left}
       - {n: 3, box: '[data-testid=v3-network-access] button.v3-btn.primary', badge: left}
 
@@ -314,9 +316,11 @@ shots:
     status: new   # workshop-files S3 Files, allowed for retail-service
     account: admin
     path: /v3/storage
-    wait: '[data-testid=v3-storage-access] select'
+    wait: '[data-testid=v3-storage-access] button.v3-sel'
     actions:
-      - {eval: "(() => { const s = document.querySelector('[data-testid=v3-storage-access] select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(s,'retail-service'); s.dispatchEvent(new Event('change',{bubbles:true})); })()"}
+      # the project control is the V3 themed Select (a button + listbox), not a <select>
+      - {click: '[data-testid=v3-storage-access] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has-text("retail-service")'}
       - {sleep: 1500}
     clip: main.v3-main div.v3-reveal
     highlights:
