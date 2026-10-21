@@ -785,9 +785,11 @@ def _persist_requirements(ctx: StageContext, agent: Agent, requirements: list[st
 
 def _deploy_spec(spec: dict[str, Any], workspace: WorkspaceContext) -> AgentSpec:
     """The spec every stage builds from: the stored one, with an attached COA context
-    layer expanded into its as_user MCP tool + prompt addendum. One expansion feeds
-    the template, the execution role, the environment and the return-URL allow-list;
-    the stored spec (and its snapshots) keep only ``context_layer``."""
+    layer expanded into its as_user MCP tool + prompt addendum (gateway mode: the
+    managed gateway's URL for the template's ``CONTEXT_GATEWAY`` block + the addendum,
+    no tool). One expansion feeds the template, the execution role, the environment
+    and the return-URL allow-list; the stored spec (and its snapshots) keep only
+    ``context_layer``."""
     return context_layer_service.deploy_spec(spec, workspace.id)
 
 

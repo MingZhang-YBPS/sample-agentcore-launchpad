@@ -8,11 +8,14 @@ import {
   buildMcpServerSpec,
   byocIssues,
   type ConnectionRef,
+  contextLayerSpec,
+  contextLayerVia,
   emptyAgentForm,
   filesystemIssues,
   formFromStoredSpec,
   hasByoMounts,
   republishSpec,
+  withContextVia,
 } from "./agent-spec";
 
 const CATALOGS: AgentFormCatalogs = {
@@ -304,5 +307,52 @@ describe("storage catalog mounts in the wizard (storage-mounts SM-2)", () => {
     const inline = [1, 2, 3].map((i) => ({ arn: `arn:aws:s3files:us-east-1:1:ap/${i}`, path: `/mnt/in${i}` }));
     expect(filesystemIssues({ ...base, s3Mounts: inline.slice(0, 2), catalogMounts: picks }).tooMany).toBe(false);
     expect(filesystemIssues({ ...base, s3Mounts: inline, catalogMounts: picks }).tooMany).toBe(true);
+  });
+});
+
+describe("context layer access mode (via)", () => {
+  const NS = "dc09046b-28af-4c7b-a03a-4fa63cda243b";
+  const harness = (contextLayer: ReturnType<typeof emptyAgentForm>["contextLayer"]) => ({
+    ...emptyAgentForm("harness"),
+    name: "hr-agent",
+    contextLayer,
+  });
+
+  it("sends via only for gateway mode, the shape the backend stores", () => {
+    const direct = harness({ namespaceId: NS, namespaceName: "AnyCompany HR" });
+    expect(contextLayerSpec(direct)).toEqual({ context_layer: { namespace_id: NS, namespace_name: "AnyCompany HR" } });
+    const explicit = harness({ namespaceId: NS, namespaceName: "", via: "direct" });
+    expect(contextLayerSpec(explicit)).toEqual({ context_layer: { namespace_id: NS } });
+    const gateway = harness({ namespaceId: NS, namespaceName: "HR", via: "gateway" });
+    expect(contextLayerSpec(gateway)).toEqual({ context_layer: { namespace_id: NS, namespace_name: "HR", via: "gateway" } });
+    expect(buildAgentSpec(gateway, CATALOGS).context_layer).toEqual({ namespace_id: NS, namespace_name: "HR", via: "gateway" });
+  });
+
+  it("keeps the old shapes: not owned, none, or a method that cannot carry a layer", () => {
+    expect(contextLayerSpec({ ...harness(null), contextLayer: undefined })).toEqual({});
+    expect(contextLayerSpec(harness(null))).toEqual({ context_layer: null });
+    const container = { ...harness({ namespaceId: NS, namespaceName: "", via: "gateway" }), method: "container" as const };
+    expect(contextLayerSpec(container)).toEqual({ context_layer: null });
+  });
+
+  it("reads the mode back from a stored spec", () => {
+    const stored = { name: "hr-agent", method: "harness", system_prompt: "help" };
+    const gateway = formFromStoredSpec("harness", "hr-agent", {
+      ...stored,
+      context_layer: { namespace_id: NS, namespace_name: "HR", via: "gateway" },
+    }).form;
+    expect(gateway.contextLayer).toEqual({ namespaceId: NS, namespaceName: "HR", via: "gateway" });
+    expect(contextLayerSpec(gateway).context_layer).toEqual({ namespace_id: NS, namespace_name: "HR", via: "gateway" });
+    const direct = formFromStoredSpec("harness", "hr-agent", { ...stored, context_layer: { namespace_id: NS } }).form;
+    expect(direct.contextLayer).toEqual({ namespaceId: NS, namespaceName: "" });
+    expect(contextLayerVia(direct.contextLayer)).toBe("direct");
+  });
+
+  it("switches the mode without touching the namespace", () => {
+    const choice = { namespaceId: NS, namespaceName: "HR" };
+    expect(withContextVia(choice, "gateway")).toEqual({ ...choice, via: "gateway" });
+    expect(withContextVia({ ...choice, via: "gateway" }, "direct")).toEqual(choice);
+    expect(withContextVia(null, "gateway")).toBeNull();
+    expect(contextLayerVia(null)).toBe("direct");
   });
 });

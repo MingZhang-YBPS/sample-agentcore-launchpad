@@ -24,6 +24,7 @@ from app.models.ledger import Agent
 from app.schemas.agent import DEFAULT_GPT_MAX_TOKENS, AgentSpec, is_openai_model_id
 from app.services import (
     agent_iam,
+    context_layer_gateway,
     cost_tags,
     inference_profiles,
     project_gateway,
@@ -123,12 +124,25 @@ _KB_END = "Ground answers on retrieved content and cite sources when you use the
 
 
 def _context_prompt(spec: AgentSpec) -> str:
-    """The COA context-layer section (namespace + tool guidance), or ''. The COA tool
-    itself is never deployed: it rides each console turn's tools override with the
-    member's token (``services/invoke.harness_turn_overrides``)."""
+    """The COA context-layer section (namespace + tool guidance), or ''.
+
+    Direct: the COA tool itself is never deployed, it rides each console turn's tools
+    override with the member's token (``services/invoke.harness_turn_overrides``), and
+    the model sees ``coa_<tool>``. Gateway mode: the managed gateway is deployed as the
+    attachment ``launchpad_coa_gw`` (``_build_live_params``), swapped each turn for a
+    ``remote_mcp`` server with the member's JWT, and the model sees
+    ``launchpad_coa_gw_coa___<tool>``."""
     return context_layer_support.addendum_for(
-        spec, tool_prefix=context_layer_support.HARNESS_TOOL_PREFIX
+        spec, tool_prefix=context_layer_support.harness_tool_prefix(spec)
     )
+
+
+# every addendum a Harness may have been deployed with (the access mode can change
+# between a deploy and a prompt read back from it)
+_CONTEXT_PREFIXES = (
+    context_layer_support.HARNESS_TOOL_PREFIX,
+    context_layer_support.GATEWAY_TOOL_PREFIX,
+)
 
 
 def strip_generated_prompt(spec: AgentSpec, text: str) -> str:
@@ -140,10 +154,12 @@ def strip_generated_prompt(spec: AgentSpec, text: str) -> str:
     from the LIVE Harness (an AI recommendation) carries those sections too; storing
     it as the spec prompt would make the next deploy append them twice (measured live
     2026-09-30). Exact block first; otherwise (KB only) the marker through the
-    section's closing line, in case the revision reflowed the KB bullet lines."""
-    context = _context_prompt(spec)
-    if context and context in text:
-        text = text.replace(context, "").rstrip()
+    section's closing line, in case the revision reflowed the KB bullet lines.
+    Every COA addendum the Harness may carry (direct or gateway mode) is stripped."""
+    for prefix in _CONTEXT_PREFIXES:
+        context = context_layer_support.addendum_for(spec, tool_prefix=prefix)
+        if context and context in text:
+            text = text.replace(context, "").rstrip()
     note = mounts.prompt_note(spec)
     if note and note in text:
         text = text.replace(note, "").rstrip()
@@ -322,6 +338,15 @@ def build_create_params(
         for name in kb_tool_names:
             if spec.knowledge_bases and f"@{name}" not in allowed:
                 allowed.append(f"@{name}")
+        # gateway mode: the managed COA gateway is the context layer, never filtered out
+        # by an explicit list (the direct path appends ``@coa`` per turn the same way)
+        selector = context_layer_support.GATEWAY_SELECTOR
+        if (
+            context_layer_support.via_gateway(spec)
+            and any(t["name"] == context_layer_support.GATEWAY_ALIAS for t in tools)
+            and selector not in allowed
+        ):
+            allowed.append(selector)
     params["allowedTools"] = allowed
     environment_variables = mounts.with_mounts_env(dict(spec.env), spec)
     if environment_variables:
@@ -487,14 +512,28 @@ def _build_live_params(
         if spec.memory.memory_id
         else project_memory.memory_resources(resources, workspace.id).get("memory_arn")
     )
+    # gateway mode: 409 context_layer.gateway_unavailable without the managed gateway,
+    # before any Registry read
+    managed = (
+        context_layer_gateway.require_harness_attachment(workspace)
+        if context_layer_support.via_gateway(spec)
+        else None
+    )
+    attachments = registry_console.resolve_gateway_attachments(spec.tools, workspace)
+    if managed is not None:
+        # first, so it claims the alias the prompt addendum names (``_gateway_tool_name``
+        # suffixes a later duplicate); a Registry attachment of the same gateway is
+        # dropped, as resolve_gateway_attachments keeps one attachment per ARN
+        attachments = [
+            managed,
+            *(a for a in attachments if a.get("gateway_arn") != managed["gateway_arn"]),
+        ]
     return build_create_params(
         spec,
         resources.get("execution_role_arn", ""),
         memory_arn,
         kb_gateway=_kb_gateway_config(resources),
-        gateway_attachments=registry_console.resolve_gateway_attachments(
-            spec.tools, workspace
-        ),
+        gateway_attachments=attachments,
         shared_gateway_arn=resources.get("gateway_arn"),
         vpc=spec_vpc(spec, workspace.id),
     )

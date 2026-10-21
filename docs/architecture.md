@@ -3916,14 +3916,22 @@ per-user grants decide what an agent may see.
   from the token vault, through the console workload identity, and lives only in
   process memory and on requests to COA — the custody exception documented in
   [identity.md](identity.md) §7.7.
-- **Agents** (`AgentSpec.context_layer = {namespace_id, namespace_name}`; pure
-  helpers in `templates/context_layer_support.py`):
+- **Agents** (`AgentSpec.context_layer = {namespace_id, namespace_name, via?}`; pure
+  helpers in `templates/context_layer_support.py`). `via` is direct (the default,
+  never stored) or `"gateway"` (the managed COA gateway below):
   - *Harness*: the deploy adds a prompt addendum (namespace id + tool guidance)
     and no COA tool. Each console turn (`services/invoke.harness_turn_overrides`)
     re-reads the deployed tools, appends a `remote_mcp` server `coa` pointing at
     COA's MCP runtime with the member's bearer, and adds `@coa` to
     `allowedTools`. No consent yet ⇒ the turn is an `auth_required` event and
     InvokeHarness never runs.
+  - *Harness via the gateway*: the deploy attaches the managed gateway as
+    `launchpad_coa_gw` (M2M outbound auth, like any user-trusting gateway), selects
+    `@launchpad_coa_gw`, and names the tools `launchpad_coa_gw_coa___<tool>` in the
+    addendum. Each console turn runs the gateway's consent gate first, then swaps the
+    attachment for a `remote_mcp` server carrying the member's pool JWT. A turn that
+    cannot swap fails closed (`context_layer.gateway_unavailable`). The COA tools show
+    in `GetHarness`, so the code view lists them.
   - *Strands* (`zip_runtime`, HTTP): every deploy stage builds from
     `context_layer.deploy_spec`, which expands the ref into one `as_user` MCP tool
     on the layer's Connection plus the addendum — the template, the execution
@@ -3934,6 +3942,13 @@ per-user grants decide what an agent may see.
     the same outcome as a Harness turn. Any other `as_user` MCP server only sits
     the turn out until its consent (the model still answers). A runtime picks
     this up on its next deploy.
+  - *Strands via the gateway*: the expansion adds no tool. The managed gateway's URL
+    (ledger only) is baked into `main.py` as `CONTEXT_GATEWAY = {"url": …, "tools":
+    "coa___*"}` beside the launchpad-gw client, and the addendum names the tools
+    `coa___<tool>`. Each console turn runs the gateway's consent gate in the backend
+    first (`invoke._runtime_gateway_gate`), then sends the member's pool JWT as the
+    payload's `gateway_access_token`; the runtime loads COA's tools from the gateway
+    with it, with no M2M fallback. The code view shows `CONTEXT_GATEWAY`.
   - `/v1`, evaluation replays, canary / A-B and Harness conversion refuse a
     COA-attached agent: none of them has a console user to act as.
 - **Module** (`routers/context_layer.py`, page `frontend/src/v2/pages/ContextLayer.tsx`
@@ -4001,6 +4016,41 @@ per-user grants decide what an agent may see.
     password shows within 5 minutes), in the reveal response and in the member's
     browser while the panel is open. The `/<prefix>/launchpad/` scope keeps the
     reveal from reading any other secret.
+- **Managed COA gateway** (`services/context_layer_gateway.py`, gateway mode). This is
+  an opt-in path per agent (`context_layer.via = "gateway"`, the wizard's 接入方式,
+  offered while the gateway is enabled; Harness and Strands); direct stays the default. An admin enables one gateway per workspace,
+  `launchpad-coa-gw`, from the overview's gateway card. It is separate from
+  `launchpad-gw`, which is never modified.
+  - `PUT /api/context-layer/gateway` is idempotent and resumable. It reads COA's
+    `tools/list` with the admin's console COA token: no consent means a 409 and
+    nothing is created. It then ensures the gateway (MCP `2025-11-25` + `2025-03-26`,
+    CUSTOM_JWT on the workspace pool admitting the console + M2M clients, so it
+    passes `user_gateways.trusts_workspace_users`). It adds the console return URL to
+    the gateway's own workload identity, and ensures one target `coa`: COA's MCP
+    runtime with an **inline** tool schema and outbound `OAUTH` `AUTHORIZATION_CODE`
+    on the layer's Connection. A 3LO target without an inline schema waits in
+    `CREATE_PENDING_AUTH`.
+  - The ledger keeps `resources["gateway"] = {gateway_id, gateway_arn, gateway_url,
+    target_id}`, written as soon as the gateway exists. `GET …/gateway` reads state,
+    tools, versions, the return-URL allow-list and drift (`issues`) back from AWS;
+    `GET /api/context-layer` carries only `gateway: {enabled, gateway_id}`.
+  - Refresh re-reads COA's tools into the inline schema. Delete removes the target,
+    then the gateway, and drops the `gw:<gateway_id>` grant and pending rows. It is
+    refused while an agent uses gateway mode, and disconnecting the layer is refused
+    while the gateway exists. Re-connecting keeps it.
+  - **Consent** (`gateway_turn_auth`, the gate a gateway-mode turn runs before the
+    agent): a `coa___list_metrics` preflight through the gateway with the member's
+    pool JWT (MCP `2025-11-25`, `elicitation.url`). JSON-RPC `-32042` means no
+    consent: a `user_jwt` pending session on `gw:<gateway_id>` and the usual
+    `auth_required` card, before the model runs. `/auth/return` completes it with
+    the same cached JWT (`policy_identity.gateway_user_token`). Any other answer
+    means consented, and is remembered for 10 minutes per member. A failure fails
+    open.
+  - Consents given through the gateway live in the gateway's own vault slot and
+    cannot be revoked on the platform: revoke skips `gw:` rows, 我的授权 marks them
+    *Not revocable here*, and the card says so ([identity.md](identity.md) §7.7).
+    The gateway role needs `GetWorkloadAccessTokenForJWT` (CDK and the spoke
+    policy). Teardown sweeps the gateway by name.
 - **Limits.** COA cannot be framed (`X-Frame-Options: DENY`), so every authoring
   link opens a new tab. COA's REST data layer caps at 29 s, which is why questions
   go to the streaming Serve runtime and not to `POST /namespaces/{id}/query`. `/v1`

@@ -4,7 +4,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from app.core.config import Settings, get_settings
@@ -276,6 +276,19 @@ class ContextLayerRef(BaseModel):
         pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
     )
     namespace_name: str = Field(default="", max_length=256)
+    # How the agent reaches COA: "direct" (the default) or "gateway", the workspace's
+    # managed COA gateway with the member's pool JWT (services/context_layer_gateway).
+    # Serialized only when "gateway", so every direct spec stored before or after this
+    # field existed — and everything derived from it — stays byte-identical.
+    via: Literal["direct", "gateway"] = Field(
+        default="direct", exclude_if=lambda v: v == context_layer_support.VIA_DIRECT
+    )
+    # Deploy time only, gateway mode on a Strands runtime: the managed gateway's MCP URL
+    # the template bakes (``context_layer.expanded_spec`` →
+    # ``context_layer_support.bind_gateway_url``). Private, so it is never serialized
+    # (stored specs, snapshots and API answers keep the ref only) and never settable
+    # by a client: the URL the member's JWT goes to is always the ledger's.
+    _gateway_url: str = PrivateAttr(default="")
 
 
 class MemoryConfig(BaseModel):

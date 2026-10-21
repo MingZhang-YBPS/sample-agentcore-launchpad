@@ -203,13 +203,23 @@ def _jwt_claims(token: str) -> dict[str, Any]:
 
 
 def gateway_user_token(
-    workspace: WorkspaceContext, username: str, role: str, email: str | None = None
+    workspace: WorkspaceContext,
+    username: str,
+    role: str,
+    email: str | None = None,
+    *,
+    min_valid_s: float = 60,
 ) -> str | None:
     """Return a verified Cognito user JWT for an authenticated Chat caller.
 
     ``None`` is deliberate only while the console auth gate is disabled, where
     there is no authenticated human and the established M2M path remains the
     correct identity.
+
+    A cached token is reused while it stays valid for ``min_valid_s`` more
+    seconds. A caller whose token must still be the cached one later (the managed
+    COA gateway's consent, completed with the very JWT it was asked with) asks for
+    a longer margin, so the cache cannot roll over in between.
     """
 
     settings = get_settings()
@@ -230,12 +240,12 @@ def gateway_user_token(
     project_groups = _project_groups(workspace, username, role)
     key = (workspace.account_id, workspace.region, username, role, tuple(sorted(project_groups)))
     cached = _token_cache.get(key)
-    if cached and float(cached["expires_at"]) > time.time() + 60:
+    if cached and float(cached["expires_at"]) > time.time() + min_valid_s:
         return str(cached["token"])
 
     with _lock:
         cached = _token_cache.get(key)
-        if cached and float(cached["expires_at"]) > time.time() + 60:
+        if cached and float(cached["expires_at"]) > time.time() + min_valid_s:
             return str(cached["token"])
         demo_password = _demo_password(workspace, username)
         password = demo_password or _shadow_password(username)

@@ -357,6 +357,12 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/context-layer/namespaces/{namespace_id}/ontology"): MEMBER,
     ("GET", "/api/context-layer/health"): MEMBER,
     ("POST", "/api/context-layer/playground"): PERM_PROJECT_USE,
+    # the managed COA gateway: an AgentCore Gateway + target + workload identity
+    # change, so ADMIN; its live status is a read
+    ("GET", "/api/context-layer/gateway"): MEMBER,
+    ("PUT", "/api/context-layer/gateway"): ADMIN,
+    ("POST", "/api/context-layer/gateway/refresh"): ADMIN,
+    ("DELETE", "/api/context-layer/gateway"): ADMIN,
     # ---- governance ----
     # the workspace's PII guardrail preset (T12): reading it is a member's business
     # (the wizard shows whether it exists); creating the real Bedrock resource is not
@@ -1948,6 +1954,10 @@ _DATA_ROUTES = (
     ("DELETE", "/api/coding/runtime"),
     ("PUT", "/api/context-layer"),
     ("DELETE", "/api/context-layer"),
+    # the managed COA gateway (an AgentCore Gateway + target + workload identity)
+    ("PUT", "/api/context-layer/gateway"),
+    ("POST", "/api/context-layer/gateway/refresh"),
+    ("DELETE", "/api/context-layer/gateway"),
     ("POST", "/api/memory/resources/{memory_id}/adopt"),
     ("POST", "/api/governance/guardrail"),
     ("PUT", "/api/release-policies/{workspace_id}"),

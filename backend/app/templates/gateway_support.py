@@ -92,14 +92,23 @@ def runtime_user_id(spec: Mapping[str, Any] | None, actor_id: str = "default") -
     the same Runtime-injected workload token the Gateway client uses; when the
     spec has a ``model_provider`` (SB-2; its key is read the same way); and for a
     runtime that attaches the COA context layer, whose deploy expands it into one
-    such tool (``context_layer_support``). A Harness reaches COA through the
-    backend's console workload instead, so its spec does not count.
+    such tool (``context_layer_support``). A direct Harness reaches COA through the
+    backend's console workload instead, so its spec does not count; one in gateway
+    mode (``context_layer.via = "gateway"``) does, because its turn reaches the managed
+    COA gateway with the member's workspace-pool JWT, which the Chat route mints for
+    exactly the user this names. So does a Strands runtime in gateway mode (no as_user
+    tool): the route mints that JWT because this names the member, and it rides the
+    payload as ``gateway_access_token`` to the runtime's ``CONTEXT_GATEWAY`` client.
     """
     tools = (spec or {}).get("tools") or []
-    needs_token = any(
-        isinstance(tool, dict) and (tool.get("type") == "gateway" or tool.get("auth"))
-        for tool in tools
-    ) or ((spec or {}).get("method") != "harness" and context_layer_support.attached(spec))
+    needs_token = (
+        any(
+            isinstance(tool, dict) and (tool.get("type") == "gateway" or tool.get("auth"))
+            for tool in tools
+        )
+        or ((spec or {}).get("method") != "harness" and context_layer_support.attached(spec))
+        or context_layer_support.uses_gateway(spec)
+    )
     # SB-2: a direct model provider reads its api_key through the token vault,
     # which needs the same Runtime-injected workload token.
     needs_token = needs_token or bool((spec or {}).get("model_provider"))

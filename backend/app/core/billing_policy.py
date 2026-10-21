@@ -166,6 +166,10 @@ BILLING: dict[tuple[str, str], Billable | Free] = {
     ("POST", "/api/context-layer/demo-account/reveal"): FREE,
     ("POST", "/api/context-layer/playground"): Billable(SOURCE_CONTEXT_LAYER),
     ("POST", "/api/context-layer/revoke"): FREE,
+    # the managed COA gateway: control-plane writes (+ one COA tools/list read)
+    ("PUT", "/api/context-layer/gateway"): FREE,
+    ("POST", "/api/context-layer/gateway/refresh"): FREE,
+    ("DELETE", "/api/context-layer/gateway"): FREE,
     # ---- Studio local debug and the AI fix: model calls on the host ----
     ("POST", "/api/conversations"): FREE,
     ("DELETE", "/api/conversations/{session_id}"): FREE,

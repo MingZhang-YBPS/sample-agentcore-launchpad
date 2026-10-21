@@ -52,6 +52,8 @@ def chat_stream(
     status_events: bool = False,
     stop: "StopSignal | None" = None,
     context: dict[str, str] | None = None,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta|policy_denied)* → done.
 
@@ -83,6 +85,10 @@ def chat_stream(
     in the runtime payload. An ``output_schema`` agent's parsed answer arrives as a
     ``structured`` event (``{value}``) after the text; a guardrail turn drops it, as
     only the text is screened.
+
+    ``user_role`` / ``user_email`` are the signed-in member's, for an agent whose
+    context layer runs in gateway mode (a Harness: ``invoke.harness_turn_overrides``; a
+    Strands runtime: ``invoke._runtime_gateway_gate``).
     """
     session_id = session_id or new_session_id()
     workspace = workspace if workspace is not None else context_for_workspace(
@@ -159,6 +165,8 @@ def chat_stream(
                 gateway_access_token=gateway_access_token,
                 thinking=status_events,
                 console_user=console_user,
+                user_role=user_role,
+                user_email=user_email,
             )
         else:
             invoke_kwargs: dict[str, Any] = {}
@@ -174,6 +182,10 @@ def chat_stream(
                 invoke_kwargs["console_user"] = False
             if context:
                 invoke_kwargs["context"] = context
+            if user_role:
+                # a gateway-mode Strands agent's consent gate mints for this member
+                invoke_kwargs["user_role"] = user_role
+                invoke_kwargs["user_email"] = user_email
             source = invoke_agent_events(
                 agent,
                 prompt,
@@ -245,6 +257,8 @@ def _harness_events(
     gateway_access_token: str | None = None,
     thinking: bool = False,
     console_user: bool = True,
+    user_role: str | None = None,
+    user_email: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Map one InvokeHarness stream onto chat events.
 
@@ -264,9 +278,11 @@ def _harness_events(
     overrides = harness_turn_overrides(
         agent, workspace, gateway_access_token=gateway_access_token,
         runtime_user_id=runtime_user_id, console_user=console_user, session_id=session_id,
+        user_role=user_role, user_email=user_email,
     )
     if "auth_required" in overrides:
-        # COA consent first: the card is the whole turn, InvokeHarness never runs
+        # COA consent first (direct, or the managed gateway's preflight): the card is
+        # the whole turn, InvokeHarness never runs
         yield {"event": "auth_required", "data": overrides["auth_required"]}
         return
     params.update(overrides)

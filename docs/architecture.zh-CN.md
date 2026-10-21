@@ -2009,18 +2009,29 @@ Agent 能看到什么由 COA 的逐用户授权决定。
 - **令牌**（`services/context_layer_tokens.py`）：成员的 COA 令牌只来自令牌库，经由控制台
   工作负载身份获取，只存在于进程内存和发往 COA 的请求中——即
   [identity.md](identity.md) §7.7 记录的托管例外。
-- **Agent**（`AgentSpec.context_layer = {namespace_id, namespace_name}`；纯函数在
-  `templates/context_layer_support.py`）：
+- **Agent**（`AgentSpec.context_layer = {namespace_id, namespace_name, via?}`；纯函数在
+  `templates/context_layer_support.py`）。`via` 为直连（默认值，从不存储）或 `"gateway"`
+  （见下文的托管 COA 网关）：
   - *Harness*：部署时只追加一段提示词（命名空间 id 与工具指引），不部署 COA 工具。每轮控制台
     对话（`services/invoke.harness_turn_overrides`）重新读取已部署的工具，追加一个指向 COA
     MCP 运行时、携带成员 bearer 的 `remote_mcp` 服务 `coa`，并在 `allowedTools` 中加入
     `@coa`。尚未授权时，该轮就是一个 `auth_required` 事件，InvokeHarness 不会执行。
+  - *经 Gateway 的 Harness*：部署时把托管网关挂载为 `launchpad_coa_gw`（与其他信任工作区用户的
+    网关一样使用 M2M 出站认证），选中 `@launchpad_coa_gw`，并在提示词中把工具称为
+    `launchpad_coa_gw_coa___<tool>`。每轮控制台对话先过网关的授权关，再把该挂载替换为携带成员
+    用户池 JWT 的 `remote_mcp` 服务。无法替换的一轮对话直接拒绝
+    （`context_layer.gateway_unavailable`）。COA 工具出现在 `GetHarness` 中，代码视图也会列出。
   - *Strands*（HTTP `zip_runtime`）：每个部署阶段都基于 `context_layer.deploy_spec` 构建，它把
     引用展开为该层 Connection 上的一个 `as_user` MCP 工具并追加提示词——模板、执行角色、
     环境变量与返回 URL 白名单都读取这一次展开，存储的 spec 只保留引用。烘焙进代码的这个工具带
     `gates_turn` 标记：成员尚未授权时，生成的运行时只发出 `auth_required` 授权卡片并结束该轮，
     不调用模型——与 Harness 的结果一致。其他 `as_user` MCP 服务在授权前只是本轮不可用，模型照常
     作答。已部署的运行时在下次部署后生效。
+  - *经 Gateway 的 Strands*：展开时不添加任何工具。托管网关的 URL（只来自账本）以
+    `CONTEXT_GATEWAY = {"url": …, "tools": "coa___*"}` 的形式烘焙进 `main.py`，与 launchpad-gw
+    客户端并存；提示词把工具称为 `coa___<tool>`。每轮控制台对话先在后端过网关的授权关
+    （`invoke._runtime_gateway_gate`），再把成员的用户池 JWT 作为载荷的 `gateway_access_token`
+    发送；运行时用它从网关加载 COA 工具，没有 M2M 兜底。代码视图会显示 `CONTEXT_GATEWAY`。
   - `/v1`、评估回放、金丝雀／A-B 实验与 Harness 转换都拒绝挂载 COA 的 Agent：它们都没有可代表
     的控制台用户。
 - **模块**（`routers/context_layer.py`，页面 `frontend/src/v2/pages/ContextLayer.tsx` 与
@@ -2069,6 +2080,32 @@ Agent 能看到什么由 COA 的逐用户授权决定。
     域名下所有客户端的会话）、重新授权。如果授权结果不是所选的账号，会自动打开这份引导。
   - 密码只存在于 SSM、后端内存（最多 300 秒，轮换后的密码 5 分钟内生效）、查看接口的响应，以及
     面板打开期间成员的浏览器中。`/<prefix>/launchpad/` 范围限制保证查看接口无法读取其他密钥。
+- **托管 COA 网关**（`services/context_layer_gateway.py`，经 Gateway 接入）：按 Agent 选择启用
+  （`context_layer.via = "gateway"`，即向导中的“接入方式”，仅在网关启用时可选；支持
+  Harness 与 Strands），默认仍为直连。管理员在概览页的网关卡片上为每个
+  工作区启用一个网关 `launchpad-coa-gw`，它与 `launchpad-gw` 相互独立，后者从不被修改。
+  - `PUT /api/context-layer/gateway` 幂等且可续做。它先以管理员的控制台 COA 令牌读取 COA 的
+    `tools/list`：未授权时返回 409，不创建任何资源。然后确保网关存在（MCP `2025-11-25` +
+    `2025-03-26`，工作区用户池上的 CUSTOM_JWT，允许控制台与 M2M 客户端，因此满足
+    `user_gateways.trusts_workspace_users`），把控制台返回 URL 加入网关自身的工作负载身份，并确保
+    一个目标 `coa`：指向 COA 的 MCP 运行时，带**内联**工具 schema，出站为基于该层 Connection 的
+    `OAUTH` `AUTHORIZATION_CODE`。没有内联 schema 的 3LO 目标会停在 `CREATE_PENDING_AUTH`。
+  - 账本只存 `resources["gateway"] = {gateway_id, gateway_arn, gateway_url, target_id}`，网关一经
+    创建就写入。`GET …/gateway` 从 AWS 读回状态、工具、MCP 版本、返回 URL 白名单与漂移
+    （`issues`）；`GET /api/context-layer` 只带 `gateway: {enabled, gateway_id}`。
+  - “刷新工具”把 COA 的工具重新写入内联 schema。删除时先删目标、再删网关，并删除以
+    `gw:<gateway_id>` 为键的授权行与待完成会话；仍有 Agent 使用经 Gateway 接入时拒绝删除，网关
+    存在时也拒绝断开上下文层。重新连接会保留网关。
+  - **授权**（`gateway_turn_auth`，经 Gateway 接入的一轮对话在调用 Agent 之前先过这道关）：以成员的
+    用户池 JWT 经网关预检一次 `coa___list_metrics`（MCP `2025-11-25`，`elicitation.url`）。
+    JSON-RPC `-32042` 表示尚未授权：记录一条 `gw:<gateway_id>` 上的 `user_jwt` 待完成会话，并在调用
+    模型之前返回常规的 `auth_required` 授权卡片。`/auth/return` 用同一个缓存的 JWT
+    （`policy_identity.gateway_user_token`）完成授权。其他任何回答都表示已授权，按成员缓存 10 分钟。
+    预检失败时放行。
+  - 经网关完成的授权存放在网关自己的令牌库槽位中，无法在平台上撤销：撤销会跳过 `gw:` 行，
+    我的授权将其标为“不可在平台撤销”，卡片上也会说明这一点（[identity.md](identity.md) §7.7）。
+    网关角色需要 `GetWorkloadAccessTokenForJWT`（CDK 与 spoke 工作区的 `gateway_role_policy`
+    均已包含）。teardown 按名称清理该网关。
 - **限制**：COA 不允许被内嵌（`X-Frame-Options: DENY`），所以所有编写链接都在新标签页打开。
   COA 的 REST 数据层上限为 29 秒，因此提问走流式 Serve 运行时，而不是
   `POST /namespaces/{id}/query`。挂载 COA 的 Agent 在 `/v1` 上返回 409；金丝雀／A-B、评估回放

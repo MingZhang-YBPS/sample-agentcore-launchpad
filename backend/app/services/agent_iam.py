@@ -45,6 +45,7 @@ from app.schemas.agent import (
 )
 from app.schemas.strands_builder import uses_code_interpreter
 from app.services.workspace import WorkspaceContext
+from app.templates import context_layer_support
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +358,14 @@ def _uses_gateway(spec: AgentSpec) -> bool:
     """
     if spec.knowledge_bases:
         return True  # harness KBs ride the shared KB gateway
+    if spec.method == "harness" and context_layer_support.via_gateway(spec):
+        # the managed COA gateway is deployed as an M2M gateway attachment, as a
+        # Registry-attached user-trusting gateway is (each console turn swaps in the
+        # member's JWT, but the deployed configuration stays one the role can run).
+        # A Strands runtime in gateway mode needs no grant: it calls the gateway over
+        # plain HTTPS with the member's JWT from the payload, which the gateway's
+        # CUSTOM_JWT authorizer checks (no IAM call, no token exchange).
+        return True
     for tool in spec.tools:
         if tool.type == "gateway":
             return True

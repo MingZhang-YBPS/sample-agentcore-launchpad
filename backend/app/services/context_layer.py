@@ -71,6 +71,9 @@ AGENT_CLIENT_KEY = "agent_client_id"
 WEB_CLIENT_KEY = "web_client_id"
 _CLIENT_ID_RE = re.compile(r"^[\w+]{1,128}$")
 RUNTIME_KEYS = {"mcp": "mcp_runtime_arn", "serve": "serve_runtime_arn"}
+# resources key of the managed COA gateway's identifiers (``context_layer_gateway``):
+# {gateway_id, gateway_arn, gateway_url, target_id}. Present ⇔ an admin enabled it.
+GATEWAY_KEY = "gateway"
 _RUNTIME_ARN_RE = re.compile(
     r"^arn:aws[\w-]*:bedrock-agentcore:(?P<region>[a-z0-9-]+):(?P<account>\d{12}):"
     r"runtime/(?P<id>[A-Za-z0-9_-]+)$"
@@ -129,6 +132,12 @@ def _layer(row: ContextLayerRow) -> ContextLayer:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def gateway_ref(layer: ContextLayer | None) -> dict[str, str] | None:
+    """The managed COA gateway's ledger identifiers, or None when it is not enabled."""
+    ref = (layer.resources if layer is not None else {}).get(GATEWAY_KEY)
+    return dict(ref) if isinstance(ref, dict) and ref.get("gateway_id") else None
 
 
 def not_connected() -> AppError:
@@ -541,6 +550,10 @@ def connect(
         demo_param = kept if context_layer_demo.in_scope(prefix, kept) else ""
     if demo_param:
         resources[context_layer_demo.PARAM_KEY] = demo_param
+    if row is not None and isinstance((row.resources or {}).get(GATEWAY_KEY), dict):
+        # discovery never sees the managed gateway: re-connecting keeps it (enable or
+        # refresh re-points its target when the MCP runtime or Connection changed)
+        resources[GATEWAY_KEY] = dict(row.resources[GATEWAY_KEY])
     if row is None:
         row = ContextLayerRow(workspace_id=workspace.id)
         if creator is not None:
@@ -580,8 +593,10 @@ def referencing_agents(db: Session, workspace_id: str) -> list[dict[str, str]]:
 
 def disconnect(db: Session, workspace: WorkspaceContext) -> dict[str, Any]:
     """Forget the layer; refused (409 ``context_layer.referenced``) while any agent
-    attaches it. The Connection and the console workload identity stay: they are
-    listed under 出站凭证 and swept by teardown."""
+    attaches it, and (409 ``context_layer.gateway_enabled``) while the managed COA
+    gateway exists — it is the layer's AWS resource, deleted first on its own card.
+    The Connection and the console workload identity stay: they are listed under
+    出站凭证 and swept by teardown."""
     row = _row(db, workspace.id)
     if row is None:
         raise not_connected()
@@ -591,6 +606,14 @@ def disconnect(db: Session, workspace: WorkspaceContext) -> dict[str, Any]:
             "context_layer.referenced",
             f"{len(refs)} agent(s) attach the context layer; detach it from them first",
             {"referenced_by": refs},
+            status_code=409,
+        )
+    gateway = gateway_ref(_layer(row))
+    if gateway is not None:
+        raise AppError(
+            "context_layer.gateway_enabled",
+            "the managed COA gateway still exists; delete it on the Context Layer page first",
+            {"gateway_id": gateway["gateway_id"]},
             status_code=409,
         )
     out = {
@@ -727,6 +750,11 @@ def status(
         "callback_registered": callback_registered,
         "authorization": authorization,
         **demo,
+        # ledger only: the live state is GET /api/context-layer/gateway
+        "gateway": {
+            "enabled": gateway_ref(layer) is not None,
+            "gateway_id": (gateway_ref(layer) or {}).get("gateway_id"),
+        },
         "referenced_by": referencing_agents(db, workspace.id),
         "created_by_name": layer.created_by_name,
         "created_at": layer.created_at.isoformat() if layer.created_at else None,
@@ -749,19 +777,27 @@ def status(
 def grant_agent_id(db: Session, workspace_id: str, agent_id: str, provider: str) -> str:
     """The ``user_grants.agent_id`` a Chat auth card polls for.
 
-    A Harness agent's COA consent is asked on the console workload identity, so its
-    grant is the console grant (``agent_id=""``), not one per agent; every other
+    A gateway-mode agent's COA consent (``context_layer.via = "gateway"``) is the
+    managed gateway's grant (``gw:<gateway_id>``), shared by every gateway-mode
+    agent. A direct Harness agent's is asked on the console workload identity, so
+    its grant is the console grant (``agent_id=""``), not one per agent. Every other
     pair is what it says."""
     if not agent_id:
         return agent_id
     agent = db.get(Agent, agent_id)
-    if (
-        agent is not None
-        and agent.workspace_id == workspace_id
-        and agent.method == "harness"
-        and support.attached(agent.spec)
-        and connection_for(db, workspace_id) == provider
-    ):
+    if agent is None or agent.workspace_id != workspace_id or not support.attached(agent.spec):
+        return agent_id
+    layer = get(db, workspace_id)
+    if layer is None or layer.connection != provider:
+        return agent_id
+    if support.uses_gateway(agent.spec):
+        gateway = gateway_ref(layer)
+        if gateway is None:
+            return agent_id  # no managed gateway: nothing was asked for it
+        from app.services import context_layer_gateway
+
+        return context_layer_gateway.gateway_grant_id(gateway["gateway_id"])
+    if agent.method == "harness":
         return ""
     return agent_id
 
@@ -770,9 +806,26 @@ def expanded_spec(spec: AgentSpec, layer: ContextLayer) -> AgentSpec:
     """The deploy-time spec of a Strands agent: ``context_layer`` becomes one
     ``as_user`` MCP tool on the layer's Connection plus the prompt addendum. The
     single expansion every deploy consumer (template, IAM, environment, return-URL
-    allow-list) reads. Never stored: the agent row keeps only ``context_layer``."""
+    allow-list) reads. Never stored: the agent row keeps only ``context_layer``.
+
+    Gateway mode (``via = "gateway"``) adds no tool at all, so there is no identity
+    client, execution-role grant, environment entry or return URL for COA. The managed
+    gateway's MCP URL (ledger only) is bound to the ref for the template's
+    ``CONTEXT_GATEWAY`` block, and the addendum names the gateway's ``coa___<tool>``
+    tools. Without an enabled gateway: 409 ``context_layer.gateway_unavailable``, so no
+    stage builds the agent in the wrong mode."""
     if spec.context_layer is None:
         return spec
+    if support.via_gateway(spec):
+        from app.services import context_layer_gateway
+
+        url = context_layer_gateway.require_runtime_gateway_url(layer)
+        return spec.model_copy(update={
+            "context_layer": support.bind_gateway_url(spec.context_layer, url),
+            "system_prompt": spec.system_prompt + support.addendum_for(
+                spec, tool_prefix=support.strands_tool_prefix(spec)
+            ),
+        })
     tool = ToolRef(**support.strands_tool_ref(layer.mcp_url, layer.connection))
     return spec.model_copy(update={
         "tools": [*spec.tools, tool],
@@ -782,7 +835,8 @@ def expanded_spec(spec: AgentSpec, layer: ContextLayer) -> AgentSpec:
 
 def deploy_spec(spec_dict: dict[str, Any], workspace_id: str) -> AgentSpec:
     """``AgentSpec(**stored)``, expanded when it attaches the context layer (zip
-    deploy stages). A layer gone since save fails the stage by name."""
+    deploy stages). A layer gone since save fails the stage by name, and so does a
+    gateway-mode agent's managed gateway (``context_layer.gateway_unavailable``)."""
     spec = AgentSpec(**spec_dict)
     if spec.context_layer is None:
         return spec
