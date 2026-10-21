@@ -962,19 +962,29 @@ body.v3-body {
 .v3 .v3-interval[data-undecided="true"] .track { border-style: dashed; border-color: var(--v3-wait); }
 
 /* ── confirm dialog ──────────────────────────────────────────────────────── */
+/* A tall form must never push its foot (cancel / save) off screen: the dialog is
+   capped at the viewport below its top offset, its title and foot stay put and only
+   the body scrolls. The mask scrolls too, as a fallback for a very short window. */
 .v3 .v3-modal-mask {
+  --v3-modal-top: min(16vh, 140px);
   position: fixed;
   inset: 0;
   z-index: 120;
   display: grid;
   place-items: start center;
-  padding-top: 16vh;
+  padding: var(--v3-modal-top) 16px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: color-mix(in srgb, var(--v3-scrim) 66%, transparent);
   backdrop-filter: blur(3px);
   animation: v3-fade 0.12s ease-out;
 }
 .v3 .v3-modal {
   width: min(480px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - var(--v3-modal-top) - 16px);
+  max-height: calc(100dvh - var(--v3-modal-top) - 16px);
   padding: 22px 24px 18px;
   border-radius: 14px;
   border: 1px solid var(--v3-line-2);
@@ -982,9 +992,10 @@ body.v3-body {
   box-shadow: 0 30px 80px -20px color-mix(in srgb, var(--v3-shade) 80%, transparent);
   animation: v3-rise 0.18s var(--v3-ease);
 }
-.v3 .v3-modal h2 { margin: 0 0 10px; font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 18px; font-weight: 650; }
-.v3 .v3-modal .body { color: var(--v3-text-2); line-height: 1.6; }
-.v3 .v3-modal .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.v3 .v3-modal h2 { flex: none; margin: 0 0 10px; font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 18px; font-weight: 650; }
+/* the padding / negative margin keep focus rings inside the scroll box visible */
+.v3 .v3-modal .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -6px; padding: 2px 6px; color: var(--v3-text-2); line-height: 1.6; }
+.v3 .v3-modal .foot { flex: none; display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 
 /* ── track: a lifecycle as one line of lamps ─────────────────────────────── */
 .v3 .v3-track { display: grid; margin: 0; padding: 4px 0 0; list-style: none; }

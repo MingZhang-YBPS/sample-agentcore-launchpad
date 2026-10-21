@@ -31,9 +31,19 @@ export function percent(fraction: number): string {
   return `${Math.round(fraction * 100)}%`;
 }
 
-/** The lines as one label: "80% · 100% · block 100%". */
+/** The lines as one label: "80% · 100%" (overrun off: the alert and the block share
+ *  100 %, shown once) or "80% · 105% · 110%" (overrun on). */
 export function linesLabel(lines: readonly BudgetLine[]): string {
-  return lines.map((line) => percent(line.fraction)).join(" · ");
+  return [...new Set(lines.map((line) => percent(line.fraction)))].join(" · ");
+}
+
+/** Active rows first, archived ones apart: an archived project's spend still counts,
+ *  but its budget can no longer be set (409 `project.archived`). */
+export function splitArchived<T extends { status?: string | null }>(rows: readonly T[]): { active: T[]; archived: T[] } {
+  const active: T[] = [];
+  const archived: T[] = [];
+  for (const row of rows) (row.status && row.status !== "active" ? archived : active).push(row);
+  return { active, archived };
 }
 
 /** Green below 80 %, amber from 80 %, red from 100 % (the department's lines). */

@@ -504,7 +504,8 @@ export function V3Costs() {
       />
       {view === "spend" ? (basis === "billing" ? <BillingView /> : <SpendView />)
         : view === "alerts" ? <AlertsView />
-        : view === "project" && project.current ? <ProjectBudgetView projectId={project.current.id} />
+        : view === "project" && project.current ? <ProjectBudgetView projectId={project.current.id}
+            manageInDepartment={me.data?.budget_scope === "department"} />
         : view === "department" ? <DepartmentBudgetView departments={me.data?.departments ?? []} me={me.data} />
         : view === "platform" ? <PlatformBudgetView />
         : me.loading ? <Panel><Skeleton rows={3} /></Panel>

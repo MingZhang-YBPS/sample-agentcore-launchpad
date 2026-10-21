@@ -10,7 +10,7 @@ import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
 import { Select } from "../../select";
 import { Btn, Chip, Empty, Lamp, Notice, Panel, Skeleton, Spark, Stat } from "../../ui";
-import { allocationProblem, budgetRights, linesLabel, parseBudget, percent, spendSignal } from "./budgetModel";
+import { allocationProblem, budgetRights, linesLabel, parseBudget, percent, spendSignal, splitArchived } from "./budgetModel";
 
 function usd(value: number | null | undefined): string {
   if (value == null) return "—";
@@ -34,22 +34,30 @@ function BudgetBar({ fraction, lines, testId }: { fraction: number | null; lines
 
 /* ── the project page ─────────────────────────────────────────────────── */
 
-/** The current project's budget, switch and lines — every member's. */
-export function ProjectBudgetView({ projectId }: { projectId: string }) {
+/** The current project's budget, switch and lines — every member's. `manageInDepartment`:
+ *  the caller sets budgets as a department administrator, which happens on the
+ *  Department tab (the project switcher lists only projects they are a member of). */
+export function ProjectBudgetView({ projectId, manageInDepartment = false }: { projectId: string; manageInDepartment?: boolean }) {
   const loaded = useLoad(() => projectQuotasApi.get(projectId), `v3-costs-project:${projectId}`);
   const view = loaded.data;
   if (loaded.loading && !view) return <Panel><Skeleton rows={4} /></Panel>;
   if (!view) return <Notice s="act"><ApiErrorDetail error={loaded.failure ?? loaded.error} /></Notice>;
-  return <ProjectBudgetPanel view={view} />;
+  return <ProjectBudgetPanel view={view} manageInDepartment={manageInDepartment} />;
 }
 
-export function ProjectBudgetPanel({ view }: { view: ProjectQuotas }) {
+export function ProjectBudgetPanel({ view, manageInDepartment = false }: { view: ProjectQuotas; manageInDepartment?: boolean }) {
   const { t } = useTranslation();
   const budget = view.budget;
   const overrun = Boolean(view.allow_overrun);
   const dept = view.department_budget ?? null;
   return (
     <div style={{ display: "grid", gap: 16 }} data-testid="v3-costs-project">
+      {manageInDepartment && (
+        <Notice s="info">
+          <span data-testid="v3-costs-project-manage-hint">{t("v3.costs.budget.manageInDepartment")}</span>{" "}
+          <Link to="/v3/costs?view=department">{t("v3.costs.budget.manageInDepartmentLink")}</Link>
+        </Notice>
+      )}
       {budget ? (
         <>
           <div className="v3-grid c4">
@@ -80,7 +88,7 @@ export function ProjectBudgetPanel({ view }: { view: ProjectQuotas }) {
           </Panel>
         </>
       ) : (
-        <Panel><Empty title={t("v3.costs.budget.noBudget")}>{t("v3.costs.budget.noBudgetSub")}</Empty></Panel>
+        <Panel><Empty title={t("v3.costs.budget.noBudget")}>{t(view.department_id ? "v3.costs.budget.noBudgetSub" : "v3.costs.budget.noBudgetSubPlatform")}</Empty></Panel>
       )}
       {dept && (
         <Panel title={t("v3.costs.budget.departmentTitle", { name: dept.name })}>
@@ -271,6 +279,7 @@ export function DepartmentBudgetPanel({ view, rights, onSaved }: {
 }) {
   const { t } = useTranslation();
   const trend = view.trend.map((p) => p.spent_usd ?? 0);
+  const split = splitArchived(view.projects);
   return (
     <div style={{ display: "grid", gap: 16 }} data-testid="v3-costs-department">
       {view.alerts.map((alert) => (
@@ -294,7 +303,7 @@ export function DepartmentBudgetPanel({ view, rights, onSaved }: {
       {!rights.allocate && <Notice s="info">{t("v3.costs.budget.readOnly")}</Notice>}
       {rights.setDepartment && <DepartmentEditor view={view} onSaved={onSaved} />}
       <Panel flush title={t("v3.costs.budget.projectsTitle")}>
-        {view.projects.length === 0 ? <Empty title={t("v3.costs.budget.noProjects")} /> : (
+        {split.active.length === 0 && split.archived.length === 0 ? <Empty title={t("v3.costs.budget.noProjects")} /> : split.active.length === 0 ? null : (
           <div className="v3-table-scroll">
             <table className="v3-table">
               <thead>
@@ -308,13 +317,38 @@ export function DepartmentBudgetPanel({ view, rights, onSaved }: {
                 </tr>
               </thead>
               <tbody>
-                {view.projects.map((row) => <ProjectRow key={row.project_id} view={view} row={row} canEdit={rights.allocate} onSaved={onSaved} />)}
+                {split.active.map((row) => <ProjectRow key={row.project_id} view={view} row={row} canEdit={rights.allocate} onSaved={onSaved} />)}
               </tbody>
             </table>
           </div>
         )}
+        <ArchivedProjects rows={split.archived} />
       </Panel>
     </div>
+  );
+}
+
+/** Archived projects, folded: read-only (their budgets can no longer be set), their
+ *  spend still in the totals. */
+function ArchivedProjects({ rows }: { rows: readonly BudgetProjectRow[] }) {
+  const { t } = useTranslation();
+  if (rows.length === 0) return null;
+  return (
+    <details data-testid="v3-costs-archived" style={{ padding: "8px 16px 12px" }}>
+      <summary className="v3-hint" style={{ cursor: "pointer" }}>{t("v3.costs.budget.archivedGroup", { count: rows.length })}</summary>
+      <small className="v3-hint">{t("v3.costs.budget.archivedHint")}</small>
+      <table className="v3-table">
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.project_id} data-testid={`v3-costs-archived-row-${row.project_id}`}>
+              <td><b>{row.name}</b> <span className="mono v3-hint">{row.project_id}</span> <Chip>{t("v3.costs.budget.archived")}</Chip></td>
+              <td className="num mono">{row.budget_usd == null ? t("v3.costs.budget.unset") : usd(row.budget_usd)}</td>
+              <td className="num mono">{usd(row.spent_usd)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }
 
@@ -332,6 +366,7 @@ export function PlatformBudgetView() {
 
 export function PlatformBudgetPanel({ view }: { view: PlatformCostView }) {
   const { t } = useTranslation();
+  const unassigned = splitArchived(view.unassigned_projects);
   return (
     <div style={{ display: "grid", gap: 16 }} data-testid="v3-costs-platform">
       {view.alerts.map((alert) => (
@@ -370,7 +405,7 @@ export function PlatformBudgetPanel({ view }: { view: PlatformCostView }) {
                     <td className="num mono">{usd(d.allocated_usd)}</td>
                     <td className="num"><span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                       <Lamp s={spendSignal(fraction)} /><span className="mono">{usd(d.spent_usd)}</span></span></td>
-                    <td className="num">{d.projects.length}</td>
+                    <td className="num">{splitArchived(d.projects).active.length}</td>
                   </tr>
                 );
               })}
@@ -380,10 +415,11 @@ export function PlatformBudgetPanel({ view }: { view: PlatformCostView }) {
       </Panel>
       {view.unassigned_projects.length > 0 && (
         <Panel flush title={t("v3.costs.budget.unassigned")}>
+          {unassigned.active.length > 0 && (
           <table className="v3-table">
             <thead><tr><th>{t("v3.costs.colProject")}</th><th className="num">{t("v3.costs.budget.budget")}</th><th className="num">{t("v3.costs.budget.spent")}</th></tr></thead>
             <tbody>
-              {view.unassigned_projects.map((p) => (
+              {unassigned.active.map((p) => (
                 <tr key={p.project_id}>
                   <td><b>{p.name}</b> <span className="mono v3-hint">{p.project_id}</span></td>
                   <td className="num mono">{p.budget_usd == null ? t("v3.costs.budget.unset") : usd(p.budget_usd)}</td>
@@ -392,6 +428,8 @@ export function PlatformBudgetPanel({ view }: { view: PlatformCostView }) {
               ))}
             </tbody>
           </table>
+          )}
+          <ArchivedProjects rows={unassigned.archived} />
         </Panel>
       )}
       <Panel flush title={t("v3.costs.budget.platformTitle")}>

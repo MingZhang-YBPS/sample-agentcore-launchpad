@@ -6,7 +6,7 @@ import i18n from "../../../i18n";
 import type { BudgetsMe, DepartmentCostView, PlatformCostView } from "../../../lib/api/budgets";
 import type { ProjectQuotas } from "../../../lib/api/projects";
 import { hostedGroups } from "../../nav";
-import { allocationProblem, budgetRights, costViews, linesLabel, parseBudget, pickView, spendSignal } from "./budgetModel";
+import { allocationProblem, budgetRights, costViews, linesLabel, parseBudget, pickView, spendSignal, splitArchived } from "./budgetModel";
 import { DepartmentBudgetPanel, PlatformBudgetPanel, ProjectBudgetPanel } from "./BudgetViews";
 
 const render = (node: JSX.Element) => renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>);
@@ -98,9 +98,15 @@ describe("the budget model", () => {
   });
 
   it("labels the 80/100 and 80/105/110 lines and colours the spend", () => {
-    expect(linesLabel(LINES_OFF)).toBe("80% · 100% · 100%");
+    expect(linesLabel(LINES_OFF)).toBe("80% · 100%"); // the alert and the block share 100 %
     expect(linesLabel(LINES_ON)).toBe("80% · 105% · 110%");
     expect([spendSignal(0.5), spendSignal(0.8), spendSignal(1), spendSignal(null)]).toEqual(["ok", "wait", "act", "off"]);
+  });
+
+  it("sets archived projects apart", () => {
+    const { active, archived } = splitArchived([row("a", 1), row("b", null, { status: "archived" }), row("c", 2)]);
+    expect(active.map((r) => r.project_id)).toEqual(["a", "c"]);
+    expect(archived.map((r) => r.project_id)).toEqual(["b"]);
   });
 });
 
@@ -134,6 +140,23 @@ describe("the budget pages", () => {
     expect(off).toContain("alert at 100% · $100.00");
     expect(off).toContain("The budget is used up");
     expect(render(<ProjectBudgetPanel view={quotas({ budget: null })} />)).toContain("This project has no monthly budget");
+    // a department-less project: only the platform sets it
+    const none = render(<ProjectBudgetPanel view={quotas({ budget: null, department_id: null, department_budget: null })} />);
+    expect(none).toContain("only a platform administrator sets its budget");
+    expect(none).not.toContain("v3-costs-project-manage-hint");
+    // a department administrator is pointed at the Department tab
+    const dadmin = render(<ProjectBudgetPanel view={quotas()} manageInDepartment />);
+    expect(dadmin).toContain("v3-costs-project-manage-hint");
+    expect(dadmin).toContain("/v3/costs?view=department");
+  });
+
+  it("folds a department's archived projects into a read-only group", () => {
+    const view = department({ projects: [row("alpha", 50), row("old", null, { status: "archived" })] });
+    const html = render(<DepartmentBudgetPanel view={view} rights={{ setDepartment: false, allocate: true }} onSaved={() => {}} />);
+    expect(html).toContain("v3-costs-department-row-alpha");
+    expect(html).not.toContain("v3-costs-department-row-old");
+    expect(html).toContain("v3-costs-archived-row-old");
+    expect(html).toContain("Archived projects (1)");
   });
 
   it("shows a department's allocation, its editor only at the organization level, and read-only rows without budget.manage", () => {
