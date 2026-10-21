@@ -54,7 +54,7 @@ def test_open_console_keeps_m2m_without_cognito(monkeypatch):
 
 
 def test_demo_user_uses_bootstrap_password_and_reconciles_group(monkeypatch):
-    token = _jwt("demo", ["hr-analyst"])
+    token = _jwt("demo", ["hr-analyst", "lp-role-member"])
     cognito = MagicMock()
     cognito.admin_get_user.return_value = {
         "Username": "demo",
@@ -82,16 +82,18 @@ def test_demo_user_uses_bootstrap_password_and_reconciles_group(monkeypatch):
     cognito.admin_remove_user_from_group.assert_called_once_with(
         UserPoolId="pool", Username="demo", GroupName="platform-admin"
     )
-    cognito.admin_add_user_to_group.assert_called_once_with(
-        UserPoolId="pool", Username="demo", GroupName="hr-analyst"
-    )
+    added = [c.kwargs for c in cognito.admin_add_user_to_group.call_args_list]
+    assert added == [
+        {"UserPoolId": "pool", "Username": "demo", "GroupName": "hr-analyst"},
+        {"UserPoolId": "pool", "Username": "demo", "GroupName": "lp-role-member"},
+    ]
 
 
 def test_a_non_default_workspace_ignores_the_hubs_demo_passwords(monkeypatch):
     """`demo_users.passwords` names users only `make bootstrap` creates, in the
     hub's pool. A console-registered workspace has the groups but no lab users, so
     the same caller must get a shadow identity in that pool instead of a 503."""
-    token = _jwt("admin", ["platform-admin"])
+    token = _jwt("admin", ["platform-admin", "lp-role-admin"])
     cognito = MagicMock()
     cognito.admin_get_user.side_effect = ClientError(
         {"Error": {"Code": "UserNotFoundException", "Message": "missing"}},
@@ -126,7 +128,7 @@ def test_a_non_default_workspace_ignores_the_hubs_demo_passwords(monkeypatch):
 
 
 def test_new_console_user_creates_marked_shadow_identity(monkeypatch):
-    token = _jwt("clare", ["platform-admin"])
+    token = _jwt("clare", ["platform-admin", "lp-role-admin"])
     cognito = MagicMock()
     cognito.admin_get_user.side_effect = ClientError(
         {"Error": {"Code": "UserNotFoundException", "Message": "missing"}},
@@ -161,7 +163,7 @@ def test_a_longer_validity_margin_re_mints_a_token_about_to_expire(monkeypatch):
     """The managed COA gateway's consent is completed with the very JWT it was asked
     with, so its caller asks for a token that outlives the consent session: a cached
     token closer to expiry than that is replaced, the default margin keeps it."""
-    fresh = _jwt("clare", ["platform-admin"])
+    fresh = _jwt("clare", ["platform-admin", "lp-role-admin"])
     cognito = MagicMock()
     cognito.admin_get_user.return_value = {
         "Username": "clare",
@@ -230,6 +232,105 @@ def test_mismatched_jwt_claims_are_rejected(monkeypatch):
     )
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
+    with pytest.raises(AppError) as error:
+        policy_identity.gateway_user_token(WS, "demo", "member")
+    assert error.value.code == "policy.identity_invalid"
+
+
+# ── role groups for every platform role (DBUD rule 7) ────────────────────────
+
+
+def test_every_platform_role_maps_to_its_group_and_only_admin_member_keep_legacy():
+    from app.services.users import ROLES
+
+    assert set(policy_identity.PLATFORM_ROLES) == set(ROLES)
+    assert policy_identity.role_groups("admin") == {"lp-role-admin", "platform-admin"}
+    assert policy_identity.role_groups("member") == {"lp-role-member", "hr-analyst"}
+    # least privilege: no legacy group, so no existing policy admits them by accident
+    assert policy_identity.role_groups("operator") == {"lp-role-operator"}
+    assert policy_identity.role_groups("steward") == {"lp-role-steward"}
+    assert policy_identity.role_groups("root") == frozenset()
+    # bootstrap creates every one of them (workspace_bootstrap iterates POLICY_GROUPS)
+    assert {"platform-admin", "hr-analyst", "lp-role-admin", "lp-role-operator",
+            "lp-role-member", "lp-role-steward"} == policy_identity.POLICY_GROUPS
+
+
+@pytest.mark.parametrize("role", ["operator", "steward"])
+def test_operator_and_steward_get_a_token_instead_of_a_500(monkeypatch, role):
+    token = _jwt("olive", [f"lp-role-{role}"])
+    cognito = MagicMock()
+    cognito.admin_get_user.return_value = {
+        "Username": "olive",
+        "UserAttributes": [
+            {"Name": "preferred_username", "Value": policy_identity.SHADOW_MARKER}
+        ],
+    }
+    # a stale legacy group from when olive was an admin, and an unmanaged one
+    cognito.admin_list_groups_for_user.return_value = {
+        "Groups": [{"GroupName": "platform-admin"}, {"GroupName": "lp-role-admin"},
+                   {"GroupName": "someone-elses"}]
+    }
+    cognito.initiate_auth.return_value = {
+        "AuthenticationResult": {"AccessToken": token, "ExpiresIn": 3600}
+    }
+    monkeypatch.setattr(policy_identity, "get_settings", _settings)
+    monkeypatch.setattr(policy_identity, "load_yaml_config", lambda: {})
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
+
+    assert policy_identity.gateway_user_token(WS, "olive", role) == token
+    removed = {c.kwargs["GroupName"] for c in cognito.admin_remove_user_from_group.call_args_list}
+    added = {c.kwargs["GroupName"] for c in cognito.admin_add_user_to_group.call_args_list}
+    assert removed == {"platform-admin", "lp-role-admin"}
+    assert added == {f"lp-role-{role}"}
+
+
+def test_a_missing_role_group_is_created_once_then_joined():
+    cognito = MagicMock()
+    cognito.admin_list_groups_for_user.return_value = {"Groups": []}
+    missing = ClientError({"Error": {"Code": "ResourceNotFoundException", "Message": "x"}},
+                          "AdminAddUserToGroup")
+    calls: list[str] = []
+
+    def add(**kwargs):
+        calls.append(kwargs["GroupName"])
+        if kwargs["GroupName"] == "lp-role-operator" and calls.count("lp-role-operator") == 1:
+            raise missing
+
+    cognito.admin_add_user_to_group.side_effect = add
+    assert policy_identity._reconcile_group(cognito, pool_id="p", username="olive",
+                                            role="operator") == {"lp-role-operator"}
+    cognito.create_group.assert_called_once_with(
+        UserPoolId="p", GroupName="lp-role-operator",
+        Description="Launchpad role: lp-role-operator")
+    assert calls == ["lp-role-operator", "lp-role-operator"]
+    # a missing legacy / project group is the bootstrap's: not created here
+    cognito.reset_mock()
+    cognito.admin_list_groups_for_user.return_value = {"Groups": []}
+    cognito.admin_add_user_to_group.side_effect = missing
+    with pytest.raises(ClientError):
+        policy_identity._reconcile_group(cognito, pool_id="p", username="demo", role="member")
+    cognito.create_group.assert_not_called()
+
+
+def test_an_unknown_role_is_still_refused():
+    with pytest.raises(AppError) as error:
+        policy_identity._reconcile_group(MagicMock(), pool_id="p", username="x", role="root")
+    assert error.value.code == "policy.identity_role_invalid"
+
+
+def test_a_token_missing_the_role_group_is_rejected(monkeypatch):
+    cognito = MagicMock()
+    cognito.admin_get_user.return_value = {
+        "Username": "demo", "UserAttributes": [],
+    }
+    cognito.admin_list_groups_for_user.return_value = {"Groups": []}
+    cognito.initiate_auth.return_value = {
+        "AuthenticationResult": {"AccessToken": _jwt("demo", ["hr-analyst"]), "ExpiresIn": 3600}
+    }
+    monkeypatch.setattr(policy_identity, "get_settings", _settings)
+    monkeypatch.setattr(policy_identity, "load_yaml_config",
+                        lambda: {"demo_users": {"passwords": {"demo": "pw"}}})
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
     with pytest.raises(AppError) as error:
         policy_identity.gateway_user_token(WS, "demo", "member")
     assert error.value.code == "policy.identity_invalid"

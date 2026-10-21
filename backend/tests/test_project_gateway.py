@@ -525,7 +525,7 @@ def test_the_policy_token_reconciles_project_groups():
                                      project_groups=frozenset({"lp-project-alpha"}))
     removed = {c.kwargs["GroupName"] for c in cognito.admin_remove_user_from_group.call_args_list}
     added = {c.kwargs["GroupName"] for c in cognito.admin_add_user_to_group.call_args_list}
-    assert removed == {"lp-project-old"} and added == {"lp-project-alpha"}
+    assert removed == {"lp-project-old"} and added == {"lp-project-alpha", "lp-role-member"}
 
 
 # ── targets: ownership, the rule after a change, another project's 404 ───────
