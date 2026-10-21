@@ -1,11 +1,12 @@
 """Project quotas and the monthly budget (projects design §11.3, G11-quota).
 
 `projects.settings.quotas` holds a project's limits (keys and bounds in
-`services/projects.QUOTA_COUNTS` / `QUOTA_USD`). Only a platform administrator sets
-them (`PUT /api/projects/{id}/quotas`, ADMIN with no department overlay); every
-member — and the project's department administrator — reads them with their usage.
-There is no department cap and no per-person budget: the project's own value is the
-limit.
+`services/projects.QUOTA_COUNTS` / `QUOTA_USD`). A platform administrator sets them
+all (`PUT /api/projects/{id}/quotas`, ADMIN with no department overlay); the monthly
+budget and its overrun switch are also the project's department administrator's
+(`PUT /api/projects/{id}/budget`, `services/department_budgets.py`). Every member —
+and the department administrator — reads them with their usage. There is no
+per-person budget anywhere: the project is the only budget subject.
 
 | quota                      | enforced at                              | over the limit       |
 |----------------------------|------------------------------------------|----------------------|
@@ -23,8 +24,22 @@ is bound to, plus this month's evaluation judges; or the billed cost of the proj
 Spend figures lag (Logs Insights minutes, Cost Explorer up to a day) and a turn or a
 job already running is never cut off, so a project can overshoot its budget by what
 it spends inside that lag; the gate is hard from the next operation on. An unreadable
-spend never blocks (fail open, logged). An auto-managed alert rule fires at 80 % and
-at 100 % of the budget (`alerts.sync_budget_rule`).
+spend never blocks (fail open, logged).
+
+**Thresholds.** `settings.allow_overrun` (default off, absent = off):
+
+| switch | alert rules (`alerts.sync_budget_rule`) | the gate blocks at |
+|--------|-----------------------------------------|--------------------|
+| off    | 80 %, 100 %                              | 100 %              |
+| on     | 80 %, 105 % (`OVERRUN_ALERT_FRACTION`)   | 110 % (`OVERRUN_BLOCK_FRACTION`) |
+
+The two overrun fractions are constants, not per-project settings. A project may
+switch overrun on only while its department allows it (`department_budgets`).
+
+**Departments.** A department's own monthly budget is an allocation ceiling only —
+it never blocks an operation: the sum of its projects' budgets may not exceed it
+(`department_budgets.check_allocation`), and its summed spend raises 80 % / 100 %
+notices to its administrators (`department_budgets.evaluate_departments`).
 
 A project without quotas (every project until an administrator sets one) meets none
 of these checks.
@@ -65,8 +80,15 @@ ENFORCEMENT: dict[str, str] = {
 }
 # the money keys `monthly_budget_usd` replaced (migrate_budget_quotas)
 RETIRED_QUOTAS = ("monthly_cost_alert_usd", "eval_monthly_usd_cap", "eval_run_max_usd")
-# the alert fires at these fractions of the budget (alerts.BUDGET_RULES)
-ALERT_FRACTIONS = (0.8, 1.0)
+# `settings.allow_overrun`: the project's overrun switch (absent = off)
+OVERRUN_KEY = "allow_overrun"
+WARN_FRACTION = 0.8
+# overrun on: the second alert ("over by 5 %") and the block ("over by 10 %")
+OVERRUN_ALERT_FRACTION = 1.05
+OVERRUN_BLOCK_FRACTION = 1.10
+# the alert fires at these fractions of the budget (alerts.BUDGET_RULES), by switch
+ALERT_FRACTIONS = (WARN_FRACTION, 1.0)
+OVERRUN_ALERT_FRACTIONS = (WARN_FRACTION, OVERRUN_ALERT_FRACTION)
 SPEND_CACHE_SECONDS = 60.0
 _ACTIVE_RUN_STATUSES = ("queued", "invoking", "waiting", "evaluating")
 
@@ -98,6 +120,35 @@ def limit_of(db: Session, project_id: str | None, key: str) -> int | float | Non
         return None
     with project_context(None):
         return _number(project_values(db.get(Project, project_id)).get(key))
+
+
+def allow_overrun(row: Project | None) -> bool:
+    """The project's overrun switch (default off)."""
+    settings = row.settings if row is not None and isinstance(row.settings, dict) else {}
+    return settings.get(OVERRUN_KEY) is True
+
+
+def allow_overrun_of(db: Session, project_id: str) -> bool:
+    with project_context(None):
+        return allow_overrun(db.get(Project, project_id))
+
+
+def alert_fractions(overrun: bool) -> tuple[float, float]:
+    return OVERRUN_ALERT_FRACTIONS if overrun else ALERT_FRACTIONS
+
+
+def block_fraction(overrun: bool) -> float:
+    return OVERRUN_BLOCK_FRACTION if overrun else 1.0
+
+
+def budget_lines(budget: float, overrun: bool) -> list[dict[str, Any]]:
+    """The budget's lines for the views: the alerts, then the block."""
+    lines = [{"kind": "warn" if f == WARN_FRACTION else "alert", "fraction": f,
+              "usd": round(float(budget) * f, 4)} for f in alert_fractions(overrun)]
+    fraction = block_fraction(overrun)
+    lines.append({"kind": "block", "fraction": fraction,
+                  "usd": round(float(budget) * fraction, 4)})
+    return lines
 
 
 # ── the month ─────────────────────────────────────────────────────────────────
@@ -318,6 +369,8 @@ def budget_status(db: Session, project_id: str | None) -> dict[str, Any] | None:
         return None
     spent, detail, measured = cached_spend(db, project_id)
     now = _now()
+    overrun = allow_overrun_of(db, project_id)
+    block_at = round(float(budget) * block_fraction(overrun), 4)
     out: dict[str, Any] = {
         "project_id": project_id,
         "budget_usd": float(budget),
@@ -326,7 +379,11 @@ def budget_status(db: Session, project_id: str | None) -> dict[str, Any] | None:
         else None,
         "fraction": (1.0 if budget <= 0 else round(spent / budget, 4))
         if spent is not None else None,
-        "exhausted": spent is not None and spent >= budget,
+        # blocked: at the block line (100 %, or 110 % with overrun on)
+        "exhausted": spent is not None and spent >= block_at,
+        "allow_overrun": overrun,
+        "block_at_usd": block_at,
+        "lines": budget_lines(float(budget), overrun),
         "month_start": _month_start(now).isoformat(),
         "reset_at": _next_month_start(now).isoformat(),
         "measured_at": measured,
@@ -354,22 +411,30 @@ def budget_exempt() -> Iterator[None]:
 
 def budget_exhausted(status: dict[str, Any]) -> AppError:
     pid = status["project_id"]
+    over = status.get("allow_overrun")
+    line = (f"its ${status['budget_usd']:g} monthly budget plus the "
+            f"{round((OVERRUN_BLOCK_FRACTION - 1) * 100):g} % overrun allowance"
+            if over else f"its ${status['budget_usd']:g} monthly budget")
     return AppError(
         "project.budget_exhausted",
-        f"project '{pid}' has spent ${status['spent_usd']:.2f} of its "
-        f"${status['budget_usd']:g} monthly budget; billable operations resume when the "
-        f"budget resets on {status['reset_at'][:10]} (UTC) or an administrator raises it",
+        f"project '{pid}' has spent ${status['spent_usd']:.2f} of {line}; billable "
+        f"operations resume when the budget resets on {status['reset_at'][:10]} (UTC) "
+        "or an administrator raises it",
         {"project_id": pid, "budget_usd": status["budget_usd"],
          "spent_usd": status["spent_usd"], "reset_at": status["reset_at"],
-         "month_start": status["month_start"], "basis": status["basis"]},
+         "month_start": status["month_start"], "basis": status["basis"],
+         "allow_overrun": bool(over),
+         "block_at_usd": status.get("block_at_usd", status["budget_usd"])},
         status_code=409, next=[next_step("project.settings", project_id=pid)])
 
 
 def assert_budget(db: Session, project_id: str | None) -> None:
     """Refuse a billable operation of a project whose month-to-date spend has reached
-    its `monthly_budget_usd` (409 `project.budget_exhausted`). Nothing for a project
-    without a budget, for work attributed to no project (platform / system calls),
-    inside `budget_exempt()`, or when the spend cannot be read (fail open)."""
+    its block line — `monthly_budget_usd`, or 110 % of it with the overrun switch on —
+    (409 `project.budget_exhausted`). Nothing for a project without a budget, for
+    work attributed to no project (platform / system calls), inside
+    `budget_exempt()`, or when the spend cannot be read (fail open). A department
+    budget never blocks here: it only caps what its projects may be allocated."""
     if not project_id or _EXEMPT.get():
         return
     try:
@@ -423,7 +488,7 @@ def quotas_view(db: Session, row: Project) -> dict[str, Any]:
             remaining_usd=round(max(0.0, budget["budget_usd"] - rule.last_value), 4),
             fraction=1.0 if budget["budget_usd"] <= 0
             else round(rule.last_value / budget["budget_usd"], 4),
-            exhausted=rule.last_value >= budget["budget_usd"])
+            exhausted=rule.last_value >= budget["block_at_usd"])
     items = []
     for key, enforcement in ENFORCEMENT.items():
         item: dict[str, Any] = {
@@ -441,9 +506,14 @@ def quotas_view(db: Session, row: Project) -> dict[str, Any]:
                 item.update(state=rule.state, workspace_id=rule.workspace_id)
         items.append(item)
     now = _now()
+    from app.services import department_budgets
+
     return {"project_id": row.id, "department_id": row.department_id,
             "quotas": project, "items": items, "budget": budget,
             "budget_basis": budget_basis(row),
+            "allow_overrun": allow_overrun(row),
+            # the department's ceiling and switch (None without a department)
+            "department_budget": department_budgets.department_summary(db, row.department_id),
             "month_start": _month_start(now).isoformat(),
             "reset_at": _next_month_start(now).isoformat()}
 
@@ -464,6 +534,15 @@ def update_quotas(db: Session, identity: Any, row: Project, quotas: dict[str, An
         raise AppError("project.archived", f"project '{row.id}' is archived",
                        {"project_id": row.id}, status_code=409)
     clean = projects_svc._check_quotas(quotas)
+    if BUDGET_KEY in clean:
+        from app.services import department_budgets
+
+        department_budgets.check_allocation(
+            db, project_id=row.id, old_department=row.department_id,
+            new_department=row.department_id,
+            old_budget=_number(project_values(row).get(BUDGET_KEY)),
+            new_budget=_number(clean[BUDGET_KEY]), old_overrun=allow_overrun(row),
+            new_overrun=allow_overrun(row), platform=True)
     merged = projects_svc._merge_settings(row.settings or {}, {"quotas": clean})
     if merged == (row.settings or {}):
         return row

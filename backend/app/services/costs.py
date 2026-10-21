@@ -299,6 +299,30 @@ def month_to_date_usd(
     inference profile, else the resolved agent — `_row_project`); the cached entry is
     workspace-wide.
     """
+    raw = _month_to_date_raw(db, workspace, force=force)
+    if project is None:
+        return float(raw["usd"])
+    return float((raw.get("by_project") or {}).get(project, 0.0))
+
+
+def month_to_date_breakdown(
+    db: Session, workspace: WorkspaceContext, *, force: bool = False,
+) -> dict[str, Any]:
+    """The workspace's month-to-date estimate: `usd` (every priced span), `by_project`
+    (the part `_row_project` attributes to a project) and `unattributed_usd` (the
+    rest — services no ledger agent claims: platform presets, the shared COA / Skill
+    Lab runtimes, deleted agents). One cached read shared with `month_to_date_usd`."""
+    raw = _month_to_date_raw(db, workspace, force=force)
+    by_project = {pid: float(usd) for pid, usd in (raw.get("by_project") or {}).items()}
+    total = float(raw["usd"])
+    return {"usd": total, "by_project": by_project,
+            "unattributed_usd": round(max(0.0, total - sum(by_project.values())), 6),
+            "hours": raw.get("hours")}
+
+
+def _month_to_date_raw(
+    db: Session, workspace: WorkspaceContext, *, force: bool = False,
+) -> dict[str, Any]:
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     hours = max(1, min(744, int((now - month_start).total_seconds() // 3600) or 1))
@@ -325,10 +349,7 @@ def month_to_date_usd(
             "by_project": {pid: round(usd, 6) for pid, usd in by_project.items()},
         }
 
-    raw = cached(f"costs-mtd:{workspace.id}:{hours}", force, build)
-    if project is None:
-        return float(raw["usd"])
-    return float((raw.get("by_project") or {}).get(project, 0.0))
+    return cached(f"costs-mtd:{workspace.id}:{hours}", force, build)
 
 
 def invocations_by_project(

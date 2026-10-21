@@ -63,17 +63,31 @@ DASHBOARD_KINDS = ("error_rate", "latency_p95_ms")
 DASHBOARD_WINDOWS = ("1h", "6h", "24h", "7d")
 # A project's `quotas.monthly_budget_usd` (projects §11.3) is kept as two ordinary
 # `cost_mtd_usd` rules of the project, in the project's home workspace (its
-# workspace-default binding, else the first): one at 80 % of the budget, one at 100 %.
-# Each reads the project's month-to-date spend across every workspace it is bound to
+# workspace-default binding, else the first): one at 80 % of the budget, and one at
+# 100 % — or, with the project's overrun switch on (`settings.allow_overrun`), at
+# 105 % instead (the gate then blocks at 110 %). Each reads the project's
+# month-to-date spend across every workspace it is bound to
 # (`project_quotas.cached_spend`, the gate's figure), fires once per month as the
 # spend crosses it (the month-to-date value falls back to ~0 on the 1st), and is
-# (re)written from the budget — removed when the budget is cleared. The rules only
-# notify; the block itself is `project_quotas.assert_budget`.
+# (re)written from the budget and the switch — removed when the budget is cleared.
+# The rules only notify; the block itself is `project_quotas.assert_budget`.
+# Department budgets notify through `department_budgets.evaluate_departments`, run
+# at the end of every evaluation pass (no rule rows: a workspace rule is readable by
+# every member of the workspace, a department's spend is not).
 BUDGET_RULE_NAME = "project monthly budget"
 BUDGET_WARN_RULE_NAME = "project monthly budget 80%"
+BUDGET_OVER_RULE_NAME = "project monthly budget 105%"
 BUDGET_RULE_CREATOR = "quota"
 # rule name → the fraction of the budget it fires at
-BUDGET_RULES: dict[str, float] = {BUDGET_WARN_RULE_NAME: 0.8, BUDGET_RULE_NAME: 1.0}
+BUDGET_RULES: dict[str, float] = {BUDGET_WARN_RULE_NAME: 0.8, BUDGET_RULE_NAME: 1.0,
+                                  BUDGET_OVER_RULE_NAME: 1.05}
+
+
+def budget_rules_for(overrun: bool) -> dict[str, float]:
+    """The rules one project keeps: 80/100, or 80/105 with the overrun switch on."""
+    second = BUDGET_OVER_RULE_NAME if overrun else BUDGET_RULE_NAME
+    return {BUDGET_WARN_RULE_NAME: BUDGET_RULES[BUDGET_WARN_RULE_NAME],
+            second: BUDGET_RULES[second]}
 
 
 def validate(kind: str, comparison: str, window: str, threshold: float) -> None:
@@ -295,6 +309,10 @@ def evaluate_rules(
                     rule.last_notified_at = now
                     rule.last_detail = f"{detail} · webhook {outcome}"
         evaluated.append(rule_out(rule))
+    from app.services import department_budgets
+
+    # department budgets (notify only): the departments with a project bound here
+    departments = department_budgets.evaluate_departments(db, workspace_id=workspace.id)
     db.commit()
     firing = [row for row in evaluated if row["state"] == STATE_FIRING]
     return {
@@ -303,6 +321,7 @@ def evaluate_rules(
         "rules": evaluated,
         "firing": len(firing),
         "unknown": len([row for row in evaluated if row["state"] == STATE_UNKNOWN]),
+        "departments": departments,
     }
 
 
@@ -315,10 +334,12 @@ def is_budget_rule(rule: AlertRule) -> bool:
 
 
 def budget_rule(db: Session, project_id: str) -> AlertRule | None:
-    """The project's 100 % budget rule, in whichever workspace it lives."""
+    """The project's top budget rule (100 %, or 105 % with overrun on), in whichever
+    workspace it lives."""
     with project_context(None):
         rows = db.scalars(select(AlertRule).where(
-            AlertRule.project_id == project_id, AlertRule.name == BUDGET_RULE_NAME,
+            AlertRule.project_id == project_id,
+            AlertRule.name.in_([BUDGET_OVER_RULE_NAME, BUDGET_RULE_NAME]),
             AlertRule.created_by == BUDGET_RULE_CREATOR,
         ).order_by(AlertRule.created_at)).all()
     return rows[0] if rows else None
@@ -338,26 +359,29 @@ def _home_workspace(db: Session, project_id: str) -> str | None:
 
 
 def sync_budget_rule(db: Session, project_id: str) -> AlertRule | None:
-    """Make the project's budget rules match `quotas.monthly_budget_usd`: create the
-    80 % and 100 % rules in the home workspace, move them there, retune their
-    thresholds when the budget changes, or remove them when it is cleared. What
-    someone set on a rule (a webhook, disabling it) stays. Returns the 100 % rule."""
+    """Make the project's budget rules match `quotas.monthly_budget_usd` and its
+    overrun switch: create the 80 % and 100 % (or 105 %) rules in the home workspace,
+    move them there, retune their thresholds when the budget changes, drop the one
+    the switch no longer wants, or remove them all when the budget is cleared. What
+    someone set on a kept rule (a webhook, disabling it) stays. Returns the top rule."""
     from app.models.projects import Project
-    from app.services.project_quotas import BUDGET_KEY, limit_of
+    from app.services.project_quotas import BUDGET_KEY, allow_overrun, limit_of
 
     out: AlertRule | None = None
     with project_context(None):
         project = db.get(Project, project_id)
         budget = limit_of(db, project_id, BUDGET_KEY) if project else None
         home = _home_workspace(db, project_id) if budget is not None else None
-        for name, fraction in BUDGET_RULES.items():
+        wanted = budget_rules_for(allow_overrun(project))
+        for name in BUDGET_RULES:
+            fraction = wanted.get(name)
             rows = list(db.scalars(select(AlertRule).where(
                 AlertRule.project_id == project_id, AlertRule.name == name,
                 AlertRule.created_by == BUDGET_RULE_CREATOR).order_by(AlertRule.created_at)))
-            keep = rows[0] if rows and home is not None else None
+            keep = rows[0] if rows and home is not None and fraction is not None else None
             for extra in rows[1:] if keep is not None else rows:
                 db.delete(extra)
-            if home is None or budget is None:
+            if home is None or budget is None or fraction is None:
                 continue
             threshold = round(float(budget) * fraction, 4)
             if keep is None:
@@ -372,7 +396,7 @@ def sync_budget_rule(db: Session, project_id: str) -> AlertRule | None:
                 if keep.threshold != threshold:
                     keep.threshold = threshold
                     keep.state = STATE_UNKNOWN  # re-judged (and re-notified) on the next pass
-            if name == BUDGET_RULE_NAME:
+            if name != BUDGET_WARN_RULE_NAME:
                 out = keep
         db.flush()
     return out

@@ -48,6 +48,42 @@ class InvitationCreate(BaseModel):
     valid_days: int | None = Field(default=None, ge=1, le=3650)
 
 
+class DepartmentBudgetPut(BaseModel):
+    # partial; typed loosely so the service answers `department.budget_invalid`
+    monthly_budget_usd: Any = None
+    allow_overrun: Any = None
+
+
+# ── the department budget and its cost page (projects §11.3) ─────────────────
+
+
+@router.get("/{department_id}/budget")
+def get_budget(department_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The department cost page: platform administrators and the department's own
+    administrators (`dadmin` overlay, `core/route_policy.py`)."""
+    from app.services import department_budgets
+
+    return department_budgets.department_view(db, svc.get_department(db, department_id))
+
+
+@router.put("/{department_id}/budget")
+def put_budget(
+    department_id: str, body: DepartmentBudgetPut, request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The department's monthly budget (an allocation ceiling, never a block) and its
+    overrun switch — platform administrators only."""
+    from app.services import department_budgets
+
+    row = svc.get_department(db, department_id)
+    fields = body.model_dump(exclude_unset=True)
+    if fields.get("allow_overrun", False) is None:
+        fields.pop("allow_overrun")
+    department_budgets.update_department_budget(db, require_identity(request), row, fields)
+    db.commit()
+    return department_budgets.department_view(db, row)
+
+
 @router.get("")
 def list_departments(
     status: str | None = Query(default=None, max_length=16), db: Session = Depends(get_db),

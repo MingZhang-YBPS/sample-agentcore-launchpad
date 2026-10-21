@@ -544,7 +544,25 @@ def plan_resources(db: Session, workspace: Any, scope: Scope,
     if scope.workspace_wide:
         for item in workspace_infra(workspace):
             add(item)
+        for item in context_layer_infra(db, workspace):
+            add(item)
     return list(found.values())
+
+
+def context_layer_infra(db: Session, workspace: Any) -> list[dict[str, Any]]:
+    """The managed COA gateway (`launchpad-coa-gw`) is shared by every project's
+    gateway-mode turns: platform infrastructure (`launchpad:project=shared`), so its
+    fixed and per-request fees land on the billing view's shared row — the platform
+    line — rather than untagged. COA's own runtimes are a connected deployment
+    Launchpad never tags (`services/context_layer.py`)."""
+    from app.models.ledger import ContextLayer
+
+    with project_context(None):
+        layer = db.scalars(select(ContextLayer).where(
+            ContextLayer.workspace_id == workspace.id)).first()
+    gateway = ((layer.resources or {}).get("gateway") if layer is not None else None) or {}
+    arn = gateway.get("gateway_arn") if isinstance(gateway, dict) else None
+    return [entry(GATEWAY, arn=str(arn))] if arn else []
 
 
 def workspace_infra(workspace: Any) -> list[dict[str, Any]]:

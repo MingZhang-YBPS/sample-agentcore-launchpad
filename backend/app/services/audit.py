@@ -52,6 +52,8 @@ STRUCTURE_ACTIONS = frozenset({
     "user.sessions.revoke",
     "project.transfer",
     "project.quotas.update",
+    # a project's budget / overrun switch set through the department allocation (DBUD)
+    "project.budget.update",
 })
 # `system.update.*` — the platform's online update (online-update §5); `steward.*` —
 # a structure-only administrator's membership changes and two-person requests (§11.4);

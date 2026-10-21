@@ -29,6 +29,13 @@ pages and channel adapters are covered with console chat by the one entry point
 (deploys, evaluation runs, Skill Lab, experiment traffic) are checked when they
 start, never mid-way: spend estimates lag, so a project may overshoot its budget by
 what such work and the lag add up to.
+
+Budget administration itself is FREE: the budget / quota / cost-view routes live under
+``/api/projects``, ``/api/departments`` and ``/api/budgets``, outside
+``BILLABLE_PREFIXES`` (the guard test refuses a row outside them), so the dependency
+never gates them — a used-up project can always be given more budget. A turn's COA
+tool calls (direct and gateway mode) run inside the agent's invoke, so they meet the
+agent's project's gate there, before the gateway preflight or any COA call.
 """
 
 from dataclasses import dataclass

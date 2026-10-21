@@ -1795,6 +1795,37 @@ PROJECT_QUOTA_ROUTES: dict[tuple[str, str], str] = {
 ROUTE_POLICY.update(PROJECT_QUOTA_ROUTES)
 WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_QUOTA_ROUTES)
 
+# ---- department budgets and the cost dashboards (projects §11.3, DBUD) ----
+# Budgets are project budgets; a department's budget only caps what its projects may
+# be allocated (`services/department_budgets.py`). Hub-global, like the rest of
+# project structure:
+#   PUT  /api/projects/{id}/budget      the project's budget + overrun switch — a
+#        platform administrator, or the project's department administrator
+#        (`dadmin` overlay "project"); structure (a steward may)
+#   PUT  /api/departments/{id}/budget   the department's ceiling + switch — platform
+#        administrators only, no overlay; structure
+#   GET  /api/departments/{id}/budget   the department cost page — platform
+#        administrators and that department's administrators (overlay
+#        "department"); budget figures are structure like a project's quotas read
+#   GET  /api/budgets/platform          the platform cost page (every project, the
+#        platform / unattributed line) — administrators, data like `/api/costs`
+#   GET  /api/budgets/me                which of those views the caller can open, and
+#        its department alerts — any account (the handler answers only its own)
+DEPARTMENT_BUDGET_ROUTES: dict[tuple[str, str], str] = {
+    ("PUT", "/api/projects/{project_id}/budget"): ADMIN,
+    ("GET", "/api/departments/{department_id}/budget"): ADMIN,
+    ("PUT", "/api/departments/{department_id}/budget"): ADMIN,
+    ("GET", "/api/budgets/platform"): ADMIN,
+    ("GET", "/api/budgets/me"): MEMBER,
+}
+ROUTE_POLICY.update(DEPARTMENT_BUDGET_ROUTES)
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/budgets")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(DEPARTMENT_BUDGET_ROUTES)
+DEPARTMENT_ADMIN_ROUTES.update({
+    ("PUT", "/api/projects/{project_id}/budget"): "project",
+    ("GET", "/api/departments/{department_id}/budget"): "department",
+})
+
 
 # ---- steward: the structure-only platform administrator (projects design §11.4,
 # G11-steward) ----
@@ -2013,6 +2044,12 @@ ADMIN_SPLIT.update(dict.fromkeys(KB_MIGRATION_ROUTES, ADMIN_DATA))
 # administrators' (online-update §2.6)
 ADMIN_SPLIT.update({
     ("PUT", "/api/projects/{project_id}/quotas"): ADMIN,
+    # department budgets (DBUD): setting budgets and reading the department page are
+    # structure; the platform page reads every workspace's spend: data
+    ("PUT", "/api/projects/{project_id}/budget"): ADMIN,
+    ("GET", "/api/departments/{department_id}/budget"): ADMIN,
+    ("PUT", "/api/departments/{department_id}/budget"): ADMIN,
+    ("GET", "/api/budgets/platform"): ADMIN_DATA,
     **{key: ADMIN_DATA for key, role in SYSTEM_UPDATE_ROUTES.items() if role == ADMIN},
 })
 

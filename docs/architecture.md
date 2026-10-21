@@ -5349,6 +5349,66 @@ the project, that Cost Explorer can split once the payer account activates the t
 id, else the ledger agent (`project_source`), and returns a `by_project` breakdown.
 Shared projects keep today's requests exactly.
 
+### Budgets: projects, departments and the three cost views
+
+Budgets are **project budgets**; there is no per-person budget anywhere (a member's
+username may label usage rows for drill-down, never a budget subject). The month is
+the UTC calendar month.
+
+- **Project budget** — `projects.settings.quotas.monthly_budget_usd`, enforced by
+  `project_quotas.assert_budget` on every billable route (`core/billing_policy.py`) and
+  at the one invoke entry point, against the project's month-to-date spend on its
+  budget basis (price-map estimate or billed `launchpad:project` cost; cached 60 s).
+  Its **overrun switch** `projects.settings.allow_overrun` (default off) picks the
+  lines: off — alert rules at 80 % and 100 %, block at 100 % (`409
+  project.budget_exhausted`); on — alerts at 80 % and 105 %, block at 110 %
+  (`OVERRUN_ALERT_FRACTION` / `OVERRUN_BLOCK_FRACTION`, constants). The alert rules are
+  ordinary `cost_mtd_usd` rules the platform keeps in step (`alerts.sync_budget_rule`).
+- **Department budget** — `departments.settings.budget{monthly_budget_usd,
+  allow_overrun}`, set by platform administrators only (`PUT
+  /api/departments/{id}/budget`). It is an **allocation ceiling** and never blocks an
+  operation: the sum of the department's project budgets (archived projects included)
+  may not exceed it (`409 department.budget_overallocated`, `detail{budget_usd,
+  allocated_usd, requested_usd, remaining_usd}`), it cannot be lowered below what is
+  allocated (`409 department.budget_below_allocated`), and a project with a budget
+  cannot move into a department that has no room for it. Only writes that *add*
+  allocation are checked, so a legacy over-allocated department can always be lowered
+  back under its ceiling. The department's overrun switch (default off) gates its
+  projects' switches (`409 department.overrun_disabled`); turning it off while projects
+  use theirs is refused with their list (`409 department.overrun_in_use`).
+- **Who allocates** — a department administrator of the project's department, or any
+  platform administrator, sets the project's budget and switch (`PUT
+  /api/projects/{id}/budget`, the `dadmin` overlay). A department with no budget has
+  nothing to allocate: its administrators cannot raise a project's budget (`409
+  department.budget_unset`); platform administrators set it unconstrained, as before
+  department budgets existed. A project with no department (`default`) stays the
+  platform's. The other quotas (`PUT …/quotas`) stay platform-only. Budget writes are
+  outside `BILLABLE_PREFIXES`, so they are never gated themselves, and are journalled
+  as `project.budget.update` / `department.budget.update`.
+- **Department alerts** — at the end of each alert evaluation pass,
+  `department_budgets.evaluate_departments` sums each budgeted department's project
+  spend (the gate's cached figure) and records crossing 80 % / 100 % once per month per
+  line in a `platform_settings` row (`budget.department.<id>`, also a short daily
+  history for the trend), journalled as `department.budget.alert`. Notify only. The
+  department's administrators and the platform's read them from `GET
+  /api/budgets/me`; they are not alert rules because a workspace-level rule is
+  readable by every member of the workspace.
+- **Cost views** (V3 `/v3/costs?view=project|department|platform`, entries shown only
+  to whoever can open them): the project page reads `GET /api/projects/{id}/quotas`
+  (members; budget, switch, the 80/100 or 80/105/110 lines); the department page `GET
+  /api/departments/{id}/budget` (its administrators and platform administrators:
+  budget, allocated, unallocated, spend, per-project rows, trend); the platform page
+  `GET /api/budgets/platform` (administrators, not a steward: every department and
+  project plus the **platform / unattributed** line — the month-to-date estimate no
+  project carries in a multi-project workspace, with the shared components named).
+- **COA cost attribution** — a turn's COA tool calls, direct or gateway mode, run
+  inside the agent's invoke, so they meet the agent's project's `assert_budget` before
+  the gateway preflight, a COA token or any COA call; their model tokens are on the
+  agent's spans, attributed to its project. COA's fixed costs are the platform's: the
+  managed gateway `launchpad-coa-gw` is tagged `launchpad:project=shared` by the cost-tag
+  back-fill (`cost_tags.context_layer_infra`), so its fees land on the billing view's
+  shared row; COA's own runtimes are a connected deployment Launchpad never tags.
+
 ### Administration
 
 Administrators manage structure from **Configure** in the V3 console: **Users**

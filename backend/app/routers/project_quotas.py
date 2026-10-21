@@ -42,3 +42,30 @@ def put_quotas(
     svc.update_quotas(db, identity, row, body.quotas)
     db.commit()
     return svc.quotas_view(db, row)
+
+
+class BudgetPut(BaseModel):
+    # partial: an omitted field stays; `monthly_budget_usd: null` clears the budget.
+    # Typed loosely on purpose: the service refuses a bool / string amount with
+    # `project.budget_invalid` (pydantic would coerce them).
+    monthly_budget_usd: Any = None
+    allow_overrun: Any = None
+
+
+@router.put("/{project_id}/budget")
+def put_budget(
+    project_id: str, body: BudgetPut, request: Request, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The project's monthly budget and overrun switch: a platform administrator or
+    an administrator of the project's department (`dadmin` overlay), allocated from
+    the department's budget (`services/department_budgets.py`)."""
+    from app.services import department_budgets
+
+    identity = require_identity(request)
+    row = projects_svc.get_project(db, project_id)
+    fields = body.model_dump(exclude_unset=True)
+    if fields.get("allow_overrun", False) is None:
+        fields.pop("allow_overrun")
+    department_budgets.update_project_budget(db, identity, row, fields)
+    db.commit()
+    return svc.quotas_view(db, row)

@@ -478,6 +478,15 @@ def create_project(
         _check_open_workspaces(db, department_id, workspaces)
         _check_project_limit(db, department_id)
     clean = _check_settings(settings or {}, ADMIN_SETTINGS if platform else DEPARTMENT_SETTINGS)
+    budget = (clean.get("quotas") or {}).get("monthly_budget_usd")
+    if budget is not None:
+        from app.services import department_budgets
+
+        # a budget set at creation is allocated from the department like any other
+        department_budgets.check_allocation(
+            db, project_id=project_id, old_department=None, new_department=department_id,
+            old_budget=None, new_budget=float(budget), old_overrun=False, new_overrun=False,
+            platform=platform)
     for ws in workspaces:
         _workspace(db, ws)
     row = Project(
@@ -527,6 +536,12 @@ def update_project(
         if department:
             _check_department_scope(db, identity, fields["department_id"])
     tag_keys_before = _project_tag_keys(row)
+    from app.services import department_budgets
+    from app.services import project_quotas as pq
+
+    before = {"department": row.department_id,
+              "budget": department_budgets.project_budget(row),
+              "overrun": pq.allow_overrun(row)}
     changed: list[str] = []
     for key in ("name", "description", "department_id"):
         if key in fields and getattr(row, key) != fields[key]:
@@ -544,6 +559,15 @@ def update_project(
             changed.append("settings")
     if not changed:
         return row
+    if "department_id" in changed or "settings" in changed:
+        # moving into a department, or a budget set through the settings, must fit
+        # the (new) department's allocation and overrun rules (department_budgets)
+        department_budgets.check_allocation(
+            db, project_id=row.id, old_department=before["department"],
+            new_department=row.department_id, old_budget=before["budget"],
+            new_budget=department_budgets.project_budget(row),
+            old_overrun=before["overrun"], new_overrun=pq.allow_overrun(row),
+            platform=structure)
     row.updated_at = _now()
     if RETAG_FIELDS & set(changed) or ("settings" in changed and (
             (fields["settings"] or {}).keys() & {"cost_tags"})):

@@ -44,6 +44,7 @@ from app.routers.assistant import router as assistant_router
 from app.routers.auth import OPEN_CONSOLE_REMEDY, auth_middleware
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import router as auth_router
+from app.routers.budgets import router as budgets_router
 from app.routers.channels import console_router as channel_links_router
 from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
@@ -274,6 +275,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
 
     app.include_router(project_audit_router)  # a project's audit view + export (§11.6)
     app.include_router(project_quotas_router)  # a project's quotas and budgets (§11.3)
+    app.include_router(budgets_router)  # the platform / my budget dashboards (§11.3)
     app.include_router(cost_tags_router)  # cost allocation tags + billing view (CT-2)
     app.include_router(resource_shares_router)  # cross-project sharing grants (§11.2)
     app.include_router(share_notices_router)  # the caller's ended-share notices (SHARE-2)

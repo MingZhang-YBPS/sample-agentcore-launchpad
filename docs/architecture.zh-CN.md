@@ -2544,6 +2544,17 @@ BYOC 代码）退回账本解析。模型花费记在模型而非运行时名下
 即可按项目拆分。`/api/costs` 依次按 span 属性、模型 id 中的推理配置文件、账本中的 Agent 归属每一行（`project_source`），
 并返回 `by_project` 汇总。共享项目的请求与现在完全相同。
 
+### 预算：项目、部门与三级费用视图
+
+预算只有**项目预算**，任何地方都没有个人预算（成员用户名可以记在用量行上用于下钻，但从不作为预算主体）。月份按 UTC 自然月计算。
+
+- **项目预算**：`projects.settings.quotas.monthly_budget_usd`，由 `project_quotas.assert_budget` 在每个计费路由（`core/billing_policy.py`）和唯一的调用入口处执行，与项目在其预算口径（价格表估算或按 `launchpad:project` 计费的账单成本，缓存 60 秒）下的本月花费比较。**超支开关** `projects.settings.allow_overrun`（默认关闭）决定各条线：关闭时告警规则在 80% 与 100%，100% 拦截（`409 project.budget_exhausted`）；开启时告警在 80% 与 105%，110% 拦截（常量 `OVERRUN_ALERT_FRACTION` / `OVERRUN_BLOCK_FRACTION`）。告警规则是平台自动维护的普通 `cost_mtd_usd` 规则（`alerts.sync_budget_rule`）。
+- **部门预算**：`departments.settings.budget{monthly_budget_usd, allow_overrun}`，只有平台管理员能设置（`PUT /api/departments/{id}/budget`）。它只是**分配上限**，本身从不拦截任何操作：部门内各项目预算（含已归档项目）之和不能超过它（`409 department.budget_overallocated`，`detail{budget_usd, allocated_usd, requested_usd, remaining_usd}`），不能降到已分配额以下（`409 department.budget_below_allocated`），带预算的项目也不能移入容纳不下它的部门。只检查*增加*分配的写入，因此历史上超额分配的部门总能被降回上限之内。部门的超支开关（默认关闭）约束其项目的开关（`409 department.overrun_disabled`）；仍有项目开着开关时关闭部门开关会被拒绝并列出这些项目（`409 department.overrun_in_use`）。
+- **谁来分配**：项目所在部门的部门管理员或任一平台管理员设置项目的预算与开关（`PUT /api/projects/{id}/budget`，经 `dadmin` 叠加）。未设预算的部门无可分配：其部门管理员不能提高项目预算（`409 department.budget_unset`）；平台管理员可不受约束地设置，与引入部门预算之前一致。没有部门的项目（`default`）仍只归平台。其他配额（`PUT …/quotas`）仍只有平台管理员可改。预算写入不在 `BILLABLE_PREFIXES` 之内，本身永不被拦截，并记为 `project.budget.update` / `department.budget.update`。
+- **部门告警**：每次告警评估结束时，`department_budgets.evaluate_departments` 汇总每个有预算的部门下各项目的花费（与拦截读取的是同一缓存数字），每条线每月只记录一次越过 80% / 100% 的事件，存于一条 `platform_settings` 行（`budget.department.<id>`，同时保存用于趋势的每日历史），并记为 `department.budget.alert`。只通知不拦截。部门管理员与平台管理员从 `GET /api/budgets/me` 读取；之所以不做成告警规则，是因为工作区级规则对工作区的所有成员可见。
+- **费用视图**（V3 `/v3/costs?view=project|department|platform`，导航只向能打开的人显示）：项目页读 `GET /api/projects/{id}/quotas`（成员；预算、开关、80/100 或 80/105/110 三条线）；部门页读 `GET /api/departments/{id}/budget`（部门管理员与平台管理员：预算、已分配、未分配、花费、各项目行、趋势）；平台页读 `GET /api/budgets/platform`（管理员，组织管理员不可：所有部门与项目，以及**平台 / 未归属**一行，即多项目工作区中不属于任何项目的本月估算，并列出共享组件）。
+- **COA 成本归属**：一轮对话中的 COA 工具调用（直连或网关模式）都在 Agent 的调用内执行，因此在网关预检、获取 COA 令牌或任何 COA 调用之前，先经过该 Agent 所在项目的 `assert_budget`；其模型 token 记在 Agent 自己的 span 上，归属该项目。COA 的固定成本归平台：托管网关 `launchpad-coa-gw` 由成本标签回填任务打上 `launchpad:project=shared`（`cost_tags.context_layer_infra`），其费用落在账单视图的共享行；COA 自身的运行时是外接部署，Launchpad 从不为其打标签。
+
 ### 管理
 
 管理员在 V3 控制台的 **配置** 分组中管理结构：**用户管理**（项目与项目组成员资格、批量“加入项目”、通过
