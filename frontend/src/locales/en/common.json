@@ -15249,7 +15249,7 @@
       },
       "quotas": {
         "title": "Quotas and monthly budget",
-        "sub": "Usage against this project's limits. Only a platform administrator sets them; an empty field means no limit.",
+        "sub": "Usage against this project's limits. A platform administrator sets them here; an empty field means no limit. The monthly budget can also be set by an administrator of the project's department, on the Department budgets page.",
         "col": {
           "quota": "Quota",
           "used": "Used",

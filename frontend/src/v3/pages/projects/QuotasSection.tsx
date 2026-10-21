@@ -51,7 +51,8 @@ function BudgetSummary({ budget }: { budget: ProjectBudget }) {
 /**
  * §11.3 "Quotas and monthly budget": every member (and the project's department
  * administrator) sees usage against the limits and the budget's month-to-date spend,
- * remaining and reset date (the 1st, UTC); only a platform administrator edits them.
+ * remaining and reset date (the 1st, UTC); only a platform administrator edits them
+ * here (a department administrator sets the budget on /v3/costs?view=department).
  */
 export function QuotasSection({ project, abilities }: { project: ProjectDetail; abilities: ProjectAbilities }) {
   const { t } = useTranslation();
