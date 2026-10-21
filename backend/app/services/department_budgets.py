@@ -20,14 +20,13 @@ with. There is no per-person budget. A department adds two things on top:
   have theirs on is refused with their list (409 `department.overrun_in_use`) rather
   than silently flipping them.
 
-**Who allocates.** Budget writes take the account key `budget.manage`
-(`users.PLATFORM_PERMISSIONS`); the caller's identity decides its reach
-(`budget_scope`): a platform role (admin / steward) holding it works at the
-organization level — every department's ceiling and switch, every project's budget,
-the department-less ones (the built-in `default`) included; a department
-administrator holding it works at the department level — the budgets and switches of
-the projects of the departments they administer, never the department's own ceiling.
-Without the key nobody but an admin (who holds every key) sets a budget. A department
+**Who allocates** (`budget_scope`). The organization level takes the account key
+`budget.manage` (`users.PLATFORM_PERMISSIONS`) on a platform role (admin / steward):
+every department's ceiling and switch, every project's budget, the department-less
+ones (the built-in `default`) included. The department level comes with the identity:
+a department administrator sets the budgets and switches of the projects of the
+departments they administer — no key needed, and removing them as administrator
+removes it — never the department's own ceiling. A department
 with **no budget** is unlimited: its projects' budgets are allocated without a
 ceiling, by either level.
 
@@ -142,11 +141,10 @@ def _holds_key(identity: Any) -> bool:
 
 def budget_scope(db: Session, identity: Any) -> tuple[str | None, frozenset[str]]:
     """`(level, departments)`: `("platform", ∅)` for a platform role holding
-    `budget.manage`, `("department", the departments they administer)` for a
-    department administrator holding it, `(None, ∅)` otherwise."""
-    if not _holds_key(identity):
-        return None, frozenset()
-    if access.can_manage_structure(identity):
+    `budget.manage`; `("department", the departments they administer)` for a
+    department administrator — by that identity alone, no key needed; `(None, ∅)`
+    otherwise."""
+    if access.can_manage_structure(identity) and _holds_key(identity):
         return SCOPE_PLATFORM, frozenset()
     managed = access.managed_departments(db, identity)
     return (SCOPE_DEPARTMENT, managed) if managed else (None, frozenset())
@@ -166,8 +164,8 @@ def require_project_budget(db: Session, identity: Any, department_id: str | None
     if level == SCOPE_DEPARTMENT and department_id and department_id in departments:
         return level
     raise _forbidden(
-        "setting a project's budget needs the budget.manage permission, at the "
-        "organization level or as an administrator of the project's department",
+        "setting a project's budget needs the budget.manage permission at the "
+        "organization level, or being an administrator of the project's department",
         {"department_id": department_id})
 
 

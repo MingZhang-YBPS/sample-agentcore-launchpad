@@ -2611,7 +2611,7 @@
     "department.budget_invalid": "A department budget is an amount from 0 USD (or null to clear it); allow_overrun is true or false.",
     "department.overrun_disabled": "This department does not allow its projects to overrun their budget — a platform administrator turns that on for the department first.",
     "department.overrun_in_use": "Some projects of this department still allow overrun — turn theirs off first.",
-    "budget.forbidden": "Setting a budget needs the Manage budgets permission: at the organization level (a platform or organization administrator) it covers department budgets and every project's; at the department level (a department administrator) only the department's projects. Ask an administrator to grant it on the Users page.",
+    "budget.forbidden": "You can't set this budget. Department administrators set their own departments' project budgets; department budgets, and the budgets of projects outside your departments, need the Manage budgets permission at the organization level (a platform or organization administrator), which an administrator grants on the Users page.",
     "department.project_limit": "This department has reached its project limit — archive a project or ask a platform administrator to raise the limit.",
     "department.invitations_disabled": "This department does not let its administrators create accounts — ask a platform administrator.",
     "project.isolation_requires_per_agent_role": "This project is isolated: its agents need their own execution role. Turn per-agent roles on (or redeploy so the runtime reports its role).",

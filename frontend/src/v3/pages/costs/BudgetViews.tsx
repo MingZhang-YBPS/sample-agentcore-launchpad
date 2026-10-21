@@ -235,8 +235,8 @@ function ProjectRow({ view, row, canEdit, onSaved }: {
 /**
  * A department's budget page — its administrators' and the platform's: the ceiling,
  * what is allocated and unallocated, the month's spend and trend, and each project's
- * budget and overrun switch (editable here, within the ceiling, for a caller holding
- * `budget.manage` there). Only the organization level edits the department's own
+ * budget and overrun switch (editable here, within the ceiling, at the organization
+ * level with `budget.manage` or by the department's administrators). Only the organization level edits the department's own
  * budget and switch; a department without a budget is unlimited.
  */
 export function DepartmentBudgetView({ departments, me }: {

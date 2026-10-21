@@ -2611,7 +2611,7 @@
     "department.budget_invalid": "部门预算须为不小于 0 的美元金额（null 表示清除）；allow_overrun 须为 true 或 false。",
     "department.overrun_disabled": "该部门不允许项目超支，请先由平台管理员为部门开启。",
     "department.overrun_in_use": "该部门仍有项目开启了允许超支，请先关闭这些项目的开关。",
-    "budget.forbidden": "设置预算需要「管理预算」权限：组织级（平台管理员或组织管理员）可设置部门预算和所有项目预算，部门级（部门管理员）只能设置本部门项目的预算。请联系管理员在“用户”页授予。",
+    "budget.forbidden": "你不能设置这项预算。部门管理员可以设置本部门项目的预算；部门预算和其他部门项目的预算需要组织级的「管理预算」权限（平台管理员或组织管理员），由管理员在“用户”页授予。",
     "department.project_limit": "该部门的项目数已达上限，请归档项目或联系平台管理员调高上限。",
     "department.invitations_disabled": "该部门不允许部门管理员创建账号，请联系平台管理员。",
     "project.isolation_requires_per_agent_role": "该项目已隔离：其智能体需要各自的执行角色。请开启按智能体角色（或重新部署，使运行时报告其角色）。",

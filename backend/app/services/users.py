@@ -59,13 +59,12 @@ AGENT_PERMISSIONS = (
 )
 
 # Account keys that are NOT project keys (never in a project role, an `inherit`
-# membership or a project's permission set). `budget.manage` is the budget authority
-# (projects §11.3): the key says *whether* an account may set budgets, the identity
-# says *where* — a platform role (admin / steward) at the organization level (every
-# department's ceiling and switch, every project's budget), a department
-# administrator inside the departments they administer (their projects' budgets and
-# switches). Granted by role to nobody but admins; an administrator grants it to
-# named accounts on the Users page.
+# membership or a project's permission set). `budget.manage` is the organization-level
+# budget authority (projects §11.3): on a platform role (admin / steward) it sets every
+# department's ceiling and switch and every project's budget. Granted by role to
+# nobody but admins; an administrator grants it to named accounts on the Users page.
+# The department level needs no key: a department administrator sets their
+# departments' project budgets by that identity (`department_budgets.budget_scope`).
 PLATFORM_PERMISSIONS = ("budget.manage",)
 # every key an account can hold (`users.permissions`, `/api/auth/status`)
 ACCOUNT_PERMISSIONS = (*AGENT_PERMISSIONS, *PLATFORM_PERMISSIONS)

@@ -5376,15 +5376,15 @@ the UTC calendar month.
   back under its ceiling. The department's overrun switch (default off) gates its
   projects' switches (`409 department.overrun_disabled`); turning it off while projects
   use theirs is refused with their list (`409 department.overrun_in_use`).
-- **Who allocates** — budget writes take one account key, `budget.manage`
-  (`users.PLATFORM_PERMISSIONS`; admins hold it by role, everyone else only when an
-  administrator grants it on the Users page). The identity decides its level
-  (`department_budgets.budget_scope`): a platform role (admin / steward) holding it
-  works at the organization level — department ceilings and switches, and every
-  project's budget, department-less ones (`default`) included; a department
-  administrator holding it works at the department level — the budgets and switches of
-  the projects of the departments they administer (`PUT /api/projects/{id}/budget`,
-  the `dadmin` overlay), never the department's own ceiling. Without it the write is
+- **Who allocates** — `department_budgets.budget_scope` decides the level. The
+  organization level takes the account key `budget.manage`
+  (`users.PLATFORM_PERMISSIONS`; admins hold it by role, a steward only when an
+  administrator grants it on the Users page): department ceilings and switches, and
+  every project's budget, department-less ones (`default`) included. The department
+  level comes with the identity and needs no key: a department administrator sets the
+  budgets and switches of the projects of the departments they administer
+  (`PUT /api/projects/{id}/budget`, the `dadmin` overlay); removing them as
+  administrator removes it. Never the department's own ceiling. Anyone else gets
   `403 budget.forbidden`, on every path that can change a budget (the budget routes,
   `PUT …/quotas`, a project's settings). A department with no budget is unlimited: its
   projects' budgets are allocated without a ceiling. The other quotas (`PUT …/quotas`)

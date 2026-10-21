@@ -58,7 +58,8 @@ export function parseBudget(text: string): number | null | undefined {
  * What the caller may change on a department's page, from `GET /api/budgets/me`
  * (the backend enforces the same): the department's own budget and switch at the
  * organization level only; its projects' budgets at the organization level, or as an
- * administrator of that department — both need the `budget.manage` key.
+ * administrator of that department — the organization level needs the
+ * `budget.manage` key, a department administrator needs none.
  */
 export function budgetRights(me: Pick<BudgetsMe, "budget_scope" | "budget_departments"> | null | undefined,
   departmentId: string): { setDepartment: boolean; allocate: boolean } {

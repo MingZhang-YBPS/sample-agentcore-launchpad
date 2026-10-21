@@ -1800,8 +1800,8 @@ WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(PROJECT_QUOTA_ROUTES)
 # be allocated (`services/department_budgets.py`). Hub-global, like the rest of
 # project structure:
 #   PUT  /api/projects/{id}/budget      the project's budget + overrun switch — the
-#        `budget.manage` key at the organization level, or as the project's
-#        department administrator (`dadmin` overlay "project"); checked in the handler
+#        `budget.manage` key at the organization level, or being the project's
+#        department administrator (no key; `dadmin` overlay "project"); checked in the handler
 #   PUT  /api/departments/{id}/budget   the department's ceiling + switch —
 #        `budget.manage` at the organization level (admin / steward), no overlay
 #   GET  /api/departments/{id}/budget   the department cost page — platform

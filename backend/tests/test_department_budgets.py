@@ -43,8 +43,8 @@ def _spend(monkeypatch, usd):
 @pytest.fixture
 def world(app):  # noqa: F811
     """retail (dana administers it): alpha (dev a developer), alpha2; ops (olga
-    administers it): gamma. The built-in `default` project has no department. Both
-    department administrators hold `budget.manage` (granted, never by role)."""
+    administers it): gamma. The built-in `default` project has no department. Neither
+    department administrator holds `budget.manage`: the department level needs none."""
     admin = _admin(app)
     dana, olga, dev = (_user(n, grant=False) for n in ("dana", "olga", "dev"))
     for dept in ("retail", "ops"):
@@ -56,8 +56,6 @@ def world(app):  # noqa: F811
     _member_of("alpha", dev)
     assert admin.put("/api/departments/retail/admins", json={"add": [dana]}).status_code == 200
     assert admin.put("/api/departments/ops/admins", json={"add": [olga]}).status_code == 200
-    for uid in (dana, olga):
-        _grant_budget(admin, uid)
     project_quotas.clear_spend_cache()
     return SimpleNamespace(admin=admin, dana=_login(app, "dana"), olga=_login(app, "olga"),
                            dev=_login(app, "dev"), dev_id=dev, dana_id=dana)
@@ -225,17 +223,25 @@ def test_a_department_without_a_budget_is_unlimited(world):
 # ── budget.manage: one key, the identity decides the level ────────────────────
 
 
-def test_budget_writes_need_budget_manage(app, world):  # noqa: F811
-    # a department administrator without the key: refused, on every budget path
+def test_department_admins_set_project_budgets_by_default(app, world):  # noqa: F811
+    # no key granted: the department-admin identity alone reaches its projects
+    assert world.dana.put("/api/projects/alpha/budget",
+                          json={"monthly_budget_usd": 10}).status_code == 200
+    me = world.dana.get("/api/budgets/me").json()
+    assert (me["budget_scope"], me["budget_departments"]) == ("department", ["retail"])
+    # ...even an explicit `budget.manage: false` does not take the department level away
     _grant_budget(world.admin, world.dana_id, granted=False)
     dana = _login(app, "dana")
+    assert dana.put("/api/projects/alpha/budget",
+                    json={"monthly_budget_usd": 12}).status_code == 200
+    # ...removing them as department administrator does
+    assert world.admin.put("/api/departments/retail/admins",
+                           json={"remove": [world.dana_id]}).status_code == 200
+    dana = _login(app, "dana")
     res = dana.put("/api/projects/alpha/budget", json={"monthly_budget_usd": 10})
-    assert res.status_code == 403 and res.json()["code"] == "budget.forbidden"
-    assert res.json()["detail"]["permission"] == "budget.manage"
+    assert res.status_code in (403, 404)
     assert dana.get("/api/budgets/me").json()["budget_scope"] is None
-    # ...yet still reads the department page (viewing is not a budget operation)
-    assert dana.get("/api/departments/retail/budget").status_code == 200
-    # the key without a department to administer reaches nothing either
+    # the key without a department to administer reaches nothing
     _grant_budget(world.admin, world.dev_id)
     dev = _login(app, "dev")
     assert dev.put("/api/projects/alpha/budget",
