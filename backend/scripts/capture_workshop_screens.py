@@ -380,7 +380,7 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
                 raise RuntimeError(f"highlight {i + 1} matched nothing: {sels}")
             boxes.append({"n": h.get("n"), "rect": rect, "pad": h.get("pad"),
                           "badge": h.get("badge")})
-        page.evaluate(OVERLAY_JS, {"boxes": boxes, "pad": shot.get("box_pad", 4)})
+        drawn = page.evaluate(OVERLAY_JS, {"boxes": boxes, "pad": shot.get("box_pad", 4)})
         clip = None
         if shot.get("clip"):
             sels = [expand(s, ctx, lang) for s in _as_list(shot["clip"])]
@@ -388,11 +388,9 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
             if rect is None:
                 raise RuntimeError(f"clip matched nothing: {sels}")
             m = shot.get("margin", 16)
-            # the badges sit outside their box: keep them inside the crop
-            for b in boxes:
-                r = b["rect"]
-                badge = {"x": r["x"] - 18, "y": r["y"] - 18, "w": r["w"] + 22, "h": r["h"] + 22}
-                rect = _union(rect, badge)
+            # frames and badges as drawn (a 'left' / 'right' / 'top' badge sits outside
+            # its frame): the crop holds every one of them whole
+            rect = crop_rect(rect, drawn)
             x, y = max(rect["x"] - m, 0), max(rect["y"] - m, 0)
             clip = {"x": x, "y": y,
                     "w": rect["x"] + rect["w"] + m - x, "h": rect["y"] + rect["h"] + m - y}
@@ -410,6 +408,13 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
 
 def _as_list(v: Any) -> list[str]:
     return v if isinstance(v, list) else [v]
+
+
+def crop_rect(rect: dict[str, float], drawn: list[dict[str, float]]) -> dict[str, float]:
+    """The crop target grown to every drawn highlight frame and badge."""
+    for d in drawn:
+        rect = _union(rect, d)
+    return rect
 
 
 def _union(a: dict[str, float], b: dict[str, float]) -> dict[str, float]:

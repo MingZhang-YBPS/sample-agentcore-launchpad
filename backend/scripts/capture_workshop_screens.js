@@ -8,36 +8,44 @@
   host.id = '__ws_overlay';
   host.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none';
   document.body.appendChild(host);
+  // every drawn element's page rect (badge ring included): the crop is the union of
+  // these, so a badge placed outside its frame is never cut off by the crop
   const placed = [];
+  const docW = document.documentElement.scrollWidth;
+  const S = 28, RING = 3;
   for (const b of boxes) {
     if (!b.rect) continue;
     const r = b.rect, p = b.pad ?? pad;
+    const fx = Math.max(r.x - p, 0), fy = Math.max(r.y - p, 0);
+    const fw = Math.min(r.w + 2 * p, docW - fx), fh = r.h + 2 * p;
     const f = document.createElement('div');
-    f.style.cssText = `position:absolute;left:${r.x - p}px;top:${r.y - p}px;width:${r.w + 2 * p}px;`
-      + `height:${r.h + 2 * p}px;border:3px solid #e5243b;border-radius:9px;`
+    f.style.cssText = `position:absolute;left:${fx}px;top:${fy}px;width:${fw}px;`
+      + `height:${fh}px;border:3px solid #e5243b;border-radius:9px;`
       + 'box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.75),0 0 0 1px rgba(0,0,0,.25);box-sizing:border-box';
     host.appendChild(f);
+    placed.push({x: fx, y: fy, w: fw, h: fh});
     if (b.n != null) {
       const d = document.createElement('div');
       d.textContent = String(b.n);
       // default: on the frame's top-left corner; 'left' / 'right': outside the frame,
       // centred vertically; 'top': above the frame, centred — for a box whose corner
       // would cover its own label or a neighbour
-      const at = b.badge === 'left'
-        ? `left:${r.x - p - 36}px;top:${r.y + r.h / 2 - 14}px;`
-        : b.badge === 'right'
-          ? `left:${r.x + r.w + p + 8}px;top:${r.y + r.h / 2 - 14}px;`
-          : b.badge === 'top'
-            ? `left:${r.x + r.w / 2 - 14}px;top:${r.y - p - 36}px;`
-            : `left:${r.x - p - 13}px;top:${r.y - p - 13}px;`;
-      d.style.cssText = `position:absolute;${at}width:28px;height:28px;`
+      let x, y;
+      if (b.badge === 'left') { x = r.x - p - 36; y = r.y + r.h / 2 - 14; }
+      else if (b.badge === 'right') { x = r.x + r.w + p + 8; y = r.y + r.h / 2 - 14; }
+      else if (b.badge === 'top') { x = r.x + r.w / 2 - 14; y = r.y - p - 36; }
+      else { x = r.x - p - 13; y = r.y - p - 13; }
+      // never past the page's own edges (a box flush with the page side)
+      x = Math.min(Math.max(x, RING), docW - S - RING);
+      y = Math.max(y, RING);
+      d.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${S}px;height:${S}px;`
         + 'border-radius:50%;background:#e5243b;color:#fff;font:700 16px/28px system-ui,sans-serif;'
         + 'text-align:center;box-shadow:0 0 0 2px #fff,0 1px 3px rgba(0,0,0,.4)';
       host.appendChild(d);
+      placed.push({x: x - RING, y: y - RING, w: S + 2 * RING, h: S + 2 * RING});
     }
-    placed.push(b.n);
   }
-  return placed.length;
+  return placed;
 }
 
 // @UNCLAMP_JS

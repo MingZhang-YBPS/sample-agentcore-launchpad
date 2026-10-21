@@ -43,6 +43,45 @@ def test_page_helpers_load_as_bare_functions():
         assert "// @" not in js
 
 
+def test_crop_rect_grows_to_every_drawn_badge():
+    rect = {"x": 100, "y": 100, "w": 200, "h": 50}
+    drawn = [{"x": 96, "y": 96, "w": 208, "h": 58},          # the frame
+             {"x": 304, "y": 108, "w": 34, "h": 34},          # a 'right' badge
+             {"x": 50, "y": 60, "w": 34, "h": 34}]            # a 'left' / 'top' one
+    assert cws.crop_rect(rect, drawn) == {"x": 50, "y": 60, "w": 288, "h": 94}
+
+
+def test_overlay_badges_stay_on_the_page_and_are_reported():
+    """In a real page: every badge position is inside the document, and the returned
+    rects cover each drawn element whole (what the crop is grown to)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    try:
+        pw = sync_api.sync_playwright().start()
+        browser = pw.chromium.launch()
+    except Exception as exc:  # noqa: BLE001 - no browser on this host
+        pytest.skip(f"no headless Chromium: {exc}")
+    try:
+        page = browser.new_page(viewport={"width": 400, "height": 300})
+        page.set_content("<body style='margin:0'><div style='height:300px'></div></body>")
+        boxes = [{"n": 1, "rect": {"x": 0, "y": 0, "w": 60, "h": 20}},                # corner
+                 {"n": 2, "rect": {"x": 360, "y": 100, "w": 40, "h": 20}, "badge": "right"},
+                 {"n": 3, "rect": {"x": 4, "y": 150, "w": 40, "h": 20}, "badge": "left"},
+                 {"n": 4, "rect": {"x": 100, "y": 2, "w": 40, "h": 20}, "badge": "top"}]
+        drawn = page.evaluate(cws.OVERLAY_JS, {"boxes": boxes, "pad": 4})
+        badges = page.evaluate(
+            "() => [...document.querySelectorAll('#__ws_overlay > div')]"
+            ".filter(d => d.textContent).map(d => d.getBoundingClientRect().toJSON())")
+        assert len(badges) == 4 and len(drawn) == 8
+        for b in badges:
+            assert b["left"] >= 0 and b["top"] >= 0 and b["right"] <= 400, b
+            assert any(d["x"] <= b["left"] and d["y"] <= b["top"]
+                       and d["x"] + d["w"] >= b["right"] and d["y"] + d["h"] >= b["bottom"]
+                       for d in drawn), b
+    finally:
+        browser.close()
+        pw.stop()
+
+
 def test_per_lang_picks_the_language_and_falls_back_to_english():
     assert cws.per_lang({"zh": "登录", "en": "Sign in"}, "zh") == "登录"
     assert cws.per_lang({"en": "Sign in"}, "zh") == "Sign in"
