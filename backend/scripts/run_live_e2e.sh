@@ -93,6 +93,7 @@ agent_dlc_browser|--ui @BASE@ --out @LOGDIR@/dlc-shots
 skill_lab_assets_browser|--base-url @BASE@ --evidence-dir @LOGDIR@/skill-lab-assets
 skill_lab_taskgen_assets_browser|--base-url @BASE@ --evidence-dir @LOGDIR@/skill-lab-taskgen
 policy_deny_browser|--ui @BASE@ --agent @DENY_AGENT@ --project @DENY_PROJECT@
+costs_dept_admin_browser|--ui @BASE@ --out @LOGDIR@/costs-shots
 "
 
 # never run against a deployed console: name|reason

@@ -5407,6 +5407,9 @@ the UTC calendar month.
   `GET /api/budgets/platform` (administrators, not a steward: every department and
   project plus the **platform / unattributed** line — the month-to-date estimate no
   project carries in a multi-project workspace, with the shared components named).
+- **Check.** `backend/scripts/e2e_costs_dept_admin_browser.py` (headless, no AWS
+  call; in `run_live_e2e.sh`) drives the cost pages as a throwaway department
+  administrator and as an administrator against its own fixture department.
 - **COA cost attribution** — a turn's COA tool calls, direct or gateway mode, run
   inside the agent's invoke, so they meet the agent's project's `assert_budget` before
   the gateway preflight, a COA token or any COA call; their model tokens are on the
