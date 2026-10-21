@@ -7,13 +7,19 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../components/ErrorCallout";
+import { useAuth } from "../../auth/auth-context";
 import { type AlertKind, type AlertRuleInfo, api } from "../../lib/api";
+import { budgetsApi } from "../../lib/api/budgets";
+import { isSteward } from "../../lib/api/steward";
+import { useProject } from "../../workspace/project-context";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
 import { ago } from "../format";
 import { useLoad, useToast } from "../hooks";
 import { Btn, Chip, Confirm, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, type Signal, Skeleton, Stat } from "../ui";
 import { BillingView } from "./cost-tags/BillingView";
+import { DepartmentBudgetView, PlatformBudgetView, ProjectBudgetView } from "./costs/BudgetViews";
+import { costViews, pickView } from "./costs/budgetModel";
 import { alertDetailText } from "../../lib/alertDetail";
 import { Select } from "../select";
 
@@ -454,14 +460,22 @@ function AlertsView() {
 }
 
 /**
- * Where the money went, and what the platform watches — one page, two `?view=`
- * states as in V2 (`alerts`; spend is bare). The spend view leads with any rule
- * that is firing or close to its line, so the threshold is the headline.
+ * Where the money went, and what the platform watches — one page, `?view=` states as
+ * in V2: the workspace spend report (bare) and its rules (`alerts`), administrators';
+ * then the budget dashboards (projects §11.3), each offered only to whoever can open
+ * it — the current project's budget (`project`, every member), a department's
+ * (`department&id=`, its administrators and the platform's) and the platform's
+ * (`platform`, administrators). The spend view leads with any rule that is firing or
+ * close to its line, so the threshold is the headline.
  */
 export function V3Costs() {
   const { t } = useTranslation();
+  const { isAdmin, role } = useAuth();
+  const project = useProject();
   const [params, setParams] = useSearchParams();
-  const view = params.get("view") === "alerts" ? "alerts" : "spend";
+  const me = useLoad(() => budgetsApi.me().catch(() => null), "v3-costs-budgets-me");
+  const views = costViews(isAdmin, me.data, project.current !== null);
+  const view = pickView(params.get("view") ?? (isAdmin ? "spend" : "project"), views);
   // the spend view's basis (cost-tags §1.4-2): the token estimate, or what AWS billed
   const basis = params.get("basis") === "billing" ? "billing" : "estimate";
   return (
@@ -479,15 +493,23 @@ export function V3Costs() {
                 options={(["estimate", "billing"] as const).map((value) => ({ value, label: t(`v3.costTags.basis.${value}`) }))}
               />
             )}
-            <Filters
-              value={view}
-              onChange={(next) => setParams(next === "spend" ? {} : { view: next })}
-              options={(["spend", "alerts"] as const).map((value) => ({ value, label: t(`v2.costs.tab.${value}`) }))}
-            />
+            {view && views.length > 1 && (
+              <Filters
+                value={view}
+                onChange={(next) => setParams(next === "spend" ? {} : { view: next })}
+                options={views.map((value) => ({ value, label: t(`v3.costs.view.${value}`) }))}
+              />
+            )}
           </>
         }
       />
-      {view === "spend" ? (basis === "billing" ? <BillingView /> : <SpendView />) : <AlertsView />}
+      {view === "spend" ? (basis === "billing" ? <BillingView /> : <SpendView />)
+        : view === "alerts" ? <AlertsView />
+        : view === "project" && project.current ? <ProjectBudgetView projectId={project.current.id} />
+        : view === "department" ? <DepartmentBudgetView departments={me.data?.departments ?? []} platform={isAdmin || isSteward(role)} />
+        : view === "platform" ? <PlatformBudgetView />
+        : me.loading ? <Panel><Skeleton rows={3} /></Panel>
+        : <Panel><Empty title={t("v3.costs.budget.nothing")} /></Panel>}
     </div>
   );
 }

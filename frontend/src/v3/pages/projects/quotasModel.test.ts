@@ -99,6 +99,12 @@ describe("the monthly budget's progress", () => {
     expect(budgetProgress(budget({ budget_usd: 0, spent_usd: 0 }))).toEqual({ fraction: 1, signal: "act", blocked: true });
   });
 
+  it("blocks at the block line with the overrun switch on (110 %)", () => {
+    const over = { allow_overrun: true, block_at_usd: 11 };
+    expect(budgetProgress(budget({ spent_usd: 10.5, ...over }))).toEqual({ fraction: 1, signal: "act", blocked: false });
+    expect(budgetProgress(budget({ spent_usd: 11, ...over }))?.blocked).toBe(true);
+  });
+
   it("is null while the spend is not measured", () => {
     expect(budgetProgress(budget({ spent_usd: null }))).toBeNull();
   });

@@ -528,6 +528,14 @@ export interface QuotaItem {
   workspace_id?: string;
 }
 
+/** One line of a budget: the alerts (80 %, then 100 % — or 105 % with overrun on)
+ *  and the block (100 %, or 110 % with overrun on). */
+export interface BudgetLine {
+  kind: "warn" | "alert" | "block";
+  fraction: number;
+  usd: number;
+}
+
 /** The monthly budget this UTC calendar month; resets on the 1st at 00:00 UTC. */
 export interface ProjectBudget {
   project_id: string;
@@ -537,12 +545,28 @@ export interface ProjectBudget {
   remaining_usd: number | null;
   /** spent / budget (may exceed 1: spend figures lag, a small overshoot is possible) */
   fraction: number | null;
+  /** at the block line: billable work is refused */
   exhausted: boolean;
+  /** the project's overrun switch: alerts 80/105 %, block at 110 % */
+  allow_overrun?: boolean;
+  block_at_usd?: number;
+  lines?: BudgetLine[];
   month_start: string;
   reset_at: string;
   measured_at: string | null;
   detail: string;
   basis: "estimate" | "billing";
+}
+
+/** The project's department's allocation ceiling (projects §11.3). */
+export interface DepartmentBudgetSummary {
+  department_id: string;
+  name: string;
+  monthly_budget_usd: number | null;
+  allow_overrun: boolean;
+  allocated_usd: number;
+  /** null when the department has no budget */
+  unallocated_usd: number | null;
 }
 
 export interface ProjectQuotas {
@@ -553,8 +577,19 @@ export interface ProjectQuotas {
   /** null when the project has no monthly budget */
   budget: ProjectBudget | null;
   budget_basis: "estimate" | "billing";
+  /** the project's overrun switch (default off) */
+  allow_overrun?: boolean;
+  /** null without a department */
+  department_budget?: DepartmentBudgetSummary | null;
   month_start: string;
   reset_at: string;
+}
+
+/** `PUT /api/projects/{id}/budget` — a platform administrator or the project's
+ *  department administrator; partial (`monthly_budget_usd: null` clears it). */
+export interface ProjectBudgetPut {
+  monthly_budget_usd?: number | null;
+  allow_overrun?: boolean;
 }
 
 export const projectQuotasApi = {
@@ -562,6 +597,9 @@ export const projectQuotasApi = {
   /** partial: a key set to null clears it; omitted keys stay (platform administrators only) */
   put: (projectId: string, quotas: Partial<Record<QuotaKey, number | null>>) =>
     sendJson<ProjectQuotas>(projectPath(projectId, "quotas"), "PUT", { quotas }),
+  /** the budget and overrun switch, allocated from the department's budget */
+  putBudget: (projectId: string, body: ProjectBudgetPut) =>
+    sendJson<ProjectQuotas>(projectPath(projectId, "budget"), "PUT", body),
 };
 
 /* ── cross-project shares (projects §11.2) ─────────────────────────────────────── */

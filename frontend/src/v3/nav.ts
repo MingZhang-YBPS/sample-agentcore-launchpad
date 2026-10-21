@@ -1,4 +1,4 @@
-import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, KeySquare, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
+import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, KeySquare, Landmark, PiggyBank, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -87,10 +87,21 @@ export const V3_AFTER: Record<string, V2NavItem[]> = {
     // cost allocation tags and their activation in Billing (cost-tags §1.6), administrator-only
     { to: "/v3/cost-tags", labelKey: "v3.costTags.nav", icon: Tags, admin: true },
   ],
+  // the three budget dashboards (projects §11.3), each shown only to whoever can open
+  // it: the current project's budget (every member), the department's (its
+  // administrators — `DEPARTMENT_ADMIN_ENTRIES` — and platform administrators), the
+  // platform's (administrators). The backend enforces the same split.
+  "/v2/costs": [
+    { to: "/v3/costs?view=project", labelKey: "v3.costs.nav.project", icon: PiggyBank },
+    { to: "/v3/costs?view=department", labelKey: "v3.costs.nav.department", icon: Building2, admin: true },
+    { to: "/v3/costs?view=platform", labelKey: "v3.costs.nav.platform", icon: Landmark, admin: true },
+  ],
 };
 
 /** `admin` entries a department administrator (non-empty `managed_departments`) sees too. */
-export const DEPARTMENT_ADMIN_ENTRIES: ReadonlySet<string> = new Set(["/v3/projects", "/v3/departments"]);
+export const DEPARTMENT_ADMIN_ENTRIES: ReadonlySet<string> = new Set([
+  "/v3/projects", "/v3/departments", "/v3/costs?view=department",
+]);
 
 /**
  * The rail of a steward (organization admin, projects §11.4): the structure entries of

@@ -93,6 +93,7 @@ export function budgetProgress(budget: ProjectBudget): { fraction: number; signa
   if (budget.spent_usd === null) return null;
   const raw = budget.budget_usd <= 0 ? 1 : budget.spent_usd / budget.budget_usd;
   const fraction = Math.min(1, Math.max(0, raw));
-  const blocked = budget.spent_usd >= budget.budget_usd;
-  return { fraction, blocked, signal: blocked ? "act" : raw >= 0.8 ? "wait" : "ok" };
+  // the block line: the budget, or 110 % of it with the overrun switch on
+  const blocked = budget.spent_usd >= (budget.block_at_usd ?? budget.budget_usd);
+  return { fraction, blocked, signal: blocked || raw >= 1 ? "act" : raw >= 0.8 ? "wait" : "ok" };
 }
