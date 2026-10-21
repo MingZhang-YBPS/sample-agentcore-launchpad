@@ -149,3 +149,24 @@ def test_assume_state_satisfies_state_but_not_missing_agents():
     cws.check_requires({"name": "x", "requires": ["state:a sealed golden set"]}, ctx)
     with pytest.raises(cws.SkipShot):
         cws.check_requires({"name": "x", "requires": ["state:fresh", "agent:nope"]}, ctx)
+
+
+def test_relabel_shows_the_workshop_region_in_text_and_inputs():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    try:
+        pw = sync_api.sync_playwright().start()
+        browser = pw.chromium.launch()
+    except Exception as exc:  # noqa: BLE001 - no browser on this host
+        pytest.skip(f"no headless Chromium: {exc}")
+    try:
+        page = browser.new_page()
+        page.set_content("<body><span>Default · us-west-2</span><b>US-WEST-2</b>"
+                         "<input value='arn:aws:bedrock:us-west-2:1:x'><i>us-east-1</i></body>")
+        n = page.evaluate(cws.RELABEL_JS, {"from": "us-west-2", "to": "us-east-1"})
+        assert n == 3
+        assert page.locator("span").inner_text() == "Default · us-east-1"
+        assert page.locator("b").inner_text() == "US-EAST-1"
+        assert page.locator("input").input_value() == "arn:aws:bedrock:us-east-1:1:x"
+    finally:
+        browser.close()
+        pw.stop()

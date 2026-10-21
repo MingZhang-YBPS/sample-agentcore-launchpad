@@ -72,6 +72,7 @@ def _page_js() -> dict[str, str]:
 
 _JS = _page_js()
 OVERLAY_JS, UNCLAMP_JS, PROBE_JS = _JS["OVERLAY_JS"], _JS["UNCLAMP_JS"], _JS["PROBE_JS"]
+RELABEL_JS = _JS["RELABEL_JS"]
 
 
 class SkipShot(Exception):
@@ -91,6 +92,9 @@ class Ctx:
     workshop: Path | None = None
     # set by --assume-state: the walker vouches for every `state:` requirement
     assume_state: bool = False
+    # --display-region: (actual, shown) — the walk ran in another region than the
+    # workshop's; the page text says the workshop's region
+    relabel: tuple[str, str] | None = None
 
 
 # ── configuration ────────────────────────────────────────────────────────────
@@ -366,6 +370,8 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
                 page.set_viewport_size({"width": vw, "height": min(height, 9000)})
                 page.wait_for_timeout(400)
         page.mouse.move(vw - 2, vh - 2)
+        if ctx.relabel:
+            page.evaluate(RELABEL_JS, {"from": ctx.relabel[0], "to": ctx.relabel[1]})
         if probe is not None:
             probe.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(probe / f"{shot['name']}.{lang}.png"), full_page=True)
@@ -473,6 +479,12 @@ def main() -> int:
                    help="write a full-page PNG + element outline here instead of the crop")
     p.add_argument("--out", type=Path,
                    help="write the images here instead of <workshop>/static/images (a preview)")
+    p.add_argument("--display-region",
+                   help="the region the workshop runs in (e.g. us-east-1): when the walk "
+                        "ran elsewhere, every occurrence of the console's region in the page "
+                        "text (region chips, ARNs) is shown as this one")
+    p.add_argument("--actual-region",
+                   help="the console's own region, when it is not --region")
     args = p.parse_args()
 
     shots = yaml.safe_load(args.manifest.read_text())["shots"]
@@ -486,6 +498,10 @@ def main() -> int:
     chosen = [s for s in shots if any(fnmatch.fnmatch(s["name"], g) for g in args.only)]
     ctx = load_ctx(args.stack, args.region)
     ctx.assume_state = args.assume_state
+    if args.display_region:
+        actual = args.actual_region or args.region
+        if actual != args.display_region:
+            ctx.relabel = (actual, args.display_region)
     ctx.workshop = args.workshop
     discover(ctx)
     out = args.out or args.workshop / "static" / "images"

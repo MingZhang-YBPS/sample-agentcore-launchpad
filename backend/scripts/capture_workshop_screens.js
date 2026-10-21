@@ -48,6 +48,26 @@
   return placed;
 }
 
+// @RELABEL_JS
+// --display-region: the walk ran in another region than the workshop's. Rewrite the
+// console's region (any case) in every text node, input value and title, so a region
+// chip or an ARN reads as the workshop's region. Display only; nothing is sent.
+({from, to}) => {
+  const re = new RegExp(from.replace(/[-]/g, '\\-'), 'gi');
+  const swap = (s) => s.replace(re, (m) => (m === m.toUpperCase() ? to.toUpperCase() : to));
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let n = 0;
+  for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+    if (re.test(t.nodeValue)) { t.nodeValue = swap(t.nodeValue); n++; }
+    re.lastIndex = 0;
+  }
+  for (const el of document.querySelectorAll('input, textarea')) {
+    if (re.test(el.value)) { el.value = swap(el.value); n++; }
+    re.lastIndex = 0;
+  }
+  return n;
+}
+
 // @UNCLAMP_JS
 // Grow the page so nothing the crop needs lives inside an inner scroller:
 // unclamp the shell's fixed-height panes, then report the document height.
