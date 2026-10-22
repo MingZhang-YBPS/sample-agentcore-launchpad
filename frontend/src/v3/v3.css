@@ -1038,7 +1038,9 @@ body.v3-body {
 }
 .v3 .v3-modal.wide { width: min(640px, calc(100vw - 32px)); }
 .v3 .v3-modal .body .v3-input + .v3-input, .v3 .v3-modal .body label + label { margin-top: 10px; }
-.v3 .v3-field { display: grid; gap: 6px; }
+/* one column that never grows past the field: a long themed Select label (a run id
+   with its date) otherwise sizes the track to its text and pushes siblings out */
+.v3 .v3-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .v3 .v3-field > span { font-family: var(--v3-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-text-3); }
 .v3 textarea.v3-input { height: auto; min-height: 96px; padding: 10px 12px; resize: vertical; line-height: 1.55; }
 
