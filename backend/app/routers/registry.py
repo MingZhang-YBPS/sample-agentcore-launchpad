@@ -40,9 +40,11 @@ class A2ADemoRequest(BaseModel):
 def _hidden_record_ids(ws: WorkspaceScope, viewer: Viewer) -> frozenset[str]:
     """Registry record ids of agents hidden from ``viewer`` by workspace isolation,
     or owned by another project's agent (an A2A record is the agent's: its deploy
-    ``register`` stage created it). MCP / skill records have no owning agent and
-    stay workspace level. One ledger read with a project current; none otherwise
-    for a viewer who does not filter."""
+    ``register`` stage created it), or an Agent-skill record another project
+    registered (its ownership row, ``creators.REGISTRY_SKILL``; shared ones stay
+    visible). MCP records, system preset skills and skills registered before
+    projects have no ownership row and stay workspace level. One ledger read with a
+    project current; none otherwise for a viewer who does not filter."""
     pid = current_project()
     if not viewer.filters and pid is None:
         return frozenset()
@@ -66,9 +68,32 @@ def _hidden_record_ids(ws: WorkspaceScope, viewer: Viewer) -> frozenset[str]:
                     Agent.project_id != pid,
                 )
             }
-        return frozenset(hidden | foreign)
+        return frozenset(hidden | foreign | _foreign_skill_ids(db, ws.id, pid))
     finally:
         db.close()
+
+
+def _foreign_skill_ids(db: Any, workspace_id: str, pid: str) -> set[str]:
+    """Agent-skill records whose ownership row names another project than ``pid``,
+    minus those that project shared with ``pid``."""
+    from sqlalchemy import select
+
+    from app.models.ledger import ResourceCreator
+    from app.services import creators, resource_shares
+
+    with project_context(None):
+        rows = db.execute(
+            select(ResourceCreator.resource_id).where(
+                ResourceCreator.workspace_id == workspace_id,
+                ResourceCreator.kind == creators.REGISTRY_SKILL,
+                ResourceCreator.project_id.is_not(None),
+                ResourceCreator.project_id != pid,
+            )
+        ).scalars().all()
+    if not rows:
+        return set()
+    shared = resource_shares.received_ids(db, creators.REGISTRY_SKILL, project_id=pid)
+    return {rid for rid in rows if rid not in shared}
 
 
 def _require_record_visible(ws: WorkspaceScope, viewer: Viewer, record_id: str) -> None:
@@ -850,13 +875,31 @@ def attachables(
     refresh: bool = False, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
     """APPROVED MCP servers + skills the create wizard offers for mounting.
-    Cached 60s per workspace — each call walks GetRegistryRecord per record."""
+    Cached 60s per workspace — each call walks GetRegistryRecord per record; the
+    current project's view drops another project's skill records after the cache."""
     slot = _attachables_cache.get(ws.id)
     if not refresh and slot is not None and time.time() - slot["at"] < 60:
-        return slot["data"]
-    data = console.attachable_records(ws.context)
-    _attachables_cache[ws.id] = {"data": data, "at": time.time()}
-    return data
+        data = slot["data"]
+    else:
+        data = console.attachable_records(ws.context)
+        _attachables_cache[ws.id] = {"data": data, "at": time.time()}
+    return _project_attachables(ws, data)
+
+
+def _project_attachables(ws: WorkspaceScope, data: dict[str, Any]) -> dict[str, Any]:
+    pid = current_project()
+    if pid is None or not data.get("skills"):
+        return data
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        foreign = _foreign_skill_ids(db, ws.id, pid)
+    finally:
+        db.close()
+    if not foreign:
+        return data
+    return {**data, "skills": [s for s in data["skills"] if s.get("record_id") not in foreign]}
 
 
 @router.post("/sync-defaults", status_code=202)

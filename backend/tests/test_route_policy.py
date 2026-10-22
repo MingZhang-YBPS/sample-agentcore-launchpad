@@ -506,3 +506,34 @@ class TestProjectOwnedSkillRecords:
         assert response.status_code == 403, response.text
         assert response.json()["code"] == "auth.infra_admin_required"
         assert two_projects == []
+
+    def test_another_projects_skill_is_hidden_from_lists_and_attachables(
+        self, member_session, two_projects
+    ):
+        """BUG-35: a skill registered in one project must not show up in another
+        project's registry list, record reads or the wizard's attachable skills."""
+        from app.core.project_scope import project_context
+        from app.routers import registry as registry_router
+
+        response = member_session.post("/api/registry/records", json={
+            "type": "AGENT_SKILLS", "name": "skill-one", "skill_md": "---\nname: s1\n---\n"})
+        assert response.status_code == 201, response.text
+        data = {"mcp": [], "skills": [{"record_id": "rec-skill-1", "name": "s1"},
+                                      {"record_id": "rec-unowned", "name": "preset"}]}
+
+        class _Ws:
+            id = "default"
+
+        db = SessionLocal()
+        try:
+            with project_context("alpha"):
+                assert registry_router._foreign_skill_ids(db, "default", "alpha") == {
+                    "rec-skill-1"}
+                seen = registry_router._project_attachables(_Ws(), data)
+                # an unowned record (system preset, pre-project) stays workspace level
+                assert [s["record_id"] for s in seen["skills"]] == ["rec-unowned"]
+            with project_context(TEST_PROJECT):
+                assert registry_router._foreign_skill_ids(db, "default", TEST_PROJECT) == set()
+                assert registry_router._project_attachables(_Ws(), data) == data
+        finally:
+            db.close()
