@@ -636,7 +636,7 @@ shots:
     wait: '[data-testid=chat-tool]'
     actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
     highlights:
-      - {n: 1, box: 'select:has(option:text-is("lab-policy-advisor"))', badge: left}
+      - {n: 1, box: 'main button.v3-sel:has-text("lab-policy-advisor")', badge: left}
       - {n: 2, box: '[data-testid=chat-tool]', badge: left}
       - {n: 3, box: '.v3-msg.agent', badge: left}
 
@@ -747,7 +747,7 @@ shots:
     wait: '[data-testid=chat-tool]'
     actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
     highlights:
-      - {n: 1, box: 'select:has(option:text-is("lab-legacy-agent"))', badge: left}
+      - {n: 1, box: 'main button.v3-sel:has-text("lab-legacy-agent")', badge: left}
       - {n: 2, box: '.v3-msg.user', badge: left}
       - {n: 3, box: '[data-testid=chat-tool]', badge: left}
       - {n: 4, box: '.v3-msg.agent', badge: left}
@@ -763,7 +763,7 @@ shots:
     wait: '[data-testid=chat-tool]'
     actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
     highlights:
-      - {n: 1, box: 'select:has(option:text-is("lab-legacy-agent"))', badge: left}
+      - {n: 1, box: 'main button.v3-sel:has-text("lab-legacy-agent")', badge: left}
       - {n: 2, box: '.v3-msg.user', badge: left}
       - {n: 3, box: '[data-testid=chat-tool]', badge: left}
       - {n: 4, box: '.v3-msg.agent', badge: left}
