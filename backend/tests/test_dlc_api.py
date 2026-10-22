@@ -1,5 +1,6 @@
 """The Agent-DLC console API end to end: define → evaluate → gate → sign, with roles."""
 
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -415,6 +416,11 @@ def test_release_gate_blocks_a_red_line_and_signs_a_clean_candidate(engineer, ow
     gate = engineer.get(f"/api/agents/{agent_id}/release/gate").json()
     assert gate["report"]["verdict"] == "BLOCKED"
     assert gate["report"]["redline_violations"] == ["R1"]
+    # re-reading the gate does not move when the verdict was reached
+    time.sleep(0.01)
+    again = engineer.get(f"/api/agents/{agent_id}/release/gate").json()
+    assert again["report"]["decided_at"] == gate["report"]["decided_at"]
+    blocked_at = gate["report"]["decided_at"]
     assert engineer.post(f"/api/agents/{agent_id}/release/sign", json={}).status_code == 403
     assert admin.post(f"/api/agents/{agent_id}/release/sign", json={}).status_code == 409
 
@@ -425,6 +431,7 @@ def test_release_gate_blocks_a_red_line_and_signs_a_clean_candidate(engineer, ow
     gate = engineer.get(f"/api/agents/{agent_id}/release/gate").json()
     assert gate["report"]["verdict"] == "PASS", [
         (c["key"], c["verdict"], c.get("reason")) for c in gate["report"]["criteria"]]
+    assert gate["report"]["decided_at"] != blocked_at  # a new outcome is a new decision
     signed = admin.post(f"/api/agents/{agent_id}/release/sign", json={"note": "ship"})
     assert signed.status_code == 200, signed.text
     assert endpoints["live"] == "2"

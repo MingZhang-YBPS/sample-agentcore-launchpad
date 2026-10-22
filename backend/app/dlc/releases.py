@@ -588,6 +588,18 @@ def provenance(
     }
 
 
+_OUTCOME_KEYS = ("verdict", "redline_violations", "invalid", "gate_failures", "waived")
+
+
+def _same_outcome(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    """Whether two gate reports reach the same decision from the same runs."""
+    def run_ids(report: dict[str, Any]) -> list[str]:
+        return sorted(str(r.get("id")) for r in report.get("runs") or [])
+    return run_ids(old) == run_ids(new) and all(
+        old.get(k) == new.get(k) for k in _OUTCOME_KEYS
+    )
+
+
 def evaluate(db: Session, record: ReleaseRecord) -> dict[str, Any]:
     """Compute (or refresh) the gate report once every gate run has completed."""
     runs = [db.get(EvalRun, rid) for rid in record.run_ids or []]
@@ -630,6 +642,12 @@ def evaluate(db: Session, record: ReleaseRecord) -> dict[str, Any]:
     )
     report["runs"] = [{"id": r.id, "split": r.split, "status": r.status,
                        "denominator": r.denominator} for r in runs]
+    # Every read of the gate re-derives the report, so `decide` stamps "now". The
+    # verdict was reached when the outcome last changed, not when someone opened the
+    # page: keep the earlier stamp while the same runs give the same outcome.
+    stored = record.gate_report or {}
+    if stored.get("decided_at") and _same_outcome(stored, report):
+        report["decided_at"] = stored["decided_at"]
     agent = db.get(Agent, record.agent_id)
     if agent is not None:
         report["storage"] = refresh_storage(db, record, agent)
