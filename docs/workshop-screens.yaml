@@ -923,11 +923,11 @@ shots:
     actions:
       - {sleep: 2000}
       - {click: {zh: 'main button.v3-btn.primary:has-text("新建标注任务")', en: 'main button.v3-btn.primary:has-text("New labelling task")'}}
-      - {wait: '.v3-modal select.v3-select >> nth=0'}
-      - {select: ['.v3-modal select.v3-select >> nth=0', S2]}
+      - {wait: '.v3-modal button.v3-sel >> nth=0'}
+      - {select: ['.v3-modal button.v3-sel >> nth=0', S2]}
       - {sleep: 2500}
-      # the run dropdown's labels carry dates; pick the gate's regression run by its id (LP_GATE_RUN)
-      - {eval: "() => { const s = document.querySelectorAll('.v3-modal select.v3-select')[1]; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, '{env:LP_GATE_RUN}'); s.dispatchEvent(new Event('change', {bubbles: true})); }"}
+      # the run options' labels carry dates; pick the gate's regression run by its id (LP_GATE_RUN)
+      - {select: ['.v3-modal button.v3-sel >> nth=1', '{env:LP_GATE_RUN}']}
       - {sleep: 800}
       - {click: '.v3-modal label:has(span:text-is("developer")) input'}
       - {click: '.v3-modal label:has(span:text-is("sme")) input'}
@@ -936,7 +936,7 @@ shots:
       - {n: 1, box: '.v3-modal .v3-grid.c2 > label.v3-field', badge: left}
       - {n: 2, box: '.v3-modal .v3-grid.c2 > div.v3-field', badge: right}
       - {n: 3, box: '.v3-modal .v3-std-keys', badge: left}
-      - {n: 4, box: '.v3-modal select.v3-select >> nth=2', badge: left}
+      - {n: 4, box: '.v3-modal button.v3-sel >> nth=2', badge: left}
       - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
 
   - name: 40-evaluate-calib-status
