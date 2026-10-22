@@ -161,16 +161,27 @@ export function sortTasks(tasks: V2Task[]): V2Task[] {
 }
 
 /** Every operator task of the workspace: batch runs (scored and insights) +
- *  agent-owned scores-mode online configs (experiment arms and external configs
- *  are not tasks; continuous insights live on the online-evaluation page). */
+ *  agent-owned scores-mode online configs (A/B test / canary-owned and external
+ *  configs are not tasks). Read by 评估总览 (首页 has its own loader); the 评估任务 tabs list
+ *  each kind on its own (`loadRunTasks`, every online config on 持续评估). */
 export async function loadTasks(): Promise<V2Task[]> {
   const [runs, online] = await Promise.all([
     api.listEvaluationRuns({ limit: 200 }),
-    // experiment arms and externally created configs are not operator tasks
+    // A/B test / canary-owned and externally created configs are not operator tasks
     api.v2OnlineConfigs().catch(() => ({ configs: [], total: 0 })),
   ]);
   return sortTasks([
     ...runs.runs.map(taskFromRun),
     ...online.configs.filter((c) => c.owner === "agent" && c.mode === "scores").map(taskFromOnline),
   ]);
+}
+
+/** A run that is an online config's on-demand insights report (`dataset_name`
+ *  `online:<configId>`): it belongs to that config's 报告 panel, not to one-off runs. */
+export const isOnlineReport = (run: EvaluationRunInfo) => (run.dataset_name ?? "").startsWith("online:");
+
+/** The one-off batch runs, newest first: the 一次性评估 tab. */
+export async function loadRunTasks(): Promise<V2Task[]> {
+  const runs = await api.listEvaluationRuns({ limit: 200 });
+  return sortTasks(runs.runs.filter((run) => !isOnlineReport(run)).map(taskFromRun));
 }
