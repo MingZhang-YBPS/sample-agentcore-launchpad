@@ -275,9 +275,17 @@ def run_actions(page: Page, actions: list[dict[str, Any]], ctx: Ctx, lang: str) 
         elif verb == "press":
             page.keyboard.press(arg)
         elif verb == "select":
-            # [selector of a <select>, visible option label]; ids differ per console
+            # [selector of a <select> or of the V3 themed Select's trigger, visible
+            # option label]; ids differ per console
             sel, label = arg
-            page.locator(expand(sel, ctx, lang)).first.select_option(label=expand(label, ctx, lang))
+            el = page.locator(expand(sel, ctx, lang)).first
+            text = expand(label, ctx, lang)
+            if el.evaluate("e => e instanceof HTMLSelectElement"):
+                el.select_option(label=text)
+            else:  # the themed Select: open its listbox, pick the option by its label
+                el.click()
+                page.locator("[data-testid=v3-select-popup] [role=option]").filter(
+                    has_text=text).first.click()
         elif verb == "wait":
             page.wait_for_selector(expand(arg, ctx, lang), timeout=30000)
         elif verb == "sleep":

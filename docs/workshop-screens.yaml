@@ -648,14 +648,15 @@ shots:
     requires: [agent:lab-service-assistant]
     viewport: [1440, 1000]
     storage: {'launchpad_project:default': retail-service}
-    wait: 'select:has(option:text-is("user_preferences"))'
+    wait: 'main button.v3-sel >> nth=1'
     actions:
-      - {select: ['select:has(option:text-is("user_preferences"))', user_preferences]}
+      # the actor and strategy pickers are the V3 themed Select (button + listbox)
+      - {select: ['main button.v3-sel >> nth=1', user_preferences]}
       - {wait: 'tr.click:has-text("高楼层")'}
       - {sleep: 800}
     highlights:
-      - {n: 1, box: 'select:has(option[value$="__developer"])', badge: left}
-      - {n: 2, box: 'select:has(option:text-is("user_preferences"))', badge: left}
+      - {n: 1, box: 'main button.v3-sel >> nth=0', badge: left}
+      - {n: 2, box: 'main button.v3-sel >> nth=1', badge: top}
       - {n: 3, box: 'tr.click:has-text("高楼层")', badge: left}
 
   - name: 30-build-memory-record
@@ -666,9 +667,10 @@ shots:
     requires: [agent:lab-service-assistant]
     viewport: [1440, 1000]
     storage: {'launchpad_project:default': retail-service}
-    wait: 'select:has(option:text-is("user_preferences"))'
+    wait: 'main button.v3-sel >> nth=1'
     actions:
-      - {select: ['select:has(option:text-is("user_preferences"))', user_preferences]}
+      # the actor and strategy pickers are the V3 themed Select (button + listbox)
+      - {select: ['main button.v3-sel >> nth=1', user_preferences]}
       - {wait: 'tr.click:has-text("高楼层")'}
       - {click: 'tr.click:has-text("高楼层")'}
       - {wait: '.v3-modal[role=dialog]'}
