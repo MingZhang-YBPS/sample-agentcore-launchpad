@@ -953,7 +953,7 @@ shots:
       - {sleep: 2000}
     highlights:
       - {n: 1, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=3', badge: left}
-      - {n: 2, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=4', badge: right}
+      - {n: 2, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=4', badge: top}
 
   - name: 40-evaluate-calib-label
     chapter: 20-flywheel/30-evaluate
@@ -970,8 +970,8 @@ shots:
     highlights:
       - {n: 1, box: 'main .v3-panel .v3-alert >> nth=0', badge: left}
       - {n: 2, box: 'main .v3-grid.c3 > * >> nth=1', badge: left}
-      - {n: 3, box: 'main tr:has(.v3-std-seg) >> nth=0 >> td >> nth=2', badge: left}
-      - {n: 4, box: 'main tr:has(.v3-std-seg) >> nth=0 >> td >> nth=3', badge: left}
+      - {n: 3, box: 'main tr:has(.v3-std-seg) >> nth=0 >> td >> nth=2', badge: top}
+      - {n: 4, box: 'main tr:has(.v3-std-seg) >> nth=0 >> td >> nth=3', badge: top}
       - {n: 5, box: 'main tr:has(.v3-std-seg) >> nth=0 >> .v3-std-seg', badge: right}
 
   - name: 40-evaluate-calib-decide
