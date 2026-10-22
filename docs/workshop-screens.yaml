@@ -837,9 +837,9 @@ shots:
 
   - name: 40-evaluate-task-passk
     chapter: 20-flywheel/30-evaluate
-    status: replace   # wizard step 2 with k = 3, NOT submitted; dataset = the golden dev split (LP_GOLDEN_DEV)
+    status: replace   # wizard step 2 with k = 3, NOT submitted; dataset = the golden dev split (LP_GOLDEN_DEV); LP_EV_* = the three custom evaluator ids
     account: developer
-    path: /v3/tasks?view=new&agent={agent:lab-service-assistant}&dataset={env:LP_GOLDEN_DEV}&evaluators=Builtin.Correctness,unicorn_fee_check-0TvQY63jCW,unicorn_privacy_guard-gCMQxs5vjS,unicorn_no_overpromise-O00JOXCDwe
+    path: /v3/tasks?view=new&agent={agent:lab-service-assistant}&dataset={env:LP_GOLDEN_DEV}&evaluators=Builtin.Correctness,{env:LP_EV_FEE},{env:LP_EV_PRIVACY},{env:LP_EV_OVERPROMISE}
     requires: [agent:lab-service-assistant]
     viewport: [1440, 960]
     storage: {'launchpad_project:default': retail-service}
