@@ -541,6 +541,23 @@ def test_calibration_blind_then_decided(engineer, owner, admin):
     assert row["calibrated"] is True and row["effective_tier"] == "gate"
 
 
+def test_annotation_task_without_lineage_binds_the_agents_criteria(engineer):
+    # an API caller that names only the agent still gets a task bound to the agent's
+    # published standard; unbound, its verdict would carry no evaluator id and no gate
+    # could ever count it
+    agent_id = _agent()
+    lineage = _create_set(engineer, agent_id)
+    engineer.put(f"/api/criteria-sets/{lineage}", json={"criteria": CRITERIA})
+    engineer.post(f"/api/criteria-sets/{lineage}/publish", json={})
+    published = engineer.get(f"/api/criteria-sets/{lineage}").json()
+    task = engineer.post("/api/annotation-tasks", json={
+        "agent_id": agent_id, "criterion_key": CRITERIA[0]["key"],
+        "annotators": [ENG["username"], BIZ["username"]],
+        "items": [{"ref": "i0", "input": "q", "answer": "a", "judge_label": "pass"}]})
+    assert task.status_code == 201, task.text
+    assert task.json()["criteria_set_id"] == published["set"]["id"]
+
+
 def test_admission_requires_golden_admit_and_a_human_answer(engineer, owner):
     agent_id = _agent()
     lineage = _create_set(engineer, agent_id)

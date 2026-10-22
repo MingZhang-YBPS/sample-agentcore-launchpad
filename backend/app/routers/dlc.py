@@ -728,7 +728,10 @@ def create_annotation_task(
                            detail={"run_id": run.id, "criterion_key": req.criterion_key})
     cset = (
         criteria_svc.latest_published(db, ws.id, req.criteria_lineage_id)
-        if req.criteria_lineage_id else None
+        if req.criteria_lineage_id
+        # without a lineage the task would bind no criteria set, so its verdict would
+        # carry no evaluator id and no gate could ever count it: take the agent's own
+        else criteria_svc.agent_set(db, ws.id, req.agent_id) if req.agent_id else None
     )
     task = cal_svc.create_task(
         db, workspace_id=ws.id, agent_id=req.agent_id,
