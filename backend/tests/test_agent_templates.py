@@ -76,3 +76,10 @@ def test_the_payload_carries_i18n_keys_not_prose(client):
     for row in client.get("/api/agent-templates").json()["templates"]:
         assert row["label_key"].startswith("templates.")
         assert row["description_key"].startswith("templates.")
+
+
+def test_blank_keeps_the_platform_memory_default():
+    """The V3 quick form says a blank Harness deploys with long-term memory (the
+    platform default); its Full form link opens the wizard from this template, so the
+    template must carry the same default or the switch silently drops it."""
+    assert agent_templates.get("blank").memory_long_term is True

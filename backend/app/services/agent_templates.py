@@ -117,6 +117,9 @@ TEMPLATES: tuple[AgentTemplate, ...] = (
         method="harness",
         system_prompt="",
         knowledge="suggested",
+        # the platform default (`emptyAgentForm`), which the V3 quick form shows as
+        # "deploys with long-term memory": its Full form link must not drop it
+        memory_long_term=True,
         tags=("blank",),
     ),
 )
