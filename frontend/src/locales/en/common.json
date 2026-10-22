@@ -6285,6 +6285,7 @@
         "deleteBody": "Delete “{{name}}”? This cannot be undone.",
         "deleteOk": "Delete"
       },
+      "prunedEvaluators": "Removed evaluators this region does not offer yet: {{names}}",
       "copySuffix": " copy",
       "createdRun": "Evaluation task started",
       "errName": "Enter a task name",
