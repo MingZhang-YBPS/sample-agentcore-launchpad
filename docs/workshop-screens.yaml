@@ -1254,6 +1254,7 @@ shots:
     path: /v3/observability?tab=traces&view=trace&id={env:LP_OBS_TID}&range=24h
     viewport: [1440, 1100]
     storage: {'launchpad_project:default': retail-service}
+    clip: ['main.v3-main h1', 'main .v3-grid.c4', '.v3-obs-wf', 'main .v3-obs-side dl.v3-kv']
     wait: '.v3-obs-wf .r'
     actions:
       - {sleep: 2500}
@@ -1262,9 +1263,13 @@ shots:
     highlights:
       - {n: 1, box: 'main .v3-grid.c4', badge: left}
       - {n: 2, box: 'main .v3-obs-legend', badge: left}
-      - {n: 3, box: '.v3-obs-wf [role=listitem] >> nth=10 >> xpath=./span', badge: left}
-      - {n: 4, box: '.v3-obs-wf [role=listitem] >> nth=20 >> xpath=./span', badge: left}
-      - {n: 5, box: 'main .v3-obs-side', badge: right}
+      # by span name, not row number (the span count differs per run); a row is
+      # display:contents, so the box is its child spans
+      - {n: 3, box: '.v3-obs-wf .r:has(.t:has-text("kb_search")) >> nth=0 >> xpath=./span', badge: left}
+      - {n: 4, box: '.v3-obs-wf .r:has(.t:text-is("chat global.zai.glm-5.3")) >> nth=-1 >> xpath=./span', badge: left}
+      # the span card now carries the prompt messages (thousands of px): frame its
+      # two key/value blocks and crop to the waterfall, not the whole card
+      - {n: 5, box: 'main .v3-obs-side dl.v3-kv', badge: right}
 
 
   - name: 60-observe-costs
@@ -1296,13 +1301,13 @@ shots:
     actions:
       - {sleep: 2500}
       - {click: {zh: 'main button:has-text("新建规则")', en: 'main button:has-text("New rule")'}}
-      - {wait: '.v3-modal select.v3-select'}
-      - {eval: "() => { const s = document.querySelector('.v3-modal select.v3-select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, 'latency_p95_ms'); s.dispatchEvent(new Event('change', {bubbles: true})); }"}
+      - {wait: '.v3-modal button.v3-sel'}
+      - {select: ['.v3-modal button.v3-sel >> nth=0', {zh: 'p95 延迟', en: 'p95 latency'}]}
       - {fill: ['.v3-modal label.v3-field >> nth=1 >> input.v3-input', lab-p95-30s]}
       - {fill: ['.v3-modal .v3-grid.c2 input.v3-input', '30000']}
       - {sleep: 800}
     highlights:
-      - {n: 1, box: '.v3-modal label.v3-field:has(select) >> nth=0', badge: left}
+      - {n: 1, box: '.v3-modal label.v3-field:has(button.v3-sel) >> nth=0', badge: left}
       - {n: 2, box: '.v3-modal label.v3-field >> nth=1', badge: left}
       - {n: 3, box: '.v3-modal .v3-grid.c2 label.v3-field >> nth=0', badge: left}
       - {n: 4, box: '.v3-modal .v3-grid.c2 label.v3-field >> nth=1', badge: right}
@@ -1335,11 +1340,11 @@ shots:
     wait: 'main .v3-grid.c4'
     actions:
       - {sleep: 1500}
-      - {eval: "() => { const s = document.querySelector('main select.v3-select'); const o = [...s.options].find(x => x.textContent.trim() === 'lab-service-assistant'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, o.value); s.dispatchEvent(new Event('change', {bubbles: true})); }"}
+      - {select: ['main button.v3-sel', lab-service-assistant]}
       - {wait: 'main .v3-ins-intent >> nth=1'}
       - {sleep: 1500}
     highlights:
-      - {n: 1, box: 'main select.v3-select', badge: top}
+      - {n: 1, box: 'main button.v3-sel', badge: top}
       - {n: 2, box: 'main .v3-ins-nowrap + button', badge: top}
       - {n: 3, box: 'main .v3-grid.c4', badge: left}
       - {n: 4, box: 'main .v3-panel:has(.v3-ins-note)', badge: left}
@@ -1392,7 +1397,7 @@ shots:
     actions:
       - {sleep: 2000}
     highlights:
-      - {n: 1, box: 'main select.v3-select', badge: top}
+      - {n: 1, box: 'main button.v3-sel', badge: top}
       - {n: 2, box: 'main .v3-filters >> nth=0 >> button[aria-pressed=true]', badge: top}
       - {n: 3, box: 'main .v3-filters >> nth=-1', badge: left}
       - {n: 4, box: 'main .v3-table', badge: left}
@@ -1409,7 +1414,7 @@ shots:
     wait: '.v3-msg-actions button[aria-pressed=true]'
     actions: [{sleep: 1500}]
     highlights:
-      - {n: 1, box: '.v3-chat-side select.v3-select', badge: left}
+      - {n: 1, box: '.v3-chat-side button.v3-sel', badge: left}
       - {n: 2, box: '.v3-chat-session.on', badge: left}
       - {n: 3, box: '.v3-msg-actions button[aria-pressed=true]', badge: right}
 
@@ -1420,22 +1425,22 @@ shots:
     path: /v3/issues?view=reviewers
     viewport: [1440, 1000]
     storage: {'launchpad_project:default': retail-service}
-    wait: 'main select.v3-iss-select'
+    wait: 'main button.v3-sel.v3-iss-select'
     mask: ['main input.v3-input.mono']
     actions:
       - {sleep: 1500}
-      - {select: ['main select.v3-iss-select', lab-service-assistant]}
+      - {select: ['main button.v3-sel.v3-iss-select', lab-service-assistant]}
       - {sleep: 1200}
       - {fill: ['main input.v3-input:not(.mono)', {zh: '售后政策专家 sme', en: 'after-sales policy expert sme'}]}
-      - {select: ['main form select.v3-select, main .v3-panel select.v3-select:not(.v3-iss-select)', {zh: '7 天后过期', en: 'In 7 days'}]}
+      - {select: ['main form button.v3-sel, main .v3-panel button.v3-sel:not(.v3-iss-select)', {zh: '7 天后过期', en: 'In 7 days'}]}
       - {click: 'main button[type=submit]'}
       - {wait: 'main input.v3-input.mono'}
       - {save_value: ['main input.v3-input.mono', '{env:LP_REVIEW_LINK_FILE}']}
       - {sleep: 1500}
     highlights:
-      - {n: 1, box: 'main select.v3-iss-select', badge: left}
+      - {n: 1, box: 'main button.v3-sel.v3-iss-select', badge: left}
       - {n: 2, box: 'main input.v3-input:not(.mono)', badge: left}
-      - {n: 3, box: 'main .v3-panel select.v3-select:not(.v3-iss-select)', badge: top}
+      - {n: 3, box: 'main .v3-panel button.v3-sel:not(.v3-iss-select)', badge: top}
       - {n: 4, box: 'main button[type=submit]', badge: right}
       - {n: 5, box: 'main input.v3-input.mono', badge: left}
       - {n: 6, box: 'main input.v3-input.mono + button', badge: right}
@@ -1590,10 +1595,10 @@ shots:
     path: /v3/issues?view=reviewers
     viewport: [1440, 1000]
     storage: {'launchpad_project:default': retail-service}
-    wait: 'main select.v3-iss-select'
+    wait: 'main button.v3-sel.v3-iss-select'
     actions:
       - {sleep: 1500}
-      - {select: ['main select.v3-iss-select', lab-service-assistant]}
+      - {select: ['main button.v3-sel.v3-iss-select', lab-service-assistant]}
       - {wait: 'main .v3-table tbody tr'}
       - {sleep: 800}
       - {click: {zh: 'main .v3-table tbody tr:has-text("售后政策专家 sme") button.v3-btn:not([disabled])', en: 'main .v3-table tbody tr:has-text("after-sales policy expert sme") button.v3-btn:not([disabled])'}}
