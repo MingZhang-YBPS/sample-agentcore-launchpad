@@ -1614,6 +1614,7 @@ shots:
     chapter: 30-wrap-up/10-team-lab
     status: replace   # admin, Users: opens the Disable account confirm on a self-registered trainee (does NOT confirm)
     account: admin
+    viewport: [1680, 900]   # the English user table is ~1300px wide: at 1440 it scrolls and the shot shows it cut
     path: /v3/users
     wait: 'table.v3-table'
     actions:
@@ -1631,6 +1632,7 @@ shots:
     chapter: 90-appendix/10-organizer-deploy
     status: replace   # admin, Users: the Add user button; the built-in admin row
     account: admin
+    viewport: [1680, 900]   # the English user table is ~1300px wide: at 1440 it scrolls and the shot shows it cut
     path: /v3/users
     wait: 'table.v3-table'
     actions: [{sleep: 1200}]
@@ -1703,6 +1705,7 @@ shots:
     chapter: 90-appendix/10-organizer-deploy
     status: replace   # admin, Users: the new developer-2 row
     account: admin
+    viewport: [1680, 900]   # the English user table is ~1300px wide: at 1440 it scrolls and the shot shows it cut
     path: /v3/users
     requires: [user:developer-2]
     wait: 'table.v3-table'
