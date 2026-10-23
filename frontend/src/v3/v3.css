@@ -423,7 +423,10 @@ body.v3-body {
   border-radius: var(--v3-r);
   padding: 18px 20px;
 }
-.v3 .v3-panel.flush { padding: 0; overflow: hidden; }
+/* x scrolls rather than clips: a table wider than the panel (English labels at 1440px
+   on Users, Tasks, Governance, Departments, Network, Models) otherwise loses its first
+   and last columns, row actions included, with no way to reach them (BUG-39) */
+.v3 .v3-panel.flush { padding: 0; overflow-x: auto; overflow-y: hidden; }
 .v3 .v3-panel-head {
   display: flex;
   align-items: center;
