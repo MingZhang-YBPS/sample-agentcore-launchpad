@@ -1603,11 +1603,12 @@ shots:
       - {sleep: 800}
       - {click: {zh: 'main .v3-table tbody tr:has-text("售后政策专家 sme") button.v3-btn:not([disabled])', en: 'main .v3-table tbody tr:has-text("after-sales policy expert sme") button.v3-btn:not([disabled])'}}
       - {wait: '.v3-modal'}
+      - {eval: "document.head.insertAdjacentHTML('beforeend', '<style>.v3 .v3-modal-mask{backdrop-filter:none!important;background:rgba(4,8,16,.35)!important}</style>')"}
       - {sleep: 600}
     highlights:
       - {n: 1, box: {zh: 'header button:has-text("评审人"), .v3-head a:has-text("评审人"), .v3-head button:has-text("评审人")', en: 'header button:has-text("Reviewers"), .v3-head a:has-text("Reviewers"), .v3-head button:has-text("Reviewers")'}, badge: left}
       - {n: 2, box: {zh: 'main .v3-table tbody tr:has-text("售后政策专家 sme") button.v3-btn:not([disabled])', en: 'main .v3-table tbody tr:has-text("after-sales policy expert sme") button.v3-btn:not([disabled])'}, badge: left}
-      - {n: 3, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: top}
+      - {n: 3, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: right}
 
   - name: 80-team-lab-user-disable
     chapter: 30-wrap-up/10-team-lab
@@ -1619,10 +1620,11 @@ shots:
       - {sleep: 1200}
       - {click: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("禁用")', en: 'tr:has-text("trainee-alex") button:has-text("Disable")'}}
       - {wait: '.v3-modal'}
+      - {eval: "document.head.insertAdjacentHTML('beforeend', '<style>.v3 .v3-modal-mask{backdrop-filter:none!important;background:rgba(4,8,16,.35)!important}</style>')"}
       - {sleep: 600}
     highlights:
       - {n: 1, box: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("禁用")', en: 'tr:has-text("trainee-alex") button:has-text("Disable")'}, badge: left}
-      - {n: 2, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: top}
+      - {n: 2, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: right}
 
   # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
   - name: 90-organizer-users-create-open
@@ -1785,7 +1787,7 @@ shots:
     wait: '.v3-main'
     actions: [{sleep: 1500}]
     highlights:
-      - {n: 1, box: 'header.v3-top .v3-account', badge: left}
+      - {n: 1, box: 'header.v3-top .v3-account', badge: bottom}
       - {n: 2, box: '.v3-main .v3-empty, .v3-main [role=alert], .v3-main .v3-alert', badge: left}
 
   - name: 90-organizer-users-reset
@@ -1923,6 +1925,6 @@ shots:
     wait: '[data-testid=v3-sysupdate-current]'
     clip: '.v3-main .v3-reveal'
     highlights:
-      - {n: 1, box: '[data-testid=v3-sysupdate-current]'}
-      - {n: 2, box: '[data-testid=v3-sysupdate-remote]'}
-      - {n: 3, box: '[data-testid=v3-sysupdate-history]'}
+      - {n: 1, box: '[data-testid=v3-sysupdate-current]', badge: top}   # a corner badge covers the card label
+      - {n: 2, box: '[data-testid=v3-sysupdate-remote]', badge: top}
+      - {n: 3, box: '[data-testid=v3-sysupdate-history]', badge: left}

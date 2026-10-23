@@ -403,7 +403,7 @@ def capture(pw: Any, shot: dict[str, Any], lang: str, ctx: Ctx, out: Path,
             if rect is None:
                 raise RuntimeError(f"clip matched nothing: {sels}")
             m = shot.get("margin", 16)
-            # frames and badges as drawn (a 'left' / 'right' / 'top' badge sits outside
+            # frames and badges as drawn (a 'left' / 'right' / 'top' / 'bottom' badge sits outside
             # its frame): the crop holds every one of them whole
             rect = crop_rect(rect, drawn)
             x, y = max(rect["x"] - m, 0), max(rect["y"] - m, 0)

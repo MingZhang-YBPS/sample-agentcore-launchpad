@@ -28,12 +28,13 @@
       const d = document.createElement('div');
       d.textContent = String(b.n);
       // default: on the frame's top-left corner; 'left' / 'right': outside the frame,
-      // centred vertically; 'top': above the frame, centred — for a box whose corner
+      // centred vertically; 'top' / 'bottom': above / below the frame, centred — for a box whose corner
       // would cover its own label or a neighbour
       let x, y;
       if (b.badge === 'left') { x = r.x - p - 36; y = r.y + r.h / 2 - 14; }
       else if (b.badge === 'right') { x = r.x + r.w + p + 8; y = r.y + r.h / 2 - 14; }
       else if (b.badge === 'top') { x = r.x + r.w / 2 - 14; y = r.y - p - 36; }
+      else if (b.badge === 'bottom') { x = r.x + r.w / 2 - 14; y = r.y + r.h + p + 8; }
       else { x = r.x - p - 13; y = r.y - p - 13; }
       // never past the page's own edges (a box flush with the page side)
       x = Math.min(Math.max(x, RING), docW - S - RING);

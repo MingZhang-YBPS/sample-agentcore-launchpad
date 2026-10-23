@@ -66,12 +66,15 @@ def test_overlay_badges_stay_on_the_page_and_are_reported():
         boxes = [{"n": 1, "rect": {"x": 0, "y": 0, "w": 60, "h": 20}},                # corner
                  {"n": 2, "rect": {"x": 360, "y": 100, "w": 40, "h": 20}, "badge": "right"},
                  {"n": 3, "rect": {"x": 4, "y": 150, "w": 40, "h": 20}, "badge": "left"},
-                 {"n": 4, "rect": {"x": 100, "y": 2, "w": 40, "h": 20}, "badge": "top"}]
+                 {"n": 4, "rect": {"x": 100, "y": 2, "w": 40, "h": 20}, "badge": "top"},
+                 {"n": 5, "rect": {"x": 200, "y": 200, "w": 40, "h": 20}, "badge": "bottom"}]
         drawn = page.evaluate(cws.OVERLAY_JS, {"boxes": boxes, "pad": 4})
         badges = page.evaluate(
             "() => [...document.querySelectorAll('#__ws_overlay > div')]"
             ".filter(d => d.textContent).map(d => d.getBoundingClientRect().toJSON())")
-        assert len(badges) == 4 and len(drawn) == 8
+        assert len(badges) == 5 and len(drawn) == 10
+        # 'bottom' sits below its frame (the frame ends at y 200 + 20 + the pad)
+        assert badges[4]["top"] >= 224, badges[4]
         for b in badges:
             assert b["left"] >= 0 and b["top"] >= 0 and b["right"] <= 400, b
             assert any(d["x"] <= b["left"] and d["y"] <= b["top"]
