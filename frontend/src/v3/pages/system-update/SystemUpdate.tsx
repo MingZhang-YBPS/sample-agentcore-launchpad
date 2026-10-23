@@ -1,5 +1,5 @@
 import { CheckCircle2, CircleDashed, Copy, Loader2, RefreshCw, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
@@ -168,7 +168,18 @@ function SchedulePanel({ state, update, onDone, failed }: {
 
 function LogPanel({ update }: { update: SystemUpdate }) {
   const { t } = useTranslation();
-  const log = useLoad(() => systemUpdateApi.log(update.id), `v3-sysupdate-log:${update.id}:${update.status}:${update.updated_at}`);
+  // Keyed on the update only: a status change refetches in place, so an open log keeps
+  // its text (and scroll) instead of blanking on every poll.
+  const log = useLoad(() => systemUpdateApi.log(update.id), `v3-sysupdate-log:${update.id}`);
+  const { reload } = log;
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    reload();
+  }, [update.status, update.updated_at, reload]);
   return (
     <details>
       <summary>{t("v3.systemUpdate.log")}</summary>
@@ -191,18 +202,27 @@ export function V3SystemUpdate() {
   const { isAdmin } = useAuth();
   const toast = useToast();
   const failed = useFailure();
-  const [version, setVersion] = useState(0);
   const [busy, setBusy] = useState(false);
-  const state = useLoad(async () => (isAdmin ? systemUpdateApi.state() : null), `v3-sysupdate:${isAdmin}:${version}`);
-  const reload = () => setVersion((v) => v + 1);
+  // One stable key: a poll refetches in place (useLoad keeps the last data for the same
+  // key), so the page does not drop to a skeleton and remount its panels every 5 s.
+  const state = useLoad(async () => (isAdmin ? systemUpdateApi.state() : null), `v3-sysupdate:${isAdmin}`);
+  const reload = state.reload;
   const current = state.data?.current ?? null;
   const live = current !== null && LIVE_STATUSES.has(current.status);
+  // The commit this tab's bundle was served by: once a restart lands a different one, the
+  // page says so once and lets the operator reload, rather than reloading on its own.
+  const loadedSha = useRef<string | null>(null);
+  const runningSha = state.data?.version.sha ?? null;
+  if (loadedSha.current === null && runningSha) loadedSha.current = runningSha;
+  const newBuild = !!runningSha && !!loadedSha.current && runningSha !== loadedSha.current;
 
+  // A failed poll keeps the last data, so a restart (`applying`) keeps polling until the
+  // new backend answers instead of stopping on the first refused request.
   useEffect(() => {
-    if (!live) return undefined;
-    const timer = window.setTimeout(() => setVersion((v) => v + 1), POLL_MS);
+    if (!live || state.loading) return undefined;
+    const timer = window.setTimeout(reload, POLL_MS);
     return () => window.clearTimeout(timer);
-  }, [live, state.data]);
+  }, [live, state.loading, state.data, state.error, reload]);
 
   if (!isAdmin) {
     return (
@@ -254,10 +274,27 @@ export function V3SystemUpdate() {
       <ErrorCallout error={failed.error} onDismiss={failed.clear} data-testid="v3-system-update-error" />
       {state.loading && !data ? (
         <Panel><Skeleton rows={4} /></Panel>
-      ) : state.error ? (
+      ) : state.error && !data ? (
         <Notice s="act">{state.error}</Notice>
       ) : data ? (
         <>
+          {state.error && (
+            <div data-testid="v3-sysupdate-reconnecting">
+              <Notice s={live ? "wait" : "act"}>{live ? t("v3.systemUpdate.reconnecting") : state.error}</Notice>
+            </div>
+          )}
+          {newBuild && (
+            <div data-testid="v3-sysupdate-newbuild">
+              <Notice s="ok">
+                <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  {t("v3.systemUpdate.newBuild", { sha: data.version.short ?? "" })}
+                  <Btn kind="ghost" size="sm" onClick={() => window.location.reload()}>
+                    <RefreshCw size={13} /> {t("v3.systemUpdate.loadNewBuild")}
+                  </Btn>
+                </span>
+              </Notice>
+            </div>
+          )}
           {!data.version.update_enabled && <Notice s="info">{t("v3.systemUpdate.disabled")}</Notice>}
           <Panel>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
