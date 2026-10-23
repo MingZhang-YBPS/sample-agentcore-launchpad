@@ -242,6 +242,9 @@ function UserList() {
         ) : rows.length === 0 ? (
           <Empty title={t("usersPage.empty")} />
         ) : (
+          // the English labels make the row wider than the flush panel (overflow: hidden);
+          // without the scroll region the selection column and the delete action are cut off
+          <div className="v3-table-scroll" role="region" aria-label={t("v3.ux.tableScroll")} tabIndex={0}>
           <table className="v3-table">
             <thead>
               <tr>
@@ -324,6 +327,7 @@ function UserList() {
               })}
             </tbody>
           </table>
+          </div>
         )}
         {total > PAGE_SIZE && (
           <div className="v3-usr-pager">
