@@ -7,6 +7,7 @@ import {
   contextLayerSupported,
   contextLayerVia,
   hasByoMounts,
+  managedGatewayAttached,
   pythonLabel,
   resolveKb,
   skillNameFromPath,
@@ -207,6 +208,7 @@ export function WizardReview({
           label: t("v2.agents.wizard.tools"),
           value: list([
             ...form.tools.map((n) => t(`v2.agents.wizard.builtin.${n}`)),
+            ...(managedGatewayAttached(form) ? [t("v2.agents.wizard.managedGateway")] : []),
             ...form.selectedGateway,
             ...form.selectedMcp,
             ...form.nativeTools.map((n) => t(`v2.agents.wizard.native.${n}`)),
@@ -231,7 +233,12 @@ export function WizardReview({
         ...model,
         {
           label: t("v2.agents.wizard.tools"),
-          value: list([...base, ...(strands.strands_tools ?? []), ...(a2a ? [] : form.selectedGateway)]),
+          value: list([
+            ...base,
+            ...(strands.strands_tools ?? []),
+            ...(a2a ? [] : form.selectedGateway),
+            ...(managedGatewayAttached(form) ? [t("v2.agents.wizard.managedGateway")] : []),
+          ]),
         },
         ...strandsReviewItems(strands, t),
         ...(a2a

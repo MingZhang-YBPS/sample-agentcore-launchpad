@@ -187,6 +187,10 @@ def _assert_target_references(
     hidden = visibility.hidden_aws_ids(viewer, db, ws.id, creators.EVALUATOR, evaluators)
     # another project's evaluator scores here only when it is shared at `use` (§11.2)
     read_only = resource_shares.refused_ids(db, creators.EVALUATOR, evaluators, "use")
+    offered = None
+    if any(e in coverage.KNOWN_BUILTINS for e in evaluators):
+        control = control_client(ws.context)
+        offered = _region_builtins(control)
     for evaluator in dict.fromkeys(evaluators):
         if evaluator in hidden:
             # workspace isolation: a hidden custom evaluator is a missing one
@@ -198,6 +202,10 @@ def _assert_target_references(
                 "project for use access, or drop it",
                 {"evaluator": evaluator}, status_code=422,
             )
+        if offered and evaluator in coverage.KNOWN_BUILTINS and evaluator not in offered:
+            # documented but still rolling out here: StartBatchEvaluation would reject
+            # the whole batch only after the agent was invoked
+            raise _evaluator_missing(evaluator)
         if evaluator in coverage.KNOWN_BUILTINS:
             needs, level = coverage.builtin_needs(evaluator), coverage.KNOWN_BUILTINS[evaluator]
         elif evaluator.startswith(("Builtin.", "ThirdParty.")):
@@ -271,6 +279,18 @@ def _assert_target_references(
             "evaluator.",
             {"evaluators": problems}, status_code=422,
         )
+
+
+def _region_builtins(control: Any) -> set[str] | None:
+    """The built-ins this region's ListEvaluators names; None (check nothing) when the
+    listing fails or names none — it then says nothing about them. One page: the
+    service lists built-ins first, and they fit well within it."""
+    try:
+        listed = control.list_evaluators(maxResults=100).get("evaluators") or []
+        ids = {str(e.get("evaluatorId") or "") for e in listed}
+    except Exception:
+        return None
+    return {e for e in ids if e.startswith("Builtin.")} or None
 
 
 def _evaluator_missing(evaluator: str) -> AppError:
@@ -996,10 +1016,12 @@ def list_evaluators(
 ) -> dict[str, Any]:
     builtin = [{**row, **creators.empty()} for row in _builtin_evaluator_rows()]
     live: list[dict[str, Any]] = []
+    offered: set[str] = set()
     try:
         for ev in ac.list_evaluators(control_client(ws.context)):
             evaluator_id = ev.get("evaluatorId", "")
             if evaluator_id.startswith("Builtin."):
+                offered.add(evaluator_id)
                 continue  # rendered from the local dicts above
             evaluator_type = ev.get("evaluatorType")
             third_party = evaluator_type == "ThirdParty" or evaluator_id.startswith(
@@ -1038,6 +1060,11 @@ def list_evaluators(
         viewer, db, ws.id, creators.EVALUATOR, (row["id"] for row in live)
     )
     live = [row for row in live if row["id"] not in hidden]
+    # A documented built-in can still be rolling out in this region, and
+    # StartBatchEvaluation refuses the whole run over one it does not have. A
+    # listing that names no built-ins says nothing about them, so it hides none.
+    if offered:
+        builtin = [row for row in builtin if row["id"] in offered]
     known = creators.lookup(db, ws.id, creators.EVALUATOR, (row["id"] for row in live))
     # "from project X (read / use)" on the evaluators another project lent (§11.2)
     lent = resource_shares.shared_from(db, creators.EVALUATOR, {row["id"] for row in live})

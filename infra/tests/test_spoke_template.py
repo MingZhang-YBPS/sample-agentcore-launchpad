@@ -46,6 +46,10 @@ SCOPED_SIDS = frozenset(
         "CodeBuildLaunchpad",
         "BedrockKnowledgeBases",
         "CostTagsAgentLogGroups",
+        "TransactionSearchLogGroups",
+        "TransactionSearchServiceLinkedRole",
+        "TransactionSearchCloudTrailChannel",
+        "EvaluationResultLogGroups",
     }
 )
 
@@ -224,13 +228,14 @@ def test_a_fresh_region_can_turn_on_transaction_search(statements: list[dict[str
         "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutRetentionPolicy",
         "logs:PutResourcePolicy", "logs:DescribeResourcePolicies",
         "application-signals:StartDiscovery", "iam:GetRole",
-        "cloudtrail:CreateServiceLinkedChannel",
+        "cloudtrail:CreateServiceLinkedChannel", "cloudtrail:GetChannel",
     }
     assert required <= granted, f"missing {sorted(required - granted)}"
     by_sid = {statement["Sid"]: statement for statement in statements}
-    # the log-group writes are the documented two groups, not every group
+    # the log-group writes are the documented two groups, not every group — each
+    # as the bare group ARN (CreateLogGroup is checked against it) and its `:*` form
     groups = by_sid["TransactionSearchLogGroups"]["Resource"]
-    assert len(groups) == 2 and all(
+    assert len(groups) == 4 and all(
         "aws/spans" in g["Fn::Sub"] or "application-signals/data" in g["Fn::Sub"] for g in groups)
 
 

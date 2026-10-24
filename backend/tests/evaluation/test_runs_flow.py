@@ -254,9 +254,11 @@ def test_harness_run_completes(client, monkeypatch):
          "creationTime": 2},
     ])
     harness_calls = {"n": 0}
+    actors: list[str] = []
 
     def invoke_harness_text(client_, arn, prompt, session_id=None, actor_id="default"):
         harness_calls["n"] += 1
+        actors.append(actor_id)
         return {"text": "ok", "session_id": f"hsess-{harness_calls['n']:03d}" + "x" * 30}
 
     monkeypatch.setattr(svc.hc, "invoke_harness_text", invoke_harness_text)
@@ -275,6 +277,12 @@ def test_harness_run_completes(client, monkeypatch):
         time.sleep(0.1)
     assert run["status"] == "completed", run.get("error")
     assert harness_calls["n"] == 2 and calls["n"] == 0  # InvokeHarness, not runtime
+    # each scenario replays as a fresh user under the agent's scope, never the
+    # shared bare "default" actor, and the run records which actor ran which session
+    assert actors == [svc.eval_actor(agent.id, run_id, 1), svc.eval_actor(agent.id, run_id, 2)]
+    assert actors[0] != actors[1] and all(a.startswith(f"{agent.id}__") for a in actors)
+    stored = SessionLocal().get(EvalRun, run_id)
+    assert [svc.eval_session_actors(stored, sid)[0] for sid in run["session_ids"]] == actors
     telemetry_wait.assert_called_once_with(
         workspace=ANY,
         session_id=run["session_ids"][-1],

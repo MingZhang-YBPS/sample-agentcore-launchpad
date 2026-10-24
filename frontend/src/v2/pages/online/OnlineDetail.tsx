@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import {
@@ -26,7 +26,10 @@ import {
   isEditable,
   isTransient,
   modeOf,
+  ownerLabel,
   OWNER_TONE,
+  parentLink,
+  parentNote,
   POLL_MS,
   reportActive,
   reportKey,
@@ -51,6 +54,7 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { backState, backTarget, returnPath } from "../tasks/back";
 
 function Sparkline({ points, evaluatorId }: { points: OnlineEvalResultsPoint[]; evaluatorId: string }) {
   const values = points.map((p) => p.mean).filter((v): v is number => v != null);
@@ -350,9 +354,12 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
   );
 }
 
+/** One online evaluation config (`/v2/eval/tasks?view=detail&kind=online&id=`). */
 export function OnlineDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const toast = useV2Toast();
   const { can } = useAuth();
   const mayRun = can("eval.run");
@@ -376,7 +383,7 @@ export function OnlineDetail({ id }: { id: string }) {
       if (confirm === "delete") {
         await api.v2DeleteOnlineConfig(row.config_id);
         toast("success", t("v2.online.deleted", { logGroup: row.results_log_group }));
-        setParams({});
+        setParams({ tab: "online" });
         return;
       }
       await api.v2OnlineAction(row.config_id, confirm);
@@ -390,17 +397,26 @@ export function OnlineDetail({ id }: { id: string }) {
     }
   };
 
+  // Back returns to the opener (a list tab, an outside page), else the 持续评估 tab
+  const back = () => {
+    const outside = returnPath(location.state);
+    if (outside) navigate(outside);
+    else setParams(backTarget(location.state, "tab=online"));
+  };
+
   if (config.loading && !row) return <Spin />;
   if (config.error && !row) {
     return (
       <>
-        <FlowHeader title={id} onBack={() => setParams({})} />
+        <FlowHeader title={id} onBack={back} />
         <Alert tone="error">{config.error}</Alert>
       </>
     );
   }
   if (!row) return null;
   const mode = modeOf(row);
+  // experiment / canary configs: whose they are, what they score, the way to the owner
+  const note = parentNote(row);
 
   return (
     <>
@@ -414,7 +430,7 @@ export function OnlineDetail({ id }: { id: string }) {
             </Tag>
           </span>
         }
-        onBack={() => setParams({})}
+        onBack={back}
         end={
           <>
             <Button onClick={() => setTick((n) => n + 1)}>{t("v2.common.refresh")}</Button>
@@ -435,9 +451,19 @@ export function OnlineDetail({ id }: { id: string }) {
             )}
             {isEditable(row) && (
               <Button
+                disabled={!mayRun}
+                onClick={() => setParams({ view: "new", from: `online:${row.config_id}` }, { state: backState(location.search) })}
+                testId="v2-online-copy"
+              >
+                {t("v2.tasks.copy")}
+              </Button>
+            )}
+            {/* the editor hands this page's history state back to it on save / Back */}
+            {isEditable(row) && (
+              <Button
                 kind="primary"
                 disabled={busy || transient || !mayRun}
-                onClick={() => setParams({ view: "edit", id: row.config_id })}
+                onClick={() => setParams({ view: "edit", kind: "online", id: row.config_id }, { state: location.state })}
                 testId="v2-online-edit"
               >
                 {t("v2.common.edit")}
@@ -448,11 +474,18 @@ export function OnlineDetail({ id }: { id: string }) {
       />
       {row.failure_reason && <Alert tone="error">{row.failure_reason}</Alert>}
       {row.duplicate_enabled && <Alert tone="warn">{t("v2.online.duplicateWarn")}</Alert>}
-      {row.owner === "experiment" && (
-        <Alert action={<Link to="/v2/eval/experiments?mode=configuration" className="v2-link">{t("v2.online.openExperiments")}</Link>}>
-          {t("v2.online.experimentReadonly")}
+      {note && (
+        <Alert
+          action={
+            <Link to={parentLink(row) ?? "/v2/eval/experiments"} className="v2-link" data-testid="v2-online-parent-link">
+              {t(note.open)}
+            </Link>
+          }
+        >
+          {t(note.text, { name: note.name ?? "" })}
         </Alert>
       )}
+      {note?.leftover && <Alert tone="warn">{t(note.leftover)}</Alert>}
       {row.owner === "external" && (
         <Alert>
           {row.matched_agent ? t("v2.online.externalMatched", { name: row.matched_agent.name }) : t("v2.online.externalReadonly")}
@@ -464,7 +497,7 @@ export function OnlineDetail({ id }: { id: string }) {
             { label: t("v2.tasks.colName"), value: configName(row) },
             { label: "ID", value: <span className="mono">{row.config_id}</span> },
             { label: t("v2.tasks.colAgent"), value: agentLabel(row) },
-            { label: t("v2.online.colOwner"), value: <Tag tone={OWNER_TONE[row.owner]}>{t(`v2.online.owner.${row.owner}`)}</Tag> },
+            { label: t("v2.online.colOwner"), value: <Tag tone={OWNER_TONE[row.owner]}>{ownerLabel(t, row)}</Tag> },
             { label: t("v2.online.colMode"), value: t(`v2.online.mode.${mode}`) },
             {
               label: mode === "insights" ? t("v2.online.insightTypes") : t("v2.tasks.colEvaluators"),

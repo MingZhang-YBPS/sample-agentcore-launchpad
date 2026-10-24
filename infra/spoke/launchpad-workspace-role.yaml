@@ -600,10 +600,16 @@ Resources:
               # source (DescribeLogStreams + FilterLogEvents). None of
               # StartQuery's siblings (GetQueryResults, StopQuery,
               # DescribeLogGroups) accept a resource, and the account-level X-Ray
-              # setting has no ARN at all.
+              # setting has no ARN at all. Neither have
+              # application-signals:StartDiscovery and cloudtrail:ListChannels,
+              # which UpdateTraceSegmentDestination(CloudWatchLogs) calls as the
+              # caller (LIVE-OBSERVED 2026-10-23, spoke-use2; the rest of that
+              # chain is ApplicationSignalsDiscovery below).
               - Sid: Observability
                 Effect: Allow
                 Action:
+                  - application-signals:StartDiscovery
+                  - cloudtrail:ListChannels
                   - cloudwatch:GetMetricData
                   - cloudwatch:ListMetrics
                   - logs:CreateDelivery
@@ -614,6 +620,7 @@ Resources:
                   - logs:FilterLogEvents
                   - logs:GetDeliveryDestination
                   - logs:GetDeliverySource
+                  - logs:GetLogEvents
                   - logs:GetQueryResults
                   - logs:PutDeliveryDestination
                   - logs:PutDeliverySource
@@ -642,6 +649,12 @@ Resources:
                   - xray:GetIndexingRules
                   - xray:UpdateIndexingRule
                 Resource: "*"
+              # LIVE-OBSERVED (2026-10-23, spoke-use2): the span log group and its
+              # `default` stream are created under the CALLER's permissions, and
+              # logs:CreateLogGroup is checked against the bare group ARN (no `:*`)
+              # in a region where Transaction Search was never on — so both forms
+              # are listed. Scoped to the two groups the TransactionSearchXRayAccess
+              # resource policy names.
               - Sid: TransactionSearchLogGroups
                 Effect: Allow
                 Action:
@@ -649,7 +662,9 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutRetentionPolicy
                 Resource:
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:aws/spans"
                   - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:aws/spans:*"
+                  - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/application-signals/data"
                   - Fn::Sub: "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/application-signals/data:*"
               - Sid: TransactionSearchServiceLinkedRole
                 Effect: Allow
@@ -657,10 +672,13 @@ Resources:
                   - iam:GetRole
                 Resource:
                   - Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/AWSServiceRoleForCloudWatchApplicationSignals"
+              # GetChannel mirrors the scoping of the AWS managed
+              # CloudWatchApplicationSignalsFullAccess (2026-10-23, spoke-use2)
               - Sid: TransactionSearchCloudTrailChannel
                 Effect: Allow
                 Action:
                   - cloudtrail:CreateServiceLinkedChannel
+                  - cloudtrail:GetChannel
                 Resource:
                   - Fn::Sub: "arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:channel/aws-service-channel/application-signals/*"
 

@@ -42,6 +42,7 @@ from app.core.runtime_target import pip_platform_args
 from app.deployer import model_profile
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.input_contract import record_input_contract, stamp_input_contract
 from app.deployer.mounts import describe as describe_mounts
 from app.deployer.mounts import with_mounts_env
 from app.deployer.network import describe as describe_network
@@ -438,6 +439,11 @@ def _build_code_zip(
     s3_key = package_key(agent)
     ctx.workspace.client("s3").upload_file(str(final_zip), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
+    # the entrypoint opts into native attachments the same way generated code
+    # does; the stdio bridge never does (an MCP server takes no chat files)
+    record_input_contract(
+        ctx, "" if wrapper is not None else entry.read_text(encoding="utf-8", errors="replace")
+    )
     ctx.log(f"package {secs:.1f}s · {size_mb:.1f}MB → s3://{bucket}/{s3_key}")
     detail = f"code_zip · {size_mb:.1f}MB · s3 ✓"
     if installed:
@@ -702,6 +708,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # reaches this line too, so the snapshot is never skipped.
         inbound_auth_service.record_deployed_auth(row, resolved_auth)
         row.version = str(ready.get("agentRuntimeVersion", row.version or "1"))
+        stamp_input_contract(ctx, db, row)
         db.commit()
         # as_user return-URL allow-list on the runtime's auto-created workload
         # identity, reconciled on every deploy (create and redeploy)

@@ -2266,9 +2266,9 @@ def session_transcript(
             )
             if turns:
                 origin = "logs"
-    # Long-term records only make sense for chat sessions — eval traffic all
-    # shares the bare "default" actor, so its namespaces aggregate across
-    # every agent's runs and say nothing about this session.
+    # Long-term records only make sense for chat sessions — an eval scenario's
+    # actor lives for one replay (and legacy runs shared the bare "default"
+    # actor across every agent's runs), so a count would say nothing useful.
     long_term_records = None
     if row is not None and readable and long_term:
         try:

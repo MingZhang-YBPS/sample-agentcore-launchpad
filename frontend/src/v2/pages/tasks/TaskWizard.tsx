@@ -7,7 +7,7 @@ import { evalCostApi, usd } from "../../../lib/api/evalCost";
 import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { actorModelOptions, CLOUD_VALUE_PREFIX, defaultActorModel } from "../../../lib/evaluation";
-import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
+import { builtinsNotInCatalog, evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { useModelCatalog } from "../../../lib/model-catalog";
 import { adoptModelDefault, STATIC_MODEL_DEFAULTS, useModelDefaultsArrival } from "../../../lib/model-defaults";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
@@ -36,11 +36,11 @@ import { LogSourceFields } from "./LogSourceFields";
 import { LogStreamPicker } from "./LogStreamPicker";
 import { isPassiveSource, passiveEstimateBody } from "./passiveCost";
 import { SessionPicker } from "./SessionPicker";
+import { StrategySwitch } from "./StrategySwitch";
 
 type Source = "window" | "sessions" | "logs" | "dataset";
 /** What is evaluated: a platform agent, or CloudWatch telemetry with no agent behind it. */
 type Target = "agent" | "cloudwatch";
-type Strategy = "history" | "continuous";
 
 const LOOKBACKS = [1, 6, 24, 72, 168, 336];
 const SESSION_RANGE: V2Range = "7d";
@@ -58,7 +58,6 @@ interface Draft {
   logGroups: string[];
   mode: TaskMode;
   source: Source;
-  strategy: Strategy;
   lookbackHours: number;
   sessionIds: string[];
   /** sessions of the log streams picked for the 日志 source, listed over `logHours` */
@@ -68,8 +67,6 @@ interface Draft {
   dataset: string;
   /** the model that plays the user of a simulated-persona dataset */
   actorModelId: string;
-  sampling: number;
-  sessionTimeout: number;
   evaluators: string[];
   /** insight types, insights mode only */
   insights: string[];
@@ -88,15 +85,12 @@ const emptyDraft = (): Draft => ({
   logGroups: [],
   mode: "evaluators",
   source: "window",
-  strategy: "history",
   lookbackHours: 24,
   sessionIds: [],
   logSessionIds: [],
   logHours: 168,
   dataset: "",
   actorModelId: defaultActorModel(),
-  sampling: 10,
-  sessionTimeout: 15,
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
   insights: [...INSIGHT_TYPES],
   repeats: 1,
@@ -104,9 +98,9 @@ const emptyDraft = (): Draft => ({
 });
 
 /**
- * Prefill from `?from=run:<id>` / `?from=online:<id>` (copy), or from hand-off
- * params (`?agent=<id>&dataset=<id>&evaluators=<id,id,…>`, e.g. the architect
- * assistant's next steps).
+ * Prefill from `?from=run:<id>` (copy), or from hand-off params
+ * (`?agent=<id>&dataset=<id>&evaluators=<id,id,…>`, e.g. the architect assistant's
+ * next steps). A copy of an online config opens the continuous form (`OnlineEditor`).
  */
 async function seedDraft(from: string | null, handoff: Handoff, copySuffix: string): Promise<Draft> {
   if (from?.startsWith("run:")) {
@@ -123,18 +117,6 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
     if (name.startsWith("logs:")) return { ...base, source: "logs", logSessionIds: run.session_ids };
     return { ...base, source: "sessions", sessionIds: run.session_ids };
   }
-  if (from?.startsWith("online:")) {
-    const cfg = await api.v2OnlineConfig(from.slice(7));
-    return {
-      ...emptyDraft(),
-      name: `${cfg.description || cfg.name || cfg.config_id}${copySuffix}`.slice(0, 64),
-      agentId: cfg.agent_id ?? "",
-      strategy: "continuous",
-      sampling: cfg.sampling_percentage ?? 10,
-      sessionTimeout: cfg.session_timeout_minutes ?? 15,
-      evaluators: cfg.evaluators,
-    };
-  }
   const seeded: Draft = { ...emptyDraft(), agentId: handoff.agent ?? "" };
   if (handoff.evaluators.length) seeded.evaluators = handoff.evaluators;
   if (handoff.dataset) return { ...seeded, source: "dataset", dataset: handoff.dataset };
@@ -147,6 +129,7 @@ interface Handoff {
   evaluators: string[];
 }
 
+/** The one-off create form (`?view=new`): a batch evaluation run in two steps. */
 export function TaskWizard() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
@@ -192,6 +175,16 @@ export function TaskWizard() {
     if (seed.data && draft === null) setDraft(adoptActor(seed.data, modelDefaults?.actor_model_id));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- adoptActor reads refs/props only
   }, [seed.data, draft]);
+  // a copied run or a handoff can carry a built-in this region does not offer: it is
+  // not in the picker (so it could not be unticked) and would fail the whole batch
+  const [prunedEvaluators, setPrunedEvaluators] = useState<string[]>([]);
+  useEffect(() => {
+    if (!draft || !evaluators.data) return;
+    const dropped = builtinsNotInCatalog(draft.evaluators, evaluators.data.evaluators);
+    if (dropped.length === 0) return;
+    setDraft({ ...draft, evaluators: draft.evaluators.filter((id) => !dropped.includes(id)) });
+    setPrunedEvaluators((prev) => [...prev, ...dropped]);
+  }, [draft, evaluators.data]);
 
   const activeAgents = useMemo(() => (agents.data?.agents ?? []).filter((a) => a.status === "active"), [agents.data]);
   const agent = activeAgents.find((a) => a.id === draft?.agentId) ?? null;
@@ -218,7 +211,7 @@ export function TaskWizard() {
   // Computed before the early returns below, so the hook order never changes.
   const repeatable =
     !!draft && draft.target === "agent" && draft.source === "dataset" && draft.mode === "evaluators" &&
-    draft.strategy === "history" && !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
+    !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
   const estimate = useLoad(
     () =>
       repeatable && draft?.agentId
@@ -226,8 +219,9 @@ export function TaskWizard() {
         : Promise.resolve(null),
     `task-estimate:${repeatable}:${draft?.agentId}:${draft?.dataset}:${draft?.repeats}:${draft?.evaluators.join(",")}`,
   );
-  // eval-cost §1.1: a passive run and an online config are priced (and confirmed) too
-  const passiveBody = repeatable ? null : passiveEstimateBody(draft);
+  // eval-cost §1.1: a passive run is priced (and confirmed) too; this form only creates
+  // one-off runs — the continuous (online) config is priced by `OnlineEditor`
+  const passiveBody = repeatable || !draft ? null : passiveEstimateBody({ ...draft, strategy: "history", sampling: 0 });
   const passiveKey = passiveBody ? JSON.stringify(passiveBody) : "none";
   const passiveEstimate = useLoad(
     () => (passiveBody ? evalCostApi.estimate(passiveBody) : Promise.resolve(null)),
@@ -284,48 +278,32 @@ export function TaskWizard() {
     setSubmitting(true);
     setError(null);
     try {
-      if (draft.strategy === "continuous" && !insights) {
-        const cfg = await api.v2CreateOnlineConfig({
-          agent_id: draft.agentId,
-          mode: "scores",
-          evaluators: draft.evaluators,
-          sampling_percentage: draft.sampling,
-          session_timeout_minutes: draft.sessionTimeout,
-          filters: [],
-          description: draft.name.trim().slice(0, 200),
-          enable_on_create: true,
-          confirm_cost: draft.confirmCost,
-        });
-        toast("success", t("v2.tasks.createdOnline"));
-        // the new task's Back returns to where the wizard was opened from
-        setParams({ view: "detail", kind: "online", id: cfg.config_id }, { state: location.state });
-      } else {
-        const scope =
-          draft.source === "window"
-            ? { lookback_hours: draft.lookbackHours }
-            : draft.source === "sessions"
-              ? { session_ids: draft.sessionIds }
-              : draft.source === "logs"
-                ? { session_ids: draft.logSessionIds, session_source: "logs" as const }
-                : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
-                ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
-                : { dataset_id: draft.dataset, ...(simulated ? { actor_model_id: draft.actorModelId } : {}) };
-        const run = await withStorageConfirm((confirm) => api.v2CreateRun({
-          ...(draft.target === "cloudwatch"
-            ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
-            : { agent_id: draft.agentId }),
-          name: draft.name.trim(),
-          description: draft.description || undefined,
-          ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
-          ...scope,
-          ...(repeatable ? { repeats: draft.repeats } : {}),
-          // a replay and a passive run (session_ids / lookback_hours) alike
-          ...(!insights && (repeatable || isPassiveSource(draft.source)) ? { confirm_cost: draft.confirmCost } : {}),
-          ...storageFlag(confirm),
-        }));
-        toast("success", t("v2.tasks.createdRun"));
-        setParams({ view: "detail", kind: "run", id: run.id }, { state: location.state });
-      }
+      const scope =
+        draft.source === "window"
+          ? { lookback_hours: draft.lookbackHours }
+          : draft.source === "sessions"
+            ? { session_ids: draft.sessionIds }
+            : draft.source === "logs"
+              ? { session_ids: draft.logSessionIds, session_source: "logs" as const }
+              : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
+              ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
+              : { dataset_id: draft.dataset, ...(simulated ? { actor_model_id: draft.actorModelId } : {}) };
+      const run = await withStorageConfirm((confirm) => api.v2CreateRun({
+        ...(draft.target === "cloudwatch"
+          ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
+          : { agent_id: draft.agentId }),
+        name: draft.name.trim(),
+        description: draft.description || undefined,
+        ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
+        ...scope,
+        ...(repeatable ? { repeats: draft.repeats } : {}),
+        // a replay and a passive run (session_ids / lookback_hours) alike
+        ...(!insights && (repeatable || isPassiveSource(draft.source)) ? { confirm_cost: draft.confirmCost } : {}),
+        ...storageFlag(confirm),
+      }));
+      toast("success", t("v2.tasks.createdRun"));
+      // the new task's Back returns to where the wizard was opened from
+      setParams({ view: "detail", kind: "run", id: run.id }, { state: location.state });
     } catch (err) {
       const refusal = costRefusal(err);
       if (refusal?.kind === "confirm") set({ confirmCost: false });
@@ -351,12 +329,8 @@ export function TaskWizard() {
     set({
       target,
       source: target === "cloudwatch" && (draft.source === "sessions" || draft.source === "dataset") ? "window" : draft.source,
-      strategy: target === "cloudwatch" ? "history" : draft.strategy,
       logSessionIds: [],
     });
-  const chooseSource = (source: Source) => set({ source, strategy: source === "window" ? draft.strategy : "history" });
-  // continuous insights are an online-evaluation config with a report schedule — not a task
-  const chooseMode = (mode: TaskMode) => set({ mode, strategy: mode === "insights" ? "history" : draft.strategy });
   const toggleInsight = (id: string) =>
     set({ insights: INSIGHT_TYPES.filter((x) => (x === id ? !draft.insights.includes(id) : draft.insights.includes(x))) });
   // too few sessions to cluster — the batch would come back with no trees
@@ -389,12 +363,14 @@ export function TaskWizard() {
               </Button>
             ) : (
               <Button kind="primary" disabled={submitting} onClick={() => void submit()} testId="v2-task-submit">
-                {draft.strategy === "continuous" ? t("v2.tasks.submitOnline") : t("v2.tasks.submitRun")}
+                {t("v2.tasks.submitRun")}
               </Button>
             )}
           </>
         }
       />
+      {/* the switch carries only the agent; a CloudWatch target has none */}
+      {step === 0 && <StrategySwitch value="history" agentId={cloudwatch ? null : draft.agentId} />}
       {error && <Alert tone="error">{error}</Alert>}
 
       {step === 0 && (
@@ -442,14 +418,14 @@ export function TaskWizard() {
                     title={t("v2.tasks.modeEvaluators")}
                     desc={t("v2.tasks.modeEvaluatorsDesc")}
                     on={draft.mode === "evaluators"}
-                    onClick={() => chooseMode("evaluators")}
+                    onClick={() => set({ mode: "evaluators" })}
                     testId="v2-task-mode-evaluators"
                   />
                   <OptionCard
                     title={t("v2.tasks.modeInsights")}
                     desc={t("v2.tasks.modeInsightsDesc")}
                     on={draft.mode === "insights"}
-                    onClick={() => chooseMode("insights")}
+                    onClick={() => set({ mode: "insights" })}
                     testId="v2-task-mode-insights"
                   />
                 </div>
@@ -478,7 +454,7 @@ export function TaskWizard() {
                   on={draft.source === key}
                   disabled={disabled}
                   badge={disabled ? <Tag tone="gray">{t("v2.tasks.cw.needsAgent")}</Tag> : undefined}
-                  onClick={() => chooseSource(key)}
+                  onClick={() => set({ source: key })}
                   testId={`v2-task-src-${key}`}
                 />
               ))}
@@ -487,45 +463,9 @@ export function TaskWizard() {
             <div className="v2-grid-2" style={{ marginTop: 20 }}>
               <div>
                 <h3 className="v2-sec-title" style={{ fontSize: 14 }}>
-                  {t("v2.tasks.strategy")}
+                  {t("v2.tasks.scope")}
                 </h3>
-                <div className="v2-options" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-                  <OptionCard
-                    title={t("v2.tasks.strategyHistory")}
-                    desc={t(draft.source === "dataset" ? "v2.tasks.strategyReplayDesc" : "v2.tasks.strategyHistoryDesc")}
-                    on={draft.strategy === "history"}
-                    onClick={() => set({ strategy: "history" })}
-                    testId="v2-task-strategy-history"
-                  />
-                  <OptionCard
-                    title={t("v2.tasks.strategyContinuous")}
-                    desc={t("v2.tasks.strategyContinuousDesc")}
-                    on={draft.strategy === "continuous"}
-                    disabled={draft.source !== "window" || draft.mode === "insights" || cloudwatch}
-                    onClick={() => set({ strategy: "continuous" })}
-                    testId="v2-task-strategy-continuous"
-                  />
-                </div>
-                {draft.mode === "insights" && draft.source === "window" && (
-                  <p className="v2-muted" style={{ marginTop: 8 }}>
-                    {t("v2.tasks.insightsNoContinuous")}
-                  </p>
-                )}
-              </div>
-              <div>
-                <h3 className="v2-sec-title" style={{ fontSize: 14 }}>
-                  {draft.strategy === "continuous" ? t("v2.tasks.sampling") : t("v2.tasks.scope")}
-                </h3>
-                {draft.strategy === "continuous" ? (
-                  <div className="v2-form cols-2">
-                    <Field label={t("v2.tasks.samplingRate")} hint={t("v2.tasks.samplingHint")}>
-                      <input className="v2-input" type="number" min={0.01} max={100} step={1} value={draft.sampling} onChange={(e) => set({ sampling: Math.max(0.01, Math.min(100, Number(e.target.value) || 10)) })} />
-                    </Field>
-                    <Field label={t("v2.tasks.sessionTimeout")} hint={t("v2.tasks.sessionTimeoutHint")}>
-                      <input className="v2-input" type="number" min={1} max={1440} value={draft.sessionTimeout} onChange={(e) => set({ sessionTimeout: Math.max(1, Math.min(1440, Number(e.target.value) || 15)) })} />
-                    </Field>
-                  </div>
-                ) : draft.source === "window" || draft.source === "logs" ? (
+                {draft.source === "window" || draft.source === "logs" ? (
                   <Field
                     label={draft.source === "logs" ? t("v2.tasks.logs.window") : t("v2.tasks.lookback")}
                     hint={draft.source === "logs" ? t("v2.tasks.logs.picked", { count: draft.logSessionIds.length }) : t("v2.tasks.lookbackHint")}
@@ -692,8 +632,6 @@ export function TaskWizard() {
                 selected={draft.sessionIds}
                 onChange={(sessionIds) => set({ sessionIds })}
               />
-            ) : draft.strategy === "continuous" ? (
-              <Alert>{t("v2.tasks.previewContinuous", { rate: draft.sampling })}</Alert>
             ) : (
               <>
                 <Alert>{t("v2.tasks.previewWindow", { count: windowSessions.length, hours: draft.lookbackHours })}</Alert>
@@ -820,6 +758,11 @@ export function TaskWizard() {
       {step === 1 && draft.mode === "evaluators" && (
         <Card title={t("v2.tasks.pickEvaluators")} sub={t("v2.tasks.pickedCount", { count: draft.evaluators.length, max: MAX_EVALUATORS })}>
           <CustomUnavailableNote marker={evaluators.data?.custom_unavailable} />
+          {prunedEvaluators.length > 0 && (
+            <Alert tone="warn">
+              {t("v2.tasks.prunedEvaluators", { names: prunedEvaluators.map((id) => evaluatorLabel(t, id)).join(", ") })}
+            </Alert>
+          )}
           <div className="v2-toolbar">
             <FilterSelect
               label={t("v2.evaluators.colLevel")}

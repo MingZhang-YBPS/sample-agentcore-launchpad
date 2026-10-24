@@ -38,6 +38,7 @@ def run_simulated_scenario(
     actor_model_id: str,
     protocol: str = "http",
     runtime_user_id: str | None = None,
+    actor_id: str = "default",
     invoke_text: Any = None,
 ) -> str:
     """Drive one persona scenario to completion; returns the runtime session id.
@@ -72,7 +73,8 @@ def run_simulated_scenario(
             result = invoke_text(prompt, state["session_id"])
         elif method == "harness":
             result = hc.invoke_harness_text(
-                data_client, agent_arn, prompt, session_id=state["session_id"]
+                data_client, agent_arn, prompt, session_id=state["session_id"],
+                actor_id=actor_id,
             )
         elif protocol == "a2a":  # JSON-RPC runtimes reject the {prompt} payload
             result = rt.invoke_a2a_text(
@@ -84,6 +86,7 @@ def run_simulated_scenario(
                 agent_arn,
                 prompt,
                 session_id=state["session_id"],
+                actor_id=actor_id,
                 runtime_user_id=runtime_user_id,
             )
         state["session_id"] = result["session_id"]

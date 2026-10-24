@@ -68,8 +68,61 @@ export function configName(row: OnlineEvalConfigRow): string {
   return row.name ?? row.config_id;
 }
 
+/** The owning agent: the ledger row's, else the external match (≈), else the agent of
+ *  the experiment / canary that owns the config. */
 export function agentLabel(row: OnlineEvalConfigRow): string {
-  return row.agent_name ?? (row.matched_agent ? `≈ ${row.matched_agent.name}` : "—");
+  return row.agent_name ?? (row.matched_agent ? `≈ ${row.matched_agent.name}` : (row.parent?.agent_name ?? "—"));
+}
+
+/** The owner tag: an experiment-owned config names its kind (A/B 实验 / 金丝雀) — the
+ *  generic "A/B 实验 / 金丝雀" only when the backend sent no `parent`. */
+export function ownerLabel(t: TFunction, row: OnlineEvalConfigRow): string {
+  if (row.owner === "experiment" && row.parent) return t(`v2.online.ownerKind.${row.parent.kind}`);
+  return t(`v2.online.owner.${row.owner}`);
+}
+
+/** Where an experiment-owned config's owner lives: the experiment / canary detail, or
+ *  its list tab when the record is gone (null for the other owners). */
+export function parentLink(row: OnlineEvalConfigRow): string | null {
+  if (row.owner !== "experiment") return null;
+  const parent = row.parent;
+  if (parent?.kind === "canary") {
+    return parent.id ? `/v2/eval/experiments?${new URLSearchParams({ mode: "canary", canary: parent.id })}` : "/v2/eval/experiments?mode=canary";
+  }
+  return parent?.id ? `/v2/eval/experiments?${new URLSearchParams({ view: "detail", id: parent.id })}` : "/v2/eval/experiments?mode=configuration";
+}
+
+/** An experiment-owned config whose owner was cleaned up or is gone: the cleanup that
+ *  should have deleted it left it behind. */
+export function isLeftover(row: OnlineEvalConfigRow): boolean {
+  if (row.owner !== "experiment") return false;
+  const parent = row.parent;
+  return !parent || !parent.id || parent.status === "cleaned";
+}
+
+/** The read-only alert of an experiment-owned config, as i18n keys: who created it and
+ *  which traffic it scores (`text`, with `name` when the record still exists), the link
+ *  label (`open`, to the record or to its list tab) and the leftover line, if any. */
+export interface ParentNote {
+  text: string;
+  name: string | null;
+  open: string;
+  leftover: string | null;
+}
+
+export function parentNote(row: OnlineEvalConfigRow): ParentNote | null {
+  if (row.owner !== "experiment") return null;
+  const parent = row.parent;
+  const kind = parent?.kind ?? "experiment";
+  const known = Boolean(parent?.id);
+  // a canary config scores one arm; an experiment's `_oe1` both (a pre-split `_oe2` the challenger)
+  const scope = `.${parent?.arm ?? "both"}`;
+  return {
+    text: `v2.online.parent.${kind}${known ? "" : "Gone"}${scope}`,
+    name: known ? parent?.name || parent?.id || null : null,
+    open: `v2.online.parent.${known ? "open" : "openList"}.${kind}`,
+    leftover: isLeftover(row) ? `v2.online.parent.leftover.${kind}` : null,
+  };
 }
 
 export function insightLabel(t: TFunction, id: string): string {
@@ -177,6 +230,17 @@ export function draftFromRow(row: OnlineEvalConfigRow): OnlineDraft {
   };
 }
 
+/** Longest description AWS accepts on a config. */
+export const MAX_DESCRIPTION = 200;
+
+/** The create form's start for a copy of `row` (`?view=new&from=online:<id>`): its agent,
+ *  mode, evaluators / insights, frequencies, sampling, timeout and filters, and its
+ *  description (else its name) with the copy suffix, cut to `MAX_DESCRIPTION`. */
+export function copyDraft(row: OnlineEvalConfigRow, copySuffix: string): { agentId: string; draft: OnlineDraft } {
+  const description = `${row.description?.trim() || configName(row)}${copySuffix}`.slice(0, MAX_DESCRIPTION);
+  return { agentId: row.agent_id ?? "", draft: { ...draftFromRow(row), description } };
+}
+
 /** First problem of the draft (null ⇒ valid). */
 export function validateDraft(t: TFunction, d: OnlineDraft): string | null {
   const sampling = Number(d.sampling);
@@ -194,7 +258,7 @@ export function validateDraft(t: TFunction, d: OnlineDraft): string | null {
     if (f.kind === "string" && !f.value) return t("v2.online.err.filterValue");
     if (f.kind === "number" && (f.value.trim() === "" || !Number.isFinite(Number(f.value)))) return t("v2.online.err.filterValue");
   }
-  if (d.description.length > 200) return t("v2.online.err.description");
+  if (d.description.length > MAX_DESCRIPTION) return t("v2.online.err.description");
   return null;
 }
 

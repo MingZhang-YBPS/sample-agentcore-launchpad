@@ -573,6 +573,46 @@ export interface AgentSourceInfo {
   image_digest?: string | null;
 }
 
+/** GET /api/agents/{id}/runtime-logs — one page of the Runtime's stdout/stderr. */
+export type RuntimeLogsRange = "1h" | "6h" | "24h" | "7d";
+
+export interface RuntimeLogsParams {
+  range?: RuntimeLogsRange;
+  session_id?: string;
+  keyword?: string;
+  include_otel?: boolean;
+  next_token?: string;
+  limit?: number;
+}
+
+export interface RuntimeLogEvent {
+  timestamp: string | null;
+  stream: string;
+  session_id: string | null;
+  message: string;
+}
+
+export interface RuntimeLogsPage {
+  agent_id: string;
+  range: RuntimeLogsRange;
+  session_id: string | null;
+  keyword: string | null;
+  include_otel: boolean;
+  log_group: string | null;
+  cloudwatch_url: string | null;
+  /** oldest first */
+  events: RuntimeLogEvent[];
+  next_token: string | null;
+  /** stream = the session's own streams; content = events naming it (Harness) */
+  session_match: "stream" | "content" | null;
+  /** sessions owning a stream in the window (first unfiltered page only) */
+  sessions: string[];
+  /** lines of a stream named after no session that name no visible session themselves
+   *  (only on an agent that can host private sessions; null = withheld under a keyword) */
+  hidden_unattributed: number | null;
+  unavailable_reason: "no_runtime" | "log_group_not_found" | "access_denied" | null;
+}
+
 /** One row of `GET /api/agents/{id}/snapshots` (T18); `spec` only on the single-fetch. */
 export interface SpecSnapshotInfo {
   seq: number;
@@ -3899,6 +3939,21 @@ export interface JudgeModelFallback {
 
 export type OnlineEvalOwner = "agent" | "experiment" | "external";
 
+/** The record behind an `owner: "experiment"` config, resolved from the ledger by the
+ *  8-char id prefix in its name: `exp_<id8>_…` = a configuration A/B experiment (its
+ *  `_oe1` scores both arms → `arm: null`), `can_<id8>_oec` / `_oet` = a runtime canary's
+ *  control / treatment arm. `agent_name` = the experiment's agent / the canary's
+ *  champion. A record gone from the ledger keeps `kind` + `arm` (read off the name)
+ *  with `id` / `name` / `status` / `agent_name` null. */
+export interface OnlineEvalParent {
+  kind: "experiment" | "canary";
+  id: string | null;
+  name: string | null;
+  status: string | null;
+  agent_name: string | null;
+  arm: "control" | "treatment" | null;
+}
+
 /** `scores` = evaluators judge each sampled session; `insights` = sampled
  *  sessions are clustered into recurring failure / intent / summary reports.
  *  Derived server-side (`insights` non-empty → insights); immutable after create. */
@@ -3940,6 +3995,8 @@ export interface OnlineEvalConfigRow {
   agent_id: string | null;
   agent_name: string | null;
   matched_agent: { id: string; name: string } | null;
+  /** Set on `owner: "experiment"` rows only, null on every other owner. */
+  parent: OnlineEvalParent | null;
   detailed: boolean;
   mode: OnlineEvalMode;
   evaluators: string[];
@@ -6510,6 +6567,10 @@ export const api = {
       `/api/alerts/evaluate?notify=${notify}`,
       { method: "POST" },
     ),
+  /** One page of the agent's Runtime stdout/stderr; the log group is server-derived. */
+  agentRuntimeLogs: (id: string, query: string) =>
+    request<RuntimeLogsPage>(`/api/agents/${encodeURIComponent(id)}/runtime-logs${query}`),
+  /** The agent's spec snapshots (one per publish), newest first, without specs. */
   agentSnapshots: (id: string) =>
     request<{ snapshots: SpecSnapshotInfo[] }>(`/api/agents/${encodeURIComponent(id)}/snapshots`),
   snapshotDiff: (id: string, fromSeq: number, toSeq: number) =>
@@ -7821,6 +7882,10 @@ export const v2KnowledgeApi = {
       method: "POST",
       body: JSON.stringify({ text, number_of_results: numberOfResults }),
     }),
+  /** A presigned GET (≈5 min) for a document a retrieval result cites, by its S3
+   *  address; `404 kb.source_not_found` when no visible KB's data source holds it. */
+  sourceLink: (uri: string) =>
+    request<KbSourceLink>(`/api/knowledge-bases/source?uri=${encodeURIComponent(uri)}`),
 };
 
 // ---- Agent-DLC: criteria, golden sets, calibration, the gate, watch ----
@@ -8170,6 +8235,15 @@ export interface ReleasePolicyView {
   policy: Record<string, unknown>;
   effective: Record<string, unknown>;
 }
+
+export interface KbSourceLink {
+  url: string;
+  name: string;
+  kb_id: string;
+  kb_name: string | null;
+  expires_in: number;
+}
+
 // ---- coding agent (remote web IDE over the platform coding runtime) ----
 /* `/api/coding/*` — parent task 10-19-coding-agent design §7.3. A repo is private
  * to its creator: a foreign or missing id is `404 coding.repo_not_found`. Every

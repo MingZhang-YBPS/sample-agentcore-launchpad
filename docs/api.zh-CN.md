@@ -654,12 +654,15 @@ created_at, updated_at}`。webhook URL 只写不读——响应只带 `has_webho
 | `POST` | `/api/knowledge-bases/{kb_id}/query` | 检索 Playground——`{text, number_of_results?}`（1–100，默认 8）→ 带 `managedSearchConfiguration` 的 `Retrieve`，响应 `{results}`，元素为 `{text, score, location_uri, metadata}` |
 | `POST` | `/api/knowledge-bases/{kb_id}/migrate-to-project` | 管理员（数据）。把已隔离项目的现有知识库迁到项目自己的角色、S3 前缀（`projects/<pid>/kb/<kb_id>/`）与标签：复制上传文件、切换角色（`UpdateKnowledgeBase`）、打标签，并在新前缀上创建数据源并同步 → `{kb_id, project_id, role_arn, prefix, copied, old_data_sources[], data_source, sync?, sync_error?, state: syncing\|done}`。幂等且只增不减：旧数据源在 `finish` 之前继续服务。其他项目的知识库 → `404 kb.not_found`；项目未隔离 → `409 project.isolation_disabled`；服务拒绝改角色 → `409 kb.role_update_unsupported`（在项目内重建该知识库） |
 | `POST` | `/api/knowledge-bases/{kb_id}/migrate-to-project/finish` | 管理员（数据）。新数据源最近一次同步为 `COMPLETE` 后：删除旧的 `kb/<kb_id>/` 数据源与共享角色上该知识库的内联策略 → `{kb_id, deleted_data_sources[], state: done}`。旧对象保留。`409 kb.not_migrated`（先迁移）、`409 kb.migration_syncing`（等待同步完成） |
+| `GET` | `/api/knowledge-bases/source?uri=` | 为检索结果引用的文档签发预签名 GET（5 分钟）——`uri` 是它的 S3 地址（`s3://…`，或 `Retrieve` 返回的 `https://<bucket>.s3.<region>.amazonaws.com/…` 形式）。只有对象位于调用者可见的托管知识库数据源内才签发；响应 `{url, name, kb_id, kb_name, expires_in}`，文本类文档以 `text/plain` 返回。控制台对话里的引用链接和 Playground 的来源标签都经它打开 |
 | `POST` | `/api/knowledge-bases/ensure-gateway` | 按名字「不存在才创建」共享的 `launchpad-kb-gw` MCP 网关，并把 `{id, arn, url}` 持久化到工作区。幂等；harness 部署路径调用的是同一个 helper，因此这条路由只用于提前预置网关 |
 
 错误码：`kb.not_found`（404——未知 id，或该知识库不是 MANAGED）、`kb.ds_not_found`
 （404）、`kb.has_attached_agents`（409，阻塞的 Agent 名在 `detail.agents` 里）、
 `kb.delete_conflict`（409——知识库仍在 `CREATING`）、`kb.no_upload_target`（409）、
-`kb.no_files`（400——表单里没有上传部件）、`kb.sync_not_ready`（409——
+`kb.no_files`（400——表单里没有上传部件）、`kb.source_unsupported`（400——不是 S3 地址）、
+`kb.source_not_found`（404——可见知识库的数据源里都没有它）、`kb.source_missing`（404——
+对象已删除）、`kb.source_unreadable`（502——后端读不到该对象）、`kb.sync_not_ready`（409——
 `StartIngestionJob` 抛出 `ValidationException` 或 `ConflictException`：数据源仍在预置，
 或已有同步在跑）、`kb.bucket_required` / `kb.invalid_bucket` / `kb.invalid_prefix` /
 `kb.invalid_source`（400——数据源校验）、`kb.query_failed`（502——知识库侧检索失败，
@@ -910,6 +913,7 @@ tools/toolkits/skills/knowledge_bases 与 `a2a` 协议。部署时服务端会�
 | `GET` | `/api/agents/{agent_id}/mcp` | member——仅限 MCP 服务器（`spec.protocol == "mcp"`），否则 `409 agent.not_mcp_server`：`{target_name, target_id, client_id, gateway_id, endpoint, target_status, status_reasons[], tools[{name, description}], tools_error}`——实时读回网关目标（AWS 上已不存在时为 `MISSING`），以及智能体经网关看到的工具（`<target>___<tool>`）；不返回任何密钥。另带工具审批闸门 `review {state: none\|reviewing\|approved\|rejected, open_review_id, approved_review_id, approved_hash, live_hash, drift}`（见下文“控制台 MCP 工具审批 API”）：`live_hash` 是实时列出的工具清单的哈希（目标不是 `READY` 时为 null），与 `approved_hash` 不同时 `drift` 为 true。此读取不记录任何东西，记录由 `POST /api/mcp-servers/{agent_id}/reviews/check` 完成。另带服务器运维状态（§15.7、§15.8）：`qualifier`（`DEFAULT` 跟随每个新版本，回滚后为固定的 `live`）、`live_version`、`health {status: healthy\|drift\|failing\|withheld, checked_at, tool_count, error, consecutive_failures, alert, review_id, repointed}`（最近一次每小时 `mcp.health` 检查或 `POST …/health` 的结果）、`operation {kind: rollback\|scaffold, status: running\|succeeded\|failed, version?, actor, error, started_at, completed_at, results?}`，以及 `rollback_versions[{version, review_id, decided_at}]`（各运行时版本的已批准工具清单，最新在前）。`endpoint` 带当前的 qualifier |
 | `GET` | `/api/agents/{agent_id}/network` | 成员——Agent 的运行网络（projects §12.11）：`{agent_id, mode: PUBLIC\|VPC, profile, vpc, enis}`。PUBLIC 以及配置档出现之前的内联网络 `profile` 为 `null`；否则为 `{id, name, vpc_id, subnet_ids[], security_group_ids[], internet, status, checked_at, archived, blocking, warnings}`（上次预检的阻断项 / 警告数），Workspace 已没有该配置时为 `{id, missing: true}`。`vpc` 是解析后的 `{subnets[], security_groups[]}`。`enis` 为 `{status: ok, scope: "profile", count, in_use, interfaces[{id, subnet_id, availability_zone, status, private_ip, description}]}`，按配置档列出（同一组子网与安全组中的所有 Agent 共享这些 ENI）；Workspace 角色无法读取 ENI 时（较旧的 spoke 模板）为 `{status: unavailable, error}`。其他项目的 Agent 返回 `404 agent.not_found` |
 | `GET` | `/api/agents/{agent_id}/conversions` | 成员——`{source: {id, name, method, status}, conversions: [agent…]}`：由该 Agent 转换出的 **Runtime 孪生**（`POST …/convert` 会在新的 `-rt` Agent 上标记 `spec.source_harness.agent_id`），最新在前，每行是普通的 Agent 投影加上它最近一次的 `deployment`。纯账本读取（不调用 AWS）；已删除的孪生不列出；来源不存在或已删除 → 404 `agent.not_found`。助手的 NEXT STEPS 用它在孪生 `active` 后切换目标，并在刷新页面后重新找到孪生 |
+| `GET` | `/api/agents/{agent_id}/runtime-logs` | 成员——Runtime 的 stdout/stderr（Agent 详情 · 运行日志）。查询参数：`range`（`1h`\|`6h`\|`24h`\|`7d`，默认 `1h`）、`session_id`（与可观测性相同的会话 ID 格式）、`keyword`（≤128，作为带引号的 `FilterLogEvents` 词项）、`include_otel`（默认 `false`：丢弃共享的 `otel-rt-logs` 流）、`limit`（≤200，默认 100）、`next_token`。返回 `{log_group, cloudwatch_url, events[{timestamp, stream, session_id, message}], next_token, session_match: stream\|content\|null, sessions[], hidden_unattributed, unavailable_reason: null\|no_runtime\|log_group_not_found\|access_denied, …}`——事件按时间正序；日志组始终由台账行推导（`/aws/bedrock-agentcore/runtimes/<resource_id>-DEFAULT`，Harness 按前缀找到其后端 runtime 的日志组），绝不接受调用方传入；指定会话时读取以该会话命名的流，Harness 的流不含会话 ID，则改为匹配包含该 ID 的事件；`next_token` 固定首页的时间窗口；其他主体的私有会话返回 404，其事件也会被过滤；在可能承载其他主体私有会话的 Agent 上（系统预置 Agent，或助手会话所发往的预置 Agent），不以会话命名的流（Harness 的流、`otel-rt-logs`）中的事件，仅当其内容指明调用方可见的会话（OTel `session.id` / 应用日志 `sessionId`；`"-"`、空值、`null`、`none` 视为无会话）时才显示，因此这类 Agent 的 print 类 stdout 不会显示——`hidden_unattributed` 统计本页丢弃的行数（指定 `keyword` 时为 `null`：行数会暴露哪些被隐藏的行包含该关键词）；其他 Agent 照常显示这些行，计数为 `0`；`sessions`（仅首个未过滤页）列出窗口内拥有日志流的会话。不改变任何状态 |
 
 错误码:`agent.not_found`(404,未知 id 或其他 workspace 的 Agent)、`agent.no_resource`(409,该行没有可查询的
 AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Runtime 也非 Harness 的形态;`message` 即面板展示的
@@ -995,7 +999,7 @@ Pipeline 的数据源也可以读取 **CloudWatch 日志组**（`source.type = "
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/eval/evaluators` | `{evaluators[], builtin_count}`——先是本地内置目录（`source: builtin`，轨迹匹配器标 `requires_ground_truth`），再是账户 `ListEvaluators` 的行（`source: third_party \| custom`、`evaluator_type`、`provider`、`status`）。自定义行带 `definition: judge \| derived \| code`（由 `evaluatorType` 推导——列表不含配置）。账号列举失败时仍返回 200，仅含内置评估器，并附 `custom_unavailable: {code, message}`（`aws.*`、`workspace.assume_role_failed` 或 `evaluators.list_failed`；通用消息，绝不回显 AWS 文本）；成功时无此键 |
+| `GET` | `/api/eval/evaluators` | `{evaluators[], builtin_count}`——先是本地内置目录（`source: builtin`，轨迹匹配器标 `requires_ground_truth`；列举成功且其中含内置评估器时，只保留本区域实际提供的——仍在上线中的已文档化内置评估器不会列出，因为 `StartBatchEvaluation` 会拒绝引用它的整个运行），再是账户 `ListEvaluators` 的行（`source: third_party \| custom`、`evaluator_type`、`provider`、`status`）。自定义行带 `definition: judge \| derived \| code`（由 `evaluatorType` 推导——列表不含配置）。账号列举失败时仍返回 200，仅含内置评估器，并附 `custom_unavailable: {code, message}`（`aws.*`、`workspace.assume_role_failed` 或 `evaluators.list_failed`；通用消息，绝不回显 AWS 文本）；成功时无此键 |
 | `POST` | `/api/eval/evaluators` | 创建 → 201 `{evaluator_id, arn}`。公共字段：`name`（`^[a-zA-Z][a-zA-Z0-9_]{0,47}$`）、`description`。**评审**：`instructions`（10–4000 字符，至少一个 `{placeholder}`，否则 422 `evaluator.missing_placeholder`）、`rating_scale[≥2]`（默认 pass/fail）、`model_id`、`level`（TOOL_CALL \| TRACE \| SESSION，默认 TRACE）。**派生**：`base_evaluator_id`（`Builtin.*` \| `ThirdParty.*`；不存在 → 400 `evaluator.base_not_found`）、`model_id`；级别取自基础评估器。**代码评估器**：`lambda_arn`（`arn:aws[-partition]:lambda:<region>:<account>:function:<name>[:qualifier]`）、`lambda_timeout_s` 1–300（默认 60）、`level`；Lambda 必须与 workspace 同区域，否则 422 `evaluator.lambda_region_mismatch`（`detail: {lambda_region, workspace_region}`）。派生或代码载荷携带 `rating_scale` → 400 `evaluator.rating_scale_not_allowed`。任何定义在 `CreateEvaluator` 上都必须带 `level` |
 | `GET` | `/api/eval/evaluators/{evaluator_id}` | `{id, name, level, description, definition, instructions, rating_scale, model_id, base_evaluator_id, lambda_arn, lambda_timeout_s, evaluator_type, provider, status, shared_from?}`（其他项目借给本项目的评估器带 `shared_from {project_id, name, access}`，§11.2）——其他定义的字段为空/null（代码评估器的 `instructions: ""`、`rating_scale: []`、`model_id: null`） |
 | `PUT` | `/api/eval/evaluators/{evaluator_id}` | 全量配置替换（`UpdateEvaluator` 接收完整配置，因此每个字段都要回传），载荷与创建相同但不含 `name` → 返回刷新后的详情。载荷必须与评估器**当前**定义一致：用评审/派生载荷更新代码评估器，或用代码载荷更新评审/派生评估器 → 400 `evaluator.definition_mismatch`（`detail: {current, payload}`）——评估器绝不会被转换。托管 id → 400 `evaluator.builtin_immutable` |
@@ -1193,13 +1197,13 @@ AWS Dataset，各有不可变版本。样本出处记录在 `metadata.dlc`（`ca
 
 `/api/eval/online/*` 管理 AgentCore **在线评估配置**:按采样比例持续给真实会话打分。AWS 是唯一事实来源,
 ledger 只存标识。列表返回 workspace 账号内全部配置并按 `owner` 归类:`agent`(本控制台为 agent 创建)、
-`experiment`(`exp_*`/`can_*` 实验 arm,只读)、`external`(其他来源)。
+`experiment`(`exp_*`/`can_*`,归属于 A/B 实验或金丝雀,只读,见 `parent`)、`external`(其他来源)。
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
-| `GET` | `/api/eval/online` | `{configs, total}`:全部配置,含 `owner`、双状态、`failure_reason`、evaluators、采样率、超时、`matched_agent`、`duplicate_enabled`、`results_log_group` |
+| `GET` | `/api/eval/online` | `{configs, total}`:全部配置,含 `owner`、双状态、`failure_reason`、evaluators、采样率、超时、`matched_agent`、`parent`（见下）、`duplicate_enabled`、`results_log_group` |
 | `POST` | `/api/eval/online` | 为活跃 agent 创建:`{agent_id, mode: scores\|insights(默认 scores), evaluators[1..10](scores 模式), insights[1..3] ⊆ Builtin.Insight.FailureAnalysis\|UserIntent\|ExecutionSummary + clustering_frequencies[0..3] ⊆ DAILY\|WEEKLY\|MONTHLY(insights 模式), sampling_percentage 0.01–100(省略 → scores 10 / insights 100), session_timeout_minutes 1–1440(15), filters[0..5], description?, enable_on_create(true)}` → 201 行(`status` 从 `CREATING` 开始)。混用两类 → 422 `online_eval.mode_conflict`;行带 `mode`(由 `insights` 非空推导) |
-| `GET` | `/api/eval/online/{config_id}` | 完整详情(`filters`、`data_source`、`execution_role_arn`) |
+| `GET` | `/api/eval/online/{config_id}` | 完整详情(`filters`、`data_source`、`execution_role_arn`、`parent`) |
 | `PATCH` | `/api/eval/online/{config_id}` | 仅 `owner=agent`:`description, sampling_percentage, session_timeout_minutes, filters` 之任意,加上本模式自己的分析字段——`evaluators`(scores)或 `insights` / `clustering_frequencies`(insights;完整列表,`[]` 频率即清除聚类);另一类 → 422 `online_eval.mode_conflict`,模式不可变。后端总是重发完整 `rule`(AWS 整体替换) |
 | `POST` | `/api/eval/online/{config_id}/pause` · `/resume` | 切换 `executionStatus`(`agent` 与 `external`) |
 | `DELETE` | `/api/eval/online/{config_id}` | 删除 AWS 配置并删掉 ledger 行(`agent` 与 `external`);结果日志组保留并在响应里给出 |
@@ -1207,6 +1211,11 @@ ledger 只存标识。列表返回 workspace 账号内全部配置并按 `owner`
 | `GET` | `/api/eval/online/{config_id}/reports` | insights **报告** = 以该配置为数据源的批量评估:`{config_id, mode, reports[{batch_id, name, status, run_status, created_at, updated_at, insights, sessions{completed, failed, in_progress, total}, origin: aws_scheduled\|console, run_id, error}], aws_unavailable}` 最新在前(ListBatchEvaluations 失败时 `aws_unavailable: true`,仅有控制台行)——账本里的控制台运行(`EvalRun.dataset_name == "online:<config_id>"`)与 AWS 定期批次合并,后者靠 `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource.onlineEvaluationConfigArn` 归属(只有摘要里没有 evaluators/insights 的批次才是候选;每个一次 Get,按 batch id 缓存)。任何归属均可读 |
 | `POST` | `/api/eval/online/{config_id}/reports` | 立即出报告 `{range: 1h\|6h\|24h\|7d(24h)}` → 202 `{run_id, status, queue_position}`:仅 agent 持有的 insights 配置(否则 403 / 422);经有界运行队列提交 `EvalRun(mode=insights, dataset_name="online:<config_id>")`,批次使用 `onlineEvaluationConfigSource`——只覆盖该配置在窗口内**采样过**的会话,并继承配置的 insights(该数据源下显式传 evaluators/insights 会被 AWS 拒绝) |
 | `GET` | `/api/eval/online/{config_id}/reports/{batch_id}` | `{batch_id, name, status, created_at, updated_at, time_range, sessions, insights{failures, userIntents, executionSummaries}, error_details}`(`parse_insights` 树,与运行页的 insights 运行相同);批次不是该配置的数据源时 404 `online_eval.report_not_found` |
+
+`parent` 指明 `owner=experiment` 配置背后的记录（其他归属一律为 `null`）：`{kind: experiment|canary, id, name, status, agent_name, arm: control|treatment|null}`。
+按名称里的 8 位 id 前缀从账本解析：`exp_<id8>_…` 属于配置 A/B 实验（`_oe1` 给两组流量打分，所以 `arm` 为 `null`；拆分前的旧数据 `_oe2` 只给实验内置金丝雀的候选版本打分，所以 `arm` 为 `treatment`），
+`can_<id8>_oec` / `_oet` 是运行时金丝雀的对照组 / 候选组。`agent_name` 是实验的 Agent 或金丝雀的冠军 Agent。记录已不存在时，
+`id` / `name` / `status` / `agent_name` 为 `null`（`kind` 与 `arm` 取自名称）。列表每种模型最多查询一次；同前缀有多条记录时，取调用方可见的最新一条。
 
 错误码:`online_eval.no_telemetry`(400,agent 还没有遥测日志组,先跑一次会话)、`online_eval.evaluator_unsupported`(400)、
 `online_eval.read_only`(403)、`online_eval.not_found`(404)、`online_eval.conflict`(409)、

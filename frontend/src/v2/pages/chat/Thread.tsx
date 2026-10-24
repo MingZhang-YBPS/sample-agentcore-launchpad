@@ -10,6 +10,7 @@ import type { FeedbackVerdict } from "../../../lib/api";
 import { TOOL_RUN_GLYPH, toolRunLabel } from "../../../lib/chat";
 import { approvalActionable, approvalPhase } from "../../../lib/tool-approval";
 import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
+import { useV2Toast } from "../../hooks";
 import { Alert, Button, Spin, Tag } from "../../ui";
 import { AuthCard } from "./AuthCard";
 import { PolicyDenyCard } from "./PolicyDenyCard";
@@ -51,6 +52,7 @@ export function Thread({
   now?: number;
 }) {
   const { t } = useTranslation();
+  const toast = useV2Toast();
   // follows the stream only while the reader is at the bottom
   const thread = useStickToBottom();
   useFollowOwnTurns(messages.length, messages[messages.length - 1]?.kind === "user", thread.toBottom);
@@ -90,7 +92,7 @@ export function Thread({
               )}
             </div>
             <div className="v2-chat-bub">
-              {msg.text && <Markdown text={msg.text} />}
+              {msg.text && <Markdown text={msg.text} onSourceError={(m) => toast("error", m)} />}
               {msg.streaming && <span className="v2-chat-caret" />}
               {msg.structured !== undefined && <StructuredAnswer value={msg.structured} />}
             </div>

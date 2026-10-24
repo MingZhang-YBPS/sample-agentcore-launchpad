@@ -72,7 +72,9 @@ directly from the browser's CDN URL, independent of workspace and AgentCore.
 Every V2 module page also offers its own recordings: each published collection
 carries its module's sidebar `path`, and the V2 shell adds a **Demo videos**
 button to the page header of any module with V2 recordings, playing them in a
-drawer.
+drawer. A module that became a tab of another entry keeps its section: the 在线评估
+recordings (`/v2/eval/online`) play on 评估任务's 持续评估 tab and the online config
+sub-pages, which the entry maps onto that path (`videoPath` in `v2/nav.ts`).
 The separate `launchpad-videos` CDK stack retains its private S3 origin and
 OAC-restricted CloudFront distribution. See [Video library](video-library.md)
 for management and immutable media publication.
@@ -103,7 +105,7 @@ real, runnable code in this repo.
 | **Policy** | Governance discovers existing MCP Gateways live, persists opt-in management through Launchpad-owned Gateway tags, and manages one attached Policy Engine plus Cedar policies. Initial Engine attachment mode is operator-selected (`ENFORCE` by default, `LOG_ONLY` available); new policies still start `LOG_ONLY`. A Gateway that references an Engine deleted out-of-band is surfaced as an explicit dangling state — reads keep the stale ARN visible, policy mutations return 409, and create-and-attach replaces the reference. ACTIVE edits create LOG_ONLY candidates, promotion and rollback use conservative ordering, and later Gateway transitions to `ENFORCE` require evidence or a typed zero-evidence override. Authenticated Chat calls to `launchpad-gw` use a server-minted Cognito user JWT, so Cedar `OAuthUser` tags such as `username` and `cognito:groups` reflect the signed-in console identity instead of the agent's M2M client. ZIP Runtime receives it in the sensitive invoke payload; Harness receives an invocation-scoped authenticated `remote_mcp` tool. A second CUSTOM_JWT Gateway gets the same treatment when it already admits these tokens (`services/user_gateways.py`): its authorizer's discovery URL is the workspace pool's, `allowedClients` holds both the console client and the M2M client, it has no `allowedAudience` (Cognito access tokens carry none), and no interceptor sets `passRequestHeaders`. Such a Gateway is Harness-attachable with the workspace M2M provider, and each logged-in Harness turn re-reads it and swaps it for a `remote_mcp` tool under its configured alias carrying the user JWT; one that no longer qualifies, or cannot be read, keeps its M2M identity. This is what lets a dedicated Gateway with *as user* (3LO) targets see the human instead of the agent. Public API/evaluation traffic and an auth-disabled local console remain M2M. When such a Harness call is denied at call time (a rule with a `context.input` condition — a scope-only deny instead filters the tool out of `tools/list`, so the model never calls it), the Harness returns the Gateway's denial as an error `toolResult`; Chat recognises its signature (`services/policy_denials.py`, shared with Policy Test) and streams `policy_denied`, which V2 Chat shows as a policy-deny card beside the as_user consent card and persists as a `policy` history row. ZIP Runtime agents do not forward tool results yet. Every mutation is journaled locally while AWS remains the source of current state. |
 | **Evaluation** | Real `StartBatchEvaluation` / insights over CloudWatch traces. A run's scope is exactly one of: a **dataset** (replay items — multi-turn scenarios replay sequentially in one session), explicit **session ids**, or a **time window** (`lookback_hours` 1–336 — passive: no new invocations, `filterConfig.timeRange` over existing traffic). 14 general prompt-template evaluators (12 trace/session plus 2 ordinary tool-call), 2 skill `TOOL_CALL` prompt-template evaluators, and 3 ground-truth-only programmatic `Builtin.Trajectory*Match` session matchers (selectable only on dataset runs whose scenarios define `expected_trajectory`) plus **custom evaluators** with full CRUD on the `?view=evaluators` sub-page in three definitions — **LLM-as-a-judge** (`llmAsAJudge`: instructions with placeholders, numerical rating scale, Bedrock judge model), **derived** (`derived`: a Builtin/ThirdParty base evaluator's prompt on a chosen model) and **code-based** (`codeBased.lambdaConfig`: a Lambda function ARN in the workspace Region plus a 1–300 s timeout, default 60; no instructions, scale or model). Every definition needs `level` on `CreateEvaluator`. The judge model defaults to `global.openai.gpt-6-sol` (judge and derived, console and assistant evaluation assets); `CreateEvaluator`/`UpdateEvaluator` test-call the model with a fixed `max_output_tokens=10` that GPT-6 refuses (it needs ≥ 16, and an explicit `inferenceConfig.maxTokens` does not change the probe), so exactly that `ValidationException` is retried once on `global.anthropic.claude-sonnet-5-5` and the reply's `model_fallback` (`{requested, used, reason}`) says so — the assistant's materializer records the fallback and its own client token on the resource before the retry, so a resumed operation rebuilds the same request. The console detail projection carries `definition: judge|derived|code`; `UpdateEvaluator` is a full-config replace, so an update payload must be of the evaluator's own kind — a judge payload against a code-based evaluator (or any other cross-kind pair) is refused with `evaluator.definition_mismatch` instead of silently converting it. A code-based evaluator's Lambda receives `{schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs, evaluationTarget}` and answers `{label, value?, explanation?}` or `{errorCode, errorMessage}` (300 s / 6 MB limits); the console manages **no IAM** for it — the evaluation execution role that batch/online runs pass as `evaluationExecutionRoleArn` needs `lambda:InvokeFunction` + `lambda:GetFunction` on the function and the function's resource policy must allow `bedrock-agentcore.amazonaws.com`, both stated as a hint under the ARN field. Code-based evaluators are selectable wherever custom evaluators are (batch runs, experiments, online configs). When the account listing fails (`ListEvaluators` AccessDenied on a spoke role, throttling, a non-AWS error), `GET /api/eval/evaluators` still answers the builtins and adds `custom_unavailable: {code, message}` (the mapped `aws.*` / `workspace.assume_role_failed` code or `evaluators.list_failed`, with a generic message — never the raw AWS text), logged once as a warning; the evaluator pages show it as a banner and the V2 pickers as an inline note, so a failed listing never reads as an account without custom evaluators. Insights runs pick a subset of the three analysis types (failure analysis / user intent / execution summary). Datasets live in SQLite as devguide scenarios (`?view=datasets` sub-page: scenario editor, JSON/JSONL import) and sync one-way to AWS Dataset resources (`AGENTCORE_EVALUATION_PREDEFINED_V1`): the first sync creates the dataset (`CreateDataset`), every later sync edits that dataset's **DRAFT** in place (`ListDatasetExamples` → `DeleteDatasetExamples` → `AddDatasetExamples`, each polled through `UPDATING` to `ACTIVE`) so the dataset id and its published versions survive; **PUBLISH VERSION** (`CreateDatasetVersion`) snapshots the draft as an immutable numbered version and flips `draftStatus` from `MODIFIED` to `UNMODIFIED`. The row's `cloud` blob caches id/ARN/status plus `draft_status`, `example_count` and the version list (`ListDatasetVersions`); cloud-only datasets show the same read-only and can publish too, and a single published version can be deleted (`DeleteDataset` with `datasetVersion`). A cloud-dataset run may **pin a published version** (`dataset_version`, validated against `ListDatasetVersions` before the run row exists; `GetDataset` and `ListDatasetExamples` then read that snapshot so the replayed scenarios and ground truth are exactly the version's); the draft is the default, and the pinned version is stored on the run and shown as `· v<N>` in the runs list. A recorded copy that AWS no longer knows (`ResourceNotFoundException`) or that was deleted through the console is re-created on the next sync; scenario ground truth (assertions / expected responses / expected trajectory) is injected into batch runs via `evaluationMetadata.sessionMetadata`. A dataset scenario whose invocation hits a transient upstream error (a mid-stream `runtimeClientError` / `internalServerException`, throttling, a 5xx, or a Harness stream that ended without answering — `harness.incomplete_response` right after a tool step (stop reason `tool_result` / `tool_use`) or with neither a stop event nor any text, where the agent never ran) is replayed in a fresh session up to `TRANSIENT_SCENARIO_RETRIES` (2) more times before the run fails; a Harness execution timeout (a model call that never returns holds the scenario silent until the agent budget runs out) is replayed once (`TIMEOUT_SCENARIO_RETRIES`). A scenario that then still ends on the agent's own budget — the timeout again, or an iteration / token limit (`harness.execution_limit`) — is the agent's result for that scenario, not a run failure: its session is kept and scored as it stands, and the run row records it in `budget_stops` (`[{scenario_id, session_id, code, stop_reason}]`, shown as a notice on the V2 task detail). Any other error still fails the run, naming the scenario — except for a **simulated persona** scenario: the SDK executor swallows the agent call's exception, so `simulation.run_simulated_scenario` re-raises that original exception (a Harness timeout then gets its one replay like a replayed scenario), and a persona that still fails is **skipped** — recorded in `scenario_failures` (`[{scenario_id, retries, code, error}]`, a notice on the V2 task detail) while the other personas run and are scored; the run fails only when no scenario produced a session (live 2026-10-10: one Harness GPT-6 call that returned 0 tokens for 600 s had discarded all six personas of a run). The V2 task wizard accepts simulated datasets and asks for the user actor model (`actor_model_id`) when one is picked. Runs execute through a bounded-concurrency queue — up to `eval_max_concurrent_runs` at once (default 5, capped at 5 to match the AWS active-batch-evaluations account quota); excess runs queue instead of failing. Lower the cap when other consumers in the same account need headroom. An operator can **stop** any active run from the Runs page (`POST /api/eval/runs/{id}/stop`): a run whose batch exists on AWS is stopped with `StopBatchEvaluation` (STOPPING → STOPPED — the sessions already judged keep their results, which the poller records as partial scores), a run still queued is cancelled locally before it ever reaches AWS, and a run replaying its dataset stops between prompts without calling `StartBatchEvaluation`. All three end in the terminal ledger status `stopped` (never `failed`) with the reason "stopped by operator"; `DeleteBatchEvaluation` is not exposed. The run row stores only the per-evaluator **averages** (`evaluatorSummaries.statistics.averageScore`, each with its judgement `count` = `totalEvaluated`; AWS leaves `statistics` empty for a code-based evaluator, so that evaluator's mean is computed from the batch's results stream when the run finishes), and the architect's next-steps card shows the polarity-normalized, count-weighted mean of them (`runMeanScore`) — the same number as the task detail's normalized mean over every result; the **judge's explanation of every score** lives in the batch's own results log stream (`GetBatchEvaluation.outputConfig.cloudWatchConfig` → `run-<batchId>` in `/aws/bedrock-agentcore/evaluations/batch-evaluations/results/default`, `gen_ai.evaluation.result` records), which the Runs page reads on demand for the selected terminal run (`GET /api/eval/runs/{id}/results`, never persisted) and renders as a SESSION RESULTS panel — per session, one row per judgement (evaluator, level, score, label, expandable explanation; a span-level evaluator yields one row per tool call) with a link to the Observability session detail. **Online evaluation** (`?view=online`): one AgentCore `OnlineEvaluationConfig` per agent + evaluator set scores a sampled share (0.01–100 %) of live sessions after a session-idle timeout, no new invocations; results land in `/aws/bedrock-agentcore/evaluations/results/<configId>` (also EMF metrics under `Bedrock-AgentCore/Evaluations`) and the console aggregates them with Logs Insights (per-evaluator mean / labels / trend / recent records with judge explanations). The page lists **every** config in the workspace account classified by owner — `agent` (Launchpad-created, full control), `experiment` (`exp_*`/`can_*` arms, read-only), `external` (pause/resume/delete only). Update always sends the complete `rule` because AWS replaces it wholesale; create refuses a never-invoked agent (AWS validates the log group exists). A config runs in one of two **modes**: `scores` (evaluators) or `insights` (1–3 insight types + optional DAILY/WEEKLY/MONTHLY clustering — AWS forbids both on one config); insights configs produce **reports** (batch evaluations sourced from the config: AWS-scheduled on the clustering cadence, or RUN REPORT NOW from the console through the run queue), attributed via `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource` and rendered with the same insight-cluster trees as the Runs page; a report covers only the sessions the config sampled. Online scores also surface where sessions are looked at: the Observability session detail carries an ONLINE EVALUATION block (every config's result records for that session, owner-classified, fail-soft — a results-query failure never hides traces) and the Overview has an **ONLINE QUALITY · 24h** tile (polarity-normalised, count-weighted mean over the workspace's agent-owned configs, 120 s cache, no AWS call while no config exists). Both read all results log groups at once through `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])`. A third, **on-demand** mode scores one session synchronously through the data-plane `Evaluate` API from the Observability session detail (SCORE NOW: ≤5 evaluators, ≤10 results per call, nothing persisted) — for probing a custom evaluator or one suspicious session, where a batch run would be the durable answer. **Recommendations from a run** (V2 task detail): a completed run seeds `StartRecommendation` scoped to its sessions — the system-prompt job pins `agentTraces.batchEvaluation` to its batch (unless the run has red-team sessions: golden tests the architect marked `adversarial` — injections, nonpublic-information requests, pressure for prohibited advice — whose content makes AgentCore refuse the whole recommendation — those sessions are left out, the others' spans go inline, and the row records `result.excluded_sessions`; the scenarios stay in the evaluation), the tool-description job (which refuses a batch source) gets the same sessions' spans inline; a Managed Harness's inputs are read live from `GetHarness` (+ its Gateway target tool schemas, narrowed by `allowedTools`), other agents fall back to the spec, then to required operator input. Rows (`eval_recommendations`) hold the job id + confirmed inputs and are refreshed from `GetRecommendation` on read. The console shows, per kind, only the newest recommendation and any accepted one; superseded attempts (typically one AWS refused before a retry succeeded) collapse under an "earlier recommendations (n)" toggle (`splitRecommendations`), so a stale FAILED card never sits next to the result. The system prompt may instead come from the registered `gepa_lite` provider (`provider` + `model_id` on the create request): the experiment RECOMMEND stage's reflective pipeline over the run's own batch-results stream and session transcripts, run on a background thread with a `provider-` pointer instead of an AWS id (a row a restart left non-terminal reads as interrupted) — the fallback when the AgentCore job refuses the input (its prompt-attack protection rejects some ordinary Chinese system prompts outright). A completed system-prompt recommendation of a Managed Harness run can be **accepted** from the task detail as well as from the architect's step 3: the operator reviews the prompt in an editable dialog and the reviewed text is what re-publishes the Harness (`accept` body `system_prompt`; `accepted.edited` records an edit). |
 | **Optimization** | Recommendations → configuration bundles → gateway A/B (config-bundle 50/50) → target-based canary → verdict → promote → cleanup. The system-prompt recommendation is **pluggable**: the AgentCore job by default, or a 3rd-party provider (`gepa_lite` — one GEPA-style reflective round over the pinned evaluation run's per-session judge scores, explanations and transcripts, on an operator-chosen Bedrock Converse model) that bypasses `StartRecommendation` and its content filter; its prompt still becomes the treatment configuration bundle, so the A/B measures it like any other. Dataset replay at the traffic stage posts prompts concurrently (at most `TRAFFIC_MAX_CONCURRENCY` = 10 in flight, `LAUNCHPAD_TRAFFIC_CONCURRENCY` dials it down); one prompt is one session is one arm, so the split is unaffected. A canary's replay is paired instead: each prompt goes to both versions (see Console V2 below). Every replay (and a canary's live gateway route) sends `X-Amzn-Bedrock-AgentCore-Runtime-User-Id`, which the Gateway forwards as `runtimeUserId`: without it the runtime gets no workload access token, and a twin whose tools need an outbound Identity token (its Gateway MCP client) errors on every session, leaving the A/B test with no scores. |
-| **Observability** | CloudWatch Logs Insights over both telemetry layouts: legacy traces in `aws/spans`, and unified traces/logs/prompts in `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>`. Span records are rendered as a per-session rail. |
+| **Observability** | CloudWatch Logs Insights over both telemetry layouts: legacy traces in `aws/spans`, and unified traces/logs/prompts in `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>`. Span records are rendered as a per-session rail. The agent detail's Runtime logs card reads a runtime's raw stdout/stderr with `FilterLogEvents` (`GET /api/agents/{id}/runtime-logs`): the log group is derived server-side from the agent row, a session narrows to the streams named after it, and the shared `otel-rt-logs` stream is excluded unless asked for. On an agent that can host another principal's private session (a system preset), a line of a stream named after no session (a Harness's, `otel-rt-logs`) shows only when its own content names a session the caller may read — the trade-off: that agent's print-style stdout is never shown; the card says how many lines it hid (not under a keyword, where the count would reveal which hidden lines match). Every other agent shows such lines. |
 | **Builtin Tools** | Code Interpreter (`aws.codeinterpreter.v1`) runs operator-editable Python in an inline execution demo. Browser accepts an operator-editable navigation URL, starts a five-minute `1280x720` session, and returns a server-generated SigV4 Live View URL rendered by the official `BrowserLiveView` DCV component. The operator can use the managed browser or select an existing READY custom Browser with `browserSigning.enabled` for Web Bot Auth, restore an existing Browser Profile, and explicitly opt into saving Profile state before stop. Explicit stop and backend expiry both release retained sessions. |
 
 ## The unified five-stage deploy pipeline
@@ -140,7 +142,7 @@ type fails the suite until the inventory classifies it.
 | **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) | *No code generated.* Verify the staged upload (or the ECR image) and stamp server-verified provenance (sha256, uploader, timestamp) onto the spec |
 | **package** | *skipped* (no artifact) | resolve → hashed lock → `--require-hashes` install of ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR → resolve digest → scan gate | `code_zip`: download → safe-extract → verify entrypoint → resolve the zip's `requirements.txt` for linux/aarch64 (hashed lock) → zip → S3. `container_source`: verify Dockerfile → same CodeBuild → ECR → digest → scan gate as 方式A. `container_image`: *skipped* |
 | **provision** | Reuse the shared execution role | Reuse the shared execution role | Reuse the shared execution role | Per-agent least-privilege role (same machinery) |
-| **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY | `CreateAgentRuntime` — `codeConfiguration` (user's Python version + entrypoint, no ADOT launcher) or `containerConfiguration` — + poll READY |
+| **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY | `CreateAgentRuntime` — `codeConfiguration` (user's Python version + entrypoint; ADOT launcher only when the bundle ships it) or `containerConfiguration` — + poll READY |
 | **register** | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | Same shared register stage — byoc agents are runtime-backed for chat/versions/observability |
 
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
@@ -602,6 +604,18 @@ optional and serves as a description. Config-bundle experiments and canary
 candidates degrade with `custom-source-unverified`, exactly like other
 custom-source runtimes. Samples: [`samples/byoc/`](../samples/byoc/README.md);
 lab walkthrough: [docs/lab/13-byoc.md](lab/13-byoc.md).
+
+**Native attachments (`code_zip`).** A `code_zip` entrypoint can opt into the
+[playground attachment contract](#playground-file-attachments) exactly as
+generated code does: a top-level `LAUNCHPAD_ATTACHMENT_CONTRACT = "v1"` literal.
+The package stage records it from the uploaded entrypoint and the deploy stage
+stamps `Agent.attachment_version` only once the runtime is READY, so Chat then
+sends the original images/PDFs as `attachments: [{name, media_type, data}]`
+(base64) beside the prompt — provided `spec.model_id` is a multimodal model. The
+code must acknowledge them before its answer (`"attachment_contract": "v1"` on a
+JSON reply, or a leading `{"event": "attachments", "contract": "v1"}` SSE event).
+Container kinds and stdio-bridged MCP servers never record a contract, so they
+keep text/text-PDF input.
 
 ### Hosted MCP servers (`protocol: "mcp"`)
 
@@ -2536,9 +2550,17 @@ evaluated, what it was measured on, and how two runs line up case by case.
   `agent_snapshot_seq` (the newest spec snapshot that reached AWS — a snapshot still
   deploying is not what the run invokes) and, for a replay, `dataset_fingerprint` (16 hex of
   sha256 over the normalized scenarios, key order irrelevant) with `dataset_size`. The
-  replay loop writes `scenario_map` (`{session_id: {scenario_id, input}}`) as each session
-  lands; a skipped persona has no entry. All four columns are nullable and older rows keep
-  them null.
+  replay loop writes `scenario_map` (`{session_id: {scenario_id, input, actor_id}}`) as each
+  session lands; a skipped persona has no entry. All four columns are nullable and older rows
+  keep them null.
+- **A fresh memory actor per scenario.** Each replayed scenario (and each persona) invokes
+  under its own actor, `memory.eval_actor` = `<agent>__eval-<run>-<ordinal>`, recorded as the
+  entry's `actor_id`; the transcript read uses it (a legacy entry without one falls back to the
+  bare `default` actor). Before this, every replay passed no actor, so all runs of every agent
+  shared `default` — on the shared memory a scenario could be answered from the long-term
+  records another run had left there (live on prod3, 2026-10-23: a case the knowledge base could
+  not answer scored as correct). The agent prefix keeps workspace isolation filtering these
+  actors with their agent.
 - **Versions on read.** Every run payload carries `snapshot {seq, source}`: `stamped`, or
   for an older row `inferred` from the snapshot timeline (the newest snapshot whose deploy
   ended by the run's creation, else the oldest), or `observed` for a passive scope, whose
@@ -2549,8 +2571,9 @@ evaluated, what it was measured on, and how two runs line up case by case.
     早于版本记录 and compares it as older than every numbered version, so an accepted
     recommendation from before the snapshots reads as a version change, not a re-run.
 - **Benchmarks.** A local dataset (revision = the fingerprint), a cloud dataset (revision =
-  the pinned version or the draft's fingerprint) or the agent's live traffic, which groups
-  every window, chosen-session and log-stream run. Trends only connect runs of one
+  the pinned version or the draft's fingerprint) or the agent's past sessions (console label
+  历史会话 / Past sessions — one-off runs over existing traffic, not online evaluation), which
+  groups every window, chosen-session and log-stream run. Trends only connect runs of one
   benchmark; the composite and regression math stays in the console, which owns evaluator
   polarity.
 - **Compare.** Two replays of one benchmark pair sessions by scenario id. A legacy run
@@ -2580,7 +2603,8 @@ evaluated, what it was measured on, and how two runs line up case by case.
   scored run's detail offers 与上一次对比: the newest earlier completed run of the same agent
   and benchmark, read from the scorecard.
 - **按 Agent tab.** `/v2/eval/tasks` now opens on 按 Agent (`AgentScoreList`); the run list
-  moved to `?tab=all`. Each agent row shows its main benchmark (the one with the most
+  moved to `?tab=runs` (一次性评估; the earlier `?tab=all` still opens it), next to the
+  持续评估 tab of online configs (below). Each agent row shows its main benchmark (the one with the most
   completed runs), the latest composite, and the change against the previous *version's*
   latest run on that benchmark, or the reason there is none.
   - The composite is over the evaluators every completed run of that benchmark includes.
@@ -3107,14 +3131,24 @@ through the same backend routes and permission checks as the classic pages.
   stay classic. In V2 the classic `/agents` and `/agents/:id` URLs redirect to the
   native pages (`AgentsRoute` in `App.tsx`), so cross-module links and the classic
   wizard's post-deploy hand-over land there.
-- **Online evaluation and experiments (native).** `/v2/eval/online` (`v2/pages/Online.tsx`,
-  shared rules in `v2/online.ts`) manages every online evaluation config — agent-owned,
-  experiment arms (read-only) and external ones, scores and insights modes: list with
-  mode/owner/execution filters (polled while CREATING/UPDATING/DELETING), detail with
-  the server's per-evaluator aggregates and trend plus the judged records (scores) or
-  the scheduled / on-demand insight reports with a report drawer (insights), and a
-  create/edit form with filters whose save sends only the changed fields
-  (`api.v2UpdateOnlineConfig`, PATCH). `/v2/eval/experiments` (`v2/pages/Experiments.tsx`)
+- **Online evaluation and experiments (native).** Online evaluation configs are 评估任务's
+  持续评估 tab (`/v2/eval/tasks?tab=online`, `v2/pages/online/`, shared rules in
+  `v2/online.ts`; there is no separate 在线评估 menu). The tab manages every config —
+  agent-owned, experiment-owned (read-only) and external ones, scores and insights modes.
+  An experiment-owned row says whose it is from the API's `parent`: the tag reads A/B 实验
+  or 金丝雀, the Agent column falls back to that record's agent, and the detail names the
+  record and the traffic it scores (both arms of an A/B test, a canary's control or
+  candidate), links straight to it (`parentLink`; its list tab once it is gone) and adds
+  a leftover note when that record was cleaned or no longer exists. The tab has
+  a list with mode/owner/execution filters that opens on the agent-owned configs (polled
+  while CREATING/UPDATING/DELETING); a detail (`?view=detail&kind=online&id=`) with the
+  server's per-evaluator aggregates and trend plus the judged records (scores), or the
+  scheduled / on-demand insight reports with a report drawer (insights); and a
+  create/edit form with filters (`?view=new&strategy=continuous`, a copy via
+  `from=online:<id>`, `?view=edit&kind=online&id=`) whose save sends only the changed
+  fields (`api.v2UpdateOnlineConfig`, PATCH). The old `/v2/eval/online` URLs redirect to
+  the matching tab or sub-page (`onlineToTasksUrl` in `v2/pages/tasks/urls.ts`), and the
+  ⌘K palette still finds the tab as 在线评估. `/v2/eval/experiments` (`v2/pages/Experiments.tsx`)
   rebuilds the configuration-bundle experiment — list, `?view=new` (agent, trace
   readiness, baseline run) and `?view=detail&id=` with one stage card per step
   (recommend → bundles → gateway/A-B → traffic → verdict/promote → cleanup) posting the
@@ -3224,34 +3258,41 @@ through the same backend routes and permission checks as the classic pages.
   included, listed underneath; accepting one opens the prompt for review/editing and
   re-publishes the Harness as a new version with the reviewed text) and step 4's 金丝雀实验 (`HarnessCanary.tsx`). In V2 the classic
   `/evaluation?view=online|experiment` URLs are mapped onto these pages (`EvaluationRoute`
-  in `App.tsx`, `oe=`/`exp=` become `view=detail&id=`); the classic evaluation page and
-  its section nav are no longer reached from the V2 sidebar.
+  in `App.tsx`: `oe=<id>` becomes the 持续评估 tab's `view=detail&kind=online&id=` and
+  `oe=new` its continuous form, `exp=` becomes `view=detail&id=`); the classic evaluation
+  page and its section nav are no longer reached from the V2 sidebar.
 - **What is native V2.** The workbench (`/v2`), Agent management (above) and the Agent evaluation module:
   数据中心 `/v2/eval/data` (tabs: Agent trajectories = observability traces with a
   trace/session detail, datasets with a record editor and 复制所选到新数据集 — the picked
   records copied as stored, assertions / every turn / expected trajectory included, with
   `metadata.copied_from` — data-processing pipelines),
-  评估任务 `/v2/eval/tasks`, 评估总览 `/v2/eval/insights` and 评估器
-  `/v2/eval/evaluators`. Sub-pages follow the console convention: `?view=` states
+  评估任务 `/v2/eval/tasks` (one-off runs and, on its 持续评估 tab, online evaluation
+  configs), 评估总览 `/v2/eval/insights` and 评估器 `/v2/eval/evaluators`. Sub-pages follow the console convention: `?view=` states
   of one route (`view=new|detail|edit|trace|dataset|pipeline…`). Every other
   sidebar entry (agent development, runtime, experiments, administration) is a
   classic module rendered inside the V2 shell until it is rebuilt natively.
-- **Evaluation tasks unify two resources** (`v2/tasks.ts`): a batch evaluation run
-  is a *history* task (time window, hand-picked sessions or a dataset replay,
-  evaluated once; `name`/`description` stored on the run row), an agent-owned
-  scores-mode online evaluation config is a *continuous* task (sampling rate,
-  session timeout; its description is the task name). Status maps both onto
-  queued / running / completed / failed / stopped / paused. A history task picks
+- **Evaluation tasks cover two resources, by how they run.** A batch evaluation run is
+  a one-off task (time window, hand-picked sessions or a dataset replay, evaluated
+  once; `name`/`description` stored on the run row) and is listed on the 一次性评估 tab
+  (`TaskList`, runs only — an online config's on-demand insights report, a run with
+  `dataset_name` `online:<configId>`, is left to that config's 报告 panel); an online evaluation config is a continuous task (sampling
+  rate, session timeout) and is listed on the 持续评估 tab (above). There is one 新建
+  entry: a strategy switch (`pages/tasks/StrategySwitch.tsx`) over the run wizard
+  (`TaskWizard`) and the online config form (`OnlineEditor`), carrying the chosen agent
+  across. 首页 (and its launch checklist) and 评估总览 still read both as one `V2Task`
+  list (`v2/tasks.ts`: runs plus agent-owned configs — 评估总览 only the scores-mode
+  ones — whose description is the task name), with status mapped onto queued /
+  running / completed / failed / stopped / paused, and open each in its own detail
+  page. A one-off task picks
   an evaluation type: evaluator scoring, or insights (failure analysis / user
   intent / execution summary — the classic run form's insights mode,
   `mode: "insights"` on `POST /api/eval/runs`). An insights task's detail shows
   the run's clusters instead of scores; clustering needs at least 3 sessions, so
   hand-picked sessions require 3 and a smaller window/dataset warns. Continuous
-  insights stay on the online-evaluation page (they carry a report schedule).
-  The task list shows the evaluation type as its own column (and filter); to stay
-  within eight columns the run strategy rides under the data source and the
-  update time under the creation time, and the operations column is pinned to
-  the right edge.
+  insights are created on the continuous form (they carry a report schedule).
+  The run list shows the evaluation type under the evaluators (and as a filter); to
+  stay within eight columns the update time rides under the creation time, and the
+  operations column is pinned to the right edge.
 - **数据处理 · 运行日志 source** (`v2/pages/data/LogSource.tsx`, backend
   `app/evaluation/pipeline_logs.py`): a pipeline can read 1–10 CloudWatch log groups
   instead of observed traces, which brings in agents that emit no OTel spans (or only
@@ -3871,7 +3912,13 @@ canvas and `protocol="a2a"`.
   existed on a first attach — and attaches it as an `agentcore_gateway` tool with
   `CLIENT_CREDENTIALS` outbound auth. `harness.py::_kb_prompt` appends a
   `## Knowledge bases` prompt section naming the gateway's MCP tools
-  (`…___Retrieve`, `agentic-…___AgenticRetrieveStream`). The gateway is created
+  (`…___Retrieve`, `agentic-…___AgenticRetrieveStream`) and asking for each cited
+  source as a Markdown link titled with the document. A retrieval result cites
+  `location.s3Location.uri`, an https URL into the data source's private bucket, so
+  the console never follows it directly: chat and playground links to an S3 object
+  open through `GET /api/knowledge-bases/source`, which signs a 5-minute GET only
+  for an object inside a visible managed KB's data source (`knowledge.source_link`).
+  The gateway is created
   lazily: nothing provisions it until the first KB-mounting harness deploy, or an
   explicit `POST /api/knowledge-bases/ensure-gateway`.
 - **Direct channel — 方式A (container) and `zip_runtime`.** No gateway; the

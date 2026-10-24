@@ -154,6 +154,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/agents/{agent_id}/mcp"): MEMBER,  # live Gateway read-back
     ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
     ("GET", "/api/agents/{agent_id}/source"): MEMBER,  # read-only code / harness config
+    ("GET", "/api/agents/{agent_id}/runtime-logs"): MEMBER,  # read-only AWS view
     ("GET", "/api/agents/{agent_id}/conversions"): MEMBER,  # ledger read: runtime twins
     ("DELETE", "/api/agents/{agent_id}"): PERM_AGENT_DELETE,
     ("POST", "/api/agents/{agent_id}/convert"): PERM_AGENT_CONVERT,
@@ -328,6 +329,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/knowledge-bases"): MEMBER,
     ("POST", "/api/knowledge-bases"): PERM_PROJECT_WRITE,
     ("POST", "/api/knowledge-bases/ensure-gateway"): INFRA,
+    ("GET", "/api/knowledge-bases/source"): MEMBER,
     ("GET", "/api/knowledge-bases/{kb_id}"): MEMBER,
     ("PATCH", "/api/knowledge-bases/{kb_id}"): PERM_PROJECT_WRITE,
     ("DELETE", "/api/knowledge-bases/{kb_id}"): PERM_PROJECT_WRITE,
