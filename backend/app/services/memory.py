@@ -195,6 +195,14 @@ def scoped_actor(agent_id: str, base_actor: str = "river") -> str:
     return f"{agent_id}{SCOPE_SEP}{encode_actor_part(base_actor)}"
 
 
+_EVAL_ACTOR = re.compile(r"eval-[0-9a-f]+-\d+")
+
+
+def is_eval_actor(human_actor: str) -> bool:
+    """True for the human part ``eval_actor`` builds — a replayed scenario, not a person."""
+    return _EVAL_ACTOR.fullmatch(human_actor) is not None
+
+
 def create_turn_event(
     workspace: WorkspaceContext, actor_id: str, session_id: str, prompt: str, answer: str
 ) -> dict[str, Any]:

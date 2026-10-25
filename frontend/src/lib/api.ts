@@ -2712,6 +2712,8 @@ export interface MemoryActor {
   actor_id: string;
   agent_id: string | null;
   agent_name: string | null;
+  /** the agent row is gone or soft-deleted — a re-created namesake is a different partition */
+  agent_deleted: boolean;
   human_actor: string;
   scoped: boolean;
   source?: MemorySource;
