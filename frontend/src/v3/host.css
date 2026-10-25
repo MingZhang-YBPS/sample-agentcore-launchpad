@@ -1,0 +1,240 @@
+/* Console V3 — hosting the V2 pages V3 has not redesigned.
+ *
+ * Those pages render inside the V3 shell (`<V3Shell hosted />`) in a
+ * `.v2.v3-host` wrapper, so the V2 page styles still apply; this file then
+ * re-points every `--v2-*` token at the V3 palette. V2's own stylesheet names
+ * its literal colours as tokens for exactly this reason (see the block under
+ * `--v2-mono` in v2/v2.css), so the re-point reaches all of it.
+ *
+ * Semantics follow V3: blue (`--v2-primary`, V2's accent) becomes V3's info
+ * blue — links, active tabs, focus, "blue" tags — while the one primary action
+ * of a page keeps V3's mint button. Green/orange/red stay ok/wait/act.
+ */
+
+.v3 .v2.v3-host {
+  --v2-primary: var(--v3-info);
+  --v2-primary-hover: var(--v3-info-hover);
+  --v2-primary-active: var(--v3-info-active);
+  --v2-primary-soft: var(--v3-info-dim);
+  --v2-primary-line: color-mix(in srgb, var(--v3-info) 40%, transparent);
+  --v2-bg: transparent;
+  --v2-card: var(--v3-ink-2);
+  --v2-fill: var(--v3-ink-1);
+  --v2-fill-2: var(--v3-ink-3);
+  --v2-line: var(--v3-line);
+  --v2-line-2: var(--v3-line-soft);
+  --v2-ink: var(--v3-text);
+  --v2-ink-2: var(--v3-text-2);
+  --v2-ink-3: var(--v3-text-3);
+  --v2-ink-4: var(--v3-text-4);
+  --v2-success: var(--v3-ok);
+  --v2-success-soft: var(--v3-ok-dim);
+  --v2-warning: var(--v3-wait);
+  --v2-warning-soft: var(--v3-wait-dim);
+  --v2-danger: var(--v3-act);
+  --v2-danger-soft: var(--v3-act-dim);
+  --v2-radius: var(--v3-r);
+  --v2-radius-sm: var(--v3-r-sm);
+  --v2-shadow: 0 1px 0 rgba(255, 255, 255, 0.025) inset, 0 20px 40px -24px color-mix(in srgb, var(--v3-shade) 60%, transparent);
+  --v2-font: var(--v3-body);
+  --v2-mono: var(--v3-mono);
+
+  --v2-on-primary: var(--v3-on-primary);
+  --v2-primary-disabled: color-mix(in srgb, var(--v3-primary) 30%, transparent);
+  --v2-danger-line: color-mix(in srgb, var(--v3-act) 45%, transparent);
+  --v2-success-line: color-mix(in srgb, var(--v3-ok) 30%, transparent);
+  --v2-warning-line: color-mix(in srgb, var(--v3-wait) 35%, transparent);
+  --v2-success-ink: var(--v3-ok);
+  --v2-success-ink-2: var(--v3-ok);
+  --v2-warning-ink: var(--v3-wait);
+  --v2-warning-ink-2: var(--v3-wait);
+  --v2-danger-ink: var(--v3-act);
+  --v2-row-hover: color-mix(in srgb, var(--v3-info) 5%, transparent);
+  /* data-series hues (tags, charts) that are not V3 signals */
+  --v2-purple: #b48cff;
+  --v2-purple-soft: color-mix(in srgb, var(--v2-purple) 14%, transparent);
+  --v2-cyan: #4fe3e3;
+  --v2-mask: color-mix(in srgb, var(--v3-scrim) 70%, transparent);
+
+  /* the V2 root is a full-page flex shell; here it is just the page body */
+  display: block;
+  min-height: 0;
+  background: none;
+  color: var(--v3-text);
+  font-family: var(--v3-body);
+  color-scheme: dark;
+}
+
+/* ── surfaces: V3 panels, not V2 white cards ─────────────────────────────── */
+.v3 .v3-host .v2-card,
+.v3 .v3-host .v2-kpi,
+.v3 .v3-host .v2-flow-head {
+  position: relative;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--v3-ink-3) 66%, transparent), color-mix(in srgb, var(--v3-ink-2) 66%, transparent));
+  border: 1px solid var(--v3-line);
+}
+.v3 .v3-host .v2-card::after,
+.v3 .v3-host .v2-kpi::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 18px;
+  width: 28px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--v3-line-2);
+}
+.v3 .v3-host .v2-sec-title {
+  font-family: var(--v3-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--v3-text-2);
+}
+.v3 .v3-host .v2-sec-title::before { display: none; }
+.v3 .v3-host .v2-sec-title .sub,
+.v3 .v3-host .v2-sec-title .end { letter-spacing: 0; text-transform: none; font-family: var(--v3-body); }
+
+/* ── page header: V3's display type ─────────────────────────────────────── */
+.v3 .v3-host .v2-page-head { margin-bottom: 20px; }
+.v3 .v3-host .v2-page-head h1,
+.v3 .v3-host .v2-flow-head h1 {
+  font-family: var(--v3-display);
+  font-variation-settings: "wdth" 118;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.v3 .v3-host .v2-page-head h1 { font-size: 26px; }
+
+/* ── numbers are instruments ────────────────────────────────────────────── */
+.v3 .v3-host .v2-kpi .l { font-family: var(--v3-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-host .v2-kpi .v { font-family: var(--v3-display); font-variation-settings: "wdth" 112; font-size: 32px; }
+.v3 .v3-host .v2-table th {
+  background: transparent;
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+  border-bottom: 1px solid var(--v3-line);
+}
+.v3 .v3-host .v2-table .num,
+.v3 .v3-host .v2-table td.right { font-family: var(--v3-mono); font-size: 13px; }
+
+/* ── controls ────────────────────────────────────────────────────────────── */
+.v3 .v3-host .v2-btn { border-radius: 8px; background: var(--v3-ink-3); border-color: var(--v3-line-2); }
+.v3 .v3-host .v2-btn:hover:not(:disabled) { color: var(--v3-text); border-color: var(--v3-text-3); background: var(--v3-ink-hover); }
+.v3 .v3-host .v2-btn:disabled { background: var(--v3-ink-2); color: var(--v3-text-3); opacity: 0.6; }
+.v3 .v3-host .v2-btn.primary {
+  color: var(--v3-on-primary);
+  background: var(--v3-primary);
+  border-color: var(--v3-primary);
+  font-weight: 650;
+}
+.v3 .v3-host .v2-btn.primary:hover:not(:disabled) { color: var(--v3-on-primary); background: var(--v3-primary-hover); border-color: var(--v3-primary-hover); box-shadow: 0 0 24px color-mix(in srgb, var(--v3-primary) 30%, transparent); }
+.v3 .v3-host .v2-btn.primary:disabled { color: color-mix(in srgb, var(--v3-on-primary) 70%, transparent); background: var(--v2-primary-disabled); border-color: transparent; }
+.v3 .v3-host .v2-btn.danger { color: var(--v3-act); border-color: color-mix(in srgb, var(--v3-act) 40%, transparent); background: var(--v3-act-dim); }
+.v3 .v3-host .v2-btn.soft { color: var(--v3-info); background: var(--v3-info-dim); border-color: transparent; }
+.v3 .v3-host .v2-input,
+.v3 .v3-host .v2-sel,
+.v3 .v3-host .v2-textarea,
+.v3 .v3-host .v2-filter { background: var(--v3-ink-0); border-color: var(--v3-line-2); border-radius: 8px; }
+.v3 .v3-host .v2-input:focus,
+.v3 .v3-host .v2-textarea:focus,
+.v3 .v3-host .v2-sel:focus-visible,
+.v3 .v3-host .v2-sel.open { border-color: var(--v3-primary); box-shadow: 0 0 0 3px var(--v3-primary-dim); }
+.v3 .v3-host select option { background: var(--v3-ink-2); color: var(--v3-text); }
+.v3 .v3-host .v2-tag { font-family: var(--v3-mono); font-size: 11px; font-weight: 500; border-radius: 5px; }
+.v3 .v3-host .v2-alert { border: 1px solid var(--v3-line); }
+.v3 .v3-host .v2-alert.info { border-color: color-mix(in srgb, var(--v3-info) 30%, transparent); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.warn { border-color: color-mix(in srgb, var(--v3-wait) 30%, transparent); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.error { border-color: color-mix(in srgb, var(--v3-act) 32%, transparent); color: var(--v3-text); }
+.v3 .v3-host .v2-alert.success { border-color: color-mix(in srgb, var(--v3-ok) 28%, transparent); color: var(--v3-text); }
+.v3 .v3-host .v2-steps button.on { background: var(--v3-ink-3); }
+
+/* ── overlays: modals, drawers, menus and toasts are portalled or fixed, and
+     still inside .v3-host, so they pick the tokens up; give them depth ────── */
+.v3 .v3-host .v2-modal,
+.v3 .v3-host .v2-drawer,
+.v3 .v3-host .v2-toast { border: 1px solid var(--v3-line-2); box-shadow: 0 30px 80px -20px color-mix(in srgb, var(--v3-shade) 80%, transparent); }
+.v3 .v3-host .v2-mask { backdrop-filter: blur(3px); }
+
+/* the few page literals that are not tokens */
+.v3 .v3-host .v2-users-soon { color: var(--v3-wait) !important; }
+.v3 .v3-host .v2-skilllab-md .hljs-string { color: var(--v3-ok); }
+.v3 .v3-host .v2-chat-thumb.on.up { color: var(--v3-ok); }
+.v3 .v3-host .v2-chat-thumb.on.down { color: var(--v3-act); }
+
+/* ── light theme: V2 pages were light to begin with, so most of this is the
+     V3 tokens doing their job; what is left are the series hues (back to V2's
+     own light values), flat white cards instead of the night gradient, and the
+     native controls ───────────────────────────────────────────────────────── */
+[data-theme="light"] .v3 .v2.v3-host {
+  --v2-purple: #722ed1;
+  --v2-purple-soft: #f5e8ff;
+  --v2-cyan: #0e8a8a;
+  --v2-shadow: 0 1px 2px color-mix(in srgb, var(--v3-shade) 40%, transparent), 0 16px 32px -24px var(--v3-shade);
+  color-scheme: light;
+}
+[data-theme="light"] .v3 .v3-host .v2-card,
+[data-theme="light"] .v3 .v3-host .v2-kpi,
+[data-theme="light"] .v3 .v3-host .v2-flow-head { background: var(--v3-ink-2); }
+
+/* ── classic module pages (`<V3Shell hosted="classic" />`) ───────────────────
+   The classic pages are styled entirely through theme/tokens.css. Re-point those
+   tokens to the V3 room while the V3 shell is mounted — on <body>, as V2 does,
+   so their portaled toasts and dialogs follow. The classic brand amber would
+   read as V3's "waiting" signal, so the brand becomes V3's mint. */
+body.v3-body {
+  --bg: #0b1220;
+  --panel: #101a2d;
+  --panel-2: #16233b;
+  --line: #1d2b45;
+  --line-2: #26385a;
+  --grid: #17233a;
+  --ink: #dbe4f3;
+  --ink-2: #9aa8c2;
+  --ink-3: #66748f;
+  --amber: #3ef0b4;
+  --amber-soft: rgba(62, 240, 180, 0.14);
+  --amber-rgb: 62, 240, 180;
+  --amber-hover: #6af6c8;
+  --amber-active: #2bd29b;
+  --on-amber: #04150e;
+  --good: #3ef0b4;
+  --warn: #ffb547;
+  --crit: #ff5c6c;
+  --crit-text: #ff7a87;
+  --field: #070c16;
+  --code-bg: #070c16;
+  --bg-rgb: 11, 18, 32;
+}
+.v3 .v3-classic { font-family: var(--v3-body); }
+/* the classic pages by daylight: same mapping, the V3 light palette */
+[data-theme="light"] body.v3-body {
+  --bg: #f2f4f8;
+  --panel: #ffffff;
+  --panel-2: #e9edf4;
+  --line: #dce2ec;
+  --line-2: #bac4d4;
+  --grid: #e8ecf3;
+  --ink: #0e1829;
+  --ink-2: #424f67;
+  --ink-3: #56637b;
+  --amber: #026b4f;
+  --amber-soft: rgba(2, 107, 79, 0.1);
+  --amber-rgb: 2, 107, 79;
+  --amber-hover: #015a42;
+  --amber-active: #014a36;
+  --on-amber: #ffffff;
+  --good: #026b4f;
+  --warn: #925000;
+  --serious: #b4471b;
+  --crit: #b82133;
+  --crit-text: #951a2a;
+  --field: #fbfcfd;
+  --code-bg: #f2f4f8;
+  --tint-rgb: 0, 0, 0;
+  --bg-rgb: 242, 244, 248;
+}

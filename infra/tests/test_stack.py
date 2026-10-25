@@ -30,6 +30,15 @@ def test_core_resources_present(template: Template):
     template.resource_count_is("AWS::Cognito::UserPool", 1)
 
 
+def test_office_facts_api_leaves_no_retained_cloudwatch_role(template: Template):
+    """teardown.py destroys launchpad-base; nothing it creates may outlive it.
+    The REST API's default CloudWatch role is RETAINed and sets the account-wide
+    API Gateway logging role, so it must not be created at all."""
+    template.resource_count_is("AWS::ApiGateway::Account", 0)
+    for res in template.find_resources("AWS::IAM::Role").values():
+        assert res.get("DeletionPolicy") != "Retain"
+
+
 def test_cognito_groups_and_users(template: Template):
     template.resource_count_is("AWS::Cognito::UserPoolGroup", 2)
     template.resource_count_is("AWS::Cognito::UserPoolUser", 2)
@@ -400,3 +409,21 @@ def test_gateway_role_can_resolve_a_routed_config_bundle(template: Template):
             }
         ),
     )
+
+
+def test_group_attachments_wait_for_their_group_and_user(template: Template):
+    """An attachment that runs before its group fails with "Group not found"."""
+    groups = template.find_resources("AWS::Cognito::UserPoolGroup")
+    users = template.find_resources("AWS::Cognito::UserPoolUser")
+    attachments = template.find_resources("AWS::Cognito::UserPoolUserToGroupAttachment")
+    assert attachments
+    for res in attachments.values():
+        props = res["Properties"]
+        deps = set(res.get("DependsOn", []))
+        [group_id] = [
+            k for k, g in groups.items() if g["Properties"]["GroupName"] == props["GroupName"]
+        ]
+        [user_id] = [
+            k for k, u in users.items() if u["Properties"]["Username"] == props["Username"]
+        ]
+        assert group_id in deps and user_id in deps

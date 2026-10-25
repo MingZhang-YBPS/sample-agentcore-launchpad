@@ -7,7 +7,7 @@
 // Type-only imports keep this loadable in the node test environment.
 import type { CodingTurnRow } from "../../../lib/api";
 import { parseTimestamp } from "../../../lib/timestamps";
-import { displayPath, projectPath } from "./paths";
+import { displayPath, repoPath } from "./paths";
 
 export interface CodingEventRecord {
   seq: number;
@@ -25,13 +25,13 @@ export type NoticeCode = "appServerExited" | "serverRequestDeclined" | "restored
  *  file's whole content as its "diff", and the Changes tab reads diffs from the
  *  workspace anyway, so keeping the text would hold every written file in memory.
  *  codex reports absolute paths (`/mnt/workspace/project/README.md`); `path` and
- *  `movePath` are project-relative when inside the project, else as reported. */
+ *  `movePath` are repo-relative when inside the repo, else as reported. */
 export interface FileChangeView {
   path: string;
   kind: FileChangeKind;
   movePath: string | null;
-  /** the project-relative path the Changes tab lists this change under (a move's
-   *  destination); null when the file is outside the project (nothing to diff there) */
+  /** the repo-relative path the Changes tab lists this change under (a move's
+   *  destination); null when the file is outside the repo (nothing to diff there) */
   openPath: string | null;
   added: number;
   removed: number;
@@ -84,7 +84,7 @@ export interface PlanStepView {
 
 export interface TurnView {
   turnId: string;
-  /** the ledger row id (`coding_turns.id`), once the project detail named it */
+  /** the ledger row id (`coding_turns.id`), once the repo detail named it */
   rowId: string | null;
   prompt: string | null;
   model: string | null;
@@ -235,7 +235,7 @@ function fileChanges(value: unknown): FileChangeView[] {
       path: displayPath(path),
       kind,
       movePath: movePath === null ? null : displayPath(movePath),
-      openPath: projectPath(movePath ?? path),
+      openPath: repoPath(movePath ?? path),
       ...diffStats(kind, str(change.diff) ?? ""),
     };
   });
@@ -739,7 +739,7 @@ function sameUsage(a: TokenUsage | null, b: TokenUsage | null): boolean {
 }
 
 /**
- * Merge the project detail's ledger turns into the conversation by codex `turn_id`.
+ * Merge the repo detail's ledger turns into the conversation by codex `turn_id`.
  * The events stay authoritative for what happened; the ledger fills what they lack
  * (the prompt, model, effort, the settled usage) and a settled status overrides an
  * event turn still in progress (a turn the watcher abandoned). A ledger turn the
@@ -828,8 +828,8 @@ export function affectsFiles(record: CodingEventRecord): boolean {
   return false;
 }
 
-/** The project files a turn's file-change items touched (each once, in first-seen
- *  order; changes outside the project are left out — there is nothing to open). */
+/** The repo files a turn's file-change items touched (each once, in first-seen
+ *  order; changes outside the repo are left out — there is nothing to open). */
 export function turnChangedPaths(turn: TurnView | null | undefined): string[] {
   const paths = new Set<string>();
   for (const item of turn?.items ?? []) {

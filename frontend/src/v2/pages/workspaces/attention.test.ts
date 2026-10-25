@@ -11,6 +11,7 @@ function ws(id: string, over: Partial<Workspace> = {}): Workspace {
     region: "us-west-2",
     cross_account: false,
     bootstrap_status: "ready",
+    tier: "dev",
     is_default: false,
     created_at: null,
     updated_at: null,

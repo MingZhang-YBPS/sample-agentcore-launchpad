@@ -1,5 +1,5 @@
 import { Plus, Trash2, Upload } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -7,8 +7,10 @@ import {
   BYOC_KINDS,
   BYOC_MODELS_MAX,
   BYOC_PYTHON_VERSIONS,
+  type AgentForm,
   byoMountsAllowed,
   DEFAULT_SESSION_MOUNT,
+  DISPLAY_NAME_MAX,
   filesystemIssues,
   hasByoMounts,
   managedGatewayAttached,
@@ -16,36 +18,95 @@ import {
   type MountRow,
   promptWithToolkit,
   pythonLabel,
+  randomAgentSlug,
+  slugFromDisplayName,
   TOOLKITS,
   toggle,
   toolkitToolNames,
 } from "../../../lib/agent-spec";
-import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
+import { type ByocPythonVersion, errorMessage, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
+import { adotLauncher } from "../../../lib/byocTelemetry";
+import {
+  MCP_STDIO_ARGS_MAX,
+  MCP_STDIO_BASES,
+  MCP_STDIO_DEFAULT_COMMAND,
+  MCP_STDIO_OFF,
+  type McpStdioBase,
+  type McpStdioForm,
+  mcpStdioArgs,
+  mcpStdioIssues,
+  withBase,
+} from "../../../lib/mcp-stdio";
+import {
+  type CatalogMountRow,
+  catalogMountsSpec,
+  MAX_BYO_MOUNTS,
+  modeAllowed,
+  newCatalogRow,
+  pickable,
+  type StorageEntry,
+  type StoragePreflight,
+  storageApi,
+} from "../../../lib/api/storage";
+import { useModelCatalog } from "../../../lib/model-catalog";
+import { byoRowsMode, mountNeedsProfile } from "../../../lib/storage-mounts";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
+import { useAuth } from "../../../auth/auth-context";
 import { HintLabel } from "../../Glossary";
 import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
+import { useNetworkProfiles } from "../../../lib/useNetworkProfiles";
+import { NetworkSection } from "./NetworkSection";
+import { StrandsToolPicker } from "./StrandsSections";
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
 
-/** The name field every method starts with. */
+/** Next slug while it still follows the display name: the ASCII-derived slug, or a
+ *  random `agent-xxxxxx` kept stable while the member keeps typing. */
+function followSlug(displayName: string, current: string): string {
+  const derived = slugFromDisplayName(displayName);
+  if (derived) return derived;
+  return /^agent-[a-z0-9]{6}$/.test(current) ? current : randomAgentSlug();
+}
+
+/** Display name (free text, any language) + the resource-name slug derived from it.
+ *  Editing the slug by hand stops the derivation; a re-publish locks the slug only. */
 export function NameField({ form, set, err, nameLocked }: Omit<SectionProps, "cat">) {
   const { t } = useTranslation();
+  const onDisplayName = (value: string) =>
+    set((prev) => ({
+      displayName: value,
+      ...(nameLocked || prev.nameEdited ? {} : { name: value.trim() ? followSlug(value, prev.name) : "" }),
+    }));
   return (
-    <Field
-      label={<HintLabel term="runtime">{t("v2.agents.colName")}</HintLabel>}
-      required
-      hint={t(nameLocked ? "v2.agents.wizard.nameLocked" : "v2.agents.wizard.nameHint")}
-      error={err("name")}
-    >
-      <input
-        className="v2-input"
-        value={form.name}
-        disabled={nameLocked}
-        maxLength={48}
-        placeholder="hr-assistant-v3"
-        onChange={(e) => set({ name: e.target.value.toLowerCase() })}
-        data-testid="v2-agent-name"
-      />
-    </Field>
+    <>
+      <Field label={t("v2.agents.wizard.displayName")} hint={t("v2.agents.wizard.displayNameHint")}>
+        <input
+          className="v2-input"
+          value={form.displayName}
+          maxLength={DISPLAY_NAME_MAX}
+          placeholder={t("v2.agents.wizard.displayNamePlaceholder")}
+          onChange={(e) => onDisplayName(e.target.value)}
+          data-testid="v2-agent-display-name"
+        />
+      </Field>
+      <Field
+        label={
+          <HintLabel term="runtime">{t("v2.agents.wizard.resourceName")}</HintLabel>
+        }
+        required
+        hint={t(nameLocked ? "v2.agents.wizard.nameLocked" : "v2.agents.wizard.nameHint")}
+        error={err("name")}
+      >
+        <input
+          className="v2-input mono"
+          value={form.name}
+          disabled={nameLocked}
+          maxLength={48}
+          placeholder="hr-assistant-v3"
+          onChange={(e) => set({ name: e.target.value.toLowerCase(), nameEdited: true })}
+          data-testid="v2-agent-name"
+        />
+      </Field>
+    </>
   );
 }
 
@@ -264,7 +325,7 @@ export function ProtocolCard({
   );
 }
 
-export function StrandsToolsCard(props: SectionProps) {
+export function StrandsToolsCard(props: SectionProps & { touched?: boolean }) {
   const { t } = useTranslation();
   const { form, set } = props;
   const a2a = form.protocol === "a2a";
@@ -282,13 +343,17 @@ export function StrandsToolsCard(props: SectionProps) {
       <div className="v2-form">
         <Field label={t("v2.agents.wizard.templateTools")} hint={t("v2.agents.wizard.templateToolsHint")}>
           <div className="v2-row" data-testid="v2-agent-template-tools">
-            {(kitTools.length ? kitTools : ["calculator", "current_utc_time"]).map((name) => (
-              <Tag key={name} tone={kitTools.length ? "blue" : "gray"}>
+            {(kitTools.length || form.strands?.tools.length
+              ? [...kitTools, ...(form.strands?.tools ?? [])]
+              : ["calculator", "current_utc_time"]
+            ).map((name) => (
+              <Tag key={name} tone={kitTools.length || form.strands?.tools.length ? "blue" : "gray"}>
                 <span className="mono">{name}</span>
               </Tag>
             ))}
           </div>
         </Field>
+        <StrandsToolPicker form={form} set={set} touched={Boolean(props.touched)} />
         {a2a ? (
           <Field label={t("v2.agents.wizard.gateways")}>
             <span className="v2-muted">{t("v2.agents.wizard.gatewayA2a")}</span>
@@ -375,12 +440,150 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
   );
 }
 
-export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" | "err"> & { touched: boolean }) {
+const PREFLIGHT_DEBOUNCE_MS = 600;
+const SEVERITY_TONE = { ok: "green", warn: "orange", block: "red", info: "gray" } as const;
+
+/**
+ * Mounts from the workspace's storage catalog (storage-mounts §4, §10): pick an entry of
+ * the project's allowed set, its path (default `/mnt/<id>`) and its mode — read-only by
+ * default, read-write only where the entry allows it. Each change re-runs the §5
+ * preflight (storage × the network step's profile) and shows its findings; the deploy
+ * runs it again and refuses on a blocking one. Members pick here too — the entry, not the ARN, is what they name.
+ */
+function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"> & { form: AgentForm; inlineCount: number }) {
   const { t } = useTranslation();
+  const rows = form.catalogMounts ?? [];
+  const [entries, setEntries] = useState<StorageEntry[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [report, setReport] = useState<StoragePreflight | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [pick, setPick] = useState("");
+  const setRows = (next: CatalogMountRow[]) => set({ catalogMounts: next });
+
+  useEffect(() => {
+    let live = true;
+    storageApi
+      .list()
+      .then((res) => live && setEntries(res.storage))
+      .catch((e: unknown) => {
+        if (!live) return;
+        setEntries([]);
+        setLoadError(errorMessage(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const key = JSON.stringify([rows, form.networkProfileId, form.method]);
+  useEffect(() => {
+    if (rows.length === 0) {
+      setReport(null);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      setChecking(true);
+      storageApi
+        .preflight({ mounts: catalogMountsSpec(rows), network_profile_id: form.networkProfileId || null, method: form.method })
+        .then((res) => live && setReport(res))
+        .catch((e: unknown) => live && setReport({ status: "blocked", results: [{ check: "preflight", severity: "block", message: errorMessage(e) }] }))
+        .finally(() => live && setChecking(false));
+    }, PREFLIGHT_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+    // the serialized inputs are the dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  const byId = new Map((entries ?? []).map((e) => [e.id, e]));
+  const options = pickable(entries ?? [], rows).map((e) => ({ value: e.id, label: `${e.name} (${e.id})` }));
+  const full = rows.length + inlineCount >= MAX_BYO_MOUNTS;
+  const patch = (i: number, change: Partial<CatalogMountRow>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...change } : r)));
+  return (
+    <Field label={t("v3.storage.picker.title")} hint={t("v3.storage.picker.hint", { max: MAX_BYO_MOUNTS })}>
+      {entries === null ? <Spin /> : (
+        <div className="v2-agents-rows" data-testid="v2-agent-fs-catalog">
+          {loadError && <Alert tone="error">{loadError}</Alert>}
+          {rows.map((row, i) => {
+            const entry = byId.get(row.storageId);
+            return (
+              <div key={row.storageId} className="v2-agents-row mount">
+                <span className="mono" title={entry?.access_point_arn}>{entry ? `${entry.name} (${row.storageId})` : row.storageId}</span>
+                <input
+                  className="v2-input mono"
+                  value={row.path}
+                  aria-label={t("v2.agents.wizard.fsPath")}
+                  onChange={(e) => patch(i, { path: e.target.value })}
+                  data-testid={`v2-agent-fs-catalog-path-${i}`}
+                />
+                <Select
+                  value={row.mode}
+                  ariaLabel={t("v3.storage.detail.mode")}
+                  options={[
+                    { value: "ro", label: t("v3.storage.mode.ro") },
+                    ...(entry?.max_mode === "rw" || row.mode === "rw" ? [{ value: "rw", label: t("v3.storage.mode.rw") }] : []),
+                  ]}
+                  onChange={(v) => patch(i, { mode: v === "rw" ? "rw" : "ro" })}
+                  testId={`v2-agent-fs-catalog-mode-${i}`}
+                />
+                <RemoveButton onClick={() => setRows(rows.filter((_, j) => j !== i))} />
+                {entry && !modeAllowed(row, entry) && <span className="v2-agents-err">{t("v3.storage.picker.modeTooWide")}</span>}
+              </div>
+            );
+          })}
+          {options.length > 0 && !full ? (
+            <div style={{ display: "flex", gap: 8 }}>
+              <Select value={pick} options={options} placeholder={t("v3.storage.picker.choose")} onChange={setPick} testId="v2-agent-fs-catalog-pick" />
+              <Button size="sm" disabled={!pick} onClick={() => { setRows([...rows, newCatalogRow(pick)]); setPick(""); }} testId="v2-agent-fs-catalog-add">
+                <Plus size={13} aria-hidden="true" />
+                {t("v3.storage.picker.add")}
+              </Button>
+            </div>
+          ) : (entries.length === 0 && <div className="v2-muted">{t("v3.storage.picker.none")}</div>)}
+          {checking && <Spin />}
+          {report && report.results.filter((r) => r.severity !== "ok").length > 0 && (
+            <div data-testid="v2-agent-fs-catalog-preflight" style={{ display: "grid", gap: 4 }}>
+              {report.results.filter((r) => r.severity !== "ok").map((r, i) => (
+                <div key={`${r.check}-${i}`}>
+                  <Tag tone={SEVERITY_TONE[r.severity] ?? "gray"}>{r.storage_id ?? r.check}</Tag> <span>{r.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {report?.status === "ok" && <div className="v2-muted">{t("v3.storage.picker.preflightOk")}</div>}
+        </div>
+      )}
+    </Field>
+  );
+}
+
+/**
+ * The storage card: managed session storage, and the BYO S3 Files / EFS mounts of the
+ * methods that take them (storage-mounts §3). The BYO rows are inline access point
+ * ARNs that only an administrator edits (D-2); a member sees an administrator's rows
+ * read-only. A mount runs in the agent's network profile (the network step); only a
+ * container agent may still carry the legacy inline subnets / security groups.
+ * `network={false}` leaves the network step out, for a method whose own card has it
+ * (BYOC's artifact card).
+ */
+export function FilesystemCard({
+  form,
+  set,
+  touched,
+  network = true,
+}: Omit<SectionProps, "cat" | "err"> & { touched: boolean; network?: boolean }) {
+  const { t } = useTranslation();
+  const { isAdmin } = useAuth();
   const issues = filesystemIssues(form);
-  // harness / Strands mount managed session storage only — BYO needs the container's VPC wiring
   const byoAllowed = byoMountsAllowed(form.method);
   const byo = byoAllowed && hasByoMounts(form);
+  const rowsMode = byoAllowed ? byoRowsMode(form.method, isAdmin, byo) : "hidden";
+  const editable = rowsMode === "edit";
+  const { profiles } = useNetworkProfiles();
+  const needsProfile = mountNeedsProfile({ method: form.method, networkProfileId: form.networkProfileId, hasByo: byo });
   const show = (on: boolean, key: string) => (touched && on ? t(key) : undefined);
   const kinds = [
     { kind: "s3" as const, field: "s3Mounts" as const, label: "S3 Files", ph: "create.configure.fsS3ArnPlaceholder" },
@@ -389,9 +592,10 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
   const patchRow = (field: "s3Mounts" | "efsMounts", i: number, patch: Partial<MountRow>) =>
     set((prev) => ({ [field]: prev[field].map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   return (
+    <>
     <Card
       title={t("v2.agents.wizard.fsTitle")}
-      sub={t(byo ? "create.configure.fsNoteByo" : byoAllowed ? "create.configure.fsNote" : "v2.agents.wizard.fsNoteSession")}
+      sub={t(byo ? "storage.mount.noteByo" : byoAllowed ? "storage.mount.note" : "v2.agents.wizard.fsNoteSession")}
       testId="v2-agent-fs"
     >
       <div className="v2-form">
@@ -414,7 +618,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
             </Field>
           )}
         </div>
-        {byoAllowed && kinds.map(({ kind, field, label, ph }) => (
+        {rowsMode !== "hidden" && kinds.map(({ kind, field, label, ph }) => (
           <Field key={kind} label={t("v2.agents.wizard.fsMounts", { kind: label })} hint={t("v2.agents.wizard.fsMountsHint", { max: MAX_MOUNTS_PER_KIND })}>
             {form[field].length > 0 && (
               <div className="v2-agents-rows">
@@ -428,6 +632,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
                           value={row.arn}
                           placeholder={t(ph)}
                           aria-label={t("v2.agents.wizard.fsArn")}
+                          readOnly={!editable}
                           onChange={(e) => patchRow(field, i, { arn: e.target.value })}
                           data-testid={`v2-agent-fs-${kind}-arn-${i}`}
                         />
@@ -436,9 +641,11 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
                           value={row.path}
                           placeholder="/mnt/data"
                           aria-label={t("v2.agents.wizard.fsPath")}
+                          readOnly={!editable}
                           onChange={(e) => patchRow(field, i, { path: e.target.value })}
                           data-testid={`v2-agent-fs-${kind}-path-${i}`}
                         />
+                        {/* removing is allowed to a member too: it adds no access */}
                         <RemoveButton onClick={() => set((prev) => ({ [field]: prev[field].filter((_, j) => j !== i) }))} />
                       </div>
                       {touched && bad && (
@@ -451,26 +658,57 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
                 })}
               </div>
             )}
-            <div>
-              <Button
-                size="sm"
-                disabled={form[field].length >= MAX_MOUNTS_PER_KIND}
-                onClick={() => set((prev) => ({ [field]: [...prev[field], { arn: "", path: "" }] }))}
-                testId={`v2-agent-fs-add-${kind}`}
-              >
-                <Plus size={13} aria-hidden="true" />
-                {t("v2.agents.wizard.fsAdd", { kind: label })}
-              </Button>
-            </div>
+            {editable && (
+              <div>
+                <Button
+                  size="sm"
+                  disabled={form[field].length >= MAX_MOUNTS_PER_KIND}
+                  onClick={() => set((prev) => ({ [field]: [...prev[field], { arn: "", path: "" }] }))}
+                  testId={`v2-agent-fs-add-${kind}`}
+                >
+                  <Plus size={13} aria-hidden="true" />
+                  {t("v2.agents.wizard.fsAdd", { kind: label })}
+                </Button>
+              </div>
+            )}
           </Field>
         ))}
+        {rowsMode === "readonly" && (
+          <div className="v2-muted" data-testid="v2-agent-fs-admin-only">
+            {t("storage.mount.adminOnly")}
+          </div>
+        )}
+        {byoAllowed && !isAdmin && !byo && (
+          <div className="v2-muted" data-testid="v2-agent-fs-ask-admin">
+            {t("storage.mount.askAdmin")}
+          </div>
+        )}
+        {byoAllowed && (
+          <CatalogMountsField form={form} set={set} inlineCount={form.s3Mounts.length + form.efsMounts.length} />
+        )}
         {touched && issues.duplicatePaths && <span className="v2-agents-err">{t("v2.agents.wizard.errDupPath")}</span>}
-        {byo && (
+        {issues.tooMany && <span className="v2-agents-err" data-testid="v2-agent-fs-too-many">{t("v2.agents.wizard.errTooManyMounts", { max: MAX_BYO_MOUNTS })}</span>}
+        {needsProfile && (
+          <div data-testid="v2-agent-fs-needs-profile">
+            <Alert tone={touched ? "error" : "warn"}>{t("storage.mount.needsProfile")}</Alert>
+          </div>
+        )}
+        {form.networkProfileId ? (
+          // a stored profile reference: the profile's ids live on the profile, not here
+          // its own test id: the network card's profile picker owns v2-agent-network-profile
+          <div className="v2-muted" data-testid="v2-agent-fs-network-profile">
+            {t("v2.agents.wizard.networkProfile", {
+              id: profiles?.find((p) => p.id === form.networkProfileId)?.name ?? form.networkProfileId,
+            })}
+          </div>
+        ) : byo && form.method === "container" && (
+          // the legacy inline network a container agent's mounts predate profiles with
           <div className="v2-form cols-2">
             <Field label={t("create.configure.fsSubnets")} required error={show(issues.vpc && !form.vpcSubnets.trim(), "v2.agents.wizard.errVpc")}>
               <input
                 className="v2-input mono"
                 value={form.vpcSubnets}
+                readOnly={!editable}
                 onChange={(e) => set({ vpcSubnets: e.target.value })}
                 placeholder="subnet-0abc, subnet-0def"
                 data-testid="v2-agent-fs-subnets"
@@ -480,6 +718,7 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
               <input
                 className="v2-input mono"
                 value={form.vpcSgs}
+                readOnly={!editable}
                 onChange={(e) => set({ vpcSgs: e.target.value })}
                 placeholder="sg-0abc"
                 data-testid="v2-agent-fs-sgs"
@@ -489,6 +728,9 @@ export function FilesystemCard({ form, set, touched }: Omit<SectionProps, "cat" 
         )}
       </div>
     </Card>
+    {/* the network step (projects §12.6) — harness, Strands / A2A and container */}
+    {network && <NetworkSection form={form} set={set} />}
+    </>
   );
 }
 
@@ -515,6 +757,111 @@ export function ByocBasicCard(props: Omit<SectionProps, "cat">) {
   );
 }
 
+/** byoc + protocol "mcp": where the server's tools appear on the Gateway, and
+ *  (code zip) whether it is a stdio-only server run behind the platform bridge. */
+export function McpServerCard({ form, set, err }: Omit<SectionProps, "cat">) {
+  const { t } = useTranslation();
+  const target = form.mcpTargetName.trim();
+  // a form without it (older drafts) reads as off
+  const stdio = form.mcpStdio ?? MCP_STDIO_OFF;
+  const setStdio = (next: McpStdioForm) => set({ mcpStdio: next });
+  const zip = form.byocKind === "code_zip";
+  const issues = mcpStdioIssues(stdio, form.byocKind);
+  const argv = [stdio.command.trim(), ...mcpStdioArgs(stdio.args)].filter(Boolean).join(" ");
+  return (
+    <Card title={t("v2.agents.wizard.mcp.cardTitle")} sub={t("v2.agents.wizard.mcp.cardSub")} testId="v2-agent-mcp">
+      <div className="v2-form">
+        <Field
+          label={t("v2.agents.wizard.mcp.targetName")}
+          required
+          error={err("mcpTarget")}
+          hint={t("v2.agents.wizard.mcp.targetHint", { example: `${target || "crm-lookup"}___find_order` })}
+        >
+          <input
+            className="v2-input mono"
+            value={form.mcpTargetName}
+            maxLength={100}
+            placeholder="crm-lookup"
+            onChange={(e) => set({ mcpTargetName: e.target.value })}
+            data-testid="v2-agent-mcp-target"
+          />
+        </Field>
+        <Field label={t("mcpServer.stdio.label")} hint={t(zip ? "mcpServer.stdio.hint" : "mcpServer.stdio.zipOnly")}>
+          <label className="v2-check">
+            <input
+              type="checkbox"
+              checked={zip && stdio.on}
+              disabled={!zip}
+              onChange={(e) => setStdio({ ...stdio, on: e.target.checked })}
+              data-testid="v2-agent-mcp-stdio"
+            />
+            {t("mcpServer.stdio.on")}
+          </label>
+        </Field>
+        {zip && stdio.on && (
+          <>
+            <Field label={t("mcpServer.stdio.base")} hint={t(`mcpServer.stdio.baseHint.${stdio.base}`)}>
+              <Segmented<McpStdioBase>
+                value={stdio.base}
+                ariaLabel={t("mcpServer.stdio.base")}
+                options={MCP_STDIO_BASES.map((b) => ({ value: b, label: t(`mcpServer.stdio.baseName.${b}`) }))}
+                onChange={(b) => setStdio(withBase(stdio, b))}
+              />
+            </Field>
+            <div className="v2-form cols-2">
+              <Field
+                label={t("mcpServer.stdio.command")}
+                required
+                hint={t("mcpServer.stdio.commandHint")}
+                error={err("mcpStdio") ?? (issues.command && stdio.command.trim() ? t("mcpServer.stdio.errCommand") : undefined)}
+              >
+                <input
+                  className="v2-input mono"
+                  value={stdio.command}
+                  maxLength={255}
+                  placeholder={MCP_STDIO_DEFAULT_COMMAND[stdio.base]}
+                  onChange={(e) => setStdio({ ...stdio, command: e.target.value })}
+                  data-testid="v2-agent-mcp-stdio-command"
+                />
+              </Field>
+              <Field
+                label={t("mcpServer.stdio.args")}
+                hint={t("mcpServer.stdio.argsHint", { max: MCP_STDIO_ARGS_MAX })}
+                error={issues.args ? t("mcpServer.stdio.errArgs", { max: MCP_STDIO_ARGS_MAX }) : undefined}
+              >
+                <textarea
+                  className="v2-textarea code"
+                  rows={3}
+                  value={stdio.args}
+                  placeholder={stdio.base === "node" ? "build/index.js" : "server.py"}
+                  onChange={(e) => setStdio({ ...stdio, args: e.target.value })}
+                  data-testid="v2-agent-mcp-stdio-args"
+                />
+              </Field>
+            </div>
+            {argv && (
+              <span className="v2-muted">
+                {t("mcpServer.stdio.preview")} <span className="mono">{argv}</span>
+              </span>
+            )}
+            <Alert tone="warn">{t("mcpServer.stdio.limits")}</Alert>
+          </>
+        )}
+        <Alert>{t("v2.agents.wizard.mcp.wiring")}</Alert>
+        {/* §15.10: the server may sit in a VPC profile (the network step below, shared
+            with every BYOC artifact); it changes the server's outbound path only */}
+        <Field label={t("storage.mount.mcp.network")}>
+          <div className="v2-muted" data-testid="v2-agent-mcp-network">
+            {form.networkProfileId
+              ? t("storage.mount.mcp.vpc", { id: form.networkProfileId })
+              : t("storage.mount.mcp.public")}
+          </div>
+        </Field>
+      </div>
+    </Card>
+  );
+}
+
 export function ByocArtifactCard({
   form,
   set,
@@ -532,7 +879,9 @@ export function ByocArtifactCard({
   const upload = ui.byocUpload;
   const reqs = upload?.detected.requirements;
   const candidates = upload?.detected.entrypoint_candidates ?? [];
+  const stdioBridge = form.protocol === "mcp" && !!form.mcpStdio?.on;
   return (
+    <>
     <Card title={t("v2.agents.wizard.artifactTitle")}>
       <div className="v2-options">
         {BYOC_KINDS.map((k) => (
@@ -604,6 +953,15 @@ export function ByocArtifactCard({
             {upload && kind === "code_zip" && !upload.detected.agentcore_sdk_detected && (
               <Alert tone="warn">{t("create.configure.byocNoSdkWarn")}</Alert>
             )}
+            {upload && kind === "code_zip" && (
+              <div data-testid="v2-agent-byoc-telemetry">
+                {adotLauncher(upload.detected, form.byocInstallReqs) ? (
+                  <Alert tone="success">{t("byocTelemetry.adotOn")}</Alert>
+                ) : (
+                  <Alert tone="warn">{t("byocTelemetry.noAdotWarn")}</Alert>
+                )}
+              </div>
+            )}
             {upload && kind === "container_source" && !upload.detected.has_dockerfile && (
               <Alert tone="warn">{t("create.configure.byocNoDockerfileWarn")}</Alert>
             )}
@@ -619,6 +977,8 @@ export function ByocArtifactCard({
         )}
         {kind === "code_zip" && (
           <div className="v2-form cols-2">
+            {/* a stdio MCP server: the platform bridge is the entrypoint */}
+            {!stdioBridge && (
             <Field label={t("create.configure.byocEntrypoint")} required error={err("byocEntrypoint")}>
               {candidates.length > 0 ? (
                 <Select
@@ -641,6 +1001,7 @@ export function ByocArtifactCard({
                 />
               )}
             </Field>
+            )}
             <Field label={t("create.configure.byocPython")}>
               <Select
                 value={form.byocPython}
@@ -660,21 +1021,26 @@ export function ByocArtifactCard({
                 {t("create.configure.byocInstallReqs")}
               </label>
             </Field>
-            <Field label={t("v2.agents.wizard.byocContractKind")} hint={t("create.configure.byocRawHint")}>
-              <label className="v2-check">
-                <input
-                  type="checkbox"
-                  checked={form.byocRawContract}
-                  onChange={(e) => set({ byocRawContract: e.target.checked })}
-                  data-testid="v2-agent-byoc-raw"
-                />
-                {t("create.configure.byocRaw")}
-              </label>
-            </Field>
+            {form.protocol !== "mcp" && (
+              <Field label={t("v2.agents.wizard.byocContractKind")} hint={t("create.configure.byocRawHint")}>
+                <label className="v2-check">
+                  <input
+                    type="checkbox"
+                    checked={form.byocRawContract}
+                    onChange={(e) => set({ byocRawContract: e.target.checked })}
+                    data-testid="v2-agent-byoc-raw"
+                  />
+                  {t("create.configure.byocRaw")}
+                </label>
+              </Field>
+            )}
           </div>
         )}
       </div>
     </Card>
+    {/* the network step (projects §12.6) — both BYOC artifact kinds, agents and MCP servers */}
+    <NetworkSection form={form} set={set} />
+    </>
   );
 }
 
@@ -687,6 +1053,7 @@ export function ByocModelsCard({
   const { t } = useTranslation();
   const [customOpen, setCustomOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  useModelCatalog(); // the account catalog joins the offered models once it lands
   const models = form.byocModels;
   const full = models.length >= BYOC_MODELS_MAX;
   const add = (id: string) => set((prev) => ({ byocModels: prev.byocModels.includes(id) ? prev.byocModels : [...prev.byocModels, id] }));
@@ -805,8 +1172,12 @@ export function ByocEnvCard({ form, set }: Omit<SectionProps, "cat" | "err">) {
     >
       {contractOpen && (
         <div className="v2-agents-contract" data-testid="v2-agent-byoc-contract">
-          <h3 className="v2-sub-title">{t("create.configure.byocContract")}</h3>
-          <pre className="v2-pre">{t("create.configure.byocContractBody")}</pre>
+          <h3 className="v2-sub-title">
+            {t(form.protocol === "mcp" ? "v2.agents.wizard.mcp.contract" : "create.configure.byocContract")}
+          </h3>
+          <pre className="v2-pre">
+            {t(form.protocol === "mcp" ? "v2.agents.wizard.mcp.contractBody" : "create.configure.byocContractBody")}
+          </pre>
         </div>
       )}
       {form.byocEnvRows.length === 0 ? (

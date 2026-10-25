@@ -24,7 +24,6 @@ from app.evaluation import scorecard
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.scenarios import INPUT_PREVIEW_CHARS, input_preview, items_fingerprint
 from app.models.ledger import Agent, Deployment, SpecSnapshot
-from app.services import memory
 from tests import test_visibility as tv
 from tests.conftest import ws_ctx
 from tests.evaluation.test_datasets_v2 import PERSONA, SCENARIO
@@ -108,11 +107,13 @@ def _get_run(run_id: str) -> EvalRun:
 @pytest.fixture
 def queued(monkeypatch):
     """Runs are accepted but never executed (the queued row is the subject)."""
-    queue = SimpleNamespace(submit=lambda run_id, fn: 0, position=lambda run_id: 0,
+    # **_kw: V3's queue takes `project_id=` and its telemetry resolver `qualifier=`
+    queue = SimpleNamespace(submit=lambda run_id, fn, **_kw: 0, position=lambda run_id: 0,
                             cancel=lambda run_id: False)
     monkeypatch.setattr(svc, "run_queue", queue)
     monkeypatch.setattr(eval_routers, "run_queue", queue)
-    monkeypatch.setattr(svc, "resolve_telemetry", lambda agent, ws: ("svc.DEFAULT", "/lg"))
+    monkeypatch.setattr(svc, "resolve_telemetry",
+                        lambda agent, ws, **_kw: ("svc.DEFAULT", "/lg"))
     return queue
 
 
@@ -243,8 +244,7 @@ def test_a_skipped_persona_has_no_map_entry_and_previews_are_capped(monkeypatch)
     assert row.session_ids == ["sess-p1-" + "x" * 30, "sess-p3-" + "x" * 30]
     assert set(row.scenario_map) == set(row.session_ids)  # p2 was skipped: no entry
     assert row.scenario_map["sess-p3-" + "x" * 30] == {
-        "scenario_id": "p3", "input": PERSONA["input"],
-        "actor_id": memory.eval_actor(None, row.id, 2)}
+        "scenario_id": "p3", "input": PERSONA["input"]}
     p1 = row.scenario_map["sess-p1-" + "x" * 30]
     assert p1["scenario_id"] == "p1" and len(p1["input"]) <= INPUT_PREVIEW_CHARS
 
@@ -257,10 +257,8 @@ def test_a_budget_stopped_scenario_keeps_its_map_entry(monkeypatch):
     row, sessions, _finished = _execute(monkeypatch, [ok(), stopped])
     assert row.budget_stops and row.budget_stops[0]["session_id"] == sessions[1]
     assert row.scenario_map == {
-        sessions[0]: {"scenario_id": "first", "input": "first",
-                      "actor_id": memory.eval_actor(None, row.id, 0)},
-        sessions[1]: {"scenario_id": "second", "input": "second",
-                      "actor_id": memory.eval_actor(None, row.id, 1)},
+        sessions[0]: {"scenario_id": "first", "input": "first"},
+        sessions[1]: {"scenario_id": "second", "input": "second"},
     }
 
 
@@ -620,7 +618,7 @@ def test_compare_two_stamped_replays_aligns_by_scenario(client, results):
     results.answers[a] = _judged({"a1": 0.9, "a2": 0.4})
     results.answers[b] = _judged({"b1": 0.5, "b2": 0.95})
 
-    res = client.get(f"/api/eval/runs/compare?a={a}&b={b}")
+    res = client.get(f"/api/eval/runs/compare-pair?a={a}&b={b}")
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["alignment"] == "scenario" and body["alignment_reason"] is None
@@ -635,7 +633,7 @@ def test_compare_two_stamped_replays_aligns_by_scenario(client, results):
     assert [(s["seq"], s["note"]) for s in config["between"]] == [(2, "prompt tweak"), (3, None)]
     assert sorted(results.calls) == sorted([a, b])
 
-    same = client.get(f"/api/eval/runs/compare?a={b}&b={b}").json()
+    same = client.get(f"/api/eval/runs/compare-pair?a={b}&b={b}").json()
     assert same["config"] == {"same": True, "agent_id": agent, "seq": 3}
 
 
@@ -650,7 +648,7 @@ def test_compare_a_legacy_pair_aligns_by_order_and_degrades_per_side(client, res
                           "sessions": []}
     results.answers[b] = {**_judged({"b1": 0.5}), "truncated": True}
 
-    body = client.get(f"/api/eval/runs/compare?a={a}&b={b}").json()
+    body = client.get(f"/api/eval/runs/compare-pair?a={a}&b={b}").json()
     assert body["alignment"] == "order"
     assert body["results"]["a"] == {"available": False, "reason": "unreadable",
                                     "detail": "boom"}
@@ -666,7 +664,7 @@ def test_compare_window_runs_reads_no_results(client, results):
     agent = _agent()
     a = _run(agent, dataset_name="window:24h")
     b = _run(agent, dataset_name="window:24h")
-    body = client.get(f"/api/eval/runs/compare?a={a}&b={b}").json()
+    body = client.get(f"/api/eval/runs/compare-pair?a={a}&b={b}").json()
     assert (body["alignment"], body["alignment_reason"]) == ("none", "live_traffic")
     assert body["cases"] == [] and body["results"] is None
     assert results.calls == []
@@ -686,7 +684,7 @@ def test_compare_a_legacy_cloud_run_reads_its_pinned_version(client, results, mo
     b = _run(agent, dataset_id="cl-1", dataset_name="cloud:hr", dataset_version="3",
              session_ids=["b1"], scenario_map={"b1": {"scenario_id": "refund_flow",
                                                       "input": "I want a refund"}})
-    body = client.get(f"/api/eval/runs/compare?a={a}&b={b}").json()
+    body = client.get(f"/api/eval/runs/compare-pair?a={a}&b={b}").json()
     assert body["alignment"] == "order" and read == [("cl-1", "2")]
     assert [c["scenario_id"] for c in body["cases"]] == ["refund_flow"]
     assert body["runs"]["a"]["benchmark"]["revision"] == "v2"
@@ -699,16 +697,16 @@ def test_compare_refuses_active_and_insights_runs(client, results):
     active = _run(agent, status="evaluating", dataset_name="window:1h")
     insights = _run(agent, mode="insights", dataset_name="window:1h")
     for other in (active, insights):
-        res = client.get(f"/api/eval/runs/compare?a={done}&b={other}")
+        res = client.get(f"/api/eval/runs/compare-pair?a={done}&b={other}")
         assert res.status_code == 422, res.text
         assert res.json()["code"] == "run.compare_unsupported"
-    assert client.get(f"/api/eval/runs/compare?a={done}").status_code == 422
+    assert client.get(f"/api/eval/runs/compare-pair?a={done}").status_code == 422
 
 
 def test_compare_is_not_read_as_a_run_id(client, results):
-    # `/runs/compare` is declared before `/runs/{run_id}`: a missing query parameter is
-    # the compare route's validation error, never a lookup of run "compare"
-    res = client.get("/api/eval/runs/compare")
+    # `/runs/compare-pair` is declared before `/runs/{run_id}`: a missing query parameter is
+    # the compare route's validation error, never a lookup of run "compare-pair"
+    res = client.get("/api/eval/runs/compare-pair")
     assert res.status_code == 422, res.text
     assert res.json().get("code") != "run.not_found"
 
@@ -726,7 +724,7 @@ def test_a_hidden_dataset_shows_neither_its_current_name_nor_its_items(
     a = _run(agent, session_ids=["a1", "a2"], created_at=T0, **common)
     b = _run(agent, session_ids=["b1", "b2"], created_at=T0 + timedelta(days=1), **common)
     _isolate()
-    url = f"/api/eval/runs/compare?a={a}&b={b}"
+    url = f"/api/eval/runs/compare-pair?a={a}&b={b}"
 
     labels = {r["benchmark"]["label"] for r in bob_client.get("/api/eval/scorecard").json()["runs"]}
     assert labels == {"ada original"}
@@ -749,9 +747,9 @@ def test_compare_a_hidden_run_is_404(ada, bob, results):
     mine = _run(agent, created_by=bob_id, dataset_name="window:1h")
     theirs = _run(agent, created_by=ada_id, dataset_name="window:1h")
     _isolate()
-    res = bob_client.get(f"/api/eval/runs/compare?a={mine}&b={theirs}")
+    res = bob_client.get(f"/api/eval/runs/compare-pair?a={mine}&b={theirs}")
     assert res.status_code == 404 and res.json()["code"] == "run.not_found"
-    assert bob_client.get(f"/api/eval/runs/compare?a={mine}&b={mine}").status_code == 200
+    assert bob_client.get(f"/api/eval/runs/compare-pair?a={mine}&b={mine}").status_code == 200
 
 
 def test_compare_hides_a_hidden_agents_publish_history(admin, ada, bob, results):
@@ -764,7 +762,7 @@ def test_compare_hides_a_hidden_agents_publish_history(admin, ada, bob, results)
     a = _run(ada_agent, agent_snapshot_seq=1, dataset_name="window:1h")
     b = _run(ada_agent, agent_snapshot_seq=2, dataset_name="window:1h")
     _isolate()
-    url = f"/api/eval/runs/compare?a={a}&b={b}"
+    url = f"/api/eval/runs/compare-pair?a={a}&b={b}"
     assert bob_client.get(url).json()["config"] is None
     assert admin.get(url).json()["config"]["between"][0]["seq"] == 2
 
@@ -800,7 +798,6 @@ def test_rerun_a_local_dataset_run(client, submitted):
     assert (body["name"], body["description"]) == ("weekly · 再评", "why")
     assert body["dataset_id"] == dataset and body["evaluators"] == EVALS
     assert body["snapshot"] == {"seq": 2, "source": "stamped"}  # the version live now
-    assert body["budget_notice"] is None
     [call] = submitted
     assert call["dataset_items"] == [{"prompt": "q1"}] and call["actor_model_id"] is None
 
@@ -896,34 +893,12 @@ def test_rerun_on_a_dataset_hidden_since_is_refused_like_post_runs(ada, bob, sub
     assert submitted == []
 
 
-def test_rerun_refuses_a_payer_at_their_limit_like_post_runs(app, bob, submitted):
-    from tests.test_budget_jobs import _limit, _spent
-
-    bob_id, bob_client = bob
-    agent = _agent()
-    dataset = _dataset([{"prompt": "q"}], created_by=bob_id)
-    source = _run(agent, created_by=bob_id, dataset_id=dataset, dataset_name="ds")
-    _limit(bob_id, 1.0)
-    _spent(bob_id, 1.0)
-
-    rerun = bob_client.post(f"/api/eval/runs/{source}/rerun")
-    create = bob_client.post("/api/eval/runs", json={
-        "agent_id": agent, "dataset_id": dataset, "evaluators": EVALS, "wait_seconds": 0})
-    for res in (rerun, create):
-        assert res.status_code == 402, res.text
-        assert res.json()["code"] == "budget.exceeded"
-    assert rerun.json()["detail"] == create.json()["detail"]
-    assert submitted == []
-
-
 def test_rerun_route_is_classified():
-    from app.core.billing_policy import BILLING, SOURCE_EVAL, Billable
     from app.core.route_policy import PERM_EVAL_RUN, ROUTE_POLICY
 
     assert ROUTE_POLICY[("POST", "/api/eval/runs/{run_id}/rerun")] == PERM_EVAL_RUN
     assert ROUTE_POLICY[("GET", "/api/eval/scorecard")] == "member"
-    assert ROUTE_POLICY[("GET", "/api/eval/runs/compare")] == "member"
-    assert BILLING[("POST", "/api/eval/runs/{run_id}/rerun")] == Billable(SOURCE_EVAL)
+    assert ROUTE_POLICY[("GET", "/api/eval/runs/compare-pair")] == "member"
 
 
 def test_rerun_window_of_a_log_source_keeps_its_source(client, submitted, monkeypatch):

@@ -40,7 +40,6 @@ def run_simulated_scenario(
     runtime_user_id: str | None = None,
     actor_id: str = "default",
     invoke_text: Any = None,
-    meter_for: Any = None,
 ) -> str:
     """Drive one persona scenario to completion; returns the runtime session id.
 
@@ -49,13 +48,10 @@ def run_simulated_scenario(
     ``harness.execution_timeout``) is re-raised as is — the caller's transient
     retry and its error codes see the real failure. A failure that never came
     from the agent call (the actor model, the executor) raises RuntimeError.
-    ``invoke_text(prompt, session_id) -> {text, session_id}`` overrides the
-    default SigV4 runtime call for HTTP runtimes — the JWT-inbound bearer path
-    rides through it (harness/A2A keep their own dispatch).
-    ``meter_for() -> UsageMeter`` meters the agent side of each turn the platform
-    invokes itself (exact Harness / Claude SDK usage, else the turn estimate);
-    an ``invoke_text`` caller meters its own turns. The actor model's usage is
-    unreachable here — the caller estimates it (services/job_budget.py).
+    ``invoke_text(prompt, session_id) -> {text, session_id}``, when given, makes
+    every agent call — evaluation replays pass their own invoke, so persona turns
+    get the same per-session memory actor, JWT Bearer path and pinned endpoint as
+    replay turns. Without it the call dispatches on ``method`` / ``protocol``.
     """
     if not actor_model_id:
         raise RuntimeError(
@@ -73,41 +69,28 @@ def run_simulated_scenario(
 
     def _invoke(inp: AgentInvokerInput) -> AgentInvokerOutput:
         prompt = inp.payload if isinstance(inp.payload, str) else str(inp.payload)
-        if invoke_text is not None and method != "harness" and protocol != "a2a":
-            result = invoke_text(prompt, state["session_id"])  # meters its own turn
-        else:
-            meter = meter_for() if meter_for is not None else None
-            sink = {"on_usage": meter.on_usage} if meter is not None else {}
-            try:
-                result = _platform_invoke(prompt, sink)
-            except Exception:
-                if meter is not None:
-                    meter.settle(failed=True, session_id=state["session_id"])
-                raise
-            if meter is not None:
-                meter.settle(session_id=result.get("session_id"))
-        state["session_id"] = result["session_id"]
-        return AgentInvokerOutput(agent_output=result["text"])
-
-    def _platform_invoke(prompt: str, sink: dict[str, Any]) -> dict[str, Any]:
-        if method == "harness":
-            return hc.invoke_harness_text(
+        if invoke_text is not None:
+            result = invoke_text(prompt, state["session_id"])
+        elif method == "harness":
+            result = hc.invoke_harness_text(
                 data_client, agent_arn, prompt, session_id=state["session_id"],
-                actor_id=actor_id, **sink,
+                actor_id=actor_id,
             )
-        if protocol == "a2a":  # JSON-RPC runtimes reject the {prompt} payload; no usage
-            return rt.invoke_a2a_text(
+        elif protocol == "a2a":  # JSON-RPC runtimes reject the {prompt} payload
+            result = rt.invoke_a2a_text(
                 data_client, agent_arn, prompt, session_id=state["session_id"]
             )
-        return rt.invoke_runtime_text(
-            data_client,
-            agent_arn,
-            prompt,
-            session_id=state["session_id"],
-            actor_id=actor_id,
-            runtime_user_id=runtime_user_id,
-            **sink,
-        )
+        else:
+            result = rt.invoke_runtime_text(
+                data_client,
+                agent_arn,
+                prompt,
+                session_id=state["session_id"],
+                actor_id=actor_id,
+                runtime_user_id=runtime_user_id,
+            )
+        state["session_id"] = result["session_id"]
+        return AgentInvokerOutput(agent_output=result["text"])
 
     profile = scenario.get("actor_profile") or {}
     executor = SimulatedScenarioExecutor(

@@ -4,19 +4,22 @@ import { useTranslation } from "react-i18next";
 import { Btn, Panel, ViewHead } from "../../components";
 import { api, type Workspace, type WorkspacePreflightResult } from "../../lib/api";
 import { CROSS_ACCOUNT_GUIDE_URL, SPOKE_TEMPLATE_URL } from "../../lib/links";
-import { ROLE_ARN, suggestExternalId, WORKSPACE_REGIONS as REGIONS } from "../../lib/workspaces";
+import { ROLE_ARN, suggestExternalId } from "../../lib/workspaces";
 
 const OTHER = "__other__";
 
 export function CreateWorkspaceView({
   hubAccountId,
   takenRegions,
+  suggestedRegions,
   onBack,
   onDone,
 }: {
   /** The hub's own account: the default, and the only one for a local workspace. */
   hubAccountId: string;
   takenRegions: string[];
+  /** suggestions from the backend; a typed region is always accepted */
+  suggestedRegions: string[];
   onBack: () => void;
   onDone: (created: Workspace) => void | Promise<void>;
 }) {
@@ -272,7 +275,7 @@ export function CreateWorkspaceView({
                 data-testid="ws-region-select"
               >
                 <option value={OTHER}>{t("workspacesPage.create.regionOther")}</option>
-                {REGIONS.map((option) => (
+                {suggestedRegions.map((option) => (
                   <option key={option} value={option}>
                     {option}
                     {/* "in use" is about THIS account's regions; another

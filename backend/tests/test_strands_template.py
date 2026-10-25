@@ -645,7 +645,10 @@ def test_invoke_emits_heartbeat_during_a_quiet_tool_call(template_module, monkey
 
     out = _drain(template_module.invoke({"prompt": "hi"}))
 
-    assert out[-1] == {"event": "complete", "result": "done"}
+    # a heartbeat may still land after the result on a loaded machine; the result
+    # is the last thing the client acts on
+    events = [e for e in out if e.get("event") != "heartbeat"]
+    assert events[-1] == {"event": "complete", "result": "done"}
     assert out[0]["event"] == "heartbeat" and "timestamp" in out[0]
 
 

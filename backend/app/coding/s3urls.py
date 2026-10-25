@@ -1,4 +1,4 @@
-"""Presigned S3 URLs and the per-project prefix in the workspace artifacts bucket.
+"""Presigned S3 URLs and the per-repo prefix in the workspace artifacts bucket.
 
 The coding runtime's role has no S3 permission (the microVM shell can read its
 credentials): snapshots, restores and exports move through presigned URLs this
@@ -6,11 +6,11 @@ backend mints with the workspace's own credentials, one per transfer and never
 ahead of time — a presigned URL lives no longer than the credentials that signed
 it (an assumed cross-account role lasts ≤ 1 h).
 
-Layout: ``coding/<workspace_id>/<project_id>/{snapshots,exports}/<utc-ts>.<ext>``
+Layout: ``coding/<workspace_id>/<repo_id>/{snapshots,exports}/<utc-ts>.<ext>``
 and ``…/downloads/<utc-ts>-<rand>/<filename>`` (a browser download: the runtime PUTs
-the file or the project zip, the browser GETs it through a short-lived URL). The
+the file or the repo zip, the browser GETs it through a short-lived URL). The
 newest ``KEEP_SNAPSHOTS`` snapshots are kept; downloads older than
-``DOWNLOAD_KEEP_S`` are pruned at the next download; deleting a project deletes its
+``DOWNLOAD_KEEP_S`` are pruned at the next download; deleting a repo deletes its
 whole prefix.
 """
 
@@ -30,7 +30,7 @@ KEEP_SNAPSHOTS = 3
 URL_TTL_S = 900
 # A browser download URL is used at once (the console clicks it as it arrives).
 DOWNLOAD_URL_TTL_S = 300
-# Older download objects are deleted at the next download of the project (well past
+# Older download objects are deleted at the next download of the repo (well past
 # the URL's TTL, so a URL being used is never pruned).
 DOWNLOAD_KEEP_S = 15 * 60
 _SIGV4 = "coding-s3v4"
@@ -52,8 +52,8 @@ def bucket_of(ctx: WorkspaceContext) -> str:
     return bucket
 
 
-def project_prefix(workspace_id: str, project_id: str) -> str:
-    return f"{PREFIX}/{workspace_id}/{project_id}/"
+def repo_prefix(workspace_id: str, repo_id: str) -> str:
+    return f"{PREFIX}/{workspace_id}/{repo_id}/"
 
 
 def _stamp(now: datetime | None = None) -> str:
@@ -61,23 +61,23 @@ def _stamp(now: datetime | None = None) -> str:
     return (now or datetime.now(UTC)).strftime(_STAMP_FORMAT)
 
 
-def snapshot_key(workspace_id: str, project_id: str, now: datetime | None = None) -> str:
-    return f"{project_prefix(workspace_id, project_id)}snapshots/{_stamp(now)}.tgz"
+def snapshot_key(workspace_id: str, repo_id: str, now: datetime | None = None) -> str:
+    return f"{repo_prefix(workspace_id, repo_id)}snapshots/{_stamp(now)}.tgz"
 
 
-def export_key(workspace_id: str, project_id: str, now: datetime | None = None) -> str:
-    return f"{project_prefix(workspace_id, project_id)}exports/{_stamp(now)}.zip"
+def export_key(workspace_id: str, repo_id: str, now: datetime | None = None) -> str:
+    return f"{repo_prefix(workspace_id, repo_id)}exports/{_stamp(now)}.zip"
 
 
-def downloads_prefix(workspace_id: str, project_id: str) -> str:
-    return f"{project_prefix(workspace_id, project_id)}downloads/"
+def downloads_prefix(workspace_id: str, repo_id: str) -> str:
+    return f"{repo_prefix(workspace_id, repo_id)}downloads/"
 
 
-def download_key(workspace_id: str, project_id: str, filename: str,
+def download_key(workspace_id: str, repo_id: str, filename: str,
                  now: datetime | None = None) -> str:
     """``…/downloads/<utc-ts>-<rand>/<filename>``: the stamp dates the object for
     the prune; the random part keeps two downloads in one instant apart."""
-    return (f"{downloads_prefix(workspace_id, project_id)}"
+    return (f"{downloads_prefix(workspace_id, repo_id)}"
             f"{_stamp(now)}-{secrets.token_hex(4)}/{filename}")
 
 
@@ -159,14 +159,14 @@ def _delete_keys(s3: Any, bucket: str, keys: list[str]) -> int:
     return deleted
 
 
-def prune_snapshots(ctx: WorkspaceContext, workspace_id: str, project_id: str, *,
+def prune_snapshots(ctx: WorkspaceContext, workspace_id: str, repo_id: str, *,
                     keep_key: str | None = None, keep: int = KEEP_SNAPSHOTS,
                     client: Any = None) -> list[str]:
     """Delete all but the newest ``keep`` snapshots (keys sort by time); the
-    project's current ``keep_key`` is never deleted. Returns the deleted keys."""
+    repo's current ``keep_key`` is never deleted. Returns the deleted keys."""
     s3 = client or _s3(ctx)
     bucket = bucket_of(ctx)
-    keys = sorted(_list_keys(s3, bucket, f"{project_prefix(workspace_id, project_id)}snapshots/"))
+    keys = sorted(_list_keys(s3, bucket, f"{repo_prefix(workspace_id, repo_id)}snapshots/"))
     doomed = [k for k in keys[:-keep] if k != keep_key] if keep > 0 else []
     if doomed:
         _delete_keys(s3, bucket, doomed)
@@ -182,15 +182,15 @@ def _download_stamp(key: str, prefix: str) -> datetime | None:
         return None
 
 
-def prune_downloads(ctx: WorkspaceContext, workspace_id: str, project_id: str, *,
+def prune_downloads(ctx: WorkspaceContext, workspace_id: str, repo_id: str, *,
                     keep_s: int = DOWNLOAD_KEEP_S, now: datetime | None = None,
                     client: Any = None) -> list[str]:
-    """Delete the project's download objects minted more than ``keep_s`` seconds
+    """Delete the repo's download objects minted more than ``keep_s`` seconds
     ago (an object whose key carries no stamp is not one this module wrote: it
     goes too). Returns the deleted keys."""
     s3 = client or _s3(ctx)
     bucket = bucket_of(ctx)
-    prefix = downloads_prefix(workspace_id, project_id)
+    prefix = downloads_prefix(workspace_id, repo_id)
     cutoff = (now or datetime.now(UTC)) - timedelta(seconds=keep_s)
     doomed = []
     for key in _list_keys(s3, bucket, prefix):
@@ -202,11 +202,11 @@ def prune_downloads(ctx: WorkspaceContext, workspace_id: str, project_id: str, *
     return doomed
 
 
-def delete_project_prefix(ctx: WorkspaceContext, workspace_id: str, project_id: str, *,
+def delete_repo_prefix(ctx: WorkspaceContext, workspace_id: str, repo_id: str, *,
                           client: Any = None) -> int:
-    """Delete every object under the project's prefix (snapshots, exports and
+    """Delete every object under the repo's prefix (snapshots, exports and
     downloads)."""
     s3 = client or _s3(ctx)
     bucket = bucket_of(ctx)
-    keys = _list_keys(s3, bucket, project_prefix(workspace_id, project_id))
+    keys = _list_keys(s3, bucket, repo_prefix(workspace_id, repo_id))
     return _delete_keys(s3, bucket, keys) if keys else 0

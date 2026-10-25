@@ -1,20 +1,22 @@
 // Codex reports paths absolutely (`/mnt/workspace/project/README.md`), while the IDE's
-// tree, tabs and Changes tab are project-relative (`README.md`). Every codex path that
-// reaches the UI goes through `projectPath` — one rule, unit-tested.
+// tree, tabs and Changes tab are repo-relative (`README.md`). Every codex path that
+// reaches the UI goes through `repoPath` — one rule, unit-tested.
 
-/** The project's working directory in the coding runtime (parent design §2.1). */
-export const PROJECT_ROOT = "/mnt/workspace/project";
+/** The repo's working directory in the coding runtime (parent design §2.1). The
+ *  microVM's directory layout is part of the runtime image and still calls it
+ *  `project/` — installed runtimes and their snapshots depend on that name. */
+export const REPO_ROOT = "/mnt/workspace/project";
 
-const ROOT_SEGMENTS = PROJECT_ROOT.split("/").filter(Boolean);
+const ROOT_SEGMENTS = REPO_ROOT.split("/").filter(Boolean);
 
 /**
- * A path as codex reported it → project-relative (`src/app.py`). Absolute paths must
- * lie under `PROJECT_ROOT`; relative paths are relative to the project (codex's cwd)
+ * A path as codex reported it → repo-relative (`src/app.py`). Absolute paths must
+ * lie under `REPO_ROOT`; relative paths are relative to the repo (codex's cwd)
  * and come back as they were, minus `.` / empty segments. `..` is resolved and never
- * climbs out. `null` when the path is empty, outside the project (another absolute
- * path, `~`, a `..` escape) or the project root itself (no file to open).
+ * climbs out. `null` when the path is empty, outside the repo (another absolute
+ * path, `~`, a `..` escape) or the repo root itself (no file to open).
  */
-export function projectPath(raw: string | null | undefined): string | null {
+export function repoPath(raw: string | null | undefined): string | null {
   if (typeof raw !== "string" || raw === "" || raw.startsWith("~")) return null;
   const absolute = raw.startsWith("/");
   const segments: string[] = [];
@@ -35,7 +37,7 @@ export function projectPath(raw: string | null | undefined): string | null {
   return segments.length ? segments.join("/") : null;
 }
 
-/** How a codex path is shown: project-relative when inside the project, else as reported. */
+/** How a codex path is shown: repo-relative when inside the repo, else as reported. */
 export function displayPath(raw: string): string {
-  return projectPath(raw) ?? raw;
+  return repoPath(raw) ?? raw;
 }

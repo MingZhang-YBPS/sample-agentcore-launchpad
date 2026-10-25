@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 
 import { classifyCodingHref, type CodingLinkBlocked } from "./codingLinks";
 
-/** Open a project file in the editor, optionally at a line (and column). */
+/** Open a repo file in the editor, optionally at a line (and column). */
 export type OpenFileHandler = (path: string, line: number | null, column: number | null) => void;
 
 const REMARK = [remarkGfm];
@@ -17,10 +17,10 @@ const keepUrl = (url: string) => url;
 
 /**
  * Markdown from the coding agent (messages, reasoning, plans) and the editor's `.md`
- * preview, styled like the shared `components/Markdown` (`.md`). Links into the project
+ * preview, styled like the shared `components/Markdown` (`.md`). Links into the repo
  * — codex writes them absolutely, `/mnt/workspace/project/main.py#L12` — open the file
  * in the IDE; relative links resolve against `baseDir` (the previewed file's directory,
- * the project root for agent text). http/https/mailto open in a new tab; anything else
+ * the repo root for agent text). http/https/mailto open in a new tab; anything else
  * is inert text. Images are never fetched (a remote one would leak the reader's IP to
  * whoever wrote the text): a placeholder names the source. No rehype-raw — HTML stays
  * escaped text.

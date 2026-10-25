@@ -374,8 +374,7 @@ def test_a_harness_canary_completes_from_50_50_on_a_treatment_win(client, monkey
     canary_id = _canary(_agent())
     _at_stage(canary_id, 1, {"verdict": "treatment-wins", "significant": True})
     runs: list[str] = []
-    monkeypatch.setattr(canary_svc, "run_action",
-                        lambda cid, action, fn, caller=None: runs.append(action))
+    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
 
     res = _complete(client, canary_id)
 
@@ -402,8 +401,7 @@ def test_a_non_significant_early_win_still_needs_the_override(client, monkeypatc
     canary_id = _canary(_agent())
     _at_stage(canary_id, 1, {"verdict": "treatment-wins", "significant": False})
     runs: list[str] = []
-    monkeypatch.setattr(canary_svc, "run_action",
-                        lambda cid, action, fn, caller=None: runs.append(action))
+    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
 
     refused = _complete(client, canary_id)
     overridden = _complete(client, canary_id, allow_non_significant=True)
@@ -418,8 +416,7 @@ def test_a_50_50_tie_may_complete_with_the_override(client, monkeypatch):
     canary_id = _canary(_agent())
     _at_stage(canary_id, 1, {"verdict": "tie", "significant": False})
     runs: list[str] = []
-    monkeypatch.setattr(canary_svc, "run_action",
-                        lambda cid, action, fn, caller=None: runs.append(action))
+    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
 
     refused = _complete(client, canary_id)
     overridden = _complete(client, canary_id, allow_non_significant=True)
@@ -450,8 +447,7 @@ def test_early_complete_is_a_50_50_win_or_tie_from_paired_replay(client, monkeyp
     canary_id = _canary(_agent())
     _at_stage(canary_id, stage, verdict, harness=harness)
     runs: list[str] = []
-    monkeypatch.setattr(canary_svc, "run_action",
-                        lambda cid, action, fn, caller=None: runs.append(action))
+    monkeypatch.setattr(canary_svc, "run_action", lambda cid, action, fn: runs.append(action))
 
     res = _complete(client, canary_id, allow_non_significant=True)
 
@@ -507,7 +503,6 @@ def test_rollback_republishes_the_control_version(monkeypatch):
     db = SessionLocal()
     row = db.get(RuntimeCanary, canary_id)
     row.artifacts = {**row.artifacts, "setup": _setup_artifact(canary_id)}
-    row.created_by, row.created_by_name = "u-can", "carla"
     db.commit()
     db.close()
     control = MagicMock()
@@ -537,14 +532,15 @@ def test_rollback_republishes_the_control_version(monkeypatch):
         agent = db.get(Agent, agent_id)
         assert agent.version == "4"
         assert agent.spec["system_prompt"] == "original prompt"
-        # the restored prompt is a publish too: snapshotted at the restored version,
-        # attributed to the canary's creator
+        # the restored prompt is a publish too: snapshotted at the restored version.
+        # V3's SpecSnapshot has one `created_by` (a username, no `created_by_name`);
+        # the canary paths attribute their snapshots to "canary"
         from app.models.ledger import SpecSnapshot
 
         (snap,) = db.query(SpecSnapshot).filter(SpecSnapshot.agent_id == agent_id).all()
         assert snap.spec["system_prompt"] == "original prompt"
         assert (snap.aws_version, snap.note) == ("4", "canary rolled back")
-        assert (snap.created_by, snap.created_by_name) == ("u-can", "carla")
+        assert snap.created_by == "canary"
     finally:
         db.close()
     assert _reload(canary_id).status == "rolled_back"

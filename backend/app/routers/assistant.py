@@ -8,12 +8,16 @@ re-asserted inside the approval, where the caller's account, permission and
 workspace grant are ALSO re-resolved from the database inside the write
 transaction. Every route is workspace-scoped; conversations are additionally bound
 to the caller's immutable principal (``app.assistant.principal``), except that an
-admin may share one with the whole workspace: every member may then work on it
+admin may share one with its whole project: every member may then work on it
 (each action under its usual permission), and only its owner may delete it.
+
+Conversations are project-owned (design §5.5), and every permission re-checked here
+— at the claim boundary, for CLEAR, for materialization — is the request project's
+key, not the account's (``ProjectScope.can`` / ``principal.project_can``).
 """
 
 import json as _json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from typing import Any
 
@@ -22,10 +26,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.assistant import evaluation_repair, preparation, service
+from app.assistant import digest, evaluation_repair, preparation, service
 from app.assistant import proposal as proposal_contract
-from app.assistant.principal import principal_of
-from app.core.billing_policy import SOURCE_ARCHITECT
+from app.assistant.principal import principal_of, project_can
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError
 from app.models.ledger import Job, Workspace
@@ -33,9 +36,7 @@ from app.routers.agents import _agent_out
 from app.routers.auth import Identity, require_identity, require_permission, resolve_identity
 from app.routers.auth import enabled as auth_enabled
 from app.routers.workspaces import WorkspaceScope, _authorize, require_workspace
-from app.services import budgets
 from app.services.chat import sse_encode
-from app.services.usage_meter import UsageMeter
 
 router = APIRouter(prefix="/api/assistant/architect", tags=["assistant"])
 
@@ -145,6 +146,13 @@ def _caller(request: Request) -> Identity:
     return identity if auth_enabled() else replace(identity, username="river")
 
 
+def _can(request: Request, identity: Identity) -> Callable[[str], bool]:
+    """The caller's keys: the request project's (resolved by the route policy), else —
+    hub-global, never here in practice — the account's."""
+    project = getattr(request.state, "project", None)
+    return project.can if project is not None else identity.can
+
+
 def _recheck_factory(request: Request, ws: WorkspaceScope) -> service.Recheck:
     """Re-resolve the principal and the workspace from the database at the claim
     boundary: an account disabled/expired, a permission revoked or a grant removed
@@ -158,7 +166,7 @@ def _recheck_factory(request: Request, ws: WorkspaceScope) -> service.Recheck:
                 raise AppError("auth.required", "Authentication required", status_code=401)
         else:
             identity = _caller(request)
-        if not identity.can(service.PERMISSION_DEPLOY):
+        if not project_can(db, identity, ws.id, service.PERMISSION_DEPLOY):
             raise AppError("auth.permission_required",
                            f"This action requires the '{service.PERMISSION_DEPLOY}' permission",
                            {"permission": service.PERMISSION_DEPLOY}, status_code=403)
@@ -203,6 +211,9 @@ class RevisionRef(BaseModel):
 
 class ApproveRequest(RevisionRef):
     content_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    # the business project the new agent is filed under (services/agent_project);
+    # omitted = the request's project (X-Project)
+    project_id: str | None = Field(default=None, max_length=32)
 
 
 @router.get("")
@@ -264,7 +275,7 @@ def set_sharing(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """The owner or an administrator opens (or closes) one conversation to every
-    member of the workspace. Deleting it stays with the owner."""
+    member of its project. Deleting it stays with the owner."""
     identity = _caller(request)
     row = service.set_shared(db, ws.id, identity, conversation_id, req.shared)
     return service.conversation_summary(db, row, viewer=principal_of(identity))
@@ -298,12 +309,7 @@ def turn(
     identity = _caller(request)
     principal = principal_of(identity)
     conversation = service.accessible_conversation(db, ws.id, principal, conversation_id)
-    preset = service._require_available(db, ws.row)
-    # the turn's caller pays (in a shared conversation, the collaborator who typed);
-    # the route gate checked spend, this adds the preset model's price
-    payer = budgets.payer_of_request(request)
-    budgets.check_agent(db, payer, preset)
-    meter = UsageMeter.for_payer(payer, SOURCE_ARCHITECT, origin_workspace_id=ws.id)
+    service._require_available(db, ws.row)
     service.require_turn_capacity(conversation)
     service.check_prompt(conversation, req.prompt)
     if req.retry_of_turn is not None:
@@ -321,24 +327,21 @@ def turn(
     def generate() -> Iterator[str]:
         # The stream outlives the request scope → its own session.
         session = SessionLocal()
-        completed = False
         try:
             conversation = service.accessible_conversation(
                 session, ws.id, principal, conversation_id
             )
             run.inner = service.run_turn(
                 session, conversation, workspace_row, workspace, identity, prompt, run=run,
-                retry_of=req.retry_of_turn, meter=meter,
+                retry_of=req.retry_of_turn,
             )
             for event in run.inner:
-                completed = completed or event.get("event") == "done"
                 yield sse_encode(event)
         except AppError as exc:  # a claim refusal after the response started
             yield sse_encode({"event": "error", "data": {"code": exc.code,
                                                         "message": exc.message}})
         finally:
             session.close()
-            meter.settle(failed=not completed)
 
     run.generator = generate()
     return TurnResponse(
@@ -347,6 +350,23 @@ def turn(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/conversations/{conversation_id}/digest/regenerate")
+def regenerate_digest(
+    conversation_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The owner's "wrong, regenerate" on the confirmed-items digest (assistant-context
+    C2, D-4): rebuilt from every turn outside the replay window by one Converse call on
+    the workspace's cheap default model. A collaborator of a shared conversation reads
+    the digest but gets 403 here; anyone else 404. Writes the ledger only."""
+    identity = _caller(request)
+    principal = principal_of(identity)
+    row = service.accessible_conversation(db, ws.id, principal, conversation_id)
+    return {"context_digest": digest.regenerate(db, row, ws.context, principal)}
 
 
 @router.put("/conversations/{conversation_id}/preparation")
@@ -425,6 +445,13 @@ def approve_proposal(
     from app.deployer.pipeline import live_deploy_worker, start_deploy_async
 
     require_permission(request, service.PERMISSION_DEPLOY)  # belt and braces
+    # the new agent's business project (body or X-Project), validated before the
+    # conversation is read: it becomes the request's project from here on
+    from app.services import agent_project
+
+    agent_project.resolve_agent_project(
+        request, db, ws.id, req.project_id, service.PERMISSION_DEPLOY,
+    )
     identity = _caller(request)
     row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     outcome = service.approve_proposal(
@@ -499,7 +526,7 @@ def _plan_state(db: Session, row) -> dict[str, Any]:
         "disclosure": (
             "Creating assets publishes the SELECTED golden-test inputs, expected responses, "
             "assertions and evaluator rubrics of this plan to the workspace Evaluation console "
-            "(Datasets / Evaluators), where every member of the workspace can read them. The "
+            "(Datasets / Evaluators), where every member of the project can read them. The "
             "conversation transcript itself stays private. Nothing is deployed, run, synced to "
             "AWS Datasets or invoked; created assets are registered — they have not passed."
         ),
@@ -576,7 +603,7 @@ def materialize_evaluation_plan(
         fresh = resolve_identity(request, db=db)
         if fresh is None or principal_of(fresh) != principal_of(identity):
             raise AppError("auth.required", "Authentication required", status_code=401)
-        if not assets.may_materialize(fresh):
+        if not assets.may_materialize(fresh, db, ws.id):
             raise assets.permission_error()
     ws_row = db.get(Workspace, ws.id)
     if ws_row is None:
@@ -589,7 +616,7 @@ def materialize_evaluation_plan(
         fresh = resolve_identity(request, db=session) if auth_enabled() else _caller(request)
         if fresh is None:
             raise AppError("auth.required", "Authentication required", status_code=401)
-        if not assets.may_materialize(fresh):
+        if not assets.may_materialize(fresh, session, ws.id):
             raise assets.permission_error()
         fresh_ws = session.get(Workspace, ws.id)
         if fresh_ws is None:
@@ -676,7 +703,7 @@ def review_lambda_revision(
             raise AppError("auth.required", "Authentication required", status_code=401)
         if principal_of(fresh) != principal_of(identity):
             raise AppError("auth.required", "Authentication required", status_code=401)
-        if not assets.may_materialize(fresh):
+        if not assets.may_materialize(fresh, session, ws.id):
             raise assets.permission_error()
         fresh_ws = session.get(Workspace, ws.id)
         if fresh_ws is None:
@@ -735,7 +762,8 @@ def conversation_footprint(
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
     fp = purge_mod.footprint(db, row)
-    return {**fp, "can_clear": all(identity.can(p) for p in fp["required_permissions"])}
+    can = _can(request, identity)
+    return {**fp, "can_clear": all(can(p) for p in fp["required_permissions"])}
 
 
 @router.delete("/conversations/{conversation_id}")
@@ -759,7 +787,7 @@ def delete_conversation(
     starts a new attempt that resumes from the verified checkpoints."""
     identity = _caller(request)
     row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
-    job, done = purge_mod.request_purge(db, row, can=identity.can)
+    job, done = purge_mod.request_purge(db, row, can=_can(request, identity))
     if done is not None:
         return done
     purge_mod.start_purge_async(job.id)

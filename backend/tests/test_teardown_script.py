@@ -48,9 +48,13 @@ class StubControl(_Calls):
 
     def __init__(
         self, *, gateways=(), targets=None, api_key_providers=(), oauth_providers=(),
-        workload_identities=(),
+        engines=(), engine_tags=None, policies=None, attached=None, workload_identities=(),
     ):
         super().__init__()
+        self.engines = list(engines)
+        self.engine_tags = dict(engine_tags or {})  # engine arn -> tags
+        self.policies = {k: list(v) for k, v in (policies or {}).items()}  # engine id -> policies
+        self.attached = dict(attached or {})  # gateway id -> engine arn
         self.gateways = list(gateways)
         self.targets = dict(targets or {})  # gateway_id -> [target summaries]
         self.api_key_providers = list(api_key_providers)
@@ -63,6 +67,30 @@ class StubControl(_Calls):
 
     def list_gateway_targets(self, gatewayIdentifier, **kwargs):
         return {"items": self.targets.get(gatewayIdentifier, [])}
+
+    def get_gateway(self, gatewayIdentifier, **kwargs):
+        arn = self.attached.get(gatewayIdentifier)
+        return {"gatewayId": gatewayIdentifier,
+                **({"policyEngineConfiguration": {"arn": arn}} if arn else {})}
+
+    def list_policy_engines(self, **kwargs):
+        return {"policyEngines": self.engines}
+
+    def list_tags_for_resource(self, resourceArn, **kwargs):
+        return {"tags": self.engine_tags.get(resourceArn, {})}
+
+    def list_policies(self, policyEngineId, **kwargs):
+        return {"policies": self.policies.get(policyEngineId, [])}
+
+    def delete_policy(self, **kwargs):
+        self.policies[kwargs["policyEngineId"]] = [
+            p for p in self.policies.get(kwargs["policyEngineId"], [])
+            if p["policyId"] != kwargs["policyId"]
+        ]
+        return self._record("delete_policy", **kwargs)
+
+    def delete_policy_engine(self, **kwargs):
+        return self._record("delete_policy_engine", **kwargs)
 
     def list_api_key_credential_providers(self, **kwargs):
         return {"credentialProviders": self.api_key_providers}
@@ -114,10 +142,15 @@ class _Paginator:
 
 
 class StubIam(_Calls):
-    def __init__(self, roles: dict[str, list[dict]] | None = None, inline: dict | None = None):
+    def __init__(self, roles: dict[str, list[dict]] | None = None, inline: dict | None = None,
+                 documents: dict | None = None):
         super().__init__()
         self.roles = roles or {}  # name -> tags
         self.inline = inline or {}  # name -> inline policy names
+        self.documents = documents or {}  # (role, policy) -> policy document
+
+    def get_role_policy(self, RoleName, PolicyName):
+        return {"PolicyDocument": self.documents.get((RoleName, PolicyName), {})}
 
     def get_paginator(self, op):
         assert op == "list_roles"
@@ -335,6 +368,31 @@ def test_delete_credential_providers_by_name(monkeypatch):
     ]
 
 
+def _telemetry_policy(region: str) -> dict:
+    return {"Statement": [{
+        "Sid": "Telemetry", "Effect": "Allow", "Action": ["logs:PutLogEvents"],
+        "Resource": [f"arn:aws:logs:{region}:123456789012:log-group:"
+                     "/aws/bedrock-agentcore/runtimes/*"],
+    }]}
+
+
+def test_agent_roles_of_another_region_are_not_swept(monkeypatch):
+    # IAM is account-global: a us-west-2 teardown must leave a us-east-1 agent's role
+    tag = [{"Key": teardown.agent_iam.MANAGED_TAG_KEY, "Value": "a"}]
+    here, there = "launchpad-agent-here-11111111", "launchpad-agent-there-22222222"
+    iam = StubIam(
+        roles={here: tag, there: tag, ORPHAN_ROLE: tag},
+        inline={here: ["launchpad-caps-here"], there: ["launchpad-caps-there"]},
+        documents={(here, "launchpad-caps-here"): _telemetry_policy("us-west-2"),
+                   (there, "launchpad-caps-there"): _telemetry_policy("us-east-1")},
+    )
+    _wire(monkeypatch, StubControl(), iam)
+    roles = [ident for kind, ident, _ in teardown.collect_targets("us-west-2")
+             if kind == "agent-role"]
+    # its own Region's role and the policy-less orphan go; the other Region's stays
+    assert roles == [ORPHAN_ROLE, here]
+
+
 def test_delete_agent_role_removes_inline_policies_first(monkeypatch):
     iam = StubIam(inline={ORPHAN_ROLE: ["fs", "gateway"]})
     _wire(monkeypatch, StubControl(), iam)
@@ -361,6 +419,47 @@ def test_scope_constants_match_the_services_that_create_the_resources():
     assert SHARED_ROLE == teardown.EXECUTION_ROLE_BASE
 
 
+LP_DESC = "Policy Engine managed from Launchpad for launchpad-gw"
+MANAGED = {"agentcore-launchpad:managed": "true",
+           "agentcore-launchpad:managed-by": "agentcore-launchpad"}
+
+
+def _engine(engine_id: str, description: str) -> dict:
+    return {"policyEngineId": engine_id, "name": engine_id.rsplit("-", 1)[0],
+            "policyEngineArn": f"arn:aws:bedrock-agentcore:us-west-2:1:policy-engine/{engine_id}",
+            "description": description}
+
+
+def test_collect_targets_finds_attached_and_leftover_launchpad_engines(monkeypatch):
+    attached = _engine("launchpad_gw_abc_policy-1", LP_DESC)
+    leftover = _engine("launchpad_gw_policy-2", LP_DESC)
+    foreign_attached = _engine("theirs-3", "someone else's engine")
+    untagged = _engine("untagged-4", LP_DESC)
+    other_gw = _engine("other-5", "Policy Engine managed from Launchpad for other-gw")
+    engines = [attached, leftover, foreign_attached, untagged, other_gw]
+    tags = {e["policyEngineArn"]: MANAGED for e in engines if e is not untagged}
+    control = StubControl(
+        gateways=[{"gatewayId": GW_ID, "name": teardown.GATEWAY_NAME},
+                  {"gatewayId": OTHER_GW_ID, "name": "other-gw"}],
+        engines=engines, engine_tags=tags,
+        attached={GW_ID: attached["policyEngineArn"], OTHER_GW_ID: other_gw["policyEngineArn"]},
+    )
+    _wire(monkeypatch, control, StubIam())
+    targets = teardown.collect_targets("us-west-2")
+    found = [ident for kind, ident, _ in targets if kind == "policy-engine"]
+    assert found == ["launchpad_gw_abc_policy-1", "launchpad_gw_policy-2"]
+    kinds = [kind for kind, _, _ in targets]
+    assert kinds.index("gateway") < kinds.index("policy-engine")
+
+
+def test_delete_policy_engine_removes_policies_first(monkeypatch):
+    control = StubControl(policies={"pe-1": [{"policyId": "p-a"}, {"policyId": "p-b"}]})
+    monkeypatch.setattr(teardown.bs, "_client", lambda service, region: control)
+    teardown.delete_target("policy-engine", "pe-1", "us-west-2")
+    assert [kw["policyId"] for kw in control.ops("delete_policy")] == ["p-a", "p-b"]
+    assert control.ops("delete_policy_engine") == [{"policyEngineId": "pe-1"}]
+    order = [op for op, _ in control.calls]
+    assert order.index("delete_policy_engine") > order.index("delete_policy")
 def test_collect_targets_sweeps_only_console_workload_identities(monkeypatch):
     """The COA context layer's console workload identities, across pages; a
     runtime's own workload identity (named after the runtime) is never matched."""

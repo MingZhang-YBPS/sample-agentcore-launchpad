@@ -18,7 +18,7 @@ import time
 import uuid
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 # unique per run — harness deletion is async, so a fixed name races re-runs
 AGENT_NAME = f"golden-path-{uuid.uuid4().hex[:6]}"
@@ -66,11 +66,14 @@ def main() -> int:
     health = client.get("/api/health").json()
     overview = client.get("/api/overview").json()
     services = overview["services"]
-    down = [k for k, v in services.items() if not v and k != "evaluation"]
+    # evaluation lights up after the first run; Policy is opt-in (d071afa) — a fresh
+    # workspace has no engine until an administrator attaches one
+    down = [k for k, v in services.items() if not v and k not in ("evaluation", "policy")]
     step(
         "bootstrap-verify",
         health.get("status") == "ok" and not down,
-        f"health ok · services {'all green' if not down else 'DOWN: ' + ','.join(down)}",
+        f"health ok · services {'all green' if not down else 'DOWN: ' + ','.join(down)}"
+        f"{'' if services.get('policy') else ' · policy not attached (opt-in)'}",
     )
 
     # 2 — create harness agent
@@ -95,29 +98,27 @@ def main() -> int:
 
     try:
         # 3 — chat two turns, same session (short-term memory)
-        turn1 = client.post(
-            f"/api/agents/{agent_id}/invoke",
-            json={"prompt": "Hi! My favourite colour is teal. Please remember that."},
-        ).json()
+        turn1 = chat_sse(
+            client, agent_id, "Hi! My favourite colour is teal. Please remember that."
+        )
         session_id = turn1["session_id"]
-        turn2 = client.post(
-            f"/api/agents/{agent_id}/invoke",
-            json={
-                "prompt": "What is my favourite colour? One word.",
-                "session_id": session_id,
-            },
-        ).json()
+        turn2 = chat_sse(
+            client, agent_id, "What is my favourite colour? One word.", session_id=session_id
+        )
         step(
             "chat-memory",
             "teal" in turn2["text"].lower(),
             f"turn2 → {turn2['text']!r} ({turn2['latency_ms']}ms, session {session_id[:12]}…)",
         )
 
-        # 4 — gateway tool call (Cedar-enforced MCP gateway → HR lambda)
-        hr = client.post(
-            f"/api/agents/{agent_id}/invoke",
-            json={"prompt": "How many vacation days does Maya Chen have left?"},
-        ).json()
+        # 4 — gateway tool call (Cedar-enforced MCP gateway → HR lambda). The HR
+        # toolset only looks employees up by id (get_employee takes EMP-NNNN; there
+        # is no search by name), so the prompt gives the id — as e2e_gateway_tool
+        # does. Asking by name alone made Claude ask back for the id instead.
+        hr = chat_sse(
+            client, agent_id,
+            "How many vacation days does Maya Chen (employee EMP-1024) have left this year?",
+        )
         step("gateway-tool", "9" in hr["text"], f"→ {hr['text']!r}")
 
         # 5 — registry approval chain on the auto-created A2A record
@@ -174,7 +175,10 @@ def main() -> int:
         )
         run_res.raise_for_status()
         run = run_res.json()
-        deadline = time.time() + 900
+        # Same budget as e2e_eval_run.wait_run: AgentCore batch evaluation has been
+        # observed to take ~21 min for this 2-item dataset when it queues behind
+        # e2e_eval_extended's runs, so 15 min failed a run that later completed.
+        deadline = time.time() + 1800
         while time.time() < deadline:
             run = client.get(f"/api/eval/runs/{run['id']}").json()
             if run["status"] in ("completed", "failed"):

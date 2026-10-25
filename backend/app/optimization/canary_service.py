@@ -7,9 +7,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.billing_policy import SOURCE_CANARY
 from app.core.db import SessionLocal
 from app.core.errors import AppError, cleanup_error, is_not_found
+from app.core.project_scope import project_context
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.online_evaluators import ONLINE_EVAL_DEFAULT
 from app.models.ledger import Agent
@@ -17,12 +17,12 @@ from app.optimization import canary_harness, canary_infra
 from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
 from app.schemas.agent import AgentSpec
-from app.services import budgets, creators, job_budget, snapshots
+from app.services import creators, snapshots
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
-from app.services.agentcore.client import control_client, data_client
+from app.services.agentcore.client import api_data_client as data_client
+from app.services.agentcore.client import control_client
 from app.services.memory import scoped_actor
-from app.services.usage_meter import KIND_JOB_ESTIMATE
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 logger = logging.getLogger(__name__)
@@ -71,20 +71,20 @@ def run_action(
     canary_id: str,
     action: str,
     fn: Callable[[Progress], Any],
-    caller: creators.Creator | None = None,
 ) -> None:
-    """Run one canary action with progress persisted on its own ledger row.
-    ``caller`` is recorded per action (``artifacts.action_callers``): who started
-    an action pays for it, whoever created the canary."""
+    """Run one canary action with progress persisted on its own ledger row."""
 
     def progress(message: str) -> None:
         _update(canary_id, progress=message[:300])
 
-    _refuse_system_subject(_get(canary_id), action)  # before any write or thread
+    canary = _get(canary_id)
+    _refuse_system_subject(canary, action)  # before any write or thread
+    project_id = canary.project_id  # a thread starts with an empty context
 
     def runner() -> None:
         try:
-            fn(progress)
+            with project_context(project_id):
+                fn(progress)
             _update(canary_id, running_action=None, progress=None)
         except Exception as exc:
             _update(
@@ -94,11 +94,7 @@ def run_action(
                 error=f"{action}: {type(exc).__name__}: {exc}"[:500],
             )
 
-    extra: dict[str, Any] = {}
-    if caller is not None:
-        extra["artifact"] = {"action_callers": experiment_service.record_action_caller(
-            _get(canary_id).artifacts, action, caller)}
-    _update(canary_id, running_action=action, error=None, **extra)
+    _update(canary_id, running_action=action, error=None)
     experiment_service._spawn(runner)
 
 
@@ -879,27 +875,12 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     return result
 
 
-def arm_models(row: RuntimeCanary) -> dict[str, str | None]:
-    """The model each arm's tokens are priced at (either canary kind): the
-    champion's for the control endpoint, the candidate spec's (when it changed it)
-    for the treatment."""
-    db = SessionLocal()
-    try:
-        agent = db.get(Agent, row.champion_agent_id)
-        control = budgets.agent_model(agent)[0] if agent is not None else None
-    finally:
-        db.close()
-    candidate = str((row.artifacts.get("edited_spec") or {}).get("model_id") or "").strip()
-    return {"control": control, "treatment": candidate or control}
-
-
 def _paired_traffic(
     row: RuntimeCanary,
     workspace: WorkspaceContext,
     prompts: list[str],
     scenario_ids: list[str] | None,
     progress: Progress,
-    budget: job_budget.JobBudget | None = None,
 ) -> dict[str, Any]:
     """Send every prompt to BOTH named endpoints (see ``canary_harness.PAIRED_MODE``).
 
@@ -910,15 +891,7 @@ def _paired_traffic(
     ``TRAFFIC_MAX_CONCURRENCY`` run at once on daemon threads, while ``progress``
     stays on this thread. A transient upstream error is retried once in a new
     session; any other failure marks that side of the pair, which the verdict then
-    leaves out — it never fails the whole replay.
-
-    ``budget`` (the action caller's) meters each call: exactly where the agent
-    reports usage (Harness ``metadata``, a Claude SDK runtime's ``complete.usage``),
-    and a Runtime turn that reports nothing as one flagged ``job_estimate`` row at
-    the agent's turn estimate (the rule an eval replay turn follows). It is checked
-    once per PAIR, by whichever arm of it starts first: once the caller is over
-    their monthly limit the pairs not yet started are skipped whole
-    (``skipped: budget_exceeded``), so no half pair is ever sent."""
+    leaves out — it never fails the whole replay."""
     import queue
     import threading
     import uuid
@@ -934,13 +907,6 @@ def _paired_traffic(
     # the per-kind seams; everything else about a pair is shared
     new_session_id = hc.new_session_id if harness else rt.new_session_id
     invoke_text = hc.invoke_harness_text if harness else rt.invoke_runtime_text
-    opaque: dict[str, Any] = {}
-    if budget is not None and not harness:
-        # read once per action, not per call: a silent Runtime turn's estimate
-        opaque = {
-            "opaque": True, "estimate_kind": KIND_JOB_ESTIMATE,
-            "estimate_usd": experiment_service.traffic_prompt_estimate(row.champion_agent_id),
-        }
     labels = list(scenario_ids or [])
     pairs = [
         {"index": i, "scenario_id": labels[i] if i < len(labels) else f"item_{i + 1}",
@@ -952,22 +918,6 @@ def _paired_traffic(
         for arm in ("control", "treatment"):
             jobs.put((i, arm))
     done: queue.SimpleQueue[tuple[int, str, str | None, str | None]] = queue.SimpleQueue()
-    models = arm_models(row) if budget is not None else {}
-    # per pair: may it run (decided once, by its first arm to start)
-    allowed: dict[int, bool] = {}
-    decide = threading.Lock()
-    stop_error: list[AppError] = []
-
-    def pair_allowed(i: int) -> bool:
-        if budget is None:
-            return True
-        with decide:
-            if i not in allowed:
-                error = None if stop_error else budget.exceeded()
-                if error is not None:
-                    stop_error.append(error)
-                allowed[i] = not stop_error
-            return allowed[i]
 
     def worker() -> None:
         while True:
@@ -975,30 +925,19 @@ def _paired_traffic(
                 i, arm = jobs.get_nowait()
             except queue.Empty:
                 return
-            if not pair_allowed(i):
-                done.put((i, arm, None, job_budget.STOP_REASON))
-                continue
             error: str | None = None
             sid: str | None = None
             for attempt in range(2):
                 sid = new_session_id()
-                meter = (budget.meter(session_id=sid, model_id=models.get(arm),
-                                      resource_id=arn, **opaque)
-                         if budget is not None else None)
                 try:
                     invoke_text(
                         data, arn, prompts[i], session_id=sid, actor_id=actor,
                         qualifier=endpoints[arm],
                         runtime_user_id=experiment_service.TRAFFIC_USER_ID,
-                        **({"on_usage": meter.on_usage} if meter is not None else {}),
                     )
                     error = None
-                    if meter is not None:
-                        meter.settle(session_id=sid)
                     break
                 except Exception as exc:  # noqa: BLE001 — recorded per side, never raised
-                    if meter is not None:
-                        meter.settle(failed=True, session_id=sid)
                     error = (getattr(exc, "code", None) or type(exc).__name__)[:120]
                     if attempt or not transient_invoke_error(exc):
                         break
@@ -1010,41 +949,28 @@ def _paired_traffic(
                for n in range(workers)]
     for thread in threads:
         thread.start()
-    total, failed, skipped = 2 * len(prompts), 0, 0
+    total, failed = 2 * len(prompts), 0
     for finished in range(1, total + 1):
         i, arm, sid, error = done.get()
-        if error == job_budget.STOP_REASON and sid is None:
-            skipped += 1  # never sent: the caller's budget was reached first
-            pairs[i]["skipped"] = job_budget.STOP_REASON
-        else:
-            pairs[i][f"{arm}_session_id"] = sid
-            if error:
-                failed += 1
-                pairs[i].setdefault("errors", {})[arm] = error
-                pairs[i]["error"] = ", ".join(
-                    f"{k}: {v}" for k, v in pairs[i]["errors"].items())
-        progress(f"paired replay · {finished}/{total} calls · {failed} failed"
-                 + (f" · {skipped} skipped: budget reached" if skipped else ""))
+        pairs[i][f"{arm}_session_id"] = sid
+        if error:
+            failed += 1
+            pairs[i].setdefault("errors", {})[arm] = error
+            pairs[i]["error"] = ", ".join(f"{k}: {v}" for k, v in pairs[i]["errors"].items())
+        progress(f"paired replay · {finished}/{total} calls · {failed} failed")
     for thread in threads:
         thread.join()
     for p in pairs:
         p.pop("errors", None)
-    sent = total - failed - skipped
-    result: dict[str, Any] = {
+    return {
         "mode": canary_harness.PAIRED_MODE,
         "pairs": pairs,
         "session_ids": [p[k] for p in pairs for k in ("control_session_id", "treatment_session_id")
                         if p[k]],
-        "sent": sent,
+        "sent": total - failed,
         "failed": failed,
-        "status_counts": {"ok": sent, **({"error": failed} if failed else {})},
+        "status_counts": {"ok": total - failed, **({"error": failed} if failed else {})},
     }
-    if skipped:
-        result.update(
-            skipped=skipped, stop_reason=job_budget.STOP_REASON,
-            stop_message=job_budget.stop_message(stop_error[0]) if stop_error else None,
-        )
-    return result
 
 
 def act_traffic(
@@ -1053,13 +979,8 @@ def act_traffic(
     dataset_info: dict[str, str],
     progress: Progress,
     scenario_ids: list[str] | None = None,
-    caller: creators.Creator | None = None,
 ) -> dict[str, Any]:
-    """One PAIRED traffic attempt for either canary kind (``_paired_traffic``),
-    charged to ``caller`` (who pressed TRAFFIC). It stops before its next pair once
-    the caller is over budget, keeping what was already sent; the attempt then
-    carries ``stop_reason: budget_exceeded`` — not a row error: a retry would be
-    refused.
+    """One PAIRED traffic attempt for either canary kind (``_paired_traffic``).
 
     A Runtime canary used to replay through its Gateway at the stage weights, which
     at 90/10 gave the treatment 2 of 50 sessions (issue #298). That weighted attempt
@@ -1068,9 +989,8 @@ def act_traffic(
     (``active_canary_route``), so the stage weights keep capping its exposure."""
     row = _get(canary_id)
     workspace = context_for_workspace(row.workspace_id)
-    budget = experiment_service.action_budget(row, caller, SOURCE_CANARY)
     attempt = {
-        **_paired_traffic(row, workspace, prompts, scenario_ids, progress, budget=budget),
+        **_paired_traffic(row, workspace, prompts, scenario_ids, progress),
         **dataset_info,
         "baseline_n": 0,
         "completed_at": _now(),
@@ -1168,8 +1088,7 @@ def _paired_verdict(row: RuntimeCanary, current: dict[str, Any], progress: Progr
         **verdict,
         **_scoring_keys(configured, metrics),
         "mode": canary_harness.PAIRED_MODE,
-        # a pair the caller's spend budget skipped was never sent
-        "pairs_sent": sum(1 for p in pairs if not p.get("skipped")),
+        "pairs_sent": len(pairs),
         "pairs_complete": len(complete),
         "pairs": rows_out,
         "baseline_n": 0,
@@ -1312,9 +1231,10 @@ def act_complete(
         agent.spec = copy.deepcopy(row.artifacts["edited_spec"])
         agent.version = setup["v_candidate"]
         # a canary win is a publish like any other (no deployment row, though): the
-        # promoted spec joins the snapshot history, stamped with the version it made live
+        # promoted spec joins the snapshot history, stamped with the version it made
+        # live, or a later rollback to "the spec before this" would skip it
         snap = snapshots.record_snapshot(
-            db, agent, actor=_canary_actor(row), note="canary promoted"
+            db, agent, created_by="canary", note=f"canary {canary_id[:8]} promoted"
         )
         snap.aws_version = str(setup["v_candidate"])
         db.commit()
@@ -1398,7 +1318,7 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
                 # pipeline, so it joins the snapshot history at the restored version.
                 fresh.spec = {**(fresh.spec or {}), "requirements": healed[-1]}
                 snap = snapshots.record_snapshot(
-                    db, fresh, actor=_canary_actor(row), note="canary rolled back"
+                    db, fresh, created_by="canary", note="canary rolled back"
                 )
                 snap.aws_version = str(v_restored)
             db.commit()
@@ -1418,14 +1338,6 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
         artifact={"rollback": result},
     )
     return result
-
-
-def _canary_actor(row: RuntimeCanary) -> creators.Creator | None:
-    """Who a canary's ledger publish is attributed to: the canary's creator (the
-    action thread carries no request identity); None falls back to the agent's."""
-    if row.created_by is None and row.created_by_name is None:
-        return None
-    return creators.Creator(user_id=row.created_by, name=row.created_by_name)
 
 
 def _prompt_text(system_prompt: Any) -> str:
@@ -1485,7 +1397,7 @@ def _rollback_harness(canary_id: str, row: RuntimeCanary, progress: Progress) ->
             agent.version = v_restored or agent.version
             # the restored prompt is a publish too: snapshot it at the restored version
             snap = snapshots.record_snapshot(
-                db, agent, actor=_canary_actor(row), note="canary rolled back"
+                db, agent, created_by="canary", note="canary rolled back"
             )
             snap.aws_version = str(agent.version) if agent.version else None
             db.commit()

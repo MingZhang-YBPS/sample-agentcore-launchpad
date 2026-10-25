@@ -30,8 +30,7 @@ def stub_environment(monkeypatch, batch_status="COMPLETED"):
     call_count = {"n": 0}
 
     def invoke_runtime_text(
-        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None,
-        on_usage=None,
+        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None
     ):
         call_count["n"] += 1
         return {"text": "42", "session_id": f"sess-{call_count['n']:03d}" + "x" * 30}
@@ -257,8 +256,7 @@ def test_harness_run_completes(client, monkeypatch):
     harness_calls = {"n": 0}
     actors: list[str] = []
 
-    def invoke_harness_text(client_, arn, prompt, session_id=None, actor_id="default",
-                            on_usage=None):
+    def invoke_harness_text(client_, arn, prompt, session_id=None, actor_id="default"):
         harness_calls["n"] += 1
         actors.append(actor_id)
         return {"text": "ok", "session_id": f"hsess-{harness_calls['n']:03d}" + "x" * 30}
@@ -281,9 +279,10 @@ def test_harness_run_completes(client, monkeypatch):
     assert harness_calls["n"] == 2 and calls["n"] == 0  # InvokeHarness, not runtime
     # each scenario replays as a fresh user under the agent's scope, never the
     # shared bare "default" actor, and the run records which actor ran which session
-    assert actors == [f"{agent.id}__eval-{run_id}-0", f"{agent.id}__eval-{run_id}-1"]
-    stored = SessionLocal().get(EvalRun, run_id).scenario_map
-    assert [stored[sid]["actor_id"] for sid in run["session_ids"]] == actors
+    assert actors == [svc.eval_actor(agent.id, run_id, 1), svc.eval_actor(agent.id, run_id, 2)]
+    assert actors[0] != actors[1] and all(a.startswith(f"{agent.id}__") for a in actors)
+    stored = SessionLocal().get(EvalRun, run_id)
+    assert [svc.eval_session_actors(stored, sid)[0] for sid in run["session_ids"]] == actors
     telemetry_wait.assert_called_once_with(
         workspace=ANY,
         session_id=run["session_ids"][-1],

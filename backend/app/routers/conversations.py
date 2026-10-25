@@ -4,12 +4,16 @@ un-deployed generated code).
 Namespaced apart from the platform Chat page: `/api/chat/*` invokes DEPLOYED
 AgentCore runtimes; `/api/conversations/*` here runs local, un-deployed studio
 flows. Ported from strands_studio_ui backend/main.py (origin/main).
+
+Every session belongs to the workspace, project and user that created it; any
+other caller gets the same 404 as for a missing one (an admin sees the whole
+project's).
 """
 
 import json
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.errors import AppError, NotFoundError
@@ -23,8 +27,10 @@ from app.models.conversation import (
     MessageListResponse,
     UpdateSessionCodeRequest,
 )
+from app.routers.auth import require_identity
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import local_exec
-from app.services.conversation_service import conversation_service
+from app.services.conversation_service import SessionCaller, conversation_service
 
 logger = logging.getLogger("launchpad.conversations")
 
@@ -41,45 +47,62 @@ def _require_interpreter() -> None:
         raise AppError(code, message, status_code=status)
 
 
+def _caller(request: Request) -> SessionCaller:
+    """The request's workspace + identity — what a session is scoped to."""
+    ws: WorkspaceScope = require_workspace(request)
+    identity = require_identity(request)
+    return SessionCaller(ws.id, identity.username, identity.is_admin)
+
+
 def _not_found(exc: ValueError) -> NotFoundError:
     return NotFoundError("studio.session.not_found", str(exc))
 
 
 @router.post("/conversations", response_model=ConversationSession)
-async def create_conversation_session(request: CreateConversationRequest) -> ConversationSession:
+async def create_conversation_session(
+    request: CreateConversationRequest, caller: SessionCaller = Depends(_caller)
+) -> ConversationSession:
     _require_interpreter()
     try:
-        return await conversation_service.create_session(request)
+        return await conversation_service.create_session(request, caller)
     except Exception as exc:  # noqa: BLE001
         logger.error("error creating conversation session: %s", exc)
         raise AppError("studio.session.create_failed", str(exc), status_code=500) from exc
 
 
 @router.get("/conversations", response_model=ConversationListResponse)
-async def get_conversation_sessions() -> ConversationListResponse:
-    return await conversation_service.get_sessions()
+async def get_conversation_sessions(
+    caller: SessionCaller = Depends(_caller),
+) -> ConversationListResponse:
+    return await conversation_service.get_sessions(caller)
 
 
 @router.get("/conversations/{session_id}", response_model=ConversationHistoryResponse)
-async def get_conversation_history(session_id: str) -> ConversationHistoryResponse:
+async def get_conversation_history(
+    session_id: str, caller: SessionCaller = Depends(_caller)
+) -> ConversationHistoryResponse:
     try:
-        return await conversation_service.get_session_history(session_id)
+        return await conversation_service.get_session_history(session_id, caller)
     except ValueError as exc:
         raise _not_found(exc) from exc
 
 
 @router.delete("/conversations/{session_id}")
-async def delete_conversation_session(session_id: str) -> dict:
+async def delete_conversation_session(
+    session_id: str, caller: SessionCaller = Depends(_caller)
+) -> dict:
     try:
-        return await conversation_service.delete_session(session_id)
+        return await conversation_service.delete_session(session_id, caller)
     except ValueError as exc:
         raise _not_found(exc) from exc
 
 
 @router.post("/conversations/{session_id}/messages", response_model=ChatResponse)
-async def send_chat_message(session_id: str, request: ChatRequest) -> ChatResponse:
+async def send_chat_message(
+    session_id: str, request: ChatRequest, caller: SessionCaller = Depends(_caller)
+) -> ChatResponse:
     try:
-        return await conversation_service.send_message(session_id, request.message)
+        return await conversation_service.send_message(session_id, request.message, caller)
     except ValueError as exc:
         raise _not_found(exc) from exc
     except Exception as exc:  # noqa: BLE001
@@ -88,10 +111,14 @@ async def send_chat_message(session_id: str, request: ChatRequest) -> ChatRespon
 
 
 @router.post("/conversations/{session_id}/messages/stream")
-async def send_chat_message_stream(session_id: str, request: ChatRequest) -> StreamingResponse:
+async def send_chat_message_stream(
+    session_id: str, request: ChatRequest, caller: SessionCaller = Depends(_caller)
+) -> StreamingResponse:
     async def generate_response():
         try:
-            async for chunk in conversation_service.stream_message(session_id, request.message):
+            async for chunk in conversation_service.stream_message(
+                session_id, request.message, caller
+            ):
                 # chunk_to_sse preserves newlines inside multiline chunks (empty
                 # `data: ` line = newline); the [CHAT_COMPLETE:id] /
                 # [CHAT_ERROR:json] sentinels are single-line and pass through.
@@ -118,12 +145,16 @@ async def send_chat_message_stream(session_id: str, request: ChatRequest) -> Str
 
 @router.put("/conversations/{session_id}/code", response_model=ConversationSession)
 async def update_conversation_code(
-    session_id: str, request: UpdateSessionCodeRequest
+    session_id: str,
+    request: UpdateSessionCodeRequest,
+    caller: SessionCaller = Depends(_caller),
 ) -> ConversationSession:
     """Rewrite the session's agent code in place (messages kept) — backs the
     apply-fix path so subsequent turns run the fixed code."""
     try:
-        return await conversation_service.update_session_code(session_id, request.generated_code)
+        return await conversation_service.update_session_code(
+            session_id, request.generated_code, caller
+        )
     except ValueError as exc:
         raise _not_found(exc) from exc
     except Exception as exc:  # noqa: BLE001
@@ -132,8 +163,10 @@ async def update_conversation_code(
 
 
 @router.get("/conversations/{session_id}/messages", response_model=MessageListResponse)
-async def get_conversation_messages(session_id: str) -> MessageListResponse:
+async def get_conversation_messages(
+    session_id: str, caller: SessionCaller = Depends(_caller)
+) -> MessageListResponse:
     try:
-        return await conversation_service.get_session_messages(session_id)
+        return await conversation_service.get_session_messages(session_id, caller)
     except ValueError as exc:
         raise _not_found(exc) from exc

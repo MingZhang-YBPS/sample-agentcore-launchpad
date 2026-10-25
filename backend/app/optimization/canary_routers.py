@@ -11,17 +11,18 @@ from app.assistant import purge as assistant_purge
 from app.core import billing_policy
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import owned_get, project_context, visible_in_current_project
 from app.evaluation.online_evaluators import (
     normalize_online_evaluators,
     refuse_hidden_evaluators,
 )
 from app.evaluation.routers import _dataset_in
 from app.models.ledger import Agent
-from app.optimization import canary_harness, canary_service, service
+from app.optimization import canary_harness, canary_infra, canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import agent_access, budgets, creators, visibility
+from app.services import agent_access, creators, visibility
 from app.services.agentcore.client import control_client
 from app.services.creators import Creator
 from app.services.harness_convert import graft_config_bundle
@@ -127,6 +128,9 @@ class RuntimeCanaryCreate(BaseModel):
     # when set, the verdict's winner / significance / sample size come from this one
     # evaluator (it must be among the selected); absent → the legacy aggregate verdict
     primary_evaluator: str | None = None
+    # the starter confirms the candidate's read-write shared-state storage mounts in a
+    # gated workspace (storage-mounts §8.2); without it such a start is a 409
+    confirm_storage: bool = False
 
 
 def _validate_evaluators(
@@ -282,6 +286,8 @@ def create_runtime_canary(
             )
         _validate_harness_versions(agent, req.harness_versions, ws)
         evaluators, primary = _validate_evaluators(req, ws, db, viewer)
+        canary_infra.storage_write_check(agent, None, confirmed=req.confirm_storage,
+                                         actor=creator.name)
         row = canary_service.start_harness_canary(
             agent,
             control_version=req.harness_versions.control,
@@ -311,7 +317,8 @@ def create_runtime_canary(
             status_code=400,
         )
     if req.source_experiment_id:
-        source = db.get(Experiment, req.source_experiment_id)
+        # another project's experiment reads as missing (owned_get), so invalid
+        source = owned_get(db, Experiment, req.source_experiment_id)
         if source is not None and (
             source.workspace_id != ws.id or not visibility.sees(viewer, db, source.created_by)
         ):
@@ -332,6 +339,8 @@ def create_runtime_canary(
             )
     edited_spec = _resolve_edited_spec(agent, candidate)
     evaluators, primary = _validate_evaluators(req, ws, db, viewer)
+    canary_infra.storage_write_check(agent, edited_spec, confirmed=req.confirm_storage,
+                                     actor=creator.name)
     row = canary_service.start_canary(
         agent, edited_spec, ws.context, req.source_experiment_id,
         start_stage=req.start_stage, online_evaluators=evaluators, primary_evaluator=primary,
@@ -358,15 +367,11 @@ def runtime_canary_action(
     canary_id: str,
     req: RuntimeCanaryAction,
     response: Response,
-    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     row = _canary_in(db, ws, canary_id, viewer=viewer)
-    # the spend-budget gate for setup / traffic / advance only: rolling back or
-    # completing a canary must stay possible for a payer over budget
-    billing_policy.gate_action(request, req.action)
     if req.action not in AGENT_FREE_ACTIONS:
         # setup / advance / complete / rollback re-publish the champion and traffic
         # invokes it: a visible canary does not make a hidden agent the caller's
@@ -375,6 +380,13 @@ def runtime_canary_action(
             db.get(Agent, row.champion_agent_id) if row.champion_agent_id else None,
             NotFoundError("agent.not_found", "agent not found"),
         )
+        # a legacy canary's separate challenger must be in the same project (§5.5)
+        challenger = row.challenger_agent_id
+        if challenger and challenger != row.champion_agent_id:
+            with project_context(None):
+                other = db.get(Agent, challenger)
+            if other is not None and not visible_in_current_project(other):
+                raise NotFoundError("agent.not_found", "agent not found")
     system_agents.assert_not_system_agent(db, row.champion_agent_id, "canary")
     system_agents.assert_not_system_agent(db, row.challenger_agent_id, "canary")
     # a conversation CLEAR owns this canary's cleanup while it runs
@@ -388,6 +400,10 @@ def runtime_canary_action(
     reason = canary_service.stage_not_ready_reason(row, req.action)
     if reason:
         raise AppError("canary.stage_not_ready", reason, status_code=409)
+    # the project's monthly budget, for the actions that spend (core/billing_policy.py);
+    # verdict / cleanup and the other wind-down actions are never refused
+    billing_policy.gate_action(getattr(row, "project_id", None), req.action,
+                               billing_policy.CANARY_BILLABLE_ACTIONS)
 
     if req.action == "setup":
         canary_service.assert_setup_available(row.id)
@@ -411,29 +427,18 @@ def runtime_canary_action(
             "dataset_id": dataset.id,
             "dataset_name": dataset.name,
         }
-        if canary_service.is_harness(row):
-            # paired Harness calls are metered by tokens at each arm's model: a budgeted
-            # caller is refused an arm with no price (or no known model, an imported
-            # Harness) rather than spending past the limit unseen. A Runtime arm with no
-            # price falls back to the agent's turn estimate, so it needs no refusal.
-            payer = budgets.payer_of_request(request)
-            if payer.budgeted:
-                for model in dict.fromkeys(canary_service.arm_models(row).values()):
-                    budgets.check(db, payer, model_id=model, model_unknown=model is None)
     elif req.action in {"advance", "complete"}:
         canary_service.assert_verdict_allows(
             row, allow_non_significant=req.allow_non_significant
         )
 
     action = req.action
-    # who pays for this action: the caller, recorded per action
-    caller = Creator.of_request(request)
     if action == "setup":
         fn = partial(canary_service.act_setup, canary_id)
     elif action == "traffic":
         fn = partial(
             canary_service.act_traffic, canary_id, prompts, dataset_info,
-            scenario_ids=scenario_ids, caller=caller,
+            scenario_ids=scenario_ids,
         )
     elif action == "verdict":
         fn = partial(canary_service.act_verdict, canary_id)
@@ -454,7 +459,7 @@ def runtime_canary_action(
     else:
         fn = partial(canary_service.act_cleanup, canary_id)
 
-    canary_service.run_action(canary_id, action, fn, caller=caller)
+    canary_service.run_action(canary_id, action, fn)
     response.status_code = 202
     db.expire_all()
     row = db.get(RuntimeCanary, canary_id)

@@ -15,6 +15,17 @@ export const SERVICES = [
   { id: "observability", kind: "bootstrap", to: "/v2/observability" },
 ] as const;
 
+/**
+ * The first-run hero's three routes to a first agent, in one place. `template`
+ * points at the wizard until the scenario-template gallery ships — then only
+ * this constant changes.
+ */
+export const FIRST_AGENT_PATHS = {
+  assistant: "/v2/assistant",
+  template: "/v2/agents?view=new",
+  configure: "/v2/agents?view=new",
+} as const;
+
 /** One-line deploy progress for an agent row (same reading as the classic feed). */
 export function stageSummary(agent: AgentInfo): string {
   const stages = agent.deployment?.stages ?? [];

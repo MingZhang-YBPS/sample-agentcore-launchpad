@@ -45,7 +45,9 @@ import type {
   Toolkit,
 } from "../lib/api";
 import { api, ApiError, HARNESS_NATIVE_TOOLS } from "../lib/api";
+import { catalogRowsFromSpec } from "../lib/api/storage";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
+import { adotLauncher } from "../lib/byocTelemetry";
 import {
   A2A_MODEL_SOURCE,
   A2A_SKILL_SEEDS,
@@ -86,6 +88,8 @@ import type {
 } from "../lib/agent-spec";
 import ClassicIdentitySection from "../components/ClassicIdentitySection";
 import type { ModelSource, ReasoningEffort } from "../lib/models";
+import { useModelCatalog } from "../lib/model-catalog";
+import { adoptModelDefault, useModelDefaultsArrival } from "../lib/model-defaults";
 import { useWorkspace } from "../workspace/workspace-context";
 import { SystemPresetsPanel } from "./create/SystemPresetsPanel";
 import {
@@ -106,7 +110,7 @@ import {
   isCustomModelId,
   modelOptionsFor,
   REASONING_EFFORTS,
-  SPEC_DEFAULT_MODEL_ID,
+  specDefaultModelId,
   supportsReasoningEffort,
 } from "../lib/models";
 
@@ -158,6 +162,8 @@ interface EditingTarget {
 
 // Spec fields we read back when loading an existing agent into the wizard.
 interface StoredSpec {
+  /** T12 PII protection; absent on every spec written before it existed */
+  guardrail?: { enabled?: boolean; mode?: "anonymize" | "block" } | null;
   model_id?: string;
   model_source?: ModelSource;
   agent_sdk?: AgentSdk;
@@ -183,7 +189,7 @@ interface StoredSpec {
     s3_files?: { access_point_arn?: string; mount_path?: string }[];
     efs?: { access_point_arn?: string; mount_path?: string }[];
   };
-  network?: { subnets?: string[]; security_groups?: string[] };
+  network?: { subnets?: string[]; security_groups?: string[]; profile_id?: string } | null;
   byoc?: ByocConfigInput;
 }
 
@@ -881,6 +887,8 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [efsMounts, setEfsMounts] = useState<MountRow[]>([]);
   const [vpcSubnets, setVpcSubnets] = useState("");
   const [vpcSgs, setVpcSgs] = useState("");
+  // a stored `network: {profile_id}`: no input here, carried into the re-publish
+  const [networkProfileId, setNetworkProfileId] = useState("");
   // zip runtime service protocol: standard HTTP invocations vs a real A2A
   // JSON-RPC server (serverProtocol=A2A) with configurable agent-card skills
   const [protocol, setProtocol] = useState<"http" | "a2a">("http");
@@ -929,6 +937,15 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   // when set, the wizard edits an existing agent and the launch button re-publishes it
   const [editing, setEditing] = useState<EditingTarget | null>(null);
   const [detailsMode, setDetailsMode] = useState(false);
+  // The model is seeded before the configured defaults may have loaded: adopt the
+  // configured default for the method then, unless the member already chose one or
+  // an agent is being edited. The account catalog joins the dropdown when it lands.
+  const seededModel = useRef(modelId);
+  useModelCatalog();
+  useModelDefaultsArrival(() => {
+    if (editing || customModel) return;
+    setModelId((cur) => adoptModelDefault(cur, seededModel.current, defaultModelForMethod(method, modelSource), false));
+  });
   // one submit at a time (both paths); the outcome of an accepted request is
   // consumed only while this component is still mounted
   const [submitting, setSubmitting] = useState(false);
@@ -1139,6 +1156,7 @@ const deployLock = !canDeploy
     setS3Mounts([]);
     setEfsMounts([]);
     setVpcSubnets("");
+    setNetworkProfileId("");
     setVpcSgs("");
     setProtocol("http");
     setA2aSkills([]);
@@ -1213,6 +1231,13 @@ const deployLock = !canDeploy
   // The shared form model (lib/agent-spec.ts) builds the spec the V2 wizard posts too.
   const agentForm = (): AgentForm => ({
     method,
+    // the classic wizard has no display-name input: a re-publish keeps the stored one
+    displayName: (editing?.spec as { display_name?: string | null } | undefined)?.display_name ?? "",
+    // T12: the classic wizard has no PII toggle — a re-publish keeps what is stored
+    guardrail: (() => {
+      const stored = (editing?.spec as StoredSpec | undefined)?.guardrail;
+      return stored?.enabled ? (stored.mode ?? "anonymize") : "off";
+    })(),
     name,
     modelId,
     modelSource,
@@ -1237,9 +1262,14 @@ const deployLock = !canDeploy
     sessionMount,
     s3Mounts,
     efsMounts,
+    // the classic wizard has no catalog picker: a re-publish keeps the stored picks
+    catalogMounts: catalogRowsFromSpec((editing?.spec as { filesystem?: Parameters<typeof catalogRowsFromSpec>[0] } | undefined)?.filesystem),
     vpcSubnets,
     vpcSgs,
+    networkProfileId,
     protocol,
+    // the classic wizard has no MCP-server mode
+    mcpTargetName: "",
     a2aSkills,
     byocKind,
     byocUploadId: byocUpload?.upload_id ?? null,
@@ -1481,7 +1511,7 @@ const deployLock = !canDeploy
     setName(agent.name);
     // A spec stored before model_source existed is a Converse-API agent, never
     // Mantle; an id in neither catalog rides the "Custom model ID…" branch.
-    const storedModel = spec.model_id ?? SPEC_DEFAULT_MODEL_ID;
+    const storedModel = spec.model_id ?? specDefaultModelId();
     const storedSource = spec.model_source ?? "bedrock";
     setModelId(storedModel);
     setModelSource(storedSource);
@@ -1550,6 +1580,7 @@ const deployLock = !canDeploy
     );
     setVpcSubnets((spec.network?.subnets ?? []).join(", "));
     setVpcSgs((spec.network?.security_groups ?? []).join(", "));
+    setNetworkProfileId(spec.network?.profile_id ?? "");
     setProtocol(spec.protocol ?? "http");
     setA2aSkills(
       (spec.a2a_skills ?? []).map((s) => ({
@@ -2149,6 +2180,26 @@ const deployLock = !canDeploy
                           <span>{t("create.configure.byocNoSdkWarn")}</span>
                         </div>
                       )}
+                    {byocUpload && byocKind === "code_zip" &&
+                      (adotLauncher(byocUpload.detected, byocInstallReqs) ? (
+                        <div
+                          className="note"
+                          style={{ borderColor: "var(--good)" }}
+                          data-testid="byoc-adot-on"
+                        >
+                          <span className="i" style={{ color: "var(--good)" }}>✓</span>
+                          <span>{t("byocTelemetry.adotOn")}</span>
+                        </div>
+                      ) : (
+                        <div
+                          className="note"
+                          style={{ borderColor: "var(--amber)" }}
+                          data-testid="byoc-no-adot"
+                        >
+                          <span className="i" style={{ color: "var(--amber)" }}>[!]</span>
+                          <span>{t("byocTelemetry.noAdotWarn")}</span>
+                        </div>
+                      ))}
                     {byocUpload && byocKind === "container_source" &&
                       !byocUpload.detected.has_dockerfile && (
                         <div className="note" style={{ borderColor: "var(--amber)" }}>

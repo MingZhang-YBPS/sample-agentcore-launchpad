@@ -22,10 +22,12 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.billing_policy import SOURCE_EXPERIMENT
+from sqlalchemy import func, select
+
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
+from app.core.project_scope import current_project, project_context
 from app.deployer.pipeline import create_deployment, execute_deploy_job
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.models import EvalRun
@@ -37,12 +39,13 @@ from app.evaluation.online_evaluators import (  # noqa: F401 — re-exported
 from app.evaluation.scenarios import scenario_prompts
 from app.models.ledger import Agent, Deployment, Job
 from app.optimization import providers as rec_providers
-from app.optimization.models import Experiment
+from app.optimization.models import Experiment, RuntimeCanary
 from app.optimization.providers import evidence as rec_evidence
 from app.optimization.providers.base import OptimizeRequest
 from app.schemas.agent import AgentSpec
-from app.services import creators, job_budget, visibility
-from app.services.agentcore.client import control_client, data_client
+from app.services import creators, visibility
+from app.services.agentcore.client import api_data_client as data_client
+from app.services.agentcore.client import control_client
 from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
 from app.services.visibility import Viewer
@@ -79,10 +82,6 @@ TRAFFIC_USER_ID = "launchpad-experiment-traffic"
 # fatally. Never surfaces to a caller: its presence implies a stored exception,
 # which send_gateway_traffic raises before it builds a result.
 _TRAFFIC_SKIPPED = object()
-# Outcome for a prompt never sent because the action caller reached their monthly
-# spend budget: unlike _TRAFFIC_SKIPPED it is not an error — the stage keeps the
-# prompts already answered.
-_TRAFFIC_BUDGET_SKIPPED = object()
 
 _sleep = time.sleep  # injectable
 
@@ -149,39 +148,36 @@ def experiment_status(exp: Experiment) -> str:
     return "ready" if legacy_promotion(exp.artifacts) else exp.status
 
 
-def run_action(
-    exp_id: str, action: str, fn: Callable[[Progress], Any],
-    caller: creators.Creator | None = None,
-) -> None:
+def run_action(exp_id: str, action: str, fn: Callable[[Progress], Any]) -> None:
     """Run a stage action on a daemon thread with row-level progress.
 
     The wrapped fn persists its own artifact + stage on success; this runner
     only owns the running_action/progress/error lifecycle. A failure keeps
     the stage so re-POSTing the same action retries it (AWS creates are
-    idempotent — conflict-adopt by name). ``caller`` is recorded per action
-    (``artifacts.action_callers``): who started it is who pays for it.
+    idempotent — conflict-adopt by name).
     """
     def progress(msg: str) -> None:
         _update(exp_id, progress=msg[:300])
 
     # Refuse before running_action is written and before the thread exists: a
     # system-managed preset is never the subject of an experiment action.
-    _refuse_system_agent(_get(exp_id).agent_id, action)
+    exp = _get(exp_id)
+    _refuse_system_agent(exp.agent_id, action)
+    # a thread inherits no context: the action reads and writes as the experiment's
+    # project (a promote's deploy job is stamped there, not platform-wide)
+    project_id = exp.project_id
 
     def runner() -> None:
-        try:
-            fn(progress)
-            _update(exp_id, running_action=None, progress=None)
-        except Exception as exc:
-            # the action prefix lets the UI pin the failure to its button
-            _update(exp_id, running_action=None, progress=None,
-                    error=f"{action}: {type(exc).__name__}: {exc}"[:500])
+        with project_context(project_id):
+            try:
+                fn(progress)
+                _update(exp_id, running_action=None, progress=None)
+            except Exception as exc:
+                # the action prefix lets the UI pin the failure to its button
+                _update(exp_id, running_action=None, progress=None,
+                        error=f"{action}: {type(exc).__name__}: {exc}"[:500])
 
-    extra: dict[str, Any] = {}
-    if caller is not None:
-        extra["artifact"] = {
-            "action_callers": record_action_caller(_get(exp_id).artifacts, action, caller)}
-    _update(exp_id, running_action=action, error=None, **extra)
+    _update(exp_id, running_action=action, error=None)
     _spawn(runner)
 
 
@@ -381,6 +377,18 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
             "reason_code": "not-active",
             "reason": "Canary agent must be active.",
         }
+    if getattr(agent_row, "endpoint_mode", None) == "live":
+        # A gated agent serves production from its named `live` endpoint and ships
+        # through the release gate. A canary routes production through its own
+        # gateway and compares against DEFAULT (possibly an unsigned candidate),
+        # so it would bypass the gate, and its promote would never move `live`.
+        return {
+            **base,
+            "reason_code": "gated",
+            "reason": "This agent ships through the release gate (live / candidate "
+                      "endpoints); a canary would route its production traffic around "
+                      "the gate. Release it through the gate instead.",
+        }
     if (agent_row.spec or {}).get("context_layer"):
         return {**base, **_CONTEXT_LAYER_REFUSAL}
     if agent_row.method == "harness":
@@ -443,7 +451,7 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
 def _agent_meta(exp: Experiment, workspace: WorkspaceContext) -> dict[str, Any]:
     """Runtime facts captured at create time; rebuilt lazily for old rows."""
     meta = exp.artifacts.get("agent_meta")
-    if meta and "tools" in meta and "experiment_capability" in meta:
+    if meta and all(k in meta for k in ("tools", "experiment_capability", "bundle_config")):
         return meta
     from app.models.ledger import Agent  # local import — avoids cycle at module load
 
@@ -458,6 +466,7 @@ def _agent_meta(exp: Experiment, workspace: WorkspaceContext) -> dict[str, Any]:
                 **meta,
                 "tools": discover_agent_tools(agent_row.spec or {}),
                 "experiment_capability": experiment_capability(agent_row),
+                "bundle_config": bundle_config(agent_row.spec or {}),
             }
             _update(exp.id, artifact={"agent_meta": meta})
         return meta
@@ -473,6 +482,9 @@ def _agent_meta(exp: Experiment, workspace: WorkspaceContext) -> dict[str, Any]:
         "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
         "tools": discover_agent_tools(agent_row.spec or {}),
         "experiment_capability": experiment_capability(agent_row),
+        # where this agent's production traffic is logged (`live` once gated)
+        "telemetry_endpoint": _telemetry_endpoint(agent_row),
+        "bundle_config": bundle_config(agent_row.spec or {}),
     }
     _update(exp.id, artifact={"agent_meta": meta})
     return meta
@@ -602,17 +614,16 @@ def stage_recommend(
     source: dict[str, Any] | None = None,
     provider: str | None = None,
     model_id: str | None = None,
-    meter: Any = None,
 ) -> dict[str, Any]:
-    """``meter`` pays for a 3rd-party provider's model calls (the AgentCore
-    recommendation jobs are free: pricing page, "pay only for evaluations")."""
     data = data_client(workspace)
-    log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
+    # recommendations read past production traffic: a gated agent's is on `live`
+    endpoint = agent.get("telemetry_endpoint") or "DEFAULT"
+    log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-{endpoint}"
     log_group_arns = [
         ac.to_log_group_arn(log_group, workspace.region, workspace.account_id),
         ac.to_log_group_arn("aws/spans", workspace.region, workspace.account_id),
     ]
-    service_names = [f"{agent['runtime_name']}.DEFAULT"]
+    service_names = [f"{agent['runtime_name']}.{endpoint}"]
     current_prompt = agent["system_prompt"]
     out: dict[str, Any] = {}
 
@@ -661,7 +672,6 @@ def stage_recommend(
                 # `recommend_tools` is ignored here (it keeps its meaning on the
                 # AgentCore branch below)
                 components=mine, tools=agent.get("tools") or {},
-                **({"meter": meter} if meter is not None else {}),
             )
         )
     if "system_prompt" in types and "system_prompt" not in mine:
@@ -781,15 +791,9 @@ def _third_party_prompt_recommendation(
     tools: dict[str, str] | None = None,
     tool_turns: rec_evidence.ToolTurnsFn | None = None,
     tool_spans: rec_evidence.ToolSpansFn | None = None,
-    meter: Any = None,
 ) -> dict[str, Any]:
     """Recommendation(s) from a registered non-AgentCore provider — the system
     prompt and/or the agent's own tool descriptions, per ``components``.
-
-    ``meter`` (a ``UsageMeter`` of the requester) is charged the provider's own
-    model calls: every ConverseStream round's reported usage, settled as one exact
-    ``tokens`` row at the provider model's price once the provider returns (or
-    fails).
 
     Evidence is the pinned run's own batch-evaluation results stream joined
     with each session's transcript; the router already guaranteed a pinned
@@ -855,30 +859,24 @@ def _third_party_prompt_recommendation(
         )
     finally:
         db.close()
-    if meter is not None:
-        converse = _metered_converse(converse, workspace, meter)
-    try:
-        result = prov.optimize(
-            OptimizeRequest(
-                current_prompt=agent.get("system_prompt") or "",
-                agent=agent,
-                trace_source=source,
-                evidence=evidence,
-                stats=stats,
-                model_id=resolved_model,
-                workspace=workspace,
-                max_chars=REC_PROMPT_MAX_CHARS,
-                extra_feedback=extra_feedback,
-                max_tokens=settings.prompt_opt_max_tokens,
-                components=components,
-                tools=own_tools,
-            ),
-            progress,
-            converse=converse,
-        )
-    finally:
-        if meter is not None:
-            meter.settle()  # what the rounds reported, even when the provider failed
+    result = prov.optimize(
+        OptimizeRequest(
+            current_prompt=agent.get("system_prompt") or "",
+            agent=agent,
+            trace_source=source,
+            evidence=evidence,
+            stats=stats,
+            model_id=resolved_model,
+            workspace=workspace,
+            max_chars=REC_PROMPT_MAX_CHARS,
+            extra_feedback=extra_feedback,
+            max_tokens=settings.prompt_opt_max_tokens,
+            components=components,
+            tools=own_tools,
+        ),
+        progress,
+        converse=converse,
+    )
     out: dict[str, Any] = dict(attribution)
     if want_prompt:
         # the prompt's meta; the tool component's counters live in tool_provider_meta
@@ -909,22 +907,6 @@ def _third_party_prompt_recommendation(
             out["tool_error"] = (result.tool_error or result.error or "provider produced "
                                  "no tool descriptions")[:300]
     return out
-
-
-def _metered_converse(converse: Any, workspace: WorkspaceContext, meter: Any) -> Any:
-    """Wrap a provider's ``ConverseFn`` so each round's reported usage reaches
-    ``meter`` (``converse_text`` returns ``{input_tokens, output_tokens}``)."""
-    from app.optimization.providers.bedrock_lm import converse_for
-
-    inner = converse or converse_for(workspace)
-
-    def call(model_id: str, system: str, messages: list[dict[str, str]],
-             max_tokens: int) -> tuple[str, dict[str, Any]]:
-        text, usage = inner(model_id, system, messages, max_tokens)
-        meter.converse_usage(usage)
-        return text, usage
-
-    return call
 
 
 def recommendation_attribution(rec: dict[str, Any] | None) -> str | None:
@@ -987,12 +969,43 @@ def system_prompt_rec_failed(rec: dict[str, Any]) -> bool:
 
 DEFAULT_TOOL_DESCS = {"calculator": "Evaluate a basic arithmetic expression"}
 
+# strands-builder SB-1: the spec settings the generated Strands runtime also reads
+# from the config bundle per request (same keys), so an experiment can compare them
+BUNDLE_CONFIG_KEYS = ("model_params", "conversation", "few_shot_examples", "prompt_variables")
+
+
+def bundle_config(spec: dict[str, Any]) -> dict[str, Any]:
+    """The agent's own SB-1 bundle settings — only the ones it sets."""
+    return {key: spec[key] for key in BUNDLE_CONFIG_KEYS if spec.get(key)}
+
+
+def _create_bundle(
+    control: Any, *, extra_config: dict[str, Any] | None = None, **kwargs: Any,
+) -> dict[str, Any]:
+    """`ac.create_configuration_bundle`, plus the SB-1 keys beside the system
+    prompt and tools in the agent's configuration (none set: the same request)."""
+    if not extra_config:
+        return ac.create_configuration_bundle(control, **kwargs)
+    return control.create_configuration_bundle(
+        bundleName=kwargs["bundle_name"],
+        description=kwargs.get("description") or kwargs["bundle_name"],
+        components={kwargs["agent_arn"]: {"configuration": {
+            **extra_config,
+            "system_prompt": kwargs["system_prompt"],
+            "tools": {name: {"description": description}
+                      for name, description in kwargs["tool_descriptions"].items()},
+        }}},
+        commitMessage=kwargs["commit_message"],
+        clientToken=str(uuid.uuid4()),
+    )
+
 
 def create_bundle_idempotent(control: Any, **kwargs: Any) -> dict[str, Any]:
     """create_configuration_bundle with conflict-adopt — a retried bundles
-    action after a partial failure must re-use the bundle it already made."""
+    action after a partial failure must re-use the bundle it already made.
+    ``extra_config`` carries the SB-1 keys (``BUNDLE_CONFIG_KEYS``)."""
     try:
-        return ac.create_configuration_bundle(control, **kwargs)
+        return _create_bundle(control, **kwargs)
     except Exception as exc:
         if not _is_conflict(exc):
             raise
@@ -1019,12 +1032,17 @@ def stage_bundles(
     workspace: WorkspaceContext,
     treatment_tool_descs: dict[str, str] | None = None,
     attribution: str | None = None,
+    treatment_config: dict[str, Any] | None = None,
 ) -> dict:
     control = control_client(workspace)
     current_prompt = agent["system_prompt"]
     # control mirrors production: the agent's own tool descriptions; treatment
     # overlays the accepted edits on that same base
     current_descs = agent.get("tools") or DEFAULT_TOOL_DESCS
+    # SB-1 settings likewise: control carries the agent's own, treatment overlays
+    # its overrides (`BUNDLE_CONFIG_KEYS` only) on them
+    current_config = dict(agent.get("bundle_config") or {})
+    overrides = {k: v for k, v in (treatment_config or {}).items() if k in BUNDLE_CONFIG_KEYS}
     control_bundle = create_bundle_idempotent(
         control,
         agent_arn=agent["arn"],
@@ -1032,6 +1050,7 @@ def stage_bundles(
         system_prompt=current_prompt,
         tool_descriptions=current_descs,
         commit_message="control — current production config",
+        extra_config=current_config,
     )
     treatment_bundle = create_bundle_idempotent(
         control,
@@ -1039,6 +1058,7 @@ def stage_bundles(
         bundle_name=f"exp_{exp_id[:8]}_treatment",
         system_prompt=treatment_prompt,
         tool_descriptions={**current_descs, **(treatment_tool_descs or {})},
+        extra_config={**current_config, **overrides},
         # who produced the treatment text is part of the bundle's own history
         commit_message="treatment — accepted recommendation"
         + (f" ({attribution})" if attribution else ""),
@@ -1188,6 +1208,31 @@ def list_ab_tests(data: Any) -> list[dict[str, Any]]:
             return tests
 
 
+_ARM_NAME_RE = re.compile(r"^(exp|can)_([A-Za-z0-9]+)_", re.IGNORECASE)
+
+
+def _other_project_test(name: str) -> bool:
+    """An `exp_<id8>_…` / `can_<id8>_…` A/B test whose experiment or canary belongs
+    to another project than the current one (the shared gateway is workspace-wide)."""
+    m = _ARM_NAME_RE.match(name)
+    if m is None or current_project() is None:
+        return False
+    model = Experiment if m.group(1).lower() == "exp" else RuntimeCanary
+    id8 = m.group(2)
+    db = SessionLocal()
+    try:
+        def owner() -> str | None:
+            return db.scalar(select(model.id).where(
+                func.lower(model.id).startswith(id8.lower(), autoescape=True)).limit(1))
+
+        if owner() is not None:
+            return False  # the current project's own
+        with project_context(None):
+            return owner() is not None
+    finally:
+        db.close()
+
+
 def assert_gateway_available(
     gateway_arn: str,
     data: Any,
@@ -1217,6 +1262,10 @@ def assert_gateway_available(
                         "name": test.get("name"),
                         "execution_status": test.get("executionStatus"),
                     }
+                    if not _other_project_test(str(test.get("name") or ""))
+                    # another project's test: busy, but not named
+                    else {"id": None, "name": None,
+                          "execution_status": test.get("executionStatus")}
                     for test in active
                 ],
             },
@@ -1326,17 +1375,8 @@ def send_gateway_traffic(
     concurrency: int | None = None, user_id: str = TRAFFIC_USER_ID,
     path_suffix: str = "/invocations",
     body_for: Callable[[str, str], dict[str, Any]] | None = None,
-    budget: Any = None,
-    estimate_usd: float | None = None,
 ) -> dict[str, Any]:
     """SigV4 POST each prompt through the experiment gateway (A/B routes them).
-
-    ``budget`` (a ``JobBudget`` of the action caller) is checked before each
-    prompt is sent: once the caller is at or over their monthly limit the prompts
-    not yet started are skipped (requests in flight finish), and the result says
-    so (``stop_reason: budget_exceeded``, ``skipped``). Each answered prompt is
-    debited ``estimate_usd`` as a ``job_estimate`` on its session — the response
-    body is never read, so there is no in-band usage.
 
     ``path_suffix`` / ``body_for`` default to the Runtime target contract
     (``/<target>/invocations`` + ``{prompt, sessionId}``); a Harness canary's
@@ -1419,27 +1459,6 @@ def send_gateway_traffic(
     # written by the one worker that owns index i, so no lock is needed
     outcomes: list[Any] = [None] * len(seeds)
     abort = threading.Event()
-    # the caller's spend budget: set once a prompt found them over the limit
-    over_budget = threading.Event()
-    stop_error: list[Any] = []
-    # answered prompts whose estimate this thread has not written yet: counted by
-    # the check, under the one lock the write also holds, so it is never a prompt late
-    debit_lock = threading.Lock()
-    undebited = {"usd": 0.0}
-    per_prompt = float(estimate_usd or 0.0)
-
-    def budget_allows() -> bool:
-        if budget is None:
-            return True
-        if over_budget.is_set():
-            return False
-        with debit_lock:
-            error = budget.exceeded(extra_usd=undebited["usd"])
-        if error is not None:
-            stop_error.append(error)
-            over_budget.set()
-            return False
-        return True
 
     def worker() -> None:
         while True:
@@ -1450,13 +1469,8 @@ def send_gateway_traffic(
             try:
                 if abort.is_set():
                     outcomes[index] = _TRAFFIC_SKIPPED
-                elif not budget_allows():
-                    outcomes[index] = _TRAFFIC_BUDGET_SKIPPED
                 else:
                     outcomes[index] = send_one(*seeds[index])
-                    if budget is not None and outcomes[index] == 200:
-                        with debit_lock:
-                            undebited["usd"] += per_prompt
             except BaseException as exc:  # re-raised by the caller, in order
                 outcomes[index] = exc
                 abort.set()  # one fatal error stops the prompts not yet started
@@ -1471,25 +1485,13 @@ def send_gateway_traffic(
     ]
     for thread in threads:
         thread.start()
-    sent_ok = live_failed = skipped = 0
+    sent_ok = live_failed = 0
     for _ in range(len(seeds)):
-        index = finished.get()
-        if outcomes[index] == 200:
+        if outcomes[finished.get()] == 200:
             sent_ok += 1
-            if budget is not None:
-                # debited here, on the one thread that writes, as each answer lands
-                with debit_lock:
-                    budget.estimate(
-                        estimate_usd, quantity=1, unit="prompt",
-                        session_id=seeds[index][1], detail={"estimate": "traffic_prompt"},
-                    )
-                    undebited["usd"] -= per_prompt
-        elif outcomes[index] is _TRAFFIC_BUDGET_SKIPPED:
-            skipped += 1
         else:
             live_failed += 1
-        progress(f"sent {sent_ok}/{len(seeds)} ({live_failed} failed"
-                 + (f", {skipped} skipped: budget reached)" if skipped else ")"))
+        progress(f"sent {sent_ok}/{len(seeds)} ({live_failed} failed)")
     for thread in threads:
         thread.join()
 
@@ -1503,24 +1505,15 @@ def send_gateway_traffic(
     failed = 0
     status_counts: dict[str, int] = {}
     for (_, session_id), status in zip(seeds, outcomes, strict=True):
-        if status is _TRAFFIC_BUDGET_SKIPPED:
-            continue  # never sent: not a failure, not a status
         status_counts[str(status)] = status_counts.get(str(status), 0) + 1
         if status == 200:
             session_ids.append(session_id)
         else:
             failed += 1
-    result: dict[str, Any] = {
+    return {
         "session_ids": session_ids, "sent": len(session_ids), "failed": failed,
         "status_counts": status_counts,
     }
-    if skipped:
-        error = stop_error[0] if stop_error else None
-        result.update(
-            skipped=skipped, stop_reason=job_budget.STOP_REASON,
-            stop_message=job_budget.stop_message(error) if error is not None else None,
-        )
-    return result
 
 
 def metric_evaluator_id(metric: dict[str, Any]) -> str:
@@ -1679,19 +1672,10 @@ def act_recommend(
     source: dict[str, Any] | None = None,
     provider: str | None = None,
     model_id: str | None = None,
-    caller: creators.Creator | None = None,
 ) -> None:
-    """``caller`` — who pressed RECOMMEND, not the experiment's creator — pays for a
-    3rd-party provider's model calls."""
     exp = _get(exp_id)
     workspace = context_for_workspace(exp.workspace_id)
     sel = tuple(t for t in REC_TYPES if t in (types or REC_TYPES))
-    meter = None
-    if provider and provider != rec_providers.DEFAULT_PROVIDER:
-        meter = action_budget(exp, caller, SOURCE_EXPERIMENT).meter(
-            model_id=(model_id or rec_providers.get_provider(provider).default_model_id()
-                      or None),
-        )
     rec = stage_recommend(
         exp_id,
         _agent_meta(exp, workspace),
@@ -1703,7 +1687,6 @@ def act_recommend(
         # only when chosen: the default path's call shape stays exactly as before
         **({"provider": provider} if provider else {}),
         **({"model_id": model_id} if model_id else {}),
-        **({"meter": meter} if meter is not None else {}),
     )
     # merge over the prior artifact: the type(s) just generated replace their
     # own keys; the other type's output and any earlier accept survive
@@ -1753,6 +1736,9 @@ def action_bundles(exp: Experiment) -> dict[str, Any]:
         rec.get("accepted_tool_descriptions"),
         # only for a 3rd-party recommendation — the AgentCore path is unchanged
         **({"attribution": attribution} if attribution else {}),
+        # SB-1 settings the treatment changes (model params, conversation, …)
+        **({"treatment_config": rec["accepted_config"]}
+           if isinstance(rec.get("accepted_config"), dict) else {}),
     )
     _update(exp.id, stage="bundles", artifact={"bundles": result})
     return result
@@ -1812,59 +1798,18 @@ def resolve_traffic_items(dataset: Any) -> list[tuple[str, str]]:
 
 def act_traffic(
     exp_id: str, prompts: list[str], dataset_info: dict[str, str],
-    progress: Progress, caller: creators.Creator | None = None,
+    progress: Progress,
 ) -> None:
-    """Replay ``prompts`` through the A/B gateway, charged to ``caller`` (who pressed
-    TRAFFIC): one ``job_estimate`` per answered prompt at the agent's recent
-    measured average (the response body is never read), and a stop before the
-    next prompt once the caller is over budget — the prompts already sent are
-    kept as the stage's traffic (``stop_reason: budget_exceeded`` on the artifact)."""
     exp = _get(exp_id)
     gateway = exp.artifacts["gateway"]
-    budget = action_budget(exp, caller, SOURCE_EXPERIMENT)
     result = send_gateway_traffic(
         gateway["gateway_url"], gateway["target_v1"],
         prompts,
         context_for_workspace(exp.workspace_id),
         progress=progress,
-        budget=budget,
-        estimate_usd=traffic_prompt_estimate(exp.agent_id),
     )
     result.update(dataset_info)
-    # A budget stop is not an error to retry (a retry would be refused): the stage
-    # advanced with what was sent, and the artifact's `stop_reason` says why it is short.
     _update(exp_id, stage="traffic", artifact={"traffic": result})
-
-
-def traffic_prompt_estimate(agent_id: str | None) -> float:
-    """One gateway traffic prompt's estimate: the agent's recent measured average
-    per turn, else the ``agent_turn_estimate_usd`` budget setting."""
-    db = SessionLocal()
-    try:
-        return job_budget.turn_estimate(db, agent_id, fallback="agent_turn_estimate_usd")[0]
-    finally:
-        db.close()
-
-
-def action_budget(row: Any, caller: creators.Creator | None, source: str) -> Any:
-    """The payer of one experiment / canary action: the caller who started it
-    (recorded on the row's ``action_callers``), never assumed to be the creator."""
-    agent_id = getattr(row, "agent_id", None) or getattr(row, "champion_agent_id", None)
-    ref_type = "experiment" if source == SOURCE_EXPERIMENT else "canary"
-    return job_budget.JobBudget.for_creator(
-        caller, source, origin_workspace_id=row.workspace_id, agent_id=agent_id,
-        ref_type=ref_type, ref_id=row.id,
-    )
-
-
-def record_action_caller(artifacts: dict[str, Any], action: str,
-                         caller: creators.Creator | None) -> dict[str, Any]:
-    """``artifacts["action_callers"]`` with ``action`` → who started it now (its
-    payer); the creator stays on the row's own ``created_by``."""
-    callers = dict((artifacts or {}).get("action_callers") or {})
-    callers[action] = {"user_id": getattr(caller, "user_id", None),
-                       "name": getattr(caller, "name", None), "at": _now()}
-    return callers
 
 
 def act_verdict(exp_id: str, progress: Progress) -> None:
@@ -1888,6 +1833,12 @@ def act_verdict(exp_id: str, progress: Progress) -> None:
             artifact={"verdict": {"metrics": metrics, **verdict}})
 
 
+def _telemetry_endpoint(agent_row: Any) -> str:
+    from app.evaluation.service import telemetry_endpoint
+
+    return telemetry_endpoint(agent_row)
+
+
 def start_experiment(
     agent_row: Any, workspace: WorkspaceContext, *, creator: creators.Creator | None = None
 ) -> Experiment:
@@ -1902,6 +1853,9 @@ def start_experiment(
         "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
         "tools": discover_agent_tools(agent_row.spec or {}),
         "experiment_capability": experiment_capability(agent_row),
+        # where this agent's production traffic is logged (`live` once gated)
+        "telemetry_endpoint": _telemetry_endpoint(agent_row),
+        "bundle_config": bundle_config(agent_row.spec or {}),
     }
     db = SessionLocal()
     try:
@@ -1969,6 +1923,36 @@ def _refuse_system_agent(agent_id: str | None, action: str) -> None:
     from app.system_agents.service import refuse_system_agent_id
 
     refuse_system_agent_id(agent_id, action)
+
+
+def assert_experiment_promotable(exp: Experiment, *, allow_non_significant: bool) -> None:
+    """Promote redeploys the agent in place, so the verdict must back it (F6).
+
+    Mirrors the canary's `assert_verdict_allows`: control-wins and insufficient data
+    never promote; a treatment win that is not significant, or a tie, promotes only
+    with an explicit override the caller recorded.
+    """
+    verdict = exp.artifacts.get("verdict") or {}
+    label = str(verdict.get("verdict") or "")
+    if label == "control-wins":
+        raise AppError(
+            "experiment.verdict_blocked",
+            "the control arm won — promoting the treatment would ship a worse version",
+            status_code=409,
+        )
+    if not label or label.startswith("insufficient"):
+        raise AppError(
+            "experiment.verdict_blocked",
+            "the A/B test has not produced a usable verdict yet",
+            status_code=409,
+        )
+    strong = label == "treatment-wins" and verdict.get("significant") is True
+    if not strong and not allow_non_significant:
+        raise AppError(
+            "experiment.verdict_not_significant",
+            "the treatment did not win significantly — confirm the override to promote anyway",
+            status_code=409,
+        )
 
 
 def act_promote(exp_id: str, progress: Progress) -> dict[str, Any]:

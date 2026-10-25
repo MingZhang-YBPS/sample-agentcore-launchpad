@@ -32,6 +32,7 @@ from fastapi import Request
 from sqlalchemy import or_, select, true
 from sqlalchemy.orm import Session
 
+from app.core.project_scope import current_project
 from app.models.ledger import ApiKey, ResourceCreator, User, Workspace
 
 if TYPE_CHECKING:
@@ -43,12 +44,39 @@ ISOLATED = "isolated"
 MODES = (SHARED, ISOLATED)
 
 _ROLE_ADMIN = "admin"  # == routers.auth.ROLE_ADMIN (not imported: import cycle)
+# AWS-managed evaluator ids: shared by every project, never in `resource_creators`
+_AWS_MANAGED = ("Builtin.", "ThirdParty.")
 
 
 def mode(row: Workspace | None) -> str:
     """The workspace's visibility mode; absent or unknown reads as shared."""
     value = ((row.settings if row is not None else None) or {}).get(SETTINGS_KEY)
     return ISOLATED if value == ISOLATED else SHARED
+
+
+def project_mode(project_id: str) -> str | None:
+    """A project's `settings.resource_visibility`, or None to follow its workspace."""
+    from sqlalchemy import text
+
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text("SELECT settings FROM projects WHERE id = :id"), {"id": project_id},
+        ).first()
+    finally:
+        db.close()
+    raw = row[0] if row else None
+    if isinstance(raw, str):
+        import json
+
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = None
+    value = (raw or {}).get(SETTINGS_KEY) if isinstance(raw, dict) else None
+    return value if value in MODES else None
 
 
 def set_mode(db: Session, row: Workspace, value: str) -> None:
@@ -67,10 +95,14 @@ class Viewer:
     `filters` is True only for a non-admin in an isolated workspace; every other
     viewer (admins, the auth-disabled operator, a shared workspace, internal
     callers) sees everything and pays no extra query.
+
+    `project_id` is the request's project (design §5.13): the isolation rule above
+    applies inside it, after the project filter. None for internal callers.
     """
 
     user_id: str | None
     filters: bool
+    project_id: str | None = None
 
     ALL: ClassVar[Viewer]
 
@@ -85,16 +117,23 @@ class Viewer:
 
         identity = require_identity(request)
         scope = require_workspace(request)
+        project = getattr(request.state, "project", None)
+        effective = mode(scope.row)
+        if project is not None:  # a project's own setting wins (design §5.13)
+            effective = project_mode(project.id) or effective
         viewer = cls(
             user_id=identity.user_id,
-            filters=mode(scope.row) == ISOLATED and not identity.is_admin,
+            filters=effective == ISOLATED and not identity.is_admin,
+            project_id=project.id if project is not None else None,
         )
         request.state.viewer = viewer
         return viewer
 
     def principal_key(self) -> str:
-        """A cache key separating viewers that may see different sets."""
-        return f"u:{self.user_id or ''}" if self.filters else "all"
+        """A cache key separating viewers that may see different sets — two
+        projects of one workspace never share an entry, isolated or not."""
+        key = f"u:{self.user_id or ''}" if self.filters else "all"
+        return f"p:{self.project_id}|{key}" if self.project_id else key
 
 
 Viewer.ALL = Viewer(user_id=None, filters=False)
@@ -125,22 +164,39 @@ def viewer_for_principal(db: Session, workspace: Workspace | None, principal: st
     return Viewer(user_id=user_id, filters=True)
 
 
-def viewer_for_key(db: Session, key: ApiKey) -> Viewer:
-    """The viewer of a `/v1` API key: its **creator's** current visibility.
+def scope_for_key(db: Session, key: ApiKey) -> Viewer:
+    """The viewer of a `/v1` API key (design projects §5.7): its **creator's**
+    current visibility inside the key's project.
 
-    Shared workspace → everything. A key with no recorded creator (config admin,
-    auth-disabled operator, legacy keys) → everything. A creator who is currently
-    an admin → everything. Otherwise the member's own view — re-evaluated on every
-    call, so switching the workspace to isolated narrows existing member keys at
-    once. (A deleted creator's key is refused before this by offboarding.)
+    The project is the key's own (`ApiKey.project_id`), never a header — /v1 runs
+    as it, so the isolation rule below applies inside it. Whether the creator is
+    still a member of that project is decided before this, at auth
+    (`api_keys.creator_offboarded`): a key whose creator left is refused, so this
+    only narrows within the project.
+
+    Shared workspace → everything in the project. A key with no recorded creator
+    (config admin, auth-disabled operator, legacy keys) → everything. A creator who
+    is currently an admin → everything. Otherwise the member's own view —
+    re-evaluated on every call, so switching the workspace to isolated narrows
+    existing member keys at once. (A deleted creator's key is refused before this
+    by offboarding.) A key not yet stamped with a project reads as `Viewer.ALL`
+    did before projects.
     """
+    project_id = key.project_id
+    everything = Viewer.ALL if project_id is None else Viewer(
+        user_id=None, filters=False, project_id=project_id,
+    )
     workspace = db.get(Workspace, key.workspace_id) if key.workspace_id else None
     if mode(workspace) != ISOLATED or key.created_by is None:
-        return Viewer.ALL
+        return everything
     user = db.get(User, key.created_by)
     if user is not None and user.role == _ROLE_ADMIN:
-        return Viewer.ALL
-    return Viewer(user_id=key.created_by, filters=True)
+        return everything
+    return Viewer(user_id=key.created_by, filters=True, project_id=project_id)
+
+
+# the pre-projects name, kept for callers and tests that still use it
+viewer_for_key = scope_for_key
 
 
 # ── predicates: a row check paired with its SQL clause ────────────────────────
@@ -179,24 +235,43 @@ def hidden_aws_ids(
 ) -> set[str]:
     """The ids of an AWS-only kind (`resource_creators`) hidden from `viewer`.
 
-    An id with no creator row — created outside the console, or before creators
-    were recorded — has an unknown creator and stays visible.
+    Two layers (design §5.13). First the project: AWS lists every project's
+    resources, so an id owned by another project is hidden whoever the viewer is —
+    an allow-check read across projects (`creators.outside_current_project`; an id
+    with no row is the workspace default project's). AWS-managed evaluator ids
+    (`Builtin.*`, `ThirdParty.*`) belong to no project and are never hidden. Then,
+    inside the project, workspace isolation: an id with no creator row — created
+    outside the console, or before creators were recorded — has an unknown creator
+    and stays visible. An id another project shared with this one (§11.2,
+    `resource_shares.received_ids`) is that project's creation: the member rule of
+    this one does not apply to it.
     """
-    if not viewer.filters:
-        return set()
     wanted = [i for i in set(ids) if i]
-    if not wanted:
+    if not wanted or (not viewer.filters and current_project() is None):
         return set()
+    from app.services import creators
+
+    hidden = creators.outside_current_project(
+        db, workspace_id, kind, (i for i in wanted if not i.startswith(_AWS_MANAGED))
+    )
+    if not viewer.filters:
+        return hidden
+    from app.services import resource_shares
+
+    shared = resource_shares.received_ids(db, kind)  # empty without a project
+    rest = [i for i in wanted if i not in hidden and i not in shared]
+    if not rest:
+        return hidden
     rows = db.execute(
         select(ResourceCreator.resource_id).where(
             ResourceCreator.workspace_id == workspace_id,
             ResourceCreator.kind == kind,
-            ResourceCreator.resource_id.in_(wanted),
+            ResourceCreator.resource_id.in_(rest),
             ResourceCreator.created_by.is_not(None),
             ~clause(viewer, ResourceCreator.created_by),
         )
     )
-    return {rid for (rid,) in rows}
+    return hidden | {rid for (rid,) in rows}
 
 
 def aws_id_visible(

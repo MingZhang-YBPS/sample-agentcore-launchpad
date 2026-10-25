@@ -324,7 +324,12 @@ def test_the_models_carrying_workspace_id_are_exactly_the_scoped_tables():
     mapped = {
         name
         for name, table in Base.metadata.tables.items()
-        if "workspace_id" in table.columns and name != "user_workspaces"  # the grant's own FK
+        if "workspace_id" in table.columns
+        # hub-global link tables whose workspace_id is the link itself: a workspace
+        # grant, a project ↔ workspace binding (design §2.2)
+        # bindings of a hub-global row to a workspace, not rows of the workspace
+        and name not in ("user_workspaces", "project_workspaces", "project_resources",
+                         "department_workspaces")
     }
     assert mapped == set(WORKSPACE_SCOPED_TABLES)
 

@@ -1,109 +1,101 @@
-"""Thumbs feedback on console chat answers.
+"""Thumbs feedback on agent answers (T15).
 
 A thumbs-down is a *bad case* the evaluation flow already knows how to consume:
-`list_feedback` returns the down-voted **session ids** of the range, which the V2
-"add to dataset" modal posts to `POST /api/eval/datasets/from-sessions` unchanged.
-No dataset-building logic lives here.
-
-Visibility: an answer can be rated only when its agent is visible to the caller
-(`agent_access.agent_in`), and the list drops every row of an agent hidden from the
-caller (`agent_access.hidden_agent_ids`) before counting or limiting. The routes pass
-`require_viewer`; nothing internal calls in here.
-
-Ported from the console-v3 branch without the issue box, answer rules, share links,
-review links / `correction` and comments.
+`list_feedback` exposes the down-voted **session ids**, which the V2 "add to
+dataset" modal posts to `POST /api/eval/datasets/from-sessions` unchanged. No
+dataset-building logic lives here.
 """
 
-from __future__ import annotations
-
-from datetime import UTC, datetime, timedelta
+import logging
 from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
-from app.models.ledger import Agent, ChatFeedback, ChatMessage, _now
-from app.services import agent_access
-from app.services.visibility import Viewer
+from app.models.ledger import Agent, ChatFeedback, ChatMessage
+
+logger = logging.getLogger("launchpad.feedback")
 
 VERDICTS = ("up", "down")
-SOURCE_CONSOLE = "console"
-RANGE_HOURS = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
-PREVIEW_CHARS = 500
+MAX_COMMENT = 1000
+MAX_CORRECTION = 4000
 # what one from-sessions call accepts (pipelines.MAX_SESSIONS_PER_CALL)
 MAX_SESSION_IDS = 50
 
 
-def _iso(value: datetime | None) -> str | None:
-    """SQLite drops the zone; every stored time is UTC, so say so on the wire."""
-    if value is None:
-        return None
-    return value.replace(tzinfo=value.tzinfo or UTC).isoformat()
-
-
 def _answer_in(
-    db: Session, workspace_id: str, message_id: int, viewer: Viewer
+    db: Session, workspace_id: str, agent_id: str, session_id: str, message_id: int
 ) -> ChatMessage:
-    """The agent answer being rated, or 404 — a message of another workspace, a
-    user turn / tool row, and an answer of an agent hidden from `viewer` all read
-    exactly like a missing one."""
+    """The agent answer being rated, or 404 — a message of another workspace,
+    agent or session reads exactly like a missing one."""
     row = db.get(ChatMessage, message_id)
     if (
         row is None
         or row.workspace_id != workspace_id
+        or row.agent_id != agent_id
+        or row.session_id != session_id
         or row.role != "agent"
-        or agent_access.agent_in(
-            db, workspace_id, row.agent_id, viewer=viewer, include_deleted=True
-        ) is None
     ):
         raise NotFoundError("feedback.message_not_found", "message not found")
     return row
 
 
-def rate(
+def record_feedback(
     db: Session,
     *,
     workspace_id: str,
+    agent_id: str,
+    session_id: str,
     message_id: int,
-    verdict: str | None,
+    verdict: str,
+    comment: str | None,
     actor: str,
-    viewer: Viewer = Viewer.ALL,
+    source: str,
+    correction: str | None = None,
 ) -> dict[str, Any]:
-    """Upsert `actor`'s verdict on one answer; `verdict=None` withdraws it (a no-op
-    when there is none)."""
-    answer = _answer_in(db, workspace_id, message_id, viewer)
+    """Upsert one actor's verdict on one answer. `verdict="none"` withdraws it.
+
+    `correction` is the answer a reviewer says it should have been (T34). A thumbs-down
+    opens an issue-box item (T36) -- best effort, never a reason to lose the verdict."""
+    _answer_in(db, workspace_id, agent_id, session_id, message_id)
     row = (
         db.query(ChatFeedback)
         .filter(ChatFeedback.message_id == message_id, ChatFeedback.actor == actor)
         .first()
     )
-    if verdict is None:
+    if verdict == "none":
         if row is not None:
             db.delete(row)
             db.commit()
         return {"message_id": message_id, "verdict": None}
+    comment = (comment or "").strip()[:MAX_COMMENT] or None
+    correction = (correction or "").strip()[:MAX_CORRECTION] or None
     if row is None:
-        db.add(ChatFeedback(
-            workspace_id=workspace_id, agent_id=answer.agent_id,
-            session_id=answer.session_id, message_id=message_id, verdict=verdict,
-            actor=actor, source=SOURCE_CONSOLE,
-        ))
-        try:
-            db.commit()
-        except IntegrityError:
-            # a concurrent first vote by the same actor (two tabs) won the insert:
-            # the last write still wins, as an update of that row
-            db.rollback()
-            db.query(ChatFeedback).filter(
-                ChatFeedback.message_id == message_id, ChatFeedback.actor == actor
-            ).update({ChatFeedback.verdict: verdict, ChatFeedback.updated_at: _now()})
-            db.commit()
+        row = ChatFeedback(
+            workspace_id=workspace_id, agent_id=agent_id, session_id=session_id,
+            message_id=message_id, verdict=verdict, comment=comment, actor=actor,
+            source=source, correction=correction,
+        )
+        db.add(row)
     else:
         row.verdict = verdict
-        db.commit()
+        row.comment = comment
+        row.correction = correction
+    db.commit()
+    if verdict == "down":
+        _open_issue(db, row)
     return {"message_id": message_id, "verdict": verdict}
+
+
+def _open_issue(db: Session, row: ChatFeedback) -> None:
+    from app.services import issues  # local: issues reads this module's tables
+
+    try:
+        issues.open_from_feedback(db, row)
+    except Exception:  # noqa: BLE001 - the verdict is already saved
+        db.rollback()
+        logger.warning("could not open an issue for feedback %s", row.id, exc_info=True)
 
 
 def verdicts_for(
@@ -124,87 +116,55 @@ def verdicts_for(
     return {message_id: verdict for message_id, verdict in rows}
 
 
-def since_for(range_key: str, now: datetime | None = None) -> datetime:
-    """Start of the range, in UTC (ledger times are stored as UTC wall clock)."""
-    return (now or datetime.now(UTC)) - timedelta(hours=RANGE_HOURS[range_key])
+def _preview(text: str | None, limit: int = 240) -> str:
+    return (text or "")[:limit]
 
 
 def list_feedback(
     db: Session,
     workspace_id: str,
     *,
-    range_key: str = "24h",
     verdict: str | None = None,
     agent_id: str | None = None,
     limit: int = 50,
-    viewer: Viewer = Viewer.ALL,
-    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Feedback given in the range (by `updated_at` — when the verdict was last set).
-
-    `totals` counts both verdicts over the range regardless of `verdict`; `items` are
-    the newest `limit` rows (optionally one verdict); `down_session_ids` are the
-    distinct sessions with a thumbs-down in the range, newest first, capped at what
-    one from-sessions call accepts. Hidden agents are filtered in SQL first."""
-    since = since_for(range_key, now)
-    base = db.query(ChatFeedback).filter(
-        ChatFeedback.workspace_id == workspace_id,
-        ChatFeedback.updated_at >= since,
-    )
-    hidden = agent_access.hidden_agent_ids(db, viewer, workspace_id)
-    if hidden:
-        base = base.filter(ChatFeedback.agent_id.not_in(hidden))
+    base = db.query(ChatFeedback).filter(ChatFeedback.workspace_id == workspace_id)
     if agent_id:
         base = base.filter(ChatFeedback.agent_id == agent_id)
 
-    totals = dict.fromkeys(VERDICTS, 0)
+    counts = {v: 0 for v in VERDICTS}
     for found, n in (
         base.with_entities(ChatFeedback.verdict, func.count(ChatFeedback.id))
         .group_by(ChatFeedback.verdict)
         .all()
     ):
-        if found in totals:
-            totals[found] = int(n)
+        counts[found] = int(n)
 
     query = base
     if verdict:
         query = query.filter(ChatFeedback.verdict == verdict)
-    # the question is the closest preceding user turn of the same session
-    question_id = (
-        select(func.max(ChatMessage.id))
-        .where(
-            ChatMessage.workspace_id == workspace_id,
-            ChatMessage.session_id == ChatFeedback.session_id,
-            ChatMessage.role == "user",
-            ChatMessage.id < ChatFeedback.message_id,
-        )
-        .correlate(ChatFeedback)
-        .scalar_subquery()
-    )
-    rows = (
-        query.with_entities(ChatFeedback, question_id)
-        .order_by(ChatFeedback.updated_at.desc(), ChatFeedback.id)
-        .limit(limit)
-        .all()
-    )
+    rows = query.order_by(ChatFeedback.updated_at.desc()).limit(limit).all()
 
-    message_ids = {r.message_id for r, _ in rows} | {q for _, q in rows if q is not None}
-    messages = {
-        mid: (text or "", created_at)
-        for mid, text, created_at in db.query(
-            ChatMessage.id, func.substr(ChatMessage.text, 1, PREVIEW_CHARS),
-            ChatMessage.created_at,
-        ).filter(ChatMessage.id.in_(message_ids or {-1}))
-    }
     names = {
-        a_id: name
-        for a_id, name in db.query(Agent.id, Agent.name).filter(
-            Agent.id.in_({r.agent_id for r, _ in rows} or {""})
+        a.id: a.name
+        for a in db.query(Agent).filter(
+            Agent.id.in_({r.agent_id for r in rows} or {""})
         )
     }
     items = []
-    for r, q_id in rows:
-        answer_text, answered_at = messages.get(r.message_id, ("", None))
+    for r in rows:
+        answer = db.get(ChatMessage, r.message_id)
+        question = (
+            db.query(ChatMessage.text)
+            .filter(
+                ChatMessage.workspace_id == workspace_id,
+                ChatMessage.session_id == r.session_id,
+                ChatMessage.role == "user",
+                ChatMessage.id < r.message_id,
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
         items.append({
             "id": r.id,
             "agent_id": r.agent_id,
@@ -212,17 +172,18 @@ def list_feedback(
             "session_id": r.session_id,
             "message_id": r.message_id,
             "verdict": r.verdict,
+            "comment": r.comment,
+            "correction": r.correction,
             "actor": r.actor,
             "source": r.source,
-            "question": messages.get(q_id, ("", None))[0] if q_id is not None else "",
-            "answer": answer_text,
-            "answered_at": _iso(answered_at),
-            "created_at": _iso(r.created_at),
-            "updated_at": _iso(r.updated_at),
+            "question": _preview(question[0] if question else ""),
+            "answer": _preview(answer.text if answer else ""),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         })
 
     latest = func.max(ChatFeedback.updated_at)
-    down_session_ids = [
+    down_sessions = [
         sid
         for sid, _at in base.filter(ChatFeedback.verdict == "down")
         .with_entities(ChatFeedback.session_id, latest)
@@ -231,4 +192,4 @@ def list_feedback(
         .limit(MAX_SESSION_IDS)
         .all()
     ]
-    return {"totals": totals, "items": items, "down_session_ids": down_session_ids}
+    return {"counts": counts, "items": items, "down_session_ids": down_sessions}

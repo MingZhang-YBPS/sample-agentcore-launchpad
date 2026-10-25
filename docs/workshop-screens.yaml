@@ -1,0 +1,1933 @@
+# Agent-DLC workshop screenshots — one entry per image base name.
+# Read by backend/scripts/capture_workshop_screens.py (format in its docstring).
+#
+# Fields: name · chapter (content file) · status (keep | replace | new) · account
+# (admin | developer | biz-owner | release-ops | sme | anon) · path · wait · actions ·
+# clip (Playwright selector(s); the crop is their union plus `margin`) · highlights
+# ([{n, box}] — the numbers match the "图中：" caption; no n = an unnumbered frame) ·
+# hide / mask (selectors hidden / blurred) · storage (localStorage overrides on top
+# of: dark theme, the shot's language, V3, tour seen, chooser skipped) · viewport ·
+# requires (agent:NAME, user:NAME, fact:<agent>.<story fact>[=value], state:<what a
+# workshop walk-through must have produced>) · manual (why it is not captured).
+# Any string may be a {zh: ..., en: ...} pair; {agent:NAME} / {user:NAME} expand to ids.
+
+shots:
+  # ── 10-prepare/20-setup ────────────────────────────────────────────────────
+  - name: 10-setup-signin
+    chapter: 10-prepare/20-setup
+    status: keep
+    account: anon
+    path: /v3
+    wait: '[data-testid=auth-tabs]'
+    highlights:
+      - {n: 1, box: '[data-testid=auth-tab-signin]', badge: left}
+      - {n: 2, box: '.v3-auth-fields .v3-field >> nth=0', badge: left}
+      - {n: 3, box: '.v3-auth-fields .v3-field >> nth=1', badge: left}
+      - {n: 4, box: '.v3-auth-submit', badge: left}
+
+  - name: 10-setup-v3-topbar
+    chapter: 10-prepare/20-setup
+    status: replace   # the top bar gained the theme switch
+    account: admin
+    path: /v3
+    wait: '[data-testid=v3-shell]'
+    clip: header.v3-top
+    margin: 6
+    highlights:
+      - {n: 1, box: .v3-cmdk-trigger}
+      - {n: 2, box: 'label.v3-ws >> nth=0'}
+      - {n: 3, box: '.v3-top-right > button.v3-btn.ghost.sm >> nth=0'}
+      - {n: 4, box: '[data-testid=v3-theme-switch]'}
+      - {n: 5, box: '.v3-top-right > .v3-help:not(.v3-theme)'}
+      - {n: 6, box: '[data-testid=v3-switch-v2]'}
+      - {n: 7, box: ['.v3-account', '.v3-top-right > button >> nth=-1']}
+
+  - name: 10-setup-v3-onboarding
+    chapter: 10-prepare/20-setup
+    status: keep
+    account: admin
+    path: /v3
+    storage: {launchpad_v3_tour_done: null}
+    wait: .v3-tour-card
+    requires: ['state:fresh workspace (launch sequence at 1/5, no agents)']
+    highlights:
+      - {box: .v3-tour-card}
+
+  - name: 10-setup-v3-rail
+    chapter: 10-prepare/20-setup
+    status: replace   # the Configure group grew from 6 to 17 entries
+    account: admin
+    path: /v3
+    viewport: [1440, 1400]
+    storage: {launchpad_nav_mode: expert}
+    wait: '[data-testid=v3-shell]'
+    actions: [{expand_rail: true}]
+    clip: nav.v3-rail
+    margin: 0
+    highlights:
+      - {box: ['[data-tour=modules] .v3-rail-label', '[data-tour=modules] .v3-rail-group']}
+      - {n: 1, box: '[data-testid=v3-nav-mode]'}
+
+  - name: 10-setup-service-health
+    chapter: 10-prepare/20-setup
+    status: keep
+    account: admin
+    path: /v2?full=1
+    wait: ul.v2-home-health
+    clip: 'div:has(> ul.v2-home-health)'
+    margin: 8
+    highlights:
+      - {box: ['[data-testid=v2-health-gateway]', '[data-testid=v2-health-memory]',
+               '[data-testid=v2-health-registry]', '[data-testid=v2-health-observability]']}
+
+  - name: 10-concepts-glossary
+    chapter: 10-prepare/10-concepts
+    status: new   # the console's own glossary: platform terms + Agent-DLC term cards
+    account: admin
+    path: /v3
+    wait: '[data-testid=v3-shell]'
+    actions:
+      - {click: '.v3-top-right > .v3-help:not(.v3-theme) > button'}
+      - {click: {zh: '.v3-help-menu >> text=术语表', en: '.v3-help-menu >> text=Glossary'}}
+      - {wait: .v3-dlc-terms}
+    clip: '[role=dialog]'
+    margin: 44   # room for the left badges outside the dialog
+    highlights:
+      - {n: 1, box: '[role=dialog] input.v3-input', badge: left}
+      - {n: 2, box: '.v3-dlc-term >> nth=0'}
+      - {n: 3, box: '.v3-dlc-term >> nth=0 >> .v3-dlc-term-used', badge: left}
+
+  # ── 10-prepare/30-roles ────────────────────────────────────────────────────
+  # Taking this shot IS the walk-through's self-registration: one trainee per
+  # language (re-running fails at the wait, the name being taken).
+  - name: 15-roles-register-pending
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: anon
+    path: /v3
+    wait: '[data-testid=auth-tabs]'
+    actions:
+      - {click: '[data-testid=auth-tab-register]'}
+      - {fill: {zh: ['#reg-username', trainee-xiaoming], en: ['#reg-username', trainee-alex]}}
+      - {fill: {zh: ['#reg-email', trainee-xiaoming@example.com], en: ['#reg-email', trainee-alex@example.com]}}
+      - {fill: ['#reg-password', '{env:LP_TRAINEE_PW}']}
+      - {fill: ['#reg-confirm', '{env:LP_TRAINEE_PW}']}
+      - {click: '.v3-auth-card form button[type=submit]'}
+      - {wait: '[data-testid=register-success]'}
+    clip: .v3-auth-card
+    margin: 40
+    highlights:
+      - {n: 1, box: '[data-testid=register-success] h2', badge: left}
+      - {n: 2, box: '[data-testid=register-status]', badge: left}
+      - {n: 3, box: '[data-testid=register-success] .v3-auth-submit', badge: left}
+
+  - name: 15-roles-users-pending
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: admin
+    path: /v3/users
+    requires: ['user:trainee-xiaoming']
+    wait: 'div.v3-alert'
+    actions:
+      - {click: 'div.v3-alert button'}
+      - {sleep: 800}
+    clip: main.v3-main div.v3-reveal
+    margin: 16
+    highlights:
+      - {n: 1, box: 'div.v3-alert button', badge: right}
+      - {box: '.v3-filters button >> nth=1'}
+      - {n: 2, box: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("通过")', en: 'tr:has-text("trainee-alex") button:has-text("Approve")'}, badge: top}
+
+  - name: 15-roles-approve-dialog
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: admin
+    path: /v3/users
+    requires: ['user:trainee-xiaoming']
+    wait: 'div.v3-alert'
+    actions:
+      - {click: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("通过")', en: 'tr:has-text("trainee-alex") button:has-text("Approve")'}}
+      - {wait: '[data-testid=v3-user-approve]'}
+    clip: '[role=dialog]'
+    margin: 40
+    highlights:
+      - {n: 1, box: '[data-testid=v3-user-approve] button', badge: left}
+      - {n: 2, box: '[role=dialog] .v3-btn.primary', badge: top}
+
+  - name: 15-roles-developer-sidebar
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: developer
+    path: /v3
+    viewport: [1440, 1100]
+    storage: {launchpad_nav_mode: null}
+    wait: '[data-testid=v3-shell]'
+    actions: [{expand_rail: true}]
+    clip: nav.v3-rail
+    margin: 0
+    highlights:
+      - {n: 1, box: 'nav.v3-rail > a'}
+      - {n: 2, box: '[data-tour=modules] .v3-rail-group'}
+      - {n: 3, box: '[data-testid=v3-nav-mode]'}
+
+  - name: 15-roles-bizowner-perms
+    chapter: 10-prepare/30-roles
+    status: keep
+    account: admin
+    path: /v3/users?view=detail&user=biz-owner
+    requires: [user:biz-owner]
+    wait: '.v3-usr-chip'
+    clip: ['section.v3-panel:has(.v3-usr-chip)', 'section.v3-panel:has([data-testid=v3-user-granted])']
+    highlights:
+      - {n: 1, box: '.v3-usr-chip:has-text("criteria.sign")'}
+      - {n: 2, box: '.v3-usr-chip:has-text("golden.admit")'}
+      - {n: 3, box: '.v3-usr-chip:has-text("judge.calibrate")'}
+      - {n: 4, box: '[data-testid=v3-user-granted] .v3-chip'}
+
+  - name: 15-roles-user-sessions
+    chapter: 10-prepare/30-roles
+    status: new   # account detail: Force sign-out (revoke every session)
+    account: admin
+    path: /v3/users?view=detail&user=biz-owner
+    requires: [user:biz-owner]
+    wait: '.v3-usr-chip'
+    actions:
+      - {click: {zh: 'button:has-text("强制下线")', en: 'button:has-text("Force sign-out")'}}
+      - {sleep: 1500}
+    clip: .v3-modal
+    margin: 40
+    highlights:
+      - {n: 1, box: '.v3-modal h2', badge: left}
+      - {n: 2, box: '.v3-modal .v3-btn.danger', badge: top}
+
+  # ── 10-prepare/40-teams ────────────────────────────────────────────────────
+  - name: 40-teams-departments
+    chapter: 10-prepare/40-teams
+    status: new   # department list after creating 客服中心
+    account: admin
+    path: /v3/departments
+    wait: 'td:has-text("客服中心")'
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: 'tr:has(td:has-text("客服中心"))', badge: left}
+
+  - name: 40-teams-project-create
+    chapter: 10-prepare/40-teams
+    status: new   # New project dialog filled like retail-service; never submitted
+    account: admin
+    path: /v3/projects
+    wait: '[data-testid=projects-table]'
+    actions:
+      - {click: {zh: 'button.v3-btn.primary:has-text("新建项目")', en: 'button.v3-btn.primary:has-text("New project")'}}
+      - {wait: '[data-testid=project-create]'}
+      - {fill: ['[data-testid=project-create] input.v3-input >> nth=0', '零售客服']}
+      - {fill: ['[data-testid=project-create] input.v3-input.mono', 'retail-service']}
+      # the department control is the V3 themed Select (a button + listbox), not a <select>
+      - {click: '[data-testid=project-create] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has-text("客服中心")'}
+      - {sleep: 500}
+      - {fill: ['[data-testid=project-create] textarea', '零售与电商的智能客服，飞轮主线在这里']}
+      - {click: '[data-testid=project-create] input[type=checkbox] >> nth=0'}
+      - {sleep: 500}
+    clip: .v3-modal
+    margin: 40
+    highlights:
+      - {n: 1, box: '[data-testid=project-create] button.v3-sel >> nth=0', badge: left}
+      - {n: 2, box: '[data-testid=project-create] input[type=checkbox] >> nth=0', badge: left}
+
+  - name: 40-teams-members
+    chapter: 10-prepare/40-teams
+    status: new   # retail-service members: four project roles, biz-owner override
+    account: admin
+    path: /v3/projects?id=retail-service&tab=members
+    wait: 'td:has-text("biz-owner")'
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: 'tr:has(td:has-text("biz-owner"))', badge: left}
+
+  - name: 40-teams-member-edit
+    chapter: 10-prepare/40-teams
+    status: new   # edit biz-owner: overrides ticked, criteria.manage unticked; cancelled, not saved
+    account: admin
+    path: /v3/projects?id=retail-service&tab=members
+    wait: 'td:has-text("biz-owner")'
+    actions:
+      - {click: {zh: 'tr:has(td:has-text("biz-owner")) button:has-text("编辑")', en: 'tr:has(td:has-text("biz-owner")) button:has-text("Edit")'}}
+      - {wait: '[data-testid=member-dialog]'}
+      - {sleep: 800}
+    clip: .v3-modal
+    margin: 40
+    highlights:
+      - {n: 1, box: '.v3-prj-checks input[type=checkbox] >> nth=0', badge: left}
+      - {n: 2, box: '[data-testid=key-picker] label:has-text("criteria.manage")', badge: left}
+
+  - name: 40-teams-switcher
+    chapter: 10-prepare/40-teams
+    status: new   # developer after switching to retail-service (persisted per workspace)
+    account: developer
+    path: /v3
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v3-project-switch]'
+    highlights:
+      - {n: 1, box: '[data-testid=v3-project-switch]', badge: right}
+
+  # ── 10-prepare/50-platform-config ──────────────────────────────────────────
+  - name: 50-platform-config-network-list
+    chapter: 10-prepare/50-platform-config
+    status: new   # workshop-private: preflight passed, used by 2 projects, shared chip
+    account: admin
+    path: /v3/network
+    wait: 'td:has-text("workshop-private")'
+    clip: 'table:has(th:has-text("VPC"))'
+    margin: 24
+    highlights:
+      - {n: 1, box: 'table:has(th:has-text("VPC")) td:has(span):has-text("Agent"):has-text("2")', badge: top}
+
+  - name: 50-platform-config-network-access
+    chapter: 10-prepare/50-platform-config
+    status: new   # retail-service allows workshop-private as default (bound in the walk)
+    account: admin
+    path: /v3/network
+    wait: '[data-testid=v3-network-access] button.v3-sel'
+    actions:
+      # the project control is the V3 themed Select (a button + listbox), not a <select>
+      - {click: '[data-testid=v3-network-access] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has-text("retail-service")'}
+      - {sleep: 1500}
+    clip: '[data-testid=v3-network-access]'
+    margin: 48
+    highlights:
+      - {n: 1, box: '[data-testid=v3-network-access] button.v3-sel >> nth=0', badge: left}
+      - {n: 2, box: '[data-testid=v3-network-access] tr:has-text("workshop-private")', badge: left}
+      - {n: 3, box: '[data-testid=v3-network-access] button.v3-btn.primary', badge: left}
+
+  - name: 50-platform-config-enforcement
+    chapter: 10-prepare/50-platform-config
+    status: new   # workspace network rules: PUBLIC allowed, IAM enforcement off, gap notes
+    account: admin
+    path: /v3/network
+    wait: '[data-testid=v3-network-enforcement]'
+    clip: '[data-testid=v3-network-enforcement]'
+    margin: 16
+
+  - name: 50-platform-config-storage
+    chapter: 10-prepare/50-platform-config
+    status: new   # workshop-files S3 Files, allowed for retail-service
+    account: admin
+    path: /v3/storage
+    wait: '[data-testid=v3-storage-access] button.v3-sel'
+    actions:
+      # the project control is the V3 themed Select (a button + listbox), not a <select>
+      - {click: '[data-testid=v3-storage-access] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has-text("retail-service")'}
+      - {sleep: 1500}
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: 'tr:has(td:has-text("S3 Files"))', badge: left}
+      - {n: 2, box: '[data-testid=v3-storage-access]', badge: left}
+
+  - name: 50-platform-config-project-settings
+    chapter: 10-prepare/50-platform-config
+    status: new   # retail-service settings tab, read only
+    account: admin
+    path: /v3/projects?id=retail-service&tab=settings
+    viewport: [1440, 2400]
+    wait: 'main.v3-main textarea'
+    actions: [{sleep: 1500}]
+    clip: main.v3-main div.v3-reveal
+
+  - name: 50-platform-config-cost-tags
+    chapter: 10-prepare/50-platform-config
+    status: new   # after the ce inline policy: keys inactive, no error card
+    account: admin
+    path: /v3/cost-tags
+    viewport: [1440, 1600]
+    wait: 'td:has-text("launchpad:project")'
+    actions:
+      - {click: {zh: 'button:has-text("重新检查")', en: 'button:has-text("Check again")'}}
+      - {sleep: 4000}
+    clip: main.v3-main div.v3-reveal
+
+  # ── 20-flywheel/10-define ──────────────────────────────────────────────────
+  - name: 20-define-sidebar-expert
+    chapter: 20-flywheel/10-define
+    status: keep
+    account: developer
+    path: /v3
+    viewport: [1440, 1100]
+    storage: {launchpad_nav_mode: expert, launchpad_v3_rail_open: '{"eval":true}'}
+    wait: '[data-testid=v3-shell]'
+    clip: nav.v3-rail
+    margin: 0
+    highlights:
+      - {n: 1, box: '[data-testid=v3-nav-mode]'}
+      - {n: 2, box: '.v3-rail-group:has([data-testid=v3-rail-group-eval])'}
+      - {n: 3, box: 'a.v3-rail-sub[href="/v3/evaluators"]'}
+
+  - name: 20-define-evaluator-rubric
+    chapter: 20-flywheel/10-define
+    status: new   # developer in retail-service: new LLM-judge form filled, NOT created
+    account: developer
+    path: /v3/evaluators?view=new
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service, launchpad_nav_mode: expert}
+    wait: 'main.v3-main textarea'
+    actions:
+      - {fill: ['main.v3-main input[placeholder="answer_faithfulness"]', 'unicorn_fee_check']}
+      - {fill: [{zh: ':nth-match(main.v3-main input.v3-input:not(.mono), 1)', en: ':nth-match(main.v3-main input.v3-input:not(.mono), 1)'}, {zh: '金额、费率与时限是否与参考答案一致', en: 'Whether amounts, rates and time limits match the reference answer'}]}
+      - {fill: ['main.v3-main textarea', {zh: "你是独角兽公司客服质检员。用户问题与上下文：{context}\n客服的回答：{assistant_turn}\n政策专家给出的参考答案：{expected_response}\n只检查一件事：回答中出现的金额、费用比例、退款金额、时限（天数、小时、截止时间）和行李重量是否与参考答案一致、计算是否正确。\n- 回答没有涉及任何数字或时限，参考答案也不需要数字：判为 pass。\n- 回答中的数字与参考答案一致（允许等价写法，如 ¥980 与 980 元）：判为 pass。\n- 任何一个数字、比例或时限与参考答案矛盾或计算错误：判为 fail。\n不要评价语气、篇幅或其他方面。\n", en: "You are a quality reviewer for Unicorn Company customer service. User question and context: {context}\nThe agent's reply: {assistant_turn}\nThe reference answer written by a policy expert: {expected_response}\nCheck one thing only: whether the amounts, fee percentages, refund amounts, time limits (days, hours, deadlines) and baggage weights in the reply match the reference answer and are calculated correctly.\n- The reply contains no numbers or time limits and the reference answer needs none: pass.\n- Every number in the reply matches the reference answer (equivalent forms such as ¥980 and 980 yuan are fine): pass.\n- Any number, percentage or time limit contradicts the reference answer or is miscalculated: fail.\nDo not judge tone, length or anything else.\n"}]}
+      - {fill: [{zh: ':nth-match(input[aria-label="定义"], 1)', en: ':nth-match(input[aria-label="Definition"], 1)'}, {zh: '金额、比例与时限全部正确，或不涉及', en: 'All amounts, rates and time limits are correct, or none are involved'}]}
+      - {fill: [{zh: ':nth-match(input[aria-label="定义"], 2)', en: ':nth-match(input[aria-label="Definition"], 2)'}, {zh: '至少一个金额、比例或时限错误', en: 'At least one amount, rate or time limit is wrong'}]}
+      - {sleep: 600}
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: '.v3-ev-defs', badge: left}
+      - {n: 2, box: '.v3-panel:has(input[placeholder="answer_faithfulness"])', badge: left}
+      - {n: 3, box: '.v3-panel:has(textarea)', badge: left}
+      - {n: 4, box: '.v3-panel:has-text("{expected_response}"):not(:has(textarea))', badge: top}
+      - {n: 5, box: {zh: '.v3-panel:has(input[aria-label="定义"])', en: '.v3-panel:has(input[aria-label="Definition"])'}, badge: left}
+      - {n: 6, box: 'main.v3-main button.v3-btn.primary', badge: left}
+
+  - name: 20-define-evaluator-list-custom
+    chapter: 20-flywheel/10-define
+    status: new   # the three unicorn_ evaluators, Custom filter, project retail-service
+    account: developer
+    path: /v3/evaluators
+    storage: {'launchpad_project:default': retail-service, launchpad_nav_mode: expert}
+    wait: 'td:has-text("unicorn_fee_check")'
+    actions:
+      - {click: {zh: 'main.v3-main button:has-text("自定义")', en: 'main.v3-main button:has-text("Custom")'}}
+      - {sleep: 800}
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: {zh: 'main.v3-main button:has-text("自定义")', en: 'main.v3-main button:has-text("Custom")'}, badge: top}
+      - {n: 2, box: 'tr:has(td:has-text("unicorn_"))', badge: left}
+
+  # ── 20-flywheel/20-build ───────────────────────────────────────────────────
+  - name: 30-build-chooser
+    chapter: 20-flywheel/20-build
+    status: new
+    account: developer
+    path: /v3/create
+    storage: {lp.v3.create.chooser: null, 'launchpad_project:default': retail-service}
+    wait: .v3-chooser-main
+    actions:
+      - {click: {zh: '.v3-chooser-qs >> text=什么都没有', en: '.v3-chooser-qs >> text=Nothing yet'}}
+      - {click: {zh: '.v3-chooser-qs >> text=调用工具办事', en: '.v3-chooser-qs >> text=Gets things done with tools'}}
+      - {click: {zh: '.v3-chooser-qs >> text=要，走完整 Agent-DLC', en: '.v3-chooser-qs >> text=Yes — the full Agent-DLC'}}
+    clip: .v3-chooser-main
+    highlights:
+      - {n: 1, box: ol.v3-chooser-qs}
+      - {n: 2, box: .v3-chooser-side}
+      - {n: 3, box: details.v3-chooser-compare}
+
+
+  - name: 30-build-byoc-entry
+    chapter: 20-flywheel/20-build
+    status: keep
+    account: developer
+    path: /v3/create
+    wait: .v3-way
+    clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("其他构建方式"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Other ways to build"))'}
+    highlights:
+      - {n: 1, box: {zh: '.v3-way:has-text("自带代码")', en: '.v3-way:has-text("Bring your own code")'}}
+
+  - name: 30-build-strands-config
+    chapter: 20-flywheel/20-build
+    status: replace   # Strands wizard in retail-service: 01 basics filled, not deployed
+    account: developer
+    path: /v2/agents?view=new&method=zip_runtime
+    viewport: [1440, 1400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=sb-group-advanced]'
+    actions:
+      - {fill: ['input[placeholder="hr-assistant-v3"]', 'lab-service-assistant']}
+      - {fill: [{zh: 'textarea[placeholder^="描述"]', en: 'textarea[placeholder^="Describe"]'}, {zh: "你是独角兽公司的智能客服助手，服务独角兽商城（电商购物）和独角兽旅行（机票、酒店）两条业务线的用户。请友好、简洁地回答用户关于商品、订单、退换货、航班退改签、行李和酒店预订取消的问题。", en: "You are the customer service assistant of Unicorn Company, serving users of two business lines: Unicorn Mall (online shopping) and Unicorn Trip (flights and hotels). Answer questions about products, orders, returns and exchanges, flight changes and refunds, baggage, and hotel booking cancellations in a friendly, concise way."}]}
+      - {sleep: 500}
+    clip: '[data-testid=sb-group-basics]'
+    highlights:
+      - {n: 1, box: 'input[placeholder="hr-assistant-v3"]', badge: left}
+      - {n: 2, box: {zh: 'textarea[placeholder^="描述"]', en: 'textarea[placeholder^="Describe"]'}, badge: left}
+
+  - name: 30-build-strands-network
+    chapter: 20-flywheel/20-build
+    status: new   # the network card preselects the project default workshop-private
+    account: developer
+    path: /v2/agents?view=new&method=zip_runtime
+    viewport: [1440, 5000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=sb-group-advanced]'
+    actions:
+      - {click: '[data-testid=sb-group-advanced] button.sb-group-head'}
+      - {wait: '[data-testid=v2-agent-network-profile]'}
+      - {sleep: 3500}
+    clip: '[data-testid=v2-agent-network]'
+    highlights:
+      - {n: 1, box: '[data-testid=v2-agent-network-profile]', badge: left}
+
+  - name: 30-build-strands-deploy-done
+    chapter: 20-flywheel/20-build
+    status: replace   # V3 agent page after the first deploy (private network, ~6 min)
+    account: developer
+    path: /v3/agents?id={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions: [{sleep: 2500}]
+    clip: main.v3-main div.v3-reveal
+
+  - name: 15-roles-release-policy-card
+    chapter: 10-prepare/30-roles
+    status: replace   # needs a running agent, so it is taken after 2.2; admin, read only
+    account: admin
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'section.v3-panel:has(.v3-grid.c3 label.v3-field)'
+    actions: [{sleep: 2000}]
+    clip: 'section.v3-panel:has(.v3-grid.c3 label.v3-field)'
+    highlights:
+      - {n: 1, box: 'section.v3-panel:has(.v3-grid.c3 label.v3-field) .v3-grid.c3 > label.v3-field:nth-child(1)', badge: left}
+      - {n: 2, box: 'section.v3-panel:has(.v3-grid.c3 label.v3-field) .v3-grid.c3 > label.v3-field:nth-child(2)', badge: left}
+      - {n: 3, box: 'section.v3-panel:has(.v3-grid.c3 label.v3-field) .v3-grid.c3 > label.v3-field:nth-child(3)', badge: left}
+      - {n: 4, box: 'section.v3-panel:has(.v3-grid.c3 label.v3-field) .v3-grid.c3 > label.v3-field:nth-child(4)', badge: left}
+      - {n: 5, box: 'section.v3-panel:has(.v3-grid.c3 label.v3-field) .v3-grid.c3 > label.v3-field:nth-child(5)', badge: left}
+      - {n: 6, box: 'section.v3-panel:has(.v3-grid.c3 label.v3-field) button.v3-btn.primary', badge: left}
+
+  - name: 30-build-harness-tools
+    chapter: 20-flywheel/20-build
+    status: new   # harness full form: native execution unticked
+    account: developer
+    path: /v2/agents?view=new&method=harness
+    viewport: [1440, 1600]
+    storage: {'launchpad_project:default': retail-service}
+    wait: main.v3-main
+    actions:
+      - {click: {zh: 'button:has-text("切换到完整表单")', en: 'button:has-text("full form")'}}
+      - {wait: '[data-testid=v2-agent-native-tools]'}
+      - {click: '[data-testid=v2-agent-native-tools] label.v2-check >> nth=0'}
+      - {click: '[data-testid=v2-agent-native-tools] label.v2-check >> nth=1'}
+      - {sleep: 800}
+    clip: 'section.v2-card:has([data-testid=v2-agent-native-tools])'
+    highlights:
+      - {n: 1, box: '[data-testid=v2-agent-native-tools]', badge: left}
+
+  - name: 30-build-harness-deploy-done
+    chapter: 20-flywheel/20-build
+    status: new   # V3 agent page of lab-policy-advisor (harness, VPC)
+    account: developer
+    path: /v3/agents?id={agent:lab-policy-advisor}
+    requires: [agent:lab-policy-advisor]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions: [{sleep: 2500}]
+    clip: main.v3-main div.v3-reveal
+
+  - name: 30-build-kb-create
+    chapter: 20-flywheel/20-build
+    status: replace   # create form in retail-service; description counter /200
+    account: developer
+    path: /v2/knowledge-bases?view=new
+    viewport: [1440, 1400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-kb-name]'
+    actions:
+      - {fill: ['[data-testid=v2-kb-name]', lab-unicorn-policies]}
+      - {fill: ['[data-testid=v2-kb-desc]', {zh: "独角兽公司客服政策库：独角兽商城退换货、退款时效、优惠叠加与部分退货分摊、价保；独角兽航空各票价品牌的改签与退票费率、税费、非自愿退改、行李额；独角兽酒店各房价类型的取消窗口、未入住、延迟退房、国庆规则。回答退换货、退款、改签退票、行李、酒店取消或费用计算问题时查询本知识库。", en: "Unicorn Company policies: Unicorn Mall returns and refunds; Unicorn Air change/refund fees, taxes, baggage; Unicorn Hotels cancellation, no-show. Query it for refunds, flight changes, baggage or fees."}]}
+      - {upload: ['[data-testid=v2-kb-source] input[type=file]', {zh: ["assets/kb/ecommerce-returns-policy.md", "assets/kb/unicorn-air-change-refund-baggage.md", "assets/kb/unicorn-hotels-cancellation.md"], en: ["assets/kb/ecommerce-returns-policy.en.md", "assets/kb/unicorn-air-change-refund-baggage.en.md", "assets/kb/unicorn-hotels-cancellation.en.md"]}]}
+      - {sleep: 800}
+    clip: main.v3-main
+    highlights:
+      - {n: 1, box: '[data-testid=v2-kb-name]', badge: left}
+      - {n: 2, box: '[data-testid=v2-kb-desc]', badge: left}
+      - {n: 3, box: '[data-testid=v2-kb-source] .v2-options', badge: left}
+      - {n: 4, box: '[data-testid=v2-kb-source] .v2-field >> nth=1', badge: left}
+      - {n: 5, box: '[data-testid=v2-kb-submit]', badge: top}
+
+  - name: 30-build-kb-ingestion
+    chapter: 20-flywheel/20-build
+    status: new   # detail page import track: AVAILABLE -> COMPLETE -> indexed 3
+    account: developer
+    path: /v3/knowledge?id={kb:lab-unicorn-policies}
+    requires: [kb:lab-unicorn-policies]
+    viewport: [1440, 2400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'ol.v3-track'
+    actions: [{sleep: 2000}]
+    clip: 'section.v3-panel:has(ol.v3-track)'
+    highlights:
+      - {n: 1, box: 'ol.v3-track', badge: left}
+
+  - name: 30-build-kb-retrieve
+    chapter: 20-flywheel/20-build
+    status: replace   # retrieve card with results
+    account: developer
+    path: /v3/knowledge?id={kb:lab-unicorn-policies}
+    requires: [kb:lab-unicorn-policies]
+    viewport: [1440, 3000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'ol.v3-track'
+    actions:
+      - {fill: [{zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) input.v3-input', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) input.v3-input'}, {zh: 标准预付价酒店最晚什么时候可以免费取消？, en: "Until when can a Standard Prepaid hotel booking be cancelled for free?"}]}
+      - {click: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) button.v3-btn.primary', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) button.v3-btn.primary'}}
+      - {sleep: 6000}
+    clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve"))'}
+    highlights:
+      - {n: 1, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) input.v3-input', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) input.v3-input'}, badge: left}
+      - {n: 2, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("检索")) button.v3-btn.primary', en: 'section.v3-panel:has(.v3-panel-head:text-is("Retrieve")) button.v3-btn.primary'}, badge: right}
+
+  - name: 30-build-registry-list
+    chapter: 20-flywheel/20-build
+    status: new
+    account: developer
+    path: /v3/registry
+    requires: [record:lab-unicorn-service-rules]
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main table tbody tr'
+    actions: [{sleep: 2000}]
+    highlights:
+      - {n: 1, box: 'main.v3-main .v3-btn.primary', badge: left}
+      - {n: 2, box: 'main.v3-main table tbody tr:has-text("lab-unicorn-service-rules")'}
+
+  - name: 30-build-registry-record
+    chapter: 20-flywheel/20-build
+    status: new
+    account: biz-owner
+    path: /v3/registry?id={record:lab-unicorn-service-rules}
+    requires: [record:lab-unicorn-service-rules]
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'ol.v3-track'
+    actions: [{sleep: 2000}]
+    highlights:
+      - {n: 1, box: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("生命周期"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Lifecycle"))'}}
+      - {n: 2, box: {zh: 'main.v3-main button:has-text("在新 Agent 中使用")', en: 'main.v3-main button:has-text("Use in new agent")'}, badge: left}
+
+  - name: 30-build-attach-skill-kb
+    chapter: 20-flywheel/20-build
+    status: replace   # V2 re-publish wizard inside V3, both attached
+    account: developer
+    path: /v2/agents?view=edit&id={agent:lab-policy-advisor}
+    requires: [agent:lab-policy-advisor, kb:lab-unicorn-policies, record:lab-unicorn-service-rules]
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-agent-skills]'
+    actions: [{sleep: 2000}]
+    clip: {zh: 'section.v2-card:has(h2.v2-sec-title:text-is("Skill 与知识库"))', en: 'section.v2-card:has(h2.v2-sec-title:text-is("Skills and knowledge"))'}
+    highlights:
+      - {n: 1, box: '[data-testid=v2-agent-skills] label:has-text("lab-unicorn-service-rules")', badge: left}
+      - {n: 2, box: 'label:has-text("lab-unicorn-policies")', badge: left}
+
+  - name: 30-build-chat-kb
+    chapter: 20-flywheel/20-build
+    status: replace   # V3 chat, advisor with skill + KB gateway tools; the session is
+                      # asked beforehand over /api/chat and opened by id (LP_CHAT_SID_*)
+    account: developer
+    path: {zh: '/v3/chat?agent={agent:lab-policy-advisor}&session={env:LP_CHAT_SID_ZH}',
+           en: '/v3/chat?agent={agent:lab-policy-advisor}&session={env:LP_CHAT_SID_EN}'}
+    requires: [agent:lab-policy-advisor]
+    viewport: [1440, 1400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=chat-tool]'
+    actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
+    highlights:
+      - {n: 1, box: 'main button.v3-sel:has-text("lab-policy-advisor")', badge: left}
+      - {n: 2, box: '[data-testid=chat-tool]', badge: left}
+      - {n: 3, box: '.v3-msg.agent', badge: left}
+
+  - name: 30-build-memory-longterm
+    chapter: 20-flywheel/20-build
+    status: replace   # V3 memory, long-term tab; strategy picked by label (ids differ per console)
+    account: developer
+    path: /v3/memory?tab=long-term&actor={agent:lab-service-assistant}__developer
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main button.v3-sel >> nth=1'
+    actions:
+      # the actor and strategy pickers are the V3 themed Select (button + listbox)
+      - {select: ['main button.v3-sel >> nth=1', user_preferences]}
+      - {wait: 'tr.click:has-text("高楼层")'}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: 'main button.v3-sel >> nth=0', badge: left}
+      - {n: 2, box: 'main button.v3-sel >> nth=1', badge: top}
+      - {n: 3, box: 'tr.click:has-text("高楼层")', badge: left}
+
+  - name: 30-build-memory-record
+    chapter: 20-flywheel/20-build
+    status: new   # the record dialog of the hotel preference
+    account: developer
+    path: /v3/memory?tab=long-term&actor={agent:lab-service-assistant}__developer
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main button.v3-sel >> nth=1'
+    actions:
+      # the actor and strategy pickers are the V3 themed Select (button + listbox)
+      - {select: ['main button.v3-sel >> nth=1', user_preferences]}
+      - {wait: 'tr.click:has-text("高楼层")'}
+      - {click: 'tr.click:has-text("高楼层")'}
+      - {wait: '.v3-modal[role=dialog]'}
+      - {sleep: 800}
+    clip: '.v3-modal[role=dialog]'
+    highlights:
+      - {n: 1, box: '.v3-modal dd.mono:has-text("/preferences/")', badge: left}
+      - {n: 2, box: '.v3-modal dl.v3-kv:has(dt:has-text("preference"))', badge: left}
+
+  - name: 30-build-byoc-artifact
+    chapter: 20-flywheel/20-build
+    status: replace   # V2 byoc wizard after the zip upload (the upload itself stages a new upload id)
+    account: developer
+    path: /v2/agents?view=new&method=byoc
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-agent-byoc-drop]'
+    actions:
+      - {upload: ['[data-testid=v2-agent-byoc-file]', ["assets/byoc/lab-legacy-agent.zip"]]}
+      - {wait: '[data-testid=v2-agent-byoc-uploaded]'}
+      - {sleep: 2500}
+    clip: 'section.v2-card:has([data-testid=v2-agent-byoc-drop])'
+    highlights:
+      - {n: 1, box: '[data-testid=v2-agent-byoc-kind-code_zip]', badge: left}
+      - {n: 2, box: '[data-testid=v2-agent-byoc-drop]', badge: left}
+      - {n: 3, box: '[data-testid=v2-agent-byoc-telemetry]', badge: left}
+      - {n: 4, box: 'section.v2-card:has([data-testid=v2-agent-byoc-drop]) .v2-alert.success', badge: left}
+      - {n: 5, box: '[data-testid=v2-agent-byoc-entrypoint]', badge: left}
+
+  - name: 30-build-byoc-config
+    chapter: 20-flywheel/20-build
+    status: replace   # the allowed-models card of the byoc wizard
+    account: developer
+    path: /v2/agents?view=new&method=byoc
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-agent-byoc-models]'
+    actions: [{sleep: 1500}]
+    clip: 'section.v2-card:has([data-testid=v2-agent-byoc-models])'
+    highlights:
+      - {n: 1, box: 'section.v2-card:has([data-testid=v2-agent-byoc-models]) .v2-row', badge: left}
+      - {n: 2, box: '[data-testid=v2-agent-byoc-model-row]', badge: left}
+
+  - name: 30-build-byoc-deploy-done
+    chapter: 20-flywheel/20-build
+    status: replace   # V3 agent page of the byoc agent
+    account: developer
+    path: /v3/agents?id={agent:lab-legacy-agent}
+    requires: [agent:lab-legacy-agent]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions: [{sleep: 2500}]
+    clip: main.v3-main div.v3-reveal
+
+  - name: 30-build-byoc-code-card
+    chapter: 20-flywheel/20-build
+    status: replace   # the Uploaded code panel on the V3 agent page
+    account: developer
+    path: /v3/agents?id={agent:lab-legacy-agent}
+    requires: [agent:lab-legacy-agent]
+    viewport: [1440, 2000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("上传的代码"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Uploaded code"))'}
+    actions: [{sleep: 1000}]
+    clip: {zh: 'section.v3-panel:has(.v3-panel-head:text-is("上传的代码"))', en: 'section.v3-panel:has(.v3-panel-head:text-is("Uploaded code"))'}
+
+  - name: 30-build-byoc-try-refund
+    chapter: 20-flywheel/20-build
+    status: replace   # session asked beforehand over /api/chat (LP_CHAT_SID_BYOC_REFUND)
+    account: developer
+    path: '/v3/chat?agent={agent:lab-legacy-agent}&session={env:LP_CHAT_SID_BYOC_REFUND}'
+    requires: [agent:lab-legacy-agent]
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=chat-tool]'
+    actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
+    highlights:
+      - {n: 1, box: 'main button.v3-sel:has-text("lab-legacy-agent")', badge: left}
+      - {n: 2, box: '.v3-msg.user', badge: left}
+      - {n: 3, box: '[data-testid=chat-tool]', badge: left}
+      - {n: 4, box: '.v3-msg.agent', badge: left}
+
+  - name: 30-build-byoc-try-baggage
+    chapter: 20-flywheel/20-build
+    status: replace   # session asked beforehand over /api/chat (LP_CHAT_SID_BYOC_BAGGAGE)
+    account: developer
+    path: '/v3/chat?agent={agent:lab-legacy-agent}&session={env:LP_CHAT_SID_BYOC_BAGGAGE}'
+    requires: [agent:lab-legacy-agent]
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=chat-tool]'
+    actions: [{sleep: 1500}, {eval: "document.querySelector('.v3-chat-thread').scrollTop = 0"}, {sleep: 500}]
+    highlights:
+      - {n: 1, box: 'main button.v3-sel:has-text("lab-legacy-agent")', badge: left}
+      - {n: 2, box: '.v3-msg.user', badge: left}
+      - {n: 3, box: '[data-testid=chat-tool]', badge: left}
+      - {n: 4, box: '.v3-msg.agent', badge: left}
+
+
+  # ── 20-flywheel/30-evaluate ───────────────────────────────────────────────
+  - name: 20-define-criteria-table
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # developer after publishing unicorn-service-criteria v1 (unsigned)
+    account: developer
+    path: /v3/standards?view=criteria&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1800]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'text=unicorn-service-criteria'
+    actions:
+      - {click: 'text=unicorn-service-criteria'}
+      - {wait: 'section.v3-panel:has(.v3-grid.c4)'}
+      - {sleep: 2000}
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: 'section.v3-panel:has(.v3-grid.c4) .v3-panel-head span.end', badge: left}
+      - {n: 2, box: 'section.v3-panel .v3-grid.c4 > div.v3-stat:nth-child(3)', badge: left}
+      - {n: 3, box: 'section.v3-panel .v3-grid.c2 > div.v3-stat:nth-child(2)', badge: left}
+      - {n: 4, box: 'section.v3-panel.flush:has(td:text-is("P1")) table.v3-table', badge: left}
+      - {n: 5, box: {zh: 'button.v3-btn:text-is("开出新版本") + span.v3-std-muted', en: 'button.v3-btn:text-is("Open a new version") + span.v3-std-muted'}, badge: right}
+
+  - name: 40-evaluate-golden-seed
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # biz-owner's seed dialog, file chosen, NOT submitted; capture before seeding
+    account: biz-owner
+    path: /v3/standards?view=golden&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'text=unicorn-service-golden'
+    actions:
+      - {click: 'text=unicorn-service-golden'}
+      - {wait: {zh: 'button:has-text("初次编制切分")', en: 'button:has-text("Curate the splits")'}}
+      - {click: {zh: 'button:has-text("初次编制切分")', en: 'button:has-text("Curate the splits")'}}
+      - {wait: '.v3-modal .body textarea'}
+      - {upload: ['.v3-modal .body input[type=file]', {zh: ["assets/datasets/unicorn-service-golden.json"], en: ["assets/datasets/unicorn-service-golden.en.json"]}]}
+      - {sleep: 1500}
+    clip: '.v3-modal'
+    highlights:
+      - {n: 1, box: {zh: 'xpath=//*[starts-with(normalize-space(text()),"下载模板")]/..', en: 'xpath=//*[starts-with(normalize-space(text()),"Download a template")]/..'}, badge: left}
+      - {n: 2, box: '.v3-modal .body input[type=file]', badge: left}
+      - {n: 3, box: '.v3-modal .body textarea', badge: left}
+      - {n: 4, box: '.v3-modal .foot button.primary', badge: left}
+
+  - name: 20-define-golden-coverage
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # developer after biz-owner sealed the splits
+    account: developer
+    path: /v3/standards?view=golden&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1400]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'text=unicorn-service-golden'
+    actions:
+      - {click: 'text=unicorn-service-golden'}
+      - {wait: 'table.v3-std-coverage'}
+      - {sleep: 1500}
+    clip: main.v3-main div.v3-reveal
+    highlights:
+      - {n: 1, box: 'section.v3-panel:has(div.v3-std-split) .v3-panel-head span.end', badge: left}
+      - {n: 2, box: 'section.v3-panel div.v3-grid.c3:has(div.v3-std-split)', badge: left}
+      - {n: 3, box: 'table.v3-std-coverage', badge: left}
+
+  - name: 40-evaluate-task-passk
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # wizard step 2 with k = 3, NOT submitted; dataset = the golden dev split (LP_GOLDEN_DEV); LP_EV_* = the three custom evaluator ids
+    account: developer
+    path: /v3/tasks?view=new&agent={agent:lab-service-assistant}&dataset={env:LP_GOLDEN_DEV}&evaluators=Builtin.Correctness,{env:LP_EV_FEE},{env:LP_EV_PRIVACY},{env:LP_EV_OVERPROMISE}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    clip: ['main.v3-main h1', 'section.v3-panel.flush span.v3-chip:not(td span)']
+    actions:
+      - {sleep: 2000}
+      - {fill: ['main input.v3-input >> nth=0', dev-baseline]}
+      - {click: {zh: 'main button.v3-btn.primary:has-text("下一步")', en: 'main button.v3-btn.primary:has-text("Next")'}}
+      - {wait: '.v3-grid.c2 label.v3-field input.v3-input'}
+      - {fill: ['.v3-grid.c2 label.v3-field input.v3-input', '3']}
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: '.v3-grid.c2 label.v3-field', badge: left}
+      - {n: 2, box: 'div.v3-cost-head', badge: left}
+      - {n: 3, box: 'section.v3-panel >> nth=0 >> div[style*="margin-top"]', badge: left}
+      - {n: 4, box: 'section.v3-panel.flush span.v3-chip:not(td span)', badge: left}
+
+  - name: 40-evaluate-migrate
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # release-ops BEFORE the migration: single endpoint + the switch button
+    account: release-ops
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    clip: ['main.v3-main h1', 'main .v3-alert:has(button)']
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4 > .v3-panel >> nth=0', badge: left}
+      - {n: 2, box: 'main .v3-alert:has(button) button', badge: right}
+
+  - name: 40-evaluate-gate-run
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # after the §8 redeploy, BEFORE the gate runs: live 2, candidate 3, k = 1
+    account: developer
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c3 label.v3-field input.v3-input'
+    clip: ['main .v3-grid.c4', 'main .v3-grid.c3 ~ div button.v3-btn.primary']
+    actions:
+      - {sleep: 3000}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4 > .v3-panel >> nth=1', badge: left}
+      - {n: 2, box: 'main .v3-grid.c4 > .v3-panel >> nth=2', badge: left}
+      - {n: 3, box: 'main .v3-grid.c3 label.v3-field', badge: left}
+      - {n: 4, box: 'main .v3-grid.c3 ~ div button.v3-btn.primary', badge: right}
+
+  - name: 40-evaluate-gate-report
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # V3 gate page after the decision: BLOCKED (P2, K1), red line P1 passed
+    account: developer
+    path: /v3/gate?agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-pipe'
+    actions:
+      - {sleep: 3000}
+    highlights:
+      - {n: 1, box: 'main.v3-main h1', badge: left}
+      - {n: 2, box: 'main .v3-grid.c4 > .v3-panel >> nth=2', badge: left}
+      - {n: 3, box: 'main .v3-pipe', badge: left}
+      - {n: 4, box: 'main table.v3-table tr:has(td .mono:text-is("P1"))', badge: left}
+      - {n: 5, box: 'main table.v3-table tr:has(td .mono:text-is("K1"))', badge: left}
+      - {n: 6, box: 'main .v3-grid[style*="repeat(5"]', badge: left}
+
+  - name: 40-evaluate-calib-newtask
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # admin, dialog filled but NOT saved: S2, the gate's regression run, developer + sme
+    account: admin
+    path: /v3/standards?view=calibration&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main.v3-main h1'
+    actions:
+      - {sleep: 2000}
+      - {click: {zh: 'main button.v3-btn.primary:has-text("新建标注任务")', en: 'main button.v3-btn.primary:has-text("New labelling task")'}}
+      - {wait: '.v3-modal button.v3-sel >> nth=0'}
+      - {select: ['.v3-modal button.v3-sel >> nth=0', S2]}
+      - {sleep: 2500}
+      # the run options' labels carry dates; pick the gate's regression run by its id (LP_GATE_RUN)
+      - {select: ['.v3-modal button.v3-sel >> nth=1', '{env:LP_GATE_RUN}']}
+      - {sleep: 800}
+      - {click: '.v3-modal label:has(span:text-is("developer")) input'}
+      - {click: '.v3-modal label:has(span:text-is("sme")) input'}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal .v3-grid.c2 > label.v3-field', badge: left}
+      - {n: 2, box: '.v3-modal .v3-grid.c2 > div.v3-field', badge: right}
+      - {n: 3, box: '.v3-modal .v3-std-keys', badge: left}
+      - {n: 4, box: '.v3-modal button.v3-sel >> nth=2', badge: left}
+      - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
+
+  - name: 40-evaluate-calib-status
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # admin, right after creating the S2 task: Labelling, developer 0/15 · sme 0/15
+    account: admin
+    path: /v3/standards?view=calibration&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main table.v3-table tbody tr'
+    clip: ['main.v3-main h1', 'main table.v3-table']
+    actions:
+      - {sleep: 2000}
+    highlights:
+      - {n: 1, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=3', badge: left}
+      - {n: 2, box: 'main table.v3-table tbody tr >> nth=0 >> td >> nth=4', badge: top}
+
+  - name: 40-evaluate-calib-label
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # developer after labelling all 15 (sme not yet): blind, no Judge column
+    account: developer
+    path: /v3/standards?view=calibration&agent={agent:lab-service-assistant}&task={env:LP_CAL_TASK}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-std-seg'
+    clip: ['main.v3-main h1', 'main tr:has(.v3-std-seg) >> nth=1']
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: 'main .v3-panel .v3-alert >> nth=0', badge: left}
+      - {n: 2, box: 'main .v3-grid.c3 > * >> nth=1', badge: left}
+      - {n: 3, box: 'main tr:has(.v3-std-seg) >> nth=0 >> td >> nth=2', badge: top}
+      - {n: 4, box: 'main tr:has(.v3-std-seg) >> nth=0 >> td >> nth=3', badge: top}
+      - {n: 5, box: 'main tr:has(.v3-std-seg) >> nth=0 >> .v3-std-seg', badge: right}
+
+  - name: 40-evaluate-calib-decide
+    chapter: 20-flywheel/30-evaluate
+    status: replace   # biz-owner on the closed S2 task: kappa 1.00/1.00, one-class notice, confusion 15/0/0/0
+    account: biz-owner
+    path: /v3/standards?view=calibration&agent={agent:lab-service-assistant}&task={env:LP_CAL_TASK}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.v3-split'
+    clip: ['main.v3-main h1', 'main .v3-panel:has(.v3-grid.v3-split)']
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.v3-split .v3-grid.c2 > * >> nth=0', badge: left}
+      - {n: 2, box: 'main .v3-grid.v3-split .v3-grid.c2 > * >> nth=1', badge: right}
+      - {n: 3, box: 'main .v3-grid.v3-split .v3-alert', badge: left}
+      - {n: 4, box: 'main .v3-grid.v3-split > * >> nth=1', badge: right}
+
+  # ── 20-flywheel/40-release ─────────────────────────────────────────────────
+  - name: 50-release-waiver-request
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, K1 waiver dialog filled but NOT submitted
+    account: developer
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 2500}
+      - {click: {zh: 'main button:has-text("申请豁免")', en: 'main button:has-text("Request a waiver")'}}
+      - {wait: '.v3-modal button.v3-sel'}
+      - {select: ['.v3-modal button.v3-sel', 'K1']}
+      - {fill: ['.v3-modal textarea.v3-input', {zh: '成本预算 500 token/会话 低于当前用量，开发者两周内优化提示词与检索；先按现有用量放行', en: 'The 500-token budget is below current usage; the developer optimises prompt and retrieval within two weeks; release at current usage meanwhile'}]}
+      - {fill: ['.v3-modal .v3-grid.c2 input.v3-input >> nth=0', biz-owner]}
+      - {eval: "() => { const i = document.querySelector('.v3-modal input[type=number]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, '14'); i.dispatchEvent(new Event('input', {bubbles: true})); }"}
+      - {fill: ['.v3-modal div[style*="grid"] > label.v3-field:last-child input.v3-input', {zh: '每天在观测页查看每会话 token 用量；优化完成后重新部署并重跑放行门', en: 'Check tokens per session on the Observe page daily; redeploy and rerun the gate once optimised'}]}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal label.v3-field:has(button.v3-sel)', badge: left}
+      - {n: 2, box: '.v3-modal label.v3-field:has(textarea)', badge: left}
+      - {n: 3, box: '.v3-modal .v3-grid.c2', badge: left}
+      - {n: 4, box: '.v3-modal div[style*="grid"] > label.v3-field:last-child', badge: left}
+      - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
+
+  - name: 50-release-waiver-approve
+    chapter: 20-flywheel/40-release
+    status: replace   # release-ops, K1 approve confirm open but NOT confirmed
+    account: release-ops
+    path: /v3/standards?view=release&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 2500}
+      - {click: {zh: 'main tr:has(td:text-is("K1")) button:has-text("批准")', en: 'main tr:has(td:text-is("K1")) button:has-text("Approve")'}}
+      - {wait: '.v3-modal dl.v3-kv'}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal dl.v3-kv', badge: left}
+      - {n: 2, box: '.v3-modal button.v3-btn.primary', badge: right}
+
+  - name: 50-release-sign-modal
+    chapter: 20-flywheel/40-release
+    status: replace   # release-ops, gate PASS with the missed gates waived (K1 in the rewalk); sign dialog open, note filled, NOT confirmed
+    account: release-ops
+    path: /v3/gate?agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-pipe'
+    actions:
+      - {sleep: 3000}
+      - {click: {zh: 'main button:has-text("签署并放行")', en: 'main button:has-text("Sign and release")'}}
+      - {wait: '.v3-modal dl.v3-kv'}
+      - {fill: ['.v3-modal textarea', {zh: 'K1 已豁免 14 天，风险责任人 biz-owner；红线 P1 通过', en: 'K1 waived for 14 days, risk owner biz-owner; red line P1 passed'}]}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal dl.v3-kv', badge: left}
+      - {n: 2, box: '.v3-modal textarea', badge: left}
+      - {n: 3, box: '.v3-modal button.v3-btn.primary', badge: right}
+
+  - name: 50-release-records
+    chapter: 20-flywheel/40-release
+    status: replace   # release-ops after the re-release: live on the new version, history released / rolled back
+    account: release-ops
+    path: /v3/gate?agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 3000}
+      - {eval: "() => { const b = [...document.querySelectorAll('main .v3-panel button')].find((x) => /回滚|Roll back/.test(x.textContent)); b && b.closest('.v3-panel').scrollIntoView({block: 'end'}); }"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: 'main.v3-main h1', badge: left}
+      - {n: 2, box: 'main .v3-grid.c4 > .v3-panel >> nth=0', badge: left}
+      - {n: 3, box: {zh: 'main .v3-panel:has(button:has-text("回滚")) table', en: 'main .v3-panel:has(button:has-text("Roll back")) table'}, badge: left}
+      - {n: 4, box: {zh: 'main .v3-panel button:has-text("回滚")', en: 'main .v3-panel button:has-text("Roll back")'}, badge: right}
+
+  - name: 50-release-api-key
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, V3 agent page Access & integration tab: API keys card with the agent-scoped key (no plaintext shown)
+    account: developer
+    path: /v3/agents?id={agent:lab-service-assistant}&tab=access
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v3-api-key-row"]'
+    clip: 'main .v3-panel:has(.v3-keys)'
+    actions:
+      - {sleep: 2000}
+    highlights:
+      - {n: 1, box: '.v3-keys-create', badge: left}
+      - {n: 2, box: '[data-testid="v3-api-key-row"]', badge: left}
+
+  - name: 50-release-gw-engine-logonly
+    chapter: 20-flywheel/40-release
+    status: replace   # admin, launchpad-gw overview after manage + engine attach in LOG_ONLY (set LP_GW to the gateway id)
+    account: admin
+    path: /v2/governance?view=gateway&gateway={env:LP_GW}&full=1
+    viewport: [1440, 1100]
+    wait: '[data-testid="v2-governance-engine"]'
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: {zh: '.v2-row .v2-tag:has-text("已纳管")', en: '.v2-row .v2-tag:has-text("Managed")'}, badge: right}
+      - {n: 2, box: '[data-testid="v2-governance-iam"]', badge: left}
+      - {n: 3, box: '[data-testid="v2-governance-engine"] dl.v2-desc', badge: left}
+
+  - name: 50-release-policy-test-deny
+    chapter: 20-flywheel/40-release
+    status: replace   # admin, launchpad-gw Policies section, policy test after ENFORCE: demo create_payout → DENY (LP_GW = gateway id)
+    account: admin
+    path: /v2/governance?view=gateway&gateway={env:LP_GW}&section=policies&full=1
+    viewport: [1440, 1300]
+    wait: '[data-testid="v2-governance-policy-test"]'
+    actions:
+      - {sleep: 2500}
+      - {click: '[data-testid="v2-governance-policy-test"] button.v2-sel >> nth=0'}
+      - {click: '[role=option]:has-text("demo@hr-analyst")'}
+      - {click: '[data-testid="v2-governance-policy-test"] button.v2-sel >> nth=1'}
+      - {click: '[role=option]:has-text("hr-database___create_payout")'}
+      - {fill: ['[data-testid="v2-governance-policy-test"] textarea', '{"employee_id":"EMP-1024","amount":1}']}
+      - {click: '[data-testid="v2-governance-policy-test-run"]'}
+      - {wait: '[data-testid="v2-governance-policy-test"] .v2-governance-test-result'}
+      - {eval: "() => document.querySelector('[data-testid=v2-governance-policy-test]').scrollIntoView({block: 'start'})"}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-governance-policy-test"] button.v2-sel >> nth=0', badge: left}
+      - {n: 2, box: '[data-testid="v2-governance-policy-test"] button.v2-sel >> nth=1', badge: right}
+      - {n: 3, box: '[data-testid="v2-governance-policy-test"] textarea', badge: left}
+      - {n: 4, box: '[data-testid="v2-governance-policy-test-run"]', badge: left}
+      - {n: 5, box: '[data-testid="v2-governance-policy-test"] .v2-governance-test-result .v2-row >> nth=0', badge: left}
+      - {n: 6, box: '[data-testid="v2-governance-policy-test"] .v2-governance-test-result dl', badge: left}
+
+  - name: 50-release-exp-start
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, start-experiment form prefilled with lab-service-assistant, readiness loaded (not started)
+    account: developer
+    path: /v3/experiments?view=new&agent={agent:lab-service-assistant}
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v2-exp-agent"]'
+    actions:
+      - {sleep: 6000}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-exp-agent"]', badge: left}
+      - {n: 2, box: '[data-testid="v2-exp-lookback"]', badge: right}
+      - {n: 3, box: {zh: '.v2-card:has(h2.v2-sec-title:has-text("数据就绪度"))', en: '.v2-card:has(h2.v2-sec-title:has-text("DATA READINESS"))'}, badge: left}
+      - {n: 4, box: '[data-testid="v2-exp-start"]', badge: right}
+
+  - name: 50-release-exp-traffic
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, experiment detail at SEND TRAFFIC, dataset switched to the dev split (not sent); LP_EXP = experiment id, LP_GOLDEN_DEV = dev split id
+    account: developer
+    path: /v3/experiments?view=detail&id={env:LP_EXP}
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v2-exp-traffic-dataset"]'
+    actions:
+      - {sleep: 2500}
+      - {click: '[data-testid="v2-exp-traffic-dataset"]'}
+      - {click: '[role=option]:has-text("dev (24)")'}
+      - {eval: "() => document.querySelector('[data-testid=v2-exp-traffic-dataset]').scrollIntoView({block: 'center'})"}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-exp-traffic-dataset"]', badge: left}
+      - {n: 2, box: '.v2-form:has([data-testid="v2-exp-traffic-dataset"]) button', badge: right}
+
+  - name: 50-release-exp-verdict
+    chapter: 20-flywheel/40-release
+    status: replace   # developer, experiment verdict card after MONITOR RESULTS (LP_EXP = experiment id)
+    account: developer
+    path: /v3/experiments?view=detail&id={env:LP_EXP}
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v2-exp-card-verdict"]'
+    clip: '[data-testid="v2-exp-card-verdict"]'
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-exp-card-verdict"] h2.v2-sec-title', badge: left}
+      - {n: 2, box: '[data-testid="v2-exp-card-verdict"] table', badge: left}
+
+  # ── 20-flywheel/50-observe ─────────────────────────────────────────────────
+  - name: 60-observe-dashboard
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, Observability dashboard 24H
+    account: biz-owner
+    path: /v3/observability?range=24h
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '.v3-obs-stats'
+    actions:
+      - {sleep: 6000}
+    highlights:
+      - {n: 1, box: 'main .v3-filters >> nth=-1', badge: right}
+      - {n: 2, box: 'main .v3-panel:has(.v3-obs-findings)', badge: left}
+      - {n: 3, box: 'main .v3-obs-stats', badge: left}
+      - {n: 4, box: 'main .v3-grid.c2 >> nth=0', badge: left}
+      - {n: 5, box: 'main .v3-grid.c2 >> nth=1', badge: left}
+
+  - name: 60-observe-session
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, session detail of the five-question chat session (LP_OBS_SID)
+    account: biz-owner
+    path: /v3/observability?tab=sessions&view=session&id={env:LP_OBS_SID}&range=24h
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '.v3-obs-turns'
+    actions:
+      - {sleep: 3000}
+      - {eval: "() => { const t = document.querySelector('.v3-obs-turns'); t.style.maxHeight = '560px'; t.style.overflow = 'hidden'; }"}
+      - {sleep: 400}
+    highlights:
+      - {n: 1, box: 'main header.v3-head .v3-head-end', badge: left}
+      - {n: 2, box: 'main .v3-grid.c4', badge: left}
+      - {n: 3, box: 'main .v3-obs-split > .v3-panel', badge: left}
+      - {n: 4, box: 'main .v3-obs-side', badge: right}
+
+  - name: 60-observe-score-now
+    chapter: 20-flywheel/50-observe
+    status: replace   # developer, V2 full session page: Score now with Helpfulness + unicorn_privacy_guard (runs a billed score)
+    account: developer
+    path: /v2/observability?tab=sessions&view=session&id={env:LP_OBS_SID}&full=1
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid="v2-obs-score-now"]'
+    clip: '[data-testid="v2-obs-score-now"]'
+    actions:
+      - {sleep: 2500}
+      - {fill: ['[data-testid="v2-obs-score-now"] .v2-search input', Helpfulness]}
+      - {sleep: 600}
+      - {click: '[data-testid="v2-obs-score-Builtin.Helpfulness"]'}
+      - {fill: ['[data-testid="v2-obs-score-now"] .v2-search input', privacy]}
+      - {sleep: 600}
+      - {click: '[data-testid^="v2-obs-score-unicorn_privacy_guard"]'}
+      - {fill: ['[data-testid="v2-obs-score-now"] .v2-search input', '']}
+      - {click: '[data-testid="v2-obs-score-run"]'}
+      - {click: '[data-testid="v2-confirm-ok"]'}
+      - {sleep: 25000}
+      - {wait: '[data-testid="v2-obs-score-results"]'}
+      - {sleep: 1000}
+    highlights:
+      - {n: 1, box: '[data-testid="v2-obs-score-now"] .v2-search', badge: left}
+      - {n: 2, box: '[data-testid="v2-obs-score-run"]', badge: right}
+      - {n: 3, box: '[data-testid="v2-obs-score-now"] .v2-sub-title', badge: left}
+      - {n: 4, box: '[data-testid="v2-obs-score-results"]', badge: left}
+
+  - name: 60-observe-waterfall
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, trace detail of the slowest turn (LP_OBS_TID), last model call selected
+    account: biz-owner
+    path: /v3/observability?tab=traces&view=trace&id={env:LP_OBS_TID}&range=24h
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    clip: ['main.v3-main h1', 'main .v3-grid.c4', '.v3-obs-wf', 'main .v3-obs-side dl.v3-kv']
+    wait: '.v3-obs-wf .r'
+    actions:
+      - {sleep: 2500}
+      - {click: '.v3-obs-wf .r:has(.t:text-is("chat global.zai.glm-5.3")) >> nth=-1'}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4', badge: left}
+      - {n: 2, box: 'main .v3-obs-legend', badge: left}
+      # by span name, not row number (the span count differs per run); a row is
+      # display:contents, so the box is its child spans
+      - {n: 3, box: '.v3-obs-wf .r:has(.t:has-text("kb_search")) >> nth=0 >> xpath=./span', badge: left}
+      - {n: 4, box: '.v3-obs-wf .r:has(.t:text-is("chat global.zai.glm-5.3")) >> nth=-1 >> xpath=./span', badge: left}
+      # the span card now carries the prompt messages (thousands of px): frame its
+      # two key/value blocks and crop to the waterfall, not the whole card
+      - {n: 5, box: 'main .v3-obs-side dl.v3-kv', badge: right}
+
+
+  - name: 60-observe-costs
+    chapter: 20-flywheel/50-observe
+    status: replace   # admin, Costs & alerts → Spend, 24h estimate
+    account: admin
+    path: /v3/costs
+    viewport: [1440, 1200]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 6000}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4', badge: left}
+      - {n: 2, box: 'main .v3-filters >> nth=0', badge: left}
+      - {n: 3, box: 'main .v3-panel:has(.v3-table) >> nth=0', badge: left}
+      - {n: 4, box: 'main .v3-panel:has([data-testid=v3-costs-by-project])', badge: right}
+      - {n: 5, box: 'main .v3-panel:has(.v3-table) >> nth=-1', badge: right}
+      - {n: 6, box: 'main .v3-filters >> nth=-1', badge: left}
+
+  - name: 60-observe-alert-new
+    chapter: 20-flywheel/50-observe
+    status: replace   # admin, New alert rule dialog filled (p95 / lab-p95-30s / 30000) but NOT submitted
+    account: admin
+    path: /v3/costs?view=alerts
+    viewport: [1440, 960]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 2500}
+      - {click: {zh: 'main button:has-text("新建规则")', en: 'main button:has-text("New rule")'}}
+      - {wait: '.v3-modal button.v3-sel'}
+      - {select: ['.v3-modal button.v3-sel >> nth=0', {zh: 'p95 延迟', en: 'p95 latency'}]}
+      - {fill: ['.v3-modal label.v3-field >> nth=1 >> input.v3-input', lab-p95-30s]}
+      - {fill: ['.v3-modal .v3-grid.c2 input.v3-input', '30000']}
+      - {sleep: 800}
+    highlights:
+      - {n: 1, box: '.v3-modal label.v3-field:has(button.v3-sel) >> nth=0', badge: left}
+      - {n: 2, box: '.v3-modal label.v3-field >> nth=1', badge: left}
+      - {n: 3, box: '.v3-modal .v3-grid.c2 label.v3-field >> nth=0', badge: left}
+      - {n: 4, box: '.v3-modal .v3-grid.c2 label.v3-field >> nth=1', badge: right}
+      - {n: 5, box: '.v3-modal button.v3-btn.primary', badge: right}
+
+  - name: 60-observe-alert-rule
+    chapter: 20-flywheel/50-observe
+    status: replace   # admin, Alerts tab after Re-check: lab-p95-30s firing (P95 ~32 s)
+    account: admin
+    path: /v3/costs?view=alerts
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-cost-rule'
+    actions:
+      - {sleep: 1500}
+      - {click: {zh: 'main button:has-text("立即重新检查")', en: 'main button:has-text("Re-check now")'}}
+      - {sleep: 4000}
+    highlights:
+      - {n: 1, box: 'main .v3-grid.c4', badge: left}
+      - {n: 2, box: {zh: 'main button:has-text("立即重新检查")', en: 'main button:has-text("Re-check now")'}, badge: left}
+      - {n: 3, box: 'main .v3-cost-rule >> nth=0', badge: left}
+
+  - name: 60-observe-intents
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, Intent view 7 days, lab-service-assistant, AI-grouped
+    account: biz-owner
+    path: /v3/intents
+    viewport: [1440, 1250]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-grid.c4'
+    actions:
+      - {sleep: 1500}
+      - {select: ['main button.v3-sel', lab-service-assistant]}
+      - {wait: 'main .v3-ins-intent >> nth=1'}
+      - {sleep: 1500}
+    highlights:
+      - {n: 1, box: 'main button.v3-sel', badge: top}
+      - {n: 2, box: 'main .v3-ins-nowrap + button', badge: top}
+      - {n: 3, box: 'main .v3-grid.c4', badge: left}
+      - {n: 4, box: 'main .v3-panel:has(.v3-ins-note)', badge: left}
+      - {n: 5, box: 'main .v3-panel:has(.v3-ins-intent)', badge: left}
+
+  - name: 60-observe-watch
+    chapter: 20-flywheel/50-observe
+    status: replace   # developer, Standards → Drift watch after Save + Run now (regression run finished)
+    account: developer
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=watch
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 2200]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table'
+    actions:
+      - {sleep: 3000}
+    highlights:
+      - {n: 1, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^告警"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Alerts"))'}, badge: left}
+      - {n: 2, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^通过率"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Pass rate"))'}, badge: left}
+      - {n: 3, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^是智能体"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Agent or judge"))'}, badge: left}
+      - {n: 4, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^排程(?!运行)"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Schedule(?!d)"))'}, badge: left}
+      - {n: 5, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^排程运行"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Scheduled runs"))'}, badge: left}
+
+  - name: 60-observe-scorecard
+    chapter: 20-flywheel/50-observe
+    status: replace   # biz-owner, Standards → Scorecard after the drift-watch run
+    account: biz-owner
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=scorecard
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1500]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-std-dims'
+    actions:
+      - {sleep: 2500}
+    highlights:
+      - {n: 1, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^需要关注"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Needs attention"))'}, badge: left}
+      - {n: 2, box: 'main .v3-grid.c4', badge: left}
+      - {n: 3, box: 'main .v3-std-dims', badge: left}
+      - {n: 4, box: 'main .v3-std-dims + .v3-grid.c2', badge: left}
+
+  - name: 60-observe-audit
+    chapter: 20-flywheel/50-observe
+    status: replace   # admin, Standards → Decision history for lab-service-assistant
+    account: admin
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=audit
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table'
+    actions:
+      - {sleep: 2000}
+    highlights:
+      - {n: 1, box: 'main button.v3-sel', badge: top}
+      - {n: 2, box: 'main .v3-filters >> nth=0 >> button[aria-pressed=true]', badge: top}
+      - {n: 3, box: 'main .v3-filters >> nth=-1', badge: left}
+      - {n: 4, box: 'main .v3-table', badge: left}
+  # ── 20-flywheel/60-feedback ──────────────────────────────────────────────
+
+  - name: 70-feedback-thumbs-down
+    chapter: 20-flywheel/60-feedback
+    status: replace   # developer, V3 chat, second (no-fare) question answered with the stale ¥760, thumbs-down pressed (LP_FB_SID = that session)
+    account: developer
+    path: '/v3/chat?agent={agent:lab-service-assistant}&session={env:LP_FB_SID}'
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '.v3-msg-actions button[aria-pressed=true]'
+    actions: [{sleep: 1500}]
+    highlights:
+      - {n: 1, box: '.v3-chat-side button.v3-sel', badge: left}
+      - {n: 2, box: '.v3-chat-session.on', badge: left}
+      - {n: 3, box: '.v3-msg-actions button[aria-pressed=true]', badge: right}
+
+  - name: 70-feedback-reviewer-link
+    chapter: 20-flywheel/60-feedback
+    status: replace   # biz-owner, Issue box → Reviewers: CREATES a 7-day link for lab-service-assistant (side effect!) and saves the once-shown URL to LP_REVIEW_LINK_FILE
+    account: biz-owner
+    path: /v3/issues?view=reviewers
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main button.v3-sel.v3-iss-select'
+    mask: ['main input.v3-input.mono']
+    actions:
+      - {sleep: 1500}
+      - {select: ['main button.v3-sel.v3-iss-select', lab-service-assistant]}
+      - {sleep: 1200}
+      - {fill: ['main input.v3-input:not(.mono)', {zh: '售后政策专家 sme', en: 'after-sales policy expert sme'}]}
+      - {select: ['main form button.v3-sel, main .v3-panel button.v3-sel:not(.v3-iss-select)', {zh: '7 天后过期', en: 'In 7 days'}]}
+      - {click: 'main button[type=submit]'}
+      - {wait: 'main input.v3-input.mono'}
+      - {save_value: ['main input.v3-input.mono', '{env:LP_REVIEW_LINK_FILE}']}
+      - {sleep: 1500}
+    highlights:
+      - {n: 1, box: 'main button.v3-sel.v3-iss-select', badge: left}
+      - {n: 2, box: 'main input.v3-input:not(.mono)', badge: left}
+      - {n: 3, box: 'main .v3-panel button.v3-sel:not(.v3-iss-select)', badge: top}
+      - {n: 4, box: 'main button[type=submit]', badge: right}
+      - {n: 5, box: 'main input.v3-input.mono', badge: left}
+      - {n: 6, box: 'main input.v3-input.mono + button', badge: right}
+
+  - name: 70-feedback-review-page
+    chapter: 20-flywheel/60-feedback
+    status: replace   # anon (sme), review page from the reviewer link (LP_REVIEW_TOKEN = the link's token, never logged); Wrong + correction filled, NOT submitted
+    account: anon
+    path: '/r/{env:LP_REVIEW_TOKEN}'
+    viewport: [1280, 1000]
+    wait: '[data-testid=review-card]'
+    clip: ['.share-head', '.review-intro', '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0']
+    actions:
+      - {sleep: 1500}
+      - {click: '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> [data-testid=review-down]'}
+      - {wait: '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> textarea'}
+      - {fill: ['[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> textarea', '延误 2 小时不属于非自愿退票（A-08 要求因航空公司原因航班取消、延误 3 小时及以上或时刻变更），按自愿退票处理：轻享经济舱票面价不退，只退税费 ¥80（机场建设费 ¥50 + 燃油附加费 ¥30），7 个工作日内原路退回，独角兽旅行不收服务费（A-03、A-06、A-11）。这次用户没有提供票面价，不能替用户假定票面是 ¥760；延误达到 3 小时可全额退票（票面价 + 税费），金额以订单票面价为准。']}
+      - {eval: "() => document.querySelector('[data-testid=review-card]').scrollIntoView({block: 'start'})"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> .review-q', badge: left}
+      - {n: 2, box: '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> [data-testid=review-down]', badge: right}
+      - {n: 3, box: '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> textarea', badge: left}
+      - {n: 4, box: '[data-testid=review-card]:has-text("轻享经济舱航班延误了 2 小时") >> nth=0 >> [data-testid=review-submit]', badge: right}
+
+  - name: 70-feedback-issue-correction
+    chapter: 20-flywheel/60-feedback
+    status: replace   # biz-owner, Issue box with the thumbs-down issue open; the reviewer's correction merged into it (LP_FB_ISSUE = issue id)
+    account: biz-owner
+    path: '/v3/issues?issue={env:LP_FB_ISSUE}'
+    viewport: [1440, 1300]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-iss-transcript'
+    actions: [{sleep: 2000}]
+    highlights:
+      - {n: 1, box: 'main .v3-iss-item.on', badge: left}
+      - {n: 2, box: 'main .v3-iss-turn.flagged .who', badge: right}
+      - {n: 3, box: 'main .v3-iss-transcript + div', badge: right}
+      - {n: 4, box: 'main .v3-iss-fixes', badge: right}
+
+  - name: 70-feedback-admission-queue
+    chapter: 20-flywheel/60-feedback
+    status: replace   # biz-owner, Standards → Admission after Collect: three candidates for the same question (issue / feedback / review)
+    account: biz-owner
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=admission
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 900]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table tbody tr'
+    actions: [{sleep: 2000}]
+    highlights:
+      - {n: 1, box: {zh: 'main button:has-text("收集新候选")', en: 'main button:has-text("Collect")'}, badge: left}
+      - {n: 2, box: 'main .v3-grid.c4', badge: left}
+      - {n: 3, box: 'main .v3-filters >> nth=-1', badge: left}
+      - {n: 4, box: 'main .v3-table', badge: left}
+
+  - name: 70-feedback-admit-modal
+    chapter: 20-flywheel/60-feedback
+    status: replace   # biz-owner, Admit dialog on the review candidate, expected answer pasted, S1 unticked, NOT admitted
+    account: biz-owner
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=admission
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1200]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table tbody tr'
+    actions:
+      - {sleep: 1500}
+      - {click: {zh: 'main tr:has(td:text-is("review")) button:has-text("准入")', en: 'main tr:has(td:text-is("review")) button:has-text("Admit")'}}
+      - {wait: '.v3-modal textarea'}
+      - {sleep: 1500}
+      - {fill: ['.v3-modal textarea', '延误 2 小时不属于非自愿退票（A-08 要求因航空公司原因航班取消、延误 3 小时及以上或时刻变更），按自愿退票处理：轻享经济舱票面价不退，只退税费 ¥80（机场建设费 ¥50 + 燃油附加费 ¥30），7 个工作日内原路退回，独角兽旅行不收服务费（A-03、A-06、A-11）。这次用户没有提供票面价，不能替用户假定票面是 ¥760；延误达到 3 小时可全额退票（票面价 + 税费），金额以订单票面价为准。']}
+      - {eval: "() => { for (const l of document.querySelectorAll('.v3-modal .v3-std-keys label')) { const c = l.querySelector('input'); const want = l.textContent.trim() !== 'S1'; if (c.checked !== want) c.click(); } }"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: '.v3-modal .v3-grid.c2', badge: left}
+      - {n: 2, box: '.v3-modal .v3-grid.c2 + *', badge: left}
+      - {n: 3, box: '.v3-modal label.v3-field:has(textarea)', badge: left}
+      - {n: 4, box: '.v3-modal .v3-grid.c3 label.v3-field >> nth=0', badge: left}
+      - {n: 5, box: '.v3-modal .v3-grid.c3 label.v3-field >> nth=1', badge: left}
+      - {n: 6, box: '.v3-modal button.v3-btn:not(.ghost) >> nth=-1', badge: right}
+
+  - name: 70-feedback-duplicate-hint
+    chapter: 20-flywheel/60-feedback
+    status: replace   # biz-owner, Admit dialog on the feedback candidate after the review one was admitted: similar-sample notice (NOT admitted)
+    account: biz-owner
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=admission
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1200]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table tbody tr'
+    actions:
+      - {sleep: 1500}
+      - {click: {zh: 'main tr:has(td:text-is("feedback")) button:has-text("准入")', en: 'main tr:has(td:text-is("feedback")) button:has-text("Admit")'}}
+      - {wait: '.v3-modal .v3-alert'}
+      - {sleep: 1500}
+    highlights:
+      - {n: 1, box: '.v3-modal .v3-alert >> nth=0', badge: left}
+      - {n: 2, box: '.v3-modal button.v3-btn.ghost >> nth=-1', badge: left}
+
+  - name: 70-feedback-ladder
+    chapter: 20-flywheel/60-feedback
+    status: replace   # developer, Standards → Fix ladder after the §4 regression run
+    account: developer
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=compare
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1500]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-table'
+    actions: [{sleep: 2500}]
+    highlights:
+      - {n: 1, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^修复阶梯"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Fix ladder"))'}, badge: left}
+      - {n: 2, box: 'main .v3-grid.c3:has(> .v3-panel) >> nth=-1', badge: left}
+      - {n: 3, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^逐条判据"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Per criterion"))'}, badge: left}
+
+  - name: 70-feedback-two-numbers
+    chapter: 20-flywheel/60-feedback
+    status: new   # developer, Standards → Fix ladder after §7.4: first and last rung use different criteria versions → agent improved / standard tightened / added
+    account: developer
+    path: /v3/standards?agent={agent:lab-service-assistant}&view=compare
+    requires: [agent:lab-service-assistant]
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main .v3-std-ladder'
+    actions: [{sleep: 2500}]
+    highlights:
+      - {n: 1, box: 'main .v3-panel .v3-alert[data-s=wait] >> nth=0', badge: left}
+      - {n: 2, box: 'main .v3-panel .v3-grid.c3 >> nth=0', badge: left}
+      - {n: 3, box: 'main .v3-std-ladder', badge: left}
+      - {n: 4, box: 'main .v3-grid.c3:has(> .v3-panel) >> nth=0', badge: left}
+
+  - name: 70-feedback-rec-failed
+    chapter: 20-flywheel/60-feedback
+    status: replace   # developer, eval task detail of the §4 regression run (LP_REC_RUN): two FAILED system-prompt recommendations (prompt attack protection)
+    account: developer
+    path: '/v3/tasks?view=detail&id={env:LP_REC_RUN}'
+    viewport: [1440, 1100]
+    storage: {'launchpad_project:default': retail-service}
+    wait: '[data-testid=v2-rec-system_prompt]'
+    clip: ['[data-testid=v2-rec-system_prompt]']
+    actions:
+      - {sleep: 2000}
+      - {eval: "() => document.querySelector('[data-testid=v2-rec-system_prompt]').scrollIntoView({block: 'start'})"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: '[data-testid=v2-rec-system_prompt] >> nth=0', badge: left}
+
+  # ── 30-wrap-up/10-team-lab ─────────────────────────────────────────────────
+  - name: 80-team-lab-reviewer-revoke
+    chapter: 30-wrap-up/10-team-lab
+    status: replace   # biz-owner, Issue box → Reviewers: opens the revoke confirm on the first active link (does NOT confirm)
+    account: biz-owner
+    path: /v3/issues?view=reviewers
+    viewport: [1440, 1000]
+    storage: {'launchpad_project:default': retail-service}
+    wait: 'main button.v3-sel.v3-iss-select'
+    actions:
+      - {sleep: 1500}
+      - {select: ['main button.v3-sel.v3-iss-select', lab-service-assistant]}
+      - {wait: 'main .v3-table tbody tr'}
+      - {sleep: 800}
+      - {click: {zh: 'main .v3-table tbody tr:has-text("售后政策专家 sme") button.v3-btn:not([disabled])', en: 'main .v3-table tbody tr:has-text("after-sales policy expert sme") button.v3-btn:not([disabled])'}}
+      - {wait: '.v3-modal'}
+      - {eval: "document.head.insertAdjacentHTML('beforeend', '<style>.v3 .v3-modal-mask{backdrop-filter:none!important;background:rgba(4,8,16,.35)!important}</style>')"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: {zh: 'header button:has-text("评审人"), .v3-head a:has-text("评审人"), .v3-head button:has-text("评审人")', en: 'header button:has-text("Reviewers"), .v3-head a:has-text("Reviewers"), .v3-head button:has-text("Reviewers")'}, badge: left}
+      - {n: 2, box: {zh: 'main .v3-table tbody tr:has-text("售后政策专家 sme") button.v3-btn:not([disabled])', en: 'main .v3-table tbody tr:has-text("after-sales policy expert sme") button.v3-btn:not([disabled])'}, badge: left}
+      - {n: 3, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: right}
+
+  - name: 80-team-lab-user-disable
+    chapter: 30-wrap-up/10-team-lab
+    status: replace   # admin, Users: opens the Disable account confirm on a self-registered trainee (does NOT confirm)
+    account: admin
+    viewport: [1680, 900]   # the English user table is ~1300px wide: at 1440 it scrolls and the shot shows it cut
+    path: /v3/users
+    wait: 'table.v3-table'
+    actions:
+      - {sleep: 1200}
+      - {click: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("禁用")', en: 'tr:has-text("trainee-alex") button:has-text("Disable")'}}
+      - {wait: '.v3-modal'}
+      - {eval: "document.head.insertAdjacentHTML('beforeend', '<style>.v3 .v3-modal-mask{backdrop-filter:none!important;background:rgba(4,8,16,.35)!important}</style>')"}
+      - {sleep: 600}
+    highlights:
+      - {n: 1, box: {zh: 'tr:has-text("trainee-xiaoming") button:has-text("禁用")', en: 'tr:has-text("trainee-alex") button:has-text("Disable")'}, badge: left}
+      - {n: 2, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: right}
+
+  # ── 90-appendix/10-organizer-deploy ────────────────────────────────────────
+  - name: 90-organizer-users-create-open
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, Users: the Add user button; the built-in admin row
+    account: admin
+    viewport: [1680, 900]   # the English user table is ~1300px wide: at 1440 it scrolls and the shot shows it cut
+    path: /v3/users
+    wait: 'table.v3-table'
+    actions: [{sleep: 1200}]
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: {zh: 'main button:has-text("新增用户")', en: 'main button:has-text("Add user")'}, badge: left}
+
+  - name: 90-organizer-users-create-form
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, Add user dialog filled for developer-2 with project 零售客服 / Developer (NOT submitted)
+    account: admin
+    path: /v3/users
+    viewport: [1440, 1300]
+    wait: 'table.v3-table'
+    actions:
+      - {sleep: 1200}
+      - {click: {zh: 'main button:has-text("新增用户")', en: 'main button:has-text("Add user")'}}
+      - {wait: '[data-testid=v3-user-create]'}
+      - {fill: ['[data-testid=v3-user-create] input[name=username]', developer-2]}
+      - {fill: ['[data-testid=v3-user-create] input[name=email]', developer-2@example.com]}
+      - {click: {zh: '[data-testid=v3-user-projects] button:has-text("添加项目")', en: '[data-testid=v3-user-projects] button:has-text("Add project")'}}
+      # project and role are V3 themed Selects (a button + listbox), not <select>s
+      - {click: '[data-testid=v3-user-projects] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("零售客服"))'}
+      - {click: '[data-testid=v3-user-projects] button.v3-sel >> nth=1'}
+      - {click: {zh: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("开发者"))', en: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("Developer"))'}}
+      - {sleep: 500}
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-user-create] input[name=username]', badge: left}
+      - {n: 2, box: '[data-testid=v3-user-create] input[name=email]', badge: right}
+      - {n: 3, box: '[data-testid=v3-user-create] label:has(> input[name=role]) button.v3-sel', badge: left}
+      - {n: 4, box: '[data-testid=v3-user-create] label:has(> input[name=expiry]) button.v3-sel', badge: right}
+      - {n: 5, box: '[data-testid=v3-user-create] input[name=password-choice] >> nth=0', badge: left}
+      - {n: 6, box: '[data-testid=v3-user-projects] button.v3-sel >> nth=0', badge: left}
+      - {n: 7, box: '[data-testid=v3-user-projects] button.v3-sel >> nth=1', badge: right}
+      - {n: 8, box: '[role=dialog] .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-create-password
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # CREATES developer-2 (side effect!) and saves its one-time password to LP_DEV2_PW_FILE (0600); masked in the image
+    account: admin
+    path: /v3/users
+    wait: 'table.v3-table'
+    actions:
+      - {sleep: 1200}
+      - {click: {zh: 'main button:has-text("新增用户")', en: 'main button:has-text("Add user")'}}
+      - {wait: '[data-testid=v3-user-create]'}
+      - {fill: ['[data-testid=v3-user-create] input[name=username]', developer-2]}
+      - {fill: ['[data-testid=v3-user-create] input[name=email]', developer-2@example.com]}
+      - {click: {zh: '[data-testid=v3-user-projects] button:has-text("添加项目")', en: '[data-testid=v3-user-projects] button:has-text("Add project")'}}
+      - {click: '[data-testid=v3-user-projects] button.v3-sel >> nth=0'}
+      - {click: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("零售客服"))'}
+      - {click: '[data-testid=v3-user-projects] button.v3-sel >> nth=1'}
+      - {click: {zh: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("开发者"))', en: '[data-testid=v3-select-popup] [role=option]:has(> .txt:text-is("Developer"))'}}
+      - {click: '[role=dialog] .v3-btn.primary'}
+      - {wait: '[data-testid=v3-one-time-password]'}
+      - {save_value: ['[data-testid=v3-one-time-password]', '{env:LP_DEV2_PW_FILE}']}
+      - {sleep: 600}
+    mask: ['[data-testid=v3-one-time-password]']
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-one-time-password]', badge: left}
+      - {n: 2, box: {zh: '[role=dialog] button:has-text("复制")', en: '[role=dialog] button:has-text("Copy")'}, badge: top}
+      - {n: 3, box: {zh: '[role=dialog] button:has-text("关闭")', en: '[role=dialog] button:has-text("Close")'}, badge: top}
+
+  - name: 90-organizer-users-list
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, Users: the new developer-2 row
+    account: admin
+    viewport: [1680, 900]   # the English user table is ~1300px wide: at 1440 it scrolls and the shot shows it cut
+    path: /v3/users
+    requires: [user:developer-2]
+    wait: 'table.v3-table'
+    actions: [{sleep: 1200}]
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: 'table.v3-table tbody tr:has-text("developer-2")', badge: left}
+
+  - name: 90-organizer-users-workspaces
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, developer-2 detail: Projects and roles card (Default inherits + 零售客服 Developer)
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    actions: [{sleep: 1200}]
+    clip: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^项目与角色"))', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Projects and roles"))'}
+    margin: 16
+    highlights:
+      - {n: 1, box: {zh: 'main .v3-panel:has(> .v3-panel-head:text-matches("^项目与角色")) tbody tr:has-text("零售客服")', en: 'main .v3-panel:has(> .v3-panel-head:text-matches("^Projects and roles")) tbody tr:has-text("零售客服")'}, badge: left}
+      - {n: 2, box: {zh: 'main button:has-text("编辑项目")', en: 'main button:has-text("Edit projects")'}, badge: left}
+
+  - name: 90-organizer-users-workspaces-dialog
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, developer-2: the Edit projects dialog (NOT saved)
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    actions:
+      - {sleep: 1200}
+      - {click: {zh: 'main button:has-text("编辑项目")', en: 'main button:has-text("Edit projects")'}}
+      - {wait: '[data-testid=v3-user-memberships]'}
+      - {sleep: 500}
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-user-memberships] [data-testid=v3-user-projects]', badge: left}
+      - {n: 2, box: '[role=dialog] .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-register
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # anon, login card Register tab filled for developer-3 (NOT submitted)
+    account: anon
+    path: /v3
+    wait: '[data-testid=auth-tabs]'
+    actions:
+      - {click: '[data-testid=auth-tab-register]'}
+      - {fill: ['#reg-username', developer-3]}
+      - {fill: ['#reg-email', developer-3@example.com]}
+      - {sleep: 400}
+    clip: .v3-auth-card
+    margin: 40
+    highlights:
+      - {n: 1, box: '[data-testid=auth-tab-register]', badge: left}
+      - {n: 2, box: '#reg-username', badge: left}
+      - {n: 3, box: '.v3-auth-card form button[type=submit]', badge: left}
+
+  - name: 90-organizer-users-approve
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, Users: the Approve dialog for a pending developer-3 (registered by the walk; NOT confirmed)
+    account: admin
+    path: /v3/users
+    requires: ['user:developer-3']
+    wait: 'div.v3-alert'
+    actions:
+      - {click: {zh: 'tr:has-text("developer-3") button:has-text("通过")', en: 'tr:has-text("developer-3") button:has-text("Approve")'}}
+      - {wait: '[data-testid=v3-user-approve]'}
+      - {sleep: 500}
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-user-approve] [data-testid=v3-user-projects]', badge: left}
+      - {n: 2, box: '[role=dialog] .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-denied
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # developer-2 (password from LAUNCHPAD_WS_PASSWORD_DEVELOPER_2) opens Users: admin required
+    account: developer-2
+    walk_account: true   # created by 90-organizer-users-create-password; password from LAUNCHPAD_WS_PASSWORD_DEVELOPER_2
+    path: /v3/users
+    wait: '.v3-main'
+    actions: [{sleep: 1500}]
+    highlights:
+      - {n: 1, box: 'header.v3-top .v3-account', badge: bottom}
+      - {n: 2, box: '.v3-main .v3-empty, .v3-main [role=alert], .v3-main .v3-alert', badge: left}
+
+  - name: 90-organizer-users-reset
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, developer-2 detail: the Reset password confirm (NOT confirmed)
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    actions:
+      - {click: {zh: '.v3-head-end button:has-text("重置密码")', en: '.v3-head-end button:has-text("Reset password")'}}
+      - {wait: '.v3-modal'}
+      - {sleep: 400}
+    clip: '.v3-modal'
+    margin: 24
+    highlights:
+      - {n: 1, box: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-newpw
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # RESETS developer-2's password (side effect!) and saves the new one to LP_DEV2_PW_FILE; masked
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    actions:
+      - {click: {zh: '.v3-head-end button:has-text("重置密码")', en: '.v3-head-end button:has-text("Reset password")'}}
+      - {wait: '.v3-modal'}
+      - {click: '.v3-modal .v3-btn.danger, .v3-modal .v3-btn.primary'}
+      - {wait: '[data-testid=v3-one-time-password]'}
+      - {save_value: ['[data-testid=v3-one-time-password]', '{env:LP_DEV2_PW_FILE}']}
+      - {sleep: 500}
+    mask: ['[data-testid=v3-one-time-password]']
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=v3-one-time-password]', badge: left}
+      - {n: 2, box: {zh: '[role=dialog] button:has-text("复制")', en: '[role=dialog] button:has-text("Copy")'}, badge: top}
+      - {n: 3, box: {zh: '[role=dialog] button:has-text("关闭")', en: '[role=dialog] button:has-text("Close")'}, badge: top}
+
+  - name: 90-organizer-users-admin-key
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, top bar: the Change password key icon
+    account: admin
+    path: /v3
+    wait: '[data-testid=v3-shell]'
+    clip: header.v3-top
+    margin: 6
+    highlights:
+      - {n: 1, box: {zh: 'header.v3-top button[aria-label="修改密码"]', en: 'header.v3-top button[aria-label="Change password"]'}, badge: left}
+
+  - name: 90-organizer-users-admin-password
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin: the Change password dialog, empty (NOT submitted)
+    account: admin
+    path: /v3
+    wait: '[data-testid=v3-shell]'
+    actions:
+      - {click: {zh: 'header.v3-top button[aria-label="修改密码"]', en: 'header.v3-top button[aria-label="Change password"]'}}
+      - {wait: '[data-testid=password-current]'}
+      - {sleep: 400}
+    clip: '[role=dialog]'
+    margin: 24
+    highlights:
+      - {n: 1, box: '[data-testid=password-current]', badge: left}
+      - {n: 2, box: '[data-testid=password-next]', badge: left}
+      - {n: 3, box: '[data-testid=password-confirm]', badge: left}
+      - {n: 4, box: '[role=dialog] .v3-btn.primary', badge: top}
+
+  - name: 90-organizer-users-builtin
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # admin, the built-in admin's detail page
+    account: admin
+    path: /v3/users?view=detail&user=admin
+    wait: '.v3-main .v3-alert'
+    actions: [{sleep: 1000}]
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: {zh: '.v3-head-end button:has-text("修改密码")', en: '.v3-head-end button:has-text("Change password")'}, badge: left}
+      - {n: 2, box: '.v3-main .v3-alert', badge: left}
+
+  - name: 90-organizer-architecture
+    chapter: 90-appendix/10-organizer-deploy
+    status: keep
+    manual: architecture diagram generated by docs/workshop-architecture/build.py (HTML + official AWS icons, then a screenshot) for the private-network template
+  - name: 90-organizer-upgrade-outputs
+    chapter: 90-appendix/10-organizer-deploy
+    status: keep
+    manual: CloudFormation console, stack Outputs tab (SessionManagerUrl row), secrets masked
+  - name: 90-organizer-upgrade-terminal
+    chapter: 90-appendix/10-organizer-deploy
+    status: keep
+    manual: Session Manager browser terminal (whoami → ssm-user)
+  - name: 90-organizer-upgrade-create
+    chapter: 90-appendix/10-organizer-deploy
+    status: keep
+    manual: Session Manager terminal, cat > /tmp/lp-upgrade.sh
+  - name: 90-organizer-upgrade-run
+    chapter: 90-appendix/10-organizer-deploy
+    status: keep
+    manual: Session Manager terminal, the one-line upgrade command running
+  - name: 90-organizer-upgrade-health
+    chapter: 90-appendix/10-organizer-deploy
+    status: keep
+    manual: Session Manager terminal, build done and health check ok
+
+  - name: 90-organizer-users-detail
+    chapter: 90-appendix/10-organizer-deploy
+    status: replace   # the page head gained 强制下线
+    account: admin
+    path: /v3/users?view=detail&user=developer-2
+    requires: [user:developer-2]
+    wait: '.v3-usr-chip'
+    clip: '.v3-main header.v3-head'
+    highlights:
+      - {n: 1, box: {zh: '.v3-head-end button:has-text("重置密码")', en: '.v3-head-end button:has-text("Reset password")'}}
+      - {n: 2, box: {zh: '.v3-head-end button:has-text("强制下线")', en: '.v3-head-end button:has-text("Force sign-out")'}}
+
+  - name: 90-organizer-admins
+    chapter: 90-appendix/10-organizer-deploy
+    status: new
+    account: admin
+    path: /v3/admins
+    wait: '[data-testid=v3-admins-table]'
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: '.v3-head-end .v3-btn.primary'}
+      - {n: 2, box: '[data-testid=v3-admins-table]'}
+
+  - name: 90-organizer-system-update
+    chapter: 90-appendix/40-platform-ops
+    status: new
+    account: admin
+    path: /v3/system-update
+    wait: '[data-testid=v3-sysupdate-current]'
+    clip: '.v3-main .v3-reveal'
+    highlights:
+      - {n: 1, box: '[data-testid=v3-sysupdate-current]', badge: top}   # a corner badge covers the card label
+      - {n: 2, box: '[data-testid=v3-sysupdate-remote]', badge: top}
+      - {n: 3, box: '[data-testid=v3-sysupdate-history]', badge: left}

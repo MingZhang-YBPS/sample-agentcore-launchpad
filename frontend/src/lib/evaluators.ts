@@ -1,6 +1,15 @@
 import type { TFunction } from "i18next";
 
-import type { EvaluatorsUnavailable } from "./api";
+import type { EvaluatorsUnavailable, ModelDefaults } from "./api";
+import {
+  GLM_MODEL_ID,
+  mergeModelOptions,
+  peekModelDefaults,
+  STATIC_MODEL_DEFAULTS,
+  withCurrentModel,
+} from "./model-defaults";
+import { activeCatalogIds } from "./model-catalog";
+import { modelsForActiveRegion } from "./regions";
 
 // Localized display names for evaluators. Builtins translate through the
 // evalPage.evaluatorNames.<Name> locale block, third-party managed evaluators
@@ -76,10 +85,12 @@ export function scoreColor(score: number, evaluatorId: string): string {
       : "var(--crit-text)";
 }
 
-/** Bedrock models offered as the judge of a custom LLM evaluator (the backend
- *  default, `global.openai.gpt-6-sol`, first; while AgentCore's evaluator
- *  validation still refuses GPT-6 the backend falls back to
- *  `global.anthropic.claude-sonnet-5-5` and says so in `model_fallback`). */
+/** Static Bedrock models offered as the judge of a custom LLM evaluator. The
+ *  configured default (`judge_model_id` of `GET /api/models/defaults`) and its
+ *  fallback lead the picker via `judgeModelOptions`; this list's first entry is only
+ *  the pre-load / offline default. While AgentCore's evaluator validation refuses
+ *  the requested judge the backend falls back to `judge_fallback_model_id` and says
+ *  so in `model_fallback`. */
 export const JUDGE_MODEL_OPTIONS = [
   "global.openai.gpt-6-sol",
   "global.anthropic.claude-sonnet-5-5",
@@ -89,9 +100,42 @@ export const JUDGE_MODEL_OPTIONS = [
   "global.anthropic.claude-opus-4-8",
   "global.anthropic.claude-opus-4-6-v1",
   "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-  "global.amazon.nova-2-lite-v1:0",
-  "us.amazon.nova-pro-v1:0",
+  // Kimi / DeepSeek: AgentCore judge acceptance live-probed 2026-10-12 (R1 included —
+  // a judge runs no tools); DeepSeek V3.1 is us-west-2 only (region-filtered)
+  "deepseek.v3.2",
+  "global.moonshotai.kimi-k3",
+  "us.moonshotai.kimi-k3",
+  "moonshotai.kimi-k2.5",
+  "moonshot.kimi-k2-thinking",
+  "deepseek.v3-v1:0",
+  "us.deepseek.r1-v1:0",
 ];
+
+/** The judge a new evaluator pre-selects: the configured default (static until loaded). */
+export function defaultJudgeModel(defaults: ModelDefaults | null = peekModelDefaults()): string {
+  return (defaults ?? STATIC_MODEL_DEFAULTS).judge_model_id;
+}
+
+/**
+ * A judge picker's options: the configured default first, then its fallback (when
+ * enabled) and GLM-5.3, then the static list narrowed to the workspace's geography,
+ * then the workspace account's model catalog. The configured ids and GLM (global)
+ * are never region-filtered — the operator chose them — and a stored `current` id
+ * outside the list is kept (prepended).
+ */
+export function judgeModelOptions(
+  defaults: ModelDefaults | null,
+  current?: string | null,
+  catalog: readonly string[] = activeCatalogIds(),
+): string[] {
+  const d = defaults ?? STATIC_MODEL_DEFAULTS;
+  const merged = mergeModelOptions(
+    d.judge_model_id,
+    [d.judge_fallback_model_id, GLM_MODEL_ID],
+    [...modelsForActiveRegion(JUDGE_MODEL_OPTIONS), ...catalog],
+  );
+  return withCurrentModel(merged, current);
+}
 
 export type EvaluatorLevel = "TOOL_CALL" | "TRACE" | "SESSION";
 

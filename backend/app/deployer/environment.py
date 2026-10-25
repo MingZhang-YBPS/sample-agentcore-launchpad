@@ -4,8 +4,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.project_scope import current_project
 from app.schemas.agent import AgentSpec
-from app.services.gateway_bootstrap import GATEWAY_SCOPE
+from app.services import project_gateway, project_memory
+from app.services.project_telemetry import with_project_attributes
 from app.templates.gateway_support import (
     ENV_PROVIDER,
     ENV_SCOPE,
@@ -35,6 +37,7 @@ def runtime_environment(
     resources: Mapping[str, Any],
     workload_name: str = "",
     agent_id: str = "",
+    workspace_id: str = "",
 ) -> dict[str, str]:
     """Merge user environment with platform-owned runtime values.
 
@@ -42,10 +45,24 @@ def runtime_environment(
     does not exist until the runtime does — so it is empty on create and supplied
     on later updates. The rendered Gateway client treats a missing value as "no
     self-minted token", not as an error.
+
+    An agent of an isolated project also gets its span resource attributes
+    (`OTEL_RESOURCE_ATTRIBUTES`, projects design §10.8); the project is the one the
+    deploy runs as (`project_context(<job's project>)`), and ``agent_id`` /
+    ``workspace_id`` are added when the caller knows them. The runtime create
+    wrappers turn the same attributes into the `launchpad:*` resource tags.
+
+    The same project decides the gateway provider / scopes (`project_gateway.
+    effective_resources`, §10.6) and the default memory (`project_memory.
+    memory_resources`, §10.4) once its isolation is provisioned; every other
+    project reads ``resources`` unchanged.
     """
+    resources = project_gateway.effective_resources(
+        dict(resources), current_project(), workspace_id or None)
     environment = dict(spec.env)
-    # a spec-pinned memory overrides the workspace's shared bootstrap memory
-    memory_id = spec.memory.memory_id or resources.get("memory_id")
+    # a spec-pinned memory overrides the project's / workspace's default memory
+    memory_id = spec.memory.memory_id or project_memory.memory_resources(
+        resources, workspace_id).get("memory_id")
     if (spec.memory.short_term or spec.memory.long_term) and memory_id:
         environment["LAUNCHPAD_MEMORY_ID"] = str(memory_id)
     if uses_gateway(spec):
@@ -57,7 +74,7 @@ def runtime_environment(
         if gateway_url and provider:
             environment[ENV_URL] = gateway_url
             environment[ENV_PROVIDER] = provider
-            environment[ENV_SCOPE] = GATEWAY_SCOPE
+            environment[ENV_SCOPE] = ",".join(project_gateway.gateway_scopes(resources))
             # the client loads only the selected records' tools (target-scoped)
             environment[ENV_TOOLS] = ",".join(gateway_tool_patterns(spec))
         if workload_name:
@@ -67,8 +84,18 @@ def runtime_environment(
         environment[ENV_OUTBOUND_AUTH] = auth_declarations
         if workload_name:
             environment.setdefault(ENV_WORKLOAD, workload_name)
+    # SB-2: the direct model provider's key read uses the same self-minted
+    # workload-token fallback as the identity block's tools
+    if spec.model_provider is not None and workload_name:
+        environment.setdefault(ENV_WORKLOAD, workload_name)
     if uses_as_user(spec):
         environment[ENV_OAUTH_RETURN_URL] = get_settings().resolved_oauth_return_url()
         if agent_id:
             environment[ENV_AGENT_ID] = agent_id
-    return environment
+    from app.deployer.mounts import mounts_env
+
+    environment.update(mounts_env(spec))  # LAUNCHPAD_MOUNTS, also for canary candidates
+    return with_project_attributes(
+        environment, project_id=current_project(), agent_id=agent_id or None,
+        workspace_id=workspace_id or None,
+    )

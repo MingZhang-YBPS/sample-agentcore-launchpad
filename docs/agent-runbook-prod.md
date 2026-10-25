@@ -1,7 +1,12 @@
-# Agent Runbook — Production-Mode Startup
+# Agent Runbook — Prod Run Mode Startup
 
 Audience: an AI agent (or operator) that must start, update, verify, or debug a
-Launchpad deployment running in **prod mode**. Two supported shapes: the
+Launchpad deployment running in **prod run mode**.
+
+> `prod` here is the name of a run mode (`LAUNCHPAD_RUN_MODE=prod`: mandatory login,
+> built frontend, no auto-reload), not a statement that the sample is production
+> ready. It is sample code for non-production usage; see the notice in the
+> [README](../README.md). Two supported shapes: the
 built-in launcher (§2) and a systemd deployment (§3 — the reference layout used
 by the real us-east-1 box). Paired doc: [agent-runbook-dev.md](agent-runbook-dev.md).
 
@@ -56,7 +61,8 @@ backend). Key facts an agent must know before touching them:
   a **region drop-in** overriding the unit's default region (us-east-1 there —
   check with `systemctl show launchpad-backend -p Environment`). Hardening:
   `NoNewPrivileges`, **`PrivateTmp=true`** (consequences in §5),
-  `ProtectSystem=full`.
+  `ProtectSystem=full`. Optional `EnvironmentFile=-/etc/launchpad-models.env`
+  for platform model settings (see "Platform model settings" below).
 - Frontend unit: `npm run preview -- --host 127.0.0.1 --port 5173 --strictPort`
   over `frontend/dist` — **a rebuild is required for any frontend change**.
 - Both bind loopback; CloudFront (or any fronting proxy) terminates TLS.
@@ -98,54 +104,31 @@ The return URL is baked into each as_user agent at deploy time (runtime env
 setting or changing it, **re-publish every agent that has an as_user tool**.
 The frontend unit needs nothing.
 
-### Enabling the alert check (one box only)
+### Platform model settings (accounts without OpenAI / Anthropic access)
 
-Alert rules (`/v2/costs?view=alerts`) post their webhooks only from a background
-thread, which is **off by default**. Turn it on with a drop-in on **exactly one**
-backend that shares the AWS account: prod and prod2 share one, and each box
-evaluates its own ledger's rules, so two enabled boxes can post the same breach
-twice. The thread assumes one uvicorn process per box, which is what the unit runs.
+The models the platform itself calls (judge, intents, actor, architect, …) are
+`LAUNCHPAD_*` settings ([setup.md → Choosing models](setup.md#choosing-models--切换模型)).
+The preferred switch is the console's Models page (admin → Configuration →
+Models): it applies at once, no restart, and wins over env. For a host-side
+default, `scripts/switch_models.py` writes `/etc/launchpad-models.env`; on a
+self-hosted box make sure the backend unit loads it (the leading `-` keeps the
+unit starting while the file is absent):
 
 ```bash
-sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
-printf '[Service]\nEnvironment=LAUNCHPAD_ALERTS_SCHEDULER_ENABLED=true\n' \
-  | sudo tee /etc/systemd/system/launchpad-backend.service.d/alerts-scheduler.conf
-sudo systemctl daemon-reload && sudo systemctl restart launchpad-backend
-sudo systemctl show launchpad-backend -p Environment | grep -c ALERTS_SCHEDULER_ENABLED=true   # want 1
+systemctl cat launchpad-backend | grep -q launchpad-models.env || {
+  sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
+  printf '[Service]\nEnvironmentFile=-/etc/launchpad-models.env\n' \
+    | sudo tee /etc/systemd/system/launchpad-backend.service.d/models.conf
+  sudo systemctl daemon-reload
+}
+cd /home/ubuntu/workspace/agentcore_launchpad/backend
+/home/ubuntu/.local/bin/uv run python ../scripts/switch_models.py --region us-east-1 --dry-run
+sudo /home/ubuntu/.local/bin/uv run --no-sync python ../scripts/switch_models.py --region us-east-1 --restart
+sudo journalctl -u launchpad-backend --since "2 min ago" -q   # as after every restart
 ```
 
-Then confirm on the Alerts view: its banner (`GET /api/alerts/scheduler`) reads the
-running process's setting, so it says whether this box checks. Don't grep the journal
-for the thread's start line: the backend configures no logging, so its INFO lines
-never reach the journal (only warnings, such as a failed workspace check, do). The interval is
-`LAUNCHPAD_ALERTS_SCHEDULER_INTERVAL_SECONDS` (default 300, minimum 60). Each pass
-runs Logs Insights queries, which are billed. Remove the drop-in and restart to
-turn the thread off.
-
-### Budgets (per-person monthly spend limits)
-
-Budgets are inert until an admin creates a level on Spend & alerts → Budgets. Until then every
-billable request is only metered. Before turning them on:
-- price every model listed as unpriced on the Models page, because a limited person is refused
-  an unpriced model (`402 budget.model_unpriced`);
-- check the per-turn estimate for runtimes that report no usage (Budgets → settings).
-
-Admins stay unlimited unless they are given a level. To unblock someone mid-month, give them an
-override on the Budgets tab; there is no restart.
-
-The budgets reconciliation thread is on by default on every box. It reconciles only that box's
-own sessions, so it is safe on prod and prod2 at once. Its queries are billed:
-- every tick (10 minutes), a few Logs Insights queries over the span window since the last
-  tick. After an outage the window widens, to at most 24 hours;
-- once an hour, one Logs Insights query over the last ~75 minutes of the account's spans, plus
-  one batched CloudWatch `GetMetricData` per workspace.
-
-To switch it off:
-- add `Environment=LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false` in a drop-in, as for the alert
-  check;
-- restart the backend.
-
-Budgets → Reconciliation shows its last run, lag and failures.
+The workshop templates already carry `EnvironmentFile=-/etc/launchpad-models.env`
+in their backend unit. A changed judge model changes evaluation scores.
 
 ### Update recipe (verified sequence)
 

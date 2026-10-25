@@ -78,7 +78,8 @@ def consume(client, mode):
     ("max_iterations", "harness.execution_limit", 502),
     ("max_iterations_exceeded", "harness.execution_limit", 502),
     ("max_output_tokens_exceeded", "harness.execution_limit", 502),
-    ("model_context_window_exceeded", "harness.execution_limit", 502),
+    ("model_context_window_exceeded", "harness.context_window_exceeded", 502),
+    ("context_window_exceeded", "harness.context_window_exceeded", 502),
     ("limit_turns", "harness.execution_limit", 502),
     ("limit_output_tokens", "harness.execution_limit", 502),
     ("limit_total_tokens", "harness.execution_limit", 502),
@@ -341,7 +342,17 @@ def sse_events(response):
             "event": lines[0].removeprefix("event: "),
             "data": json.loads(lines[1].removeprefix("data: ")),
         })
-    return events
+    # `saved` (console chat only) announces a persisted message id for thumbs
+    # feedback — bookkeeping, not part of the answer these tests assert on.
+    return [event for event in events if event["event"] != "saved"]
+
+
+# the console chat adds working-status events (chat-streaming S2); the outcome is the rest
+_STATUS_EVENTS = {"phase", "thinking", "tool_end", "heartbeat"}
+
+
+def _without_status(events):
+    return [e for e in events if e["event"] not in _STATUS_EVENTS]
 
 
 @pytest.mark.parametrize("entrance", ["chat", "public-stream", "console-sync", "public-sync"])
@@ -367,11 +378,9 @@ def test_real_endpoints_preserve_late_harness_failure(
 
     if entrance in {"chat", "public-stream"}:
         assert response.status_code == 200  # status was sent before the stream failed
-        events = sse_events(response)
-        # the console route alone announces the persisted answer before the
-        # event that closed its bubble; `/v1` never carries `saved`
-        saved = ["saved"] if entrance == "chat" else []
-        assert [event["event"] for event in events] == ["meta", "delta", *saved, "error"]
+        events = _without_status(sse_events(response))
+        # V3's chat_ledger `saved` event is dropped by sse_events (bookkeeping)
+        assert [event["event"] for event in events] == ["meta", "delta", "error"]
         assert events[1]["data"] == {"text": "partial answer"}
         error = events[-1]["data"]
     else:
@@ -410,10 +419,10 @@ def test_stream_endpoints_complete_normal_tool_cycles(client, monkeypatch, entra
     response = invoke_endpoint(client, entrance, agent.id)
 
     assert response.status_code == 200
-    events = sse_events(response)
-    saved = ["saved"] if entrance == "chat" else []  # console-only (see above)
-    assert [event["event"] for event in events] == ["meta", "tool", "delta", *saved, "done"]
-    assert events[1]["data"] == {"name": "kb_search", "id": "tool-1"}
+    events = _without_status(sse_events(response))
+    assert [event["event"] for event in events] == ["meta", "tool", "delta", "done"]
+    tool = {k: v for k, v in events[1]["data"].items() if k != "started_at"}  # console: S2 timer
+    assert tool == {"name": "kb_search", "id": "tool-1"}
     assert events[2]["data"] == {"text": "final answer"}
     assert stream.drained and stream.closed == 1
 
@@ -423,7 +432,7 @@ def test_empty_stream_is_an_sse_error_without_done(client, monkeypatch, entrance
     stream = Stream([])
     monkeypatch.setattr(chat, "data_client", lambda _ws=None: client_for(stream))
     response = invoke_endpoint(client, entrance, create_agent().id)
-    events = sse_events(response)
+    events = _without_status(sse_events(response))
     assert [event["event"] for event in events] == ["meta", "error"]
     assert events[-1]["data"]["code"] == "harness.incomplete_response"
     assert events[-1]["data"]["detail"] == {"stop_reason": None}
@@ -453,7 +462,9 @@ def test_chat_stream_keeps_invocation_scoped_gateway_identity(monkeypatch):
         runtime_user_id="operator", gateway_access_token="test-token", workspace=workspace,
     ))
     assert events[-1]["event"] == "done"
-    authenticated_tools.assert_called_once_with({}, workspace.resources, "test-token")
+    authenticated_tools.assert_called_once_with(
+        {}, workspace.resources, "test-token", workspace_id=workspace.id,
+    )
     assert data.invoke_harness.call_args.kwargs == {
         "harnessArn": ARN, "runtimeSessionId": SID, "actorId": "agent__operator",
         "runtimeUserId": "operator", "tools": tools,

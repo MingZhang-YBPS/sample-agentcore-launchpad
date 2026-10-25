@@ -16,7 +16,13 @@ from app.schemas.agent import AgentSpec
 from app.templates.attachment_support import render_attachment_source
 from app.templates.context_layer_support import render_context_gateway_source
 from app.templates.gateway_support import render_gateway_source, uses_gateway
-from app.templates.identity_support import render_identity_source, uses_identity
+from app.templates.identity_support import (
+    IDENTITY_TEMPLATE,
+    apply_turn_gate,
+    render_identity_source,
+    uses_identity,
+    uses_turn_gate,
+)
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
     KB_TOOL_NAME,
@@ -26,6 +32,7 @@ from app.templates.kb_support import (
     mounted_kbs,
     render_direct_kb_source,
 )
+from app.templates.strands_agent.builder import apply_builder, builder_tool_descriptions
 from app.templates.toolkits import (
     toolkit_source,
     toolkit_tool_descriptions,
@@ -47,9 +54,36 @@ def _feature_line(source: str, marker: str, value: str) -> str:
     return re.sub(rf"^[^\n]*{re.escape(marker)}[^\n]*\n", "", source, flags=re.M)
 
 
+def _identity_source(spec: AgentSpec) -> str:
+    """The outbound-auth block — also for a ``model_provider`` spec with no auth
+    tool, whose provider key is read through the same token-vault helper
+    (``resource_api_key``); it then carries no tool of its own."""
+    source = render_identity_source(spec)
+    if source or spec.model_provider is None:
+        return source
+    return (
+        apply_turn_gate(IDENTITY_TEMPLATE.read_text(encoding="utf-8"), False)
+        .strip()
+        .replace("__LAUNCHPAD_IDENTITY_TOOLS__", "[]")
+    )
+
+
+def _notices_fn(spec: AgentSpec) -> str:
+    # tool hooks queue approval asks next to the identity block's auth asks
+    if spec.tool_hooks is not None:
+        return "launchpad_turn_notices"
+    return "identity_drain_auth_notices" if uses_identity(spec) else "lambda: []"
+
+
 def render_main_py(spec: AgentSpec) -> str:
-    source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
-    # Feature lines first, before any spec text (the system prompt) is in the source.
+    # SB-1 builder markers first: their lines vanish for a spec that sets none.
+    # The COA turn gate renders only for a spec with the context layer attached,
+    # so every older spec keeps rendering byte-identical code.
+    source = apply_turn_gate(
+        apply_builder((TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8"), spec),
+        uses_turn_gate(spec),
+    )
+    # Feature lines next, before any spec text (the system prompt) is in the source.
     context_gateway = render_context_gateway_source(spec)
     source = _feature_line(
         source, CONTEXT_GATEWAY_SOURCE, context_gateway and context_gateway + "\n\n"
@@ -87,25 +121,22 @@ def render_main_py(spec: AgentSpec) -> str:
             "__LAUNCHPAD_GATEWAY_TOOLS_FN__",
             "gateway_tools" if uses_gateway(spec) else "lambda _stack, _user_token=None: []",
         )
-        .replace("__LAUNCHPAD_IDENTITY_SOURCE__", render_identity_source(spec))
+        .replace("__LAUNCHPAD_IDENTITY_SOURCE__", _identity_source(spec))
         .replace(
             "__LAUNCHPAD_IDENTITY_TOOLS_FN__",
             "identity_tools"
             if uses_identity(spec)
             else 'lambda _stack, _session_id="", _force_reauth=(): []',
         )
-        .replace(
-            "__LAUNCHPAD_IDENTITY_NOTICES_FN__",
-            "identity_drain_auth_notices" if uses_identity(spec) else "lambda: []",
-        )
-        .replace(
-            "__LAUNCHPAD_IDENTITY_GATED_FN__",
-            "identity_turn_gated" if uses_identity(spec) else "lambda: False",
-        )
+        .replace("__LAUNCHPAD_IDENTITY_NOTICES_FN__", _notices_fn(spec))
+        .replace("__LAUNCHPAD_IDENTITY_GATED_FN__", "identity_turn_gated")
         .replace("__LAUNCHPAD_TOOLKIT_TOOLS__", toolkit_tools)
         .replace(
             "__LAUNCHPAD_TOOLKIT_TOOL_DESCRIPTIONS__",
-            repr(toolkit_tool_descriptions(list(spec.toolkits))),
+            repr({
+                **toolkit_tool_descriptions(list(spec.toolkits)),
+                **builder_tool_descriptions(spec),
+            }),
         )
         .replace(
             "__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__",

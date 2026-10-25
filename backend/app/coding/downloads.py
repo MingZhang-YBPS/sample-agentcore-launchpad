@@ -1,19 +1,19 @@
-"""Browser downloads of a coding project: one file, or the whole project as a zip.
+"""Browser downloads of a coding repo: one file, or the whole repo as a zip.
 
 Bytes never pass through ``InvokeAgentRuntime`` (its payloads are short JSON, and
 the backend is no file proxy). The backend mints a presigned PUT under the
-project's ``downloads/`` prefix; the runtime uploads the file (``upload_file``, any
-regular file up to 200 MB, text or binary) or the project zip (``export`` — the
+repo's ``downloads/`` prefix; the runtime uploads the file (``upload_file``, any
+regular file up to 200 MB, text or binary) or the repo zip (``export`` — the
 deploy handoff's file set: tracked + untracked-not-ignored, no ``.git``, no
 dependency dirs) to it; the backend answers a presigned GET that lives
 ``DOWNLOAD_URL_TTL_S`` and whose ``Content-Disposition: attachment`` makes the
 browser save the object under its file name (RFC 6266 / 5987: an ASCII
 ``filename`` plus the UTF-8 ``filename*``).
 
-Owner-only: the router resolves the project through ``projects.require_project``
-without ``admin_ok`` (an administrator can delete a member's project but never read
+Owner-only: the router resolves the repo through ``repos.require_repo``
+without ``admin_ok`` (an administrator can delete a member's repo but never read
 its files). Allowed while a turn runs — it only reads. Download objects older than
-``s3urls.DOWNLOAD_KEEP_S`` are pruned at each request; deleting the project deletes
+``s3urls.DOWNLOAD_KEEP_S`` are pruned at each request; deleting the repo deletes
 its whole prefix.
 """
 
@@ -29,7 +29,7 @@ from app.services.workspace import WorkspaceContext
 
 from . import files, runtime_client, s3urls
 from .deploy import agent_name_from
-from .models import CodingProject
+from .models import CodingRepo
 from .runtime_client import CodingRuntimeError
 
 logger = logging.getLogger("launchpad.coding")
@@ -59,13 +59,13 @@ def ascii_filename(name: str) -> str:
     return _NOT_ASCII_SAFE.sub("_", clean_filename(name))
 
 
-def archive_names(project_name: str) -> tuple[str, str]:
-    """``(display, ascii)`` names of the project zip: a slug of the project name
+def archive_names(repo_name: str) -> tuple[str, str]:
+    """``(display, ascii)`` names of the repo zip: a slug of the repo name
     that keeps its own letters (``天气 助手`` → ``天气-助手.zip``); a non-ASCII
-    slug's stand-in is the project's Agent-name slug (the deploy handoff's)."""
-    slug = _NOT_SLUG.sub("-", (project_name or "").lower()).strip("-_")[:80].strip("-_")
-    display = f"{slug or agent_name_from(project_name)}.zip"
-    return display, display if display.isascii() else f"{agent_name_from(project_name)}.zip"
+    slug's stand-in is the repo's Agent-name slug (the deploy handoff's)."""
+    slug = _NOT_SLUG.sub("-", (repo_name or "").lower()).strip("-_")[:80].strip("-_")
+    display = f"{slug or agent_name_from(repo_name)}.zip"
+    return display, display if display.isascii() else f"{agent_name_from(repo_name)}.zip"
 
 
 def content_disposition(display: str, ascii_name: str | None = None) -> str:
@@ -86,33 +86,33 @@ def _too_large(exc: CodingRuntimeError, max_bytes: int) -> AppError:
                     detail, status_code=413)
 
 
-def download(ctx: WorkspaceContext, workspace_id: str, project: CodingProject,
+def download(ctx: WorkspaceContext, workspace_id: str, repo: CodingRepo,
              path: str | None) -> dict[str, Any]:
-    """Stage one file (``path``) or the project zip (``path`` None) for the
+    """Stage one file (``path``) or the repo zip (``path`` None) for the
     browser; ``{url, filename, size, expires_in}``."""
     rel = files.clean_path(path) if path is not None else None
     runtime_client.require_runtime_arn(ctx)
     try:
-        s3urls.prune_downloads(ctx, workspace_id, project.id)
+        s3urls.prune_downloads(ctx, workspace_id, repo.id)
     except Exception as exc:  # noqa: BLE001 — a leftover download costs a few bytes
-        logger.warning("coding project %s: download prune failed: %s", project.id, exc)
+        logger.warning("coding repo %s: download prune failed: %s", repo.id, exc)
 
     if rel is None:
-        display, ascii_name = archive_names(project.name)
+        display, ascii_name = archive_names(repo.name)
         action, payload, content_type, cap = "export", {}, ARCHIVE_TYPE, MAX_ARCHIVE_BYTES
     else:
         display = clean_filename(rel.rsplit("/", 1)[-1])
         ascii_name = ascii_filename(display)
         action, payload, content_type, cap = ("upload_file", {"path": rel}, FILE_TYPE,
                                               MAX_FILE_BYTES)
-    key = s3urls.download_key(workspace_id, project.id, ascii_filename(ascii_name))
+    key = s3urls.download_key(workspace_id, repo.id, ascii_filename(ascii_name))
     put_url = s3urls.presign_put(ctx, key)
     try:
-        result = runtime_client.project_call(ctx, project, action, put_url=put_url,
+        result = runtime_client.repo_call(ctx, repo, action, put_url=put_url,
                                              **payload)
     except CodingRuntimeError as exc:
         if exc.code == "not_found" and rel is not None:
-            raise AppError("coding.file_not_found", "the file does not exist in the project",
+            raise AppError("coding.file_not_found", "the file does not exist in the repo",
                            {"path": rel}, status_code=404) from exc
         if exc.code == "file_too_large":
             raise _too_large(exc, cap) from exc
@@ -127,7 +127,7 @@ def download(ctx: WorkspaceContext, workspace_id: str, project: CodingProject,
         content_type=content_type,
     )
     size = result.get("bytes") if isinstance(result, dict) else None
-    logger.info("coding project %s: %s download staged (%s bytes)", project.id,
+    logger.info("coding repo %s: %s download staged (%s bytes)", repo.id,
                 "archive" if rel is None else "file", size)
     return {
         "url": url,

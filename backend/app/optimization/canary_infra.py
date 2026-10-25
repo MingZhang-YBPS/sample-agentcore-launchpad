@@ -25,6 +25,7 @@ from typing import Any
 
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.network import spec_vpc
 from app.deployer.zip_runtime import (
     _generate_code,
     build_agent_zip,
@@ -82,14 +83,19 @@ def _uploader_for(workspace: WorkspaceContext) -> Callable[[str, str, str], None
     return upload
 
 
-def candidate_s3_key(agent_name: str, canary_id: str, role: str) -> str:
+def candidate_s3_key(agent_name: str, canary_id: str, role: str,
+                     project_id: str | None = None) -> str:
     """Deterministic key for a canary's zip: one object per canary + role.
 
     A uuid per mint orphaned a ~37MB object on every attempt (ISSUE-011); keyed
     this way a retried mint overwrites its own object, and cleanup knows exactly
-    which keys the record owns.
+    which keys the record owns. An isolated project's zips sit under its
+    `projects/<pid>/` prefix (projects design §10.10).
     """
-    return f"agents/{agent_name}/canary/{canary_id}-{role}.zip"
+    from app.services import project_storage
+
+    return project_storage.artifact_key(
+        project_id, f"agents/{agent_name}/canary/{canary_id}-{role}.zip")
 
 
 def delete_object_quiet(key: str, workspace: WorkspaceContext, *,
@@ -161,7 +167,7 @@ def mint_candidate_version(
     # inherit them. Read from the live resource rather than derived from the agent
     # name, so an agent deployed before per-agent roles existed still works.
     live = rt.get_runtime(control_client, agent.resource_id)
-    role_arn = agent_iam.live_runtime_role_arn(live, workspace)
+    role_arn = agent_iam.live_runtime_role_arn(live, workspace, agent.project_id)
     if not role_arn:
         raise RuntimeError(
             "the runtime reports no execution role and execution_role_arn is missing "
@@ -186,11 +192,13 @@ def mint_candidate_version(
     )
     if repinned is not None and on_repinned is not None:
         on_repinned(repinned)
-    s3_key = candidate_s3_key(agent.name, canary_id, role)
+    s3_key = candidate_s3_key(agent.name, canary_id, role,
+                              getattr(agent, "project_id", None))
     (uploader or _uploader_for(workspace))(str(zip_path), bucket, s3_key)
     log(f"candidate artifact → s3://{bucket}/{s3_key} · {source}")
 
-    environment = runtime_environment(edited_spec, workspace.resources)
+    environment = runtime_environment(edited_spec, workspace.resources,
+                                      workspace_id=agent.workspace_id or "")
 
     resp = rt.update_code_runtime(
         control_client,
@@ -202,6 +210,8 @@ def mint_candidate_version(
         protocol=edited_spec.protocol,
         # an omitted list detaches the mounts — the candidate keeps production's
         filesystem_configurations=filesystem_configurations(edited_spec) or None,
+        # every update sends the network: a VPC agent's candidate must stay in its VPC
+        vpc=spec_vpc(edited_spec, agent.workspace_id),
     )
     v_candidate = str(resp["agentRuntimeVersion"])
     log(f"UpdateAgentRuntime published candidate version {v_candidate}")
@@ -210,6 +220,28 @@ def mint_candidate_version(
         on_status=lambda s: log(f"candidate runtime status: {s}"),
     )
     return v_current, v_candidate, s3_key
+
+
+# ─── shared-state storage (storage-mounts §8.2) ──────────────────────────────
+def storage_write_check(
+    agent: Any, spec: AgentSpec | dict[str, Any] | None, *, confirmed: bool,
+    actor: str | None = None,
+) -> list[dict[str, Any]]:
+    """Refuse a canary whose candidate mounts shared-state storage read-write in a
+    gated workspace until the starter confirms (409 `storage.write_confirm_required`).
+
+    The candidate ships with the mounts it is measured with, so its share of live
+    traffic writes into that storage; swapping in a read-only mount for the canary
+    would measure — and later promote — another version. Returns the confirmed writes
+    (journaled), ``[]`` when there are none. ``spec`` defaults to the agent's own (a
+    Harness canary compares two existing versions)."""
+    from app.services import storage_dlc
+
+    data = spec.model_dump(mode="json") if isinstance(spec, AgentSpec) else spec
+    return storage_dlc.confirm_run_writes(
+        agent.workspace_id, data if data is not None else (agent.spec or {}),
+        confirmed=confirmed, action="canary.start", target=agent.id, actor=actor,
+    )
 
 
 # ─── dedicated per-canary gateway ────────────────────────────────────────────

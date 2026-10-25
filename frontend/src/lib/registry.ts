@@ -140,3 +140,17 @@ export function parseSkillMd(record: WithDescriptors): string {
     | undefined;
   return skills?.skillMd?.inlineContent ?? "";
 }
+
+// The reasons the platform itself writes onto a record (agentcore/registry.py) are
+// fixed English sentences; show them in the console language. A reason a person
+// typed (a rejection note) passes through untouched.
+const PLATFORM_REASONS: Record<string, string> = {
+  "approved via launchpad console": "registry.drawer.reason.approved",
+  "disabled via launchpad console": "registry.drawer.reason.disabled",
+  "rejected via launchpad console": "registry.drawer.reason.rejected",
+};
+
+export function statusReasonText(reason: string, t: (key: string) => string): string {
+  const key = PLATFORM_REASONS[reason.trim().toLowerCase()];
+  return key ? t(key) : reason;
+}

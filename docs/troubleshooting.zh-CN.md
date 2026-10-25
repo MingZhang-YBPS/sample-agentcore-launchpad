@@ -11,10 +11,20 @@ English: [troubleshooting.md](troubleshooting.md)
   Evaluation 都是预览功能，必须先在 `us-west-2` 为你的账号开启，bootstrap 才能
   成功。Agent Registry 已 GA（自 2026-08-06 起使用 `agent-registry` 命名空间，见
   [registry-ga-migration.md](registry-ga-migration.md)），无需开启预览。
-- **默认模型是 `global.anthropic.claude-sonnet-5`**（`DEFAULT_MODEL_ID`）。
-  新建 Agent 默认使用该 inference profile；Sonnet 4.6
-  （`global.anthropic.claude-sonnet-4-6`）仍可选择，已有 Agent 保留各自的
-  `model_id`。可在 AgentSpec 中用 `model_id` 逐个覆盖。
+- **新建 Agent 的默认模型是 `global.zai.glm-5.3`**（`agent_default_model_id`，
+  环境变量 `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID`）。新建 Agent 默认使用该
+  inference profile；其他模型仍可选择，已有 Agent 保留各自的 `model_id`。可在
+  AgentSpec 中用 `model_id` 逐个覆盖，或按
+  [setup.zh-CN.md → 切换模型](setup.zh-CN.md#切换模型) 修改默认值。
+- **账号里没有 OpenAI / Anthropic 模型。** 平台自己调用的模型默认是 OpenAI 与
+  Anthropic 的（评审 `global.openai.gpt-6-sol`，意图与建议问题
+  `global.anthropic.claude-sonnet-5`，以及 actor、架构师、架构助手等），这类账号
+  会看到评估器创建被拒、意图视图降级，或这些功能报 `AccessDeniedException`。管理员在
+  **admin → 配置 → 模型设置** 里切换（选模型、**测试**、**保存**，立即生效）；或在
+  主机上用 `scripts/switch_models.py` 探测账号，把能用的替代模型写进
+  `/etc/launchpad-models.env`（见 [setup.zh-CN.md → 切换模型](setup.zh-CN.md#切换模型)）。
+  Claude Agent SDK、Studio AI Fix 和 Skill Lab 的 claude / codex 路径不能换成其他
+  家族。换评审模型会改变评估分数。
 - **`config/launchpad.yaml` 已 gitignore。** 它包含账号 id 与演示凭证,因此从不
   提交。若缺失(全新 clone,或你删了它),重新运行 `make bootstrap`——它是幂等的,
   会从既有资源重写该文件。
@@ -124,3 +134,32 @@ English: [troubleshooting.md](troubleshooting.md)
 - **创建 obo 目标时出现签发者警告。** 连接的 IdP 不是网关的入站签发者。只有该
   IdP 信任网关签发者的令牌作为主体令牌时，交换才会成功；请在 IdP 侧配置该信任，
   或选择同一签发者的连接（[identity.md §8.3](identity.md#83-obo-on-behalf-of-token-exchange)）。
+
+## Agent-DLC：判据、黄金集与放行门
+
+这里多数情况是**有意的拒绝**——报错信息会说明该怎么做。
+
+| 你看到的 | 含义 → 怎么处理 |
+|---|---|
+| 部署在 `register` 阶段报 `ConflictException: Concurrent update detected` | AgentCore Registry 在消化刚提交的记录时的瞬态冲突——它本身不属于 Agent-DLC，但正是它会让一次门控部署在放行记录开出之前就失败。`registry.submit_record` 会按 AWS 自己的“请重试”措辞重试三次（1 秒 / 3 秒 / 7 秒）；**其他**冲突（例如记录已是 PENDING_APPROVAL）仍会上报，因为那是真实的状态冲突 |
+| `422 criteria.invalid`，带 `detail.findings` | 判据表违反了方法论的规则。`criteria.redline_judge`：红线不能交给大模型裁判——改用代码断言、轨迹匹配或指标。`criteria.dimension_uncovered`：每个维度要么有判据、要么写明 `n/a:<dimension>`。`criteria.no_redline`：没有红线的表不能发布 |
+| 某条门限判据显示“声明为门限 · 仅观察” | 裁判类判据在校准通过前不拦人。去「判据 → 裁判校准」跑一次标注任务并记录 `aligned`；在那之前它只记录，不强制 |
+| `409 calibration.not_supported` | 数据不支持把裁判判定为一致。detail 里带着裁判—人 κ、人—人 κ、样本量与下限。如果**人之间**就判不一致，请改写判据——写不下来的规则换裁判也救不了 |
+| 放行判定为 `INVALID` | 这不是“不达标”：是证据判不了。`provenance.issues` 会说明原因——判据版本未签署、运行用的是别的版本或端点、没有评估保留集——每行的 `reason` 会指出判定缺失或无法判定占比超过 5%。该修的是证据；豁免是用错了工具，而红线永不可豁免 |
+| `409 golden.holdout_sealed` | 保留集只编制一次，之后封存。正是这一点让它成为保留集；新用例请加到 `dev` 或 `regression` |
+| `409 golden.holdout_closed` | 样本准入与样本编辑永不写入保留集。请用 `dev` 或 `regression` |
+| `409 release.nothing_pending` | 没有等待判定的候选版本。`gated` 工作区里一次部署就会开出放行记录；`direct` 工作区根本不做门控（`PUT /api/release-policies/{workspace}` 的 `release_mode`） |
+| `409 release.not_gateable` 并附原因 | A2A 运行时不接受端点限定符；系统预置由平台放行；尚未部署的智能体没有可指向的版本 |
+| 放行报告显示“2 次放行运行未完成”，且是遥测超时 | 评估根本没看到这些会话。每个端点写自己的日志组，所以这通常是一个从未被调用过的新端点：先在该端点上调用一次，再重跑放行门 |
+| `409 run.cost_over_limit` / `run.cost_confirm_required` | 工作区的成本闸门。detail 带预估值；超过上限的运行只有管理员能发起，`confirm_cost: true` 表示已确认成本 |
+| `422 run.repeats_scope` | pass^k 是对智能体回放数据集用例——它无法重复历史会话或日志源 |
+| `409 watch.over_cost_ceiling` | 排程重评的预估成本超过上限，于是被跳过并上报，而不是先花掉。调高 `max_cost_usd` 或缩小切分 |
+| 新区域的工作区显示 `ready`，但追踪、可观测性和评估都是空的；bootstrap 的 observability 阶段显示 `unavailable · AccessDeniedException` | 该区域的 Transaction Search 没有开启。用当前 `infra/spoke/` 模板更新工作区角色（或 hub 角色）——模板已补齐 `UpdateTraceSegmentDestination` 代表调用方执行操作所需的权限——然后由管理员调用 `POST /api/workspaces/{id}/observability/repair` 只重跑这一阶段，无需重新 bootstrap |
+| 批量评估报 `FAS credentials do not have permission to create CloudWatch log groups` | 角色早于 `EvaluationResultLogGroups` 这条权限：AgentCore 用调用方的凭证创建评估结果日志组。用当前 `infra/spoke/` 模板更新角色 |
+| `409 annotation.links_not_allowed` | prod 级工作区不发放无账号标注链接：那里的标注会接触真实客户会话。请把标注人邀请为成员并授予 `judge.calibrate` |
+| 标注链接返回 `404 share.not_found` | 所有不可用状态刻意返回同一个答案（未知、已撤销、已过期、任务已删，或工作区升为 prod）。重新生成一个链接 |
+| `403 calibration.own_labels` | 你参与产生了这个任务的标注（作为标注人、仲裁人，或发放过它的标注链接），因此不能同时裁定它的裁判。请让另一位持 `judge.calibrate` 的人（或管理员）记录结论 |
+| `409 calibration.not_supported` 且 `human_human_kappa: null` | 只有一个人做了标注。裁判是对照「彼此一致的人」来认证的，只有单人标注的样本不计入——请让第二位标注人完成 |
+| `409 admission.redaction_blocked` | 个人信息护栏拒绝了这段会话，它不能进入黄金集。准入接口自己会做脱敏检测，所以即使没打开过候选详情，答案也是这个 |
+| 签署 / 准入 / 校准时 `403 auth.permission_required` | `criteria.sign`、`golden.admit`、`judge.calibrate` 只授予具体的人，不按角色给——它们决定“什么叫好”。由管理员按用户授予 |
+| 删除智能体返回 `aws_resource_deleted: false`（门控智能体，或带 Runtime Canary 端点的智能体） | 这是预期行为，不是失败。harness 端点可能 DELETING 数分钟，而 AgentCore 不允许删除仍带端点的资源，所以控制台的行立即删除，AWS 侧由后台 sweep（`dlc.teardown`，每个 tick 执行）收尾。无需处理；已删除行的 `teardown_pending_at` 清空（且 `endpoint_mode` 回到 `default`）就是 sweep 的回执 |

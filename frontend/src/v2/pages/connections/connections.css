@@ -4,7 +4,7 @@
 .v2 .v2-conn-templates { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .v2 .v2-conn-template {
   display: flex; align-items: center; justify-content: space-between; gap: 6px;
-  padding: 8px 10px; border: 1px solid var(--v2-line); border-radius: 6px; background: #fff;
+  padding: 8px 10px; border: 1px solid var(--v2-line); border-radius: 6px; background: var(--v2-card);
   cursor: pointer; font: inherit; text-align: left;
 }
 .v2 .v2-conn-template:hover { border-color: var(--v2-primary-hover); }

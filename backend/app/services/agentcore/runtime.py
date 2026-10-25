@@ -85,6 +85,8 @@ def create_code_runtime(
     instrument: bool = True,
     authorizer_configuration: dict[str, Any] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
+    vpc: dict[str, Any] | None = None,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
 
@@ -92,13 +94,20 @@ def create_code_runtime(
     (PYTHON_3_13, main.py); BYOC passes the user's choices through and keeps
     the ADOT launcher only when its bundle ships one (user zips don't always).
     ``authorizer_configuration`` is the inbound JWT authorizer
-    ({"customJWTAuthorizer": ...}); None means IAM/SigV4 (the field is omitted)."""
+    ({"customJWTAuthorizer": ...}); None means IAM/SigV4 (the field is omitted).
+    ``vpc`` = the spec's resolved network profile ``{subnets, security_groups}``
+    (`network_profiles.resolve_vpc`); None = PUBLIC. ``filesystem_configurations``
+    (`deployer/filesystem.py`) is the session storage plus any S3 Files / EFS
+    mounts; the latter need ``vpc`` (storage-mounts §3.2). ``tags`` are added to
+    the `launchpad:*` project tags the environment's span attributes imply
+    (`_runtime_tags`)."""
+    _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
         "agentRuntimeArtifact": _code_artifact(
             s3_bucket, s3_key, python_version, entrypoint, instrument
         ),
-        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "networkConfiguration": _network_configuration(vpc),
         "roleArn": role_arn,
     }
     if environment:
@@ -110,12 +119,67 @@ def create_code_runtime(
         params["authorizerConfiguration"] = authorizer_configuration
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
+    if resource_tags := _runtime_tags(environment, tags):
+        params["tags"] = resource_tags
     return client.create_agent_runtime(**params)
 
 
+def _runtime_tags(
+    environment: dict[str, str] | None, tags: dict[str, str] | None = None
+) -> dict[str, str]:
+    """CreateAgentRuntime / TagResource ``tags``: the unified cost-tag set of every
+    runtime (cost-tags design §1.1, `cost_tags.runtime_tags`) — the project the
+    environment's span attributes name (an isolated project's agent, projects design
+    §10.8) or else the deploy's current project (`shared` when none), then the
+    caller's explicit ``tags`` (the deployer's agent tags). The ``tags`` member is
+    in the service model (botocore 1.43); unverified live."""
+    from app.services.cost_tags import runtime_tags
+
+    return runtime_tags(environment, tags)
+
+
+def _tag_updated_runtime(
+    client: Any, response: dict[str, Any], environment: dict[str, str] | None,
+    tags: dict[str, str] | None = None,
+) -> None:
+    """UpdateAgentRuntime takes no tags, so a re-publish tags the runtime with
+    TagResource — a runtime created before cost tags (or before its project was
+    isolated, or transferred since) catches up on its next publish. Best-effort: a
+    refusal is logged, never fails the deploy."""
+    resource_tags = _runtime_tags(environment, tags)
+    if not resource_tags:
+        return
+    arn = (response or {}).get("agentRuntimeArn")
+    if not arn:
+        return
+    try:
+        client.tag_resource(resourceArn=arn, tags=resource_tags)
+    except Exception as exc:  # noqa: BLE001 — attribution must not fail a publish
+        logger.warning("TagResource on %s failed: %s", arn, exc)
+
+
+def _byo_entries(filesystem_configurations: list[dict[str, Any]] | None) -> bool:
+    return any("sessionStorage" not in fs for fs in filesystem_configurations or [])
+
+
+def _check_mounts_network(
+    filesystem_configurations: list[dict[str, Any]] | None, vpc: dict[str, Any] | None
+) -> None:
+    """S3 Files / EFS mounts are reached from the runtime's ENIs, so they need VPC
+    mode (design storage-mounts §3.2). `AgentSpec` already refuses the combination;
+    this keeps any other caller from sending a request the service rejects late."""
+    if _byo_entries(filesystem_configurations) and not vpc:
+        raise ValueError(
+            "S3 Files / EFS mounts need the runtime in a VPC — give the agent a "
+            "network profile"
+        )
+
+
 def _network_configuration(vpc: dict[str, Any] | None) -> dict[str, Any]:
-    """PUBLIC by default; VPC mode when a networkModeConfig is supplied
-    (required for BYO file systems — S3 Files / EFS access points)."""
+    """The one place a runtime's networkConfiguration is built (design §12.6,
+    §12.13): PUBLIC when the spec names no network; VPC mode with the resolved
+    profile's subnets / security groups otherwise (also what BYO file systems —
+    S3 Files / EFS access points — require)."""
     if not vpc:
         return {"networkMode": "PUBLIC"}
     return {
@@ -138,11 +202,16 @@ def create_container_runtime(
     vpc: dict[str, Any] | None = None,
     lifecycle: dict[str, int] | None = None,
     authorizer_configuration: dict[str, Any] | None = None,
+    protocol: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from an ECR image (Claude SDK container path).
 
     ``lifecycle`` = {idleRuntimeSessionTimeout, maxLifetime} seconds (the Skill
-    Lab exec worker caps sessions at 8h and reaps idle ones at 5min)."""
+    Lab exec worker caps sessions at 8h and reaps idle ones at 5min).
+    ``protocol`` and ``tags`` as ``create_code_runtime`` (None / "http" = the HTTP
+    default)."""
+    _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
         "agentRuntimeArtifact": {
@@ -157,8 +226,13 @@ def create_container_runtime(
         params["filesystemConfigurations"] = filesystem_configurations
     if lifecycle:
         params["lifecycleConfiguration"] = dict(lifecycle)
+    proto = _protocol_configuration(protocol)
+    if proto:
+        params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
+    if resource_tags := _runtime_tags(environment, tags):
+        params["tags"] = resource_tags
     return client.create_agent_runtime(**params)
 
 
@@ -198,6 +272,8 @@ def update_code_runtime(
     instrument: bool = True,
     authorizer_configuration: dict[str, Any] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
+    vpc: dict[str, Any] | None = None,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
     place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it).
@@ -209,13 +285,19 @@ def update_code_runtime(
     authorizer rides the same call: every update passes the RESOLVED inbound
     auth — echoing the JWT config keeps (or sets) it, omitting it switches the
     runtime back to IAM/SigV4, which is also how JWT→IAM transitions are
-    performed (CloudFormation marks authorizer updates "No interruption")."""
+    performed (CloudFormation marks authorizer updates "No interruption").
+    The network rides it too (design §12.6): every update sends the spec's
+    resolved ``vpc`` (None = PUBLIC), so a changed network profile republishes
+    in place. Whether the service accepts PUBLIC→VPC (or a subnet change) on
+    UpdateAgentRuntime is unverified live; a refusal surfaces as the update's
+    error."""
+    _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": _code_artifact(
             s3_bucket, s3_key, python_version, entrypoint, instrument
         ),
-        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "networkConfiguration": _network_configuration(vpc),
         "roleArn": role_arn,
     }
     if environment is not None:
@@ -227,7 +309,9 @@ def update_code_runtime(
         params["authorizerConfiguration"] = authorizer_configuration
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
-    return client.update_agent_runtime(**params)
+    response = client.update_agent_runtime(**params)
+    _tag_updated_runtime(client, response, environment, tags)
+    return response
 
 
 def update_container_runtime(
@@ -241,11 +325,15 @@ def update_container_runtime(
     vpc: dict[str, Any] | None = None,
     lifecycle: dict[str, int] | None = None,
     authorizer_configuration: dict[str, Any] | None = None,
+    protocol: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new container image — new version, same ARN.
     NB: a version bump resets managed session storage (documented UI note).
     Authorizer semantics as ``update_code_runtime``: echo to keep, omit to
-    return the runtime to IAM/SigV4."""
+    return the runtime to IAM/SigV4. ``protocol`` must be echoed too: an omitted
+    protocolConfiguration resets the runtime to HTTP."""
+    _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": {"containerConfiguration": {"containerUri": container_uri}},
@@ -258,9 +346,14 @@ def update_container_runtime(
         params["filesystemConfigurations"] = filesystem_configurations
     if lifecycle:
         params["lifecycleConfiguration"] = dict(lifecycle)
+    proto = _protocol_configuration(protocol)
+    if proto:
+        params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
-    return client.update_agent_runtime(**params)
+    response = client.update_agent_runtime(**params)
+    _tag_updated_runtime(client, response, environment, tags)
+    return response
 
 
 def get_runtime(client: Any, runtime_id: str) -> dict[str, Any]:
@@ -320,13 +413,16 @@ def wait_runtime_ready(
 
 
 def create_runtime_endpoint(
-    client: Any, *, runtime_id: str, endpoint_name: str, version: int | str
+    client: Any, *, runtime_id: str, endpoint_name: str, version: int | str,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """CreateAgentRuntimeEndpoint — a named endpoint pinned to ``version``."""
+    """CreateAgentRuntimeEndpoint — a named endpoint pinned to ``version``, carrying
+    the cost tags of the current project (`_runtime_tags`) plus ``tags``."""
     return client.create_agent_runtime_endpoint(
         agentRuntimeId=runtime_id,
         name=endpoint_name,
         agentRuntimeVersion=str(version),
+        tags=_runtime_tags(None, tags),
     )
 
 
@@ -425,19 +521,58 @@ def wait_endpoint_ready(
         sleeper(interval_s)
 
 
-def flatten_sse_text(raw: str, *, on_usage: Any = None) -> str | None:
+def ensure_runtime_endpoint(
+    client: Any,
+    *,
+    runtime_id: str,
+    endpoint_name: str,
+    version: int | str,
+    timeout_s: int = 600,
+    sleeper: Any = time.sleep,
+) -> dict[str, Any]:
+    """Create — or re-point — a named endpoint at ``version`` and wait until it serves it.
+
+    Idempotent: a ConflictException (the endpoint exists) becomes an update when it
+    serves another version. Used by Agent-DLC's `live` / `candidate` endpoints.
+    """
+    try:
+        create_runtime_endpoint(
+            client, runtime_id=runtime_id, endpoint_name=endpoint_name, version=version
+        )
+    except Exception as exc:
+        if type(exc).__name__ != "ConflictException":
+            raise
+        current = get_runtime_endpoint(client, runtime_id=runtime_id, endpoint_name=endpoint_name)
+        if str(current.get("liveVersion") or "") != str(version):
+            update_runtime_endpoint(
+                client, runtime_id=runtime_id, endpoint_name=endpoint_name, version=version
+            )
+    deadline = time.monotonic() + timeout_s
+    while True:
+        detail = wait_endpoint_ready(
+            client, runtime_id=runtime_id, endpoint_name=endpoint_name,
+            timeout_s=timeout_s, sleeper=sleeper,
+        )
+        if str(detail.get("liveVersion") or "") == str(version):
+            return detail
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"endpoint {endpoint_name} on {runtime_id} did not reach version {version}"
+            )
+        sleeper(5)
+
+
+def flatten_sse_text(raw: str) -> str | None:
     """Join the text deltas of an SSE event stream, or None if raw isn't SSE.
 
     Supports both converted-Harness event envelopes and Launchpad's native
-    runtime events. ``on_usage`` as on ``_runtime_payload_events``.
+    runtime events.
     """
     if not raw.lstrip().startswith("data:"):
         return None
     parts = [
         event["data"]["text"]
-        for event in _normalized_runtime_events(
-            _sse_payloads(raw.splitlines()), on_usage=on_usage,
-        )
+        for event in _normalized_runtime_events(_sse_payloads(raw.splitlines()))
         if event["event"] == "delta"
     ]
     return "".join(parts) or None
@@ -519,29 +654,14 @@ def _safe_auth_url(value: Any) -> str | None:
     return None
 
 
-def report_usage(on_usage: Any, usage: Any, kind: str = "call") -> None:
-    """Hand a runtime-reported token usage to the caller's meter. ``kind`` is
-    ``"call"`` for one model call (summed per turn) or ``"turn"`` for a whole-turn
-    aggregate. A meter must never fail the invocation, so nothing escapes."""
-    if on_usage is None or not isinstance(usage, dict):
-        return
-    try:
-        on_usage(usage, kind)
-    except Exception:  # noqa: BLE001 — metering is best effort by contract
-        pass
+# strands-builder SB-2 approval notices the generated runtime streams
+APPROVAL_EVENTS = ("approval_required", "approval_refused")
 
 
-def _runtime_payload_events(
-    payload: Any, on_usage: Any = None,
-) -> Iterator[dict[str, Any]]:
+def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     """Normalize one runtime payload to Chat's tool/delta/complete contract
     (lenient ``str()`` coercion of text fields, shared by Chat, the public API
-    and evaluation replays).
-
-    ``on_usage(usage, kind)`` receives the token usage the runtime reported: the
-    Claude Agent SDK template's ``complete.usage`` (Anthropic field names, one
-    aggregate for the whole turn → ``"turn"``), a ``{"result", "usage"}`` body, and
-    each Converse-shaped ``metadata`` event (one model call → ``"call"``)."""
+    and evaluation replays)."""
     if isinstance(payload, str) and _REPR_EVENT.match(payload):
         recovered = _repr_event(payload)
         if recovered is None:
@@ -564,6 +684,7 @@ def _runtime_payload_events(
     kind = payload.get("event")
     if isinstance(kind, str) and (
         kind in {"delta", "heartbeat", "tool", "auth_required", "complete", "error"}
+        or kind in APPROVAL_EVENTS
         or (kind == "attachments" and payload.get("contract") == "v1")
     ):
         if kind == "attachments":
@@ -598,11 +719,34 @@ def _runtime_payload_events(
                     "session_uri": str(payload.get("session_uri", "")),
                 },
             }
+        elif kind in APPROVAL_EVENTS:
+            # strands-builder SB-2 tool hooks: a tool on the approval list was
+            # paused for the console user (approval_required) or refused for a
+            # caller that cannot approve (approval_refused). The runtime already
+            # masked the input.
+            yield {
+                "event": kind,
+                "data": {
+                    "tool": str(payload.get("tool", "")),
+                    "tool_use_id": str(payload.get("tool_use_id", "")),
+                    "input": payload.get("input") if isinstance(payload.get("input"), dict)
+                    else {},
+                },
+            }
         elif kind == "complete":
-            report_usage(on_usage, payload.get("usage"), "turn")
-            yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
+            data: dict[str, Any] = {"text": str(payload.get("result", ""))}
+            # strands-builder SB-1: an output_schema agent's parsed answer
+            if isinstance(payload.get("structured"), (dict, list)):
+                data["structured"] = payload["structured"]
+            yield {"event": "complete", "data": data}
         elif kind == "error":
             raise RuntimeError(str(payload.get("message", "runtime stream failed")))
+        return
+
+    strands_text = _strands_loop_event(payload)
+    if strands_text is not None:
+        if strands_text:
+            yield {"event": "complete", "data": {"text": strands_text}}
         return
 
     inner = kind if isinstance(kind, dict) else payload
@@ -610,8 +754,6 @@ def _runtime_payload_events(
         detail = inner.get("runtimeClientError") or inner.get("internalServerException")
         raise RuntimeError(f"runtime returned error: {detail}")
     converse_event = _is_converse_stream_event(inner)
-    if converse_event and "metadata" in inner:
-        report_usage(on_usage, inner["metadata"].get("usage"), "call")
     if converse_event:
         tool_use = inner.get("contentBlockStart", {}).get("start", {}).get("toolUse")
         if isinstance(tool_use, dict):
@@ -623,13 +765,54 @@ def _runtime_payload_events(
         text = delta.get("text")
         if text:
             yield {"event": "delta", "data": {"text": str(text)}}
+        usage = _converse_usage(inner.get("metadata"))
+        if usage is not None:
+            # one model call's tokens; `_normalized_runtime_events` sums them
+            yield {"event": "usage", "data": usage}
     if "result" in payload:
-        report_usage(on_usage, payload.get("usage"), "turn")
         yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
     elif not converse_event:
         text = _free_form_payload_text(payload)
         if text:
             yield {"event": "complete", "data": {"text": text}}
+
+
+# Strands' agent loop also yields its own lifecycle events next to the Converse ones
+# when an entrypoint forwards every `stream_async` event (measured 2026-10-14 on an
+# AgentCore CLI Strands template that does): bookkeeping flags, and the finished
+# `message` / `result` the deltas already carried.
+_STRANDS_LOOP_FLAGS = frozenset(
+    {"init_event_loop", "start", "start_event_loop", "force_stop", "force_stop_reason"}
+)
+
+
+def _message_text(message: Any) -> str:
+    """The text blocks of an assistant Converse message (``{role, content[]}``)."""
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return ""
+    blocks = message.get("content")
+    if not isinstance(blocks, list):
+        return ""
+    return "".join(
+        str(block["text"]) for block in blocks
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    )
+
+
+def _strands_loop_event(payload: dict[str, Any]) -> str | None:
+    """``None`` when ``payload`` is not a Strands loop event; otherwise the final
+    text it carries ("" for pure bookkeeping). The text only matters when no
+    delta was streamed — `_normalized_runtime_events` drops it after deltas."""
+    keys = set(payload)
+    if keys and keys <= _STRANDS_LOOP_FLAGS:
+        return ""
+    message = payload.get("message")
+    if keys == {"message"} and isinstance(message, dict) and "role" in message:
+        return _message_text(message)
+    if keys == {"result"} and isinstance(payload["result"], dict):
+        # a serialized AgentResult: {stop_reason, message, metrics, state}
+        return _message_text(payload["result"].get("message"))
+    return None
 
 
 def _is_converse_stream_event(payload: dict[str, Any]) -> bool:
@@ -656,6 +839,48 @@ def _is_converse_stream_event(payload: dict[str, Any]) -> bool:
         return False
     field, field_type = fields[name]
     return isinstance(detail.get(field), field_type)
+
+
+# Converse `metadata.usage` counters → the normalized `usage` event's fields.
+# Strands forwards Bedrock's camelCase as-is; snake_case is accepted for code
+# that re-serializes it.
+_USAGE_FIELDS = (
+    ("input_tokens", ("inputTokens", "input_tokens")),
+    ("output_tokens", ("outputTokens", "output_tokens")),
+    ("total_tokens", ("totalTokens", "total_tokens")),
+    ("cache_read_input_tokens", ("cacheReadInputTokens", "cache_read_input_tokens")),
+    ("cache_write_input_tokens", ("cacheWriteInputTokens", "cache_write_input_tokens")),
+)
+
+
+def _converse_usage(metadata: Any) -> dict[str, int] | None:
+    """The token counts of one Converse ``metadata`` event, or None when it
+    carries none. Only non-negative integers count; a missing total is
+    input + output."""
+    usage = metadata.get("usage") if isinstance(metadata, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    counts: dict[str, int] = {}
+    for field, keys in _USAGE_FIELDS:
+        for key in keys:
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                counts[field] = value
+                break
+    if not counts:
+        return None
+    if "total_tokens" not in counts:
+        counts["total_tokens"] = counts.get("input_tokens", 0) + counts.get("output_tokens", 0)
+    return counts
+
+
+def _add_usage(total: dict[str, int] | None, usage: dict[str, int]) -> dict[str, int]:
+    """Sum per-model-call usage into the turn's totals (``model_calls`` counts them)."""
+    calls = (total or {}).get("model_calls", 0) + 1
+    summed = {k: v for k, v in (total or {}).items() if k != "model_calls"}
+    for field, value in usage.items():
+        summed[field] = summed.get(field, 0) + value
+    return {**summed, "model_calls": calls}
 
 
 # Conventional text keys, in preference order: the devguide example, then the
@@ -702,16 +927,40 @@ def _free_form_payload_text(payload: dict[str, Any]) -> str:
     return dumped
 
 
+_UNRECOGNIZED_SAMPLE_CHARS = 300
+
+
 def _normalized_runtime_events(
-    payloads: Iterable[Any], *, require_attachments: bool = False, on_usage: Any = None,
+    payloads: Iterable[Any], *, require_attachments: bool = False, require_text: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    """Suppress a final full result when real deltas were already emitted."""
+    """Suppress a final full result when real deltas were already emitted.
+
+    ``require_text`` (the invoke stream that Chat, ``/v1`` and evaluation share): a
+    stream that ends with no text, tool call or consent ask to show raises a named
+    error carrying the start of what the runtime sent, instead of a blank turn.
+
+    Token usage the runtime reports (Converse ``metadata.usage``, one per model
+    call — a tool turn has several) is summed and yielded once, as a ``usage``
+    event, when the stream ends: ``{input_tokens, output_tokens, total_tokens,
+    model_calls[, cache_*_input_tokens]}``. No usage reported → no event."""
+    usage: dict[str, int] | None = None
     saw_delta = False
+    saw_other = False
     acknowledged = False
+    payload_count = 0
+    sample = ""
     for payload in payloads:
-        for event in _runtime_payload_events(payload, on_usage):
+        payload_count += 1
+        if not sample:
+            sample = (payload if isinstance(payload, str) else json.dumps(payload, default=str))[
+                :_UNRECOGNIZED_SAMPLE_CHARS
+            ]
+        for event in _runtime_payload_events(payload):
             if event["event"] == "attachments":
                 acknowledged = event["data"].get("contract") == "v1"
+                continue
+            if event["event"] == "usage":
+                usage = _add_usage(usage, event["data"])
                 continue
             if require_attachments and not acknowledged and event["event"] != "heartbeat":
                 raise _attachment_ack_error()
@@ -721,11 +970,33 @@ def _normalized_runtime_events(
             elif event["event"] == "complete":
                 if not saw_delta and event["data"]["text"]:
                     saw_delta = True
-                    yield {"event": "delta", "data": event["data"]}
+                    yield {"event": "delta", "data": {"text": event["data"]["text"]}}
+                if "structured" in event["data"]:
+                    # the text answer above stays the reply; this rides alongside
+                    yield {"event": "structured", "data": {"value": event["data"]["structured"]}}
             else:
+                if event["event"] in ("tool", "auth_required", *APPROVAL_EVENTS):
+                    saw_other = True
                 yield event
     if require_attachments and not acknowledged:
         raise _attachment_ack_error()
+    if usage is not None:
+        # before the unreadable-reply error below: those tokens were still spent
+        yield {"event": "usage", "data": usage}
+    if require_text and not saw_delta and not saw_other:
+        if payload_count == 0:
+            raise AppError(
+                "runtime.empty_reply",
+                "the agent's runtime answered with an empty response",
+                status_code=502,
+            )
+        raise AppError(
+            "runtime.unrecognized_reply",
+            "the agent answered in a format the console cannot read — see docs: "
+            "accepted runtime response formats",
+            {"sample": sample},
+            status_code=502,
+        )
 
 
 def _attachment_ack_error() -> AppError:
@@ -747,12 +1018,15 @@ def _runtime_invoke_params(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
+    context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {
         "agentRuntimeArn": runtime_arn,
         "runtimeSessionId": session_id,
         "payload": _invoke_payload(
             prompt, actor_id, gateway_access_token, attachments, force_reauth_providers,
+            context, tool_approvals,
         ),
     }
     if qualifier:
@@ -773,11 +1047,25 @@ def _invoke_payload(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
+    context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> bytes:
     """The request body both transports (SigV4 and bearer) send."""
     payload: dict[str, Any] = {"prompt": prompt, "actor_id": actor_id}
+    if tool_approvals is not None:
+        # console chat only (strands-builder SB-2 tool hooks): the caller can
+        # approve, and which tools the user approved for this turn. /v1 and
+        # evaluations never send it, so the runtime refuses approval-list tools.
+        payload["tool_approvals"] = {
+            "interactive": bool(tool_approvals.get("interactive")),
+            "approved": [str(name) for name in tool_approvals.get("approved") or [] if name],
+        }
     if attachments:
         payload["attachments"] = attachments
+    if context:
+        # this turn's {{variable}} values (strands-builder SB-1): the generated
+        # Strands runtime fills declared prompt variables from it, others ignore it
+        payload["context"] = dict(context)
     if force_reauth_providers:
         # as_user revocation: the generated identity block sends
         # forceAuthentication=true for exactly these Connections this turn.
@@ -801,10 +1089,10 @@ def stream_runtime_events(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
-    on_usage: Any = None,
+    context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Invoke a runtime and yield normalized tool/text events as bytes arrive.
-    ``on_usage`` as on ``_runtime_payload_events``."""
+    """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
     response = client.invoke_agent_runtime(
         **_runtime_invoke_params(
@@ -817,13 +1105,14 @@ def stream_runtime_events(
             gateway_access_token,
             attachments,
             force_reauth_providers,
+            context,
+            tool_approvals,
         )
     )
     body = response["response"]
     try:
         yield from _runtime_body_events(
             body, str(response.get("contentType", "")).lower(), bool(attachments),
-            on_usage=on_usage,
         )
     finally:
         if hasattr(body, "close"):
@@ -831,7 +1120,7 @@ def stream_runtime_events(
 
 
 def _runtime_body_events(
-    body: Any, content_type: str, require_attachments: bool, *, on_usage: Any = None,
+    body: Any, content_type: str, require_attachments: bool,
 ) -> Iterator[dict[str, Any]]:
     if "text/event-stream" in content_type:
         lines = (
@@ -840,7 +1129,7 @@ def _runtime_body_events(
             else body.read().splitlines()
         )
         yield from _normalized_runtime_events(
-            _sse_payloads(lines), require_attachments=require_attachments, on_usage=on_usage,
+            _sse_payloads(lines), require_attachments=require_attachments, require_text=True,
         )
         return
 
@@ -851,17 +1140,17 @@ def _runtime_body_events(
         decoded = raw.decode("utf-8", errors="replace") if raw else ""
         if decoded.lstrip().startswith("data:"):
             yield from _normalized_runtime_events(
-                _sse_payloads(decoded.splitlines()), require_attachments=require_attachments,
-                on_usage=on_usage,
+                _sse_payloads(decoded.splitlines()),
+                require_attachments=require_attachments, require_text=True,
             )
         else:
             yield from _normalized_runtime_events(
-                [decoded] if decoded else [], require_attachments=require_attachments,
-                on_usage=on_usage,
+                [decoded] if decoded else [],
+                require_attachments=require_attachments, require_text=True,
             )
     else:
         yield from _normalized_runtime_events(
-            [payload], require_attachments=require_attachments, on_usage=on_usage,
+            [payload], require_attachments=require_attachments, require_text=True,
         )
 
 
@@ -876,23 +1165,32 @@ def invoke_runtime_text(
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
-    on_usage: Any = None,
+    context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses.
 
     as_user consent asks (``auth_required`` events) are collected onto
     ``result["auth_required"]`` — a non-streaming caller still needs the
-    authorization URL to relay to the user. ``on_usage`` as on
-    ``_runtime_payload_events``.
+    authorization URL to relay to the user. Reported token usage (the stream's
+    ``usage`` event) lands on ``result["usage"]``, and an ``output_schema``
+    agent's parsed answer (the ``structured`` event) on ``result["structured"]``.
+    SB-2 approval notices land on ``result["approval_required"]`` /
+    ``result["approval_refused"]``.
     """
     session_id = session_id or new_session_id()
     extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
     if force_reauth_providers:
         extra["force_reauth_providers"] = force_reauth_providers
-    if on_usage is not None:
-        extra["on_usage"] = on_usage
+    if context:
+        extra["context"] = context
+    if tool_approvals is not None:
+        extra["tool_approvals"] = tool_approvals
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
+    usage: dict[str, int] | None = None
+    structured: Any = None
+    approvals: dict[str, list[dict[str, Any]]] = {}
     for event in stream_runtime_events(
         client,
         runtime_arn,
@@ -908,9 +1206,20 @@ def invoke_runtime_text(
             parts.append(event["data"]["text"])
         elif event["event"] == "auth_required":
             auth_required.append(event["data"])
+        elif event["event"] == "usage":
+            usage = event["data"]
+        elif event["event"] == "structured":
+            structured = event["data"]["value"]
+        elif event["event"] in APPROVAL_EVENTS:
+            approvals.setdefault(event["event"], []).append(event["data"])
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
+    if usage is not None:
+        result["usage"] = usage
+    if structured is not None:
+        result["structured"] = structured
+    result.update(approvals)
     return result
 
 
@@ -957,7 +1266,8 @@ def stream_runtime_events_bearer(
     attachments: list[dict[str, str]] | None = None,
     force_reauth_providers: list[str] | None = None,
     http_response: Any = None,
-    on_usage: Any = None,
+    context: dict[str, str] | None = None,
+    tool_approvals: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Bearer-token InvokeAgentRuntime over the data-plane HTTPS endpoint.
 
@@ -977,6 +1287,7 @@ def stream_runtime_events_bearer(
     }
     body = _invoke_payload(
         prompt, actor_id, gateway_access_token, attachments, force_reauth_providers,
+        context, tool_approvals,
     )
     opener = http_response or _default_bearer_response
     with opener(url, headers, body) as response:
@@ -998,9 +1309,7 @@ def stream_runtime_events_bearer(
         content_type = str(
             (getattr(response, "headers", None) or {}).get("content-type") or ""
         ).lower()
-        yield from _runtime_body_events(
-            _HttpxBody(response), content_type, bool(attachments), on_usage=on_usage,
-        )
+        yield from _runtime_body_events(_HttpxBody(response), content_type, bool(attachments))
 
 
 def _read_error_body(response: Any, limit: int = 500) -> str:
@@ -1025,10 +1334,13 @@ def invoke_runtime_text_bearer(
 ) -> dict[str, Any]:
     """Synchronous bearer invoke (SigV4 twin: ``invoke_runtime_text``); ``extra``
     carries the same optional payload fields (attachments, force-reauth,
-    gateway token)."""
+    gateway token, context, tool approvals)."""
     session_id = session_id or new_session_id()
     parts: list[str] = []
     auth_required: list[dict[str, Any]] = []
+    usage: dict[str, int] | None = None
+    structured: Any = None
+    approvals: dict[str, list[dict[str, Any]]] = {}
     for event in stream_runtime_events_bearer(
         region,
         runtime_arn,
@@ -1044,9 +1356,20 @@ def invoke_runtime_text_bearer(
             parts.append(event["data"]["text"])
         elif event["event"] == "auth_required":
             auth_required.append(event["data"])
+        elif event["event"] == "usage":
+            usage = event["data"]
+        elif event["event"] == "structured":
+            structured = event["data"]["value"]
+        elif event["event"] in APPROVAL_EVENTS:
+            approvals.setdefault(event["event"], []).append(event["data"])
     result: dict[str, Any] = {"text": "".join(parts), "session_id": session_id}
     if auth_required:
         result["auth_required"] = auth_required
+    if usage is not None:
+        result["usage"] = usage
+    if structured is not None:
+        result["structured"] = structured
+    result.update(approvals)
     return result
 
 

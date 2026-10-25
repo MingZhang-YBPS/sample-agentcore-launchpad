@@ -469,6 +469,13 @@ INFRA_CODES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _engine_attached(monkeypatch):
+    """policy-test journals only when the Gateway has a Policy Engine; these tests
+    exercise the enforced path unless they say otherwise."""
+    monkeypatch.setattr(gov, "_attached_engine", lambda _ws: "launchpad_pe-test")
+
+
 def _post_policy_test(client, **overrides):
     body = {
         "username": "demo",
@@ -637,3 +644,45 @@ def test_retired_demo_identity_is_rejected(client, monkeypatch):
     )
     res = _post_policy_test(client, username="river")
     assert res.status_code == 422
+
+
+def test_enforced_policy_test_names_the_engine(client, monkeypatch):
+    monkeypatch.setattr(gov.mcp_client, "tools_call",
+                        lambda _ws, tool, args, username="demo": {"content": []})
+    body = _post_policy_test(client).json()
+    assert body["enforced"] is True and body["policy_engine_id"] == "launchpad_pe-test"
+    assert body["note"] is None and body["recorded"] is True
+
+
+def test_without_a_policy_engine_an_allow_is_not_enforced_or_recorded(client, monkeypatch):
+    """Regression (live e2e, us-west-2): with no Policy Engine attached the call goes
+    through and used to be journaled as a Cedar ALLOW in the decision log."""
+    monkeypatch.setattr(gov, "_attached_engine", lambda _ws: "")
+    calls = []
+    monkeypatch.setattr(gov.mcp_client, "tools_call",
+                        lambda _ws, tool, args, username="demo": calls.append(tool)
+                        or {"content": [{"text": "ok"}]})
+    before = _ledger_count()
+    body = _post_policy_test(client).json()
+    assert calls == ["hr-database___create_payout"]  # the call still runs
+    assert body["outcome"] == "ALLOW"
+    assert body["enforced"] is False and body["policy_engine_id"] is None
+    assert body["recorded"] is False and body["decision_id"] is None
+    assert "no Policy Engine attached" in body["note"]
+    assert _ledger_count() == before
+    assert client.get("/api/governance/decisions").json()["decisions"] == []
+
+
+def test_without_a_policy_engine_a_refusal_is_not_journaled_either(client, monkeypatch):
+    from app.core.errors import AppError
+
+    monkeypatch.setattr(gov, "_attached_engine", lambda _ws: "")
+
+    def unauthorized(_ws, tool, args, username="demo"):
+        raise AppError("gateway.unauthorized", "gateway rejected the call (403)", {})
+
+    monkeypatch.setattr(gov.mcp_client, "tools_call", unauthorized)
+    before = _ledger_count()
+    body = _post_policy_test(client).json()
+    assert body["enforced"] is False and body["recorded"] is False
+    assert _ledger_count() == before

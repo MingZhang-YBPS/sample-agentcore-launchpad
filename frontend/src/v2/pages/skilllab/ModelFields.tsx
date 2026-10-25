@@ -1,12 +1,14 @@
 import { useTranslation } from "react-i18next";
 
+import { useModelCatalog } from "../../../lib/model-catalog";
 import type { SkillLabJudgeMode, SkillLabStatus, SkillLabTargetBackend } from "../../../lib/api";
 import {
   BACKEND_LABELS,
   backendsOf,
-  JUDGE_MODEL_SUGGESTIONS,
   judgeReadiness,
   modelDefault,
+  skillLabJudgeSuggestions,
+  skillLabTargetSuggestions,
 } from "../../../lib/skillLab";
 import { Field, Select } from "../../ui";
 
@@ -43,6 +45,7 @@ export function ModelFields({
   judge?: JudgeFields;
 }) {
   const { t } = useTranslation();
+  useModelCatalog(); // the account catalog joins the suggestions once it lands
   const judgeModes: SkillLabJudgeMode[] = status?.judge_modes?.length ? status.judge_modes : ["auto", "chat", "agentic"];
   const readiness = judgeReadiness(status, judge?.model ?? "");
 
@@ -70,9 +73,15 @@ export function ModelFields({
         <input
           className="v2-input mono"
           value={targetModel}
+          list={`${testId}-target-models`}
           data-testid={`${testId}-target-model`}
           onChange={(e) => setTargetModel(e.target.value)}
         />
+        <datalist id={`${testId}-target-models`}>
+          {skillLabTargetSuggestions(status, backend).map((model) => (
+            <option key={model} value={model} />
+          ))}
+        </datalist>
       </Field>
       {judge && (
         <>
@@ -85,7 +94,7 @@ export function ModelFields({
               onChange={(e) => judge.setModel(e.target.value)}
             />
             <datalist id={`${testId}-judge-models`}>
-              {JUDGE_MODEL_SUGGESTIONS.map((model) => (
+              {skillLabJudgeSuggestions(status).map((model) => (
                 <option key={model} value={model} />
               ))}
             </datalist>

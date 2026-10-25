@@ -1,6 +1,6 @@
 """Pre-restart in-flight inventory: what a backend restart will do to background work.
 
-Every prod update restarts the backend, and nine startup hooks in `create_app`
+Every prod update restarts the backend, and ten startup hooks in `create_app`
 (plus two read-time reapers) give in-flight rows four different fates. This module
 reads the ledger once and names each in-flight row with the fate the restart gives
 it, so an operator can decide *before* `systemctl restart` whether to wait.
@@ -26,13 +26,15 @@ from typing import Any
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
-from app.coding.models import CodingProject
+from app.coding.models import CodingRepo
 from app.evaluation.agentcore_eval import REC_TERMINAL
 from app.evaluation.models import EvalPipeline, EvalRecommendation, EvalRun
 from app.evaluation.recommendations import PROVIDER_JOB_PREFIX
 from app.evaluation.service import INTERRUPTED_STATUSES
 from app.models.assistant import AssistantConversation, EvaluationAssetOperation
-from app.models.ledger import Job, PolicyChange
+from app.models.ledger import Agent, Job, PolicyChange
+from app.models.system_update import PREPARING as SYSTEM_UPDATE_PREPARING
+from app.models.system_update import SystemUpdate
 from app.optimization.models import Experiment, RuntimeCanary
 from app.skill_lab.models import SkillLabJob
 
@@ -66,6 +68,10 @@ EVAL_PIPELINE = "eval_pipeline"
 EVAL_RECOMMENDATION = "eval_recommendation"
 ASSISTANT_TURN = "assistant_turn"
 ASSISTANT_PREPARATION = "assistant_preparation"
+# online update (OU-1): the prepare job lives on its `system_updates` row, not in `jobs`
+SYSTEM_UPDATE_PREPARE = "system_update_prepare"
+# a deleted agent whose AWS teardown was deferred (`agents.teardown_pending_at`)
+AGENT_TEARDOWN = "agent_teardown"
 CODING_TURN = "coding_turn"
 
 # Every call in the `if resume_jobs:` block of `create_app`, by the name main.py
@@ -73,11 +79,11 @@ CODING_TURN = "coding_turn"
 # to a reason instead. Drift-guarded: tests/test_inflight.py parses main.py.
 STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     "clear_stale_turn_claims": (ASSISTANT_TURN, ASSISTANT_PREPARATION),
-    "backfill_snapshot_baselines": (
-        "records a baseline spec snapshot for live agents that have none; ledger-only "
-        "and idempotent, no in-flight row"
-    ),
     "resume_pending_jobs": (JOB,),
+    "migrate_preset_timeouts": (
+        "queues a preset repair job (a Job row, resumed like any other) for a preset still "
+        "on the legacy turn budget; idempotent, no row of its own"
+    ),
     "resume_evaluation_assets": (EVAL_ASSET_OPERATION,),
     "resume_interrupted_runs": (EVAL_RUN,),
     "clear_stale_running_actions": (EXPERIMENT_ACTION,),
@@ -88,15 +94,14 @@ STARTUP_HOOKS: dict[str, tuple[str, ...] | str] = {
     "local_exec.reap_orphan_containers":
         "kills leftover studio exec containers + scratch dirs; transient, no ledger row",
     "start_auto_refresh": "starts the model-price refresh thread; restart-safe, no ledger row",
-    "alert_scheduler.start": (
-        "starts the opt-in alert-check thread (off by default); restart-safe — a rule's "
-        "state is re-read on the next tick, no in-flight row"
+    "start_dlc_scheduler": (
+        "starts the Agent-DLC tick thread (due watch runs, alert rules, expiry sweeps); "
+        "restart-safe — a task claimed by the stopped process is reclaimable after "
+        "ten minutes, and the eval runs it started are EVAL_RUN rows"
     ),
-    "budget_scheduler.start": (
-        "starts the budget reconciliation thread (on by default); restart-safe — a "
-        "session's rows and its watermark commit together, so an interrupted window is "
-        "read again on the next tick, no in-flight row"
-    ),
+    # online update (OU-1): resumes a `preparing` system_updates row's build from its
+    # checkpoints and reads the updater's apply.result
+    "resume_system_updates": (SYSTEM_UPDATE_PREPARE,),
     "coding_watcher.start": (CODING_TURN,),
 }
 
@@ -126,15 +131,36 @@ def resumable_job_types() -> frozenset[str]:
     # Lazy, as in resume_pending_jobs: the uninstall worker's import chain reaches
     # the deployer pipeline.
     from app.assistant import purge as assistant_purge
-    from app.services import workspace_bootstrap
+    from app.services import (
+        cost_tags,
+        project_isolation,
+        project_migration,
+        project_purge,
+        promotion_exec,
+        registry_sync,
+        workspace_bootstrap,
+    )
     from app.system_agents import uninstall as system_uninstall
 
     return frozenset({
         "deploy_agent",
         workspace_bootstrap.JOB_TYPE,
+        project_isolation.JOB_TYPE,
+        project_migration.JOB_TYPE,
+        project_purge.JOB_TYPE,
+        "agent_eni_release",  # pipeline.ENI_JOB_TYPE (a VPC agent's ENI wait, §12.9)
         system_uninstall.JOB_TYPE,
+        promotion_exec.JOB_TYPE,
         assistant_purge.JOB_TYPE,
+        cost_tags.JOB_TYPE,
+        registry_sync.JOB_TYPE,
     })
+
+
+def retry_job_types() -> dict[str, str]:
+    """Job types an administrator's retry takes over (from the job's checkpoints)
+    instead of `resume_pending_jobs` — a restart leaves them for that retry."""
+    return {}
 
 
 @dataclass(frozen=True)
@@ -224,12 +250,17 @@ def collect_inflight(
                                   handled_by))
 
     resumable = resumable_job_types()
+    retried = retry_job_types()
     failed_at_startup = failed_at_startup_job_types()
     for r in reader.rows(Job, ["id", "workspace_id", "type", "status", "updated_at"],
                          lambda m: m.status.in_(_JOB_ACTIVE)):
         if r.type in resumable:
             add(JOB, r.id, r.workspace_id, r.status, r.type, r.updated_at, RESUMES,
                 "resume_pending_jobs")
+        elif r.type in retried:
+            add(JOB, r.id, r.workspace_id, r.status,
+                f"{r.type} — stops; retrying it continues from its checkpoints",
+                r.updated_at, CLEARED_RETRY, retried[r.type])
         elif r.type in failed_at_startup:
             add(JOB, r.id, r.workspace_id, r.status,
                 f"{r.type} — its thread dies; failed, the admin runs it again",
@@ -318,11 +349,24 @@ def collect_inflight(
             f"architect conversation {r.title} — preparation claim cleared, retry it",
             r.updated_at, CLEARED_RETRY, "clear_stale_turn_claims")
 
-    for r in reader.rows(CodingProject, ["id", "workspace_id", "name", "active_turn_id",
-                                         "updated_at"],
+    for r in reader.rows(SystemUpdate, ["id", "kind", "target_sha", "status", "updated_at"],
+                         lambda m: m.status == SYSTEM_UPDATE_PREPARING):
+        add(SYSTEM_UPDATE_PREPARE, r.id, None, r.status,
+            f"console {r.kind} to {r.target_sha[:12]} — the build resumes from its last step",
+            r.updated_at, RESUMES, "resume_system_updates")
+
+    for r in reader.rows(Agent, ["id", "workspace_id", "name", "teardown_pending_at"],
+                         lambda m: m.status == "deleted",
+                         lambda m: m.teardown_pending_at.isnot(None)):
+        add(AGENT_TEARDOWN, r.id, r.workspace_id, "teardown_pending",
+            f"deleted agent {r.name} — AWS still holds its resource; the Agent-DLC "
+            "tick's teardown sweep keeps retrying the delete", r.teardown_pending_at,
+            RESTART_SAFE, "dlc.scheduler.sweep_deleted_resources")
+    for r in reader.rows(CodingRepo, ["id", "workspace_id", "name", "active_turn_id",
+                                      "updated_at"],
                          lambda m: m.status == "running"):
         add(CODING_TURN, r.id, r.workspace_id, f"turn {r.active_turn_id or '(starting)'}",
-            f"coding project {r.name} — the turn runs on in its microVM; the watcher "
+            f"coding repo {r.name} — the turn runs on in its microVM; the watcher "
             "settles it after the restart", r.updated_at, RESTART_SAFE,
             "coding_watcher.start")
 

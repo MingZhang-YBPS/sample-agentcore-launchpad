@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 import app.routers.agents as agents_router
 import app.routers.public_api as public_api
@@ -30,6 +31,7 @@ from app.models.ledger import (
 from app.optimization.models import Experiment, RuntimeCanary
 from app.routers.workspaces import WORKSPACE_HEADER
 from app.services import users as users_service
+from tests.conftest import TEST_DEPARTMENT
 
 ADMIN_CREDS = {"username": "operator", "password": "s3cret-pass"}
 MEMBER_CREDS = {
@@ -94,6 +96,19 @@ def _workspace(workspace_id: str = OTHER, region: str = "us-west-1", **columns) 
                 resources=columns.pop("resources", {"gateway_id": "gw-2"}),
                 **columns,
             )
+        )
+        # its own business project, so a new agent there is filed under one
+        # (services/agent_project) instead of the workspace's `default` project
+        db.execute(
+            text("INSERT INTO projects (id, name, description, department_id, status,"
+                 " is_default, created_at, updated_at) VALUES (:p, :p, '', :d, 'active', 0,"
+                 " '2026-01-01 00:00:00', '2026-01-01 00:00:00')"),
+            {"p": f"proj-{workspace_id}", "d": TEST_DEPARTMENT},
+        )
+        db.execute(
+            text("INSERT INTO project_workspaces (project_id, workspace_id,"
+                 " is_workspace_default, enabled_at) VALUES (:p, :w, 1, '2026-01-01 00:00:00')"),
+            {"p": f"proj-{workspace_id}", "w": workspace_id},
         )
         db.commit()
     finally:
@@ -184,10 +199,9 @@ class TestHeaderResolution:
         assert blind.status_code == 403 and blind.json()["code"] == "workspace.forbidden"
         assert named.status_code == 403 and named.json()["code"] == "workspace.forbidden"
         # ...and the switcher has nothing to offer
-        assert member.get("/api/workspaces").json() == {
-            "workspaces": [],
-            "all_workspaces": False,
-        }
+        body = member.get("/api/workspaces").json()
+        body.pop("suggested_regions")  # form suggestions, not workspace data
+        assert body == {"workspaces": [], "all_workspaces": False}
 
     def test_a_member_is_not_told_which_role_reaches_a_workspace(self, gated_app):
         """The switcher needs to know a workspace is cross-account (it is a

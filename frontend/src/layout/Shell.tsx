@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { matchPath, Outlet, useLocation } from "react-router-dom";
 
+import { scopeKey, useProject } from "../workspace/project-context";
 import { useWorkspace } from "../workspace/workspace-context";
 import { NAV_ENTRIES, navEntryFor, ROUTE_PATHS } from "./nav";
 import { RouteChunk } from "./RouteChunk";
@@ -22,6 +23,7 @@ export function Shell() {
   const { t } = useTranslation();
   const { health, status: healthStatus } = useHealth();
   const { current } = useWorkspace();
+  const { current: project } = useProject();
 
   return (
     <>
@@ -33,10 +35,10 @@ export function Shell() {
       <div className="layout">
         <Sidebar health={health} />
         <main>
-          {/* Workspace-bound pages refetch on selection. Announcement drafts
+          {/* Workspace-bound pages refetch on a workspace or project switch. Announcement drafts
               belong to the installation and must survive a workspace switch. */}
           <div className="view" key={
-            location.pathname === "/announcements" ? "announcements" : current?.id ?? "none"
+            location.pathname === "/announcements" ? "announcements" : scopeKey(current?.id, project?.id)
           }>
             {/* Pages are lazily loaded (see App.tsx): the pending line and the
                 chunk-load failure state belong inside the content area, and the

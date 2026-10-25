@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useSearchParams } from "react-router-dom";
 
-import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
-import { rememberBudgetNotice } from "../../../lib/budgets";
-import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
-import { loadModelDefaults, STATIC_MODEL_DEFAULTS, withCurrentModel } from "../../../lib/model-defaults";
+import { api, dlcApi, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
+import { evalCostApi, usd } from "../../../lib/api/evalCost";
+import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
+import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
+import { actorModelOptions, CLOUD_VALUE_PREFIX, defaultActorModel } from "../../../lib/evaluation";
 import { builtinsNotInCatalog, evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
+import { useModelCatalog } from "../../../lib/model-catalog";
+import { adoptModelDefault, STATIC_MODEL_DEFAULTS, useModelDefaultsArrival } from "../../../lib/model-defaults";
+import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
 import { CustomUnavailableNote } from "../../EvaluatorPicker";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -30,6 +34,7 @@ import {
 import { backTarget } from "./back";
 import { LogSourceFields } from "./LogSourceFields";
 import { LogStreamPicker } from "./LogStreamPicker";
+import { isPassiveSource, passiveEstimateBody } from "./passiveCost";
 import { SessionPicker } from "./SessionPicker";
 import { StrategySwitch } from "./StrategySwitch";
 
@@ -65,9 +70,13 @@ interface Draft {
   evaluators: string[];
   /** insight types, insights mode only */
   insights: string[];
+  /** pass^k: each dataset scenario runs this many times (1 = off) */
+  repeats: number;
+  confirmCost: boolean;
 }
 
-const EMPTY: Draft = {
+// a function, not a constant: the actor is the configured default once loaded
+const emptyDraft = (): Draft => ({
   name: "",
   description: "",
   target: "agent",
@@ -81,11 +90,12 @@ const EMPTY: Draft = {
   logSessionIds: [],
   logHours: 168,
   dataset: "",
-  // seedDraft replaces it with the platform's configured actor (GET /api/model-defaults)
-  actorModelId: STATIC_MODEL_DEFAULTS.actor_model_id,
+  actorModelId: defaultActorModel(),
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
   insights: [...INSIGHT_TYPES],
-};
+  repeats: 1,
+  confirmCost: false,
+});
 
 /**
  * Prefill from `?from=run:<id>` (copy), or from hand-off params
@@ -93,12 +103,6 @@ const EMPTY: Draft = {
  * next steps). A copy of an online config opens the continuous form (`OnlineEditor`).
  */
 async function seedDraft(from: string | null, handoff: Handoff, copySuffix: string): Promise<Draft> {
-  // never rejects: a failed read falls back to the static defaults
-  const actorModelId = (await loadModelDefaults()).actor_model_id;
-  return { ...(await seedDraftFields(from, handoff, copySuffix)), actorModelId };
-}
-
-async function seedDraftFields(from: string | null, handoff: Handoff, copySuffix: string): Promise<Draft> {
   if (from?.startsWith("run:")) {
     const run = await api.getEvaluationRun(from.slice(4));
     const name = run.dataset_name ?? "";
@@ -106,14 +110,14 @@ async function seedDraftFields(from: string | null, handoff: Handoff, copySuffix
     const target = run.log_source
       ? { target: "cloudwatch" as const, serviceName: run.log_source.service_name, logGroups: run.log_source.log_group_names }
       : { agentId: run.agent_id };
-    const base: Draft = { ...EMPTY, name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", ...target, ...copied };
+    const base: Draft = { ...emptyDraft(), name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", ...target, ...copied };
     if (name.startsWith("window:")) return { ...base, source: "window", lookbackHours: parseInt(name.slice(7), 10) || 24 };
     if (name.startsWith("cloud:") && run.dataset_id) return { ...base, source: "dataset", dataset: `${CLOUD_VALUE_PREFIX}${run.dataset_id}` };
     if (run.dataset_id) return { ...base, source: "dataset", dataset: run.dataset_id };
     if (name.startsWith("logs:")) return { ...base, source: "logs", logSessionIds: run.session_ids };
     return { ...base, source: "sessions", sessionIds: run.session_ids };
   }
-  const seeded: Draft = { ...EMPTY, agentId: handoff.agent ?? "" };
+  const seeded: Draft = { ...emptyDraft(), agentId: handoff.agent ?? "" };
   if (handoff.evaluators.length) seeded.evaluators = handoff.evaluators;
   if (handoff.dataset) return { ...seeded, source: "dataset", dataset: handoff.dataset };
   return seeded;
@@ -153,8 +157,23 @@ export function TaskWizard() {
   // bumped by the trajectory picker's refresh: re-reads past the 60 s session cache
   const [sessionsForce, setSessionsForce] = useState(0);
 
+  // The actor is seeded before the configured defaults may have arrived: adopt the
+  // configured actor (whichever comes last, seed or defaults) unless the user picked one.
+  const actorTouched = useRef(false);
+  const [actorCustom, setActorCustom] = useState(false);
+  useModelCatalog();
+  const adoptActor = (d: Draft, configured: string | undefined): Draft => ({
+    ...d,
+    actorModelId: adoptModelDefault(
+      d.actorModelId, STATIC_MODEL_DEFAULTS.actor_model_id, configured ?? "", actorTouched.current,
+    ),
+  });
+  const modelDefaults = useModelDefaultsArrival((d) => {
+    setDraft((cur) => cur && adoptActor(cur, d.actor_model_id));
+  });
   useEffect(() => {
-    if (seed.data && draft === null) setDraft(seed.data);
+    if (seed.data && draft === null) setDraft(adoptActor(seed.data, modelDefaults?.actor_model_id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- adoptActor reads refs/props only
   }, [seed.data, draft]);
   // a copied run or a handoff can carry a built-in this region does not offer: it is
   // not in the picker (so it could not be unticked) and would fail the whole batch
@@ -188,6 +207,26 @@ export function TaskWizard() {
     `cw-window:${cwReady}:${draft?.source}:${cwService}:${draft?.logGroups.join("|")}:${draft?.lookbackHours}`,
   );
 
+  // pass^k replays dataset scenarios against an agent; it has no meaning for past sessions.
+  // Computed before the early returns below, so the hook order never changes.
+  const repeatable =
+    !!draft && draft.target === "agent" && draft.source === "dataset" && draft.mode === "evaluators" &&
+    !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
+  const estimate = useLoad(
+    () =>
+      repeatable && draft?.agentId
+        ? dlcApi.estimate({ agent_id: draft.agentId, dataset_id: draft.dataset, evaluators: draft.evaluators, repeats: draft.repeats })
+        : Promise.resolve(null),
+    `task-estimate:${repeatable}:${draft?.agentId}:${draft?.dataset}:${draft?.repeats}:${draft?.evaluators.join(",")}`,
+  );
+  // eval-cost §1.1: a passive run is priced (and confirmed) too; this form only creates
+  // one-off runs — the continuous (online) config is priced by `OnlineEditor`
+  const passiveBody = repeatable || !draft ? null : passiveEstimateBody({ ...draft, strategy: "history", sampling: 0 });
+  const passiveKey = passiveBody ? JSON.stringify(passiveBody) : "none";
+  const passiveEstimate = useLoad(
+    () => (passiveBody ? evalCostApi.estimate(passiveBody) : Promise.resolve(null)),
+    `task-passive-estimate:${passiveKey}`,
+  );
   if (seed.error) return <Alert tone="error">{seed.error}</Alert>;
   if (!draft) return <Spin />;
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
@@ -233,6 +272,9 @@ export function TaskWizard() {
     if (insights && draft.insights.length === 0) return setError(t("v2.tasks.errInsights"));
     if (!insights && draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
     if (!insights && draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
+    const priced = passiveBody ? passiveEstimate.data : null;
+    if (!insights && priced?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: usd(priced.max_usd) }));
+    if (!insights && priced?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
     setSubmitting(true);
     setError(null);
     try {
@@ -246,7 +288,7 @@ export function TaskWizard() {
               : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
               ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
               : { dataset_id: draft.dataset, ...(simulated ? { actor_model_id: draft.actorModelId } : {}) };
-      const run = await api.v2CreateRun({
+      const run = await withStorageConfirm((confirm) => api.v2CreateRun({
         ...(draft.target === "cloudwatch"
           ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
           : { agent_id: draft.agentId }),
@@ -254,14 +296,18 @@ export function TaskWizard() {
         description: draft.description || undefined,
         ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
         ...scope,
-      });
+        ...(repeatable ? { repeats: draft.repeats } : {}),
+        // a replay and a passive run (session_ids / lookback_hours) alike
+        ...(!insights && (repeatable || isPassiveSource(draft.source)) ? { confirm_cost: draft.confirmCost } : {}),
+        ...storageFlag(confirm),
+      }));
       toast("success", t("v2.tasks.createdRun"));
-      // its estimate is more than the creator has left: the detail page says so
-      rememberBudgetNotice(run.id, run.budget_notice);
       // the new task's Back returns to where the wizard was opened from
       setParams({ view: "detail", kind: "run", id: run.id }, { state: location.state });
     } catch (err) {
-      setError(errorMessage(err));
+      const refusal = costRefusal(err);
+      if (refusal?.kind === "confirm") set({ confirmCost: false });
+      setError(refusal ? refusalText(t, refusal) : errorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -454,12 +500,29 @@ export function TaskWizard() {
                   <div style={{ marginTop: 16 }}>
                     <Field label={t("v2.tasks.actorModel")} required hint={t("v2.tasks.actorModelHint")}>
                       <Select
-                        value={draft.actorModelId}
-                        onChange={(v) => set({ actorModelId: v })}
+                        value={actorCustom ? CUSTOM_MODEL_OPTION : draft.actorModelId}
+                        onChange={(v) => {
+                          actorTouched.current = true;
+                          setActorCustom(v === CUSTOM_MODEL_OPTION);
+                          if (v !== CUSTOM_MODEL_OPTION) set({ actorModelId: v });
+                        }}
                         testId="v2-task-actor-model"
                         mono
-                        options={withCurrentModel(ACTOR_MODELS, draft.actorModelId).map((m) => ({ value: m, label: m }))}
+                        options={[
+                          ...actorModelOptions(modelDefaults, draft.actorModelId).map((m) => ({ value: m, label: m })),
+                          { value: CUSTOM_MODEL_OPTION, label: t("models.picker.custom") },
+                        ]}
                       />
+                      {actorCustom && (
+                        <input
+                          className="v2-input mono"
+                          style={{ marginTop: 8 }}
+                          data-testid="v2-task-actor-model-custom"
+                          value={draft.actorModelId}
+                          placeholder={t("models.picker.customPlaceholder", { example: defaultActorModel(modelDefaults) })}
+                          onChange={(e) => set({ actorModelId: e.target.value.trim() })}
+                        />
+                      )}
                     </Field>
                   </div>
                 )}
@@ -613,6 +676,82 @@ export function TaskWizard() {
             <Alert>{draft.source === "dataset" ? t("evalPage.newRun.insightsHint") : t("evalPage.newRun.insightsWindowHint")}</Alert>
             {fewSessions && <Alert tone="warn">{t("v2.tasks.insightsFewSessions", { min: MIN_INSIGHT_SESSIONS })}</Alert>}
           </div>
+        </Card>
+      )}
+
+      {step === 1 && repeatable && (
+        <Card title={t("v2.tasks.passK")} sub={t("v2.tasks.passKSub")} testId="v2-task-passk">
+          <div className="v2-form cols-2">
+            <Field label={t("v2.tasks.repeats")} hint={t("v2.tasks.repeatsHint")}>
+              <input
+                className="v2-input"
+                type="number"
+                min={1}
+                max={10}
+                value={draft.repeats}
+                onChange={(e) => set({ repeats: Math.max(1, Math.min(10, Number(e.target.value) || 1)), confirmCost: false })}
+              />
+            </Field>
+            <Field label={t("v2.dlc.cost.estimate")} hint={t("v2.dlc.cost.basisHint")}>
+              {estimate.loading ? (
+                <Spin />
+              ) : estimate.data ? (
+                <span>
+                  <b>{estimate.data.total_usd === null ? t("v2.dlc.cost.unknown") : `$${estimate.data.total_usd.toFixed(2)}`}</b>{" "}
+                  {t("v2.dlc.cost.sessions", { sessions: estimate.data.sessions, minutes: estimate.data.duration_minutes ?? 0 })}
+                  {estimate.data.unpriced && <Tag tone="orange">{t("v2.dlc.cost.unpriced")}</Tag>}
+                  {estimate.data.over_limit && <Tag tone="red">{t("v2.dlc.cost.overLimit")}</Tag>}
+                </span>
+              ) : (
+                "—"
+              )}
+            </Field>
+          </div>
+          {draft.repeats > 1 && <Alert tone="warn">{t("v2.dlc.release.passKCost", { k: draft.repeats })}</Alert>}
+          {estimate.data?.confirm_required && (
+            <label className="v2-check">
+              <input type="checkbox" checked={draft.confirmCost} onChange={(e) => set({ confirmCost: e.target.checked })} />{" "}
+              {t("v2.tasks.confirmCost", { usd: estimate.data.total_usd ?? "—" })}
+            </label>
+          )}
+        </Card>
+      )}
+
+      {step === 1 && passiveBody && (
+        <Card
+          title={t("v3.evalCost.estimateTitle")}
+          sub={passiveBody.scope === "online" ? t("v3.evalCost.perDay") : t("v3.evalCost.perRun")}
+          testId="v2-task-cost"
+        >
+          {passiveEstimate.loading && !passiveEstimate.data ? (
+            <Spin />
+          ) : !passiveEstimate.data ? (
+            <Alert tone="warn">{t("v3.evalCost.estimateUnavailable")}</Alert>
+          ) : (
+            <>
+              <span>
+                <b>
+                  {passiveEstimate.data.total_usd === null ? t("v3.evalCost.unknown") : usd(passiveEstimate.data.total_usd)}
+                  {passiveBody.scope === "online" && passiveEstimate.data.total_usd !== null && ` ${t("v3.evalCost.slashDay")}`}
+                </b>{" "}
+                {passiveBody.scope === "online"
+                  ? t("v3.evalCost.sessionsPerDay", { count: passiveEstimate.data.sessions })
+                  : t("v3.evalCost.sessionsRun", { count: passiveEstimate.data.sessions, minutes: passiveEstimate.data.duration_minutes ?? 0 })}
+                {passiveEstimate.data.sessions_basis === "history_7d" && ` · ${t("v3.evalCost.sessionsFromHistory")}`}{" "}
+                {(passiveEstimate.data.unpriced_models?.length ?? 0) > 0 && (
+                  <Tag tone="orange">{t("v3.evalCost.unpricedCount", { count: passiveEstimate.data.unpriced_models?.length ?? 0 })}</Tag>
+                )}
+                {passiveEstimate.data.over_limit && <Tag tone="red">{t("v3.evalCost.overLimit", { max: usd(passiveEstimate.data.max_usd) })}</Tag>}
+              </span>
+              {passiveEstimate.data.over_limit && <Alert tone="error">{t("v3.evalCost.overLimitHint", { max: usd(passiveEstimate.data.max_usd) })}</Alert>}
+              {passiveEstimate.data.confirm_required && !passiveEstimate.data.over_limit && (
+                <label className="v2-check">
+                  <input type="checkbox" checked={draft.confirmCost} onChange={(e) => set({ confirmCost: e.target.checked })} />{" "}
+                  {t("v3.evalCost.confirm", { usd: usd(passiveEstimate.data.total_usd) })}
+                </label>
+              )}
+            </>
+          )}
         </Card>
       )}
 

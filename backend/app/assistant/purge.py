@@ -70,6 +70,7 @@ from app.assistant import evaluation_assets as assets
 from app.core.config import DATA_DIR
 from app.core.db import SessionLocal
 from app.core.errors import AppError
+from app.core.project_scope import project_context
 from app.deployer.pipeline import _append_log
 from app.evaluation.models import EvalDataset
 from app.models.assistant import (
@@ -360,15 +361,19 @@ def _ledger_only(fp: dict[str, Any]) -> bool:
 
 
 def clearing_job_for_agent(db: Session, agent_id: str) -> Job | None:
-    """The live purge job whose conversation deployed ``agent_id``, if any."""
-    conversation_ids = [r[0] for r in db.query(AssistantProposal.conversation_id)
-                        .filter(AssistantProposal.agent_id == agent_id).distinct().all()]
-    for cid in conversation_ids:
-        row = db.get(AssistantConversation, cid)
-        if row is not None:
-            job = live_purge_job(db, row)
-            if job is not None:
-                return job
+    """The live purge job whose conversation deployed ``agent_id``, if any.
+
+    Workspace-wide (``project_context(None)``): a safety refusal fails safe, not
+    filtered — the caller already reached the Agent, and only a job id comes out."""
+    with project_context(None):
+        conversation_ids = [r[0] for r in db.query(AssistantProposal.conversation_id)
+                            .filter(AssistantProposal.agent_id == agent_id).distinct().all()]
+        for cid in conversation_ids:
+            row = db.get(AssistantConversation, cid)
+            if row is not None:
+                job = live_purge_job(db, row)
+                if job is not None:
+                    return job
     return None
 
 
@@ -951,7 +956,34 @@ def execute_purge_job(
     job_id: str, *, resume: bool = False, workspace: WorkspaceContext | None = None,
     clients: assets.ClientFactory = assets._default_clients,
 ) -> None:
-    """Run (or, with ``resume=True``, adopt a crashed) purge job. Never raises."""
+    """Run (or, with ``resume=True``, adopt a crashed) purge job. Never raises.
+
+    Runs as the job's project (a worker thread starts with none), so the cleanup paths
+    it reuses read and stamp exactly what a request in that project would."""
+    with project_context(_job_project(job_id)):
+        _execute_purge_job(job_id, resume=resume, workspace=workspace, clients=clients)
+
+
+def _job_project(job_id: str) -> str | None:
+    """The purge job's project — else its conversation's (a job is stamped from the
+    request's project, so the fallback only covers a row older than projects)."""
+    db = SessionLocal()
+    try:
+        with project_context(None):
+            job = db.get(Job, job_id)
+            if job is None or job.project_id:
+                return job.project_id if job is not None else None
+            cid = (job.payload or {}).get("conversation_id")
+            row = db.get(AssistantConversation, cid) if cid else None
+            return row.project_id if row is not None else None
+    finally:
+        db.close()
+
+
+def _execute_purge_job(
+    job_id: str, *, resume: bool, workspace: WorkspaceContext | None,
+    clients: assets.ClientFactory,
+) -> None:
     db = SessionLocal()
     lock = None
     try:

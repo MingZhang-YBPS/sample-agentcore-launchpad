@@ -1,31 +1,60 @@
 import type { ChatAttachmentMetadata, FeedbackVerdict } from "../../../lib/api";
-import type { BudgetRefusalCode } from "../../../lib/budgets";
 import type { PolicyDeny } from "../../../lib/policy-deny";
+import type { ToolApproval } from "../../../lib/tool-approval";
 import type { AuthAsk } from "../../../lib/user-grants";
 
 export { retryPromptFor } from "../../../lib/user-grants";
 
 export interface ChatMessage {
-  kind: "user" | "agent" | "tool" | "memory" | "error" | "auth" | "policy";
+  kind: "user" | "agent" | "tool" | "memory" | "error" | "auth" | "policy" | "approval";
   text: string;
   name?: string;
   streaming?: boolean;
   attachments?: ChatAttachmentMetadata[];
   /** kind "auth": the as_user consent ask */
   auth?: AuthAsk;
-  /** kind "agent": ledger id of the persisted answer — what a thumbs verdict attaches to */
+  /** ledger id of a persisted agent answer — what a thumbs verdict attaches to */
   id?: number;
-  /** kind "agent": the viewer's current thumbs verdict */
+  /** the viewer's current verdict on this answer */
   verdict?: FeedbackVerdict | null;
+  /** T35: a curated answer (rule), not the model, produced this reply */
+  curated?: boolean;
   /** kind "policy": a Gateway tool call a Cedar policy denied */
   policy?: PolicyDeny;
-  /** kind "error": the send was refused for budget (402) — the row links to My usage */
-  budget?: BudgetRefusalCode;
+  /** kind "approval" (SB-2): a tool call paused for the user's approval, or refused */
+  approval?: ToolApproval;
+  /** kind "user": the tools this turn approved (a retry of the turn sends them again) */
+  approved?: string[];
+  /** kind "tool" of a live turn: the call's run (status, duration); a restored row has none */
+  run?: import("../../../lib/chat").ToolRun;
+  /** the live turn a tool row belongs to (tool ids repeat across turns) */
+  turn?: number;
+  /** kind "agent": the parsed answer of an agent with an output schema (SB-1 `structured` event) */
+  structured?: unknown;
+}
+
+/** Attach a `structured` event's value to the turn's answer: the latest agent message
+ * after the latest user message, or a new (empty-text) answer when none streamed. */
+export function attachStructured<M extends ChatMessage>(messages: M[], value: unknown): M[] {
+  const next = [...messages];
+  for (let i = next.length - 1; i >= 0; i--) {
+    if (next[i].kind === "user") break;
+    if (next[i].kind === "agent") {
+      next[i] = { ...next[i], structured: value };
+      return next;
+    }
+  }
+  return [...next, { kind: "agent", text: "", structured: value } as M];
 }
 
 /** Append a streamed delta. An auth card asked mid-answer sits after the open
  * bubble without closing it, so the text around the card stays one bubble. */
-export function appendDelta(messages: ChatMessage[], text: string, open: boolean): ChatMessage[] {
+export function appendDelta(
+  messages: ChatMessage[],
+  text: string,
+  open: boolean,
+  curated = false,
+): ChatMessage[] {
   const next = [...messages];
   let i = next.length - 1;
   while (i >= 0 && next[i].kind === "auth") i -= 1;
@@ -33,9 +62,31 @@ export function appendDelta(messages: ChatMessage[], text: string, open: boolean
   if (open && bubble?.kind === "agent" && bubble.streaming) {
     next[i] = { ...bubble, text: bubble.text + text };
   } else {
-    next.push({ kind: "agent", text, streaming: true });
+    // T35: `curated` marks a bubble a curated answer rule wrote, not the model
+    next.push(curated ? { kind: "agent", text, streaming: true, curated } : { kind: "agent", text, streaming: true });
   }
   return next;
+}
+
+/**
+ * The error item a turn retry attaches to: the latest error after the thread's last
+ * user message (only the latest turn can be retried), and whether that turn carried
+ * files (a turn with attachments is not retried — the user sends it again). Null
+ * when the latest turn shows no error.
+ */
+export function latestRetryTarget(messages: ChatMessage[]): { index: number; attachments: boolean } | null {
+  let user = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].kind === "user") {
+      user = i;
+      break;
+    }
+  }
+  if (user < 0) return null;
+  for (let i = messages.length - 1; i > user; i -= 1) {
+    if (messages[i].kind === "error") return { index: i, attachments: !!messages[user].attachments?.length };
+  }
+  return null;
 }
 
 /** The console stream's `saved {message_id}` event: the open answer was just

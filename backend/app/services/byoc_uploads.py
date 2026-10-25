@@ -24,10 +24,18 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from botocore.exceptions import ClientError
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from app.core.errors import AppError, NotFoundError, cleanup_error, is_not_found
+from app.core.errors import (
+    AppError,
+    NotFoundError,
+    aws_error_code,
+    cleanup_error,
+    is_not_found,
+)
+from app.core.project_scope import current_project
 from app.core.runtime_target import TARGET_PYTHON
 from app.services import requirements_txt
 from app.services.workspace import WorkspaceContext
@@ -55,6 +63,11 @@ _REQUIREMENTS_MAX_BYTES = 256 * 1024
 _SDK_SCAN_MAX_BYTES = 1024 * 1024
 _SDK_SCAN_MAX_FILES = 400
 _SDK_MARKERS = (b"BedrockAgentCoreApp", b"@app.entrypoint")
+# The ADOT distro carries the `opentelemetry-instrument` launcher a code zip
+# needs to emit spans; without it the agent never shows up in Observability.
+ADOT_DISTRIBUTION = "aws-opentelemetry-distro"
+_ADOT_MODULE = "aws_opentelemetry_distro"
+_REQ_NAME_RE = re.compile(r"^\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
 
 
 def _error(code: str, message: str, status: int = 422) -> AppError:
@@ -65,12 +78,27 @@ def new_upload_id() -> str:
     return uuid.uuid4().hex
 
 
-def source_key(workspace_id: str, upload_id: str) -> str:
-    return f"byoc/{workspace_id}/{upload_id}/source.zip"
+def source_key(workspace_id: str, upload_id: str, project_id: str | None = None) -> str:
+    """The staged zip's key; an isolated ``project_id``'s sits under its
+    `projects/<pid>/` prefix (projects design §10.10)."""
+    from app.services import project_storage
+
+    return project_storage.artifact_key(project_id, f"byoc/{workspace_id}/{upload_id}/source.zip")
 
 
-def manifest_key(workspace_id: str, upload_id: str) -> str:
-    return f"byoc/{workspace_id}/{upload_id}/manifest.json"
+def manifest_key(workspace_id: str, upload_id: str, project_id: str | None = None) -> str:
+    from app.services import project_storage
+
+    return project_storage.artifact_key(
+        project_id, f"byoc/{workspace_id}/{upload_id}/manifest.json")
+
+
+def _candidate_keys(key_of: Any, workspace_id: str, upload_id: str) -> list[str]:
+    """Where an upload of the current project may be: under the project prefix
+    (staged while isolated), else the workspace key (staged before the project was
+    isolated, or any shared project's)."""
+    keys = [key_of(workspace_id, upload_id, current_project()), key_of(workspace_id, upload_id)]
+    return list(dict.fromkeys(keys))
 
 
 async def upload_body_limit_middleware(request: Request, call_next: Any) -> Any:
@@ -173,12 +201,63 @@ def validate_and_detect(path: Path) -> dict[str, Any]:
             "has_dockerfile": "Dockerfile" in rel,
             "agentcore_sdk_detected": _scan_for_sdk(zf, root, rel),
         }
+        detected.update(_detect_adot(zf, root, rel))
         return {
             "entries_count": len(infos),
             "uncompressed_bytes": total,
             "root_prefix": root,
             "detected": detected,
         }
+
+
+def _normalize_dist(name: str) -> str:
+    """PEP 503 name normalization: AWS_OpenTelemetry.Distro → aws-opentelemetry-distro."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def requirements_mention_adot(text: str) -> bool:
+    """True when a requirement line names the ADOT distro — any version
+    specifier, extras or marker; comment lines and option lines don't count."""
+    for line in text.splitlines():
+        line = line.split(" #", 1)[0].strip()
+        if not line or line.startswith(("#", "-")):
+            continue
+        match = _REQ_NAME_RE.match(line)
+        if match and _normalize_dist(match.group(1)) == ADOT_DISTRIBUTION:
+            return True
+    return False
+
+
+def _detect_adot(zf: zipfile.ZipFile, root: str, rel_names: list[str]) -> dict[str, Any]:
+    """``{adot_detected, adot_source}`` — the distro is either vendored at the
+    zip root (its package or dist-info directory) or listed in the root
+    requirements.txt. Vendored wins: it ships the launcher even when the
+    deploy skips the requirements install."""
+    for rel in rel_names:
+        if "/" not in rel:
+            continue
+        top = rel.split("/", 1)[0]
+        # aws_opentelemetry_distro-0.19.0.dist-info → aws-opentelemetry-distro
+        dist = _normalize_dist(top.split("-", 1)[0]) if top.endswith(".dist-info") else None
+        if top == _ADOT_MODULE or dist == ADOT_DISTRIBUTION:
+            return {"adot_detected": True, "adot_source": "vendored"}
+    if "requirements.txt" in rel_names:
+        info = zf.getinfo(f"{root}requirements.txt")
+        if info.file_size <= _REQUIREMENTS_MAX_BYTES and requirements_mention_adot(
+            zf.read(info).decode("utf-8", errors="replace")
+        ):
+            return {"adot_detected": True, "adot_source": "requirements"}
+    return {"adot_detected": False, "adot_source": None}
+
+
+def adot_launcher(detected: dict[str, Any] | None, install_requirements: bool) -> bool:
+    """Whether a code_zip deploy wraps the entrypoint in `opentelemetry-instrument`:
+    the distro must end up in the bundle — vendored, or installed from the
+    requirements. Manifests staged before the check existed read as False."""
+    detected = detected or {}
+    if not detected.get("adot_detected"):
+        return False
+    return detected.get("adot_source") == "vendored" or install_requirements
 
 
 def _requirements_text(path: Path, root: str) -> str | None:
@@ -264,6 +343,8 @@ def stage_upload(
     manifest = {
         "upload_id": upload_id,
         "workspace_id": workspace.id,
+        # the project it was staged in: a spec of another project may not deploy it
+        "project_id": current_project(),
         "sha256": sha256,
         "size_bytes": size_bytes,
         "original_filename": filename,
@@ -272,10 +353,11 @@ def stage_upload(
         **report,
     }
     s3 = s3_client or workspace.client("s3")
-    s3.upload_file(str(tmp_zip), bucket, source_key(workspace.id, upload_id))
+    project_id = manifest["project_id"]
+    s3.upload_file(str(tmp_zip), bucket, source_key(workspace.id, upload_id, project_id))
     s3.put_object(
         Bucket=bucket,
-        Key=manifest_key(workspace.id, upload_id),
+        Key=manifest_key(workspace.id, upload_id, project_id),
         Body=json.dumps(manifest, ensure_ascii=False).encode("utf-8"),
         ContentType="application/json",
     )
@@ -295,13 +377,18 @@ def get_manifest(
             "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
     s3 = s3_client or workspace.client("s3")
-    try:
-        body = s3.get_object(Bucket=bucket, Key=manifest_key(workspace.id, upload_id))
-    except Exception as exc:  # NoSuchKey and friends → uniform 404
-        if type(exc).__name__ in ("NoSuchKey", "ClientError", "ResourceNotFoundException"):
-            raise NotFoundError("byoc.upload_not_found", "upload not found") from exc
-        raise
-    return json.loads(body["Body"].read())
+    keys = _candidate_keys(manifest_key, workspace.id, upload_id)
+    for index, key in enumerate(keys):
+        try:
+            body = s3.get_object(Bucket=bucket, Key=key)
+        except Exception as exc:  # NoSuchKey and friends → uniform 404
+            if type(exc).__name__ in ("NoSuchKey", "ClientError", "ResourceNotFoundException"):
+                if index + 1 < len(keys):
+                    continue
+                raise NotFoundError("byoc.upload_not_found", "upload not found") from exc
+            raise
+        return json.loads(body["Body"].read())
+    raise NotFoundError("byoc.upload_not_found", "upload not found")  # pragma: no cover
 
 
 def download_upload(
@@ -318,7 +405,20 @@ def download_upload(
         )
     s3 = s3_client or workspace.client("s3")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    s3.download_file(bucket, source_key(workspace_id, upload_id), str(dest))
+    keys = _candidate_keys(source_key, workspace_id, upload_id)
+    for key in keys[:-1]:
+        try:
+            s3.download_file(bucket, key, str(dest))
+            return
+        except Exception as exc:  # not under the project prefix → the workspace key
+            if not (is_not_found(exc) or _is_404(exc)):
+                raise
+    s3.download_file(bucket, keys[-1], str(dest))
+
+
+def _is_404(exc: Exception) -> bool:
+    """`download_file` reports a missing object as a ClientError with code 404."""
+    return isinstance(exc, ClientError) and aws_error_code(exc) in ("404", "NotFound")
 
 
 def extract_zip(zip_path: Path, dest: Path) -> Path:
@@ -356,7 +456,9 @@ def delete_upload_objects(
     if not bucket:
         return
     s3 = s3_client or workspace.client("s3")
-    for key in (source_key(workspace_id, upload_id), manifest_key(workspace_id, upload_id)):
+    keys = (_candidate_keys(source_key, workspace_id, upload_id)
+            + _candidate_keys(manifest_key, workspace_id, upload_id))
+    for key in keys:
         try:
             s3.delete_object(Bucket=bucket, Key=key)
         except Exception as exc:  # noqa: BLE001 — cleanup must never block a delete

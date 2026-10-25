@@ -4,11 +4,12 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Path
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError
-from app.models.ledger import PolicyDecision
+from app.core.errors import AppError, NotFoundError
+from app.models.ledger import ChatSession, PolicyDecision
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.governance import (
     EngineRequest,
@@ -25,8 +26,9 @@ from app.schemas.governance import (
 from app.schemas.governance import (
     GenerationRequest as ScopedGenerationRequest,
 )
+from app.services import access, governance_evidence, mcp_client
 from app.services import governance as governance_service
-from app.services import governance_evidence, mcp_client
+from app.services import guardrail as guardrail_service
 from app.services import traces as trace_service
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client, iam_client
@@ -399,7 +401,7 @@ def start_gateway_generation(
 )
 def get_gateway_generation(
     gateway_id: str = GATEWAY_ID,
-    generation_id: str = RESOURCE_ID,
+    generation_id: str = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return governance_service.generation_view(
@@ -552,6 +554,18 @@ def _determining_policy_id(exc: AppError) -> str | None:
     return determining_policy_id(f"{detail.get('message') or ''} {exc.message}")
 
 
+def _attached_engine(ws: WorkspaceScope) -> str:
+    """The Policy Engine attached to the workspace Gateway (`""` = none)."""
+    return governance_service.attached_policy_engine_id(control_client(ws.context), ws.context)
+
+
+NOT_ENFORCED_NOTE = (
+    "Not enforced: the workspace Gateway has no Policy Engine attached, so no Cedar "
+    "policy evaluated this call and nothing was recorded in the decision log. Attach "
+    "a Policy Engine under Governance to enforce policies."
+)
+
+
 @router.post("/governance/policy-test")
 def policy_test(
     req: PolicyTestRequest,
@@ -563,7 +577,14 @@ def policy_test(
     Only ALLOW and DENY are authorization decisions and get journaled. ERROR means
     the evaluation never happened (bad credentials, gateway unreachable, an
     unrecognised failure) and writes nothing — an error is not a decision.
+
+    Without a Policy Engine on the Gateway no Cedar policy decides anything: the call
+    still runs (its outcome is what the Gateway did), but the answer carries
+    `enforced: false` and a note, and nothing is journaled — a permit nobody
+    evaluated is not audit evidence.
     """
+    engine_id = _attached_engine(ws)
+    enforced = bool(engine_id)
     principal = f"{req.username}@{ROLE_BY_USER.get(req.username, 'user')}"
     outcome, reason = "ALLOW", None
     policy_id = None
@@ -583,7 +604,7 @@ def policy_test(
             policy_id = _determining_policy_id(exc)
 
     decision_id = None
-    if outcome in ("ALLOW", "DENY"):
+    if enforced and outcome in ("ALLOW", "DENY"):
         decision = PolicyDecision(
             workspace_id=ws.id,
             principal=principal,
@@ -602,6 +623,9 @@ def policy_test(
         "policy_id": policy_id,
         "decision_id": decision_id,
         "recorded": decision_id is not None,
+        "enforced": enforced,
+        "policy_engine_id": engine_id or None,
+        "note": None if enforced else NOT_ENFORCED_NOTE,
     }
 
 
@@ -637,8 +661,21 @@ def decision_log(
 def get_trace(
     session_id: str,
     lookback_hours: int = 3,
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    # CloudWatch answers for any session id in the account. Where the workspace
+    # holds several projects, a trace is readable only through a chat session of
+    # the current project (the query is auto-filtered): another project's reads
+    # as missing (design §5.9). A single-project workspace keeps reading any id.
+    if len(access.workspace_bindings(db, ws.id)) > 1 and db.scalar(
+        select(ChatSession.id)
+        .where(ChatSession.workspace_id == ws.id, ChatSession.session_id == session_id)
+        .limit(1)
+    ) is None:
+        raise NotFoundError(
+            "trace.not_found", f"session '{session_id}' not found", {"session_id": session_id}
+        )
     return trace_service.session_trace(
         session_id, ws.context, lookback_hours=lookback_hours
     )
@@ -708,3 +745,26 @@ def get_generation(
             for a in assets
         ],
     }
+
+
+# ── PII guardrail preset (roadmap T12) ──────────────────────────────────────────
+# The workspace-level resource an agent's `guardrail.enabled` opts into. Reading it
+# is a member's business (the wizard shows whether the preset exists); provisioning
+# it creates a real Bedrock resource, so it is the administrator's.
+
+
+@router.get("/governance/guardrail")
+def get_guardrail(scope: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
+    """Whether this workspace has the `launchpad-pii` guardrail, and its state."""
+    return guardrail_service.describe(scope.context)
+
+
+@router.post("/governance/guardrail", status_code=201)
+def provision_guardrail(
+    db: Session = Depends(get_db),
+    scope: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Create the preset (idempotent — an existing one is adopted by name)."""
+    guardrail_service.ensure_guardrail(scope.context, db=db)
+    db.commit()
+    return guardrail_service.describe(scope.context)

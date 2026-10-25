@@ -16,6 +16,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 from app.services.agentcore import harness as harness_api
 from app.services.agentcore import runtime as runtime_api
+from tests.conftest import TEST_PROJECT
 
 RUNTIME_ID = "hr_assistant-AbCdEf1234"
 HARNESS_ID = "hr-harness-XyZ987"
@@ -107,6 +108,7 @@ def _seed(
     try:
         row = Agent(
             workspace_id=workspace_id,
+            project_id=TEST_PROJECT,
             name=f"a-{method}",
             method=method,
             status=status,
@@ -427,3 +429,13 @@ def test_unknown_agent_is_404(client, stub):
     res = client.get("/api/agents/nope/versions")
     assert res.status_code == 404
     assert res.json()["code"] == "agent.not_found"
+
+
+def test_minted_canary_endpoint_names_are_recognised():
+    """The canaries mint `stable<id6>` / `treat<id6>` and `ctl<id6>` / `trt<id6>` (F3)."""
+    from app.services.agent_versions import is_canary_endpoint
+
+    for name in ("stable", "treatment", "stable1a2b3c", "treat1a2b3c", "ctl0f9e8d", "trt0f9e8d"):
+        assert is_canary_endpoint(name), name
+    for name in ("DEFAULT", "live", "candidate", "stablehello", "prod"):
+        assert not is_canary_endpoint(name), name

@@ -101,6 +101,24 @@ class LaunchpadBaseStack(Stack):
             timeout=Duration.minutes(30),
         )
         repo.grant_pull_push(build_project)
+        # an isolated project's images go to its own repository under the shared one
+        # (`launchpad-agents/<pid>`, projects design §10.10). The project_provision `ecr`
+        # stage cannot add this itself: the role is CDK-named, not `launchpad-*`.
+        build_project.add_to_role_policy(
+            iam.PolicyStatement(
+                sid="ProjectReposPullPush",
+                actions=[
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:BatchGetImage",
+                    "ecr:CompleteLayerUpload",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:InitiateLayerUpload",
+                    "ecr:PutImage",
+                    "ecr:UploadLayerPart",
+                ],
+                resources=[f"{repo.repository_arn}/*"],
+            )
+        )
         artifacts.grant_read(build_project)
 
         # ---- Cognito: users, roles for Cedar policy demos ----
@@ -152,8 +170,12 @@ class LaunchpadBaseStack(Stack):
             access_token_validity=Duration.hours(1),
         )
 
+        # The attachment names its group by string, which CloudFormation does not
+        # read as a reference: without an explicit dependency it may run before
+        # the group exists and fail with "Group not found".
+        groups: dict[str, cognito.CfnUserPoolGroup] = {}
         for role_name in ("platform-admin", "hr-analyst"):
-            cognito.CfnUserPoolGroup(
+            groups[role_name] = cognito.CfnUserPoolGroup(
                 self,
                 f"Group-{role_name}",
                 user_pool_id=pool.user_pool_id,
@@ -185,6 +207,7 @@ class LaunchpadBaseStack(Stack):
                 username=spec["username"],
             )
             attachment.add_dependency(user)
+            attachment.add_dependency(groups[spec["group"]])
 
         # ---- IAM: execution role assumed by AgentCore Runtime workloads ----
         exec_role = iam.Role(
@@ -227,7 +250,7 @@ class LaunchpadBaseStack(Stack):
                 ],
                 # Mantle models are hosted outside the stack's region, so the
                 # region segment stays wildcarded (see LAUNCHPAD_MANTLE_REGION).
-                resources=[f"arn:aws:bedrock-mantle:*:{self.account}:project/*"],
+                resources=[f"arn:{self.partition}:bedrock-mantle:*:{self.account}:project/*"],
             )
         )
         exec_role.add_to_policy(
@@ -355,7 +378,7 @@ class LaunchpadBaseStack(Stack):
                 sid="ManagedKbRetrieval",
                 actions=["bedrock:Retrieve", "bedrock:GetKnowledgeBase"],
                 resources=[
-                    f"arn:aws:bedrock:{self.region}:{self.account}:knowledge-base/*"
+                    f"arn:{self.partition}:bedrock:{self.region}:{self.account}:knowledge-base/*"
                 ],
             )
         )
@@ -379,7 +402,7 @@ class LaunchpadBaseStack(Stack):
                 sid="IdentityVaultSecrets",
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
+                    f"arn:{self.partition}:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
                 ],
             )
         )
@@ -439,6 +462,11 @@ class LaunchpadBaseStack(Stack):
             handler=facts_lambda,
             proxy=False,
             deploy_options=apigw.StageOptions(stage_name="prod"),
+            # No execution logging, so no account-level API Gateway CloudWatch
+            # role: CDK creates that role with RemovalPolicy.RETAIN, and every
+            # deploy/destroy cycle would orphan one IAM role and leave the
+            # account's API Gateway settings pointing at it after teardown.
+            cloud_watch_role=False,
         )
         facts = facts_api.root.add_resource("facts")
         facts.add_method("GET", api_key_required=True)
@@ -496,7 +524,7 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:InvokeAgentRuntimeForUser",
                 ],
                 resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:runtime/*"
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:runtime/*"
                 ],
             )
         )
@@ -531,7 +559,7 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:GetConfigurationBundleVersion",
                 ],
                 resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}"
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}"
                     ":configuration-bundle/*"
                 ],
             )
@@ -549,8 +577,8 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:BatchAuthorizeActions",
                 ],
                 resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:policy-engine/*",
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:gateway/*",
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:policy-engine/*",
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:gateway/*",
                 ],
             )
         )
@@ -559,7 +587,7 @@ class LaunchpadBaseStack(Stack):
                 sid="IdentitySecrets",
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
+                    f"arn:{self.partition}:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
                 ],
             )
         )
@@ -570,7 +598,7 @@ class LaunchpadBaseStack(Stack):
                 sid="ManagedKbRetrieval",
                 actions=["bedrock:GetKnowledgeBase", "bedrock:Retrieve"],
                 resources=[
-                    f"arn:aws:bedrock:{self.region}:{self.account}:knowledge-base/*"
+                    f"arn:{self.partition}:bedrock:{self.region}:{self.account}:knowledge-base/*"
                 ],
             )
         )

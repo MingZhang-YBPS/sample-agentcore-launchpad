@@ -7,6 +7,7 @@ import { RouteChunk } from "./layout/RouteChunk";
 import { Shell } from "./layout/Shell";
 import { NotFound } from "./pages/NotFound";
 import { Overview } from "./pages/Overview";
+import { ProjectProvider } from "./workspace/ProjectProvider";
 import { WorkspaceProvider } from "./workspace/WorkspaceProvider";
 import { api } from "./lib/api";
 import { classicAgentNewToV2, v2EditPath } from "./v2/pages/agents/classicUrl";
@@ -22,6 +23,7 @@ import { classicChatToV2 } from "./v2/pages/chat/classicUrl";
 import { classicObservabilityToV2 } from "./v2/pages/observability/classicUrl";
 import { classicMemoryToV2 } from "./v2/pages/memory/classicUrl";
 import { classicGovernanceToV2 } from "./v2/pages/governance/classicUrl";
+import { v3TwinOf } from "./v3/nav";
 import { classicOnlineToTasksUrl, onlineToTasksUrl } from "./v2/pages/tasks/urls";
 
 // Every module but the index route and the catch-all is fetched on navigation.
@@ -88,6 +90,73 @@ const Workspaces = lazy(() =>
 // every classic route keeps its URL and, once the operator chose V2, renders
 // inside the V2 shell instead of the classic one (see ConsoleShell).
 const V2Shell = lazy(() => import("./v2/V2Shell").then((m) => ({ default: m.V2Shell })));
+// Console V3 — the redesigned console, the default and switchable with V2 (src/v3/)
+const V3Shell = lazy(() => import("./v3/Shell").then((m) => ({ default: m.V3Shell })));
+const V3Home = lazy(() => import("./v3/pages/Home").then((m) => ({ default: m.V3Home })));
+const V3Agents = lazy(() => import("./v3/pages/Agents").then((m) => ({ default: m.V3Agents })));
+const V3Chat = lazy(() => import("./v3/pages/Chat").then((m) => ({ default: m.V3Chat })));
+const V3Gate = lazy(() => import("./v3/pages/Gate").then((m) => ({ default: m.V3Gate })));
+const V3Registry = lazy(() => import("./v3/pages/Registry").then((m) => ({ default: m.V3Registry })));
+const V3Releases = lazy(() => import("./v3/pages/Releases").then((m) => ({ default: m.V3Releases })));
+const V3Issues = lazy(() => import("./v3/pages/Issues").then((m) => ({ default: m.V3Issues })));
+const V3Environments = lazy(() => import("./v3/pages/Environments").then((m) => ({ default: m.V3Environments })));
+const V3Observability = lazy(() => import("./v3/pages/Observability").then((m) => ({ default: m.V3Observability })));
+const V3Memory = lazy(() => import("./v3/pages/Memory").then((m) => ({ default: m.V3Memory })));
+const V3Governance = lazy(() => import("./v3/pages/Governance").then((m) => ({ default: m.V3Governance })));
+const V3Connections = lazy(() => import("./v3/pages/Connections").then((m) => ({ default: m.V3Connections })));
+const V3Costs = lazy(() => import("./v3/pages/Costs").then((m) => ({ default: m.V3Costs })));
+const V3Insights = lazy(() => import("./v3/pages/Insights").then((m) => ({ default: m.V3Insights })));
+const V3Intents = lazy(() => import("./v3/pages/Intents").then((m) => ({ default: m.V3Intents })));
+const V3Data = lazy(() => import("./v3/pages/Data").then((m) => ({ default: m.V3Data })));
+const V3Evaluators = lazy(() => import("./v3/pages/Evaluators").then((m) => ({ default: m.V3Evaluators })));
+const V3Tasks = lazy(() => import("./v3/pages/Tasks").then((m) => ({ default: m.V3Tasks })));
+const V3Online = lazy(() => import("./v3/pages/Online").then((m) => ({ default: m.V3Online })));
+const V3Experiments = lazy(() => import("./v3/pages/Experiments").then((m) => ({ default: m.V3Experiments })));
+const V3Standards = lazy(() => import("./v3/pages/Standards").then((m) => ({ default: m.V3Standards })));
+const V3SkillLab = lazy(() => import("./v3/pages/SkillLab").then((m) => ({ default: m.V3SkillLab })));
+const V3Users = lazy(() => import("./v3/pages/Users").then((m) => ({ default: m.V3Users })));
+const V3Workspaces = lazy(() => import("./v3/pages/Workspaces").then((m) => ({ default: m.V3Workspaces })));
+const V3Models = lazy(() => import("./v3/pages/Models").then((m) => ({ default: m.V3Models })));
+const V3Identity = lazy(() => import("./v3/pages/Identity").then((m) => ({ default: m.V3Identity })));
+const V3Fleet = lazy(() => import("./v3/pages/Fleet").then((m) => ({ default: m.V3Fleet })));
+const V3Announcements = lazy(() => import("./v3/pages/Announcements").then((m) => ({ default: m.V3Announcements })));
+const V3Videos = lazy(() => import("./v3/pages/Videos").then((m) => ({ default: m.V3Videos })));
+const V3VideoManagement = lazy(() => import("./v3/pages/VideoManagement").then((m) => ({ default: m.V3VideoManagement })));
+const V3Assistant = lazy(() => import("./v3/pages/Assistant").then((m) => ({ default: m.V3Assistant })));
+const V3Create = lazy(() => import("./v3/pages/Create").then((m) => ({ default: m.V3Create })));
+// Configure → Projects (projects design §6.3) and the §6.4 project-owner entry
+const V3Projects = lazy(() => import("./v3/pages/projects/Projects").then((m) => ({ default: m.V3Projects })));
+const V3ProjectSettings = lazy(() =>
+  import("./v3/pages/projects/Projects").then((m) => ({ default: m.V3ProjectSettings })),
+);
+// Configure → Administrators / Departments (projects §7.9)
+const V3Admins = lazy(() => import("./v3/pages/admins/Admins").then((m) => ({ default: m.V3Admins })));
+const V3Departments = lazy(() =>
+  import("./v3/pages/departments/Departments").then((m) => ({ default: m.V3Departments })),
+);
+// Gateway tool targets: Lambda tools and externally hosted MCP servers
+const V3GatewayTools = lazy(() =>
+  import("./v3/pages/tools/GatewayToolTargets").then((m) => ({ default: m.GatewayToolTargets })),
+);
+// Configure → Network profiles (projects §12.12)
+const V3NetworkProfiles = lazy(() =>
+  import("./v3/pages/network/NetworkProfiles").then((m) => ({ default: m.V3NetworkProfiles })),
+);
+// Configure → Storage (storage-mounts §10)
+const V3Storage = lazy(() => import("./v3/pages/storage/Storage").then((m) => ({ default: m.V3Storage })));
+// Configure → Cost tags (cost-tags §1.6)
+const V3CostTags = lazy(() => import("./v3/pages/cost-tags/CostTags").then((m) => ({ default: m.V3CostTags })));
+// Configure → Single sign-on (sso §2.7)
+const V3Sso = lazy(() => import("./v3/pages/sso/Sso").then((m) => ({ default: m.V3Sso })));
+// Configure → System update (online-update §2.7)
+const V3SystemUpdate = lazy(() =>
+  import("./v3/pages/system-update/SystemUpdate").then((m) => ({ default: m.V3SystemUpdate })),
+);
+// Configure → Menu settings: the rail modules members see (services/nav_settings)
+const V3MenuSettings = lazy(() =>
+  import("./v3/pages/menu-settings/MenuSettings").then((m) => ({ default: m.V3MenuSettings })),
+);
+const V3Knowledge = lazy(() => import("./v3/pages/Knowledge").then((m) => ({ default: m.V3Knowledge })));
 const V2Home = lazy(() => import("./v2/pages/Home").then((m) => ({ default: m.V2Home })));
 const V2DataCenter = lazy(() =>
   import("./v2/pages/DataCenter").then((m) => ({ default: m.V2DataCenter })),
@@ -114,10 +183,14 @@ const V2Observability = lazy(() => import("./v2/pages/Observability").then((m) =
 const V2Memory = lazy(() => import("./v2/pages/Memory").then((m) => ({ default: m.V2Memory })));
 const V2Governance = lazy(() => import("./v2/pages/Governance").then((m) => ({ default: m.V2Governance })));
 const V2Users = lazy(() => import("./v2/pages/Users").then((m) => ({ default: m.V2Users })));
-const V2Workspaces = lazy(() => import("./v2/pages/Workspaces").then((m) => ({ default: m.V2Workspaces })));
-const V2Models = lazy(() => import("./v2/pages/Models").then((m) => ({ default: m.V2Models })));
+const V2Fleet = lazy(() => import("./v2/pages/Fleet").then((m) => ({ default: m.V2Fleet })));
+const V2Intents = lazy(() => import("./v2/pages/Intents").then((m) => ({ default: m.V2Intents })));
+const V2Issues = lazy(() => import("./v2/pages/Issues").then((m) => ({ default: m.V2Issues })));
 const V2Costs = lazy(() => import("./v2/pages/Costs").then((m) => ({ default: m.V2Costs })));
-const V2MyUsage = lazy(() => import("./v2/pages/MyUsage").then((m) => ({ default: m.V2MyUsage })));
+const V2Promotions = lazy(() => import("./v2/pages/Promotions").then((m) => ({ default: m.V2Promotions })));
+const V2Standards = lazy(() => import("./v2/pages/Standards").then((m) => ({ default: m.V2Standards })));
+const V2Environments = lazy(() => import("./v2/pages/Environments").then((m) => ({ default: m.V2Environments })));
+const V2Workspaces = lazy(() => import("./v2/pages/Workspaces").then((m) => ({ default: m.V2Workspaces })));
 const V2Connections = lazy(() => import("./v2/pages/Connections").then((m) => ({ default: m.V2Connections })));
 const V2MyConnections = lazy(() => import("./v2/pages/MyConnections").then((m) => ({ default: m.V2MyConnections })));
 // as_user consent return page: signed in (the binding leg needs the caller) but
@@ -138,13 +211,15 @@ const V2NotFound = lazy(() =>
  */
 function V2OrClassic({ classic, toV2 }: { classic: ReactNode; toV2: (search: string) => string }) {
   const { search } = useLocation();
-  if (useUiVersion() === "v2") return <Navigate to={toV2(search)} replace />;
+  if (useUiVersion() !== "v1") return <Navigate to={toV2(search)} replace />;
   return <>{classic}</>;
 }
 
 /** The index route honours the operator's remembered console choice. */
 function IndexRoute() {
-  return useUiVersion() === "v2" ? <Navigate to="/v2" replace /> : <Overview />;
+  const version = useUiVersion();
+  if (version === "v3") return <Navigate to="/v3" replace />;
+  return version === "v2" ? <Navigate to="/v2" replace /> : <Overview />;
 }
 
 /**
@@ -154,7 +229,7 @@ function IndexRoute() {
  */
 function AgentsRoute({ mode }: { mode: "list" | "detail" }) {
   const { agentId } = useParams();
-  if (useUiVersion() === "v2") {
+  if (useUiVersion() !== "v1") {
     const to = mode === "detail" && agentId ? `/v2/agents?view=detail&id=${agentId}` : "/v2/agents";
     return <Navigate to={to} replace />;
   }
@@ -168,7 +243,7 @@ function AgentsRoute({ mode }: { mode: "list" | "detail" }) {
  */
 function AgentsEditRoute() {
   const { agentId } = useParams();
-  const v2 = useUiVersion() === "v2";
+  const v2 = useUiVersion() !== "v1";
   const [target, setTarget] = useState<string | "classic" | null>(null);
   useEffect(() => {
     if (!v2 || !agentId) return;
@@ -192,7 +267,7 @@ function AgentsEditRoute() {
  */
 function AgentsNewRoute() {
   const { search } = useLocation();
-  const target = useUiVersion() === "v2" ? classicAgentNewToV2(search) : null;
+  const target = useUiVersion() !== "v1" ? classicAgentNewToV2(search) : null;
   return target ? <Navigate to={target} replace /> : <CreateAgent mode="new" />;
 }
 
@@ -255,23 +330,33 @@ function V2OnlineRoute() {
 
 function EvaluationRoute() {
   const { search } = useLocation();
-  const target = useUiVersion() === "v2" ? v2EvaluationTarget(search) : null;
+  const target = useUiVersion() !== "v1" ? v2EvaluationTarget(search) : null;
   return target ? <Navigate to={target} replace /> : <Evaluation />;
 }
 
 /**
- * Chrome for the classic routes: the classic shell, or the V2 shell when the
- * operator chose V2 — so links between modules (`/agents/…`, `/chat?agent=…`)
+ * Chrome for the classic routes: the classic shell, or the V2 / V3 shell when the
+ * operator chose one — so links between modules (`/agents/…`, `/chat?agent=…`)
  * work unchanged in both consoles and switching keeps the current page.
  */
 function ConsoleShell() {
-  return useUiVersion() === "v2" ? (
-    <RouteChunk>
-      <V2Shell classic />
-    </RouteChunk>
-  ) : (
-    <Shell />
-  );
+  const version = useUiVersion();
+  if (version === "v1") return <Shell />;
+  return <RouteChunk>{version === "v3" ? <V3Shell hosted="classic" /> : <V2Shell classic />}</RouteChunk>;
+}
+
+/**
+ * Chrome for the native V2 pages: the V2 shell, or — once the operator chose
+ * V3 — the V3 shell hosting the same page on the V3 theme, so every link a V2
+ * page makes (`/v2/...`) stays inside V3. A page V3 has rebuilt hands over to
+ * its V3 page instead (`v3TwinOf`).
+ */
+function V2Frame() {
+  const { pathname, search } = useLocation();
+  if (useUiVersion() !== "v3") return <V2Shell />;
+  const twin = v3TwinOf(pathname, search);
+  if (twin) return <Navigate to={twin} replace />;
+  return <V3Shell hosted="v2" />;
 }
 
 export default function App() {
@@ -279,116 +364,178 @@ export default function App() {
     <BrowserRouter>
       <ToastProvider>
         <WorkspaceProvider>
-          <Routes>
-            <Route
-              path="auth/return"
-              element={
-                <RouteChunk>
-                  <AuthReturn />
-                </RouteChunk>
-              }
-            />
-            <Route
-              path="v2"
-              element={
-                <RouteChunk>
-                  <V2Shell />
-                </RouteChunk>
-              }
-            >
-              <Route index element={<V2Home />} />
-              <Route path="agents" element={<V2Agents />} />
-              <Route path="eval/data" element={<V2DataCenter />} />
-              <Route path="eval/tasks" element={<V2Tasks />} />
-              <Route path="eval/insights" element={<V2Insights />} />
-              <Route path="eval/evaluators" element={<V2Evaluators />} />
-              <Route path="eval/online" element={<V2OnlineRoute />} />
-              <Route path="eval/experiments" element={<V2Experiments />} />
-              <Route path="assistant" element={<V2Assistant />} />
-              <Route path="registry" element={<V2Registry />} />
-              <Route path="knowledge-bases" element={<V2KnowledgeBases />} />
-              <Route path="context-layer" element={<V2ContextLayer />} />
-              <Route path="skill-lab" element={<V2SkillLab />} />
-              <Route path="coding" element={<V2Coding />} />
-              <Route path="chat" element={<V2Chat />} />
-              <Route path="observability" element={<V2Observability />} />
-              <Route path="memory" element={<V2Memory />} />
-              <Route path="governance" element={<V2Governance />} />
-              <Route path="users" element={<V2Users />} />
-              <Route path="workspaces" element={<V2Workspaces />} />
-              <Route path="models" element={<V2Models />} />
-              <Route path="costs" element={<V2Costs />} />
-              <Route path="usage" element={<V2MyUsage />} />
-              <Route path="connections" element={<V2Connections />} />
-              <Route path="my-connections" element={<V2MyConnections />} />
-              <Route path="announcements" element={<V2Announcements />} />
-              <Route path="videos" element={<V2Videos />} />
-              <Route path="video-management" element={<V2VideoManagement />} />
-              <Route path="*" element={<V2NotFound />} />
-            </Route>
-            <Route element={<ConsoleShell />}>
-            <Route index element={<IndexRoute />} />
-            <Route path="agents" element={<AgentsRoute mode="list" />} />
-            <Route path="agents/new" element={<AgentsNewRoute />} />
-            <Route path="agents/import" element={<CreateAgent mode="import" />} />
-            <Route path="agents/:agentId" element={<AgentsRoute mode="detail" />} />
-            <Route path="agents/:agentId/edit" element={<AgentsEditRoute />} />
-            <Route path="create" element={<LegacyCreateRedirect />} />
-            <Route path="create/studio" element={<CreateAgentStudio />} />
+          <ProjectProvider>
+            <Routes>
               <Route
-                path="create/assistant"
-                element={<V2OrClassic classic={<CreateAgentAssistant />} toV2={classicAssistantToV2} />}
+                path="auth/return"
+                element={
+                  <RouteChunk>
+                    <AuthReturn />
+                  </RouteChunk>
+                }
               />
               <Route
-                path="registry"
-                element={<V2OrClassic classic={<Registry />} toV2={classicRegistryToV2} />}
-              />
+                path="v3"
+                element={
+                  <RouteChunk>
+                    <V3Shell />
+                  </RouteChunk>
+                }
+              >
+                <Route index element={<V3Home />} />
+                <Route path="agents" element={<V3Agents />} />
+                <Route path="chat" element={<V3Chat />} />
+                <Route path="gate" element={<V3Gate />} />
+                <Route path="registry" element={<V3Registry />} />
+                <Route path="knowledge" element={<V3Knowledge />} />
+                <Route path="create" element={<V3Create />} />
+                <Route path="assistant" element={<V3Assistant />} />
+                <Route path="insights" element={<V3Insights />} />
+                <Route path="intents" element={<V3Intents />} />
+                <Route path="data" element={<V3Data />} />
+                <Route path="evaluators" element={<V3Evaluators />} />
+                <Route path="tasks" element={<V3Tasks />} />
+                <Route path="online" element={<V3Online />} />
+                <Route path="experiments" element={<V3Experiments />} />
+                <Route path="standards" element={<V3Standards />} />
+                <Route path="skill-lab" element={<V3SkillLab />} />
+                <Route path="users" element={<V3Users />} />
+                <Route path="admins" element={<V3Admins />} />
+                <Route path="sso" element={<V3Sso />} />
+                {/* project groups were retired (department → project → member) */}
+                <Route path="project-groups" element={<Navigate to="/v3/projects" replace />} />
+                <Route path="departments" element={<V3Departments />} />
+                <Route path="workspaces" element={<V3Workspaces />} />
+                <Route path="network" element={<V3NetworkProfiles />} />
+                <Route path="storage" element={<V3Storage />} />
+                <Route path="cost-tags" element={<V3CostTags />} />
+                <Route path="projects" element={<V3Projects />} />
+                <Route path="project-settings" element={<V3ProjectSettings />} />
+                <Route path="models" element={<V3Models />} />
+                <Route path="system-update" element={<V3SystemUpdate />} />
+                <Route path="menu-settings" element={<V3MenuSettings />} />
+                <Route path="identity" element={<V3Identity />} />
+                <Route path="fleet" element={<V3Fleet />} />
+                <Route path="announcements" element={<V3Announcements />} />
+                <Route path="videos" element={<V3Videos />} />
+                <Route path="video-management" element={<V3VideoManagement />} />
+                <Route path="releases" element={<V3Releases />} />
+                <Route path="issues" element={<V3Issues />} />
+                <Route path="environments" element={<V3Environments />} />
+                <Route path="observability" element={<V3Observability />} />
+                <Route path="memory" element={<V3Memory />} />
+                <Route path="governance" element={<V3Governance />} />
+                <Route path="connections" element={<V3Connections />} />
+                <Route path="tools/gateway" element={<V3GatewayTools />} />
+                <Route path="costs" element={<V3Costs />} />
+                <Route path="*" element={<Navigate to="/v3" replace />} />
+              </Route>
               <Route
-                path="knowledge-bases"
-                element={<V2OrClassic classic={<KnowledgeBases />} toV2={classicKnowledgeBasesToV2} />}
-              />
-              <Route
-                path="memory"
-                element={<V2OrClassic classic={<Memory />} toV2={classicMemoryToV2} />}
-              />
-              <Route
-                path="chat"
-                element={<V2OrClassic classic={<Chat />} toV2={classicChatToV2} />}
-              />
-              <Route
-                path="observability"
-                element={<V2OrClassic classic={<Observability />} toV2={classicObservabilityToV2} />}
-              />
-              <Route path="evaluation" element={<EvaluationRoute />} />
-              <Route
-                path="skill-lab"
-                element={<V2OrClassic classic={<SkillLab />} toV2={classicSkillLabToV2} />}
-              />
-              <Route
-                path="governance"
-                element={<V2OrClassic classic={<Governance />} toV2={classicGovernanceToV2} />}
-              />
-              <Route
-                path="users"
-                element={<V2OrClassic classic={<Users />} toV2={classicUsersToV2} />}
-              />
-              <Route
-                path="announcements"
-                element={<V2OrClassic classic={<Announcements />} toV2={classicAnnouncementsToV2} />}
-              />
-              <Route
-                path="videos"
-                element={<V2OrClassic classic={<Videos />} toV2={classicVideosToV2} />}
-              />
-              <Route
-                path="workspaces"
-                element={<V2OrClassic classic={<Workspaces />} toV2={classicWorkspacesToV2} />}
-              />
-              {/* Catch-all stays INSIDE the Shell group so an unknown URL keeps
-                  the sidebar/topbar/footer instead of a bare background grid. */}
-              <Route path="*" element={<NotFound />} />
-            </Route>
-          </Routes>
+                path="v2"
+                element={
+                  <RouteChunk>
+                    <V2Frame />
+                  </RouteChunk>
+                }
+              >
+                <Route index element={<V2Home />} />
+                <Route path="agents" element={<V2Agents />} />
+                <Route path="eval/data" element={<V2DataCenter />} />
+                <Route path="eval/tasks" element={<V2Tasks />} />
+                <Route path="eval/insights" element={<V2Insights />} />
+                <Route path="eval/intents" element={<V2Intents />} />
+                <Route path="eval/evaluators" element={<V2Evaluators />} />
+                <Route path="eval/online" element={<V2OnlineRoute />} />
+                <Route path="eval/experiments" element={<V2Experiments />} />
+                <Route path="eval/standards" element={<V2Standards />} />
+                <Route path="assistant" element={<V2Assistant />} />
+                <Route path="registry" element={<V2Registry />} />
+                <Route path="knowledge-bases" element={<V2KnowledgeBases />} />
+                <Route path="context-layer" element={<V2ContextLayer />} />
+                <Route path="skill-lab" element={<V2SkillLab />} />
+                <Route path="coding" element={<V2Coding />} />
+                <Route path="chat" element={<V2Chat />} />
+                <Route path="observability" element={<V2Observability />} />
+                <Route path="memory" element={<V2Memory />} />
+                <Route path="governance" element={<V2Governance />} />
+                <Route path="users" element={<V2Users />} />
+                <Route path="costs" element={<V2Costs />} />
+                <Route path="issues" element={<V2Issues />} />
+                <Route path="fleet" element={<V2Fleet />} />
+                <Route path="promotions" element={<V2Promotions />} />
+                <Route path="environments" element={<V2Environments />} />
+                <Route path="workspaces" element={<V2Workspaces />} />
+                <Route path="connections" element={<V2Connections />} />
+                <Route path="my-connections" element={<V2MyConnections />} />
+                <Route path="announcements" element={<V2Announcements />} />
+                <Route path="videos" element={<V2Videos />} />
+                <Route path="video-management" element={<V2VideoManagement />} />
+                <Route path="*" element={<V2NotFound />} />
+              </Route>
+              <Route element={<ConsoleShell />}>
+              <Route index element={<IndexRoute />} />
+              <Route path="agents" element={<AgentsRoute mode="list" />} />
+              <Route path="agents/new" element={<AgentsNewRoute />} />
+              <Route path="agents/import" element={<CreateAgent mode="import" />} />
+              <Route path="agents/:agentId" element={<AgentsRoute mode="detail" />} />
+              <Route path="agents/:agentId/edit" element={<AgentsEditRoute />} />
+              <Route path="create" element={<LegacyCreateRedirect />} />
+              <Route path="create/studio" element={<CreateAgentStudio />} />
+                <Route
+                  path="create/assistant"
+                  element={<V2OrClassic classic={<CreateAgentAssistant />} toV2={classicAssistantToV2} />}
+                />
+                <Route
+                  path="registry"
+                  element={<V2OrClassic classic={<Registry />} toV2={classicRegistryToV2} />}
+                />
+                <Route
+                  path="knowledge-bases"
+                  element={<V2OrClassic classic={<KnowledgeBases />} toV2={classicKnowledgeBasesToV2} />}
+                />
+                <Route
+                  path="memory"
+                  element={<V2OrClassic classic={<Memory />} toV2={classicMemoryToV2} />}
+                />
+                <Route
+                  path="chat"
+                  element={<V2OrClassic classic={<Chat />} toV2={classicChatToV2} />}
+                />
+                <Route
+                  path="observability"
+                  element={<V2OrClassic classic={<Observability />} toV2={classicObservabilityToV2} />}
+                />
+                <Route path="evaluation" element={<EvaluationRoute />} />
+                <Route
+                  path="skill-lab"
+                  element={<V2OrClassic classic={<SkillLab />} toV2={classicSkillLabToV2} />}
+                />
+                <Route
+                  path="governance"
+                  element={<V2OrClassic classic={<Governance />} toV2={classicGovernanceToV2} />}
+                />
+                <Route
+                  path="users"
+                  element={<V2OrClassic classic={<Users />} toV2={classicUsersToV2} />}
+                />
+                <Route
+                  path="announcements"
+                  element={<V2OrClassic classic={<Announcements />} toV2={classicAnnouncementsToV2} />}
+                />
+                <Route
+                  path="videos"
+                  element={<V2OrClassic classic={<Videos />} toV2={classicVideosToV2} />}
+                />
+                <Route
+                  path="workspaces"
+                  element={<V2OrClassic classic={<Workspaces />} toV2={classicWorkspacesToV2} />}
+                />
+                {/* Catch-all stays INSIDE the Shell group so an unknown URL keeps
+                    the sidebar/topbar/footer instead of a bare background grid. */}
+                <Route path="*" element={<NotFound />} />
+              </Route>
+            </Routes>
+          </ProjectProvider>
         </WorkspaceProvider>
       </ToastProvider>
     </BrowserRouter>

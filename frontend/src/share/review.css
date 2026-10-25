@@ -1,0 +1,12 @@
+/* SME review page (T34): a single column of question/answer cards. */
+.v2.review-page { height: auto; min-height: 100vh; padding-bottom: 48px; }
+.v2 .review-intro { color: var(--v2-ink-2); font-size: 13px; margin: 12px 0 4px; }
+.v2 .review-list { display: flex; flex-direction: column; gap: 14px; padding-top: 8px; }
+.v2 .review-card { border: 1px solid var(--v2-line); border-radius: 10px; padding: 14px 16px; background: var(--v2-surface, #fff); display: flex; flex-direction: column; gap: 10px; }
+.v2 .review-card p { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; }
+.v2 .review-label { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; font-weight: 600; color: var(--v2-ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
+.v2 .review-actions { display: flex; gap: 10px; align-items: center; }
+.v2 .review-actions .v2-chat-thumb { width: auto; padding: 6px 12px; gap: 6px; display: inline-flex; align-items: center; }
+.v2 .review-saved { font-size: 12px; color: var(--v2-ink-3); }
+.v2 .review-correction { display: flex; flex-direction: column; gap: 10px; }
+.v2 .review-correction label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }

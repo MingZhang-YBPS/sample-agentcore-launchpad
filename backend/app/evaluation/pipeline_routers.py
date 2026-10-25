@@ -33,18 +33,20 @@ from app.assistant.principal import principal_of
 from app.assistant.sessions import PrivateSessions
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context
 from app.evaluation import log_streams, pipeline_logs, pipelines
 from app.evaluation.models import EvalDataset, EvalPipeline
 from app.evaluation.online_routers import _agent_in
 from app.evaluation.routers import (
     LOG_GROUP_NAME_RE,
     SERVICE_NAME_RE,
+    _assert_log_source_in_project,
     _dataset_in,
     _dataset_out,
     _infer_kind,
     _validate_items,
 )
-from app.evaluation.service import resolve_telemetry
+from app.evaluation.service import ProjectFence, resolve_telemetry
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import creators, observability, visibility
@@ -77,6 +79,7 @@ def _read_items(
     """Items extracted from each visible session + a skip reason per miss."""
     items: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
+    fence = ProjectFence(db, ws.id)
     for session_id in session_ids:
         if not private.visible(session_id):
             skipped.append({"session_id": session_id, "reason": "not_found"})
@@ -86,7 +89,7 @@ def _read_items(
         except NotFoundError:
             skipped.append({"session_id": session_id, "reason": "not_found"})
             continue
-        if private.mentions_hidden(detail):
+        if private.mentions_hidden(detail) or not _in_project(fence, detail.get("traces")):
             skipped.append({"session_id": session_id, "reason": "not_found"})
             continue
         transcript = detail.get("transcript") or {}
@@ -107,6 +110,16 @@ def _read_items(
             continue
         items.extend(found)
     return items, skipped
+
+
+def _in_project(fence: ProjectFence, traces: list[dict[str, Any]] | None) -> bool:
+    """An observed session's spans come from the whole account: with several
+    projects in the workspace, only a session whose services resolve to this
+    project's (or a platform) agent is read — an unattributable one is not (§5.9)."""
+    if not fence.closed:
+        return True
+    services = {t.get("service") for t in traces or [] if t.get("service")}
+    return bool(services) and all(fence.allows_service(s) for s in services)
 
 
 def _require_receivable(dataset: EvalDataset) -> None:
@@ -134,7 +147,7 @@ def _write(
     something to write (a dataset cannot be empty). A created dataset records
     `creator`; an append leaves the existing creator alone."""
     if dataset_id:
-        dataset = _dataset_in(db, ws, dataset_id)
+        dataset = _dataset_in(db, ws, dataset_id, need="own")
         merged, added, reasons = pipelines.merge_items(dataset.items, items, dedupe=dedupe)
         skipped.extend({"session_id": "", "reason": r} for r in reasons)
         if added:
@@ -200,7 +213,7 @@ def datasets_from_sessions(
 ) -> dict[str, Any]:
     kind = "predefined"
     if body.dataset_id:
-        target = _dataset_in(db, ws, body.dataset_id, viewer=viewer)
+        target = _dataset_in(db, ws, body.dataset_id, viewer=viewer, need="own")
         _require_receivable(target)
         kind = target.kind
     items, skipped = _read_items(
@@ -297,7 +310,8 @@ def _check_output(
     db: Session, ws: WorkspaceScope, output: PipelineOutput, *, viewer: Viewer
 ) -> None:
     if output.dataset_id:
-        _require_receivable(_dataset_in(db, ws, output.dataset_id, viewer=viewer))
+        _require_receivable(
+            _dataset_in(db, ws, output.dataset_id, viewer=viewer, need="own"))
 
 
 @router.get("/pipelines")
@@ -326,6 +340,7 @@ def create_pipeline(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _check_output(db, ws, body.output, viewer=viewer)
+    _refuse_foreign_groups(db, ws, body.source)
     row = EvalPipeline(
         workspace_id=ws.id,
         name=body.name,
@@ -363,6 +378,7 @@ def update_pipeline(
     if row.status == "running":
         raise AppError("pipeline.running", "the pipeline is running", status_code=409)
     _check_output(db, ws, body.output, viewer=viewer)
+    _refuse_foreign_groups(db, ws, body.source)
     row.name = body.name
     row.description = body.description
     row.config = body.model_dump(include={"source", "processing", "output"})
@@ -407,8 +423,16 @@ def run_pipeline(
     db.commit()
     with _live_lock:
         _live_runs.add(row.id)
-    _spawn(lambda: _run_pipeline(row.id, config, ws, private, creator=creator))
+    pid = row.project_id
+    _spawn(lambda: _run_in_project(pid, row.id, config, ws, private, creator=creator))
     return _pipeline_out(row)
+
+
+def _run_in_project(project_id: str | None, *args: Any, **kwargs: Any) -> None:
+    """A thread inherits no context: the run reads and writes as its pipeline's project
+    (its output dataset is stamped there, its session reads are fenced to it)."""
+    with project_context(project_id):
+        _run_pipeline(*args, **kwargs)
 
 
 _live_runs: set[str] = set()
@@ -453,18 +477,21 @@ def _run_pipeline(
             src, proc, out = config.source, config.processing, config.output
             kind = "predefined"
             if out.dataset_id:
-                target = _dataset_in(db, ws, out.dataset_id)
+                target = _dataset_in(db, ws, out.dataset_id, need="own")
                 _require_receivable(target)
                 kind = target.kind
             if src.type == "logs":
+                _refuse_foreign_groups(db, ws, src)
                 items, skipped, log_stats = _read_log_items(ws, private, src, proc, kind=kind)
                 outcome["scanned"] = log_stats.pop("sessions_found")
                 outcome["matched"] = log_stats.pop("sessions_taken")
                 outcome["log"] = log_stats
             else:
                 listing = observability.list_sessions(src.range, db, ws.context)
+                fence = ProjectFence(db, ws.id)
                 rows = [r for r in listing.get("sessions", [])
-                        if private.visible(r.get("session_id"))]
+                        if private.visible(r.get("session_id"))
+                        and (not fence.closed or fence.allows_service(r.get("service")))]
                 outcome["scanned"] = len(rows)
                 picked = pipelines.select_sessions(
                     rows, agent=src.agent, status=src.status, limit=src.max_sessions
@@ -530,6 +557,16 @@ def _convert_logs(
     return rows, truncated, converted
 
 
+def _refuse_foreign_groups(db: Session, ws: WorkspaceScope, src: PipelineSource) -> None:
+    """Another project's agent runtime log group answers like a missing one."""
+    fence = ProjectFence(db, ws.id)
+    foreign = [g for g in src.log_groups if fence.foreign_log_group(g)]
+    if foreign:
+        raise NotFoundError("pipeline.log_group_not_found",
+                            f"log group(s) not found: {', '.join(foreign)}",
+                            {"missing": foreign})
+
+
 def _read_log_items(
     ws: WorkspaceScope,
     private: PrivateSessions,
@@ -583,6 +620,7 @@ def preview_logs(
     if src.type != "logs":
         raise AppError("pipeline.not_logs", "only a logs source can be previewed",
                        status_code=422)
+    _refuse_foreign_groups(db, ws, src)
     rows, truncated, converted = _convert_logs(ws, _private(request, ws, db), src)
     sessions = [
         {**s, "turns": [{**t, "text": str(t.get("text") or "")[:PREVIEW_TURN_CHARS]}
@@ -641,6 +679,7 @@ def log_sessions(
     if needle:
         queries["hits"] = log_streams.keyword_query(needle)
     groups = list(dict.fromkeys(log_group))
+    _assert_log_source_in_project(db, ws, service_name, groups)
     results = observability.run_insights_queries(
         queries, hours, logs=ws.context.client("logs"), log_groups=groups,
     )
@@ -654,11 +693,18 @@ def log_sessions(
 @router.get("/log-groups")
 def log_groups(
     q: str | None = Query(None, max_length=128, pattern=r"^[.\-_/#A-Za-z0-9]*$"),
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Log groups whose name contains `q` (case-insensitive), to pick a task's
-    input log groups."""
-    return log_streams.list_log_groups(ws.context.client("logs"), q or None)
+    input log groups — never another project's agent runtime group."""
+    out = log_streams.list_log_groups(ws.context.client("logs"), q or None)
+    fence = ProjectFence(db, ws.id)
+    if fence.closed:
+        out["log_groups"] = [
+            g for g in out["log_groups"] if not fence.foreign_log_group(g["name"])
+        ]
+    return out
 
 
 @router.get("/log-services")
@@ -685,6 +731,9 @@ def log_services(
     services = log_streams.services_from_rows(
         results["services"], resolve, results.get("scopes")
     )
+    fence = ProjectFence(db, ws.id)
+    if fence.closed:  # another project's agent is not an unowned service here
+        services = [row for row in services if not fence.foreign_service(row["service_name"])]
     needle = (q or "").strip().lower()
     if needle:
         services = [row for row in services if needle in row["service_name"].lower()]

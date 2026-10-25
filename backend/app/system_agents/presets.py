@@ -41,6 +41,7 @@ SYSTEM_SKILLS_PREFIX = "system-skills"
 # workload-identity / token-vault statements it grants authenticated MCP refs.
 AWS_KNOWLEDGE_MCP_URL = "https://knowledge-mcp.global.api.aws"
 AWS_KNOWLEDGE_TOOL_NAME = "aws_knowledge"
+ARCHITECT_KEY = "aws-agent-solution-architect"
 
 
 @dataclass(frozen=True)
@@ -58,42 +59,34 @@ class SystemPreset:
     # Inference defaults for a NEW install. An administrator may change every member
     # of ``InstallOptions`` afterwards; these are the values ``InstallOptions()`` and
     # ``default_options`` resolve to, never a constraint on what is stored.
-    # Built-in; ``model_setting`` names the Settings role that overrides it for a new
-    # install (read through ``default_model_id``).
+    # built-in default (settings.architect_model_id); see default_options()
     model_id: str = Settings.model_fields["architect_model_id"].default
-    model_setting: str | None = None
     model_source: ModelSource = "bedrock"
     # Per model call (``bedrockModelConfig.maxTokens``): 64k output so a full design
     # proposal is never cut at the provider's 4096-token default. Not a spend cap.
     max_tokens: int | None = 65536
     reasoning_effort: ReasoningEffort | None = "high"
     max_iterations: int = 100
-    timeout_seconds: int = 900
+    # One turn's whole Harness budget. 1500 s fits the architect's measured 7–8
+    # "reason + AWS Knowledge call" steps (~1–2 min each, growing with the context)
+    # with ~1.5× headroom; 900 s timed out mid-design (assistant-context §6). The turn
+    # claim TTL is derived from the stored value (``assistant.service.claim_ttl_s``).
+    timeout_seconds: int = 1500
     skill_dir: str = ""  # directory name under SKILLS_ROOT
 
-    def default_model_id(self) -> str:
-        """The model of a new install: the ``model_setting`` role (env, launchpad.yaml
-        or the admin Models page) when the preset names one, else ``model_id``."""
-        if self.model_setting:
-            return str(getattr(get_settings(), self.model_setting) or "").strip() or (
-                self.model_id
-            )
-        return self.model_id
-
-    def default_reasoning_effort(self) -> ReasoningEffort | None:
-        """The preset effort, but only while the default model takes one: AgentSpec
-        refuses ``reasoning_effort`` on a non-OpenAI model."""
-        if is_openai_model_id(self.default_model_id()):
-            return self.reasoning_effort
-        return None
-
     def default_options(self) -> "InstallOptions":
-        """What a first install with an empty body gets."""
+        """What a first install with an empty body gets. The architect's model is
+        settings.architect_model_id (env LAUNCHPAD_ARCHITECT_MODEL_ID) so an account
+        without OpenAI access installs on a model it can invoke; ``reasoning_effort``
+        is OpenAI-only (AgentSpec refuses it elsewhere), so it is preset only then."""
+        model_id = self.model_id
+        if self.key == ARCHITECT_KEY:
+            model_id = get_settings().architect_model_id.strip() or self.model_id
         return InstallOptions(
-            model_id=self.default_model_id(),
+            model_id=model_id,
             model_source=self.model_source,
             max_tokens=self.max_tokens,
-            reasoning_effort=self.default_reasoning_effort(),
+            reasoning_effort=self.reasoning_effort if is_openai_model_id(model_id) else None,
         )
 
     def skill_path(self) -> Path:
@@ -163,7 +156,7 @@ Rules you always follow:
 """
 
 ARCHITECT = SystemPreset(
-    key="aws-agent-solution-architect",
+    key=ARCHITECT_KEY,
     name="aws-agent-solution-architect",
     label="AWS Agent Solution Architect",
     description=(
@@ -173,12 +166,27 @@ ARCHITECT = SystemPreset(
         "skill bundle."
     ),
     skill_version="1.5.8",
-    model_setting="architect_model_id",
     system_prompt=ARCHITECT_SYSTEM_PROMPT,
     allowed_tools=("shell", "file_*", f"@{AWS_KNOWLEDGE_TOOL_NAME}"),
 )
 
 PRESETS: dict[str, SystemPreset] = {ARCHITECT.key: ARCHITECT}
+
+# Earlier builds' catalogue default for ``timeout_seconds``. A stored preset spec that
+# still carries it is taken as "never changed by an administrator" and moved to the
+# current default once (``system_agents.timeout_migration``); any other stored value
+# is an administrator's choice and is kept.
+LEGACY_TIMEOUT_SECONDS: dict[str, int] = {ARCHITECT.key: 900}
+
+
+def timeout_migration_target(preset: "SystemPreset", spec: dict | None) -> int | None:
+    """The ``timeout_seconds`` a stored spec should move to, or ``None`` when it stays:
+    only a spec still on the preset's legacy default moves, to this build's default.
+    Idempotent — a migrated spec carries the new default and never matches again."""
+    legacy = LEGACY_TIMEOUT_SECONDS.get(preset.key)
+    if not spec or legacy is None or legacy == preset.timeout_seconds:
+        return None
+    return preset.timeout_seconds if spec.get("timeout_seconds") == legacy else None
 RESERVED_AGENT_NAMES: frozenset[str] = frozenset(p.name for p in PRESETS.values())
 
 
@@ -286,7 +294,7 @@ def build_spec(
     return AgentSpec(
         name=preset.name,
         method="harness",
-        model_id=options.model_id or preset.default_model_id(),
+        model_id=options.model_id or preset.model_id,
         model_source=options.model_source or preset.model_source,
         max_tokens=options.max_tokens,
         reasoning_effort=options.reasoning_effort,
@@ -338,7 +346,7 @@ def effective_settings(preset: SystemPreset, spec: dict | None) -> dict:
         return {}
     options = options_from_spec(spec)
     return {
-        "model_id": options.model_id or preset.default_model_id(),
+        "model_id": options.model_id or preset.model_id,
         "model_source": options.model_source or preset.model_source,
         "max_tokens": options.max_tokens,
         "reasoning_effort": options.reasoning_effort,
@@ -353,10 +361,10 @@ def default_settings(preset: SystemPreset) -> dict:
     """This build's catalogue defaults for the same members (``knowledge_bases`` is
     always empty by default)."""
     return {
-        "model_id": preset.default_model_id(),
+        "model_id": preset.model_id,
         "model_source": preset.model_source,
         "max_tokens": preset.max_tokens,
-        "reasoning_effort": preset.default_reasoning_effort(),
+        "reasoning_effort": preset.reasoning_effort,
         "system_prompt": preset.system_prompt,
         "max_iterations": preset.max_iterations,
         "timeout_seconds": preset.timeout_seconds,

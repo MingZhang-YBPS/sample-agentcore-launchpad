@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 
 @dataclass
@@ -21,9 +20,6 @@ class GenerationTask:
     previous_code: str | None = None  # current code during repair rounds
     validation_errors: list[str] = field(default_factory=list)  # errors during repair rounds
     mode: str = "generate"  # "generate" | "fix" (selects backend prompts)
-    # Launchpad: the round's token usage (the agent's ``ResultMessage.usage``) is
-    # reported here for the spend budget (services/usage_meter.py); None = unmetered
-    on_usage: Callable[[dict[str, Any]], Any] | None = None
 
 
 class GenerationError(Exception):

@@ -6,9 +6,16 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/auth-context";
 import { Panel, ViewHead } from "../components";
 import { AnnouncementFeed } from "../components/AnnouncementFeed";
+import { loadModelCatalog, setCatalogWorkspace } from "../lib/model-catalog";
+import { loadModelDefaults } from "../lib/model-defaults";
+import { setActiveRegion } from "../lib/regions";
 import { api, AUTH_UNAUTHORIZED_EVENT, type Workspace } from "../lib/api";
+import { isSteward } from "../lib/api/steward";
 import { storedWorkspaceId, storeWorkspaceId } from "../lib/workspace-header";
+import { useUiVersion } from "../lib/ui-version";
 import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
+import { V3AuthLoading } from "../v3/AuthFrame";
+import { V3NoWorkspace } from "../v3/NoWorkspace";
 import { WorkspaceContext } from "./workspace-context";
 
 interface ListState {
@@ -47,7 +54,7 @@ function resolveCurrent(
  * workspace and a member with several grants meets `workspace.header_required`.
  */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const { isAdmin } = useAuth();
+  const { isAdmin, role } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [list, setList] = useState<ListState>(EMPTY);
@@ -82,6 +89,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  // Prefetch the configured model defaults alongside the workspace list (both gate
+  // nothing): seeded model fields read them synchronously once cached.
+  useEffect(() => {
+    void loadModelDefaults();
+  }, []);
+
   useEffect(() => {
     // AuthGate swaps children for the login page on a 401, which unmounts this
     // provider — the listener is here so a stale list can never outlive the
@@ -95,6 +108,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => resolveCurrent(list.workspaces, selected, isAdmin),
     [isAdmin, list.workspaces, selected],
   );
+
+  // Model pickers read these at render time; set before the children render.
+  setActiveRegion(current?.region);
+  setCatalogWorkspace(current?.id);
+
+  // The workspace's account/Region model catalog, for every model picker.
+  const currentId = current?.id ?? null;
+  useEffect(() => {
+    if (currentId) void loadModelCatalog(currentId);
+  }, [currentId]);
 
   useEffect(() => {
     // Keeps storage and state agreeing after the list changes under us (the
@@ -130,7 +153,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   if (list.status === "loading") return <WorkspaceLoading />;
-  if (list.status === "ready" && !isAdmin && list.workspaces.length === 0) {
+  // A steward holds no grant by design (§11.4): its structure pages are hub-global,
+  // and the shell shows the steward's empty state on every business page.
+  if (list.status === "ready" && !isAdmin && !isSteward(role) && list.workspaces.length === 0) {
     return <NoWorkspaceGranted />;
   }
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
@@ -138,19 +163,24 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
 function WorkspaceLoading() {
   const { t } = useTranslation();
-  return <V2AuthLoading label={t("workspacesPage.resolving")} />;
+  // the same ground as the sign-in page and the console about to open
+  const Loading = useUiVersion() === "v3" ? V3AuthLoading : V2AuthLoading;
+  return <Loading label={t("workspacesPage.resolving")} />;
 }
 
 /**
  * A member whose account has no grant yet. Every workspace-scoped route would
  * answer 403, so the console says who can fix it instead of rendering pages that
- * all fail. Wearing the sign-in page's V2 chrome, because it is the same kind of
- * dead end for workspace operations: signing out stays reachable, while
- * installation-wide announcements can still be read below the access message.
+ * all fail. Wearing the sign-in page's chrome (V3's own page, `V3NoWorkspace`, or
+ * this V2 one), because it is the same kind of dead end for workspace operations:
+ * signing out stays reachable, while installation-wide announcements can still be
+ * read below the access message.
  */
 function NoWorkspaceGranted() {
   const { t } = useTranslation();
   const { authRequired, username, logout } = useAuth();
+  // V3 (the default) has its own native page; V2 and classic keep this one
+  if (useUiVersion() === "v3") return <V3NoWorkspace />;
   return (
     <V2AuthFrame
       testId="no-workspace-page"

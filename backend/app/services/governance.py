@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context
 from app.models.ledger import PolicyChange
 from app.routers.auth import enabled as auth_enabled
 from app.services import registry_console, user_gateways
@@ -1408,14 +1409,15 @@ def _new_change(
     policy: dict[str, Any] | None = None,
     override_reason: str | None = None,
 ) -> PolicyChange:
-    running = (
-        db.query(PolicyChange)
-        .filter(
-            PolicyChange.gateway_id == gateway["gatewayId"],
-            PolicyChange.status.in_(("pending", "running")),
+    with project_context(None):  # the lock is the shared gateway's, not a project's
+        running = (
+            db.query(PolicyChange)
+            .filter(
+                PolicyChange.gateway_id == gateway["gatewayId"],
+                PolicyChange.status.in_(("pending", "running")),
+            )
+            .first()
         )
-        .first()
-    )
     if running is not None:
         raise AppError(
             "governance.operation_in_flight",
@@ -1576,9 +1578,7 @@ def queue_engine_attach(
                 mode=attachment.get("mode"),
             )
     requested = request.model_dump(mode="json")
-    requested["engine_name"] = request.name or _resource_name(
-        f"{gateway['name']}_policy"
-    )
+    requested["engine_name"] = request.name or _default_engine_name(gateway)
     if dangling:
         requested["replaced_engine_arn"] = dangling["arn"]
     change = _new_change(
@@ -1934,6 +1934,18 @@ def _assert_evidence_or_override(
             {"evidence_count": 0},
             status_code=409,
         )
+
+
+def _default_engine_name(gateway: dict[str, Any]) -> str:
+    """Name a new Policy Engine after the Gateway's unique id, not its name.
+
+    Engine names are unique per account and Region, and a Gateway name is not: a
+    redeployed stack recreates ``launchpad-gw`` under a new id while an earlier
+    deployment's ``launchpad_gw_policy`` may still exist, and CreatePolicyEngine
+    then fails with a ConflictException. The id suffix keeps the name distinct.
+    """
+    base = _resource_name(str(gateway.get("gatewayId") or gateway["name"]))
+    return f"{base[:41]}_policy"
 
 
 def _resource_name(value: str) -> str:
@@ -2569,3 +2581,363 @@ def _change_is_conservative_partial(control: Any, change: PolicyChange) -> bool:
         candidate.get("enforcementMode") == "ACTIVE"
         and original.get("enforcementMode") == "ACTIVE"
     )
+
+
+# ---- Cedar scaffold for hosted MCP servers and console tool targets (projects §15.7) ----
+#
+# Two policies per target, named from it so a re-run finds and updates its own:
+# `lp_mcp_<target>_unreviewed` forbids every tool of a list nobody approved yet (no
+# `unless`: a forbid overrides any permit), and `lp_mcp_<target>_project` permits the
+# approved tools — to every OAuth principal while the workspace holds one project, else
+# to members of the owning project (`cognito:groups` carries `lp-project-<pid>`, §10.6;
+# the per-project M2M client joins the condition with R10-gw). They are created while the
+# Gateway runs LOG_ONLY, so the decision log shows what ENFORCE would refuse before the
+# mode switch, which goes through the same `gateway_mode` operation as the Governance page.
+
+MCP_POLICY_PREFIX = "lp_mcp_"
+_MCP_POLICY_SUFFIXES = {"unreviewed": "_unreviewed", "project": "_project"}
+
+
+def mcp_policy_names(target_name: str) -> dict[str, str]:
+    slug = re.sub(r"[^A-Za-z0-9_]", "_", target_name)
+    room = 48 - len(MCP_POLICY_PREFIX) - max(len(s) for s in _MCP_POLICY_SUFFIXES.values())
+    return {
+        role: f"{MCP_POLICY_PREFIX}{slug[:room]}{suffix}"
+        for role, suffix in _MCP_POLICY_SUFFIXES.items()
+    }
+
+
+def _cedar_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _cedar_principal(gateway: dict[str, Any]) -> str:
+    return (
+        "AgentCore::IamEntity" if gateway.get("authorizerType") == "AWS_IAM"
+        else "AgentCore::OAuthUser"
+    )
+
+
+def _cedar_actions(target_name: str, tools: list[str]) -> str:
+    actions = [
+        f'AgentCore::Action::"{_cedar_string(f"{target_name}___{tool}")}"'
+        for tool in sorted(set(tools))
+    ]
+    if len(actions) == 1:
+        return f"action == {actions[0]}"
+    return "action in [" + ", ".join(actions) + "]"
+
+
+def mcp_unreviewed_statement(
+    gateway: dict[str, Any], target_name: str, tools: list[str]
+) -> str:
+    return (
+        "forbid(\n"
+        f"  principal is {_cedar_principal(gateway)},\n"
+        f"  {_cedar_actions(target_name, tools)},\n"
+        f'  resource == AgentCore::Gateway::"{_cedar_string(gateway["gatewayArn"])}"\n'
+        ");"
+    )
+
+
+def mcp_project_statement(
+    gateway: dict[str, Any], target_name: str, tools: list[str], *, project_id: str | None,
+    client_id: str | None = None, scope: str | None = None,
+) -> str:
+    head = (
+        "permit(\n"
+        f"  principal is {_cedar_principal(gateway)},\n"
+        f"  {_cedar_actions(target_name, tools)},\n"
+        f'  resource == AgentCore::Gateway::"{_cedar_string(gateway["gatewayArn"])}"\n'
+        ")"
+    )
+    if project_id is None:
+        return head + ";"
+    if client_id is None and scope is None:
+        # a shared project: its agents hold the workspace M2M token, so only the
+        # members' user tokens carry the project (today's shape)
+        group = f"*lp-project-{_cedar_string(project_id)}*"
+        return (
+            head + " when {\n"
+            '  principal.hasTag("cognito:groups") &&\n'
+            f'  principal.getTag("cognito:groups") like "{group}"\n'
+            "};"
+        )
+    condition = project_principal_condition(project_id, client_id=client_id, scope=scope)
+    return head + " when {\n" + condition + "\n};"
+
+
+def mcp_scaffold_plan(
+    control: Any,
+    gateway_id: str,
+    *,
+    target_name: str,
+    approved_tools: list[str] | None,
+    open_tools: list[str] | None,
+    project_id: str | None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """What the scaffold would change on the Gateway's engine (no writes).
+
+    ``open_tools`` is the list of an open review (forbidden until decided), else None
+    (the forbid is removed); ``approved_tools`` the approved list (permitted), else None.
+    With ``workspace_id`` an isolated project's M2M client / scope joins the permit
+    (§10.6, `project_gateway.project_principal`). Steps are ``create`` / ``update`` /
+    ``delete`` / ``keep`` per policy name."""
+    gateway = _require_managed(control, gateway_id)
+    _assert_gateway_ready(gateway)
+    attachment, engine = _attached_engine(control, gateway)
+    names = mcp_policy_names(target_name)
+    principal: dict[str, str] = {}
+    if project_id is not None and workspace_id is not None:
+        from app.services import project_gateway
+
+        principal = project_gateway.project_principal(project_id, workspace_id) or {}
+    wanted = {
+        names["unreviewed"]: (
+            mcp_unreviewed_statement(gateway, target_name, open_tools) if open_tools else None
+        ),
+        names["project"]: (
+            mcp_project_statement(gateway, target_name, approved_tools, project_id=project_id,
+                                  client_id=principal.get("client_id"),
+                                  scope=principal.get("scope"))
+            if approved_tools else None
+        ),
+    }
+    steps = policy_steps(control, engine["policyEngineId"], wanted)
+    return {
+        "gateway_id": gateway_id,
+        "gateway_name": gateway.get("name"),
+        "engine_id": engine.get("policyEngineId"),
+        "mode": attachment.get("mode"),
+        "steps": steps,
+    }
+
+
+def apply_mcp_scaffold(
+    workspace: WorkspaceContext,
+    gateway_id: str,
+    steps: list[dict[str, Any]],
+    *,
+    target_name: str,
+    acknowledged_gateway_ids: list[str],
+    mode: dict[str, Any] | None = None,
+    evidence_count: int = 0,
+    control: Any | None = None,
+    iam: Any | None = None,
+    description: str | None = None,
+) -> list[dict[str, Any]]:
+    """Run the plan one governance operation at a time (the Gateway holds one in-flight
+    operation), each queued and audited exactly like a Governance-page change, then the
+    optional mode switch (``{mode, confirmation_name, override_reason}``). Stops at the
+    first failed step. Returns ``[{name, action, operation_id, status, error}]``."""
+    from app.schemas.governance import (
+        GatewayModeRequest,
+        PolicyCreateRequest,
+        PolicyDeleteRequest,
+        PolicyUpdateRequest,
+    )
+
+    control = control or control_client(workspace)
+    iam = iam or iam_client(workspace)
+    description = description or (
+        f"Launchpad tool review scaffold for {target_name} (projects §15.7)"
+    )
+    out: list[dict[str, Any]] = []
+    todo = [s for s in steps if s.get("action") != "keep"]
+    if mode is not None:
+        todo.append({"name": "gateway_mode", "action": "mode"})
+    for step in todo:
+        db = SessionLocal()
+        try:
+            gateway = _require_gateway(control, gateway_id)
+            envelope = {
+                "expected_gateway_updated_at": gateway.get("updatedAt"),
+                "acknowledged_gateway_ids": acknowledged_gateway_ids,
+            }
+            action = step["action"]
+            if action == "create":
+                queued = queue_policy_create(db, control, workspace, gateway_id,
+                                             PolicyCreateRequest(
+                                                 **envelope, name=step["name"],
+                                                 statement=step["statement"],
+                                                 description=description,
+                                                 authorization_model="custom"))
+            elif action in ("update", "delete"):
+                _, engine = _attached_engine(control, gateway)
+                detail = policy_api.get_policy(control, engine["policyEngineId"],
+                                               step["policy_id"])
+                envelope["expected_policy_updated_at"] = detail.get("updatedAt")
+                if action == "update":
+                    queued = queue_policy_update(
+                        db, control, workspace, gateway_id, step["policy_id"],
+                        PolicyUpdateRequest(**envelope, statement=step["statement"],
+                                            description=description))
+                else:
+                    queued = queue_policy_delete(db, control, workspace, gateway_id,
+                                                 step["policy_id"],
+                                                 PolicyDeleteRequest(**envelope))
+            else:
+                queued = queue_gateway_mode(
+                    db, control, workspace, iam, gateway_id,
+                    GatewayModeRequest(**envelope, **(mode or {})),
+                    evidence_count=evidence_count,
+                )
+        except AppError as exc:
+            out.append({"name": step["name"], "action": step["action"], "operation_id": None,
+                        "status": "failed", "error": f"{exc.code}: {exc.message}"})
+            return out
+        finally:
+            db.close()
+        run_policy_change(queued["id"], control=control, iam=iam)
+        db = SessionLocal()
+        try:
+            change = db.get(PolicyChange, queued["id"])
+            status = change.status if change is not None else "failed"
+            error = change.error if change is not None else "operation vanished"
+        finally:
+            db.close()
+        out.append({"name": step["name"], "action": step["action"],
+                    "operation_id": queued["id"], "status": status, "error": error})
+        if status != "succeeded":
+            return out
+    return out
+
+
+def policy_steps(
+    control: Any, engine_id: str, wanted: dict[str, str | None]
+) -> list[dict[str, Any]]:
+    """The steps that make the engine's policies named in ``wanted`` match it: a
+    statement creates / updates / keeps its policy, ``None`` deletes a live one."""
+    existing: dict[str, dict[str, Any]] = {}
+    for summary in policy_api.list_policies(control, engine_id):
+        if summary.get("name") in wanted:
+            existing[summary["name"]] = policy_api.get_policy(
+                control, engine_id, summary["policyId"]
+            )
+    steps: list[dict[str, Any]] = []
+    for name, statement in wanted.items():
+        live = existing.get(name)
+        if statement is None:
+            if live is not None:
+                steps.append({"name": name, "action": "delete", "policy_id": live["policyId"]})
+            continue
+        if live is None:
+            steps.append({"name": name, "action": "create", "statement": statement})
+        elif _statement(live) != statement:
+            steps.append({"name": name, "action": "update", "statement": statement,
+                          "policy_id": live["policyId"]})
+        else:
+            steps.append({"name": name, "action": "keep", "policy_id": live["policyId"]})
+    return steps
+
+
+# ---- per-project gateway authorization (projects §10.6, R10-gw) ----
+#
+# One forbid per (isolated project, target the project owns), `lp_proj_<pid>_<target>`,
+# the payout rule's shape: every principal is refused the target's tools *unless* it
+# carries the project — the project's M2M client (an agent of the project), its
+# `project.<pid>` scope (the same agent, should `client_id` not surface as a tag), or
+# the `lp-project-<pid>` group (a member's user token, `policy_identity`). The baseline
+# permit stays as it is, so nothing outside the project's targets changes.
+#
+# TO VERIFY live: that the gateway surfaces `client_id` and `scope` as principal tags
+# the way `cognito:groups` is (samples/policies/payout_admin_only.cedar), and how a
+# list claim is rendered in the tag. The condition therefore names all three and
+# matches a scope / group as a whole token (end of value or followed by a delimiter)
+# rather than `*lp-project-a*`, which would also admit project `a-b`.
+
+PROJECT_POLICY_PREFIX = "lp_proj_"
+_POLICY_NAME_MAX = 48
+# what may follow a token inside a rendered list claim: space-separated scopes,
+# a comma- or JSON-joined group list
+_TOKEN_DELIMITERS = (" ", ",", '"', "]")
+
+
+def project_policy_name(project_id: str, target_name: str) -> str:
+    """`lp_proj_<pid>_<target>`, ≤ 48 characters (POLICY_NAME_PATTERN); a long target
+    name is cut and suffixed with a digest so two never share a name."""
+    pid = re.sub(r"[^A-Za-z0-9_]", "_", project_id)
+    target = re.sub(r"[^A-Za-z0-9_]", "_", target_name)
+    name = f"{PROJECT_POLICY_PREFIX}{pid}_{target}"
+    if len(name) <= _POLICY_NAME_MAX:
+        return name
+    import hashlib
+
+    digest = hashlib.sha256(target_name.encode()).hexdigest()[:7]
+    room = _POLICY_NAME_MAX - len(PROJECT_POLICY_PREFIX) - len(pid) - len(digest) - 2
+    head = f"{target[:room]}_" if room > 0 else ""
+    return f"{PROJECT_POLICY_PREFIX}{pid}_{head}{digest}"
+
+
+def _token_test(tag: str, token: str) -> str:
+    """`principal.getTag(tag)` holds `token` as a whole list element."""
+    value = _cedar_string(token)
+    tests = [f'principal.getTag("{tag}") == "{value}"',
+             f'principal.getTag("{tag}") like "*{value}"']
+    tests += [f'principal.getTag("{tag}") like "*{value}{_cedar_string(d)}*"'
+              for d in _TOKEN_DELIMITERS]
+    return f'(principal.hasTag("{tag}") && (' + " || ".join(tests) + "))"
+
+
+def project_principal_condition(
+    project_id: str, *, client_id: str | None = None, scope: str | None = None,
+) -> str:
+    """The Cedar expression "the principal belongs to the project"."""
+    from app.services.project_isolation import resource_names
+
+    parts = []
+    if client_id:
+        parts.append(f'(principal.hasTag("client_id") && '
+                     f'principal.getTag("client_id") == "{_cedar_string(client_id)}")')
+    if scope:
+        parts.append(_token_test("scope", scope))
+    parts.append(_token_test("cognito:groups", resource_names(project_id).cognito_group))
+    return "  " + " ||\n  ".join(parts)
+
+
+def project_forbid_statement(
+    gateway: dict[str, Any], target_name: str, tools: list[str], *, project_id: str,
+    client_id: str | None, scope: str | None,
+) -> str:
+    """§10.6-4: the target's tools are refused to every principal outside the project."""
+    return (
+        "forbid(\n"
+        f"  principal is {_cedar_principal(gateway)},\n"
+        f"  {_cedar_actions(target_name, tools)},\n"
+        f'  resource == AgentCore::Gateway::"{_cedar_string(gateway["gatewayArn"])}"\n'
+        ") unless {\n"
+        + project_principal_condition(project_id, client_id=client_id, scope=scope)
+        + "\n};"
+    )
+
+
+def gateway_enforcement(gateway: dict[str, Any]) -> tuple[str, str]:
+    """(attached engine ARN, mode) of a GetGateway response; ("", "") when none."""
+    attachment = gateway.get("policyEngineConfiguration") or {}
+    return str(attachment.get("arn") or ""), str(attachment.get("mode") or "")
+
+
+def engine_gateway_ids(control: Any, engine_arn: str) -> list[str]:
+    """Every gateway attached to the engine — the acknowledgement a policy change on a
+    shared engine needs (`_assert_shared_for_mutation`)."""
+    impact = _engine_impact(_all_mcp_gateway_details(control)).get(engine_arn, [])
+    return [gateway["id"] for gateway in impact]
+
+
+def project_cedar_plan(
+    control: Any, gateway_id: str, wanted: dict[str, str | None],
+) -> dict[str, Any]:
+    """The steps that bring one project's `lp_proj_*` policies to ``wanted`` on the
+    gateway's engine (no writes), for `apply_mcp_scaffold`."""
+    gateway = _require_managed(control, gateway_id)
+    _assert_gateway_ready(gateway)
+    attachment, engine = _attached_engine(control, gateway)
+    return {
+        "gateway_id": gateway_id,
+        "engine_id": engine.get("policyEngineId"),
+        "engine_arn": attachment.get("arn"),
+        "mode": attachment.get("mode"),
+        "steps": policy_steps(control, engine["policyEngineId"], wanted),
+        "acknowledged_gateway_ids": engine_gateway_ids(control, attachment["arn"]),
+    }

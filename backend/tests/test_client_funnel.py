@@ -28,7 +28,9 @@ CONSTRUCTOR_RE = re.compile(
 FACTORY = "services/aws_clients.py"
 # Hub-scoped ambient-credential use, deliberately outside the workspace funnel:
 # a Bedrock credential *availability* probe for the local Claude Code CLI.
-EXEMPT = {"codegen/backends/claude_sdk.py"}
+# The invoke-access view (IA-1) shows sample code for the customer's own backend: its
+# `boto3.client(...)` lines are text in a string, never run here.
+EXEMPT = {"codegen/backends/claude_sdk.py", "services/invoke_access.py"}
 
 # SDK classes that construct boto3 clients internally: the regex above cannot see
 # them, so their construction sites are allowlisted by hand.
@@ -141,6 +143,28 @@ def test_clients_are_cached_per_service_unless_cfg_makes_them_unique(monkeypatch
     assert ctx.client("iam", config=cfg) is not ctx.client("iam", config=cfg)
     tokened = ctx.client("bedrock-agentcore", cache_token="read_timeout=1200", config=cfg)
     assert ctx.client("bedrock-agentcore", cache_token="read_timeout=1200", config=cfg) is tokened
+    aws_clients.reset_cache()
+
+
+def test_a_client_idle_past_the_nat_timeout_is_rebuilt(monkeypatch):
+    """A pooled connection a NAT gateway dropped hangs a full read timeout, so a
+    cached client unused for longer than IDLE_RECYCLE_S comes back fresh — and one
+    in steady use keeps its connection pool."""
+    aws_clients.reset_cache()
+    monkeypatch.setattr(aws_clients, "get_session", lambda *a, **k: _StubSession())
+    clock = [1000.0]
+    monkeypatch.setattr(aws_clients.time, "monotonic", lambda: clock[0])
+    ctx = ws.WorkspaceContext(account_id="111122223333", region="us-west-2")
+
+    first = ctx.client("agent-registry-control")
+    clock[0] += aws_clients.IDLE_RECYCLE_S - 1
+    assert ctx.client("agent-registry-control") is first  # within the window
+    clock[0] += aws_clients.IDLE_RECYCLE_S - 1
+    assert ctx.client("agent-registry-control") is first  # each use restarts it
+    clock[0] += aws_clients.IDLE_RECYCLE_S + 1
+    rebuilt = ctx.client("agent-registry-control")
+    assert rebuilt is not first
+    assert ctx.client("agent-registry-control") is rebuilt
     aws_clients.reset_cache()
 
 

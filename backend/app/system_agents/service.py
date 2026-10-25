@@ -46,6 +46,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context, visible_in_current_project
 from app.deployer.pipeline import StageContext, StageResult, create_deployment
 from app.models.ledger import Agent, Deployment, Job, Workspace
 from app.schemas.agent import AgentSpec
@@ -266,17 +267,39 @@ def find_installed(db: Session, workspace_id: str, preset: SystemPreset) -> Agen
 
 
 def find_name_holder(db: Session, workspace_id: str, preset: SystemPreset) -> Agent | None:
-    """A live *ordinary* agent squatting on the reserved name (never adopted)."""
-    return (
-        db.query(Agent)
-        .filter(
-            Agent.workspace_id == workspace_id,
-            Agent.name == preset.name,
-            Agent.status != "deleted",
-            Agent.system_key.is_(None),
+    """A live *ordinary* agent squatting on the reserved name (never adopted) — in
+    any project of the workspace: the name is workspace-wide (design §4.3)."""
+    with project_context(None):
+        return (
+            db.query(Agent)
+            .filter(
+                Agent.workspace_id == workspace_id,
+                Agent.name == preset.name,
+                Agent.status != "deleted",
+                Agent.system_key.is_(None),
+            )
+            .first()
         )
-        .first()
-    )
+
+
+def _holder_out(db: Session, workspace_id: str, holder: Agent | None,
+                *, is_admin: bool) -> dict[str, Any] | None:
+    """The squatter for the status projection. A member learns which agent it is
+    only when it is in their project — the status read is project-exempt, so with no
+    project current that means a workspace holding a single project."""
+    if holder is None:
+        return None
+    if is_admin or _same_project(db, workspace_id, holder):
+        return {"agent_id": holder.id, "agent_name": holder.name, "method": holder.method}
+    return {"agent_id": None, "agent_name": None, "method": None}
+
+
+def _same_project(db: Session, workspace_id: str, holder: Agent) -> bool:
+    if current_project() is not None:
+        return visible_in_current_project(holder)
+    from app.services import access
+
+    return len(access.workspace_bindings(db, workspace_id)) <= 1
 
 
 def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
@@ -294,13 +317,17 @@ def latest_uninstall_job(db: Session, agent_id: str) -> Job | None:
 
 
 def _owner_job(db: Session, agent_id: str) -> Job | None:
-    """The job that currently owns the row's teardown: the newest uninstall job."""
-    rows = (
-        db.query(Job)
-        .filter(Job.type == UNINSTALL_JOB_TYPE)
-        .order_by(Job.created_at.desc(), Job.id.desc())
-        .all()
-    )
+    """The job that currently owns the row's teardown: the newest uninstall job.
+
+    Read across projects: a preset's jobs belong to the platform preset, whichever
+    project (if any) the request that queued them happened to run in."""
+    with project_context(None):
+        rows = (
+            db.query(Job)
+            .filter(Job.type == UNINSTALL_JOB_TYPE)
+            .order_by(Job.created_at.desc(), Job.id.desc())
+            .all()
+        )
     for job in rows:
         if (job.payload or {}).get("agent_id") == agent_id:
             return job
@@ -309,7 +336,8 @@ def _owner_job(db: Session, agent_id: str) -> Job | None:
 
 def _latest_job(db: Session, agent: Agent) -> tuple[Deployment | None, Job | None]:
     deployment = _latest_deployment(db, agent.id)
-    job = db.get(Job, deployment.job_id) if deployment and deployment.job_id else None
+    with project_context(None):  # the preset's job, as in _owner_job
+        job = db.get(Job, deployment.job_id) if deployment and deployment.job_id else None
     return deployment, job
 
 
@@ -362,11 +390,7 @@ def preset_status(
         "update_available": bool(agent and installed_version != preset.skill_version),
         "status": status,
         "requirements": requirements,
-        "name_collision": (
-            {"agent_id": holder.id, "agent_name": holder.name, "method": holder.method}
-            if holder
-            else None
-        ),
+        "name_collision": _holder_out(db, row.id, holder, is_admin=is_admin),
         "agent_id": agent.id if agent else None,
         "agent_status": agent.status if agent else None,
         "error": agent.error if agent else None,

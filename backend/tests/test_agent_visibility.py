@@ -163,13 +163,13 @@ def test_hidden_agent_answers_each_routes_missing_error(world):
         ("POST", f"/api/chat/{hidden}/sessions/sess-12345678/stop"),
         ("GET", f"/api/chat/{hidden}/history?session_id=sess-12345678"),
         ("GET", f"/api/chat/{hidden}/memory?session_id=sess-12345678"),
+        ("POST", "/api/eval/online",
+         {"agent_id": hidden, "evaluators": ["Builtin.Helpfulness"]}),
+        ("GET", f"/api/eval/agents/{hidden}/log-streams"),
     )
     _refused(
         world.bob, "agent.not_active",
         ("POST", "/api/eval/runs", {"agent_id": hidden}),
-        ("POST", "/api/eval/online",
-         {"agent_id": hidden, "evaluators": ["Builtin.Helpfulness"]}),
-        ("GET", f"/api/eval/agents/{hidden}/log-streams"),
         ("GET", f"/api/experiments/readiness?agent_id={hidden}"),
         ("POST", "/api/experiments", {"agent_id": hidden}),
         status=400,

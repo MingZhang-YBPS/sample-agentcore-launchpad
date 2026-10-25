@@ -9,6 +9,10 @@ so the assertions look for facts that appear only inside the workbook.
 Requires a bootstrapped default workspace, AWS credentials, the Skill Lab worker
 Runtime, and a Registry AGENT_SKILLS record id. Cleans up the job and any task
 set it creates.
+
+Precondition: `--record-id` (or SKILL_LAB_E2E_RECORD_ID) names an AGENT_SKILLS record
+(only read); `--bucket` (SKILL_LAB_E2E_BUCKET) is optional and adds the S3 readback of
+the worker's inputs. run_live_e2e.sh picks the first such record, or skips.
 """
 
 from __future__ import annotations
@@ -108,7 +112,7 @@ def _exec_job_inputs(bucket: str, region: str, since: float) -> dict[str, bytes]
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--base-url", "--base", dest="base_url", default="http://127.0.0.1:8000")
     parser.add_argument("--record-id", default=os.environ.get("SKILL_LAB_E2E_RECORD_ID"))
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--count", type=int, default=2)

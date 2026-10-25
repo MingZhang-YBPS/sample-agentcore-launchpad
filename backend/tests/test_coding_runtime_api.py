@@ -231,21 +231,21 @@ def test_startup_sweep_fails_interrupted_jobs_only():
     assert _job("j-deploy").status == "running", "other job types are not ours"
 
 
-def test_running_projects_counts_this_workspaces_running_projects_only():
-    from app.coding.models import CodingProject
+def test_running_repos_counts_this_workspaces_running_repos_only():
+    from app.coding.models import CodingRepo
 
     db = SessionLocal()
     try:
-        assert install.running_projects(db, DEFAULT_WORKSPACE_ID) == 0
+        assert install.running_repos(db, DEFAULT_WORKSPACE_ID) == 0
         db.add_all([
-            CodingProject(workspace_id=DEFAULT_WORKSPACE_ID, owner_principal="user:u1",
+            CodingRepo(workspace_id=DEFAULT_WORKSPACE_ID, owner_principal="user:u1",
                           name=f"p{i}", session_id=f"s{i}".ljust(40, "x"), status=state)
             for i, state in enumerate(("running", "running", "idle"))
         ])
-        db.add(CodingProject(workspace_id="west", owner_principal="user:u1", name="w",
+        db.add(CodingRepo(workspace_id="west", owner_principal="user:u1", name="w",
                              session_id="w".ljust(40, "x"), status="running"))
         db.commit()
-        assert install.running_projects(db, DEFAULT_WORKSPACE_ID) == 2
+        assert install.running_repos(db, DEFAULT_WORKSPACE_ID) == 2
     finally:
         db.close()
 
@@ -334,13 +334,13 @@ def test_admin_install_answers_202_with_the_job_and_is_idempotent(admin, started
     assert busy.status_code == 409 and busy.json()["code"] == "coding.runtime_busy"
 
 
-def test_admin_uninstall_answers_202_and_is_refused_while_projects_run(admin, started,
+def test_admin_uninstall_answers_202_and_is_refused_while_repos_run(admin, started,
                                                                          monkeypatch):
-    monkeypatch.setattr(install, "running_projects", lambda db, wid: 2)
+    monkeypatch.setattr(install, "running_repos", lambda db, wid: 2)
     refused = admin.delete("/api/coding/runtime")
     assert refused.status_code == 409
     assert refused.json()["code"] == "coding.runtime_in_use"
-    monkeypatch.setattr(install, "running_projects", lambda db, wid: 0)
+    monkeypatch.setattr(install, "running_repos", lambda db, wid: 0)
     ok = admin.delete("/api/coding/runtime")
     assert ok.status_code == 202
     assert _job(ok.json()["job_id"]).type == install.UNINSTALL_JOB_TYPE

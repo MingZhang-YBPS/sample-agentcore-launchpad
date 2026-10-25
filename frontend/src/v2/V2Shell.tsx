@@ -1,19 +1,21 @@
 import "./v2.css";
 import "./v2-classic.css";
+import "./glossary.css";
 
-import { ChevronDown, Repeat, Search } from "lucide-react";
+import { ChevronDown, LogOut, Repeat, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
+import { getUiVersion, setUiVersion } from "../lib/ui-version";
 import { useNavMode } from "../lib/nav-mode";
-import { setUiVersion } from "../lib/ui-version";
+import { NoBoundProjectBanner } from "../workspace/NoProjectAssigned";
+import { scopeKey, useProject } from "../workspace/project-context";
 import { useWorkspace } from "../workspace/workspace-context";
-import { BudgetBanner } from "./BudgetBanner";
 import { CommandPalette, PALETTE_SHORTCUT } from "./CommandPalette";
-import { GlossaryDialog } from "./Glossary";
+import { GlossaryDialog } from "./GlossaryDialog";
 import { HelpMenu } from "./HelpMenu";
 import { V2Lang } from "./Lang";
 import { V2Logo } from "./Logo";
@@ -21,8 +23,8 @@ import { isNavItemActive, navGroupsFor } from "./nav";
 import { TourHost } from "./onboarding/Tour";
 import { closePalette, isPaletteToggle, isSlashOpen, openPalette, togglePalette } from "./palette";
 import { ModuleDemoProvider } from "./pages/videos/ModuleDemo";
+import { TierTag } from "./pages/workspaces/tags";
 import { FilterSelect, V2ToastProvider } from "./ui";
-import { UserMenu } from "./UserMenu";
 
 const COLLAPSE_KEY = "launchpad_v2_nav_collapsed";
 
@@ -44,14 +46,27 @@ function WorkspaceSelect() {
   const { workspaces, current, select } = useWorkspace();
   if (workspaces.length === 0) return null;
   return (
-    <FilterSelect
-      label={t("topbar.workspaceLabel")}
-      title={t("topbar.workspaceTitle")}
-      value={current?.id ?? ""}
-      options={workspaces.map((ws) => ({ value: ws.id, label: `${ws.name} · ${ws.region}` }))}
-      onChange={select}
-      testId="v2-workspace-select"
-    />
+    <>
+      <FilterSelect
+        label={t("topbar.workspaceLabel")}
+        title={t("topbar.workspaceTitle")}
+        value={current?.id ?? ""}
+        options={workspaces.map((ws) => ({
+          value: ws.id,
+          // T05: a non-dev tier is part of the name, so prod is never picked by mistake
+          label: `${ws.name} · ${ws.region}${
+            ws.tier && ws.tier !== "dev" ? ` · ${t(`v2.workspaces.tier.${ws.tier}`)}` : ""
+          }`,
+        }))}
+        onChange={select}
+        testId="v2-workspace-select"
+      />
+      {current && (
+        <span data-testid="v2-workspace-tier" data-tier={current.tier ?? "dev"}>
+          <TierTag tier={current.tier} />
+        </span>
+      )}
+    </>
   );
 }
 
@@ -68,16 +83,19 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
   const navigate = useNavigate();
   const { isAdmin, authRequired, username, logout } = useAuth();
   const { current } = useWorkspace();
+  const { current: project } = useProject();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
-  // A view filter only (every route stays reachable by URL); everyone starts on
-  // the full sidebar and may opt into the essentials.
-  const [navMode, setNavMode] = useNavMode();
+  // T11: members land on the pared-down sidebar, admins on the full one; either
+  // can switch. A filter only — every route stays reachable by URL.
+  const [navMode, setNavMode] = useNavMode(isAdmin);
   const navGroups = navGroupsFor(navMode, isAdmin);
 
-  // Opening a /v2 page (a bookmark, a shared link) is choosing V2: the classic
-  // modules reached from its sidebar then stay inside this shell too.
+  // Opening a /v2 page (a bookmark, a shared link) is choosing V2 over the classic
+  // console: its modules reached from the sidebar then stay inside this shell. It
+  // does NOT undo a V3 choice — V3 links to pages it has not rebuilt yet, and
+  // following one must not silently switch the operator's console back.
   useEffect(() => {
-    if (!classic) setUiVersion("v2");
+    if (!classic && getUiVersion() === "v1") setUiVersion("v2");
   }, [classic]);
 
   // The classic console styles <body> for its dark theme; V2 overrides it
@@ -157,12 +175,36 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
               </button>
               <WorkspaceSelect />
               <V2Lang />
+              <button
+                type="button"
+                className="v2-btn sm"
+                // every V2 page has a V3 home (hosted or rebuilt): stay on this one
+                onClick={() => setUiVersion("v3")}
+                data-testid="v2-switch-v3"
+                title={t("v3.switch.tryHint")}
+              >
+                {t("v3.switch.try")}
+              </button>
               <HelpMenu />
               <button type="button" className="v2-btn sm" onClick={switchToClassic} data-testid="v2-switch-classic">
                 <Repeat size={13} aria-hidden="true" />
                 {t("v2.switchClassic")}
               </button>
-              <UserMenu displayName={displayName} authRequired={authRequired} onLogout={() => void logout()} />
+              <div className="v2-user">
+                <span className="v2-avatar">{displayName.slice(0, 1).toUpperCase()}</span>
+                <span>{displayName}</span>
+                {authRequired && (
+                  <button
+                    type="button"
+                    className="v2-link"
+                    onClick={() => void logout()}
+                    title={t("auth.logout")}
+                    aria-label={t("auth.logout")}
+                  >
+                    <LogOut size={14} />
+                  </button>
+                )}
+              </div>
             </div>
           </header>
           <div className="v2-layout">
@@ -209,13 +251,11 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
                 title={t("v2.navMode.hint")}
                 onClick={() => setNavMode(navMode === "business" ? "expert" : "business")}
               >
-                {navMode === "business" ? t("v2.navMode.showExpert") : t("v2.navMode.showBusiness")}
+                {navMode === "business" ? t("v2.nav.showExpert") : t("v2.nav.showBusiness")}
               </button>
             </aside>
             <div className="v2-main">
-              {/* own spend at 80 % of the monthly budget or over it (myUsage.ts) */}
-              <BudgetBanner who={displayName} />
-              {/* Workspace-bound pages refetch on selection; hub-global content
+              {/* Workspace-bound pages refetch on a workspace or project switch; hub-global content
                   and admin drafts survive a workspace switch. */}
               <div
                 className={classic ? "v2-main-inner view v2-classic" : "v2-main-inner"}
@@ -224,9 +264,10 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
                   location.pathname === "/videos" || location.pathname === "/v2/videos" ||
                   location.pathname === "/v2/video-management"
                     ? "hub-global-content"
-                    : current?.id ?? "none"
+                    : scopeKey(current?.id, project?.id)
                 }
               >
+                <NoBoundProjectBanner />
                 <RouteChunk key={location.pathname}>
                   <Outlet />
                 </RouteChunk>

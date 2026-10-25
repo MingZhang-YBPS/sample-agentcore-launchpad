@@ -62,7 +62,7 @@ def _fetch_source(url: str) -> dict[str, Any]:
     return data
 
 
-def _entry_from_litellm(spec: dict[str, Any]) -> dict[str, float] | None:
+def _entry_from_litellm(spec: dict[str, Any]) -> dict[str, Any] | None:
     """litellm per-token USD costs → our per-1M entry; None when unpriced."""
     try:
         cost_in = float(spec["input_cost_per_token"])
@@ -79,6 +79,9 @@ def _entry_from_litellm(spec: dict[str, Any]) -> dict[str, float] | None:
         value = spec.get(src)
         if isinstance(value, (int, float)) and value >= 0:
             entry[dst] = round(float(value) * 1e6, 4)
+    window = spec.get("max_input_tokens")
+    if isinstance(window, int) and window > 0:
+        entry["max_input_tokens"] = window  # the assistant's replay budget (C3)
     return entry
 
 
@@ -316,13 +319,7 @@ def refresh_model_prices(
         # region is priced on its next appearance here.
         workspace = default_workspace_context()
         seen = sorted({*_seen_models(workspace, cw), *_span_models(workspace, logs)})
-        # the map WITHOUT console price overrides (services/rates.py): what is
-        # persisted to yaml must never carry an override past its own reset
-        from app.services import rates
-
-        prices, updated, added = refresh_map(
-            rates.base_model_prices(settings), seen, source
-        )
+        prices, updated, added = refresh_map(settings.model_prices, seen, source)
         meta = {
             "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "source": url,

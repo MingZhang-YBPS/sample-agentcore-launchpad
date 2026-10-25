@@ -48,6 +48,19 @@ def regional_role_name(base_name: str, region: str) -> str:
     return base_name if region == LEGACY_REGION else f"{base_name}-{region}"
 
 
+# Phase 2 isolation (projects design §10.3): one customer managed policy per
+# (isolated project, workspace), used as the permissions boundary of that project's
+# agent roles. The spoke template scopes its policy grants and the CreateRole boundary
+# condition to this prefix (`policy/launchpad-project-*`), so every name must keep it.
+PROJECT_BOUNDARY_POLICY_PREFIX = "launchpad-project-"
+
+
+def project_boundary_policy_name(project_id: str, region: str) -> str:
+    """`launchpad-project-<pid>[-<region>]` — the same regional rule as the roles, since
+    policy names are account-global too and one workspace exists per (account, region)."""
+    return regional_role_name(f"{PROJECT_BOUNDARY_POLICY_PREFIX}{project_id}", region)
+
+
 def service_trust_policy(
     service: str, account_id: str, *, source_account: bool = True
 ) -> dict[str, Any]:
@@ -516,6 +529,48 @@ def gateway_role_policy(account_id: str, region: str) -> dict[str, Any]:
     }
 
 
+# Console-created Lambda tool targets (design projects §15.12): the Gateway invokes
+# them with its own role (GATEWAY_IAM_ROLE), so each one adds its function to this
+# inline policy on the Gateway role, and deleting the target takes it out again.
+LAMBDA_TOOLS_POLICY_NAME = "launchpad-lambda-tools"
+
+
+def lambda_tools_policy(lambda_arns: list[str]) -> dict[str, Any]:
+    """`lambda:InvokeFunction` on exactly these functions (and their versions /
+    aliases), one statement per function so a review can read them one by one."""
+    functions: set[str] = set()
+    for arn in lambda_arns:
+        base = arn.split(":function:", 1)
+        # a qualified ARN (version / alias) grants its function, like the bare one
+        functions.add(f"{base[0]}:function:{base[1].split(':', 1)[0]}" if len(base) == 2 else arn)
+    statements = []
+    for index, function_arn in enumerate(sorted(functions)):
+        statements.append({
+            "Sid": f"InvokeLambdaTool{index}",
+            "Effect": "Allow",
+            "Action": "lambda:InvokeFunction",
+            "Resource": [function_arn, f"{function_arn}:*"],
+        })
+    return {"Version": "2012-10-17", "Statement": statements}
+
+
+def sync_lambda_tools_policy(iam: Any, role_name: str, lambda_arns: list[str]) -> None:
+    """Make the Gateway role's Lambda-tools inline policy name exactly ``lambda_arns``
+    (deleted when none remain). Idempotent."""
+    if lambda_arns:
+        iam.put_role_policy(
+            RoleName=role_name,
+            PolicyName=LAMBDA_TOOLS_POLICY_NAME,
+            PolicyDocument=json.dumps(lambda_tools_policy(lambda_arns)),
+        )
+        return
+    try:
+        iam.delete_role_policy(RoleName=role_name, PolicyName=LAMBDA_TOOLS_POLICY_NAME)
+    except Exception as exc:  # noqa: BLE001 — the SDK's typed error is client-specific
+        if "NoSuchEntity" not in f"{type(exc).__name__}{exc}":
+            raise
+
+
 def kb_role_policy(artifacts_bucket: str) -> dict[str, Any]:
     """The Bedrock Managed KB ingestion role — base_stack.py:571-585. Per-KB
     inline policies (`launchpad-kb-{id}`) extend it to external buckets."""
@@ -544,7 +599,9 @@ def codebuild_role_policy(
     account_id: str, region: str, artifacts_bucket: str, ecr_repo_arn: str, project: str
 ) -> dict[str, Any]:
     """What the CDK grants the build project implicitly (`repo.grant_pull_push`,
-    `artifacts.grant_read`) plus its log group, written out."""
+    `artifacts.grant_read`) plus its log group, written out. The push grant covers
+    the shared repository **and** the per-project repositories under it
+    (`launchpad-agents/<pid>`, projects design §10.10)."""
     bucket_arn = f"arn:aws:s3:::{artifacts_bucket}"
     return {
         "Version": "2012-10-17",
@@ -571,7 +628,7 @@ def codebuild_role_policy(
                     "ecr:CompleteLayerUpload",
                     "ecr:PutImage",
                 ],
-                "Resource": ecr_repo_arn,
+                "Resource": [ecr_repo_arn, f"{ecr_repo_arn}/*"],
             },
             {
                 "Sid": "SourceObjects",
@@ -619,6 +676,26 @@ def _tags(iam: Any, role_name: str) -> dict[str, str]:
     }
 
 
+def _shared_cost_tags() -> list[dict[str, str]]:
+    """A workspace service role's cost tags (cost-tags design §1.2): shared
+    infrastructure, no project. `launchpad:workspace` is the adoption tag above."""
+    from app.services.project_telemetry import TAG_WORKSPACE, shared_tags
+
+    return [{"Key": k, "Value": v} for k, v in shared_tags().items() if k != TAG_WORKSPACE]
+
+
+def _catch_up_cost_tags(iam: Any, role_name: str, current: dict[str, str],
+                        log: Callable[[str], None]) -> None:
+    """An adopted role made before cost tags gets them; best-effort."""
+    missing = [t for t in _shared_cost_tags() if current.get(t["Key"]) != t["Value"]]
+    if not missing:
+        return
+    try:
+        iam.tag_role(RoleName=role_name, Tags=missing)
+    except Exception as exc:  # noqa: BLE001 — attribution never fails a bootstrap
+        log(f"cost tags on role {role_name} not written: {exc}")
+
+
 def ensure_role(
     iam: Any,
     *,
@@ -647,6 +724,7 @@ def ensure_role(
             Tags=[
                 {"Key": WORKSPACE_TAG_KEY, "Value": workspace_id},
                 {"Key": "launchpad:managed", "Value": "true"},
+                *_shared_cost_tags(),
             ],
         )
         role_arn = created["Role"]["Arn"]
@@ -677,6 +755,7 @@ def ensure_role(
         iam.update_assume_role_policy(
             RoleName=role_name, PolicyDocument=json.dumps(trust_policy)
         )
+        _catch_up_cost_tags(iam, role_name, tags, log)
 
     for policy_name, document in inline_policies.items():
         iam.put_role_policy(

@@ -11,6 +11,7 @@ import {
   type AssistantProposal,
   errorMessage,
 } from "../../../lib/api";
+import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { asRecord, type DeployedAgent } from "../../../lib/assistant";
 import {
   coverageInfo,
@@ -192,9 +193,9 @@ export function NextStepsCard({
     setStarting(true);
     setRunError(null);
     try {
-      const created = await api.createEvaluationRun({
-        agent_id: targetId, dataset_id: datasetId, evaluators: evaluators.map((e) => e.id),
-      });
+      const created = await withStorageConfirm((confirm) => api.createEvaluationRun({
+        agent_id: targetId, dataset_id: datasetId, evaluators: evaluators.map((e) => e.id), ...storageFlag(confirm),
+      }));
       setRuns((prev) => [created, ...(prev ?? []).filter((r) => r.id !== created.id)]);
       toast("success", t("assistantNext.run.startedToast", { id: created.id.slice(0, 8) }));
     } catch (err) {

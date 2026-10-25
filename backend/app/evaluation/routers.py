@@ -6,13 +6,14 @@ Adapted from agentcore_eva_opt routers (datasets/evaluators/runs/insights).
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -24,16 +25,18 @@ from app.core.errors import (
     mapped_aws_error,
     public_aws_message,
 )
+from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import recommendations, scorecard, service
+from app.evaluation import recommendations, run_cost, scorecard, service
 from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
 from app.evaluation.online_evaluators import require_visible_evaluators
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
+from app.models.shares import KIND_EVAL_DATASET
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
-from app.services import agent_access, budgets, creators, job_budget, visibility
+from app.services import access, agent_access, creators, resource_shares, visibility
 from app.services.agentcore.client import control_client
 from app.services.aws_clients import is_assume_role_failure
 from app.services.creators import Creator
@@ -182,6 +185,8 @@ def _assert_target_references(
     problems: dict[str, list[str]] = {}
     control = None
     hidden = visibility.hidden_aws_ids(viewer, db, ws.id, creators.EVALUATOR, evaluators)
+    # another project's evaluator scores here only when it is shared at `use` (§11.2)
+    read_only = resource_shares.refused_ids(db, creators.EVALUATOR, evaluators, "use")
     offered = None
     if any(e in coverage.KNOWN_BUILTINS for e in evaluators):
         control = control_client(ws.context)
@@ -190,6 +195,13 @@ def _assert_target_references(
         if evaluator in hidden:
             # workspace isolation: a hidden custom evaluator is a missing one
             raise _evaluator_missing(evaluator)
+        if evaluator in read_only:
+            raise AppError(
+                "run.evaluator_share_read_only",
+                f"evaluator {evaluator} is shared with this project read-only — ask its "
+                "project for use access, or drop it",
+                {"evaluator": evaluator}, status_code=422,
+            )
         if offered and evaluator in coverage.KNOWN_BUILTINS and evaluator not in offered:
             # documented but still rolling out here: StartBatchEvaluation would reject
             # the whole batch only after the agent was invoked
@@ -291,11 +303,12 @@ def _evaluator_missing(evaluator: str) -> AppError:
 
 
 def _require_visible_evaluator(
-    db: Session, ws: WorkspaceScope, viewer: Viewer, evaluator_id: str
+    db: Session, ws: WorkspaceScope, viewer: Viewer, evaluator_id: str, *, need: str
 ) -> None:
     """A custom evaluator hidden by workspace isolation answers like a missing one;
-    built-in / third-party ids carry no creator and are always visible."""
-    require_visible_evaluators(db, ws.id, viewer, [evaluator_id])
+    built-in / third-party ids carry no creator and are always visible. One another
+    project shared is read (`need="read"`) but never changed (`"own"`)."""
+    require_visible_evaluators(db, ws.id, viewer, [evaluator_id], need=need)
 
 
 def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
@@ -315,17 +328,55 @@ def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
 
 
 def _dataset_in(
-    db: Session, ws: WorkspaceScope, dataset_id: str, *, viewer: Viewer = Viewer.ALL
+    db: Session, ws: WorkspaceScope, dataset_id: str, *, viewer: Viewer = Viewer.ALL,
+    need: str = "read",
 ) -> EvalDataset:
     """The dataset, or 404 — another workspace's dataset, or one hidden from the
-    viewer by workspace isolation (`services/visibility.py`), is not visible here."""
+    viewer by workspace isolation (`services/visibility.py`), is not visible here.
+
+    A dataset another project shared with this one (projects §11.2) reads like its
+    own; its member visibility is the owner project's, not this one's. `need` is what
+    the caller does with it: `read`; `use` — an evaluation runs on it (a read-only
+    share answers `share.read_only`); `own` — any change, here or on AWS (every share
+    answers `share.read_only`, before the AWS call)."""
     dataset = db.get(EvalDataset, dataset_id)
     if dataset is None or dataset.workspace_id != ws.id:
         raise NotFoundError("dataset.not_found", "dataset not found")
-    visibility.require_seen(
-        viewer, db, dataset.created_by, NotFoundError("dataset.not_found", "dataset not found")
-    )
+    if _shared_root(dataset) is None:
+        visibility.require_seen(
+            viewer, db, dataset.created_by,
+            NotFoundError("dataset.not_found", "dataset not found"),
+        )
+    elif need != "read" and resource_shares.refused_ids(
+            db, KIND_EVAL_DATASET, [_shared_root(dataset)], need):
+        raise NotFoundError(
+            "share.read_only",
+            f"dataset '{dataset_id}' is shared with this project "
+            + ("read-only" if need == "use" else "— only its own project changes it"),
+            {"id": dataset_id, "need": need},
+        )
     return dataset
+
+
+def _shared_root(dataset: EvalDataset) -> str | None:
+    """The shared resource id (a golden set's parent) when `dataset` is another
+    project's row this one sees through a share; None for its own rows."""
+    pid = current_project()
+    if pid is None or dataset.project_id in (pid, None):
+        return None
+    return dataset.split_of or dataset.id
+
+
+def _with_shared_from(db: Session, rows: list[dict[str, Any]],
+                      datasets: list[EvalDataset]) -> list[dict[str, Any]]:
+    """Label the rows another project lent: `shared_from {project_id, name, access}`."""
+    roots = {d.id: _shared_root(d) for d in datasets}
+    lent = resource_shares.shared_from(db, KIND_EVAL_DATASET, {r for r in roots.values() if r})
+    for row in rows:
+        root = roots.get(row["id"])
+        if root and root in lent:
+            row["shared_from"] = lent[root]
+    return rows
 
 
 @router.get("/datasets")
@@ -334,14 +385,19 @@ def list_datasets(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
+    seen = visibility.clause(viewer, EvalDataset.created_by)
+    pid = current_project()
+    if pid is not None and viewer.filters:
+        # a shared row (§11.2) is another project's creation: its own rule applied
+        seen = or_(seen, EvalDataset.project_id != pid)
     rows = (
         db.query(EvalDataset)
         .filter(EvalDataset.workspace_id == ws.id)
-        .filter(visibility.clause(viewer, EvalDataset.created_by))
+        .filter(seen)
         .order_by(EvalDataset.created_at.desc())
         .all()
     )
-    return {"datasets": [_dataset_out(d) for d in rows]}
+    return {"datasets": _with_shared_from(db, [_dataset_out(d) for d in rows], rows)}
 
 
 @router.post("/datasets", status_code=201)
@@ -429,8 +485,9 @@ def update_dataset(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     if req.items is not None:
+        _refuse_golden(dataset, "edit")
         _validate_items(req.items)
         if _infer_kind(req.items) != dataset.kind:
             raise AppError(
@@ -455,10 +512,27 @@ def delete_dataset(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
+    _refuse_golden(dataset, "delete")
     db.delete(dataset)
     db.commit()
     return {"deleted": True}
+
+
+def _refuse_golden(dataset: EvalDataset, action: str) -> None:
+    """A golden set and its splits change only through the golden routes.
+
+    Those routes carry the admission permission, the provenance stamps and the holdout
+    seal (`app/dlc/golden.py`); a plain dataset write would skip all three — rewrite a
+    sealed holdout, or orphan the splits of a deleted parent."""
+    if dataset.role == "golden":
+        raise AppError(
+            "dataset.golden_managed",
+            f"a golden set cannot be {'edited' if action == 'edit' else 'deleted'} as a plain "
+            "dataset — admit, move or retire its items on the golden set page",
+            {"id": dataset.id, "action": action},
+            status_code=409,
+        )
 
 
 # ─── AWS cloud datasets (draft in place + published versions) ───────────────
@@ -537,7 +611,7 @@ def sync_dataset_to_aws(
     published versions and any run pinned to them survive; the draft then reads
     MODIFIED until PUBLISH VERSION snapshots it. The recorded `cloud` blob caches
     id/arn/status plus draft_status, example_count and the version list."""
-    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     examples = normalize_scenarios(dataset.items)
     client = control_client(ws.context)
     synced_at = datetime.now(UTC).isoformat()
@@ -652,7 +726,7 @@ def publish_dataset_version(
     """Snapshot the cloud copy's DRAFT as the next immutable numbered version.
     The draft stays (draft_status flips to UNMODIFIED); the new version joins
     `cloud.versions`. 409 `dataset.not_synced` without a live cloud copy."""
-    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer)
+    dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     client = control_client(ws.context)
     detail = _existing_cloud_draft(client, dataset)
     if detail is None:
@@ -738,9 +812,9 @@ def list_cloud_datasets(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     out = []
-    hidden = _hidden_cloud_ids(db, ws, viewer)
+    hidden = _cloud_hidden(db, ws, viewer, shared="read")
     for ds in ac.list_datasets(control_client(ws.context)):
-        if ds.get("datasetId") in hidden:
+        if hidden(ds.get("datasetId") or ""):
             continue
         out.append(
             {
@@ -766,7 +840,7 @@ def get_cloud_dataset(
     """Cloud dataset detail for the run form and the datasets page — whether it
     can drive a run, whether its scenarios carry ground truth (gates Trajectory*
     evaluators), the DRAFT status and the published versions."""
-    _require_cloud_visible(db, ws, cloud_id, viewer)
+    _require_cloud_visible(db, ws, cloud_id, viewer, shared="read")
     client = control_client(ws.context)
     detail = ac.get_dataset(client, dataset_id=cloud_id)
     return _cloud_detail_out(client, detail)
@@ -848,30 +922,68 @@ def _rows_with_cloud(db: Session, ws: WorkspaceScope, cloud_id: str) -> list[Eva
     ]
 
 
-def _hidden_cloud_ids(db: Session, ws: WorkspaceScope, viewer: Viewer) -> set[str]:
-    """Cloud dataset ids hidden from `viewer`: a cloud dataset follows the local
-    rows linked to it — visible when ANY of them is — and one with no local row
-    (made outside the console) has no known creator, so it stays shared."""
-    if not viewer.filters:
-        return set()
+def _cloud_hidden(db: Session, ws: WorkspaceScope, viewer: Viewer, *,
+                  shared: str | None = None) -> Callable[[str], bool]:
+    """Whether a cloud dataset id is hidden from `viewer` in the current project: a
+    cloud dataset follows the local rows linked to it — visible when ANY of them is.
+
+    The links are read across every project (design §5.5): ListDatasets is
+    account-wide, so a dataset synced by another project must not pass for an unlinked
+    one. One with no local row (made outside the console) has no known creator and
+    stays shared — with several projects in the workspace, shared by the workspace's
+    default project only.
+
+    `shared` (projects §11.2) lets the cloud copy of a dataset another project shared
+    with this one through: `read` (list, detail) or `use` (a run replays it). Without
+    it — every route that changes the cloud dataset — a shared copy stays hidden."""
+    pid = current_project()
+    if not viewer.filters and pid is None:
+        return lambda _cloud_id: False
+    lent = (resource_shares.received_ids(db, KIND_EVAL_DATASET, use=shared == "use")
+            if shared else frozenset())
+    with project_context(None):
+        rows = (
+            db.query(EvalDataset)
+            .filter(EvalDataset.workspace_id == ws.id, EvalDataset.cloud.isnot(None))
+            .all()
+        )
     linked: dict[str, bool] = {}
-    for row in (
-        db.query(EvalDataset)
-        .filter(EvalDataset.workspace_id == ws.id, EvalDataset.cloud.isnot(None))
-        .all()
-    ):
+    for row in rows:
         cloud_id = (row.cloud or {}).get("dataset_id")
         if cloud_id:
-            linked[cloud_id] = linked.get(cloud_id, False) or visibility.sees(
-                viewer, db, row.created_by
+            own = (pid is None or row.project_id == pid) and (
+                not viewer.filters or visibility.sees(viewer, db, row.created_by)
             )
-    return {cloud_id for cloud_id, seen in linked.items() if not seen}
+            lent_here = (pid is not None and row.project_id != pid
+                         and (row.split_of or row.id) in lent)
+            seen = own or lent_here
+            linked[cloud_id] = linked.get(cloud_id, False) or seen
+    unlinked_hidden = pid is not None and not _workspace_default_project(db, ws, pid)
+
+    def hidden(cloud_id: str) -> bool:
+        if cloud_id in linked:
+            return not linked[cloud_id]
+        return unlinked_hidden
+
+    return hidden
+
+
+def _workspace_default_project(db: Session, ws: WorkspaceScope, pid: str) -> bool:
+    """True when `pid` holds the workspace's unattributed AWS objects: always in a
+    single-project workspace, else only the workspace's default project."""
+    if not service.several_projects(db, ws.id):
+        return True
+    return any(
+        b.project_id == pid and b.is_workspace_default
+        for b in access.workspace_bindings(db, ws.id)
+    )
 
 
 def _require_cloud_visible(
-    db: Session, ws: WorkspaceScope, cloud_id: str, viewer: Viewer
+    db: Session, ws: WorkspaceScope, cloud_id: str, viewer: Viewer, *,
+    shared: str | None = None,
 ) -> None:
-    if cloud_id in _hidden_cloud_ids(db, ws, viewer):
+    if _cloud_hidden(db, ws, viewer, shared=shared)(cloud_id):
         raise NotFoundError("dataset.not_found", "dataset not found")
 
 
@@ -954,8 +1066,12 @@ def list_evaluators(
     if offered:
         builtin = [row for row in builtin if row["id"] in offered]
     known = creators.lookup(db, ws.id, creators.EVALUATOR, (row["id"] for row in live))
+    # "from project X (read / use)" on the evaluators another project lent (§11.2)
+    lent = resource_shares.shared_from(db, creators.EVALUATOR, {row["id"] for row in live})
     for row in live:
         row.update(known.get(row["id"]) or creators.empty())
+        if row["id"] in lent:
+            row["shared_from"] = lent[row["id"]]
     return {"evaluators": builtin + live, "builtin_count": len(builtin)}
 
 
@@ -1221,11 +1337,23 @@ def get_evaluator(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_visible_evaluator(db, ws, viewer, evaluator_id)
-    detail = _evaluator_out(
-        ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
-    )
-    return {**detail, **creators.lookup_one(db, ws.id, creators.EVALUATOR, evaluator_id)}
+    _require_visible_evaluator(db, ws, viewer, evaluator_id, need="read")
+    raw = ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
+    detail = _evaluator_out(raw)
+    # the same reading the run gate applies (`_check_ground_truth`): a judge needs
+    # what its rubric's placeholders name, a derived one what its base needs.
+    # ListEvaluators carries no config, so only this read can answer; an external
+    # code evaluator stays unknown (None).
+    from app.evaluation import coverage
+
+    needs, _kind = coverage.needs_from_config(raw, None)
+    detail["requires_ground_truth"] = None if needs is None else bool(needs)
+    out = {**detail, **creators.lookup_one(db, ws.id, creators.EVALUATOR, evaluator_id)}
+    # a borrowed evaluator (§11.2) says whose it is, so the page hides Edit
+    lent = resource_shares.shared_from(db, creators.EVALUATOR, {evaluator_id})
+    if evaluator_id in lent:
+        out["shared_from"] = lent[evaluator_id]
+    return out
 
 
 class JudgeUpdate(BaseModel):
@@ -1259,7 +1387,7 @@ def update_evaluator(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _reject_managed(evaluator_id)
-    _require_visible_evaluator(db, ws, viewer, evaluator_id)
+    _require_visible_evaluator(db, ws, viewer, evaluator_id, need="own")
     _require_one_definition(req)
     if req.instructions is not None:
         _require_placeholder(req.instructions)
@@ -1323,10 +1451,24 @@ def delete_evaluator(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     _reject_managed(evaluator_id)
-    _require_visible_evaluator(db, ws, viewer, evaluator_id)
+    _require_visible_evaluator(db, ws, viewer, evaluator_id, need="own")
     from app.assistant.evaluation_assets import managed_evaluator
+    from app.models.assistant import EvaluationAssetOperation
 
-    owner = managed_evaluator(db, ws.id, evaluator_id)
+    # the owning operation is looked up in every project: one of another project
+    # still guards its Lambda / IAM footprint, and the evaluator answers as missing
+    pid = current_project()
+    with project_context(None):
+        owner = managed_evaluator(db, ws.id, evaluator_id)
+        operation = (
+            db.get(EvaluationAssetOperation, owner["operation_id"]) if owner else None
+        )
+    if pid is not None and operation is not None and operation.project_id != pid:
+        raise ClientError(
+            {"Error": {"Code": "ResourceNotFoundException",
+                       "Message": f"Evaluator {evaluator_id} not found"}},
+            "GetEvaluator",
+        )
     if owner is not None:
         # an evaluator created by an evaluation-assets operation has a Lambda / IAM
         # footprint that only the operation's cleanup removes — deleting the record
@@ -1385,9 +1527,17 @@ class RunCreate(BaseModel):
     session_source: Literal["logs"] | None = None
     lookback_hours: int | None = Field(default=None, ge=1, le=336)  # time window
     insights: list[str] | None = None  # insight-type subset (insights mode)
+    # Agent-DLC pass^k (design §5.3): each dataset scenario is invoked `repeats` times in
+    # distinct sessions. Opt-in, and priced first — `confirm_cost` acknowledges the
+    # estimate when the workspace policy asks for confirmation.
+    repeats: int = Field(default=1, ge=1, le=10)
+    confirm_cost: bool = False
+    # storage-mounts §6: a dataset replay against an agent with a read-write mount
+    # writes into shared storage; the member acknowledges it (409 storage.write_confirm)
+    confirm_storage: bool = False
 
 
-def _run_out(run: EvalRun, *, snapshot: dict[str, Any] | None) -> dict[str, Any]:
+def _run_out(run: EvalRun, *, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     """A run's payload. ``snapshot`` is the agent version it evaluated
     (``scorecard.resolve_snapshots``: ``{seq, source: stamped|inferred|observed}``, or
     null without an agent or a deployed snapshot) — resolved by the caller, a page at
@@ -1418,12 +1568,11 @@ def _run_out(run: EvalRun, *, snapshot: dict[str, Any] | None) -> dict[str, Any]
         # sessions a partially failed batch skipped, and why (null when none / older row)
         "session_failures": run.session_failures,
         "error": run.error,
-        # `budget_exceeded` when the run stopped at a boundary because its creator
-        # reached their monthly spend budget (services/job_budget.py), else null
-        "stop_reason": job_budget.stop_reason_of(run.error),
         # additive: an operator stop is pending on this run (in-memory flag;
         # the row turns `stopped` once the poller/worker observes it)
         "stop_requested": service.stop_requested(run.id),
+        # eval-cost §1.3: {usd, kind (actual / live / estimate), estimate_usd}
+        "cost": run_cost.summary(run),
         "snapshot": snapshot,
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "updated_at": run.updated_at.isoformat() if run.updated_at else None,
@@ -1528,7 +1677,7 @@ def _replayed_items(
             return None
         return list(dataset.items or [])
     if scope == scorecard.SCOPE_CLOUD:
-        if run.dataset_id in _hidden_cloud_ids(db, ws, viewer):
+        if _cloud_hidden(db, ws, viewer, shared="read")(run.dataset_id):
             return None
         try:
             return _cloud_dataset_items(run.dataset_id, ws, version=run.dataset_version)[1]
@@ -1551,8 +1700,9 @@ def _side_results(run: EvalRun, ws: WorkspaceScope) -> tuple[dict[str, Any], dic
     return status, by_session
 
 
-# declared before `/runs/{run_id}`, which would read `compare` as a run id
-@router.get("/runs/compare")
+# declared before `/runs/{run_id}`, which would read `compare-pair` as a run id.
+# `/runs/compare` (`?runs=`) is V3's fix ladder in `app/routers/dlc.py`.
+@router.get("/runs/compare-pair")
 def compare_runs(
     a: str = Query(min_length=1, max_length=16),
     b: str = Query(min_length=1, max_length=16),
@@ -1714,11 +1864,11 @@ def _start_run(
     dataset_name = None
     time_range = None
     if req.dataset_id:
-        dataset = _dataset_in(db, ws, req.dataset_id, viewer=viewer)
+        dataset = _dataset_in(db, ws, req.dataset_id, viewer=viewer, need="use")
         items = dataset.items
         dataset_name = dataset.name
     elif req.cloud_dataset_id:
-        _require_cloud_visible(db, ws, req.cloud_dataset_id, viewer)
+        _require_cloud_visible(db, ws, req.cloud_dataset_id, viewer, shared="use")
         cloud_name, items = _cloud_dataset_items(
             req.cloud_dataset_id, ws, version=req.dataset_version
         )
@@ -1757,6 +1907,7 @@ def _start_run(
     log_source = None
     if req.log_source:
         groups = list(dict.fromkeys(req.log_source.log_group_names))
+        _assert_log_source_in_project(db, ws, req.log_source.service_name, groups)
         _assert_log_groups_exist(ws, groups)
         log_source = {"service_name": req.log_source.service_name, "log_group_names": groups}
 
@@ -1773,14 +1924,38 @@ def _start_run(
     if req.mode == "insights":
         applied = req.insights or list(ac.INSIGHT_TYPES)
 
-    # The route gate checked the caller's spend (the agent rides in the body, not
-    # the path): a replay also invokes the agent, and a persona run the actor model,
-    # so a budgeted payer is refused here when either has no price.
-    payer = budgets.payer_of_request(request)
-    if payer.budgeted and items:
-        budgets.check_agent(db, payer, agent)
-        if persona:
-            budgets.check_model(payer, actor_model_id)
+    if req.repeats > 1 and not (agent is not None and dataset_scope):
+        raise AppError(
+            "run.repeats_scope",
+            "repeats replays dataset scenarios against an agent — it does not apply to "
+            "past sessions or a log source",
+            status_code=422,
+        )
+    dlc_lineage = _golden_lineage(db, ws, req.dataset_id) if req.dataset_id else {}
+    cost_estimate = None
+    if agent is not None and dataset_scope and req.mode == "evaluators":
+        from app.dlc import cost as cost_svc
+
+        cost_estimate = cost_svc.estimate(
+            db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=items,
+            evaluators=applied, repeats=req.repeats,
+        )
+    elif req.mode == "evaluators" and (req.session_ids or req.lookback_hours):
+        # eval-cost §1.1: a passive run (picked sessions or a look-back window) is
+        # priced and held to the same limits — nothing is invoked, the judges are
+        cost_estimate = _passive_estimate(db, ws, agent, req, applied)
+    if cost_estimate is not None:
+        from app.dlc import cost as cost_svc
+        from app.routers.auth import require_identity
+
+        cost_svc.assert_allowed(
+            cost_estimate, confirmed=req.confirm_cost,
+            is_admin=require_identity(request).role == "admin",
+        )
+    # the project's monthly budget (projects §11.3): a used-up budget refuses the run
+    from app.services import release_gates
+
+    release_gates.assert_eval_budget(db, current_project(), cost_estimate)
 
     run = service.submit_run(
         agent=agent,
@@ -1800,20 +1975,85 @@ def _start_run(
         name=req.name,
         description=req.description,
         log_source=log_source,
+        repeats=req.repeats,
+        cost_estimate=cost_estimate,
+        agent_version=agent.version if agent is not None else None,
+        **dlc_lineage,
         creator=Creator.of_request(request),
+        # a BYOC code zip without ADOT fails every session with no spans —
+        # say so now instead of after a full replay (projects §17.3-5)
+        precheck_telemetry=True,
+        confirm_storage=req.confirm_storage,
     )
-    out = _run_one(db, run)
-    out["budget_notice"] = None
-    if payer.budgeted:
-        # the run is allowed either way; it stops at its next boundary once the
-        # limit is reached — say so up front when the forecast is more than is left
-        forecast = job_budget.eval_run_forecast(
-            db, agent=agent, items=items, evaluators=applied, mode=req.mode,
-            actor_model_id=actor_model_id,
-            session_count=len(set(req.session_ids or [])) or None,
-        )
-        out["budget_notice"] = job_budget.notice(db, payer.user_id, forecast)
+    return _run_one(db, run)
+
+
+def _passive_estimate(
+    db: Session, ws: WorkspaceScope, agent: Agent | None, req: Any, evaluators: list[str],
+) -> dict[str, Any]:
+    """The estimate of judging existing sessions: the picked ones, or as many as the
+    agent's last 7 days put in the look-back window. The agent's criteria price
+    their judge calls (as on the wizard's card, `POST /api/eval/runs/estimate`)."""
+    from app.dlc import cost as cost_svc
+    from app.dlc import criteria as criteria_svc
+
+    rows = []
+    if agent is not None:
+        cset = criteria_svc.agent_set(db, ws.id, agent.id)
+        rows = criteria_svc.criteria_of(db, cset.id) if cset else []
+    sessions = (len(set(req.session_ids)) if req.session_ids else
+                cost_svc.window_sessions(db, agent, ws.context, hours=req.lookback_hours))
+    out = cost_svc.estimate(
+        db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=[],
+        evaluators=evaluators, criteria_rows=rows, scope="passive", sessions=sessions,
+    )
+    out["sessions_basis"] = "given" if req.session_ids else "history_7d"
     return out
+
+
+def _golden_lineage(db: Session, ws: WorkspaceScope, dataset_id: str) -> dict[str, Any]:
+    """A run over a golden split is scored against that split's criteria (Agent-DLC).
+
+    Ties the run to the latest *published* version of the criteria lineage the golden
+    set serves, so its per-criterion results land in `criterion_results` and it can
+    rung the fix ladder. Any other dataset runs exactly as before.
+    """
+    from app.dlc import criteria as criteria_svc
+
+    dataset = db.get(EvalDataset, dataset_id)
+    if dataset is None or dataset.role != "golden" or not dataset.split:
+        return {}
+    if not dataset.criteria_set_id:
+        return {"split": dataset.split}
+    cset = criteria_svc.latest_published(db, ws.id, dataset.criteria_set_id)
+    if cset is None:
+        return {"split": dataset.split}
+    return {"split": dataset.split, "criteria_set_id": cset.id,
+            "criteria_set_version": cset.version}
+
+
+def _assert_log_source_in_project(
+    db: Session, ws: WorkspaceScope, service_name: str, groups: list[str]
+) -> None:
+    """An agent-less run reads account-wide telemetry: with several projects in the
+    workspace, another project's agent — named by its service or its runtime log
+    group — answers like a missing one (design §5.5)."""
+    fence = service.ProjectFence(db, ws.id)
+    if not fence.closed:
+        return
+    foreign = [g for g in groups if fence.foreign_log_group(g)]
+    if foreign:
+        raise AppError(
+            "run.log_group_missing",
+            f"log group(s) not found in this workspace: {', '.join(foreign)}",
+            {"missing": foreign},
+            status_code=422,
+        )
+    if fence.foreign_service(service_name):
+        raise NotFoundError(
+            "run.service_not_found", f"service '{service_name}' not found",
+            {"service_name": service_name},
+        )
 
 
 def _assert_log_groups_exist(ws: WorkspaceScope, groups: list[str]) -> None:
@@ -1930,8 +2170,8 @@ def rerun_run(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Evaluate a run's target again, as it is now, on the run's own scope — a new
-    run, exactly as ``POST /runs`` would start it (same validation, visibility,
-    budget refusals and ``budget_notice``). A simulated-persona dataset plays the
+    run, exactly as ``POST /runs`` would start it (same validation, visibility and
+    the project budget gate). A simulated-persona dataset plays the
     user with the platform's current actor model."""
     source = _run_in(db, ws, run_id, viewer=viewer)
     req = _rerun_request(source, body.name if body else None)
@@ -2026,23 +2266,13 @@ def list_run_recommendations(
 def create_run_recommendations(
     run_id: str,
     req: RecommendationCreate,
-    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     """Start one StartRecommendation job per requested kind, its traces pinned to
-    this run's batch evaluation (only completed runs with a batch → else 409). The
-    caller is recorded as the requester: a 3rd-party provider's model calls are
-    charged to them, and a budgeted caller is refused when that model has no price."""
+    this run's batch evaluation (only completed runs with a batch → else 409)."""
     run = _run_in(db, ws, run_id, viewer=viewer)
-    if req.provider and req.provider != recommendations.AGENTCORE_PROVIDER:
-        from app.optimization import providers as rec_providers
-
-        if req.provider in rec_providers.PROVIDER_IDS:
-            model = (req.model_id or "").strip() or (
-                rec_providers.get_provider(req.provider).default_model_id() or None)
-            budgets.check_model(budgets.payer_of_request(request), model)
     rows = recommendations.start(
         db, run, ws.context,
         kinds=list(dict.fromkeys(req.kinds)),
@@ -2052,7 +2282,6 @@ def create_run_recommendations(
         tools={t.name: t.description for t in req.tools or []},
         provider=req.provider,
         model_id=req.model_id,
-        requester=Creator.of_request(request),
     )
     return {"recommendations": [recommendations.out(r) for r in rows]}
 
@@ -2119,7 +2348,7 @@ def accept_run_recommendation(
     spec = current.model_copy(update={"system_prompt": strip_generated_prompt(current, prompt)})
     spec = AgentSpec(**spec.model_dump())
     result = republish_agent(
-        db, agent, spec, ws, actor=Creator.of_request(request),
+        db, agent, spec, ws, actor=Creator.of_request(request).name,
         note="recommendation accepted", viewer=viewer,
     )
     identity = getattr(request.state, "identity", None)

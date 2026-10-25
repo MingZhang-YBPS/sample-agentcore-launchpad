@@ -37,14 +37,19 @@ TEMPLATE = Path(__file__).resolve().parents[1] / "spoke" / "launchpad-workspace-
 SCOPED_SIDS = frozenset(
     {
         "IamOnLaunchpadRoles",
+        "IamProjectBoundaryPolicies",
+        "IamProjectBoundaryOnAgentRoles",
+        "IamIsolatedAgentRolesNeedABoundary",
         "PassLaunchpadRoles",
         "S3Launchpad",
         "EcrLaunchpad",
         "CodeBuildLaunchpad",
         "BedrockKnowledgeBases",
+        "CostTagsAgentLogGroups",
         "TransactionSearchLogGroups",
-        "ApplicationSignalsDiscovery",
-        "EvaluationResultLogs",
+        "TransactionSearchServiceLinkedRole",
+        "TransactionSearchCloudTrailChannel",
+        "EvaluationResultLogGroups",
     }
 )
 
@@ -157,21 +162,27 @@ def test_service_linked_roles_are_limited_to_an_allowlist(statements: list[dict[
     assert all(name.endswith(".amazonaws.com") for name in services)
 
 
-def test_the_role_cannot_push_images(statements: list[dict[str, Any]]):
+def test_the_role_pushes_images_only_through_the_artifact_copy_statement(
+    statements: list[dict[str, Any]],
+):
     """CodeBuild builds and pushes, under a role of its own that this stack lets
-    the hub create. The hub itself only reads back the digest and scan findings,
-    so an ECR write grant here would be an unexplained widening."""
-    ecr = [
-        action
-        for statement in statements
-        for action in statement["Action"]
-        if action.startswith("ecr:")
-    ]
-    assert set(ecr) == {
-        "ecr:CreateRepository",
-        "ecr:DescribeImageScanFindings",
-        "ecr:DescribeImages",
-        "ecr:DescribeRepositories",
+    the hub create. The hub itself only reads back the digest and scan findings —
+    except for a PROMOTED image (roadmap T24), which it copies by digest through
+    the ECR API. That grant lives in one named, single-repository statement so an
+    ECR write anywhere else is still an unexplained widening."""
+    by_sid = {s["Sid"]: s for s in statements}
+    writes = {"ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload", "ecr:PutImage",
+              "ecr:UploadLayerPart"}
+    for statement in statements:
+        pushed = writes & set(statement["Action"])
+        assert not pushed or statement["Sid"] == "EcrArtifactCopy", statement["Sid"]
+    copy = by_sid["EcrArtifactCopy"]
+    assert set(copy["Action"]) >= writes | {"ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"}
+    assert copy["Resource"] != "*" and copy["Resource"]["Fn::Sub"].endswith(
+        "repository/launchpad-agents"
+    )
+    assert "ecr:GetAuthorizationToken" not in {
+        a for s in statements for a in s["Action"]
     }
 
 
@@ -202,3 +213,144 @@ def test_the_hub_can_prove_which_account_it_landed_in(statements: list[dict[str,
 def test_the_role_arn_is_an_output(template: dict[str, Any]):
     """It is what the operator pastes back into the console."""
     assert template["Outputs"]["RoleArn"]["Value"] == {"Fn::GetAtt": ["WorkspaceRole", "Arn"]}
+
+
+def test_a_fresh_region_can_turn_on_transaction_search(statements: list[dict[str, Any]]):
+    """Found on real AWS: with only xray:UpdateTraceSegmentDestination the call is
+    refused in a region that never had Transaction Search, because the service also
+    exercises the indexing rule, the aws/spans log group and Application Signals on
+    the caller's behalf. Without these a new-region workspace has no aws/spans group
+    and every trace, observability view and evaluation there reads nothing."""
+    granted = {action for statement in statements for action in statement["Action"]}
+    required = {
+        "xray:GetTraceSegmentDestination", "xray:UpdateTraceSegmentDestination",
+        "xray:GetIndexingRules", "xray:UpdateIndexingRule",
+        "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutRetentionPolicy",
+        "logs:PutResourcePolicy", "logs:DescribeResourcePolicies",
+        "application-signals:StartDiscovery", "iam:GetRole",
+        "cloudtrail:CreateServiceLinkedChannel", "cloudtrail:GetChannel",
+    }
+    assert required <= granted, f"missing {sorted(required - granted)}"
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    # the log-group writes are the documented two groups, not every group — each
+    # as the bare group ARN (CreateLogGroup is checked against it) and its `:*` form
+    groups = by_sid["TransactionSearchLogGroups"]["Resource"]
+    assert len(groups) == 4 and all(
+        "aws/spans" in g["Fn::Sub"] or "application-signals/data" in g["Fn::Sub"] for g in groups)
+
+
+def test_a_fresh_region_can_run_its_first_batch_evaluation(statements: list[dict[str, Any]]):
+    """Found on real AWS: StartBatchEvaluation creates its results log group with the
+    caller's credentials, so a region that never ran one needs logs:CreateLogGroup on
+    the evaluations prefix — scoped to that prefix, not every group in the account."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    statement = by_sid["EvaluationResultLogGroups"]
+    assert {"logs:CreateLogGroup", "logs:CreateLogStream"} <= set(statement["Action"])
+    # and reads the per-session results back (run results route, Agent-DLC snapshot)
+    assert "logs:GetLogEvents" in statement["Action"]
+    (resource,) = statement["Resource"]
+    assert resource["Fn::Sub"].endswith(":log-group:/aws/bedrock-agentcore/evaluations/*")
+
+
+def test_the_knowledge_base_console_can_list(statements: list[dict[str, Any]]):
+    """Found on real AWS: the knowledge-base page answered 403 because the role
+    could manage a knowledge base but not list them. ListKnowledgeBases has no
+    resource type, so it sits with CreateKnowledgeBase on `*`; ListDataSources
+    takes the knowledge-base ARN and stays in the scoped statement."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    assert "bedrock:ListKnowledgeBases" in by_sid["BedrockCreateKnowledgeBase"]["Action"]
+    assert "bedrock:ListDataSources" in by_sid["BedrockKnowledgeBases"]["Action"]
+
+
+def test_the_hub_can_call_models_and_guardrails(statements: list[dict[str, Any]]):
+    """Found on real AWS: intent clustering, suggestions, prompt optimization and
+    the judge test-invoke on CreateEvaluator all failed with bedrock:InvokeModel
+    denied, and the PII guardrail preset could neither be created nor applied.
+    Invocation is scoped to models and this account's inference profiles; the
+    guardrail reads are scoped to this account's guardrails."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    infer = by_sid["BedrockModelInference"]
+    assert set(infer["Action"]) == {"bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"}
+    resources = [r["Fn::Sub"] for r in infer["Resource"]]
+    assert all(":foundation-model/" in r or ":${AWS::AccountId}:" in r for r in resources)
+    assert any(r.endswith(":inference-profile/*") for r in resources)
+    guard = by_sid["BedrockGuardrails"]
+    assert set(guard["Action"]) == {"bedrock:ApplyGuardrail", "bedrock:GetGuardrail"}
+    assert guard["Resource"]["Fn::Sub"].endswith(":${AWS::AccountId}:guardrail/*")
+    create = set(by_sid["BedrockGuardrailsCreate"]["Action"])
+    assert create == {"bedrock:CreateGuardrail", "bedrock:ListGuardrails"}
+
+
+def _sub(value: Any) -> str:
+    return value["Fn::Sub"] if isinstance(value, dict) else value
+
+
+def test_project_boundary_policies_are_scoped_to_their_prefix(statements: list[dict[str, Any]]):
+    """Projects design §10.3: the hub writes only `launchpad-project-*` policies — the
+    per-(project, workspace) boundaries — and never deletes one outright or edits
+    another customer managed policy."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    policies = by_sid["IamProjectBoundaryPolicies"]
+    assert policies["Effect"] == "Allow"
+    assert {"iam:CreatePolicy", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion"} <= set(
+        policies["Action"]
+    )
+    assert "iam:DeletePolicy" not in policies["Action"]
+    assert _sub(policies["Resource"]).endswith(":policy/launchpad-project-*")
+    # no other statement may touch managed policies
+    managed = {"iam:CreatePolicy", "iam:CreatePolicyVersion", "iam:DeletePolicy",
+               "iam:DeletePolicyVersion", "iam:SetDefaultPolicyVersion", "iam:TagPolicy"}
+    others = {a for s in statements if s["Sid"] != "IamProjectBoundaryPolicies"
+              for a in s["Action"] if a in managed}
+    assert others == set(), others
+
+
+def test_a_boundary_can_only_be_a_project_boundary(statements: list[dict[str, Any]]):
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    put = by_sid["IamProjectBoundaryOnAgentRoles"]
+    assert put["Action"] == ["iam:PutRolePermissionsBoundary"]
+    assert _sub(put["Resource"]).endswith(":role/launchpad-agent-*")
+    condition = put["Condition"]["StringLike"]["iam:PermissionsBoundary"]
+    assert _sub(condition).endswith(":policy/launchpad-project-*")
+    # removing a boundary is never granted
+    assert not any("iam:DeleteRolePermissionsBoundary" in s["Action"] for s in statements)
+
+
+def test_an_isolated_agent_role_cannot_be_created_without_a_boundary(
+    statements: list[dict[str, Any]],
+):
+    """The Deny pairs the request tag with a negated boundary match: both must hold, so
+    shared projects' roles (no isolation tag) are untouched, and an isolated one with
+    no boundary at all is refused (a negated operator is true for an absent key)."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    deny = by_sid["IamIsolatedAgentRolesNeedABoundary"]
+    assert deny["Effect"] == "Deny" and deny["Action"] == ["iam:CreateRole"]
+    assert _sub(deny["Resource"]).endswith(":role/launchpad-agent-*")
+    assert deny["Condition"]["StringEquals"] == {
+        "aws:RequestTag/launchpad:isolation": "isolated"
+    }
+    boundary = deny["Condition"]["StringNotLike"]["iam:PermissionsBoundary"]
+    assert _sub(boundary).endswith(":policy/launchpad-project-*")
+
+
+def test_every_cost_tagged_resource_can_be_tagged(statements: list[dict[str, Any]]):
+    """Cost tags (cost-tags design §1.2 / §1.5): each resource the platform tags has
+    its tag action, on the resources Launchpad owns, plus the Cost Explorer reads."""
+    by_sid = {s["Sid"]: s for s in statements}
+    expected = {
+        "IamOnLaunchpadRoles": {"iam:TagRole", "iam:ListRoleTags"},
+        "EcrLaunchpad": {"ecr:TagResource", "ecr:ListTagsForResource"},
+        "EcrProjectRepositories": {"ecr:TagResource", "ecr:ListTagsForResource"},
+        "CodeBuildLaunchpad": {"codebuild:CreateProject", "codebuild:UpdateProject"},
+        "BedrockKnowledgeBases": {"bedrock:TagResource"},
+        "SecretsManagerForTokenVault": {"secretsmanager:TagResource"},
+        "CostTagsAgentLogGroups": {"logs:TagResource", "logs:ListTagsForResource"},
+        "AgentCoreAndRegistry": {"bedrock-agentcore:*"},
+        "CostExplorerByTag": {"ce:GetCostAndUsage", "ce:ListCostAllocationTags",
+                              "ce:UpdateCostAllocationTagsStatus"},
+    }
+    for sid, actions in expected.items():
+        assert actions <= set(by_sid[sid]["Action"]), sid
+    logs = by_sid["CostTagsAgentLogGroups"]["Resource"]
+    assert len(logs) == 1 and logs[0]["Fn::Sub"].endswith(
+        "log-group:/aws/bedrock-agentcore/runtimes/*")

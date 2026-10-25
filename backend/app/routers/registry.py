@@ -13,9 +13,11 @@ from starlette.datastructures import UploadFile
 
 from app.assistant.principal import principal_of
 from app.core.errors import AppError, NotFoundError, aws_error_message, mapped_aws_error
-from app.routers.auth import require_identity
+from app.core.project_scope import current_project, project_context
+from app.routers.auth import require_identity, require_permission
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
+from app.services import registry_sync
 from app.services import skill_ingest as si
 from app.services.skill_ingest import (
     SKILL_BUNDLE_MAX_BYTES,
@@ -36,23 +38,67 @@ class A2ADemoRequest(BaseModel):
 
 
 def _hidden_record_ids(ws: WorkspaceScope, viewer: Viewer) -> frozenset[str]:
-    """Registry record ids of agents hidden from ``viewer`` by workspace isolation
-    (an A2A record is the agent's: its deploy ``register`` stage created it). No
-    ledger read at all for a viewer who does not filter."""
-    if not viewer.filters:
+    """Registry record ids of agents hidden from ``viewer`` by workspace isolation,
+    or owned by another project's agent (an A2A record is the agent's: its deploy
+    ``register`` stage created it), or an Agent-skill record another project
+    registered (its ownership row, ``creators.REGISTRY_SKILL``; shared ones stay
+    visible). MCP records, system preset skills and skills registered before
+    projects have no ownership row and stay workspace level. One ledger read with a
+    project current; none otherwise for a viewer who does not filter."""
+    pid = current_project()
+    if not viewer.filters and pid is None:
         return frozenset()
     from app.core.db import SessionLocal
+    from app.models.ledger import Agent
     from app.services.agent_access import HiddenAgents
 
     db = SessionLocal()
     try:
-        return HiddenAgents(db, viewer, ws.id).record_ids
+        hidden = HiddenAgents(db, viewer, ws.id).record_ids if viewer.filters else frozenset()
+        if pid is None:
+            return hidden
+        # read across projects: the project-filtered read cannot see whose a record is
+        with project_context(None):
+            foreign = {
+                rid
+                for (rid,) in db.query(Agent.registry_record_id).filter(
+                    Agent.workspace_id == ws.id,
+                    Agent.registry_record_id.is_not(None),
+                    Agent.project_id.is_not(None),
+                    Agent.project_id != pid,
+                )
+            }
+        return frozenset(hidden | foreign | _foreign_skill_ids(db, ws.id, pid))
     finally:
         db.close()
 
 
+def _foreign_skill_ids(db: Any, workspace_id: str, pid: str) -> set[str]:
+    """Agent-skill records whose ownership row names another project than ``pid``,
+    minus those that project shared with ``pid``."""
+    from sqlalchemy import select
+
+    from app.models.ledger import ResourceCreator
+    from app.services import creators, resource_shares
+
+    with project_context(None):
+        rows = db.execute(
+            select(ResourceCreator.resource_id).where(
+                ResourceCreator.workspace_id == workspace_id,
+                ResourceCreator.kind == creators.REGISTRY_SKILL,
+                ResourceCreator.project_id.is_not(None),
+                ResourceCreator.project_id != pid,
+            )
+        ).scalars().all()
+    if not rows:
+        return set()
+    shared = resource_shares.received_ids(db, creators.REGISTRY_SKILL, project_id=pid)
+    return {rid for rid in rows if rid not in shared}
+
+
 def _require_record_visible(ws: WorkspaceScope, viewer: Viewer, record_id: str) -> None:
-    """A hidden agent's A2A record answers like a missing record — before AWS."""
+    """A hidden (or another project's) agent's A2A record answers like a missing
+    record — before AWS."""
     if record_id in _hidden_record_ids(ws, viewer):
         raise NotFoundError("aws.not_found", "registry record not found")
 
@@ -69,7 +115,6 @@ def _visible_records(
 @router.post("/a2a-demo")
 def a2a_demo(
     req: A2ADemoRequest,
-    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
@@ -81,14 +126,10 @@ def a2a_demo(
     """
     import json as _json
 
-    from app.core.billing_policy import SOURCE_INVOKE
     from app.core.db import SessionLocal
-    from app.services import budgets
     from app.services.agent_access import agent_in
-    from app.services.agentcore import runtime as rt
     from app.services.agentcore.client import data_client
     from app.services.agentcore.harness import new_session_id
-    from app.services.usage_meter import UsageMeter
 
     db = SessionLocal()
     try:
@@ -113,28 +154,17 @@ def a2a_demo(
                            "agent, or chat with this one in the Chat console",
                            status_code=409)
         arn = agent.arn
-        # the agent comes from the body, so the route-level gate checked spend only:
-        # the model check (an unpriced model for a budgeted caller) happens here
-        payer = budgets.payer_of_request(request)
-        budgets.check_agent(db, payer, agent)
-        meter = UsageMeter.for_agent(payer, SOURCE_INVOKE, agent, workspace_id=ws.id)
     finally:
         db.close()
 
     started = time.monotonic()
     session_id = new_session_id()
-    body: Any = None
-    try:
-        response = data_client(ws.context).invoke_agent_runtime(
-            agentRuntimeArn=arn,
-            runtimeSessionId=session_id,
-            payload=_json.dumps({"prompt": req.question, "actor_id": "a2a-demo"}).encode(),
-        )
-        body = _json.loads(response["response"].read())
-        if isinstance(body, dict):
-            rt.report_usage(meter.on_usage, body.get("usage"), "turn")
-    finally:
-        meter.settle(failed=body is None, session_id=session_id)
+    response = data_client(ws.context).invoke_agent_runtime(
+        agentRuntimeArn=arn,
+        runtimeSessionId=session_id,
+        payload=_json.dumps({"prompt": req.question, "actor_id": "a2a-demo"}).encode(),
+    )
+    body = _json.loads(response["response"].read())
     if isinstance(body, dict) and body.get("error"):
         raise AppError("registry.a2a_demo_failed", str(body["error"])[:300],
                        status_code=502)
@@ -201,7 +231,11 @@ def list_records(
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    records = _visible_records(ws, viewer, console.console_list(ws.context, type, status))
+    try:
+        listed = console.console_list(ws.context, type, status)
+    except ValueError as exc:  # unknown ?type= — a caller mistake, not a 500
+        raise AppError("registry.bad_type", str(exc), status_code=422) from exc
+    records = _visible_records(ws, viewer, listed)
     return {"records": _with_system(ws, records)}
 
 
@@ -326,6 +360,39 @@ def live_agent_card(
         ) from exc
 
 
+def _require_mcp_record_approvable(request: Request, ws: WorkspaceScope, record_id: str) -> None:
+    """Design §15.13: approving an MCP record takes `mcp.approve`, and a hosted MCP
+    server's record only after its tool list passed review (§15.6). Other record
+    types keep their lifecycle unchanged."""
+    record = console.console_get(ws.context, record_id)
+    if str(record.get("descriptorType") or "").upper() != "MCP":
+        return
+    require_permission(request, "mcp.approve")
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+    from app.services import mcp_reviews
+
+    name = str(record.get("name") or "")
+    db = SessionLocal()
+    try:
+        hosted = [
+            a for a in db.query(Agent).filter(
+                Agent.workspace_id == ws.id, Agent.status != "deleted",
+            ).all()
+            if (a.spec or {}).get("protocol") == "mcp"
+            and ((a.spec or {}).get("mcp") or {}).get("target_name") == name
+        ]
+        for agent in hosted:
+            if mcp_reviews.state(db, agent.id).get("state") != "approved":
+                raise AppError(
+                    "mcp.review_pending",
+                    "approve this MCP server's tool list first (MCP server → Tool review)",
+                    {"agent_id": agent.id}, status_code=409,
+                )
+    finally:
+        db.close()
+
+
 class ActionRequest(BaseModel):
     action: str  # submit | approve | publish | reject | disable
 
@@ -342,6 +409,8 @@ def record_action(
     # The caller's role reaches the service explicitly: a system-managed Skill's
     # lifecycle is administrator-only, ordinary records stay member-operable.
     identity = require_identity(request)
+    if req.action in ("approve", "publish"):
+        _require_mcp_record_approvable(request, ws, record_id)
     try:
         console.console_action(ws.context, record_id, req.action, is_admin=identity.is_admin)
     except ValueError as exc:
@@ -363,9 +432,12 @@ class RegisterRequest(BaseModel):
 
 @router.post("/records", status_code=201)
 def register_record(
-    req: RegisterRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: RegisterRequest,
+    request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     if req.type == "MCP":
+        _refuse_on_project_path(request)
         if not req.url or not req.url.startswith(("https://", "http://")):
             raise AppError(
                 "registry.invalid_url",
@@ -384,8 +456,39 @@ def register_record(
             status_code=400,
         )
     record = console.register_skill(ws.context, req.name, req.description, req.skill_md)
+    _own_skill(request, ws, record)
     _invalidate_attachables(ws.id)
     return _record_out(record)
+
+
+def _refuse_on_project_path(request: Request) -> None:
+    """A non-admin reached a create route through the project-owned skill path
+    (route policy): only an Agent-skill record may be created there."""
+    if getattr(request.state, "project_skill_only", False):
+        raise AppError(
+            "auth.infra_admin_required",
+            "this workspace holds several projects, so its shared infrastructure "
+            "(governance, registry catalog, gateway targets…) is changed by an "
+            "administrator only",
+            status_code=403,
+        )
+
+
+def _own_skill(request: Request, ws: WorkspaceScope, record: dict[str, Any]) -> None:
+    """The current project owns the skill record it just registered (its members
+    manage it in a multi-project workspace)."""
+    from app.core.db import SessionLocal
+    from app.services import creators
+
+    record_id = str(record.get("recordId") or "")
+    if not record_id:
+        return
+    db = SessionLocal()
+    try:
+        creators.record(db, ws.id, creators.REGISTRY_SKILL, record_id,
+                        creators.Creator.of_request(request))
+    finally:
+        db.close()
 
 
 def _sweep_staging() -> None:
@@ -402,6 +505,20 @@ def _stage(bundles: list[SkillBundle]) -> str:
     sid = secrets.token_urlsafe(16)
     _staging[sid] = {"bundles": bundles, "expires": time.time() + _STAGING_TTL_S}
     return sid
+
+
+def _staged_for(sid: str, ws: WorkspaceScope) -> dict[str, Any] | None:
+    """The staging entry ``sid`` when it was inspected in this workspace and project
+    (an entry that recorded neither — staged by another route — is not bound)."""
+    _sweep_staging()
+    entry = _staging.get(sid)
+    if entry is None:
+        return None
+    if entry.get("workspace_id", ws.id) != ws.id:
+        return None
+    if entry.get("project_id", current_project()) != current_project():
+        return None
+    return entry
 
 
 def _drop_staging(sid: str) -> None:
@@ -460,6 +577,7 @@ async def inspect_skill(
     # inspected the source. No client-supplied source paths cross this boundary.
     _staging[response["staging_id"]].update(
         owner_principal=principal_of(require_identity(request)), workspace_id=ws.id,
+        project_id=current_project(),
     )
     return response
 
@@ -546,13 +664,14 @@ def _match_bundle(bundles: list[SkillBundle], sel: ImportSelection) -> SkillBund
 
 @router.post("/skills/import")
 def import_skills(
-    req: ImportRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: ImportRequest,
+    request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Register each selected staged bundle via the shared pipeline. A per-item
     failure (name conflict, validation) is reported inline and never aborts the
     other selections. Staging is consumed once the batch completes."""
-    _sweep_staging()
-    entry = _staging.get(req.staging_id)
+    entry = _staged_for(req.staging_id, ws)
     if entry is None:
         raise AppError(
             "registry.staging_expired",
@@ -578,6 +697,7 @@ def import_skills(
                 name_override=sel.name_override,
                 description_override=sel.description_override,
             )
+            _own_skill(request, ws, record)
             records.append({"name": record.get("name", label), "ok": True,
                             "record": _record_out(record)})
         except AppError as exc:
@@ -698,8 +818,7 @@ def update_record(
 
     bundle: SkillBundle | None = None
     if req.staging_id is not None:
-        _sweep_staging()
-        entry = _staging.get(req.staging_id)
+        entry = _staged_for(req.staging_id, ws)
         if entry is None:
             raise AppError(
                 "registry.staging_expired",
@@ -739,6 +858,14 @@ def delete_record(
 ) -> dict[str, Any]:
     _require_record_visible(ws, viewer, record_id)
     console.console_delete(ws.context, record_id)
+    from app.core.db import SessionLocal
+    from app.services import creators
+
+    db = SessionLocal()
+    try:
+        creators.forget(db, ws.id, creators.REGISTRY_SKILL, record_id)
+    finally:
+        db.close()
     _invalidate_attachables(ws.id)
     return {"deleted": True, "record_id": record_id}
 
@@ -748,18 +875,64 @@ def attachables(
     refresh: bool = False, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
     """APPROVED MCP servers + skills the create wizard offers for mounting.
-    Cached 60s per workspace — each call walks GetRegistryRecord per record."""
+    Cached 60s per workspace — each call walks GetRegistryRecord per record; the
+    current project's view drops another project's skill records after the cache."""
     slot = _attachables_cache.get(ws.id)
     if not refresh and slot is not None and time.time() - slot["at"] < 60:
-        return slot["data"]
-    data = console.attachable_records(ws.context)
-    _attachables_cache[ws.id] = {"data": data, "at": time.time()}
-    return data
+        data = slot["data"]
+    else:
+        data = console.attachable_records(ws.context)
+        _attachables_cache[ws.id] = {"data": data, "at": time.time()}
+    return _project_attachables(ws, data)
 
 
-@router.post("/sync-defaults")
+def _project_attachables(ws: WorkspaceScope, data: dict[str, Any]) -> dict[str, Any]:
+    pid = current_project()
+    if pid is None or not data.get("skills"):
+        return data
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        foreign = _foreign_skill_ids(db, ws.id, pid)
+    finally:
+        db.close()
+    if not foreign:
+        return data
+    return {**data, "skills": [s for s in data["skills"] if s.get("record_id") not in foreign]}
+
+
+@router.post("/sync-defaults", status_code=202)
 def sync_defaults(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    """Register gateway targets (MCP) + the sample skill bundle (AGENT_SKILLS)."""
-    results = console.ensure_default_records(ws.context)
-    _invalidate_attachables(ws.id)
-    return {"results": results}
+    """Queue the registration of the gateway targets (MCP) + the sample skill bundle
+    (AGENT_SKILLS) as a `registry_sync_defaults` job — it waits every new record out
+    of CREATING, longer than an origin request may take. A sync already in flight is
+    returned instead of starting another. Poll `GET /sync-defaults/{job_id}`."""
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        job, created = registry_sync.queue(db, ws.id)
+        if created:
+            registry_sync.start_async(job.id)
+        return {**registry_sync.view(job), "started": created}
+    finally:
+        db.close()
+
+
+@router.get("/sync-defaults/{job_id}")
+def sync_defaults_status(
+    job_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    """A sync job's status and the per-record results recorded so far."""
+    from app.core.db import SessionLocal
+    from app.models.ledger import Job
+
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id)
+        if job is None or job.type != registry_sync.JOB_TYPE or job.workspace_id != ws.id:
+            raise NotFoundError("job.not_found", "job not found")
+        return registry_sync.view(job)
+    finally:
+        db.close()

@@ -47,8 +47,16 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
+from app.core.regions import partition_for_region
 from app.models.ledger import Job, Workspace
-from app.services import aws_clients, gateway_bootstrap, policy_bootstrap, workspace_iam
+from app.services import (
+    aws_clients,
+    cost_tags,
+    gateway_bootstrap,
+    policy_bootstrap,
+    project_telemetry,
+    workspace_iam,
+)
 from app.services import bootstrap as hub_bootstrap
 from app.services.agent_iam import retry_iam_propagation
 from app.services.policy_identity import POLICY_GROUPS
@@ -522,7 +530,8 @@ def _stage_validate_access(ctx: BootstrapContext) -> str:
 
 def _ecr_repo_arn(ctx: BootstrapContext) -> str:
     repo = ctx.resources.get("ecr_repo") or ECR_REPO_NAME
-    return f"arn:aws:ecr:{ctx.region}:{ctx.account_id}:repository/{repo}"
+    partition = partition_for_region(ctx.region)
+    return f"arn:{partition}:ecr:{ctx.region}:{ctx.account_id}:repository/{repo}"
 
 
 def _artifacts_bucket_name(ctx: BootstrapContext) -> str:
@@ -674,6 +683,11 @@ def _ensure_repository(ctx: BootstrapContext, ecr: Any, name: str) -> str:
     try:
         repo = ecr.describe_repositories(repositoryNames=[name])["repositories"][0]
         ctx.log(f"reusing ECR repository {name}")
+        if repo.get("repositoryArn"):
+            cost_tags.tag_quietly(
+                ctx.workspace, cost_tags.entry(cost_tags.ECR_REPOSITORY,
+                                               arn=repo["repositoryArn"]),
+                _shared_tags(ctx), ctx.log)
     except ClientError as exc:
         if _error_code(exc) != "RepositoryNotFoundException":
             raise
@@ -682,9 +696,15 @@ def _ensure_repository(ctx: BootstrapContext, ecr: Any, name: str) -> str:
             # Scan on push so a deploy can be blocked on findings before the image
             # ever backs a runtime.
             imageScanningConfiguration={"scanOnPush": True},
+            tags=cost_tags.tag_list(_shared_tags(ctx)),
         )["repository"]
         ctx.log(f"created ECR repository {name}")
     return str(repo["repositoryUri"])
+
+
+def _shared_tags(ctx: BootstrapContext) -> dict[str, str]:
+    """Cost tags of the workspace's own infrastructure (cost-tags design §1.2)."""
+    return project_telemetry.shared_tags(ctx.workspace_id)
 
 
 def _stage_storage(ctx: BootstrapContext) -> str:
@@ -703,6 +723,70 @@ def _stage_storage(ctx: BootstrapContext) -> str:
 
 # ── stage: codebuild ───────────────────────────────────────────────────────
 
+CODEBUILD_POLICY_NAME = "launchpad-agent-builder"
+
+
+def codebuild_policy(
+    account_id: str, region: str, bucket: str, ecr_repo_arn: str
+) -> dict[str, Any]:
+    """`workspace_iam.codebuild_role_policy`, with the push grant widened from the
+    shared repository to it **and** the per-project repositories under it
+    (`launchpad-agents/<pid>`, projects design §10.10): an isolated project's images
+    are built by the same project, into its own repository."""
+    policy = workspace_iam.codebuild_role_policy(
+        account_id, region, bucket, ecr_repo_arn, CODEBUILD_PROJECT_NAME
+    )
+    for statement in policy["Statement"]:
+        if statement.get("Sid") == "EcrPullPush":
+            statement["Resource"] = [ecr_repo_arn, f"{ecr_repo_arn}/*"]
+    return policy
+
+
+def ensure_codebuild_project_repos(
+    workspace: WorkspaceContext, log: Callable[[str], None] = lambda _m: None
+) -> bool:
+    """Put the widened `codebuild_policy` on the role the workspace's CodeBuild project
+    runs as, for a workspace bootstrapped before the widening (or by the CDK stack,
+    whose role carries `repo.grant_pull_push` on the shared repository only, and is not
+    named `launchpad-*`, so the workspace role cannot write it). Called by the `ecr`
+    stage of `project_provision` (`project_storage`); idempotent. Returns
+    whether the role carries the grant now; a role that cannot be read or written is
+    logged and reported False — the repository is still made, and the deploy's build
+    stage then names the missing grant."""
+    resources = workspace.resources or {}
+    bucket = resources.get("artifacts_bucket")
+    project = resources.get("codebuild_project") or CODEBUILD_PROJECT_NAME
+    if not bucket:
+        log("artifacts_bucket missing from the resource map — CodeBuild role not widened")
+        return False
+    repo = resources.get("ecr_repo") or ECR_REPO_NAME
+    repo_arn = (
+        f"arn:{partition_for_region(workspace.region)}:ecr:{workspace.region}:"
+        f"{workspace.account_id}:repository/{repo}"
+    )
+    try:
+        found = workspace.client("codebuild").batch_get_projects(names=[project])
+        projects = found.get("projects") or []
+        role_arn = str(projects[0].get("serviceRole") or "") if projects else ""
+        if not role_arn:
+            log(f"CodeBuild project {project} not found — CodeBuild role not widened")
+            return False
+        role_name = role_arn.rsplit("/", 1)[-1]
+        # a plain put, like `workspace_iam.ensure_role`'s reconcile: PutRolePolicy is
+        # idempotent and the workspace role is not granted GetRolePolicy
+        workspace.client("iam").put_role_policy(
+            RoleName=role_name, PolicyName=CODEBUILD_POLICY_NAME,
+            PolicyDocument=json.dumps(codebuild_policy(
+                workspace.account_id, workspace.region, bucket, repo_arn
+            )),
+        )
+        log(f"CodeBuild role {role_name} may push to {repo}/*")
+        return True
+    except (ClientError, BotoCoreError) as exc:
+        log(f"CodeBuild role not widened to {repo}/*: {_error_code(exc)} — re-run the "
+            "workspace bootstrap, or grant its role push on the project repository")
+        return False
+
 
 def _stage_codebuild(ctx: BootstrapContext) -> str:
     bucket = ctx.require("artifacts_bucket")
@@ -716,12 +800,8 @@ def _stage_codebuild(ctx: BootstrapContext) -> str:
             "codebuild.amazonaws.com", ctx.account_id, source_account=False
         ),
         inline_policies={
-            "launchpad-agent-builder": workspace_iam.codebuild_role_policy(
-                ctx.account_id,
-                ctx.region,
-                bucket,
-                _ecr_repo_arn(ctx),
-                CODEBUILD_PROJECT_NAME,
+            CODEBUILD_POLICY_NAME: codebuild_policy(
+                ctx.account_id, ctx.region, bucket, _ecr_repo_arn(ctx)
             )
         },
         description="Assumed by CodeBuild to build Launchpad agent images",
@@ -730,6 +810,10 @@ def _stage_codebuild(ctx: BootstrapContext) -> str:
     codebuild = ctx.workspace.client("codebuild")
     if _project_exists(codebuild, CODEBUILD_PROJECT_NAME):
         ctx.log(f"reusing CodeBuild project {CODEBUILD_PROJECT_NAME}")
+        cost_tags.tag_quietly(
+            ctx.workspace, cost_tags.entry(cost_tags.CODEBUILD_PROJECT,
+                                           name=CODEBUILD_PROJECT_NAME),
+            _shared_tags(ctx), ctx.log)
     else:
         # Every start_build overrides source and environment variables
         # (agentcore/codebuild.start_image_build), so the placeholder source here
@@ -748,6 +832,7 @@ def _stage_codebuild(ctx: BootstrapContext) -> str:
                 },
                 serviceRole=role_arn,
                 timeoutInMinutes=CODEBUILD_TIMEOUT_MINUTES,
+                tags=cost_tags.tag_list(_shared_tags(ctx), "key", "value"),
             ),
             ctx.log,
             attempts=ctx.timeouts.iam_attempts,
@@ -946,6 +1031,10 @@ def _stage_gateway(ctx: BootstrapContext) -> str:
         }
     )
     ctx.log(f"gateway {gateway['id']} {'created' if created else 'reused'}")
+    # the shared gateway is workspace infrastructure (cost-tags design §1.2)
+    cost_tags.tag_quietly(ctx.workspace, cost_tags.entry(cost_tags.GATEWAY,
+                                                         arn=gateway["arn"]),
+                          _shared_tags(ctx), ctx.log)
     m2m_client_id = ctx.require("m2m_client_id")
     gateway_bootstrap.ensure_gateway_allows_client(
         control, gateway["id"], m2m_client_id, timeout_s=ctx.timeouts.gateway_s
@@ -974,6 +1063,7 @@ def _stage_memory(ctx: BootstrapContext) -> str:
             control,
             execution_role_arn=ctx.require("execution_role_arn"),
             timeout_s=ctx.timeouts.memory_s,
+            tags=_shared_tags(ctx),
         ),
         ctx.log,
         attempts=ctx.timeouts.iam_attempts,
@@ -1080,6 +1170,22 @@ def _stage_observability(ctx: BootstrapContext) -> str:
     if not state.get("enabled"):
         return f"not active yet · {state.get('status') or 'unknown'}"
     return "transaction search active" + ("" if state.get("changed") else " (already)")
+
+
+def repair_observability(workspace: WorkspaceContext, *, workspace_id: str,
+                         log: Callable[[str], None] = lambda _msg: None) -> dict[str, Any]:
+    """Re-run only the observability stage on an already-ready workspace.
+
+    The stage degrades rather than fails (an environment that deploys and invokes is
+    worth having), so a workspace can reach READY with Transaction Search off — e.g.
+    when the role lacked a permission at bootstrap time. A full re-bootstrap is
+    refused on a ready workspace, so without this the only fix was by hand. Returns
+    the same detail string the stage records, plus whether it is active now.
+    """
+    ctx = BootstrapContext(workspace_id=workspace_id, job_id="repair-observability",
+                           workspace=workspace, log=log)
+    detail = _stage_observability(ctx)
+    return {"detail": detail, "active": detail.startswith("transaction search active")}
 
 
 # ── stage: finalize ────────────────────────────────────────────────────────

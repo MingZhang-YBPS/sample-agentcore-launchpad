@@ -6,7 +6,7 @@ const file = (path: string, line: number | null = null, column: number | null = 
 const blocked = (reason: string) => ({ kind: "blocked", reason });
 
 describe("classifyCodingHref", () => {
-  it("opens codex's absolute project links as project files", () => {
+  it("opens codex's absolute repo links as repo files", () => {
     expect(classifyCodingHref("/mnt/workspace/project/README.md", "")).toEqual(file("README.md"));
     expect(classifyCodingHref("/mnt/workspace/project/src/main.py", "docs")).toEqual(file("src/main.py"));
     expect(classifyCodingHref("file:///mnt/workspace/project/main.py", "")).toEqual(file("main.py"));
@@ -56,7 +56,7 @@ describe("classifyCodingHref", () => {
     expect(classifyCodingHref("file:relative.py", "")).toEqual(blocked("malformed"));
   });
 
-  it("keeps links outside the project inert", () => {
+  it("keeps links outside the repo inert", () => {
     expect(classifyCodingHref("/mnt/workspace/.codex/config.toml", "")).toEqual(blocked("outside"));
     expect(classifyCodingHref("/etc/passwd", "")).toEqual(blocked("outside"));
     expect(classifyCodingHref("//evil.example/x", "")).toEqual(blocked("outside"));

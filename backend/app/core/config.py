@@ -6,7 +6,7 @@ Sources, in ascending precedence: defaults < config/launchpad.yaml < environment
 runnable locally.
 """
 
-from collections.abc import Callable
+import shutil
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # from the console.
     auth_username: str = Field(default="admin", min_length=1, max_length=64)
     auth_password: SecretStr | None = None
+    # A password the built-in admin set on the console (a hash in the ledger,
+    # app/services/admin_credential.py) takes precedence over `auth_password`.
+    # Break-glass: `true` ignores that override, so `auth_password` signs in again
+    # (the other way is `scripts/reset_admin_password.py`, which deletes it).
+    auth_admin_password_override_disabled: bool = False
     # Effective value is `auth_cookie_secure or run_mode == "prod"` — read it
     # through `routers.auth.cookie_secure()`, never directly, so prod is secure
     # by default while yaml can still force it on in dev.
@@ -151,6 +156,27 @@ class Settings(BaseSettings):
     # Keep the SDK read timeout above that service limit so buffered agents can
     # return their final response.
     agentcore_read_timeout_s: int = Field(default=1000, gt=0)
+    # Runtimes built from a platform template (Strands zip, Claude SDK container) send a
+    # heartbeat at least every 15 s while they work, so this much silence on their
+    # stream means the stream is dead, not that the agent is thinking. Without it a
+    # stalled InvokeAgentRuntime stream held a release-gate replay for the full
+    # ``agentcore_read_timeout_s`` (live 2026-10-13: 1 of 24 replays, 1000 s).
+    agentcore_heartbeat_read_timeout_s: int = Field(default=120, gt=0)
+    # AgentCore Memory reads and writes answer in well under a second. With the
+    # runtime's 1000 s read timeout a stalled ListEvents held a calibration-task
+    # create past CloudFront's 60 s for good (live 2026-10-18); a short timeout and
+    # one retry turn that stall into a fast fresh attempt.
+    agentcore_memory_read_timeout_s: int = Field(default=15, gt=0)
+    # Read timeout for request/response AgentCore data-plane APIs (A/B tests,
+    # recommendations, batch-evaluation reads) — see ``api_data_client``.
+    agentcore_api_read_timeout_s: int = Field(default=60, gt=0)
+
+    # The longest a synchronous invoke (console /invoke, public /v1 invoke) waits
+    # before answering 504 invoke.timeout with the session id and the streaming
+    # route; the turn keeps running (services/sync_deadline.py). 50 s stays under
+    # CloudFront's default 60 s origin read timeout. 0 = no deadline, for a
+    # deployment with no proxy timeout in front of it.
+    sync_invoke_deadline_s: int = Field(default=50, ge=0)
 
     # How many experiment/canary replay prompts are posted through the A/B gateway
     # at once (optimization.service.send_gateway_traffic). Each prompt is an
@@ -175,37 +201,54 @@ class Settings(BaseSettings):
     # can be re-checked (POST /api/eval/runs/{id}/recheck).
     eval_batch_wait_s: int = Field(default=7200, ge=60, le=86400)
 
-    # Models the platform itself calls or pre-selects (not the models of the agents
-    # users build). Each is a role in app.services.model_settings: overridable as
-    # LAUNCHPAD_<FIELD>, in launchpad.yaml, or by an administrator on the console's
-    # Models page (ledger ``platform_settings``, applied on top of every Settings
-    # build by the hook registered below). Precedence: console > env > yaml >
-    # default. Read them per call through ``get_settings()``, never at import.
-    # Default model of an agent spec submitted without a model_id, and the Create
-    # Agent wizard's pre-selection (served by GET /api/model-defaults).
-    agent_default_model_id: str = "global.openai.gpt-6-sol"
-    # Default of the Claude Agent SDK ("container") method — Claude models only, so a
-    # container spec without a model_id gets this instead of the agent default.
-    claude_sdk_model_id: str = "global.anthropic.claude-sonnet-5"
+    # Models the platform itself calls (not the models of the agents users build).
+    # Each is overridable as LAUNCHPAD_<FIELD> — scripts/switch_models.py probes the
+    # account and writes them to an EnvironmentFile for accounts that cannot invoke
+    # the defaults (e.g. no OpenAI / Anthropic access); an administrator can also
+    # override them on the console's Models page (ledger ``platform_settings``,
+    # applied in-process by app.services.model_settings), which wins over env.
+    # See docs/setup.md "Choosing models".
+    # Default model of a new agent (the Create Agent wizard pre-selects it; a spec
+    # submitted without a model_id gets it).
+    agent_default_model_id: str = "global.zai.glm-5.3"
+    # Intent clustering (Observe intent view) and the try-chat suggested questions.
+    platform_model_id: str = "global.anthropic.claude-sonnet-5"
     # Default LLM-as-judge model of custom / derived AgentCore evaluators, and the
     # model to retry on when AgentCore's evaluator validation refuses the judge
-    # (empty = no fallback; the refusal surfaces). See evaluation/agentcore_eval.py.
+    # (empty = no fallback; the refusal surfaces).
     judge_model_id: str = "global.openai.gpt-6-sol"
     judge_fallback_model_id: str = "global.anthropic.claude-sonnet-5-5"
     # Default model of agents the architect assistant proposes (managed Harness).
     assistant_model_id: str = "global.openai.gpt-6-sol"
-    # Model of the system architect agent on a new install. Its preset
-    # reasoning_effort applies only while this is an OpenAI model.
+    # Default model of the system architect agent on a new install. reasoning_effort
+    # is preset only when this is an OpenAI model (the only family that takes it).
     architect_model_id: str = "global.openai.gpt-6-astra"
-    # Simulated-user (actor) model the console pre-selects for persona scenarios;
-    # it must accept Converse forced tool choice.
+    # Model of the architect assistant's confirmed-items digest (assistant-context C2,
+    # D-2); empty = agent_default_model_id (the workspace's cheap default).
+    assistant_digest_model_id: str = ""
+    # Per-project Bedrock application inference profiles for isolated projects (projects
+    # design §10.8): cost per project at the model call; off until verified live.
+    project_inference_profiles: bool = False
+    # The architect assistant's replay budget (assistant-context C3): half the
+    # architect model's input context window, in estimated tokens, capped at
+    # assistant_replay_max_tokens; the other half stays free for the turn's own tool
+    # results and output. The window is this override when > 0, else the model's
+    # entry in model_context_windows / a refreshed model_prices entry's
+    # max_input_tokens (longest substring key wins); with neither the replay keeps
+    # the 160 000-character budget.
+    assistant_context_window_tokens: int = 0
+    assistant_replay_max_tokens: int = 200_000
+    assistant_replay_max_turns: int = 12
+    # Input context windows (tokens) by model-id substring, for models whose
+    # model_prices entry carries no max_input_tokens. Overridable in launchpad.yaml.
+    model_context_windows: dict[str, int] = {}
+    # Default simulated-user (actor) model the console pre-selects for persona
+    # scenarios; it must accept Converse forced tool choice (any / tool).
     actor_model_id: str = "global.openai.gpt-6-luna"
-    # Model of a Strands Studio canvas node that names none. Deliberately its own
-    # setting, not the agent default: the backend scopes a studio agent's IAM role
-    # to it and the canvas codegen bakes it in, so both must agree (the console reads
-    # it from GET /api/model-defaults), and moving it would move every existing
-    # flow's model-less nodes.
+    # Model of a Strands Studio canvas node that names none.
     studio_fallback_model_id: str = "global.anthropic.claude-sonnet-5"
+    # Default of the Claude Agent SDK ("container") method — Claude models only.
+    claude_sdk_model_id: str = "global.anthropic.claude-sonnet-5"
 
     # 3rd-party recommendation providers for the experiment RECOMMEND stage
     # (app/optimization/providers). Model ids are Bedrock Converse
@@ -245,6 +288,11 @@ class Settings(BaseSettings):
     # LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true.
     studio_exec_backend: Literal["subprocess", "docker"] = "subprocess"
     studio_exec_docker_image: str = "launchpad-studio-exec:latest"
+    # The docker-compatible CLI every container call shells out to (the docker
+    # exec backend, its e2e and the local container smoke). "auto" = `docker`
+    # if it is on PATH, else `finch` (macOS hosts without Docker Desktop);
+    # any other value is used as-is. Read it through resolve_container_cli().
+    container_cli: str = "auto"
     # Docker network the exec containers join. Empty = docker's default bridge.
     # Set to the network created by scripts/setup_exec_docker.sh --harden-net
     # (whose subnet a DOCKER-USER rule blocks from IMDS) when running with
@@ -356,10 +404,10 @@ class Settings(BaseSettings):
         # bare amazon.nova-2-lite-v1:0 = the global-profile price.
         "nova-2-lite": {"input": 0.3, "output": 2.5},
         # Z.AI GLM on Bedrock, from https://aws.amazon.com/bedrock/pricing/
-        # (Standard tier, read 2026-10-08; litellm agrees, 2026-10-14). The longest
-        # matching key wins, so the US cross-region profile gets its own entry over
-        # the global one, and glm-4.7-flash over glm-4.7. GLM-5 / 4.7 / 4.7 Flash are
-        # the US in-region rates; the page lists no cache rates for them.
+        # (Standard tier, read 2026-10-08). The longest matching key wins, so the
+        # US cross-region profile gets its own entry over the global one, and
+        # glm-4.7-flash over glm-4.7. GLM-5 / 4.7 / 4.7 Flash are the US in-region
+        # rates (N. Virginia, Ohio, Oregon); the page lists no cache rates for them.
         "glm-5.3": {"input": 1.68, "output": 5.28, "cache_read": 0.312, "cache_write": 2.10},
         "us.zai.glm-5.3": {
             "input": 1.848, "output": 5.808, "cache_read": 0.3432, "cache_write": 2.31,
@@ -405,32 +453,35 @@ class Settings(BaseSettings):
         },
     }
     model_prices_meta: dict[str, Any] = {}  # written by the price refresher
+    # eval-cost §1.2: overrides of the evaluation unit prices (runtime vCPU / GB-hour,
+    # managed evaluator per 1K tokens…) app.dlc.cost.DEFAULT_EVAL_PRICES names; keys
+    # left out keep their defaults
+    eval_cost_prices: dict[str, Any] = {}
     model_prices_source_url: str = (
         "https://raw.githubusercontent.com/BerriAI/litellm/main/"
         "model_prices_and_context_window.json"
     )
     model_prices_refresh_hours: int = 24  # 0 disables the periodic refresher
-    # Background alert checks (`app.services.alert_scheduler`). OFF by default and
-    # turned on per box: prod and prod2 share one AWS account, so enabling it on
-    # both would post every webhook twice. One thread per process — the systemd
-    # unit runs a single uvicorn; several processes would each run one.
-    alerts_scheduler_enabled: bool = False
-    alerts_scheduler_interval_seconds: int = 300
-    # Budget reconciliation (`app.services.budget_scheduler`): measured span tokens
-    # replace estimates and AgentCore fees are charged per person. ON by default —
-    # enforcement depends on it — with LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false as the
-    # emergency off switch. Each box reconciles only the sessions in its own ledger,
-    # so prod and prod2 sharing one AWS account never charge each other's sessions.
-    budgets_reconcile_enabled: bool = True
-    budgets_reconcile_interval_seconds: int = 600
+
+    # Online update (docs/design online-update §2.1): where the console pulls new
+    # commits from. Deployment configuration, never a request parameter — the API
+    # takes no URL or branch, and only a fast-forward of the running commit is
+    # accepted. `update_enabled` None = on when the systemd updater is installed
+    # (backend/scripts/install_updater.sh); false turns the whole feature off.
+    update_repo: str = "https://github.com/aws-samples/sample-agentcore-launchpad"
+    update_branch: str = "console-v3"
+    update_enabled: bool | None = None
+    # Prepare refuses to start below this much free disk under DATA_DIR, and fails
+    # a stage that grows past the cap (`update.disk_low`).
+    update_min_free_gb: float = Field(default=3.0, ge=0)
+    update_stage_max_gb: float = Field(default=6.0, gt=0)
 
     @model_validator(mode="after")
     def _seed_model_prices(self) -> "Settings":
         # launchpad.yaml carries its own model_prices map (the refresher persists
-        # the whole map), and a yaml/env dict REPLACES the default instead of
-        # merging with it — which would hide every price added to the defaults
-        # after that file was written. Fill in the default entries it lacks; an
-        # entry it has (refreshed or edited by hand) still wins.
+        # it), which would hide every price added to the defaults after that file
+        # was written. Fill in the default entries it lacks; an entry it has —
+        # refreshed or edited by hand — still wins.
         defaults = type(self).model_fields["model_prices"].default or {}
         missing = {k: v for k, v in defaults.items() if k not in self.model_prices}
         if missing:
@@ -455,23 +506,18 @@ class Settings(BaseSettings):
         )
 
 
-# Callables run on every freshly built ``Settings`` before ``get_settings`` caches
-# it. The console model overrides register one (app.services.model_settings), so an
-# override survives every ``get_settings.cache_clear()`` — the price refresher and
-# default-workspace resource writes both clear the cache at runtime. A registry
-# rather than an import keeps this module free of app imports.
-_SETTINGS_HOOKS: list[Callable[[Settings], None]] = []
+def resolve_container_cli(value: str = "auto") -> str:
+    """The container CLI to invoke for setting value ``value``.
 
-
-def register_settings_hook(hook: Callable[[Settings], None]) -> None:
-    """Run ``hook`` on every Settings ``get_settings`` builds (idempotent)."""
-    if hook not in _SETTINGS_HOOKS:
-        _SETTINGS_HOOKS.append(hook)
+    "auto" (or empty) picks `docker` if it is on PATH, else `finch`, else the
+    bare name "docker" — so a host with neither still gets the familiar
+    "docker is not installed" refusal. An explicit value is returned as-is.
+    """
+    if value and value != "auto":
+        return value
+    return shutil.which("docker") or shutil.which("finch") or "docker"
 
 
 @lru_cache
 def get_settings() -> Settings:
-    settings = Settings()
-    for hook in _SETTINGS_HOOKS:
-        hook(settings)
-    return settings
+    return Settings()

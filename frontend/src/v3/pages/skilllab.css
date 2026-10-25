@@ -1,0 +1,4 @@
+/* V3 Skill Lab — the job log and clipped cells; everything else is V3 vocabulary. */
+.v3 .v3-sl-log { max-height: 340px; min-height: 120px; font-size: 12px; }
+.v3 .v3-sl-clip { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3 .v3-name small.v3-sl-clip { display: block; max-width: 520px; }

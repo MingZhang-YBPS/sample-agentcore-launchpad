@@ -3,6 +3,8 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.services.agentcore import registry as reg
 
 RID = "launchpad-registry-x"
@@ -138,6 +140,49 @@ def test_upsert_updates_with_wrappers():
     assert "optionalValue" in kwargs["descriptors"]
 
 
+def test_upsert_recreates_a_deprecated_record_under_a_new_version():
+    """Live 2026-10-16: sync-defaults updated the DEPRECATED office-facts record and
+    AWS refused (terminal state); the sync failed for every default."""
+    client = MagicMock()
+    client.list_registry_records.return_value = {
+        "registryRecords": [
+            {"name": "x", "recordId": "old1", "recordType": "MCP",
+             "status": "DEPRECATED", "recordVersion": "1.0.0-mcp"},
+        ]
+    }
+    client.create_registry_record.return_value = {
+        "recordArn": f"arn:aws:agent-registry:us-west-2:1:registry/{RID}/record/new2",
+        "status": "CREATING",
+    }
+    record, created = reg.upsert_record(
+        client, RID, name="x", description="d", descriptor_type="MCP",
+        descriptors={"mcp": {"server": {"schemaVersion": "v", "inlineContent": "{}"}}},
+    )
+    assert created is True and record["recordId"] == "new2"
+    client.update_registry_record.assert_not_called()
+    assert client.create_registry_record.call_args.kwargs["recordVersion"] == "2.0.0-mcp"
+
+
+def test_upsert_updates_the_live_record_next_to_a_deprecated_one():
+    client = MagicMock()
+    client.list_registry_records.return_value = {
+        "registryRecords": [
+            {"name": "x", "recordId": "old1", "recordType": "MCP",
+             "status": "DEPRECATED", "recordVersion": "1.0.0-mcp"},
+            {"name": "x", "recordId": "live2", "recordType": "MCP",
+             "status": "APPROVED", "recordVersion": "2.0.0-mcp"},
+        ]
+    }
+    client.update_registry_record.return_value = {"recordId": "live2", "recordType": "MCP"}
+    _, created = reg.upsert_record(
+        client, RID, name="x", description="d", descriptor_type="MCP",
+        descriptors={"mcp": {"server": {"schemaVersion": "v", "inlineContent": "{}"}}},
+    )
+    assert created is False
+    assert client.update_registry_record.call_args.kwargs["recordId"] == "live2"
+    assert reg.find_record(client, RID, "x", "MCP")["recordId"] == "live2"
+
+
 def test_status_transitions():
     client = MagicMock()
     reg.submit_record(client, RID, "r1")
@@ -265,6 +310,31 @@ def test_registry_endpoint_returns_unavailable_envelope(client, monkeypatch):
         "message": "blocked by account policy",
         "detail": {"reason": "blocked by account policy"},
     }
+
+
+def test_list_records_accepts_ga_type_names():
+    """`?type=` takes the platform (`AGENT_SKILLS`) or GA (`skill`) spelling alike."""
+    control = MagicMock()
+    control.list_registry_records.return_value = {"registryRecords": []}
+    for name in ("AGENT_SKILLS", "SKILL", "skill"):
+        reg.list_records(control, RID, name)
+        assert control.list_registry_records.call_args.kwargs["filters"] == [
+            {"name": "recordType", "values": ["SKILL"]}
+        ]
+
+
+def test_list_route_unknown_type_is_422(client, monkeypatch):
+    import app.services.registry_console as console
+
+    control = MagicMock()
+    monkeypatch.setattr(console, "registry_control_client", lambda _ws: control)
+    monkeypatch.setattr(console, "_registry_id", lambda _ws: RID)
+
+    response = client.get("/api/registry/records?type=gadget")
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "registry.bad_type"
+    control.list_registry_records.assert_not_called()
 
 
 # ---------- consumer view: ListDiscoverableRegistryRecords ----------
@@ -421,3 +491,44 @@ def test_discoverable_route_registry_unavailable_is_503(client, monkeypatch):
 
     assert response.status_code == 503
     assert response.json()["code"] == "registry.unavailable"
+
+
+def test_submitting_a_record_retries_the_services_own_concurrent_conflict(monkeypatch):
+    """`SubmitRegistryRecordForApproval` answers ConflictException "Concurrent update
+    detected. Please retry." while it settles — observed failing a whole deploy at the
+    register stage, which is why this retries instead of surfacing it."""
+    from app.services.agentcore import registry as reg
+
+    monkeypatch.setattr(reg.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    class _Client:
+        def submit_registry_record_for_approval(self, **kw):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise type("ConflictException", (Exception,), {})(
+                    "Concurrent update detected. Please retry."
+                )
+            return {"recordId": kw["recordId"], "status": "PENDING_APPROVAL"}
+
+    out = reg.submit_record(_Client(), "reg-1", "rec-1")
+    assert out["status"] == "PENDING_APPROVAL" and calls["n"] == 3
+
+
+def test_a_different_conflict_is_not_retried(monkeypatch):
+    """Only AWS's own "retry" wording is retried — a real state conflict must surface."""
+    from app.services.agentcore import registry as reg
+
+    monkeypatch.setattr(reg.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    class _Client:
+        def submit_registry_record_for_approval(self, **kw):
+            calls["n"] += 1
+            raise type("ConflictException", (Exception,), {})(
+                "Record is already PENDING_APPROVAL"
+            )
+
+    with pytest.raises(Exception, match="already PENDING_APPROVAL"):
+        reg.submit_record(_Client(), "reg-1", "rec-1")
+    assert calls["n"] == 1

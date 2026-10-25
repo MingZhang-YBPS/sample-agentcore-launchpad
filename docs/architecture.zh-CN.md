@@ -258,26 +258,103 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 
 | 方式 | 会话存储 | 自带 S3 Files / EFS（+ VPC） | 发送位置 |
 |---|---|---|---|
-| `harness` | 支持 | 拒绝（422） | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
-| `zip_runtime` / `studio` | 支持 | 拒绝（422） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
-| `container` | 支持 | 支持 | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `harness` | 支持 | 支持（P3 / P4 探测待做） | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
+| `zip_runtime` / `studio` | 支持 | 支持（P1 / P2 探测待做） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `container` | 支持 | 支持（2026-07-13 实测） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `byoc`（代码 zip、镜像；Agent 与 MCP 服务器） | 支持 | 支持（P5 探测待做） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+
+`schemas/agent.BYO_MOUNT_METHODS` 列出接受自带挂载的方式（设计 storage-mounts §3）。
+所有方式的请求形状都在 `bedrock-agentcore-control` service model 中；线上行为探测脚本是
+`backend/scripts/probe_storage_mounts.py`（P1 zip 创建、P2 zip 换路径、P3 Harness 创建、
+P4 Harness 由 PUBLIC 重新发布到 VPC、P5 BYOC 镜像、P8 只读）。探测否定的方式会移出该集合，
+并以探测结论拒绝（`BYO_MOUNT_UNSUPPORTED`）。BYOC 过去完全不发 `filesystemConfigurations`；
+现在创建与每次更新都发送 spec 的列表（含会话存储），所以现有 BYOC Agent 下次重新发布时会挂上
+`/mnt/workspace`。
+
+**挂载依赖 Agent 的网络。** S3 Files / EFS 的挂载目标从运行时的 ENI 访问，所以带自带挂载的 spec
+必须引用网络（`spec.network`，即网络配置档，见下文「Agent 网络」）；PUBLIC 会被拒绝（422），
+`runtime.py` 在任何 Create / Update 调用之前再拒绝一次。挂载沿用各方式已有的 `spec_vpc` 网络放置，
+不再有只属于 container 的 VPC 路径。
+
+**谁可以设置。** 内联挂载（早于下文存储目录的形式）是 Access Point ARN；与内联子网 /
+安全组一样，只有管理员可以新增或修改（`services/mount_policy.py`，`storage.inline_not_allowed`，400）。
+成员可以在管理员设置的挂载保持不变时重新发布，也可以删除挂载。每种方式的执行角色都会得到
+`launchpad-fs-<agent>` 内联策略（总是包含 `ClientWrite`；只读模式随存储目录一起提供）。
+
+**存储目录**（storage-mounts §4、SM-2，`services/storage_mounts.py`，[api.zh-CN.md](api.zh-CN.md)
+「控制台存储目录 API」）。管理员按工作区把 S3 Files 或 EFS 接入点登记为目录条目（`storage_mounts`：id、种类、
+接入点、`max_mode` `ro` / `rw`、`data_class`、可选的默认网络配置档），并像网络配置档一样按项目放行
+（`project_storage_mounts`）；不在项目允许集合中的条目视同不存在。spec 随后按 id 挂载：
+`filesystem.mounts[{storage_id, mount_path, mode}]`（默认只读，最高为 `max_mode`），成员在向导中选择存储，
+无需填写 ARN；服务端把条目的种类与接入点写入保存的 spec。**检查**通过工作区的只读 describe 调用读取接入点、
+文件系统与挂载目标；**预检**（向导调用 `POST /api/storage-mounts/preflight`，部署时再跑一次，
+`409 storage.preflight_failed`）把每个挂载与 spec 的网络配置档对照：同一 VPC、每个子网所在可用区都有挂载目标、
+Agent 安全组出站与挂载目标安全组入站放行 NFS（TCP 2049）。**IAM 按模式授予**：`storage_iam_statements`
+对每个挂载授予 `ClientMount`，只有 `rw` 挂载另加 `ClientWrite`（内联挂载仍为读写）。**晋级**时目录挂载是种类为
+`storage` 的资源映射引用：目录 id 即逻辑名，目标工作区的同名条目（或映射行指定的条目）必须在用且允许该项目使用，
+否则拒绝发布（`storage.unmapped`），解析后的 spec 以目标的接入点重新盖章。内联接入点带有源账户，不能晋级
+（`storage.inline_not_promotable`）。
+
+**会写入生产存储的运行**（storage-mounts §8.2）。在 `gated` 工作区中，若 Agent 以读写方式挂载了 `shared_state` 存储，
+评估回放或金丝雀都会写入该存储，后端因此返回 `409 storage.write_confirm_required` 并附上这些挂载。控制台无法事先判断，
+所以运行页与金丝雀页照常发送请求，收到该回复后询问一次，再带 `confirm_storage: true` 重发（`lib/storage-confirm.ts`）；
+放行门展示挂载差异，其评估按钮需要同样的确认，签字通过读写变更时需要 `storage_ack`。
+
+**Agent 如何得知挂载**（`app/deployer/mounts.py`）。代码运行时（zip、studio、container、BYOC）的环境变量
+里有 `LAUNCHPAD_MOUNTS`（JSON：`[{name, path, kind, mode}]`）；Strands HTTP 模板、Claude SDK 容器模板与
+Harness 还会在系统提示词末尾附一段「Shared directories」说明（模板渲染进代码；Harness 拼进 `systemPrompt`，
+从线上 Harness 读回提示词时再去掉）。Studio 与转换后的代码、A2A Agent（其卡片描述截自提示词开头）只读取
+环境变量。托管会话存储不在列表中。
 
 两个更新 API 在重新发布时的语义不同（2026-10-04 实测）：
 
 - **UpdateAgentRuntime 省略 `filesystemConfigurations` 会清空挂载**，和它重置
-  `protocolConfiguration` 的方式一样。因此 zip、container 和金丝雀候选版本每次更新都发送该列表；
+  `protocolConfiguration` 的方式一样。因此 zip、container、BYOC 和金丝雀候选版本每次更新都发送该列表；
   “关闭会话存储”正是靠省略它来卸载。
 - **UpdateHarness 省略 `environment` 则保留原配置**，发送时整体替换列表（`[]` 卸载全部）。
-  Harness 重新发布前先读 `GetHarness`（`harness.environment_for_update`），只替换
-  `sessionStorage` 条目，平台之外配置的网络/生命周期设置以及 EFS / S3 Files 挂载都会保留。
-  金丝雀回滚不带 `environment`，因此保留当前挂载。
+  Harness 重新发布前先读 `GetHarness`（`harness.environment_for_update`），按 `mountPath` 合并：
+  spec 的条目（会话存储与自带挂载）归平台，原样发送；线上条目所在路径若曾由该 Agent 的某次发布设置
+  （其 spec 快照），也归平台，因此从 spec 删除的挂载会被卸载；其余线上条目（平台之外配置的 EFS /
+  S3 Files 挂载）与网络/生命周期设置一起保留。spec 现在使用的路径上若有平台从未设置的线上条目，
+  以 spec 为准替换，并在部署日志记一行。金丝雀回滚不带 `environment`，因此保留当前挂载。
 
 所有已存储的 spec 都是 `model_dump()` 写入的，本身就带着默认值。所以现有的 Harness 或 Strands
 Agent 下次重新发布时会挂上 `/mnt/workspace`，除非用户把它关掉。会话存储不需要 IAM 授权。
-VPC 模式下访问 `acr-storage-*` S3 桶的出网要求在这里不适用，因为 Harness 和 zip runtime
-都保持 `PUBLIC`。生成的 Agent 不会被告知挂载路径（container 模板同样没有）；Harness 通过
-原生 `shell` / `file_operations` 工具访问它。Harness / Strands Agent 的这一设置只有 V2 向导
-（`FilesystemCard`）可以编辑，经典控制台会原样回传已存储的值。
+在 VPC 网络配置档中（见下文「Agent 网络」），运行时经配置档的 S3 网关端点访问
+`acr-storage-*` S3 桶，配置档预检对每个 Agent 都要求该端点。Harness 通过原生 `shell` /
+`file_operations` 工具访问挂载。V2 向导（`FilesystemCard`）编辑这一设置，其中自带挂载行只有管理员可以编辑；
+经典控制台会原样回传已存储的值。
+
+### Agent 网络（`AgentSpec.network`）
+
+每种部署方式都部署到 `spec.network` 所引用的网络配置档中：Harness、`zip_runtime` / `studio`
+（HTTP 与 A2A）、`container` 以及 BYOC（代码 zip 与镜像，Agent 与托管 MCP 服务器都一样）。
+`deployer/network.spec_vpc` 是唯一的解析器：`{profile_id}`（或配置档出现之前的内联
+`{subnets, security_groups}`，匹配到对应的 `legacy-<hash8>` 配置）被解析为各部署器以 VPC 模式交给
+`networkConfiguration` 的 `{subnets, security_groups}`；省略网络即为 `PUBLIC`。Runtime 路径在创建与每次
+更新时都发送它。`UpdateHarness` 在 spec 未引用配置档时保留实时网络；把 Harness 移出配置档的重新发布
+会在任务载荷中带上旧网络（`network_from`），于是部署设为 `PUBLIC` 而不是保留原值。修改网络就是一次
+普通的重新发布：同一资源上的新版本。
+
+**部署时的网络闸门。** `pipeline.network_gate` 在 `POST /api/agents`、
+`POST /api/agents/{id}/redeploy` 与 `POST /api/agents/{id}/convert` 中、任何任务创建之前运行：
+
+- Workspace 禁止 PUBLIC（`network_public_allowed: false`）而没有网络 → `400 network.public_not_allowed`；
+- 引用了配置档时，按**此** Agent 用到的功能（`network_preflight.features_of_spec`：容器镜像拉取、
+  Bedrock 模型、记忆、网关工具、Identity、A2A、知识库）重新预检，因此检查的是这个 Agent 需要的端点，
+  而不只是每个 Agent 都需要的端点。有任何阻断项 → `409 network.preflight_failed`，阻断项在
+  `detail.results` 中。`legacy-<hash8>` 配置不做预检：其部署行为与配置档出现之前相同。
+
+**Agent 运行在哪里。** `GET /api/agents/{agent_id}/network`（`services/agent_network.py`）返回
+`mode`（`PUBLIC` / `VPC`）、解析后的配置档及其上次预检（状态、`checked_at`、阻断 / 警告数；Workspace
+已没有该配置时为 `missing`）、放置位置（`vpc`），以及 AgentCore 在其中持有的 ENI（按配置档的子网与安全组
+过滤 `ec2:DescribeNetworkInterfaces`）。ENI 按配置档列出，因为同一组子网与安全组中的所有 Agent 共享它们；
+没有该读取权限的旧版 spoke 角色返回 `status: unavailable`，路由本身不失败。
+
+**控制台。** V2 向导的网络步骤（`NetworkSection`）覆盖每种方式，包括 Harness 快速创建的高级选项。
+`GET /api/network-profiles` 标记了可选的 `is_default` 配置时，新 Agent 默认使用项目的默认配置档；审阅步骤
+对每种方式都显示网络（「公网」或配置档）。Studio 发布对话框提供同样的选择，重新发布时带上已存储的网络
+（spec 会被整体替换）。
 
 ### BYOC —— 自带代码
 
@@ -336,7 +413,7 @@ requirements 文件不能扩大"仅平台索引"这一供应链边界:`-r`/`-c` 
 CodeBuild 源码包,**覆盖上传中自带的任何 buildspec**——成员只控制 Dockerfile,
 永远不控制构建配方。
 
-**v1 范围。** 仅 HTTP 协议(不支持 A2A);spec 上不支持
+**v1 范围。** HTTP 或 MCP 协议(不支持 A2A);spec 上不支持
 toolkits/skills/knowledge_bases/tools(平台不生成这份代码,无法接线——请在你自己的
 代码里配置能力);`system_prompt` 可选,作为描述使用。配置包实验与金丝雀候选按
 `custom-source-unverified` 降级,与其他自带源码的运行时一致。示例见
@@ -349,15 +426,32 @@ toolkits/skills/knowledge_bases/tools(平台不生成这份代码,无法接线�
 Chat 会把原始图片/PDF 以 `attachments: [{name, media_type, data}]`(base64)随 prompt
 一起发送——前提是 `spec.model_id` 为多模态模型。代码必须在回答前确认收到附件(JSON
 回复带 `"attachment_contract": "v1"`,或 SSE 首个事件 `{"event": "attachments", "contract": "v1"}`)。
-容器类 artifact 从不记录约定,仍只接受文本/文本 PDF 输入。
+容器类 artifact 和经 stdio 桥接的 MCP 服务器从不记录约定,仍只接受文本/文本 PDF 输入。
 
-**可观测性(`code_zip`)。** span 由 agent 进程自身产生,因此直接代码运行时只有在 ADOT
-下启动才会出现在可观测性页面。package 阶段检查最终部署包中是否存在
-`bin/opentelemetry-instrument`——zip 的 `requirements.txt` 列出 `aws-opentelemetry-distro`
-(或成员自行 vendor)时 `pip install -t` 会写入它——并把结果记录在 job 上;deploy 阶段随后与
-平台生成的代码一样使用 `["opentelemetry-instrument", <入口>]`。没有启动器时入口直接运行(缺失的
-启动器会让运行时启动失败),agent 不产生 span;其 stdout 仍写入运行时日志组。容器类 artifact
-自己掌控 `CMD`,插桩由镜像负责。
+### 托管 MCP 服务器（`protocol: "mcp"`）
+
+V3 的 **MCP 服务器** 入口（`/v2/agents?view=new&method=byoc&protocol=mcp`）部署一个 BYOC 制品（三种来源均可），它在 `0.0.0.0:8000/mcp` 以 streamable HTTP 提供 MCP；平台让工作区网关成为它唯一的调用方（`app/services/mcp_servers.py`；设计见 `docs/design` §15 的最小版）。spec 带 `mcp: {target_name}`；`client_id`、`provider_arn`、`target_id` 由服务端写入——创建与重新发布接口会覆盖请求里的这些值，任何调用方都无法让流水线指向别人的网关目标。MCP 服务器也可以像其他 Agent 一样指定 VPC 网络配置（§15.10）：该配置只改变运行时的出站路径，网关仍经 AgentCore 数据面调用它。
+
+| 阶段 | MCP 服务器的工作 |
+|---|---|
+| generate | 在工作区 Cognito 池为它创建专属应用客户端（`lp-mcp-<agent id 前 12 位>`，client_credentials，scope `launchpad-gw/invoke`）；把 `inbound_auth` 写为该池的 JWT，只允许这个客户端 |
+| provision | 每 Agent 执行角色，**不含** `BedrockModels` / Mantle 授权（工具不调用模型）；记忆强制关闭 |
+| deploy | `CreateAgentRuntime` / `UpdateAgentRuntime` 带 `protocolConfiguration.serverProtocol = MCP`，每次更新都回传（省略会把 Runtime 重置为 HTTP）；不注入 `MODEL_ID` 环境变量 |
+| register | 不建 A2A 记录，改为：同名 OAuth2 凭证提供方（持有该客户端），再建 MCP 服务器网关目标，端点为 Runtime 在 `DEFAULT` 上的数据面 URL；创建目标、或重新发布后执行 `SynchronizeGatewayTargets`，都会列出工具；同名但指向别处的目标被拒绝（`409 mcp.target_name_taken`），改名后旧目标会被删除 |
+
+网关级注册中心记录**不会**被改写（更新会让已批准的记录回到 DRAFT，影响所有挂载它的 Agent）；register 阶段在日志里提示到「治理 → 注册中心导入」刷新。MCP 服务器不可调用（`invoke_capability.reason_code = not-agent-protocol`，对话、`/v1`、评估都会跳过它），不参与放行门，入站认证不能切换（`422 agent.inbound_auth_unsupported`），重新发布也不能在 `mcp` 与其他协议之间切换。`GET /api/agents/{id}/mcp` 实时读回目标状态，以及智能体经网关看到的工具（`<target>___<tool>`）——V3 智能体页用它替换生命周期、对话和试用面板。删除按反向顺序进行：网关目标 → Runtime → OAuth2 提供方 → Cognito 客户端，可重复执行。示例：[`samples/byoc/hello-mcp/`](../samples/byoc/hello-mcp/README.md)（`mcp>=1.10,<2`）。托管服务器与其他 BYOC Agent 一样部署到 `spec.network` 的配置档中（见「Agent 网络」）。
+
+**工具审批闸门（§15.6）。** 托管服务器的工具在部署者以外的人批准其清单之前不会对外提供。创建目标、或重新发布后重新同步目标时，会经网关列出工具；`services/mcp_reviews.py` 把它们快照为 `[{name, description, input_schema}]`（去掉前缀并排序），并把快照的 SHA-256 与最近一次已批准的清单比较。一致则目标保持在线；否则在 `mcp_tool_reviews` 表中打开一条审批，带上相对已批准清单的差异与给审批人的提示（注入式措辞、URL、指向其他工具的指令、破坏性或写入类动词、缺失或过长的描述），并再次删除目标。register 阶段在日志中注明目标已被扣下，因此 Agent 既不能调用也看不到新工具。无法读取的清单同样被扣下（失败即关闭）。审批需要项目级权限键 `mcp.approve`，由 `release_ops` 与 `tool_steward` 模板持有（持有 `promotion.approve` 的 `inherit` 成员也持有）。部署者永远不能审批自己的审批单，管理员也不例外。批准后在后台重新创建目标（再次经过闸门），并在审批单上记录 `publish_status`。`POST /api/mcp-servers/{agent_id}/reviews/check` 会重新同步在线目标，以发现不经重新部署就改变了工具的服务器：一旦不同，就打开一条 `drift` 审批并扣下目标。目标早于闸门存在的服务器，会在下一次部署时把实时清单记为已批准的 `baseline`。批准或发布托管服务器的注册中心记录同样需要 `mcp.approve`，且工具审批须已通过（`409 mcp.review_pending`）。扣下整个目标仍然是闸门；下文的 Cedar 脚手架按需再加上按工具的策略。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台 MCP 工具审批 API」。
+
+**端点、健康检查与回滚（§15.8）。** `mcp_servers` 表（`models/lambda_tools.McpServerState`）为每个托管服务器保存一行：目标调用的端点（`qualifier`）、`live_version`、最近一次 `health` 以及最近一次后台 `operation`。目标调用运行时的 `DEFAULT` 端点，它跟随每个新版本。每小时的调度任务 `mcp.health`（`dlc/scheduler.py`，`mcp_servers.check_health`）检查每个处于活跃项目中的在线服务器：目标调用的端点不是服务器当前端点时改指过去，重新同步，并与已批准清单比较（`check_drift`：漂移会打开审批并扣下目标）。结果记为 `health {status: healthy | drift | failing | withheld, checked_at, tool_count, error, consecutive_failures, alert, review_id, repointed}`；连续三次失败置 `alert` 并记录警告日志。`POST /api/mcp-servers/{agent_id}/health` 立即执行一次检查。回滚（`POST …/rollback`）把命名端点 `live` 指向一个拥有已批准工具清单的更早版本，把该清单记为当前的已批准清单（一条 `rollback` 审批），并把目标改指过去，再次经过闸门。下一次部署解除固定，回到 `DEFAULT`。移动受放行门管控的 Agent 的 live 端点需要 `release.sign`，否则需要 `agents.deploy`。
+
+**Cedar 脚手架（§15.7）。** `POST /api/mcp-servers/{agent_id}/policies/scaffold` 在挂接到 Workspace 网关的策略引擎上规划（`dry_run`）或应用两条 Cedar 策略（`governance.mcp_scaffold_plan`）：`lp_mcp_<target>_unreviewed` 禁止待审批单中的工具，`lp_mcp_<target>_project` 允许已批准的工具，Workspace 绑定多个项目时附带项目条件。每条策略是一个 `create`、`update`、`delete` 或 `keep` 步骤。应用在后台进行，同一时间只有一个治理操作，并记录在 `operation` 中。同一请求中可选的模式切换（`LOG_ONLY` / `ENFORCE`）改动共享基础设施，因此需要 `infra+perm:mcp.approve`，`ENFORCE` 还需要治理页同样要求的证据或覆盖理由。
+
+**Lambda 工具目标（§15.12）。** `POST /api/gateway-tools/lambda` 把一个 Lambda 函数登记为网关工具目标（`lambda_tool_targets` 表）。函数必须位于本 Workspace 的账号和区域内；内联的工具 Schema 在网关上出现任何东西之前就被记为一条工具审批，创建者无法自行放行。由创建者以外、持有 `mcp.approve` 的成员批准后在后台发布：`workspace_iam.sync_lambda_tools_policy` 在网关角色上写入内联策略 `launchpad-lambda-tools`（只对本 Workspace 各 Lambda 目标的函数授予 `lambda:InvokeFunction`，即函数本身及其 `:*` 版本与别名；没有 Lambda 目标时删除该策略），再用已批准的 Schema 创建 `mcp.lambda` 目标。状态：`reviewing` → `publishing` → `live`（或 `failed`、`rejected`）。删除按反向顺序进行。Lambda 可以运行在 VPC 中，因此无需网关访问私有端点也能触达私有后端。
+
+**外部托管目标（§15.15）。** 在 Workspace 网关上手动创建（经「连接」页）、且不属于任何托管服务器的 MCP 服务器目标，由 `GET /api/gateway-tools/external` 以 `hosting: external` 列出。纳管一个目标（`external_mcp_targets` 表）会把它当前列出的清单记为已批准基线，已在调用它的 Agent 不会被切断；之后每小时的 `mcp.health` 任务用它比较新的清单。漂移会打开审批，但目标属于客户，永远不会被扣下或改指。V3 页面 `/v3/tools/gateway`（导航栏：「Gateway 工具」）列出两类目标，可创建 Lambda 目标并纳管外部目标。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台网关工具目标 API」。
+
+**stdio 桥接（§15.5）。** 只支持 stdio 的服务器以代码 zip 发布，并带 `mcp.stdio_wrapper = {command, args, base}`（仅限 code_zip——Dockerfile 上下文或镜像需自行内置桥接）。部署器加入 [`samples/mcp_stdio_bridge/`](../samples/mcp_stdio_bridge/README.md)，由它在 `0.0.0.0:8000/mcp` 提供服务，并把命令作为子进程启动（不经 shell，从包根目录运行；argv 放在环境变量 `MCP_STDIO_COMMAND` 中）：`python` 底座留在托管 Python 运行时上，以桥接为入口；`node` 底座在桥接的 Node 基础镜像上构建镜像（CodeBuild，arm64），部署为容器运行时。每个容器只有一个子进程，因此保存会话状态的服务器会把所有调用方视为同一个会话；响应是普通 JSON（服务器的通知被丢弃，它反向发出的请求一律答复为不支持）。V2 向导的 MCP 服务器卡片提供该开关，开启时隐藏入口文件选择。
 
 ### 推荐的 trace 来源
 
@@ -426,6 +520,28 @@ RECOMMEND 背后的系统提示词生成器是一个 **provider**
 `backend/app/templates/toolkits/__init__.py`（每个成员的工具源码是它旁边的
 `*.py.tmpl` 模板）;spec 字段是 `backend/app/schemas/agent.py` 里的
 `AgentSpec.toolkits`。
+
+### Strands 方式——构建选项（SB-1、SB-2、SB-3）
+
+Strands 方式（`zip_runtime`，平台生成的模板）在原有的模型、提示词、工具、知识库、技能、记忆、护栏、环境变量、限额、A2A、挂载与网络之外，开放了 Strands Agents SDK 的一部分精选能力。所有字段都是可选的，且只适用于 `zip_runtime`（不能与自带源码的 `code` / `code_bundle` 同用）；一个都没设置的 spec 生成的代码逐字节不变（快照测试）。字段定义与校验在 `backend/app/schemas/strands_builder.py`；生成的支持代码在 `backend/app/templates/strands_agent/builder_support.py.tmpl`。
+
+| 能力 | spec 字段 | 生成的 Agent 做什么 | 限制 |
+|---|---|---|---|
+| 内置工具 | `strands_tools[]`、`strands_tool_config` | 导入所选的 `strands-agents-tools`（锁定 `0.8.3`，自动加入 `requirements.txt`）：`current_time`、`calculator`、`http_request`、`think`、`retrieve`、`image_reader`、`journal`。它们替换模板自带的 `calculator` / `current_utc_time` | `http_request` 需要 `strands_tool_config.http_request.allowed_hosts`（主机名或 `*.host`；为空则拒绝该工具）。`retrieve` 只检索 Agent 已挂载的知识库（必须先挂载）。`journal` 写在运行时的临时目录下。这里不提供 `shell`、`python_repl`、`file_write`、`use_aws`——它们是下面的沙箱工具 |
+| 模型参数 | `model_params{temperature, top_p, max_tokens, stop_sequences[], thinking_budget_tokens, prompt_caching}` | 每次模型调用时传入；`thinking_budget_tokens` 开启 Claude extended thinking，`prompt_caching` 开启 SDK 的自动缓存点（系统提示词与工具定义） | 取值范围由 schema 校验；thinking 仅限 Claude 模型 |
+| 对话管理 | `conversation{strategy: sliding_window\|summarizing, window_size, summary_model?}` | 滑动窗口（默认 40，与之前一致），或保留最近 `window_size` 条原文、摘要更早轮次的管理器 | `summary_model` 是 Bedrock 模型，仅用于 `summarizing`；Agent 的执行角色在自身模型之外也获得它的调用权限（`agent_iam.allowed_model_resources`） |
+| 结构化输出 | `output_schema`（JSON Schema 对象） | 在文本之外返回解析后的对象：运行时的 `complete` 事件带 `structured`，控制台流与 `/v1` SSE 发送 `structured` 事件（`{value}`），`/v1` 同步调用返回 `structured` 字段 | 必须是 object schema，每个对象最多 5 层、50 个属性，不超过 20000 个字符。不能与 `protocol: a2a` 同用，也不能与 PII 护栏同用（护栏只筛查文本；调用层对启用护栏的 Agent 也会丢弃 `structured`） |
+| 提示词模板 | `prompt_variables{name: 默认值}`、`few_shot_examples[{question, answer}]`（≤ 10） | 系统提示词中的 `{{name}}` 每次请求时依次取调用 payload 的 `context`（`/v1` 请求字段 `context`）、同名环境变量、默认值；未声明的名字保持原样。few-shot 问答对追加为示例段落 | ≤ 20 个变量，名称须匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，默认值 ≤ 2000 个字符 |
+| 把其他 Agent 当工具 | `agent_tools[{agent_id, tool_name, description}]`（≤ 10） | 每一项成为一个工具，用 Agent 自己的角色调用 `InvokeAgentRuntime`：`http` 目标走平台的 SSE 封装，`a2a` 目标走 JSON-RPC `message/send`。子 Agent 的会话 id 按调用方会话保持不变；调用链最深 3 层 | 目标必须是同一工作空间内、本项目（或以 `use` 级别借给本项目）已部署的 Runtime，协议为 `http` 或 `a2a`，入站认证为 IAM（不是 JWT）；不属于本项目或不存在的 id 返回 404，不符合条件的 Agent 或 Agent 自身返回 422。`runtime_arn` / `protocol` / `qualifier` 来自台账，部署时重新解析（`services/agent_tools.py`）；执行角色只获得这些 ARN 上的 `InvokeAgentRuntime`（需要时加 `InvokeAgentRuntimeForUser`）。工具名不得重复，也不得遮盖其他工具 |
+| 模型提供方 | `model_provider{kind: anthropic\|litellm, connection, base_url?}`（此时 `model_id` 是提供方的模型名） | `AnthropicModel`，或指向 LiteLLM 网关 `base_url` 的 `OpenAIModel`。API 密钥在运行时经令牌保管库从一个 `api_key` 类型的连接读取（缓存 5 分钟）；spec 里从不保存密钥。提供方的模型名写死在代码里，项目级 `LAUNCHPAD_MODEL_ID` 不会替换它 | `litellm` 必须填 `base_url`。仅限 Bedrock 模型来源的 HTTP Agent：`protocol: a2a`、Mantle、extended thinking 或提示词缓存时都会被拒绝 |
+| 工具调用守卫 | `tool_hooks{approval_tools[], max_tool_calls_per_turn, log_tool_calls, mask_args[]}` | Strands hooks：审批列表里的工具（名称或 `*` 模式）在控制台对话中被暂停——流中出现 `approval_required`（`tool`、`tool_use_id`、已脱敏的 `input`），对话显示审批卡片；点“批准”会以 `tool_approvals.approved = [tool]` 发送下一轮，一个名字只放行一次调用。其他调用方（`/v1`、评估、A2A 对端、其他 Agent）一律被拒绝（`approval_refused`）。另有每轮工具调用上限（每轮重置），以及每次调用一行脱敏的 `[launchpad-tool]` 日志 | 审批列表 ≤ 50 项；上限 1–500。`mask_args` 中列出的参数（以及内置的 password / secret / token / api_key / authorization）在日志和审批卡片里显示为 `***` |
+| 限流重试 | `retry{max_attempts, initial_delay_s, max_delay_s}` | Strands `ModelRetryStrategy`：被限流的模型调用按指数退避阶梯重试 | 1–10 次，初始等待 1–60 秒，最长等待 1–600 秒且不小于初始等待 |
+| 自定义 Python 工具 | `custom_tools[{name, description, code, requirements[], execution: runtime\|code_interpreter}]` | 每一项是在向导里写的一个 `@tool` 函数。`runtime`：作为 `custom_tools/<name>.py` 打进 zip，启动时导入（锁定版本的 `name==version` 依赖加入 `requirements.txt`）；`code_interpreter`：把源码和本次调用的参数发给 AgentCore Code Interpreter 执行，每次调用一个全新的命名空间。加载失败的工具变成一个返回错误的占位工具 | 不运行代码的静态检查（`schemas/custom_tool_code.py`）：恰好一个与工具同名的顶层 `@tool` 函数、受支持的类型注解、字面量默认值。允许列表之外的 import、`os.system` 一类调用、`eval` / `exec`、计算出的 `getattr`、会话目录之外的 `open()`、dunder 逃逸、导入时执行的代码以及每个声明的依赖都会成为发现项：这样的版本需要管理员按代码哈希批准这一确切版本（`/api/custom-tools/approvals`，按项目），保存 Agent 时检查，部署的生成阶段再查一次。沙箱中运行的工具不能声明依赖 |
+| 沙箱工具 | `sandbox_tools[]` ⊆ `python_repl`、`shell`、`file_write`、`use_aws` | 只在 AgentCore Code Interpreter 中运行（按需开会话，失败时换新会话重试一次），从不在运行时上执行；`use_aws` 校验服务名与操作名，用沙箱自己的角色在沙箱内运行 boto3。执行角色获得 Code Interpreter 的操作权限（与 `code-interpreter` 内置工具相同） | 由工作空间沙箱设置（`/api/custom-tools/sandbox`，管理员）逐个开放，并可指定工作空间自己的 Code Interpreter（`code_interpreter_id`，保存与部署时由服务端写入；客户端传来的 id 会被丢弃）。设置未开放的工具在保存时被拒绝（`422 custom_tool.sandbox_tool_not_allowed`） |
+
+SB-2 字段只在至少设置了一个时才额外生成支持文件（`builder_sb2.py.tmpl`），因此 SB-1 的 spec 生成的代码仍逐字节不变；SB-3 字段同样只在设置时于其后生成 `builder_sb3.py.tmpl`，SB-2 的 spec 也逐字节不变。在控制台中，V2 与 V3 对话页把 `approval_required` 显示为审批卡片（工具名与脱敏后的输入，“批准”/“拒绝”）；“拒绝”不发送任何内容，该调用不会执行。新建 Agent 选择页的能力对比在“Strands 构建选项”下列出这些能力。
+
+**实验。** 生成的代码每次请求都从配置包读取 `model_params`、`conversation`、`few_shot_examples` 与 `prompt_variables`（键名相同），因此可以在 A/B 实验中对比：实验的对照配置包带 Agent 已保存的值，实验组配置包带同样的值再叠加实验组的覆盖（`optimization/service.py` 的 `stage_bundles`、`BUNDLE_CONFIG_KEYS`）。一个都没设置的 Agent，配置包请求与之前相同。
 
 ### Registry 技能与部署快照
 
@@ -1107,9 +1223,9 @@ Agent 自身的执行角色完成。但 Mantle 需要自己的 IAM 授权:`bedro
 Agent 会部署成功并进入 ACTIVE,但首次调用报 `401 access_denied`;该授权由 harness
 与 zip 共用,新增它需要执行一次 CDK 部署。该字段默认为 `bedrock`,以兼容
 此字段出现之前写入的 spec。控制台表单的各方式同样默认 `bedrock`,默认模型为
-GPT-6 Sol(`global.openai.gpt-6-sol`);harness 与 zip 仍可切换到 Mantle
+GLM-5.3（`global.zai.glm-5.3`，全球推理配置文件，控制台面向的各区域均可用），`AgentSpec` 的默认值也是它；harness 与 zip 仍可切换到 Mantle
 (`frontend/src/lib/agent-spec.ts` 中的 `MODEL_SOURCE_BY_METHOD`)。Claude Agent SDK
-方式则默认取清单中第一个 Claude 模型。控制台提供的模型清单位于
+方式则默认取清单中第一个 Claude 模型，后端也会为未指定模型的 container spec 使用 `global.anthropic.claude-sonnet-5`（`CLAUDE_SDK_DEFAULT_MODEL_ID`）。意图归类与回答建议使用各自的平台模型；Strands Studio 画布对未指定模型的节点保留 Claude 兜底（改动会改变已有流程），新拖入的节点默认 GLM-5.3。控制台提供的模型清单位于
 `frontend/src/lib/models.ts`,清单第一项即默认模型。
 
 **Harness(方式B)** —— 两种来源使用 `HarnessModelConfiguration` 联合类型中
@@ -1283,7 +1399,7 @@ Agent 详情的「代码」按钮打开 `/v2/agents?view=source&id=`，背后是
 
 评估视图可以读出一个 Agent 在多次运行中的得分：每次运行评估的是哪个版本、用什么基准衡量，以及两次运行
 如何逐个用例对齐。规则集中在 `app/evaluation/scorecard.py`；路由为 `GET /api/eval/scorecard`、
-`GET /api/eval/runs/compare` 与 `POST /api/eval/runs/{id}/rerun`（见 API 参考）。
+`GET /api/eval/runs/compare-pair` 与 `POST /api/eval/runs/{id}/rerun`（见 API 参考）。
 
 - **运行行上的记录。** `submit_run` 是创建运行行的唯一位置，它记录 `agent_snapshot_seq`（已部署到 AWS 的最新
   配置快照——仍在部署中的快照并不是运行实际调用的版本），回放运行还记录 `dataset_fingerprint`（对规范化后的
@@ -1358,6 +1474,18 @@ public  /v1  ──┘        │
                         ├─ Policy        (网关处的 Cedar ENFORCE)
                         └─ Observability (spans → CloudWatch Transaction Search)
 ```
+
+### 断线不丢的控制台对话轮次
+
+控制台的一轮对话（`POST /api/chat/{id}`）运行在后台工作线程上，而不在 HTTP 响应里（`app/services/chat_turns.py`，chat-streaming §5.2）。工作线程在该轮的项目上下文中运行上面的调用链，持久化对话条目，并把每个事件按 `seq` 编号发布到该轮的内存缓冲区；响应只是缓冲区的第一个订阅者。因此关闭标签页、刷新页面或代理断开连接都不再结束这一轮：它会继续运行并继续保存。
+
+- `meta.turn_id` 标识该轮，每个非心跳帧都以 SSE `id` 携带其 `seq`。`GET /api/chat/{id}/turns/{turn_id}/events?after=<seq>` 重新订阅：先返回缓冲区中 `seq` 之后的事件（部分事件已离开缓冲区时先发 `gap`），再返回实时事件。控制台在断线后用它重连；`GET …/history` 返回 `running_turn`，使重新打开的会话能跟随仍在运行的轮次。
+- 停止按钮关闭流并调用 `POST …/turns/{turn_id}/stop`：关闭上游，保存部分回答与一条 `interrupted` 行，并短暂等待工作线程，使下一轮能被立即接受。
+- 每个会话同一时间只运行一轮（`409 chat.turn_in_progress`），因此恢复的页面不会交错两轮。一轮最多运行 Agent 的 `timeout_seconds` + 60 秒，之后以 `chat.turn_timeout` 结束。
+- 缓冲区有上限（2000 个事件或 600 秒），已结束的轮次在 60 秒内仍可恢复；之后只剩台账。
+- **单进程（v1）。** 轮次登记表就是服务进程的内存。多工作进程部署必须把恢复请求路由到运行该轮的进程；重启会丢失运行中的轮次，其部分回答在台账中保留到最后一次写入的条目。尚未实现从台账进行多进程恢复。
+
+尚未实测验证：`InvokeHarness` / `InvokeAgentRuntime` 的流被关闭后 AgentCore 是否继续执行该轮（`interrupted` 行假设执行在此结束）。`/v1` 与分享页不使用工作线程：它们的流仍随连接结束。路由见 [api.zh-CN.md](api.zh-CN.md)「控制台 Chat API」。
 
 ### Gateway（MCP）工具同时可达 Harness 与 zip runtime
 
@@ -1637,8 +1765,8 @@ DCV live-view chunk（它本来就是懒加载的，见 `pages/governance/ToolsV
 
 第二套控制台体验与经典版**并存**：浅色、企业级 SaaS 风格的界面，按客户熟悉的评估工作流设计（顶部产品栏、分组可折叠侧边栏、带「共 N 项」计数的筛选列表页、分步向导、`|` 标题的分区卡片、状态标签）。它位于 `frontend/src/App.tsx` 中独立的 `/v2/*` 路由组，处在经典 `<Shell />` **之外**，有自己的外壳（`v2/V2Shell.tsx`）；两者共享认证、工作区 Provider 与 `lib/api.ts`，因此 V2 的每次读写都走与经典页面相同的后端路由与权限检查。
 
-- **切换。** 经典版顶栏有「体验新版 V2」入口，V2 顶栏有「返回经典版」。选择以浏览器本地偏好保存（`lib/ui-version.ts`，键 `launchpad_ui_version`，通过 `useUiVersion()` 响应式读取）。**V2 为默认界面**：只有存储值为 `v1`（明确点过「返回经典版」）时才停留在经典版，否则首页 `/` 重定向到 `/v2`；打开任意 `/v2` 页面也会选中 V2。存储不可用或为空时视为 V2（切换仍对当前标签页生效）。
-- **进入控制台前的页面。** 登录／注册（`auth/AuthGate.tsx`）、会话与 Workspace 加载动画以及「未分配 Workspace」提示页（`workspace/WorkspaceProvider.tsx`）无论选择哪个界面，都使用 V2 外观（`v2/AuthFrame.tsx` + `v2/auth.css`）。
+- **切换。** 经典版顶栏有「体验新版 V2」入口，V2 顶栏有「返回经典版」。选择以浏览器本地偏好保存（`lib/ui-version.ts`，键 `launchpad_ui_version`，通过 `useUiVersion()` 响应式读取）。**V3 为默认界面**（见「控制台 V3」）：只有存储值为 `v2`（明确点过「返回 V2」）时停留在 V2、为 `v1`（明确点过「返回经典版」）时停留在经典版，否则首页 `/` 重定向到 `/v3`；在经典版中打开 `/v2` 页面会选中 V2。存储不可用或为空时视为 V3（切换仍对当前标签页生效）。
+- **进入控制台前的页面。** 登录／注册（`auth/AuthGate.tsx`）、会话与 Workspace 加载动画以及「未分配 Workspace」提示页（`workspace/WorkspaceProvider.tsx`）使用所选控制台的外观：默认是 V3（`v3/AuthFrame.tsx` + `v3/auth.css`，深色「指挥中心」底色），选择 V2 或经典版后使用 V2（`v2/AuthFrame.tsx` + `v2/auth.css`）。登录与注册表单共用一套，类名带上对应控制台的前缀。「未分配 Workspace」提示页在 V3 下有原生页面（`v3/NoWorkspace.tsx`：等待授权状态、退出登录和公开公告列表，均为 V3 面板）；V2 和经典版仍使用内嵌经典公告组件的 V2 页面。
 - **V2 中的经典模块。** 经典路由组通过 `App.tsx` 中的 `ConsoleShell` 渲染：默认是经典 `<Shell />`，选择 V2 后改为 `<V2Shell classic />`。因此 `/chat`、`/agents/…`、`/registry` 在两套控制台中 URL 不变，模块间链接无需改动，切换时停留在当前页面（只有没有经典对应页的原生 `/v2` 页面会回到 `/`）。经典页面的样式完全基于 `theme/tokens.css` 中的变量（原先写死的底色与叠加色也改为变量：`--field`、`--code-bg`、`--on-amber`、`--amber-rgb`、`--tint-rgb`、`--bg-rgb` 等）；`v2/v2-classic.css` 在 `body.v2-body` 上把这些变量改指向 V2 配色（使挂载到 body 的提示与弹窗同样生效），并在经典页面的内容容器 `.v2-classic` 下做形状微调。
 - **样式隔离。** `v2/v2.css` 的所有规则都限定在 `.v2`（外壳根节点）或 `body.v2-body` 下；后者仅在 V2 外壳挂载期间加到 `<body>` 上，用于屏蔽经典版的深色背景与噪点。经典主题不受影响；V2 使用自己的组件库（`v2/ui.tsx`：按钮、标签、筛选下拉、搜索、表格与分页、卡片、向导步骤、弹窗、抽屉、描述列表、KPI、提示），不复用经典组件。
 - **Agent 管理（原生）。** `/v2/agents`（`v2/pages/Agents.tsx`）列出工作区内的 Agent，每行按经典版的权限规则显示操作；`?view=detail&id=` 展示基本信息、五阶段部署流水线与任务日志（部署中自动轮询）、AWS 版本与端点、BYOC 制品、转换来源和知识库；`?view=new` 是创建向导（`v2/pages/agents/AgentWizard.tsx`）。向导完整配置**托管 Harness**，提交的 `AgentSpecInput` 与经典向导为该方式构建的完全一致（目录数据来自 `registryAttachables()`、托管知识库列表与记忆资源）；Strands、其他 Agent SDK 与自带代码转到经典向导 `/agents/new?method=…`，经典向导据此直接打开已预选该方式的配置步骤。编辑、导入、系统预置与 Studio 画布仍使用经典页面。选择 V2 后，经典的 `/agents` 与 `/agents/:id` 会重定向到原生页面（`App.tsx` 中的 `AgentsRoute`），因此其他模块的链接以及经典向导部署后的跳转都会落到原生页面。
@@ -1649,6 +1777,26 @@ DCV live-view chunk（它本来就是懒加载的，见 `pages/governance/ToolsV
 - **「日志」数据源**（`v2/pages/tasks/LogStreamPicker.tsx`）：向导通过 `GET /api/eval/agents/{id}/log-streams` 列出 Agent 运行日志组在时间窗口内（默认 7 天）的日志流，并按关键字过滤——匹配日志流名称或日志内容（见数据处理 API）。每一行对应一个会话：代码运行时的 `[runtime-logs-<sessionId>]` 日志流；Harness 运行时按 microVM 命名日志流，则为该会话在 `otel-rt-logs` 中的切片。不属于单个会话的日志流默认隐藏、可切换显示，且不可选择。选中的会话以普通 `session_ids` 运行发起（不调用 Agent），并带 `session_source: "logs"`，列表中数据来源显示为「日志」。
 - **评估对象：平台 Agent 或 CloudWatch 遥测。** 任务可以直接基于 CloudWatch 遥测评估一个非平台 Agent（例如未托管在 AgentCore Runtime 上的 Agent，`v2/pages/tasks/LogSourceFields.tsx`）：操作员给出 span 的 `service.name` 与 1–10 个输入日志组——可从 `aws/spans` 中发现的服务里选择（`GET /api/eval/log-services`，同时预填 span 资源属性指向的内容日志组，并标出属于平台 Agent 的服务），也可搜索日志组（`GET /api/eval/log-groups`）。运行以 `log_source {service_name, log_group_names}` 代替 `agent_id`，与 `StartBatchEvaluation` 的 `cloudWatchLogs` 数据源一一对应。只支持被动范围：链路（时间窗口）或日志（这些日志组中该服务的会话，用 Logs Insights 从其 span 中发现——`GET /api/eval/log-sessions`——因为非 Runtime Agent 的内容日志不一定带 `session.id`）；Agent 轨迹、数据集回放与持续评估都需要平台 Agent。ledger 行的 `agent_id` 为 `""`，`agent_name` 为服务名称。
 - **结果在界面中展示，而非导出。** 任务详情与评估总览把评估记录（`GET /api/eval/runs/{id}/results`、`GET /api/eval/online/{id}/results`）读成统一的行模型（`v2/results.ts`）：状态、原始分数与**归一化**分数（0–1，惩罚型评估器经 `evaluatorPolarity` 取反）、标签、说明。归一化分数低于 0.7 即为 Bad Case。评估总览汇总（洞察类运行没有分数，不参与汇总）时间窗口内最近 12 个已完成的运行与全部持续任务，提供 KPI、按评估器拆分、筛选、CSV 导出，以及「Bad Case 回流数据集」（调用 `POST /api/eval/datasets/from-sessions`，见数据处理 API）。其中的**评估洞察**面板（`v2/InsightsPanel.tsx`）覆盖时间窗口内已完成的洞察类运行，直接使用运行行上已有的聚类（不额外读取）：先给出任务数、失败类别数、用户意图数与执行摘要数，再把失败类别、用户意图与执行摘要按名称跨任务合并、按会话数由多到少排列，并附最主要的改进建议；点击聚类打开抽屉，展示子类别、根因与改进建议、受影响会话以及来源任务链接。评估任务、Agent、数据来源与搜索筛选同样作用于该面板，评估器、状态与分数区间筛选只针对打分结果。
+
+## 控制台 V3（预览）
+
+默认的深色「指挥中心」控制台，位于 `/v3/*`（`frontend/src/v3/`），与 V2 并存而非替换。它通过与 V2 相同的 `api` / `dlcApi` 客户端、后端路由和权限检查读写——没有 V3 专属的后端接口。
+
+- **切换。** V2 顶栏有「试用 V3」（`data-testid="v2-switch-v3"`），V3 顶栏有「返回 V2」。未存储选择的浏览器访问 `/` 会进入 `/v3`；「返回 V2」会在 `launchpad_ui_version`（`lib/ui-version.ts`）中存入 `v2`，「试用 V3」存入 `v3`；打开任意 `/v3` 页面即视为选择 V3。
+- **原生页面。** 指挥中心（`/v3`：由部署失败、待签署的放行、被拦下的放行门汇总出的「需要你处理」队列，见 `v3/signals.ts`）、智能体（`/v3/agents`，`?id=` 为单个智能体：页头有「编辑 ▾」/「⋯ 更多」——转换、回滚、删除（需输入名称确认；导入的运行时改为从平台移除）——以及标签页「概览 / 部署与版本 / 访问与集成 / 放行」，保存在 `?tab=` 中）、对话（`/v3/chat`，同一条 `chat_stream` SSE 链路）、放行门（`/v3/gate`：四道门流水线、各判据的区间、签署 / 拦下 / 回滚 / 运行放行门）。
+- **已重做的模块（第一批：Agent 开发）。** `/v3/create` 是启动页：场景模板（`GET /api/agent-templates`）和空白开始填入一个托管 Harness 快速表单（名称、提示词、挂载的知识库），提交与 V2 向导相同的 `buildAgentSpec` 输出，然后进入该智能体页面，详情页在部署期间自动轮询；其他方式和非 Harness 场景交给完整的 V2 向导（`?method=` 或新增的 `?scenario=<key>` 预填）。`/v3/registry` 列出记录并置顶待审批队列（就地批准或驳回），每条记录有生命周期线以及 Agent 卡片、MCP 端点、技能来源；注册与编辑仍为承载页。`/v3/knowledge` 以卡片墙展示知识库，详情页有导入流程线、同步/移除/添加数据源、检索演练和文档列表——它承接了 V2 的创建后自动流程（自动首次同步、限时等待后台创建数据源、提供修复），因为在承载表单中创建的知识库会落到这里。`/v3/assistant` 按所处阶段（讨论中、待审阅方案、已批准）列出设计对话，支持共享和 CLEAR（先展示影响范围）；对话的工作视图仍为承载页。`v3TwinOf`（`v3/nav.ts`）把各模块 V2 的列表/详情 URL 映射到对应 V3 页面，侧栏和所有 V2 链接都会落到这里。
+- **已重做的模块（第二批：Agent 运行）。** `/v3/releases`（开发到运维的发布台：等待审阅的请求排在最前，其后是已批准未执行、进行中和历史；`?id=` 为单个发布的详情，审阅/执行/回滚都需先确认）、`/v3/environments`（智能体 × 环境矩阵，按需与 AWS 核对漂移）、`/v3/observability`（以需要关注的事项开头的仪表盘、会话与链路列表，以及原生的会话与链路视图——瀑布图加 Span 详情——沿用 V2 的 `?view=session|trace&id=`）、`/v3/memory`（概览、短期的参与者 → 会话 → 事件、长期记录与检索、资源；资源编辑器仍为承载页）、`/v3/governance`（Gateway 及其目标、Policy Engine 模式与近期拒绝记录、工具目录；Cedar 与限流编辑器仍为承载页）、`/v3/connections`（成员自己的 as_user 授权与撤销）、`/v3/costs`（按智能体和按人统计的花费、本月累计，以及 `?view=alerts` 的告警规则）和 `/v3/issues`（问题箱、标准答案与评审人，沿用 V2 的 `?view=` 标签）。每个页面都与对应 V2 页面的调用和权限检查一致；`v3TwinOf` 会把 V2 链接（包括已重做的视图）路由到这些页面。
+- **已重做的模块（第三、四批：评估、学习、管理）。** `/v3/insights`、`/v3/intents`、`/v3/data`（链路、数据集、流水线；链路与数据集视图）、`/v3/evaluators`（列表、详情与 LLM 评审/派生/代码评估器编辑器）、`/v3/tasks`（失败优先的运行列表、运行详情，以及与 V2 相同处理 pass^k 和 `confirm_cost` 的新建向导）、`/v3/online`（列表、详情、编辑器）、`/v3/experiments`（实验与灰度看板）、`/v3/standards`（Agent-DLC 全部九个视图；放行门本身链接到 `/v3/gate`）、`/v3/skill-lab`（首页与评估运行）、`/v3/users`、`/v3/workspaces`（列表，以及含初始化、级别、授权、清除的详情）、`/v3/identity`（管理员的连接页与 Gateway 目标）、`/v3/fleet`、`/v3/announcements`、`/v3/videos` 和 `/v3/video-management`。`v3TwinOf` 通过 `v3/nav.ts` 中的 `MODULES` 表映射这些页面，表中按 V2 路径列出 V3 页面已重做的 `view=`。对于状态机庞大、又没有数据可以验证重写的流程（实验/灰度的详情与启动、技能实验室的编辑器与向导、少数结果表与选择器），V3 页面把 V2 组件嵌入 `.v2.v3-host` 容器中使用，从而沿用 V2 自身的检查。仍完全承载的有：智能体向导及智能体详情/编辑/身份、注册中心的注册/编辑/消费者视图、新建知识库、架构助手的对话工作台、记忆资源与数据集/流水线编辑器、Cedar 策略与限流编辑器、Gateway 详情，以及注册工作区。
+- **新手引导（`v3/onboarding/`）。** 指挥中心上的「启动序列」：工作区就绪 → 首个智能体上线 → 第一次对话 → 第一次评估 → 设置放行门，每一步都根据实际存在的数据判断是否完成（`launchSteps`，有单元测试），而不是靠点击打勾；关闭后按工作区隐藏，全部完成后折叠为一行。首次进入时的「导览」依次高亮一个区域（⌘K、启动序列、需要你处理的队列、信号颜色、功能模块侧栏、帮助），可用键盘操作、可跳过，只自动出现一次（`launchpad_v3_tour_done`）。「术语解释」复用 V2 的 `glossary.*` 文案：行内 `Term` 提示、术语表对话框，以及 ⌘K 中每个术语一条入口。侧栏沿用 V2 的业务 / 专家模式（`lib/nav-mode.ts`），只是显示筛选，⌘K 和 URL 仍可到达每个页面。顶栏的「?」菜单可重新打开导览、启动序列和术语表。
+- **菜单设置（`/v3/menu-settings`，`services/nav_settings.py`）。** 管理员可以把模块菜单项从成员的侧栏和 ⌘K 里隐藏。列表存在一条工作区无关的 `platform_settings` 行（`nav_hidden_modules`）里，记的是菜单项映射到 V3 页面之前的路径（`/v2/skill-lab`、`/v3/costs?view=project`，即 `V3NavItem.railKey`）。`GET /api/nav/hidden-modules` 所有账号可读（外壳先套 `withoutHidden()`，再做业务 / 专家筛选），`PUT` 只有管理员可写（`ADMIN_DATA`，组织管理员不行），并记审计 `console.nav_hidden`。只给管理员的菜单项不在可选范围内，管理员自己始终看到全部。它和业务 / 专家模式一样只是显示筛选，不是权限：不关闭任何路由，读取失败时什么都不隐藏。
+- **故事线（`v3/story/`，storyline-ux）。** 控制台按 workshop 的故事线组织（定义 → 构建 → 评估 → 发布 → 观测 → 反馈）。步骤是代码常量（`stories.ts` 中的 `AGENT_STORY`）；每一步从唯一的动作表 `NEXT_ACTIONS`（`actions.ts`）引用页面动作，注明由哪个角色完成，并用 `done` 谓词判断 `GET /api/agents/{id}/story` 返回的事实（缓存 30 秒）。当前步是第一个未完成且非可选的步骤；后面的步骤变淡但仍可进入。在此之上：关键操作（判据表发布 / 签署、封存黄金集、评估完成、部署出候选版本、放行报告、签署放行、关闭 Issue）成功后，用停留的**下一步提示卡**取代成功 toast，直到用户关闭；智能体详情页显示**旅程条**（每章一段，显示「继续」或「等待 {角色}」）；带 `?agent=` 进入故事线上的页面时，页头显示**位置提示**（`StoryHeader`）；首页按 `GET /api/me/next-steps` 列出**轮到你 / 等待别人**；空状态列出缺少的步骤（`Prereqs`，由 `AGENT_STORY` 推出）；错误信封带 `next` / `needs`，由 `ErrorCallout` 显示为要去的那一步；Agent-DLC 术语卡片（`terms.ts`）链接到用到该术语的步骤。`/v3/create` 默认打开**选型助手**（三个问题 → 推荐的方式，附原因 / 代价 / 备选，表驱动，见 `pages/create/chooser.ts`）。MCP 服务器与系统预置不在故事线上。
+- **在你的后端调用（调用接入）。** 智能体的「访问与集成」页签有一张卡片，给出后端直接在 AgentCore 上调用该智能体所需的一切（`GET /api/agents/{id}/invoke-access`）：每个端点（`DEFAULT`，门控智能体另有 `live` / `candidate`）的 Runtime 或 Harness ARN，最小权限 IAM 策略（对 runtime 与端点 ARN 的 `InvokeAgentRuntime`，或 `InvokeHarness`；可选会话停止与读取记忆），JWT 入站的智能体改为给出 JWT 授权器的要求，以及填好所有取值的 CLI / Python / TypeScript 示例。项目设置 → 集成列出项目的全部智能体，附一份合并策略，可导出 CSV / JSON（`GET /api/projects/{id}/invoke-access`）。策略由后端按账本生成，浏览器从不自行拼 ARN。
+- **浮层。** `.v3-reveal` 子元素的动画使用 `fill-mode: backwards` 而非 `forwards`：填充状态的 transform 动画会让每个块成为 `position: fixed` 的包含块，把对话框困在面板里（填充的 opacity 也会覆盖浮层自身的淡入）。`Confirm` / `Dialog` 无论焦点在哪里都可按 Esc 关闭。
+- **其余页面在 V3 中承载，而不是跳回 V2。** 选择 V3 后，`/v2/*` 路由经由 `V2Frame`（`App.tsx`）在 `<V3Shell hosted="v2" />` 内渲染，classic 路由在 `<V3Shell hosted="classic" />` 内渲染——URL 和页面模块不变，外壳换成 V3。因此 V2 页面发出的任何链接都留在 V3 内；在承载页上点「返回 V2」只是用 V2 外壳重新渲染同一 URL。V3 已重做的两个 V2 页面会交给对应的 V3 页面（`/v2` → `/v3`，`/v2/chat` → `/v3/chat`；`/v2/chat?full=1` 保留完整的 V2 对话，V3 对话页在需要授权卡片时链接到它）。侧栏在「功能模块」下按 V2 自己的分组（可折叠）列出这些承载页，列表由 `v2/nav.ts` 派生（`v3/nav.ts` 的 `hostedGroups`，由 `v3/nav.test.ts` 保证完整）；⌘K 命令面板（也可按 `/`）可到达所有页面以及每个智能体的对话与放行门，在 zh-CN 下也能匹配英文名称和路由。
+- **承载主题。** V2 把用到的每个字面颜色都命名为 `--v2-*` token（见 `v2/v2.css` 中 `--v2-mono` 下方的一组；V2 显示完全不变），`v3/host.css` 在 `.v2.v3-host` 容器上把这些 token 重新指向 V3 调色板，并调整面板、标题和表格样式。classic 的 token（`theme/tokens.css`）在 `body.v3-body` 上重新指向，classic 的品牌琥珀色改为 V3 的薄荷绿，因为琥珀色在 V3 中表示「等待」。V2/classic 的弹窗是页面内的 `position: fixed`，所以承载时 `<main>` 不建立层叠上下文（`.v3-main.hosted`）。架构助手的鱼骨图 SVG 有意保留浅色字面调色板——它同时用作独立的 SVG 下载文件。
+- **样式。** V3 的 CSS 全部限定在 `.v3` 之下，所有自定义属性都以 `--v3-*` 为前缀，因为经典版 `theme/` 的 token 和类名（`--ink-2`、`.split`、`.caret`）是全局的，否则会冲突。信号统一使用 `ok` / `wait` / `act` / `info` / `off`。
+- **时间戳。** 账本时间戳是不带时区的 UTC；`lib/timestamps.ts` 的 `parseTimestamp` 按 UTC 解析（V2 的 `fmtTime` 也改用它），避免 `new Date()` 把它当作本地时间。
+- **检查。** `backend/scripts/e2e_v3_console_browser.py`（无头浏览器、基本只读；`--chat` 会发送一条消息）覆盖切换、所有 V3 页面和 ⌘K。
 
 ## 控制台认证与账户
 
@@ -1675,6 +1823,18 @@ Cookie**:授权在每次请求时解析(配置的 admin → `admin`,其余以 `u
 因此禁用、降权或到期在下一个请求即生效,无需等 Cookie 过期。Cookie 其余部分是无
 状态的,可跨后端重启;修改内置 admin 凭证会使**所有**会话失效,因为签名密钥由其
 派生。
+
+**修改密码与新增管理员。** 任何已登录账号都可以用 `POST /api/auth/password`(当前密码 +
+新密码)修改自己的密码;管理员可以重置他人的密码(`PATCH /api/users/{id}` 的 `password`),
+也可以用 `POST /api/users` 直接创建账号(立即生效,任意角色,包括 `admin`;把已有账号设为
+管理员是 `PATCH … role=admin`)。内置 admin 的密码同样可以修改:新密码以 pbkdf2 哈希保存在
+`platform_settings` 表的 `auth.admin_password_hash` 行(`services/admin_credential.py`),
+优先于配置的 `auth_password`,后者随即失效。格式不正确的行会被忽略;回到配置密码有两条
+应急路径:`cd backend && uv run python scripts/reset_admin_password.py`(删除该行),或
+`LAUNCHPAD_AUTH_ADMIN_PASSWORD_OVERRIDE_DISABLED=true`(忽略该行)。会话 Cookie 带有账号密码
+哈希的指纹(内置 admin 用覆盖哈希,没有覆盖时为空),所以修改密码会结束该账号的其他所有会话。
+内置 admin 在用户管理中显示为固定的 `builtin` 行:不能删除、禁用、降级或过期。账号写操作都会
+记入 `audit_events`,不含密码。
 
 有两道守卫按顺序执行,回答的是不同的问题。
 
@@ -1725,6 +1885,17 @@ localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=
 `localhost` 粘死到 HTTPS。不设置密码则对 loopback 保持网关关闭(控制台开放、注册返回
 `auth.registration_disabled`、`/api/users*` 以隐式本地 admin 身份可达),保持免引导的
 本地开发与测试流程。
+
+## 控制台单点登录（OIDC）
+
+登录门开启后，管理员可以让用户通过 OpenID Connect 身份提供方登录（sso 设计 §2；SSO-1，`routers/sso.py`、`services/sso_oidc.py`、`services/sso_mapping.py`）。API 见 [api.zh-CN.md](api.zh-CN.md)「控制台单点登录 API（OIDC）」一节。
+
+- **身份提供方**（`console_identity_providers`，平台级，仅管理员——组织管理员被拒绝，因为映射可以授予管理员角色）。预设模板为 Keycloak、Authentik、Okta、Entra ID、Google 与通用 OIDC 填好 scopes 与声明名。**测试**会重新读取 discovery 与 JWKS，并报告 IdP 是否声明支持 PKCE S256。客户端密钥只写不读：以 Fernet 加密保存，或保存为用 hub 凭证读取的 Secrets Manager ARN。
+- **流程。** 授权码 + PKCE S256。`start` 把一次性的 `state`、`nonce` 与 code verifier 写入 `sso_login_states`（10 分钟，服务端），再重定向到 IdP。`callback` 先删除 state 行（重放的回调什么也找不到），用 verifier 换取 token，并用 `joserfc` 在内存中校验 `id_token`：JWKS 签名（仅非对称算法）、`iss`、`aud` / `azp`、`exp` / `iat`（允许 2 分钟偏差）与 nonce。token 从不入库。所有结果都以重定向结束：带会话 cookie 进入控制台，或带 `?sso_error=<code>` 回到登录页。审计：`auth.sso.login`（成功 / 拒绝 / 失败，原因写在 target 中）与 `auth.sso.config.*`。
+- **账户。** 按 `(external_idp_id, external_subject)` 查找账户，从不按邮箱，因此在 IdP 侧换绑邮箱无法接管别人的账户；邮箱已被本地账户占用时拒绝（`auth.sso.email_taken`）。提供方的 `account_policy` 为 `jit`（首次登录时创建账户，立即生效，带默认工作区授权，有效期 `valid_days`，每次登录续期）或 `existing_only`（由管理员先创建账户）。邮箱须符合提供方的 `allowed_email_domains`，未设置时按控制台的注册规则。SSO 账户没有本地密码（不能重置、不能修改、不走注册审批）；它的会话戳为 `idp:<id>:<subject>` 加 `session_epoch`。若 IdP 提供 `end_session_url`，登出时一并返回（RP 发起的登出）。
+- **映射。** 每次登录都按提供方的组映射设置全局角色、项目角色与项目组角色。只增删由映射产生的成员资格（`sso_memberships`）；管理员手工设置的成员资格或角色优先，用户页会标注差异（「与 SSO 映射不一致」）。访问纪元随之推进，变更在下一个请求生效。
+- **不受影响。** 内置管理员始终用本地方式登录（应急入口），`/v1` API Key 与 `/share` 链接不变。
+- **部署。** `public_base_url` 必须是浏览器访问控制台的地址：在 IdP 登记的回调地址为 `<public_base_url>/api/auth/oidc/<id>/callback`。生产环境请设置 `LAUNCHPAD_SSO_SECRET_KEY`（Fernet 密钥）；未设置时后端在 SQLite 账本旁创建 `data/sso-secret.key`（0600），须与账本一起备份。见 [setup.zh-CN.md](setup.zh-CN.md)「单点登录（OIDC）」一节。
 
 ## 托管知识库（控制台 04）
 
@@ -2135,58 +2306,13 @@ us-east-1 上 30 天范围耗时 34 秒，查询截止时间为 55 秒）。
   https、URL 中不带凭证、所有解析地址都必须是公网地址——IPv4 映射的 IPv6 按其 IPv4 地址判断），
   直接连接检查过的地址，拒绝重定向，5 秒超时，且从不读取响应体。
 - **只有后台检查会发送通知。** `POST /api/alerts/evaluate`（控制台的“立即重新检查”）只记录
-  状态、从不发送，因此打开页面不会惊动任何人。`services/alert_scheduler.py` 是一个守护线程，
-  仅当 `alerts_scheduler_enabled`（`LAUNCHPAD_ALERTS_SCHEDULER_ENABLED`）为 true 时在应用启动
-  时启动；每隔 `alerts_scheduler_interval_seconds`（默认 300）秒，它在各自独立的数据库会话中
-  评估每个有已启用规则的 Workspace，并开启通知。它**默认关闭**：prod 与 prod2 共用 AWS，只在
-  一台机器上开启可以避免重复通知。没有跨进程的抢占机制——systemd 单元只运行一个 uvicorn 进程；
-  如果运行多个进程，每个进程都会各自启动这个线程。
+  状态、从不发送，因此打开页面不会惊动任何人。后台检查即 DLC 调度器的 60 秒心跳
+  （`app/dlc/scheduler.py` 的 `evaluate_alerts`，每 5 分钟一次）：它在开启通知的情况下评估
+  每个 Workspace 的规则，并通过 `scheduler_claims` 行保证同一台账上的第二个后端进程不会
+  重复执行同一次检查。
 
 所有路由都是 **admin**：按人拆分会暴露谁花了多少钱，而在线质量值是所有 Agent 的汇总，隔离模式
 Workspace 中的成员不应看到。V2 页面为 `/v2/costs`（`?view=costs|alerts`）。
-
-### 按人预算
-
-「成本」页回答花了多少钱，预算则按人设置上限。管理员定义若干**等级**，每个等级是一笔按 UTC 自然月计的美元
-预算，再把人分配到等级上。一个人当月已花费的金额达到额度后，平台会以 `402 budget.exceeded` 拒绝此人新的计费
-操作，直到月份重置或管理员调高额度。预算是中心全局的：每人一份总额，覆盖所有 Workspace。
-
-- **所有计费入口在同一处拦截。** `core/billing_policy.py` 把每个非 GET 路由归类为计费或免费；漂移测试会在
-  出现未归类的路由或过期条目时失败，新接口无法漏网。路由策略依赖会为计费路由确定付费人并检查花费。`/v1`
-  计入 API key 的创建者。实验与金丝雀操作按动作检查，因此清理与回滚始终可以执行。
-- **调用报告了用量就精确记录，没报告就记一份带标记的估算。** 计量器（`services/usage_meter.py`）沿调用链
-  显式传递，通过自己的短数据库会话写入；计量失败只记日志，永远不会让这一轮失败。
-  - **Harness** 每次模型调用报告一个用量事件（已实测：一次带工具调用的轮次发出了两个），所以一轮按它们的和计费。
-  - **Claude Agent SDK 容器**报告 `complete.usage`，按价格表计价，而不是用 CLI 自己估算的 `total_cost_usd`。
-  - **不报告用量的运行时**（Strands、BYOC、Studio、A2A）每轮记一份带标记的估算。估算与实测记录存于同一本台账
-    （`usage_events`），之后的实测记录会取代它所替换的估算。
-- **台账是中心全局的。** `usage_events` 与 `usage_sessions` 把来源 Workspace 记为 `origin_workspace_id`
-  而不是 `workspace_id`，因此删除 Workspace 永远不会抹掉某人的花费。`usage_sessions` 把每个计费会话 id
-  映射到付费人的 `users.id`；Chat 自己的台账以用户名为键，不能承担这一职责。它还覆盖了此前不记录会话的
-  `/v1` 与控制台调用。
-- **价格只有一个可由管理员编辑的来源。** 模型价格覆盖与 AgentCore 费率保存在 `platform_settings` 中；
-  设置钩子在每次重建时重新应用覆盖，因此它们优先于 yaml、价格刷新器与内置价格。刷新器写入 yaml 时不包含
-  覆盖，所以已重置的覆盖不会残留。模型还没有价格时，受限的人会被拒绝使用它（`budget.model_unpriced`），
-  而不是在无人察觉的情况下花超额度。
-- **长作业边运行边计费，并在边界处停止。** 评估运行、实验、金丝雀、推荐与 Skill Lab 计入启动它或触发该操作的人
-  （`services/job_budget.py`）。作业报告了用量的部分精确计量，其余部分在运行过程中按单位记入带标记的估算：
-  不透明轮次或流量提示词按 Agent 近期平均成本，模拟用户每轮按 token 系数，批量评审按每次评估，Skill Lab 按任务
-  或步骤。Skill Lab 评估作业结束后用 `results.json` 中的用量替换估算。
-  - 付费人超出预算后，作业会在下一个安全边界以 `budget_exceeded` 停止，并保留已完成的工作。流量停止记录在流量结果
-    里而不是记为失败，因为重试只会再次被拒绝。
-  - Skill Lab 评估在同一个池中运行全部任务，因此只在启动时检查。
-- **对账流程把估算与 AgentCore 费用变成实测成本。** `services/budget_reconcile.py` 每 10 分钟在一个守护线程中
-  运行，默认开启。它只读取本机台账中归属到具体人的会话，因此 prod 与 prod2 永远不会互相计费。
-  - **Token：**实测 span token 替换每轮与每个作业的估算。
-  - **按会话的费用：**Memory、Gateway 与 Policy（按 trace id 关联）、Web Search、知识库查询与 Code Interpreter
-    按会话计数。
-  - **Runtime 计算：**按会话时长加上运行时的空闲超时计费，因为会话在一轮结束后并不会停止，这段尾巴里会持续按内存
-    计费。
-  - **评估：**按次数计入运行的付费人或在线配置的创建者。
-  - **校准（`services/budget_calibration.py`）：**每个会话的内存与 vCPU 规格，由按运行时的 AWS 指标除以 span
-    中看到的会话时长得出。span 能看到所有机器的会话，所以在共用账号上这个系数仍然成立。
-  - **Cost Explorer** 只作为全账号范围的对照展示，永远不会用于向任何人计费。
-- **上线是安全的。** 没有定义任何等级时，所有人都不受限，计量器只做记录。管理员在被分配等级之前一直不受限。
 
 ## Workspaces —— 多账号/多区域环境
 
@@ -2280,6 +2406,253 @@ namespaces / search / 抽取任务返回 `memory.actor_not_found`，共享的 `d
 且不是 `default`。一次失败的运行已经开通出来的东西会留在目标账号里——响应中的
 `resource_keys` 会说明那是哪些资源种类。
 
+## 项目（Projects）——工作区内的数据与权限边界
+
+工作区是一个 `(account, region)` 环境；**项目**是它内部的团队边界。每个 Agent 以及由 Agent
+派生的每一行都只属于一个项目；成员通过项目角色进入项目；一个项目的数据对同一工作区里的其他项目
+不可见。工作区的含义不变（每个账号和区域一个，用于 DEV / PROD，或用于需要账号级隔离的团队）；一个
+项目可以绑定到多个工作区，所以 DEV → PROD 发布保持项目不变。设计见
+`docs/design/projects.zh-CN.md`（阶段 1），路由见 [api.zh-CN.md](api.zh-CN.md)「控制台项目 API」。
+
+阶段 1 隔离的是**控制台与 API 数据**，不是运行时凭据：同一工作区里所有项目的 Agent 仍共用工作区的
+执行角色、网关角色和知识库角色、`launchpad-gw` / `launchpad-kb-gw` 的 M2M 客户端，以及只按 actor
+分区的 bootstrap 记忆。今天需要运行时隔离的团队请使用独立的工作区（阶段 2 再加入按项目的 IAM 边界、
+记忆与网关授权）。
+
+### 模型
+
+| 实体 | 表 | 含义 |
+|---|---|---|
+| 项目 | `projects` | 数据与权限边界。`id` 是 slug（`^[a-z0-9][a-z0-9-]{1,31}$`），`status` 为 `active` 或 `archived`，`settings`（`resource_visibility`、`sod_strict`）。保留的 `default` 项目（`is_default`）由迁移创建 |
+| 项目 ↔ 工作区 | `project_workspaces` | 管理员允许项目在某个工作区运行。每个工作区有一条 `is_workspace_default` 绑定：不带 `X-Project` 的请求即指这个项目 |
+| 成员 | `project_members` | 用户在项目中的直接角色（`role_key`）与按键的 `overrides` |
+| 自定义角色 | `project_roles` | 基于内置模板、按项目定义的权限键集合 |
+| 项目组 | `project_groups`、`group_members` | 访问捆绑：组成员在组内每个项目中获得一个内置模板。一个项目至多属于一个组 |
+| 部门 | `departments`、`department_admins`、`department_workspaces` | 项目与项目组上的组织标签，不授予数据访问。部门管理员在向部门开放的工作区中管理其项目与项目组（见「部门管理员」） |
+| 访问纪元 | `access_epoch` | 单行计数器，任何影响访问的写入都会加一（见「缓存」） |
+
+这些都是平台级表（不带 `workspace_id`）。用户在项目中的有效权限是直接角色与项目组角色的权限键
+并集，再叠加直接成员行的 `overrides`（`false` 删除、`true` 添加）。内置模板是
+`app/services/access.py` 中的代码常量（`ROLE_TEMPLATES`：`project_owner`、`developer`、`biz_owner`、
+`release_ops`、`sme`、`tool_steward`、`viewer`）。项目级权限键为 `project.use`、`project.write`、
+`project.members`、`project.audit`、`project.share` 与 `mcp.approve`；它们不会出现在
+`users.permissions` 或 `/api/auth/status` 中，那份 16 键列表的含义保持不变。平台管理员绕过成员资格
+（`access.has_data_bypass`）并持有全部权限键，但仍被过滤到所选项目：除了多环境总览、成本、TTFA 与
+审计这些在项目之外运行的路由，没有混合视图。
+
+**`inherit` 与默认项目。** `inherit` 角色只存在于默认项目中，读取账号的全局权限（今天的 16 键计算）
+再加上 `project.use` / `project.write`（账号持有 `promotion.approve` 时还有 `mcp.approve`）。它是
+兼容层：迁移把每个持有工作区授权的非管理员账号以 `inherit` 加入该工作区的默认项目；之后每一次授权
+写入（`POST` / `PATCH /api/users`、审批、`PUT /api/workspaces/{id}/grants`）都在同一事务里同步
+`inherit` 行（`access.sync_default_membership`）；撤销授权会删除 `inherit` 行，显式角色不受影响。
+`inherit` 行只能进入账号本身被授权的工作区。因此修改账号的全局权限芯片仍会改变它在默认项目中能做的
+事，单项目部署的行为与以前完全相同。
+
+### 数据行：`ProjectOwned`、`ProjectShared`、自动条件与盖章
+
+`app/core/project_scope.py` 把边界放进 ORM，每一部分都失败即关闭：
+
+- **Mixin。** 模型继承 `ProjectOwned`（总是属于一个项目：数据集、对话会话与消息、评估运行、判据、放行记录、API Key……）或 `ProjectShared`（`project_id` 可为 NULL，表示工作区级或平台级、所有项目可读：Agent（系统预置为 NULL）、Job、托管记忆、治理变更、审计事件、告警规则、资源映射、Connections）。`core/db.py` 把它们列为 `PROJECT_STRICT_TABLES` / `PROJECT_SHARED_TABLES`；每张表都有带索引的 `project_id` 列，热点列表另有 `(workspace_id, project_id)` 索引。
+- **自动条件。** 当前有项目时，`do_orm_execute` 监听器给每一条 ORM SELECT、UPDATE、DELETE 追加 `project_id = :current`（共享表为 `OR project_id IS NULL`，`with_loader_criteria`，含别名）。列表因此在任何 count、offset、limit 之前就在 SQL 里过滤，总数不会泄露。
+- **`ProjectSession`。** `Session.get` 命中身份映射时不发 SQL，监听器看不到。`db.SessionLocal` 构造的是 `ProjectSession`，它的 `get` 会复查返回的行，其他项目的行返回 `None`；`owned_get` 在任意会话上做同样的事。原始 `text()` SQL 不经过过滤，请求路径上的原始 SQL 自己加项目条件。
+- **盖章。** `before_flush` 监听器为新行填写 `project_id`：先取父行（`__project_parent__`：评估运行取其 Agent，消息取其会话，分享链接取其 Agent 或标注任务……），再取当前项目，再取该行所在工作区——仅当该工作区恰好绑定一个项目时。否则 flush 抛出 `ProjectStampError`：没有项目的 owned 行在任何地方都不可见，而随便归入某个项目会造成泄露。已有行的项目只能通过 `POST /api/projects/{id}/transfer` 改变。
+- **当前项目。** 一个上下文变量。`route_policy.bind_request_project`（异步的应用级依赖，所以同步处理函数和流式生成器都能继承）按请求的项目设置它；`/v1` 按 Key 设置，`/share/*` 按链接设置。后台线程起始时没有当前项目，因此 worker 能看到所有行，除非它进入 `project_context(<该行的 project_id>)`；部署流水线、Job 恢复、对话轮次、评估与调度器都用它们所处理的行的项目这样做。跨项目读取（名字唯一性、多环境总览、pperm 检查）显式进入 `project_context(None)`。
+
+启动时 `assert_every_row_has_a_project` 与工作区检查并列执行：派生行取父行的项目，单项目工作区的行
+被认领并记一条 WARNING；在绑定了多个项目的工作区里出现没有项目的严格行时拒绝启动（见「运维」）。
+
+名字唯一性仍是工作区级：S3 键、ECR tag、网关目标与注册记录都用 Agent 名，所以同一工作区的两个项目不能
+有同名 Agent。`agent.name_exists` 只在调用者能看到占用者时才给出它。
+
+**新 Agent 必须归属业务项目。** 每条非系统的创建路径——`POST /api/agents`、Harness → Runtime 转换、
+发现导入、架构助手批准、会创建目标 Agent 的晋级——都经过 `services/agent_project.py`：项目取请求体的
+`project_id`（同时发送 `X-Project` 时两者必须一致，否则 `422 agent.project_mismatch`），否则取请求所在项目；
+该项目必须是调用者可达、绑定到该工作区、`active`、不是工作区 `default` 项目且有 `department_id` 的项目，
+调用者还要在其中持有该路由的权限键。拒绝均为 `422`：`agent.project_required` / `agent.project_not_found`
+（不存在与不可达同码）/ `agent.project_default_not_allowed` / `agent.project_archived` /
+`agent.project_no_department`，下一步指向项目页。`Agent` 设置了 `__project_no_default_stamp__`，所以
+`before_flush` 不会再把一个新的非系统 Agent 静默归入 `default` 项目（抛 `ProjectStampError`）；系统预置仍是
+平台行（`project_id` 为 NULL），已在 `default` 中的 Agent 保持不变。V3 创建表单的“所属项目”选择器读取
+`GET /api/agents/eligible-projects`，它在服务端只列出调用者可以创建 Agent 的业务项目。
+
+### 请求：路由策略与 `X-Project`
+
+`ROUTE_POLICY`（`app/core/route_policy.py`）为每条路由分类。除 `public` / `member` / `admin` /
+`perm:<key>` 外：
+
+- `perm:project.use`（对话、调用、反馈、标注、本人的会话）与 `perm:project.write`（其他一般写入）是项目级权限键。所有成员写路由都已重新分类，所以普通的 `member` 条目只剩读路由和中枢全局路由。
+- 项目作用域路由上的 `perm:<key>` 按请求所在项目的有效权限检查（`require_permission` 读 `request.state.project`），而不是账号的权限。
+- `infra` / `infra+perm:<key>` 标记对工作区共享基础设施的写入（治理策略、注册中心的 MCP / 技能记录、网关 Lambda 与工具目标、模板市场发布、价格刷新）。工作区只有一个活跃项目时，`require_infra` 按 `project.write`（或 `<key>`）放行；有多个时只允许管理员（`403 auth.infra_admin_required`）：一个项目不能改变另一个项目所依赖的东西。
+- `pperm:<key>` 用于中枢全局的 `/api/projects/{project_id}/…` 路由：在路径所指项目中持有 `<key>`（非成员得到 404）。
+- `PROJECT_EXEMPT` 列出不需要项目的工作区作用域路由（目录、工作区设置、放行策略、`/api/costs`、`/api/inbox`、网络配置档写入……）。`HUB_GLOBAL_PREFIXES` 新增 `/api/projects`、`/api/role-templates`、`/api/me`、`/api/admins`、`/api/project-groups`、`/api/departments`。
+
+`tests/test_route_policy.py` 保留漂移检查（每条实际路由都已分类且没有多余条目、没有工作区写路由留给
+普通成员、每条 `infra` 路由都在项目作用域内、每个 `PROJECT_EXEMPT` 条目都是实际的工作区路由），
+`scripts/check_api_docs.py` 列出 api.md 没有提到的路由。
+
+`enforce_route_policy` 先解析工作区，对项目作用域路由再解析项目，然后**才**检查权限（权限键取决于
+项目）：
+
+1. `X-Project`（前端 fetch 包装器在 `X-Workspace` 旁一并加上，`lib/workspace-header.ts`；每个工作区在 `localStorage` 的 `launchpad_project:<workspace_id>` 记住上次的项目）。
+2. 不带该头时：管理员得到工作区的默认项目；只有一个可达项目的成员得到该项目；有多个项目的成员在能进入工作区默认项目时得到它，否则 `400 project.header_required`（`detail.available`）。没有任何项目的成员得到 `403 project.none`。
+3. 未绑定到该工作区或调用者无法进入的项目一律回答 **404 `project.not_found`**，而不是 403：项目的名字和存在本身可能是敏感的。其他项目的任何资源 id 同样回答该类资源自己的 not-found。在自己的项目里缺少权限键仍是 `403 auth.permission_required`。
+4. 已归档项目中的非读请求回答 `409 project.archived`。
+
+旧客户端、curl 和 workshop 种子脚本不带该头，落在默认项目里。`/api/auth/status` 与
+`GET /api/me/access` 为前端提供数据：只有调用者在该工作区有多个项目时，V3 顶栏才在工作区切换器旁显示
+项目切换器；只有工作区绑定了多个项目时才显示只读的项目标签；命令面板在同样的条件下增加“切换项目”命令。
+
+### 缓存：访问纪元
+
+每个请求都需要调用者可达的项目与权限键。`access.snapshot_for` 用一次查询加载用户的全部成员资格
+（项目 × 绑定 × 直接成员行 × 项目组行，外加引用到的自定义角色），按用户缓存在进程内（LRU 上限 5,000，
+兜底 TTL 60 秒）。每个请求先读 `access_epoch.value`（一次主键读）；纪元变化即丢弃缓存。每一次改变
+“谁能进入什么”的写入——成员、组成员、组 ↔ 项目、绑定、项目状态、自定义角色、账号角色 / 权限 / 状态、
+工作区授权——都在**同一事务**里递增纪元（`access.bump_epoch`），所以撤销在每个进程、每个共享台账的
+实例上于下一个请求生效。工作区绑定以同样方式缓存（`workspace_bindings`）。
+
+### API Key、链接、可观测、审计
+
+- **`/v1` API Key** 带 `api_keys.project_id`（回填为默认项目）。每次 `/v1` 调用都以 Key 的项目运行并忽略任何请求头，所以 `/v1/agents` 与调用只能看到该项目的 Agent。Key 的项目被归档或从 Key 的工作区解绑、或其创建者不再能进入该项目时，Key 失效（`401`，并被永久停用）；成员资格写入在同一事务里停用这些 Key（`api_keys.disable_offboarded_keys*`）。签发 Key 需要 `project.write`。
+- **分享、评审、标注与渠道链接**从目标对象取项目。`/share/*` 以链接的项目运行；目标移到其他项目或项目已归档的链接回答与已撤销令牌相同的 404，归档项目会撤销它的链接。
+- **可观测。** CloudWatch span 不带项目，所以 `observability.ProjectAgents` 是一个允许集合：一行的会话或 `service.name` 经台账解析到当前项目的 Agent 或平台预置时才保留。在绑定多个项目的工作区里，无法归属的行只对管理员显示；单项目工作区里这个过滤不起作用。仪表盘与意图缓存按项目区分。`/api/costs` 仍只限管理员、豁免项目，带 `?project=` 过滤。
+- **审计。** `audit_events` 增加 `project_id`（当前项目；工作区级动作为 NULL）与 `actor_user_id`。结构类事件（`project.*`、`project.members.*`、`group.*`、`department.*`、`admin.grant` / `.revoke`、`user.sessions.revoke`、`project.transfer`）是中枢全局的行。`GET /api/audit`（管理员）可按 `project` 与 `actor` 跨项目过滤。
+- **后台任务。** `jobs.project_id` 从 Agent 盖章；流水线、恢复与发布执行都在该项目内运行。调度器以 Agent 的项目执行每个漂移监测、告警与 MCP 健康检查，并跳过已归档项目。
+- **可见性。** 工作区的 `shared` / `isolated` 设置（见「成员资源可见性」）在项目过滤之内生效：按创建人的规则进一步收窄成员在自己项目里看到的内容。项目的 `settings.resource_visibility` 会被保存，负责人也可修改，但过滤仍读取工作区的设置（`visibility.Viewer.of_request`）。
+
+### 职责分离
+
+对象级检查不变——无论持有哪些角色，没有人能审批自己申请的发布（`promotion.self_approval`）、签发自己
+申请的放行、批准自己的豁免或签署自己的判据。新的 SoD 列（`requested_by`、`reviewed_by`、`signed_by`……
+旁的 `*_user_id`）优先比较，所以重新注册的同名账号不会被当成原来的行为人。另外：
+
+- 除管理员外，没有人能修改自己的项目成员资格（`403 project.self_membership`），负责人因此不能给自己加签字权限；
+- 成员视图会标出在同一项目里同时持有一对职责两端的人（`agents.deploy` + `release.sign`、`criteria.manage` + `criteria.sign`）；管理员专属设置 `settings.sod_strict` 打开时，这类写入被拒绝（`409 project.sod_conflict`）。
+
+### 部门管理员
+
+部门（`departments`）可以有**部门管理员**（`department_admins`，由平台管理员任命），以及一组向它**开放**的工作区
+（`department_workspaces`）。对本部门的项目与项目组，部门管理员无需成为成员即可通过结构路由：创建项目（只能在已开放的
+工作区中，且不超过 `settings.max_projects`）、改名、调整项目组、归档、绑定已开放的工作区（不能 `make_default`）、
+管理成员与自定义角色，以及所有项目组路由（列表须带 `?department_id=`）。部门开启 `settings.can_create_users` 时，
+他们还可以把新的 `member` 账户邀请进本部门的某个项目，有效期最长为 `settings.user_validity_max_days`。这一叠加规则是
+`core/route_policy.py` 中的 `DEPARTMENT_ADMIN_ROUTES`，每次请求读取（不涉及访问纪元：它不授予数据访问）：其他部门的
+项目或项目组返回 404，工作区范围的路由仍需成员身份，所以部门管理员能看到本部门的项目，却看不到其数据。
+`GET /api/me/access` 返回 `managed_departments[{id, name, workspaces}]`，项目详情返回 `can_manage`，V3 控制台据此向他们
+显示“配置”页面与选择器。
+
+### 阶段 2：项目 IAM 边界
+
+项目切换为 `isolated`（`PUT /api/projects/{id}/isolation`）后，预置任务的 `boundary` 阶段（`services/project_iam.py`）
+为每个项目 × 工作区写入一个客户托管策略 `launchpad-project-<pid>`（必要时带 Region 后缀），项目的每个 Agent 都有自己的
+执行角色，并以该策略作为**权限边界**。按 Agent 的身份策略仍按 spec 最小授权；边界是其上限，由项目标签
+（`aws:ResourceTag/launchpad:project`）、名称前缀（记忆、S3、ECR、M2M 提供方）与显式 ARN（知识库、Connection）组成。
+边界带版本（`agents.isolation_applied = boundary-v<N>`），spec 新增 Connection 或知识库时在部署时扩展。隔离项目的 Agent
+从不使用共享执行角色：没有按 Agent 角色的部署被拒绝，返回 `409 project.isolation_requires_per_agent_role`；边界无法更新到
+最新时返回 `409 project.boundary_unavailable`。
+
+### 按项目的遥测与成本
+
+对隔离项目的 Agent，部署器加上两种标记（`services/project_telemetry.py`）：`OTEL_RESOURCE_ATTRIBUTES` 带上
+`launchpad.project`、`launchpad.agent` 与 `launchpad.workspace`（平台的条目在前；spec 不能设置 `launchpad.*` 键），
+运行时 / Harness / 项目记忆创建时带上标签 `launchpad:project`、`launchpad:workspace`、`launchpad:agent-id`，二者由同一组属性
+派生，因而不会不一致。可观测查询按 span 属性过滤，行中随之带上 `project`；没有该属性的 span（共享项目、自带 OTEL 设置的
+BYOC 代码）退回账本解析。模型花费记在模型而非运行时名下，因此在 `LAUNCHPAD_PROJECT_INFERENCE_PROFILES`（默认关闭）开启时，
+隔离项目的 Agent 按项目 × 工作区 × 模型使用带项目标签的**应用推理配置文件**，付款账户激活该成本分配标签后 Cost Explorer
+即可按项目拆分。`/api/costs` 依次按 span 属性、模型 id 中的推理配置文件、账本中的 Agent 归属每一行（`project_source`），
+并返回 `by_project` 汇总。共享项目的请求与现在完全相同。
+
+### 预算：项目、部门与三级费用视图
+
+预算只有**项目预算**，任何地方都没有个人预算（成员用户名可以记在用量行上用于下钻，但从不作为预算主体）。月份按 UTC 自然月计算。
+
+- **项目预算**：`projects.settings.quotas.monthly_budget_usd`，由 `project_quotas.assert_budget` 在每个计费路由（`core/billing_policy.py`）和唯一的调用入口处执行，与项目在其预算口径（价格表估算或按 `launchpad:project` 计费的账单成本，缓存 60 秒）下的本月花费比较。**超支开关** `projects.settings.allow_overrun`（默认关闭）决定各条线：关闭时告警规则在 80% 与 100%，100% 拦截（`409 project.budget_exhausted`）；开启时告警在 80% 与 105%，110% 拦截（常量 `OVERRUN_ALERT_FRACTION` / `OVERRUN_BLOCK_FRACTION`）。告警规则是平台自动维护的普通 `cost_mtd_usd` 规则（`alerts.sync_budget_rule`）。
+- **部门预算**：`departments.settings.budget{monthly_budget_usd, allow_overrun}`，只有平台管理员能设置（`PUT /api/departments/{id}/budget`）。它只是**分配上限**，本身从不拦截任何操作：部门内各项目预算（含已归档项目）之和不能超过它（`409 department.budget_overallocated`，`detail{budget_usd, allocated_usd, requested_usd, remaining_usd}`），不能降到已分配额以下（`409 department.budget_below_allocated`），带预算的项目也不能移入容纳不下它的部门。只检查*增加*分配的写入，因此历史上超额分配的部门总能被降回上限之内。部门的超支开关（默认关闭）约束其项目的开关（`409 department.overrun_disabled`）；仍有项目开着开关时关闭部门开关会被拒绝并列出这些项目（`409 department.overrun_in_use`）。
+- **谁来分配**：层级由 `department_budgets.budget_scope` 决定。组织级需要账号级权限 `budget.manage`（「管理预算」，`users.PLATFORM_PERMISSIONS`；管理员按角色持有，组织管理员要由管理员在“用户”页授予），可设置部门预算与开关，以及所有项目的预算（包括没有部门的 `default`）。部门级随身份而来，不需要该权限：部门管理员可设置自己管理的部门下各项目的预算与开关（`PUT /api/projects/{id}/budget`，经 `dadmin` 叠加），取消其部门管理员身份即失去该能力；部门管理员不能设置部门本身的预算。其他人凡是走会改变预算的路径（预算接口、`PUT …/quotas`、项目设置）都返回 `403 budget.forbidden`。未设预算的部门不限制：其项目预算的分配没有上限。其他配额（`PUT …/quotas`）仍属平台结构管理。预算写入不在 `BILLABLE_PREFIXES` 之内，本身永不被拦截，并记为 `project.budget.update` / `department.budget.update`。
+- **部门告警**：每次告警评估结束时，`department_budgets.evaluate_departments` 汇总每个有预算的部门下各项目的花费（与拦截读取的是同一缓存数字），每条线每月只记录一次越过 80% / 100% 的事件，存于一条 `platform_settings` 行（`budget.department.<id>`，同时保存用于趋势的每日历史），并记为 `department.budget.alert`。只通知不拦截。部门管理员与平台管理员从 `GET /api/budgets/me` 读取；之所以不做成告警规则，是因为工作区级规则对工作区的所有成员可见。
+- **费用视图**（V3 `/v3/costs?view=project|department|platform`，导航只向能打开的人显示）：项目页读 `GET /api/projects/{id}/quotas`（成员；预算、开关、80/100 或 80/105/110 三条线）；部门页读 `GET /api/departments/{id}/budget`（部门管理员与平台管理员：预算、已分配、未分配、花费、各项目行、趋势）；平台页读 `GET /api/budgets/platform`（管理员，组织管理员不可：所有部门与项目，以及**平台 / 未归属**一行，即多项目工作区中不属于任何项目的本月估算，并列出共享组件）。
+- **检查**：`backend/scripts/e2e_costs_dept_admin_browser.py`（无头浏览器，不调用 AWS；已纳入 `run_live_e2e.sh`）用一次性的部门管理员账号和管理员账号，在它自己的夹具部门上走一遍费用页。
+- **COA 成本归属**：一轮对话中的 COA 工具调用（直连或网关模式）都在 Agent 的调用内执行，因此在网关预检、获取 COA 令牌或任何 COA 调用之前，先经过该 Agent 所在项目的 `assert_budget`；其模型 token 记在 Agent 自己的 span 上，归属该项目。COA 的固定成本归平台：托管网关 `launchpad-coa-gw` 由成本标签回填任务打上 `launchpad:project=shared`（`cost_tags.context_layer_infra`），其费用落在账单视图的共享行；COA 自身的运行时是外接部署，Launchpad 从不为其打标签。
+
+### 管理
+
+管理员在 V3 控制台的 **配置** 分组中管理结构：**用户管理**（项目与项目组成员资格、批量“加入项目”、通过
+`users.session_epoch` 强制下线）、**管理员管理**（`/v3/admins`）、**项目**（成员、角色、工作区绑定、
+设置、移动 Agent）、**项目组** 与 **部门**。项目负责人（`project.members`）可进入当前项目的 **项目设置**。
+账号管理、项目结构以及项目组 / 部门路由都是中枢全局的；`access.can_manage_structure` 是唯一的判断
+（阶段 3 的 steward 只需修改它）。
+
+**组织管理员**（全局角色 `steward`，项目设计 §11.4）只管理结构，不访问项目数据。它在 V3 中的导航只有“配置”分组
+的结构入口（用户管理、管理员管理、项目、项目组、部门、工作区、模型、网络、存储：`v3/nav.ts` 的 `STEWARD_ENTRIES`）；
+其余页面显示 `StewardEmptyState`（`workspace/steward-paths.ts`），工作区与项目的入口检查也不会因它没有授权而拦下它。
+它可在用户管理页创建、编辑账号，但不能创建或修改平台角色。它在项目中做的每次成员变更都会通知项目负责人；负责人在
+项目“成员”页签顶部看到这些通知，开启二人规则时还可确认或拒绝待确认的变更（`/api/steward/*`）。
+
+### 运维
+
+**已有部署无需任何操作。** 本版本首次启动时 `init_db` 依次执行：`create_all`（新表）、`_migrate`
+（为每张 owned 与 shared 表增量添加 `project_id` 列和索引、`users.session_epoch`、SoD 的
+`*_user_id` 列）、`_seed_default_projects` 与启动检查。种子步骤是幂等的；一次性部分只在
+`platform_settings` 标记 `migration.projects_v1` 不存在时执行：
+
+1. 创建 `default` 项目并绑定到每个工作区（工作区还没有默认绑定时设为默认）；
+2. 把 `agents`（系统预置除外）、`jobs`、`managed_memories`、`api_keys`、`resource_creators`、`eval_datasets`、`eval_pipelines`、`skill_lab_tasksets`、`assistant_conversations` 的行归入其工作区的默认项目，每个派生行归入父行的项目（孤儿行归入其工作区的默认项目）；
+3. 把每个持有工作区授权的非管理员账号以 `inherit` 加入该工作区的默认项目，回填 SoD 用户 id，递增纪元，写入标记。
+
+可空的行（治理、审计、告警、映射、Connections）保持 NULL，含义与以前一样是工作区级。没有
+`resource_creators` 行的知识库属于其工作区的默认项目。每个工作区只有一个项目时，可见的东西都不变：
+没有切换器，`/api/auth/status` 相同，页面相同，`infra` 路由的行为与 `project.write` 一样。首次启动前请
+复制 `data/launchpad.db`（升级是增量的；旧版本二进制仍能在迁移后的台账上启动，因为漂移检查只看缺失的列）。
+
+**演练升级**：在真实升级前，先在生产台账的副本上运行：
+
+```bash
+cd backend
+uv run python scripts/rehearse_projects_migration.py /path/to/copy-of-launchpad.db [--keep] [--out /tmp/rehearsal.db]
+```
+
+源文件只读（SQLite 在线备份，只读打开）；`init_db` 在副本上运行且拒绝 AWS 客户端；脚本按表打印行数、
+升级前后没有项目的行数、孤儿行数、`init_db` 耗时以及各项检查（无 schema 漂移、每行都有工作区、每个严格
+行都有项目、标记已写入）。退出码 0 表示升级会成功；1 表示有检查失败（副本保留）。
+
+**回滚后的遗留行。** 降级后旧版本写入的行没有 `project_id`。单项目工作区在启动时认领它们并记 WARNING。
+绑定了多个项目的工作区会拒绝启动，并列出表与行数；停止后端后归档这些行：
+
+```bash
+cd backend
+uv run python scripts/backfill_projects.py --dry-run                    # 只报告，在一次性副本上运行
+uv run python scripts/backfill_projects.py --workspace prod --project payments
+uv run python scripts/backfill_projects.py --db /path/to/launchpad.db   # 另一个台账文件
+```
+
+它执行与启动相同的结构步骤，把派生行归入父行，认领单项目工作区的行；带 `--workspace W --project P` 时
+把 W 中其余的严格行归入 P（P 必须绑定到 W）。它不写审计行、不递增纪元、不调用任何 AWS API。退出码 0
+表示启动会接受该台账。
+
+**创建与拆分项目。** 以管理员身份：如有需要先建部门与项目组（**配置 → 部门 / 项目组**），然后在
+**配置 → 项目 → 新建项目** 中填写 id、名称、要绑定的工作区和负责人（`POST /api/projects`）。第二个项目
+首次绑定到某个工作区时，该工作区进入多项目模式：那里的 `infra` 写入变为仅管理员，无法归属的遥测对成员
+隐藏。在项目的 **成员** 标签中添加成员（或在 **用户管理** 中逐个或批量添加）；有多个项目的成员在顶栏切换器
+中选择项目。用 **移动 Agent**（`POST /api/projects/{id}/transfer`）把已有 Agent 移出 `default`：只改台账，在
+一个事务里移动 Agent、所有派生行及其 Job；源项目中限定到它的 Key 会失去它。默认项目不能归档，也不能
+从其工作区解绑；其他项目 **归档** 后变为只读，撤销其链接，并停用创建者已无法进入该项目的 Key。
+
+## Agent-DLC —— 判据、黄金集、校准与放行门
+
+完整设计见 [agent-dlc-design.zh-CN.md](agent-dlc-design.zh-CN.md)，英文版本节列出了逐个模块的实现细节。要点：
+
+- **模块**：服务在 `app/dlc/`，统计函数在 `app/evaluation/stats.py`，模型在 `app/models/dlc.py`，路由在 `app/routers/dlc.py`（控制台）与 `app/routers/share_annotate.py`（公开）。控制台页面为 `/v2/eval/standards`，以 `?view=` 切换九个子页。
+- **判据表**：按 `lineage_id` 版本化，发布即冻结，须由编辑人以外的人签署（`criteria.sign`）。红线不能交给大模型裁判；成本与性能必须是指标；裁判类判据在校准通过前实际档位为“观察”。
+- **黄金集**：开发集 / 回归集 / 保留集三个切分。`POST /api/golden-sets/{id}/seed` 是唯一写入保留集的路径，写入后即封存。
+- **放行门**：按固定顺序判定——红线 → 分母 → 各维度门限 → 观察项。证据不足判为 INVALID（无法判定），而不是不达标。
+- **流量前置门控**：门控智能体通过具名 `live` 端点对外服务，新版本部署到 `candidate`；签署后才把 `live` 指过去，回滚即重新指回，不删除任何资源。切换到具名端点（`release/migrate`）需要 `release.sign`——生产服务哪个版本是放行决定，不是构建动作。
+- **遥测按端点区分**（真实 AWS e2e 发现）：每个 AgentCore 端点各写自己的内容日志组（`…-<endpoint>`）与 service name（`….<endpoint>`）。统一由 `evaluation.service.telemetry_endpoint(agent, qualifier)` 决定读哪个：钉住端点的运行读自己的，门控智能体读 `live`，其余读 `DEFAULT`。
+- **端点删除是异步的，而且 harness 端点很慢**：AgentCore 不允许删除仍带端点的 runtime / harness，删除端点只是把它置为 DELETING（实测可达数分钟）。四条删除路径都先调 `releases.delete_endpoints`，先发出两个删除再分别等待一个**短**上限（45 秒，够 runtime 端点用）。若 AWS 仍握着 harness，`delete_agent_resources` 抛 `agent.teardown_pending`，路由照常把台账行标记为已删除并返回 `aws_resource_deleted: false`，由 `dlc.scheduler.sweep_deleted_resources` 持续重试直到 AWS 放手——而不是让一个 HTTP 删除请求挂几分钟，或者让运维对着异步状态机手动重试。该 sweep 在删除前先调 `GetHarness`，因为 **AgentCore 对已经不存在的 harness 执行 `DeleteHarness` 返回的是 `AccessDenied`，而不是 `ResourceNotFound`**：从删除错误去推断“已经没了”，要么会永远重试一个早已消失的资源，要么会把真实的权限问题吞掉。被延后的行会打上 `teardown_pending_at`，sweep 重试每个带此标记的行，不论 `endpoint_mode`——被 Runtime Canary 端点占住的 default 模式 harness 同样会被重试：对尚未 DELETING 的命名端点重新发起删除，然后删除资源本身、其执行角色与 A2A 记录。完成标记是 `teardown_pending_at` 清空且 `endpoint_mode` 回到 `default`（该列出现之前延后的行仍按 `live` 找到），这样 `resource_id` 作为历史指针得以保留（其他已删除行同样保留它）。
+- **成本是强制的，不只是展示**：`POST /api/eval/runs` 与放行门的 `start_evaluation` 都会调 `cost.assert_allowed`，`eval_cost_max_usd` / `eval_cost_confirm_usd` 在花掉第一个会话之前就拒绝。
+- **校准与标注链接**：标注期间对标注人隐藏裁判判定；数据不支持时拒绝判定为“一致”。标注链接（`/r/annotate/<token>`）让无账号的专家参与标注，prod 级工作区拒绝生成。
+- **权限**：新增 `criteria.manage`、`criteria.sign`、`golden.admit`、`judge.calibrate`、`waiver.approve`、`release.sign` 六项，关键写操作均在 `PROD_PROTECTED` 之列——包括把样本**移出**门控（`move` / `retire` 会让它离开放行门的分母，这和新增样本一样是在改标准）以及校准 `decide`（`not_aligned` 会把正在拦人的裁判降级为观察）。
+- **安全审查发现并已在服务端修掉的三处一致性缺口**（规则本来就有，只是某条路径没照着做）：（1）`GET /api/annotation-tasks` 把 `privileged` 写死为 `True`，于是列表把详情接口刻意隐藏的裁判判定直接给了每个标注人——现在两处用同一套判断；（2）监测配置的 `dataset_id` 未经校验就落库，别的工作区封存的保留集可能被拿来跑在调用方自己控制的智能体上——写入与执行时都改为经 `golden.get_parent(db, ws.id, …)` 解析；（3）单个标注人的票曾被当成共识，且没有第二位标注人时会跳过人类上限项，于是一个人可以照着裁判标注再自行认证——现在一条样本需要两位标注人一致才计入，`aligned` 需要真实的 `human_human_kappa`，并且 `decide` 拒绝该任务的标注人。样本准入也改为自己计算个人信息脱敏（不再依赖“详情页被打开过”），并把脱敏状态记在样本上（工作区没有护栏时，覆盖视图给出 `unscreened_items`）。
+
 ## Skill Lab —— 技能评估与训练（SkillOpt 集成）
 
 Skill Lab 闭合了一个其他控制台界面都不提供的环路:一条 Registry 技能记录在真实的 AgentCore
@@ -2371,25 +2744,25 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 
 ## Agent IDE —— 基于 AgentCore 上 codex 的远程 Web IDE
 
-第五种构建 Agent 的方式（父任务 `10-19-coding-agent`）：成员在浏览器 IDE（`/v2/coding`，`?view=project&id=`）中打开项目，与在 AgentCore microVM 内编写、运行和测试代码的 codex Agent 对话，然后把完成的项目交给 Launchpad，通过现有的 `byoc` 管道部署——结果是一个普通的、受治理的 Agent。
+第五种构建 Agent 的方式（父任务 `10-19-coding-agent`）：成员在浏览器 IDE（`/v2/coding`，`?view=repo&id=`）中打开代码仓库，与在 AgentCore microVM 内编写、运行和测试代码的 codex Agent 对话，然后把完成的代码仓库交给 Launchpad，通过现有的 `byoc` 管道部署——结果是一个普通的、受治理的 Agent。
 
 **运行时（平台所有，管理员安装）。** 每个 workspace 一个 AgentCore Runtime `launchpad_coding_runtime`，镜像源码在 `backend/app/coding/image/`（零依赖的 Node 22 服务，通过 stdio JSON-RPC 驱动 `codex app-server`；codex 版本固定，内置 Agent Toolkit for AWS 插件）。模型走 codex 内置的 `amazon-bedrock-runtime` provider（bedrock-runtime `/openai/v1`，SigV4——不走 Mantle）；可选模型为 `Settings.coding_models`，每个回合可选推理强度。执行角色只授予 ECR 拉取、自己的日志组以及对编码模型和 `project/default` 的 `bedrock:InvokeModel*`：microVM 中的任何 shell 都能读到这些凭证，所以角色**没有 S3 权限**。会话存储挂载在 `/mnt/workspace`（1 GB；运行时版本更新后以及闲置 14 天后会被清空）；codex 的 SQLite 和依赖目录放在本地磁盘。只由管理员安装、修复和卸载（`/api/coding/runtime*`，一个 `Job`），绝不在启动或读取时安装；资源键 `coding_runtime_*`（不在 `REQUIRED_RESOURCE_KEYS` 中）。
 
 **动作协议。** 后端的每次调用都是一次短的 `InvokeAgentRuntime`（`app/coding/runtime_client.call`），请求为 `{action, …}`，应答为 `{ok, result | error{code}}`：`status`、`start_turn`、`interrupt`、`events`（按 seq 编号的事件日志长轮询，`compact` 会丢弃已完成条目的增量）、`tree`、`read_file`（`rev: head | turn`）、`write_file`（`expected_sha256`）、`changes`、`diff`、`snapshot` / `export` / `upload_file`（上传到预签名 PUT）。每条 app-server 通知都写入会话存储上的 `.launchpad/events.jsonl`，读取方按 seq 获取，因此刷新、重连或后端重启都不会丢失任何内容。
 
-**项目（`backend/app/coding/`）。** 台账 `coding_projects` + `coding_turns`（workspace 作用域）。项目在**任何可见性模式下都只属于创建者**——刻意比 `resource_visibility` 更严格，因为项目是一个在线 shell 加代码：所有权绑定到不可变的主体（`assistant/principal.principal_of` → `user:<id>` | `config-admin` | `local-operator`），所有按 id 访问的路由都经过 `projects.project_in`（他人的或不存在的 → `404 coding.project_not_found`）。管理员可以列出全部项目（`?all=1`）并删除任意项目，但绝不能打开他人项目的 IDE、读取文件、订阅事件或运行回合。每个项目拥有一个稳定的 `runtimeSessionId`（64 个字符，创建时生成）；项目之间从不共享会话。
+**代码仓库（`backend/app/coding/`）。** 台账 `coding_repos` + `coding_turns`（workspace 作用域）。代码仓库在**任何可见性模式下都只属于创建者**——刻意比 `resource_visibility` 更严格，因为代码仓库是一个在线 shell 加代码：所有权绑定到不可变的主体（`assistant/principal.principal_of` → `user:<id>` | `config-admin` | `local-operator`），所有按 id 访问的路由都经过 `repos.repo_in`（他人的或不存在的 → `404 coding.repo_not_found`）。管理员可以列出全部代码仓库（`?all=1`）并删除任意代码仓库，但绝不能打开他人代码仓库的 IDE、读取文件、订阅事件或运行回合。每个代码仓库拥有一个稳定的 `runtimeSessionId`（64 个字符，创建时生成）；代码仓库之间从不共享会话。代码仓库是成员在编码运行时上的 git 工作目录，不是组织架构里的项目。在 microVM 内它仍位于 `/mnt/workspace/project`（运行时镜像的目录布局，为已安装的运行时及其快照保持不变）；改名之前的台账（`coding_projects`、`coding_turns.project_id`）会在启动时原地改名（`core/db._migrate_coding_repo_rename`）。
 
-**回合是异步的。** `POST …/turns` 认领项目（`UPDATE … WHERE status='idle'`——每个项目同时只有一个回合），在 microVM 中启动回合并立即返回 `running` 状态的回合行；回合在 `/ping HealthyBusy` 下运行（≤ 8 小时），所以离开或刷新页面、重启后端都不会中断它。`POST …/interrupt` 中断回合。台账丢失的运行时回合（后端在运行时应答与提交之间崩溃）会在下一次启动时被接管。
+**回合是异步的。** `POST …/turns` 认领代码仓库（`UPDATE … WHERE status='idle'`——每个代码仓库同时只有一个回合），在 microVM 中启动回合并立即返回 `running` 状态的回合行；回合在 `/ping HealthyBusy` 下运行（≤ 8 小时），所以离开或刷新页面、重启后端都不会中断它。`POST …/interrupt` 中断回合。台账丢失的运行时回合（后端在运行时应答与提交之间崩溃）会在下一次启动时被接管。
 
 **事件流（SSE）。** `GET …/events?after=<seq>`（或 `Last-Event-ID`）先发送 `status` 帧，然后以 `id: <seq>` / `event: event` 发送每条事件日志记录，空闲时发送 keep-alive 注释，25 分钟后发送 `reconnect`，失败时发送 `error {code, message}`（`app/coding/stream.py`）。**空闲模式：**回放读完且运行时没有在跑回合后，事件流每 2 秒轮询一次*台账*而不是运行时，这样打开着的 IDE 标签页不会让空闲的 microVM（按内存计费）在 15 分钟空闲超时后继续存活；一旦有新回合被认领，就切回运行时长轮询。路由以异步响应体提供事件流：阻塞的步骤在工作线程中执行，空闲时的等待则在事件循环上进行，所以打开着的空闲标签页不会占用共享工作线程池中的线程。
 
-**结算、预算与持久化。** 回合结束后，运行时立即追加 `launchpad/turnUsage`（或 `launchpad/turnAbandoned`）。先看到它的一方——SSE 代理或 **watcher**（`app/coding/watcher.py`，一个守护线程，每 15 秒一次，`LAUNCHPAD_CODING_WATCHER_ENABLED`）——用 `UPDATE coding_turns SET settled_at=… WHERE … AND settled_at IS NULL` 结算；只有胜出者向付费方计费（`UsageMeter`，来源 `coding`，引用 `coding_turn`）并请求快照。codex 的 `inputTokens` 包含缓存命中和缓存写入的 token，`outputTokens` 包含推理 token，所以计费时会拆成互不重叠的计数。启动回合是 `Billable(SOURCE_CODING)`（沿用现有的 `402` 约定），并在启动时就把会话写入 `usage_sessions`，这样对账从第一分钟起就知道这个会话（codex 运行时不产生 span，所以它的运行时计算费用是基于台账的下限：各回合的开始和结束时间点加上空闲尾巴）。watcher 还会把运行时已不再运行的回合（会话存储从较旧的快照恢复）或超过 8 小时生命周期的回合标记为 abandoned，释放失效的启动认领，并为保存过的文件做快照（30 秒防抖）。快照通过后端签发的预签名 URL 写到 `s3://<artifacts>/coding/<ws>/<project>/snapshots/<ts>.tgz`（保留最新 3 份）；每个动作都携带最新快照的预签名 GET 作为 `restore_url`，所以会话存储被清空的 microVM 会先恢复项目再做其他事。
+**结算与持久化。** 回合结束后，运行时立即追加 `launchpad/turnUsage`（或 `launchpad/turnAbandoned`）。先看到它的一方——SSE 代理或 **watcher**（`app/coding/watcher.py`，一个守护线程，每 15 秒一次，`LAUNCHPAD_CODING_WATCHER_ENABLED`）——用 `UPDATE coding_turns SET settled_at=…, usage=… WHERE … AND settled_at IS NULL` 结算；只有胜出者请求快照。回合行按 codex 上报的原样记录计数（`inputTokens` 包含缓存命中和缓存写入的 token，`outputTokens` 包含推理 token）。watcher 还会把运行时已不再运行的回合（会话存储从较旧的快照恢复）或超过 8 小时生命周期的回合标记为 abandoned，释放失效的启动认领，并为保存过的文件做快照（30 秒防抖）。快照通过后端签发的预签名 URL 写到 `s3://<artifacts>/coding/<ws>/<repo>/snapshots/<ts>.tgz`（保留最新 3 份）；每个动作都携带最新快照的预签名 GET 作为 `restore_url`，所以会话存储被清空的 microVM 会先恢复代码仓库再做其他事。
 
 **文件。** IDE 读取目录树、文件内容（工作区、`HEAD` 或最近一个回合的基线）、变更列表和统一 diff，并以乐观的 `expected_sha256` 保存文件（`409 coding.file_conflict` 携带当前哈希）；回合运行期间拒绝保存。路径在任何调用前先由后端检查（绝对路径、`..`、NUL、`.git`），运行时的路径守卫是最终判定。
 
-**下载。** `POST …/download`（仅所有者，回合运行期间也可用）把单个文件（`{path}`，文本或二进制，≤ 200 MB）或整个项目打包成 `<project>.zip`（不传 `path`：与部署导出相同的文件集合，≤ 50 MB）交给浏览器。字节从不经过 `InvokeAgentRuntime`：后端在 `coding/<ws>/<project>/downloads/<ts>-<rand>/` 下签发预签名 PUT，运行时把文件（`upload_file`）或 zip（`export`）上传上去，后端再返回一个有效期 5 分钟、带 `Content-Disposition: attachment`（ASCII 的 `filename` 加 RFC 5987 的 UTF-8 `filename*`）的预签名 GET，浏览器就地保存文件（`app/coding/downloads.py`）。超过 15 分钟的下载对象会在该项目下一次下载时清理；删除项目会删除其整个前缀。
+**下载。** `POST …/download`（仅所有者，回合运行期间也可用）把单个文件（`{path}`，文本或二进制，≤ 200 MB）或整个代码仓库打包成 `<repo>.zip`（不传 `path`：与部署导出相同的文件集合，≤ 50 MB）交给浏览器。字节从不经过 `InvokeAgentRuntime`：后端在 `coding/<ws>/<repo>/downloads/<ts>-<rand>/` 下签发预签名 PUT，运行时把文件（`upload_file`）或 zip（`export`）上传上去，后端再返回一个有效期 5 分钟、带 `Content-Disposition: attachment`（ASCII 的 `filename` 加 RFC 5987 的 UTF-8 `filename*`）的预签名 GET，浏览器就地保存文件（`app/coding/downloads.py`）。超过 15 分钟的下载对象会在该代码仓库下一次下载时清理；删除代码仓库会删除其整个前缀。
 
-**部署交接。** `POST …/deploy`（`perm:agents.deploy`）先为项目做快照，让运行时把项目文件打成 zip 上传到预签名 PUT，再下载并用 `byoc_uploads.stage_upload` 暂存（与成员上传相同的检查），然后创建一个以调用者为创建者的 `byoc` Agent（`routers.agents.start_create`，即 `POST /api/agents` 背后的代码），或重新发布该项目已有的 Agent（`republish_agent`，即重新部署背后的代码）。下载导出文件前会先按 250 MiB 的 BYOC zip 上限检查其大小（microVM 中运行的是任意代码）。项目根目录有 `Dockerfile` 时选 `container_source`，否则选 `code_zip`（`main.py`）。项目的 `AGENTS.md` 会告诉编码 Agent BYOC 约定。
+**部署交接。** `POST …/deploy`（`perm:agents.deploy`）先为代码仓库做快照，让运行时把代码仓库文件打成 zip 上传到预签名 PUT，再下载并用 `byoc_uploads.stage_upload` 暂存（与成员上传相同的检查），然后创建一个以调用者为创建者的 `byoc` Agent（`routers.agents.start_create`，即 `POST /api/agents` 背后的代码），或重新发布该代码仓库已有的 Agent（`republish_agent`，即重新部署背后的代码）。下载导出文件前会先按 250 MiB 的 BYOC zip 上限检查其大小（microVM 中运行的是任意代码）。仓库根目录有 `Dockerfile` 时选 `container_source`，否则选 `code_zip`（`main.py`）。代码仓库的 `AGENTS.md` 会告诉编码 Agent BYOC 约定。
 
 ## SQLite 台账与 job/event 模型
 
@@ -2402,6 +2775,10 @@ summary 上，**不改动**任何评分语义（score 无效的行仍被排除�
 | `deployments` | 每次部署一行——五阶段数组,含各阶段 status/detail/时间戳 |
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
 | `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间、显式结束 runtime 会话后的 `ended_at` |
+| `mcp_tool_reviews` | 托管 MCP 服务器、Lambda 工具目标与已纳管外部目标的工具审批——工具清单快照及其哈希、相对已批准清单的差异、提示、状态（`reviewing`/`approved`/`rejected`/`superseded`）、来源（`deploy`/`drift`/`baseline`/`rollback`）、申请人、审批人、备注，以及批准后的重新发布状态 |
+| `mcp_servers` | 每个托管 MCP 服务器一行——其网关目标调用的端点（`DEFAULT` / `live`）、固定的 `live_version`、最近一次健康检查与最近一次后台操作（回滚、Cedar 脚手架） |
+| `lambda_tool_targets` | 控制台创建的 Lambda 网关目标——Lambda ARN、目标名与 id、内联工具 Schema、状态（`reviewing`/`publishing`/`live`/`failed`/`rejected`）、创建者 |
+| `external_mcp_targets` | 纳入工具审批的手动创建 MCP 服务器网关目标——目标 id 与名称、端点、纳管人、最近一次漂移检查 |
 | `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态(`pending`/`active`/`disabled`)、`expires_at`(审批前为空)、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
 | `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文)、创建者(`created_by` 用户 id + `created_by_name`,旧密钥为 NULL)、`last_used_at` |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |

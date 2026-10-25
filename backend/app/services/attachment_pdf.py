@@ -46,7 +46,8 @@ def main() -> None:
         try:
             resource.setrlimit(which, (value, value))
         except (ValueError, OSError):
-            # macOS refuses RLIMIT_AS; the parent's timeout still bounds the run
+            # macOS rejects an RLIMIT_AS below its unlimited hard cap; the CPU
+            # ceiling and the parent's 8 s timeout still bound the child
             pass
     try:
         data = sys.stdin.buffer.read(MAX_FILE_BYTES + 1)

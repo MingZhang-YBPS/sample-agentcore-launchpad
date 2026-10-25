@@ -8,6 +8,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.services import observability as obs
+from tests.conftest import TEST_PROJECT
 
 from .conftest import ws_ctx
 
@@ -732,9 +733,9 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
 
 
 def test_transcript_falls_back_to_eval_run_session(monkeypatch):
-    """Eval-run sessions have no chat ledger row. A run from before per-scenario
-    actors recorded none on its scenario map: its transcript still comes from the
-    BARE "default" actor those replays used."""
+    """Eval-run sessions have no chat ledger row. A run replayed before every session
+    got its own actor (no `attempts`) left the conversation under the BARE "default"
+    actor — still found there."""
     from app.evaluation.models import EvalRun
 
     agent_id = _seed_agent()
@@ -751,6 +752,8 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
 
     def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
         seen["actor"] = actor_id
+        if actor_id != "default":
+            return []
         envelope = json.dumps(
             {"message": {"role": "user", "content": [{"text": "PTO balance?"}]}}
         )
@@ -770,37 +773,122 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
     assert [t["text"] for t in result["turns"]] == ["PTO balance?", "15 days"]
 
 
-def test_transcript_reads_the_eval_scenario_actor(monkeypatch):
-    """A replayed scenario runs under its own actor (memory.eval_actor), recorded on
-    the run's scenario map — the transcript reads exactly that actor."""
+def _eval_run(agent_id, session_ids, attempts=None):
     from app.evaluation.models import EvalRun
 
-    agent_id = _seed_agent()
-    sid = "f" * 64
-    actor = f"{agent_id}__eval-run1-3"
     db = SessionLocal()
     run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
                   agent_name="hr-assistant", mode="evaluators", evaluators=[],
-                  status="completed", session_ids=[sid],
-                  scenario_map={sid: {"scenario_id": "T01", "input": "q", "actor_id": actor}})
+                  status="completed", session_ids=session_ids, attempts=attempts)
     db.add(run)
     db.commit()
-    seen: list[str] = []
-
-    def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
-        seen.append(actor_id)
-        return [{"eventTimestamp": "2026-10-23T01:00:00", "payload": [
-            {"conversational": {"role": "USER", "content": {"text": "where is my ticket?"}}},
-            {"conversational": {"role": "ASSISTANT", "content": {"text": "approving"}}},
-        ]}]
-
-    monkeypatch.setattr(obs.memory, "list_events", fake_events)
-    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
-    result = obs.session_transcript(db, sid, ws_ctx())
+    run_id = run.id
     db.close()
-    assert seen == [actor] and result["actor_id"] == actor
-    assert result["source"] == "eval" and result["long_term_records"] is None
-    assert [t["text"] for t in result["turns"]] == ["where is my ticket?", "approving"]
+    return run_id
+
+
+def test_transcript_reads_a_replayed_session_under_its_recorded_actor(monkeypatch):
+    """Live: since each replayed session got its own memory actor
+    (`<agent>__eval-<run>-<n>`), the reader still looked under "default" and every
+    eval transcript — and every calibration item's agent answer — came back empty."""
+    agent_id = _seed_agent()
+    sids = ["a" * 64, "b" * 64]
+    run_id = _eval_run(agent_id, sids, attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": sids[0],
+         "actor_id": f"{agent_id}__eval-RUN-1"},
+        {"scenario_id": "s2", "attempt": 1, "session_id": sids[1],
+         "actor_id": f"{agent_id}__eval-RUN-2"},
+    ])
+    fake_events, probed = _events_for({f"{agent_id}__eval-RUN-2": ["second answer"]})
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    result = obs.session_transcript(db, sids[1], ws_ctx())
+    db.close()
+    assert result["run_id"] == run_id
+    assert result["actor_id"] == f"{agent_id}__eval-RUN-2"
+    assert [t["text"] for t in result["turns"]] == ["second answer"]
+    assert probed[0] == f"{agent_id}__eval-RUN-2"
+
+
+def test_transcript_rederives_the_actor_of_a_run_that_did_not_record_it(monkeypatch):
+    """Runs replayed after 2cfc398f but before attempts carried `actor_id`: the actor
+    is re-derived with the writer's own `eval_actor` from the session's position."""
+    from app.evaluation.service import eval_actor
+
+    agent_id = _seed_agent()
+    sids = ["c" * 64, "d" * 64, "f" * 64]
+    run_id = _eval_run(agent_id, sids, attempts=[
+        {"scenario_id": f"s{n}", "attempt": 1, "session_id": sid}
+        for n, sid in enumerate(sids, start=1)
+    ])
+    actor = eval_actor(agent_id, run_id, 3)
+    fake_events, _ = _events_for({actor: ["third answer"], "default": ["WRONG"]})
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    result = obs.session_transcript(db, sids[2], ws_ctx())
+    db.close()
+    assert result["actor_id"] == actor
+    assert [t["text"] for t in result["turns"]] == ["third answer"]
+
+
+def test_transcript_reads_a_harness_replay_under_its_recorded_actor(monkeypatch):
+    """Harness replays now pass InvokeHarness their per-session actor; an older
+    harness run recorded "default" and is still read there."""
+    agent_id = _seed_agent()  # method="harness"
+    new_sid, old_sid = "1" * 64, "2" * 64
+    _eval_run(agent_id, [new_sid], attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": new_sid,
+         "actor_id": f"{agent_id}__eval-NEW-1"}])
+    _eval_run(agent_id, [old_sid], attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": old_sid, "actor_id": "default"}])
+    fake_events, _ = _events_for({f"{agent_id}__eval-NEW-1": ["new answer"],
+                                  "default": ["old answer"]})
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    new = obs.session_transcript(db, new_sid, ws_ctx())
+    old = obs.session_transcript(db, old_sid, ws_ctx())
+    db.close()
+    assert [t["text"] for t in new["turns"]] == ["new answer"]
+    assert [t["text"] for t in old["turns"]] == ["old answer"]
+    assert old["actor_id"] == "default"
+
+
+def _seed_a2a_agent(name="hr-assistant"):
+    db = SessionLocal()
+    agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=name, method="zip_runtime",
+                  status="active", resource_id="hr_a2a-X", spec={"protocol": "a2a"},
+                  arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/hr_a2a-X")
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+    return agent_id
+
+
+def test_transcript_reads_an_a2a_replay_under_the_templates_actor(monkeypatch):
+    """The A2A template writes each session under `<name>__a2a__<session>`. Runs from
+    before this recorded "default" for A2A sessions (where nothing was written): the
+    reader still derives the template's actor and finds the answer."""
+    agent_id = _seed_a2a_agent()
+    new_sid, old_sid = "3" * 64, "4" * 64
+    _eval_run(agent_id, [new_sid], attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": new_sid,
+         "actor_id": f"hr-assistant__a2a__{new_sid}"}])
+    _eval_run(agent_id, [old_sid], attempts=[
+        {"scenario_id": "s1", "attempt": 1, "session_id": old_sid, "actor_id": "default"}])
+    fake_events, probed = _events_for({
+        f"hr-assistant__a2a__{new_sid}": ["new a2a answer"],
+        f"hr-assistant__a2a__{old_sid}": ["old a2a answer"],
+    })
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    new = obs.session_transcript(db, new_sid, ws_ctx())
+    old = obs.session_transcript(db, old_sid, ws_ctx())
+    db.close()
+    assert [t["text"] for t in new["turns"]] == ["new a2a answer"]
+    assert [t["text"] for t in old["turns"]] == ["old a2a answer"]
+    assert old["actor_id"] == f"hr-assistant__a2a__{old_sid}"
+    assert probed[0] == f"hr-assistant__a2a__{new_sid}"
 
 
 # ── transcript: sessions in NO platform ledger (gateway traffic, /v1 callers) ─
@@ -1420,7 +1508,7 @@ def test_session_transcript_endpoint_skips_logs_insights(client, mocked_aws, mon
 
     db = SessionLocal()
     foreign = Agent(workspace_id="other-ws", name="x", method="harness",
-                    status="active", resource_id="x-1")
+                    status="active", resource_id="x-1", project_id=TEST_PROJECT)
     db.add(foreign)
     db.commit()
     foreign_id = foreign.id
@@ -1733,6 +1821,14 @@ def test_evaluate_session_spans_wrapper_shape():
         ace.evaluate_session_spans(fake, evaluator_id="Builtin.Helpfulness", spans=[])
 
 
+def test_root_span_queries_accept_agentcore_invocation_roots():
+    # AgentCore exports no parentless span: `POST /invocations` carries the
+    # caller's parentSpanId, so a "no parent" filter alone matched nothing.
+    for query in (obs.q_root_spans(), obs.q_dashboard_series("24h"), obs.q_dashboard_totals()):
+        assert obs.ROOT_SPAN_FILTER in query
+        assert 'name = "POST /invocations"' in query
+        legacy_filter = "| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)\n"
+        assert legacy_filter not in query
 # ── trace roots: parentless or POST /invocations, one trace counted once ─────
 
 

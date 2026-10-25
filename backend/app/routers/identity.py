@@ -27,6 +27,7 @@ from app.services import (
     agent_access,
     consent_portals,
     context_layer,
+    creators,
     inbound_auth,
     oauth_sessions,
     policy_identity,
@@ -151,11 +152,17 @@ def list_templates() -> dict[str, Any]:
 
 
 @router.get("/connections/oidc-sources")
-def list_oidc_sources(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
+def list_oidc_sources(
+    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """OAuth2 Connections with a derivable OIDC discovery URL — the inbound JWT
     form's "Choose from a Connection" picker. The Connection's own client id is
-    deliberately not returned: it is the agent's outbound client, not a caller."""
-    return {"sources": connections.list_oidc_sources(control_client(ws.context))}
+    deliberately not returned: it is the agent's outbound client, not a caller.
+    Another project's Connections are left out."""
+    return {"sources": connections.list_oidc_sources(
+        control_client(ws.context),
+        exclude=connections.foreign_names(db, ws.id, connections.KIND_OAUTH2),
+    )}
 
 
 @router.get("/connections/{kind}/{name}")
@@ -256,7 +263,8 @@ def list_gateway_targets(ws: WorkspaceScope = Depends(require_workspace)) -> dic
 
 @router.post("/gateway-targets", status_code=201)
 def create_gateway_target(
-    req: CreateTargetRequest, ws: WorkspaceScope = Depends(require_workspace)
+    req: CreateTargetRequest, request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return gateway_targets.create_target(
         control_client(ws.context),
@@ -273,6 +281,8 @@ def create_gateway_target(
         api_key_location=req.api_key.location,
         api_key_parameter=req.api_key.parameter_name,
         api_key_prefix=req.api_key.prefix or None,
+        workspace_id=ws.id,  # turns on the other-project Connection refusal
+        creator=creators.Creator.of_request(request),  # the target's ownership row
     )
 
 
@@ -280,7 +290,8 @@ def create_gateway_target(
 def delete_gateway_target(
     target_id: str, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
-    gateway_targets.delete_target(control_client(ws.context), _resources(ws), target_id)
+    gateway_targets.delete_target(control_client(ws.context), _resources(ws), target_id,
+                                  workspace_id=ws.id)
     return {"deleted": True}
 
 

@@ -9,6 +9,7 @@ import app.services.invoke as invoke_service
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, ChatSession
 from app.services.agentcore import runtime as rt
+from tests.conftest import TEST_PROJECT
 
 RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/stop-me"
 
@@ -20,7 +21,7 @@ def _delta_events(text: str):
 def make_agent(method="zip_runtime", name="stop-agent", spec=None, workspace=None) -> str:
     db = SessionLocal()
     agent = Agent(
-        workspace_id=workspace or DEFAULT_WORKSPACE_ID,
+        workspace_id=workspace or DEFAULT_WORKSPACE_ID, project_id=TEST_PROJECT,
         name=name, method=method, status="active",
         arn=RUNTIME_ARN if method != "harness" else RUNTIME_ARN.replace("runtime/", "harness/"),
         spec=spec or {"name": name},

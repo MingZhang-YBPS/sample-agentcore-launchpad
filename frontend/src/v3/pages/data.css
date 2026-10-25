@@ -1,0 +1,10 @@
+/* V3 data center — a clamped cell for long dataset inputs and expected answers. */
+.v3 .v3-dc-clip {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 460px;
+  word-break: break-word;
+  color: var(--v3-text-2);
+}

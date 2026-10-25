@@ -46,7 +46,10 @@ MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
 
 
 def _memory_client():
-    return boto3.client("bedrock-agentcore", region_name=os.environ.get("AWS_REGION", "us-west-2"))
+    return boto3.client(
+        "bedrock-agentcore",
+        region_name=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
+    )
 
 
 def recall_context(actor_id: str, query: str) -> str:
@@ -90,11 +93,14 @@ def memory_session_manager(
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
+# An isolated project's application inference profile ARN, set by the platform
+# when per-project inference profiles are on (projects design §10.8).
+MODEL_ID = os.environ.get("LAUNCHPAD_MODEL_ID") or MODEL_ID
 # Which hosting surface MODEL_ID belongs to: "bedrock" (Converse API) or
 # "mantle" (Bedrock Mantle, OpenAI-compatible Responses API).
 MODEL_SOURCE = "__LAUNCHPAD_MODEL_SOURCE__"
 # Mantle models are hosted in their own region, independent of where this
-# runtime runs (AWS_REGION is us-west-2 here, where they are not offered).
+# runtime runs (AWS_REGION is the runtime's own region, where they may not be offered).
 MANTLE_REGION = os.environ.get("LAUNCHPAD_MANTLE_REGION", "us-east-1")
 DEFAULT_SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 SKILLS_ENABLED = __LAUNCHPAD_SKILLS_ENABLED__
@@ -179,6 +185,7 @@ __LAUNCHPAD_GATEWAY_SOURCE__
 
 __LAUNCHPAD_CONTEXT_GATEWAY_SOURCE__
 __LAUNCHPAD_IDENTITY_SOURCE__
+__LAUNCHPAD_STRANDS_BUILDER_SOURCE__
 
 # Per-request Gateway MCP tool loader. Rendered as the real loader only when this
 # spec carries a `gateway` ToolRef; otherwise a no-op, so an agent without one
@@ -188,11 +195,16 @@ GATEWAY_TOOLS = __LAUNCHPAD_GATEWAY_TOOLS_FN__
 # Per-request loader for the spec's auth-carrying rest/mcp tools (AgentCore
 # Identity outbound auth). Same no-op contract as GATEWAY_TOOLS. The session id
 # feeds the as_user customState (which chat to return to after IdP consent);
-# the notice drain turns as_user consent asks into `auth_required` events; the
-# gate says a tool the turn cannot run without (the COA context layer) awaits one.
+# the notice drain turns as_user consent asks into `auth_required` events.
+#[turn-gate]
+# The gate says a tool the turn cannot run without (the COA context layer)
+# awaits consent.
+#[/turn-gate]
 IDENTITY_TOOLS = __LAUNCHPAD_IDENTITY_TOOLS_FN__
 IDENTITY_AUTH_NOTICES = __LAUNCHPAD_IDENTITY_NOTICES_FN__
+#[turn-gate]
 IDENTITY_TURN_GATED = __LAUNCHPAD_IDENTITY_GATED_FN__
+#[/turn-gate]
 
 # Tools contributed by the platform toolkits this spec selected — empty when none.
 # A selected toolkit REPLACES the template's own calculator/current_utc_time (they
@@ -280,6 +292,7 @@ def build_agent(
     plugins = skill_plugins()
     if plugins:
         kwargs["plugins"] = plugins
+    __LAUNCHPAD_BUILD_AGENT_HOOK__
     return Agent(**kwargs)
 
 
@@ -375,6 +388,7 @@ async def _turn_events(
     payload: dict[str, Any], prompt: str, session_id: str
 ) -> AsyncIterator[dict[str, Any]]:
     actor_id = str(payload.get("actor_id", "default"))
+    __LAUNCHPAD_TURN_HOOK__
     # The Gateway MCP session must stay open for as long as the agent may call one
     # of its tools, so it is scoped to the whole turn. GATEWAY_TOOLS is a no-op
     # returning [] for a spec with no gateway tool.
@@ -396,6 +410,7 @@ async def _turn_events(
             + IDENTITY_TOOLS(stack, session_id, force_reauth),
             session_manager=session_manager,
         )
+#[turn-gate]
         if IDENTITY_TURN_GATED():
             # the context layer is this agent's fact source: without the user's
             # COA consent the model never answers — the turn ends at the card,
@@ -404,6 +419,7 @@ async def _turn_events(
                 yield {"event": "auth_required", **notice}
             yield {"event": "complete", "result": ""}
             return
+#[/turn-gate]
         known = recall_context(actor_id, prompt)
         if known:
             agent.system_prompt = f"{resolve_system_prompt()}\n\nKnown user context:\n{known}"

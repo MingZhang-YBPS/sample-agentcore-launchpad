@@ -2,13 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import { activeNavItem, navGroupsFor, V2_NAV, V2_PALETTE_ALIASES } from "./nav";
 
+// V3's business sidebar (roadmap T11): the build → run essentials, the release and
+// issue hand-offs, and the Agent-DLC surfaces a business owner works in
 const BUSINESS = [
   "/v2",
   "/v2/assistant",
   "/v2/agents",
+  "/v2/coding",
   "/v2/knowledge-bases",
+  "/v2/context-layer",
   "/v2/chat",
+  "/v2/promotions",
+  "/v2/issues",
   "/v2/observability",
+  "/v2/eval/intents",
+  "/v2/eval/standards",
   "/v2/videos",
 ];
 
@@ -38,7 +46,7 @@ describe("navGroupsFor", () => {
     expect(groups.flatMap((g) => g.items).some((item) => item.admin)).toBe(false);
   });
 
-  it("business mode keeps exactly the seven essentials, in order", () => {
+  it("business mode keeps exactly the business entries, in order", () => {
     expect(paths(navGroupsFor("business", true))).toEqual(BUSINESS);
     expect(paths(navGroupsFor("business", false))).toEqual(BUSINESS);
   });
@@ -46,12 +54,12 @@ describe("navGroupsFor", () => {
   it("business mode drops the groups it empties", () => {
     for (const isAdmin of [true, false]) {
       const groups = navGroupsFor("business", isAdmin);
-      expect(groups.map((g) => g.key)).toEqual(["home", "build", "run", "learn"]);
+      expect(groups.map((g) => g.key)).toEqual(["home", "build", "run", "eval", "learn"]);
       expect(groups.every((g) => g.items.length > 0)).toBe(true);
     }
   });
 
-  it("marks only the seven essentials as business", () => {
+  it("marks only the business entries as business", () => {
     const marked = V2_NAV.flatMap((g) => g.items)
       .filter((item) => item.business)
       .map((item) => item.to);
@@ -71,14 +79,13 @@ describe("navGroupsFor", () => {
     expect(paths(V2_NAV)).toEqual(before);
   });
 
-  it("lists the coding console as an expert-only Build entry for everyone", () => {
+  it("lists the coding console as a Build entry for everyone, in the business sidebar too", () => {
     const build = V2_NAV.find((g) => g.key === "build");
     const item = build?.items.find((entry) => entry.to === "/v2/coding");
-    expect(item).toMatchObject({ v2: true, labelKey: "v2.nav.coding" });
+    expect(item).toMatchObject({ v2: true, labelKey: "v2.nav.coding", business: true });
     expect(item?.admin).toBeUndefined();
-    expect(item?.business).toBeUndefined();
     expect(paths(navGroupsFor("expert", false))).toContain("/v2/coding");
-    expect(paths(navGroupsFor("business", false))).not.toContain("/v2/coding");
+    expect(paths(navGroupsFor("business", false))).toContain("/v2/coding");
   });
 });
 

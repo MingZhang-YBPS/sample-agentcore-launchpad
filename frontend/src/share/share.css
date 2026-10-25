@@ -1,0 +1,16 @@
+/* Standalone share page: no shell, one column, the thread scrolls. */
+.v2.share-page { display: flex; flex-direction: column; height: 100vh; max-width: 860px; margin: 0 auto; padding: 0 16px; box-sizing: border-box; }
+.v2 .share-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--v2-line); }
+.v2 .share-head h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--v2-ink); }
+.v2 .share-head-end { display: flex; align-items: center; gap: 12px; }
+.v2 .share-expiry { font-size: 12px; color: var(--v2-ink-3); }
+.v2 .share-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.v2 .share-comment { display: flex; gap: 8px; padding: 8px 0; }
+.v2 .share-comment .v2-input { flex: 1; }
+.v2 .share-composer { display: flex; gap: 8px; align-items: flex-end; padding: 12px 0 16px; }
+.v2 .share-composer .v2-textarea { flex: 1; resize: none; }
+.v2.share-gone { align-items: center; justify-content: center; text-align: center; color: var(--v2-ink-2); }
+.v2.share-gone h1 { font-size: 20px; margin: 0 0 8px; color: var(--v2-ink); }
+/* Embedded in an <iframe> (T30): fill the frame, drop the centered column and the page gutters. */
+.v2.share-page.share-embed { height: 100%; min-height: 100vh; max-width: none; padding: 0 12px; }
+.v2.share-embed .share-composer { padding: 8px 0 12px; }

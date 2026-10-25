@@ -12,9 +12,10 @@ import {
   type JobInfo,
   type StageInfo,
 } from "../../../lib/api";
+import { proposalStorage } from "../../../lib/api/storageDlc";
 import { isFishbone, proposalDefaultModel, type ProposalEditDraft } from "../../../lib/assistant";
-import { useModelDefaults, withCurrentModel } from "../../../lib/model-defaults";
-import { MODEL_CATALOG, type ModelSource } from "../../../lib/models";
+import { useModelCatalog } from "../../../lib/model-catalog";
+import { modelOptionsFor, type ModelSource } from "../../../lib/models";
 import { fmtTime } from "../../format";
 import { Alert, Descriptions, Field, Select, Table, Tag } from "../../ui";
 import { AGENT_TONE, JOB_TONE, shortId, STAGE_TONE } from "./common";
@@ -72,6 +73,13 @@ export function ProposalView({
       tools: Array.isArray(tool.config?.tools) ? (tool.config.tools as unknown[]).map(String) : null,
     }));
   const selectedToolPolicy = b?.resources?.tool_access_policy === "selected-v1";
+  // storage catalog entries the agent mounts (storage-mounts §8.3); a read-write
+  // mount is highlighted — it writes shared storage once the agent runs
+  const storageChoices = proposalStorage(c);
+  const writesStorage = storageChoices.some((s) => s.mode === "rw");
+  const boundStorage = ((b?.resources ?? {}) as {
+    storage?: Record<string, { name?: string | null; access_point_arn?: string | null; mode?: string; data_class?: string | null; network_profile_id?: string | null }>;
+  }).storage ?? {};
   const authLabel = (auth: Record<string, unknown> | null) => {
     const oauth = (auth?.oauth ?? null) as { providerArn?: string; grantType?: string } | null;
     if (oauth) return `oauth · ${oauth.grantType ?? ""} · ${(oauth.providerArn ?? "").split("/").slice(-1)[0]}`;
@@ -128,6 +136,21 @@ export function ProposalView({
             : []),
           { label: t("assistantPage.field.skills"), value: tags(list(c.skills), "v2-assistant-proposal-skills") },
           { label: t("assistantPage.field.kbs"), value: tags(list(c.knowledge_bases), "v2-assistant-proposal-kbs") },
+          ...(storageChoices.length
+            ? [{
+                label: t("v3.assistant.storage.label"),
+                value: (
+                  <span className="v2-tags" data-testid="v2-assistant-proposal-storage">
+                    {storageChoices.map((s) => (
+                      <Tag key={s.storage_id} tone={s.mode === "rw" ? "orange" : "outline"} dot={s.mode === "rw"}
+                        title={s.mode === "rw" ? t("v3.assistant.storage.rwHint") : undefined} testId={`v2-assistant-proposal-storage-${s.mode}`}>
+                        {s.storage_id} · {t(`v3.assistant.storage.mode.${s.mode}`)}
+                      </Tag>
+                    ))}
+                  </span>
+                ),
+              }]
+            : []),
           {
             label: t("assistantPage.field.memory"),
             value: c.memory === "workspace" ? t("assistantPage.memoryWorkspace") : t("assistantPage.memoryDisabled"),
@@ -139,6 +162,13 @@ export function ProposalView({
           { label: t("assistantPage.field.target"), value: <span className="mono">{account} · {region} · harness</span> },
         ]}
       />
+      {writesStorage && (
+        <div style={{ marginTop: 12 }}>
+          <Alert tone="warn">{t("v3.assistant.storage.rwNotice", {
+            storage: storageChoices.filter((s) => s.mode === "rw").map((s) => s.storage_id).join(", "),
+          })}</Alert>
+        </div>
+      )}
       {Array.isArray(toolsOverride) ? (
         <div style={{ marginTop: 12 }}>
           <Alert tone="warn">
@@ -176,6 +206,13 @@ export function ProposalView({
                 kb → {kb.kb_id}
                 {kb.name ? ` (${kb.name})` : ""}
                 {b.resources?.kb_gateway ? ` · via ${b.resources.kb_gateway.gateway_id}` : ""}
+              </li>
+            ))}
+            {Object.entries(boundStorage).map(([id, st]) => (
+              <li key={`storage-${id}`}>
+                storage · {id} → {st.access_point_arn} · {st.mode}
+                {st.data_class ? ` · ${st.data_class}` : ""}
+                {st.network_profile_id ? ` · ${t("v3.assistant.storage.network", { profile: st.network_profile_id })}` : ""}
               </li>
             ))}
             <li>
@@ -268,14 +305,8 @@ export function ProposalEditor({
     set(key, has ? draft[key].filter((x) => x !== value) : [...draft[key], value]);
   };
   const bad = (k: string) => (errors[k] ? t("v2.assistant.fieldInvalid") : null);
-  // loads the platform's model defaults: a switch to Bedrock re-seeds the configured
-  // assistant model (and re-renders once it arrives)
-  useModelDefaults();
-  const models = MODEL_CATALOG[draft.model_source];
-  const suggested = withCurrentModel(
-    models.map((m) => m.model_id),
-    draft.model_source === "bedrock" ? proposalDefaultModel("bedrock") : null,
-  );
+  useModelCatalog(); // the account catalog joins the suggestions once it lands
+  const models = modelOptionsFor(draft.model_source);
   const memoryModes: AssistantMemoryMode[] = ["disabled", "workspace"];
   const check = (on: boolean, disabled: boolean, label: string, onToggle: () => void, testId?: string, title?: string) => (
     <label key={label} className={`v2-check${disabled ? " disabled" : ""}`} title={title}>
@@ -313,8 +344,8 @@ export function ProposalEditor({
             data-testid="v2-assistant-edit-model"
           />
           <datalist id="v2-assistant-models">
-            {suggested.map((id) => (
-              <option key={id} value={id}>{models.find((m) => m.model_id === id)?.label ?? id}</option>
+            {models.map((m) => (
+              <option key={m.model_id} value={m.model_id}>{m.label}</option>
             ))}
           </datalist>
         </Field>

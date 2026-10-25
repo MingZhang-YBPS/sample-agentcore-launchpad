@@ -190,6 +190,8 @@ BASE=http://127.0.0.1:8000
 | 6b | Traces | `uv run python scripts/e2e_traces.py` | the just-chatted session's span tree appears in `aws/spans` | 2–4 min |
 | 7 | Managed KB | `PYTHONPATH=. uv run python scripts/e2e_knowledge_base.py` | KB created, docs uploaded, data source `AVAILABLE`, ingestion `COMPLETE`, playground answers cite the docs. **Prints `KB_ID=…` and does NOT clean up — delete that KB yourself** | 8–12 min |
 | 8 | Evaluation | `uv run python scripts/e2e_eval_run.py --base $BASE` | 3-item dataset, Correctness + Helpfulness scores return, insights run produces a failure/intent excerpt | 6–10 min |
+| 9 | Agent-DLC gate | `uv run python scripts/e2e_agent_dlc.py --base $BASE` | three identities; criteria signed by someone other than its author; holdout sealed; a redeploy lands on `candidate` while `live` keeps serving; gate PASS over both splits read from the candidate's own telemetry; sign moves `live`, rollback moves it back; annotation link labels blind. Restores the release policy and deletes everything it made. **Refuses a prod-tier workspace** | 25–40 min |
+| 9b | Agent-DLC console | `uv run python scripts/e2e_agent_dlc_browser.py --ui $UI --lang zh-CN` | all nine `?view=` sub-pages render their tab with no console error and no 5xx; the dead-token annotate page shows the opaque "gone" state. Screenshots land in `--out` | 2–3 min |
 
 Steps 6 and 6b default to `http://localhost:8000` when `--base` is omitted — correct on this
 box, and part of why the whole tier is run *on* the box.

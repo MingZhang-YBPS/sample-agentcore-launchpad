@@ -1,28 +1,12 @@
 import { useTranslation } from "react-i18next";
+import { useModelCatalog } from "../../lib/model-catalog";
+import {
+  BACKEND_LABELS,
+  isOpenAiJudge,
+  skillLabJudgeSuggestions,
+  skillLabTargetSuggestions,
+} from "../../lib/skillLab";
 import type { SkillLabJudgeMode, SkillLabStatus, SkillLabTargetBackend } from "../../lib/api";
-
-/** Upstream studio's fixed backend labels — the values are API contract. */
-const BACKEND_LABELS: Record<SkillLabTargetBackend, string> = {
-  claude_code_exec: "claude_code_exec — Claude Code CLI",
-  codex_exec: "codex_exec — Codex CLI",
-};
-
-/**
- * Judge suggestions are Converse inference-profile ids (`us.`/`global.`
- * prefixed) — the bedrock_chat judge calls Converse directly, and bare model
- * ids like `openai.gpt-6-sol` are rejected with "use an inference profile".
- * The agentic judge routes by family: openai.* → host codex CLI, else claude.
- */
-const JUDGE_MODEL_SUGGESTIONS = [
-  "us.openai.gpt-6-sol",
-  "global.anthropic.claude-opus-5-5",
-  "us.openai.gpt-5.6-sol",
-  "global.anthropic.claude-opus-5",
-  "us.anthropic.claude-sonnet-5",
-];
-
-/** Mirrors backend runner.judge_exec_route's family test. */
-const isOpenAiJudge = (model: string) => /^((us|eu|apac|global)\.)?openai\./.test(model);
 
 function defaultFor(status: SkillLabStatus | null, backend: SkillLabTargetBackend): string {
   if (status === null) return "";
@@ -61,6 +45,7 @@ export function BackendModelFields({
   setJudgeMode: (m: SkillLabJudgeMode) => void;
 }) {
   const { t } = useTranslation();
+  useModelCatalog(); // the account catalog joins the suggestions once it lands
   const backends = status?.target_backends?.length
     ? status.target_backends
     : (Object.keys(BACKEND_LABELS) as SkillLabTargetBackend[]);
@@ -114,9 +99,15 @@ export function BackendModelFields({
           <input
             className="input mono"
             value={targetModel}
+            list={`${idPrefix}-target-models`}
             data-testid={`${idPrefix}-param-targetModel`}
             onChange={(e) => setTargetModel(e.target.value)}
           />
+          <datalist id={`${idPrefix}-target-models`}>
+            {skillLabTargetSuggestions(status, backend).map((model) => (
+              <option key={model} value={model} />
+            ))}
+          </datalist>
           <span className="mono dim" style={{ fontSize: 10.5 }}>
             {t(
               backend === "codex_exec"
@@ -135,7 +126,7 @@ export function BackendModelFields({
             onChange={(e) => setJudgeModel(e.target.value)}
           />
           <datalist id="skill-lab-judge-models">
-            {JUDGE_MODEL_SUGGESTIONS.map((model) => (
+            {skillLabJudgeSuggestions(status).map((model) => (
               <option key={model} value={model} />
             ))}
           </datalist>

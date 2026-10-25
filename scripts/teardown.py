@@ -6,27 +6,34 @@ Scope (reverse creation order, dependents before the shared substrate):
      COA context layer's managed gateway), then the gateways themselves (matched
      by gateway name; they reference the Cognito pool and the IAM roles that go
      with the stack)
-  2. Credential providers launchpad-office-facts-key (API key) and
+  2. Cedar Policy Engines Launchpad created for those gateways (tagged
+     managed-by agentcore-launchpad, and attached to one of them or described
+     as "Policy Engine managed from Launchpad for <gateway>"), policies first.
+     Policy names are unique across the account and Region, so a leftover
+     engine's policies would block the next deployment's identically named ones
+  3. Credential providers launchpad-office-facts-key (API key) and
      launchpad-gw-m2m (OAuth2), matched by exact name
-  2b. Console workload identities launchpad-console-* (the COA context layer's
+  3b. Console workload identities launchpad-console-* (the COA context layer's
      token-vault identity, one per workspace; the Connection it used is a
      Connection like any other and is deleted from the console)
-  3. Per-agent IAM roles: launchpad-agent-* carrying the launchpad:agent-id
+  4. Per-agent IAM roles: launchpad-agent-* carrying the launchpad:agent-id
      tag. Every per-agent role is tagged at creation, so this matches the roles
      of agents you have not deleted yet as well as the orphans a failed agent
      deletion leaves behind — delete demo agents first. The stack-owned
-     launchpad-agent-execution-role is never matched
-  4. AgentCore memory  (launchpad_memory-*)
-  5. AgentCore registry (launchpad-registry) — records must be gone first
-  6. Skill Lab exec worker (launchpad_skill_lab_worker runtime + its IAM role);
+     launchpad-agent-execution-role is never matched, nor is a role whose
+     policies name another Region (IAM is account-global; that role serves
+     another deployment's agent)
+  5. AgentCore memory  (launchpad_memory-*)
+  6. AgentCore registry (launchpad-registry) — records must be gone first
+  7. Skill Lab exec worker (launchpad_skill_lab_worker runtime + its IAM role);
      its image tags and the skill-lab/ S3 prefix live in stack-owned ECR/S3
-  6b. Coding runtime (launchpad_coding_runtime runtime + its IAM role, runtime
-     first); its image tags and the coding/ project snapshots live in
+  7b. Coding runtime (launchpad_coding_runtime runtime + its IAM role, runtime
+     first); its image tags and the coding/ repo snapshots live in
      stack-owned ECR/S3
-  7. CDK stack launchpad-base (S3 bucket auto-empties, ECR force-deletes)
+  8. CDK stack launchpad-base (S3 bucket auto-empties, ECR force-deletes)
 
-Out of scope: X-Ray Transaction Search (account-wide, shared observability),
-the Policy engine, and deployed agent runtimes — delete demo agents from the
+Out of scope: X-Ray Transaction Search (account-wide, shared observability)
+and deployed agent runtimes — delete demo agents from the
 console/API first.
 
 Usage:
@@ -35,9 +42,11 @@ Usage:
 """
 
 import argparse
+import json
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +73,13 @@ GATEWAY_NAMES = (GATEWAY_NAME, KB_GATEWAY_NAME, COA_GATEWAY_NAME)
 # of the listing before trying anyway, and how many ConflictException retries.
 GATEWAY_TARGETS_GONE_TIMEOUT_S = 90
 GATEWAY_DELETE_ATTEMPTS = 5
+
+# The description governance.py gives every Policy Engine it creates, so an engine
+# a previous deployment left behind (its gateway already gone) is still found.
+ENGINE_DESCRIPTION_PREFIX = "Policy Engine managed from Launchpad for "
+# How long an engine delete waits for its (already-deleted) policies to drop out.
+ENGINE_POLICIES_GONE_TIMEOUT_S = 120
+ENGINE_DELETE_ATTEMPTS = 5
 
 
 def _list_credential_providers(control, list_op: str) -> list[dict]:
@@ -96,6 +112,33 @@ def _gateway_targets(control) -> list[tuple[str, str, str]]:
             )
     for gw in gateways:
         targets.append(("gateway", gw["gatewayId"], f"gateway {gw['name']}"))
+    return targets
+
+
+def _policy_engine_targets(control) -> list[tuple[str, str, str]]:
+    """Launchpad-created Policy Engines of the stack gateways — attached ones and
+    the leftovers of an earlier deployment of the same gateways. An engine must
+    carry Launchpad's managed tags; an engine someone else created is never
+    matched, even when it is attached to launchpad-gw."""
+    attached: set[str] = set()
+    for gw in policy_api.list_gateways(control):
+        if gw.get("name") not in GATEWAY_NAMES:
+            continue
+        detail = policy_api.get_gateway(control, gw["gatewayId"])
+        arn = (detail.get("policyEngineConfiguration") or {}).get("arn")
+        if arn:
+            attached.add(arn)
+    described = {f"{ENGINE_DESCRIPTION_PREFIX}{name}" for name in GATEWAY_NAMES}
+    targets: list[tuple[str, str, str]] = []
+    for engine in policy_api.list_policy_engines(control):
+        arn = engine.get("policyEngineArn", "")
+        if arn not in attached and engine.get("description") not in described:
+            continue
+        if not policy_api.is_managed(policy_api.list_tags(control, arn)):
+            continue
+        targets.append(
+            ("policy-engine", engine["policyEngineId"], f"policy engine {engine.get('name', '?')}")
+        )
     return targets
 
 
@@ -141,13 +184,50 @@ def _console_workload_targets(control) -> list[tuple[str, str, str]]:
         kwargs = {"maxResults": 20, "nextToken": token}
 
 
-def _agent_role_targets(iam) -> list[tuple[str, str, str]]:
+def _role_region(iam, role_name: str) -> str | None:
+    """The Region a per-agent role serves, read from its own inline policies: every
+    capability policy carries the `Telemetry` statement on
+    `arn:<partition>:logs:<region>:…:/aws/bedrock-agentcore/runtimes/*`. None when
+    no policy names one (an orphan whose policies a half-failed delete removed)."""
+    try:
+        names = iam.list_role_policies(RoleName=role_name).get("PolicyNames", [])
+    except Exception:  # noqa: BLE001 — unreadable: treated like an orphan
+        return None
+    for policy_name in names:
+        try:
+            document = iam.get_role_policy(
+                RoleName=role_name, PolicyName=policy_name
+            ).get("PolicyDocument", {})
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(document, str):  # boto3 decodes it; a raw client may not
+            try:
+                document = json.loads(urllib.parse.unquote(document))
+            except ValueError:
+                continue
+        for statement in document.get("Statement", []) or []:
+            resources = statement.get("Resource", [])
+            for arn in [resources] if isinstance(resources, str) else resources:
+                parts = str(arn).split(":")
+                if (len(parts) > 6 and parts[2] == "logs"
+                        and "/aws/bedrock-agentcore/runtimes/" in str(arn)):
+                    return parts[3]
+    return None
+
+
+def _agent_role_targets(iam, region: str | None = None) -> list[tuple[str, str, str]]:
     """Per-agent execution roles: `launchpad-agent-*` **and** tagged
     `launchpad:agent-id`. Both are required — the tag alone is what separates
     them from the stack-owned shared execution role, which is skipped by name
     as well (its name is regional: `launchpad-agent-execution-role[-<region>]`).
     agent_iam tags every role it creates, so live agents' roles match too; the
     orphans of failed agent deletions are the ones nothing else will ever sweep.
+
+    IAM is account-global, but a teardown removes ONE Region's deployment: a role
+    whose policies name another Region belongs to another deployment's agent
+    (live 2026-10-20: a us-west-2 teardown deleted the role of a us-east-1 agent,
+    which then failed every invoke with "The execution role cannot be assumed"),
+    so it is skipped. A role naming no Region is an orphan and is still swept.
     """
     targets: list[tuple[str, str, str]] = []
     # `PathPrefix` does not filter by name, so walk every page and filter here.
@@ -165,6 +245,10 @@ def _agent_role_targets(iam) -> list[tuple[str, str, str]]:
             )
             if agent_id is None:
                 continue
+            role_region = _role_region(iam, name) if region else None
+            if role_region and role_region != region:
+                print(f"  skip {name}: serves an agent in {role_region}, not {region}")
+                continue
             desc = f"per-agent execution role ({agent_iam.MANAGED_TAG_KEY}={agent_id})"
             targets.append(("agent-role", name, desc))
     return targets
@@ -181,9 +265,10 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
     # pool and gateway/KB roles that belong to the stack), then the credential
     # providers the gateway targets and harnesses used, then per-agent roles.
     targets.extend(_gateway_targets(control))
+    targets.extend(_policy_engine_targets(control))
     targets.extend(_credential_provider_targets(control))
     targets.extend(_console_workload_targets(control))
-    targets.extend(_agent_role_targets(iam))
+    targets.extend(_agent_role_targets(iam, region))
 
     memories = control.list_memories(maxResults=100).get("memories", [])
     for mem in memories:
@@ -294,6 +379,29 @@ def _delete_gateway(control, gateway_id: str) -> None:
             time.sleep(5)  # nosemgrep: arbitrary-sleep
 
 
+def _delete_policy_engine(control, engine_id: str) -> None:
+    """Policies first (the engine refuses to go while it holds any), then the
+    engine, retrying while the gateway that used it is still detaching."""
+    for policy in policy_api.list_policies(control, engine_id):
+        policy_api.delete_policy(control, engine_id=engine_id, policy_id=policy["policyId"])
+    deadline = time.time() + ENGINE_POLICIES_GONE_TIMEOUT_S
+    while policy_api.list_policies(control, engine_id):
+        if time.time() >= deadline:
+            print(f"  warning: engine {engine_id} still lists policies; deleting anyway")
+            break
+        time.sleep(3)  # nosemgrep: arbitrary-sleep
+    for attempt in range(1, ENGINE_DELETE_ATTEMPTS + 1):
+        try:
+            control.delete_policy_engine(policyEngineId=engine_id)
+            return
+        except Exception as exc:
+            conflict = "ConflictException" in f"{type(exc).__name__}{exc}"
+            if not conflict or attempt == ENGINE_DELETE_ATTEMPTS:
+                raise
+            print(f"  engine {engine_id} busy ({attempt}/{ENGINE_DELETE_ATTEMPTS}), retrying…")
+            time.sleep(5)  # nosemgrep: arbitrary-sleep
+
+
 def delete_target(kind: str, identifier: str, region: str) -> None:
     control = bs._client("bedrock-agentcore-control", region)
     if kind == "gateway-target":
@@ -301,6 +409,8 @@ def delete_target(kind: str, identifier: str, region: str) -> None:
         control.delete_gateway_target(gatewayIdentifier=gateway_id, targetId=target_id)
     elif kind == "gateway":
         _delete_gateway(control, identifier)
+    elif kind == "policy-engine":
+        _delete_policy_engine(control, identifier)
     elif kind == "api-key-provider":
         control.delete_api_key_credential_provider(name=identifier)
     elif kind == "oauth2-provider":

@@ -16,20 +16,29 @@ DIGEST = "sha256:" + "a" * 64
 class StubEcr:
     """Returns a scripted sequence of describe_image_scan_findings responses."""
 
-    def __init__(self, responses, images=None, raises=None):
+    def __init__(self, responses, images=None, raises=None, raise_first=0):
         self._responses = list(responses)
         self._images = images
         self._raises = raises
+        self._raise_first = raise_first  # raise `raises` this many times, then respond
         self.calls = 0
 
     def describe_image_scan_findings(self, **kwargs):
         self.calls += 1
-        if self._raises:
+        if self._raises and (not self._raise_first or self.calls <= self._raise_first):
             raise self._raises
         return self._responses.pop(0) if len(self._responses) > 1 else self._responses[0]
 
     def describe_images(self, **kwargs):
         return self._images
+
+
+class ScanNotFound(Exception):
+    """Shaped like botocore's ClientError for ECR's ScanNotFoundException."""
+
+    def __init__(self):
+        super().__init__("ScanNotFoundException: Image scan does not exist for the image")
+        self.response = {"Error": {"Code": "ScanNotFoundException"}}
 
 
 def _findings(status, counts=None, description=""):
@@ -96,11 +105,40 @@ class TestWaitForScan:
         with pytest.raises(ecr.ScanUnavailable, match="unexpected"):
             ecr.wait_for_scan(client, REPO, DIGEST, sleeper=lambda _: None)
 
-    def test_an_api_error_is_surfaced_as_unavailable(self):
-        """Scanning not enabled on the registry lands here — and must not read as
-        a passed gate."""
-        client = StubEcr([], raises=RuntimeError("ScanNotFoundException"))
+    def test_a_scan_not_yet_registered_after_push_is_polled_not_skipped(self):
+        """Regression: right after the push ECR has no scan record yet; the gate
+        used to read that as "unavailable" and deploy the image unscanned."""
+        client = StubEcr(
+            [_findings("IN_PROGRESS"), _findings("COMPLETE", {"CRITICAL": 1})],
+            raises=ScanNotFound(),
+            raise_first=2,
+        )
+        seen = []
+        counts = ecr.wait_for_scan(
+            client, REPO, DIGEST, sleeper=lambda _: None, on_status=seen.append
+        )
+        assert counts == {"CRITICAL": 1}
+        assert seen == ["NOT_STARTED", "IN_PROGRESS", "COMPLETE"]
+        assert client.calls == 4
+
+    def test_pending_status_is_polled(self):
+        client = StubEcr([_findings("PENDING"), _findings("COMPLETE", {})])
+        assert ecr.wait_for_scan(client, REPO, DIGEST, sleeper=lambda _: None) == {}
+
+    def test_a_scan_that_never_appears_is_unavailable_after_the_grace(self):
+        """Scan-on-push off: the record never appears, so after the grace the gate
+        reports unavailable rather than polling until the full timeout."""
+        client = StubEcr([], raises=ScanNotFound())
         with pytest.raises(ecr.ScanUnavailable, match="ScanNotFoundException"):
+            ecr.wait_for_scan(
+                client, REPO, DIGEST, sleeper=lambda _: None, not_found_grace_s=-1
+            )
+
+    def test_an_api_error_is_surfaced_as_unavailable(self):
+        """Any other read failure lands here at once — and must not read as a
+        passed gate."""
+        client = StubEcr([], raises=RuntimeError("AccessDeniedException"))
+        with pytest.raises(ecr.ScanUnavailable, match="AccessDeniedException"):
             ecr.wait_for_scan(client, REPO, DIGEST, sleeper=lambda _: None)
 
 

@@ -174,7 +174,8 @@ def test_route_resolves_the_agent_log_group(client, monkeypatch):
     # the cap stops the listing at two
     assert len(body["streams"]) == 2 and body["truncated"] is True
 
-    assert client.get("/api/eval/agents/nope/log-streams").status_code == 400
+    missing = client.get("/api/eval/agents/nope/log-streams")
+    assert missing.status_code == 404 and missing.json()["code"] == "agent.not_found"
 
 
 # ─── CloudWatch-only sources ────────────────────────────────────────────────

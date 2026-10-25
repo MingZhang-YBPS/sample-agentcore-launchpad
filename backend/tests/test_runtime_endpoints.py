@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.errors import AppError
 from app.services import aws_clients
 from app.services.agentcore import gateway as gw
 from app.services.agentcore import runtime as rt
@@ -50,6 +51,8 @@ def test_endpoint_wrappers_call_expected_methods_with_kwargs():
     assert [c[0] for c in stub.calls] == ["create", "update", "get", "delete"]
     assert stub.calls[0][1] == {
         "agentRuntimeId": "rt-1", "name": "stable", "agentRuntimeVersion": "3",
+        # cost tags of the current project — none here, so shared (cost-tags §1.1)
+        "tags": {"launchpad:project": "shared", "launchpad:managed-by": "launchpad"},
     }
     assert stub.calls[1][1] == {
         "agentRuntimeId": "rt-1", "endpointName": "stable", "agentRuntimeVersion": "4",
@@ -328,11 +331,14 @@ def test_invoke_runtime_text_free_form_error_key_still_raises():
     ],
 )
 def test_stream_runtime_events_ignores_converse_bookkeeping_events(payload, wrapped):
-    # Converse stream events without text must not be dumped as JSON.
+    # Converse stream events without text must not be dumped as JSON — and a turn
+    # made of nothing else ends with a named error instead of a blank reply (§16).
     body = json.dumps({"event": payload} if wrapped else payload)
     stub = StubDataPlane(f"data: {body}\n\n".encode(), content_type="text/event-stream")
 
-    assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == []
+    with pytest.raises(AppError) as err:
+        list(rt.stream_runtime_events(stub, "arn:rt-1", "hi"))
+    assert err.value.code == "runtime.unrecognized_reply"
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
@@ -354,6 +360,7 @@ def test_stream_runtime_events_preserves_converse_text_and_tools(wrapped):
     assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == [
         {"event": "tool", "data": {"name": "search", "id": "t1"}},
         {"event": "delta", "data": {"text": "hello"}},
+        {"event": "usage", "data": {"input_tokens": 1, "total_tokens": 1, "model_calls": 1}},
     ]
     assert rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"] == "hello"
 

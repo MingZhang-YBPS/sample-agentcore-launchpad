@@ -20,7 +20,7 @@ import time
 import uuid
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 AGENT_NAME = "eval-target"
 LOOKBACK_HOURS = 24
@@ -131,10 +131,8 @@ def main() -> int:
     # ── 2. traffic + time-window evaluators run (with the custom judge) ─────
     print("── [2] seeding window traffic: 3 invokes …", flush=True)
     for i, scenario in enumerate(GT_SCENARIOS, 1):
-        res = client.post(f"/api/agents/{agent['id']}/invoke",
-                          json={"prompt": scenario["turns"][0]["input"]})
-        res.raise_for_status()
-        print(f"  invoke {i}: {res.json()['text'][:40]!r}", flush=True)
+        turn = chat_sse(client, agent["id"], scenario["turns"][0]["input"])
+        print(f"  invoke {i}: {turn['text'][:40]!r}", flush=True)
     print("  waiting 120s for traces to land in CloudWatch …", flush=True)
     # CloudWatch trace delivery is asynchronous; this fixed wait is test setup.
     time.sleep(120)  # nosemgrep: arbitrary-sleep
@@ -240,7 +238,10 @@ def main() -> int:
     res = client.delete(f"/api/eval/datasets/cloud/{cloud['dataset_id']}")
     print(f"  cloud dataset {cloud['dataset_id']}: "
           f"{'deleted' if res.status_code == 200 else res.text}", flush=True)
-    print(f"  local dataset {ds['id']} kept as demo material", flush=True)
+    # every run makes a fresh-named set: keeping them piled one up per run
+    res = client.delete(f"/api/eval/datasets/{ds['id']}")
+    print(f"  local dataset {ds['id']}: "
+          f"{'deleted' if res.status_code == 200 else res.text}", flush=True)
 
     print("E2E EVAL EXTENDED: PASS")
     return 0

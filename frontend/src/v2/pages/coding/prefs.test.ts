@@ -21,7 +21,7 @@ function fakeStorage(): Storage {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("composer prefs", () => {
-  it("round-trips per project", () => {
+  it("round-trips per repo", () => {
     vi.stubGlobal("window", { localStorage: fakeStorage() });
     savePrefs("p1", { model: "m1", effort: "high" });
     expect(loadPrefs("p1")).toEqual({ model: "m1", effort: "high" });
@@ -53,9 +53,9 @@ describe("composer prefs", () => {
 });
 
 describe("agentNameFrom", () => {
-  it("slugifies a project name into a valid Agent name", () => {
+  it("slugifies a repo name into a valid Agent name", () => {
     for (const [name, want] of [
-      ["My Coding Project", "my-coding-project"],
+      ["My Coding Repo", "my-coding-repo"],
       ["  hello__world!! ", "hello-world"],
       ["42 answers", "answers"],
       ["ab", "coding-ab"],

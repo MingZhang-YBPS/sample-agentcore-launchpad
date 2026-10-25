@@ -1,30 +1,20 @@
-"""Platform model settings: the roles, console overrides, and a tiny probe.
+"""Platform model settings: roles, console overrides, the account catalog, probes.
 
-Every model the platform itself calls or pre-selects is a ``Settings`` field (env
-``LAUNCHPAD_<FIELD>``, or ``launchpad.yaml``), and a *role* here. An administrator
-can override a role on the console's Models page; the override is a
-``platform_settings`` ledger row. Precedence: console > env > launchpad.yaml >
-built-in default.
-
-How an override reaches the consumers — which all read ``get_settings().<field>``
-per call: this module keeps a process-wide snapshot of the ledger's overrides and
-registers a hook with ``app.core.config`` that applies it to **every** freshly
-built ``Settings``. ``get_settings.cache_clear()`` is called at runtime (the price
-refresher, default-workspace resource writes), and without the hook each clear
-would silently revert every override to env / yaml / default. The snapshot is
-loaded from the ledger at startup (``load_overrides``) and replaced on every set
-or clear, which also updates the cached ``Settings`` in place, so a write takes
-effect without a restart.
-
-The backend runs as one uvicorn process per box, and each box has its own ledger,
-so overrides are per deployment (prod and prod2 each keep their own).
+Every model the platform calls or pre-selects is a ``Settings`` field (env
+``LAUNCHPAD_<FIELD>``). An administrator can override one on the console's Models
+page; the override is a ``platform_settings`` ledger row and is applied to the
+process's cached ``Settings`` object, so every consumer — which reads
+``get_settings().<field>`` per call — follows it without a restart. Precedence:
+console > env > launchpad.yaml > built-in default. The backend runs as one uvicorn
+process; overrides are (re)applied at startup and on every write.
 """
 
 from __future__ import annotations
 
+import os
 import re
-import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -32,39 +22,44 @@ from typing import Any, Literal
 from botocore.config import Config
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings, register_settings_hook
+from app.core.config import Settings, get_settings, load_yaml_config
 from app.core.errors import AppError
 from app.models.platform_settings import PlatformSetting
 from app.services.workspace import WorkspaceContext
 
-ProbeCheck = Literal["converse", "tool_use"]
-# The model-id shape the platform accepts elsewhere (assistant proposals, eval plans).
+Probe = Literal["converse", "judge", "actor"]
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{2,120}$")
-_GEO_PREFIXES = frozenset({"global", "us", "eu", "apac", "jp", "au", "ca"})
 
 
 @dataclass(frozen=True)
 class Role:
     field: str
-    # Model families the feature can drive (None = any): the Claude Agent SDK /
-    # Claude Code CLI paths take Claude only, codex takes OpenAI only.
+    probe: Probe = "converse"
+    # model families a feature can drive (None = any): the Claude Agent SDK / Claude
+    # Code CLI paths take Claude only, codex takes OpenAI only
     families: tuple[str, ...] | None = None
     allow_empty: bool = False  # "" is a valid value (judge fallback = none)
-    # The role runs an agent / tool loop, so its model must accept Converse toolConfig.
+    # the role runs an agent / tool loop, so its model must accept Converse toolConfig
     needs_tools: bool = False
+
+    @property
+    def env(self) -> str:
+        return f"LAUNCHPAD_{self.field.upper()}"
 
 
 ROLES: tuple[Role, ...] = (
-    Role("agent_default_model_id", needs_tools=True),
-    Role("claude_sdk_model_id", families=("anthropic",), needs_tools=True),
-    Role("judge_model_id"),
-    Role("judge_fallback_model_id", allow_empty=True),
+    Role("platform_model_id"),
+    Role("judge_model_id", probe="judge"),
+    Role("judge_fallback_model_id", probe="judge", allow_empty=True),
     Role("assistant_model_id", needs_tools=True),
     Role("architect_model_id", needs_tools=True),
-    Role("actor_model_id", needs_tools=True),
-    Role("studio_fallback_model_id", needs_tools=True),
+    Role("assistant_digest_model_id", allow_empty=True),
+    Role("agent_default_model_id", needs_tools=True),
+    Role("actor_model_id", probe="actor", needs_tools=True),
     Role("codegen_model", families=("anthropic",)),
     Role("prompt_opt_default_model_id"),
+    Role("studio_fallback_model_id", needs_tools=True),
+    Role("claude_sdk_model_id", families=("anthropic",)),
     # openai.* runs on the host codex CLI, everything else on the claude CLI
     Role("skill_lab_judge_model_id", families=("openai", "anthropic")),
     Role("skill_lab_target_model_id", families=("anthropic",)),
@@ -72,15 +67,20 @@ ROLES: tuple[Role, ...] = (
 )
 ROLE_BY_FIELD = {r.field: r for r in ROLES}
 # Bedrock models measured to refuse toolConfig ("This model doesn't support tool
-# use", us-east-1 + us-west-2, 2026-10-12): fine for plain Converse roles, never
-# for a role that runs tools.
+# use", us-east-1 + us-west-2, 2026-10-12): fine for plain Converse roles (platform,
+# judge, prompt optimisation), never for a role that runs tools.
 NO_TOOL_USE = re.compile(r"(^|\.)deepseek\.r1")
+
+
+def supports_tools(model_id: str) -> bool | None:
+    """False when the model is known to refuse tool use; None = unknown (probe it)."""
+    return False if NO_TOOL_USE.search(model_id) else None
 
 
 def role(field: str) -> Role:
     found = ROLE_BY_FIELD.get(field)
     if found is None:
-        raise AppError("models.unknown_role", f"unknown model role {field!r}",
+        raise AppError("models.unknown_role", f"unknown model setting {field!r}",
                        status_code=404)
     return found
 
@@ -88,16 +88,9 @@ def role(field: str) -> Role:
 def model_family(model_id: str) -> str:
     """``anthropic`` for ``global.anthropic.x`` / ``anthropic.x`` and so on."""
     parts = model_id.split(".")
-    if len(parts) >= 3 and parts[0] in _GEO_PREFIXES:
+    if len(parts) >= 3 and parts[0] in {"global", "us", "eu", "apac", "jp", "au", "ca"}:
         return parts[1]
     return parts[0] if len(parts) >= 2 else ""
-
-
-def validate_model_id(model_id: str) -> str:
-    value = (model_id or "").strip()
-    if not MODEL_ID_RE.match(value):
-        raise AppError("models.invalid_id", f"{value!r} is not a Bedrock model id")
-    return value
 
 
 def validate(r: Role, model_id: str) -> str:
@@ -106,8 +99,9 @@ def validate(r: Role, model_id: str) -> str:
         if r.allow_empty:
             return ""
         raise AppError("models.empty", f"{r.field} needs a model id")
-    validate_model_id(value)
-    if r.needs_tools and NO_TOOL_USE.search(value):
+    if not MODEL_ID_RE.match(value):
+        raise AppError("models.invalid_id", f"{value!r} is not a Bedrock model id")
+    if r.needs_tools and supports_tools(value) is False:
         raise AppError("models.no_tool_use",
                        f"{r.field} runs tools, and {value!r} does not support tool use")
     if r.families and model_family(value) not in r.families:
@@ -119,70 +113,7 @@ def validate(r: Role, model_id: str) -> str:
     return value
 
 
-# ── the override snapshot + the get_settings hook ───────────────────────────
-
-_LOCK = threading.RLock()
-_overrides: dict[str, str] = {}
-# The role values of one Settings object BEFORE any override was put on it, i.e.
-# what env / launchpad.yaml / the defaults resolve to: what a reset returns to.
-_baseline: tuple[Settings | None, dict[str, Any]] = (None, {})
-
-
-def _record_baseline(settings: Settings) -> dict[str, Any]:
-    global _baseline
-    _baseline = (settings, {r.field: getattr(settings, r.field) for r in ROLES})
-    return _baseline[1]
-
-
-def _baseline_of(settings: Settings) -> dict[str, Any]:
-    # Every in-place application goes through here first, so an object without a
-    # recorded baseline (cached before this module registered its hook) carries no
-    # override yet and its current values ARE the baseline.
-    global _baseline
-    owner, values = _baseline
-    if owner is settings:
-        return values
-    if owner is None:
-        return _record_baseline(settings)
-    # A sibling: two threads missed the cleared cache at once, both builds went
-    # through the hook (the last one recorded the baseline), and lru_cache kept the
-    # other. Its overridden fields already carry the override, so their baseline is
-    # the sibling's — built from the same env / yaml — not their current value
-    # (which would make a reset a no-op and report the override as the default).
-    current = {r.field: getattr(settings, r.field) for r in ROLES}
-    for field in _overrides:
-        current[field] = values[field]
-    _baseline = (settings, current)
-    return current
-
-
-def _apply_snapshot(settings: Settings) -> None:
-    """The ``get_settings`` hook: a freshly built Settings gets the overrides."""
-    with _LOCK:
-        _record_baseline(settings)
-        for field, value in _overrides.items():
-            setattr(settings, field, value)
-
-
-register_settings_hook(_apply_snapshot)
-
-
-def _sync(new: dict[str, str]) -> None:
-    """Replace the snapshot and bring the cached Settings in line, in place."""
-    global _overrides
-    with _LOCK:
-        if get_settings.cache_info().currsize == 0:
-            # Cold cache: the next build applies the snapshot through the hook.
-            # Building one here would bake in whatever env happens to be set now.
-            _overrides = dict(new)
-            return
-        settings = get_settings()
-        baseline = _baseline_of(settings)
-        for field in _overrides.keys() - new.keys():
-            setattr(settings, field, baseline[field])
-        for field, value in new.items():
-            setattr(settings, field, value)
-        _overrides = dict(new)
+# ── overrides ───────────────────────────────────────────────────────────────
 
 
 def _rows(db: Session) -> dict[str, PlatformSetting]:
@@ -194,49 +125,67 @@ def _rows(db: Session) -> dict[str, PlatformSetting]:
     }
 
 
-def load_overrides(db: Session) -> None:
-    """(Re)load the snapshot from the ledger — at startup, after ``init_db``."""
-    _sync({key: row.value for key, row in _rows(db).items()})
+def _baseline() -> Settings:
+    """Settings as env / launchpad.yaml / defaults resolve them — no console layer."""
+    return Settings()
 
 
-def reset_overrides() -> None:
-    """Drop the in-process snapshot (tests; the ledger is not touched)."""
-    _sync({})
+def apply_overrides(db: Session) -> None:
+    """Put the ledger's console overrides onto the process's cached Settings. Roles
+    without a row are left alone (env / launchpad.yaml / default already hold)."""
+    settings = get_settings()
+    for key, row in _rows(db).items():
+        setattr(settings, key, row.value)
 
 
-def overrides() -> dict[str, str]:
-    with _LOCK:
-        return dict(_overrides)
+def _source(r: Role, rows: dict[str, PlatformSetting]) -> str:
+    if r.field in rows:
+        return "console"
+    if r.env in {k.upper() for k in os.environ}:
+        return "env"
+    if r.field in load_yaml_config_live():
+        return "config"
+    return "default"
 
 
-# ── reads + writes ──────────────────────────────────────────────────────────
+def load_yaml_config_live() -> dict[str, Any]:
+    from app.core import config
+
+    return load_yaml_config(config.CONFIG_FILE)
 
 
-def effective(db: Session) -> list[dict[str, Any]]:
-    """Every role: its effective model, what a reset returns to, and who overrode it."""
-    rows = _rows(db)
-    with _LOCK:
-        settings = get_settings()
-        baseline = _baseline_of(settings)
-        out = []
-        for r in ROLES:
-            row = rows.get(r.field)
-            out.append({
-                "role": r.field,
-                "model_id": str(getattr(settings, r.field) or "").strip(),
-                "default": str(baseline[r.field] or "").strip(),
-                "overridden": row is not None,
-                "constraint": list(r.families) if r.families else None,
-                "allow_empty": r.allow_empty,
-                "needs_tools": r.needs_tools,
-                "updated_by": row.updated_by if row is not None else None,
-                "updated_at": row.updated_at.isoformat() if row is not None else None,
-            })
+def _env_value(r: Role) -> str | None:
+    for key, value in os.environ.items():
+        if key.upper() == r.env:
+            return value
+    return None
+
+
+def role_rows(db: Session) -> list[dict[str, Any]]:
+    settings, rows = get_settings(), _rows(db)
+    out = []
+    for r in ROLES:
+        row = rows.get(r.field)
+        out.append({
+            "field": r.field,
+            "env": r.env,
+            "value": str(getattr(settings, r.field) or ""),
+            "default": str(Settings.model_fields[r.field].default or ""),
+            "env_value": _env_value(r),
+            "console_value": row.value if row is not None else None,
+            "source": _source(r, rows),
+            "probe": r.probe,
+            "families": list(r.families) if r.families else None,
+            "allow_empty": r.allow_empty,
+            "needs_tools": r.needs_tools,
+            "updated_by": row.updated_by if row is not None else None,
+            "updated_at": row.updated_at.isoformat() if row is not None else None,
+        })
     return out
 
 
-def _one(db: Session, field: str) -> dict[str, Any]:
-    return next(item for item in effective(db) if item["role"] == field)
+def role_row(db: Session, field: str) -> dict[str, Any]:
+    return next(row for row in role_rows(db) if row["field"] == field)
 
 
 def set_override(db: Session, field: str, model_id: str, actor: str) -> dict[str, Any]:
@@ -248,8 +197,8 @@ def set_override(db: Session, field: str, model_id: str, actor: str) -> dict[str
         db.add(row)
     row.value, row.updated_by, row.updated_at = value, actor[:64], datetime.now(UTC)
     db.commit()
-    load_overrides(db)
-    return _one(db, r.field)
+    apply_overrides(db)
+    return role_row(db, r.field)
 
 
 def clear_override(db: Session, field: str) -> dict[str, Any]:
@@ -258,53 +207,154 @@ def clear_override(db: Session, field: str) -> dict[str, Any]:
     if row is not None:
         db.delete(row)
         db.commit()
-    load_overrides(db)
-    return _one(db, r.field)
+    # back to what env / launchpad.yaml / the default say for this one field
+    setattr(get_settings(), r.field, getattr(_baseline(), r.field))
+    return role_row(db, r.field)
 
 
-# ── probe ───────────────────────────────────────────────────────────────────
+def effective_defaults() -> dict[str, str]:
+    """The effective value of every role (what /api/models/defaults serves)."""
+    settings = get_settings()
+    return {r.field: str(getattr(settings, r.field) or "").strip() for r in ROLES}
+
+
+# ── the account's catalog ───────────────────────────────────────────────────
+
+_CATALOG_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+CATALOG_TTL_S = 600.0
+# non-chat models listing TEXT output or carrying a profile we never offer
+_NOT_CHAT = re.compile(r"embed|rerank|stable-|stability\.|pegasus|marengo|sonic|"
+                       r"voxtral|palmyra-vision|upscale", re.I)
+
+
+def _short_cfg() -> Config:
+    return Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2})
+
+
+def catalog(ctx: WorkspaceContext, *, force: bool = False) -> dict[str, Any]:
+    """Text models offered in the workspace Region: inference profiles (system
+    defined) plus on-demand foundation models. Offered is not entitled — a model
+    can still be refused at invoke; the probe tells."""
+    key = (ctx.account_id or "", ctx.region)
+    hit = _CATALOG_CACHE.get(key)
+    if hit and not force and time.monotonic() - hit[0] < CATALOG_TTL_S:
+        return hit[1]
+    models: dict[str, dict[str, Any]] = {}
+    try:
+        client = ctx.client("bedrock", cache_token="model-catalog", config=_short_cfg())
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"maxResults": 1000, "typeEquals": "SYSTEM_DEFINED"}
+            if token:
+                kwargs["nextToken"] = token
+            resp = client.list_inference_profiles(**kwargs)
+            for p in resp.get("inferenceProfileSummaries") or []:
+                pid = p.get("inferenceProfileId") or ""
+                if pid and not _NOT_CHAT.search(pid) and p.get("status", "ACTIVE") == "ACTIVE":
+                    models[pid] = {"model_id": pid, "provider": model_family(pid),
+                                   "name": p.get("inferenceProfileName") or pid,
+                                   "kind": "inference_profile",
+                                   "tool_use": supports_tools(pid)}
+            token = resp.get("nextToken")
+            if not token:
+                break
+        resp = client.list_foundation_models(byOutputModality="TEXT")
+        for m in resp.get("modelSummaries") or []:
+            mid = m.get("modelId") or ""
+            if (not mid or _NOT_CHAT.search(mid)
+                    or "ON_DEMAND" not in (m.get("inferenceTypesSupported") or [])
+                    or (m.get("modelLifecycle") or {}).get("status") == "LEGACY"):
+                continue
+            models.setdefault(mid, {"model_id": mid, "provider": model_family(mid),
+                                    "name": m.get("modelName") or mid,
+                                    "kind": "foundation_model",
+                                    "tool_use": supports_tools(mid)})
+    except Exception as exc:  # the UI falls back to its static lists
+        return {"region": ctx.region, "models": [], "error": _short_error(exc)}
+    out = {"region": ctx.region,
+           "models": sorted(models.values(), key=lambda m: (m["provider"], m["model_id"]))}
+    _CATALOG_CACHE[key] = (time.monotonic(), out)
+    return out
+
+
+# ── probes ──────────────────────────────────────────────────────────────────
 
 _PROBE_TOOL = {"toolSpec": {
     "name": "reply", "description": "Send the reply.",
     "inputSchema": {"json": {"type": "object", "properties": {"message": {"type": "string"}},
                              "required": ["message"]}}}}
+PROBE_EVALUATOR_PREFIX = "zz_probe_"
 
 
-def _short_cfg() -> Config:
-    return Config(connect_timeout=5, read_timeout=30, retries={"max_attempts": 1})
+def _short_error(exc: BaseException) -> str:
+    error = (getattr(exc, "response", None) or {}).get("Error") or {}
+    code, message = error.get("Code"), error.get("Message")
+    text = f"{code}: {message}" if code else f"{type(exc).__name__}: {exc}"
+    return text[:300]
 
 
-def probe(model_id: str, check: ProbeCheck, workspace: WorkspaceContext) -> dict[str, Any]:
-    """One small real Converse call in ``workspace`` — plain, or carrying a tool
-    definition (``tool_use``) — reporting OK or the AWS error. Read-only: nothing is
-    created in the account."""
-    value = validate_model_id(model_id)
-    if check not in ("converse", "tool_use"):
-        raise AppError("models.invalid_check", f"unknown probe check {check!r}")
-    kwargs: dict[str, Any] = {
-        "modelId": value,
-        "messages": [{"role": "user", "content": [{"text": "Reply with OK."}]}],
-        # 16, not less: GPT-6 refuses a max_output_tokens below 16
-        "inferenceConfig": {"maxTokens": 16},
-    }
-    if check == "tool_use":
-        kwargs["messages"] = [
-            {"role": "user", "content": [{"text": "Say hi through the reply tool."}]}
-        ]
-        kwargs["inferenceConfig"] = {"maxTokens": 256}
-        kwargs["toolConfig"] = {"tools": [_PROBE_TOOL], "toolChoice": {"auto": {}}}
-    out: dict[str, Any] = {"model_id": value, "check": check, "region": workspace.region}
-    runtime = workspace.client("bedrock-runtime", cache_token="model-probe",
-                               config=_short_cfg())
+def _check(name: str, fn: Any) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        response = runtime.converse(**kwargs)
+        fn()
+        error = None
     except Exception as exc:
-        error = (getattr(exc, "response", None) or {}).get("Error") or {}
-        out.update(ok=False, latency_ms=int((time.monotonic() - started) * 1000),
-                   error_code=str(error.get("Code") or type(exc).__name__),
-                   message=str(error.get("Message") or exc)[:300])
-        return out
-    out.update(ok=True, latency_ms=int((time.monotonic() - started) * 1000),
-               stop_reason=(response or {}).get("stopReason"))
-    return out
+        error = _short_error(exc)
+    return {"name": name, "ok": error is None, "error": error,
+            "latency_ms": int((time.monotonic() - started) * 1000)}
+
+
+def _evaluator_probe(control: Any, model_id: str) -> None:
+    """CreateEvaluator test-calls the judge model; a throwaway zz_probe_ evaluator
+    is created and deleted at once."""
+    created = control.create_evaluator(
+        evaluatorName=f"{PROBE_EVALUATOR_PREFIX}{uuid.uuid4().hex[:10]}",
+        description="Launchpad model probe (deleted immediately)",
+        level="TRACE",
+        evaluatorConfig={"llmAsAJudge": {
+            "instructions": "Rate the response {assistant_turn} given {context}.",
+            "ratingScale": {"numerical": [
+                {"value": 0.0, "label": "Bad", "definition": "Unhelpful."},
+                {"value": 1.0, "label": "Good", "definition": "Helpful."}]},
+            "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": model_id}},
+        }},
+        clientToken=str(uuid.uuid4()),
+    )
+    evaluator_id = created["evaluatorId"]
+    try:
+        control.delete_evaluator(evaluatorId=evaluator_id)
+    except Exception as exc:
+        raise RuntimeError(f"the model was accepted, but deleting probe evaluator "
+                           f"{evaluator_id} failed ({_short_error(exc)}) — delete it by hand"
+                           ) from exc
+
+
+def probe(ctx: WorkspaceContext, field: str, model_id: str) -> dict[str, Any]:
+    """A real tiny Converse call (plus forced tool choice for the actor, plus the
+    AgentCore evaluator acceptance for a judge) in the workspace Region."""
+    r = role(field)
+    value = validate(r, model_id)
+    if not value:
+        return {"ok": True, "model_id": "", "region": ctx.region, "checks": []}
+    runtime = ctx.client("bedrock-runtime", cache_token="model-probe", config=_short_cfg())
+    checks = [_check("converse", lambda: runtime.converse(
+        modelId=value, messages=[{"role": "user", "content": [{"text": "Reply with OK."}]}],
+        inferenceConfig={"maxTokens": 16}))]
+    if r.needs_tools and r.probe != "actor":
+        checks.append(_check("tool_use", lambda: runtime.converse(
+            modelId=value,
+            messages=[{"role": "user", "content": [{"text": "Say hi through the tool."}]}],
+            inferenceConfig={"maxTokens": 256}, toolConfig={"tools": [_PROBE_TOOL]})))
+    if r.probe == "actor":
+        checks.append(_check("tool_choice", lambda: runtime.converse(
+            modelId=value,
+            messages=[{"role": "user", "content": [{"text": "Say hi through the tool."}]}],
+            inferenceConfig={"maxTokens": 256},
+            toolConfig={"tools": [_PROBE_TOOL], "toolChoice": {"any": {}}})))
+    if r.probe == "judge":
+        from app.services.agentcore.client import control_client
+
+        control = control_client(ctx)
+        checks.append(_check("evaluator", lambda: _evaluator_probe(control, value)))
+    return {"ok": all(c["ok"] for c in checks), "model_id": value, "region": ctx.region,
+            "checks": checks}

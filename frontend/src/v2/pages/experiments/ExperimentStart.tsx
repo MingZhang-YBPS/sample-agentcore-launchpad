@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, errorMessage } from "../../../lib/api";
+import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import {
   ACTIVE_RUN_STATUSES,
   DEFAULT_EVALUATORS,
@@ -165,7 +166,8 @@ export function ExperimentStart({ hasRunning }: { hasRunning: boolean }) {
     setBaselineBusy(true);
     setRunError(null);
     try {
-      const r = await api.createEvaluationRun({ agent_id: agentId, dataset_id: baselineDataset, evaluators: DEFAULT_EVALUATORS });
+      const r = await withStorageConfirm((confirm) =>
+        api.createEvaluationRun({ agent_id: agentId, dataset_id: baselineDataset, evaluators: DEFAULT_EVALUATORS, ...storageFlag(confirm) }));
       setRun(r);
       setUrl({ agent: agentId, baselineRun: r.id, sourceRun: null });
     } catch (err) {

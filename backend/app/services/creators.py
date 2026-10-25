@@ -5,8 +5,9 @@ Every in-scope resource records its creating console principal the way API keys 
 `created_by_name` its username at creation, display only. A principal without a
 `users` row (the config admin, the auth-disabled local operator) records
 `(None, name)`; a path with no human principal (samples, bootstrap, experiment-owned
-configs) records nothing. Legacy rows and resources created outside the console are
-never backfilled — both fields read NULL.
+configs) records nothing (an AWS-only kind still gets its project ownership row where
+the workspace holds several projects, see `record`). Legacy rows and resources
+created outside the console are never backfilled — both fields read NULL.
 
 Ledger-backed kinds carry the two columns on their own row (`stamp` / `fields`).
 AWS-only kinds — knowledge bases and custom evaluators — keep theirs in the
@@ -17,6 +18,7 @@ The creator is always derived on the server; no request model carries it.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -25,16 +27,22 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.project_scope import ProjectStampError, current_project, project_context
 from app.models.ledger import ResourceCreator
+from app.services import access
 
 if TYPE_CHECKING:
     from fastapi import Request
 
     from app.routers.auth import Identity
 
+logger = logging.getLogger(__name__)
+
 # `resource_creators.kind` values — the AWS-only kinds.
 KB = "knowledge_base"
 EVALUATOR = "evaluator"
+# a registry Agent-skill record: its row is the project that may manage it
+REGISTRY_SKILL = "registry_skill"
 
 
 @dataclass(frozen=True)
@@ -92,17 +100,27 @@ def record(
     resource_id: str,
     creator: Creator | None,
 ) -> None:
-    """Remember who created an AWS-only resource. Idempotent: a row that already
-    exists (a retried create of the same id) is left as is. Commits."""
-    if creator is None or not resource_id:
+    """Remember who created an AWS-only resource — and, since the row is also its
+    project ownership (design §5.5), which project it belongs to (stamped from the
+    current one). Idempotent: a row that already exists (a retried create of the
+    same id), in whichever project, is left as is. Commits.
+
+    With no human principal nothing is recorded in a single-project workspace (no
+    row = the workspace default project, the same owner); where the workspace holds
+    several projects an ownership-only row (both creator fields NULL) is written,
+    so the resource does not fall into the default project."""
+    if not resource_id:
         return
-    existing = db.scalar(
-        select(ResourceCreator).where(
-            ResourceCreator.workspace_id == workspace_id,
-            ResourceCreator.kind == kind,
-            ResourceCreator.resource_id == resource_id,
+    if creator is None and len(access.workspace_bindings(db, workspace_id)) <= 1:
+        return
+    with project_context(None):  # the unique index spans every project
+        existing = db.scalar(
+            select(ResourceCreator.id).where(
+                ResourceCreator.workspace_id == workspace_id,
+                ResourceCreator.kind == kind,
+                ResourceCreator.resource_id == resource_id,
+            )
         )
-    )
     if existing is not None:
         return
     db.add(
@@ -110,8 +128,8 @@ def record(
             workspace_id=workspace_id,
             kind=kind,
             resource_id=resource_id,
-            created_by=creator.user_id,
-            created_by_name=creator.name,
+            created_by=creator.user_id if creator else None,
+            created_by_name=creator.name if creator else None,
         )
     )
     try:
@@ -119,6 +137,60 @@ def record(
     except IntegrityError:
         # a concurrent record of the same id won the unique index — same outcome
         db.rollback()
+    except ProjectStampError:
+        # no project is current and the workspace holds several: the resource reads
+        # as the default project's (no row), never as a request failure
+        db.rollback()
+        logger.warning("%s %s: no project to record its ownership in", kind, resource_id)
+
+
+def outside_current_project(
+    db: Session, workspace_id: str, kind: str, resource_ids: Iterable[str]
+) -> set[str]:
+    """The ids of an AWS-only kind that belong to another project than the current
+    one (design §5.5) — hidden like missing ones, whoever the viewer.
+
+    AWS lists every project's resources, so the ownership rows are read across
+    projects (``project_context(None)``). An id with no row — created outside the
+    console, or before projects — belongs to the workspace default project. Nothing
+    is outside with no current project (workers) or in a single-project workspace."""
+    pid = current_project()
+    ids = [rid for rid in set(resource_ids) if rid]
+    if pid is None or not ids:
+        return set()
+    bindings = access.workspace_bindings(db, workspace_id)
+    if len(bindings) <= 1:
+        return set()
+    default = next((b.project_id for b in bindings if b.is_workspace_default),
+                   bindings[0].project_id)
+    with project_context(None):
+        owners = dict(
+            db.execute(
+                select(ResourceCreator.resource_id, ResourceCreator.project_id).where(
+                    ResourceCreator.workspace_id == workspace_id,
+                    ResourceCreator.kind == kind,
+                    ResourceCreator.resource_id.in_(ids),
+                )
+            ).all()
+        )
+    # a resource another project shared with this one is visible to it (§11.2)
+    from app.services import resource_shares
+
+    shared = resource_shares.received_ids(db, kind, project_id=pid)
+    return {rid for rid in ids if owners.get(rid, default) != pid and rid not in shared}
+
+
+def owner_project(db: Session, workspace_id: str, kind: str, resource_id: str) -> str | None:
+    """The project an AWS-only resource's ownership row names, read across projects;
+    None when there is no row."""
+    with project_context(None):
+        return db.scalar(
+            select(ResourceCreator.project_id).where(
+                ResourceCreator.workspace_id == workspace_id,
+                ResourceCreator.kind == kind,
+                ResourceCreator.resource_id == resource_id,
+            )
+        )
 
 
 def lookup(

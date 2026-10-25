@@ -14,11 +14,15 @@ import {
   toolkitToolNames,
 } from "../../../lib/agent-spec";
 import type { InboundAuth } from "../../../lib/api";
+import { networkProfilesApi } from "../../../lib/api/projects";
+import { mcpStdioArgs } from "../../../lib/mcp-stdio";
 import { inboundCapable, issuerMismatch, jwtSummary, wizardDeployedJwt } from "../../../lib/inbound-auth";
+import { useLoad } from "../../hooks";
 import { Alert, Card, Descriptions } from "../../ui";
 import { InlineKbState } from "./InlineKb";
-import type { InlineKb, InlineKbBlock } from "./inlineKbState";
+import { type InlineKb, inlineKbBlock } from "./useInlineKb";
 import { ReachabilityWarning } from "./InboundAuthFields";
+import { strandsReviewItems, strandsReviewSpec } from "./strandsReview";
 import type { WizardCatalogs, WizardUi } from "./wizardKit";
 
 /** The review step: what will be deployed, per method (read-only). */
@@ -28,7 +32,6 @@ export function WizardReview({
   ui,
   shortTermOff = false,
   inlineKb = null,
-  kbBlock = null,
   workspaceDefault = null,
   cognitoIssuer = null,
 }: {
@@ -39,14 +42,14 @@ export function WizardReview({
   shortTermOff?: boolean;
   /** the knowledge base created inside the wizard, when one is mounted */
   inlineKb?: InlineKb | null;
-  /** why deploy waits for that knowledge base (`submitBlock`), or null */
-  kbBlock?: InlineKbBlock;
   /** the workspace inbound default an unpinned agent inherits */
   workspaceDefault?: InboundAuth | null;
   /** the workspace pool's issuer — what platform invokes present */
   cognitoIssuer?: string | null;
 }) {
   const { t } = useTranslation();
+  // the picked profile's name; a failed read shows its id
+  const profiles = useLoad(() => networkProfilesApi.list(), "v2-agent-review-network-profiles");
   const none = t("v2.agents.wizard.none");
   const list = (items: string[]) => (items.length ? items.join(", ") : none);
   const method = form.method;
@@ -55,23 +58,23 @@ export function WizardReview({
   const skillNames = form.skills.map(
     (p) => cat.skills.find((s) => s.path === p)?.name ?? ui.customSkills.find((c) => c.path === p)?.name ?? skillNameFromPath(p),
   );
-  const kbValue: React.ReactNode = form.selectedKbs.length
-    ? form.selectedKbs.map((id, i) => {
-        const own = id === inlineKb?.kb_id;
-        return (
-          <span key={id} data-testid={own ? "v2-agent-review-inline-kb" : undefined}>
-            {i > 0 && ", "}
-            {own ? inlineKb.name : resolveKb(id, cat.kbCatalog, []).name}
-            {own && (
-              <>
-                {" "}
-                <InlineKbState inline={inlineKb} />
-              </>
-            )}
-          </span>
-        );
-      })
-    : none;
+  const kbValue: React.ReactNode = form.selectedKbs.length ? (
+    form.selectedKbs.map((id, i) => (
+      <span key={id} data-testid={id === inlineKb?.kb_id ? "v2-agent-review-inline-kb" : undefined}>
+        {i > 0 && ", "}
+        {id === inlineKb?.kb_id ? inlineKb.name : resolveKb(id, cat.kbCatalog, []).name}
+        {id === inlineKb?.kb_id && (
+          <>
+            {" "}
+            <InlineKbState inline={inlineKb} />
+          </>
+        )}
+      </span>
+    ))
+  ) : (
+    none
+  );
+  const kbBlock = inlineKbBlock(inlineKb, form.selectedKbs);
   const memory = {
     label: t("v2.agents.wizard.memoryOnly"),
     value: shortTermOff
@@ -87,7 +90,43 @@ export function WizardReview({
   ];
 
   let items: { label: string; value: React.ReactNode }[];
-  if (method === "byoc") {
+  const mcpServer = method === "byoc" && form.protocol === "mcp";
+  if (mcpServer) {
+    const env = Object.keys(byocEnv(form.byocEnvRows));
+    const upload = ui.byocUpload;
+    // the bridge is the entrypoint; the row shows the argv it starts
+    const stdio = form.mcpStdio?.on && form.byocKind === "code_zip" ? form.mcpStdio : null;
+    items = [
+      ...head,
+      { label: t("v2.agents.wizard.mcp.kind"), value: t("v2.agents.wizard.mcp.kindValue") },
+      { label: t("v2.agents.wizard.mcp.targetName"), value: mono(form.mcpTargetName.trim()) },
+      ...(stdio
+        ? [{
+            label: t("mcpServer.stdio.label"),
+            value: (
+              <>
+                {mono([stdio.command.trim(), ...mcpStdioArgs(stdio.args)].join(" "))} · {t(`mcpServer.stdio.baseName.${stdio.base}`)}
+              </>
+            ),
+          }]
+        : []),
+      { label: t("v2.agents.wizard.artifactTitle"), value: t(`create.configure.byocKindName.${form.byocKind}`) },
+      form.byocKind === "container_image"
+        ? { label: t("create.configure.byocImageUri"), value: mono(form.byocImageUri.trim()) }
+        : {
+            label: t("create.configure.byocUpload"),
+            value: upload ? mono(`${upload.original_filename} · sha256 ${upload.sha256.slice(0, 12)}…`) : none,
+          },
+      ...(form.byocKind === "code_zip" && !stdio
+        ? [{
+            label: t("v2.agents.wizard.entryPython"),
+            value: mono(`${form.byocEntrypoint.trim() || "main.py"} · ${pythonLabel(form.byocPython)}`),
+          }]
+        : []),
+      { label: t("create.configure.byocEnv"), value: env.length ? mono(env.join(", ")) : none },
+      { label: t("create.configure.byocDescription"), value: form.byocDescription || none },
+    ];
+  } else if (method === "byoc") {
     const models = byocModelList(form.byocModels);
     const env = Object.keys(byocEnv(form.byocEnvRows));
     const upload = ui.byocUpload;
@@ -185,14 +224,23 @@ export function WizardReview({
     } else if (method === "zip_runtime") {
       const a2a = form.protocol === "a2a";
       const kit = toolkitToolNames(form.toolkits);
+      const strands = strandsReviewSpec(form);
+      // picked Strands tools replace the template's calculator and current_utc_time
+      const base = kit.length ? kit : strands.strands_tools?.length ? [] : ["calculator", "current_utc_time"];
       items = [
         ...head,
         { label: t("v2.agents.protocol"), value: t(`v2.agents.wizard.protocol.${form.protocol}`) },
         ...model,
         {
           label: t("v2.agents.wizard.tools"),
-          value: list([...(kit.length ? kit : ["calculator", "current_utc_time"]), ...(a2a ? [] : form.selectedGateway), ...(managedGatewayAttached(form) ? [t("v2.agents.wizard.managedGateway")] : [])]),
+          value: list([
+            ...base,
+            ...(strands.strands_tools ?? []),
+            ...(a2a ? [] : form.selectedGateway),
+            ...(managedGatewayAttached(form) ? [t("v2.agents.wizard.managedGateway")] : []),
+          ]),
         },
+        ...strandsReviewItems(strands, t),
         ...(a2a
           ? [{ label: t("v2.agents.wizard.a2aSkills"), value: list(form.a2aSkills.filter((s) => s.name.trim()).map((s) => s.name.trim())) }]
           : [{ label: t("v2.agents.wizard.toolkits"), value: list(form.toolkits) }]),
@@ -215,12 +263,26 @@ export function WizardReview({
             efs: form.efsMounts.length,
           }),
         },
-        ...(hasByoMounts(form)
-          ? [{ label: "VPC", value: mono(`${form.vpcSubnets} · ${form.vpcSgs}`) }]
-          : []),
       ];
     }
   }
+
+  // every method deploys into the chosen network profile (projects §12.6); none ⇒ PUBLIC,
+  // except a container's legacy inline subnets (BYO mounts, no profile)
+  const profile = form.networkProfileId ? profiles.data?.profiles.find((p) => p.id === form.networkProfileId) : null;
+  items = [
+    ...items,
+    {
+      label: t("network.title"),
+      value: form.networkProfileId
+        ? profile
+          ? <>{profile.name} · {mono(profile.id)}</>
+          : t("v2.agents.wizard.networkProfile", { id: form.networkProfileId })
+        : method === "container" && hasByoMounts(form)
+          ? mono(`${form.vpcSubnets} · ${form.vpcSgs}`)
+          : t("network.public"),
+    },
+  ];
 
   const inboundShown = inboundCapable(method, form.protocol) && !!form.inbound;
   const deployedJwt = inboundShown ? wizardDeployedJwt(form.inbound, form.inboundJwt, workspaceDefault) : null;
@@ -243,7 +305,11 @@ export function WizardReview({
   }
 
   return (
-    <Card title={t("v2.agents.wizard.reviewTitle")} sub={t(`v2.agents.wizard.reviewSubBy.${method}`)} testId="v2-agent-review">
+    <Card
+      title={t("v2.agents.wizard.reviewTitle")}
+      sub={t(mcpServer ? "v2.agents.wizard.mcp.reviewSub" : `v2.agents.wizard.reviewSubBy.${method}`)}
+      testId="v2-agent-review"
+    >
       <Descriptions items={items} />
       {mismatch && <ReachabilityWarning mismatch={mismatch} testId="v2-agent-review-issuer-warning" />}
       {method !== "byoc" && (
@@ -253,10 +319,11 @@ export function WizardReview({
         </>
       )}
       <div className="v2-agents-foot">
-        {kbBlock === "busy" && <Alert tone="warn">{t("v2.agents.wizard.inlineKb.busyBlock")}</Alert>}
         {kbBlock === "waiting" && <Alert tone="warn">{t("v2.agents.wizard.inlineKb.waitActive")}</Alert>}
         {kbBlock === "failed" && <Alert tone="error">{t("v2.agents.wizard.inlineKb.failedBlock")}</Alert>}
-        {inlineKb && kbBlock === null && <Alert>{t("v2.agents.wizard.inlineKb.note")}</Alert>}
+        {inlineKb && kbBlock === null && form.selectedKbs.includes(inlineKb.kb_id) && (
+          <Alert>{t("v2.agents.wizard.inlineKb.note")}</Alert>
+        )}
         <Alert>{t("v2.agents.wizard.deployNote")}</Alert>
       </div>
     </Card>

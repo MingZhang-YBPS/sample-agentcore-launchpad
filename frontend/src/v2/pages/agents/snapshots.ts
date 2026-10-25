@@ -1,10 +1,8 @@
 // Pure logic of the agent detail's Snapshots card: change groups and their labels, how
-// one field-level change reads (scalar before/after, list + / −, an elided long body),
-// which rows offer Roll back, the two-row compare pick, and the server's notes. Mirrors
+// one field-level change reads (scalar before/after, list + / −), the two-row compare pick, and the server's notes. Mirrors
 // `backend/app/services/snapshots.py` (GROUP_ORDER, _ATOMIC, BODY_LIMIT) so vitest
 // covers it without a DOM.
-import type { SnapshotState, SpecChange, SpecChangeGroup, SpecSnapshotInfo } from "../../../lib/api";
-import type { TagTone } from "../../ui";
+import type { SpecChange, SpecChangeGroup, SpecSnapshotInfo } from "../../../lib/api";
 
 /** Display order of the change groups (the backend's GROUP_ORDER, then "other"). */
 export const SNAPSHOT_GROUPS: SpecChangeGroup[] = [
@@ -36,17 +34,6 @@ export function groupChanges(changes: SpecChange[]): { group: SpecChangeGroup; c
   return SNAPSHOT_GROUPS.filter((g) => by.has(g)).map((group) => ({ group, changes: by.get(group) ?? [] }));
 }
 
-export const SNAPSHOT_TONE: Record<SnapshotState, TagTone> = {
-  deployed: "green",
-  deploying: "blue",
-  failed: "red",
-  not_deployed: "gray",
-};
-
-export function snapshotStateKey(state: SnapshotState): string {
-  return `v2.agents.snapshots.state.${state}`;
-}
-
 /** A before / after value as text: strings verbatim, structures as indented JSON. */
 export function valueText(value: unknown): string {
   if (value === null || value === undefined) return "—";
@@ -66,29 +53,16 @@ export function itemText(item: unknown): string {
 export type SideView =
   /** the field is not set on this side (an `added` change's before, a `removed` one's after) */
   | { kind: "absent" }
-  /** a whole-compared body over the backend's 2 KB limit: only its length came back */
-  | { kind: "elided"; length: number }
   | { kind: "text"; text: string };
 
 export type ChangeView =
   | { kind: "list"; removed: string[]; added: string[] }
   | { kind: "values"; before: SideView; after: SideView };
 
-function isLengthStub(value: unknown): value is { length: number } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
-    typeof (value as { length?: unknown }).length === "number"
-  );
-}
-
 function side(change: SpecChange, which: "before" | "after"): SideView {
   const absent = which === "before" ? change.kind === "added" : change.kind === "removed";
   if (absent) return { kind: "absent" };
   const value = change[which];
-  if (change.elided && isLengthStub(value)) return { kind: "elided", length: value.length };
   return { kind: "text", text: valueText(value) };
 }
 
@@ -119,13 +93,6 @@ export function changeView(change: SpecChange): ChangeView {
   return { kind: "values", before: side(change, "before"), after: side(change, "after") };
 }
 
-/** Whole-compared string fields whose full text the card can fetch when elided. */
-const FULL_TEXT_FIELDS = new Set(["system_prompt", "code"]);
-
-export function canShowFull(change: SpecChange): boolean {
-  return change.elided === true && FULL_TEXT_FIELDS.has(change.path);
-}
-
 /** The value at a dotted spec path; undefined when any step is missing. */
 export function valueAtPath(spec: Record<string, unknown> | null | undefined, path: string): unknown {
   let node: unknown = spec;
@@ -139,12 +106,6 @@ export function valueAtPath(spec: Record<string, unknown> | null | undefined, pa
 /** The newest snapshot's seq (the configuration the agent holds now); null when none. */
 export function newestSeq(rows: Pick<SpecSnapshotInfo, "seq">[]): number | null {
   return rows.length ? Math.max(...rows.map((r) => r.seq)) : null;
-}
-
-/** A row offers Roll back when it deployed successfully and is not the newest (the
- *  newest is what the agent already holds — or, after a failed publish, what failed). */
-export function rollbackable(row: Pick<SpecSnapshotInfo, "seq" | "deployed">, newest: number | null): boolean {
-  return row.deployed && row.seq !== newest;
 }
 
 /** Tick / untick a row; at most two stay picked (a third pick drops the oldest pick). */

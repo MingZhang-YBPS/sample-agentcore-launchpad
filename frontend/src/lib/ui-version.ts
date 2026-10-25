@@ -1,12 +1,12 @@
 import { useSyncExternalStore } from "react";
 
-// Which console experience the operator chose: console V2 (the default) or the
-// original console (v1). Both ship side by side and render the same modules: in
-// V2 the classic routes (/chat, /agents, …) keep their URLs but render inside the
-// V2 shell, next to the native V2 pages under /v2. The choice is a per-browser
-// convenience: only an explicit "back to classic" (a stored "v1") opts out, so a
-// blocked or empty storage means V2.
-export type UiVersion = "v1" | "v2";
+// Which console experience the operator chose: the redesigned console V3 (the
+// default, under /v3), console V2, or the original console (v1). All ship side by
+// side and render the same modules: in V2 / V3 the classic routes (/chat, /agents,
+// …) keep their URLs but render inside that console's shell. The choice is a
+// per-browser convenience: only an explicit "back to V2" (a stored "v2") or "back
+// to classic" (a stored "v1") opts out, so a blocked or empty storage means V3.
+export type UiVersion = "v1" | "v2" | "v3";
 
 const KEY = "launchpad_ui_version";
 
@@ -16,9 +16,11 @@ let current: UiVersion = read();
 
 function read(): UiVersion {
   try {
-    return localStorage.getItem(KEY) === "v1" ? "v1" : "v2";
+    const stored = localStorage.getItem(KEY);
+    // V3 is the default: only an explicit choice of V2 or classic stays there
+    return stored === "v1" ? "v1" : stored === "v2" ? "v2" : "v3";
   } catch {
-    return "v2";
+    return "v3";
   }
 }
 

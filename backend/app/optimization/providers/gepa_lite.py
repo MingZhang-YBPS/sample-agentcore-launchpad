@@ -301,10 +301,12 @@ class GepaLiteProvider:
     supports = ("system_prompt", "tool_descriptions")
 
     def models(self) -> list[dict[str, str]]:
-        return [
-            {"model_id": m, "label": registry.label_for_model_id(m)}
-            for m in get_settings().prompt_opt_models
-        ]
+        # the configured default leads, even when an operator switched it to a model
+        # the list does not carry (e.g. GLM in an account without Claude)
+        settings = get_settings()
+        ids = list(dict.fromkeys([settings.prompt_opt_default_model_id,
+                                  *settings.prompt_opt_models]))
+        return [{"model_id": m, "label": registry.label_for_model_id(m)} for m in ids if m]
 
     def default_model_id(self) -> str | None:
         return get_settings().prompt_opt_default_model_id

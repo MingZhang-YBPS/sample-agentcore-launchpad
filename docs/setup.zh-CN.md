@@ -10,7 +10,7 @@ English: [setup.md](setup.md)
   无需开启预览
 - 具备管理员级别权限的凭证(`aws sts get-caller-identity` 可用)
 - `uv` ≥ 0.8、Node.js ≥ 20(`npm`)、AWS CDK CLI v2(`npm i -g aws-cdk`)、
-  Docker(支持 ARM64,第 5 阶段容器路径需要)
+  Docker(支持 ARM64,第 5 阶段容器路径需要；也可用 [finch](https://github.com/runfinch/finch)，见下文)
 - 每个账号/区域执行一次 CDK bootstrap:`cdk bootstrap aws://<account>/us-west-2`
 
 ## 引导(Bootstrap)
@@ -115,6 +115,17 @@ HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默�
 上述值也可写入 `config/launchpad.yaml` 的 `auth_username`、`auth_password`、
 `auth_cookie_secure`,遵循常规配置优先级;密码建议放在进程环境变量中。修改凭证并
 重启后端会使已有会话失效。
+
+#### 单点登录（OIDC）
+
+登录门开启后，管理员可以在**配置 → 单点登录**中添加 OpenID Connect 身份提供方（Keycloak、Authentik、Okta、Entra ID、Google 或任意 OIDC IdP）；每个已启用的提供方在登录页上有一个按钮。本地登录表单仍然可用，内置管理员始终可以用本地方式登录，作为应急入口。部署时要注意两项设置：
+
+- **`public_base_url`**（`LAUNCHPAD_PUBLIC_BASE_URL`）必须是浏览器看到的控制台地址（参考部署中为 CloudFront 地址），因为在 IdP 登记的回调地址由它拼出：`<public_base_url>/api/auth/oidc/<provider-id>/callback`。提供方页面会显示要复制的准确值。该值不对时，IdP 会拒绝回跳。
+- **客户端密钥的加密密钥。** 客户端密钥以 Fernet 加密保存。生产环境请在后端的环境变量（见下文 systemd 单元）中把 `LAUNCHPAD_SSO_SECRET_KEY` 设为一个 Fernet 密钥（`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`）。未设置时，后端在首次使用时于 SQLite 账本旁创建 `data/sso-secret.key`（权限 0600）。请把该文件与账本一起备份：丢失后已保存的密钥无法读取，每个提供方的密钥都要重新填写。以 Secrets Manager ARN 给出的密钥用 hub 的凭证读取，不在本地加密。
+
+SSO 账户没有本地密码：控制台中不能重置或修改它的密码。它的全局角色与项目成员资格在每次登录时按提供方的组映射更新；管理员手工做的修改优先。
+
+分步配置指南：[IAM Identity Center（SAML 2.0）](sso-identity-center.zh-CN.md)、[Keycloak（OIDC 或 SAML 2.0）](sso-keycloak.zh-CN.md)。
 
 ### 角色:成员能做什么
 
@@ -372,6 +383,12 @@ export LAUNCHPAD_STUDIO_EXEC_BACKEND=docker   # 或在 launchpad.yaml 里写 stu
 `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true`(显式设为 `false` 仍然是总开关)。
 前提:后端用户能访问 docker daemon(`docker` 组),且已用上面的脚本构建镜像。
 
+没有 Docker？所有容器调用（本后端、`setup_exec_docker.sh`、`local_container_smoke.sh`、
+`e2e_docker_exec.py`）在 PATH 上有 `docker` 时用它，否则用 `finch`；设置
+`LAUNCHPAD_CONTAINER_CLI`（或 launchpad.yaml 里的 `container_cli:`）可固定其一。finch 的
+虚拟机只共享 `$HOME`，所以代码检出要放在其下（或把它的 `data/` 加进
+`~/.finch/finch.yaml` 的 `additional_directories`）；`--harden-net` 仍仅支持 docker。
+
 有一道边界**不是**白来的:EC2 上 IMDS hop limit ≥ 2 时(这些机器的默认值),默认
 bridge 网络里的容器仍能访问实例元数据服务 —— 这也正是依赖 ambient 凭证的 Bedrock 路径无需 API key
 就能工作的原因。要得到真正无凭证的沙箱:
@@ -496,8 +513,10 @@ Studio 代码生成的回退模型）从 `GET /api/model-defaults` 取预选值�
 
 登录网关开启后,登录页同时提供**注册**:填写用户名、**公司邮箱**和密码提交申请。
 默认情况下新账户处于 **`pending`(待审批)**,必须由管理员审批通过后才能登录,
-**7 天有效期从审批时开始计算**。上面配置的内置 admin 不入库,因此永远不会被锁在
-控制台之外。
+**7 天有效期从审批时开始计算**。管理员也可以在**用户管理 → 新增用户**直接创建账号
+(立即生效,任意角色,包括管理员)。上面配置的内置 admin 没有 `users` 行;如果在控制台
+修改了它的密码(顶栏钥匙图标「修改密码」),配置的 `auth_password` 将失效,直到用
+`cd backend && uv run python scripts/reset_admin_password.py` 清除覆盖值(应急恢复)。
 
 公共/临时邮箱域名(Gmail、QQ、163、Outlook、mailinator 等)会被拒绝。相关配置:
 
@@ -516,7 +535,165 @@ admin 账号会看到**用户管理**模块(`/users`):审批队列(「待审批�
 到期与禁用在每次请求时校验,账户会**立即**失去控制台访问权限,无需等待会话
 Cookie 过期。
 
-## 生产部署
+## Agent-DLC：打开放行门
+
+设计见 [agent-dlc-design.zh-CN.md](agent-dlc-design.zh-CN.md)，这里是操作顺序。以下步骤**不会自动发生**：
+在管理员打开之前，工作区保持原有行为（`release_mode: direct`，部署直接进生产）。
+
+1. **把工作区切换为门控**。「判据 → 放行门 → *放行策略*」（管理员），或
+   `PUT /api/release-policies/{workspace_id}` 传 `{"release_mode": "gated"}`。同一张卡片还设置裁判校准的
+   有效期（`calibration.period_days`、`kappa_floor`）与评估成本闸门（`eval_cost_confirm_usd`、
+   `eval_cost_max_usd`）——闸门是**拒绝**超限的运行，不只是提醒。
+2. **把每个智能体切换到具名端点**。「判据 → 放行门 → *切换到 live / candidate*」（需要 `release.sign`）。
+   在那之前智能体只有一个端点，AWS 每次更新都会自动滚过去，放行门无从拦起。A2A 运行时与系统预置
+   无法门控，界面会说明原因。
+3. **把三项“标准所有权”权限授予具体的人，而不是角色**。「用户」→ 选中成员 → `criteria.sign`（签署标准）、
+   `golden.admit`（准入样本）、`judge.calibrate`（判定裁判一致）。它们刻意不在任何角色的默认权限里：
+   这三项决定“什么叫好”。`criteria.manage`、`waiver.approve` 与 `release.sign` 沿用成员/操作员的常规划分。
+4. **编写并签署判据表**。「判据 → 判据表」。至少一条红线、每个维度有判据或标注 `n/a:<dimension>`、
+   成本与性能用指标、红线不交给大模型裁判——其余情况编辑器会直接拒绝。发布即冻结该版本，再由
+   **作者以外的人**签署。未签署的标准会让每份放行报告都是 INVALID，这正是设计意图。
+5. **一次性编制黄金集**。「判据 → 黄金集 → *初次编制切分*」（`golden.admit`）。这是唯一写入保留集的路径，
+   写完即封存。样本按用例档位分层，使三个切分见到同样的正例 / 反例 / 模糊 / 对抗构成。
+6. **第一次跑放行门之前，先在每个端点上调用一次**。每个 AgentCore 端点写自己的日志组，所以全新的
+   `candidate` 在有流量之前没有任何遥测，放行门会一直等不存在的记录而超时。在候选端点上聊一轮就够了。
+7. **之后循环自己会转**。一次部署落到 `candidate` 并开出放行记录；「判据 → 放行门」对它跑回归集**和**
+   保留集，给出带置信区间的判定，再由第二个人签署——只有这时 `live` 才会移动。回滚即把 `live` 指回去，
+   不删除任何资源。
+
+**裁判只有校准后才拦人。** 裁判类判据在标注任务记录 `aligned` 之前，显示与处理都是 `observe`。
+「判据 → 裁判校准」可以从一次已完成的运行创建标注任务（裁判的判定对标注人隐藏）；在 dev / staging
+工作区还可以给外部专家一个无账号链接（`/r/annotate/<token>`）。**prod** 工作区拒绝发放这种链接——
+那里的标注会接触真实客户会话，请把这个人邀请为成员。
+
+**端到端验证（真实 AWS，自带清理）：**
+
+```bash
+cd backend
+# 三个身份走完整循环：部署 → 切换端点 → 由他人签署判据 → 封存黄金集 → 放行门 → 签署 → 回滚 → 校准
+LAUNCHPAD_E2E_USERNAME=<admin> LAUNCHPAD_E2E_PASSWORD=<pw> \
+  uv run python scripts/e2e_agent_dlc.py --base http://localhost:8000
+# 双语走查九个控制台子页，遇到控制台报错或 5xx 即失败
+uv run python scripts/e2e_agent_dlc_browser.py --ui http://localhost:5173 --lang zh-CN
+```
+
+第一个脚本会拒绝在 `prod` 级工作区运行，并把它改过的放行策略还原。两者都不在 `make verify` 之内
+（需要真实 AWS 凭证和已引导的工作区）。
+
+## 切换模型
+
+除了你构建的 Agent 自己的模型，平台本身也调用模型：给意图起名、生成建议问题、评估打分、扮演模拟用户、提议 Agent、修复 Studio 代码。内置默认值假定账号能在 Bedrock 上调用 OpenAI 与 Anthropic 模型。有的账号不能；这些模型每一个都是可以切换的配置项，既可以在控制台改，也可以在主机上改。
+
+| 环境变量（`launchpad.yaml` 的键 = 去掉 `LAUNCHPAD_` 后的小写名） | 默认值 | 用在哪里 |
+|---|---|---|
+| `LAUNCHPAD_AGENT_DEFAULT_MODEL_ID` | `global.zai.glm-5.3` | 新建 Agent 的默认模型：新建智能体向导预选它，提交时没有 `model_id` 的 spec 也用它。 |
+| `LAUNCHPAD_PLATFORM_MODEL_ID` | `global.anthropic.claude-sonnet-5` | 意图归类与命名（可观测 → 意图视图）以及试聊面板的建议问题。调用失败时，意图视图退回机械归类，面板退回通用问题。 |
+| `LAUNCHPAD_JUDGE_MODEL_ID` | `global.openai.gpt-6-sol` | 自定义与派生 AgentCore 评估器的默认 LLM 评审模型（新建评估器时评审模型字段的默认值）。 |
+| `LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5-5` | AgentCore 的评估器校验拒绝所选评审模型时改用的模型。`""` 表示不回退，直接报出拒绝。 |
+| `LAUNCHPAD_ASSISTANT_MODEL_ID` | `global.openai.gpt-6-sol` | 架构助手提议的 Agent（托管 Harness）的默认模型。 |
+| `LAUNCHPAD_ARCHITECT_MODEL_ID` | `global.openai.gpt-6-astra` | 安装系统架构师 Agent 时使用的模型。只有 OpenAI 模型才预设 `reasoning_effort`，因为只有这一家接受它。 |
+| `LAUNCHPAD_ACTOR_MODEL_ID` | `global.openai.gpt-6-luna` | 人设场景里控制台预选的模拟用户（actor）模型。它必须支持 Converse 的强制工具选择。 |
+| `LAUNCHPAD_STUDIO_FALLBACK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Strands Studio 画布上没有指定模型的节点所用的模型。 |
+| `LAUNCHPAD_PROMPT_OPT_DEFAULT_MODEL_ID` | `global.anthropic.claude-opus-5` | 实验 RECOMMEND 阶段在请求未指定模型时使用的反思模型（见[提示词优化](#提示词优化)）。 |
+| `LAUNCHPAD_PROMPT_OPT_MODELS` | [提示词优化](#提示词优化)里的四个 id | 控制台提供的反思模型清单，JSON 数组（`'["global.zai.glm-5.3","deepseek.v3.2"]'`）。只能用环境变量或 `launchpad.yaml` 设置，模型设置页不编辑这份清单。 |
+| `LAUNCHPAD_CLAUDE_SDK_MODEL_ID` | `global.anthropic.claude-sonnet-5` | Claude Agent SDK（容器）方式的默认模型。**仅限 Claude。** |
+| `LAUNCHPAD_CODEGEN_MODEL` | `global.anthropic.claude-sonnet-5` | Studio 的 AI Fix，运行在 Claude Agent SDK 上（见[代码生成（AI Fix）](#代码生成ai-fix)）。**仅限 Claude。** |
+| `LAUNCHPAD_SKILL_LAB_JUDGE_MODEL_ID` | `us.openai.gpt-6-sol` | Skill Lab 的评审。OpenAI id 走主机上的 `codex` CLI，Claude id 走主机上的 `claude` CLI。**仅限 OpenAI 或 Claude。** |
+| `LAUNCHPAD_SKILL_LAB_TARGET_MODEL_ID` | `global.anthropic.claude-opus-5-5` | Skill Lab 的 `claude_code_exec` 目标。**仅限 Claude。** |
+| `LAUNCHPAD_SKILL_LAB_CODEX_TARGET_MODEL_ID` | `global.openai.gpt-6-sol` | Skill Lab 的 `codex_exec` 目标。**仅限 OpenAI。** |
+
+这些配置项是“接下来新建的东西”的默认值。已有 Agent 保留各自的 `model_id`，已安装的架构师保留它的模型，已有评估器保留创建时的评审模型（下面的脚本可以把它们迁过去）。
+
+### 模型设置页
+
+管理员在控制台里切换：**admin → 配置 → 模型设置**（V3；英文界面为 Configuration → Models）。每个配置项一行，显示当前模型和它的来源（`default` 默认值、`config` 即 `launchpad.yaml`、`env` 环境变量、`console` 控制台）。
+
+1. 在下拉框里选一个模型。下拉框列出账号所在 Region 提供的文本模型（推理配置与按需基础模型）。“提供”不等于“有权调用”，所以：
+2. 点 **测试**，用这个模型做一次真实的、很小的 Converse 调用。两个评审模型行还会跑 AgentCore Evaluations 的接受探测：用这个评审模型建一个临时的 `zz_probe_…` 评估器，再把它删掉。模拟用户（actor）行会检查强制工具选择；其余驱动工具调用的行（新建 Agent 默认、架构助手、架构师、Studio 兜底）会多做一项 `tool_use` 检查。
+3. 点 **保存**，选择写入账本（`platform_settings` 表）并立即作用于正在运行的后端，无需重启。
+4. 点 **恢复默认**，删除控制台上的选择，这一行退回环境变量、`launchpad.yaml` 或默认值。
+
+仅限 Claude、仅限 OpenAI 的行会拒绝其他家族的模型（`models.wrong_family`）。页面背后的接口：`GET /api/models/defaults`（任何成员：控制台预选用的生效值）、`GET /api/models/settings`、`PUT` / `DELETE /api/models/settings/{field}`（管理员）、`GET /api/model-catalog`（成员）、`POST /api/model-probe`（管理员）。
+
+### 脚本：scripts/switch_models.py
+
+控制台还连不上的主机，或想一次设好全部配置项时，用 `scripts/switch_models.py`。它探测账号（同样是真实的 Converse 调用；评审模型另做一次 AgentCore `CreateEvaluator` 测试；actor 检查强制工具选择），每个配置项取第一个能用的候选（依次是当前值、默认值、`--prefer` 指定的 id、内置的备选），把 `LAUNCHPAD_*` 行写进 `/etc/launchpad-models.env`（权限 0600）。仅限 Claude 或仅限 OpenAI 的配置项只尝试该家族的候选；都不能用时报告为 `UNAVAILABLE`，不写进文件。
+
+```bash
+cd <repo>/backend
+# 只探测并打印，什么也不改
+uv run python ../scripts/switch_models.py --region us-east-1 --dry-run
+# 写入 /etc/launchpad-models.env 并重启后端（写 /etc 需要 root）
+sudo "$(command -v uv)" run --no-sync python ../scripts/switch_models.py \
+  --region us-east-1 --prefer global.zai.glm-5.3 --restart
+```
+
+- `--prefer a,b`：在每个配置项的默认值之后紧接着尝试这些 id（家族符合时）。`--roles judge,actor` 只处理部分配置项；`--json` 额外输出机器可读的结果。
+- `--restart`：写完后执行 `systemctl restart launchpad-backend`。不加它就要自己重启后端：环境变量文件只在启动时读取。
+- 脚本会列出控制台创建的、评审模型已经不能用的评估器；加 `--update-evaluators` 会把它们改为选出的评审模型。
+- 在模型设置页保存过的配置项优先于这个文件；脚本会报告它们，但从不修改。要让文件里的值生效，先在页面上点 **恢复默认**。
+- `--env-file <路径>` 写到别处，例如在笔记本上用目标账号的凭证运行时。
+- `--no-sync` 让 root 运行时不去重新同步服务用户拥有的后端 venv。退出码 0 表示每个可切换的配置项都选好了，2 表示有配置项（或评估器更新）找不到能用的模型，1 表示用法、凭证或写文件出错。
+
+2026-10-12 在 us-east-1 实测：AgentCore Evaluations 接受 `global.zai.glm-5.3` 作为评审模型（GPT-6 Sol、Claude Sonnet 5.5、Kimi K3、DeepSeek R1 也接受）。模拟 OpenAI 与 Anthropic 都不可用时，脚本给平台、评审、架构助手、架构师、actor、Studio 兜底和提示词优化默认值都选了 `global.zai.glm-5.3`，评审回退选了 `deepseek.v3.2`，反思清单为 `global.zai.glm-5.3`、`deepseek.v3.2`、`global.moonshotai.kimi-k3`、`moonshotai.kimi-k2.5`，并把 Claude Agent SDK、codegen 和三个 Skill Lab 配置项报告为 `UNAVAILABLE`。
+
+### 实测过的替代模型：DeepSeek 与 Kimi
+
+除了 GLM-5.3，Bedrock 上的 DeepSeek 与 Kimi 模型也可以作为平台配置项的候选。实测探测结果，账号 784675006790，2026-10-12（探测用的评估器事后已全部删除）：
+
+| 模型 | us-east-1 Converse（延迟） | us-west-2 Converse（延迟） | 工具调用（auto / 强制 any / 流式） | 推理块 | AgentCore 评审 | 可用于的配置项 |
+|---|---|---|---|---|---|---|
+| `us.deepseek.r1-v1:0` | 可用 2.1 秒 | 可用 1.7 秒 | 拒绝（“This model doesn't support tool use”） | 有 | 接受 | 平台、评审、评审回退、提示词优化 |
+| `deepseek.v3.2` | 可用 0.6 秒 | 可用 0.7 秒 | 可用 / 可用 / 可用 | 无 | 接受 | 所有不限家族的配置项 |
+| `deepseek.v3-v1:0`（DeepSeek V3.1） | 未提供 | 可用 0.6 秒 | 可用 / 可用 / 可用 | 无 | 接受（us-west-2） | 全部（仅 us-west-2） |
+| `global.moonshotai.kimi-k3` | 可用 2.0 秒 | 可用 2.3 秒 | 可用 / 可用 / 可用 | 有 | 接受 | 全部 |
+| `us.moonshotai.kimi-k3` | 可用 2.8 秒 | 可用 2.1 秒 | 可用 / 可用 / 可用 | 有 | 接受 | 全部 |
+| `moonshotai.kimi-k2.5` | 可用 0.6 秒 | 可用 0.8 秒 | 可用 / 可用 / 可用 | 无 | 接受 | 全部 |
+| `moonshot.kimi-k2-thinking` | 可用 1.2 秒 | 可用 0.9 秒 | 可用 / 可用 / 可用 | 有 | 接受 | 全部 |
+| `global.zai.glm-5.3` | 可用 0.8 秒 | 可用 0.8 秒 | 可用 / 可用 / 可用 | 有 | 接受 | 全部 |
+
+“全部”指所有不限定 Claude 或 OpenAI 的配置项。推理块没有影响：平台只读取响应里的文本块，推理内容会被忽略。
+
+**不支持工具调用的模型不能用于需要工具的配置项。** 新建 Agent 默认、架构助手、架构师、actor 和 Studio 兜底这几个配置项驱动的是会调用工具的 Agent，后端会以 `models.no_tool_use` 拒绝不支持工具调用的模型（例如 DeepSeek R1）。在模型设置页上，这几行的 **测试** 会多做一项 `tool_use` 检查（actor 那一行改为检查强制工具选择）。
+
+**价格**（每百万输入 / 输出 token，Standard 按需，美国东部（弗吉尼亚北部），2026-10-12，已写入后端价格表 `model_prices`）：取自 [Bedrock 价格页](https://aws.amazon.com/bedrock/pricing/)，并与 AWS Price List API 交叉核对：DeepSeek V3.2 $0.62 / $1.85，Kimi K2.5 $0.60 / $3.00，Kimi K2 Thinking $0.60 / $2.50。价格页上没有、取自 Price List API 的：DeepSeek V3.1 $0.58 / $1.68（us-west-2），DeepSeek R1 $1.35 / $5.40，Kimi K3 global $3.00 / $15.00（缓存读 $0.30、缓存写 $3.75），Kimi K3 US 推理配置 $3.30 / $16.50（$0.33 / $4.125）。GPT-6 Sol 两处都没有，按其[模型卡片](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html)定价（短上下文 ≤ 272K）：global 推理配置 $2.00 / $10.00（缓存读 $0.20、缓存写 $2.50），US 推理配置与 Mantle 区域内 $2.20 / $11.00（$0.22 / $2.75），因此默认评审不再显示为未定价。
+
+### 手动设置
+
+把配置行写进 `/etc/launchpad-models.env`（root 所有，权限 0600），并确认后端单元加载这个文件。开头的 `-` 让文件不存在时单元照常启动：
+
+```bash
+sudo install -m 0600 /dev/null /etc/launchpad-models.env   # 仅在文件还不存在时
+sudo tee -a /etc/launchpad-models.env >/dev/null <<'ENV'
+LAUNCHPAD_JUDGE_MODEL_ID=global.zai.glm-5.3
+LAUNCHPAD_PLATFORM_MODEL_ID=global.zai.glm-5.3
+ENV
+systemctl cat launchpad-backend | grep -q launchpad-models.env || {
+  sudo mkdir -p /etc/systemd/system/launchpad-backend.service.d
+  printf '[Service]\nEnvironmentFile=-/etc/launchpad-models.env\n' \
+    | sudo tee /etc/systemd/system/launchpad-backend.service.d/models.conf
+  sudo systemctl daemon-reload
+}
+sudo systemctl restart launchpad-backend
+```
+
+也可以把同样的键（小写）写进 `config/launchpad.yaml`（`judge_model_id: global.zai.glm-5.3`，`prompt_opt_models:` 写成 YAML 列表）后重启。`make bootstrap` 对这个文件做合并，重新引导后这些键仍然保留。
+
+**优先级：** 模型设置页（控制台）> 环境变量（含这个环境变量文件）> `config/launchpad.yaml` > 内置默认值。
+
+### 不能换成其他家族的功能
+
+有些功能被它运行所在的 SDK 或 CLI 绑定在某一个模型家族上。没有 Anthropic 权限的账号里，无论怎么设置，下面这些都不可用：**Claude Agent SDK** 部署方式、**Studio AI Fix**（codegen）、Skill Lab 的 `claude_code_exec` 目标和走 claude CLI 的评审。没有 OpenAI 权限时，Skill Lab 的 `codex_exec` 目标和走 codex 的评审不可用。Skill Lab 评审需要这两家之一。
+
+### 换评审模型会改变分数
+
+LLM 评审的分数是这个模型的判断。换了评审模型之后，评审类判据上的分数、通过率和放行判定与旧评审打出的结果不可比；为旧评审记录的校准（裁判—人 κ）也不能沿用：只在同一个评审模型内比较运行，在依赖评审拦截之前重新做一次标注任务。指标与代码类判据（token 数、延迟、断言）不受影响。
+
+## 托管部署
+
+> 本节说明如何在一台长期运行的主机上运行本示例，用于 workshop 或共享的评估环境。它不是生产部署
+> 指南：本示例未针对生产使用进行加固，基于它运行的任何内容，其安全、测试与运维均由你自行负责。
+> 在面向真实用户或真实数据开放之前，请先与你所在组织的安全和法务团队确认。
 
 `./start.py --prod` 只是本地预览:构建前端、提供构建产物、关闭后端自动重载,并绑定到
 `0.0.0.0`。长期运行的主机应改用进程管理器托管这两个服务,并在前面放一层终结 TLS 的
@@ -540,6 +717,11 @@ Environment=LAUNCHPAD_RUN_MODE=prod
 Environment=LAUNCHPAD_AUTH_USERNAME=admin
 Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
 Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
+# 仅在使用单点登录时：浏览器访问地址与客户端密钥的加密密钥
+Environment=LAUNCHPAD_PUBLIC_BASE_URL=https://<console-host>
+Environment=LAUNCHPAD_SSO_SECRET_KEY=<fernet-key>
+# 可选的模型配置，见“切换模型”；“-”表示文件可以不存在
+EnvironmentFile=-/etc/launchpad-models.env
 ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=on-failure
 ```
@@ -568,13 +750,13 @@ proxy_set_header X-Forwarded-Proto https;   # TLS 在 CloudFront 终结
 由于 TLS 在边缘终结,`LAUNCHPAD_AUTH_COOKIE_SECURE=true` 必须保持开启;纯 HTTP 下
 浏览器会丢弃会话 Cookie。
 
-**3. 更新已有主机。**
+**3. 更新已有主机。** 下面是简要步骤；从旧版本升级（备份、迁移演练、回滚、故障排查）请按 [upgrade.zh-CN.md](upgrade.zh-CN.md) 操作。
 
 ```bash
 (cd backend && uv run python scripts/ledger_backup.py)   # 在线备份并校验；服务运行时不要 cp 台账
-git merge --ff-only origin/main
-cd backend && uv sync && cd ..
-cd frontend && npm run build && cd ..          # 必须:preview 只吃 dist/
+git fetch origin && git merge --ff-only origin/console-v3
+cd backend && uv sync --frozen && cd ..
+cd frontend && npm ci && npm run build && cd ..          # 必须:preview 只吃 dist/
 sudo systemctl restart launchpad-backend launchpad-frontend
 curl -s localhost:8000/api/auth/status          # 预期 auth_required: true
 ```
@@ -583,6 +765,24 @@ curl -s localhost:8000/api/auth/status          # 预期 auth_required: true
 就是开放的 —— 如果不希望任何拿到 URL 的人都能提交申请,请设置
 `LAUNCHPAD_AUTH_REGISTRATION_ENABLED=false` 或用
 `LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS` 限定公司域名。
+
+**4. 在线更新（可选）。** 管理员可以在 **配置 → 系统更新** 页面更新控制台，代替手工执行第 3 步。先以 root 安装一次更新器：
+
+```bash
+sudo backend/scripts/install_updater.sh      # 可用 --user / --services / --health-url 覆盖默认值
+systemctl status launchpad-updater.path      # 预期 active (waiting)
+```
+
+安装脚本把 `backend/scripts/apply_update.sh` 复制到 `/usr/local/lib/launchpad/`（更新不会替换执行它的脚本），写入 `/etc/launchpad-updater.env` 和两个单元：`launchpad-updater.path` 监视 `data/updates/apply.request`，`launchpad-updater.service`（`Type=oneshot`，以 root 运行）负责应用。
+
+页面上的流程：
+
+1. **检查**：比较当前运行的提交和所配置来源的最新提交，只接受快进。来源是部署配置，不是请求参数：`LAUNCHPAD_UPDATE_REPO`（默认 `https://github.com/aws-samples/sample-agentcore-launchpad`）和 `LAUNCHPAD_UPDATE_BRANCH`（默认 `console-v3`）。
+2. **准备更新**：把该提交检出到 `data/updates/stage-<sha>`，并以 `nice 10` 在其中只运行固定命令：`uv sync --frozen`、`npm ci`、`npm run build`，然后做导入自检，再用独立的临时台账在临时端口做启动自检。当前服务不受影响。失败（例如访问不了 npm 源）时更新状态为 `prepare_failed`。后端重启后，准备从最后完成的步骤继续。只保留最近两个暂存目录。
+3. **排期重启**（“立即”即一分钟后，或 7 天内的指定时间）会发布公告。如果重启会中断进行中的任务，页面会列出这些任务，并要求先勾选“我已知晓”。到点后控制台写入 `data/updates/apply.request`。更新器随后在线备份台账（`ledger_backup.py`），快进检出，用重命名换入构建好的 `frontend/dist`，执行 `uv sync --frozen` 并重启服务，然后最多等待 120 秒，直到 `/api/auth/status` 返回的 `version.sha` 等于新提交。健康检查失败时，更新器重置到上一个提交，恢复旧的 `dist`，再次重启，并报告 `rolled_back`。控制台读回结果（`data/updates/apply.result`）并结束公告。
+4. **回滚**：准备上一次更新所替换的提交，再像更新一样排期。
+
+未安装更新器时，页面仍可检查和准备，然后显示手工应用暂存目录的命令。`LAUNCHPAD_UPDATE_ENABLED=false` 关闭整个功能。默认只有安装了更新器的主机才能排期。每一步都以 `system.update.*` 记入平台审计日志。另外两个可调参数：`LAUNCHPAD_UPDATE_MIN_FREE_GB`（默认 3，准备所需的空闲磁盘）和 `LAUNCHPAD_UPDATE_STAGE_MAX_GB`（默认 6，暂存目录大小上限）。
 
 ## 资源清理
 

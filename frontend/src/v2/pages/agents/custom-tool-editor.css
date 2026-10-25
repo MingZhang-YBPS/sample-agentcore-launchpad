@@ -1,0 +1,303 @@
+/* Strands builder SB-3 — custom tools and the sandboxed built-in tools, in the
+ * channel-strip vocabulary of SB-1 / SB-2 (lamps for state, mono for what the
+ * runtime reads, the primary line for signal, warning for what waits on a person,
+ * danger only for what blocks the deploy).
+ *
+ *  · a custom tool is a bench: a numbered head that reads closed (name, where it
+ *    runs, its verdict), and the code on an inverted slab — the page's ink as the
+ *    surface, its card colour as the type — with a line gutter that carries the
+ *    check's marks, so a finding is found by eye before it is read;
+ *  · the sandboxed tools sit in an enclosure: a hatched rail names the Code
+ *    Interpreter they run in, so "never in this runtime" is drawn, not just said.
+ *
+ * No new palette: every colour is a V2 token (re-pointed at V3 when hosted), mixed.
+ */
+
+/* ── the list ──────────────────────────────────────────────────────────── */
+.ct-list { display: grid; gap: 10px; }
+.ct-add {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--v2-primary-line);
+  border-radius: var(--v2-radius-sm);
+  background: none;
+  color: var(--v2-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+.ct-add:hover:not(:disabled) { background: var(--v2-primary-soft); }
+.ct-add:disabled { cursor: not-allowed; opacity: 0.6; }
+.ct-add:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: 1px; }
+.ct-add-when { font-size: 12px; color: var(--v2-ink-3); }
+
+/* ── one bench ─────────────────────────────────────────────────────────── */
+.ct-bench {
+  --ct-signal: var(--v2-line);
+  position: relative;
+  border: 1px solid var(--v2-line);
+  border-radius: var(--v2-radius-sm);
+  background: var(--v2-card);
+  animation: sb-in 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+/* the bench's spine takes the verdict's colour */
+.ct-bench::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--ct-signal);
+  transition: background-color 200ms ease;
+}
+.ct-bench.v-clean,
+.ct-bench.v-approved { --ct-signal: var(--v2-success); }
+.ct-bench.v-review { --ct-signal: var(--v2-warning); }
+.ct-bench.v-syntax,
+.ct-bench.v-error { --ct-signal: var(--v2-danger); border-color: var(--v2-danger-line); }
+.ct-bench.v-checking { --ct-signal: var(--v2-primary-line); }
+
+.ct-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 10px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+.ct-head::-webkit-details-marker { display: none; }
+.ct-head:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: -2px; border-radius: var(--v2-radius-sm); }
+.ct-idx {
+  font-family: var(--v2-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--v2-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.ct-bench[open] .ct-idx { color: var(--v2-primary); }
+.ct-name { font-size: 13.5px; color: var(--v2-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-where {
+  font-size: 11.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--v2-line);
+  color: var(--v2-ink-2);
+  background: var(--v2-fill);
+}
+.ct-where.code_interpreter {
+  border-color: var(--v2-primary-line);
+  color: var(--v2-primary);
+  background: var(--v2-primary-soft);
+}
+.ct-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--v2-mono);
+  font-size: 11.5px;
+  color: var(--v2-ink-3);
+}
+.ct-bench .sb-lamp { flex: none; }
+.ct-bench.v-clean .sb-lamp,
+.ct-bench.v-approved .sb-lamp { background: var(--v2-success); border-color: var(--v2-success); box-shadow: 0 0 0 3px var(--v2-success-soft); }
+.ct-bench.v-review .sb-lamp { background: var(--v2-warning); border-color: var(--v2-warning); box-shadow: 0 0 0 3px var(--v2-warning-soft); }
+.ct-bench.v-syntax .sb-lamp,
+.ct-bench.v-error .sb-lamp { background: var(--v2-danger); border-color: var(--v2-danger); box-shadow: 0 0 0 3px var(--v2-danger-soft); }
+.ct-bench.v-checking .sb-lamp { border-color: var(--v2-primary); animation: ct-pulse 900ms ease-in-out infinite alternate; }
+
+.ct-body { display: grid; gap: 12px; padding: 0 14px 14px 16px; }
+.ct-meta { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
+
+/* ── the slab ──────────────────────────────────────────────────────────── */
+.ct-slab {
+  --ct-surface: var(--v2-ink);
+  --ct-type: var(--v2-card);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  border-radius: var(--v2-radius-sm) var(--v2-radius-sm) 0 0;
+  background: var(--ct-surface);
+  overflow: hidden;
+}
+.ct-gutter {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--ct-type) 6%, var(--ct-surface));
+  border-right: 1px solid color-mix(in srgb, var(--ct-type) 14%, var(--ct-surface));
+  user-select: none;
+}
+.ct-gutter span {
+  position: relative;
+  min-width: 3.4em;
+  padding: 0 10px 0 14px;
+  font-family: var(--v2-mono);
+  font-size: 12.5px;
+  line-height: 20px;
+  text-align: right;
+  color: color-mix(in srgb, var(--ct-type) 38%, var(--ct-surface));
+  font-variant-numeric: tabular-nums;
+}
+/* a mark: a filled tick before the number, the number itself lit */
+.ct-gutter span[class]::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 6px;
+  width: 6px;
+  height: 8px;
+  border-radius: 1px;
+}
+.ct-gutter .m-finding { color: var(--v2-warning); }
+.ct-gutter .m-finding::before { background: var(--v2-warning); }
+.ct-gutter .m-error { color: var(--v2-danger); }
+.ct-gutter .m-error::before { background: var(--v2-danger); }
+.ct-code {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  margin: 0;
+  padding: 10px 14px;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: var(--ct-type);
+  caret-color: var(--v2-primary-hover);
+  font-family: var(--v2-mono);
+  font-size: 12.5px;
+  line-height: 20px;
+  tab-size: 4;
+  white-space: pre;
+  overflow: auto;
+}
+.ct-code::selection { background: color-mix(in srgb, var(--v2-primary) 45%, var(--ct-surface)); }
+.ct-slab:focus-within { box-shadow: 0 0 0 2px var(--v2-primary-line); }
+
+/* the verdict strip closes the slab like the schema editor's foot */
+.ct-verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--v2-line);
+  border-top: 0;
+  border-radius: 0 0 var(--v2-radius-sm) var(--v2-radius-sm);
+  background: var(--v2-fill-2);
+}
+.ct-verdict-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--v2-mono);
+  font-size: 12px;
+  color: var(--v2-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-bench.v-syntax .ct-verdict-text,
+.ct-bench.v-error .ct-verdict-text { color: var(--v2-danger-ink); }
+.ct-bench.v-review .ct-verdict-text { color: var(--v2-warning-ink); }
+.ct-hash { font-size: 11.5px; color: var(--v2-ink-3); }
+
+/* what the model sees */
+.ct-params { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ct-params-label { font-size: 12px; color: var(--v2-ink-3); margin-right: 2px; }
+.ct-type { color: var(--v2-ink-3); margin-left: 4px; }
+.ct-type::before { content: ": "; }
+
+/* the review sheet: one row per finding, its line a button into the slab */
+.ct-findings {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--v2-warning-line);
+  border-radius: var(--v2-radius-sm);
+  background: var(--v2-warning-soft);
+}
+.ct-findings ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ct-findings li { display: grid; grid-template-columns: 52px auto minmax(0, 1fr); gap: 10px; align-items: baseline; font-size: 12.5px; }
+.ct-line {
+  justify-self: start;
+  padding: 1px 6px;
+  border: 1px solid var(--v2-warning-line);
+  border-radius: var(--v2-radius-sm);
+  background: var(--v2-card);
+  color: var(--v2-warning-ink-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.ct-line:disabled { cursor: default; }
+.ct-line:hover:not(:disabled) { border-color: var(--v2-warning); }
+.ct-line:focus-visible { outline: 2px solid var(--v2-primary); }
+.ct-kind { font-size: 11.5px; color: var(--v2-warning-ink-2); white-space: nowrap; }
+.ct-kind.k-dangerous_import,
+.ct-kind.k-call { font-weight: 600; }
+.ct-msg { color: var(--v2-ink); overflow-wrap: anywhere; }
+.ct-approve { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.ct-approve .sb-err { grid-column: 1 / -1; }
+
+/* ── the sandbox enclosure ─────────────────────────────────────────────── */
+.ct-sandbox {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--v2-primary-line);
+  border-radius: var(--v2-radius-sm);
+  overflow: hidden;
+}
+.ct-sandbox.closed { border-color: var(--v2-line); }
+.ct-rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 7px 12px;
+  /* hatching: the boundary between this runtime and the sandbox */
+  background:
+    repeating-linear-gradient(-45deg, transparent 0 6px, color-mix(in srgb, var(--v2-primary) 9%, transparent) 6px 8px),
+    var(--v2-primary-soft);
+  border-bottom: 1px solid var(--v2-primary-line);
+  font-size: 12px;
+  color: var(--v2-ink-2);
+}
+.ct-sandbox.closed .ct-rail {
+  background:
+    repeating-linear-gradient(-45deg, transparent 0 6px, color-mix(in srgb, var(--v2-ink) 6%, transparent) 6px 8px),
+    var(--v2-fill);
+  border-bottom-color: var(--v2-line);
+}
+.ct-rail-name { font-weight: 600; color: var(--v2-ink); font-variation-settings: "wdth" 112; }
+.ct-rail .mono { font-family: var(--v2-mono); font-size: 11.5px; color: var(--v2-primary); }
+.ct-sandbox.closed .ct-rail .mono { color: var(--v2-ink-3); }
+.ct-sandbox-tools { padding: 10px; background: var(--v2-card); }
+.ct-admin { border-top: 1px solid var(--v2-line-2); padding: 8px 12px 10px; background: var(--v2-card); }
+.ct-admin summary { cursor: pointer; font-size: 12px; color: var(--v2-ink-2); }
+.ct-admin summary:focus-visible { outline: 2px solid var(--v2-primary); }
+.ct-admin-body { display: grid; gap: 10px; padding-top: 10px; }
+.ct-admin-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+@keyframes ct-pulse {
+  from { box-shadow: 0 0 0 0 var(--v2-primary-soft); }
+  to { box-shadow: 0 0 0 4px var(--v2-primary-soft); }
+}
+
+@media (max-width: 760px) {
+  .ct-head { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .ct-where, .ct-state { display: none; }
+  .ct-meta, .ct-approve { grid-template-columns: 1fr; }
+  .ct-findings li { grid-template-columns: 52px minmax(0, 1fr); }
+  .ct-kind { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ct-bench, .ct-bench::before, .ct-add { transition: none; animation: none; }
+  .ct-bench.v-checking .sb-lamp { animation: none; }
+}

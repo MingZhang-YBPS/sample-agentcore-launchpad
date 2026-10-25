@@ -234,8 +234,8 @@ export function SkillsKbCard({
 }: SectionProps & {
   customSkills: WizardUi["customSkills"];
   setCustomSkills: Dispatch<SetStateAction<WizardUi["customSkills"]>>;
-  /** the knowledge field (`KnowledgeField`: pick existing KBs or create one inline) */
-  kbSlot: ReactNode;
+  /** the knowledge field (see `KnowledgeField`); omitted when the caller renders it apart */
+  kbSlot?: ReactNode;
 }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
@@ -320,12 +320,9 @@ export function SkillsKbCard({
 
   const gitValid = gitUrl.trim().startsWith("https://");
   return (
-    <Card title={t("v2.agents.wizard.skillsKb")}>
+    <Card title={kbSlot ? t("v2.agents.wizard.skillsKb") : t("v2.agents.wizard.skills")}>
       <div className="v2-form">
-        <Field
-          label={<HintLabel term="skill">{t("v2.agents.wizard.skills")}</HintLabel>}
-          hint={t("v2.agents.wizard.skillsHintSources")}
-        >
+        <Field label={<HintLabel term="skill">{t("v2.agents.wizard.skills")}</HintLabel>} hint={t("v2.agents.wizard.skillsHintSources")}>
           {cat.loading ? (
             <Spin />
           ) : (
@@ -424,10 +421,7 @@ export function MemoryCard({ form, set, cat, err, loop, note }: SectionProps & {
             {t("v2.agents.wizard.longTermOn")}
           </label>
         </Field>
-        <Field
-          label={<HintLabel term="memory">{t("v2.agents.wizard.memoryResource")}</HintLabel>}
-          hint={t("create.configure.memoryResourceHint")}
-        >
+        <Field label={<HintLabel term="memory">{t("v2.agents.wizard.memoryResource")}</HintLabel>} hint={t("create.configure.memoryResourceHint")}>
           <Select
             value={form.memoryId}
             onChange={(v) => set({ memoryId: v })}
@@ -480,6 +474,34 @@ export function MemoryCard({ form, set, cat, err, loop, note }: SectionProps & {
           <Alert>{note}</Alert>
         </div>
       )}
+    </Card>
+  );
+}
+
+/**
+ * T12 — PII protection. The screen runs in the platform's invoke chain, not inside
+ * the agent, so it applies to every method; the copy says what it costs (buffered
+ * answers) rather than leaving the member to discover it.
+ */
+export function GuardrailCard({ form, set }: Pick<SectionProps, "form" | "set">) {
+  const { t } = useTranslation();
+  return (
+    <Card title={t("v2.agents.wizard.guardrail.title")} sub={t("v2.agents.wizard.guardrail.sub")}>
+      <div className="v2-form">
+        <Field label={t("v2.agents.wizard.guardrail.mode")} hint={t("v2.agents.wizard.guardrail.hint")}>
+          <Select
+            value={form.guardrail}
+            options={[
+              { value: "off", label: t("v2.agents.wizard.guardrail.off") },
+              { value: "anonymize", label: t("v2.agents.wizard.guardrail.anonymize") },
+              { value: "block", label: t("v2.agents.wizard.guardrail.block") },
+            ]}
+            onChange={(v) => set({ guardrail: v as AgentForm["guardrail"] })}
+            testId="v2-agent-guardrail"
+          />
+        </Field>
+        {form.guardrail !== "off" && <Alert>{t("v2.agents.wizard.guardrail.bufferedNote")}</Alert>}
+      </div>
     </Card>
   );
 }

@@ -228,6 +228,25 @@ def test_engine_attach_uses_selected_initial_mode(requested_mode, expected_mode)
         db.close()
 
 
+def test_engine_attach_default_name_follows_the_gateway_id():
+    """A stale engine named after an earlier same-named Gateway must not collide."""
+    control = FakeControl()
+    db = SessionLocal()
+    try:
+        request = EngineRequest(
+            expected_gateway_updated_at=control.gateway["updatedAt"],
+            authorization_model="allowlist",
+            mode="LOG_ONLY",
+        )
+        attach = governance.queue_engine_attach(db, control, ws_ctx(), "gw-1", request)
+        assert attach["requested"]["engine_name"] == "gw_1_policy"
+        long_id = {"gatewayId": "launchpad-gw-" + "x" * 60, "name": "launchpad-gw"}
+        name = governance._default_engine_name(long_id)
+        assert name.endswith("_policy") and len(name) <= 48
+    finally:
+        db.close()
+
+
 def test_candidate_cutover_partial_retry_and_inverse_rollback():
     control = FakeControl()
     iam = FakeIam()

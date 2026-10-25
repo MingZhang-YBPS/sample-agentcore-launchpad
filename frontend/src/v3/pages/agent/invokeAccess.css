@@ -1,0 +1,185 @@
+/* "Call it from your app" + API keys (invoke-access §0, IA-2).
+ *
+ * The card reads as a wiring sheet: three numbered stations on one rail —
+ * 01 what to call, 02 what the caller may do, 03 how to call — so a backend
+ * developer follows it top to bottom and lands on a copy button at every station.
+ * The rail is ink; only the endpoint production traffic uses is lit (mint), as
+ * everywhere else in V3. Tokens and type are V3's own (v3.css).
+ */
+
+.v3 .v3-ia { display: grid; gap: 0; }
+.v3 .v3-ia-station {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 0 14px;
+  padding-bottom: 22px;
+}
+.v3 .v3-ia-station:last-child { padding-bottom: 0; }
+/* the rail: a hairline from one station's number to the next */
+.v3 .v3-ia-station::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  top: 30px;
+  bottom: 4px;
+  width: 1px;
+  background: linear-gradient(var(--v3-line-2), var(--v3-line) 70%, transparent);
+}
+.v3 .v3-ia-station:last-child::before { display: none; }
+.v3 .v3-ia-num {
+  width: 34px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--v3-line-2);
+  border-radius: var(--v3-r-sm);
+  background: var(--v3-ink-0);
+  color: var(--v3-text-3);
+  font-family: var(--v3-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.v3 .v3-ia-station[data-done="true"] .v3-ia-num { border-color: color-mix(in srgb, var(--v3-ok) 45%, transparent); color: var(--v3-ok); }
+.v3 .v3-ia-body { display: grid; gap: 12px; min-width: 0; }
+.v3 .v3-ia-label {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 26px;
+  font-family: var(--v3-display);
+  font-variation-settings: "wdth" 112;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--v3-text);
+}
+.v3 .v3-ia-label small { font-family: var(--v3-body); font-variation-settings: "wdth" 100; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--v3-text-3); font-size: 12px; }
+.v3 .v3-ia-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.v3 .v3-ia-tools .grow { flex: 1; }
+
+/* the endpoint switchboard: one key per qualifier, production lit */
+.v3 .v3-ia-board { display: flex; flex-wrap: wrap; gap: 8px; }
+.v3 .v3-ia-key {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 120px;
+  padding: 8px 12px;
+  border: 1px solid var(--v3-line);
+  border-radius: var(--v3-r-sm);
+  background: var(--v3-ink-1);
+  color: var(--v3-text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s var(--v3-ease), background 0.15s var(--v3-ease), transform 0.15s var(--v3-ease);
+}
+.v3 .v3-ia-key:hover { border-color: var(--v3-line-2); background: var(--v3-ink-hover); }
+.v3 .v3-ia-key:focus-visible { outline: 2px solid var(--v3-info); outline-offset: 2px; }
+.v3 .v3-ia-key[aria-pressed="true"] { border-color: color-mix(in srgb, var(--v3-info) 55%, transparent); background: var(--v3-info-dim); color: var(--v3-text); }
+.v3 .v3-ia-key .q { font-family: var(--v3-mono); font-size: 13px; color: var(--v3-text); }
+.v3 .v3-ia-key .role { grid-column: 2; font-size: 11px; color: var(--v3-text-3); }
+.v3 .v3-ia-key[data-prod="true"] .role { color: var(--v3-ok); }
+
+.v3 .v3-ia-checks { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--v3-text-2); }
+.v3 .v3-ia-checks label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+.v3 .v3-ia-checks label[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+
+/* a code block with its own header strip (file name left, actions right) */
+.v3 .v3-ia-code { border: 1px solid var(--v3-line); border-radius: 8px; overflow: hidden; background: var(--v3-ink-0); }
+.v3 .v3-ia-code > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--v3-line);
+  background: var(--v3-ink-2);
+  font-family: var(--v3-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--v3-text-3);
+}
+.v3 .v3-ia-code > header .end { margin-left: auto; display: flex; gap: 6px; }
+.v3 .v3-ia-code pre.v3-pre { border: 0; border-radius: 0; max-height: 320px; }
+/* a freshly loaded document settles in, so a changed policy is noticed */
+.v3 .v3-ia-fresh { animation: v3-ia-in 0.32s var(--v3-ease) both; }
+@keyframes v3-ia-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+.v3 .v3-ia-notes { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--v3-text-3); }
+.v3 .v3-ia-notes li { display: grid; grid-template-columns: 14px 1fr; gap: 8px; }
+.v3 .v3-ia-notes li::before { content: "—"; color: var(--v3-text-4); }
+
+/* ── API keys ─────────────────────────────────────────────────────────────── */
+.v3 .v3-keys { display: grid; gap: 12px; }
+.v3 .v3-keys-create { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.v3 .v3-keys-create .v3-input { flex: 1; min-width: 180px; max-width: 320px; }
+.v3 .v3-keys-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--v3-line); border-radius: 8px; overflow: hidden; }
+.v3 .v3-keys-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--v3-line-soft);
+  transition: background 0.12s;
+}
+.v3 .v3-keys-row:last-child { border-bottom: 0; }
+.v3 .v3-keys-row:hover { background: color-mix(in srgb, var(--v3-info) 4%, transparent); }
+.v3 .v3-keys-row .who { display: grid; gap: 2px; min-width: 0; }
+.v3 .v3-keys-row .who b { font-weight: 600; overflow-wrap: anywhere; }
+.v3 .v3-keys-row .who span { font-size: 12px; color: var(--v3-text-3); overflow-wrap: anywhere; }
+.v3 .v3-keys-row .acts { display: flex; gap: 6px; }
+.v3 .v3-keys-row .usage { grid-column: 2 / -1; display: grid; gap: 4px; padding-top: 6px; }
+.v3 .v3-keys-row .usage .v3-spark { height: 36px; width: 100%; }
+.v3 .v3-keys-row .reason { grid-column: 2 / -1; font-size: 12px; color: var(--v3-wait); }
+.v3 .v3-keys-once { display: grid; gap: 8px; }
+.v3 .v3-keys-once code {
+  display: block;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--v3-ok) 50%, transparent);
+  border-radius: var(--v3-r-sm);
+  background: var(--v3-ink-0);
+  font-family: var(--v3-mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+  color: var(--v3-ok-text);
+}
+
+/* the chat side panel's compact entry */
+.v3 .v3-keys-entry {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--v3-line);
+  border-radius: var(--v3-r);
+  background: var(--v3-ink-2);
+}
+.v3 .v3-keys-entry .top { display: flex; align-items: center; gap: 8px; }
+.v3 .v3-keys-entry .top .n { margin-left: auto; font-family: var(--v3-mono); font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-keys-entry ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.v3 .v3-keys-entry li { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--v3-text-2); }
+.v3 .v3-keys-entry li .mono { color: var(--v3-text-3); margin-left: auto; }
+.v3 .v3-keys-entry li span:not(.mono) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── project integration inventory ─────────────────────────────────────────── */
+.v3 .v3-ia-inv td.arn { font-family: var(--v3-mono); font-size: 12px; }
+.v3 .v3-ia-inv tr[data-off="true"] td { opacity: 0.55; }
+
+@media (max-width: 640px) {
+  .v3 .v3-ia-station { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-ia-station::before, .v3 .v3-ia-num { display: none; }
+  .v3 .v3-keys-row { grid-template-columns: 14px minmax(0, 1fr); }
+  .v3 .v3-keys-row .acts { grid-column: 2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-ia-fresh { animation: none; }
+  .v3 .v3-ia-key, .v3 .v3-keys-row { transition: none; }
+}

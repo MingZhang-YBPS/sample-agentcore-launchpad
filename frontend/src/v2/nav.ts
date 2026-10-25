@@ -2,25 +2,30 @@ import {
   Bot,
   BrainCircuit,
   ChartColumn,
-  Cpu,
   Database,
   FlaskConical,
   Gauge,
+  GitCompareArrows,
   House,
+  Inbox,
   KeyRound,
   Layers,
   Link2,
   LibraryBig,
+  Layers3,
   ListChecks,
   MessagesSquare,
   Network,
   PlayCircle,
   Radar,
+  Route,
+  Rocket,
   ScrollText,
   Settings,
   ShieldCheck,
   Sparkles,
   SquareStack,
+  Scale,
   SquareTerminal,
   Target,
   Users,
@@ -28,8 +33,6 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-
-import type { NavMode } from "../lib/nav-mode";
 
 /**
  * One sidebar entry. `v2: true` entries are native V2 pages under /v2; the
@@ -43,15 +46,18 @@ export interface V2NavItem {
   v2?: boolean;
   /** only rendered for administrators */
   admin?: boolean;
+  /** rendered for administrators and for callers holding this project permission
+   *  (e.g. `project.members`) in some project of the current workspace */
+  perm?: string;
+  /** shown in the pared-down `business` sidebar mode too (see lib/nav-mode.ts) */
+  business?: boolean;
   /** exact-match active state (the /v2 index) */
   end?: boolean;
   /** other path prefixes that belong to this entry (e.g. the classic create
    *  and edit flows of a module whose list is native) */
   also?: string[];
-  /** also shown in the pared-down `business` sidebar mode (see lib/nav-mode.ts) */
-  business?: true;
-  /** glossary sentence shown as the entry's native tooltip, keeping the sidebar
-   *  itself uncluttered */
+  /** glossary sentence (T03) shown as the entry's native tooltip — keeps the
+   *  sidebar itself uncluttered */
   hintKey?: string;
   /** the module path whose demo videos a location of this entry plays, when it is
    *  not `to` (a tab that took over a former module); null → `to` */
@@ -89,36 +95,22 @@ export const V2_NAV: V2NavGroup[] = [
     key: "build",
     labelKey: "v2.nav.groupBuild",
     items: [
-      {
-        to: "/v2/assistant",
-        labelKey: "nav.assistant",
-        icon: Sparkles,
-        v2: true,
-        also: ["/create/assistant"],
-        business: true,
-      },
+      { to: "/v2/assistant", labelKey: "nav.assistant", icon: Sparkles, v2: true, business: true, also: ["/create/assistant"] },
       {
         to: "/v2/agents",
         labelKey: "nav.createAgent",
+        hintKey: "glossary.agent",
         icon: Bot,
         v2: true,
+        business: true,
         also: ["/agents", "/create/studio"],
-        business: true,
-        hintKey: "glossary.agent",
       },
-      // expert mode only: a member's remote coding projects, deployed through byoc
-      { to: "/v2/coding", labelKey: "v2.nav.coding", icon: SquareTerminal, v2: true },
+      // a member's remote coding repos, deployed through byoc; in the pared-down sidebar too
+      { to: "/v2/coding", labelKey: "v2.nav.coding", icon: SquareTerminal, v2: true, business: true },
       { to: "/v2/registry", labelKey: "nav.registry", icon: SquareStack, v2: true, hintKey: "glossary.registry" },
-      {
-        to: "/v2/knowledge-bases",
-        labelKey: "nav.knowledgeBases",
-        icon: LibraryBig,
-        v2: true,
-        business: true,
-        hintKey: "glossary.knowledgeBase",
-      },
-      // expert mode only (D7): the COA context layer this workspace is connected to
-      { to: "/v2/context-layer", labelKey: "nav.contextLayer", icon: Network, v2: true, hintKey: "glossary.contextLayer" },
+      { to: "/v2/knowledge-bases", labelKey: "nav.knowledgeBases", icon: LibraryBig, v2: true, business: true, hintKey: "glossary.knowledgeBase" },
+      // the COA context layer this workspace is connected to; in the pared-down sidebar too
+      { to: "/v2/context-layer", labelKey: "nav.contextLayer", icon: Network, v2: true, business: true, hintKey: "glossary.contextLayer" },
     ],
   },
   {
@@ -126,23 +118,18 @@ export const V2_NAV: V2NavGroup[] = [
     labelKey: "v2.nav.groupRun",
     items: [
       { to: "/v2/chat", labelKey: "nav.chat", icon: MessagesSquare, v2: true, business: true },
-      {
-        to: "/v2/observability",
-        labelKey: "nav.observability",
-        icon: Gauge,
-        v2: true,
-        business: true,
-        hintKey: "glossary.observability",
-      },
+      // T21: the release hand-off — an operator's home, so it rides in the Run group
+      { to: "/v2/promotions", labelKey: "v2.nav.promotions", icon: Rocket, v2: true, business: true },
+      // T36: where a business owner works a problem from thumbs-down to closed
+      { to: "/v2/issues", labelKey: "v2.nav.issues", icon: Inbox, v2: true, business: true },
+      // T32: what each environment runs for an agent, and drift against AWS
+      { to: "/v2/environments", labelKey: "v2.nav.environments", icon: GitCompareArrows, v2: true },
+      { to: "/v2/observability", labelKey: "nav.observability", icon: Gauge, v2: true, business: true, hintKey: "glossary.observability" },
       { to: "/v2/memory", labelKey: "nav.memory", icon: Layers, v2: true, hintKey: "glossary.memory" },
-      {
-        to: "/v2/governance",
-        labelKey: "nav.governance",
-        icon: ShieldCheck,
-        v2: true,
-        hintKey: "glossary.cedarPolicy",
-      },
+      { to: "/v2/governance", labelKey: "nav.governance", icon: ShieldCheck, v2: true, hintKey: "glossary.cedarPolicy" },
       { to: "/v2/my-connections", labelKey: "nav.myConnections", icon: Link2, v2: true },
+      // T28/T29: spend attribution and the thresholds the platform watches
+      { to: "/v2/costs", labelKey: "v2.nav.costs", icon: Wallet, v2: true, admin: true },
     ],
   },
   {
@@ -150,6 +137,8 @@ export const V2_NAV: V2NavGroup[] = [
     labelKey: "v2.nav.groupEval",
     items: [
       { to: "/v2/eval/insights", labelKey: "v2.nav.insights", icon: ChartColumn, v2: true },
+      // T33: what people were trying to do, and what the agent could not answer
+      { to: "/v2/eval/intents", labelKey: "v2.nav.intents", icon: Route, v2: true, business: true },
       { to: "/v2/eval/data", labelKey: "v2.nav.dataCenter", icon: Database, v2: true, hintKey: "glossary.dataset" },
       {
         to: "/v2/eval/tasks",
@@ -159,20 +148,11 @@ export const V2_NAV: V2NavGroup[] = [
         // its 持续评估 tab and the online config sub-pages were the 在线评估 module
         videoPath: (params) => (isOnlineTasksView(params) ? ONLINE_VIDEO_PATH : null),
       },
-      {
-        to: "/v2/eval/evaluators",
-        labelKey: "v2.nav.evaluators",
-        icon: Target,
-        v2: true,
-        hintKey: "glossary.evaluator",
-      },
-      {
-        to: "/v2/eval/experiments",
-        labelKey: "v2.nav.experiments",
-        icon: FlaskConical,
-        v2: true,
-        hintKey: "glossary.experiment",
-      },
+      { to: "/v2/eval/evaluators", labelKey: "v2.nav.evaluators", icon: Target, v2: true, hintKey: "glossary.evaluator" },
+      // Agent-DLC: the criteria table, the golden set, the gate and the drift watch —
+      // the business owner's surface, so it rides in the pared-down sidebar too
+      { to: "/v2/eval/standards", labelKey: "v2.nav.standards", icon: Scale, v2: true, business: true, hintKey: "glossary.criteria" },
+      { to: "/v2/eval/experiments", labelKey: "v2.nav.experiments", icon: FlaskConical, v2: true, hintKey: "glossary.experiment" },
       // Skill Lab evaluates and trains Skills against task sets — an evaluation surface
       { to: "/v2/skill-lab", labelKey: "nav.skillLab", icon: BrainCircuit, v2: true, hintKey: "glossary.skill" },
     ],
@@ -189,17 +169,10 @@ export const V2_NAV: V2NavGroup[] = [
     labelKey: "v2.nav.groupAdmin",
     items: [
       { to: "/v2/users", labelKey: "nav.users", icon: Users, v2: true, admin: true },
-      {
-        to: "/v2/workspaces",
-        labelKey: "nav.workspaces",
-        icon: Workflow,
-        v2: true,
-        admin: true,
-        hintKey: "glossary.workspace",
-      },
+      // T37-T39: every environment at once, plus governance health and shared templates
+      { to: "/v2/fleet", labelKey: "v2.nav.fleet", icon: Layers3, v2: true, admin: true },
+      { to: "/v2/workspaces", labelKey: "nav.workspaces", icon: Workflow, v2: true, hintKey: "glossary.workspace", admin: true },
       { to: "/v2/connections", labelKey: "nav.connections", icon: KeyRound, v2: true, admin: true },
-      { to: "/v2/models", labelKey: "v2.nav.models", icon: Cpu, v2: true, admin: true },
-      { to: "/v2/costs", labelKey: "v2.nav.costs", icon: Wallet, v2: true, admin: true },
       { to: "/v2/announcements", labelKey: "nav.announcements", icon: ScrollText, v2: true, admin: true },
       { to: "/v2/video-management", labelKey: "videoManage.title", icon: Settings, v2: true, admin: true },
     ],
@@ -216,17 +189,18 @@ export const V2_PALETTE_ALIASES: V2NavItem[] = [
 ];
 
 /**
- * The sidebar a viewer sees: admin-only entries for administrators only, and in
- * `business` mode only the `business` entries. Groups left empty are dropped;
- * order is kept. A view filter only: every route stays reachable by URL.
+ * The entries a sidebar mode shows (roadmap T11). `business` keeps the
+ * build → run essentials plus Learn; `expert` is the full table. Administrator-only
+ * entries are filtered separately, by role, in either mode.
  */
-export function navGroupsFor(mode: NavMode, isAdmin: boolean): V2NavGroup[] {
-  return V2_NAV.map((group) => ({
+export function navGroupsFor(mode: "business" | "expert", isAdmin: boolean): V2NavGroup[] {
+  const groups = V2_NAV.map((group) => ({
     ...group,
     items: group.items.filter(
       (item) => (!item.admin || isAdmin) && (mode === "expert" || item.business === true),
     ),
-  })).filter((group) => group.items.length > 0);
+  }));
+  return groups.filter((group) => group.items.length > 0);
 }
 
 export function isNavItemActive(item: V2NavItem, pathname: string, search: string): boolean {

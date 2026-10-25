@@ -12,7 +12,8 @@ The review table's documents column and the unused-uploads note need a finished
 generation, so they are covered by the real-AWS script
 (`e2e_skill_lab_taskgen_assets.py`), which has one anyway.
 
-Runs against an already-started local frontend/backend, writes only the requested
+Runs against an already-started frontend/backend (signs in with
+LAUNCHPAD_E2E_USERNAME / _PASSWORD when set), writes only the requested
 evidence directory, and leaves no job running.
 """
 
@@ -27,6 +28,12 @@ from playwright.sync_api import Request, Response, sync_playwright
 
 CSV = b"region,revenue\nAPAC,1240\nEMEA,980\n"
 MD = b"# Q2 brief\n\nRevenue up 14%.\n"
+
+
+def tid(scope, test_id: str):
+    """The classic page's test id, or the same id as the V2 page hosted in console V3
+    renders it (`v2-` prefixed) — classic `/skill-lab` URLs now redirect there."""
+    return scope.locator(f'[data-testid="{test_id}"], [data-testid="v2-{test_id}"]')
 
 
 def main() -> int:
@@ -52,6 +59,14 @@ def main() -> int:
             else playwright.chromium.launch(headless=True)
         )
         page = browser.new_page(viewport={"width": 1440, "height": 1100})
+        # a console with the login gate on (prod) needs a session first
+        user = os.environ.get("LAUNCHPAD_E2E_USERNAME")
+        password = os.environ.get("LAUNCHPAD_E2E_PASSWORD")
+        if user and password:
+            res = page.request.post(f"{args.base_url}/api/auth/login",
+                                    data={"username": user, "password": password})
+            if not res.ok:
+                raise SystemExit(f"login failed: HTTP {res.status}")
 
         def request_finished(request: Request) -> None:
             if "/api/skill-lab/" not in request.url:
@@ -72,19 +87,20 @@ def main() -> int:
             page.goto(
                 f"{args.base_url}/skill-lab?view=tasksets&gen=new", wait_until="networkidle"
             )
-            page.get_by_test_id("taskgen-attach-input").set_input_files(
+            tid(page, "taskgen-attach-input").set_input_files(
                 [fixtures / "rows.csv", fixtures / "brief.md", fixtures / "extra.txt"]
             )
             # Three rows, each labelled with the runtime path — not the bare
             # filename — so the panel agrees with the prompt and the import.
             for name in ("rows.csv", "brief.md", "extra.txt"):
-                row = page.get_by_test_id(f"taskgen-attachment-{name}")
+                row = tid(page, f"taskgen-attachment-{name}")
                 row.wait_for(timeout=30_000)
                 assert f"data/{name}" in row.inner_text(), row.inner_text()
 
-            page.get_by_test_id("taskgen-attachment-remove-extra.txt").click()
+            page.locator('[data-testid="taskgen-attachment-remove-extra.txt"], '
+                         '[data-testid="v2-taskgen-attachment-extra.txt"] button').first.click()
             page.wait_for_timeout(300)
-            assert page.get_by_test_id("taskgen-attachment-extra.txt").count() == 0
+            assert tid(page, "taskgen-attachment-extra.txt").count() == 0
 
             upload = next(
                 item for item in network if str(item["url"]).endswith("/task-assets")
@@ -94,7 +110,8 @@ def main() -> int:
 
             # Submit with the smallest possible run, then cancel at once.
             # Skill rows toggle on click (the ☐/☑ is a glyph, not a checkbox input).
-            page.get_by_test_id("taskgen-skill-list").locator("tr").first.click()
+            page.locator('[data-testid="taskgen-skill-list"], [data-testid="v2-taskgen-skills"]'
+                         ).locator("tr:has(td)").first.click()
             # Wait for the RESPONSE, not the request: `expect_request` resolves the
             # moment the request is issued, so reading "the newest job" afterwards
             # raced the server creating the row — it once cancelled the previous
@@ -104,7 +121,8 @@ def main() -> int:
                 and response.url.endswith("/api/skill-lab/jobs"),
                 timeout=60_000,
             ) as submitted:
-                page.get_by_test_id("taskgen-wizard-submit").click()
+                page.locator('[data-testid="taskgen-wizard-submit"], '
+                             '[data-testid="v2-taskgen-submit"]').first.click()
             created = submitted.value
             body = created.request.post_data_json
             assert isinstance(body, dict), body

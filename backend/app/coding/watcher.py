@@ -6,21 +6,21 @@ cannot rely on the SSE proxy to settle it. One daemon thread per process
 false`` turns it off — the hermetic suite does) ticks every
 ``coding_watcher_interval_s`` (15 s) and, per workspace:
 
-* **running projects** — reads the runtime's event log from the project's
+* **running repos** — reads the runtime's event log from the repo's
   ``last_seq`` (``compact``, no wait) and settles every turn whose end record it
   finds (``turns.settle`` — idempotent, races the SSE path safely), then advances
   ``last_seq``. A turn the runtime no longer runs and never reported ending (its
   microVM's session storage came back from an older snapshot) is settled
   ``abandoned``; so is one past the microVM's 8-hour lifetime.
-* **stale start claims** — a project claimed for a start whose runtime answer
+* **stale start claims** — a repo claimed for a start whose runtime answer
   never arrived (the process died in between) is released after
   ``START_CLAIM_TTL``; a DELETE claim likewise after ``DELETE_CLAIM_TTL``.
-* **dirty projects** — idle projects with a manual save older than
+* **dirty repos** — idle repos with a manual save older than
   ``SAVE_DEBOUNCE`` are snapshotted (``snapshots.take_quietly``, backed off after a
   failure).
 
 Restart-safe: everything is re-read from the ledger and the runtime on the next
-tick (``inflight.RESTART_SAFE``). Modelled on ``services/budget_scheduler``.
+tick (``inflight.RESTART_SAFE``).
 """
 
 from __future__ import annotations
@@ -39,11 +39,11 @@ from app.services.workspace import WorkspaceContext, context_for_workspace
 
 from . import runtime_client, snapshots, turns
 from .models import (
-    PROJECT_DELETING,
-    PROJECT_IDLE,
-    PROJECT_RUNNING,
+    REPO_DELETING,
+    REPO_IDLE,
+    REPO_RUNNING,
     TURN_ABANDONED,
-    CodingProject,
+    CodingRepo,
     CodingTurn,
 )
 
@@ -76,32 +76,32 @@ def _utc(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-def _abandon(project_id: str, turn_id: str, reason: str, ctx: WorkspaceContext,
+def _abandon(repo_id: str, turn_id: str, reason: str, ctx: WorkspaceContext,
              end_seq: int) -> bool:
-    return turns.settle(project_id, turn_id, status=TURN_ABANDONED,
+    return turns.settle(repo_id, turn_id, status=TURN_ABANDONED,
                         error=f"the turn was abandoned ({reason})", end_seq=end_seq, ctx=ctx)
 
 
-def check_running(project: CodingProject, ctx: WorkspaceContext,
+def check_running(repo: CodingRepo, ctx: WorkspaceContext,
                   now: datetime) -> dict[str, Any]:
-    """One running project: settle what ended, advance the cursor. Raises on a
+    """One running repo: settle what ended, advance the cursor. Raises on a
     runtime failure (the tick logs it and moves on)."""
-    turn_id = project.active_turn_id
-    outcome: dict[str, Any] = {"project_id": project.id, "settled": []}
+    turn_id = repo.active_turn_id
+    outcome: dict[str, Any] = {"repo_id": repo.id, "settled": []}
     if not turn_id:
         return outcome  # a start in flight — the claim sweep handles a dead one
-    cursor = int(project.last_seq or 0)
+    cursor = int(repo.last_seq or 0)
     completions: dict[str, Any] = {}
     page: dict[str, Any] = {}
     drained = False
     failed: list[int] = []
     for _ in range(MAX_PAGES_PER_TICK):
-        page = runtime_client.project_call(
-            ctx, project, "events", after=cursor, wait_ms=0, limit=PAGE_LIMIT, compact=True,
+        page = runtime_client.repo_call(
+            ctx, repo, "events", after=cursor, wait_ms=0, limit=PAGE_LIMIT, compact=True,
             read_timeout=_READ_TIMEOUT_S,
         ) or {}
         records = [r for r in page.get("events") or [] if isinstance(r, dict)]
-        outcome["settled"] += turns.settle_from_records(project.id, records, completions,
+        outcome["settled"] += turns.settle_from_records(repo.id, records, completions,
                                                         ctx=ctx, failed_seqs=failed)
         next_after = page.get("next_after")
         seq_now = page.get("seq")
@@ -119,16 +119,16 @@ def check_running(project: CodingProject, ctx: WorkspaceContext,
     db = SessionLocal()
     try:
         db.execute(
-            update(CodingProject)
-            .where(CodingProject.id == project.id, CodingProject.last_seq < cursor)
+            update(CodingRepo)
+            .where(CodingRepo.id == repo.id, CodingRepo.last_seq < cursor)
             .values(last_seq=cursor)
             .execution_options(synchronize_session=False)
         )
         db.commit()
-        fresh = db.get(CodingProject, project.id)
+        fresh = db.get(CodingRepo, repo.id)
         turn = (
             db.query(CodingTurn)
-            .filter(CodingTurn.project_id == project.id, CodingTurn.turn_id == turn_id)
+            .filter(CodingTurn.repo_id == repo.id, CodingTurn.turn_id == turn_id)
             .first()
         )
     finally:
@@ -141,12 +141,12 @@ def check_running(project: CodingProject, ctx: WorkspaceContext,
     if drained and runtime_turn != turn_id:
         # drained, and the runtime runs something else (or nothing) without ever
         # having reported this turn's end: it is gone
-        if _abandon(project.id, turn_id, "the runtime no longer runs it", ctx, cursor):
+        if _abandon(repo.id, turn_id, "the runtime no longer runs it", ctx, cursor):
             outcome["settled"].append(turn_id)
         return outcome
     started = _utc(turn.started_at) if turn is not None else None
     if started is not None and now - started > TURN_LIFETIME:
-        if _abandon(project.id, turn_id, "it outlived the runtime's 8-hour limit", ctx,
+        if _abandon(repo.id, turn_id, "it outlived the runtime's 8-hour limit", ctx,
                     cursor):
             outcome["settled"].append(turn_id)
     return outcome
@@ -156,18 +156,18 @@ def _release_stale_claims(now: datetime) -> int:
     db = SessionLocal()
     try:
         released = db.execute(
-            update(CodingProject)
-            .where(CodingProject.status == PROJECT_RUNNING,
-                   CodingProject.active_turn_id.is_(None),
-                   CodingProject.updated_at < now - START_CLAIM_TTL)
-            .values(status=PROJECT_IDLE, updated_at=now)
+            update(CodingRepo)
+            .where(CodingRepo.status == REPO_RUNNING,
+                   CodingRepo.active_turn_id.is_(None),
+                   CodingRepo.updated_at < now - START_CLAIM_TTL)
+            .values(status=REPO_IDLE, updated_at=now)
             .execution_options(synchronize_session=False)
         ).rowcount
         released += db.execute(
-            update(CodingProject)
-            .where(CodingProject.status == PROJECT_DELETING,
-                   CodingProject.updated_at < now - DELETE_CLAIM_TTL)
-            .values(status=PROJECT_IDLE, updated_at=now)
+            update(CodingRepo)
+            .where(CodingRepo.status == REPO_DELETING,
+                   CodingRepo.updated_at < now - DELETE_CLAIM_TTL)
+            .values(status=REPO_IDLE, updated_at=now)
             .execution_options(synchronize_session=False)
         ).rowcount
         db.commit()
@@ -177,7 +177,7 @@ def _release_stale_claims(now: datetime) -> int:
 
 
 def run_once(now: datetime | None = None) -> dict[str, Any]:
-    """One pass over every workspace's coding projects. Never raises."""
+    """One pass over every workspace's coding repos. Never raises."""
     now = now or datetime.now(UTC)
     outcome: dict[str, Any] = {"checked": 0, "settled": [], "snapshots": 0, "released": 0,
                                "failures": []}
@@ -195,41 +195,41 @@ def run_once(now: datetime | None = None) -> dict[str, Any]:
     try:
         db = SessionLocal()
         try:
-            running = db.query(CodingProject).filter(
-                CodingProject.status == PROJECT_RUNNING,
-                CodingProject.active_turn_id.is_not(None),
+            running = db.query(CodingRepo).filter(
+                CodingRepo.status == REPO_RUNNING,
+                CodingRepo.active_turn_id.is_not(None),
             ).all()
-            dirty = db.query(CodingProject).filter(
-                CodingProject.status == PROJECT_IDLE,
-                CodingProject.dirty_at.is_not(None),
-                CodingProject.dirty_at < now - SAVE_DEBOUNCE,
+            dirty = db.query(CodingRepo).filter(
+                CodingRepo.status == REPO_IDLE,
+                CodingRepo.dirty_at.is_not(None),
+                CodingRepo.dirty_at < now - SAVE_DEBOUNCE,
             ).all()
         finally:
             db.close()
     except Exception as exc:  # noqa: BLE001
         outcome["failures"].append(f"ledger: {exc}")
         return outcome
-    for project in running:
+    for repo in running:
         try:
-            ctx = ctx_of(project.workspace_id or "")
+            ctx = ctx_of(repo.workspace_id or "")
             if not runtime_client.installed_runtime_arn(ctx):
                 continue
-            result = check_running(project, ctx, now)
+            result = check_running(repo, ctx, now)
             outcome["checked"] += 1
             outcome["settled"] += result["settled"]
-        except Exception as exc:  # noqa: BLE001 — one project never stops the tick
-            outcome["failures"].append(f"{project.id}: {exc}")
-    for project in dirty:
-        if snapshots.backing_off(project.id):
+        except Exception as exc:  # noqa: BLE001 — one repo never stops the tick
+            outcome["failures"].append(f"{repo.id}: {exc}")
+    for repo in dirty:
+        if snapshots.backing_off(repo.id):
             continue
         try:
-            ctx = ctx_of(project.workspace_id or "")
+            ctx = ctx_of(repo.workspace_id or "")
             if not runtime_client.installed_runtime_arn(ctx):
                 continue
-            if snapshots.take_quietly(project.id, ctx=ctx, reason="save"):
+            if snapshots.take_quietly(repo.id, ctx=ctx, reason="save"):
                 outcome["snapshots"] += 1
         except Exception as exc:  # noqa: BLE001
-            outcome["failures"].append(f"{project.id}: {exc}")
+            outcome["failures"].append(f"{repo.id}: {exc}")
     return outcome
 
 

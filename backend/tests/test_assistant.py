@@ -980,7 +980,7 @@ def test_stale_turn_claim_is_reclaimed_and_cleared_on_startup(client, ready, har
     db = SessionLocal()
     try:  # a dead process left the claim behind long ago
         db.get(AssistantConversation, cid).active_turn_started_at = (
-            datetime.now(UTC) - timedelta(seconds=service.TURN_CLAIM_TTL_S + 5))
+            datetime.now(UTC) - timedelta(seconds=service.MAX_TURN_CLAIM_TTL_S + 5))
         db.commit()
     finally:
         db.close()

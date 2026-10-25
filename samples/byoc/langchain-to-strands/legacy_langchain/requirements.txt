@@ -1,0 +1,5 @@
+# The BEFORE state — not deployed, kept so the original agent still runs locally.
+langchain>=1.0,<2
+langchain-aws>=1.0,<2
+fastapi>=0.120,<1
+uvicorn>=0.40,<1

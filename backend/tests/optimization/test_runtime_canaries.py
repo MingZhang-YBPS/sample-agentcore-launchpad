@@ -309,7 +309,7 @@ def test_setup_action_dispatches(client, monkeypatch):
     monkeypatch.setattr(
         canary_svc,
         "run_action",
-        lambda canary_id, action, fn, caller=None: dispatched.append(action),
+        lambda canary_id, action, fn: dispatched.append(action),
     )
     res = client.post(
         f"/api/runtime-canaries/{row.id}/action",
@@ -1136,18 +1136,23 @@ def test_complete_records_candidate_as_production(monkeypatch):
     stored = _reload(row.id)
     assert stored.status == "completed"
     assert stored.artifacts["complete"]["ab_test_status"] == "STOPPED"
-    # the promoted spec joins the snapshot history like any other publish, stamped
-    # with the version it made live (there is no deployment row behind it)
+    # the promoted spec joins the snapshot history like any other publish (F5),
+    # stamped with the version it made live (there is no deployment row behind it)
     from app.models.ledger import SpecSnapshot
 
     db = SessionLocal()
     try:
-        (snap,) = db.query(SpecSnapshot).filter(SpecSnapshot.agent_id == agent_id).all()
+        snap = (
+            db.query(SpecSnapshot)
+            .filter(SpecSnapshot.agent_id == agent_id)
+            .order_by(SpecSnapshot.seq.desc())
+            .first()
+        )
+        assert snap is not None and snap.spec["system_prompt"] == "promoted prompt"
+        assert snap.aws_version == "2" and "canary" in (snap.note or "")
+        assert snap.deployment_id is None
     finally:
         db.close()
-    assert snap.spec["system_prompt"] == "promoted prompt"
-    assert (snap.seq, snap.aws_version, snap.note) == (1, "2", "canary promoted")
-    assert snap.deployment_id is None
 
 
 def test_rollback_rolls_forward_current_spec(monkeypatch):

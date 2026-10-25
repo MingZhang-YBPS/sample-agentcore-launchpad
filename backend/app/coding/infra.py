@@ -11,7 +11,7 @@ Two deliberate differences from the Skill Lab worker:
 
 * **Drift covers everything the runtime is configured with** — image, env, role,
   session-storage mount, lifecycle and network mode. An update publishes a new
-  version, and a new version wipes every project's session storage once its live
+  version, and a new version wipes every repo's session storage once its live
   session ends, so an update must happen exactly when something changed (the
   snapshot restore brings the files back, but it is not free).
 * **Updates always echo ``filesystemConfigurations``** — UpdateAgentRuntime treats
@@ -213,7 +213,7 @@ def ensure_runtime(
                 log,
             )
             log(f"updated runtime {RUNTIME_NAME} · {runtime_id} ({', '.join(reasons)} changed; "
-                "new version — project files come back from their snapshots)")
+                "new version — repo files come back from their snapshots)")
     ready = rt.wait_runtime_ready(
         client, runtime_id, on_status=lambda s: (wait_log or log)(f"runtime status: {s}")
     )
@@ -305,9 +305,9 @@ def uninstall_coding_runtime(
     log: Callable[[str, str], None] = lambda _stage, _msg: None,
 ) -> dict[str, None]:
     """Runtime first (and wait until it is gone — deleting the role under a live
-    runtime can wedge the runtime's own deletion), then the role. Project
+    runtime can wedge the runtime's own deletion), then the role. Repo
     snapshots under ``coding/`` in the artifacts bucket are kept: a re-install
-    restores every project. Returns the resource keys to clear."""
+    restores every repo. Returns the resource keys to clear."""
     client = control_client(workspace)
     existing = find_runtime(client)
     if existing is None:

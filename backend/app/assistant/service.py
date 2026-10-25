@@ -5,28 +5,33 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
 * **Principal + workspace bound.** Every read and write filters on
   ``(workspace_id, owner_principal)``; another principal's, another workspace's or
   an unowned (NULL principal) conversation is a 404 — a recycled username inherits
-  nothing. The one exception is an admin **share**: a ``shared`` conversation of
-  the same workspace is open to every member for every action (``may_collaborate``
-  — discussion, preparation, proposal review and approval, evaluation assets) under
-  that action's usual permission, re-checked at each write; deleting it (and its
-  footprint preview) stays with the owner. Unsharing closes it again at once. An
-  administrator *reads* every conversation of the workspace (``may_view``: list,
+  nothing. Conversations are project-owned (design §5.5): every read is also
+  confined to the request's project. The one exception is an admin **share**: a
+  ``shared`` conversation of the same project is open to every member for every
+  action (``may_collaborate`` — discussion, preparation, proposal review and
+  approval, evaluation assets) under that action's usual permission (the project's
+  key), re-checked at each write; deleting it (and its footprint preview) stays
+  with the owner. Unsharing closes it again at once. An
+  administrator *reads* every conversation of the project (``may_view``: list,
   detail, evaluation plan and operation status) but writes only where it
   collaborates — an unshared one is read-only until the admin shares it.
 * **Discussion never writes AWS.** A turn makes exactly one data-plane call
-  (``InvokeHarness`` on the preset) and ledger writes. No proposal, valid or not,
-  creates anything until a separate approval.
+  (``InvokeHarness`` on the preset) and ledger writes; afterwards the confirmed-items
+  digest may make one background Bedrock ``Converse`` call (``assistant.digest``). No
+  proposal, valid or not, creates anything until a separate approval.
 * **One in-flight turn per conversation.** A turn is an atomic conditional claim on
   the conversation row (``active_turn``); a concurrent turn is refused (409), a
-  claim left behind by a dead process is reclaimed after ``TURN_CLAIM_TTL_S`` and on
-  startup. The private runtime session id is written to the ledger *before* the
-  data-plane call. A stream that is cut off persists the partial answer as an
-  interrupted turn and never yields a proposal from incomplete output.
+  claim left behind by a dead process is reclaimed after ``claim_ttl_s`` of the
+  preset's turn budget and on startup. The private runtime session id is written to
+  the ledger *before* the data-plane call. A stream that is cut off persists the
+  partial answer as an interrupted turn and never yields a proposal from incomplete
+  output.
 * **Server-owned bounded replay.** The preset runs with persistent memory disabled
   and every turn uses a fresh runtime session id, so the transcript is replayed
   through ``InvokeHarness.messages``, paired by turn, within one FINAL budget that
   includes the protocol preamble and the current message; omitted older turns are
-  disclosed, the current message is never truncated (too large → 413).
+  disclosed and summarized into the preamble's confirmed-items digest
+  (``assistant.digest``), the current message is never truncated (too large → 413).
 * **Monotonic, unique revisions.** Model emissions and member edits both allocate
   their revision from the conversation's ``revision_seq`` inside the same short
   write transaction that stores the row (unique index), so two concurrent writers
@@ -61,24 +66,32 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from botocore.exceptions import ClientError
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
-from app.assistant import preparation, submission
+from app.assistant import digest, preparation, submission
 from app.assistant import proposal as proposal_contract
-from app.assistant.principal import may_collaborate, may_view, principal_of, viewer_clause
+from app.assistant.principal import (
+    may_collaborate,
+    may_view,
+    principal_of,
+    project_can,
+    viewer_clause,
+)
+from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project
 from app.deployer.pipeline import create_deployment
 from app.evaluation import agentcore_eval as ac
 from app.models.assistant import AssistantConversation, AssistantMessage, AssistantProposal
 from app.models.ledger import Agent, Job, Workspace
 from app.routers.auth import Identity
-from app.schemas.agent import ToolRef
+from app.schemas.agent import AgentSpec, ToolRef
 from app.services import agent_names, creators, knowledge, registry_console, visibility
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client, data_client
@@ -92,9 +105,6 @@ from app.system_agents import service as system_agents
 from app.system_agents.presets import ARCHITECT
 from app.system_agents.presets import is_reserved_name as _reserved
 
-if TYPE_CHECKING:  # passed in by the turn route, never built here
-    from app.services.usage_meter import UsageMeter
-
 logger = logging.getLogger("launchpad.assistant")
 
 PRESET = ARCHITECT
@@ -102,16 +112,29 @@ PERMISSION_DEPLOY = "agents.deploy"
 MAX_PROMPT_CHARS = 100_000
 MAX_PROMPT_BYTES = 300_000
 # The FINAL composed request (preamble + catalog + replayed turns + current message)
-# never exceeds this many characters; the newest turns that fit are kept.
+# never exceeds the replay budget; the newest turns that fit are kept. The budget is
+# half the architect model's context window in estimated tokens (``replay_budget``,
+# assistant-context C3); this many characters when that window is unknown.
 MAX_REPLAY_CHARS = 160_000
+# Default of ``settings.assistant_replay_max_turns``.
 MAX_REPLAY_TURNS = 12
+# Share of the model's context window the replay may fill; the rest is the turn's own
+# room for tool results and output (the preset's max_tokens).
+REPLAY_WINDOW_SHARE = 0.5
+# A turn that overflowed the model's context window inside one Harness execution
+# (``harness.context_window_exceeded``) is replayed with this share of the history
+# it replayed the first time (assistant-context C4); the current message is unchanged.
+OVERFLOW_HISTORY_SHARE = 0.5
 CATALOG_MAX_ENTRIES = 60
 # Explicit state bounds: a conversation is a requirement-intake session, not a log.
 MAX_TURNS = 200
 MAX_REVISIONS = 50
-# A turn claim older than this belongs to a dead process (the harness itself times
-# out at ≤ 3600 s; the preset uses 900 s) and may be reclaimed.
+# A turn claim older than its TTL belongs to a dead process and may be reclaimed. The
+# TTL follows the preset's turn budget (``claim_ttl_s``); this is the fallback for a
+# conversation whose preset agent (or its stored ``timeout_seconds``) cannot be read.
 TURN_CLAIM_TTL_S = 1800
+# Margin on top of the attempts' budgets: stream setup, ledger writes, the finalizer.
+TURN_CLAIM_MARGIN_S = 300
 # SSE keep-alive cadence while the upstream is silent; also the longest the turn's
 # consumer ever blocks, so cancellation is observed within one interval.
 HEARTBEAT_S = 1.0
@@ -126,12 +149,26 @@ TURN_RETRIED_NAME = "turn_retried"
 # with nothing at all, a mid-stream runtimeClientError / internalServerException,
 # throttling, a 5xx — ``evaluation.service.transient_invoke_error``) replays the whole
 # turn this many times in a fresh Harness session before the member sees an error
-# (live 2026-10-04: about one architect turn in five on prod and dev). One replay keeps
-# two attempts inside ``TURN_CLAIM_TTL_S``; an execution timeout is never replayed —
+# (live 2026-10-04: about one architect turn in five on prod and dev). ``claim_ttl_s``
+# keeps every attempt inside the claim TTL; an execution timeout is never replayed —
 # the member already waited the preset's whole budget.
 TURN_TRANSIENT_RETRIES = 1
 # How long a replay waits for the consumer to record its fresh session on the ledger.
 RETRY_RECORD_WAIT_S = 30.0
+# Harness ``timeout_seconds`` upper bound (``AgentSpec``).
+MAX_TURN_TIMEOUT_S = 3600
+
+
+def claim_ttl_s(timeout_seconds: int) -> int:
+    """How long a turn claim may live before it counts as a dead process's orphan:
+    every attempt of the turn (first + transient replays) running its whole Harness
+    budget, the replay's session-record wait, and a margin. 1500 s → 3330 s."""
+    return int((1 + TURN_TRANSIENT_RETRIES) * timeout_seconds + RETRY_RECORD_WAIT_S
+               + TURN_CLAIM_MARGIN_S)
+
+
+# The longest any claim can live (the TTL of the largest allowed turn budget).
+MAX_TURN_CLAIM_TTL_S = claim_ttl_s(MAX_TURN_TIMEOUT_S)
 # Ledger-only row reserving a replay's Harness session (``sessions.is_assistant_session``
 # reads every row's session id): never shown in the transcript, never replayed.
 SESSION_ROLE = "session"
@@ -241,6 +278,12 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   comparisons); disclose it in the readable proposal. Default is empty.
 - `skills`: list of catalog **skill keys** from the list below (may be empty)
 - `knowledge_bases`: list of catalog **knowledge base ids** from the list below
+- `storage`: optional list of `{{"storage_id": "<catalog storage id>", "mode": "ro" | "rw"}}`
+  naming catalog **storage ids** from the list below (shared file storage mounted
+  into the agent). `mode` defaults to `"ro"` and never exceeds the entry's max mode;
+  never put ARNs, paths or mount points here. The network comes from the entries'
+  default network profile, so every chosen entry must share one. Omit it (or send
+  `[]`) when the agent needs no shared storage.
 - `memory`: `"disabled"` (no memory at all) or `"workspace"` (the workspace's
   existing shared AgentCore Memory with all of its configured strategies) — these
   are the only two choices the platform can enforce
@@ -403,6 +446,12 @@ Hard rules of this environment:
    natural-language Skill generation are unavailable. Evaluators and
    datasets are NOT created by this conversation either: the member later reviews a
    separate evaluation-assets plan and may create them from it.
+5. Older turns drop out of what you are shown; a summary of them is only a fallback.
+   When the member confirms a constraint that affects the architecture, risk or cost,
+   write it into the proposal's `requirements_baseline` (or `assumptions`) in the same
+   reply — as a change against the current stored proposal when one exists. Before
+   the first proposal, restate it in the reply and carry it into `requirements_baseline`
+   when you propose. The proposal is the reviewable record that is never lost.
 """
 
 
@@ -457,6 +506,16 @@ def catalog_section(catalog: dict[str, Any]) -> str:
             "by a single hyphen (trim leading/trailing hyphens; maximum 60 characters)."
         )
     lines.append("")
+    if "storage" in catalog:  # the project's allowed storage (storage-mounts §8.3)
+        lines.append("Storage (`storage` ids; mode `ro` unless `rw` is needed and allowed):")
+        lines += [
+            f"- `{e['storage_id']}` — {e.get('name') or ''} · {e.get('kind') or ''}"
+            f" · max mode `{e.get('max_mode') or 'ro'}`"
+            + (f" · network `{e['network_profile_id']}`" if e.get("network_profile_id") else "")
+            for e in (catalog.get("storage") or [])[:CATALOG_MAX_ENTRIES]
+            if e.get("status") != "blocked"
+        ] or ["- (none)"]
+        lines.append("")
     evaluators = catalog.get("evaluators")
     if evaluators is not None:
         lines.append("Evaluators (`evaluator_id` for `kind: existing` — prefer these; a custom "
@@ -614,9 +673,15 @@ def restrict_catalog(
     db: Session, workspace_id: str, viewer: Viewer, catalog: dict[str, Any]
 ) -> dict[str, Any]:
     """The catalog as ``viewer`` (the conversation owner) may see it: the KBs
-    workspace isolation hides are dropped. Custom evaluators are never in the
-    catalog. The deploy-job re-validation reads the unrestricted catalog."""
-    if not viewer.filters or not catalog.get("knowledge_bases"):
+    workspace isolation hides are dropped, and so are another project's (AWS lists
+    every project's KBs — design §5.5), so an approval can never pin one. Custom
+    evaluators are never in the catalog. The storage a proposal may mount is the
+    current project's allowed set (storage-mounts §8.3), read from the database on
+    every call. The deploy-job re-validation reads the unrestricted catalog."""
+    storage = proposal_contract.storage_catalog(db, workspace_id, current_project())
+    if storage or "storage" in catalog:
+        catalog = {**catalog, "storage": storage}
+    if not catalog.get("knowledge_bases") or (not viewer.filters and current_project() is None):
         return catalog
     from app.routers.knowledge import visible_kbs
 
@@ -630,9 +695,9 @@ def owner_catalog(db: Session | None, conversation: AssistantConversation) -> di
 
     The snapshot is taken at create / refresh; a workspace switched to isolated
     afterwards must not keep showing (or prompting with) KBs the owner can no
-    longer see. Free unless the workspace is isolated and the owner a member."""
+    longer see; the project's storage entries are re-read too (storage-mounts §8.3)."""
     catalog = conversation.catalog or {}
-    if db is None or not catalog.get("knowledge_bases"):
+    if db is None:
         return catalog
     return restrict_catalog(
         db, conversation.workspace_id,
@@ -757,7 +822,7 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
                 })
     except (AppError, ClientError, KeyError, ValueError) as exc:
         warnings.append(f"knowledge base catalog unavailable: {_short(exc)}")
-    res = workspace.resources or {}
+    res = _agent_resources(workspace)
     kb_gateway: dict[str, Any] | None = None
     if res.get("kb_gateway_id"):
         try:  # the live configuration a KB mount would depend on (read-only)
@@ -781,6 +846,9 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
             "oauth_provider_arn": res.get("oauth_provider_arn"),
             "execution_role_arn": res.get("execution_role_arn"),
             "kb_gateway": kb_gateway,
+            # an isolated project's own scopes (§10.6); absent → the workspace scope
+            **({"gateway_scopes": list(res["gateway_scopes"])}
+               if res.get("gateway_scopes") else {}),
         },
         "target": {
             "workspace_id": workspace.id,
@@ -788,6 +856,17 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
             "region": workspace.region,
         },
     }
+
+
+def _agent_resources(workspace: WorkspaceContext) -> dict[str, Any]:
+    """The resource map as an agent of the current project sees it: an isolated,
+    provisioned project's gateway provider / scopes (§10.6) and default memory
+    (§10.4); the workspace map itself for every other project."""
+    from app.services import project_gateway, project_memory
+
+    res = project_gateway.effective_resources(
+        dict(workspace.resources or {}), current_project(), workspace.id)
+    return project_memory.memory_resources(res, workspace.id)
 
 
 def catalog_evaluators(workspace: WorkspaceContext, warnings: list[str]) -> list[dict[str, Any]]:
@@ -841,6 +920,7 @@ def deploy_requirements(row: Workspace) -> list[dict[str, str]]:
 
 def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, Any]:
     preset = system_agents.preset_status(db, row, PRESET, is_admin=identity.is_admin)
+    can_deploy = project_can(db, identity, row.id, PERMISSION_DEPLOY)  # the project's keys
     agent = preset_agent(db, row.id)
     res = row.resources or {}
     return {
@@ -857,7 +937,7 @@ def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, A
             "requirements": preset["requirements"],
             "can_install": preset["can_install"],
         },
-        "can_deploy": identity.can(PERMISSION_DEPLOY),
+        "can_deploy": can_deploy,
         "deploy_requirements": deploy_requirements(row),
         "capabilities": {
             "shared_memory": bool(res.get("memory_arn")),
@@ -866,7 +946,9 @@ def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, A
         "is_admin": identity.is_admin,
         # SE-047: materializing an evaluation plan (AWS evaluators + Lambda + IAM)
         # needs the deploy permission; every member prepares/edits plans
-        "can_materialize_evaluation_assets": identity.can(PERMISSION_DEPLOY),
+        "can_materialize_evaluation_assets": can_deploy,
+        # assistant-context C3: what one turn may replay with the preset's model
+        "replay_budget": replay_budget(db, row.id).as_dict(),
         "owner": identity.username,
         "principal": principal_of(identity),
     }
@@ -911,7 +993,7 @@ def owned_conversation(
 def accessible_conversation(
     db: Session, workspace_id: str, principal: str, conversation_id: str
 ) -> AssistantConversation:
-    """The owner's conversation, or one an admin shared with the workspace — every
+    """The owner's conversation, or one an admin shared with the project — every
     route but delete (and its footprint) resolves through this. A conversation whose
     CLEAR is queued or running refuses every write (409): a turn, approval or new asset
     started now would race the teardown (``assistant.purge``)."""
@@ -933,7 +1015,7 @@ def viewable_conversation(
     db: Session, workspace_id: str, identity: Identity, conversation_id: str
 ) -> AssistantConversation:
     """``accessible_conversation`` widened for reads: an administrator also resolves
-    any other member's conversation of the workspace (read-only). Only the read
+    any other member's conversation of the project (read-only). Only the read
     routes — detail, evaluation plan, operation status — and sharing use this."""
     row = db.get(AssistantConversation, conversation_id)
     if (
@@ -950,8 +1032,8 @@ ADMIN_LIST_LIMIT = 200  # an administrator lists every member's conversations
 
 
 def list_conversations(db: Session, workspace_id: str, identity: Identity) -> list[dict[str, Any]]:
-    """The caller's own conversations plus the ones shared with the workspace; for an
-    administrator, every member's."""
+    """The caller's own conversations plus the ones shared with the project; for an
+    administrator, every member's in the selected project."""
     principal = principal_of(identity)
     rows = (
         db.query(AssistantConversation)
@@ -963,13 +1045,15 @@ def list_conversations(db: Session, workspace_id: str, identity: Identity) -> li
         .limit(ADMIN_LIST_LIMIT if identity.is_admin else LIST_LIMIT)
         .all()
     )
-    return [conversation_summary(db, r, viewer=principal) for r in rows]
+    trimmed = context_trimmed(db, [r.id for r in rows], workspace_id)
+    return [{**conversation_summary(db, r, viewer=principal), "context_trimmed": r.id in trimmed}
+            for r in rows]
 
 
 def set_shared(
     db: Session, workspace_id: str, identity: Identity, conversation_id: str, shared: bool
 ) -> AssistantConversation:
-    """Publish/unpublish a conversation to every workspace member — by its owner, or
+    """Publish/unpublish a conversation to every member of its project — by its owner, or
     by an administrator, who reads every conversation and so may share any of them
     (sharing is how an admin turns a read-only one into a collaboration); a
     collaborator on a shared one cannot toggle it."""
@@ -1132,6 +1216,8 @@ def conversation_detail(
             if m.role != SESSION_ROLE
         ],
         "proposals": [proposal_out(db, p) for p in _proposals(db, row.id)],
+        "context": context_window(db, row),
+        "context_digest": digest.view(row),
     }
 
 
@@ -1204,13 +1290,30 @@ def _turn_limit_error() -> AppError:
     )
 
 
-def _claim_is_stale(row: AssistantConversation, now: datetime) -> bool:
+def _turn_claim_ttl(db: Session | None, row: AssistantConversation) -> int:
+    """The claim TTL for this conversation's turns, from the turn budget its preset
+    agent runs with (the agent of its latest turn, else the workspace's installed
+    preset). ``TURN_CLAIM_TTL_S`` when neither — nor its stored budget — is readable."""
+    if db is None:
+        return TURN_CLAIM_TTL_S
+    agent = db.get(Agent, row.preset_agent_id) if row.preset_agent_id else None
+    if agent is None and row.workspace_id:
+        agent = system_agents.find_installed(db, row.workspace_id, PRESET)
+    budget = (agent.spec or {}).get("timeout_seconds") if agent is not None else None
+    if not isinstance(budget, int) or isinstance(budget, bool) or budget <= 0:
+        return TURN_CLAIM_TTL_S
+    return claim_ttl_s(min(budget, MAX_TURN_TIMEOUT_S))
+
+
+def _claim_is_stale(row: AssistantConversation, now: datetime,
+                    db: Session | None = None) -> bool:
     if row.active_turn is None or row.active_turn_started_at is None:
         return False
     started = row.active_turn_started_at
     if started.tzinfo is None:
         started = started.replace(tzinfo=UTC)
-    return now - started > timedelta(seconds=TURN_CLAIM_TTL_S)
+    ttl = _turn_claim_ttl(db if db is not None else object_session(row), row)
+    return now - started > timedelta(seconds=ttl)
 
 
 # Single-host live ownership: turns streaming in THIS process. A claim whose owner is
@@ -1228,8 +1331,9 @@ def _turn_live_here(conversation_id: str) -> bool:
 def claim_turn(db: Session, conversation_id: str) -> tuple[int, str]:
     """Atomically reserve the next turn number, refusing while another turn is in
     flight (`409 assistant.turn_in_progress`) or the conversation is full. A claim
-    older than ``TURN_CLAIM_TTL_S`` is taken over; the previous holder's token is
-    invalidated so it can never publish (fail-safe, no result stealing)."""
+    older than its TTL (``claim_ttl_s`` of the preset's turn budget) is taken over;
+    the previous holder's token is invalidated so it can never publish (fail-safe, no
+    result stealing)."""
     now = datetime.now(UTC)
     token = uuid.uuid4().hex
     # ONE ownership acquisition: the process-level registry lock is held across the
@@ -1257,7 +1361,7 @@ def _claim_turn_locked(
     ).rowcount
     if claimed != 1:
         row = db.get(AssistantConversation, conversation_id)
-        if (row is not None and _claim_is_stale(row, now) and row.turns < MAX_TURNS
+        if (row is not None and _claim_is_stale(row, now, db) and row.turns < MAX_TURNS
                 and conversation_id not in _LIVE_TURNS):  # registry lock is held
             claimed = db.execute(
                 update(AssistantConversation)
@@ -1447,6 +1551,7 @@ def _preamble(conversation: AssistantConversation, *, inline: bool = False) -> s
     return (protocol_preamble() + "\n"
             + catalog_section(owner_catalog(object_session(conversation), conversation))
             + preparation.context(conversation)
+            + digest.preamble_section(conversation)
             + (submit_tool_section() if inline else "")
             + current_proposal_section(_base_of(conversation), inline=inline))
 
@@ -1464,6 +1569,106 @@ REPLAY_PROPOSAL_MARKER = (
 
 def _strip_proposal_blocks(text: str) -> str:
     return _REPLAY_PROPOSAL_RE.sub(REPLAY_PROPOSAL_MARKER, text)
+
+
+# ---------------------------------------------------------------------------
+# the replay budget (assistant-context C3)
+# ---------------------------------------------------------------------------
+
+# CJK ideographs, kana, hangul, their punctuation and full-width forms: about one token
+# each; everything else is estimated at four characters per token (conservative).
+_CJK_RE = re.compile(
+    "[\u2e80-\u303f\u3040-\u30ff\u3100-\u31ff\u3400-\u4dbf\u4e00-\u9fff"
+    "\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef"
+    "\U00020000-\U0003134f]"
+)
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimated model tokens of ``text``: 1 per CJK character, 1 per 4 others."""
+    if not text:
+        return 0
+    other = len(_CJK_RE.sub("", text))
+    return (len(text) - other) + -(-other // 4)
+
+
+def _longest_key(table: dict[str, Any], model_id: str) -> Any:
+    """The entry whose key is the longest substring of ``model_id`` (case-insensitive),
+    like the ``model_prices`` lookup."""
+    lowered = model_id.lower()
+    hits = [k for k in table if isinstance(k, str) and k and k.lower() in lowered]
+    return table[max(hits, key=len)] if hits else None
+
+
+def model_context_window(model_id: str | None) -> tuple[int | None, str]:
+    """``(input context window in tokens, source)`` of the architect model: the
+    ``assistant_context_window_tokens`` override (``config``), else the model's
+    ``model_context_windows`` entry or its refreshed ``model_prices`` entry's
+    ``max_input_tokens`` (``model``), else ``(None, "fallback")``."""
+    settings = get_settings()
+    if settings.assistant_context_window_tokens > 0:
+        return settings.assistant_context_window_tokens, "config"
+    if model_id:
+        window = _longest_key(settings.model_context_windows or {}, model_id)
+        if not isinstance(window, int) or window <= 0:
+            priced = {k: v.get("max_input_tokens") for k, v in (settings.model_prices or {}).items()
+                      if isinstance(v, dict) and isinstance(v.get("max_input_tokens"), int)}
+            window = _longest_key(priced, model_id)
+        if isinstance(window, int) and window > 0:
+            return window, "model"
+    return None, "fallback"
+
+
+@dataclass(frozen=True)
+class ReplayBudget:
+    """How large one composed request may be, and in what unit it is measured."""
+
+    unit: str  # "tokens" (estimated) | "chars" (the model's window is unknown)
+    limit: int
+    max_turns: int
+    source: str  # config | model | fallback
+    model_id: str | None = None
+    context_window_tokens: int | None = None
+
+    def measure(self, text: str) -> int:
+        return estimate_tokens(text) if self.unit == "tokens" else len(text)
+
+    def overhead(self, chars: int) -> int:
+        """A fixed framing allowance given in characters, in this budget's unit."""
+        return -(-chars // 4) if self.unit == "tokens" else chars
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"unit": self.unit, "limit": self.limit, "max_turns": self.max_turns,
+                "source": self.source, "model_id": self.model_id,
+                "context_window_tokens": self.context_window_tokens,
+                "window_share": REPLAY_WINDOW_SHARE}
+
+
+def budget_for_model(model_id: str | None) -> ReplayBudget:
+    """The replay budget of an architect running ``model_id``:
+    ``min(window × REPLAY_WINDOW_SHARE, assistant_replay_max_tokens)`` estimated
+    tokens, or ``MAX_REPLAY_CHARS`` characters when the window is unknown."""
+    settings = get_settings()
+    max_turns = max(1, int(settings.assistant_replay_max_turns or MAX_REPLAY_TURNS))
+    window, source = model_context_window(model_id)
+    if window is None:
+        return ReplayBudget("chars", MAX_REPLAY_CHARS, max_turns, source, model_id)
+    limit = int(window * REPLAY_WINDOW_SHARE)
+    if settings.assistant_replay_max_tokens > 0:
+        limit = min(limit, settings.assistant_replay_max_tokens)
+    return ReplayBudget("tokens", limit, max_turns, source, model_id, window)
+
+
+def replay_budget(db: Session | None, workspace_id: str | None) -> ReplayBudget:
+    """The budget of the workspace's installed architect preset (its stored model)."""
+    agent = (system_agents.find_installed(db, workspace_id, PRESET)
+             if db is not None and workspace_id is not None else None)
+    model_id = (agent.spec or {}).get("model_id") if agent is not None else None
+    return budget_for_model(model_id if isinstance(model_id, str) and model_id else None)
+
+
+def _budget_of(conversation: AssistantConversation) -> ReplayBudget:
+    return replay_budget(object_session(conversation), conversation.workspace_id)
 
 
 def check_retry(db: Session, conversation: AssistantConversation, turn: int) -> None:
@@ -1488,13 +1693,40 @@ def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
             f"the message exceeds {MAX_PROMPT_CHARS} characters / {MAX_PROMPT_BYTES} bytes",
             {"max_chars": MAX_PROMPT_CHARS, "max_bytes": MAX_PROMPT_BYTES}, status_code=413,
         )
-    if len(_preamble(conversation, inline=True)) + len(prompt) + 200 > MAX_REPLAY_CHARS:
+    budget = _budget_of(conversation)
+    preamble = _preamble(conversation, inline=True)
+    if budget.measure(preamble) + budget.measure(prompt) + budget.overhead(200) > budget.limit:
         raise AppError(
             "assistant.prompt_too_large",
             "the message plus the protocol preamble exceeds the request budget; shorten "
             "the message or split it over several turns",
-            {"max_request_chars": MAX_REPLAY_CHARS}, status_code=413,
+            {f"max_request_{budget.unit}": budget.limit}, status_code=413,
         )
+
+
+@dataclass(frozen=True)
+class ReplayWindow:
+    """What one composed request carries of the transcript (assistant-context C1)."""
+
+    replayed_turns: int
+    omitted_turns: int
+    # the stored turn number of the oldest replayed turn (None when none is replayed)
+    first_replayed_turn: int | None
+    # share of the replay budget (``ReplayBudget.limit``) the FINAL request uses
+    budget_used_ratio: float
+    # the budget the request was composed against (assistant-context C3)
+    budget: ReplayBudget | None = None
+    # how much of the budget the replayed turns took (budget units; C4 halves it)
+    history_used: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        out = {"replayed_turns": self.replayed_turns, "omitted_turns": self.omitted_turns,
+               "first_replayed_turn": self.first_replayed_turn,
+               "budget_used_ratio": self.budget_used_ratio}
+        if self.budget is not None:
+            out["budget"] = {"unit": self.budget.unit, "limit": self.budget.limit,
+                             "source": self.budget.source}
+        return out
 
 
 def compose_messages(
@@ -1502,18 +1734,21 @@ def compose_messages(
     *, inline: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """The bounded ``InvokeHarness.messages`` replay and how many older turns were
-    omitted from it.
-
-    Turns are paired by their turn number (never by insert order): each replayed
-    turn is the member's text plus the assistant's reply when there was one; a
-    failed/interrupted turn is replayed with an explicit marker instead of a reply
-    and counts against the budget like any other. The newest turns that fit the
-    FINAL budget (preamble + catalog + turns + current message) are kept, the count
-    of omitted older turns is disclosed in the preamble, and the current message is
-    always sent whole (``check_prompt`` refuses one that cannot fit).
+    omitted from it (``compose_replay`` also reports the window).
     """
+    messages, window = compose_replay(conversation, history, prompt, inline=inline)
+    return messages, window.omitted_turns
+
+
+def replay_turns(
+    conversation: AssistantConversation, history: list[AssistantMessage],
+) -> tuple[list[tuple[int, str, str | None]], list[str]]:
+    """The replayable turns of ``history`` as ``(turn, member text, reply or None)``,
+    oldest first, and the verdicts that ride on the NEXT member message. Paired by
+    turn number; retried turns and empty rows are left out; once a proposal is stored
+    its blocks in old replies are replaced by ``REPLAY_PROPOSAL_MARKER``. Shared by the
+    replay (``compose_replay``) and the confirmed-items digest (``assistant.digest``)."""
     by_turn: dict[int, dict[str, list[str]]] = {}
-    preamble = _preamble(conversation, inline=inline)
     strip = _base_of(conversation) is not None
     retried = {m.turn for m in history if m.role == "error" and m.name == TURN_RETRIED_NAME}
     for m in history:
@@ -1531,34 +1766,73 @@ def compose_messages(
         # a stored proposal is shown once, as stored, in the preamble; replaying every
         # earlier 20–60k-char block too would crowd the turns themselves out of budget
         slot[m.role].append(_strip_proposal_blocks(m.text) if strip else m.text)
-    turns: list[tuple[str, str | None]] = []
+    turns: list[tuple[int, str, str | None]] = []
     carried: list[str] = []
-    for _, slot in sorted(by_turn.items()):
+    for number, slot in sorted(by_turn.items()):
         if slot["user"]:
-            turns.append(("\n\n".join(carried + slot["user"]),
+            turns.append((number, "\n\n".join(carried + slot["user"]),
                           "\n\n".join(slot["assistant"]) or None))
             carried = []
         carried += slot["verdict"]
+    return turns, carried
+
+
+def compose_replay(
+    conversation: AssistantConversation, history: list[AssistantMessage], prompt: str,
+    *, inline: bool = False, history_cap: int | None = None,
+) -> tuple[list[dict[str, Any]], ReplayWindow]:
+    """The bounded ``InvokeHarness.messages`` replay and the window it keeps.
+
+    Turns are paired by their turn number (never by insert order): each replayed
+    turn is the member's text plus the assistant's reply when there was one; a
+    failed/interrupted turn is replayed with an explicit marker instead of a reply
+    and counts against the budget like any other. The newest turns that fit the
+    FINAL budget (preamble + catalog + turns + current message) are kept, the count
+    of omitted older turns is disclosed in the preamble, and the current message is
+    always sent whole (``check_prompt`` refuses one that cannot fit). The budget and
+    the turn count follow the architect model (``replay_budget``); ``history_cap``
+    further bounds the replayed turns (the overflow replay of C4).
+    """
+    budget_spec = _budget_of(conversation)
+    preamble = _preamble(conversation, inline=inline)
+    turns, carried = replay_turns(conversation, history)
     if carried:
         prompt = "\n\n".join(carried + [prompt])
-    budget = MAX_REPLAY_CHARS - len(preamble) - len(prompt) - 200
-    kept: list[tuple[str, str | None]] = []
+    measure = budget_spec.measure
+    fixed = measure(preamble) + measure(prompt) + budget_spec.overhead(200)
+    budget = budget_spec.limit - fixed
+    if history_cap is not None:
+        budget = min(budget, history_cap)
+    per_turn = budget_spec.overhead(80)
+    kept: list[tuple[int, str, str | None]] = []
     used = 0
-    for user_text, reply in reversed(turns):
-        size = len(user_text) + len(reply or "") + 80
-        if len(kept) >= MAX_REPLAY_TURNS or used + size > budget:
+    for number, user_text, reply in reversed(turns):
+        size = measure(user_text) + measure(reply or "") + per_turn
+        if len(kept) >= budget_spec.max_turns or used + size > budget:
             break
-        kept.insert(0, (user_text, reply))
+        kept.insert(0, (number, user_text, reply))
         used += size
     omitted = len(turns) - len(kept)
+    window = ReplayWindow(
+        replayed_turns=len(kept), omitted_turns=omitted,
+        first_replayed_turn=kept[0][0] if kept else None,
+        budget_used_ratio=round(min(1.0, (fixed + used) / budget_spec.limit), 3),
+        budget=budget_spec, history_used=used,
+    )
     if omitted:
+        covered = digest.covered_through(conversation)
+        summarized = (
+            f" Turns up to {covered} are summarized under \"Summary of earlier turns\" "
+            "above; that summary may be incomplete." if covered else ""
+        )
         preamble += (
             f"\n\n> Replay note: {omitted} earlier turn(s) of this conversation were omitted "
-            "to fit the request; ask the member to restate anything you need from them."
+            f"to fit the request.{summarized} Ask the member to restate anything you need "
+            "from them."
         )
     messages: list[dict[str, Any]] = []
     pending_user: list[str] = []
-    for user_text, reply in kept:
+    for _number, user_text, reply in kept:
         pending_user.append(user_text)
         if reply is None:
             pending_user.append("(no assistant reply was produced for the message above)")
@@ -1570,7 +1844,51 @@ def compose_messages(
     messages.append({"role": "user", "content": [{"text": "\n\n".join(pending_user)}]})
     first = messages[0]["content"][0]["text"]
     messages[0]["content"][0]["text"] = preamble + "\n\n---\n\n## Member message\n\n" + first
-    return messages, omitted
+    return messages, window
+
+
+def context_window(db: Session, row: AssistantConversation) -> dict[str, Any]:
+    """The window the NEXT turn's request would replay (``GET`` detail: the console
+    draws its "no longer in context" divider after a reload too). The same
+    ``compose_replay`` as a turn, with an empty message and the larger inline
+    preamble; never calls the model. A turn in flight is not part of its own replay."""
+    history = [m for m in _messages(db, row.id)
+               if row.active_turn is None or m.turn != row.active_turn]
+    _replay, window = compose_replay(row, history, "", inline=True)
+    return window.as_dict()
+
+
+def context_trimmed(
+    db: Session, conversation_ids: list[str], workspace_id: str | None = None,
+) -> set[str]:
+    """The listed conversations whose next turn surely omits older turns: more
+    replayable turns than the budget's turn count, or more replayable text than the
+    whole request budget (in tokens, at least a quarter of the characters). One cheap
+    query (lengths, never text); a lower bound of ``context_window`` — a conversation
+    it misses still shows its divider on open."""
+    if not conversation_ids:
+        return set()
+    budget = replay_budget(db, workspace_id) if workspace_id else budget_for_model(None)
+    rows = db.execute(
+        select(AssistantMessage.conversation_id, AssistantMessage.turn,
+               AssistantMessage.role, AssistantMessage.name,
+               func.length(AssistantMessage.text))
+        .where(AssistantMessage.conversation_id.in_(conversation_ids),
+               AssistantMessage.role.in_(("user", "assistant", "error")))
+    ).all()
+    retried = {(cid, turn) for cid, turn, role, name, _n in rows
+               if role == "error" and name == TURN_RETRIED_NAME}
+    turns: dict[str, set[int]] = {}
+    chars: dict[str, int] = {}
+    for cid, turn, role, _name, size in rows:
+        if role == "error" or (cid, turn) in retried or not size:
+            continue
+        if role == "user":
+            turns.setdefault(cid, set()).add(turn)
+        chars[cid] = chars.get(cid, 0) + size
+    return {cid for cid in conversation_ids
+            if len(turns.get(cid, ())) > budget.max_turns
+            or budget.overhead(chars.get(cid, 0)) > budget.limit}
 
 
 # ---------------------------------------------------------------------------
@@ -1764,7 +2082,7 @@ def record_unusable(
 
 def _persist_partial(
     db: Session, conversation: AssistantConversation | tuple[str, str | None], turn: int,
-    token: str, session_id: str, text: str, error: str,
+    token: str, session_id: str, text: str, error: str, trace: dict[str, Any] | None = None,
 ) -> bool:
     """Persist a partial/failed turn — only while this worker still holds the claim
     (a reclaimed turn's late worker writes nothing). ``conversation`` may be the plain
@@ -1783,6 +2101,8 @@ def _persist_partial(
             workspace_id=workspace_id, conversation_id=conversation_id,
             turn=turn, role="assistant", text=text, runtime_session_id=session_id,
         ))
+    if trace is not None:  # before the error row: a failed turn's last row stays its error
+        db.add(_trace_row((conversation_id, workspace_id), turn, session_id, trace))
     db.add(AssistantMessage(
         workspace_id=workspace_id, conversation_id=conversation_id,
         turn=turn, role="error", text=error[:4000], runtime_session_id=session_id,
@@ -1927,13 +2247,124 @@ def _submissions(
     )
 
 
+CONTEXT_OVERFLOW_CODE = "harness.context_window_exceeded"
+# ``name`` of the hidden SESSION_ROLE row that records a turn's trace attributes: the
+# replay window it was composed with and the tool results its execution streamed.
+TURN_TRACE_NAME = "turn_trace"
+
+
+class _ToolResultMeter:
+    """A data-plane client stand-in that counts the tool results a Harness execution
+    streams back (assistant-context C4): they accumulate inside the execution, out of
+    the replay budget's sight, and are what overflows a model's context window."""
+
+    def __init__(self, client: Any, stats: dict[str, int]) -> None:
+        self._client = client
+        self._stats = stats
+
+    def invoke_harness(self, **kwargs: Any) -> dict[str, Any]:
+        response = self._client.invoke_harness(**kwargs)
+        return {**response, "stream": _MeteredStream(response["stream"], self._stats)}
+
+
+class _MeteredStream:
+    def __init__(self, stream: Any, stats: dict[str, int]) -> None:
+        self._stream = stream
+        self._stats = stats
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        for event in self._stream:
+            if isinstance(event, dict):
+                self._count(event)
+            yield event
+
+    def _count(self, event: dict[str, Any]) -> None:
+        start = (event.get("contentBlockStart") or {}).get("start") or {}
+        result = start.get("toolResult")
+        if isinstance(result, dict):
+            self._stats["tool_results"] += 1
+            self._stats["tool_result_chars"] += _result_chars(result.get("content"))
+        delta = (event.get("contentBlockDelta") or {}).get("delta") or {}
+        self._stats["tool_result_chars"] += _result_chars(delta.get("toolResult"))
+
+    def close(self) -> None:
+        close = getattr(self._stream, "close", None)
+        if callable(close):
+            close()
+
+
+def _result_chars(parts: Any) -> int:
+    if not isinstance(parts, list):
+        return 0
+    total = 0
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        if isinstance(part.get("text"), str):
+            total += len(part["text"])
+        elif "json" in part:
+            total += len(json.dumps(part["json"], ensure_ascii=False, default=str))
+    return total
+
+
+def _new_tool_stats() -> dict[str, int]:
+    return {"tool_results": 0, "tool_result_chars": 0}
+
+
+def _trace_row(ids: tuple[str, str | None], turn: int, session_id: str,
+               trace: dict[str, Any]) -> AssistantMessage:
+    conversation_id, workspace_id = ids
+    return AssistantMessage(
+        workspace_id=workspace_id, conversation_id=conversation_id, turn=turn,
+        role=SESSION_ROLE, name=TURN_TRACE_NAME,
+        text=json.dumps(trace, ensure_ascii=False, sort_keys=True)[:4000],
+        runtime_session_id=session_id,
+    )
+
+
+def _turn_trace(window: ReplayWindow, stats: dict[str, int],
+                exc: BaseException | None = None) -> dict[str, Any]:
+    """One turn's trace attributes: the window its final attempt replayed and the
+    tool results that attempt's execution streamed (input for tuning
+    ``REPLAY_WINDOW_SHARE``), logged and kept on a hidden ledger row."""
+    trace: dict[str, Any] = {
+        **stats,
+        "replayed_turns": window.replayed_turns, "omitted_turns": window.omitted_turns,
+        "budget_used_ratio": window.budget_used_ratio,
+    }
+    if window.budget is not None:
+        trace["budget_unit"], trace["budget_limit"] = window.budget.unit, window.budget.limit
+    if exc is not None:
+        trace["error"] = str(getattr(exc, "code", None) or type(exc).__name__)
+    logger.info("assistant: turn trace %s", json.dumps(trace, sort_keys=True))
+    return trace
+
+
+def turn_trace(db: Session, conversation_id: str, turn: int) -> dict[str, Any] | None:
+    """The recorded trace attributes of one turn (None before it finished)."""
+    row = db.execute(
+        select(AssistantMessage.text)
+        .where(AssistantMessage.conversation_id == conversation_id,
+               AssistantMessage.turn == turn, AssistantMessage.role == SESSION_ROLE,
+               AssistantMessage.name == TURN_TRACE_NAME)
+        .order_by(AssistantMessage.id.desc()).limit(1)
+    ).scalar_one_or_none()
+    try:
+        return json.loads(row) if row else None
+    except ValueError:
+        return None
+
+
 def _replayable_turn_error(exc: BaseException) -> bool:
     """Transient upstream failures, plus a model call cut off at ``max_tokens``: live
     2026-10-05 a proposal call stopped there 40 s in, far short of the 65 536-token
-    budget (the manual retry wrote the 11 k-token proposal in 3 min). Timeouts and
-    iteration limits are never replayed."""
+    budget (the manual retry wrote the 11 k-token proposal in 3 min). A turn whose tool
+    results overflowed the model's context window is replayed too, with less history
+    (``OVERFLOW_HISTORY_SHARE``). Timeouts and iteration limits are never replayed."""
     from app.evaluation.service import transient_invoke_error
 
+    if getattr(exc, "code", None) == CONTEXT_OVERFLOW_CODE:
+        return True
     if getattr(exc, "code", None) == "harness.execution_limit":
         detail = getattr(exc, "detail", None)
         return isinstance(detail, dict) and detail.get("stop_reason") == "max_tokens"
@@ -1950,7 +2381,6 @@ def run_turn(
     prompt: str,
     run: TurnRun | None = None,
     retry_of: int | None = None,
-    meter: "UsageMeter | None" = None,
 ) -> Iterator[dict[str, Any]]:
     """One assistant turn as SSE-ready events:
     ``meta → (tool|delta)* → (proposal)? → done`` or ``error``.
@@ -1964,10 +2394,6 @@ def run_turn(
     times in a fresh Harness session: the failed attempt's partial text and tool rows
     are discarded, any inline submission it made is forgotten, and a ``retry`` event
     tells the client to clear what it streamed.
-
-    ``meter`` (services/usage_meter.py) receives every Harness model call's usage,
-    from every attempt and inline-function round trip of the turn — a replay
-    re-spends, and the payer is charged for it. The caller settles it.
     """
     run = run or TurnRun()
     agent = _require_available(db, row)
@@ -1977,12 +2403,6 @@ def run_turn(
     conversation = db.get(AssistantConversation, conversation_id)
     ids = (conversation_id, conversation.workspace_id)  # plain values for the finalizer
     session_id = hc.new_session_id()
-    if meter is not None:
-        from app.services import budgets
-
-        meter.agent_id, meter.resource_id = agent.id, agent.arn
-        meter.model_id = budgets.agent_model(agent)[0]
-        meter.session_id = session_id
     parts: list[str] = []
     terminal = False  # True once a terminal row (reply or error) was persisted
     producer: threading.Thread | None = None
@@ -1998,8 +2418,15 @@ def run_turn(
         history = [m for m in _messages(db, conversation_id) if m.turn != turn]
         if retry_of is not None:  # the retried exchange is not replayed (see TURN_RETRIED_NAME)
             history = [m for m in history if m.turn != retry_of]
-        messages, omitted = compose_messages(conversation, history, prompt,
-                                             inline=overrides is not None)
+        messages, window = compose_replay(conversation, history, prompt,
+                                          inline=overrides is not None)
+        # the request an overflowed execution is replayed with (C4): the same message
+        # with a share of the history — composed here, the producer never reads ``db``
+        overflow_messages, overflow_window = messages, window
+        if window.replayed_turns:
+            overflow_messages, overflow_window = compose_replay(
+                conversation, history, prompt, inline=overrides is not None,
+                history_cap=int(window.history_used * OVERFLOW_HISTORY_SHARE))
         # the FIRST write is fenced like every other one: composing the replay took
         # time, and ownership may have been replaced meanwhile
         _lock_conversation(db, conversation_id)
@@ -2024,7 +2451,9 @@ def run_turn(
         db.commit()
         yield {"event": "meta", "data": {"conversation_id": conversation_id, "turn": turn,
                                          "session_id": session_id, "agent": agent.name,
-                                         "omitted_turns": omitted}}
+                                         "omitted_turns": window.omitted_turns,
+                                         "first_replayed_turn": window.first_replayed_turn,
+                                         "context": window.as_dict()}}
         try:
             actor = scoped_actor(agent.id, identity.username)
             # Upstream production runs in its own thread; this generator only ever
@@ -2039,15 +2468,17 @@ def run_turn(
             if overrides is not None:
                 invoke_extra = {"tools": overrides[0], "allowed_tools": overrides[1],
                                 "inline_tools": frozenset({submission.TOOL_NAME})}
-            if meter is not None:
-                invoke_extra["on_usage"] = meter.on_usage
 
             # plain values: the producer thread must never lazy-load through ``db``
             # (the consumer's session), which a rollback below has already expired
             harness_arn = agent.arn
 
-            # the current attempt's Harness session (a replay starts a fresh one)
+            # the current attempt's Harness session (a replay starts a fresh one), its
+            # request (an overflow replay sends less history) and tool-result counts
             attempt_session = [session_id]
+            attempt_request = [messages]
+            attempt_stats = [_new_tool_stats()]
+            attempt_window = [window]
 
             def produce() -> None:
                 attempt = 0
@@ -2063,14 +2494,24 @@ def run_turn(
                             attempt_session[0] = hc.new_session_id()
                             if submissions is not None:
                                 submissions.reset()
-                            logger.warning("assistant: turn %s replayed after %s",
-                                           turn, _short(exc))
+                            failed_stats = attempt_stats[0]
+                            attempt_stats[0] = _new_tool_stats()
+                            overflow = getattr(exc, "code", None) == CONTEXT_OVERFLOW_CODE
+                            if overflow:
+                                attempt_request[0] = overflow_messages
+                                attempt_window[0] = overflow_window
+                            logger.warning("assistant: turn %s replayed after %s (tool results "
+                                           "%d, %d chars)", turn, _short(exc),
+                                           failed_stats["tool_results"],
+                                           failed_stats["tool_result_chars"])
                             # the new session is on the ledger before its data-plane call
                             # (like the first one): wait for the consumer to record it
                             recorded = threading.Event()
                             events.put(("retry", {"attempt": attempt, "reason": _short(exc),
                                                   "session_id": attempt_session[0],
-                                                  "recorded": recorded}))
+                                                  "recorded": recorded,
+                                                  "overflow": overflow,
+                                                  "tool_stats": failed_stats}))
                             deadline = time.monotonic() + RETRY_RECORD_WAIT_S
                             while not recorded.wait(HEARTBEAT_S):
                                 if run.cancelled or time.monotonic() > deadline:
@@ -2081,8 +2522,8 @@ def run_turn(
                         return
 
             def attempt_once() -> None:
-                request = messages
-                client = data_client(workspace)
+                request = attempt_request[0]
+                client = _ToolResultMeter(data_client(workspace), attempt_stats[0])
                 while True:
                     handoff: list[dict[str, Any]] | None = None
                     for produced in hc.invoke_harness_events(
@@ -2153,16 +2594,26 @@ def run_turn(
                     db.execute(delete(AssistantMessage).where(
                         AssistantMessage.conversation_id == conversation_id,
                         AssistantMessage.turn == turn, AssistantMessage.role == "tool"))
+                    failed = event["tool_stats"]
                     db.add(AssistantMessage(
                         workspace_id=conversation.workspace_id, conversation_id=conversation_id,
                         turn=turn, role=SESSION_ROLE, name="turn_replay",
-                        text=f"replay {event['attempt']} after {event['reason']}"[:4000],
+                        text=(f"replay {event['attempt']} after {event['reason']} (tool "
+                              f"results {failed['tool_results']}, "
+                              f"{failed['tool_result_chars']} chars)")[:4000],
                         runtime_session_id=session_id,
                     ))
                     db.commit()
                     event["recorded"].set()
-                    yield {"event": "retry", "data": {"attempt": event["attempt"],
-                                                      "reason": event["reason"]}}
+                    retry_data: dict[str, Any] = {"attempt": event["attempt"],
+                                                  "reason": event["reason"]}
+                    if event["overflow"]:
+                        # the replay sends less history: the console redraws its divider
+                        retry_data["code"] = CONTEXT_OVERFLOW_CODE
+                        retry_data["context"] = overflow_window.as_dict()
+                        retry_data["omitted_turns"] = overflow_window.omitted_turns
+                        retry_data["first_replayed_turn"] = overflow_window.first_replayed_turn
+                    yield {"event": "retry", "data": retry_data}
                     continue
                 if run.cancelled:
                     break  # the owner cancelled: handled as interrupted below
@@ -2202,7 +2653,9 @@ def run_turn(
                 yield event
         except Exception as exc:
             _persist_partial(db, ids, turn, token, session_id, "".join(parts),
-                             f"{type(exc).__name__}: {exc}")
+                             f"{type(exc).__name__}: {exc}",
+                             trace=_turn_trace(attempt_window[0], attempt_stats[0], exc)
+                             if producer is not None else None)
             terminal = True
             payload: dict[str, Any] = {"message": f"{type(exc).__name__}: {exc}"}
             if isinstance(exc, AppError):
@@ -2235,6 +2688,8 @@ def run_turn(
             workspace_id=conversation.workspace_id, conversation_id=conversation_id,
             turn=turn, role="assistant", text=text, runtime_session_id=session_id,
         ))
+        trace = _turn_trace(attempt_window[0], attempt_stats[0])
+        db.add(_trace_row(ids, turn, session_id, trace))
         fresh = db.get(AssistantConversation, conversation_id)
         preparation_event = None
         if requirements is not None:
@@ -2288,7 +2743,7 @@ def run_turn(
             yield proposal_event
         if preparation_event is not None:
             yield preparation_event
-        yield {"event": "done", "data": {"turn": turn}}
+        yield {"event": "done", "data": {"turn": turn, "trace": trace}}
     finally:
         if not terminal:
             # GeneratorExit (client went away) or an unexpected error before the
@@ -2316,6 +2771,14 @@ def run_turn(
             producer.join(timeout=HEARTBEAT_S * 3)
             if producer.is_alive():  # pragma: no cover — logged, never hidden
                 logger.warning("assistant: turn %s producer still alive after cleanup", turn)
+        try:
+            # the next turn's window may now omit turns the digest does not cover yet:
+            # summarize them in the background (assistant-context C2), never waited on
+            db.rollback()
+            digest.after_turn(db, conversation_id, workspace)
+        except Exception:  # noqa: BLE001 — the digest is best effort
+            logger.warning("assistant: could not schedule the digest of %s", conversation_id,
+                           exc_info=True)
         run.finished = True
 
 
@@ -2468,7 +2931,7 @@ def approve_proposal(
     if latest is None or latest.revision != revision:
         raise _stale(latest, "that proposal revision is not the current one — review the latest")
     # 2. request-start snapshot checks (cheap refusals before any cloud read)
-    if not identity.can(PERMISSION_DEPLOY):
+    if not project_can(db, identity, row.id, PERMISSION_DEPLOY):
         raise AppError("auth.permission_required",
                        f"This action requires the '{PERMISSION_DEPLOY}' permission",
                        {"permission": PERMISSION_DEPLOY}, status_code=403)
@@ -2535,6 +2998,15 @@ def approve_proposal(
                        f"'{content.name}' is reserved for a system-managed preset",
                        {"name": content.name}, status_code=409)
     spec = proposal_contract.to_agent_spec(content, live_catalog)
+    if spec.filesystem.mounts:
+        # catalog mounts in stored form + the storage × network preflight, exactly as
+        # the create route (routers/agents.py `_stored_storage`, storage-mounts §4.2)
+        from app.services import storage_mounts
+
+        stored = storage_mounts.normalize_spec_storage(
+            db, row.id, current_project(), spec.model_dump(mode="json"))
+        storage_mounts.assert_preflight(db, workspace, stored, current_project())
+        spec = AgentSpec.model_validate(stored)
     # 4. ONE short write transaction: lock → recheck principal/workspace → re-read
     #    revision → name claim → revision claim → agent + deployment + job → commit
     _lock_conversation(db, conversation_id)
@@ -2585,15 +3057,26 @@ def approve_proposal(
             status="deploying",
             spec=spec.model_dump(),
             owner=approver.username,
+            # the business project the route validated (services/agent_project)
+            project_id=current_project(),
         )
         # the approver (possibly a collaborator, not the conversation owner) created it
         creators.stamp(agent, Creator.of(approver))
+        from app.services import project_quotas
+
+        project_quotas.assert_capacity(db, current_project(), "max_agents")  # §11.3
         db.add(agent)
         db.flush()
+        project_quotas.recheck_after_insert(db, agent.project_id, "max_agents")
         agent_names.claim_agent_name(  # 409 → rollback; names the holder only if visible
             db, fresh_row.id, spec.name, agent.id,
             viewer=visibility.viewer_for_principal(db, fresh_row, principal_of(approver)),
         )
+        # PUBLIC allowed here / the network profile passes its preflight (§12.6)
+        from app.deployer.pipeline import network_gate
+        from app.services.workspace import context_for_workspace
+
+        network_gate(db, context_for_workspace(agent.workspace_id), spec.model_dump())
         deployment, job = create_deployment(
             db, agent, commit=False,
             payload_extra={"assistant": {
@@ -2669,6 +3152,13 @@ def assert_job_bindings_pinned(
                 "bindings — refusing to deploy"
             )
     live_catalog = preparation.live_catalog(workspace, pin.get("preparation_sources") or [])
+    if content_raw.get("storage"):  # the agent's project's storage (storage-mounts §8.3)
+        db = SessionLocal()
+        try:
+            live_catalog = {**live_catalog, "storage": proposal_contract.storage_catalog(
+                db, workspace.id, agent.project_id)}
+        finally:
+            db.close()
     content, _display, errors = proposal_contract.validate(content_raw, live_catalog)
     if content is None or errors:
         raise RuntimeError("assistant job: approved proposal no longer validates in this "
@@ -2682,7 +3172,7 @@ def assert_job_bindings_pinned(
             "fresh revision"
         )
     if content.knowledge_bases:
-        res = workspace.resources or {}
+        res = _agent_resources(workspace)
         kb = (pinned.get("resources") or {}).get("kb_gateway") or {}
         if not (res.get("kb_gateway_id") == kb.get("gateway_id")
                 and res.get("kb_gateway_arn") == kb.get("gateway_arn")

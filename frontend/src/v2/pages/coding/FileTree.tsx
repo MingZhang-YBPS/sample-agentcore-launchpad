@@ -7,13 +7,13 @@ import { Alert, LinkButton, Spin } from "../../ui";
 import { emptyTree, mergeListing, refreshTargets, ROOT, type TreeState, visibleRows } from "./fileTree";
 
 /**
- * The project's directory tree. The root is listed on mount; a directory is listed
+ * The repo's directory tree. The root is listed on mount; a directory is listed
  * the first time it is expanded. `version` bumps (an agent turn changed files, a
  * save) re-list the root and every expanded directory, keeping what is expanded.
  * A file row has a download button, shown on hover / keyboard focus.
  */
 export function FileTree({
-  projectId,
+  repoId,
   version,
   activePath,
   onOpen,
@@ -21,7 +21,7 @@ export function FileTree({
   downloading,
   headEnd,
 }: {
-  projectId: string;
+  repoId: string;
   version: number;
   activePath: string | null;
   onOpen: (path: string) => void;
@@ -60,7 +60,7 @@ export function FileTree({
       const latest = () => alive.current && generation.current.get(dir) === ticket;
       setLoadingDirs((prev) => new Set(prev).add(dir));
       try {
-        const res = await codingApi.tree(projectId, dir, 1);
+        const res = await codingApi.tree(repoId, dir, 1);
         if (!latest()) return;
         setTree((prev) => mergeListing(prev, dir, res.entries, 1));
         setError(null);
@@ -77,7 +77,7 @@ export function FileTree({
         }
       }
     },
-    [projectId],
+    [repoId],
   );
 
   const refresh = useCallback(() => {

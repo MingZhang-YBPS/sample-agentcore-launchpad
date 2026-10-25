@@ -4,21 +4,6 @@
  */
 import type { StageInfo } from "./api";
 
-/**
- * Regions AgentCore serves. The list is a convenience, not the authority: the
- * bootstrap job's `validate-access` stage probes the target for real, so an
- * operator can type a region this build has not heard of.
- */
-export const WORKSPACE_REGIONS = [
-  "us-west-2",
-  "us-east-1",
-  "us-east-2",
-  "eu-central-1",
-  "eu-west-1",
-  "ap-southeast-2",
-  "ap-northeast-1",
-] as const;
-
 /** `arn:aws…:iam::<account>:role/<name>`; group 1 is the account id. */
 export const ROLE_ARN = /^arn:aws[a-z-]*:iam::(\d{12}):role\/.+$/;
 

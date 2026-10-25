@@ -28,6 +28,8 @@ export default defineConfig(({ mode }) => {
     // (console and public API share an origin in prod) — without this the copied
     // curl hits vite and 404s before the backend can check the API key
     "/v1": apiTarget,
+    // the account-free share API (T13); the page itself lives at /s/<token>
+    "/share": apiTarget,
   };
 
   return {

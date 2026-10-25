@@ -1,10 +1,9 @@
 /**
  * Shared Bedrock model catalog and default model id.
  *
- * studioFallbackModelId() is the single source of truth for the fallback model used
- * by every code-generation fallback path — nodes that carry no explicit model id
- * (orchestrator/swarm drops, legacy flows); DEFAULT_MODEL_ID is its built-in value,
- * used until the platform defaults load. It is deliberately NOT what a newly
+ * DEFAULT_MODEL_ID is the single source of truth for the fallback model used by
+ * every code-generation fallback path — nodes that carry no explicit model id
+ * (orchestrator/swarm drops, legacy flows). It is deliberately NOT what a newly
  * dropped agent node gets: that is DEFAULT_NEW_AGENT_MODEL_ID (see FlowEditor).
  * Changing these fallbacks would retroactively change existing flows.
  *
@@ -15,22 +14,23 @@
  * listings — likely requires model access enablement).
  */
 
-import { currentModelDefaults, STATIC_MODEL_DEFAULTS } from '../../lib/model-defaults';
 import { MODEL_CATALOG } from '../../lib/models';
 
-/** The built-in fallback (backend `studio_fallback_model_id`'s default). */
-export const DEFAULT_MODEL_ID = STATIC_MODEL_DEFAULTS.studio_fallback_model_id;
+export const DEFAULT_MODEL_ID = 'global.anthropic.claude-sonnet-5';
 
-/**
- * The fallback the generators bake in for a node without a model id: the platform's
- * `studio_fallback_model_id` (`GET /api/model-defaults`, an admin can change it),
- * else {@link DEFAULT_MODEL_ID}. It must equal what the backend scopes the agent's
- * execution role to (`agent_iam.studio_fallback_model_id`), so it is read from the
- * server rather than hard-coded — the canvas page loads the defaults before it
- * generates the code it publishes.
- */
+// launchpad extension: the server's configured `studio_fallback_model_id`
+// (GET /api/models/defaults) replaces DEFAULT_MODEL_ID once loaded — an account
+// may lack Anthropic models. Module state so the pure generators stay pure.
+let studioFallbackModel: string = DEFAULT_MODEL_ID;
+
+/** Called once the configured model defaults load (blank keeps the static id). */
+export function setStudioFallbackModelId(modelId: string | null | undefined): void {
+  studioFallbackModel = modelId?.trim() || DEFAULT_MODEL_ID;
+}
+
+/** The fallback model for nodes that carry no explicit model id. */
 export function studioFallbackModelId(): string {
-  return currentModelDefaults().studio_fallback_model_id || DEFAULT_MODEL_ID;
+  return studioFallbackModel;
 }
 
 /** Sentinel value for the "Custom model ID" option in model dropdowns. */
@@ -43,6 +43,18 @@ export interface BedrockModelOption {
 
 // Entry [0] is what a new agent node and a switch to the Bedrock provider get.
 export const BEDROCK_MODELS: BedrockModelOption[] = [
+  {
+    model_id: 'global.zai.glm-5.3',
+    model_name: 'GLM-5.3 (global)',
+  },
+  {
+    model_id: 'zai.glm-5',
+    model_name: 'GLM-5',
+  },
+  {
+    model_id: 'zai.glm-4.7',
+    model_name: 'GLM-4.7',
+  },
   {
     model_id: 'global.openai.gpt-6-sol',
     model_name: 'GPT-6 Sol (global)',
@@ -103,22 +115,82 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
     model_id: 'qwen.qwen3-coder-480b-a35b-v1:0',
     model_name: 'Qwen3 Coder 480B A35B Instruct',
   },
+  // launchpad extension: Kimi / DeepSeek, live-probed 2026-10-12 for tool use
+  // (DeepSeek V3.1 is us-west-2 only — region-filtered; R1 refuses toolConfig and
+  // is deliberately absent: agent nodes run tools).
   {
     model_id: 'deepseek.v3-v1:0',
-    model_name: 'DeepSeek-V3.1',
+    model_name: 'DeepSeek V3.1',
   },
   {
-    model_id: 'us.amazon.nova-premier-v1:0',
-    model_name: 'Amazon Nova Premier v1',
+    model_id: 'deepseek.v3.2',
+    model_name: 'DeepSeek V3.2',
   },
   {
-    model_id: 'us.amazon.nova-pro-v1:0',
-    model_name: 'Amazon Nova Pro v1',
+    model_id: 'global.moonshotai.kimi-k3',
+    model_name: 'Kimi K3 (global)',
+  },
+  {
+    model_id: 'us.moonshotai.kimi-k3',
+    model_name: 'Kimi K3 (US)',
+  },
+  {
+    model_id: 'moonshotai.kimi-k2.5',
+    model_name: 'Kimi K2.5',
+  },
+  {
+    model_id: 'moonshot.kimi-k2-thinking',
+    model_name: 'Kimi K2 Thinking',
   },
 ];
 
-/** The model a newly dropped agent node starts on (native Bedrock, Converse). */
+/** The static model a newly dropped agent node starts on (native Bedrock, Converse);
+ *  {@link newAgentModel} is the configured one. */
 export const DEFAULT_NEW_AGENT_MODEL = BEDROCK_MODELS[0];
+
+// launchpad extension: the server's configured new-agent default
+// (`agent_default_model_id`, matching the Create Agent wizard) and the workspace
+// account's model catalog, set by the Studio page once loaded.
+let studioNewAgentModelId: string = DEFAULT_NEW_AGENT_MODEL.model_id;
+let studioCatalogModels: BedrockModelOption[] = [];
+
+/** Called by the Studio page with the configured defaults and the account catalog. */
+export function setStudioModelContext(ctx: {
+  fallbackModelId?: string | null;
+  newAgentModelId?: string | null;
+  catalog?: BedrockModelOption[];
+}): void {
+  setStudioFallbackModelId(ctx.fallbackModelId);
+  studioNewAgentModelId = ctx.newAgentModelId?.trim() || DEFAULT_NEW_AGENT_MODEL.model_id;
+  studioCatalogModels = ctx.catalog ?? [];
+}
+
+/**
+ * Bedrock dropdown rows: the configured new-agent default and the canvas fallback
+ * first, then the static list, then the account catalog — deduped, a known id
+ * keeping its curated name.
+ */
+export function studioBedrockModels(): BedrockModelOption[] {
+  const byId = new Map<string, BedrockModelOption>();
+  for (const m of [...BEDROCK_MODELS, ...studioCatalogModels]) if (!byId.has(m.model_id)) byId.set(m.model_id, m);
+  const order = [
+    studioNewAgentModelId,
+    studioFallbackModel,
+    ...BEDROCK_MODELS.map((m) => m.model_id),
+    ...studioCatalogModels.map((m) => m.model_id),
+  ];
+  const out: BedrockModelOption[] = [];
+  for (const id of order) {
+    if (!id || out.some((m) => m.model_id === id)) continue;
+    out.push(byId.get(id) ?? { model_id: id, model_name: id });
+  }
+  return out;
+}
+
+/** The model a newly dropped agent node starts on: the configured default. */
+export function newAgentModel(): BedrockModelOption {
+  return studioBedrockModels()[0];
+}
 
 /**
  * OpenAI GPT-5.x / GPT-6 on native Bedrock (any profile prefix). These take a
@@ -272,7 +344,7 @@ export function isCustomModel(
 ): boolean {
   if (modelName === CUSTOM_MODEL_NAME) return true;
   if (!modelId) return false;
-  return !BEDROCK_MODELS.some((m) => m.model_id === modelId);
+  return !studioBedrockModels().some((m) => m.model_id === modelId);
 }
 
 /** Same as {@link isCustomModel} but against the Mantle catalog. */

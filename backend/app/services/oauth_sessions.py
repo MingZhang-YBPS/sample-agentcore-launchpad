@@ -45,6 +45,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context
 from app.models.ledger import Agent, OauthPendingSession, UserGrant, UserTokenRevocation
 
 logger = logging.getLogger(__name__)
@@ -331,6 +332,26 @@ def complete(
     data_client: Any,
     user_token: Callable[[str], str | None] | None = None,
 ) -> dict[str, Any]:
+    """``_complete`` across projects: a consent started in one project may be
+    finished while the browser's current project is another. The session URI is a
+    one-time capability already bound to its user (checked below), and the grant
+    takes its agent's project (``UserGrant.__project_parent__``)."""
+    with project_context(None):
+        return _complete(
+            db, workspace_id, session_uri,
+            caller=caller, data_client=data_client, user_token=user_token,
+        )
+
+
+def _complete(
+    db: Session,
+    workspace_id: str,
+    session_uri: str,
+    *,
+    caller: str,
+    data_client: Any,
+    user_token: Callable[[str], str | None] | None = None,
+) -> dict[str, Any]:
     """Bind the consented token to its recorded user (leg 3), then mark the
     grant authorized and drop the session row.
 
@@ -420,11 +441,18 @@ def complete(
 
 
 def revoke(db: Session, workspace_id: str, *, user_id: str, provider: str) -> dict[str, Any]:
-    """Force re-auth on the next call for every agent holding this grant.
+    """Force re-auth on the next call for every agent holding this grant — in every
+    project: the revocation is per (user, Connection), one workspace-level row
+    (unique per workspace), and the query is already confined to this user.
 
     Gateway grants (``gw:<gateway_id>``) and their in-flight consents are left as
     they are: the token stays usable in the gateway's vault slot whatever the
     ledger says, so marking it revoked would only misreport it."""
+    with project_context(None):
+        return _revoke(db, workspace_id, user_id=user_id, provider=provider)
+
+
+def _revoke(db: Session, workspace_id: str, *, user_id: str, provider: str) -> dict[str, Any]:
     now = _now()
     revocation = _revocation(db, workspace_id, user_id, provider)
     if revocation is None:
@@ -501,17 +529,18 @@ def forget_agent(db: Session, workspace_id: str, agent_id: str) -> int:
 
 def forget_connection(db: Session, workspace_id: str, provider: str) -> int:
     """Drop every user's grants, revocation and in-flight consents for a deleted
-    Connection: the credential provider (and its vaulted tokens) is gone. Caller
-    commits."""
-    for model in (OauthPendingSession, UserTokenRevocation):
-        db.query(model).filter(
-            model.workspace_id == workspace_id, model.provider == provider
-        ).delete(synchronize_session=False)
-    return (
-        db.query(UserGrant)
-        .filter(UserGrant.workspace_id == workspace_id, UserGrant.provider == provider)
-        .delete(synchronize_session=False)
-    )
+    Connection: the credential provider (and its vaulted tokens) is gone — in every
+    project, whichever one deletes it. Caller commits."""
+    with project_context(None):
+        for model in (OauthPendingSession, UserTokenRevocation):
+            db.query(model).filter(
+                model.workspace_id == workspace_id, model.provider == provider
+            ).delete(synchronize_session=False)
+        return (
+            db.query(UserGrant)
+            .filter(UserGrant.workspace_id == workspace_id, UserGrant.provider == provider)
+            .delete(synchronize_session=False)
+        )
 
 
 def list_grants(db: Session, workspace_id: str, *, user_id: str) -> list[dict[str, Any]]:

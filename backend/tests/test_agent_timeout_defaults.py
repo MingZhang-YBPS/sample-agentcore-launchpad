@@ -66,15 +66,15 @@ def test_explicit_budgets_survive_proposal_mapping(budget):
     assert spec.timeout_seconds == budget
 
 
-def test_architect_preset_keeps_its_900_second_budget():
-    assert ARCHITECT.timeout_seconds == 900
+def test_architect_preset_has_a_1500_second_budget():
+    assert ARCHITECT.timeout_seconds == 1500
 
 
 def test_a_proposal_without_a_model_gets_the_wizard_default_not_the_spec_fallback(
     monkeypatch,
 ):
-    """The architect proposes the assistant default (GPT-6 Sol on native Bedrock).
-    It equals AgentSpec's agent default today, but the two are separate roles."""
+    """The architect proposes the assistant default (GPT-6 Sol on native Bedrock);
+    AgentSpec's own default (V3: agent_default_model_id) is a separate role."""
     from app.assistant import service
     from app.assistant.proposal import PROPOSAL_DEFAULT_MODEL_ID
     from app.core.config import get_settings
@@ -86,7 +86,7 @@ def test_a_proposal_without_a_model_gets_the_wizard_default_not_the_spec_fallbac
     assert proposal.model_id == mapped.model_id == PROPOSAL_DEFAULT_MODEL_ID
     assert mapped.method == "harness" and mapped.model_source == "bedrock"
     assert model_config(mapped)["apiFormat"] == "converse_stream"
-    assert DEFAULT_MODEL_ID == PROPOSAL_DEFAULT_MODEL_ID  # equal by default only
+    assert DEFAULT_MODEL_ID != PROPOSAL_DEFAULT_MODEL_ID
     monkeypatch.setattr(get_settings(), "agent_default_model_id", "us.amazon.nova-pro-v1:0")
     assert ProposalContent(name="ordinary-agent", system_prompt="x").model_id == (
         PROPOSAL_DEFAULT_MODEL_ID)

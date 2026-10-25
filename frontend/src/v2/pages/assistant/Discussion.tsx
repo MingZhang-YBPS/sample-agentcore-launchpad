@@ -1,10 +1,19 @@
-import type { RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../../../auth/auth-context";
 import { Markdown } from "../../../components";
+import { JumpToLatest } from "../../../components/JumpToLatest";
 import type { AssistantCatalog, AssistantConversationDetail } from "../../../lib/api";
-import { type AssistantLiveMessage, retryableTurn, stripProposalBlock, TURN_RETRIED_NAME } from "../../../lib/assistant";
+import {
+  type AssistantContextDigest,
+  type AssistantContextWindow,
+  type AssistantLiveMessage,
+  contextDividerIndex,
+  retryableTurn,
+  stripProposalBlock,
+  TURN_RETRIED_NAME,
+} from "../../../lib/assistant";
+import { useFollowOwnTurns, useStickToBottom } from "../../../lib/useStickToBottom";
 import { Alert, Button, Descriptions, LinkButton, Tag } from "../../ui";
 import { SECTION_IDS, useReadOnly } from "./common";
 
@@ -12,8 +21,8 @@ export const COMPOSER_ID = "v2-assistant-input";
 
 /** The streaming transcript, the composer and the workspace catalog summary. */
 export function DiscussionCard({
-  conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog, threadRef,
-  retryOf, onRetry,
+  conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog,
+  retryOf, onRetry, context, onSummarize, digest, onRegenerateDigest, regeneratingDigest,
 }: {
   conversation: AssistantConversationDetail;
   messages: AssistantLiveMessage[];
@@ -23,21 +32,72 @@ export function DiscussionCard({
   preparing: boolean;
   onSend: () => void;
   onRefreshCatalog: () => void;
-  threadRef: RefObject<HTMLDivElement>;
   /** the failed turn the composer will retry (null = an ordinary new turn) */
   retryOf: number | null;
   /** start (turn, prompt) or cancel (null) an edit-and-retry */
   onRetry: (target: { turn: number; prompt: string } | null) => void;
+  /** the replay window the assistant sees (null = unknown, no divider) */
+  context?: AssistantContextWindow | null;
+  /** send the preset "summarize what is confirmed into the proposal" message */
+  onSummarize?: () => void;
+  /** the summary of the omitted turns the assistant sees instead (C2) */
+  digest?: AssistantContextDigest | null;
+  /** the owner's "wrong, regenerate" (absent for everyone else) */
+  onRegenerateDigest?: () => void;
+  regeneratingDigest?: boolean;
 }) {
   const { t } = useTranslation();
   const { username } = useAuth();
   const readOnly = useReadOnly();
+  // follows the stream only while the reader is at the bottom
+  const thread = useStickToBottom();
+  useFollowOwnTurns(messages.length, messages[messages.length - 1]?.role === "user", thread.toBottom);
   // A shared conversation has several senders: name everyone but the caller.
   const sender = (author?: string | null) =>
     author && author !== username ? author : t("assistantPage.you");
   const marker = t("assistantPage.proposalInText");
   const sendDisabled = busy || preparing || !input.trim() || conversation.turn_in_progress !== null;
   const retryable = busy ? null : retryableTurn(messages);
+  const dividerAt = contextDividerIndex(messages, context ?? null);
+  const divider = dividerAt < 0 || !context ? null : (
+    <div key="context-divider" className="v2-assistant-context" role="separator" data-testid="v2-assistant-context-divider">
+      <div className="line"><span>{t("v3.assistant.context.divider", { n: context.omitted_turns })}</span></div>
+      <div className="v2-muted">{t("v3.assistant.context.hint")}</div>
+      {!readOnly && onSummarize && (
+        <button
+          type="button"
+          className="v2-link"
+          disabled={busy || preparing || conversation.turn_in_progress !== null}
+          onClick={onSummarize}
+          data-testid="v2-assistant-context-summarize"
+        >
+          {t("v3.assistant.context.summarize")}
+        </button>
+      )}
+      {digest?.text ? (
+        <details className="v2-assistant-digest" data-testid="v2-assistant-digest">
+          <summary>{t("v3.assistant.digest.show", { n: digest.through_turn ?? 0 })}</summary>
+          <div className="v2-muted">{t("v3.assistant.digest.note")}</div>
+          <Markdown text={digest.text} />
+          {!readOnly && onRegenerateDigest && (
+            <button
+              type="button"
+              className="v2-link"
+              disabled={regeneratingDigest || digest.generating}
+              onClick={onRegenerateDigest}
+              data-testid="v2-assistant-digest-regenerate"
+            >
+              {regeneratingDigest || digest.generating
+                ? t("v3.assistant.digest.regenerating")
+                : t("v3.assistant.digest.regenerate")}
+            </button>
+          )}
+        </details>
+      ) : digest?.generating ? (
+        <div className="v2-muted" data-testid="v2-assistant-digest-generating">{t("v3.assistant.digest.generating")}</div>
+      ) : null}
+    </div>
+  );
   let lastErrorIndex = -1;
   if (retryable) {
     messages.forEach((m, i) => {
@@ -53,12 +113,12 @@ export function DiscussionCard({
         </h2>
         <div
           className="v2-assistant-thread"
-          ref={threadRef}
+          ref={thread.ref}
           data-testid="v2-assistant-thread"
           data-conversation={conversation.id}
         >
           {messages.length === 0 && <div className="v2-muted" style={{ padding: "24px 0" }}>{t("assistantPage.emptyThread")}</div>}
-          {messages.map((msg, i) =>
+          {messages.map((msg, i) => [i === dividerAt ? divider : null,
             msg.role === "user" ? (
               <div key={i} className="v2-turn user">
                 <div className="who">{sender(msg.author)}</div>
@@ -111,8 +171,10 @@ export function DiscussionCard({
                   )}
                 </Alert>
               </div>
-            ),
+            )],
           )}
+          {dividerAt === messages.length && divider}
+          <JumpToLatest show={!thread.atBottom} onClick={thread.toBottom} />
         </div>
         {!readOnly && <div className="v2-assistant-composer">
           <label className="v2-muted" style={{ fontSize: 12.5 }} htmlFor={COMPOSER_ID}>

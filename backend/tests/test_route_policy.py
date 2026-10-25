@@ -19,7 +19,9 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.route_policy import (
     ADMIN,
+    INFRA,
     MEMBER,
+    PROJECT_EXEMPT,
     PUBLIC,
     ROUTE_POLICY,
     WORKSPACE_EXEMPT,
@@ -29,6 +31,7 @@ from app.core.route_policy import (
 from app.main import create_app
 from app.routers import auth
 from app.services import users as users_service
+from tests.conftest import TEST_PROJECT
 
 ADMIN_CREDS = {"username": "operator", "password": "s3cret-pass"}
 MEMBER_CREDS = {
@@ -57,7 +60,9 @@ def _api_routes(app) -> set[tuple[str, str]]:
     pairs = set()
     for route in walk(app.routes):
         path = getattr(route, "path_format", None) or getattr(route, "path", "")
-        if not (path == "/api" or path.startswith("/api/")):
+        # `/share` is the account-free surface (T13): outside /api but classified
+        # in the same table, so it cannot ship unclassified either.
+        if not (path == "/api" or path.startswith(("/api/", "/share/"))):
             continue
         for method in getattr(route, "methods", None) or []:
             if method in {"HEAD", "OPTIONS"}:
@@ -117,8 +122,14 @@ def admin_session(gated_app):
 
 ADMIN_ROUTES = sorted(k for k, v in ROUTE_POLICY.items() if v == ADMIN)
 MEMBER_ROUTES = sorted(k for k, v in ROUTE_POLICY.items() if v == MEMBER)
+# account keys only: project.use / project.write come with every project membership,
+# so revoking the account's keys does not close them (see TestProjectKeyRoutes)
 PERMISSION_ROUTES = sorted(
-    k for k, v in ROUTE_POLICY.items() if v.startswith("perm:")
+    k for k, v in ROUTE_POLICY.items()
+    if v.startswith("perm:") and not v.startswith("perm:project.")
+)
+PROJECT_KEY_ROUTES = sorted(
+    k for k, v in ROUTE_POLICY.items() if v.startswith(("perm:project.", INFRA))
 )
 
 
@@ -167,7 +178,41 @@ class TestNoDrift:
         permission_roles = {
             f"perm:{key}" for key in users_service.AGENT_PERMISSIONS
         }
-        assert set(ROUTE_POLICY.values()) <= {ADMIN, MEMBER, PUBLIC} | permission_roles
+        project_roles = {"perm:project.use", "perm:project.write", "perm:mcp.approve"}
+        infra_roles = {INFRA} | {f"{INFRA}+{role}" for role in permission_roles}
+        from app.services.access import ALL_PROJECT_KEYS
+
+        # pperm:<key> — a project key checked against the project named in the path
+        pperm_roles = {f"pperm:{key}" for key in ALL_PROJECT_KEYS}
+        assert set(ROUTE_POLICY.values()) <= (
+            {ADMIN, MEMBER, PUBLIC} | permission_roles | project_roles | infra_roles
+            | pperm_roles
+        )
+
+    def test_no_workspace_write_is_left_to_any_member(self):
+        """Design §5.3: inside a project every write states the key it needs —
+        participation (project.use), an ordinary write (project.write), a named key, or
+        workspace-shared infrastructure (infra). Bare MEMBER writes stay hub-global."""
+        loose = sorted(
+            (method, path) for (method, path), role in ROUTE_POLICY.items()
+            if role == MEMBER and method != "GET" and (method, path) not in WORKSPACE_EXEMPT
+        )
+        assert not loose, f"classify these workspace writes (design §5.3): {loose}"
+
+    def test_infra_routes_run_inside_a_project(self):
+        """`infra` reads the workspace's project count and the project's keys, so it
+        must be workspace-scoped and project-resolved."""
+        infra = {k for k, v in ROUTE_POLICY.items() if v.startswith(INFRA)}
+        assert infra and not infra & (WORKSPACE_EXEMPT | PROJECT_EXEMPT)
+
+    def test_the_project_exemptions_are_live_workspace_routes(self):
+        """Both directions: an exemption names a classified, workspace-scoped route
+        (hub-global ones never resolve a project anyway), and a project-key role never
+        sits on an exempt route, where it would silently fall back to account keys."""
+        assert PROJECT_EXEMPT <= set(ROUTE_POLICY)
+        assert not PROJECT_EXEMPT & WORKSPACE_EXEMPT
+        for key in PROJECT_EXEMPT:
+            assert not ROUTE_POLICY[key].startswith(("perm:project.", INFRA)), key
 
     def test_the_open_paths_are_public(self):
         """`auth_middleware` lets these through, so the table must agree."""
@@ -210,6 +255,40 @@ class TestNoDrift:
             ("GET", "/api/observability/sessions"),
         ]:
             assert key not in WORKSPACE_EXEMPT
+
+
+class TestTheStewardSplit:
+    """Projects §11.4: every `ADMIN` route is classified structure (`ADMIN`, a steward
+    passes) or data (`ADMIN_DATA`, a steward is refused) — both directions."""
+
+    def test_every_admin_route_is_one_of_the_two(self, gated_app):
+        from app.core.route_policy import ADMIN_SPLIT
+
+        unclassified = sorted(set(ADMIN_ROUTES) - set(ADMIN_SPLIT))
+        assert not unclassified, (
+            "classify these ADMIN routes as structure (ADMIN) or data (ADMIN_DATA) in "
+            f"route_policy.ADMIN_SPLIT (projects §11.4): {unclassified}"
+        )
+        stale = sorted(set(ADMIN_SPLIT) - set(ADMIN_ROUTES))
+        assert not stale, f"ADMIN_SPLIT names routes that are not ADMIN: {stale}"
+
+    def test_the_two_kinds_do_not_overlap(self):
+        from app.core.route_policy import _DATA_ROUTES, _STRUCTURE_ROUTES
+
+        assert not set(_DATA_ROUTES) & set(_STRUCTURE_ROUTES)
+        assert len(set(_DATA_ROUTES)) == len(_DATA_ROUTES)
+        assert len(set(_STRUCTURE_ROUTES)) == len(_STRUCTURE_ROUTES)
+
+    def test_the_design_s_data_routes_are_data(self):
+        from app.core.route_policy import ADMIN_DATA, admin_kind
+
+        for key in [("GET", "/api/costs"), ("PUT", "/api/steward/settings"),
+                    ("POST", "/api/system/update/prepare")]:
+            assert admin_kind(*key) == ADMIN_DATA, key
+        # cross-platform reads whose handlers keep a steward to structure (WIRE-B)
+        for key in [("GET", "/api/audit"), ("GET", "/api/fleet"), ("GET", "/api/inbox")]:
+            assert admin_kind(*key) != ADMIN_DATA, key
+        assert admin_kind("GET", "/api/not-a-route") == ADMIN_DATA  # unknown is closed
 
 
 class TestAdminRoutesAreEnforced:
@@ -271,6 +350,77 @@ class TestPermissionRoutesAreEnforced:
         assert response.json()["code"] == "auth.permission_required"
 
 
+class TestProjectKeyRoutes:
+    """`perm:project.*` and `infra` routes: anonymous 401; a member whose project role
+    holds no keys (viewer) 403 before any handler runs."""
+
+    @pytest.mark.parametrize(("method", "path_format"), PROJECT_KEY_ROUTES)
+    def test_anonymous_gets_401(self, anon_session, method, path_format):
+        response = anon_session.request(method, _concrete(path_format))
+        assert response.status_code == 401, response.text
+
+    @pytest.mark.parametrize(("method", "path_format"), PROJECT_KEY_ROUTES)
+    def test_a_viewer_gets_403(self, member_session, method, path_format):
+        _set_default_role("viewer")
+        response = member_session.request(method, _concrete(path_format))
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.permission_required"
+
+
+def _set_default_role(role_key: str) -> None:
+    from sqlalchemy import text
+
+    from app.services import access
+
+    db = SessionLocal()
+    try:
+        user = users_service.find_by_username(db, MEMBER_CREDS["username"])
+        assert user is not None
+        db.execute(text("DELETE FROM project_members WHERE user_id = :u"), {"u": user.id})
+        db.execute(
+            text("INSERT INTO project_members (project_id, user_id, role_key, added_at)"
+                 " VALUES (:p, :u, :r, '2026-10-14 00:00:00')"),
+            {"p": TEST_PROJECT, "u": user.id, "r": role_key},
+        )
+        access.bump_epoch(db)
+        db.commit()
+    finally:
+        db.close()
+
+
+class TestInfraNeedsAnAdminOnceProjectsShareTheWorkspace:
+    INFRA_ROUTE = next(k for k in PROJECT_KEY_ROUTES if ROUTE_POLICY[k] == INFRA)
+
+    def test_one_project_means_the_projects_write_key(self, member_session):
+        from app.core.route_policy import infra_key
+
+        assert infra_key(INFRA) == "project.write"
+        assert infra_key(f"{INFRA}+perm:identity.manage") == "identity.manage"
+
+    def test_several_projects_mean_admin_only(self, member_session):
+        from sqlalchemy import text
+
+        from app.services import access
+
+        _set_default_role("developer")  # holds project.write: only the count refuses
+        db = SessionLocal()
+        try:
+            db.execute(text("INSERT INTO projects (id, name, description, status, is_default,"
+                            " created_at, updated_at) VALUES ('alpha', 'Alpha', '', 'active', 0,"
+                            " '2026-10-14 00:00:00', '2026-10-14 00:00:00')"))
+            db.execute(text("INSERT INTO project_workspaces (project_id, workspace_id,"
+                            " is_workspace_default, enabled_at) VALUES ('alpha', 'default', 0,"
+                            " '2026-10-14 00:00:00')"))
+            access.bump_epoch(db)
+            db.commit()
+        finally:
+            db.close()
+        method, path_format = self.INFRA_ROUTE
+        response = member_session.request(method, _concrete(path_format))
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.infra_admin_required"
+
+
 class TestUnclassifiedRouteFailsClosed:
     def test_removing_an_entry_makes_the_route_refuse(self, admin_session, monkeypatch):
         monkeypatch.delitem(ROUTE_POLICY, ("GET", "/api/overview"))
@@ -285,3 +435,105 @@ class TestOpenConsoleIsUnaffected:
         so the table must not lock a single-operator dev box out of its own
         console."""
         assert client.get("/api/apikeys").status_code == 200
+
+
+class TestProjectOwnedSkillRecords:
+    """A registry Agent-skill record belongs to the project that registered it: in a
+    multi-project workspace that project's members manage it with project.write,
+    while MCP records and another project's / unowned skills stay admin-only."""
+
+    @pytest.fixture
+    def two_projects(self, member_session, monkeypatch):
+        from sqlalchemy import text
+
+        from app.routers import registry as registry_router
+        from app.services import access
+
+        _set_default_role("developer")
+        db = SessionLocal()
+        try:
+            db.execute(text("INSERT INTO projects (id, name, description, status, is_default,"
+                            " created_at, updated_at) VALUES ('alpha', 'Alpha', '', 'active', 0,"
+                            " '2026-10-14 00:00:00', '2026-10-14 00:00:00')"))
+            db.execute(text("INSERT INTO project_workspaces (project_id, workspace_id,"
+                            " is_workspace_default, enabled_at) VALUES ('alpha', 'default', 0,"
+                            " '2026-10-14 00:00:00')"))
+            access.bump_epoch(db)
+            db.commit()
+        finally:
+            db.close()
+        record = {"recordId": "rec-skill-1", "name": "s1", "descriptorType": "AGENT_SKILLS",
+                  "status": "DRAFT"}
+        calls: list[tuple[str, str]] = []
+        monkeypatch.setattr(registry_router.console, "register_skill",
+                            lambda ctx, name, desc, md: dict(record))
+        monkeypatch.setattr(registry_router.console, "console_action",
+                            lambda ctx, rid, action, is_admin: calls.append((rid, action)))
+        monkeypatch.setattr(registry_router.console, "console_get",
+                            lambda ctx, rid: {**record, "recordId": rid})
+        monkeypatch.setattr(registry_router, "_with_system",
+                            lambda ws, recs: [registry_router._record_out(r) for r in recs])
+        return calls
+
+    def test_member_registers_a_skill_and_manages_it(self, member_session, two_projects):
+        from app.models.ledger import ResourceCreator
+
+        response = member_session.post("/api/registry/records", json={
+            "type": "AGENT_SKILLS", "name": "skill-one", "skill_md": "---\nname: s1\n---\n"})
+        assert response.status_code == 201, response.text
+        db = SessionLocal()
+        try:
+            row = db.query(ResourceCreator).filter_by(resource_id="rec-skill-1").one()
+            assert (row.kind, row.project_id) == ("registry_skill", TEST_PROJECT)
+        finally:
+            db.close()
+        submit = member_session.post("/api/registry/records/rec-skill-1/action",
+                                     json={"action": "submit"})
+        assert submit.status_code == 200, submit.text
+        assert two_projects == [("rec-skill-1", "submit")]
+
+    def test_mcp_registration_stays_admin_only(self, member_session, two_projects):
+        response = member_session.post("/api/registry/records", json={
+            "type": "MCP", "name": "mcp-one", "url": "https://example.com/mcp"})
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.infra_admin_required"
+
+    def test_a_record_this_project_does_not_own_stays_admin_only(
+        self, member_session, two_projects
+    ):
+        response = member_session.post("/api/registry/records/rec-unowned/action",
+                                       json={"action": "submit"})
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.infra_admin_required"
+        assert two_projects == []
+
+    def test_another_projects_skill_is_hidden_from_lists_and_attachables(
+        self, member_session, two_projects
+    ):
+        """BUG-35: a skill registered in one project must not show up in another
+        project's registry list, record reads or the wizard's attachable skills."""
+        from app.core.project_scope import project_context
+        from app.routers import registry as registry_router
+
+        response = member_session.post("/api/registry/records", json={
+            "type": "AGENT_SKILLS", "name": "skill-one", "skill_md": "---\nname: s1\n---\n"})
+        assert response.status_code == 201, response.text
+        data = {"mcp": [], "skills": [{"record_id": "rec-skill-1", "name": "s1"},
+                                      {"record_id": "rec-unowned", "name": "preset"}]}
+
+        class _Ws:
+            id = "default"
+
+        db = SessionLocal()
+        try:
+            with project_context("alpha"):
+                assert registry_router._foreign_skill_ids(db, "default", "alpha") == {
+                    "rec-skill-1"}
+                seen = registry_router._project_attachables(_Ws(), data)
+                # an unowned record (system preset, pre-project) stays workspace level
+                assert [s["record_id"] for s in seen["skills"]] == ["rec-unowned"]
+            with project_context(TEST_PROJECT):
+                assert registry_router._foreign_skill_ids(db, "default", TEST_PROJECT) == set()
+                assert registry_router._project_attachables(_Ws(), data) == data
+        finally:
+            db.close()

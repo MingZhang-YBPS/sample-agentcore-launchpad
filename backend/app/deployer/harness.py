@@ -13,12 +13,25 @@ import re
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.project_scope import current_project
+from app.deployer import mounts
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.network import NETWORK_FROM_KEY, spec_vpc
+from app.deployer.network import describe as describe_network
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.harness_tool_access import gateway_target_selectors, selected_tool_patterns
 from app.models.ledger import Agent
 from app.schemas.agent import DEFAULT_GPT_MAX_TOKENS, AgentSpec, is_openai_model_id
-from app.services import agent_iam, context_layer_gateway, registry_console
+from app.services import (
+    agent_iam,
+    context_layer_gateway,
+    cost_tags,
+    inference_profiles,
+    project_gateway,
+    project_memory,
+    project_telemetry,
+    registry_console,
+)
 from app.services import kb_gateway as kbgw
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
@@ -139,18 +152,23 @@ _CONTEXT_PREFIXES = (
 
 
 def strip_generated_prompt(spec: AgentSpec, text: str) -> str:
-    """Remove the platform-appended sections from a prompt read back from AWS.
+    """Remove the platform-appended KB, mount and COA context-layer sections from a
+    prompt read back from AWS.
 
-    The deployed ``systemPrompt`` is ``spec.system_prompt + _kb_prompt(spec)`` (+ the
-    COA context-layer section), so a prompt revised from the LIVE Harness (an AI
-    recommendation) carries them too; storing it as the spec prompt would make the next
-    deploy append them twice (measured live 2026-09-30). Exact block first; otherwise
-    the KB marker through the section's closing line, in case the revision reflowed
-    the KB bullet lines."""
+    The deployed ``systemPrompt`` is ``spec.system_prompt + _kb_prompt(spec) +
+    mounts.prompt_note(spec)`` (+ the COA context-layer section), so a prompt revised
+    from the LIVE Harness (an AI recommendation) carries those sections too; storing
+    it as the spec prompt would make the next deploy append them twice (measured live
+    2026-09-30). Exact block first; otherwise (KB only) the marker through the
+    section's closing line, in case the revision reflowed the KB bullet lines.
+    Every COA addendum the Harness may carry (direct or gateway mode) is stripped."""
     for prefix in _CONTEXT_PREFIXES:
         context = context_layer_support.addendum_for(spec, tool_prefix=prefix)
         if context and context in text:
             text = text.replace(context, "").rstrip()
+    note = mounts.prompt_note(spec)
+    if note and note in text:
+        text = text.replace(note, "").rstrip()
     if not spec.knowledge_bases:
         return text
     block = _kb_prompt(spec)
@@ -177,10 +195,11 @@ def build_create_params(
     kb_gateway: dict[str, str] | None = None,
     gateway_attachments: list[dict[str, Any]] | None = None,
     shared_gateway_arn: str | None = None,
+    vpc: dict[str, list[str]] | None = None,
 ) -> dict:
     """AgentSpec → CreateHarness kwargs. Harness names disallow hyphens.
 
-    ``gateway`` carries {arn, oauth_provider_arn} — any spec tool of type
+    ``gateway`` carries {arn, oauth_provider_arn[, scopes]} — any spec tool of type
     "gateway" attaches the shared gateway with CLIENT_CREDENTIALS outbound auth
     (legacy config-less ToolRefs). ``gateway_attachments`` is the server-side
     live Registry/Gateway resolution for new ToolRefs and takes precedence.
@@ -192,6 +211,8 @@ def build_create_params(
     system_prompt = spec.system_prompt
     if spec.knowledge_bases:
         system_prompt += _kb_prompt(spec)
+    # the BYO mounts the agent can use (storage-mounts §3.2)
+    system_prompt += mounts.prompt_note(spec)
     system_prompt += _context_prompt(spec)
     params: dict[str, Any] = {
         "harnessName": spec.name.replace("-", "_"),
@@ -271,7 +292,7 @@ def build_create_params(
                             "oauth": {
                                 "providerArn": gateway["oauth_provider_arn"],
                                 "grantType": "CLIENT_CREDENTIALS",
-                                "scopes": [GATEWAY_SCOPE],
+                                "scopes": list(gateway.get("scopes") or [GATEWAY_SCOPE]),
                             }
                         },
                     }
@@ -299,7 +320,7 @@ def build_create_params(
                             "oauth": {
                                 "providerArn": kb_gateway["oauth_provider_arn"],
                                 "grantType": "CLIENT_CREDENTIALS",
-                                "scopes": [GATEWAY_SCOPE],
+                                "scopes": list(kb_gateway.get("scopes") or [GATEWAY_SCOPE]),
                             }
                         },
                     }
@@ -338,15 +359,16 @@ def build_create_params(
         ):
             allowed.append(selector)
     params["allowedTools"] = allowed
-    if spec.env:
-        params["environmentVariables"] = dict(spec.env)
-    # managed session storage on the backing runtime (BYO mounts are container-only);
-    # omitted on create means none. Re-publish rebuilds this from GetHarness.
-    filesystem = filesystem_configurations(spec)
-    if filesystem:
-        params["environment"] = {
-            "agentCoreRuntimeEnvironment": {"filesystemConfigurations": filesystem}
-        }
+    environment_variables = mounts.with_mounts_env(dict(spec.env), spec)
+    if environment_variables:
+        params["environmentVariables"] = environment_variables
+    # session storage + S3 Files / EFS mounts on the backing runtime (storage-mounts
+    # §3.2) and, for a VPC agent, its network (``vpc`` = the resolved profile, design
+    # §12.6; BYO mounts require one); omitted on create means none / PUBLIC.
+    # Re-publish merges this with GetHarness (`hc.environment_for_update`).
+    environment = hc.environment_for_create(filesystem_configurations(spec), vpc)
+    if environment:
+        params["environment"] = environment
     if (spec.memory.short_term or spec.memory.long_term) and memory_arn:
         params["memory"] = {"agentCoreMemoryConfiguration": {"arn": memory_arn}}
     elif not (spec.memory.short_term or spec.memory.long_term):
@@ -381,11 +403,14 @@ def _skill_source(path: str) -> dict[str, Any]:
     return {"path": path}
 
 
-def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
+def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, Any] | None:
+    """{arn, oauth_provider_arn, scopes} of launchpad-kb-gw from an agent's
+    (`project_gateway.effective_resources`) resource map."""
     if resources.get("kb_gateway_arn") and resources.get("oauth_provider_arn"):
         return {
             "arn": resources["kb_gateway_arn"],
             "oauth_provider_arn": resources["oauth_provider_arn"],
+            "scopes": project_gateway.gateway_scopes(resources),
         }
     return None
 
@@ -414,7 +439,8 @@ def _pinned_params(
     memory = res.get("memory") or {}
     kb = res.get("kb_gateway") or None
     kb_gateway = (
-        {"arn": kb["gateway_arn"], "oauth_provider_arn": kb["oauth_provider_arn"]}
+        {"arn": kb["gateway_arn"], "oauth_provider_arn": kb["oauth_provider_arn"],
+         "scopes": list(kb.get("scopes") or [GATEWAY_SCOPE])}
         if kb and kb.get("gateway_arn") and kb.get("oauth_provider_arn")
         else None
     )
@@ -426,7 +452,7 @@ def _pinned_params(
             "gateway_name": "launchpad_kb_gw",
             "outbound_auth": {"oauth": {"providerArn": kb_gateway["oauth_provider_arn"],
                                         "grantType": "CLIENT_CREDENTIALS",
-                                        "scopes": [GATEWAY_SCOPE]}},
+                                        "scopes": kb_gateway["scopes"]}},
         })
     return build_create_params(
         spec,
@@ -435,6 +461,7 @@ def _pinned_params(
         kb_gateway=kb_gateway,
         gateway_attachments=attachments,
         shared_gateway_arn=workspace.resources.get("gateway_arn"),
+        vpc=spec_vpc(spec, workspace.id),
     )
 
 
@@ -485,12 +512,16 @@ def _build_live_params(
 ) -> dict[str, Any]:
     if pin:
         return _pinned_params(spec, workspace, pin)
-    resources = workspace.resources
-    # a spec-pinned memory overrides the workspace's shared bootstrap memory
+    # the deploy runs as the agent's project: an isolated, provisioned project's
+    # gateway tokens come from its own provider and scopes (§10.6) and its default
+    # memory is its own (§10.4); every other project reads the workspace map as is
+    resources = project_gateway.effective_resources(
+        workspace.resources, current_project(), workspace.id)
+    # a spec-pinned memory overrides the project's / workspace's default memory
     memory_arn = (
         memory_arn_for(workspace, spec.memory.memory_id)
         if spec.memory.memory_id
-        else resources.get("memory_arn")
+        else project_memory.memory_resources(resources, workspace.id).get("memory_arn")
     )
     # gateway mode: 409 context_layer.gateway_unavailable without the managed gateway,
     # before any Registry read
@@ -515,6 +546,7 @@ def _build_live_params(
         kb_gateway=_kb_gateway_config(resources),
         gateway_attachments=attachments,
         shared_gateway_arn=resources.get("gateway_arn"),
+        vpc=spec_vpc(spec, workspace.id),
     )
 
 
@@ -541,7 +573,7 @@ def _execution_role_arn(ctx: StageContext, agent: Agent) -> str:
     if not arn:
         if get_settings().per_agent_execution_roles:
             arn = (
-                f"arn:aws:iam::{ctx.workspace.account_id}:role/"
+                f"arn:{ctx.workspace.partition}:iam::{ctx.workspace.account_id}:role/"
                 f"{agent_iam.role_name_for(agent.name, agent.id)}"
             )
         else:
@@ -551,6 +583,43 @@ def _execution_role_arn(ctx: StageContext, agent: Agent) -> str:
 
         require_dedicated_role(agent, arn, ctx.workspace, get_settings())
     return arn
+
+
+def _attribute_to_project(
+    ctx: StageContext, agent: Agent, params: dict[str, Any]
+) -> dict[str, Any]:
+    """Every harness carries the unified cost tags (cost-tags design §1.1: its
+    project — `shared` for a system preset —, workspace, agent id, department and the
+    project's own cost tags). Projects design §10.8 adds, for an isolated project's
+    harness only, the span resource attributes on its environment variables and —
+    behind `project_inference_profiles`, Bedrock-hosted models only — the project's
+    application inference profile as the model id."""
+    out = dict(params)
+    out["tags"] = cost_tags.agent_tags(agent, ctx.workspace.id)
+    if not project_telemetry.attributed(agent.project_id):
+        return out
+    environment = project_telemetry.with_project_attributes(
+        out.get("environmentVariables") or {}, project_id=agent.project_id,
+        agent_id=agent.id, workspace_id=ctx.workspace.id,
+    )
+    out["environmentVariables"] = environment
+    out["tags"] = {**out["tags"], **project_telemetry.tags_from_environment(environment)}
+    spec = AgentSpec(**agent.spec)
+    if spec.model_source == "bedrock" and inference_profiles.enabled():
+        db = ctx.session()
+        try:
+            model_id = inference_profiles.model_id_for(
+                db, project_id=agent.project_id, workspace=ctx.workspace,
+                model_id=spec.model_id, log=ctx.log,
+            )
+        finally:
+            db.close()
+        if model_id != spec.model_id:
+            model = dict(out["model"])
+            model["bedrockModelConfig"] = {**model["bedrockModelConfig"], "modelId": model_id}
+            out["model"] = model
+            ctx.log(f"model {spec.model_id} via the project's inference profile {model_id}")
+    return out
 
 
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
@@ -563,7 +632,7 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     pin = ctx.scratch.get("assistant_pin")
     if pin:
         _verify_pinned_resources(ctx, spec, pin, skills=True)
-    params = _build_live_params(spec, ctx.workspace, pin)
+    params = _attribute_to_project(ctx, agent, _build_live_params(spec, ctx.workspace, pin))
     ctx.scratch["create_params"] = params
     ctx.log(
         f"harness request generated for {params['harnessName']} · "
@@ -687,6 +756,33 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
     return StageResult(detail=role_detail)
 
 
+def _update_network(ctx: StageContext, spec: AgentSpec, workspace_id: str | None) -> Any:
+    """The network an UpdateHarness sends (design §12.6): the spec's profile when it
+    names one; PUBLIC when this re-publish moved the agent off its profile (the job
+    carries the old network); otherwise the live value is kept, so a harness whose
+    network was set outside the platform keeps it."""
+    vpc = spec_vpc(spec, workspace_id)
+    if vpc is not None:
+        ctx.log(f"network: {describe_network(vpc)}")
+        return vpc
+    if ctx.scratch.get(NETWORK_FROM_KEY):
+        ctx.log("network: PUBLIC (moved off its network profile)")
+        return None
+    return hc.KEEP_NETWORK
+
+
+def _published_mount_paths(db: Any, agent_id: str) -> set[str]:
+    """The BYO mount paths any publish of this agent set (its spec snapshots): the
+    entries the platform owns on the live harness even after the spec dropped them,
+    so a re-publish detaches a removed mount (storage-mounts §3.2)."""
+    from app.models.ledger import SpecSnapshot
+
+    paths: set[str] = set()
+    for (spec,) in db.query(SpecSnapshot.spec).filter(SpecSnapshot.agent_id == agent_id):
+        paths |= mounts.manifest_paths(spec)
+    return paths
+
+
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     client = control_client(ctx.workspace)
     mode = ctx.scratch.get("mode", "create")
@@ -699,7 +795,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         def _params() -> dict[str, Any]:
             params = ctx.scratch.get("create_params")
             if params is None:  # resume/update path without scratch — regenerate
-                params = _build_live_params(AgentSpec(**row.spec), ctx.workspace, pin)
+                params = _attribute_to_project(
+                    ctx, row, _build_live_params(AgentSpec(**row.spec), ctx.workspace, pin)
+                )
             if pin:
                 # the last check before the write: the reviewed resources still are
                 # what the request is about to send
@@ -715,10 +813,15 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         if mode == "update" and row.resource_id:  # in-place re-publish → UpdateHarness
             harness_id = row.resource_id
             update_params = hc.wrap_params_for_update(_params())
+            # UpdateHarness takes no tags: the harness is tagged after the update
+            tags = update_params.pop("tags", None)
             update_params["harnessId"] = harness_id
             update_params["environment"] = hc.environment_for_update(
                 hc.get_harness(client, harness_id),
                 filesystem_configurations(AgentSpec(**row.spec)),
+                _update_network(ctx, AgentSpec(**row.spec), row.workspace_id),
+                managed_paths=_published_mount_paths(db, row.id),
+                on_conflict=ctx.log,
             )
             harness = agent_iam.retry_iam_propagation(
                 lambda: hc.update_harness(client, update_params), ctx.log
@@ -728,12 +831,19 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             ctx.log(
                 f"UpdateHarness accepted · harnessId {harness_id} · new version {row.version}"
             )
+            _tag_harness(client, harness.get("arn") or row.arn, tags, ctx.log)
         elif row.resource_id:  # resumed create — harness already made, just poll
             harness_id = row.resource_id
             ctx.log(f"resuming — harness {harness_id} already created, polling status")
         else:  # first create
-            harness = agent_iam.retry_iam_propagation(
-                lambda: hc.create_harness(client, _params()), ctx.log
+            create_params = _params()
+            harness = hc.create_after_name_release(
+                client,
+                lambda: agent_iam.retry_iam_propagation(
+                    lambda: hc.create_harness(client, create_params), ctx.log
+                ),
+                create_params["harnessName"],
+                ctx.log,
             )
             harness_id = harness["harnessId"]
             row.resource_id = harness_id
@@ -750,6 +860,19 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         return StageResult(detail=f"READY · {ready['arn']}")
     finally:
         db.close()
+
+
+def _tag_harness(client: Any, arn: str | None, tags: dict[str, str] | None,
+                 log: Any) -> None:
+    """A re-publish catches up on the harness's cost tags (one created before cost
+    tags, or before its project was isolated, has none or old ones). Best-effort: a
+    refusal is logged and the deploy goes on (the back-fill reports it)."""
+    if not tags or not arn:
+        return
+    try:
+        client.tag_resource(resourceArn=arn, tags=tags)
+    except Exception as exc:  # noqa: BLE001 — attribution must not fail a publish
+        log(f"tagging {arn} with its project failed: {exc}")
 
 
 def _stage_register(ctx: StageContext, agent: Agent) -> StageResult:
@@ -770,7 +893,12 @@ register_method("harness", STAGES)
 
 
 def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
-    """Remove the AWS-side harness + per-agent KB target for a ledger row (idempotent)."""
+    """Remove the AWS-side harness + per-agent KB target for a ledger row (idempotent).
+
+    Raises `AppError("agent.teardown_pending")` when AWS still holds the harness because
+    its endpoints are mid-deletion: the caller marks the ledger row deleted anyway and
+    `dlc.scheduler.sweep_deleted_resources` finishes the AWS side.
+    """
     client = control_client(workspace)
     resources = workspace.resources
     if resources.get("kb_gateway_id"):
@@ -785,7 +913,23 @@ def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
             )
     if not agent.resource_id:
         return
+    # a gated agent serves through named endpoints; AgentCore refuses to delete a
+    # resource that still has them (Agent-DLC §6)
+    from app.dlc.releases import delete_endpoints
+
+    delete_endpoints(agent, client)
     try:
         hc.delete_harness(client, agent.resource_id)
     except client.exceptions.ResourceNotFoundException:
         pass
+    except client.exceptions.ConflictException as exc:
+        # a harness endpoint can stay DELETING for minutes; do not hold the request
+        from app.core.errors import AppError
+
+        raise AppError(
+            "agent.teardown_pending",
+            "the harness endpoints are still being deleted on AWS; the agent is "
+            "removed from the console and the harness is deleted automatically once "
+            "AWS lets go",
+            {"resource_id": agent.resource_id},
+        ) from exc

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage } from "../../../lib/api";
+import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader, Select } from "../../ui";
 import { CanaryEvaluatorFields } from "./CanaryEvaluators";
@@ -77,13 +78,14 @@ export function CanaryStart() {
       const candidate: { system_prompt?: string; code?: string } = {};
       if (prompt.trim()) candidate.system_prompt = prompt;
       if (isStudio && code.trim()) candidate.code = code;
-      const row = await api.createRuntimeCanary(
+      const row = await withStorageConfirm((confirm) => api.createRuntimeCanary(
         isHarness
           ? {
               agent_id: agentId,
               harness_versions: { control, treatment: latest },
               start_stage: runFirst ? 0 : 1,
               ...evaluators.body,
+              ...storageFlag(confirm),
             }
           : {
               agent_id: agentId,
@@ -91,8 +93,9 @@ export function CanaryStart() {
               start_stage: runFirst ? 0 : 1,
               ...(sourceExp ? { source_experiment_id: sourceExp } : {}),
               ...evaluators.body,
+              ...storageFlag(confirm),
             },
-      );
+      ));
       toast("success", t("v2.canary.created", { name: row.name }));
       setParams({ mode: "canary", canary: row.id });
     } catch (err) {

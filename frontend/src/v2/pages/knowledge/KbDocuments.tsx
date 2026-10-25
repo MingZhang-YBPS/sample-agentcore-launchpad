@@ -125,7 +125,7 @@ function Jobs({ source, lead }: { source: DataSource; lead: ReactNode }) {
                 <dl className="v2-knowledge-stats">
                   {Object.entries(j.statistics).map(([k, v]) => (
                     <div key={k}>
-                      <dt>{humanizeStat(k)}</dt>
+                      <dt>{t(`knowledge.stats.${k}`, { defaultValue: humanizeStat(k) })}</dt>
                       <dd>{v}</dd>
                     </div>
                   ))}

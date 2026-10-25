@@ -29,9 +29,12 @@ MAX_BATCH_EVALUATORS = 10
 # GPT-6 rejects (it needs >= 16) — an explicit inferenceConfig.maxTokens does not change
 # that probe (measured 2026-09-29, us-east-1 + us-west-2). Until AWS lifts it, a judge
 # whose model fails exactly that probe is created on the fallback model instead and the
-# caller is told, so the default switches over by itself once the service accepts GPT-6.
-# Both ids are settings (judge_model_id / judge_fallback_model_id: env, launchpad.yaml
-# or the admin Models page), read per call; an empty fallback disables the retry.
+# caller is told, so the default switches over by itself once the service accepts GPT-6
+# (re-measured 2026-10-12, us-east-1: GPT-6 Sol and GLM-5.3 are both accepted now).
+# Both ids are settings (judge_model_id / judge_fallback_model_id: env
+# LAUNCHPAD_JUDGE_MODEL_ID / LAUNCHPAD_JUDGE_FALLBACK_MODEL_ID, launchpad.yaml or the
+# admin Models page), read per call, so an account without OpenAI or Anthropic access
+# can switch them; an empty fallback disables the retry.
 
 
 def judge_default_model_id() -> str:

@@ -22,6 +22,24 @@ class AttachmentInput(BaseModel):
     data: str = Field(repr=False)
 
 
+# AgentCore requires a runtime session id of at least 33 characters (see
+# `agentcore.harness.new_session_id`, which mints 64). A caller-supplied shorter one
+# used to reach botocore and surface as a 500; validating it here turns the same
+# mistake into a 422 that names the rule. The ceiling and charset are AgentCore's.
+SESSION_ID_MIN = 33
+SESSION_ID_MAX = 256
+SessionIdField = Field(
+    default=None,
+    min_length=SESSION_ID_MIN,
+    max_length=SESSION_ID_MAX,
+    pattern=r"^[A-Za-z0-9_\-#:.@]+$",
+    description=(
+        f"Existing session to continue. {SESSION_ID_MIN}–{SESSION_ID_MAX} characters; "
+        "omit it to start a new session."
+    ),
+)
+
+
 class AttachmentRequest(BaseModel):
     prompt: str = Field(default="", max_length=MAX_TEXT_CHARS)
     attachments: list[AttachmentInput] = Field(default_factory=list)

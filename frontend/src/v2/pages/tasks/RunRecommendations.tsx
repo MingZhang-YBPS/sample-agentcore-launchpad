@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useModelCatalog, withCatalogModels } from "../../../lib/model-catalog";
 import { useAuth } from "../../../auth/auth-context";
 import { DiffPanes } from "../../../components/DiffPanes";
 import { api, errorMessage, type RecommendProviderInfo } from "../../../lib/api";
@@ -103,6 +104,7 @@ export function RunRecommendations({
   readOnly?: boolean;
 }) {
   const { t } = useTranslation();
+  useModelCatalog(); // the account catalog joins the model choices once it lands
   const toast = useV2Toast();
   const { can } = useAuth();
   const [tick, setTick] = useState(0);
@@ -285,7 +287,7 @@ export function RunRecommendations({
                     onChange={setModelChoice}
                     testId="v2-rec-model"
                     options={[
-                      ...thirdParty.models.map((m) => ({
+                      ...withCatalogModels(thirdParty.models).map((m) => ({
                         value: m.model_id === thirdParty.default_model_id ? "" : m.model_id,
                         label: `${m.label}${m.model_id === thirdParty.default_model_id ? ` · ${t("expPage.providerDefaultModel")}` : ""}`,
                       })),
@@ -296,7 +298,7 @@ export function RunRecommendations({
                     <input
                       className="v2-input mono"
                       style={{ marginTop: 8 }}
-                      placeholder="global.anthropic.claude-sonnet-5"
+                      placeholder={thirdParty.default_model_id ?? ""}
                       value={modelCustom}
                       onChange={(e) => setModelCustom(e.target.value)}
                       data-testid="v2-rec-model-custom"

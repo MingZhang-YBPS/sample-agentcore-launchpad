@@ -11,6 +11,7 @@ behaviour. Policy resources are deliberately operator-managed through
 Governance, not part of environment bootstrap.
 """
 
+import logging
 import secrets
 import string
 import time
@@ -27,6 +28,8 @@ from app.services.memory_strategies import (
     strategy_name,
 )
 from app.services.workspace import WorkspaceContext
+
+logger = logging.getLogger(__name__)
 
 STACK_NAME = "launchpad-base"
 REGISTRY_NAME = "launchpad-registry"
@@ -98,6 +101,8 @@ def ensure_memory(
     execution_role_arn: str | None = None,
     wait: bool = True,
     timeout_s: int = 300,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Return ({id, arn, strategies_added}, created).
 
@@ -108,7 +113,16 @@ def ensure_memory(
     place through ``UpdateMemory`` so a memory bootstrapped before a strategy
     joined the catalog converges on the same layout; ``strategies_added`` names
     what this run had to add (empty when nothing changed).
+
+    ``description`` applies to a memory this call creates. ``tags``: an isolated
+    project's memory (``project_memory``) passes the project's ``launchpad:*`` tags;
+    None is the workspace memory, tagged as shared infrastructure (cost-tags design
+    §1.2, ``launchpad:project=shared``). A reused memory is tagged the same way,
+    best-effort, so one bootstrapped before cost tags catches up.
     """
+    from app.services.project_telemetry import shared_tags
+
+    resource_tags = dict(tags) if tags else shared_tags()
     memories: list[dict[str, Any]] = []
     token: str | None = None
     while True:
@@ -122,16 +136,22 @@ def ensure_memory(
         mem_id = mem.get("id") or mem.get("memoryId")
         if mem_id and mem_id.startswith(f"{name}-"):
             added = _ensure_memory_strategies(control, mem_id, wait=wait, timeout_s=timeout_s)
+            try:
+                control.tag_resource(resourceArn=mem["arn"], tags=resource_tags)
+            except Exception as exc:  # noqa: BLE001 — attribution never fails a bootstrap
+                logger.warning("TagResource on memory %s failed: %s", mem_id, exc)
             return {"id": mem_id, "arn": mem["arn"], "strategies_added": added}, False
 
     params: dict[str, Any] = {
         "name": name,
-        "description": "Launchpad shared memory — short-term events + long-term strategies",
+        "description": description
+        or "Launchpad shared memory — short-term events + long-term strategies",
         "eventExpiryDuration": MEMORY_EVENT_EXPIRY_DAYS,
         "memoryStrategies": [deepcopy(entry) for entry in DEFAULT_STRATEGIES],
     }
     if execution_role_arn:
         params["memoryExecutionRoleArn"] = execution_role_arn
+    params["tags"] = resource_tags
     created = control.create_memory(**params)["memory"]
     mem_id, arn = created["id"], created["arn"]
     if wait:

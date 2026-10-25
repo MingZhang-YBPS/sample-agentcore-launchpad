@@ -19,8 +19,10 @@ from botocore.exceptions import ClientError
 
 import app.services.memory_console as mc
 from app.core.db import SessionLocal
+
+# V3 keeps the per-scenario actor in evaluation.service (main's #329 put a twin in memory)
+from app.evaluation.service import eval_actor
 from app.models.ledger import Agent, ChatMessage, ChatSession
-from app.services import memory
 
 from .conftest import set_default_resources
 
@@ -281,9 +283,9 @@ def test_evaluation_actors_are_left_out(client, configured, monkeypatch):
     wire(
         monkeypatch,
         StubData(list_actors={"actorSummaries": [
-            {"actorId": memory.eval_actor(agent_id, "bcdd2a90c1b7", 4)},
+            {"actorId": eval_actor(agent_id, "bcdd2a90c1b7", 4)},
             {"actorId": f"{agent_id}__lab01"},
-            {"actorId": memory.eval_actor(None, "bcdd2a90c1b7", 5)},
+            {"actorId": eval_actor(None, "bcdd2a90c1b7", 5)},
             {"actorId": f"{agent_id}__eval"},  # a person named "eval" is not a scenario
         ]}),
     )
@@ -294,7 +296,7 @@ def test_evaluation_actors_are_left_out(client, configured, monkeypatch):
 def test_filtered_actor_pages_are_filled_from_the_next_ones(client, configured, monkeypatch):
     """A page made only of evaluation actors must not come back empty with a token."""
     agent_id = make_agent(name="graded")
-    evals = [{"actorId": memory.eval_actor(agent_id, "abc123", i)} for i in range(3)]
+    evals = [{"actorId": eval_actor(agent_id, "abc123", i)} for i in range(3)]
 
     def page(kw):
         if kw.get("nextToken") is None:

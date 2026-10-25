@@ -17,11 +17,14 @@ import type {
   RunRecommendationKind,
   RunRecommendationSource,
 } from "./evaluation";
+import { DETAIL_CODES } from "./errors";
 import type { ExperimentInfo } from "./experiments";
+import type { McpServerOps } from "./api/mcpReviews";
 import type { ModelSource, ReasoningEffort } from "./models";
+import type { StrandsSpecFields } from "./strands-builder";
+import type { UserProject } from "./api/users";
 import type { ManagedVideo, ManagedVideoCatalog, VideoCatalog, VideoContent } from "./videos";
-import { type BudgetEstimateKey, budgetRefusalText, modelPricePath, notifyBudgetRefused } from "./budgets";
-import { WORKSPACE_HEADER } from "./workspace-header";
+import { PROJECT_HEADER, WORKSPACE_HEADER } from "./workspace-header";
 
 export interface AnnouncementContent {
   title: string;
@@ -75,6 +78,8 @@ export interface DeploymentInfo {
 export interface AgentInfo {
   id: string;
   name: string;
+  /** Human label from `spec.display_name` (any language); null ⇒ show `name`. */
+  display_name?: string | null;
   method: "harness" | "zip_runtime" | "container" | "studio" | "byoc" | "discovered_runtime";
   status: "draft" | "deploying" | "active" | "failed" | "deleted";
   arn: string | null;
@@ -163,15 +168,29 @@ export interface ChatRequest {
    * workspace M2M token; omitted ⇒ the user JWT when one can be minted. Ignored
    * for IAM agents. */
   as_user?: boolean;
+  /** retry the latest failed (or empty) turn: the ledger id of its user message
+   *  (`meta.user_message_id`); anything else answers 409 `chat.retry_not_allowed` */
+  retry_of?: number;
+  /** SB-2 tool-call approval: the tools the user approved on an approval card —
+   *  each name lets one paused call of that tool run on this turn */
+  approved_tools?: string[];
 }
 
 export interface ChatStreamPayload {
+  /** heartbeat events: time since the turn started */
+  elapsed_ms?: number;
   session_id?: string;
   text?: string;
   name?: string;
   code?: string;
   message?: string;
+  /** `error` event: the envelope's detail (e.g. `runtime.unrecognized_reply` → `{sample}`) */
+  detail?: Record<string, unknown> | null;
   attachments?: ChatAttachmentMetadata[];
+  /** `saved` event: the ledger id of the agent answer just persisted (thumbs target) */
+  message_id?: number;
+  /** `rule` event (T35): a curated answer replied instead of the model */
+  rule_id?: string;
   /** meta of a JWT-inbound agent's turn: who the Runtime authenticated */
   inbound?: { mode: "jwt"; caller: "user_jwt" | "m2m" };
   /** `auth_required` (as_user consent ask) — see AuthRequiredEvent */
@@ -186,19 +205,30 @@ export interface ChatStreamPayload {
   reason?: string;
   policy_id?: string | null;
   gateway_id?: string | null;
-  /** `saved` (console `/api/chat` only): ledger id of the answer just persisted */
-  message_id?: number;
+  /** `approval_required` (SB-2): the paused call's input, masked by the runtime;
+   *  also carries `tool` and `tool_use_id` — see lib/tool-approval.ts */
+  input?: Record<string, unknown>;
+  /** `meta`: the ledger id of this turn's user message — what `retry_of` names */
+  user_message_id?: number;
+  /** `error`: how the console may retry the turn (`ChatRetryHint` in lib/chat.ts) */
+  retry?: unknown;
+  /** `error`: the failure is transient (throttling, a dropped stream) */
+  transient?: boolean;
 }
 
 export interface ChatHistoryMessage {
-  /** ledger id (replay order); an agent answer's id is what thumbs feedback keys on */
+  /** ledger id (feedback target); present for every replayed item */
   id?: number;
+  /** the caller's current thumbs verdict on this answer */
+  verdict?: FeedbackVerdict | null;
   role: string;
   text: string;
   name: string | null;
   attachments?: ChatAttachmentMetadata[];
-  /** agent answers: the caller's thumbs verdict, null when unrated */
-  verdict?: FeedbackVerdict | null;
+  /** T35: `rule:<id>` when a curated answer, not the model, produced this reply */
+  answered_by?: string | null;
+  /** SB-1: an agent answer's parsed value under its output schema (absent / null: none) */
+  structured?: unknown;
 }
 
 export interface SystemAgentIdentity {
@@ -583,25 +613,14 @@ export interface RuntimeLogsPage {
   unavailable_reason: "no_runtime" | "log_group_not_found" | "access_denied" | null;
 }
 
-/** deployed = its publish succeeded (it has an AWS version); deploying / failed = its
- *  deployment is still running / failed; not_deployed = neither (e.g. a job lost
- *  before it ran). Only a deployed snapshot is a rollback target. */
-export type SnapshotState = "deployed" | "deploying" | "failed" | "not_deployed";
-
-/** One row of `GET /api/agents/{id}/snapshots` — the spec one publish deployed.
- *  `spec` only on `GET /api/agents/{id}/snapshots/{seq}`. */
+/** One row of `GET /api/agents/{id}/snapshots` (T18); `spec` only on the single-fetch. */
 export interface SpecSnapshotInfo {
   seq: number;
   agent_id: string;
-  /** the AWS version the publish left live; null until (unless) it succeeded */
   aws_version: string | null;
-  deployed: boolean;
-  state: SnapshotState;
   deployment_id: string | null;
-  /** server-written: "baseline", "rollback to #k", "canary promoted", … */
-  note: string | null;
   created_by: string | null;
-  created_by_name: string | null;
+  note: string | null;
   created_at: string | null;
   spec?: Record<string, unknown>;
 }
@@ -616,25 +635,21 @@ export type SpecChangeGroup =
   | "guardrail"
   | "other";
 
-/** One field-level difference of `GET /api/agents/{id}/snapshots/diff`. */
 export interface SpecChange {
-  /** dotted spec path, e.g. `memory.long_term` */
-  path: string;
+  /** dotted path, e.g. `memory.long_term` */
+  field: string;
   group: SpecChangeGroup;
   kind: "added" | "removed" | "changed";
   before: unknown;
   after: unknown;
-  /** list fields: members gained / lost (both empty on a pure re-order) */
+  /** list fields only: members gained / lost */
   added?: unknown[];
   removed?: unknown[];
-  /** a side of a whole-compared field over 2 KB reads `{length: n}` instead */
-  elided?: boolean;
 }
 
-/** An omitted side (`from` / `to` null) is the agent's current spec. */
 export interface SnapshotDiff {
-  from: SpecSnapshotInfo | null;
-  to: SpecSnapshotInfo | null;
+  from: SpecSnapshotInfo;
+  to: SpecSnapshotInfo;
   changes: SpecChange[];
 }
 
@@ -830,11 +845,6 @@ export interface RuntimeCanaryInfo {
       traffic_attempts: {
         sent: number;
         failed: number;
-        /** calls (paired) or prompts (a legacy weighted Runtime attempt) never sent
-         *  because the caller's monthly spend budget was reached; with
-         *  `stop_reason: budget_exceeded` */
-        skipped?: number;
-        stop_reason?: BudgetStopReason | null;
         baseline_n: number;
         /** the primary evaluator's own sample count before this stage's traffic
          *  (legacy weighted Runtime attempts with a primary); the verdict waits for it
@@ -850,9 +860,7 @@ export interface RuntimeCanaryInfo {
          *  legacy weighted Runtime attempt split by the gateway */
         mode?: string;
         pairs?: { scenario_id: string; control_session_id: string | null;
-                  treatment_session_id: string | null; error?: string;
-                  /** `budget_exceeded`: the pair was never sent */
-                  skipped?: BudgetStopReason }[];
+                  treatment_session_id: string | null; error?: string }[];
       }[];
       verdict?: {
         verdict: string;
@@ -933,6 +941,8 @@ export interface FilesystemInput {
   session_storage: { mount_path: string } | null;
   s3_files: ByoMountInput[];
   efs: ByoMountInput[];
+  /** catalog picks by id (storage-mounts §4) */
+  mounts?: { storage_id: string; mount_path?: string; mode?: "ro" | "rw" }[];
 }
 
 export interface VpcNetworkInput {
@@ -1001,6 +1011,9 @@ export interface ByocUploadInfo {
     has_requirements: boolean;
     has_dockerfile: boolean;
     agentcore_sdk_detected: boolean;
+    /** ADOT distro found at upload (projects §17.3-1); absent on older manifests */
+    adot_detected?: boolean;
+    adot_source?: "requirements" | "vendored" | null;
     /**
      * Upload-time dry resolve of the zip's requirements.txt against the deploy
      * target (linux/aarch64 + the selected Python). `failed` means the deploy's
@@ -1016,8 +1029,16 @@ export interface ByocUploadInfo {
   };
 }
 
-export interface AgentSpecInput {
+/** SB-1: the Strands builder's optional fields (tools, model parameters, conversation,
+ *  output schema, prompt template) — `lib/strands-builder.ts` owns their shape and
+ *  sends only the ones set (zip_runtime only). */
+export interface AgentSpecInput extends StrandsSpecFields {
   name: string;
+  /** Optional human label, 1–64 chars, trimmed; editable on redeploy (unlike `name`). */
+  display_name?: string;
+  /** The business project a NEW agent is filed under (`services/agent_project`);
+   *  omitted ⇒ the request's `X-Project`. Never stored in the spec; ignored on redeploy. */
+  project_id?: string;
   method: string;
   model_id?: string;
   /** Hosting surface of model_id. Omitted ⇒ backend defaults to "bedrock". */
@@ -1063,12 +1084,16 @@ export interface AgentSpecInput {
   knowledge_bases?: { kb_id: string; name: string; description: string }[];
   /** `memory_id` pins one AgentCore Memory; omitted ⇒ the workspace's shared default */
   memory?: { short_term: boolean; long_term: boolean; memory_id?: string };
+  /** T12 PII protection; absent ⇒ off */
+  guardrail?: { enabled: boolean; mode?: "anonymize" | "block" };
   code?: string;
   requirements?: string[];
   env?: Record<string, string>;
   studio_flow?: { nodes: unknown[]; edges: unknown[]; graphMode: boolean };
   filesystem?: FilesystemInput;
-  network?: VpcNetworkInput;
+  /** a workspace network profile (`{profile_id}`, every method) or the legacy inline
+   *  ids (a container with BYO mounts); omitted / null ⇒ PUBLIC */
+  network?: VpcNetworkInput | { profile_id: string } | null;
   /** required iff method="byoc" */
   byoc?: ByocConfigInput;
   /** Inbound auth of this agent's Runtime. Omitted ⇒ inherit the workspace
@@ -1077,6 +1102,38 @@ export interface AgentSpecInput {
   /** The COA namespace the agent reads governed context from (harness + HTTP
    * zip_runtime); `null` detaches it. Omitted ⇒ a re-publish carries the stored ref. */
   context_layer?: ContextLayerRef | null;
+  /** Runtime protocol; "mcp" hosts a byoc artifact as an MCP server. Omitted ⇒ "http". */
+  protocol?: "http" | "a2a" | "mcp";
+  /** required iff protocol="mcp": the Gateway target the server's tools appear under */
+  mcp?: { target_name: string; stdio_wrapper?: import("./mcp-stdio").McpStdioWrapperInput | null };
+}
+
+/** `GET /api/agents/{id}/mcp` — an MCP server's Gateway wiring, read back live. */
+/** `GET /api/agents/{id}/mcp`: the Gateway wiring plus the server's operations
+ *  (endpoint qualifier, health, last rollback / scaffold, rollback targets). */
+export interface McpServerStatus extends McpServerOps {
+  target_name: string;
+  target_id: string | null;
+  client_id: string | null;
+  gateway_id: string | null;
+  endpoint: string | null;
+  /** READY / CREATING / SYNCHRONIZING / FAILED…, MISSING (deleted on AWS), UNKNOWN */
+  target_status: string | null;
+  status_reasons: string[];
+  /** as agents see them through the Gateway: `<target>___<tool>` */
+  tools: { name: string; description: string }[];
+  tools_error: string | null;
+  /** the tool-review gate (projects §15.6): the Gateway target stays withheld until a
+   *  member holding `mcp.approve` — never the deployer — approves the live tool list */
+  review?: {
+    state: string;
+    open_review_id: string | null;
+    approved_review_id: string | null;
+    approved_hash: string | null;
+    live_hash: string | null;
+    /** the live tool list no longer matches the approved one */
+    drift: boolean;
+  } | null;
 }
 
 /** One skill discovered by /api/registry/skills/inspect (zip or git source). */
@@ -1100,14 +1157,102 @@ export interface AttachedSkill {
   error_code?: string;
 }
 
+/** One way out of an error (storyline-ux §4): a console action key and its params.
+ *  The console's action table (`v3/story/actions.ts`) owns where it leads. */
+export interface ApiNextStep {
+  action: string;
+  params: Record<string, string>;
+}
+
+/** The envelope's `next`, kept to well-formed entries (a malformed one is dropped). */
+export function parseNextSteps(value: unknown): ApiNextStep[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { action, params } = entry as { action?: unknown; params?: unknown };
+    if (typeof action !== "string" || !action) return [];
+    const clean: Record<string, string> = {};
+    if (params && typeof params === "object" && !Array.isArray(params)) {
+      for (const [k, v] of Object.entries(params as Record<string, unknown>)) {
+        if (typeof v === "string" || typeof v === "number") clean[k] = String(v);
+      }
+    }
+    return [{ action, params: clean }];
+  });
+}
+
 export class ApiError extends Error {
   code: string;
   detail: unknown;
-  constructor(code: string, message: string, detail: unknown) {
+  /** Console envelopes only: where to go to fix it, first = primary (never on /v1 or /share). */
+  next: ApiNextStep[];
+  /** Console envelopes only: `perm:<key>` when only that permission can fix it. */
+  needs: string | null;
+  /** The backend's `message` as sent, before console copy replaced it (projects §19). */
+  rawMessage: string;
+  /** The localized headline alone — `message` may have the AWS text appended. */
+  title: string;
+  /** The console envelope's `request_id` (or `X-Request-Id`): greps to the backend log line. */
+  requestId: string | null;
+  /** When the console received the error — shown and copied with the details. */
+  at: Date;
+  constructor(
+    code: string,
+    message: string,
+    detail: unknown,
+    extra: {
+      rawMessage?: string; title?: string; requestId?: string | null;
+      next?: ApiNextStep[]; needs?: string | null;
+    } = {},
+  ) {
     super(message);
     this.code = code;
     this.detail = detail;
+    this.next = extra.next ?? [];
+    this.needs = extra.needs ?? null;
+    this.rawMessage = extra.rawMessage ?? message;
+    this.title = extra.title ?? message;
+    this.requestId = extra.requestId ?? null;
+    this.at = new Date();
   }
+}
+
+/** The AWS facts of a console error envelope (`detail` of an `aws.*` code), when present. */
+export interface ApiErrorFacts {
+  operation: string | null;
+  awsErrorCode: string | null;
+  awsRequestId: string | null;
+  /** The backend masked account ids for a non-admin caller. */
+  masked: boolean;
+}
+
+/** What the collapsible error detail can show; null ⇒ nothing beyond the headline. */
+export function apiErrorFacts(err: ApiError): ApiErrorFacts | null {
+  const d = (err.detail && typeof err.detail === "object" && !Array.isArray(err.detail) ? err.detail : {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const facts: ApiErrorFacts = {
+    operation: str(d.operation),
+    awsErrorCode: str(d.aws_error_code),
+    awsRequestId: str(d.aws_request_id),
+    masked: d.masked === true,
+  };
+  if (!facts.awsErrorCode && !err.requestId) return null;
+  return facts;
+}
+
+/** Plain-text block for "copy details" — one `key: value` per line, empties left out. */
+export function apiErrorDetailText(err: ApiError): string {
+  const facts = apiErrorFacts(err);
+  const rows: [string, string | null][] = [
+    ["code", err.code],
+    ["operation", facts?.operation ?? null],
+    ["aws_error_code", facts?.awsErrorCode ?? null],
+    ["request_id", err.requestId],
+    ["aws_request_id", facts?.awsRequestId ?? null],
+    ["time", err.at.toISOString()],
+    ["message", err.rawMessage || null],
+  ];
+  return rows.filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("\n");
 }
 
 export const AUTH_UNAUTHORIZED_EVENT = "launchpad-unauthorized";
@@ -1120,18 +1265,26 @@ export const AUTH_UNAUTHORIZED_EVENT = "launchpad-unauthorized";
  * toast `err.message` show a translated string without each one mapping codes.
  * Pages that map codes themselves (`t(`apiErrors.${code}`, err.message)`) keep
  * working — they resolve the same key.
- *
- * A budget refusal (`402 budget.exceeded` / `budget.model_unpriced`) gets its
- * amounts, reset date or model filled in from `detail` (lib/budgets.ts).
  */
-export function localizedMessage(code: string, fallback: string, detail?: unknown): string {
-  // A budget refusal carries its amounts and reset date in `detail`; its copy lives
-  // outside `apiErrors` so the pages mapping `apiErrors.<code>` themselves fall back
-  // to this already-filled message instead of an unfilled template.
-  const budget = budgetRefusalText(code, detail, (k, options) => i18n.t(k, options));
-  if (budget !== null) return budget;
+export function localizedMessage(code: string, fallback: string): string {
   const key = `apiErrors.${code}`;
   return i18n.exists(key) ? i18n.t(key) : fallback;
+}
+
+/**
+ * `localizedMessage` plus, for the `aws.*` family, the AWS text after it: the
+ * console copy says what kind of failure it was, only AWS's own words say which
+ * parameter (projects §19). `DETAIL_CODES` likewise keep the backend's message
+ * after the copy — it names the line, item or list that failed (SG-5b). Other
+ * translated codes keep the copy alone — their backend message is log text — and
+ * untranslated ones already are the raw text.
+ */
+export function messageWithRaw(code: string, raw: string): string {
+  const title = localizedMessage(code, raw);
+  if (!raw || title === raw) return title;
+  if (code.startsWith("aws.")) return i18n.t("apiErrors.detail.withRaw", { title, raw });
+  if (DETAIL_CODES.has(code)) return i18n.t("apiErrors.detail.withSpecifics", { title, raw });
+  return title;
 }
 
 async function parseResponse<T>(path: string, res: Response): Promise<T> {
@@ -1144,11 +1297,18 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
     if (res.status === 401 && !path.startsWith("/api/auth/")) {
       window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
     }
-    const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
+    const env = (body ?? {}) as {
+      code?: string; message?: string; detail?: unknown; request_id?: string; next?: unknown; needs?: unknown;
+    };
     const code = env.code ?? `http.${res.status}`;
-    // a budget refusal is final (not a throttle to retry): the shell re-reads My usage
-    if (res.status === 402) notifyBudgetRefused(code);
-    throw new ApiError(code, localizedMessage(code, env.message ?? res.statusText, env.detail), env.detail);
+    const raw = env.message ?? res.statusText;
+    throw new ApiError(code, messageWithRaw(code, raw), env.detail, {
+      rawMessage: raw,
+      title: localizedMessage(code, raw),
+      requestId: env.request_id ?? res.headers.get("X-Request-Id") ?? null,
+      next: parseNextSteps(env.next),
+      needs: typeof env.needs === "string" && env.needs ? env.needs : null,
+    });
   }
   if (body === undefined) {
     // A 200 whose body isn't JSON (backend mid-restart behind the dev proxy,
@@ -1172,6 +1332,25 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
 function pinnedWorkspace(workspaceId?: string | null): Record<string, string> | undefined {
   return workspaceId ? { [WORKSPACE_HEADER]: workspaceId } : undefined;
 }
+
+/** Explicit `X-Project` for a create call that names its project in the body: the
+ *  backend refuses a body `project_id` that differs from the header (422
+ *  `agent.project_mismatch`), and the fetch wrapper keeps a header the caller set. */
+function pinnedProject(projectId?: string | null): Record<string, string> | undefined {
+  return projectId ? { [PROJECT_HEADER]: projectId } : undefined;
+}
+
+/** A project the create flow may file a new agent under (`GET /api/agents/eligible-projects`). */
+export interface EligibleAgentProject {
+  id: string;
+  name: string;
+  department_id: string;
+  department_name: string | null;
+  is_workspace_default: boolean;
+}
+
+/** The route keys that create an agent; the picker lists projects holding one. */
+export type AgentCreatePermission = "agents.deploy" | "agents.import" | "agents.convert";
 
 /** `headers` is narrowed to a plain record so the merge below is exhaustive. */
 type RequestInitJson = Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
@@ -1203,6 +1382,25 @@ async function requestForm<T>(
  */
 export function getJson<T>(path: string): Promise<T> {
   return request<T>(path);
+}
+
+/**
+ * A JSON write with the shared envelope handling (`ApiError`, localized copy, the
+ * 401 event) — for feature modules under `lib/api/` that keep their own clients.
+ * `body` omitted ⇒ no request body; a 204 (no content) resolves `undefined`.
+ */
+export async function sendJson<T>(
+  path: string,
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (res.status === 204) return undefined as T;
+  return parseResponse<T>(path, res);
 }
 
 /** Console copy for a non-2xx `Response` a page fetched itself (same envelope rules). */
@@ -1254,6 +1452,8 @@ export interface AssistantStatus {
   owner: string;
   /** the immutable principal conversations are bound to */
   principal: string;
+  /** assistant-context C3: what one turn may replay; absent from an older backend */
+  replay_budget?: import("./api/assistant-budget").ReplayBudget;
 }
 
 export interface AssistantCatalogTool {
@@ -1334,6 +1534,8 @@ export interface AssistantProposalContent {
   /** Agent-DLC launch-barrier fishbone the customer confirmed during intake (rendered
    *  in the proposal panel; inert). Absent when the discovery did not happen. */
   fishbone?: AssistantFishbone;
+  /** catalog storage the agent mounts (storage-mounts §8.3; ids, never ARNs or paths) */
+  storage?: { storage_id: string; mode: "ro" | "rw" }[];
 }
 
 export type FishboneDimension =
@@ -1457,6 +1659,8 @@ export interface AssistantMessage {
 }
 
 export interface AssistantConversationSummary {
+  /** earlier turns no longer fit the replay window (assistant-context C1) */
+  context_trimmed?: boolean;
   id: string;
   title: string;
   /** display username of the member who opened it */
@@ -1482,10 +1686,24 @@ export interface AssistantConversationSummary {
 }
 
 export interface AssistantConversationDetail extends AssistantConversationSummary {
+  context?: {
+    replayed_turns: number;
+    omitted_turns: number;
+    first_replayed_turn: number | null;
+    budget_used_ratio: number;
+  };
   catalog: AssistantCatalog;
   messages: AssistantMessage[];
   proposals: AssistantProposal[];
   preparation?: AssistantPreparation;
+  /** the confirmed-items digest of the turns outside the replay window
+   *  (absent on an older backend) — see `conversationDigest` in lib/assistant.ts */
+  context_digest?: {
+    text: string | null;
+    through_turn: number | null;
+    updated_at: string | null;
+    generating: boolean;
+  };
 }
 
 export interface AssistantPreparationRequirement {
@@ -2058,6 +2276,10 @@ export interface GovernancePolicyTestResult {
   policy_id: string | null;
   decision_id: string | null;
   recorded: boolean;
+  /** false: the Gateway has no Policy Engine — no Cedar policy decided, nothing journaled */
+  enforced: boolean;
+  policy_engine_id: string | null;
+  note: string | null;
 }
 
 export interface GovernanceOperation {
@@ -2480,6 +2702,10 @@ export interface MemoryNamespaceKeyInput {
   regex_pattern?: string;
 }
 
+/** Which memory a dual-read row came from (projects §10.4): an isolated project's own
+ *  memory, or the workspace's shared one it moved from. Absent outside dual-read. */
+export type MemorySource = "project" | "shared";
+
 /** AgentCore keys memory on actorId alone, so the platform folds the agent in:
  *  `<agent_id>__<human>`. These fields are that id decoded. */
 export interface MemoryActor {
@@ -2490,6 +2716,7 @@ export interface MemoryActor {
   agent_deleted: boolean;
   human_actor: string;
   scoped: boolean;
+  source?: MemorySource;
 }
 
 export interface MemorySessionLedger {
@@ -2506,6 +2733,7 @@ export interface MemorySessionRow {
   created_at: string | null;
   /** null for sessions the console never wrote (eval runs, /v1 callers) */
   ledger: MemorySessionLedger | null;
+  source?: MemorySource;
 }
 
 export interface MemoryEventPayload {
@@ -2561,6 +2789,7 @@ export interface MemoryRecord {
   /** populated only by semantic retrieval */
   score: number | null;
   metadata: Record<string, unknown>;
+  source?: MemorySource;
 }
 
 export interface MemoryPage<T> {
@@ -2654,6 +2883,8 @@ export interface ObsTraceRow {
   multi_model: boolean;
   tokens: ObsTokens;
   est_cost_usd: number | null;
+  /** the project the spans named (R10-obs); absent on older spans */
+  project?: string;
 }
 
 export interface ObsTraces {
@@ -2742,6 +2973,8 @@ export interface ObsSessionRow {
   first: string | null;
   last: string | null;
   platform: boolean;
+  /** the project the spans named (R10-obs); absent on older spans */
+  project?: string;
 }
 
 export interface ObsSessions {
@@ -2904,7 +3137,26 @@ export interface OverviewInfo {
   service_detail: Record<string, string>;
 }
 
-export type ConsoleRole = "admin" | "member";
+/** GET /api/overview/ttfa (admin-only) — Time to First Agent per registered account. */
+export interface TtfaUser {
+  username: string;
+  /** null until the account's first agent deployment succeeded */
+  ttfa_seconds: number | null;
+  /** null = logged in before the stamp existed (TTFA used created_at) or never */
+  first_login_at: string | null;
+  first_agent_at: string | null;
+}
+
+export interface TtfaInfo {
+  median_seconds: number | null;
+  samples: number;
+  users: TtfaUser[];
+}
+
+/** Global console role: `operator` approves and runs releases without editing
+ *  agents; `steward` (organization admin) manages structure only and never sees
+ *  project data (projects design §11.4). */
+export type ConsoleRole = "admin" | "member" | "operator" | "steward";
 
 /* ── AgentCore Identity: Connections, bound Gateway targets, agent identity ── */
 
@@ -3475,9 +3727,25 @@ export type AgentPermission =
   | "agents.delete"
   | "agents.convert"
   | "eval.run"
+  // T19: the release surface. `request` is default-granted; `approve` is the
+  // operator's (or a member an administrator granted it explicitly).
+  | "promotion.request"
+  | "promotion.approve"
   | "identity.manage"
   | "identity.grant"
-  | "memory.manage";
+  | "memory.manage"
+  // Agent-DLC: `criteria.manage` edits the ruler; the rest decide what "good" means and
+  // are granted to named people (business owner, risk owner, signer), never by role.
+  | "criteria.manage"
+  | "criteria.sign"
+  | "golden.admit"
+  | "judge.calibrate"
+  | "waiver.approve"
+  | "release.sign"
+  // account-only (not a project key): the budget authority. Where it reaches comes
+  // from the identity — organization level for admin / steward, the departments a
+  // department administrator administers.
+  | "budget.manage";
 
 export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.deploy",
@@ -3485,16 +3753,25 @@ export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.delete",
   "agents.convert",
   "eval.run",
+  "promotion.request",
+  "promotion.approve",
   "identity.manage",
   "identity.grant",
   "memory.manage",
+  "criteria.manage",
+  "criteria.sign",
+  "golden.admit",
+  "judge.calibrate",
+  "waiver.approve",
+  "release.sign",
+  "budget.manage",
 ];
 
 /**
  * The `permissions` body for flipping one chip. The backend treats the map as the
- * account's whole permission set (an unsent key counts as granted), so a one-key
- * map silently reverted every other override; sending the full effective map with
- * this one key changed keeps them.
+ * account's whole permission set (an unsent key falls back to the role default),
+ * so a one-key map silently reverted every other override; sending the full
+ * effective map with this one key changed keeps them.
  */
 export function togglePermission(
   current: Partial<Record<AgentPermission, boolean>> | null | undefined,
@@ -3520,6 +3797,12 @@ export interface AuthStatus {
   account_expires_at: string | null;
   /** granted agent-management permissions ([] until authenticated) */
   permissions: AgentPermission[];
+  /** the config-driven built-in admin (no ledger row) */
+  builtin?: boolean;
+  /** the enabled identity providers (sso §2.7); only present when at least one is */
+  sso_providers?: { id: string; name: string; kind: "oidc" | "saml"; preset: string }[];
+  /** 'sso' — the session came from an identity provider (sso §2.7); absent before sign-in */
+  account_source?: "local" | "sso";
 }
 
 export interface AuthLoginResult extends AuthStatus {
@@ -3606,6 +3889,8 @@ export interface EvaluatorDetail {
   lambda_arn: string | null;
   lambda_timeout_s: number | null;
   status: string | null;
+  /** From the config, as the run gate reads it; null = unknown (external code). */
+  requires_ground_truth?: boolean | null;
   evaluator_type?: string | null;
   provider?: string | null;
   /** `users.id` of the creating account (the ownership key); null for the config
@@ -3752,6 +4037,9 @@ export interface OnlineEvalConfigCreate {
   filters: OnlineEvalFilter[];
   description?: string | null;
   enable_on_create: boolean;
+  /** scores mode: acknowledges the daily estimate above the confirm threshold
+   *  (eval-cost §1.1; else 409 `run.cost_confirm_required`) */
+  confirm_cost?: boolean;
 }
 
 /** `PATCH /api/eval/online/{id}` — only changed fields travel; the rule is
@@ -3869,6 +4157,9 @@ export interface OnlineEvalRunReportAck {
 /* ── workspaces (the environment a request targets) ────────────────────── */
 
 export type WorkspaceBootstrapStatus = "registered" | "bootstrapping" | "ready" | "failed";
+/** T05: `prod` refuses member agent mutations (403 `workspace.prod_protected`). */
+export type WorkspaceTier = "dev" | "staging" | "prod";
+export const WORKSPACE_TIERS: WorkspaceTier[] = ["dev", "staging", "prod"];
 
 /**
  * Who sees a workspace's member-created resources. `shared` (the default):
@@ -3887,6 +4178,7 @@ export interface Workspace {
   /** the assumed role, for admins only — absent from a member's list */
   role_arn?: string | null;
   bootstrap_status: WorkspaceBootstrapStatus;
+  tier: WorkspaceTier;
   /** the hub's own environment: cannot be deleted or bootstrapped from here */
   is_default: boolean;
   /** absent on an older backend — read as `shared` */
@@ -3899,6 +4191,40 @@ export interface WorkspaceListResult {
   workspaces: Workspace[];
   /** true when the caller is an admin, i.e. the list is every workspace */
   all_workspaces: boolean;
+  /** AgentCore regions offered as suggestions in the registration form (backend
+   *  `core/regions.py`); never an allowlist — the form also takes a typed region. */
+  suggested_regions?: string[];
+}
+
+export type ResourceMappingKind = "kb" | "memory" | "gateway" | "mcp_record" | "skill";
+
+export interface ResourceMapping {
+  id: string;
+  workspace_id: string;
+  kind: ResourceMappingKind;
+  name: string;
+  key: string;
+  resource_id: string;
+  note: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface ResourceMappingList {
+  workspace_id: string;
+  kinds: ResourceMappingKind[];
+  mappings: ResourceMapping[];
+}
+
+/** One entry of the promotion gate `resource_mapping` (`unmapped` / `resolved`). */
+export interface MappingReference {
+  kind: ResourceMappingKind;
+  logical: string;
+  path: string;
+  source_id: string;
+  target_id?: string;
+  via?: string;
+  reason?: string;
 }
 
 export interface WorkspaceGrantUser {
@@ -3996,20 +4322,29 @@ export interface ConsoleUser {
   state: UserState;
   expires_at: string | null;
   days_remaining: number | null;
-  created_at: string;
+  /** null only on the built-in admin, which has no ledger row */
+  created_at: string | null;
   last_login_at: string | null;
   login_count: number;
+  first_login_at: string | null;
   created_by: string;
   /** effective agent-management permission map (admins: all true) */
   permissions: Record<AgentPermission, boolean>;
   /** granted workspace ids; empty for an admin, who reaches every workspace */
   workspaces: string[];
-  /** assigned spend level (`PUT /api/budgets/users/{id}`); null = none */
-  budget_level_id?: string | null;
-  /** personal monthly amount replacing the level's; null = none */
-  budget_override_usd?: number | null;
-  /** only present on a password reset the platform generated */
+  /** only present on a password reset / creation the platform generated */
   generated_password?: string;
+  /** the config-driven built-in admin: only its password can change */
+  builtin?: boolean;
+  /** built-in admin: "config" (auth_password) or "console" (a password set here) */
+  password_source?: "config" | "console";
+  password_changed_at?: string | null;
+  /** project memberships, on the routes that list them (`GET /api/users`, `/api/users/{id}`) */
+  projects?: UserProject[];
+  /** where the account signs in (sso §2.7): the console's password, or an identity provider */
+  source?: "local" | "sso";
+  external_idp_id?: string | null;
+  external_subject?: string | null;
 }
 
 export interface UserListResult {
@@ -4017,6 +4352,24 @@ export interface UserListResult {
   total: number;
   limit: number;
   offset: number;
+  /** the built-in admin when it matches the search/state filter — outside `items`/`total` */
+  builtin?: ConsoleUser | null;
+}
+
+/** `POST /api/users` — an admin-created account, active at once. */
+export interface UserCreateBody {
+  username: string;
+  email: string;
+  /** omitted ⇒ the backend generates one and returns it once */
+  password?: string;
+  role?: ConsoleRole;
+  permissions?: Partial<Record<AgentPermission, boolean>>;
+  /** omitted ⇒ ["default"]; must be empty for an administrator */
+  workspaces?: string[];
+  /** pick at most one of these; none ⇒ the default validity */
+  valid_days?: number;
+  expires_at?: string;
+  never_expires?: boolean;
 }
 
 export interface UserStats {
@@ -4046,6 +4399,99 @@ export interface UserPatchBody {
   permissions?: Partial<Record<AgentPermission, boolean>> | null;
   /** full replacement of the account's workspace grants */
   workspaces?: string[];
+}
+
+/* ── platform model defaults ──────────────────────────────────────────── */
+
+/**
+ * `GET /api/models/defaults` — the server's configured model defaults (operator
+ * env overrides included), so a console never hard-codes which model is the
+ * default in an account that may lack OpenAI or Anthropic models. All strings;
+ * `judge_fallback_model_id` is `""` when the judge fallback is disabled.
+ */
+export interface ModelDefaults {
+  /** intents + suggestions (server-side only) */
+  platform_model_id: string;
+  /** default LLM-as-judge model of custom/derived evaluators */
+  judge_model_id: string;
+  judge_fallback_model_id: string;
+  /** default model of the agents the architect assistant proposes */
+  assistant_model_id: string;
+  /** system architect agent install default */
+  architect_model_id: string;
+  /** default simulated-user (actor) model of persona scenarios */
+  actor_model_id: string;
+  /** Strands Studio fallback for canvas nodes without a model */
+  studio_fallback_model_id: string;
+  /** Claude Agent SDK (container method) default */
+  claude_sdk_model_id: string;
+  /** backend `AgentSpec` DEFAULT_MODEL_ID — what a stored spec without `model_id` means */
+  agent_default_model_id: string;
+  codegen_model: string;
+  prompt_opt_default_model_id: string;
+  skill_lab_judge_model_id: string;
+  skill_lab_target_model_id: string;
+  skill_lab_codex_target_model_id: string;
+}
+
+/** One text-output, on-demand-invocable model or inference profile the active
+ *  workspace's account offers in its Region (`GET /api/model-catalog`). "Offered"
+ *  is not "entitled": a model may still be denied at invoke. */
+export interface ModelCatalogEntry {
+  model_id: string;
+  provider: string;
+  name: string;
+  kind: "inference_profile" | "foundation_model";
+  /** false = known not to accept tool use (`toolConfig`); null/absent = unknown */
+  tool_use?: boolean | null;
+}
+
+/** `models` is empty with `error` set when the listing failed — pickers then
+ *  fall back to their static lists. */
+export interface ModelCatalog {
+  region: string;
+  models: ModelCatalogEntry[];
+  error?: string;
+}
+
+/** Which configuration layer a model role's effective value comes from. */
+export type ModelSettingSource = "default" | "config" | "env" | "console";
+
+/** One model role of `GET /api/models/settings` (admin, hub-global). */
+export interface ModelSettingRole {
+  field: string;
+  env: string;
+  /** the effective value (console override > env > default) */
+  value: string;
+  default: string;
+  env_value: string | null;
+  console_value: string | null;
+  source: ModelSettingSource;
+  probe: "converse" | "judge" | "actor";
+  /** provider families the role's feature can drive (e.g. `["anthropic"]`); null = any */
+  families: string[] | null;
+  /** `""` is a valid value (judge fallback: disabled) */
+  allow_empty: boolean;
+  /** the role's feature runs tools: a model without tool use is not offered */
+  needs_tools?: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface ModelProbeCheck {
+  name: "converse" | "tool_choice" | "evaluator";
+  ok: boolean;
+  error: string | null;
+  latency_ms: number;
+}
+
+/** `POST /api/model-probe` — live checks of one model for one role in the
+ *  active workspace's account/Region. */
+export interface ModelProbeResult {
+  ok: boolean;
+  model_id: string;
+  region: string;
+  checks: ModelProbeCheck[];
 }
 
 /* ── skill lab (skill evaluation & optimization) ────────────────────────── */
@@ -4230,11 +4676,6 @@ export interface SkillLabJobInfo {
   split: string;
   params: SkillLabJobParams;
   error: string | null;
-  /** `budget_exceeded`: its creator's monthly spend budget stopped it (a training job
-   *  between steps — resumable — or any job before it started). Absent on older backends. */
-  stop_reason?: BudgetStopReason | null;
-  /** create response only: the estimate is more than the creator has left this month */
-  budget_notice?: BudgetNotice | null;
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
@@ -4754,8 +5195,16 @@ export interface V2RunCreate {
   session_source?: "logs";
   lookback_hours?: number;
   wait_seconds?: number;
+  /** pass^k: replay each dataset scenario k times (opt-in, priced first) */
+  repeats?: number;
+  /** acknowledges the estimate when the workspace policy asks for confirmation — a
+   *  dataset replay and a passive run (session_ids / lookback_hours) alike (eval-cost §1.1) */
+  confirm_cost?: boolean;
   /** the Bedrock model that plays the user — required for a simulated-persona dataset */
   actor_model_id?: string;
+  /** lets a dataset replay write shared-state storage in a gated workspace
+   *  (storage-mounts §8.2; sent after a `storage.write_confirm_required`, `lib/storage-confirm.ts`) */
+  confirm_storage?: boolean;
 }
 
 /** One stream of an agent's runtime log group (`GET /api/eval/agents/{id}/log-streams`). */
@@ -4808,52 +5257,202 @@ export interface V2LogGroup {
   stored_bytes: number | null;
 }
 
-/** A platform model role (backend `services/model_settings.ROLES`): a `Settings`
- *  field the platform calls or pre-selects, which an administrator can override. */
-export type ModelRole =
-  | "agent_default_model_id"
-  | "claude_sdk_model_id"
-  | "judge_model_id"
-  | "judge_fallback_model_id"
-  | "assistant_model_id"
-  | "architect_model_id"
-  | "actor_model_id"
-  | "studio_fallback_model_id"
-  | "codegen_model"
-  | "prompt_opt_default_model_id"
-  | "skill_lab_judge_model_id"
-  | "skill_lab_target_model_id"
-  | "skill_lab_codex_target_model_id";
-
-/** One row of `GET /api/model-defaults` (and the answer of a PUT / DELETE). */
-export interface ModelRoleSetting {
-  role: ModelRole;
-  /** the effective model (console override > env > launchpad.yaml > built-in) */
-  model_id: string;
-  /** what a reset returns to: env / launchpad.yaml / the built-in default */
-  default: string;
-  overridden: boolean;
-  /** model families the role accepts (`["anthropic"]`, …); null = any */
-  constraint: string[] | null;
-  /** "" is valid (the judge fallback: none) */
-  allow_empty: boolean;
-  /** the role runs tools, so its model must accept Converse toolConfig */
-  needs_tools: boolean;
-  updated_by: string | null;
-  updated_at: string | null;
+export interface AgentTemplateInfo {
+  key: string;
+  label_key: string;
+  description_key: string;
+  method: "harness" | "zip_runtime";
+  system_prompt: string;
+  knowledge: "required" | "suggested" | "none";
+  toolkits: string[];
+  memory_long_term: boolean;
+  guardrail: boolean;
+  sample_questions: string[];
+  tags: string[];
 }
 
-export type ModelProbeCheck = "converse" | "tool_use";
+/** T20 — an immutable record of exactly what was tested. */
+export interface ReleaseBundleInfo {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  display_name?: string | null;
+  method: string;
+  snapshot_seq: number | null;
+  digest: string;
+  artifact: Record<string, unknown>;
+  evaluation: Record<string, unknown>;
+  policy: Record<string, unknown>;
+  workspace_id: string | null;
+  created_by: string | null;
+  note: string | null;
+  created_at: string | null;
+}
 
-export interface ModelProbeResult {
+export interface PromotionGate {
+  key: string;
   ok: boolean;
-  model_id: string;
-  check: ModelProbeCheck;
+  detail: string;
+  /** T26 — set by the execution-time evaluation only */
+  blocking?: boolean;
+  next_allowed_at?: string | null;
+}
+
+/** T27 — one stage of an execution (or rollback). */
+export interface PromotionStage {
+  name: string;
+  status: "pending" | "running" | "succeeded" | "skipped" | "failed";
+  detail: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface PromotionPlanItem {
+  key: string;
+  action: string;
+  detail: string;
+}
+
+export interface PromotionPlan {
+  promotion_id: string;
+  target_workspace_id: string;
+  target_tier: string;
+  mode: "create" | "replace";
+  items: PromotionPlanItem[];
+  observe_seconds: number;
+  gates: {
+    checks: PromotionGate[];
+    blocking_failures: string[];
+    next_allowed_at: string | null;
+  };
+  can_execute: boolean;
+  blocked_by: string[];
+}
+
+export interface PromotionLogLine {
+  ts: string | null;
+  stage: string;
+  level: string;
+  msg: string;
+}
+
+export interface SpecDiffRow {
+  field: string;
+  before: string;
+  after: string;
+  kind: "added" | "removed" | "changed";
+  /** env / code / BYOC: the change is reported, the values are not */
+  redacted?: boolean;
+}
+
+/** T21 — one request to release a bundle into another environment. */
+export interface PromotionInfo {
+  id: string;
+  bundle_id: string;
+  bundle: ReleaseBundleInfo | null;
+  source_workspace_id: string | null;
+  target_workspace_id: string;
+  status:
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "cancelled"
+    | "executing"
+    | "succeeded"
+    | "failed"
+    | "rolled_back";
+  requested_by: string | null;
+  change_note: string;
+  rollback_note: string;
+  reviewed_by: string | null;
+  review_note: string | null;
+  reviewed_at: string | null;
+  gates: { checks?: PromotionGate[]; blocking_failures?: string[]; evaluated_at?: string };
+  job_id: string | null;
+  error: string | null;
+  /** T27 */
+  stages?: PromotionStage[];
+  previous_bundle_id?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  failed_stage?: string | null;
+  action?: "execute" | "rollback" | null;
+  created_at: string | null;
+  updated_at: string | null;
+  /** detail only */
+  target_agent?: { id: string; status: string; version: string | null } | null;
+  diff?: SpecDiffRow[];
+  /** false ⇒ the caller has no grant on the target, so target data is withheld */
+  target_visible?: boolean;
+}
+
+/** T37 — one workspace's row in the fleet table. */
+export interface FleetRow {
+  id: string;
+  name: string;
+  account_id: string;
   region: string;
-  latency_ms: number;
-  error_code?: string;
-  message?: string;
-  stop_reason?: string | null;
+  tier: string;
+  cross_account: boolean;
+  bootstrap_status: string;
+  /** false ⇒ the environment cannot serve anything; the counts are null, not zero */
+  readable: boolean;
+  agents_active: number | null;
+  agents_deploying: number | null;
+  agents_failed: number | null;
+  jobs_failed: number | null;
+  promotions_pending: number | null;
+  alerts_firing: number | null;
+}
+
+export interface FleetReport {
+  generated_at: string;
+  workspaces: FleetRow[];
+  totals: {
+    workspaces: number;
+    readable: number;
+    agents_active: number;
+    alerts_firing: number;
+    promotions_pending: number;
+    needs_attention: number;
+  };
+  source: string;
+}
+
+/** T39 — one governance finding, with the link that fixes it. */
+export interface GovernanceFinding {
+  key: string;
+  severity: "action" | "warn" | "info";
+  count: number;
+  to: string;
+  sample: string[];
+}
+
+export interface GovernanceHealth {
+  workspace_id: string;
+  generated_at: string;
+  score: number;
+  grade: "good" | "fair" | "poor";
+  findings: GovernanceFinding[];
+  agents_considered: number;
+}
+
+/** T38 — an agent published as a reusable starting point. */
+export interface SharedTemplateInfo {
+  id: string;
+  title: string;
+  summary: string;
+  method: string;
+  spec: Record<string, unknown>;
+  requirements: { kind: string; label: string; detail: string }[];
+  source_workspace_id: string;
+  source_agent_name: string;
+  published_by: string | null;
+  uses: number;
+  /** true ⇒ published by the current workspace, so it may be withdrawn here */
+  own: boolean;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 /* ── evaluation scorecards: run versions, benchmarks, two-run compare ─────
@@ -4886,7 +5485,7 @@ export interface RunBenchmark {
   size: number | null;
 }
 
-/** One run of `GET /api/eval/runs/compare`: the run payload plus its benchmark. */
+/** One run of `GET /api/eval/runs/compare-pair`: the run payload plus its benchmark. */
 export type RunCompareRun = EvaluationRunInfo & { benchmark: RunBenchmark };
 
 /** One side of a compared case: the session that replayed it and its judge records
@@ -4941,7 +5540,7 @@ export type RunCompareConfig =
   | { same: true; agent_id: string; seq: number }
   | null;
 
-/** `GET /api/eval/runs/compare?a=&b=`. */
+/** `GET /api/eval/runs/compare-pair?a=&b=`. */
 export interface RunCompare {
   runs: { a: RunCompareRun; b: RunCompareRun };
   alignment: RunCompareAlignment;
@@ -5010,448 +5609,117 @@ export interface EvaluationScorecard {
   truncated: boolean;
 }
 
-/* ── spend attribution + threshold alerts (`routers/alerts.py`, all ADMIN) ── */
-
-/** `GET /api/costs?range=` — the spend windows (30d exists here, not in observability). */
-export type CostRange = "1h" | "6h" | "24h" | "7d" | "30d";
-
-/** One runtime service's spend (`services/costs.cost_report` `by_agent`). */
+/** T28 — estimated spend for a window, attributed. */
 export interface CostRow {
-  /** the span `service.name` (`<runtime>.DEFAULT`, `harness_<name>`, …) */
   service: string;
-  /** the ledger agent it resolved to; null when `known` is false */
   agent_id: string | null;
-  /** the ledger agent's name; null when `known` is false */
-  agent_name: string | null;
   display_name: string | null;
-  /** false: no agent of this console matches (imported, deleted, another stack's) */
   known: boolean;
   tokens: number;
   llm_calls: number;
-  sessions: number;
-  /** null when the model is unpriced — "—", never $0 */
   est_cost_usd: number | null;
+  /** the project the spend is attributed to (R10-obs) and how it was known */
+  project_id?: string | null;
+  project_source?: "span" | "inference_profile" | "agent" | null;
 }
 
-/** One person's spend, from console chat sessions; `actor: "—"` is the unattributed bucket. */
+/** R10-obs — spend per project (null = unattributed), costliest first. */
+export interface CostProjectRow {
+  project_id: string | null;
+  agents: number;
+  tokens: number;
+  est_cost_usd: number;
+}
+
 export interface CostActorRow {
   actor: string;
-  attributed: boolean;
   sessions: number;
   tokens: number;
   est_cost_usd: number;
 }
 
 export interface CostReport {
-  range: CostRange;
+  range: string;
   hours: number;
   generated_at: string;
   total_est_cost_usd: number;
   total_tokens: number;
   by_agent: CostRow[];
   by_actor: CostActorRow[];
-  /** models that burned tokens the price map cannot value */
+  /** absent from a backend without per-project attribution */
+  by_project?: CostProjectRow[];
   unpriced_models: string[];
-  estimate: true;
-  cache?: { hit: boolean; age_seconds: number };
+  estimate: boolean;
 }
 
-/** `GET /api/costs/month-to-date` — what a `cost_mtd_usd` rule compares. */
-export interface CostMonthToDate {
-  workspace_id: string;
-  est_cost_usd: number;
-  /** hours since the UTC month start, capped at 720 */
-  hours: number;
-  unpriced_models: string[];
-  estimate: true;
-}
+/** T29 — one watched threshold and what it last saw. */
+export type AlertKind = "error_rate" | "latency_p95_ms" | "online_quality" | "cost_mtd_usd";
 
-export type AlertKind = "error_rate" | "latency_p95_ms" | "online_quality" | "spend_usd" | "cost_mtd_usd";
-export type AlertComparison = "above" | "below";
-export type AlertState = "ok" | "firing" | "unknown";
-
-/** `services/alerts.rule_out` — never the webhook URL, only `has_webhook`. */
 export interface AlertRuleInfo {
   id: string;
   kind: AlertKind;
   name: string;
-  comparison: AlertComparison;
+  comparison: "above" | "below";
   threshold: number;
-  window: CostRange;
+  window: string;
   enabled: boolean;
   has_webhook: boolean;
-  state: AlertState;
+  state: "ok" | "firing" | "unknown";
   last_value: number | null;
   last_detail: string | null;
   last_checked_at: string | null;
   last_fired_at: string | null;
   last_notified_at: string | null;
   created_by: string | null;
-  created_by_name: string | null;
   created_at: string | null;
-  updated_at: string | null;
-  /** set by an evaluate pass on a disabled rule */
   skipped?: string;
 }
 
-export interface AlertRuleCreate {
-  kind: AlertKind;
-  name?: string;
-  threshold: number;
-  /** omitted: the kind's natural direction */
-  comparison?: AlertComparison;
-  window?: CostRange;
-  enabled?: boolean;
-  webhook_url?: string | null;
+/** T22 — one kind of work waiting on a human. */
+export interface InboxItem {
+  key: string;
+  severity: "action" | "warn" | "info";
+  count: number;
+  to: string;
+  sample: string[];
 }
 
-/** Only the fields present change; `webhook_url: null` clears the webhook. */
-export interface AlertRulePatch {
-  name?: string;
-  threshold?: number;
-  window?: CostRange;
-  enabled?: boolean;
-  webhook_url?: string | null;
-}
-
-export interface AlertEvaluation {
+export interface InboxInfo {
   workspace_id: string;
-  evaluated_at: string;
-  rules: AlertRuleInfo[];
-  firing: number;
-  unknown: number;
-}
-
-/** Whether THIS server runs the background check — the only path that notifies. */
-export interface AlertSchedulerInfo {
-  enabled: boolean;
-  interval_seconds: number;
-}
-
-/* ── spend budgets, model prices and AgentCore rates (`routers/budgets.py`) ── */
-
-/** How a person's effective limit was reached (`services/budgets.BASIS_*`). The last
- *  three mean unlimited: no level and no default level, an admin without a level, a
- *  principal with no account (the config admin, the auth-disabled operator). */
-export type BudgetBasis =
-  | "override"
-  | "level"
-  | "default_level"
-  | "unlimited"
-  | "exempt_admin"
-  | "exempt_principal";
-
-/** A level: one USD budget per calendar month (UTC), hub-global. */
-export interface BudgetLevelInfo {
-  id: string;
-  name: string;
-  monthly_budget_usd: number;
-  /** at most one level is the default (members with no level fall into it) */
-  is_default: boolean;
-  /** accounts assigned to it explicitly (not those on it by default) */
-  user_count: number;
-  created_by: string | null;
-  created_by_name: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface BudgetLevelRef {
-  id: string;
-  name: string;
-}
-
-/** Spend of one `usage_events.source` (`chat`, `v1`, `eval`, …) in the period. */
-export interface UsageBySource {
-  source: string;
-  usd: number;
-  /** the part charged as an estimate (opaque runtimes, long jobs) */
-  estimated_usd: number;
-  events: number;
-}
-
-/** `services/budgets._totals` — every spend row carries these. */
-export interface BudgetTotals {
-  /** null = unlimited */
-  limit_usd: number | null;
-  used_usd: number;
-  remaining_usd: number | null;
-  estimated_usd: number;
-  /** 0–1 */
-  estimated_share: number;
-  /** 0–100; null when unlimited */
-  percent_used: number | null;
-  unlimited: boolean;
-}
-
-/** `GET /api/me/usage?period=` — the caller's own spend, never anyone else's. */
-export interface MyUsage extends BudgetTotals {
-  user_id: string | null;
-  username: string | null;
-  level: BudgetLevelRef | null;
-  basis: BudgetBasis;
-  /** `YYYY-MM`, UTC */
-  period: string;
-  /** 00:00 UTC on the next month's 1st */
-  resets_at: string;
-  by_source: UsageBySource[];
-}
-
-/** One account in `GET /api/budgets/people`. */
-export interface BudgetPerson extends BudgetTotals {
-  user_id: string;
-  username: string;
-  role: ConsoleRole;
-  status: ConsoleUser["status"];
-  /** the level the limit comes from (assigned or default); null when none applies */
-  level: BudgetLevelRef | null;
-  assigned_level_id: string | null;
-  override_usd: number | null;
-  basis: BudgetBasis;
-  top_source: string | null;
-  by_source: UsageBySource[];
-}
-
-/** Spend charged to no current account: a deleted account (`user_id`, no name) or a
- *  principal with none (`user_name`: the config admin, the operator, a NULL-creator key). */
-export interface BudgetUnattributed extends BudgetTotals {
-  user_id: string | null;
-  user_name: string | null;
-  by_source: UsageBySource[];
-}
-
-export interface BudgetPeople {
-  period: string;
-  resets_at: string;
-  people: BudgetPerson[];
-  unattributed: BudgetUnattributed[];
-}
-
-/** `PUT /api/budgets/users/{user_id}` — both keys are the full assignment (null clears). */
-export interface BudgetAssignmentInput {
-  level_id: string | null;
-  override_usd: number | null;
-}
-
-export interface BudgetAssignment {
-  user_id: string;
-  username: string;
-  assigned_level_id: string | null;
-  override_usd: number | null;
-  level: BudgetLevelRef | null;
-  limit_usd: number | null;
-  basis: BudgetBasis;
-  unlimited: boolean;
-}
-
-/** One per-unit estimate key (`lib/budgets.ts` BUDGET_ESTIMATE_KEYS). */
-export type { BudgetEstimateKey };
-
-/** `GET/PUT /api/budgets/settings` — the per-unit estimates, their defaults and who changed them. */
-export type BudgetSettings = Record<BudgetEstimateKey, number> & {
-  defaults: Record<BudgetEstimateKey, number>;
-  updated_by: string | null;
-  updated_at: string | null;
-};
-
-/** On a create response (eval run, Skill Lab job): the job's estimate is more than its
- *  budgeted payer has left this month. It is still allowed and stops at its next boundary. */
-export interface BudgetNotice {
-  estimate_usd: number;
-  remaining_usd: number;
-  limit_usd: number;
-  period: string;
-  resets_at: string;
-}
-
-/** Why a job stopped early: its payer's monthly spend budget was reached at a boundary. */
-export type BudgetStopReason = "budget_exceeded";
-
-/** USD per 1M tokens; a null cache rate means input × the cache factor. */
-export interface ModelPriceRates {
-  input: number | null;
-  output: number | null;
-  cache_read: number | null;
-  cache_write: number | null;
-}
-
-/** One key of the merged price map (substring-matched against model ids). */
-export interface ModelPriceEntry {
-  model_id: string;
-  /** effective (override over yaml / refresher / built-in); null = no price */
-  rates: ModelPriceRates | null;
-  /** before the console override; null = the key exists only as an override */
-  base: ModelPriceRates | null;
-  overridden: boolean;
-  updated_by: string | null;
-  updated_at: string | null;
-}
-
-/** A model the platform uses that the merged map cannot price. */
-export interface UnpricedModel {
-  model_id: string;
-  /** `usage`, `agents`, `roles` (server) — the page adds `spans` from the cost report */
-  seen_in: string[];
-}
-
-export interface ModelPriceTable {
-  prices: ModelPriceEntry[];
-  unpriced_models: UnpricedModel[];
-  cache_factors: { cache_read: number; cache_write: number };
-}
-
-export interface ModelPriceInput {
-  input: number;
-  output: number;
-  cache_read?: number;
-  cache_write?: number;
-}
-
-/** `GET /api/admin/agentcore-rates` — fee rates (USD per unit) and calibration factors. */
-export interface AgentCoreRates {
-  rates: Record<string, number>;
-  defaults: Record<string, number>;
-  units: Record<string, string>;
-  calibration: Record<string, number>;
-  calibration_defaults: Record<string, number>;
-  calibration_units: Record<string, string>;
-  updated_by: string | null;
-  updated_at: string | null;
-}
-
-/** Keys to change; a null value resets that key to its default. */
-export interface AgentCoreRatesPatch {
-  rates?: Record<string, number | null>;
-  calibration?: Record<string, number | null>;
-}
-
-/** One failed part of a reconcile tick or a calibration pass. */
-export interface ReconcileFailure {
-  workspace_id: string | null;
-  /** `context` | `sessions` | `evaluations` | `online` | `pause` (absent for calibration) */
-  part?: string;
-  at?: string | null;
-  error: string;
-}
-
-/** The last reconcile tick (`services/budget_reconcile.tick`). */
-export interface ReconcileTick {
-  started_at: string;
-  finished_at: string;
-  duration_s: number;
-  /** exclusive end of the windows read (now − 2 min, minute-aligned) */
-  window_end: string;
-  sessions: number;
-  /** rows written: measured tokens, AgentCore fees, new Runtime compute rows, evaluations */
-  rows: number;
-  /** Runtime compute rows extended in place */
-  updated: number;
-  /** estimates replaced by measured cost */
-  superseded: number;
-  runs: number;
-  configs: number;
-  /** standalone online evaluations paused because their creator is over budget */
-  paused: number;
-  failures: ReconcileFailure[];
-}
-
-/** One runtime's measured Runtime factors (hourly calibration). */
-export interface RuntimeFactor {
-  runtime_id: string;
-  runtime_name: string;
-  /** GB resident per billable session-hour */
-  gb: number;
-  /** vCPU on average per billable session-hour */
-  vcpu: number;
-  sessions: number;
-  hours: number;
-  session_hours: number | null;
-  last_hour: string | null;
-  updated_at: string | null;
-  /** enough sessions back it: reconciliation uses it instead of the seed */
-  used: boolean;
-}
-
-/** This period's spend of one `usage_events.kind`, measured vs estimated. */
-export interface UsageByKind {
-  kind: string;
-  usd: number;
-  estimated_usd: number;
-  events: number;
-}
-
-/** `GET /api/budgets/reconcile-status` (admin). */
-export interface ReconcileStatus {
-  /** off only through `LAUNCHPAD_BUDGETS_RECONCILE_ENABLED=false` */
-  enabled: boolean;
-  /** the thread is alive in this process */
-  running: boolean;
-  interval_seconds: number;
-  first_tick_at: string | null;
-  last_tick: ReconcileTick | null;
-  last_failure_at: string | null;
-  /** now − the last window end; null before the first tick */
-  lag_seconds: number | null;
-  /** sessions with activity not read yet */
-  pending_sessions: number;
-  oldest_pending_at: string | null;
-  workspaces: {
-    workspace_id: string;
-    last_ok_at: string | null;
-    window_end: string | null;
-    last_error: ReconcileFailure | null;
-  }[];
-  calibration: {
-    last_hour?: string;
-    at?: string;
-    runtimes?: number;
-    samples?: number;
-    failures?: ReconcileFailure[];
-    min_sessions: number;
-    defaults: Record<string, number>;
-    factors: RuntimeFactor[];
-  };
-  period: string;
-  by_kind: UsageByKind[];
-  /** what the estimates that reconciliation replaced this period had charged */
-  superseded_usd: number;
-}
-
-/** One category of the Cost Explorer comparison. */
-export interface CalibrationReportRow {
-  /** `runtime`, `evaluations_builtin`, `evaluations_custom`, `web_search`, `memory`,
-   *  `gateway`, `knowledge_base`, `code_interpreter`, `browser`, `other`, `overhead` */
-  category: string;
-  ledger_usd: number;
-  /** null when Cost Explorer could not be read for the account */
-  cost_explorer_usd: number | null;
-}
-
-/** `GET /api/budgets/calibration-report?refresh=` (admin, report only). */
-export interface CalibrationReport {
-  period: string;
   generated_at: string;
-  /** Cost Explorer covers the whole account: every region, every box sharing it */
-  account_wide: true;
-  charges_anyone: false;
-  cached: boolean;
-  age_seconds: number;
-  accounts: {
-    account_id: string;
-    workspaces: { id: string; name: string; region: string }[];
-    ledger_total_usd: number;
-    cost_explorer_total_usd: number | null;
-    /** storage, tool indexing, data transfer: never charged to people */
-    overhead_usd: number | null;
-    by_region: Record<string, number>;
-    estimated: boolean | null;
-    error: string | null;
-    rows: CalibrationReportRow[];
-  }[];
+  total: number;
+  items: InboxItem[];
+}
+
+export interface GuardrailInfo {
+  provisioned: boolean;
+  id?: string;
+  version?: string;
+  status?: string;
+  name?: string;
+  error?: string;
+  entities: string[];
 }
 
 export const api = {
   videoCatalog: () => request<VideoCatalog>("/api/videos"),
+  modelDefaults: () => request<ModelDefaults>("/api/models/defaults"),
+  /** the active (or the pinned) workspace's account/Region model catalog */
+  modelCatalog: (workspaceId?: string | null) =>
+    request<ModelCatalog>("/api/model-catalog", { headers: pinnedWorkspace(workspaceId) }),
+  modelSettings: () => request<{ roles: ModelSettingRole[] }>("/api/models/settings"),
+  updateModelSetting: (field: string, modelId: string) =>
+    request<ModelSettingRole>(`/api/models/settings/${encodeURIComponent(field)}`, {
+      method: "PUT",
+      body: JSON.stringify({ model_id: modelId }),
+    }),
+  resetModelSetting: (field: string) =>
+    request<ModelSettingRole>(`/api/models/settings/${encodeURIComponent(field)}`, { method: "DELETE" }),
+  probeModel: (field: string, modelId: string) =>
+    request<ModelProbeResult>("/api/model-probe", {
+      method: "POST",
+      body: JSON.stringify({ field, model_id: modelId }),
+    }),
   manageVideos: () => request<ManagedVideoCatalog>("/api/videos/manage"),
   getManagedVideo: (id: string) =>
     request<ManagedVideo>(`/api/videos/manage/${encodeURIComponent(id)}`),
@@ -5610,6 +5878,8 @@ export const api = {
     dataset_id: string;
     evaluators: string[];
     wait_seconds?: number;
+    /** storage-mounts §8.2, see `V2RunCreate.confirm_storage` */
+    confirm_storage?: boolean;
   }) =>
     request<EvaluationRunInfo>("/api/eval/runs", {
       method: "POST",
@@ -5639,13 +5909,13 @@ export const api = {
    *  nothing to read yet. */
   evaluationRunResults: (runId: string) =>
     request<EvaluationRunResults>(`/api/eval/runs/${encodeURIComponent(runId)}/results`),
-  /** `GET /api/eval/runs/compare?a=&b=` — two finished evaluator runs side by side: how
+  /** `GET /api/eval/runs/compare-pair?a=&b=` — two finished evaluator runs side by side: how
    *  their sessions align, the per-case judge records when aligned (≤ 2 AWS reads, each
    *  side degrading alone) and the snapshots between their versions. 422
    *  `run.compare_unsupported` for an insights or still-active run. */
   compareEvaluationRuns: (a: string, b: string) => {
     const q = new URLSearchParams({ a, b });
-    return request<RunCompare>(`/api/eval/runs/compare?${q.toString()}`);
+    return request<RunCompare>(`/api/eval/runs/compare-pair?${q.toString()}`);
   },
   /** `GET /api/eval/scorecard?agent_id=` — the workspace's scored runs the viewer may
    *  see, each with its benchmark and version, plus their agents' snapshot timelines.
@@ -5659,9 +5929,9 @@ export const api = {
   /** `POST /api/eval/runs/{id}/rerun` (201) — evaluate the run's target again, as it is
    *  now, on the run's own scope: the same local dataset, the same cloud dataset and
    *  pinned version, or the same window length, with the same evaluators. Same checks
-   *  and `budget_notice` as `POST /runs`. 422 `run.rerun_unsupported` for chosen
+   *  and project budget gate as `POST /runs`. 422 `run.rerun_unsupported` for chosen
    *  sessions / log streams / insights; 400 `agent.not_active`; 404 `run.not_found` /
-   *  `dataset.not_found`; 402 `budget.exceeded` / `budget.model_unpriced`. */
+   *  `dataset.not_found`; 409 `project.budget_exhausted`. */
   rerunEvaluationRun: (runId: string, body: { name?: string } = {}) =>
     request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/rerun`, {
       method: "POST",
@@ -5761,6 +6031,8 @@ export const api = {
     /** both together, or neither: a cross-account workspace */
     role_arn?: string;
     external_id?: string;
+    /** defaults to `dev` server-side */
+    tier?: WorkspaceTier;
   }) =>
     request<Workspace>("/api/workspaces", { method: "POST", body: JSON.stringify(body) }),
   /** Probe an AssumeRole before registering anything; writes nothing. */
@@ -5774,7 +6046,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  patchWorkspace: (id: string, body: { name: string }) =>
+  /** Rename and/or re-tier. Moving into or out of `prod` needs `confirm_tier_change`
+   *  (else 409 `workspace.tier_change_unconfirmed`). */
+  patchWorkspace: (
+    id: string,
+    body: { name?: string; tier?: WorkspaceTier; confirm_tier_change?: boolean },
+  ) =>
     request<Workspace>(`/api/workspaces/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
@@ -5857,6 +6134,34 @@ export const api = {
     request<WorkspaceBootstrapJob>(`/api/jobs/${jobId}`, {
       headers: { "X-Workspace": workspaceId },
     }),
+  /** T23: logical → real resource ids for one workspace (pinned, not the selection). */
+  listResourceMappings: (workspaceId: string) =>
+    request<ResourceMappingList>("/api/resource-mappings", {
+      headers: pinnedWorkspace(workspaceId),
+    }),
+  putResourceMapping: (
+    workspaceId: string,
+    kind: ResourceMappingKind,
+    name: string,
+    body: { resource_id: string; note?: string | null },
+  ) =>
+    request<ResourceMapping>(
+      `/api/resource-mappings/${kind}/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify(body), headers: pinnedWorkspace(workspaceId) },
+    ),
+  deleteResourceMapping: (workspaceId: string, kind: ResourceMappingKind, name: string) =>
+    request<{ deleted: boolean; key: string }>(`/api/resource-mappings/${kind}/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+      headers: pinnedWorkspace(workspaceId),
+    }),
+  createUser: (body: UserCreateBody) =>
+    request<ConsoleUser>("/api/users", { method: "POST", body: JSON.stringify(body) }),
+  /** The signed-in account's own password; other sessions end, this one continues. */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean; expires_at: number }>("/api/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
   updateUser: (id: string, patch: UserPatchBody) =>
     request<ConsoleUser>(`/api/users/${id}`, {
       method: "PATCH",
@@ -5864,98 +6169,6 @@ export const api = {
     }),
   deleteUser: (id: string) =>
     request<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
-  /** Every platform model role's effective value (member-readable; pickers seed from it). */
-  modelDefaults: () => request<{ roles: ModelRoleSetting[] }>("/api/model-defaults"),
-  /** Admin: override one role for every workspace and member on this deployment. */
-  adminSetModel: (role: ModelRole, modelId: string) =>
-    request<ModelRoleSetting>(`/api/admin/models/${encodeURIComponent(role)}`, {
-      method: "PUT",
-      body: JSON.stringify({ model_id: modelId }),
-    }),
-  /** Admin: drop the override, back to env / launchpad.yaml / the built-in default. */
-  adminResetModel: (role: ModelRole) =>
-    request<ModelRoleSetting>(`/api/admin/models/${encodeURIComponent(role)}`, { method: "DELETE" }),
-  /** Admin: one small real Converse call in the hub's default workspace. */
-  adminProbeModel: (modelId: string, check: ModelProbeCheck) =>
-    request<ModelProbeResult>("/api/admin/models/probe", {
-      method: "POST",
-      body: JSON.stringify({ model_id: modelId, check }),
-    }),
-  /** Admin: estimated spend for a window, by agent and by person (Logs Insights, 60 s cache). */
-  costs: (range: CostRange, force = false) =>
-    request<CostReport>(
-      `/api/costs?${new URLSearchParams({ range, ...(force ? { force: "true" } : {}) })}`,
-    ),
-  /** Admin: estimated spend since the UTC month start. */
-  costsMonthToDate: (force = false) =>
-    request<CostMonthToDate>(`/api/costs/month-to-date${force ? "?force=true" : ""}`),
-  /** Admin: the workspace's alert rules and their last state (a ledger read). */
-  alertRules: () =>
-    request<{ rules: AlertRuleInfo[]; firing: number; kinds: AlertKind[] }>("/api/alerts"),
-  createAlertRule: (body: AlertRuleCreate) =>
-    request<AlertRuleInfo>("/api/alerts", { method: "POST", body: JSON.stringify(body) }),
-  updateAlertRule: (id: string, patch: AlertRulePatch) =>
-    request<AlertRuleInfo>(`/api/alerts/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    }),
-  deleteAlertRule: (id: string) =>
-    request<{ deleted: string }>(`/api/alerts/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  /** Admin: re-read every enabled rule now. Never notifies. */
-  evaluateAlerts: () => request<AlertEvaluation>("/api/alerts/evaluate", { method: "POST" }),
-  /** Admin: whether this server runs the background (notifying) check. */
-  alertScheduler: () => request<AlertSchedulerInfo>("/api/alerts/scheduler"),
-  /** The caller's own spend this period (any signed-in user). */
-  myUsage: (period?: string) =>
-    request<MyUsage>(`/api/me/usage${period ? `?${new URLSearchParams({ period })}` : ""}`),
-  /** Admin: every spend level and the default one. */
-  budgetLevels: () =>
-    request<{ levels: BudgetLevelInfo[]; default_level_id: string | null }>("/api/budgets/levels"),
-  createBudgetLevel: (body: { name: string; monthly_budget_usd: number; is_default?: boolean }) =>
-    request<BudgetLevelInfo>("/api/budgets/levels", { method: "POST", body: JSON.stringify(body) }),
-  updateBudgetLevel: (
-    id: string,
-    patch: { name?: string; monthly_budget_usd?: number; is_default?: boolean },
-  ) =>
-    request<BudgetLevelInfo>(`/api/budgets/levels/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    }),
-  /** 409 `budget.level_in_use` while accounts are assigned to it. */
-  deleteBudgetLevel: (id: string) =>
-    request<{ deleted: boolean; id: string }>(`/api/budgets/levels/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    }),
-  /** Admin: every account's level, limit and spend, plus spend with no account. */
-  budgetPeople: (period?: string) =>
-    request<BudgetPeople>(`/api/budgets/people${period ? `?${new URLSearchParams({ period })}` : ""}`),
-  /** Admin: an account's level and personal amount (both keys: null clears). */
-  assignBudget: (userId: string, body: BudgetAssignmentInput) =>
-    request<BudgetAssignment>(`/api/budgets/users/${encodeURIComponent(userId)}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    }),
-  budgetSettings: () => request<BudgetSettings>("/api/budgets/settings"),
-  /** Only the keys sent change; `null` resets a key to its default. */
-  putBudgetSettings: (body: Partial<Record<BudgetEstimateKey, number | null>>) =>
-    request<BudgetSettings>("/api/budgets/settings", { method: "PUT", body: JSON.stringify(body) }),
-  /** Admin: the merged price map, the models with no price, and the cache factors. */
-  modelPrices: () => request<ModelPriceTable>("/api/admin/model-prices"),
-  /** Admin: price any model id (unpriced, or an override of a built-in / yaml rate). */
-  setModelPrice: (modelId: string, body: ModelPriceInput) =>
-    request<ModelPriceEntry>(modelPricePath(modelId), { method: "PUT", body: JSON.stringify(body) }),
-  /** Admin: drop the console override (404 `rates.override_not_found` when there is none). */
-  clearModelPrice: (modelId: string) =>
-    request<ModelPriceEntry>(modelPricePath(modelId), { method: "DELETE" }),
-  agentcoreRates: () => request<AgentCoreRates>("/api/admin/agentcore-rates"),
-  putAgentcoreRates: (patch: AgentCoreRatesPatch) =>
-    request<AgentCoreRates>("/api/admin/agentcore-rates", { method: "PUT", body: JSON.stringify(patch) }),
-  /** Admin: the reconciliation thread's last tick, lag, failures and calibration. */
-  budgetReconcileStatus: () => request<ReconcileStatus>("/api/budgets/reconcile-status"),
-  /** Admin, report only: the ledger's AgentCore fees vs Cost Explorer month to date.
-   *  Each uncached read costs $0.01 per account — call it only when asked. */
-  budgetCalibrationReport: (refresh = false) =>
-    request<CalibrationReport>(`/api/budgets/calibration-report${refresh ? "?refresh=true" : ""}`),
   /** Stage a BYOC source zip; the returned upload_id goes into spec.byoc. */
   uploadByocArtifact: (file: File, pythonVersion?: ByocPythonVersion) => {
     const form = new FormData();
@@ -5969,8 +6182,20 @@ export const api = {
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>("/api/agents", {
       method: "POST",
       body: JSON.stringify(spec),
+      headers: pinnedProject(spec.project_id),
     }),
+  /** Server-filtered: the business projects the caller may create an agent in. */
+  agentEligibleProjects: (permission: AgentCreatePermission = "agents.deploy") =>
+    request<{ projects: EligibleAgentProject[] }>(
+      `/api/agents/eligible-projects?permission=${encodeURIComponent(permission)}`,
+    ),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  /** T10: the wizard's scenario-template gallery (static, hub-global). */
+  agentTemplates: () => request<{ templates: AgentTemplateInfo[] }>("/api/agent-templates"),
+  /** T12: the workspace's PII guardrail preset. */
+  guardrailPreset: () => request<GuardrailInfo>("/api/governance/guardrail"),
+  provisionGuardrail: () =>
+    request<GuardrailInfo>("/api/governance/guardrail", { method: "POST" }),
   /**
    * System presets. Every call takes the workspace the caller is DISPLAYING and
    * pins it as the request's `X-Workspace` header, so a read or save from this
@@ -6122,10 +6347,18 @@ export const api = {
       { method: "POST", body: JSON.stringify({ revision }) },
     ),
   /** The only executor: names the exact revision + content hash that was shown. */
-  assistantApproveProposal: (id: string, revision: number, contentHash: string) =>
+  assistantApproveProposal: (id: string, revision: number, contentHash: string, projectId?: string) =>
     request<AssistantApproveResult>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/proposal/approve`,
-      { method: "POST", body: JSON.stringify({ revision, content_hash: contentHash }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          revision,
+          content_hash: contentHash,
+          ...(projectId ? { project_id: projectId } : {}),
+        }),
+        headers: pinnedProject(projectId),
+      },
     ),
   /* ── SE-047 evaluation-assets plan (private to the conversation owner) ──
      Every call pins the workspace the panel is DISPLAYING (`X-Workspace`), so a
@@ -6194,15 +6427,23 @@ export const api = {
     ),
   discoverRuntimes: () =>
     request<RuntimeDiscoveryResponse>("/api/agents/discovery"),
-  importRuntimes: (runtimeIds: string[], harnessIds: string[] = []) =>
+  importRuntimes: (runtimeIds: string[], harnessIds: string[] = [], projectId?: string) =>
     request<RuntimeImportResult>("/api/agents/discovery/import", {
       method: "POST",
-      body: JSON.stringify({ runtime_ids: runtimeIds, harness_ids: harnessIds }),
+      body: JSON.stringify({
+        runtime_ids: runtimeIds,
+        harness_ids: harnessIds,
+        ...(projectId ? { project_id: projectId } : {}),
+      }),
+      headers: pinnedProject(projectId),
     }),
-  convertAgent: (id: string) =>
+  /** The twin is filed under `projectId` (when given) or the request's project. */
+  convertAgent: (id: string, projectId?: string) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
       `/api/agents/${id}/convert`,
-      { method: "POST" },
+      projectId
+        ? { method: "POST", body: JSON.stringify({ project_id: projectId }), headers: pinnedProject(projectId) }
+        : { method: "POST" },
     ),
   /** Runtime twins converted from this agent (ledger read, newest first). */
   listAgentConversions: (id: string) =>
@@ -6217,6 +6458,7 @@ export const api = {
     ),
   getOverview: () => request<OverviewInfo>("/api/overview"),
   overviewOnlineQuality: () => request<OnlineQuality>("/api/overview/online-quality"),
+  overviewTtfa: () => request<TtfaInfo>("/api/overview/ttfa"),
   /** `workspaceId` pins the read like the system-preset calls (the shared editor's
    * deploy poll for a preset must follow the workspace it saved into, not another
    * tab's later selection); omitted ⇒ the global stamp. */
@@ -6227,33 +6469,126 @@ export const api = {
     request<AgentSourceInfo>(
       `/api/agents/${id}/source${path ? `?path=${encodeURIComponent(path)}` : ""}`,
     ),
+  agentMcp: (id: string) => request<McpServerStatus>(`/api/agents/${id}/mcp`),
+  // T20/T21 — release bundles and promotions
+  createReleaseBundle: (id: string, body: { snapshot_seq?: number; note?: string } = {}) =>
+    request<ReleaseBundleInfo>(`/api/agents/${encodeURIComponent(id)}/release-bundles`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  agentReleaseBundles: (id: string) =>
+    request<{ bundles: ReleaseBundleInfo[] }>(
+      `/api/agents/${encodeURIComponent(id)}/release-bundles`,
+    ),
+  listPromotions: (params: { status?: string; target?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.status) query.set("status", params.status);
+    if (params.target) query.set("target", params.target);
+    const suffix = query.toString();
+    return request<{ promotions: PromotionInfo[] }>(`/api/promotions${suffix ? `?${suffix}` : ""}`);
+  },
+  getPromotion: (id: string) =>
+    request<PromotionInfo>(`/api/promotions/${encodeURIComponent(id)}`),
+  createPromotion: (body: {
+    bundle_id: string;
+    target_workspace_id: string;
+    change_note: string;
+    rollback_note: string;
+  }) => request<PromotionInfo>("/api/promotions", { method: "POST", body: JSON.stringify(body) }),
+  reviewPromotion: (id: string, body: { decision: "approve" | "reject"; note?: string }) =>
+    request<PromotionInfo>(`/api/promotions/${encodeURIComponent(id)}/review`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  // T26/T27 — plan preview, execution, rollback
+  promotionPlan: (id: string) =>
+    request<PromotionPlan>(`/api/promotions/${encodeURIComponent(id)}/plan`),
+  promotionExecution: (id: string) =>
+    request<{ promotion: PromotionInfo; log: PromotionLogLine[] }>(
+      `/api/promotions/${encodeURIComponent(id)}/execution`,
+    ),
+  executePromotion: (id: string) =>
+    request<{ promotion: PromotionInfo; job_id: string }>(
+      `/api/promotions/${encodeURIComponent(id)}/execute`,
+      { method: "POST" },
+    ),
+  rollbackPromotion: (id: string) =>
+    request<{ promotion: PromotionInfo; job_id: string }>(
+      `/api/promotions/${encodeURIComponent(id)}/rollback`,
+      { method: "POST" },
+    ),
+  // T22 — the administrator inbox
+  inbox: () => request<InboxInfo>("/api/inbox"),
+  // T37/T39 — fleet and governance health
+  fleet: () => request<FleetReport>("/api/fleet"),
+  governanceHealth: () => request<GovernanceHealth>("/api/governance/health"),
+  // T38 — the template marketplace
+  sharedTemplates: () =>
+    request<{ templates: SharedTemplateInfo[] }>("/api/marketplace/templates"),
+  publishTemplate: (body: { agent_id: string; title: string; summary?: string }) =>
+    request<SharedTemplateInfo>("/api/marketplace/templates", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  useSharedTemplate: (id: string) =>
+    request<SharedTemplateInfo>(`/api/marketplace/templates/${encodeURIComponent(id)}/use`, {
+      method: "POST",
+    }),
+  unpublishTemplate: (id: string) =>
+    request<{ deleted: string }>(`/api/marketplace/templates/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  // T28 — spend attribution
+  costs: (range: string, force = false) =>
+    request<CostReport>(`/api/costs?range=${encodeURIComponent(range)}${force ? "&force=true" : ""}`),
+  costsMonthToDate: () =>
+    request<{ workspace_id: string; est_cost_usd: number }>("/api/costs/month-to-date"),
+  // T29 — alert rules
+  alertRules: () =>
+    request<{ rules: AlertRuleInfo[]; firing: number; kinds: AlertKind[] }>("/api/alerts"),
+  createAlertRule: (body: {
+    kind: AlertKind;
+    name?: string;
+    threshold: number;
+    window?: string;
+    webhook_url?: string | null;
+  }) => request<AlertRuleInfo>("/api/alerts", { method: "POST", body: JSON.stringify(body) }),
+  updateAlertRule: (
+    id: string,
+    body: { name?: string; threshold?: number; window?: string; enabled?: boolean; webhook_url?: string | null },
+  ) =>
+    request<AlertRuleInfo>(`/api/alerts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteAlertRule: (id: string) =>
+    request<{ deleted: string }>(`/api/alerts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** `notify: false` re-reads without delivering — what a console refresh wants. */
+  evaluateAlerts: (notify = false) =>
+    request<{ rules: AlertRuleInfo[]; firing: number; unknown: number; evaluated_at: string }>(
+      `/api/alerts/evaluate?notify=${notify}`,
+      { method: "POST" },
+    ),
   /** One page of the agent's Runtime stdout/stderr; the log group is server-derived. */
   agentRuntimeLogs: (id: string, query: string) =>
     request<RuntimeLogsPage>(`/api/agents/${encodeURIComponent(id)}/runtime-logs${query}`),
   /** The agent's spec snapshots (one per publish), newest first, without specs. */
   agentSnapshots: (id: string) =>
     request<{ snapshots: SpecSnapshotInfo[] }>(`/api/agents/${encodeURIComponent(id)}/snapshots`),
-  /** One snapshot, with the full spec it deployed. */
-  agentSnapshot: (id: string, seq: number) =>
-    request<SpecSnapshotInfo>(`/api/agents/${encodeURIComponent(id)}/snapshots/${seq}`),
-  /** Field-level diff `from → to`; an omitted side is the agent's current spec
-   *  (omitting both is refused with 422 `snapshot.diff_side_required`). */
-  snapshotDiff: (id: string, fromSeq?: number | null, toSeq?: number | null) => {
-    const q = new URLSearchParams();
-    if (fromSeq != null) q.set("from_seq", String(fromSeq));
-    if (toSeq != null) q.set("to_seq", String(toSeq));
-    return request<SnapshotDiff>(`/api/agents/${encodeURIComponent(id)}/snapshots/diff?${q.toString()}`);
-  },
-  /** Re-publish a deployed snapshot's spec as a NEW version (the redeploy path and
-   *  its guards; the AWS version is never reverted in place). */
+  snapshotDiff: (id: string, fromSeq: number, toSeq: number) =>
+    request<SnapshotDiff>(
+      `/api/agents/${encodeURIComponent(id)}/snapshots/diff?from_seq=${fromSeq}&to_seq=${toSeq}`,
+    ),
   rollbackSnapshot: (id: string, seq: number) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
       `/api/agents/${encodeURIComponent(id)}/snapshots/${seq}/rollback`,
       { method: "POST" },
     ),
-  /** One agent name across every workspace the caller can see (ledger only). */
-  /** The current workspace's ledger vs what AWS reports — one control-plane read per
-   *  visible live agent, so only on request. */
+  /** `GET /api/agents/{id}/suggested-questions` — 3-5 starter questions (model or fallback). */
+  suggestedQuestions: (id: string, lang: string) =>
+    request<{ questions: string[]; source: "model" | "fallback" }>(
+      `/api/agents/${encodeURIComponent(id)}/suggested-questions?lang=${encodeURIComponent(lang)}`,
+    ),
   agentIdentity: (id: string) => request<AgentIdentityInfo>(`/api/agents/${id}/identity`),
   /** Switch inbound auth in place: pins `inbound_auth` on the stored spec
    * (`null` ⇒ inherit the workspace default) and re-publishes the same runtime. */
@@ -6437,6 +6772,8 @@ export const api = {
     online_evaluators?: string[];
     /** must be one of `online_evaluators`; absent ⇒ the aggregate verdict */
     primary_evaluator?: string;
+    /** the candidate's share of live traffic writes shared-state storage (storage-mounts §8.2) */
+    confirm_storage?: boolean;
   }) =>
     request<RuntimeCanaryInfo>("/api/runtime-canaries", {
       method: "POST",
@@ -6454,11 +6791,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  invokeAgent: (id: string, prompt: string, sessionId?: string) =>
-    request<{ text: string; session_id: string; latency_ms: number }>(
-      `/api/agents/${id}/invoke`,
-      { method: "POST", body: JSON.stringify({ prompt, session_id: sessionId }) },
-    ),
+  // no `invokeAgent`: console chat turns go over `POST /api/chat/{id}` (lib/chat.ts
+  // `streamChat`) — the sync `/invoke` sends nothing until the answer is complete, so a
+  // proxy read timeout (CloudFront: 60 s) cuts a slow turn to 504
   deleteAgent: (id: string) =>
     request<{ deleted: boolean; agent_id: string; aws_resource_deleted: boolean }>(
       `/api/agents/${id}`,
@@ -7080,58 +7415,31 @@ export interface ApiKeyInfo {
   created_by?: string | null;
   /** Display name at mint time; null only on legacy keys (creator unknown). */
   created_by_name?: string | null;
-  /** Last successful /v1 call, stamped at most once a minute. */
+  /** Last admitted /v1 call, stamped at most once a minute (`use_count` is exact). */
   last_used_at?: string | null;
   /** Why the creator may no longer hold this key (it cannot be re-enabled), or null. */
   creator_offboarded?: "deleted" | "disabled" | "expired" | "no_workspace_grant" | null;
   key?: string;
+  /** T16: empty = every agent in the workspace */
+  agent_ids?: string[];
+  expires_at?: string | null;
+  expired?: boolean;
+  rate_per_minute?: number | null;
+  use_count?: number;
 }
 
-// ---- thumbs feedback on console chat answers ----
-export type FeedbackVerdict = "up" | "down";
-
-export interface FeedbackItem {
-  id: string;
-  agent_id: string;
-  agent_name: string;
-  session_id: string;
-  message_id: number;
-  verdict: FeedbackVerdict;
-  actor: string;
-  /** `console` here; rows written by other surfaces (e.g. `share` / `review`) may exist */
-  source: string;
-  /** closest preceding user turn of the session, truncated */
-  question: string;
-  /** the rated answer, truncated */
-  answer: string;
-  answered_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+export interface ApiKeyOptions {
+  agent_ids?: string[] | null;
+  expires_at?: string | null;
+  rate_per_minute?: number | null;
 }
 
-/** `GET /api/feedback` — feedback whose verdict was last set inside `range`. */
-export interface FeedbackList {
-  /** both verdicts over the range, regardless of the `verdict` filter */
-  totals: Record<FeedbackVerdict, number>;
-  items: FeedbackItem[];
-  /** distinct sessions with a thumbs-down in the range, newest first (≤ 50) — the
-   *  input of `POST /api/eval/datasets/from-sessions` */
-  down_session_ids: string[];
+export interface ApiKeyUsage {
+  key_id: string;
+  total: number;
+  last_used_at: string | null;
+  days: { day: string; count: number }[];
 }
-
-export const feedbackApi = {
-  /** Set the caller's verdict on one agent answer; `null` withdraws it. */
-  rate: (messageId: number, verdict: FeedbackVerdict | null) =>
-    request<{ message_id: number; verdict: FeedbackVerdict | null }>("/api/feedback", {
-      method: "POST",
-      body: JSON.stringify({ message_id: messageId, verdict }),
-    }),
-  list: (params: { range: V2Range; verdict?: FeedbackVerdict; agent_id?: string; limit?: number }) => {
-    const q = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) if (value != null) q.set(key, String(value));
-    return request<FeedbackList>(`/api/feedback?${q.toString()}`);
-  },
-};
 
 export const chatApi = {
   history: (agentId: string, sessionId: string) =>
@@ -7145,27 +7453,378 @@ export const chatApi = {
   trace: (sessionId: string) =>
     request<ChatTraceInfo>(`/api/traces/${encodeURIComponent(sessionId)}`),
   apiKeys: () => request<{ keys: ApiKeyInfo[] }>("/api/apikeys"),
-  createApiKey: (name: string) =>
-    request<ApiKeyInfo>("/api/apikeys", { method: "POST", body: JSON.stringify({ name }) }),
+  createApiKey: (name: string, options: ApiKeyOptions = {}) =>
+    request<ApiKeyInfo>("/api/apikeys", { method: "POST", body: JSON.stringify({ name, ...options }) }),
+  updateApiKey: (id: string, patch: ApiKeyOptions & { name?: string }) =>
+    request<ApiKeyInfo>(`/api/apikeys/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  apiKeyUsage: (id: string, days = 14) =>
+    request<ApiKeyUsage>(`/api/apikeys/${encodeURIComponent(id)}/usage?days=${days}`),
   setApiKeyEnabled: (id: string, enabled: boolean) =>
     request<ApiKeyInfo>(`/api/apikeys/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`, {
       method: "POST",
     }),
   /** `POST /api/chat/{agent_id}` — returns the raw SSE response (read it with
-   *  `sseEvents`); a non-2xx answer throws an `ApiError` (localized message, the
-   *  envelope's `code` and `detail` — a `402 budget.*` refusal arrives here, before
-   *  any stream). `signal` aborts the request and the body read (TryChat aborts on unmount). */
+   *  `sseEvents`); a non-2xx answer throws with the localized envelope message.
+   *  `signal` aborts the request and the stream (the console's Stop button). */
   stream: async (agentId: string, body: ChatRequest, signal?: AbortSignal): Promise<Response> => {
-    const path = `/api/chat/${encodeURIComponent(agentId)}`;
-    const res = await fetch(path, {
+    const res = await fetch(`/api/chat/${encodeURIComponent(agentId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal,
     });
-    if (!res.ok) await parseResponse<never>(path, res);
+    if (!res.ok) throw new Error(await responseMessage(res));
     return res;
   },
+};
+
+// ---- share links (T13/T14) and thumbs feedback (T15) ----
+export type FeedbackVerdict = "up" | "down";
+
+export interface ShareLinkInfo {
+  id: string;
+  kind: string;
+  agent_id: string;
+  label: string;
+  prefix: string;
+  state: "active" | "revoked" | "disabled" | "expired";
+  created_by: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  use_count: number;
+  created_at: string | null;
+  /** T30: present on Slack / Feishu links. Names which secrets are set, never a value. */
+  channel?: { platform: ChannelPlatform; config: Record<string, string>; secrets_set: string[] };
+}
+
+export type ChannelPlatform = "slack" | "feishu";
+
+/** Creation answer: the raw `token` (and its URL) is shown exactly once. */
+export interface ShareLinkCreated extends ShareLinkInfo {
+  token: string;
+  path: string;
+  url: string;
+  /** T30: chat links only - the chromeless page URL and its copy-ready `<iframe>`. */
+  embed_url?: string;
+  embed_snippet?: string;
+}
+
+export interface FeedbackItem {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  session_id: string;
+  message_id: number;
+  verdict: FeedbackVerdict;
+  comment: string | null;
+  actor: string;
+  source: "console" | "share" | "review";
+  /** T34: the answer a reviewer says it should have been */
+  correction?: string | null;
+  question: string;
+  answer: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface FeedbackList {
+  counts: Record<FeedbackVerdict, number>;
+  items: FeedbackItem[];
+  /** distinct sessions with a thumbs-down, newest first — the input of
+   *  `POST /api/eval/datasets/from-sessions` */
+  down_session_ids: string[];
+}
+
+export const shareLinkApi = {
+  list: (agentId: string) =>
+    request<{ links: ShareLinkInfo[] }>(`/api/agents/${encodeURIComponent(agentId)}/share-links`),
+  create: (agentId: string, body: { label?: string; expires_in_days?: number | null }) =>
+    request<ShareLinkCreated>(`/api/agents/${encodeURIComponent(agentId)}/share-links`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revoke: (linkId: string) =>
+    request<ShareLinkInfo>(`/api/share-links/${encodeURIComponent(linkId)}/revoke`, {
+      method: "POST",
+    }),
+  /** T30: connect the agent to Slack / Feishu. Credentials go up once and never come back. */
+  createChannel: (
+    agentId: string,
+    body: {
+      platform: ChannelPlatform;
+      label?: string;
+      expires_in_days?: number | null;
+      credentials: Record<string, string>;
+    },
+  ) =>
+    request<ShareLinkCreated>(`/api/agents/${encodeURIComponent(agentId)}/channel-links`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+
+// ---- T32: environment comparison and drift ----
+
+export interface EnvironmentRow {
+  workspace: { id: string; name: string; tier: string; region: string; status: string };
+  current: boolean;
+  present: boolean;
+  vs_reference: "reference" | "same" | "differs" | "absent";
+  agent: {
+    id: string;
+    status: string;
+    method: string;
+    version: string | null;
+    spec_digest: string;
+    image_digest: string | null;
+    last_deploy: {
+      status: string;
+      started_at: string | null;
+      ended_at: string | null;
+      image_digest: string | null;
+    } | null;
+    updated_at: string | null;
+  } | null;
+}
+
+export interface EnvironmentComparison {
+  agent: string;
+  environments: EnvironmentRow[];
+  reference_workspace: string | null;
+  summary: { present: number; distinct_spec_digests: number; aligned: boolean };
+}
+
+export type DriftState = "in_sync" | "drift" | "unknown";
+
+export interface DriftAgent {
+  agent_id: string;
+  name: string;
+  method: string;
+  state: DriftState;
+  findings: { code: string; expected: string | null; observed: string | null }[];
+  reason: string | null;
+}
+
+export interface DriftReport {
+  workspace_id: string;
+  state: DriftState;
+  checked: number;
+  counts: Record<DriftState, number>;
+  truncated: boolean;
+  agents: DriftAgent[];
+}
+
+export const environmentApi = {
+  compare: (agent: string) =>
+    request<EnvironmentComparison>(
+      `/api/environments/compare?${new URLSearchParams({ agent }).toString()}`,
+    ),
+  drift: () => request<DriftReport>("/api/environments/drift"),
+};
+
+export const feedbackApi = {
+  /** `verdict: "none"` withdraws the caller's earlier verdict. */
+  rate: (
+    agentId: string,
+    body: { session_id: string; message_id: number; verdict: FeedbackVerdict | "none"; comment?: string },
+  ) =>
+    request<{ message_id: number; verdict: FeedbackVerdict | null }>(
+      `/api/chat/${encodeURIComponent(agentId)}/feedback`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  list: (params: { verdict?: FeedbackVerdict; agent_id?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value != null) q.set(key, String(value));
+    const qs = q.toString();
+    return request<FeedbackList>(`/api/feedback${qs ? `?${qs}` : ""}`);
+  },
+};
+
+// ---- business self-service: intents, review, curated answers, issue box (T33-T36) ----
+export interface IntentSession {
+  session_id: string;
+  agent_id: string;
+  message_id: number | null;
+  question: string;
+  answer: string;
+  status: "down" | "unanswered" | "up" | "ok";
+}
+
+export interface IntentCluster {
+  id: string;
+  label: string;
+  volume: number;
+  thumbs_down: number;
+  rated: number;
+  /** null when nobody rated a session of the cluster */
+  down_rate: number | null;
+  unanswered: number;
+  sessions: IntentSession[];
+}
+
+export interface IntentView {
+  /** `model` = one Bedrock grouping call; `fallback` = mechanical grouping */
+  source: "model" | "fallback";
+  sessions_considered: number;
+  clusters: IntentCluster[];
+  unanswered: (IntentSession & { cluster: string | null })[];
+  generated_at?: string;
+}
+
+export interface AnswerRuleInfo {
+  id: string;
+  agent_id: string;
+  position: number;
+  name: string;
+  match: "exact" | "contains";
+  pattern: string;
+  answer: string;
+  enabled: boolean;
+  created_by: string;
+  updated_by: string;
+  source_issue_id: string | null;
+  hit_count: number;
+  last_hit_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface AnswerRuleList {
+  agent_id: string;
+  enabled: boolean;
+  rules: AnswerRuleInfo[];
+  limit: number;
+}
+
+export interface AnswerRuleBody {
+  name?: string;
+  match: "exact" | "contains";
+  pattern: string;
+  answer: string;
+  enabled?: boolean;
+  issue_id?: string;
+}
+
+export type IssueStatus = "open" | "fixed" | "wont_fix";
+export type IssueFixAction = "rule" | "kb" | "dataset";
+
+export interface IssueInfo {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  kind: "thumbs_down" | "unanswered" | "review" | "manual";
+  status: IssueStatus;
+  session_id: string;
+  message_id: number | null;
+  question: string;
+  answer: string;
+  comment: string | null;
+  correction: string | null;
+  opened_by: string;
+  resolved_by: string | null;
+  resolution_note: string | null;
+  resolved_at: string | null;
+  hours_to_close: number | null;
+  fixes: { action: IssueFixAction; ref: string | null; by: string; at: string; note?: string }[];
+  history: { status: IssueStatus; by: string; at: string; note?: string }[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface IssueDetail extends IssueInfo {
+  transcript: { id: number; role: string; text: string; answered_by: string | null; flagged: boolean }[];
+}
+
+export interface IssueSummary {
+  open: number;
+  fixed: number;
+  wont_fix: number;
+  total: number;
+  median_hours_to_close: number | null;
+  oldest_open_hours: number | null;
+}
+
+export const intentApi = {
+  view: (params: { agent_id?: string; days: number; lang: string; refresh?: boolean }) => {
+    const q = new URLSearchParams({ days: String(params.days), lang: params.lang });
+    if (params.agent_id) q.set("agent_id", params.agent_id);
+    if (params.refresh) q.set("refresh", "true");
+    return request<IntentView>(`/api/intents?${q.toString()}`);
+  },
+};
+
+const rulesPath = (agentId: string, rest = "") => `/api/agents/${encodeURIComponent(agentId)}/rules${rest}`;
+
+export const ruleApi = {
+  list: (agentId: string) => request<AnswerRuleList>(rulesPath(agentId)),
+  create: (agentId: string, body: AnswerRuleBody) =>
+    request<AnswerRuleInfo>(rulesPath(agentId), { method: "POST", body: JSON.stringify(body) }),
+  update: (agentId: string, ruleId: string, body: Partial<AnswerRuleBody>) =>
+    request<AnswerRuleInfo>(rulesPath(agentId, `/${encodeURIComponent(ruleId)}`), {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  remove: (agentId: string, ruleId: string) =>
+    request<{ deleted: boolean }>(rulesPath(agentId, `/${encodeURIComponent(ruleId)}`), {
+      method: "DELETE",
+    }),
+  reorder: (agentId: string, ids: string[]) =>
+    request<AnswerRuleList>(`/api/agents/${encodeURIComponent(agentId)}/rules-order`, {
+      method: "PUT",
+      body: JSON.stringify({ ids }),
+    }),
+  setEnabled: (agentId: string, enabled: boolean) =>
+    request<AnswerRuleList>(`/api/agents/${encodeURIComponent(agentId)}/rules-enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  test: (agentId: string, question: string) =>
+    request<{ agent_enabled: boolean; matched: boolean; rule: AnswerRuleInfo | null }>(
+      rulesPath(agentId, "/test"),
+      { method: "POST", body: JSON.stringify({ question }) },
+    ),
+};
+
+export const issueApi = {
+  list: (params: { status?: IssueStatus; agent_id?: string } = {}) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value) q.set(key, value);
+    const qs = q.toString();
+    return request<{ items: IssueInfo[]; summary: IssueSummary }>(`/api/issues${qs ? `?${qs}` : ""}`);
+  },
+  sync: () => request<{ opened: number }>("/api/issues/sync", { method: "POST" }),
+  open: (body: { agent_id: string; session_id: string; message_id: number; kind?: "unanswered" | "manual" }) =>
+    request<IssueInfo>("/api/issues", { method: "POST", body: JSON.stringify(body) }),
+  get: (id: string) => request<IssueDetail>(`/api/issues/${encodeURIComponent(id)}`),
+  resolve: (id: string, status: "fixed" | "wont_fix", note?: string) =>
+    request<IssueInfo>(`/api/issues/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ status, note }),
+    }),
+  reopen: (id: string, note?: string) =>
+    request<IssueInfo>(`/api/issues/${encodeURIComponent(id)}/reopen`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  recordFix: (id: string, body: { action: IssueFixAction; ref?: string | null; note?: string }) =>
+    request<IssueInfo>(`/api/issues/${encodeURIComponent(id)}/fixes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+
+export const reviewLinkApi = {
+  list: (agentId: string) =>
+    request<{ links: ShareLinkInfo[] }>(`/api/agents/${encodeURIComponent(agentId)}/review-links`),
+  create: (agentId: string, body: { label?: string; expires_in_days?: number | null }) =>
+    request<ShareLinkCreated>(`/api/agents/${encodeURIComponent(agentId)}/review-links`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 // ---- V2 knowledge bases ----
@@ -7231,6 +7890,354 @@ export const v2KnowledgeApi = {
     request<KbSourceLink>(`/api/knowledge-bases/source?uri=${encodeURIComponent(uri)}`),
 };
 
+// ---- Agent-DLC: criteria, golden sets, calibration, the gate, watch ----
+/* Wire types live in `./dlc`. One client object per the module convention; the
+ * gate and sign routes are prod-protected server-side, so a 409/403 here is the
+ * answer, not a bug to work around. */
+import type {
+  AdmissionCandidate,
+  AdmissionQueue,
+  Agreement,
+  AnnotationLink,
+  AnnotationTask,
+  AuditEntry,
+  CalibrationHistory,
+  CalibrationRecord,
+  CaseTier,
+  CostEstimate,
+  CriteriaDiff,
+  CriteriaSet,
+  CriteriaSetPayload,
+  CriterionInput,
+  GateResponse,
+  GoldenItem,
+  GoldenSet,
+  ReleaseRecord,
+  ReleaseState,
+  RunComparison,
+  RunCriteria,
+  Scorecard,
+  Waiver,
+  WatchView,
+  WritableSplit,
+} from "./dlc";
+
+const dlcSet = (lineageId: string, rest = ""): string =>
+  `/api/criteria-sets/${encodeURIComponent(lineageId)}${rest}`;
+const dlcGolden = (datasetId: string, rest = ""): string =>
+  `/api/golden-sets/${encodeURIComponent(datasetId)}${rest}`;
+const dlcTask = (taskId: string, rest = ""): string =>
+  `/api/annotation-tasks/${encodeURIComponent(taskId)}${rest}`;
+const dlcAgent = (agentId: string, rest = ""): string =>
+  `/api/agents/${encodeURIComponent(agentId)}${rest}`;
+
+export const dlcApi = {
+  /* criteria sets */
+  listSets: (params?: { kind?: "template" | "agent"; agentId?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.kind) qs.set("kind", params.kind);
+    if (params?.agentId) qs.set("agent_id", params.agentId);
+    const q = qs.toString();
+    return request<{ sets: CriteriaSet[] }>(`/api/criteria-sets${q ? `?${q}` : ""}`);
+  },
+  createSet: (body: {
+    kind?: "template" | "agent";
+    name: string;
+    agent_id?: string | null;
+    description?: string;
+    scenario?: string;
+    template_lineage_id?: string | null;
+    template_version?: number | null;
+    from_evaluation_plan?: string | null;
+  }) =>
+    request<CriteriaSetPayload>("/api/criteria-sets", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getSet: (lineageId: string, version?: number) =>
+    request<CriteriaSetPayload>(dlcSet(lineageId, version ? `?version=${version}` : "")),
+  saveSet: (
+    lineageId: string,
+    body: {
+      criteria: CriterionInput[];
+      removals?: { key: string; reason?: string }[] | null;
+      name?: string;
+      description?: string;
+      scenario?: string;
+    },
+  ) => request<CriteriaSetPayload>(dlcSet(lineageId), { method: "PUT", body: JSON.stringify(body) }),
+  newSetVersion: (lineageId: string) =>
+    request<CriteriaSetPayload>(dlcSet(lineageId, "/versions"), { method: "POST" }),
+  publishSet: (lineageId: string) =>
+    request<CriteriaSetPayload>(dlcSet(lineageId, "/publish"), { method: "POST" }),
+  /** The business owner's signature; the server refuses a self-signature. */
+  signSet: (lineageId: string, note: string) =>
+    request<CriteriaSetPayload>(dlcSet(lineageId, "/sign"), {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  adoptTemplate: (lineageId: string, templateVersion: number) =>
+    request<CriteriaSetPayload>(
+      dlcSet(lineageId, `/adopt-template?template_version=${templateVersion}`),
+      { method: "POST" },
+    ),
+  discardDraft: (lineageId: string) =>
+    request<{ discarded: number }>(dlcSet(lineageId), { method: "DELETE" }),
+  diffSet: (lineageId: string, a: number, b: number) =>
+    request<CriteriaDiff>(dlcSet(lineageId, `/diff?a=${a}&b=${b}`)),
+
+  /* golden sets */
+  listGolden: () => request<{ golden_sets: GoldenSet[] }>("/api/golden-sets"),
+  createGolden: (body: { name: string; criteria_lineage_id?: string | null; description?: string }) =>
+    request<GoldenSet>("/api/golden-sets", { method: "POST", body: JSON.stringify(body) }),
+  getGolden: (datasetId: string) => request<GoldenSet>(dlcGolden(datasetId)),
+  /** Admin only: the set and all three splits, holdout included (409 while a run replays it). */
+  deleteGolden: (datasetId: string) =>
+    request<{ deleted: boolean; id: string; items: Record<string, number> }>(dlcGolden(datasetId), {
+      method: "DELETE",
+    }),
+  addGoldenItems: (datasetId: string, split: WritableSplit, items: GoldenItem[]) =>
+    request<{ added: number; golden_set: GoldenSet }>(dlcGolden(datasetId, "/items"), {
+      method: "POST",
+      body: JSON.stringify({ split, items }),
+    }),
+  /** Initial curation — the only path that writes the holdout, and it seals it. */
+  seedGolden: (datasetId: string, items: GoldenItem[], shares?: [number, number, number]) =>
+    request<{ counts: Record<string, number>; golden_set: GoldenSet }>(
+      dlcGolden(datasetId, "/seed"),
+      { method: "POST", body: JSON.stringify(shares ? { items, shares } : { items }) },
+    ),
+  moveGoldenItem: (datasetId: string, scenarioId: string, to: WritableSplit) =>
+    request<GoldenSet>(dlcGolden(datasetId, "/move"), {
+      method: "POST",
+      body: JSON.stringify({ scenario_id: scenarioId, to }),
+    }),
+  retireGoldenItem: (
+    datasetId: string,
+    body: { split: "dev" | "regression" | "holdout"; scenario_id: string; reason: string },
+  ) => request<GoldenSet>(dlcGolden(datasetId, "/retire"), { method: "POST", body: JSON.stringify(body) }),
+
+  /* annotation + calibration */
+  listTasks: (params?: { agentId?: string; status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.agentId) qs.set("agent_id", params.agentId);
+    if (params?.status) qs.set("status", params.status);
+    const q = qs.toString();
+    return request<{ tasks: AnnotationTask[] }>(`/api/annotation-tasks${q ? `?${q}` : ""}`);
+  },
+  createTask: (body: {
+    agent_id?: string | null;
+    criteria_lineage_id?: string | null;
+    criterion_key: string;
+    purpose?: "judge_calibration" | "golden_answer" | "admission";
+    annotators: string[];
+    adjudicator?: string | null;
+    run_id?: string | null;
+    dataset_id?: string | null;
+    items?: Record<string, unknown>[] | null;
+  }) => request<AnnotationTask>("/api/annotation-tasks", { method: "POST", body: JSON.stringify(body) }),
+  getTask: (taskId: string) => request<AnnotationTask>(dlcTask(taskId)),
+  /** An undecided task only (409 annotation.closed otherwise); its labels go with it. */
+  deleteTask: (taskId: string) =>
+    request<{ deleted: boolean; id: string; labels: number }>(dlcTask(taskId), { method: "DELETE" }),
+  label: (taskId: string, body: { item_ref: string; label?: string; answer?: string; rationale?: string }) =>
+    request<AnnotationTask>(dlcTask(taskId, "/labels"), { method: "POST", body: JSON.stringify(body) }),
+  adjudicate: (taskId: string) =>
+    request<AnnotationTask>(dlcTask(taskId, "/adjudicate"), { method: "POST" }),
+  agreement: (taskId: string) => request<Agreement>(dlcTask(taskId, "/agreement")),
+  /** `aligned` is refused when the numbers do not support it (`calibration.not_supported`). */
+  decideCalibration: (taskId: string, verdict: "aligned" | "not_aligned", note: string) =>
+    request<CalibrationRecord>(dlcTask(taskId, "/decide"), {
+      method: "POST",
+      body: JSON.stringify({ verdict, note }),
+    }),
+  /** Account-free annotation links. Refused in a prod workspace (`allowed: false`). */
+  annotationLinks: (taskId: string) =>
+    request<{ links: AnnotationLink[]; allowed: boolean; reason: string }>(dlcTask(taskId, "/links")),
+  createAnnotationLink: (taskId: string, body: { label: string; expires_in_days?: number | null }) =>
+    request<AnnotationLink & { token: string; path: string; url: string }>(dlcTask(taskId, "/links"), {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revokeAnnotationLink: (taskId: string, linkId: string) =>
+    request<AnnotationLink>(dlcTask(taskId, `/links/${encodeURIComponent(linkId)}`), {
+      method: "DELETE",
+    }),
+  calibrationHistory: (criterionKey: string, agentId?: string) =>
+    request<CalibrationHistory>(
+      `/api/calibration/${encodeURIComponent(criterionKey)}${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
+    ),
+
+  /* the release gate */
+  release: (agentId: string) => request<ReleaseState>(dlcAgent(agentId, "/release")),
+  /** Move the agent onto named `live` / `candidate` endpoints so a gate can hold. */
+  migrateRelease: (agentId: string) =>
+    request<ReleaseState>(dlcAgent(agentId, "/release/migrate"), { method: "POST" }),
+  evaluateRelease: (agentId: string, body: { repeats?: number; confirm_cost?: boolean }) =>
+    request<ReleaseState>(dlcAgent(agentId, "/release/evaluate"), {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gate: (agentId: string) => request<GateResponse>(dlcAgent(agentId, "/release/gate")),
+  signRelease: (agentId: string, note: string) =>
+    request<ReleaseState>(dlcAgent(agentId, "/release/sign"), {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  blockRelease: (agentId: string, note: string) =>
+    request<ReleaseState>(dlcAgent(agentId, "/release/block"), {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  rollback: (agentId: string, note: string) =>
+    request<ReleaseState & { rolled_back_to?: string | null }>(dlcAgent(agentId, "/release/rollback"), {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  releaseRecords: (agentId: string) =>
+    request<{ records: ReleaseRecord[] }>(
+      `/api/release-records?agent_id=${encodeURIComponent(agentId)}`,
+    ),
+  releaseRecord: (recordId: string) =>
+    request<ReleaseRecord>(`/api/release-records/${encodeURIComponent(recordId)}`),
+
+  /* waivers — never for a red line, always with an expiry and a second person */
+  requestWaiver: (
+    agentId: string,
+    body: {
+      criterion_key: string;
+      actual?: number | null;
+      threshold?: number | null;
+      reason: string;
+      risk_owner: string;
+      compensating_control?: string;
+      expires_on: string;
+    },
+  ) => request<Waiver>(dlcAgent(agentId, "/waivers"), { method: "POST", body: JSON.stringify(body) }),
+  approveWaiver: (waiverId: string, note: string) =>
+    request<Waiver>(`/api/waivers/${encodeURIComponent(waiverId)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  rejectWaiver: (waiverId: string, note: string) =>
+    request<Waiver>(`/api/waivers/${encodeURIComponent(waiverId)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  revokeWaiver: (waiverId: string) =>
+    request<Waiver>(`/api/waivers/${encodeURIComponent(waiverId)}`, { method: "DELETE" }),
+
+  /* admission */
+  admissionQueue: (params?: { agentId?: string; status?: string | null; refresh?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (params?.agentId) qs.set("agent_id", params.agentId);
+    if (params?.status !== undefined) qs.set("status", params.status ?? "");
+    if (params?.refresh) qs.set("refresh", "true");
+    const q = qs.toString();
+    return request<AdmissionQueue>(`/api/admission${q ? `?${q}` : ""}`);
+  },
+  candidate: (candidateId: string) =>
+    request<AdmissionCandidate>(`/api/admission/${encodeURIComponent(candidateId)}`),
+  admit: (
+    candidateId: string,
+    body: {
+      split?: WritableSplit;
+      dataset_id?: string | null;
+      expected_response: string;
+      expected_source?: "annotator" | "consensus" | "adjudicated";
+      criteria_ids?: string[];
+      case_tier?: CaseTier;
+      scenario_id?: string | null;
+    },
+  ) =>
+    request<{ item: GoldenItem; candidate: AdmissionCandidate }>(
+      `/api/admission/${encodeURIComponent(candidateId)}/admit`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  rejectCandidate: (candidateId: string, note: string) =>
+    request<AdmissionCandidate>(`/api/admission/${encodeURIComponent(candidateId)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  markDuplicate: (candidateId: string, duplicateOf: string) =>
+    request<AdmissionCandidate>(`/api/admission/${encodeURIComponent(candidateId)}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify({ duplicate_of: duplicateOf }),
+    }),
+
+  /* watch */
+  watch: (agentId: string) => request<WatchView>(dlcAgent(agentId, "/watch")),
+  putWatch: (
+    agentId: string,
+    body: {
+      criteria_lineage_id?: string | null;
+      dataset_id?: string | null;
+      every?: "daily" | "weekly";
+      at_hour?: number;
+      tz?: string;
+      repeats?: number;
+      max_cost_usd?: number | null;
+      enabled?: boolean;
+    },
+  ) => request<WatchView>(dlcAgent(agentId, "/watch"), { method: "PUT", body: JSON.stringify(body) }),
+  runWatch: (agentId: string, split: "regression" | "holdout" = "regression") =>
+    request<{ run_id: string; watch: WatchView["config"] }>(
+      dlcAgent(agentId, `/watch/run?split=${split}`),
+      { method: "POST" },
+    ),
+
+  /* run results, comparison, cost */
+  runCriteria: (runId: string, criterionKey?: string) =>
+    request<RunCriteria>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/criteria${criterionKey ? `?criterion_key=${encodeURIComponent(criterionKey)}` : ""}`,
+    ),
+  snapshotRun: (runId: string) =>
+    request<{ snapshotted: boolean; summary: RunCriteria["summary"] }>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/criteria/snapshot`,
+      { method: "POST" },
+    ),
+  compareRuns: (runIds: string[]) =>
+    request<RunComparison>(`/api/eval/runs/compare?runs=${encodeURIComponent(runIds.join(","))}`),
+  ladder: (agentId: string) => request<RunComparison>(dlcAgent(agentId, "/ladder")),
+  /** Shown before any run is started: pass^k multiplies this by `repeats`. */
+  estimate: (body: {
+    agent_id?: string | null;
+    dataset_id?: string | null;
+    items?: number | null;
+    evaluators?: string[];
+    repeats?: number;
+    /** price the agent's open release's gate evaluation (both golden splits, the criteria's evaluators) */
+    release?: boolean;
+  }) => request<CostEstimate>("/api/eval/runs/estimate", { method: "POST", body: JSON.stringify(body) }),
+
+  /* the decision history, and one agent's five dimensions */
+  audit: (params?: { target?: string; action?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.target) qs.set("target", params.target);
+    if (params?.action) qs.set("action", params.action);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return request<{ events: AuditEntry[] }>(`/api/audit${q ? `?${q}` : ""}`);
+  },
+  scorecard: (agentId: string) => request<Scorecard>(dlcAgent(agentId, "/scorecard")),
+  /** The workspace's release policy (administrator). Unset keys use tier defaults. */
+  releasePolicy: (workspaceId: string) =>
+    request<ReleasePolicyView>(`/api/release-policies/${encodeURIComponent(workspaceId)}`),
+  /** Replaces the policy wholesale — send back every key you read, changed or not. */
+  putReleasePolicy: (workspaceId: string, policy: Record<string, unknown>) =>
+    request<ReleasePolicyView>(`/api/release-policies/${encodeURIComponent(workspaceId)}`, {
+      method: "PUT",
+      body: JSON.stringify(policy),
+    }),
+};
+
+export interface ReleasePolicyView {
+  workspace_id: string;
+  tier: string;
+  policy: Record<string, unknown>;
+  effective: Record<string, unknown>;
+}
+
 export interface KbSourceLink {
   url: string;
   name: string;
@@ -7240,8 +8247,8 @@ export interface KbSourceLink {
 }
 
 // ---- coding agent (remote web IDE over the platform coding runtime) ----
-/* `/api/coding/*` — parent task 10-19-coding-agent design §7.3. A project is private
- * to its creator: a foreign or missing id is `404 coding.project_not_found`. Every
+/* `/api/coding/*` — parent task 10-19-coding-agent design §7.3. A repo is private
+ * to its creator: a foreign or missing id is `404 coding.repo_not_found`. Every
  * non-GET answers with a JSON body (the client refuses an empty 2xx). */
 
 export type CodingRuntimeState = "not_installed" | "installing" | "ready" | "failed" | "uninstalling";
@@ -7269,25 +8276,25 @@ export interface CodingRuntimeStatus {
   default_effort: string;
 }
 
-export type CodingProjectStatus = "idle" | "running";
+export type CodingRepoStatus = "idle" | "running";
 
-export interface CodingProject {
+export interface CodingRepo {
   id: string;
   name: string;
   description: string;
-  status: CodingProjectStatus;
+  status: CodingRepoStatus;
   active_turn_id: string | null;
   model: string | null;
   effort: string | null;
-  /** the Agent this project deployed (redeploys update it) */
+  /** the Agent this repo deployed (redeploys update it) */
   agent_id: string | null;
   snapshot_at: string | null;
   created_at: string;
   updated_at: string;
   created_by: string | null;
   created_by_name: string | null;
-  /** the caller owns this project — only owned rows open in the IDE (an admin's
-   *  "all" view lists other members' projects for deletion only) */
+  /** the caller owns this repo — only owned rows open in the IDE (an admin's
+   *  "all" view lists other members' repos for deletion only) */
   owned?: boolean;
 }
 
@@ -7317,7 +8324,7 @@ export interface CodingTurnRow {
   completed_at: string | null;
 }
 
-export interface CodingProjectDetail extends CodingProject {
+export interface CodingRepoDetail extends CodingRepo {
   /** latest turns (≤ 20), oldest first */
   turns: CodingTurnRow[];
   /** codex id of the running turn, if any */
@@ -7325,7 +8332,7 @@ export interface CodingProjectDetail extends CodingProject {
 }
 
 export interface CodingTreeEntry {
-  /** relative to the project root, `/`-separated */
+  /** relative to the repo root, `/`-separated */
   path: string;
   dir: boolean;
   size: number | null;
@@ -7366,7 +8373,7 @@ export interface CodingDeployRequest {
  *  `Content-Disposition: attachment` (the browser saves it, the page stays). */
 export interface CodingDownload {
   url: string;
-  /** the name the browser saves it under (`<project>.zip` for the archive) */
+  /** the name the browser saves it under (`<repo>.zip` for the archive) */
   filename: string;
   size: number | null;
   /** seconds the URL stays valid (use it at once) */
@@ -7376,12 +8383,12 @@ export interface CodingDownload {
 export interface CodingDeployResult {
   agent_id: string;
   job_id: string;
-  /** true = a new Agent, false = a redeploy of the project's Agent */
+  /** true = a new Agent, false = a redeploy of the repo's Agent */
   created: boolean;
 }
 
-function codingPath(projectId: string, rest = ""): string {
-  return `/api/coding/projects/${encodeURIComponent(projectId)}${rest}`;
+function codingPath(repoId: string, rest = ""): string {
+  return `/api/coding/repos/${encodeURIComponent(repoId)}${rest}`;
 }
 
 export const codingApi = {
@@ -7391,17 +8398,16 @@ export const codingApi = {
     request<{ job_id: string; status: string }>("/api/coding/runtime/install", { method: "POST" }),
   uninstallRuntime: () =>
     request<{ job_id: string; status: string }>("/api/coding/runtime", { method: "DELETE" }),
-  /** Own projects; `all` (admins) lists every project in the workspace. */
-  listProjects: (all = false) =>
-    request<{ projects: CodingProject[] }>(`/api/coding/projects${all ? "?all=1" : ""}`),
-  createProject: (body: { name: string; description?: string }) =>
-    request<CodingProject>("/api/coding/projects", { method: "POST", body: JSON.stringify(body) }),
-  getProject: (id: string) => request<CodingProjectDetail>(codingPath(id)),
-  updateProject: (id: string, body: { name?: string; description?: string }) =>
-    request<CodingProject>(codingPath(id), { method: "PATCH", body: JSON.stringify(body) }),
-  deleteProject: (id: string) => request<{ deleted: boolean }>(codingPath(id), { method: "DELETE" }),
-  /** Starts a turn asynchronously (`409 coding.turn_running` while one runs; a `402
-   *  budget.*` refusal arrives as an `ApiError`). */
+  /** Own repos; `all` (admins) lists every repo in the workspace. */
+  listRepos: (all = false) =>
+    request<{ repos: CodingRepo[] }>(`/api/coding/repos${all ? "?all=1" : ""}`),
+  createRepo: (body: { name: string; description?: string }) =>
+    request<CodingRepo>("/api/coding/repos", { method: "POST", body: JSON.stringify(body) }),
+  getRepo: (id: string) => request<CodingRepoDetail>(codingPath(id)),
+  updateRepo: (id: string, body: { name?: string; description?: string }) =>
+    request<CodingRepo>(codingPath(id), { method: "PATCH", body: JSON.stringify(body) }),
+  deleteRepo: (id: string) => request<{ deleted: boolean }>(codingPath(id), { method: "DELETE" }),
+  /** Starts a turn asynchronously (`409 coding.turn_running` while one runs). */
   startTurn: (id: string, body: { prompt: string; model: string; effort: string }) =>
     request<CodingTurnRow>(codingPath(id, "/turns"), { method: "POST", body: JSON.stringify(body) }),
   interrupt: (id: string) =>
@@ -7431,7 +8437,7 @@ export const codingApi = {
     request<{ changes: CodingChange[] }>(codingPath(id, `/changes?scope=${scope}`)),
   diff: (id: string, scope: CodingChangeScope) =>
     request<{ diff: string }>(codingPath(id, `/diff?scope=${scope}`)),
-  /** One file (`path`, text or binary, ≤ 200 MB) or, without a path, the whole project
+  /** One file (`path`, text or binary, ≤ 200 MB) or, without a path, the whole repo
    *  as a zip (the deploy export's file set, ≤ 50 MB). `404 coding.file_not_found`,
    *  `413 coding.download_too_large`; allowed while a turn runs. */
   download: (id: string, path?: string) =>

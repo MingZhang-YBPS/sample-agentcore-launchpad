@@ -417,7 +417,9 @@ def test_another_as_user_mcp_tool_still_lets_the_model_answer(tmp_path, monkeypa
     assert answered == ["q"]
     assert [e["event"] for e in events] == ["auth_required", "delta", "complete"]
     assert events[0]["tool"] == "crm" and events[-1]["result"] == "an answer"
-    assert module.identity_turn_gated() is False
+    # without the context layer the turn gate is not rendered at all (V3: a spec
+    # that does not opt in renders byte-identical code)
+    assert not hasattr(module, "identity_turn_gated")
 
 
 def test_a_strands_deploy_without_a_layer_fails_by_name(monkeypatch):

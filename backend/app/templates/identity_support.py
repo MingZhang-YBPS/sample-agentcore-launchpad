@@ -14,6 +14,7 @@ What is baked into the generated source is identifiers only: Connection
 """
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -69,7 +70,9 @@ def gates_turn(spec: AgentSpec, tool: ToolRef) -> bool:
 
 
 def _baked_tool(tool: ToolRef, *, gate: bool = False) -> dict[str, Any]:
-    """One entry of the IDENTITY_AUTH_TOOLS literal. Flat, JSON-safe, no secrets."""
+    """One entry of the IDENTITY_AUTH_TOOLS literal. Flat, JSON-safe, no secrets.
+    ``gates_turn`` is baked only when true, so a spec without the context layer
+    renders byte-identical code (V3's old-spec guarantee)."""
     config = tool.config or {}
     auth = tool.auth
     return {
@@ -87,8 +90,24 @@ def _baked_tool(tool: ToolRef, *, gate: bool = False) -> dict[str, Any]:
         "audience": (auth.audience or "") if auth else "",
         "key_in": auth.api_key.in_ if auth and auth.api_key else "header",
         "key_name": auth.api_key.name if auth and auth.api_key else "Authorization",
-        "gates_turn": gate,
+        **({"gates_turn": True} if gate else {}),
     }
+
+
+def uses_turn_gate(spec: AgentSpec) -> bool:
+    """Whether any tool of the spec ends the turn at a pending consent — only a spec
+    with the context layer attached. Without one the generated code carries no
+    turn-gate code at all."""
+    return any(gates_turn(spec, tool) for tool in auth_tools(spec))
+
+
+_TURN_GATE = re.compile(r"^#\[turn-gate\]\n(.*?)^#\[/turn-gate\]\n", re.DOTALL | re.MULTILINE)
+
+
+def apply_turn_gate(source: str, gated: bool) -> str:
+    """Keep (``gated``) or drop the ``#[turn-gate]`` … ``#[/turn-gate]`` sections of a
+    template; the marker lines themselves never reach the generated code."""
+    return _TURN_GATE.sub(lambda m: m.group(1) if gated else "", source)
 
 
 def render_identity_source(spec: AgentSpec) -> str:
@@ -96,7 +115,9 @@ def render_identity_source(spec: AgentSpec) -> str:
     tools = auth_tools(spec)
     if not tools:
         return ""
-    source = IDENTITY_TEMPLATE.read_text(encoding="utf-8").strip()
+    source = apply_turn_gate(
+        IDENTITY_TEMPLATE.read_text(encoding="utf-8"), uses_turn_gate(spec)
+    ).strip()
     baked = [_baked_tool(tool, gate=gates_turn(spec, tool)) for tool in tools]
     return source.replace(_MARKER, repr(baked))
 

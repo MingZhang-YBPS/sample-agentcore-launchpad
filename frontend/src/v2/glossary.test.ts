@@ -85,7 +85,10 @@ describe("glossary terms", () => {
     for (const key of hintKeys) {
       const term = key.replace(/^glossary\./, "");
       expect(key.startsWith("glossary."), key).toBe(true);
-      expect(isGlossaryTerm(term), key).toBe(true);
+      // V3's Agent-DLC hint (`glossary.criteria`) is a tooltip sentence only, not a dialog term
+      if (isGlossaryTerm(term)) continue;
+      expect(typeof lookup(en, key), key).toBe("string");
+      expect(typeof lookup(zh, key), key).toBe("string");
     }
   });
 });

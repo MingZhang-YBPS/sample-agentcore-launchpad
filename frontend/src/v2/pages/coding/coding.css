@@ -145,7 +145,7 @@
   .v2 .v2-coding-tree-dl { opacity: 1; }
   .v2 .v2-coding-tree-item.has-dl .v2-coding-tree-row { padding-right: 32px; }
 }
-/* a spinner inside a text link (the project list's download action) */
+/* a spinner inside a text link (the repo list's download action) */
 .v2 .v2-link > .v2-coding-spin { vertical-align: -2px; margin-right: 4px; }
 
 /* ---------- editor pane ---------- */
@@ -181,7 +181,7 @@
 .v2 .v2-coding-editor-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .v2 .v2-coding-editor-main > section { flex: 1; min-height: 0; }
 .v2 .v2-coding-md { flex: 1; min-height: 0; overflow: auto; padding: 16px 24px; }
-/* Markdown links into the project open the file in the IDE (a button, styled as the
+/* Markdown links into the repo open the file in the IDE (a button, styled as the
    shared .md link); links that are not followed stay plain text */
 .v2 .md .v2-coding-mdlink {
   border: 0; background: none; padding: 0; margin: 0; font: inherit; color: var(--v2-primary); cursor: pointer;

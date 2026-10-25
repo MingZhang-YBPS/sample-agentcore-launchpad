@@ -25,14 +25,20 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
+from app.deployer import model_profile
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.mounts import describe as describe_mounts
+from app.deployer.mounts import with_mounts_env, with_prompt_note
+from app.deployer.network import describe as describe_network
+from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.schemas.requirements import assert_safe_requirement_lines, reresolve_inputs, resolve_pins
-from app.services import agent_iam
+from app.schemas.strands_builder import STRANDS_TOOLS_REQUIREMENT
+from app.services import agent_iam, cost_tags, project_storage
 from app.services import context_layer as context_layer_service
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
@@ -45,6 +51,7 @@ from app.services.requirements_txt import (
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
 from app.services.workspace import WorkspaceContext
 from app.templates.strands_agent import base_requirements, render_main_py
+from app.templates.strands_agent.builder import custom_tool_files, custom_tool_requirements
 
 
 def sanitize_runtime_name(name: str) -> str:
@@ -375,6 +382,11 @@ def _download_named_skills(
     total_files = 0
     total_bytes = 0
     for name, path in pairs:
+        # the directory name: every caller passes a registry name, but `name` is
+        # joined into a path that a failure rmtree()s, so it is checked here too
+        if SKILL_NAME_RE.fullmatch(name) is None:
+            log(f"skill name '{name[:80]}' is not a valid skill name — skipped")
+            continue
         bucket, prefix = _parse_s3_uri(path)
         dest = dest_parent / "skills" / name
         try:
@@ -411,8 +423,22 @@ def _generate_code(spec: AgentSpec) -> tuple[str, str]:
     if spec.protocol == "a2a":
         from app.templates.strands_a2a_agent import render_a2a_main_py
 
+        # the A2A card's description is cut from the prompt's head, so its BYO
+        # mounts reach it through LAUNCHPAD_MOUNTS only
         return render_a2a_main_py(spec), "strands A2A template"
-    return render_main_py(spec), "strands template"
+    # the generated agent is told its BYO mounts (storage-mounts §3.2)
+    return render_main_py(with_prompt_note(spec)), "strands template"
+
+
+def write_custom_tool_files(spec: AgentSpec, pkg_dir: Path) -> int:
+    """strands-builder SB-3: each custom tool's source next to main.py
+    (``custom_tools/<name>.py``), where the generated code loads it from."""
+    files = custom_tool_files(spec)
+    for rel, content in files.items():
+        dest = pkg_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+    return len(files)
 
 
 def write_bundle_files(spec: AgentSpec, pkg_dir: Path) -> int:
@@ -450,9 +476,18 @@ STUDIO_EXTRA_REQUIREMENTS = [
 # rather than a property of when the zip happened to be built.
 MANTLE_EXTRA_REQUIREMENTS = ["strands-agents[openai]>=1.47,<2", "openai>=2,<3"]
 
+# strands-builder SB-2 model providers, on top of the Bedrock base set: the
+# Anthropic Messages API client, or (LiteLLM gateway = OpenAI chat-completions
+# proxy) the same openai pair Mantle uses.
+PROVIDER_EXTRA_REQUIREMENTS = {
+    "anthropic": ["strands-agents[anthropic]>=1.47,<2"],
+    "litellm": MANTLE_EXTRA_REQUIREMENTS,
+}
+
 
 def platform_requirements(
-    method: str, model_source: str, protocol: str = "http"
+    method: str, model_source: str, protocol: str = "http", strands_tools: bool = False,
+    model_provider: str | None = None,
 ) -> list[str]:
     """Every requirement the package stage adds on top of `spec.requirements`.
 
@@ -470,11 +505,17 @@ def platform_requirements(
     Takes the three fields it reads as scalars rather than an `AgentSpec`, because
     every caller that needs pinning is holding *unpinned* requirements and so
     cannot construct one (`AgentSpec` validates `requirements` are pinned).
+
+    ``strands_tools``: the spec selected curated ``strands-agents-tools``
+    (strands-builder SB-1) — the pinned package joins either Strands base set.
+    ``model_provider``: the SB-2 provider kind (``anthropic`` / ``litellm``), whose
+    client package joins the HTTP base set.
     """
+    tools_extra = [STRANDS_TOOLS_REQUIREMENT] if strands_tools else []
     if protocol == "a2a":
         from app.templates.strands_a2a_agent import a2a_base_requirements
 
-        return a2a_base_requirements()
+        return a2a_base_requirements() + tools_extra
     if method == "studio":
         # The canvas bakes the model into its code and knows which providers its
         # nodes use, so it supplies its own extras via spec.requirements;
@@ -484,14 +525,92 @@ def platform_requirements(
         extra = MANTLE_EXTRA_REQUIREMENTS
     else:
         extra = []
-    return base_requirements() + extra
+    if model_provider:
+        extra = [*extra, *PROVIDER_EXTRA_REQUIREMENTS[model_provider]]
+    return base_requirements() + extra + tools_extra
+
+
+def _spec_platform_requirements(spec: AgentSpec) -> list[str]:
+    """``platform_requirements`` for a whole spec (SB-1 tools, SB-2 provider)."""
+    return platform_requirements(
+        spec.method, spec.model_source, spec.protocol,
+        strands_tools=bool(spec.strands_tools),
+        model_provider=spec.model_provider.kind if spec.model_provider else None,
+    )
+
+
+def _tool_pins(spec: AgentSpec, requirements: list[str]) -> list[str]:
+    # SB-3: a runtime custom tool's own pins join the member's list (pinned by its
+    # schema; one already listed is not repeated)
+    return [r for r in custom_tool_requirements(spec) if r not in requirements]
 
 
 def _method_requirements(spec: AgentSpec) -> list[str]:
     return (
-        platform_requirements(spec.method, spec.model_source, spec.protocol)
+        _spec_platform_requirements(spec)
         + spec.requirements
+        + _tool_pins(spec, spec.requirements)
     )
+
+
+def package_key(agent: Agent) -> str:
+    """The deployment package's S3 key: `agents/<name>/…`, under `projects/<pid>/` for
+    an agent of an isolated project (projects design §10.10)."""
+    return project_storage.artifact_key(
+        agent.project_id, f"agents/{agent.name}/deployment_package.zip"
+    )
+
+
+def _resolve_agent_tools(agent: Agent, spec: AgentSpec) -> AgentSpec:
+    """strands-builder SB-2: re-read every agent tool's runtime facts from the ledger
+    and store them on the row, so the provision stage grants exactly what the
+    generated code calls (a ref the save path missed, or one whose target moved)."""
+    if not spec.agent_tools:
+        return spec
+    from sqlalchemy.orm import object_session
+
+    from app.services.agent_tools import resolved_spec
+
+    db = object_session(agent)
+    if db is None:
+        raise RuntimeError("agent row is detached — cannot resolve its agent tools")
+    resolved = resolved_spec(db, spec, agent_id=agent.id, workspace_id=agent.workspace_id)
+    refs = [ref.model_dump() for ref in resolved.agent_tools]
+    if refs != [ref.model_dump() for ref in spec.agent_tools]:
+        # the pipeline commits with the stage's status, before provision reads the row
+        agent.spec = {**(agent.spec or {}), "agent_tools": refs}
+    return resolved
+
+
+def _gate_custom_tools(agent: Agent, spec: AgentSpec) -> AgentSpec:
+    """strands-builder SB-3: refuse an unapproved custom tool version or a sandbox
+    tool the workspace does not allow, and store the Code Interpreter id the
+    workspace setting names on the row (the provision stage reads the row)."""
+    if not (spec.custom_tools or spec.sandbox_tools or spec.code_interpreter_id):
+        return spec
+    from sqlalchemy.orm import object_session
+
+    from app.core.project_scope import project_context
+    from app.models.ledger import Workspace
+    from app.services.custom_tools import assert_deployable
+
+    db = object_session(agent)
+    if db is None:
+        raise RuntimeError("agent row is detached — cannot check its custom tools")
+    with project_context(agent.project_id):
+        gated = assert_deployable(
+            db, spec, workspace=db.get(Workspace, agent.workspace_id),
+            project_id=agent.project_id,
+        )
+    if gated.code_interpreter_id != spec.code_interpreter_id:
+        stored = {**(agent.spec or {})}
+        if gated.code_interpreter_id is None:
+            stored.pop("code_interpreter_id", None)
+        else:
+            stored["code_interpreter_id"] = gated.code_interpreter_id
+        agent.spec = stored
+    return gated
+
 
 
 # ---------------------------------------------------------------------------
@@ -607,7 +726,7 @@ def build_agent_zip(
     ``resolver`` defaults to ``resolve_pins`` (looked up at call time, so tests can
     patch it); ``build_zip_kwargs`` go to both ``build_zip`` attempts.
     """
-    platform = platform_requirements(spec.method, spec.model_source, spec.protocol)
+    platform = _spec_platform_requirements(spec)
     try:
         return build_zip(code, _method_requirements(spec), build_dir, **build_zip_kwargs), None
     except LockResolveError as first:
@@ -633,7 +752,10 @@ def build_agent_zip(
     changed = [f"{old} → {new}" for old, new in zip(stale, repinned, strict=False) if old != new]
     log(f"{_HEAL_REASON} — re-resolved: {', '.join(changed)}")
     try:
-        zip_path = build_zip(code, platform + repinned, build_dir, **build_zip_kwargs)
+        zip_path = build_zip(
+            code, platform + repinned + _tool_pins(spec, repinned), build_dir,
+            **build_zip_kwargs,
+        )
     except LockResolveError as second:
         named = _named_conflict(
             second, repinned, platform, twin=True,
@@ -677,7 +799,9 @@ def _deploy_spec(spec: dict[str, Any], workspace: WorkspaceContext) -> AgentSpec
 
 
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
-    spec = _deploy_spec(agent.spec, ctx.workspace)
+    spec = _gate_custom_tools(
+        agent, _resolve_agent_tools(agent, _deploy_spec(agent.spec, ctx.workspace))
+    )
     code, source = _generate_code(spec)
     ctx.scratch["code"] = code
     ctx.log(f"{source} · {len(code)} bytes · model {spec.model_id}")
@@ -703,6 +827,9 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
         if spec.code_bundle:
             count = write_bundle_files(spec, pkg_dir)
             ctx.log(f"bundle files staged: {count} (+ main.py)")
+        if spec.custom_tools:
+            count = write_custom_tool_files(spec, pkg_dir)
+            ctx.log(f"custom tools staged: {count} under custom_tools/")
         bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log, ctx.workspace))
 
     zip_path, repinned = build_agent_zip(
@@ -721,7 +848,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     pip_secs = time.monotonic() - t0
     size_mb = zip_path.stat().st_size / 1e6
 
-    s3_key = f"agents/{agent.name}/deployment_package.zip"
+    s3_key = package_key(agent)
     ctx.workspace.client("s3").upload_file(str(zip_path), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
     record_input_contract(ctx, code)
@@ -753,15 +880,29 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # the console badge) read the snapshot, never re-resolve.
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
+        # the network rides every create AND update (design §12.6): a re-publish with
+        # a changed profile moves the runtime, an unchanged one keeps it
+        vpc = spec_vpc(AgentSpec(**row.spec), row.workspace_id)
+        ctx.log(f"network: {describe_network(vpc)}")
+        if mounts := describe_mounts(AgentSpec(**row.spec)):
+            ctx.log(mounts)
+        # §10.8: an isolated project's model through its inference profile (once, not
+        # per retried call)
+        model_env = model_profile.model_environment(
+            row.project_id, AgentSpec(**row.spec), ctx.workspace, ctx.log
+        )
 
         def _kwargs() -> dict:
             spec = _deploy_spec(row.spec, ctx.workspace)
-            environment = runtime_environment(spec, resources, agent_id=row.id)
+            environment = with_mounts_env(
+                runtime_environment(spec, resources, agent_id=row.id,
+                                    workspace_id=row.workspace_id or ""), spec
+            )
+            environment.update(model_env)
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
                 or resources.get("artifacts_bucket", ""),
-                "s3_key": ctx.scratch.get("s3_key")
-                or f"agents/{row.name}/deployment_package.zip",
+                "s3_key": ctx.scratch.get("s3_key") or package_key(row),
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or resources.get("execution_role_arn", ""),
                 "environment": environment,
@@ -772,8 +913,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # omits the field, which resets a JWT runtime back to SigV4 —
                 # that IS the JWT→IAM transition.
                 "authorizer_configuration": authorizer,
-                # managed session storage — likewise reset when omitted on update
+                # session storage + BYO mounts — likewise reset when omitted on update
                 "filesystem_configurations": filesystem_configurations(spec) or None,
+                "vpc": vpc,
+                # cost-tags §1.2: the full set (agent id, workspace) on create and update
+                "tags": cost_tags.agent_tags(row, row.workspace_id),
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
@@ -857,7 +1001,9 @@ def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
     if not agent.resource_id:
         return
     client = control_client(workspace)
-    try:
-        rt.delete_runtime(client, agent.resource_id)
-    except client.exceptions.ResourceNotFoundException:
-        pass
+    # a gated agent serves through named endpoints; AgentCore refuses to delete a
+    # runtime that still has them (Agent-DLC §6)
+    from app.dlc.releases import delete_endpoints, delete_runtime_or_defer
+
+    delete_endpoints(agent, client)
+    delete_runtime_or_defer(agent, client)

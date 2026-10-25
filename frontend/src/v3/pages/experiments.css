@@ -1,0 +1,6 @@
+/* V3 experiments — the board's filter bar (the staged flows render V2's module on
+   the V3 theme, see host.css). */
+.v3 .v3-exp-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.v3 .v3-exp-search { position: relative; flex: 1 1 200px; max-width: 300px; margin-left: auto; }
+.v3 .v3-exp-search svg { position: absolute; left: 12px; top: 11px; color: var(--v3-text-3); }
+.v3 .v3-exp-search .v3-input { padding-left: 34px; }

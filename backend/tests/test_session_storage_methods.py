@@ -38,13 +38,14 @@ def _validate(operation: str, params: dict) -> None:
 
 # ─── schema ──────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("method", ["harness", "zip_runtime"])
-def test_byo_mounts_are_container_only(method):
-    with pytest.raises(ValidationError, match="container method only"):
-        _spec(
-            method,
-            filesystem={"efs": [{"access_point_arn": EFS_AP, "mount_path": "/mnt/tools"}]},
-            network={"subnets": ["subnet-a"], "security_groups": ["sg-a"]},
-        )
+def test_byo_mounts_need_a_network_on_every_method(method):
+    # storage-mounts §3: no longer container-only — any method, inside a VPC
+    fs = {"efs": [{"access_point_arn": EFS_AP, "mount_path": "/mnt/tools"}]}
+    spec = _spec(method, filesystem=fs,
+                 network={"subnets": ["subnet-a"], "security_groups": ["sg-a"]})
+    assert spec.filesystem.byo
+    with pytest.raises(ValidationError, match="require VPC network configuration"):
+        _spec(method, filesystem=fs)
 
 
 @pytest.mark.parametrize("method", ["harness", "zip_runtime", "studio"])

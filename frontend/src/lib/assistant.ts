@@ -11,7 +11,6 @@ import {
   api,
   AUTH_UNAUTHORIZED_EVENT,
   HARNESS_NATIVE_TOOLS,
-  localizedMessage,
   type AssistantConversationDetail,
   type AssistantConversationFootprint,
   type AssistantConversationPurgeResult,
@@ -24,9 +23,8 @@ import {
   type AssistantTurnRequest,
   type HarnessNativeTool,
 } from "./api";
-import { notifyBudgetRefused } from "./budgets";
-import { defaultModelForRole } from "./model-defaults";
-import { MODEL_CATALOG, type ModelSource } from "./models";
+import { currentModelDefaults } from "./model-defaults";
+import { defaultModelFor, type ModelSource } from "./models";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
 export const ASSISTANT_JOB_POLL_MS = 3000;
@@ -86,11 +84,8 @@ export async function openAssistantTurn(
   );
   if (!res.ok) {
     if (res.status === 401) window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
-    const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string; detail?: unknown };
-    const code = body.code ?? `http.${res.status}`;
-    // `402 budget.*`: final, never replayed; the shell re-reads My usage
-    if (res.status === 402) notifyBudgetRefused(code);
-    throw new ApiError(code, localizedMessage(code, body.message ?? res.statusText, body.detail), body.detail ?? null);
+    const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string };
+    throw new ApiError(body.code ?? `http.${res.status}`, body.message ?? res.statusText, null);
   }
   return res;
 }
@@ -136,6 +131,133 @@ export function retryableTurn(messages: AssistantLiveMessage[]): { turn: number;
   return failed && !retried && prompt ? { turn: latest, prompt } : null;
 }
 
+// ─── context window (assistant-context C1) ────────────────────────────────
+
+/**
+ * What the assistant's request replays of the transcript: `GET` detail reports the
+ * NEXT turn's window, the turn stream's `meta` event the streaming turn's. Turns
+ * before `first_replayed_turn` are kept in the ledger and shown, but the model no
+ * longer sees them.
+ */
+export interface AssistantContextWindow {
+  replayed_turns: number;
+  omitted_turns: number;
+  /** the stored turn number of the oldest replayed turn; null when none is replayed */
+  first_replayed_turn: number | null;
+  /** share of the request budget the composed request uses (0–1) */
+  budget_used_ratio?: number;
+}
+
+/** The `context` member of a conversation detail (absent on an older backend). */
+export function conversationContext(detail: object | null | undefined): AssistantContextWindow | null {
+  const ctx = (detail as { context?: unknown } | null | undefined)?.context;
+  return ctx && typeof ctx === "object" && typeof (ctx as AssistantContextWindow).omitted_turns === "number"
+    ? (ctx as AssistantContextWindow)
+    : null;
+}
+
+/** The window a turn stream's `meta` event announces, or null. A `retry` event after a
+ *  context overflow carries the same members (the replay's smaller window): read it too. */
+export function contextFromMeta(data: Record<string, unknown>): AssistantContextWindow | null {
+  const omitted = data.omitted_turns;
+  if (typeof omitted !== "number") return null;
+  const first = data.first_replayed_turn;
+  const nested = conversationContext(data);
+  return nested ?? {
+    replayed_turns: 0,
+    omitted_turns: omitted,
+    first_replayed_turn: typeof first === "number" ? first : null,
+  };
+}
+
+/** A conversation-list row the backend marked as surely past the replay window. */
+export const isContextTrimmed = (summary: object) =>
+  (summary as { context_trimmed?: unknown }).context_trimmed === true;
+
+/**
+ * Where the "earlier N turns are no longer in context" divider goes: before the
+ * first row of the oldest replayed turn. With no replayed turn, after the last stored
+ * row (rows streamed in this tab carry no turn number yet). -1 = no divider.
+ */
+export function contextDividerIndex(
+  messages: AssistantLiveMessage[],
+  ctx: AssistantContextWindow | null,
+): number {
+  if (!ctx || ctx.omitted_turns <= 0) return -1;
+  const first = ctx.first_replayed_turn;
+  if (first !== null) {
+    const index = messages.findIndex((m) => typeof m.turn === "number" && m.turn >= first);
+    if (index >= 0) return index;
+  }
+  const stored = messages.findIndex((m) => typeof m.turn !== "number");
+  return stored >= 0 ? stored : messages.length;
+}
+
+// ─── confirmed-items digest (assistant-context C2) ────────────────────────
+
+/**
+ * The summary of the turns outside the replay window, which the assistant sees in its
+ * protocol preamble instead of those turns. Session state, never part of a proposal.
+ */
+export interface AssistantContextDigest {
+  /** Markdown; null while no digest was stored yet */
+  text: string | null;
+  /** the last turn it covers (inclusive) */
+  through_turn: number | null;
+  updated_at: string | null;
+  /** a refresh or a rebuild is running on the server */
+  generating: boolean;
+}
+
+/** The `context_digest` member of a conversation detail (absent on an older backend). */
+export function conversationDigest(detail: object | null | undefined): AssistantContextDigest | null {
+  const d = (detail as { context_digest?: unknown } | null | undefined)?.context_digest;
+  return d && typeof d === "object" && "text" in d ? (d as AssistantContextDigest) : null;
+}
+
+/**
+ * Whether the digest is still catching up with the window: turns before the oldest
+ * replayed one are not all covered, or a refresh is running. The console re-reads the
+ * conversation a few times while this holds (the refresh runs after the turn ended).
+ */
+export function digestPending(
+  ctx: AssistantContextWindow | null,
+  digest: AssistantContextDigest | null,
+): boolean {
+  if (!ctx || ctx.omitted_turns <= 0 || !digest) return false;
+  if (digest.generating) return true;
+  if (ctx.first_replayed_turn === null) return false; // nothing replayed: cannot tell
+  return (digest.through_turn ?? 0) < ctx.first_replayed_turn - 1;
+}
+
+/**
+ * `POST …/conversations/{id}/digest/regenerate` — the owner rebuilds the digest from
+ * every omitted turn (synchronous: one model call). Pinned to the conversation's workspace.
+ */
+export async function regenerateDigest(
+  conversationId: string,
+  workspaceId: string | null,
+): Promise<AssistantContextDigest> {
+  const res = await fetch(
+    `/api/assistant/architect/conversations/${encodeURIComponent(conversationId)}/digest/regenerate`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(workspaceId ? { [WORKSPACE_HEADER]: workspaceId } : {}),
+      },
+    },
+  );
+  const body = (await res.json().catch(() => ({}))) as {
+    code?: string; message?: string; detail?: unknown; context_digest?: AssistantContextDigest;
+  };
+  if (!res.ok || !body.context_digest) {
+    if (res.status === 401) window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
+    throw new ApiError(body.code ?? `http.${res.status}`, body.message ?? res.statusText, body.detail ?? null);
+  }
+  return body.context_digest;
+}
+
 /** The typed proposal pane shows the block; the transcript shows a pointer instead. */
 export function stripProposalBlock(text: string, marker: string): string {
   return text.replace(PROPOSAL_FENCE_RE, `> ${marker}`).replace(PREPARATION_FENCE_RE, "");
@@ -157,11 +279,10 @@ export type ProposalEditDraft = Pick<
   | "timeout_seconds"
 > & { native_tools: HarnessNativeTool[] };
 
-/** The model an edited proposal falls back to on `source`: the platform's configured
- *  assistant model on native Bedrock (what the backend proposes by default), the
- *  catalog's first entry on Mantle, whose ids are a different id space. */
+/** The model a proposal edit lands on for `source`: the assistant's configured default
+ *  on Bedrock, the first offered model on Mantle. */
 export function proposalDefaultModel(source: ModelSource): string {
-  return source === "bedrock" ? defaultModelForRole("assistant_model_id") : MODEL_CATALOG[source][0].model_id;
+  return source === "bedrock" ? currentModelDefaults().assistant_model_id : defaultModelFor(source);
 }
 
 export function proposalDraftFrom(content: AssistantProposal["content"]): ProposalEditDraft {
@@ -243,6 +364,9 @@ export function proposalContentFromDraft(
     // a reviewed function narrowing travels with its still-selected Gateway; dropping
     // it silently would widen that Gateway to every declared function
     ...carriedToolFunctions(base.tool_functions, draft.tools),
+    // storage mounts (storage-mounts §8.3) are not editable in the draft either; an
+    // edit keeps the base's `{storage_id, mode}` list as it was
+    ...(Array.isArray(base.storage) && base.storage.length ? { storage: base.storage } : {}),
   };
 }
 

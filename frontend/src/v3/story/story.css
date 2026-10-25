@@ -1,0 +1,729 @@
+/* Storyline surfaces (storyline-ux §4) — the error callout.
+ *
+ * Same signal grammar as the rest of V3: coral says "this needs you", amber "this
+ * waits on someone else", and the way out is mint — the colour of things running
+ * as intended — so the eye goes from the problem straight to the button that fixes
+ * it. The left rail is the signal; a dashed route line runs from the NEXT tag to the
+ * actions, reading as "from here, go there". Tokens only (v3.css); no new palette.
+ */
+
+.v3 .v3-callout {
+  --cl: var(--v3-act);
+  --cl-dim: var(--v3-act-dim);
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 14px 14px 14px 18px;
+  border-radius: var(--v3-r);
+  border: 1px solid color-mix(in srgb, var(--cl) 34%, var(--v3-line));
+  background:
+    linear-gradient(90deg, var(--cl-dim), transparent 42%),
+    var(--v3-ink-2);
+  color: var(--v3-text);
+  font-size: 13px;
+  overflow: hidden;
+  animation: v3-callout-in 260ms var(--v3-ease) both;
+}
+.v3 .v3-callout[data-s="wait"] { --cl: var(--v3-wait); --cl-dim: var(--v3-wait-dim); }
+
+/* the signal rail */
+.v3 .v3-callout::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--cl);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--cl) 55%, transparent);
+  transform-origin: top;
+  animation: v3-callout-rail 420ms var(--v3-ease) both;
+}
+
+.v3 .v3-callout-icon { color: var(--cl); margin-top: 2px; flex: none; }
+.v3 .v3-callout-body { display: grid; gap: 8px; min-width: 0; }
+.v3 .v3-callout-what { font-weight: 600; line-height: 1.45; color: var(--v3-text); }
+.v3 .v3-callout-what details { font-weight: 400; color: var(--v3-text-2); }
+.v3 .v3-callout-why { margin: 0; color: var(--v3-text-2); line-height: 1.55; max-width: 72ch; }
+
+.v3 .v3-callout-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+.v3 .v3-callout-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--v3-ok);
+}
+/* the route line: from the tag to the way out */
+.v3 .v3-callout-tag::after {
+  content: "";
+  width: 22px;
+  border-top: 1px dashed color-mix(in srgb, var(--v3-ok) 60%, transparent);
+}
+.v3 .v3-callout-next a.v3-btn { display: inline-flex; align-items: center; gap: 6px; }
+.v3 .v3-callout-next a.v3-btn.primary svg { transition: transform 160ms var(--v3-ease); }
+.v3 .v3-callout-next a.v3-btn.primary:hover svg { transform: translateX(2px); }
+
+.v3 .v3-callout-needs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border-radius: var(--v3-r-sm);
+  border: 1px dashed var(--v3-line-2);
+  color: var(--v3-text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.v3 .v3-callout-needs svg { color: var(--v3-wait); align-self: center; flex: none; }
+.v3 .v3-callout-needs code,
+.v3 .v3-callout-perm {
+  font-family: var(--v3-mono);
+  font-size: 0.92em;
+  color: var(--v3-text);
+}
+.v3 .v3-callout-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--v3-info);
+  white-space: nowrap;
+}
+.v3 .v3-callout-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.v3 .v3-callout-close { margin: -4px -4px 0 0; }
+
+@keyframes v3-callout-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes v3-callout-rail {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-callout, .v3 .v3-callout::before { animation: none; }
+  .v3 .v3-callout-next a.v3-btn.primary svg { transition: none; }
+}
+
+/* ── the storyline in motion (storyline-ux §3) ───────────────────────────────
+ *
+ * One drawing runs through every surface below: the story is a ROUTE LINE. A
+ * step is a station dot on it — mint when passed, amber where the line currently
+ * stops (breathing: it waits on someone), hollow ahead, dashed when optional.
+ * Chapter names are set like the console's eyebrows (mono, tracked caps), so the
+ * route reads as instrument labelling, not decoration. Tokens only; both themes.
+ */
+
+/* next-step card ─────────────────────────────────────────────────────────── */
+
+.v3 .v3-nextcard {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 14px 14px 14px 18px;
+  border-radius: var(--v3-r);
+  border: 1px solid color-mix(in srgb, var(--v3-ok) 30%, var(--v3-line));
+  background: linear-gradient(90deg, var(--v3-ok-dim), transparent 46%), var(--v3-ink-2);
+  color: var(--v3-text);
+  font-size: 13px;
+  overflow: hidden;
+  animation: v3-callout-in 260ms var(--v3-ease) both;
+}
+.v3 .v3-nextcard::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--v3-ok);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--v3-ok) 50%, transparent);
+  transform-origin: top;
+  animation: v3-callout-rail 420ms var(--v3-ease) both;
+}
+.v3 .v3-nextcard-tick {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 0;
+  border-radius: 50%;
+  background: var(--v3-ok);
+  color: var(--v3-on-ok);
+}
+.v3 .v3-nextcard-body { display: grid; gap: 10px; min-width: 0; }
+.v3 .v3-nextcard-done { font-weight: 600; line-height: 20px; }
+/* the route: a dashed line hangs from the tick down through NEXT to THEN */
+.v3 .v3-nextcard-row,
+.v3 .v3-nextcard-then {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.v3 .v3-nextcard-row::before,
+.v3 .v3-nextcard-then::before {
+  content: "";
+  position: absolute;
+  left: -22px;
+  top: -10px;
+  bottom: 50%;
+  border-left: 1px dashed color-mix(in srgb, var(--v3-ok) 55%, transparent);
+}
+.v3 .v3-nextcard-tag {
+  min-width: 64px;
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--v3-ok);
+}
+.v3 .v3-nextcard-step { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.v3 .v3-nextcard-step b { font-weight: 600; }
+.v3 .v3-nextcard-role { color: var(--v3-text-3); font-size: 12px; }
+.v3 .v3-nextcard-row .v3-btn { margin-left: auto; }
+.v3 .v3-nextcard-row .v3-btn.primary svg { transition: transform 160ms var(--v3-ease); }
+.v3 .v3-nextcard-row .v3-btn.primary:hover svg { transform: translateX(2px); }
+.v3 .v3-nextcard-row[data-kind="wait"] .v3-nextcard-tag,
+.v3 .v3-nextcard-row[data-kind="wait"] .v3-nextcard-role { color: var(--v3-wait); }
+.v3 .v3-nextcard-row[data-kind="wait"] {
+  padding: 8px 10px;
+  margin-left: -10px;
+  border-radius: var(--v3-r-sm);
+  border: 1px dashed color-mix(in srgb, var(--v3-wait) 45%, var(--v3-line));
+  background: var(--v3-wait-dim);
+}
+.v3 .v3-nextcard-row[data-kind="wait"]::before { left: -12px; }
+.v3 .v3-nextcard-then { color: var(--v3-text-3); font-size: 12.5px; }
+.v3 .v3-nextcard-then .v3-nextcard-tag { color: var(--v3-text-3); }
+.v3 .v3-nextcard-thenlink { color: var(--v3-text-2); }
+.v3 .v3-nextcard-thenlink:hover { color: var(--v3-text); text-decoration: underline; text-underline-offset: 3px; }
+.v3 .v3-nextcard-close { margin: -4px -4px 0 0; }
+
+/* journey strip ─────────────────────────────────────────────────────────── */
+
+.v3 .v3-journey {
+  padding: 12px 16px 14px;
+  border-radius: var(--v3-r);
+  border: 1px solid var(--v3-line);
+  background: var(--v3-ink-2);
+}
+.v3 .v3-journey[data-collapsed] { padding-bottom: 12px; }
+.v3 .v3-journey-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.v3 .v3-journey-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--v3-text-2);
+  font: inherit;
+  font-family: var(--v3-mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.v3 .v3-journey-toggle:hover { color: var(--v3-text); }
+.v3 .v3-journey-toggle .chev { transition: transform 180ms var(--v3-ease); }
+.v3 .v3-journey-toggle[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.v3 .v3-journey-count { letter-spacing: 0; color: var(--v3-text-3); }
+.v3 .v3-journey-meter { display: flex; gap: 3px; flex: 1; max-width: 240px; min-width: 80px; }
+.v3 .v3-journey-meter i { flex: 1; height: 3px; border-radius: 2px; background: var(--v3-line-2); }
+.v3 .v3-journey-meter i[data-s="done"] { background: var(--v3-ok); }
+.v3 .v3-journey-meter i[data-s="current"] { background: var(--v3-wait); }
+.v3 .v3-journey-act { margin-left: auto; display: inline-flex; align-items: center; }
+.v3 .v3-journey-cta svg { transition: transform 160ms var(--v3-ease); }
+.v3 .v3-journey-cta:hover svg { transform: translateX(2px); }
+.v3 .v3-journey-end { color: var(--v3-ok); font-size: 12.5px; font-weight: 600; }
+.v3 .v3-journey-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  border-radius: var(--v3-r-sm);
+  border: 1px dashed color-mix(in srgb, var(--v3-wait) 45%, var(--v3-line));
+  background: var(--v3-wait-dim);
+}
+.v3 .v3-journey-waittext { display: grid; line-height: 1.25; }
+.v3 .v3-journey-waittext b { color: var(--v3-wait-text); font-size: 12.5px; font-weight: 600; }
+.v3 .v3-journey-waittext small { color: var(--v3-text-2); font-size: 11.5px; }
+
+.v3 .v3-journey-line {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 12px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.v3 .v3-journey-line[hidden] { display: none; }
+.v3 .v3-journey-chapter {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding: 0 22px 2px 0;
+  animation: v3-journey-in 360ms var(--v3-ease) both;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+/* the line between chapters: lit once the chapter's required steps are done */
+.v3 .v3-journey-chapter:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  bottom: 8px;
+  width: 10px;
+  border-top: 1px solid var(--v3-line-2);
+}
+.v3 .v3-journey-chapter[data-complete]:not(:last-child)::after { border-color: var(--v3-ok); }
+.v3 .v3-journey-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+  white-space: nowrap;
+}
+.v3 .v3-journey-label .mono { letter-spacing: 0; font-size: 10.5px; }
+.v3 .v3-journey-chapter[data-here] .v3-journey-label { color: var(--v3-wait); }
+.v3 .v3-journey-chapter[data-complete] .v3-journey-label { color: var(--v3-ok); }
+.v3 .v3-journey-dots { position: relative; display: flex; align-items: center; gap: 4px; width: max-content; }
+/* the track under the dots */
+.v3 .v3-journey-dots::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  border-top: 1px solid var(--v3-line);
+}
+.v3 .v3-journey-dot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+.v3 .v3-journey-dot i {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--v3-line-2);
+  background: var(--v3-ink-2);
+  transition: transform 140ms var(--v3-ease);
+}
+.v3 .v3-journey-dot:hover i,
+.v3 .v3-journey-dot:focus-visible i { transform: scale(1.25); }
+.v3 .v3-journey-dot[data-s="done"] i { border-color: var(--v3-ok); background: var(--v3-ok); }
+.v3 .v3-journey-dot[data-s="optional"] i { border-style: dashed; border-color: var(--v3-text-4); }
+.v3 .v3-journey-dot[data-s="later"] i { border-color: var(--v3-text-4); }
+.v3 .v3-journey-dot[data-s="current"] i {
+  width: 12px;
+  height: 12px;
+  border-color: var(--v3-wait);
+  background: var(--v3-wait);
+  box-shadow: 0 0 0 3px var(--v3-wait-dim);
+}
+.v3 .v3-journey-dot[data-s="current"] i::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 1px solid var(--v3-wait);
+  animation: v3-breathe 2.4s var(--v3-ease) infinite;
+}
+.v3 .v3-journey-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  max-width: 240px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--v3-line-2);
+  background: var(--v3-ink-0);
+  box-shadow: 0 16px 40px -12px color-mix(in srgb, var(--v3-shade) 80%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 2px);
+  transition: opacity 0.12s, transform 0.12s;
+}
+.v3 .v3-journey-tip b { color: var(--v3-text); font-weight: 600; }
+.v3 .v3-journey-tip small { color: var(--v3-text-3); font-size: 11px; }
+.v3 .v3-journey-dot:hover .v3-journey-tip,
+.v3 .v3-journey-dot:focus-visible .v3-journey-tip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+
+@keyframes v3-journey-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* page-header position line ─────────────────────────────────────────────── */
+
+.v3 .v3-storypos {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  padding: 7px 12px;
+  margin-bottom: -6px;
+  border-radius: var(--v3-r-sm);
+  border: 1px solid var(--v3-line-soft);
+  background: linear-gradient(90deg, var(--v3-ok-dim), transparent 38%);
+  font-size: 12.5px;
+}
+.v3 .v3-storypos-where { display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.v3 .v3-storypos-chapter {
+  font-family: var(--v3-mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--v3-ok);
+}
+.v3 .v3-storypos-sep { color: var(--v3-text-4); }
+.v3 .v3-storypos-n { color: var(--v3-text-2); font-size: 11.5px; }
+.v3 .v3-storypos-name { color: var(--v3-text); font-weight: 600; }
+.v3 .v3-storypos-moves { display: inline-flex; gap: 4px; }
+.v3 .v3-storypos-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--v3-r-sm);
+  color: var(--v3-text-2);
+  font-size: 12px;
+}
+.v3 .v3-storypos-move:hover { color: var(--v3-text); background: var(--v3-ink-3); }
+.v3 .v3-storypos-move[data-dir="next"] { color: var(--v3-ok); }
+.v3 .v3-storypos-move svg { transition: transform 160ms var(--v3-ease); }
+.v3 .v3-storypos-move[data-dir="next"]:hover svg { transform: translateX(2px); }
+.v3 .v3-storypos-move[data-dir="prev"]:hover svg { transform: translateX(-2px); }
+
+/* home: your turn / waiting on others ───────────────────────────────────── */
+
+.v3 .v3-yourturn {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  border-radius: var(--v3-r);
+  border: 1px solid color-mix(in srgb, var(--v3-wait) 26%, var(--v3-line));
+  background: var(--v3-ink-2);
+  overflow: hidden;
+}
+.v3 .v3-yourturn-col { padding: 14px 16px; min-width: 0; }
+.v3 .v3-yourturn-col[data-kind="waiting"] { border-left: 1px dashed var(--v3-line-2); background: var(--v3-ink-1); }
+.v3 .v3-yourturn-col header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.v3 .v3-yourturn-title {
+  font-family: var(--v3-mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--v3-wait);
+}
+.v3 .v3-yourturn-col[data-kind="waiting"] .v3-yourturn-title { color: var(--v3-text-3); }
+.v3 .v3-yourturn-n { color: var(--v3-text-3); font-size: 11.5px; }
+.v3 .v3-yourturn ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.v3 .v3-yourturn li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  margin: 0 -8px;
+  border-radius: var(--v3-r-sm);
+}
+.v3 .v3-yourturn-col[data-kind="mine"] li:hover { background: var(--v3-ink-3); }
+.v3 .v3-yourturn-what { display: grid; min-width: 0; }
+.v3 .v3-yourturn-what b { font-weight: 600; }
+.v3 .v3-yourturn-what small { color: var(--v3-text-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3 .v3-yourturn-col[data-kind="waiting"] .v3-yourturn-what > span { color: var(--v3-text-2); }
+.v3 .v3-yourturn-glass { color: var(--v3-text-3); justify-self: center; }
+.v3 .v3-yourturn-quiet { margin: 0; color: var(--v3-text-3); }
+.v3 .v3-yourturn li.v3-yourturn-more { display: block; color: var(--v3-text-3); font-size: 12px; }
+@media (max-width: 900px) {
+  .v3 .v3-yourturn { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-yourturn-col[data-kind="waiting"] { border-left: 0; border-top: 1px dashed var(--v3-line-2); }
+}
+
+/* empty states: what is missing first ───────────────────────────────────── */
+
+.v3 .v3-prereqs {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 460px);
+  margin: 4px auto 0;
+  text-align: left;
+}
+.v3 .v3-prereqs-head {
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--v3-wait);
+}
+.v3 .v3-prereqs ol { position: relative; display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.v3 .v3-prereqs li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 3px 0;
+}
+/* the route between the checks */
+.v3 .v3-prereqs li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 6.5px;
+  top: calc(50% + 8px);
+  height: calc(100% - 16px);
+  border-left: 1px solid var(--v3-line-2);
+}
+.v3 .v3-prereqs li[data-state="done"]:not(:last-child)::after { border-color: var(--v3-ok); }
+.v3 .v3-prereqs-mark {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--v3-text-4);
+  color: var(--v3-on-ok);
+}
+.v3 .v3-prereqs li[data-state="done"] .v3-prereqs-mark { border-color: var(--v3-ok); background: var(--v3-ok); }
+.v3 .v3-prereqs li[data-state="next"] .v3-prereqs-mark { border-color: var(--v3-wait); background: var(--v3-wait-dim); box-shadow: 0 0 0 3px var(--v3-wait-dim); }
+.v3 .v3-prereqs-name { display: grid; color: var(--v3-text); font-size: 13px; }
+.v3 .v3-prereqs-name small { color: var(--v3-wait); font-size: 11.5px; }
+.v3 .v3-prereqs li[data-state="done"] .v3-prereqs-name { color: var(--v3-text-3); }
+.v3 .v3-prereqs li[data-state="later"] .v3-prereqs-name { color: var(--v3-text-2); }
+.v3 .v3-prereqs li .v3-btn { justify-self: start; }
+.v3 .v3-prereqs li[data-state="later"] .v3-btn { opacity: 0.75; }
+
+/* glossary: the Agent-DLC term cards ────────────────────────────────────── */
+
+.v3 .v3-glossary-scroll { display: grid; gap: 16px; max-height: 60vh; overflow: auto; }
+.v3 .v3-glossary-scroll .v3-glossary { max-height: none; overflow: visible; }
+.v3 .v3-dlc-terms { display: grid; gap: 10px; }
+.v3 .v3-dlc-terms-head {
+  font-family: var(--v3-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--v3-ok);
+}
+.v3 .v3-dlc-terms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.v3 .v3-dlc-term {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 12px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--v3-line);
+  background: var(--v3-ink-1);
+}
+.v3 .v3-dlc-term[data-on] { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); background: var(--v3-ok-dim); }
+.v3 .v3-dlc-term h3 {
+  margin: 0;
+  font-family: var(--v3-display);
+  font-variation-settings: "wdth" 112;
+  font-size: 15px;
+  font-weight: 650;
+}
+.v3 .v3-dlc-term p { margin: 0; color: var(--v3-text-2); font-size: 12.5px; line-height: 1.55; }
+.v3 .v3-dlc-term-tag {
+  font-family: var(--v3-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--v3-text-3);
+}
+.v3 .v3-dlc-term-used { display: grid; gap: 4px; }
+.v3 .v3-dlc-term-used ol { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.v3 .v3-dlc-term-used li { display: inline-flex; align-items: center; gap: 4px; }
+.v3 .v3-dlc-term-used li:not(:last-child)::after { content: "→"; color: var(--v3-text-4); font-size: 11px; }
+.v3 .v3-dlc-term-used a {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--v3-line-2);
+  color: var(--v3-text);
+  font-size: 12px;
+}
+.v3 .v3-dlc-term-used a .mono { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-ok); }
+.v3 .v3-dlc-term-used a:hover { border-color: var(--v3-ok); background: var(--v3-ok-dim); }
+.v3 .v3-dlc-term-foot { display: grid; gap: 6px; font-size: 12px; color: var(--v3-text-2); }
+.v3 .v3-dlc-term-related { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.v3 .v3-dlc-term-related button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--v3-info);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.v3 .v3-term-steps { display: block; margin-top: 6px; color: var(--v3-text-3); font-size: 11.5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-nextcard, .v3 .v3-nextcard::before, .v3 .v3-journey-chapter { animation: none; }
+  .v3 .v3-journey-dot[data-s="current"] i::after { animation: none; }
+  .v3 .v3-journey-dot i, .v3 .v3-journey-tip, .v3 .v3-journey-toggle .chev,
+  .v3 .v3-storypos-move svg, .v3 .v3-journey-cta svg, .v3 .v3-nextcard-row .v3-btn.primary svg { transition: none; }
+}
+
+/* ── why a control is off (guided-console §4) ────────────────────────────────
+ * A disabled control hangs a small amber flag: amber because the button is not
+ * broken, it is waiting on a step. The flag reads like an instrument tag — a mono
+ * eyebrow ("NOT YET"), the reason in body type, and the way there in mint, the
+ * same grammar as the error callout's NEXT. A notch ties the flag to the control;
+ * an invisible bridge keeps it open while the pointer travels to the link. It is
+ * always in the DOM (aria-describedby resolves) and only becomes visible on hover
+ * or focus, after a short beat on hover so passing the mouse over a toolbar does
+ * not flash a row of flags. */
+.v3 .v3-why { position: relative; display: inline-flex; vertical-align: middle; }
+/* a field keeps its full width inside the wrapper */
+.v3 .v3-why:has(> input, > select, > textarea, > .v3-sel) { display: flex; flex: 1 1 auto; min-width: 0; }
+/* …but a checkbox or radio keeps its own size beside its label */
+.v3 .v3-why:has(> input[type="checkbox"], > input[type="radio"]) { display: inline-flex; flex: none; }
+/* a natively disabled field swallows the pointer; let the wrapper take the hover */
+.v3 .v3-why > :disabled { pointer-events: none; }
+.v3 .v3-why-tip {
+  position: absolute;
+  top: calc(100% + 9px);
+  left: 0;
+  z-index: 40;
+  display: grid;
+  gap: 4px;
+  width: max-content;
+  max-width: min(300px, 80vw);
+  padding: 9px 12px 10px 14px;
+  border-radius: var(--v3-r-sm);
+  border: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+  background:
+    linear-gradient(90deg, var(--v3-wait-dim), transparent 55%),
+    var(--v3-ink-2);
+  box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--v3-shade) 70%, transparent);
+  color: var(--v3-text);
+  font-family: var(--v3-body);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  transition: opacity 140ms var(--v3-ease), transform 160ms var(--v3-ease), visibility 0s linear 160ms;
+  pointer-events: none;
+}
+/* the signal rail and the notch that points back at the control */
+.v3 .v3-why-tip::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  border-radius: var(--v3-r-sm) 0 0 var(--v3-r-sm);
+  background: var(--v3-wait);
+}
+.v3 .v3-why-tip::after {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 14px;
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  border-left: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+  border-top: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+  background: var(--v3-ink-2);
+}
+.v3 .v3-why:hover .v3-why-tip,
+.v3 .v3-why:focus-within .v3-why-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity 140ms var(--v3-ease) 120ms, transform 160ms var(--v3-ease) 120ms, visibility 0s linear 120ms;
+}
+.v3 .v3-why:focus-within .v3-why-tip { transition-delay: 0s; }
+/* the bridge across the gap, so the link can be reached with the pointer */
+.v3 .v3-why:hover::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 10px;
+}
+/* controls on the right edge (page-head actions, panel ends, dialog feet) hang their
+   flag from the right; a dialog's foot sits at the bottom, so its flag rises */
+.v3 .v3-head-end .v3-why-tip, .v3 .v3-panel-head .end .v3-why-tip, .v3 .v3-modal .foot .v3-why-tip { left: auto; right: 0; }
+.v3 .v3-head-end .v3-why-tip::after, .v3 .v3-panel-head .end .v3-why-tip::after, .v3 .v3-modal .foot .v3-why-tip::after { left: auto; right: 14px; }
+.v3 .v3-modal .foot .v3-why-tip { top: auto; bottom: calc(100% + 9px); transform: translateY(3px); }
+.v3 .v3-modal .foot .v3-why-tip::after {
+  top: auto;
+  bottom: -5px;
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+  border-bottom: 1px solid color-mix(in srgb, var(--v3-wait) 34%, var(--v3-line));
+}
+.v3 .v3-modal .foot .v3-why:hover .v3-why-tip, .v3 .v3-modal .foot .v3-why:focus-within .v3-why-tip { transform: none; }
+.v3 .v3-modal .foot .v3-why:hover::after { top: auto; bottom: 100%; }
+.v3 .v3-why-tag {
+  font-family: var(--v3-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v3-wait);
+}
+.v3 .v3-why-text { color: var(--v3-text); }
+.v3 .v3-why-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-self: start;
+  margin-top: 2px;
+  color: var(--v3-ok);
+  font-weight: 600;
+  font-size: 12px;
+  text-decoration: none;
+}
+.v3 .v3-why-go svg { transition: transform 160ms var(--v3-ease); }
+.v3 .v3-why-go:hover { text-decoration: underline; text-underline-offset: 3px; }
+.v3 .v3-why-go:hover svg { transform: translateX(2px); }
+.v3 .v3-why-go:focus-visible { outline: 2px solid var(--v3-ok); outline-offset: 2px; border-radius: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .v3 .v3-why-tip, .v3 .v3-why:hover .v3-why-tip, .v3 .v3-why:focus-within .v3-why-tip { transform: none; transition: none; }
+  .v3 .v3-why-go svg { transition: none; }
+}

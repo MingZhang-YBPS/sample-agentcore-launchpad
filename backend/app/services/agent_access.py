@@ -11,7 +11,14 @@ and legacy rows, which therefore stay visible to every member).
 - `agent_clause` is the same rule as SQL, for lists (filter before any limit).
 - `hidden_agent_ids` / `HiddenAgents` serve the derived surfaces that only *name*
   an agent (KB used-by, observability rows, memory actors, registry records, …).
-- `check_pins` refuses a spec that pins a KB / memory the caller cannot see.
+- `ProjectAgents` is the project boundary for those same surfaces (design §5.9): an
+  *allow*-set — this project's agents plus the platform presets — because a deny-set
+  built under the project filter never contains another project's agents.
+- `check_pins` refuses a spec that pins a KB / memory the caller cannot see, or a KB
+  of another project — unless that project shared it with this one at `use` level
+  (projects §11.2); a kept pin whose share has since ended is refused too.
+  `shared_for_use` is the same rule for the other `use`-level kinds (evaluators,
+  golden sets / datasets) where an evaluation names them.
 
 The `viewer` default is `Viewer.ALL`: deploy pipeline, resume, workers, purge, the
 observability resolver and name claims stay unfiltered. Only routers pass
@@ -24,11 +31,14 @@ from __future__ import annotations
 from functools import cached_property
 from typing import Any
 
+from fastapi import Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
-from app.models.ledger import Agent, ChatSession
+from app.core.project_scope import current_project, project_context
+from app.models.ledger import Agent, ChatSession, ResourceCreator
 from app.services import creators, visibility
 from app.services.memory import SCOPE_SEP, spec_memory_id
 from app.services.visibility import Viewer
@@ -63,6 +73,32 @@ def agent_in(
     if not visibility.sees(viewer, db, agent.created_by):
         return None
     return agent
+
+
+def require_path_ids_visible(request: Request, db: Session = Depends(get_db)) -> None:
+    """Router-level dependency for console routers whose routes name an agent
+    (`{agent_id}`) or an eval run (`{run_id}`) in the path but load it with their own
+    workspace-only helper: under workspace isolation a hidden one answers the same 404
+    as a missing one (`agent.not_found` / `run.not_found`) before the handler runs. A
+    route without those ids (and any non-filtering viewer) is untouched, so it costs
+    nothing in a shared workspace."""
+    agent_id = request.path_params.get("agent_id")
+    run_id = request.path_params.get("run_id")
+    if not agent_id and not run_id:
+        return
+    viewer = Viewer.of_request(request)
+    if not viewer.filters:
+        return
+    if agent_id:
+        agent = db.get(Agent, agent_id)
+        if agent is not None and not visibility.sees(viewer, db, agent.created_by):
+            raise NotFoundError("agent.not_found", "agent not found")
+    if run_id:
+        from app.evaluation.models import EvalRun
+
+        run = db.get(EvalRun, run_id)
+        if run is not None and not visibility.sees(viewer, db, run.created_by):
+            raise NotFoundError("run.not_found", "run not found")
 
 
 def agent_visible(db: Session, viewer: Viewer, agent: Agent | None) -> bool:
@@ -220,6 +256,56 @@ class HiddenAgents:
         return False
 
 
+class ProjectAgents:
+    """The agents a derived surface may attribute to while a project is current: this
+    project's (deleted ones too — their history is still the project's) plus the
+    platform presets (NULL). Loaded across projects in one query, so an id of another
+    project is recognised as such rather than read as unknown.
+
+    Fails closed: an id that names no agent of the workspace (an unattributed span,
+    session or record) is refused in a workspace bound to several projects, and
+    allowed in a single-project one, which keeps today's behaviour there. With no
+    current project (workers, admin-wide views) everything is allowed and no query
+    runs. Falsy when it allows everything, so callers skip the filtering work."""
+
+    def __init__(self, db: Session, workspace_id: str | None,
+                 project_id: str | None = None):
+        self.workspace_id = workspace_id
+        self.project_id = project_id or current_project()
+        self.ids: frozenset[str] = frozenset()
+        self._others: frozenset[str] = frozenset()
+        self._single = True
+        if self.project_id is None:
+            return
+        from app.services import access
+
+        with project_context(None):
+            rows = db.execute(
+                select(Agent.id, Agent.project_id).where(Agent.workspace_id == workspace_id)
+            ).all()
+        self.ids = frozenset(
+            aid for aid, pid in rows if pid is None or pid == self.project_id
+        )
+        self._others = frozenset(aid for aid, _ in rows) - self.ids
+        self._single = len(access.workspace_bindings(db, workspace_id or "")) <= 1
+
+    def __bool__(self) -> bool:
+        return self.project_id is not None and not (self._single and not self._others)
+
+    def allows(self, agent_id: str | None) -> bool:
+        if self.project_id is None or (agent_id and agent_id in self.ids):
+            return True
+        if agent_id and agent_id in self._others:
+            return False
+        return self._single  # unattributed
+
+    def allows_actor(self, actor_id: str | None) -> bool:
+        """A memory actor: `<agent>__<human>` by its agent part; an unscoped actor
+        (`default`, `a2a-demo`) is unattributed."""
+        agent_part, sep, _ = (actor_id or "").partition(SCOPE_SEP)
+        return self.allows(agent_part if sep else None)
+
+
 # ── spec pins ────────────────────────────────────────────────────────────────
 
 
@@ -247,10 +333,34 @@ def check_pins(
     keeps re-publishing after a switch to isolated. Runs before any row change and
     any AWS call; the miss answers are the ones a missing id gets (`kb.not_found`,
     `agent.memory_not_managed`).
+
+    The project rule runs whatever the viewer (design §5.4): an added KB must be this
+    project's, or unowned while this project is the workspace default (§5.5: a KB
+    with no creator row belongs to the default project), or shared with this project
+    at `use` level (§11.2). A KB kept from `previous_spec` whose share was revoked or
+    expired is refused (`kb.share_revoked`): the dependency is gone, so the next
+    publish fails until the pin is removed. A memory pin needs no extra check —
+    `managed_memories` is project-filtered (and memory is never shared), so another
+    project's memory is already `agent.memory_not_managed`.
     """
+    added_kbs = _kb_ids(spec) - _kb_ids(previous_spec)
+    foreign = foreign_kb_ids(db, workspace.id, added_kbs)
+    if foreign:
+        raise NotFoundError(
+            "kb.not_found", "knowledge base not found", {"kb_id": sorted(foreign)[0]}
+        )
+    ended = _ended_kb_shares(db, workspace.id, _kb_ids(spec) - added_kbs)
+    if ended:
+        raise NotFoundError(
+            "kb.share_revoked",
+            "the share of this knowledge base with this project has ended — remove the pin",
+            {"kb_id": sorted(ended)[0]},
+        )
     if not viewer.filters:
         return
-    added_kbs = _kb_ids(spec) - _kb_ids(previous_spec)
+    # a shared KB is the owner project's creation: the member visibility rule (who
+    # created it) is not this project's to apply
+    added_kbs -= shared_for_use(db, creators.KB, added_kbs)
     if added_kbs:
         hidden = visibility.hidden_aws_ids(viewer, db, workspace.id, creators.KB, added_kbs)
         if hidden:
@@ -269,3 +379,63 @@ def check_pins(
                 {"memory_id": memory_id},
                 status_code=422,
             )
+
+
+def shared_for_use(db: Session, kind: str, ids: set[str],
+                   project_id: str | None = None) -> set[str]:
+    """Of `ids`, those another project shared with the (current) project at `use`
+    level (§11.2) — what its agents may pin and its evaluations run on. `kind` is a
+    `resource_shares.kind` (`knowledge_base`, `evaluator`, `eval_dataset`, …). Empty
+    without a current project."""
+    wanted = {i for i in ids if i}
+    if not wanted:
+        return set()
+    from app.services import resource_shares
+
+    return set(resource_shares.received_ids(db, kind, use=True, project_id=project_id)
+               & wanted)
+
+
+def _ended_kb_shares(db: Session, workspace_id: str, kept: set[str]) -> set[str]:
+    """Kept KB pins of another project whose share with this one has ended."""
+    pid = current_project()
+    if pid is None or not kept:
+        return set()
+    from app.services import resource_shares
+
+    lent = resource_shares.revoked_ids(db, creators.KB, kept, pid)
+    return lent & foreign_kb_ids(db, workspace_id, lent) if lent else set()
+
+
+def foreign_kb_ids(db: Session, workspace_id: str, kb_ids: set[str],
+                   project_id: str | None = None) -> set[str]:
+    """The KB ids the current project may not pin: owned (`resource_creators`) by
+    another project — unless shared with it at `use` level (§11.2) — or unowned while
+    this project is not the workspace default. Empty without a query when no project
+    is current."""
+    pid = project_id or current_project()
+    wanted = {kb for kb in kb_ids if kb}
+    if pid is None or not wanted:
+        return set()
+    from app.services import access
+
+    with project_context(None):
+        owners = dict(
+            db.execute(
+                select(ResourceCreator.resource_id, ResourceCreator.project_id).where(
+                    ResourceCreator.workspace_id == workspace_id,
+                    ResourceCreator.kind == creators.KB,
+                    ResourceCreator.resource_id.in_(wanted),
+                )
+            ).all()
+        )
+    unowned = {kb for kb in wanted if owners.get(kb) is None}
+    out = {kb for kb, owner in owners.items() if owner is not None and owner != pid}
+    if unowned:
+        bindings = access.workspace_bindings(db, workspace_id)
+        is_default = any(b.project_id == pid and b.is_workspace_default for b in bindings)
+        if not is_default and len(bindings) > 1:
+            out |= unowned
+    if out:
+        out -= shared_for_use(db, creators.KB, out, project_id=pid)
+    return out

@@ -13,6 +13,12 @@ Launchpad adaptations vs upstream:
   sys.executable-vs-uv-run inconsistency.
 - Env is built by ``local_exec.build_execution_env`` (adds AWS region +
   Bedrock key handling); skills are bundled into the session dir at init.
+- Each session remembers the workspace, the Launchpad project current when it
+  was created (design §5.5) and its creator, and is invisible to any other
+  caller: listed, read, sent to or deleted only by its creator in that
+  workspace and project (an admin reaches every session of the project).
+  ``ConversationSession.project_id`` is unrelated — it is the upstream Strands
+  Studio *flow* project (``studio-local``), kept for port parity.
 """
 
 import asyncio
@@ -23,10 +29,12 @@ import subprocess
 import tempfile
 import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from app.core.project_scope import current_project
 from app.models.conversation import (
     ChatMessage,
     ChatResponse,
@@ -43,13 +51,54 @@ logger = logging.getLogger("launchpad.conversations")
 NONSTREAM_TIMEOUT_S = 60
 
 
+@dataclass(frozen=True)
+class SessionCaller:
+    """Who is asking: the request's workspace and identity. None (no caller) is
+    the cleanup job, which sees every session of the current project."""
+
+    workspace_id: str
+    username: str
+    is_admin: bool = False
+
+
+@dataclass(frozen=True)
+class _Owner:
+    workspace_id: str | None
+    project_id: str | None  # the Launchpad project (None = unscoped)
+    creator: str | None
+
+
 class ConversationService:
     def __init__(self) -> None:
         self.sessions: dict[str, ConversationSession] = {}
         self.messages: dict[str, list[ChatMessage]] = {}  # session_id -> messages
         self.agent_processes: dict[str, Any] = {}  # session_id -> agent info
+        # session_id -> (workspace, Launchpad project, creator) it was created by
+        self.owners: dict[str, _Owner] = {}
 
-    async def create_session(self, request: CreateConversationRequest) -> ConversationSession:
+    def _visible(self, session_id: str, caller: SessionCaller | None = None) -> bool:
+        """Like the ORM criteria: with no project current (a cleanup job) every
+        session is visible; otherwise only the current project's. A caller
+        further narrows to its workspace and — unless an admin — its own."""
+        owner = self.owners.get(session_id, _Owner(None, None, None))
+        pid = current_project()
+        if pid is not None and owner.project_id != pid:
+            return False
+        if caller is None:
+            return True
+        if owner.workspace_id != caller.workspace_id:
+            return False
+        return caller.is_admin or owner.creator == caller.username
+
+    def _require(self, session_id: str, caller: SessionCaller | None = None) -> None:
+        # another project's, workspace's or member's session reads exactly like a
+        # missing one
+        if session_id not in self.sessions or not self._visible(session_id, caller):
+            raise ValueError(f"Session {session_id} not found")
+
+    async def create_session(
+        self, request: CreateConversationRequest, caller: SessionCaller | None = None
+    ) -> ConversationSession:
         session = ConversationSession(
             project_id=request.project_id,
             version=request.version,
@@ -59,10 +108,20 @@ class ConversationService:
         )
         self.sessions[session.session_id] = session
         self.messages[session.session_id] = []
-        self._initialize_agent(session.session_id, request.generated_code)
+        self.owners[session.session_id] = _Owner(
+            caller.workspace_id if caller else None,
+            current_project(),
+            caller.username if caller else None,
+        )
+        self._initialize_agent(
+            session.session_id, request.generated_code,
+            caller.workspace_id if caller else None,
+        )
         return session
 
-    def _initialize_agent(self, session_id: str, generated_code: str) -> None:
+    def _initialize_agent(
+        self, session_id: str, generated_code: str, workspace_id: str | None = None
+    ) -> None:
         """Write the generated code to a persistent per-session temp dir and
         bundle any referenced skills next to it."""
         session_dir = Path(tempfile.mkdtemp(
@@ -71,7 +130,7 @@ class ConversationService:
         ))
         agent_file = session_dir / "agent.py"
         agent_file.write_text(generated_code, encoding="utf-8")
-        local_exec.bundle_skills_for_workdir(generated_code, str(session_dir))
+        local_exec.bundle_skills_for_workdir(generated_code, str(session_dir), workspace_id)
         local_exec.grant_workdir_to_exec_user(str(session_dir))
         self.agent_processes[session_id] = {
             "session_dir": session_dir,
@@ -80,18 +139,18 @@ class ConversationService:
         }
 
     async def update_session_code(
-        self, session_id: str, generated_code: str
+        self, session_id: str, generated_code: str, caller: SessionCaller | None = None
     ) -> ConversationSession:
         """Rewrite the session's agent code in place (session + messages kept).
         Backs the apply-fix path so subsequent turns run the fixed code."""
-        if session_id not in self.sessions:
-            raise ValueError(f"Session {session_id} not found")
+        self._require(session_id, caller)
         if session_id not in self.agent_processes:
             raise ValueError(f"Agent not initialized for session {session_id}")
         agent_info = self.agent_processes[session_id]
         agent_info["agent_file"].write_text(generated_code, encoding="utf-8")
         local_exec.bundle_skills_for_workdir(
-            generated_code, str(agent_info["session_dir"])
+            generated_code, str(agent_info["session_dir"]),
+            self.owners[session_id].workspace_id if session_id in self.owners else None,
         )
         # The rewritten file and any newly bundled skills are owned by the backend
         # user again, so re-hand them over.
@@ -135,11 +194,12 @@ class ConversationService:
             extra_env={"PYTHONUNBUFFERED": "1"},
         )
 
-    async def send_message(self, session_id: str, message: str) -> ChatResponse:
+    async def send_message(
+        self, session_id: str, message: str, caller: SessionCaller | None = None
+    ) -> ChatResponse:
         """Non-streaming turn: append the user message, run the agent replaying
         the full history, store the reply (or the error, pair-marked)."""
-        if session_id not in self.sessions:
-            raise ValueError(f"Session {session_id} not found")
+        self._require(session_id, caller)
 
         user_message = ChatMessage(session_id=session_id, sender="user", content=message)
         self.messages[session_id].append(user_message)
@@ -208,13 +268,12 @@ class ConversationService:
             return False, str(exc)
 
     async def stream_message(
-        self, session_id: str, message: str
+        self, session_id: str, message: str, caller: SessionCaller | None = None
     ) -> AsyncGenerator[str, None]:
         """Streaming turn. Yields raw stdout chunks, then a `[CHAT_ERROR:<json>]`
         sentinel on failure (JSON-encoded so multiline tracebacks stay one line),
         then always `[CHAT_COMPLETE:<agent_message_id>]`."""
-        if session_id not in self.sessions:
-            raise ValueError(f"Session {session_id} not found")
+        self._require(session_id, caller)
 
         user_message = ChatMessage(session_id=session_id, sender="user", content=message)
         self.messages[session_id].append(user_message)
@@ -308,26 +367,30 @@ class ConversationService:
             if run is not None:
                 run.cleanup()
 
-    async def get_sessions(self) -> ConversationListResponse:
-        sessions = sorted(self.sessions.values(), key=lambda s: s.updated_at, reverse=True)
+    async def get_sessions(self, caller: SessionCaller | None = None) -> ConversationListResponse:
+        sessions = sorted(
+            (s for sid, s in self.sessions.items() if self._visible(sid, caller)),
+            key=lambda s: s.updated_at, reverse=True,
+        )
         return ConversationListResponse(sessions=sessions)
 
-    async def get_session_history(self, session_id: str) -> ConversationHistoryResponse:
-        if session_id not in self.sessions:
-            raise ValueError(f"Session {session_id} not found")
+    async def get_session_history(
+        self, session_id: str, caller: SessionCaller | None = None
+    ) -> ConversationHistoryResponse:
+        self._require(session_id, caller)
         return ConversationHistoryResponse(
             session=self.sessions[session_id],
             messages=self.messages.get(session_id, []),
         )
 
-    async def get_session_messages(self, session_id: str) -> MessageListResponse:
-        if session_id not in self.sessions:
-            raise ValueError(f"Session {session_id} not found")
+    async def get_session_messages(
+        self, session_id: str, caller: SessionCaller | None = None
+    ) -> MessageListResponse:
+        self._require(session_id, caller)
         return MessageListResponse(messages=self.messages.get(session_id, []))
 
-    async def delete_session(self, session_id: str) -> dict:
-        if session_id not in self.sessions:
-            raise ValueError(f"Session {session_id} not found")
+    async def delete_session(self, session_id: str, caller: SessionCaller | None = None) -> dict:
+        self._require(session_id, caller)
         if session_id in self.agent_processes:
             session_dir = self.agent_processes[session_id].get("session_dir")
             if session_dir and Path(session_dir).exists():
@@ -335,6 +398,7 @@ class ConversationService:
             del self.agent_processes[session_id]
         del self.sessions[session_id]
         self.messages.pop(session_id, None)
+        self.owners.pop(session_id, None)
         return {"message": f"Session {session_id} deleted successfully"}
 
     async def cleanup_expired_sessions(self, max_age_hours: int = 24) -> int:

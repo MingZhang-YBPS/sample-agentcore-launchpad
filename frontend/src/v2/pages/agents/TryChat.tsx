@@ -3,117 +3,138 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { chatApi, errorMessage, localizedMessage } from "../../../lib/api";
-import { budgetRefusalOf } from "../../../lib/budgets";
-import { sseEvents } from "../../../lib/chat";
-import { BudgetRefusalLink } from "../../BudgetBanner";
-import { refreshMyUsageIfLimited } from "../../myUsage";
+import { api, chatApi, errorMessage, localizedMessage } from "../../../lib/api";
+import { seconds, sseEvents, STALL_ABORT_MS, stopChatTurn, turnStopReason, useChatTurn } from "../../../lib/chat";
+import { TurnStatusLine } from "../../../components/chat/TurnStatus";
 import { Alert, Button, Card } from "../../ui";
-import { applyStreamEvent, awaitingReply, closeOpen, pushTurn, type Turn } from "./tryChatTurns";
+import "./tryChat.css";
+import { JumpToLatest } from "../../../components/JumpToLatest";
+import { useStickToBottom } from "../../../lib/useStickToBottom";
+
+interface Turn {
+  role: "user" | "agent" | "error";
+  text: string;
+}
+
+/** Turns kept on screen (a turn is one user or agent message). */
+const MAX_TURNS = 8;
 
 /**
- * Inline try-chat on the agent detail page. A try is a real invocation over the
- * same `chatApi.stream` + `sseEvents` transport as the Chat console, so it opens
- * an ordinary ledger chat session (listed in Chat, memory scoped to this agent
- * and the signed-in member). One session per mount, reused across turns; the
- * in-flight stream is aborted on unmount. Tool rows are shown by name only; a
- * consent ask or policy denial points to the full Chat console.
+ * Inline try-chat for a freshly active agent. Streams through the same
+ * `chatApi.stream` + `sseEvents` transport as the Chat console. Chatting is
+ * allowed in prod workspaces, so this deliberately ignores the prod lock.
  */
 export function TryChat({ agentId }: { agentId: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const sessionRef = useRef<string | null>(null);
-  const inFlight = useRef(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // the background turn the stream follows (meta.turn_id): closing the stream alone
+  // leaves it running server-side (chat-streaming §5.2), so Stop names it too
+  const turnIdRef = useRef<string | null>(null);
+  // chat-streaming S2: what the running turn is doing, its timer and its stop
+  const turn = useChatTurn();
+  // follows the stream only while the reader is at the bottom
+  const body = useStickToBottom();
 
   useEffect(() => {
-    bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight });
-  }, [turns, busy]);
+    let live = true;
+    api
+      .suggestedQuestions(agentId, i18n.language)
+      .then((r) => live && setSuggestions(r.questions))
+      .catch(() => undefined); // chips are a nicety; the box works without them
+    return () => {
+      live = false;
+    };
+  }, [agentId, i18n.language]);
 
-  const copy = {
-    localize: localizedMessage,
-    sendFailed: t("chatPage.sendFailed"),
-    needsChat: t("v2.agents.tryChat.needsChat"),
-  };
+  const push = (turn: Turn) => setTurns((prev) => [...prev, turn].slice(-MAX_TURNS));
+  const appendToAgent = (delta: string) =>
+    setTurns((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.role === "agent") return [...prev.slice(0, -1), { ...last, text: last.text + delta }];
+      return [...prev, { role: "agent" as const, text: delta }].slice(-MAX_TURNS);
+    });
 
   const send = async () => {
     const prompt = text.trim();
-    if (!prompt || inFlight.current) return;
-    inFlight.current = true;
-    const controller = new AbortController();
-    abortRef.current = controller;
+    if (!prompt || busy) return;
     setText("");
     setBusy(true);
-    setTurns((prev) => pushTurn(prev, { role: "user", text: prompt }));
+    push({ role: "user", text: prompt });
+    body.toBottom();
     let completed = false;
     let failed = false;
+    turnIdRef.current = null;
+    const signal = turn.begin();
     try {
-      const res = await chatApi.stream(agentId, { prompt, session_id: sessionRef.current }, controller.signal);
+      const res = await chatApi.stream(agentId, { prompt, session_id: sessionRef.current }, signal);
       if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
-      for await (const { event, data } of sseEvents(res)) {
-        if (event === "meta" && data.session_id) {
-          sessionRef.current = data.session_id;
-          setSessionId(data.session_id);
-        }
-        if (event === "error") failed = true;
-        if (event === "done") completed = true;
-        setTurns((prev) => applyStreamEvent(prev, event, data, copy));
+      for await (const { event, data } of sseEvents(res, { heartbeats: true, signal })) {
+        turn.feed(event, data);
+        if (event === "meta") {
+          if (data.session_id) sessionRef.current = data.session_id;
+          if (data.turn_id) turnIdRef.current = data.turn_id;
+        } else if (event === "delta") appendToAgent(data.text ?? "");
+        else if (event === "error") {
+          failed = true;
+          push({ role: "error", text: localizedMessage(data.code ?? "", data.message ?? t("chatPage.sendFailed")) });
+        } else if (event === "done") completed = true;
       }
-      if (!completed && !failed) throw new Error(t("chatPage.streamInterrupted"));
+      const reason = turnStopReason(signal);
+      if (reason === "stop" && !completed && !failed) push({ role: "error", text: t("v3.chat.status.stopped") });
+      else if (reason === "stalled") throw new Error(t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }));
+      else if (!completed && !failed) throw new Error(t("chatPage.streamInterrupted"));
     } catch (err) {
-      if (controller.signal.aborted) return; // unmounted: nobody is looking
-      failed = true;
-      const budget = budgetRefusalOf(err) ?? undefined;
-      setTurns((prev) => pushTurn(prev, { role: "error", text: errorMessage(err), budget }));
+      const reason = turnStopReason(signal);
+      // a Stop before the stream opened rejects the fetch with the abort
+      if (reason === "stop" && !completed && !failed) push({ role: "error", text: t("v3.chat.status.stopped") });
+      else push({ role: "error", text: reason === "stalled" ? t("v3.chat.status.lost", { s: seconds(STALL_ABORT_MS) }) : errorMessage(err) });
     } finally {
-      if (!controller.signal.aborted) {
-        // keep the draft on failure, unless the member already typed a new one
-        if (failed) setText((cur) => cur || prompt);
-        setTurns(closeOpen);
-        setBusy(false);
-        refreshMyUsageIfLimited(); // the turn was charged: the 80 % banner may be due
-      }
-      inFlight.current = false;
+      turn.end();
+      turnIdRef.current = null;
+      setBusy(false);
     }
   };
 
-  const chatUrl =
-    `/v2/chat?agent=${encodeURIComponent(agentId)}` +
-    (sessionId ? `&session=${encodeURIComponent(sessionId)}` : "");
+  // Stop: close the stream and stop the background turn; a code runtime's session is
+  // stopped too (a Harness refuses the stop by name, which is harmless here).
+  const stopTurn = () => {
+    const turnId = turnIdRef.current;
+    turn.stop("stop");
+    if (turnId) void stopChatTurn(agentId, turnId).catch(() => undefined);
+    if (sessionRef.current) void api.stopChatSession(agentId, sessionRef.current).catch(() => undefined);
+  };
 
   return (
     <Card title={t("v2.agents.tryChat.title")} sub={t("v2.agents.tryChat.sub")} testId="v2-agent-trychat">
-      <div className="v2-trychat-body" ref={bodyRef} aria-live="polite" data-testid="v2-agent-trychat-body">
+      <div className="v2-trychat-body" ref={body.ref} aria-live="polite">
         {turns.length === 0 && <p className="v2-trychat-empty">{t("v2.agents.tryChat.empty")}</p>}
         {turns.map((turn, i) =>
           turn.role === "error" ? (
-            <Alert key={i} tone="error" action={turn.budget ? <BudgetRefusalLink code={turn.budget} /> : undefined}>
+            <Alert key={i} tone="error">
               {turn.text}
             </Alert>
-          ) : turn.role === "notice" ? (
-            <Alert key={i} tone="warn">
-              {turn.text}
-            </Alert>
-          ) : turn.role === "tool" ? (
-            <div key={i} className="v2-trychat-tool">
-              {t("v2.agents.tryChat.tool", { name: turn.text })}
-            </div>
           ) : (
             <div key={i} className={`v2-trychat-msg ${turn.role}`}>
               {turn.text}
             </div>
           ),
         )}
-        {awaitingReply(turns, busy) && (
-          <div className="v2-trychat-msg agent pending">{t("v2.agents.tryChat.thinking")}</div>
-        )}
+        {turn.status && <TurnStatusLine status={turn.status} now={turn.now} onStop={stopTurn} testId="v2-agent-trychat-status" />}
+        <JumpToLatest show={!body.atBottom} onClick={body.toBottom} />
       </div>
+      {suggestions.length > 0 && (
+        <div className="v2-trychat-chips" data-testid="v2-agent-suggestions">
+          {suggestions.map((q) => (
+            <button key={q} type="button" className="v2-trychat-chip" onClick={() => setText(q)}>
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
       <form
         className="v2-trychat-form"
         onSubmit={(e) => {
@@ -121,30 +142,21 @@ export function TryChat({ agentId }: { agentId: string }) {
           void send();
         }}
       >
-        <textarea
-          className="v2-textarea"
-          rows={2}
+        <input
+          className="v2-input"
           value={text}
           maxLength={4000}
           placeholder={t("v2.agents.tryChat.placeholder")}
           aria-label={t("v2.agents.tryChat.placeholder")}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void send();
-            }
-          }}
           data-testid="v2-agent-trychat-input"
         />
-        <Button kind="primary" type="submit" disabled={busy || !text.trim()} testId="v2-agent-trychat-send">
+        <Button kind="primary" type="submit" disabled={busy || !text.trim()}>
           <SendHorizontal size={14} /> {t("v2.agents.tryChat.send")}
         </Button>
       </form>
       <div className="v2-trychat-foot">
-        <Link to={chatUrl} data-testid="v2-agent-trychat-open">
-          {t("v2.agents.tryChat.openChat")}
-        </Link>
+        <Link to={`/v2/chat?agent=${encodeURIComponent(agentId)}`}>{t("v2.agents.tryChat.openChat")}</Link>
       </div>
     </Card>
   );

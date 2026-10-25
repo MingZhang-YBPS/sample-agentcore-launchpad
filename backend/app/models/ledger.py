@@ -24,6 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned, ProjectShared
 
 
 def _id() -> str:
@@ -59,6 +60,15 @@ class Workspace(Base):
     external_id: Mapped[str | None] = mapped_column(String(128), default=None)
     bootstrap_status: Mapped[str] = mapped_column(String(16), default="registered")
     # registered | bootstrapping | ready | failed
+    # dev | staging | prod (T05). Ledger-authoritative for every row, `default`
+    # included: the startup mirror never writes it. `prod` refuses member agent
+    # mutations (route_policy.PROD_PROTECTED); server_default keeps the raw-SQL
+    # seed of `default` (which does not name the column) on `dev`.
+    tier: Mapped[str] = mapped_column(String(16), default="dev", server_default="dev")
+    # T26: admin-configured release policy for promotions INTO this workspace (eval
+    # threshold, ENFORCE requirement, deploy window, freezes). Empty = tier defaults.
+    # Nullable: the raw-SQL seed of `default` does not name the column.
+    release_policy: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # Operator-owned workspace policy blob (vs `resources`, which bootstrap owns).
     # Keys: "inbound_auth_default" — the InboundAuth agents inherit when their
@@ -85,8 +95,11 @@ class UserWorkspace(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class Agent(Base):
+class Agent(ProjectShared, Base):
     __tablename__ = "agents"
+    # a new agent names its business project (services/agent_project); the stamp never
+    # files one under a workspace `default` project silently
+    __project_no_default_stamp__ = True
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -120,6 +133,12 @@ class Agent(Base):
     # payload — ``AgentSpec`` has no such field — and never editable through the
     # ordinary lifecycle routes, which refuse rows that carry it.
     system_key: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
+    # Which endpoint production traffic uses (docs/agent-dlc-design.md §6): "default"
+    # (the auto-rolling DEFAULT, the historical behaviour) or "live" (a named endpoint
+    # that only moves when a release is decided).
+    endpoint_mode: Mapped[str] = mapped_column(
+        String(16), default="default", server_default="default"
+    )
     # Inbound auth actually deployed onto the Runtime — the RESOLVED choice
     # (spec > workspace default > iam), snapshotted by the deploy stage so the
     # invoke path and the console never re-resolve against a default that may
@@ -129,6 +148,18 @@ class Agent(Base):
     # The resolved InboundAuth dict when mode is jwt (discovery url, allowed
     # clients/audience/scopes, custom claims — no secrets live here).
     inbound_auth_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # Phase 2 isolation (projects design §10.2): the project permissions-boundary
+    # version the agent's execution role carries now (`boundary-v<N>`), for drift
+    # detection against the project's current boundary. NULL = no boundary attached
+    # (a shared-mode project, or an isolated one not yet migrated).
+    isolation_applied: Mapped[str | None] = mapped_column(String(16), default=None)
+    # Set when a delete removed the console row but AWS still held the resource
+    # (`agent.teardown_pending`, e.g. canary or release endpoints still DELETING):
+    # `dlc.scheduler.sweep_deleted_resources` retries every such row, whatever its
+    # endpoint_mode, and clears it once AWS has let go. NULL = nothing left to finish.
+    teardown_pending_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -147,6 +178,11 @@ class Agent(Base):
             sqlite_where=text("system_key IS NOT NULL AND status != 'deleted'"),
         ),
     )
+
+    def project_platform_row(self) -> bool:
+        """A system-managed preset is platform level: every project reads and invokes
+        it, only administrators change it (design §4.2)."""
+        return bool(self.system_key)
 
 
 class SystemSkillRecord(Base):
@@ -216,7 +252,7 @@ class SystemSkillRecord(Base):
     )
 
 
-class ManagedMemory(Base):
+class ManagedMemory(ProjectShared, Base):
     """An AgentCore Memory this workspace manages (issue #55).
 
     The workspace's AWS account can hold memories the platform never created
@@ -250,7 +286,7 @@ class ManagedMemory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class ResourceCreator(Base):
+class ResourceCreator(ProjectOwned, Base):
     """Who created an AWS-only resource through the console.
 
     Knowledge bases and custom evaluators have no ledger row of their own — AWS is
@@ -319,20 +355,34 @@ class User(Base):
         DateTime(timezone=True), default=None
     )
     login_count: Mapped[int] = mapped_column(default=0)
-    # Spend budget assignment (services/budgets.py): a `budget_levels.id` (not a
-    # FK — a level cannot be deleted while assigned, the service refuses it) and an
-    # optional per-person amount that replaces the level's. Both NULL = the default
-    # level if one is marked, else unlimited; admins stay exempt until assigned.
-    budget_level_id: Mapped[str | None] = mapped_column(String(32), default=None)
-    budget_override_usd: Mapped[float | None] = mapped_column(Float, default=None)
+    # Stamped once, on the first successful login (TTFA's start clock). NULL for
+    # accounts that never logged in or that logged in before the column existed —
+    # TTFA falls back to `created_at` for those.
+    first_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # Forced logout (design §7.4): part of the session cookie's credential stamp, so a
+    # bump ends every open session. 0 stamps exactly as before the column existed.
+    session_epoch: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    # SSO (sso design §2.2): the console identity provider and its `sub` this account
+    # was created for. The pair is the account's key at sign-in — never the email, so
+    # re-binding an address at the IdP cannot take over another account. NULL = local.
+    external_idp_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    external_subject: Mapped[str | None] = mapped_column(String(255), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
 
+    __table_args__ = (
+        Index("ix_users_external_identity", "external_idp_id", "external_subject",
+              unique=True),
+    )
 
-class Deployment(Base):
+
+class Deployment(ProjectShared, Base):
     __tablename__ = "deployments"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -351,44 +401,9 @@ class Deployment(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
-class SpecSnapshot(Base):
-    """The full agent spec of one publish (`app.services.snapshots`).
-
-    `deployer.pipeline.create_deployment` writes one per create / redeploy / rollback /
-    promotion; the canary paths that change `Agent.spec` without a deployment write
-    their own, and a startup backfill gives an agent that predates the table a
-    `baseline`. Rows are append-only except for the success stamp in `_finish`, which
-    fills `aws_version` and replaces `spec` with the spec as deployed (a deploy stage
-    may rewrite it mid-job). A rollback re-publishes a stored spec as a NEW row.
-
-    The column set is a superset of the console-v3 branch's table of the same name
-    (which lacks `created_by_name`, added by `_migrate_branch_creators`). There
-    `created_by` held a username; here it is `users.id` (`app.services.creators`).
-    """
-
-    __tablename__ = "spec_snapshots"
-    __table_args__ = (UniqueConstraint("agent_id", "seq", name="uq_spec_snapshots_agent_seq"),)
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
-    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
-    seq: Mapped[int]  # 1, 2, … per agent
-    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    # the AWS version the publish left live; NULL until the deploy succeeds (and for
-    # good when it failed)
-    aws_version: Mapped[str | None] = mapped_column(String(16), default=None)
-    # NULL for the canary snapshots and the startup baseline
-    deployment_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    # Who published (`app.services.creators`): `users.id` and the username (display).
-    # Not a FK. Falls back to the agent's creator when the path has no actor.
-    created_by: Mapped[str | None] = mapped_column(String(32), default=None)
-    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
-    note: Mapped[str | None] = mapped_column(Text, default=None)  # "rollback to #2", …
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-
-
-class ChatSession(Base):
+class ChatSession(ProjectOwned, Base):
     __tablename__ = "chat_sessions"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -396,6 +411,10 @@ class ChatSession(Base):
     session_id: Mapped[str] = mapped_column(String(80), index=True)
     actor_id: Mapped[str] = mapped_column(String(64), default="river")
     turns: Mapped[int] = mapped_column(default=0)
+    # summed from the runtime's `usage` events (projects §16.3-3); 0 = not reported
+    input_tokens: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    total_tokens: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     runtime_version: Mapped[str | None] = mapped_column(String(16), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_at: Mapped[datetime] = mapped_column(
@@ -409,12 +428,13 @@ class ChatSession(Base):
     )
 
 
-class ChatMessage(Base):
+class ChatMessage(ProjectOwned, Base):
     """One rendered thread item of a console chat session (user turn, agent
     answer, tool call, error) — the Chat playground's reload-safe history.
     Integer autoincrement pk doubles as the replay order."""
 
     __tablename__ = "chat_messages"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     # carried on the row itself, not only via the agent: two queries match on a
@@ -426,43 +446,15 @@ class ChatMessage(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    # T35: `rule:<rule id>` when a curated answer (not the model) produced this row
+    answered_by: Mapped[str | None] = mapped_column(String(48), default=None)
+    # chat-streaming §4.1: on a retry turn's user row, the id of the failed turn's user
+    # row it replaces — that turn stays in the ledger but is not replayed by /history
+    retry_of: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class ChatFeedback(Base):
-    """One person's thumbs verdict on one agent answer of the console chat.
-
-    A table rather than columns on `ChatMessage`: an answer can be rated by several
-    people and a verdict can change or be withdrawn. One verdict per
-    (message, actor); re-voting updates it.
-
-    The column names and types are a **subset of the console-v3 branch's** table of
-    the same name (which also has `correction`): a ledger that ran that branch
-    already holds the table, `create_all` skips it, and `schema_drift` only reports
-    model columns missing from it. A column added here needs a `_migrate*` ALTER.
-    """
-
-    __tablename__ = "chat_feedback"
-    __table_args__ = (UniqueConstraint("message_id", "actor", name="uq_chat_feedback_actor"),)
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
-    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    agent_id: Mapped[str] = mapped_column(String(32), index=True)  # not a FK
-    session_id: Mapped[str] = mapped_column(String(80), index=True)
-    message_id: Mapped[int] = mapped_column(index=True)  # chat_messages.id (an agent answer)
-    verdict: Mapped[str] = mapped_column(String(8), index=True)  # up | down
-    # never written by the console (no free-text comments yet); kept for v3 parity
-    comment: Mapped[str | None] = mapped_column(Text, default=None)
-    actor: Mapped[str] = mapped_column(String(96))  # console username
-    # `console` here; a v3-era row may say `share` / `review`
-    source: Mapped[str] = mapped_column(String(16), default="console")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, onupdate=_now
-    )
-
-
-class ApiKey(Base):
+class ApiKey(ProjectOwned, Base):
     __tablename__ = "api_keys"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -472,18 +464,310 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # T16 scope + limits. NULL/empty `agent_ids` = every agent in the workspace (the
+    # behaviour of every key minted before scoping); NULL `expires_at` never expires;
+    # NULL `rate_per_minute` is unlimited.
+    agent_ids: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    rate_per_minute: Mapped[int | None] = mapped_column(default=None)
+    # Usage stamps, written by /v1 auth on every admitted call (`record_use`, T16):
+    # `use_count` is exact, `last_used_at` the latest admitted call.
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    use_count: Mapped[int] = mapped_column(default=0, server_default="0")
     # The minting console principal: `created_by` is its `users.id`, NULL for the
     # config admin / auth-disabled operator (no `users` row) and for keys minted
     # before this column existed. Not a FK — a deleted creator must leave the id
     # behind, since that dangling id is how the key knows its creator is gone.
-    # `created_by_name` is the display name at mint time (NULL only on legacy rows).
+    # `created_by_name` is the display name at mint time (NULL only on legacy rows;
+    # a key minted by the T16 line had its username in `created_by`, which the
+    # migration moves here — `db._migrate_api_key_lifecycle_columns`).
     created_by: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
-    # Stamped by /v1 auth on success, at most once per `LAST_USED_RESOLUTION`.
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
-class IdentityProvider(Base):
+class ApiKeyUsage(ProjectOwned, Base):
+    """Admitted `/v1` calls per key per UTC day (T16) — the aggregable usage shape."""
+
+    __tablename__ = "api_key_usage"
+    __project_parent__ = ("key_id", ("api_keys",))
+    __table_args__ = (UniqueConstraint("key_id", "day", name="uq_api_key_usage_key_day"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    key_id: Mapped[str] = mapped_column(String(32), index=True)
+    day: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD, UTC
+    count: Mapped[int] = mapped_column(default=0)
+
+
+class SpecSnapshot(ProjectShared, Base):
+    """The full agent spec as of one publish (T18): one row per create/redeploy.
+
+    Rollback re-publishes a stored spec as a NEW snapshot; rows are never edited
+    except to fill `aws_version` once the deploy stage learns it.
+    """
+
+    __tablename__ = "spec_snapshots"
+    __project_parent__ = ("agent_id", ("agents",))
+    __table_args__ = (UniqueConstraint("agent_id", "seq", name="uq_spec_snapshots_agent_seq"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    seq: Mapped[int]
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    aws_version: Mapped[str | None] = mapped_column(String(16), default=None)
+    deployment_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ShareLink(ProjectOwned, Base):
+    """A signed, revocable, account-free way for an outsider to reach exactly one
+    thing (T13). The raw token is shown once at creation; only its sha256 is at
+    rest, exactly like `ApiKey`. The row — not any request header — decides which
+    workspace a visitor lands in."""
+
+    __tablename__ = "share_links"
+    __project_parent__ = ("target_id", ("agents", "annotation_tasks"))
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    kind: Mapped[str] = mapped_column(String(16), default="chat")  # chat (extensible)
+    target_id: Mapped[str] = mapped_column(String(32), index=True)  # the agent id for `chat`
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
+    prefix: Mapped[str] = mapped_column(String(16), default="")  # display only, e.g. shr_ab12
+    label: Mapped[str] = mapped_column(String(64), default="")
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    # `users.id` of the creator (design §5.8); NULL for the built-in admin and older rows
+    created_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    use_count: Mapped[int] = mapped_column(default=0)
+    # Channel links (T30) only: `kind` is the platform (slack|feishu). `channel_config`
+    # is what the console may show back (e.g. Feishu domain); `channel_secrets` is what
+    # the adapter must be able to use (signing secret, bot token) and is NEVER
+    # serialized by any route - the API reports only which keys are set.
+    channel_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    channel_secrets: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ChatFeedback(ProjectOwned, Base):
+    """A thumbs verdict on one agent answer (T15), from the console or a share page.
+
+    A table rather than columns on `ChatMessage`: one message can be rated by
+    several actors, a verdict can change or be withdrawn, and it carries a comment
+    and an origin — none of which belong on the transcript row. One verdict per
+    (message, actor); re-voting updates it.
+    """
+
+    __tablename__ = "chat_feedback"
+    __project_parent__ = ("agent_id", ("agents",))
+    __table_args__ = (UniqueConstraint("message_id", "actor", name="uq_chat_feedback_actor"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(String(32), index=True)
+    session_id: Mapped[str] = mapped_column(String(80), index=True)
+    message_id: Mapped[int] = mapped_column(index=True)  # chat_messages.id (an agent answer)
+    verdict: Mapped[str] = mapped_column(String(8), index=True)  # up | down
+    comment: Mapped[str | None] = mapped_column(Text, default=None)
+    # T34: the answer a reviewer says it should have been (feeds a curated answer)
+    correction: Mapped[str | None] = mapped_column(Text, default=None)
+    actor: Mapped[str] = mapped_column(String(96))  # console username, or share:<link id>
+    source: Mapped[str] = mapped_column(String(16), default="console")  # console|share|review
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class SharedTemplate(Base):
+    """An agent published as a reusable starting point (roadmap T38).
+
+    Hub-global on purpose: the whole point is that *another* workspace can start from it, so
+    unlike every per-environment table this one is not workspace-scoped. The provenance
+    column is deliberately NOT named `workspace_id`: in this ledger that name *means* "scoped
+    to", and `test_workspaces` enforces exactly that — `source_workspace_id` records where it
+    came from, for attribution and for deciding who may unpublish it.
+
+    What the row carries is pruned by `services/marketplace.publishable_spec` — no
+    environment-specific ids and nothing secret-shaped; those become `requirements` telling
+    a consumer what to supply instead.
+    """
+
+    __tablename__ = "shared_templates"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    # the publishing environment, NOT a scope — reads are deliberately cross-workspace
+    source_workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    # the publishing project (design §4.2), provenance like the workspace above
+    source_project_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    agent_id: Mapped[str] = mapped_column(String(32), index=True)
+    source_agent_name: Mapped[str] = mapped_column(String(64), default="")
+    title: Mapped[str] = mapped_column(String(80), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    method: Mapped[str] = mapped_column(String(24), default="harness")
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    requirements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    published_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    uses: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class AlertRule(ProjectShared, Base):
+    """One threshold the platform watches, and what it last saw (roadmap T29).
+
+    Deliberately a *rule*, not a subscription: the value is computed from data the
+    platform already collects (spans for error rate and latency, online-evaluation
+    results for quality, the price map for spend), so a rule adds a threshold and a
+    destination rather than a new telemetry path.
+
+    `state` and `last_value` are the evaluation's own memory. They exist so a firing rule
+    notifies **once** on the transition rather than on every tick, and so the inbox can
+    show what is wrong without re-running a billed Logs Insights scan.
+    """
+
+    __tablename__ = "alert_rules"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    # error_rate | latency_p95_ms | online_quality | cost_mtd_usd
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    # "above" | "below" — quality fires when it drops, the others when they rise
+    comparison: Mapped[str] = mapped_column(String(8), default="above")
+    threshold: Mapped[float] = mapped_column(Float)
+    # the observability range key the value is measured over ("1h" … "30d")
+    window: Mapped[str] = mapped_column(String(8), default="24h")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    # Optional outbound destination. A generic JSON webhook, which is what a Slack or
+    # Feishu incoming hook already is — so one mechanism covers both without the platform
+    # holding channel credentials.
+    webhook_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    # ok | firing | unknown (unknown = the last evaluation could not read the value)
+    state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
+    last_value: Mapped[float | None] = mapped_column(default=None)
+    last_detail: Mapped[str | None] = mapped_column(Text, default=None)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_fired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class ReleaseBundle(ProjectOwned, Base):
+    """An immutable, verifiable record of exactly what was tested (T20).
+
+    The unit of promotion: a frozen copy of one `SpecSnapshot`, the artifact
+    coordinates that snapshot deployed (image digest / staged upload / requirements
+    lock), the evaluation evidence pinned to it, and the policy posture at the time —
+    reduced to one `digest`. Promotion deploys the bundle rather than re-generating
+    from the spec, which is what makes "build once, deploy many" checkable: the same
+    inputs always produce the same digest, and a digest mismatch means something other
+    than the tested thing is about to ship.
+
+    Rows are append-only. `workspace_id` is the environment the bundle was BUILT in
+    (the source); where it may go is the promotion's business.
+    """
+
+    __tablename__ = "release_bundles"
+    __project_parent__ = ("agent_id", ("agents",))
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    # the snapshot this bundle froze; null only if the snapshot was purged
+    snapshot_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    snapshot_seq: Mapped[int | None] = mapped_column(default=None)
+    agent_name: Mapped[str] = mapped_column(String(64))
+    method: Mapped[str] = mapped_column(String(24))
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # {image_digest, image_uri, upload_id, requirements_sha, source_arn, aws_version}
+    artifact: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # {run_id, dataset, dataset_version, pass_rate, evaluators, finished_at} or {}
+    evaluation: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # {guardrail, gateways, policy_engine_mode, registry_record_id}
+    policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # sha256 over the canonical (spec, artifact, agent_name, method) — the identity
+    digest: Mapped[str] = mapped_column(String(64), index=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Promotion(ProjectOwned, Base):
+    """One request to release a bundle into another environment (T21).
+
+    The hand-off between the member who built an agent and the operator who runs it:
+    a request carries the change note and the rollback plan, an approval records who
+    accepted it and which gates passed at that moment, and execution (P3) attaches the
+    job. `workspace_id` is the SOURCE environment, so the row is scoped like every
+    other; `target_workspace_id` is where it is going.
+    """
+
+    __tablename__ = "promotions"
+    __project_parent__ = ("bundle_id", ("release_bundles",))
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("release_bundles.id"), index=True)
+    target_workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    # pending | approved | rejected | executing | succeeded | failed | rolled_back
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    requested_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    # SoD (design §3.6): the immutable `users.id` beside each username, so a
+    # re-registered username is never mistaken for the original requester
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    change_note: Mapped[str] = mapped_column(Text, default="")
+    rollback_note: Mapped[str] = mapped_column(Text, default="")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    reviewed_by_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    review_note: Mapped[str | None] = mapped_column(Text, default=None)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # the gate results as evaluated at approval time — evidence, not a live read
+    gates: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    job_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    # T27 execution state. `stages` is the per-stage progress the console renders as one
+    # card each; `execution` holds the resumable scratch (target agent, inner deploy job,
+    # canary id, observation deadline) so a restarted worker continues instead of redoing.
+    stages: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    execution: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # the bundle the target ran before this release: what a rollback re-deploys
+    previous_bundle_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class IdentityProvider(ProjectShared, Base):
     """Ledger row for a Connection: an AgentCore Identity credential provider
     created through Launchpad.
 
@@ -528,7 +812,7 @@ class IdentityProvider(Base):
     description: Mapped[str | None] = mapped_column(String(200), default=None)
 
 
-class UserTokenRevocation(Base):
+class UserTokenRevocation(ProjectShared, Base):
     """A member's pending 3LO re-consent request for one Connection (identity P2).
 
     The service models no token-revocation operation, so "revoke" is deferred
@@ -559,14 +843,20 @@ class UserTokenRevocation(Base):
     user_id: Mapped[str] = mapped_column(String(128))
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
+    def project_platform_row(self) -> bool:
+        """Per (user, Connection), not per project: one row, unique per workspace, that
+        every project's invoke path honours (design §4.2) — always NULL."""
+        return True
 
-class OauthPendingSession(Base):
+
+class OauthPendingSession(ProjectOwned, Base):
     """One in-flight 3LO consent session awaiting ``CompleteResourceTokenAuth``
     (identity P2). The user id comes from this row, never from the browser.
     Claimed isomorphically from the earlier identity fork's ledgers.
     """
 
     __tablename__ = "oauth_pending_sessions"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (
         Index(
             "uq_oauth_pending_sessions_session_uri",
@@ -592,7 +882,7 @@ class OauthPendingSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class UserGrant(Base):
+class UserGrant(ProjectOwned, Base):
     """One user's as_user (3LO) grant state for one Connection on one agent.
 
     The token itself lives in the AgentCore token vault, keyed by (workload
@@ -606,6 +896,7 @@ class UserGrant(Base):
     """
 
     __tablename__ = "user_grants"
+    __project_parent__ = ("agent_id", ("agents",))
     __table_args__ = (
         Index(
             "uq_user_grants_ws_user_provider_agent",
@@ -671,7 +962,7 @@ class ContextLayer(Base):
     )
 
 
-class PolicyDecision(Base):
+class PolicyDecision(ProjectShared, Base):
     __tablename__ = "policy_decisions"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -682,8 +973,13 @@ class PolicyDecision(Base):
     reason: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
+    def project_platform_row(self) -> bool:
+        """Governance of the shared gateway is workspace level (design §4.2): one
+        decision log for every project."""
+        return True
 
-class PolicyChange(Base):
+
+class PolicyChange(ProjectShared, Base):
     """Immutable request/snapshot fields plus mutable AWS operation outcome."""
 
     __tablename__ = "policy_changes"
@@ -715,6 +1011,11 @@ class PolicyChange(Base):
         DateTime(timezone=True), default=None
     )
 
+    def project_platform_row(self) -> bool:
+        """A change to the workspace-shared gateway is workspace level (design §4.2):
+        every project reads the same audit trail and the same in-flight lock."""
+        return True
+
 
 _POLICY_CHANGE_IMMUTABLE = {
     "gateway_id",
@@ -744,7 +1045,40 @@ def _prevent_policy_change_snapshot_mutation(_: Any, __: Any, target: PolicyChan
         raise ValueError(f"immutable policy audit fields changed: {', '.join(sorted(changed))}")
 
 
-class Job(Base):
+class AuditEvent(ProjectShared, Base):
+    """One journaled privileged action (T05): an administrator's break-glass agent
+    mutation on a `prod` workspace, or a workspace tier change.
+
+    Most rows are written at admission (before the handler runs), so `outcome`
+    `success` records that the action was let through for that actor, not that the
+    work it started succeeded — the Job log / Deployment row carries that. A request
+    the platform turned away is `refused`, an action that ran and failed `failed`
+    (design §11.6). Append-only by convention; nothing in the app updates or deletes a
+    row except a workspace purge.
+    """
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    actor: Mapped[str] = mapped_column(String(64))
+    # `users.id` of the actor (design §5.10); NULL for the built-in admin, a system
+    # actor and rows written before the column existed
+    actor_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    # e.g. "POST /api/agents/{agent_id}/redeploy" or "workspace.tier_change"
+    action: Mapped[str] = mapped_column(String(160))
+    # the concrete path, or "dev->prod" for a tier change
+    target: Mapped[str] = mapped_column(String(256), default="")
+    # success | refused | failed (design §11.6); rows before the column are success
+    outcome: Mapped[str] = mapped_column(String(16), default="success",
+                                         server_default="success")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+_PLATFORM_JOB_TYPES = frozenset({"bootstrap_workspace", "uninstall_system_agent"})
+
+
+class Job(ProjectShared, Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -761,59 +1095,8 @@ class Job(Base):
         DateTime(timezone=True), default=_now, onupdate=_now
     )
 
-
-class AlertRule(Base):
-    """One threshold the platform watches, and what it last saw.
-
-    Deliberately a *rule*, not a subscription: the value is computed from data the
-    platform already collects (spans for error rate and latency, online-evaluation
-    results for quality, the price map for spend), so a rule adds a threshold and a
-    destination rather than a new telemetry path (`app.services.alerts`).
-
-    `state` and `last_value` are the evaluation's own memory: a firing rule notifies
-    **once** per firing episode, rather than on every pass.
-
-    The column set is a superset of the console-v3 branch's table of the same name
-    (which lacks `created_by_name`, added by `_migrate_branch_creators`). There
-    `created_by` held a username; here it is `users.id` (`app.services.creators`).
-    """
-
-    __tablename__ = "alert_rules"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
-    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    # error_rate | latency_p95_ms | online_quality | spend_usd | cost_mtd_usd
-    kind: Mapped[str] = mapped_column(String(32), index=True)
-    name: Mapped[str] = mapped_column(String(64), default="")
-    # "above" | "below" — quality fires when it drops, the others when they rise
-    comparison: Mapped[str] = mapped_column(String(8), default="above")
-    threshold: Mapped[float] = mapped_column(Float)
-    # the range key the value is measured over ("1h" … "30d"); see services/alerts
-    window: Mapped[str] = mapped_column(String(8), default="24h")
-    enabled: Mapped[bool] = mapped_column(default=True)
-    # Optional outbound destination: one generic https JSON webhook (a Slack or
-    # Feishu incoming hook already is one). Never returned by the API.
-    webhook_url: Mapped[str | None] = mapped_column(String(512), default=None)
-    # ok | firing | unknown (unknown = the last evaluation could not read the value)
-    state: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
-    last_value: Mapped[float | None] = mapped_column(default=None)
-    last_detail: Mapped[str | None] = mapped_column(Text, default=None)
-    last_checked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
-    # when the rule last STARTED firing (the current/last episode), not last seen firing
-    last_fired_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
-    # last delivery attempt; older than last_fired_at = this episode's post is still owed
-    last_notified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
-    # The creating console principal (`app.services.creators`): `users.id` and the
-    # username at creation (display). Not a FK.
-    created_by: Mapped[str | None] = mapped_column(String(64), default=None)
-    created_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, onupdate=_now
-    )
+    def project_platform_row(self) -> bool:
+        """Bootstrap and preset uninstall jobs serve the workspace, and a deploy of a
+        system preset (`payload.platform`, set by create_deployment) serves the
+        platform: none of them belongs to a project."""
+        return self.type in _PLATFORM_JOB_TYPES or (self.payload or {}).get("platform") is True

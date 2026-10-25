@@ -11,6 +11,7 @@ from app.assistant import purge as assistant_purge
 from app.core import billing_policy
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context
 from app.evaluation.online_evaluators import refuse_hidden_evaluators
 from app.evaluation.routers import _dataset_in
 from app.models.ledger import Agent
@@ -162,17 +163,21 @@ def create_experiment(
     # experiments share one gateway (EXP_GATEWAY_NAME) and the AB service
     # allows a single active test per gateway — a concurrent loop would fail
     # at the abtest stage, so reject up front.
-    running = (
-        db.query(Experiment)
-        .filter(Experiment.workspace_id == ws.id, Experiment.status == "running")
-        .first()
-    )
+    pid = current_project()
+    with project_context(None):  # the gateway is shared by every project too
+        running = (
+            db.query(Experiment)
+            .filter(Experiment.workspace_id == ws.id, Experiment.status == "running")
+            .first()
+        )
     if running is not None:
         # the single-running slot is workspace-wide (one shared gateway), but a
-        # member of an isolated workspace is not told which hidden experiment holds it
+        # member of an isolated workspace — or of another project — is not told
+        # which hidden experiment holds it
         named = (
             f"experiment {running.name}"
-            if visibility.sees(viewer, db, running.created_by)
+            if (pid is None or running.project_id == pid)
+            and visibility.sees(viewer, db, running.created_by)
             else "another experiment in this workspace"
         )
         raise AppError(
@@ -221,6 +226,8 @@ class ActionRequest(BaseModel):
     # providers.PROVIDER_IDS (pinned by a test) so an unknown id is a 422.
     recommend_provider: Literal["agentcore", "gepa_lite"] | None = None
     recommend_model_id: str | None = Field(default=None, min_length=3, max_length=128)
+    # promote — ship a treatment whose win is not significant (or a tie); never a loss
+    allow_non_significant: bool = False
     accepted_prompt: str | None = None                        # accept
     accepted_tool_descriptions: dict[str, str] | None = None  # accept
     dataset_id: str | None = None                             # traffic
@@ -271,15 +278,12 @@ AGENT_FREE_ACTIONS = frozenset({"verdict", "cleanup"})
 
 @router.post("/{exp_id}/action")
 def experiment_action(
-    exp_id: str, req: ActionRequest, response: Response, request: Request,
+    exp_id: str, req: ActionRequest, response: Response,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     exp = _experiment_in(db, ws, exp_id, viewer=viewer)
-    # the spend-budget gate for the billable actions only (traffic, recommend,
-    # gateway, abtest) — accept / verdict / cleanup never spend, so never refused
-    billing_policy.gate_action(request, req.action)
     if req.action not in AGENT_FREE_ACTIONS:
         # A visible experiment does not make its agent the caller's: every action
         # that reads, invokes or re-publishes it needs the agent visible too
@@ -308,9 +312,10 @@ def experiment_action(
     reason = service.stage_not_ready_reason(exp, req.action)
     if reason:
         raise AppError("experiment.stage_not_ready", reason, status_code=409)
-    # who pays for this action: the caller, recorded per action — in a shared
-    # workspace it need not be the experiment's creator
-    caller = Creator.of_request(request)
+    # the project's monthly budget, for the actions that spend (core/billing_policy.py);
+    # verdict / cleanup and the other wind-down actions are never refused
+    billing_policy.gate_action(getattr(exp, "project_id", None), req.action,
+                               billing_policy.EXPERIMENT_BILLABLE_ACTIONS)
 
     # sync actions answer inline; async ones 202 into a background thread and
     # the client watches running_action/progress on the experiment itself
@@ -345,11 +350,15 @@ def experiment_action(
     elif req.action == "bundles":
         service.action_bundles(exp)
     elif req.action == "promote":
+        if not (exp.artifacts.get("promote") or exp.artifacts.get("promotion_attempt")):
+            # a retry of a promotion already admitted is not re-judged
+            service.assert_experiment_promotable(
+                exp, allow_non_significant=req.allow_non_significant
+            )
         service.run_action(
             exp.id,
             "promote",
             lambda progress: service.act_promote(exp_id, progress),
-            caller=caller,
         )
     elif req.action == "traffic":
         if not req.dataset_id:
@@ -368,8 +377,7 @@ def experiment_action(
         service.run_action(
             exp.id, "traffic",
             lambda progress: service.act_traffic(exp_id, prompts, dataset_info,
-                                                 progress, caller=caller),
-            caller=caller,
+                                                 progress),
         )
     elif req.action == "recommend":
         _validate_recommend_provider(req)
@@ -379,24 +387,13 @@ def experiment_action(
         source = service.resolve_recommend_source(
             exp.agent_id, req.recommend_source_run_id, ws.context, viewer=viewer
         )
-        provider = rec_providers.get_provider(req.recommend_provider)
-        if provider.id != rec_providers.DEFAULT_PROVIDER:
-            # a 3rd-party provider's model calls are the caller's: an unpriced
-            # model cannot bypass a budgeted caller's limit
-            from app.services import budgets
-
-            budgets.check_model(
-                budgets.payer_of_request(request),
-                req.recommend_model_id or provider.default_model_id() or None,
-            )
         service.run_action(
             exp.id, "recommend",
             lambda progress: service.act_recommend(
                 exp_id, progress,
                 types=req.recommend_types, tools=req.recommend_tools,
                 source=source, provider=req.recommend_provider,
-                model_id=req.recommend_model_id, caller=caller),
-            caller=caller,
+                model_id=req.recommend_model_id),
         )
     elif req.action == "gateway":
         service.assert_shared_gateway_available(ws.context)
@@ -409,7 +406,6 @@ def experiment_action(
         service.run_action(
             exp.id, "gateway",
             lambda progress: service.act_gateway(exp_id, progress, evaluators),
-            caller=caller,
         )
     else:  # abtest | verdict | cleanup
         if req.action == "abtest":
@@ -422,7 +418,7 @@ def experiment_action(
             "cleanup": service.act_cleanup,
         }[req.action]
         service.run_action(exp.id, req.action,
-                           lambda progress: fn(exp_id, progress), caller=caller)
+                           lambda progress: fn(exp_id, progress))
 
     if req.action in service.ASYNC_ACTIONS:
         response.status_code = 202

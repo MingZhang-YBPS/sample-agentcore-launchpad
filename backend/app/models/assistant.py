@@ -26,10 +26,11 @@ from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueCo
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned
 from app.models.ledger import _id, _now
 
 
-class AssistantConversation(Base):
+class AssistantConversation(ProjectOwned, Base):
     __tablename__ = "assistant_conversations"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
@@ -58,7 +59,8 @@ class AssistantConversation(Base):
     turns: Mapped[int] = mapped_column(default=0)
     # One in-flight turn per conversation: the turn number a request claimed
     # (atomic conditional UPDATE) and when, so an interrupted claim can be reclaimed
-    # after ``TURN_CLAIM_TTL_S`` and cleared on startup.
+    # after the preset turn budget's ``claim_ttl_s`` (fallback ``TURN_CLAIM_TTL_S``) and
+    # cleared on startup.
     active_turn: Mapped[int | None] = mapped_column(default=None)
     active_turn_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
@@ -80,14 +82,25 @@ class AssistantConversation(Base):
     shared: Mapped[bool] = mapped_column(default=False)
     shared_by: Mapped[str | None] = mapped_column(String(64), default=None)
     shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # The confirmed-items digest (assistant-context C2): turns that fell out of the
+    # replay window, rolled into ≤ 8 000 characters of Markdown shown to the model in
+    # the protocol preamble. Session state only — never part of a proposal or its hash.
+    # ``context_digest_through_turn`` is the last turn it covers (inclusive) and the
+    # condition of every write, so two concurrent refreshes store one result.
+    context_digest: Mapped[str | None] = mapped_column(Text, default=None)
+    context_digest_through_turn: Mapped[int | None] = mapped_column(default=None)
+    context_digest_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
 
 
-class AssistantMessage(Base):
+class AssistantMessage(ProjectOwned, Base):
     __tablename__ = "assistant_messages"
+    __project_parent__ = ("conversation_id", ("assistant_conversations",))
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -112,8 +125,9 @@ class AssistantMessage(Base):
     )
 
 
-class AssistantProposal(Base):
+class AssistantProposal(ProjectOwned, Base):
     __tablename__ = "assistant_proposals"
+    __project_parent__ = ("conversation_id", ("assistant_conversations",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -182,7 +196,7 @@ class AgentNameClaim(Base):
         return f"{workspace_id}:{name}"
 
 
-class AssistantEvaluationPlan(Base):
+class AssistantEvaluationPlan(ProjectOwned, Base):
     """One revision of the reviewed evaluation-assets plan of a conversation (SE-047).
 
     Separate from the proposal: a plan names the proposal revision + content hash it
@@ -195,6 +209,7 @@ class AssistantEvaluationPlan(Base):
     """
 
     __tablename__ = "assistant_evaluation_plans"
+    __project_parent__ = ("conversation_id", ("assistant_conversations",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -219,7 +234,7 @@ class AssistantEvaluationPlan(Base):
     )
 
 
-class EvaluationAssetOperation(Base):
+class EvaluationAssetOperation(ProjectOwned, Base):
     """The durable materialization of exactly one approved plan revision.
 
     Inserted (committed) BEFORE any AWS write with the exact plan hash, the approver
@@ -234,6 +249,7 @@ class EvaluationAssetOperation(Base):
     """
 
     __tablename__ = "evaluation_asset_operations"
+    __project_parent__ = ("conversation_id", ("assistant_conversations",))
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)

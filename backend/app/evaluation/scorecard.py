@@ -34,6 +34,16 @@ from app.models.ledger import Agent, Deployment, SpecSnapshot
 from app.services import agent_access, snapshots, visibility
 from app.services.visibility import Viewer
 
+# V3's `snapshots.diff_specs` already sorts its rows in this display order; the
+# scorecard needs only the distinct groups of a diff, in the same order.
+_GROUP_ORDER = ("prompt", "model", "tools", "skills", "knowledge_bases", "memory", "guardrail")
+
+
+def _changed_groups(changes: list[dict[str, Any]]) -> list[str]:
+    """The distinct groups of a ``snapshots.diff_specs`` result, in display order."""
+    rank = {g: i for i, g in enumerate(_GROUP_ORDER)}
+    return sorted({c["group"] for c in changes}, key=lambda g: rank.get(g, len(rank)))
+
 STAMPED = "stamped"
 INFERRED = "inferred"
 OBSERVED = "observed"
@@ -353,12 +363,14 @@ def _versions(
             "seq": snap.seq,
             "aws_version": snap.aws_version,
             "created_at": iso(snap.created_at),
-            "created_by_name": snap.created_by_name,
+            # V3's SpecSnapshot.created_by is the publisher's username — the
+            # display name this payload has always carried
+            "created_by_name": snap.created_by,
             "note": snap.note,
         }
         if with_changes:
             entry["changes"] = (
-                snapshots.changed_groups(snapshots.diff_specs(live.spec or {}, snap.spec or {}))
+                _changed_groups(snapshots.diff_specs(live.spec or {}, snap.spec or {}))
                 if live is not None else []
             )
         out.append(entry)
@@ -594,7 +606,7 @@ def config_change(
         "to_seq": to_seq,
         "between": [
             {"seq": s.seq, "aws_version": s.aws_version, "note": s.note,
-             "created_at": iso(s.created_at), "created_by_name": s.created_by_name}
+             "created_at": iso(s.created_at), "created_by_name": s.created_by}
             for s in rows
         ],
     }

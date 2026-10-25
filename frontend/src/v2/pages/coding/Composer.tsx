@@ -2,8 +2,6 @@ import { CircleStop, SendHorizontal } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BudgetRefusalCode } from "../../../lib/budgets";
-import { BudgetRefusalLink } from "../../BudgetBanner";
 import { Alert, Button, Select } from "../../ui";
 
 /** The runtime refuses prompts above 32 KB (UTF-8). */
@@ -11,13 +9,12 @@ export const PROMPT_MAX_BYTES = 32 * 1024;
 
 export interface ComposerError {
   text: string;
-  budget?: BudgetRefusalCode | null;
 }
 
 /**
  * The prompt box: model and reasoning-effort selects (the runtime's offer), Enter to
  * send (Shift+Enter for a newline, never mid-IME composition), and Interrupt while a
- * turn runs. A start refused for budget shows the refusal with its link.
+ * turn runs.
  */
 export function Composer({
   models,
@@ -69,9 +66,7 @@ export function Composer({
   return (
     <div className="v2-coding-composer-wrap">
       {error && (
-        <Alert tone="error" action={error.budget ? <BudgetRefusalLink code={error.budget} /> : undefined}>
-          {error.text}
-        </Alert>
+        <Alert tone="error">{error.text}</Alert>
       )}
       {tooLong && <Alert tone="error">{t("v2.coding.composer.tooLong", { max: PROMPT_MAX_BYTES / 1024 })}</Alert>}
       <form

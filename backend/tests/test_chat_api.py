@@ -77,6 +77,8 @@ def test_chat_stream_container_forwards_native_events(monkeypatch):
     events = list(chat_stream(agent, "hello", workspace=ws_ctx()))
 
     assert events[0]["data"]["mode"] == "stream"
+    # a runtime heartbeat is passed on, stamped with the turn's elapsed time
+    assert isinstance(events[2]["data"].pop("elapsed_ms"), int)
     assert events[1:-1] == native
     assert events[-1]["event"] == "done"
 
@@ -113,6 +115,7 @@ def test_zip_runtime_streams_native_runtime_events_like_harness(monkeypatch):
 
     data = StreamingDataPlane()
     monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(invoke_service, "heartbeat_data_client", lambda _ws=None: data)
     monkeypatch.setattr(invoke_service.canary_service, "active_canary_route", lambda _id: None)
 
     events = list(chat_stream(agent, "hello", session_id="s" * 40, workspace=ws_ctx()))
@@ -142,6 +145,7 @@ def test_zip_runtime_legacy_json_result_still_renders(monkeypatch):
             return {"response": Body(), "contentType": "application/json"}
 
     monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: JsonDataPlane())
+    monkeypatch.setattr(invoke_service, "heartbeat_data_client", lambda _ws=None: JsonDataPlane())
     monkeypatch.setattr(invoke_service.canary_service, "active_canary_route", lambda _id: None)
 
     events = list(chat_stream(agent, "hello", session_id="s" * 40, workspace=ws_ctx()))
@@ -242,8 +246,10 @@ def test_chat_heartbeat_is_not_persisted(client, monkeypatch):
     response = client.post(f"/api/chat/{agent_id}", json={"prompt": "slow task"})
 
     assert response.status_code == 200
-    assert ": keep-alive\n\n" in response.text
-    assert "event: heartbeat" not in response.text
+    # the console stream names its heartbeats (with the turn's elapsed time);
+    # only /v1 keeps the `: keep-alive` comment
+    assert "event: heartbeat\ndata: {\"elapsed_ms\": " in response.text
+    assert ": keep-alive" not in response.text
     session_id = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"][0][
         "session_id"
     ]

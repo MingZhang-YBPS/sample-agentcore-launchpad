@@ -1,0 +1,93 @@
+import { useTranslation } from "react-i18next";
+
+import { type ProjectDetail, projectQuotasApi, projectsApi } from "../../../lib/api/projects";
+import { ago } from "../../format";
+import { useLoad } from "../../hooks";
+import { Chip, Lamp, Panel, Stat } from "../../ui";
+import { projectOwners } from "./model";
+import { formatQuota, usageBars, usageSignal } from "./quotasModel";
+import { useStructureNames } from "./useStructureNames";
+
+/** §11.3: how full each limited quota is; the Settings tab edits them. */
+function QuotaUsage({ projectId }: { projectId: string }) {
+  const { t } = useTranslation();
+  const quotas = useLoad(() => projectQuotasApi.get(projectId), `v3-project-overview-quotas:${projectId}`);
+  // a caller who may not read quotas, or a backend without them, simply has no panel
+  if (!quotas.data) return null;
+  const bars = usageBars(quotas.data.items);
+  return (
+    <Panel title={t("v3.projects.overview.usage")}>
+      {bars.length === 0 ? (
+        <span className="v3-prj-muted">{t("v3.projects.overview.noQuota")}</span>
+      ) : (
+        <div className="v3-prj-usage" data-testid="project-overview-usage">
+          {bars.map(({ item, fraction }) => (
+            <div key={item.key} className="row" data-testid={`project-usage-${item.key}`}>
+              <span className="label"><Lamp s={usageSignal(item)} /> {t(`v3.projects.quotas.key.${item.key}`)}</span>
+              <span className="mono">{formatQuota(item, item.used)} / {formatQuota(item, item.limit)}</span>
+              <div className="bar"><i data-s={usageSignal(item)} style={{ width: `${Math.round(fraction * 100)}%` }} /></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/** Counts, bindings, owners, quota usage (§6.3 "Overview", §11.3). */
+export function OverviewTab({ project }: { project: ProjectDetail }) {
+  const { t } = useTranslation();
+  const names = useStructureNames();
+  const members = useLoad(() => projectsApi.members(project.id), `v3-project-overview:${project.id}:${project.member_count}`);
+  const owners = projectOwners(members.data?.members ?? []);
+
+  return (
+    <div style={{ display: "grid", gap: 16 }} data-testid="project-overview">
+      <div className="v3-grid c4">
+        <Panel><Stat label={t("v3.projects.overview.members")} value={project.member_count} /></Panel>
+        <Panel><Stat label={t("v3.projects.overview.agents")} value={project.agent_count} /></Panel>
+        <Panel><Stat label={t("v3.projects.overview.workspaces")} value={project.workspaces.length} /></Panel>
+        <Panel><Stat label={t("v3.projects.overview.myKeys")} value={project.my_permissions.length} /></Panel>
+      </div>
+      <div className="v3-grid c2">
+        <Panel title={t("v3.projects.overview.about")}>
+          <dl className="v3-prj-dl">
+            <dt>{t("v3.projects.create.department")}</dt>
+            <dd>{names.department(project.department_id) ?? "—"}</dd>
+            <dt>{t("v3.projects.overview.createdBy")}</dt>
+            <dd>{project.created_by_name ?? "—"}{project.created_at && <span className="v3-prj-muted"> · {ago(project.created_at)}</span>}</dd>
+            {project.archived_at && (
+              <>
+                <dt>{t("v3.projects.overview.archivedAt")}</dt>
+                <dd>{ago(project.archived_at)}</dd>
+              </>
+            )}
+            <dt>{t("v3.projects.create.description")}</dt>
+            <dd style={{ whiteSpace: "pre-wrap" }}>{project.description || "—"}</dd>
+          </dl>
+        </Panel>
+        <Panel title={t("v3.projects.overview.owners")}>
+          {owners.length === 0 ? (
+            <span className="v3-prj-muted">{members.loading ? "…" : t("v3.projects.overview.noOwners")}</span>
+          ) : (
+            <span className="v3-prj-chips">
+              {owners.map((m) => <Chip key={m.user_id}>{m.username ?? m.user_id}</Chip>)}
+            </span>
+          )}
+          <div style={{ marginTop: 14 }}>
+            <div className="v3-eyebrow" style={{ marginBottom: 6 }}>{t("v3.projects.overview.workspaces")}</div>
+            <span className="v3-prj-chips">
+              {project.workspaces.map((w) => (
+                <Chip key={w.workspace_id} s={w.is_workspace_default ? "info" : undefined}
+                  title={w.is_workspace_default ? t("v3.projects.workspaces.isDefault") : undefined}>
+                  {w.name}{w.region ? ` · ${w.region}` : ""}
+                </Chip>
+              ))}
+            </span>
+          </div>
+        </Panel>
+      </div>
+      <QuotaUsage projectId={project.id} />
+    </div>
+  );
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """E2E for the Claude SDK container path — REAL AWS.
 
-Flow: [local docker smoke] → POST /api/agents (container) → poll stages
+Flow: [local container smoke] → POST /api/agents (container) → poll stages
       (CodeBuild+ECR+Runtime) → invoke → observability → optional Evaluation
       → DELETE.
 
@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 import httpx
-from _e2e_client import e2e_client
+from _e2e_client import chat_sse, e2e_client
 
 AGENT_NAME = "e2e-claude-sdk"
 SYSTEM_PROMPT = (
@@ -223,7 +223,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if not args.skip_local:
-        print("── local docker smoke (pre-CodeBuild gate)…")
+        print("── local container smoke (pre-CodeBuild gate)…")
         repo_root = Path(__file__).resolve().parents[2]
         smoke = subprocess.run(
             ["bash", str(repo_root / "scripts" / "local_container_smoke.sh")],
@@ -291,12 +291,7 @@ def main() -> int:
         print(f"── runtime READY · arn {arn}")
 
         print("── invoking: what is 6*7?")
-        inv = client.post(
-            f"/api/agents/{agent_id}/invoke",
-            json={"prompt": "What is 6*7? Reply with just the number."},
-        )
-        inv.raise_for_status()
-        answer = inv.json()
+        answer = chat_sse(client, agent_id, "What is 6*7? Reply with just the number.")
         print(f"answer: {answer['text']!r} · {answer['latency_ms']}ms")
         assert "42" in answer["text"], f"expected '42', got: {answer['text']!r}"
         print("── invoke assertion PASSED")

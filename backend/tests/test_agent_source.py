@@ -23,6 +23,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, Deployment
 from app.services import agent_source
 from app.services.workspace import WorkspaceContext
+from tests.conftest import TEST_PROJECT
 
 BUCKET = "launchpad-artifacts-test"
 RUNTIME_ID = "hr_assistant-AbCdEf1234"
@@ -106,6 +107,9 @@ def _seed(
     try:
         row = Agent(
             workspace_id=workspace_id,
+            # V3: every Agent is filed under a business project (ProjectStampError
+            # otherwise outside a request's project context)
+            project_id=TEST_PROJECT,
             name=name,
             method=method,
             status=status,

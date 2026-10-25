@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useModelCatalog, withCatalogModels } from "../lib/model-catalog";
 import { ExternalLink, FlaskConical, Gauge, RefreshCw } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -186,6 +187,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
 
 function ConfigurationExperimentView() {
   const { t } = useTranslation();
+  useModelCatalog(); // the account catalog joins the model choices once it lands
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const expParam = searchParams.get("exp");
@@ -1228,7 +1230,7 @@ function ConfigurationExperimentView() {
                   persistRecPrefs({ model: e.target.value });
                 }}
               >
-                {recProvider.models.map((m) => (
+                {withCatalogModels(recProvider.models).map((m) => (
                   <option
                     key={m.model_id}
                     value={m.model_id === recProvider.default_model_id ? "" : m.model_id}
@@ -1248,7 +1250,7 @@ function ConfigurationExperimentView() {
                   data-testid="rec-model-custom"
                   className="input mono"
                   style={{ marginTop: 6 }}
-                  placeholder="global.anthropic.claude-sonnet-5"
+                  placeholder={recProvider?.default_model_id ?? ""}
                   value={recModelCustom}
                   onChange={(e) => {
                     setRecModelCustom(e.target.value);

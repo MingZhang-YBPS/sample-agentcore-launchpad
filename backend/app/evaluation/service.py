@@ -19,22 +19,28 @@ content-log group is discovered by log-group prefix instead of derived.
 """
 
 import copy
-import functools
 import math
 import threading
 import time
 from collections.abc import Callable
+from functools import cached_property
 from typing import Any
 
 import httpx
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
+from sqlalchemy import select
 
-from app.core.billing_policy import SOURCE_EVAL
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
+from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import scorecard, simulation, telemetry
+from app.evaluation import run_cost, scorecard, simulation, telemetry
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import (
@@ -45,10 +51,10 @@ from app.evaluation.scenarios import (
     scenario_prompts,
 )
 from app.models.ledger import Agent
-from app.services import budgets, creators, job_budget, memory
+from app.services import creators
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
-from app.services.agentcore.client import control_client, data_client
+from app.services.agentcore.client import control_client, data_client, stream_data_client
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates import gateway_support
 
@@ -101,88 +107,9 @@ def stop_requested(run_id: str) -> bool:
     return stop_flags.requested(run_id)
 
 
-def _check_stop(run_id: str, budget: job_budget.JobBudget | None = None) -> None:
-    """A run boundary (before a scenario, a prompt, StartBatchEvaluation): the
-    operator's stop first, then the payer's spend budget (``BudgetStop`` once the
-    run's creator is at or over their monthly limit)."""
+def _check_stop(run_id: str) -> None:
     if stop_flags.requested(run_id):
         raise RunStopped(run_id)
-    if budget is not None:
-        budget.check()
-
-
-def _run_budget(
-    run_id: str, agent_id: str | None, method: str, workspace: WorkspaceContext,
-) -> tuple[job_budget.JobBudget, dict[str, Any]]:
-    """The run's payer — its creator (``EvalRun.created_by``) — and the per-turn
-    meter fields of its agent: the model its tokens are priced at, and for an
-    opaque runtime the turn estimate (the agent's recent measured average, else
-    the opaque-turn default) a silent turn is charged as ``job_estimate``."""
-    from app.services.runtime_discovery import is_discovered_harness
-    from app.services.usage_meter import KIND_JOB_ESTIMATE
-
-    db = SessionLocal()
-    try:
-        run = db.get(EvalRun, run_id)
-        agent = db.get(Agent, agent_id) if agent_id else None
-        budget = job_budget.JobBudget.for_user(
-            run.created_by if run is not None else None, SOURCE_EVAL,
-            user_name=run.created_by_name if run is not None else None,
-            origin_workspace_id=(run.workspace_id if run is not None else None) or workspace.id,
-            agent_id=agent_id or None,
-            resource_id=agent.arn if agent is not None else None,
-            ref_type="eval_run", ref_id=run_id,
-        )
-        turn: dict[str, Any] = {"estimate_kind": KIND_JOB_ESTIMATE}
-        if agent is not None:
-            model, _token_metered = budgets.agent_model(agent)
-            harness = agent.method == "harness" or is_discovered_harness(agent)
-            turn.update(model_id=model, opaque=not harness)
-            if not harness:
-                turn["estimate_usd"] = job_budget.turn_estimate(
-                    db, agent.id, fallback="opaque_turn_estimate_usd")[0]
-        else:
-            turn["opaque"] = method != "harness"
-        return budget, turn
-    finally:
-        db.close()
-
-
-def _persona_estimate(
-    budget: job_budget.JobBudget, scenario: dict[str, Any], actor_model_id: str | None,
-    turns: int,
-) -> str | None:
-    """Debit a simulated persona's actor model (its usage is unreachable inside the
-    SDK executor): ``turns`` actor turns × the calibrated tokens per turn × the
-    actor model's price."""
-    db = SessionLocal()
-    try:
-        usd = job_budget.persona_actor_usd(db, actor_model_id, turns)
-    finally:
-        db.close()
-    return budget.estimate(
-        usd, quantity=turns, unit="actor_turn", model_id=actor_model_id or None,
-        detail={"estimate": "persona_actor",
-                "scenario_id": str(scenario.get("scenario_id") or "")},
-    )
-
-
-def _judge_estimate(
-    budget: job_budget.JobBudget, evaluators: list[str], sessions: int,
-) -> str | None:
-    """Debit the batch judges as ``StartBatchEvaluation`` returns (sessions ×
-    evaluators × the calibrated per-evaluation cost). Child 3 replaces it with the
-    exact result-record count."""
-    if not evaluators or sessions <= 0:
-        return None
-    db = SessionLocal()
-    try:
-        usd, detail = job_budget.judge_estimate(db, evaluators, sessions)
-    finally:
-        db.close()
-    return budget.estimate(
-        usd, quantity=sessions * len(set(evaluators)), unit="evaluation", detail=detail,
-    )
 
 # With up to eval_max_concurrent_runs of our own batches (plus anything else in
 # the account) contending for the 5-active / 3-TPS account quotas, a start can
@@ -208,15 +135,34 @@ def _start_with_retry(start: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     return start()
 
 
+def telemetry_endpoint(agent: Agent | None, qualifier: str | None = None) -> str:
+    """The endpoint whose telemetry a read should use.
+
+    Every AgentCore endpoint writes its own content-log group (``…-<endpoint>``) and
+    service name (``….<endpoint>``). A pinned run reads its own endpoint; otherwise
+    a gated agent's production traffic is on ``live`` (Agent-DLC §6), and everything
+    else on ``DEFAULT``. Reading DEFAULT for a gated agent would show the dashboards,
+    online evaluation and insights an endpoint no user is talking to.
+    """
+    if qualifier:
+        return qualifier
+    if agent is not None and getattr(agent, "endpoint_mode", None) == "live":
+        return "live"
+    return "DEFAULT"
+
+
 def _harness_telemetry(
-    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None
+    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None,
+    endpoint: str = "DEFAULT",
 ) -> tuple[str, str]:
     """Harness span identity: the harnessId is ``{harnessName}-{suffix}`` and the
-    managed backing runtime emits ``harness_{harnessName}.DEFAULT``. Its log
+    managed backing runtime emits ``harness_{harnessName}.<endpoint>``. Its log
     group carries the BACKING runtime's own id (≠ harnessId) — discover it by
     prefix; a re-created harness leaves stale groups behind, so newest wins."""
     base = agent.resource_id.rsplit("-", 1)[0]
-    group = harness_log_group(agent.resource_id, logs_client or workspace.client("logs"))
+    group = harness_log_group(
+        agent.resource_id, logs_client or workspace.client("logs"), endpoint
+    )
     if group is None:
         raise AppError(
             "eval.harness_no_telemetry",
@@ -224,17 +170,17 @@ def _harness_telemetry(
             "chat/invoke session first, then start the evaluation",
             status_code=400,
         )
-    return f"harness_{base}.DEFAULT", group
+    return f"harness_{base}.{endpoint}", group
 
 
-def harness_log_group(harness_id: str, logs: Any) -> str | None:
-    """The DEFAULT-endpoint log group of a harness's backing runtime (newest of
-    any stale re-creations), or None before its first session."""
+def harness_log_group(harness_id: str, logs: Any, endpoint: str = "DEFAULT") -> str | None:
+    """The ``endpoint`` log group of a harness's backing runtime (newest of any
+    stale re-creations), or None before its first session."""
     base = harness_id.rsplit("-", 1)[0]
     prefix = f"/aws/bedrock-agentcore/runtimes/harness_{base}-"
     groups = [
         g for g in logs.describe_log_groups(logGroupNamePrefix=prefix).get("logGroups", [])
-        if g["logGroupName"].endswith("-DEFAULT")
+        if g["logGroupName"].endswith(f"-{endpoint}")
     ]
     if not groups:
         return None
@@ -242,9 +188,12 @@ def harness_log_group(harness_id: str, logs: Any) -> str | None:
 
 
 def resolve_telemetry(
-    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None
+    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None,
+    *, qualifier: str | None = None,
 ) -> tuple[str, str]:
-    """(service_name, log_group) for a platform agent's spans + content logs."""
+    """(service_name, log_group) for a platform agent's spans + content logs, on the
+    endpoint `telemetry_endpoint` picks (production unless `qualifier` pins one)."""
+    endpoint = telemetry_endpoint(agent, qualifier)
     if agent.method not in EVAL_SUPPORTED_METHODS:
         raise AppError(
             "eval.method_unsupported",
@@ -254,12 +203,142 @@ def resolve_telemetry(
     if not agent.resource_id:
         raise AppError("eval.agent_not_deployed", "agent has no runtime", status_code=400)
     if agent.method == "harness":
-        return _harness_telemetry(agent, workspace, logs_client)
+        return _harness_telemetry(agent, workspace, logs_client, endpoint)
     detail = rt.get_runtime(control_client(workspace), agent.resource_id)
     runtime_name = detail["agentRuntimeName"]
-    return f"{runtime_name}.DEFAULT", (
-        f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
+    return f"{runtime_name}.{endpoint}", (
+        f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-{endpoint}"
     )
+
+
+# How far back the no-telemetry pre-check looks for a span (the run API's
+# longest lookback window).
+NO_TELEMETRY_LOOKBACK_HOURS = 336
+
+
+def byoc_code_zip_without_adot(agent: Agent | None) -> bool:
+    """A BYOC code zip deployed without the ``opentelemetry-instrument`` launcher
+    (no ADOT in the bundle, projects §17): AgentCore Runtime exports no span for
+    it, so a batch evaluation finds nothing to score. Read from the raw spec —
+    ``provenance.adot_launcher`` is server-owned; rows deployed before the
+    detection existed carry none and ran without the launcher too."""
+    if agent is None or agent.method != "byoc":
+        return False
+    byoc = (agent.spec or {}).get("byoc") or {}
+    if byoc.get("artifact_kind") != "code_zip":
+        return False
+    return not (byoc.get("provenance") or {}).get("adot_launcher")
+
+
+def require_span_telemetry(
+    agent: Agent, workspace: WorkspaceContext, service_name: str, logs_client: Any = None,
+) -> None:
+    """Refuse a run before its row exists when the agent cannot have spans to
+    score (projects §17.3-5): a BYOC code zip without the ADOT launcher whose
+    endpoint (``service_name``) has written no span in the last
+    `NO_TELEMETRY_LOOKBACK_HOURS`. Code that instruments itself does write spans
+    and passes; an inconclusive probe lets the run start, as before. Any other
+    agent is not probed — a fresh one's first replay is what creates its spans."""
+    if not byoc_code_zip_without_adot(agent):
+        return
+    from app.evaluation import log_streams
+
+    logs = logs_client or workspace.client("logs")
+    since_ms = int(time.time() * 1000) - NO_TELEMETRY_LOOKBACK_HOURS * 3_600_000
+    if log_streams.service_has_spans(logs, service_name, since_ms=since_ms) is not False:
+        return
+    raise AppError(
+        "eval.no_telemetry",
+        f"agent '{agent.name}' has written no spans ({service_name}) in the last "
+        f"{NO_TELEMETRY_LOOKBACK_HOURS // 24} days: a BYOC code zip emits spans only "
+        "with the ADOT launcher — add aws-opentelemetry-distro to requirements.txt "
+        "(with install requirements on) or build from a Dockerfile, republish, "
+        "then start the evaluation",
+        {"service_name": service_name, "reason": "byoc_code_zip_no_adot"},
+        status_code=400,
+    )
+
+
+RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
+
+
+def several_projects(db: Any, workspace_id: str) -> bool:
+    """Whether the workspace holds more than one active project (design §5.5) — the
+    only shape in which account-wide telemetry and console-made AWS objects with no
+    ledger row can belong to another project. One project keeps today's behaviour."""
+    from app.services import access
+
+    active = [b for b in access.workspace_bindings(db, workspace_id) if b.status == "active"]
+    return len(active) > 1
+
+
+class ProjectFence:
+    """What of a workspace account's CloudWatch telemetry the current project may
+    reach (design §5.5, §5.9). Log groups and span service names are account-wide, so
+    the automatic ORM criteria never see them; the fence resolves them against EVERY
+    agent of the workspace and names what belongs to another project's agent.
+
+    Open — every check passes — with no current project or a single-project
+    workspace. Platform agents (project NULL) belong to every project."""
+
+    def __init__(self, db: Any, workspace_id: str) -> None:
+        self._db = db
+        self._workspace_id = workspace_id
+        self.project = current_project()
+        self.closed = bool(self.project) and several_projects(db, workspace_id)
+
+    def _foreign(self, agent: Agent | None) -> bool:
+        return agent is not None and agent.project_id not in (None, self.project)
+
+    @cached_property
+    def _resolve(self) -> Callable[[str | None], Agent | None]:
+        from app.services.observability import build_agent_resolver
+
+        with project_context(None):  # the resolver loads its candidates eagerly
+            return build_agent_resolver(self._db, self._workspace_id)
+
+    @cached_property
+    def _foreign_prefixes(self) -> tuple[str, ...]:
+        with project_context(None):
+            rows = self._db.scalars(
+                select(Agent).where(
+                    Agent.workspace_id == self._workspace_id,
+                    Agent.resource_id.isnot(None),
+                    Agent.project_id.isnot(None),
+                    Agent.project_id != self.project,
+                )
+            ).all()
+        out: list[str] = []
+        for agent in rows:
+            base = agent.resource_id.rsplit("-", 1)[0]
+            out.append(f"{RUNTIME_LOG_GROUP_PREFIX}{agent.resource_id}-")
+            out.append(f"{RUNTIME_LOG_GROUP_PREFIX}harness_{base}-")
+        return tuple(out)
+
+    def foreign_service(self, service: str | None) -> bool:
+        """A span service.name that resolves to another project's agent."""
+        return self.closed and self._foreign(self._resolve(service))
+
+    def allows_service(self, service: str | None) -> bool:
+        """Fail closed (§5.9): with several projects, only a service resolving to this
+        project's agent (or a platform agent) — an unresolved one is not attributable."""
+        if not self.closed:
+            return True
+        agent = self._resolve(service)
+        return agent is not None and not self._foreign(agent)
+
+    def foreign_log_group(self, log_group: str) -> bool:
+        """An agent's own runtime log group (`runtimes/<id>-<endpoint>`) of another project."""
+        return self.closed and log_group.startswith(self._foreign_prefixes)
+
+
+def _run_agent_name(run_id: str) -> str:
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, run_id)
+        return run.agent_name if run else ""
+    finally:
+        db.close()
 
 
 def _live_snapshot_seq(agent_id: str | None) -> int | None:
@@ -313,7 +392,9 @@ TIMEOUT_SCENARIO_RETRIES = 1
 # The agent spent its own budget on the scenario (timeout after its replay, iteration /
 # token limit): that is the scenario's result — its session is scored as it stands and
 # recorded in ``EvalRun.budget_stops`` instead of failing the whole run.
-BUDGET_STOP_CODES = frozenset({"harness.execution_timeout", "harness.execution_limit"})
+BUDGET_STOP_CODES = frozenset({
+    "harness.execution_timeout", "harness.execution_limit", "harness.context_window_exceeded",
+})
 SCENARIO_ERROR_CHARS = 300
 
 
@@ -329,11 +410,70 @@ def _scenario_error(exc: BaseException) -> dict[str, str]:
 # raised by the InvokeHarness call itself, with a 4xx status (live 2026-10-08: "Runtime
 # health check failed or timed out" failed a whole 19-scenario run at one scenario)
 _TRANSIENT_CODES = frozenset({
-    "runtimeClientError", "RuntimeClientError", "internalServerException",
-    "InternalServerException",
+    # the stream event names are camelCase; a non-streaming call (InvokeHarness answering
+    # "Runtime initialization time exceeded" during a cold start) raises PascalCase
+    "runtimeClientError", "RuntimeClientError",
+    "internalServerException", "InternalServerException",
     "throttlingException", "ThrottlingException", "serviceUnavailableException",
     "ServiceUnavailableException",
 })
+
+
+def eval_actor(agent_id: str | None, run_id: str, index: int) -> str:
+    """The memory actor for the ``index``-th replayed session of a run.
+
+    Scoped to the agent like a console user (``memory.scoped_actor``), and unique per
+    session so no replay can recall what another one said."""
+    from app.services.memory import scoped_actor
+
+    return scoped_actor(agent_id or "agent", f"eval-{run_id}-{index}")
+
+
+def a2a_session_actor(agent_name: str | None, session_id: str) -> str:
+    """The memory actor the platform A2A template writes a session under.
+
+    An A2A runtime is invoked with a bare JSON-RPC ``message/send`` that
+    InvokeAgentRuntime passes through unmodified, and Strands' ``A2AServer`` hands
+    its ``agent_factory`` nothing but the message's ``contextId`` — so no actor id
+    the caller sends can reach the session manager. The template therefore derives
+    the actor from the context (``{AGENT_NAME}__a2a__{context_id}``, see
+    ``templates/strands_a2a_agent/main.py.tmpl``), and the console sends the runtime
+    session id as the context id. A replay that opens a fresh session is thereby
+    already on its own actor, and the long-term namespaces (``/facts/{actorId}``
+    …) keep it from recalling another session's facts."""
+    return f"{agent_name or ''}__a2a__{session_id}"
+
+
+def eval_session_actors(
+    run: EvalRun, session_id: str, *, protocol: str | None = None
+) -> list[str]:
+    """The memory actors a replayed session's transcript may sit under, likeliest first.
+
+    The reader's half of ``eval_actor``: a run records the actor each session was
+    invoked with (``attempts[].actor_id``). Runs from before that was recorded are
+    re-derived the way the writer numbered them — the session's 1-based position in
+    the replay plan, which is its position in ``attempts`` / ``session_ids`` unless a
+    simulated persona was skipped. An A2A agent's sessions sit under the actor its
+    template derives from the session (``a2a_session_actor``) — older runs recorded
+    ``"default"`` for them. The bare ``"default"`` actor comes last: runs replayed
+    before every session had its own actor (harness replays until 2026-10-13) still
+    sit there."""
+    candidates: list[str] = []
+    a2a = a2a_session_actor(run.agent_name, session_id)
+    if protocol == "a2a":
+        candidates.append(a2a)
+    for position, entry in enumerate(run.attempts or [], start=1):
+        if isinstance(entry, dict) and entry.get("session_id") == session_id:
+            if entry.get("actor_id") and entry["actor_id"] != "default":
+                candidates.append(str(entry["actor_id"]))
+            if protocol != "a2a":
+                candidates.append(eval_actor(run.agent_id or None, run.id, position))
+            break
+    if session_id in (run.session_ids or []) and protocol != "a2a":
+        position = (run.session_ids or []).index(session_id) + 1
+        candidates.append(eval_actor(run.agent_id or None, run.id, position))
+    candidates.append("default")
+    return list(dict.fromkeys(candidates))
 
 
 def transient_invoke_error(exc: BaseException) -> bool:
@@ -370,34 +510,13 @@ def transient_invoke_error(exc: BaseException) -> bool:
         return exc.status_code >= 500 or exc.status_code == 429
     if isinstance(exc, httpx.TransportError):
         return True
+    # the SigV4 path's transport failures, the same as the bearer path's above: a
+    # stream that went silent past the read timeout or dropped mid-answer
+    if isinstance(exc, (ReadTimeoutError, ConnectionClosedError, EndpointConnectionError)):
+        return True
     if isinstance(exc, RuntimeError):
         return str(exc).startswith(("runtime client error", "internal server error"))
     return False
-
-
-def _run_persona(
-    budget: job_budget.JobBudget,
-    scenario: dict[str, Any],
-    actor_model_id: str | None,
-    turns: dict[str, int],
-    run: Callable[[], str],
-) -> str:
-    """One simulated persona attempt with its actor estimate: max turns debited up
-    front, then trued up (superseded) to the agent turns it really took — the actor
-    model answers each agent turn once, so the actor's turns follow the agent's."""
-    from app.services.usage_meter import supersede
-
-    max_turns = int(scenario.get("max_turns") or 10)
-    upfront = _persona_estimate(budget, scenario, actor_model_id, max_turns)
-    turns["n"] = 0
-    try:
-        return run()
-    finally:
-        taken = min(turns["n"], max_turns)
-        if upfront and taken != max_turns:
-            actual = _persona_estimate(budget, scenario, actor_model_id, taken)
-            if actual:
-                supersede([upfront], actual)
 
 
 def execute_run(
@@ -423,6 +542,8 @@ def execute_run(
     online_config_arn: str | None = None,
     agent_id: str | None = None,
     inbound_jwt: bool = False,
+    repeats: int = 1,
+    qualifier: str | None = None,
 ) -> None:
     """Drive one evaluation run to completion (runs on a run-queue worker).
 
@@ -433,25 +554,21 @@ def execute_run(
     on-demand report over the sessions that config sampled, where the batch
     inherits the config's insights/evaluators (passing them is rejected).
     ``log_groups`` are the batch's input log groups (default: ``aws/spans`` plus
-    the agent's own ``log_group``)."""
+    the agent's own ``log_group``).
+
+    ``repeats`` (Agent-DLC pass^k) replays every scenario that many times, each in
+    a fresh session; every session's scenario and attempt number are recorded on the
+    run (``attempts``). ``qualifier`` pins the endpoint invoked (a release candidate)."""
     input_groups = list(log_groups or ["aws/spans", log_group])
     telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
     attempt: dict[str, str] = {}
-    # agent turns metered so far in the current persona (its actor true-up)
-    persona_turns = {"n": 0}
-
-    def turn_meter() -> Any:
-        persona_turns["n"] += 1
-        return budget.meter(**turn_fields)
-
     try:
-        budget, turn_fields = _run_budget(run_id, agent_id, method, workspace)
-        _check_stop(run_id, budget)
+        _check_stop(run_id)
         data = data_client(workspace)
         session_ids = list(existing_session_ids or [])
         if online_config_arn:
             _update(run_id, status="evaluating")
-            _check_stop(run_id, budget)
+            _check_stop(run_id)
             response = _start_with_retry(
                 lambda: ac.start_online_report(
                     data,
@@ -477,51 +594,65 @@ def execute_run(
             metadata_entries: list[dict[str, Any]] = []
             watermark_sid: str | None = None
 
-            def raw_invoke(prompt: str, sid: str | None, sink: dict[str, Any]) -> dict[str, Any]:
+            # only a pinned endpoint passes `qualifier`; the default path is unchanged
+            pinned: dict[str, Any] = {"qualifier": qualifier} if qualifier else {}
+
+            # Each replayed session gets its own memory actor. The runtime's default
+            # actor ("default") is shared by every evaluation of every agent, so with
+            # long-term memory on, facts extracted from one scenario ("轻享票, fare ¥680")
+            # were recalled in the next and a golden item that withholds the fare was
+            # answered with another scenario's number. A fresh actor per session keeps
+            # each replay hermetic, as a golden item assumes.
+            # ("passed" marks that an invoke path actually handed it to the runtime)
+            actor: dict[str, str] = {"id": "default"}
+            a2a_agent_name = _run_agent_name(run_id) if protocol == "a2a" else ""
+
+            def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
                 if method == "harness":  # InvokeHarness, not the runtime data plane
                     attempt["session_id"] = sid or hc.new_session_id()
+                    # InvokeHarness takes actorId; the harness's memory writes the
+                    # session (and extracts long-term records) under it
+                    actor["passed"] = actor["id"]
                     return hc.invoke_harness_text(
                         data, agent_arn, prompt, session_id=attempt["session_id"],
-                        actor_id=attempt["actor_id"], **sink,
+                        actor_id=actor["id"], **pinned,
                     )
-                if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}; no usage
+                if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
+                    # no actor can be passed (a2a_session_actor): the template keys
+                    # memory on the context id, i.e. this fresh session id
+                    sid = sid or hc.new_session_id()
+                    actor["passed"] = a2a_session_actor(a2a_agent_name, sid)
                     return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
                 if inbound_jwt:  # JWT authorizer: Bearer, never SigV4
                     from app.services import inbound_auth as inbound_auth_service
 
+                    actor["passed"] = actor["id"]
                     return rt.invoke_runtime_text_bearer(
                         workspace.region,
                         agent_arn,
                         inbound_auth_service.m2m_bearer_token(workspace),
                         prompt,
                         session_id=sid,
-                        actor_id=attempt["actor_id"],
-                        **sink,
+                        actor_id=actor["id"],
+                        **pinned,
                     )
+                actor["passed"] = actor["id"]
                 return rt.invoke_runtime_text(
-                    data,
+                    stream_data_client(workspace, method, protocol),
                     agent_arn,
                     prompt,
                     session_id=sid,
-                    actor_id=attempt["actor_id"],
+                    actor_id=actor["id"],
                     runtime_user_id=runtime_user_id,
-                    **sink,
+                    **pinned,
                 )
 
-            def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
-                """One replayed turn under its own meter: exact rows where the agent
-                reports usage (Harness metadata, Claude SDK complete.usage), the
-                turn estimate where it does not — never both."""
-                meter = turn_meter()
-                try:
-                    result = raw_invoke(prompt, sid, {"on_usage": meter.on_usage})
-                except Exception:
-                    meter.settle(failed=True, session_id=attempt.get("session_id") or sid)
-                    raise
-                meter.settle(session_id=result.get("session_id"))
-                return result
+            # eval-cost §1.2: every invoke's usage and wall time, for the live spend
+            live_spend = run_cost.LiveSpend.for_run(run_id)
+            invoke = live_spend.metered(invoke)
 
             budget_stops: list[dict[str, str]] = []
+            attempts: list[dict[str, Any]] = []
             # A simulated persona that still fails after its retries is skipped,
             # not fatal: the LLM actor's conversation is not reproducible, and one
             # stalled model call (live 2026-10-10: a Harness GPT-6 call returned
@@ -537,44 +668,43 @@ def execute_run(
             live_seq = _live_snapshot_seq(agent_id)
             _update(run_id, status="invoking",
                     **({"agent_snapshot_seq": live_seq} if live_seq is not None else {}))
-            for ordinal, scenario in enumerate(scenarios):
-                _check_stop(run_id, budget)
+            plan = [
+                (scenario, attempt_no)
+                for scenario in scenarios
+                for attempt_no in range(1, max(1, int(repeats or 1)) + 1)
+            ]
+            for index, (scenario, attempt_no) in enumerate(plan, start=1):
+                _check_stop(run_id)
+                actor["id"] = eval_actor(agent_id, run_id, index)
+                actor.pop("passed", None)
                 attempt.clear()
                 attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
-                # each scenario is a fresh user: its own memory actor, never "default"
-                attempt["actor_id"] = memory.eval_actor(agent_id, run_id, ordinal)
+                if attempt_no > 1:
+                    attempt["attempt"] = str(attempt_no)
                 sid: str | None = None
                 skipped = False
                 for retry in range(TRANSIENT_SCENARIO_RETRIES + 1):
                     try:
                         sid = None  # a replay starts the whole scenario in a fresh session
                         if simulation.is_simulated(scenario):
-                            sim_kwargs: dict[str, Any] = {"meter_for": turn_meter}
-                            if inbound_jwt:
-                                # JWT runtimes: persona turns Bearer-invoke like replay turns
-                                sim_kwargs["invoke_text"] = invoke
-                            sid = _run_persona(
-                                budget, scenario, actor_model_id, persona_turns,
-                                functools.partial(
-                                    simulation.run_simulated_scenario,
-                                    data,
-                                    agent_arn=agent_arn,
-                                    method=method,
-                                    scenario=scenario,
-                                    actor_model_id=actor_model_id or "",
-                                    protocol=protocol,
-                                    runtime_user_id=runtime_user_id,
-                                    actor_id=attempt["actor_id"],
-                                    **sim_kwargs,
-                                ),
+                            # persona turns invoke exactly like replay turns: the same
+                            # per-session actor, the JWT Bearer path, the pinned endpoint
+                            sim_kwargs: dict[str, Any] = {"invoke_text": invoke}
+                            sid = simulation.run_simulated_scenario(
+                                data,
+                                agent_arn=agent_arn,
+                                method=method,
+                                scenario=scenario,
+                                actor_model_id=actor_model_id or "",
+                                protocol=protocol,
+                                runtime_user_id=runtime_user_id,
+                                **sim_kwargs,
                             )
                         else:
                             for prompt in scenario_prompts(scenario):
-                                _check_stop(run_id, budget)
+                                _check_stop(run_id)
                                 sid = invoke(prompt, sid)["session_id"]
                         break
-                    except (RunStopped, job_budget.BudgetStop):
-                        raise  # a stop is never a scenario failure to retry or skip
                     except Exception as exc:
                         timed_out = getattr(exc, "code", None) == "harness.execution_timeout"
                         if (retry == TRANSIENT_SCENARIO_RETRIES or not transient_invoke_error(exc)
@@ -599,7 +729,7 @@ def execute_run(
                                     .get("stop_reason") or ""),
                             })
                             break
-                        _check_stop(run_id, budget)
+                        _check_stop(run_id)
                         attempt["retried"] = str(retry + 1)
                 if skipped:
                     _update(run_id, scenario_failures=list(scenario_failures))
@@ -607,11 +737,20 @@ def execute_run(
                 session_ids.append(sid)
                 watermark_sid = sid
                 scenario_map[sid] = {"scenario_id": attempt["scenario_id"],
-                                     "input": input_preview(scenario),
-                                     "actor_id": attempt["actor_id"]}
+                                     "input": input_preview(scenario)}
                 metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
+                attempts.append({
+                    "scenario_id": str(scenario.get("scenario_id") or "unknown"),
+                    "attempt": attempt_no,
+                    "session_id": sid,
+                    # the memory actor this session was written under — passed by
+                    # the runtime and Harness paths, derived by the A2A template —
+                    # what the transcript reader looks under
+                    "actor_id": actor.get("passed") or "default",
+                })
                 _update(run_id, session_ids=list(session_ids),
                         budget_stops=list(budget_stops) or None,
+                        attempts=list(attempts), cost_actual=live_spend.session_done(),
                         scenario_map=dict(scenario_map))
             if not session_ids:
                 first = scenario_failures[0] if scenario_failures else {}
@@ -621,7 +760,7 @@ def execute_run(
                 )
             if session_metadata is None:
                 session_metadata = metadata_entries or None
-            _check_stop(run_id, budget)
+            _check_stop(run_id)
             _update(run_id, status="waiting")
             _wait_for_fresh_telemetry(
                 workspace=workspace,
@@ -632,9 +771,8 @@ def execute_run(
             )
 
         # Last exit before the batch exists on AWS: a stop requested during
-        # replay/wait — or a payer over budget — ends the run here without ever
-        # calling StartBatchEvaluation (the replayed sessions are kept).
-        _check_stop(run_id, budget)
+        # replay/wait ends the run here without ever calling StartBatchEvaluation.
+        _check_stop(run_id)
         _update(run_id, status="evaluating", session_ids=session_ids)
         if mode == "insights":
             response = _start_with_retry(
@@ -663,19 +801,11 @@ def execute_run(
             )
         batch_id = response["batchEvaluationId"]
         _update(run_id, batch_eval_id=batch_id)
-        if mode != "insights":  # insights are free during the preview (pricing page)
-            # debited once the batch exists (a refused start judges nothing); a
-            # time-window run's session count is unknown up front: child 3 counts it
-            _judge_estimate(budget, evaluators, len(session_ids))
         _stop_batch_if_requested(run_id, data, batch_id)
         result = _poll_batch(data, batch_id)
         _finish_from_result(run_id, mode, result, workspace=workspace)
     except RunStopped:
         _update(run_id, status="stopped", error=STOP_REASON)
-    except job_budget.BudgetStop as exc:
-        # the payer's monthly limit: stopped like an operator stop, everything done so
-        # far kept (replayed sessions on the row); the console reads the prefix
-        _update(run_id, status="stopped", error=exc.message[:500])
     except AppError as exc:
         parts = [f"{exc.code}: {exc.message}"]
         if isinstance(exc.detail, dict) and "stop_reason" in exc.detail:
@@ -688,6 +818,9 @@ def execute_run(
         _update(run_id, status="failed", error=" · ".join(parts)[:500])
     finally:
         stop_flags.clear(run_id)
+        # a run the finish path did not price (failed / stopped mid-replay) still
+        # records what it had spent
+        _record_cost(run_id, workspace, only_if_missing=True)
 
 
 def _stop_batch_if_requested(run_id: str, data: Any, batch_id: str) -> None:
@@ -751,6 +884,7 @@ def _finish_from_result(
                 result, records_reader=_records_reader(workspace, result))}
         )
         _update(run_id, status="stopped", error=reason[:500], **parsed)
+        _record_cost(run_id, workspace)
         return
     if status not in ac.EVAL_TERMINAL:
         # Not a failure on AWS: the batch outlived the wait. Say so, and point at
@@ -776,6 +910,7 @@ def _finish_from_result(
     if mode == "insights":
         _update(run_id, status="completed", insights=ac.parse_insights(result),
                 error=error)
+        _record_cost(run_id, workspace)
     else:
         reader = _records_reader(workspace, result)
         scores = ac.parse_eval_scores(result, records_reader=reader)
@@ -785,6 +920,19 @@ def _finish_from_result(
         )
         _update(run_id, status="completed", scores=scores, error=error,
                 session_failures=failures)
+        if workspace is not None:
+            # Agent-DLC: snapshot per-item criterion verdicts while the stream is fresh
+            from app.dlc.engine import finalize_run
+
+            finalize_run(run_id, workspace)
+        _record_cost(run_id, workspace, records_reader=getattr(reader, "peek", None))
+
+
+def _record_cost(run_id: str, workspace: WorkspaceContext | None, *,
+                 records_reader: Any = None, only_if_missing: bool = False) -> None:
+    """`cost_actual` at a terminal state (eval-cost §1.2) — never raises."""
+    run_cost.record(run_id, workspace, records_reader=records_reader,
+                    only_if_missing=only_if_missing)
 
 
 def _session_failures(run_id: str, result: dict[str, Any], reader: Any) -> dict[str, Any] | None:
@@ -817,7 +965,17 @@ def _records_reader(workspace: WorkspaceContext | None, result: dict[str, Any]) 
             cache.append(ac.read_result_records(workspace.client("logs"), *location))
         return cache[0]
 
+    # the records if something already read them, without a read of its own: the
+    # run's cost counts judge tokens from them only when they come for free
+    read.peek = lambda: cache[0] if cache else []  # type: ignore[attr-defined]
     return read
+
+
+def _in_project(project_id: str | None, fn: Callable[..., Any], *args: Any,
+                **kwargs: Any) -> Any:
+    # the queue's worker threads carry no context: run as the row's project
+    with project_context(project_id):
+        return fn(*args, **kwargs)
 
 
 def reconcile_run(
@@ -830,6 +988,7 @@ def reconcile_run(
         _finish_from_result(run_id, mode, result, workspace=workspace)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+        _record_cost(run_id, workspace, only_if_missing=True)
 
 
 def request_stop(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
@@ -868,6 +1027,7 @@ def request_stop(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
         # the flag is not needed (no callable will ever read it).
         stop_flags.clear(run_id)
         _update(run_id, status="stopped", error=STOP_REASON)
+        _record_cost(run_id, workspace)
     db = SessionLocal()
     try:
         return db.get(EvalRun, run_id)
@@ -903,6 +1063,7 @@ def recheck_run(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
                 status_code=409,
             )
         mode, batch_id = run.mode, run.batch_eval_id
+        run_project = run.project_id
     finally:
         db.close()
     data = data_client(workspace)
@@ -917,11 +1078,16 @@ def recheck_run(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
             _finish_from_result(run_id, mode, result, workspace=workspace)
         except RuntimeError as exc:
             _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+            _record_cost(run_id, workspace, only_if_missing=True)
     else:
         _update(run_id, status="evaluating", error=None)
+        # the row's project, not the caller's: its slot counts against that project's
+        # concurrent-run limit (projects §11.3)
         run_queue.submit(
             run_id,
-            lambda: reconcile_run(run_id, mode=mode, batch_id=batch_id, workspace=workspace),
+            lambda: _in_project(run_project, reconcile_run, run_id, mode=mode,
+                                batch_id=batch_id, workspace=workspace),
+            project_id=run_project,
         )
     db = SessionLocal()
     try:
@@ -1004,6 +1170,7 @@ def resume_interrupted_runs() -> list[str]:
     try:
         rows = db.query(EvalRun).filter(EvalRun.status.in_(INTERRUPTED_STATUSES)).all()
         resumed: list[str] = []
+        failed: list[str] = []
         for run in rows:
             if run.status == "evaluating" and run.batch_eval_id:
                 # The workspace is rebuilt from the row, not from ambient
@@ -1012,19 +1179,44 @@ def resume_interrupted_runs() -> list[str]:
                 workspace = context_for_workspace(run.workspace_id)
                 run_queue.submit(
                     run.id,
-                    lambda rid=run.id, m=run.mode, b=run.batch_eval_id, w=workspace: (
-                        reconcile_run(rid, mode=m, batch_id=b, workspace=w)
+                    lambda rid=run.id, m=run.mode, b=run.batch_eval_id, w=workspace,
+                    p=run.project_id: (
+                        _in_project(p, reconcile_run, rid, mode=m, batch_id=b, workspace=w)
                     ),
+                    # a startup thread has no project: the slot is the row's project's
+                    project_id=run.project_id,
                 )
                 resumed.append(run.id)
             else:
                 run.status = "failed"
                 run.error = ("interrupted by a backend restart before the batch "
                              "evaluation started — submit the run again")
+                failed.append(run.id)
         db.commit()
+        for run_id in failed:  # what the replay had spent before the restart
+            _record_cost(run_id, None, only_if_missing=True)
         return resumed
     finally:
         db.close()
+
+
+def evaluator_set_hash(evaluators: list[str]) -> str:
+    """Lineage of the evaluator set a run applied (sorted ids; content changes are
+    caught by calibration records, which pin each evaluator's AWS `updatedAt`)."""
+    import hashlib
+
+    return hashlib.sha256("|".join(sorted(evaluators or [])).encode()).hexdigest()[:32]
+
+
+def storage_write_check(agent: Agent, *, confirmed: bool, actor: str | None) -> None:
+    """A replay invokes the agent with the mounts it runs with: in a gated workspace a
+    read-write mount of shared-state storage is written by the evaluation (§8.2).
+    409 `storage.write_confirm_required` unless confirmed; a confirmed write is
+    journaled."""
+    from app.services import storage_dlc
+
+    storage_dlc.confirm_run_writes(agent.workspace_id, agent.spec or {}, confirmed=confirmed,
+                                   action="evaluation.run", target=agent.id, actor=actor)
 
 
 def submit_run(
@@ -1048,13 +1240,28 @@ def submit_run(
     name: str | None = None,
     description: str | None = None,
     log_source: dict[str, Any] | None = None,
+    repeats: int = 1,
+    repeat_mode: str = "all",
+    qualifier: str | None = None,
+    criteria_set_id: str | None = None,
+    criteria_set_version: int | None = None,
+    split: str | None = None,
+    cost_estimate: dict[str, Any] | None = None,
+    agent_version: str | None = None,
     creator: creators.Creator | None = None,
+    precheck_telemetry: bool = False,
+    confirm_storage: bool | None = None,
 ) -> EvalRun:
     """Queue one run. The telemetry comes from the platform ``agent`` — or, with
     ``agent=None``, from ``log_source`` {service_name, log_group_names}: an agent
     that is not a platform agent (off-runtime, or no ledger row) whose spans and
     content logs are already in CloudWatch. Such a run is passive only (session
-    ids or a time window); there is nothing to invoke."""
+    ids or a time window); there is nothing to invoke. ``precheck_telemetry``
+    refuses an agent with no spans to score (`require_span_telemetry`) before
+    the run row is created. ``confirm_storage`` (a member's run: False / True; None
+    = a platform job that decides itself) refuses a replay that would write into
+    production shared-state storage of a gated workspace unless confirmed
+    (storage-mounts §8.2, `storage_write_check`)."""
     if agent is None:
         if not log_source or dataset_items:
             raise ValueError("an agent-less run needs a log_source and a passive scope")
@@ -1079,7 +1286,18 @@ def submit_run(
             from app.services import inbound_auth as inbound_auth_service
 
             inbound_auth_service.require_platform_reachable(agent, workspace, "m2m")
-        service_name, log_group = resolve_telemetry(agent, workspace)
+        # an unpinned replay of a gated agent exercises production (`live`), like
+        # every other invoke path; DEFAULT would silently be the newest candidate
+        if dataset_items and not qualifier:
+            from app.services.invoke import production_endpoint
+
+            qualifier = production_endpoint(agent).get("qualifier")
+        if dataset_items and confirm_storage is not None:
+            storage_write_check(agent, confirmed=confirm_storage,
+                                actor=creator.name if creator else None)
+        service_name, log_group = resolve_telemetry(agent, workspace, qualifier=qualifier)
+        if precheck_telemetry:
+            require_span_telemetry(agent, workspace, service_name)
         log_groups = ["aws/spans", log_group]
     # Window runs have no dataset; encode the scope in dataset_name so the
     # runs list can render "window · Nh" without a schema change.
@@ -1105,6 +1323,15 @@ def submit_run(
             evaluators=evaluators,
             status="queued",
             session_ids=session_ids or [],
+            repeats=max(1, int(repeats or 1)),
+            repeat_mode=repeat_mode,
+            endpoint_qualifier=qualifier,
+            agent_version=agent_version or (agent.version if agent else None),
+            criteria_set_id=criteria_set_id,
+            criteria_set_version=criteria_set_version,
+            split=split,
+            cost_estimate=cost_estimate,
+            evaluator_set_hash=evaluator_set_hash(evaluators),
             # the version the run evaluates: the newest snapshot that reached AWS
             agent_snapshot_seq=scorecard.newest_deployed_seq(db, agent.id) if agent else None,
             dataset_fingerprint=fingerprint[0] if fingerprint else None,
@@ -1114,6 +1341,7 @@ def submit_run(
         db.add(run)
         db.commit()
         run_id = run.id
+        run_project = run.project_id
         agent_arn = agent.arn if agent else ""
         agent_ledger_id = agent.id if agent else None
         agent_method = agent.method if agent else ""
@@ -1131,32 +1359,37 @@ def submit_run(
     # edit that lands while the run waits in the queue must not change what
     # it replays, so the queued callable never touches the caller's list.
     items_snapshot = copy.deepcopy(dataset_items)
-    position = run_queue.submit(
-        run_id,
-        lambda: execute_run(
-            run_id,
-            workspace=workspace,
-            agent_arn=agent_arn,
-            method=agent_method,
-            protocol=agent_protocol,
-            service_name=service_name,
-            log_group=log_group,
-            log_groups=log_groups,
-            items=items_snapshot,
-            evaluators=evaluators,
-            mode=mode,
-            wait_seconds=wait_seconds,
-            existing_session_ids=session_ids,
-            time_range=time_range,
-            insights=insights,
-            session_metadata=session_metadata,
-            actor_model_id=actor_model_id,
-            runtime_user_id=agent_runtime_user,
-            online_config_arn=online_config_arn,
-            agent_id=agent_ledger_id,
-            inbound_jwt=agent_inbound_jwt,
-        ),
-    )
+
+    def queued() -> None:
+        # the queue's worker threads carry no context: run as the run's project
+        with project_context(run_project):
+            execute_run(
+                run_id,
+                workspace=workspace,
+                agent_arn=agent_arn,
+                method=agent_method,
+                protocol=agent_protocol,
+                service_name=service_name,
+                log_group=log_group,
+                log_groups=log_groups,
+                items=items_snapshot,
+                evaluators=evaluators,
+                mode=mode,
+                wait_seconds=wait_seconds,
+                existing_session_ids=session_ids,
+                time_range=time_range,
+                insights=insights,
+                session_metadata=session_metadata,
+                actor_model_id=actor_model_id,
+                runtime_user_id=agent_runtime_user,
+                online_config_arn=online_config_arn,
+                agent_id=agent_ledger_id,
+                inbound_jwt=agent_inbound_jwt,
+                repeats=max(1, int(repeats or 1)),
+                qualifier=qualifier,
+            )
+
+    position = run_queue.submit(run_id, queued, project_id=run_project)
     _update(run_id, queue_position=position)
     db = SessionLocal()
     try:

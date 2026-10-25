@@ -38,12 +38,14 @@ roles, including the orphans a failed agent deletion can leave behind:
 ```
 Gateway targets of launchpad-gw / -kb-gw / -coa-gw   # dependents of the gateways
    → Gateways launchpad-gw, -kb-gw, -coa-gw             # matched by name; waits for targets to drop out
+     → Cedar Policy Engines Launchpad created for them  # policies first
       → Credential providers                            # launchpad-office-facts-key (API key), launchpad-gw-m2m (OAuth2)
         → Console workload identities                   # launchpad-console-* (the COA context layer)
          → Per-agent IAM roles                          # launchpad-agent-* AND tagged launchpad:agent-id
             → AgentCore memory  (launchpad_memory-*)
                → AgentCore registry (launchpad-registry)   # records deleted first
                   → Skill Lab worker runtime + its IAM role
+                   → Coding runtime launchpad_coding_runtime + its IAM role   # runtime first
                      → CDK stack launchpad-base             # S3 auto-empties, ECR force-deletes
 ```
 
@@ -82,6 +84,13 @@ Notes:
   the roles of agents you have not deleted yet — not only the orphans a failed
   agent deletion leaves behind. Delete demo agents first (section 1) and review
   the dry-run before confirming.
+- Cedar Policy Engines that Launchpad created for `launchpad-gw` /
+  `launchpad-kb-gw` are deleted after the gateways, their policies first. An
+  engine must carry Launchpad's managed tags, so one someone else created is
+  never matched; a leftover engine from an earlier deployment is (it is found by
+  its "Policy Engine managed from Launchpad for …" description). Policy names are
+  unique across the account and Region, so a leftover engine would otherwise
+  block the next deployment's identically named policies.
 - Console workload identities `launchpad-console-<workspace>` are the token-vault
   identities the COA context layer creates when an admin connects a COA
   deployment (`/v2/context-layer`, see [identity.md](identity.md) §7.7). Every
@@ -90,10 +99,18 @@ Notes:
   (default `coa-<prefix>`) is an ordinary Connection: disconnect the layer, then
   delete it under Outbound credentials. COA itself is a separate product and is
   never touched.
-- Deployed agent runtimes and the Policy engine are demo-scoped (section 1) and
-  are not touched by the script; deleting your demo agents first keeps the
-  shared-infra teardown clean. X-Ray Transaction Search is account-wide shared
+- Deployed agent runtimes are demo-scoped (section 1) and are not touched by
+  the script; deleting your demo agents first keeps the shared-infra teardown
+  clean. X-Ray Transaction Search is account-wide shared
   observability and stays out of scope.
+
+## Delete the agents before the VPC
+
+Agents (and hosted MCP servers) on a VPC network profile hold ENIs in its subnets
+until AgentCore releases them, some time after the runtime is deleted. Delete those
+agents first, wait for their ENI-release jobs, archive the profile, and only then
+delete the subnets, security groups and the VPC. See
+[private-networking.md §4](private-networking.md#4-teardown-delete-the-agents-before-the-vpc).
 
 ## Order of operations (recommended)
 

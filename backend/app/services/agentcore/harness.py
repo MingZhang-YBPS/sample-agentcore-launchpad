@@ -6,7 +6,7 @@ kwargs. Payload shapes follow bedrock-agentcore-control 1.43.x.
 
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import closing
 from typing import Any
 
@@ -51,21 +51,88 @@ def wrap_params_for_update(params: dict[str, Any]) -> dict[str, Any]:
 _ENVIRONMENT_REQUEST_FIELDS = ("lifecycleConfiguration", "networkConfiguration")
 
 
+# a sentinel for "the platform says nothing about the network": keep the live one
+KEEP_NETWORK: Any = object()
+
+
+def network_configuration(vpc: Mapping[str, Any] | None) -> dict[str, Any]:
+    """``agentCoreRuntimeEnvironment.networkConfiguration`` for a resolved network
+    profile (design §12.6), None = PUBLIC.
+
+    UNVERIFIED: the harness's backing-runtime environment is assumed to take the
+    runtime's ``NetworkConfiguration`` shape (``networkMode`` +
+    ``networkModeConfig{subnets, securityGroups}``) — GetHarness echoes the member
+    under that name, but no VPC harness has been created live yet."""
+    from app.services.agentcore.runtime import _network_configuration
+
+    return _network_configuration(dict(vpc) if vpc else None)
+
+
+def environment_for_create(
+    session_storage: list[dict[str, Any]], vpc: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """CreateHarness ``environment``: the session storage plus, for a VPC agent, its
+    network. A PUBLIC agent with no storage omits the member (the service default)."""
+    request: dict[str, Any] = {}
+    if session_storage:
+        request["filesystemConfigurations"] = list(session_storage)
+    if vpc:
+        request["networkConfiguration"] = network_configuration(vpc)
+    return {"agentCoreRuntimeEnvironment": request} if request else None
+
+
+def _mount_path(entry: Mapping[str, Any]) -> str:
+    """The ``mountPath`` of one filesystemConfigurations union member ('' if none)."""
+    for member in entry.values():
+        if isinstance(member, Mapping) and member.get("mountPath"):
+            return str(member["mountPath"]).rstrip("/")
+    return ""
+
+
 def environment_for_update(
-    live: Mapping[str, Any], session_storage: list[dict[str, Any]]
+    live: Mapping[str, Any], platform_entries: list[dict[str, Any]],
+    network: Any = KEEP_NETWORK, *, managed_paths: Iterable[str] = (),
+    on_conflict: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """UpdateHarness ``environment`` that sets the platform-owned session storage and
-    keeps everything else the live harness carries.
+    """UpdateHarness ``environment`` that sets the platform-owned mounts and keeps
+    everything else the live harness carries.
 
     UpdateHarness replaces ``filesystemConfigurations`` wholesale (``[]`` detaches
     every mount; an omitted ``environment`` keeps the old one — probed live), so the
-    live list is read back and only its ``sessionStorage`` entry is swapped: EFS /
-    S3 Files mounts and network/lifecycle settings made outside the platform (an
-    imported harness) survive a re-publish."""
+    live list is read back and merged by ownership (design storage-mounts §3.2):
+    ``platform_entries`` (the spec's session storage + S3 Files / EFS mounts,
+    `deployer/filesystem.py`) are sent as they are; a live entry is the platform's —
+    and dropped — when it is session storage, sits at one of the spec's mount paths,
+    or at one of ``managed_paths`` (mount paths an earlier publish of this agent
+    set, so a mount removed from the spec is detached). Any other live entry — an
+    EFS / S3 Files mount made outside the platform (an imported harness) — survives
+    a re-publish, as do the network/lifecycle settings. A live entry at a spec path
+    that the platform never set but that differs from the spec's is a conflict: the
+    spec wins and ``on_conflict`` gets one line for the deploy log.
+
+    ``network`` is the resolved VPC (`deployer/network.spec_vpc`) when the platform
+    owns it: a dict sets VPC mode, None sets PUBLIC (a re-publish that moved the agent
+    off its profile); ``KEEP_NETWORK`` (the default) keeps the live value."""
     env = (live.get("environment") or {}).get("agentCoreRuntimeEnvironment") or {}
     request = {k: env[k] for k in _ENVIRONMENT_REQUEST_FIELDS if env.get(k)}
-    kept = [fs for fs in env.get("filesystemConfigurations") or [] if "sessionStorage" not in fs]
-    request["filesystemConfigurations"] = [*session_storage, *kept]
+    spec_paths = {_mount_path(fs): fs for fs in platform_entries}
+    managed = {str(p).rstrip("/") for p in managed_paths}
+    kept = []
+    for fs in env.get("filesystemConfigurations") or []:
+        if "sessionStorage" in fs:
+            continue
+        path = _mount_path(fs)
+        if path in spec_paths:
+            if path not in managed and fs != spec_paths[path] and on_conflict is not None:
+                on_conflict(f"mount {path}: the live harness's entry (set outside the "
+                            "platform) is replaced by the spec's")
+            continue
+        if path in managed:
+            continue
+        kept.append(fs)
+    request["filesystemConfigurations"] = [*platform_entries, *kept]
+    if network is not KEEP_NETWORK:
+        request["networkConfiguration"] = network_configuration(network)
     return {"agentCoreRuntimeEnvironment": request}
 
 
@@ -126,6 +193,56 @@ def list_harness_endpoints(client: Any, harness_id: str) -> list[dict[str, Any]]
 
 def delete_harness(client: Any, harness_id: str) -> None:
     client.delete_harness(harnessId=harness_id)
+
+
+# DeleteHarness is asynchronous: the harness stays DELETING (and keeps its name) for a
+# minute or two after the console row is gone and its name released
+NAME_RELEASE_TIMEOUT_S = 300
+NAME_RELEASE_POLL_S = 10
+
+
+def _is_name_conflict(exc: Exception) -> bool:
+    return type(exc).__name__ == "ConflictException" and "already exists" in str(exc)
+
+
+def create_after_name_release(
+    client: Any,
+    create: Callable[[], dict[str, Any]],
+    harness_name: str,
+    log: Callable[[str], None],
+    timeout_s: float = NAME_RELEASE_TIMEOUT_S,
+    poll_s: float = NAME_RELEASE_POLL_S,
+    sleeper: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Run ``create`` (CreateHarness), waiting out a same-name harness that is still
+    being deleted.
+
+    Deleting an agent releases its console name at once while AWS takes a while to let
+    go of the harness, so re-creating the name right away is refused with "already
+    exists". Only that window is waited out: a conflict whose holder is a live
+    (not DELETING) harness is a real name collision and is raised immediately."""
+    deadline = clock() + timeout_s
+    while True:
+        try:
+            return create()
+        except Exception as exc:
+            if not _is_name_conflict(exc):
+                raise
+            holder = next(
+                (h for h in list_harnesses(client) if h.get("harnessName") == harness_name),
+                None,
+            )
+            # absent from the list but still refused: the delete is just finishing
+            if holder is not None and holder.get("status") != "DELETING":
+                raise
+            if clock() + poll_s > deadline:
+                raise
+            log(
+                f"harness name {harness_name} is still held by a harness being deleted "
+                f"— retrying CreateHarness in {poll_s:g}s"
+            )
+            sleeper(poll_s)
 
 
 def get_harness_endpoint(client: Any, harness_id: str, endpoint_name: str) -> dict[str, Any]:
@@ -217,12 +334,11 @@ def decode_event_stream(raw: bytes) -> list[dict[str, Any]]:
     return events
 
 
-def event_stream_text(raw: bytes, *, on_usage: Any = None) -> str:
+def event_stream_text(raw: bytes) -> str:
     """Concatenated assistant text of a raw Harness event stream (raises on a
-    stream error event, like the boto3 path). ``on_usage`` as on
-    :func:`iter_harness_stream`."""
+    stream error event, like the boto3 path)."""
     parts: list[str] = []
-    with closing(iter_harness_stream(decode_event_stream(raw), on_usage=on_usage)) as events:
+    with closing(iter_harness_stream(decode_event_stream(raw))) as events:
         for event in events:
             delta = event.get("contentBlockDelta", {}).get("delta", {})
             if delta.get("text"):
@@ -269,9 +385,13 @@ def user_authenticated_tools(
     access_token: str,
     *,
     configured_tools: list[dict[str, Any]] | None = None,
+    workspace_id: str = "",
     user_gateways: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Harness invocation tools with launchpad-gw authenticated as one user.
+
+    ``workspace_id`` (when given) lets launchpad-kb-gw take the current project's
+    provider and scopes (`project_gateway.effective_resources`, projects §10.6).
 
     ``InvokeHarness.tools`` replaces the configured tool list for that request,
     so every non-user tool declared by the stored spec is reconstructed too.
@@ -359,6 +479,11 @@ def user_authenticated_tools(
                 attached_user_gateway = True
 
     if spec.get("knowledge_bases") and resources.get("kb_gateway_arn"):
+        from app.core.project_scope import current_project
+        from app.services import project_gateway
+
+        kb_auth = project_gateway.effective_resources(
+            dict(resources), current_project(), workspace_id or None)
         result.append(
             {
                 "type": "agentcore_gateway",
@@ -368,9 +493,9 @@ def user_authenticated_tools(
                         "gatewayArn": str(resources["kb_gateway_arn"]),
                         "outboundAuth": {
                             "oauth": {
-                                "providerArn": str(resources["oauth_provider_arn"]),
+                                "providerArn": str(kb_auth["oauth_provider_arn"]),
                                 "grantType": "CLIENT_CREDENTIALS",
-                                "scopes": ["launchpad-gw/invoke"],
+                                "scopes": project_gateway.gateway_scopes(kb_auth),
                             }
                         },
                     }
@@ -394,6 +519,9 @@ def bounded_tool_input(raw: str) -> str:
     return text[:TOOL_INPUT_MAX_CHARS] + f"… [+{len(text) - TOOL_INPUT_MAX_CHARS} chars]"
 
 
+CONTEXT_WINDOW_STOPS = frozenset({"model_context_window_exceeded", "context_window_exceeded"})
+
+
 def _stop_error(reason: Any) -> AppError | None:
     """Decode service stops, including the exported ExecutionLimitsHook messages."""
     normalized = reason.strip().lower() if isinstance(reason, str) else ""
@@ -410,30 +538,24 @@ def _stop_error(reason: Any) -> AppError | None:
         )
     elif normalized in {"cancelled", "canceled", "interrupted"}:
         code, message = "harness.execution_cancelled", "Harness execution was cancelled"
+    elif normalized in CONTEXT_WINDOW_STOPS:
+        # the turn's own tool results overflowed the model's context window: distinct
+        # from a budget limit, a replay with less history can succeed
+        code, message = (
+            "harness.context_window_exceeded",
+            "Harness execution exceeded the model's context window",
+        )
     elif normalized in {
         "max_tokens", "max_iterations", "execution_limit_exceeded",
-        "max_iterations_exceeded", "max_output_tokens_exceeded", "model_context_window_exceeded",
+        "max_iterations_exceeded", "max_output_tokens_exceeded",
         "limit_turns", "limit_output_tokens", "limit_total_tokens",
     } or normalized.startswith(("max iterations exceeded:", "max output tokens exceeded:")):
         code, message = "harness.execution_limit", "Harness execution reached its limit"
     return AppError(code, message, {"stop_reason": reason}, status_code=status)
 
 
-def _report_usage(on_usage: Any, metadata: Any) -> None:
-    """Hand one ``metadata`` event's token usage to the caller's meter. A meter
-    must never fail the invocation, so nothing it raises escapes."""
-    usage = metadata.get("usage") if isinstance(metadata, dict) else None
-    if usage is None:
-        return
-    try:
-        on_usage(usage)
-    except Exception:  # noqa: BLE001 — metering is best effort by contract
-        pass
-
-
 def iter_harness_stream(
     stream: Any, *, on_stream: Any = None, allow_handoff: bool = False,
-    on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
     """Drain and validate raw Harness events, always releasing the transport.
 
@@ -442,10 +564,6 @@ def iter_harness_stream(
     diagnosis; once a failure is seen, later text cannot make the call successful.
     ``allow_handoff``: a final ``tool_use`` stop is the inline-function handoff (the
     caller owes a ``toolResult``), not an unfinished response.
-
-    ``on_usage(usage)`` receives the ``usage`` of every ``metadata`` event — one per
-    **model call** (measured live 2026-10-15), so a turn's tokens are their sum.
-    It is called even after a failure was seen: those calls were billed too.
     """
     failure: AppError | None = None
     last_stop: Any = None
@@ -454,8 +572,6 @@ def iter_harness_stream(
         if on_stream is not None:
             on_stream(stream)
         for event in stream:
-            if on_usage is not None and "metadata" in event:
-                _report_usage(on_usage, event["metadata"])
             if "messageStop" in event:
                 last_stop = event["messageStop"].get("stopReason")
                 error = _stop_error(last_stop)
@@ -511,7 +627,6 @@ def invoke_harness_events(
     allowed_tools: list[str] | None = None,
     inline_tools: frozenset[str] = frozenset(),
     qualifier: str | None = None,
-    on_usage: Any = None,
 ) -> Iterator[dict[str, Any]]:
     """Stream one ``InvokeHarness`` call whose ``messages`` carries a bounded
     replayed conversation (``[{role: user|assistant, content: [{text}]}]``, the
@@ -540,7 +655,7 @@ def invoke_harness_events(
         **overrides,
     )
     stream = iter_harness_stream(response["stream"], on_stream=on_stream,
-                                 allow_handoff=bool(inline_tools), on_usage=on_usage)
+                                 allow_handoff=bool(inline_tools))
     with closing(stream) as events:
         # toolUse input arrives as partial-JSON deltas per content block; the joined,
         # bounded text is emitted once at the block's stop so the ledger can record
@@ -603,19 +718,15 @@ def invoke_harness_text(
     tools: list[dict[str, Any]] | None = None,
     allowed_tools: list[str] | None = None,
     qualifier: str | None = None,
-    on_usage: Any = None,
 ) -> dict[str, Any]:
     """Synchronous invoke: send one user message, drain the event stream,
     return the concatenated assistant text plus session id. ``qualifier`` pins a
-    named endpoint (a canary's control endpoint); omitted ⇒ DEFAULT.
-    ``on_usage`` as on :func:`iter_harness_stream`."""
+    named endpoint (a canary's control endpoint); omitted ⇒ DEFAULT."""
     session_id = session_id or new_session_id()
     text_parts: list[str] = []
     overrides: dict[str, Any] = {}
     if qualifier:
         overrides["qualifier"] = qualifier
-    if on_usage is not None:
-        overrides["on_usage"] = on_usage
     if runtime_user_id:
         overrides["runtime_user_id"] = runtime_user_id
     if tools is not None:

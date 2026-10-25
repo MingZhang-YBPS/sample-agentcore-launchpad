@@ -1,0 +1,168 @@
+/* V3 chat — one readable column, the composer always in reach */
+
+.v3 .v3-chat {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+  height: calc(100vh - var(--v3-top) - 56px);
+  min-height: 520px;
+}
+/* the storyline position line (chat.open with ?agent=) spans both columns above them */
+.v3 .v3-chat:has(> .v3-storypos) { grid-template-rows: auto minmax(0, 1fr); }
+.v3 .v3-chat > .v3-storypos { grid-column: 1 / -1; margin-bottom: 0; }
+.v3 .v3-chat-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px;
+  border: 1px solid var(--v3-line);
+  border-radius: var(--v3-r);
+  background: color-mix(in srgb, var(--v3-ink-2) 60%, transparent);
+}
+.v3 .v3-chat-sessions { display: grid; gap: 4px; overflow-y: auto; min-height: 0; align-content: start; }
+.v3 .v3-chat-session {
+  display: grid;
+  gap: 2px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--v3-text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.v3 .v3-chat-session:hover { background: var(--v3-ink-3); color: var(--v3-text); }
+.v3 .v3-chat-session.on { border-color: color-mix(in srgb, var(--v3-ok) 35%, transparent); background: var(--v3-ok-dim); color: var(--v3-text); }
+.v3 .v3-chat-session .preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.v3 .v3-chat-session .meta { font-size: 11px; color: var(--v3-text-3); }
+
+.v3 .v3-chat-main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  border: 1px solid var(--v3-line);
+  border-radius: var(--v3-r);
+  background: color-mix(in srgb, var(--v3-ink-1) 72%, transparent);
+  overflow: hidden;
+}
+.v3 .v3-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--v3-line);
+}
+.v3 .v3-chat-thread {
+  overflow-y: auto;
+  padding: 28px 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  scroll-behavior: smooth;
+}
+.v3 .v3-msg { width: min(760px, calc(100% - 48px)); margin: 0 auto; animation: v3-rise 0.3s var(--v3-ease); }
+.v3 .v3-msg.user { display: flex; justify-content: flex-end; }
+.v3 .v3-msg.user .bubble {
+  max-width: 78%;
+  padding: 10px 14px;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--v3-ink-3);
+  border: 1px solid var(--v3-line-2);
+  white-space: pre-wrap;
+}
+.v3 .v3-msg.agent .bubble { line-height: 1.65; color: var(--v3-text); }
+.v3 .v3-msg.agent .bubble p:first-child { margin-top: 0; }
+.v3 .v3-msg.agent .bubble p:last-child { margin-bottom: 0; }
+.v3 .v3-msg.agent .bubble pre {
+  background: var(--v3-ink-0);
+  border: 1px solid var(--v3-line);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  font-family: var(--v3-mono);
+  font-size: 12.5px;
+}
+.v3 .v3-msg.agent .bubble code { font-family: var(--v3-mono); font-size: 0.9em; }
+.v3 .v3-msg.agent .bubble a { color: var(--v3-info); text-decoration: underline; }
+.v3 .v3-msg.tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--v3-text-3);
+  font-size: 12px;
+}
+.v3 .v3-msg.tool::before { content: ""; width: 20px; height: 1px; background: var(--v3-line-2); }
+.v3 .v3-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--v3-ok);
+  animation: v3-blink 1s steps(2) infinite;
+}
+@keyframes v3-blink { 50% { opacity: 0; } }
+.v3 .v3-msg-actions { display: flex; gap: 4px; align-items: center; margin-top: 8px; }
+.v3 .v3-msg-actions button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--v3-text-3);
+  cursor: pointer;
+}
+.v3 .v3-msg-actions button:hover { background: var(--v3-ink-3); color: var(--v3-text); }
+.v3 .v3-msg-actions button[aria-pressed="true"] { color: var(--v3-ok); border-color: color-mix(in srgb, var(--v3-ok) 35%, transparent); }
+
+.v3 .v3-chat-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  width: min(820px, calc(100% - 32px));
+  margin: 0 auto 18px;
+  padding: 8px 8px 8px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--v3-line-2);
+  background: var(--v3-ink-2);
+  box-shadow: 0 10px 30px -12px color-mix(in srgb, var(--v3-shade) 60%, transparent);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.v3 .v3-chat-composer:focus-within { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); box-shadow: 0 0 0 3px var(--v3-ok-dim); }
+.v3 .v3-chat-composer textarea {
+  flex: 1;
+  min-height: 24px;
+  max-height: 200px;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--v3-text);
+  font: inherit;
+  resize: none;
+  outline: none;
+  field-sizing: content;
+}
+.v3 .v3-chat-composer .v3-btn { width: 38px; height: 38px; padding: 0; justify-content: center; border-radius: 10px; }
+
+@media (max-width: 980px) {
+  .v3 .v3-chat { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .v3 .v3-chat-side { max-height: 280px; }
+  .v3 .v3-chat-main { height: 70vh; }
+}
+
+/* a Cedar policy denied a tool call: coral, because it needs a person to change a rule */
+.v3 .v3-deny {
+  display: grid; gap: 10px; padding: 14px 16px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--v3-act) 40%, transparent); background: var(--v3-act-dim);
+}
+.v3 .v3-deny .head { display: flex; align-items: center; gap: 10px; color: var(--v3-act); }
+.v3 .v3-deny .head b { color: var(--v3-text); }
+.v3 .v3-deny .head .mono { color: var(--v3-text-2); font-size: 12.5px; }
+.v3 .v3-deny .head .v3-chip { margin-left: auto; }
+.v3 .v3-deny p { margin: 0; color: var(--v3-text-2); font-size: 13px; }
+.v3 .v3-deny .v3-kv { grid-template-columns: 110px minmax(0, 1fr); }
+.v3 .v3-deny .v3-btn { justify-self: start; }

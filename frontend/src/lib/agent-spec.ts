@@ -18,14 +18,17 @@ import type {
   Toolkit,
 } from "./api";
 import type { ModelSource, ReasoningEffort } from "./models";
+import { MCP_STDIO_OFF, mcpStdioFromSpec, mcpStdioIssues, mcpStdioSpec, type McpStdioForm, type McpStdioWrapperInput } from "./mcp-stdio";
 import {
   CLAUDE_SDK_MODEL_SOURCE,
   DEFAULT_MODEL_SOURCE,
   defaultModelFor,
-  SPEC_DEFAULT_MODEL_ID,
+  specDefaultModelId,
 } from "./models";
-import { defaultModelForRole, type ModelDefaults } from "./model-defaults";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
+import { type CatalogMountRow, catalogMountsSpec, catalogRowsFromSpec, MAX_BYO_MOUNTS } from "./api/storage";
+import { BYO_MOUNT_METHODS } from "./storage-mounts";
+import { emptyStrandsForm, type StrandsForm, strandsFormFromSpec, strandsSpec, strandsValid } from "./strands-builder";
 import {
   choiceFromSpec,
   EMPTY_JWT_FORM,
@@ -47,6 +50,29 @@ export type AgentMethod = "harness" | "zip_runtime" | "container" | "byoc";
 
 /** Same rule as the backend's `AgentSpec.name`. */
 export const AGENT_NAME_RE = /^[a-z][a-z0-9-]{2,47}$/;
+
+/** Longest display name the backend accepts (`AgentSpec.display_name`). */
+export const DISPLAY_NAME_MAX = 64;
+
+/** `agent-` + 6 random [a-z0-9] — the slug for a display name with no usable ASCII. */
+export const randomAgentSlug = (): string => {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return `agent-${Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("")}`;
+};
+
+/**
+ * The resource-name slug derived from a display name: its ASCII letter/digit runs,
+ * lowercased and joined with `-`, trimmed to 48 chars. `null` when that cannot form a
+ * valid name (too short, no ASCII, leading digit) — the caller then falls back to
+ * `randomAgentSlug()`, keeping a stable random slug while the member types.
+ */
+export const slugFromDisplayName = (displayName: string): string | null => {
+  const runs = displayName.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const slug = runs.join("-").slice(0, 48).replace(/-+$/, "");
+  return AGENT_NAME_RE.test(slug) ? slug : null;
+};
 
 export const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
 
@@ -92,6 +118,15 @@ Be concise, professional, and friendly.`,
 
 export const TOOLKIT_PROMPTS = TOOLKITS.map((kit) => kit.prompt);
 
+/**
+ * T12: the PII-protection opt-in, omitted when off so an older spec and a
+ * deliberately-off one read back identically.
+ */
+export const guardrailSpec = (form: { guardrail: AgentForm["guardrail"] }) =>
+  form.guardrail === "off"
+    ? {}
+    : { guardrail: { enabled: true, mode: form.guardrail } };
+
 /** Tool names the selected toolkits contribute. Non-empty ⇒ they replace the
  *  template's own calculator/current_utc_time, matching what the backend emits. */
 export const toolkitToolNames = (toolkits: Toolkit[]) =>
@@ -110,8 +145,10 @@ export const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
 export const MAX_MOUNTS_PER_KIND = 2;
 /** Methods whose spec carries `filesystem`: managed session storage on all three,
  *  BYO mounts (S3 Files / EFS — they need VPC networking) on the container only. */
-export const FILESYSTEM_METHODS: readonly AgentMethod[] = ["harness", "zip_runtime", "container"];
-export const byoMountsAllowed = (method: AgentMethod) => method === "container";
+export const FILESYSTEM_METHODS: readonly AgentMethod[] = ["harness", "zip_runtime", "container", "byoc"];
+/** Every wizard method mounts BYO S3 Files / EFS (storage-mounts §3) — kept equal to
+ *  the backend's `BYO_MOUNT_METHODS`. */
+export const byoMountsAllowed = (method: AgentMethod) => BYO_MOUNT_METHODS.includes(method);
 
 export const splitIds = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 export const skillNameFromPath = (path: string) =>
@@ -137,27 +174,14 @@ export const A2A_MODEL_SOURCE: ModelSource = "bedrock";
 
 export const sourceForMethod = (m: AgentMethod): ModelSource => MODEL_SOURCE_BY_METHOD[m];
 
-/**
- * The model a form seeds for `method` on `source`. On native Bedrock it is the
- * platform's configured agent default (`GET /api/model-defaults`, an admin can
- * change it) — the Claude SDK default for the container method, which drives Claude
- * only — i.e. what the backend gives a spec without a `model_id`. A configured id the
- * catalog does not list rides the "Custom model ID…" branch (`isCustomModelId`).
- * Mantle ids are a different id space, so a Mantle source keeps its catalog's first
- * entry. `defaults` pins a snapshot (the static ones, to tell a seeded value apart).
- */
-export const defaultModelForMethod = (
-  method: AgentMethod,
-  source: ModelSource = sourceForMethod(method),
-  defaults?: ModelDefaults,
-) =>
-  source === "bedrock"
-    ? defaultModelForRole("agent_default_model_id", { method, defaults })
-    : defaultModelFor(source, method === "container");
+/** The model a form seeds for `method` on `source` — the configured default, Claude-only
+ *  (`claude_sdk_model_id`) for the Claude Agent SDK. */
+export const defaultModelForMethod = (method: AgentMethod, source: ModelSource = sourceForMethod(method)) =>
+  defaultModelFor(source, method === "container");
 
 /** The source a method switch lands on: protocol survives a method switch, so
  *  re-entering zip_runtime with A2A still selected lands back on the pinned source. */
-export const sourceOnMethodSwitch = (next: AgentMethod, protocol: "http" | "a2a") =>
+export const sourceOnMethodSwitch = (next: AgentMethod, protocol: AgentForm["protocol"]) =>
   next === "zip_runtime" && protocol === "a2a" ? A2A_MODEL_SOURCE : sourceForMethod(next);
 
 // byoc allowed-models cap — mirrors `BYOC_ALLOWED_MODELS_MAX` (backend
@@ -266,6 +290,14 @@ export interface KbRef {
  *  non-managed KBs, so the type guard is defensive. */
 export const selectableKbs = <T extends AttachableKb>(catalog: T[]) =>
   catalog.filter((k) => k.status === "ACTIVE" && (k.type == null || k.type === "MANAGED"));
+
+/** `kb=1` (the new-agent chooser's "answer from documents"): the first ACTIVE
+ *  managed KB, only when nothing is selected yet — a member's own pick wins. */
+export const prefillKbPick = (selected: string[], catalog: AttachableKb[]): string[] => {
+  if (selected.length) return selected;
+  const first = selectableKbs(catalog)[0];
+  return first ? [first.kb_id] : selected;
+};
 
 /** Resolve a KB id to its name/description, preferring the live catalog and
  *  falling back to the loaded spec so out-of-catalog KBs keep their label. */
@@ -420,7 +452,13 @@ export const authToolRefs = (rows: AuthToolRow[]) =>
  *  method does not use are carried (a method switch keeps them) but never sent. */
 export interface AgentForm {
   method: AgentMethod;
+  /** Human label (any language, 1–64 chars); blank ⇒ not sent, the slug is shown. */
+  displayName: string;
+  /** The immutable slug — names every AWS resource the agent owns. */
   name: string;
+  /** UI-only: the member edited the slug by hand, so it no longer follows
+   *  `displayName` (never sent to the backend). */
+  nameEdited?: boolean;
   modelId: string;
   modelSource: ModelSource;
   agentSdk: AgentSdk;
@@ -442,6 +480,8 @@ export interface AgentForm {
   allowedTools: string[] | null;
   nativeTools: HarnessNativeTool[];
   longTerm: boolean;
+  /** T12 PII protection: off ⇒ the field is omitted from the spec entirely */
+  guardrail: "off" | "anonymize" | "block";
   /** "" ⇒ the workspace's shared default memory */
   memoryId: string;
   /** container: LAUNCHPAD_MCP_SERVERS JSON */
@@ -451,10 +491,24 @@ export interface AgentForm {
   sessionMount: string;
   s3Mounts: MountRow[];
   efsMounts: MountRow[];
+  /** mounts picked from the workspace's storage catalog (storage-mounts §4, SM-2) */
+  catalogMounts: CatalogMountRow[];
   vpcSubnets: string;
   vpcSgs: string;
-  // zip_runtime service protocol
-  protocol: "http" | "a2a";
+  /** `network: {profile_id}` — the workspace network profile the agent runs in
+   *  (projects §12.6, every method); "" ⇒ PUBLIC (or, on a container with BYO
+   *  mounts, the legacy inline ids above) */
+  networkProfileId: string;
+  /** the V2 network step chose "VPC profile" but no profile yet (blocks launch);
+   *  absent on forms without a network step */
+  networkVpc?: boolean;
+  // zip_runtime service protocol; byoc can also host an MCP server ("mcp")
+  protocol: "http" | "a2a" | "mcp";
+  /** byoc + protocol "mcp": the Gateway target its tools appear under */
+  mcpTargetName: string;
+  /** byoc + protocol "mcp" + code_zip: a stdio-only server behind the platform bridge
+   *  (`spec.mcp.stdio_wrapper`, projects §15.5); absent / off ⇒ streamable HTTP */
+  mcpStdio?: McpStdioForm;
   a2aSkills: A2aSkillRow[];
   // byoc
   byocKind: ByocArtifactKind;
@@ -478,6 +532,11 @@ export interface AgentForm {
    */
   inbound?: InboundChoice;
   inboundJwt?: JwtFormState;
+  /** zip_runtime: Strands builder options (strands-builder SB-1). Optional so a form
+   *  built elsewhere (templates, the classic wizard) still type-checks; absent ⇒
+   *  none set. A loaded agent always carries its stored values, so a re-publish
+   *  from either console keeps them. */
+  strands?: StrandsForm;
   /**
    * The COA context-layer namespace (harness + HTTP zip_runtime). Optional for the
    * same reason as `inbound`: a form that does not own it (the classic wizard) omits
@@ -552,6 +611,7 @@ export const managedGatewayAttached = (
 /** The fresh form a new agent starts on (the classic wizard's `resetForm`). */
 export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   method,
+  displayName: "",
   name: "",
   modelId: defaultModelForMethod(method),
   modelSource: sourceForMethod(method),
@@ -569,6 +629,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   skills: [],
   allowedTools: null,
   nativeTools: method === "harness" ? [...DEFAULT_HARNESS_NATIVE_TOOLS] : [],
+  guardrail: "off",
   longTerm: true,
   memoryId: "",
   mcpServers: "",
@@ -576,9 +637,13 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   sessionMount: DEFAULT_SESSION_MOUNT,
   s3Mounts: [],
   efsMounts: [],
+  catalogMounts: [],
   vpcSubnets: "",
   vpcSgs: "",
+  networkProfileId: "",
   protocol: "http",
+  mcpTargetName: "",
+  mcpStdio: { ...MCP_STDIO_OFF },
   a2aSkills: [],
   byocKind: "code_zip",
   byocUploadId: null,
@@ -593,11 +658,15 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   authTools: [],
   inbound: "inherit",
   inboundJwt: { ...EMPTY_JWT_FORM },
+  strands: emptyStrandsForm(),
   contextLayer: null,
 });
 
 /** Spec fields read back when an existing agent is loaded into the form. */
 export interface StoredAgentSpec {
+  display_name?: string | null;
+  /** T12 PII protection; absent on every spec written before it existed */
+  guardrail?: { enabled?: boolean; mode?: "anonymize" | "block" } | null;
   model_id?: string;
   model_source?: ModelSource;
   agent_sdk?: AgentSdk;
@@ -615,15 +684,19 @@ export interface StoredAgentSpec {
   native_tools?: HarnessNativeTool[];
   knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean; memory_id?: string | null };
-  protocol?: "http" | "a2a";
+  protocol?: "http" | "a2a" | "mcp";
+  mcp?: { target_name?: string; stdio_wrapper?: McpStdioWrapperInput | null } | null;
   a2a_skills?: { id?: string; name?: string; description?: string; tags?: string[] }[];
   env?: Record<string, string>;
   filesystem?: {
     session_storage?: { mount_path?: string } | null;
     s3_files?: { access_point_arn?: string; mount_path?: string }[];
     efs?: { access_point_arn?: string; mount_path?: string }[];
+    /** catalog picks by id (the server stamps kind and ARN) */
+    mounts?: { storage_id?: string; mount_path?: string; mode?: string }[];
   };
-  network?: { subnets?: string[]; security_groups?: string[] };
+  /** inline VPC ids (legacy) or a workspace network profile */
+  network?: { subnets?: string[]; security_groups?: string[]; profile_id?: string } | null;
   byoc?: ByocConfigInput;
   inbound_auth?: InboundAuth | null;
   context_layer?: ContextLayerRef | null;
@@ -652,12 +725,13 @@ export function formFromStoredSpec(
 ): { form: AgentForm; extras: StoredAgentExtras } {
   const spec = (raw ?? {}) as StoredAgentSpec;
   const base = emptyAgentForm(method);
-  const storedModel = spec.model_id ?? SPEC_DEFAULT_MODEL_ID;
+  const storedModel = spec.model_id ?? specDefaultModelId();
   const tools = spec.tools ?? [];
   const gatewayTools = tools.filter((x) => x.type === "gateway");
   const fs = spec.filesystem;
   const form: AgentForm = {
     ...base,
+    displayName: spec.display_name ?? "",
     name,
     modelId: storedModel,
     modelSource: spec.model_source ?? "bedrock",
@@ -677,15 +751,20 @@ export function formFromStoredSpec(
     allowedTools: spec.allowed_tools ?? null,
     nativeTools: method === "harness" ? spec.native_tools ?? [] : [],
     longTerm: spec.memory?.long_term ?? true,
+    guardrail: spec.guardrail?.enabled ? (spec.guardrail.mode ?? "anonymize") : "off",
     memoryId: spec.memory?.memory_id ?? "",
     mcpServers: spec.env?.LAUNCHPAD_MCP_SERVERS ?? "",
     sessionFs: fs ? fs.session_storage != null : true,
     sessionMount: fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT,
     s3Mounts: (fs?.s3_files ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
     efsMounts: (fs?.efs ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
+    catalogMounts: catalogRowsFromSpec(fs),
     vpcSubnets: (spec.network?.subnets ?? []).join(", "),
     vpcSgs: (spec.network?.security_groups ?? []).join(", "),
+    networkProfileId: spec.network?.profile_id ?? "",
     protocol: spec.protocol ?? "http",
+    mcpTargetName: spec.mcp?.target_name ?? "",
+    mcpStdio: mcpStdioFromSpec(spec.mcp?.stdio_wrapper),
     a2aSkills: (spec.a2a_skills ?? []).map((s) => ({
       name: s.name ?? "",
       description: s.description ?? "",
@@ -708,6 +787,7 @@ export function formFromStoredSpec(
     });
   }
   form.authTools = tools.filter(isAuthTool).map(authRowFromStored);
+  if (method === "zip_runtime") form.strands = strandsFormFromSpec(raw);
   form.contextLayer = spec.context_layer?.namespace_id
     ? {
         namespaceId: spec.context_layer.namespace_id,
@@ -784,8 +864,9 @@ export const byocEnv = (rows: EnvRow[]) =>
 
 export const byocModelList = (models: string[]) => models.map((m) => m.trim()).filter(Boolean);
 
-export const hasByoMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts">) =>
-  form.s3Mounts.length > 0 || form.efsMounts.length > 0;
+/** Any S3 Files / EFS mount: inline by ARN, or picked from the catalog. */
+export const hasByoMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts"> & { catalogMounts?: readonly CatalogMountRow[] }) =>
+  form.s3Mounts.length > 0 || form.efsMounts.length > 0 || (form.catalogMounts?.length ?? 0) > 0;
 
 /**
  * `inbound_auth` as the form states it: nothing for a method that cannot carry a
@@ -803,12 +884,95 @@ export const inboundValid = (form: AgentForm) =>
   !inboundCapable(form.method, form.protocol) ||
   jwtFormProblem(form.inboundJwt ?? EMPTY_JWT_FORM) === null;
 
+/** The byoc artifact block both byoc flavours (agent, MCP server) send. */
+const byocArtifact = (form: AgentForm) => {
+  const kind = form.byocKind;
+  return {
+    artifact_kind: kind,
+    ...(kind === "container_image"
+      ? { image_uri: form.byocImageUri.trim() }
+      : { upload_id: form.byocUploadId ?? "" }),
+    ...(kind === "code_zip"
+      ? {
+          entrypoint: form.byocEntrypoint.trim() || BYOC_DEFAULT_ENTRYPOINT,
+          python_version: form.byocPython,
+          install_requirements: form.byocInstallReqs,
+        }
+      : {}),
+  };
+};
+
+/**
+ * A byoc artifact hosted as an MCP server: no model, memory, tools or inbound
+ * choice — the platform grants it none and wires its JWT inbound and Gateway
+ * target itself (`backend/app/services/mcp_servers.py`).
+ */
+/** `filesystem` — the session storage plus the BYO S3 Files / EFS mounts (every
+ *  method, storage-mounts §3) and the catalog picks (`mounts`, §4); shared by the
+ *  ordinary, BYOC and MCP server specs. */
+export function filesystemSpec(form: AgentForm): Pick<AgentSpecInput, "filesystem"> {
+  return {
+    filesystem: {
+      session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null,
+      s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
+      efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
+      mounts: catalogMountsSpec(form.catalogMounts ?? []),
+    },
+  };
+}
+
+/**
+ * `network` for every method (projects §12.6): the chosen profile reference (the
+ * backend resolves it to subnets + security groups at deploy time); for a container
+ * with BYO mounts and no profile, the legacy inline ids; otherwise omitted ⇒ PUBLIC.
+ * A re-publish replaces the stored spec, so leaving a profile is just omitting it.
+ */
+export function networkSpec(form: AgentForm): Pick<AgentSpecInput, "network"> {
+  if (form.networkProfileId) {
+    const ref: NetworkProfileRefInput = { profile_id: form.networkProfileId };
+    return { network: ref };
+  }
+  if (form.method === "container" && hasByoMounts(form)) {
+    return { network: { subnets: splitIds(form.vpcSubnets), security_groups: splitIds(form.vpcSgs) } };
+  }
+  return {};
+}
+
+/** `network: {profile_id}` — a workspace network profile reference. */
+export interface NetworkProfileRefInput {
+  profile_id: string;
+}
+
+/** The network step is complete: "VPC profile" needs a profile picked. */
+export const networkValid = (form: AgentForm) => !(form.networkVpc && !form.networkProfileId);
+
+export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
+  const env = byocEnv(form.byocEnvRows);
+  // code_zip + stdio on only (mcpStdioSpec returns null otherwise)
+  const stdio = mcpStdioSpec(form.mcpStdio, form.byocKind);
+  return {
+    name: form.name,
+    ...displayNameField(form),
+    method: "byoc",
+    protocol: "mcp",
+    // optional for byoc; doubles as the server's description
+    system_prompt: form.byocDescription,
+    ...(Object.keys(env).length ? { env } : {}),
+    mcp: { target_name: form.mcpTargetName.trim(), ...(stdio ? { stdio_wrapper: stdio } : {}) },
+    byoc: byocArtifact(form) as ByocConfigInput,
+    ...filesystemSpec(form),
+    ...networkSpec(form),
+  };
+}
+
 export function buildByocSpec(form: AgentForm): AgentSpecInput {
+  if (form.protocol === "mcp") return buildMcpServerSpec(form);
   const env = byocEnv(form.byocEnvRows);
   const models = byocModelList(form.byocModels);
   const kind = form.byocKind;
   return {
     name: form.name,
+    ...displayNameField(form),
     method: "byoc",
     // the execution role scopes bedrock:InvokeModel to exactly the allowed-models
     // list; entry [0] is the primary the backend injects as env MODEL_ID (the whole
@@ -817,6 +981,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
     model_source: form.modelSource,
     // spec.system_prompt is optional for byoc; the field doubles as a description
     system_prompt: form.byocDescription,
+    ...guardrailSpec(form),
     memory: { short_term: true, long_term: false },
     ...(Object.keys(env).length ? { env } : {}),
     // byoc tools are outbound-auth declarations for the member's own code
@@ -837,6 +1002,8 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
       invoke_contract: form.byocRawContract ? "raw" : "launchpad_prompt",
       allowed_models: models,
     },
+    ...filesystemSpec(form),
+    ...networkSpec(form),
   };
 }
 
@@ -850,6 +1017,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
   });
   return {
     name: form.name,
+    ...displayNameField(form),
     method,
     model_id: form.modelId.trim(), // a pasted custom id may carry stray whitespace
     model_source: form.modelSource,
@@ -880,6 +1048,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
             method === "zip_runtime" && protocol === "http"
             ? [...gatewayToolRefs(form, cat), ...authToolRefs(form.authTools)]
             : [],
+    ...guardrailSpec(form),
     memory: {
       short_term: true,
       long_term: form.longTerm,
@@ -908,6 +1077,11 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
     ...(method === "zip_runtime" && protocol === "http" && form.toolkits.length
       ? { toolkits: form.toolkits }
       : {}),
+    // Strands builder options (SB-1): only what is set, so an agent using none
+    // posts the spec it always did
+    ...(method === "zip_runtime"
+      ? strandsSpec(form.strands, { protocol, modelId: form.modelId.trim(), modelSource: form.modelSource })
+      : {}),
     ...(form.selectedKbs.length ? { knowledge_bases: form.selectedKbs.map(cat.kbInfo) } : {}),
     ...((method === "harness" || method === "container" || method === "zip_runtime") &&
     skills.length
@@ -921,28 +1095,16 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
     ...(method === "container" && form.mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: form.mcpServers.trim() } }
       : {}),
-    ...(method === "harness" || method === "zip_runtime"
-      ? { filesystem: { session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null } }
+    ...(method === "harness" || method === "zip_runtime" || method === "container"
+      ? filesystemSpec(form)
       : {}),
-    ...(method === "container"
-      ? {
-          filesystem: {
-            session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null,
-            s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
-            efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
-          },
-          ...(hasByoMounts(form)
-            ? {
-                network: {
-                  subnets: splitIds(form.vpcSubnets),
-                  security_groups: splitIds(form.vpcSgs),
-                },
-              }
-            : {}),
-        }
-      : {}),
+    ...networkSpec(form),
   } as AgentSpecInput;
 }
+
+/** `display_name` only when the member typed one (trimmed, like the backend). */
+const displayNameField = (form: AgentForm): { display_name?: string } =>
+  form.displayName.trim() ? { display_name: form.displayName.trim() } : {};
 
 /** The spec a create / re-publish posts for the form. */
 export const buildAgentSpec = (form: AgentForm, cat: AgentFormCatalogs): AgentSpecInput =>
@@ -1028,6 +1190,8 @@ export interface FilesystemIssues {
   /** `s3:<i>` / `efs:<i>` → which half of the row is invalid */
   rows: Record<string, { arn: boolean; path: boolean }>;
   duplicatePaths: boolean;
+  /** inline + catalog mounts over `MAX_BYO_MOUNTS` */
+  tooMany: boolean;
   vpc: boolean;
 }
 
@@ -1035,10 +1199,12 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
   const byo = byoMountsAllowed(form.method);
   const s3Mounts = byo ? form.s3Mounts : [];
   const efsMounts = byo ? form.efsMounts : [];
+  const catalogMounts = byo ? (form.catalogMounts ?? []) : [];
   const paths = [
     ...(form.sessionFs ? [form.sessionMount] : []),
     ...s3Mounts.map((m) => m.path),
     ...efsMounts.map((m) => m.path),
+    ...catalogMountsSpec(catalogMounts).map((m) => m.mount_path),
   ];
   const rows: FilesystemIssues["rows"] = {};
   for (const [kind, list] of [["s3", s3Mounts], ["efs", efsMounts]] as const) {
@@ -1052,9 +1218,13 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
     sessionMount: form.sessionFs && !MOUNT_RE.test(form.sessionMount),
     rows,
     duplicatePaths: new Set(paths).size !== paths.length,
+    tooMany: s3Mounts.length + efsMounts.length + catalogMounts.length > MAX_BYO_MOUNTS,
     vpc:
-      hasByoMounts({ s3Mounts, efsMounts }) &&
-      (splitIds(form.vpcSubnets).length === 0 || splitIds(form.vpcSgs).length === 0),
+      hasByoMounts({ s3Mounts, efsMounts, catalogMounts }) &&
+      !form.networkProfileId &&
+      (form.method !== "container" ||
+        splitIds(form.vpcSubnets).length === 0 ||
+        splitIds(form.vpcSgs).length === 0),
   };
 }
 
@@ -1065,6 +1235,7 @@ export const filesystemValid = (form: AgentForm) => {
     !issues.sessionMount &&
     Object.keys(issues.rows).length === 0 &&
     !issues.duplicatePaths &&
+    !issues.tooMany &&
     !issues.vpc
   );
 };
@@ -1086,15 +1257,28 @@ export interface ByocIssues {
   imageUri: boolean;
   upload: boolean;
   entrypoint: boolean;
+  /** protocol "mcp": the Gateway target name (`MCP_TARGET_NAME_RE`) */
+  mcpTarget: boolean;
+  /** protocol "mcp" with the stdio bridge: its command / arguments (`mcpStdioIssues`) */
+  mcpStdio: boolean;
 }
+
+/** A Gateway target name, as the backend's `MCP_TARGET_NAME_RE` (no trailing hyphen). */
+export const MCP_TARGET_NAME_RE = /^[a-zA-Z0-9](?:-?[a-zA-Z0-9]){0,99}$/;
 
 export function byocIssues(form: AgentForm): ByocIssues {
   const image = form.byocKind === "container_image";
+  const mcp = form.protocol === "mcp";
   return {
-    models: !form.byocModels.some((m) => m.trim().length > 0),
+    // an MCP server is granted no model
+    models: !mcp && !form.byocModels.some((m) => m.trim().length > 0),
+    mcpTarget: mcp && !MCP_TARGET_NAME_RE.test(form.mcpTargetName.trim()),
+    mcpStdio: mcp && Object.values(mcpStdioIssues(form.mcpStdio, form.byocKind)).some(Boolean),
     imageUri: image && !ECR_IMAGE_RE.test(form.byocImageUri.trim()),
     upload: !image && form.byocUploadId == null,
-    entrypoint: form.byocKind === "code_zip" && !form.byocEntrypoint.trim().endsWith(".py"),
+    // a stdio MCP server's entrypoint is the platform bridge (the field is hidden)
+    entrypoint:
+      form.byocKind === "code_zip" && !(mcp && form.mcpStdio?.on) && !form.byocEntrypoint.trim().endsWith(".py"),
   };
 }
 
@@ -1186,6 +1370,7 @@ export function agentFormValid(
 ): boolean {
   if (!authToolsValid(form, opts.connections)) return false;
   if (!inboundValid(form)) return false;
+  if (!networkValid(form)) return false;
   if (!contextLayerValid(form)) return false;
   if (form.method === "byoc") {
     return AGENT_NAME_RE.test(form.name) && byocValid(form) && !opts.byocUploading;
@@ -1197,6 +1382,16 @@ export function agentFormValid(
     form.modelId.trim().length > 0 &&
     opts.knobIssues.length === 0 &&
     filesystemValid(form) &&
-    gatewaySelectionsValid(form, cat)
+    gatewaySelectionsValid(form, cat) &&
+    (form.method !== "zip_runtime" || strandsValid(form.strands, strandsContext(form)))
   );
 }
+
+/** What the Strands builder checks need from the rest of the form. */
+export const strandsContext = (form: AgentForm) => ({
+  protocol: form.protocol,
+  modelId: form.modelId.trim(),
+  modelSource: form.modelSource,
+  hasKbs: form.selectedKbs.length > 0,
+  guardrail: form.guardrail !== "off",
+});

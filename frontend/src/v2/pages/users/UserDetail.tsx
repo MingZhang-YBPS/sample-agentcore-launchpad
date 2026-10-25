@@ -2,18 +2,17 @@ import { KeyRound, ShieldCheck, Trash2, UserCheck, UserX } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { AGENT_PERMISSIONS, api, togglePermission } from "../../../lib/api";
+import { AGENT_PERMISSIONS, togglePermission, api } from "../../../lib/api";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { fmtTime } from "../../format";
 import { useLoad } from "../../hooks";
 import { Alert, Button, Card, Descriptions, FlowHeader, LinkButton, Spin } from "../../ui";
 import { useUserActions } from "./actions";
-import { BudgetCard } from "./BudgetCard";
 import { GrantChip, RoleTag, StateTag, ValidityCell } from "./tags";
 
 /**
- * One account (`?view=detail&user=<username>`): profile, validity, role, spend
- * budget, agent permissions and workspace grants. There is no GET-by-id route, so the account
+ * One account (`?view=detail&user=<username>`): profile, validity, role, agent
+ * permissions and workspace grants. There is no GET-by-id route, so the account
  * is read back through the list search and matched on the exact username
  * (usernames are unique).
  */
@@ -143,13 +142,6 @@ export function UserDetail({ username }: { username: string }) {
         </Card>
       </div>
 
-      {/* remounted on a reload, so the form starts from the stored assignment */}
-      <BudgetCard
-        key={`${user.id}:${user.budget_level_id ?? ""}:${user.budget_override_usd ?? ""}:${user.role}`}
-        user={user}
-        onSaved={loaded.reload}
-      />
-
       <Card title={t("v2.users.permTitle")} sub={t("v2.users.permSub")} testId="v2-users-perms">
         {isAdminRole ? (
           <span className="v2-muted">{t("v2.users.allByRole")}</span>
@@ -174,6 +166,11 @@ export function UserDetail({ username }: { username: string }) {
               );
             })}
           </div>
+        )}
+        {!isAdminRole && (
+          <p className="v2-muted" style={{ margin: "10px 0 0", fontSize: 12 }} data-testid="v2-users-budget-hint">
+            {t("v2.users.budgetManageHint")}
+          </p>
         )}
       </Card>
 

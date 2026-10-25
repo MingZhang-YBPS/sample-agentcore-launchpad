@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type RuntimeCanaryInfo } from "../../../lib/api";
+import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Confirm, Select, Tag } from "../../ui";
 import { CanaryEvaluatorFields } from "../canary/CanaryEvaluators";
@@ -88,12 +89,13 @@ export function HarnessCanary({
     setCreating(true);
     setError(null);
     try {
-      const row = await api.createRuntimeCanary({
+      const row = await withStorageConfirm((confirm) => api.createRuntimeCanary({
         agent_id: agentId,
         harness_versions: { control, treatment: latest },
         start_stage: runFirst ? 0 : 1,
         ...evaluators.body,
-      });
+        ...storageFlag(confirm),
+      }));
       await api.runtimeCanaryAction(row.id, { action: "setup" });
       toast("success", t("assistantNext.canary.startedToast", { name: row.name }));
       setTick((n) => n + 1);

@@ -13,6 +13,7 @@ from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned
 
 
 def _taskset_id() -> str:
@@ -27,7 +28,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-class SkillLabJob(Base):
+class SkillLabJob(ProjectOwned, Base):
     """One evaluation, training, or task-generation run of the vendored CLIs.
 
     The row is status + identifiers only: the CLI log streams from
@@ -38,6 +39,7 @@ class SkillLabJob(Base):
     expanded) once the operator saves the reviewed output."""
 
     __tablename__ = "skill_lab_jobs"
+    __project_parent__ = ("taskset_id", ("skill_lab_tasksets",))
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=_job_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -64,7 +66,7 @@ class SkillLabJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
-class SkillLabTaskset(Base):
+class SkillLabTaskset(ProjectOwned, Base):
     __tablename__ = "skill_lab_tasksets"
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_taskset_id)

@@ -12,7 +12,8 @@ import { RunResultsPanel } from "../components/RunResultsPanel";
 import type { AgentInfo } from "../lib/api";
 import { api, errorMessage, responseMessage } from "../lib/api";
 import {
-  ACTOR_MODELS,
+  actorModelOptions,
+  defaultActorModel,
   CLOUD_VALUE_PREFIX,
   DEFAULT_EVALUATORS,
   SIMULATED_SCHEMA,
@@ -24,6 +25,9 @@ import {
   hasInsightTrees,
 } from "../lib/evaluation";
 import { evaluatorLabel } from "../lib/evaluators";
+import { useModelCatalog } from "../lib/model-catalog";
+import { adoptModelDefault, useModelDefaultsArrival } from "../lib/model-defaults";
+import { CUSTOM_MODEL_OPTION } from "../lib/models";
 import { DatasetsView } from "./EvaluationDatasets";
 import { EvaluatorsView } from "./EvaluationEvaluators";
 import { ExperimentView } from "./EvaluationExperiment";
@@ -136,7 +140,16 @@ export function Evaluation() {
   const [queueMax, setQueueMax] = useState(3);
   const [agentId, setAgentId] = useState("");
   const [datasetId, setDatasetId] = useState("");
-  const [actorModelId, setActorModelId] = useState(ACTOR_MODELS[0]);
+  const [actorModelId, setActorModelId] = useState(defaultActorModel);
+  // seeded before the configured defaults arrive: adopt the configured actor then,
+  // unless the user already picked one
+  const seededActor = useRef(defaultActorModel());
+  const actorTouched = useRef(false);
+  const [actorCustom, setActorCustom] = useState(false);
+  useModelCatalog();
+  const modelDefaults = useModelDefaultsArrival((d) => {
+    setActorModelId((cur) => adoptModelDefault(cur, seededActor.current, d.actor_model_id, actorTouched.current));
+  });
   const [mode, setMode] = useState<"evaluators" | "insights">("evaluators");
   const [scope, setScope] = useState<"dataset" | "window">("dataset");
   const [lookbackHours, setLookbackHours] = useState(24);
@@ -676,16 +689,33 @@ export function Evaluation() {
                     <label>{t("evalPage.newRun.actorModel")}</label>
                     <select
                       className="input"
-                      value={actorModelId}
+                      value={actorCustom ? CUSTOM_MODEL_OPTION : actorModelId}
                       data-testid="actor-model"
-                      onChange={(e) => setActorModelId(e.target.value)}
+                      onChange={(e) => {
+                        actorTouched.current = true;
+                        setActorCustom(e.target.value === CUSTOM_MODEL_OPTION);
+                        if (e.target.value !== CUSTOM_MODEL_OPTION) setActorModelId(e.target.value);
+                      }}
                     >
-                      {ACTOR_MODELS.map((m) => (
+                      {actorModelOptions(modelDefaults, actorModelId).map((m) => (
                         <option key={m} value={m} style={{ background: "var(--panel)" }}>
                           {m}
                         </option>
                       ))}
+                      <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
+                        {t("models.picker.custom")}
+                      </option>
                     </select>
+                    {actorCustom && (
+                      <input
+                        className="input mono"
+                        style={{ marginTop: 6 }}
+                        data-testid="actor-model-custom"
+                        value={actorModelId}
+                        placeholder={t("models.picker.customPlaceholder", { example: defaultActorModel(modelDefaults) })}
+                        onChange={(e) => setActorModelId(e.target.value.trim())}
+                      />
+                    )}
                     <div className="note" style={{ marginTop: 8 }}>
                       <span className="i">[i]</span>
                       <span>{t("evalPage.newRun.actorModelHint")}</span>

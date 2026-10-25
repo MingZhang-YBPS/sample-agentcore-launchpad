@@ -13,6 +13,11 @@ joined to ``assistant_conversations.owner_principal``):
   belongs to another principal's conversation **after** the per-workspace cache,
   so a cached payload built for one caller can never be served to another. The
   owner still sees their own sessions; ordinary agents' sessions are untouched.
+
+Both read workspace-wide (``project_context(None)``): they are deny-lists, so the
+project filter would make them fail open — another project's assistant turns would
+be missing from them and so reachable. A session of the caller's own conversation
+in another project is hidden as well (design §5.5).
 """
 
 from typing import Any
@@ -21,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.core.errors import NotFoundError
+from app.core.project_scope import current_project, project_context
 from app.models.assistant import AssistantConversation, AssistantMessage
 from app.models.ledger import Agent
 
@@ -30,12 +36,13 @@ def is_assistant_session(session_id: str | None) -> bool:
         return False
     db = SessionLocal()
     try:
-        return (
-            db.query(AssistantMessage.id)
-            .filter(AssistantMessage.runtime_session_id == session_id)
-            .first()
-            is not None
-        )
+        with project_context(None):
+            return (
+                db.query(AssistantMessage.id)
+                .filter(AssistantMessage.runtime_session_id == session_id)
+                .first()
+                is not None
+            )
     finally:
         db.close()
 
@@ -52,22 +59,30 @@ def refuse_assistant_session(agent: Agent, session_id: str | None) -> None:
 class PrivateSessions:
     """Runtime session ids of a workspace's assistant turns that the caller may NOT
     see: every assistant session whose conversation principal differs from the
-    caller's (a NULL principal is visible to nobody)."""
+    caller's (a NULL principal is visible to nobody), or whose conversation belongs
+    to another project than the current one."""
 
     def __init__(self, db: Session, workspace_id: str, principal: str | None):
-        rows = (
-            db.query(AssistantMessage.runtime_session_id, AssistantConversation.owner_principal)
-            .join(AssistantConversation,
-                  AssistantConversation.id == AssistantMessage.conversation_id)
-            .filter(
-                AssistantMessage.workspace_id == workspace_id,
-                AssistantMessage.runtime_session_id.isnot(None),
+        project = current_project()
+        with project_context(None):
+            rows = (
+                db.query(AssistantMessage.runtime_session_id,
+                         AssistantConversation.owner_principal,
+                         AssistantConversation.project_id)
+                .join(AssistantConversation,
+                      AssistantConversation.id == AssistantMessage.conversation_id)
+                .filter(
+                    AssistantMessage.workspace_id == workspace_id,
+                    AssistantMessage.runtime_session_id.isnot(None),
+                )
+                .all()
             )
-            .all()
-        )
         self.hidden: set[str] = {
-            sid for sid, owner in rows
-            if sid and (owner is None or principal is None or owner != principal)
+            sid for sid, owner, pid in rows
+            if sid and (
+                owner is None or principal is None or owner != principal
+                or (project is not None and pid != project)
+            )
         }
 
     def visible(self, session_id: str | None) -> bool:

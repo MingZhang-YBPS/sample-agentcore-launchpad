@@ -1,21 +1,48 @@
-"""AgentCore Memory helpers — session events (short-term) + records (long-term)."""
+"""AgentCore Memory helpers — session events (short-term) + records (long-term).
+
+The default memory is the current project's (`project_memory.effective_memory_id`):
+an isolated project's own memory once provisioned, the workspace's bootstrap memory
+for every other project. While an isolated project is in its dual-read window the
+readers here also look in the old shared memory, for the project's own agents' actors
+only (`project_memory.dual_read`); an explicit ``memory_id`` (an agent-pinned memory)
+is read alone.
+"""
 
 import json
 import re
 from datetime import UTC, datetime
 from typing import Any
 
-from app.services.agentcore.client import data_client
+# memory calls get their own short-timeout client (agentcore.client.memory_data_client)
+from app.services.agentcore.client import memory_data_client as data_client
 from app.services.workspace import WorkspaceContext
 
 
 def memory_id_or_none(workspace: WorkspaceContext) -> str | None:
-    """The workspace's memory id, or None before its bootstrap has run.
+    """The current project's memory id in this workspace, or None before the
+    workspace's bootstrap has run.
 
     The console's landing view needs to distinguish "not bootstrapped" from
     "AWS call failed", so it reads the id without raising.
     """
-    return workspace.resources.get("memory_id") or None
+    from app.services import project_memory
+
+    return project_memory.effective_memory_id(workspace)
+
+
+def _dual_read(workspace: WorkspaceContext, memory_id: str | None):
+    """The shared memory to read as well (`project_memory.DualRead`), or None — always
+    None when the caller pinned a memory."""
+    if memory_id:
+        return None
+    from app.services import project_memory
+
+    return project_memory.dual_read(workspace)
+
+
+def _not_found(exc: Exception) -> bool:
+    code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+    return code == "ResourceNotFoundException"
 
 
 def _memory_id(workspace: WorkspaceContext) -> str:
@@ -39,12 +66,73 @@ def spec_memory_id(agent_spec: dict | None) -> str | None:
 def memory_arn_for(workspace: WorkspaceContext, memory_id: str) -> str:
     """Memory id → ARN in this workspace's account/region (GetMemory-free)."""
     return (
-        f"arn:aws:bedrock-agentcore:{workspace.region}:"
+        f"arn:{workspace.partition}:bedrock-agentcore:{workspace.region}:"
         f"{workspace.account_id}:memory/{memory_id}"
     )
 
 
 SCOPE_SEP = "__"
+
+# AgentCore Memory's actorId constraint (CreateEvent / ListEvents ValidationException).
+# Console usernames may carry "." (users._USERNAME_RE) and /v1 callers send free-form
+# actor ids, so a compound id that breaks this pattern is escaped (encode_actor_part).
+# AWS spells it `[a-zA-Z0-9][a-zA-Z0-9-_/]*(?::[a-zA-Z0-9-_/]+)*[a-zA-Z0-9-_/]*`; the
+# trailing class there only repeats what the last segment already matches, and the
+# overlap backtracks polynomially on a long `0----…` actor id (CodeQL py/polynomial-
+# redos), so it is dropped here — the same language, linear to match.
+ACTOR_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_/]*(?::[a-zA-Z0-9\-_/]+)*$")
+ACTOR_ESCAPE = "_"
+_ESCAPES = {".": "d", "-": "h", "_": "u"}
+_UNESCAPES = {v: k for k, v in _ESCAPES.items()}
+
+
+def encode_actor_part(human: str) -> str:
+    """A reversible, Memory-safe form of a human actor id: ``_`` then each
+    character — letters and digits as they are, ``.`` ``-`` ``_`` as ``_d`` ``_h``
+    ``_u``, anything else as ``_x<hex>_``. Prefix-free escapes make it injective,
+    and the leading ``_`` (a console username never starts with one) keeps it
+    apart from every id that needed no escaping."""
+    out = [ACTOR_ESCAPE]
+    for ch in human:
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+        elif ch in _ESCAPES:
+            out.append(f"_{_ESCAPES[ch]}")
+        else:
+            out.append(f"_x{ord(ch):x}_")
+    return "".join(out)
+
+
+def decode_actor_part(part: str) -> str:
+    """Inverse of ``encode_actor_part``; anything that is not one comes back as is."""
+    if not part.startswith(ACTOR_ESCAPE) or len(part) < 2:
+        return part
+    out: list[str] = []
+    i = 1
+    while i < len(part):
+        ch = part[i]
+        if ch != "_":
+            if not (ch.isascii() and ch.isalnum()):
+                return part
+            out.append(ch)
+            i += 1
+            continue
+        tag = part[i + 1 : i + 2]
+        if tag in _UNESCAPES:
+            out.append(_UNESCAPES[tag])
+            i += 2
+        elif tag == "x":
+            end = part.find("_", i + 2)
+            if end < 0:
+                return part
+            try:
+                out.append(chr(int(part[i + 2 : end], 16)))
+            except ValueError:
+                return part
+            i = end + 1
+        else:
+            return part
+    return "".join(out)
 
 # Strategies do not agree on a record payload shape: SEMANTIC stores prose in
 # content.text, while USER_PREFERENCE (and SUMMARIZATION) store a structured
@@ -97,25 +185,14 @@ def scoped_actor(agent_id: str, base_actor: str = "river") -> str:
     under the same compound actor, so one agent's memory never bleeds into
     another's for the same human.
 
-    Agent ids are uuid4 hex (``[0-9a-f]{32}``), so the compound id stays within
-    the actorId charset and is safe as a namespace path segment.
+    Agent ids are uuid4 hex (``[0-9a-f]{32}``). A human actor outside the actorId
+    charset (``blank.tan``) is escaped (``_blank_dtan``) — it would otherwise fail
+    every Memory call (ListEvents ValidationException) for that user.
     """
-    return f"{agent_id}{SCOPE_SEP}{base_actor}"
-
-
-def eval_actor(agent_id: str | None, run_id: str, ordinal: int) -> str:
-    """The memory actor of one replayed scenario of an evaluation run.
-
-    Every scenario is a fresh user: a replay that passed no actor landed every
-    run of every agent on the bare ``"default"`` actor, so one run's long-term
-    records (extracted minutes later) answered the next run's questions — a
-    golden-dataset case scored from another case's memory. Run ids are hex and the
-    ordinal is the scenario's position in the dataset, so the id stays within the
-    actorId charset. The run records it per session (``EvalRun.scenario_map``) for
-    the transcript read.
-    """
-    base = f"eval-{run_id}-{ordinal}"
-    return scoped_actor(agent_id, base) if agent_id else base
+    actor = f"{agent_id}{SCOPE_SEP}{base_actor}"
+    if ACTOR_ID_RE.match(actor):
+        return actor  # every id that was valid keeps its existing memory partition
+    return f"{agent_id}{SCOPE_SEP}{encode_actor_part(base_actor)}"
 
 
 _EVAL_ACTOR = re.compile(r"eval-[0-9a-f]+-\d+")
@@ -149,14 +226,31 @@ def list_events(
     max_results: int = 20,
     memory_id: str | None = None,
 ) -> list[dict]:
-    """Short-term events of one session; ``memory_id`` selects an agent-pinned memory."""
-    return data_client(workspace).list_events(
-        memoryId=memory_id or _memory_id(workspace),
-        actorId=actor_id,
-        sessionId=session_id,
-        includePayloads=True,
-        maxResults=min(max_results, 100),
-    ).get("events", [])
+    """Short-term events of one session; ``memory_id`` selects an agent-pinned memory.
+
+    In a dual-read window a session the project memory does not have (written before
+    the agent moved) is read from the shared memory."""
+    client = data_client(workspace)
+    legacy = _dual_read(workspace, memory_id)
+
+    def read(mem_id: str) -> list[dict]:
+        return client.list_events(
+            memoryId=mem_id,
+            actorId=actor_id,
+            sessionId=session_id,
+            includePayloads=True,
+            maxResults=min(max_results, 100),
+        ).get("events", [])
+
+    if legacy is None or not legacy.allows_actor(actor_id):
+        return read(memory_id or _memory_id(workspace))
+    try:
+        events = read(_memory_id(workspace))
+    except Exception as exc:
+        if not _not_found(exc):
+            raise
+        events = []
+    return events or read(legacy.memory_id)
 
 
 def list_actor_ids(
@@ -169,21 +263,30 @@ def list_actor_ids(
     actors, and callers only need a bounded candidate set).
     """
     client = data_client(workspace)
-    actor_ids: list[str] = []
-    token: str | None = None
-    for _ in range(max_pages):
-        params: dict[str, Any] = {"memoryId": _memory_id(workspace), "maxResults": 100}
-        if token:
-            params["nextToken"] = token
-        page = client.list_actors(**params)
-        actor_ids += [
-            summary["actorId"]
-            for summary in page.get("actorSummaries", [])
-            if summary.get("actorId")
-        ]
-        token = page.get("nextToken")
-        if not token:
-            break
+
+    def read(mem_id: str) -> list[str]:
+        found: list[str] = []
+        token: str | None = None
+        for _ in range(max_pages):
+            params: dict[str, Any] = {"memoryId": mem_id, "maxResults": 100}
+            if token:
+                params["nextToken"] = token
+            page = client.list_actors(**params)
+            found += [
+                summary["actorId"]
+                for summary in page.get("actorSummaries", [])
+                if summary.get("actorId")
+            ]
+            token = page.get("nextToken")
+            if not token:
+                break
+        return found
+
+    actor_ids = read(_memory_id(workspace))
+    legacy = _dual_read(workspace, None)
+    if legacy is not None:
+        # the project's own agents' actors from before the move, once each
+        actor_ids = list(dict.fromkeys(actor_ids + legacy.filter_actors(read(legacy.memory_id))))
     if prefix:
         return [actor_id for actor_id in actor_ids if actor_id.startswith(prefix)]
     return actor_ids
@@ -195,21 +298,46 @@ def list_records(
     max_results: int = 20,
     memory_id: str | None = None,
 ) -> list[dict]:
-    return data_client(workspace).list_memory_records(
-        memoryId=memory_id or _memory_id(workspace),
-        namespacePath=namespace_prefix,
-        maxResults=min(max_results, 100),
-    ).get("memoryRecordSummaries", [])
+    client = data_client(workspace)
+
+    def read(mem_id: str) -> list[dict]:
+        return client.list_memory_records(
+            memoryId=mem_id,
+            namespacePath=namespace_prefix,
+            maxResults=min(max_results, 100),
+        ).get("memoryRecordSummaries", [])
+
+    records = read(memory_id or _memory_id(workspace))
+    legacy = _dual_read(workspace, memory_id)
+    if legacy is not None and legacy.allows_namespace(namespace_prefix):
+        records = merge_records(records, read(legacy.memory_id))[: min(max_results, 100)]
+    return records
+
+
+def merge_records(primary: list[dict], legacy: list[dict]) -> list[dict]:
+    """Primary records first, then the legacy ones not already listed (by id)."""
+    seen = {r.get("memoryRecordId") for r in primary if r.get("memoryRecordId")}
+    return primary + [r for r in legacy if r.get("memoryRecordId") not in seen]
 
 
 def retrieve_records(
     workspace: WorkspaceContext, namespace: str, query: str, top_k: int = 3
 ) -> list[dict]:
-    return data_client(workspace).retrieve_memory_records(
-        memoryId=_memory_id(workspace),
-        namespace=namespace,
-        searchCriteria={"searchQuery": query, "topK": top_k},
-    ).get("memoryRecordSummaries", [])
+    client = data_client(workspace)
+
+    def read(mem_id: str) -> list[dict]:
+        return client.retrieve_memory_records(
+            memoryId=mem_id,
+            namespace=namespace,
+            searchCriteria={"searchQuery": query, "topK": top_k},
+        ).get("memoryRecordSummaries", [])
+
+    records = read(_memory_id(workspace))
+    legacy = _dual_read(workspace, None)
+    if legacy is not None and legacy.allows_namespace(namespace):
+        merged = merge_records(records, read(legacy.memory_id))
+        records = sorted(merged, key=lambda r: -(r.get("score") or 0))[:top_k]
+    return records
 
 
 def session_memory_summary(

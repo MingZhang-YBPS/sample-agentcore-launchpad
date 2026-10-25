@@ -1,11 +1,8 @@
 """Hub-global platform settings an administrator changed on the console.
 
-One row per overridden ``Settings`` field (today: the platform model roles of
-``app.services.model_settings``). Precedence is console > env > launchpad.yaml >
-default; a missing row means "not overridden here". Hub-global on purpose — not
-in ``WORKSPACE_SCOPED_TABLES`` — and per ledger, so each deployment (each box with
-its own SQLite file) carries its own overrides. Column names and types match the
-console-v3 branch's table so a ledger written by either build reads in the other.
+One row per overridden ``Settings`` field (today: the platform model ids of
+app.services.model_settings). Precedence is console > env > launchpad.yaml >
+default; a missing row means "not overridden here".
 """
 
 from datetime import datetime

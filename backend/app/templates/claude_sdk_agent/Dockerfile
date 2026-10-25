@@ -13,7 +13,14 @@ RUN apt-get update \
     && npm cache clean --force \
     && apt-get purge -y curl \
     && apt-get autoremove -y \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && dpkg --purge --force-depends --force-remove-essential --force-remove-protected \
+        apt libapt-pkg6.0 libgnutls30
+
+# The last step above drops apt and GnuTLS. Nothing at runtime installs
+# packages, node and python use OpenSSL, and only apt links libgnutls30 — whose
+# Debian builds (bookworm, trixie, sid) all carry an unfixed CRITICAL CVE
+# (CVE-2026-95210) that the platform's ECR scan gate blocks on.
 
 WORKDIR /app
 COPY requirements.txt .

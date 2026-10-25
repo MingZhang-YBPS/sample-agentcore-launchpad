@@ -4,6 +4,9 @@ import type {
   SkillLabTargetBackend,
   SkillLabTasksetInfo,
 } from "./api";
+import { activeCatalogIds, inFamilies } from "./model-catalog";
+import { mergeModelOptions } from "./model-defaults";
+import { modelsForActiveRegion } from "./regions";
 import { parseTimestamp } from "./timestamps";
 
 /** Skill Lab rules shared by the V2 pages (mirrors of the classic wizards). */
@@ -17,7 +20,7 @@ export const BACKEND_LABELS: Record<SkillLabTargetBackend, string> = {
 /**
  * Judge suggestions are Converse inference-profile ids (`us.`/`global.`
  * prefixed) — the bedrock_chat judge calls Converse directly, and bare model
- * ids like `openai.gpt-6-sol` are rejected with "use an inference profile".
+ * ids (no `us.`/`global.` prefix) are rejected with "use an inference profile".
  * The agentic judge routes by family: openai.* → host codex CLI, else claude.
  */
 export const JUDGE_MODEL_SUGGESTIONS = [
@@ -27,6 +30,30 @@ export const JUDGE_MODEL_SUGGESTIONS = [
   "global.anthropic.claude-opus-5",
   "us.anthropic.claude-sonnet-5",
 ];
+
+/** Judge datalist: the platform's configured judge, the static suggestions of this
+ *  geography, then the account catalog's OpenAI / Anthropic models (the only
+ *  families the judge routes can drive). */
+export function skillLabJudgeSuggestions(
+  status: SkillLabStatus | null,
+  catalog: readonly string[] = activeCatalogIds(),
+): string[] {
+  return mergeModelOptions(status?.default_judge_model ?? "", [], [
+    ...modelsForActiveRegion(JUDGE_MODEL_SUGGESTIONS),
+    ...inFamilies(catalog, ["openai", "anthropic"]),
+  ]);
+}
+
+/** Target-model datalist: the backend's configured default, then the account catalog
+ *  models of the family its CLI drives (codex → OpenAI, Claude Code → Anthropic). */
+export function skillLabTargetSuggestions(
+  status: SkillLabStatus | null,
+  backend: SkillLabTargetBackend,
+  catalog: readonly string[] = activeCatalogIds(),
+): string[] {
+  const family = backend === "codex_exec" ? "openai" : "anthropic";
+  return mergeModelOptions(modelDefault(status, backend), [], inFamilies(catalog, [family]));
+}
 
 /** Mirrors backend runner.judge_exec_route's family test. */
 export const isOpenAiJudge = (model: string) => /^((us|eu|apac|global)\.)?openai\./.test(model);

@@ -1,5 +1,12 @@
 """Inbound-auth service: workspace default storage, discovery probing, and the
-agent-facing resolution that folds spec + workspace default together.
+agent-facing resolution that folds spec + project / workspace default together.
+
+A project in isolated mode (`projects.settings.isolation.mode`, design §10.1) may
+carry its own default (`projects.settings.inbound_auth_default`, same shape, set
+through the project settings PATCH — validated in `services.projects`): its own
+IdP / audience for its agents (§10.7). It stands in for the workspace default for
+that project's agents only; a shared project — the default project included —
+resolves exactly as before.
 
 The pure models and precedence rule live in ``app.schemas.inbound_auth``; this
 module adds the two impure pieces — the ledger (workspace ``settings`` blob) and
@@ -19,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.models.ledger import Agent, Workspace
+from app.models.projects import Project
 from app.schemas.inbound_auth import (
     InboundAuth,
     authorizer_configuration,
@@ -37,6 +45,7 @@ __all__ = [
     "issuer_mismatch",
     "m2m_bearer_token",
     "probe_discovery",
+    "project_default",
     "record_deployed_auth",
     "require_platform_reachable",
     "resolve_for_agent",
@@ -140,17 +149,37 @@ def set_workspace_default(db: Session, row: Workspace, auth: InboundAuth) -> Non
     db.commit()
 
 
+ISOLATED = "isolated"
+
+
+def project_default(project: Project | None) -> InboundAuth | None:
+    """The project's own inbound-auth default, or None — always None unless the
+    project is isolated (a stored value outlives a switch back to shared, unused)."""
+    if project is None:
+        return None
+    settings = project.settings or {}
+    isolation = settings.get("isolation")
+    if not isinstance(isolation, dict) or isolation.get("mode") != ISOLATED:
+        return None
+    return parse_inbound_auth(settings.get(SETTINGS_KEY))
+
+
 def resolve_for_agent(agent: Agent, db: Session) -> InboundAuth:
-    """The effective inbound auth this agent's next deploy will apply.
+    """The effective inbound auth this agent's next deploy will apply: the spec's
+    own choice, else its isolated project's default, else the workspace's.
 
     Reads via getattr so a lightweight stand-in (provision-stage IAM tests pass
     a SimpleNamespace) resolves like a row with those fields unset."""
     spec = getattr(agent, "spec", None) or {}
     workspace_id = getattr(agent, "workspace_id", None)
-    row = get_workspace_row(db, workspace_id) if workspace_id else None
+    project_id = getattr(agent, "project_id", None)
+    fallback = project_default(db.get(Project, project_id)) if project_id else None
+    if fallback is None:
+        row = get_workspace_row(db, workspace_id) if workspace_id else None
+        fallback = workspace_default(row)
     return resolve_inbound_auth(
         parse_inbound_auth(spec.get("inbound_auth")),
-        workspace_default(row),
+        fallback,
         method=str(getattr(agent, "method", "") or ""),
         protocol=str(spec.get("protocol") or "http"),
     )

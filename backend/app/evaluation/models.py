@@ -8,6 +8,7 @@ from sqlalchemy import JSON, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.project_scope import ProjectOwned
 
 
 def _id() -> str:
@@ -18,7 +19,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-class EvalDataset(Base):
+class EvalDataset(ProjectOwned, Base):
     __tablename__ = "eval_datasets"
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
@@ -37,6 +38,14 @@ class EvalDataset(Base):
     # cloud: {dataset_id, arn, status, synced_at, failure_reason, draft_status
     #   (MODIFIED|UNMODIFIED), example_count, versions: [{version, example_count,
     #   created_at}]} — the row's one AWS Dataset (draft edited in place on re-sync)
+    # Agent-DLC golden sets (docs/agent-dlc-design.md §4.2): a golden parent groups
+    # three split datasets (dev | regression | holdout), each its own AWS Dataset.
+    role: Mapped[str] = mapped_column(  # scratch | golden
+        String(16), default="scratch", server_default="scratch"
+    )
+    criteria_set_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    split_of: Mapped[str | None] = mapped_column(String(16), default=None)
+    split: Mapped[str | None] = mapped_column(String(16), default=None)
     # The creating console principal (`app.services.creators`): `users.id` (NULL for
     # the config admin / auth-disabled operator, system paths and legacy rows) and
     # the username at creation, display only. Server-set, never from a payload.
@@ -45,8 +54,9 @@ class EvalDataset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class EvalRun(Base):
+class EvalRun(ProjectOwned, Base):
     __tablename__ = "eval_runs"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -99,6 +109,22 @@ class EvalRun(Base):
     # has no entry. NULL for passive scopes and older rows.
     scenario_map: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # ── Agent-DLC lineage and accounting (docs/agent-dlc-design.md §4.3) ──
+    criteria_set_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    criteria_set_version: Mapped[int | None] = mapped_column(default=None)
+    # what was actually invoked: the AWS version behind the endpoint, and the endpoint
+    agent_version: Mapped[str | None] = mapped_column(String(32), default=None)
+    endpoint_qualifier: Mapped[str | None] = mapped_column(String(64), default=None)
+    evaluator_set_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    split: Mapped[str | None] = mapped_column(String(16), default=None)
+    repeats: Mapped[int] = mapped_column(default=1, server_default="1")
+    repeat_mode: Mapped[str] = mapped_column(String(16), default="all", server_default="all")
+    cost_estimate: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    cost_actual: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    denominator: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    criteria_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # one entry per invoked session: {scenario_id, attempt, session_id}
+    attempts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
     # The creating console principal (`app.services.creators`): `users.id` (NULL for
     # the config admin / auth-disabled operator, system paths and legacy rows) and
     # the username at creation, display only. Server-set, never from a payload.
@@ -110,7 +136,7 @@ class EvalRun(Base):
     )
 
 
-class EvalRecommendation(Base):
+class EvalRecommendation(ProjectOwned, Base):
     """One AgentCore StartRecommendation job pinned to an evaluation run's batch.
 
     The job itself (status, recommended text) lives on AWS; the row keeps the job id,
@@ -119,6 +145,7 @@ class EvalRecommendation(Base):
     """
 
     __tablename__ = "eval_recommendations"
+    __project_parent__ = ("run_id", ("eval_runs",))
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -143,19 +170,13 @@ class EvalRecommendation(Base):
     # ``result`` (which every GetRecommendation refresh rewrites): {prompt, by, at};
     # accepting publishes it unless the dialog sends its own text
     edit: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
-    # Who asked for it — the spend-budget payer of a 3rd-party provider's model
-    # calls (services/job_budget.py): `users.id` (NULL for the config admin /
-    # auth-disabled operator and older rows) and the username, display only. Not
-    # the run's creator: in a shared workspace anyone who sees the run may ask.
-    requested_by: Mapped[str | None] = mapped_column(String(32), default=None)
-    requested_by_name: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
 
 
-class OnlineEvalConfig(Base):
+class OnlineEvalConfig(ProjectOwned, Base):
     """Ledger row linking an AWS online evaluation config to the agent it scores.
 
     Identifiers only — status, evaluators, rule and data source are read back from
@@ -165,6 +186,7 @@ class OnlineEvalConfig(Base):
     """
 
     __tablename__ = "online_eval_configs"
+    __project_parent__ = ("agent_id", ("agents",))
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
@@ -183,7 +205,7 @@ class OnlineEvalConfig(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class EvalPipeline(Base):
+class EvalPipeline(ProjectOwned, Base):
     """A saved data-processing task (console V2 数据处理): which observed sessions
     to read, how to turn their transcripts into dataset items, and which local
     dataset receives them. Runs are on demand; the last outcome is kept on the row."""

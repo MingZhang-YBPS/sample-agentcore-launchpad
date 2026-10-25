@@ -20,6 +20,7 @@ from app.main import create_app
 from app.models.ledger import Agent, Job, PolicyChange, UserWorkspace, Workspace
 from app.routers.workspaces import _referencing_rows
 from app.services import users as users_service
+from tests.conftest import TEST_PROJECT
 
 ADMIN_CREDS = {"username": "operator", "password": "s3cret-pass"}
 MEMBER_CREDS = {
@@ -246,7 +247,8 @@ class TestRenameAndDelete:
         db = SessionLocal()
         try:
             agent = Agent(
-                workspace_id=NEW["id"], name="resident", method="zip_runtime", status="active"
+                workspace_id=NEW["id"], name="resident", method="zip_runtime", status="active",
+                project_id=TEST_PROJECT,
             )
             db.add(agent)
             db.commit()
@@ -577,7 +579,8 @@ class TestPurge:
         db = SessionLocal()
         try:
             agent = Agent(
-                workspace_id=NEW["id"], name="resident", method="zip_runtime", status="active"
+                workspace_id=NEW["id"], name="resident", method="zip_runtime", status="active",
+                project_id=TEST_PROJECT,
             )
             db.add(agent)
             db.commit()
@@ -679,7 +682,8 @@ class TestPurge:
         try:
             db.add(Job(workspace_id=neighbour["id"], type="workspace_bootstrap", status="failed"))
             db.add(Job(workspace_id=DEFAULT_WORKSPACE_ID, type="deploy", status="succeeded"))
-            db.add(Agent(workspace_id=neighbour["id"], name="theirs", method="zip_runtime"))
+            db.add(Agent(workspace_id=neighbour["id"], name="theirs", method="zip_runtime",
+                         project_id=TEST_PROJECT))
             db.commit()
         finally:
             db.close()
@@ -690,7 +694,9 @@ class TestPurge:
         try:
             assert db.get(Workspace, neighbour["id"]) is not None
             assert _referencing_rows(db, neighbour["id"]) == {"agents": 1, "jobs": 1}
-            assert _referencing_rows(db, DEFAULT_WORKSPACE_ID) == {"jobs": 1}
+            # + the hub's journal row of the grant PATCH above (account audit rows are
+            # stamped with the hub's own workspace)
+            assert _referencing_rows(db, DEFAULT_WORKSPACE_ID) == {"jobs": 1, "audit_events": 1}
             assert (
                 db.query(UserWorkspace)
                 .filter(UserWorkspace.workspace_id == neighbour["id"])
@@ -1269,3 +1275,55 @@ def test_pre_workspace_accounts_keep_their_access_after_the_upgrade(tmp_path):
 
     with engine.begin() as conn:
         assert conn.execute(sa.text("SELECT COUNT(*) FROM user_workspaces")).scalar_one() == 0
+
+
+class TestObservabilityRepair:
+    """A workspace can reach READY with Transaction Search off (the stage degrades on
+    AccessDenied rather than failing), and a ready workspace refuses a re-bootstrap —
+    found deploying a three-region hub. This route is the way back."""
+
+    def _ready(self, admin, status="ready"):
+        assert admin.post("/api/workspaces", json=NEW).status_code == 201
+        db = SessionLocal()
+        try:
+            db.get(Workspace, NEW["id"]).bootstrap_status = status
+            db.commit()
+        finally:
+            db.close()
+
+    def test_it_reruns_the_observability_stage_on_a_ready_workspace(self, admin, monkeypatch):
+        from app.services import workspace_bootstrap
+
+        self._ready(admin)
+        calls = []
+        monkeypatch.setattr(workspace_bootstrap, "_stage_observability",
+                            lambda ctx: calls.append(ctx.workspace_id)
+                            or "transaction search active")
+        res = admin.post(f"/api/workspaces/{NEW['id']}/observability/repair")
+        assert res.status_code == 200, res.text
+        assert res.json() == {"workspace_id": NEW["id"],
+                              "detail": "transaction search active", "active": True}
+        assert calls == [NEW["id"]]
+
+    def test_a_degraded_result_is_reported_not_hidden(self, admin, monkeypatch):
+        from app.services import workspace_bootstrap
+
+        self._ready(admin)
+        monkeypatch.setattr(workspace_bootstrap, "_stage_observability",
+                            lambda ctx: "unavailable · AccessDeniedException")
+        body = admin.post(f"/api/workspaces/{NEW['id']}/observability/repair").json()
+        assert body["active"] is False
+        assert "AccessDenied" in body["detail"]
+
+    def test_it_waits_for_the_bootstrap_to_finish(self, admin):
+        self._ready(admin, status="bootstrapping")
+        res = admin.post(f"/api/workspaces/{NEW['id']}/observability/repair")
+        assert res.status_code == 409 and res.json()["code"] == "workspace.not_ready"
+
+    def test_only_an_administrator_may_repair(self, admin, member_id, gated_app):
+        self._ready(admin)
+        admin.patch(f"/api/users/{member_id}", json={"workspaces": [NEW["id"]]})
+        with TestClient(gated_app, client=("127.0.0.1", 4321)) as member:
+            assert member.post("/api/auth/login", json=MEMBER_CREDS).status_code == 200
+            res = member.post(f"/api/workspaces/{NEW['id']}/observability/repair")
+            assert res.status_code == 403

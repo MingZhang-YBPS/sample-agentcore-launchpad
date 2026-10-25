@@ -4,9 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage } from "../../../lib/api";
-import { isBudgetStop } from "../../../lib/budgets";
 import { coverageInfo, hasInsightTrees, runCoverage } from "../../../lib/evaluation";
-import { BudgetNoticeAlert, BudgetStopAlert } from "../../BudgetBanner";
 import { previousComparable } from "../../compare";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -171,10 +169,7 @@ export function TaskDetail({ id }: { id: string }) {
         }}
         end={actions}
       />
-      {data.run && <BudgetNoticeAlert id={data.run.id} />}
-      {data.run && isBudgetStop(data.run) ? (
-        <BudgetStopAlert kind="run" testId="v2-task-budget-stop" />
-      ) : coverage && data.run ? (
+      {coverage && data.run ? (
         <Alert tone={coverageInfo(coverage) ? "info" : "warn"}>
           <RunCoverageNote coverage={coverage} rawError={data.run.error}
             onReadDetail={mayRun ? () => void recheck() : undefined} reading={busy} />

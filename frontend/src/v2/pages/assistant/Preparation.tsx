@@ -12,6 +12,7 @@ import {
   errorMessage,
 } from "../../../lib/api";
 import { type AssistantKbDetail, kbReadiness } from "../../../lib/assistant";
+import { errorText } from "../../../lib/errors";
 import { Alert, Button, Tag } from "../../ui";
 import { KnowledgeBaseCreateDrawer } from "./KnowledgeBaseCreate";
 import { SECTION_IDS } from "./common";
@@ -91,8 +92,6 @@ export function PreparationCard({
     || selectedSkills.some((key) => !availableSkillKeys.has(key))
     || selectedTools.some((key) => !availableToolKeys.has(key))
     || selectedTools.length > MAX_TOOLS;
-  const describeError = (err: unknown) =>
-    err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err);
 
   useEffect(() => {
     callbacks.current.onDirty(changed && !locked);
@@ -171,7 +170,7 @@ export function PreparationCard({
       setNotice(t("assistantPreparation.saved"));
     } catch (err) {
       if (!alive.current) return;
-      setActionError(describeError(err));
+      setActionError(errorText(err));
       if (err instanceof ApiError && (err.code.includes("stale") || err.code === "assistant.resources_locked")) {
         try {
           const detail = await api.assistantConversation(conversation.id, workspaceId);
@@ -339,7 +338,7 @@ export function PreparationCard({
             <>
               <div className="v2-row" style={{ marginTop: 10 }}>
                 <Button size="sm" disabled={busy} onClick={() => void refresh()}>{t("assistantPreparation.refresh")}</Button>
-                <Link className="v2-btn sm" to="/registry?view=register&type=AGENT_SKILLS" target="_blank" rel="noopener noreferrer">
+                <Link className="v2-btn sm" to="/v2/registry?view=register&type=AGENT_SKILLS" target="_blank" rel="noopener noreferrer">
                   {t("assistantPreparation.createSkill")}
                 </Link>
               </div>
@@ -390,7 +389,7 @@ export function PreparationCard({
             <>
               <div className="v2-row">
                 <Button size="sm" disabled={busy} onClick={() => void refresh()}>{t("assistantPreparation.refresh")}</Button>
-                <Link className="v2-btn sm" to="/registry?view=register&type=MCP" target="_blank" rel="noopener noreferrer">
+                <Link className="v2-btn sm" to="/v2/registry?view=register&type=MCP" target="_blank" rel="noopener noreferrer">
                   {t("assistantPreparation.createTool")}
                 </Link>
               </div>
@@ -480,7 +479,7 @@ function KbReadiness({ kbId, name, workspaceId }: { kbId: string; name: string; 
     <div className="v2-row" style={{ fontSize: 13 }} data-testid={`v2-assistant-kb-readiness-${kbId}`}>
       <b>{name}</b>
       <Tag tone={tone}>{t(`assistantPreparation.${key}`)}</Tag>
-      <Link to={`/knowledge-bases?view=detail&kb=${encodeURIComponent(kbId)}`} target="_blank" rel="noopener noreferrer">
+      <Link to={`/v2/knowledge-bases?view=detail&id=${encodeURIComponent(kbId)}`} target="_blank" rel="noopener noreferrer">
         {t("assistantPreparation.openKb")}
       </Link>
     </div>

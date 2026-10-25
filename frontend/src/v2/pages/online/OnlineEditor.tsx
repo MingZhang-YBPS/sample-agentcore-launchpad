@@ -5,6 +5,8 @@ import { useLocation, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type EvaluatorRow, type OnlineEvalConfigRow, type OnlineEvalMode } from "../../../lib/api";
+import { usd } from "../../../lib/api/evalCost";
+import { costRefusal, type CostRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
 import { useLoad, useV2Toast } from "../../hooks";
 import {
@@ -136,6 +138,10 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
   const [enable, setEnable] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // eval-cost §1.1: a scores config is priced per day; above the workspace's confirm
+  // threshold the server answers 409 with its estimate, and the form asks to confirm
+  const [refused, setRefused] = useState<CostRefusal | null>(null);
+  const [confirmCost, setConfirmCost] = useState(false);
   const set = (patch: Partial<OnlineDraft>) => setDraft((prev) => ({ ...prev, ...patch }));
 
   const row = existing.data;
@@ -173,12 +179,20 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
         toast("success", t("v2.online.saved"));
         setParams({ view: "detail", kind: "online", id: row.config_id }, { state: location.state });
       } else {
-        const created = await api.v2CreateOnlineConfig(createBody(pickedAgent, draft, enable));
+        const body = createBody(pickedAgent, draft, enable);
+        const created = await api.v2CreateOnlineConfig(mode === "scores" ? { ...body, confirm_cost: confirmCost } : body);
         toast("success", t("v2.online.created"));
         setParams({ view: "detail", kind: "online", id: created.config_id }, { state: location.state });
       }
     } catch (err) {
-      setError(errorMessage(err));
+      const refusal = costRefusal(err);
+      if (refusal) {
+        setRefused(refusal);
+        if (refusal.kind === "confirm") setConfirmCost(false);
+        setError(refusalText(t, refusal));
+      } else {
+        setError(errorMessage(err));
+      }
     } finally {
       setBusy(false);
     }
@@ -222,6 +236,12 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
       {!editing && <StrategySwitch value="continuous" agentId={agents.data ? pickedAgent : agentId} />}
       {!editing && seed.error && <Alert tone="error">{seed.error}</Alert>}
       {error && <Alert tone="error">{error}</Alert>}
+      {refused?.kind === "confirm" && !row && (
+        <label className="v2-check" data-testid="v2-online-confirm-cost">
+          <input type="checkbox" checked={confirmCost} onChange={(e) => setConfirmCost(e.target.checked)} />{" "}
+          {t("v3.evalCost.confirm", { usd: usd(refused.estimate?.total_usd) })}
+        </label>
+      )}
       <Card title={t("v2.tasks.basic")}>
         <div className="v2-form cols-2">
           <Field label={t("v2.tasks.colAgent")} required={!editing} hint={editing ? t("v2.online.agentFixed") : t("v2.online.agentHint")}>

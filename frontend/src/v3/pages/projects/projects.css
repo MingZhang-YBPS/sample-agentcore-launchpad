@@ -1,0 +1,34 @@
+/* Configure → Projects (projects design §6.3): list, detail tabs, key picker */
+.v3 .v3-prj-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.v3 .v3-prj-filters .v3-sel { width: auto; min-width: 140px; }
+.v3 .v3-prj-filters .v3-prj-search { margin-left: auto; position: relative; flex: 1 1 200px; max-width: 300px; }
+.v3 .v3-prj-filters .v3-prj-search svg { position: absolute; left: 12px; top: 11px; color: var(--v3-text-3); }
+.v3 .v3-prj-filters .v3-prj-search input { padding-left: 34px; }
+.v3 .v3-prj-muted { color: var(--v3-text-3); }
+.v3 .v3-prj-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.v3 .v3-prj-form { display: grid; gap: 12px; }
+.v3 .v3-prj-checks { display: grid; gap: 6px; }
+.v3 .v3-prj-checks label { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.v3 .v3-prj-keys { display: grid; gap: 12px; }
+.v3 .v3-prj-keys fieldset { border: 1px solid var(--v3-line); border-radius: 8px; padding: 8px 12px 10px; margin: 0; }
+.v3 .v3-prj-keys legend { font-family: var(--v3-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-text-3); padding: 0 4px; }
+.v3 .v3-prj-keys .grid { display: grid; gap: 4px 14px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.v3 .v3-prj-keys label { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.v3 .v3-prj-keys label small { font-family: var(--v3-mono); font-size: 11px; color: var(--v3-text-3); }
+.v3 .v3-prj-cands { display: grid; gap: 4px; max-height: 220px; overflow-y: auto; }
+.v3 .v3-prj-cands button { display: flex; justify-content: space-between; gap: 10px; text-align: left; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--v3-line); background: var(--v3-ink-1); color: var(--v3-text); font: inherit; cursor: pointer; }
+.v3 .v3-prj-cands button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--v3-primary) 55%, transparent); background: var(--v3-primary-dim); }
+.v3 .v3-prj-cands > .v3-why { display: grid; }
+.v3 .v3-prj-cands button:disabled, .v3 .v3-prj-cands button[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+.v3 .v3-prj-dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+.v3 .v3-prj-dl dt { color: var(--v3-text-3); }
+.v3 .v3-prj-dl dd { margin: 0; }
+/* Overview → quota usage (§11.3) */
+.v3 .v3-prj-usage { display: grid; gap: 10px; }
+.v3 .v3-prj-usage .row { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; font-size: 13px; }
+.v3 .v3-prj-usage .label { display: inline-flex; gap: 8px; align-items: center; }
+.v3 .v3-prj-usage .bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--v3-ink-2); overflow: hidden; }
+.v3 .v3-prj-usage .bar i { display: block; height: 100%; background: var(--v3-ok); }
+.v3 .v3-prj-usage .bar i[data-s="wait"] { background: var(--v3-wait); }
+.v3 .v3-prj-usage .bar i[data-s="act"] { background: var(--v3-act); }
+.v3 .v3-prj-usage .bar i[data-s="off"] { background: var(--v3-text-3); }

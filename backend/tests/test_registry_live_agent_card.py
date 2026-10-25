@@ -15,7 +15,7 @@ from app.models.ledger import Agent
 from app.services import registry_console as console
 from app.services.agentcore import registry as reg
 from app.services.agentcore import runtime as rt
-from tests.conftest import set_default_resources
+from tests.conftest import TEST_PROJECT, set_default_resources
 
 RECORD_ID = "r-a2a-1"
 RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/aurora-1"
@@ -43,7 +43,8 @@ def _record(card: dict | None = STORED_CARD) -> dict:
 def _mk_agent(**kw) -> str:
     db = SessionLocal()
     agent = Agent(**{
-        "workspace_id": DEFAULT_WORKSPACE_ID, "name": "aurora-faq-a2a",
+        "workspace_id": DEFAULT_WORKSPACE_ID, "project_id": TEST_PROJECT,
+        "name": "aurora-faq-a2a",
         "method": "zip_runtime", "status": "active", "arn": RUNTIME_ARN,
         "registry_record_id": RECORD_ID, "spec": {"protocol": "a2a"}, **kw,
     })

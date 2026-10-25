@@ -1,69 +1,67 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Which slice of the console the V2 sidebar shows.
+ * Which slice of the console the sidebar shows (roadmap T11).
  *
- * - `business`: the build → run essentials plus Learn, for people who only build,
- *   chat with and watch agents.
- * - `expert`: every entry, exactly the sidebar as it was before this mode existed.
+ * The V2 sidebar carries ~20 entries across six groups, most of them expert
+ * surfaces (evaluation, experiments, governance, Skill Lab). A business member who
+ * only wants an agent answering questions cannot tell which of those is for them,
+ * so the sidebar has two modes:
  *
- * **Everyone defaults to `expert`** (decision of 2026-10-13; console-v3 defaulted
- * members to business): no one's sidebar changes until they opt in.
+ * - `business` — the build → run essentials plus Learn. The default for a member.
+ * - `expert`   — every entry, as before. The default for an administrator, whose
+ *                job is precisely the expert surfaces.
  *
  * It is a **view filter, not authorization**: every route stays reachable by URL
- * and through the command palette, and the backend's route policy is untouched.
- * Stored per browser like `ui-version`; an empty, invalid or blocked storage means
- * the default.
+ * and the backend's route policy is untouched. Stored per browser like
+ * `ui-version`, so a member who switches to expert mode stays there; an empty or
+ * blocked storage falls back to the role default, which is why `getNavMode`
+ * takes it as an argument rather than baking one in.
  */
 export type NavMode = "business" | "expert";
 
-export const NAV_MODE_KEY = "launchpad_nav_mode";
-
-/** A stored value as a mode, or null when it is missing or not a known mode. */
-export function parseNavMode(raw: string | null): NavMode | null {
-  return raw === "business" || raw === "expert" ? raw : null;
-}
-
-/** The mode of a viewer who never chose one: expert, whatever the role. */
-export function defaultNavMode(): NavMode {
-  return "expert";
-}
+const KEY = "launchpad_nav_mode";
 
 const listeners = new Set<() => void>();
-// the in-memory copy keeps the toggle working when storage is unavailable
-let current: NavMode = read();
+let stored: NavMode | null = read();
 
-function read(): NavMode {
+function read(): NavMode | null {
   try {
-    return parseNavMode(localStorage.getItem(NAV_MODE_KEY)) ?? defaultNavMode();
+    const value = localStorage.getItem(KEY);
+    return value === "business" || value === "expert" ? value : null;
   } catch {
-    return defaultNavMode();
+    return null;
   }
 }
 
-export function getNavMode(): NavMode {
-  return current;
+/** The stored choice, or the role default when the operator never chose. */
+export function getNavMode(isAdmin: boolean): NavMode {
+  return stored ?? (isAdmin ? "expert" : "business");
 }
 
 export function setNavMode(mode: NavMode): void {
   try {
-    localStorage.setItem(NAV_MODE_KEY, mode);
+    localStorage.setItem(KEY, mode);
   } catch {
-    // storage unavailable (private window, blocked site data): the mode still
+    // storage unavailable (private window, blocked site data): the switch still
     // applies to this tab, it just is not remembered
   }
-  if (mode === current) return;
-  current = mode;
+  if (mode === stored) return;
+  stored = mode;
   listeners.forEach((notify) => notify());
 }
 
-function subscribe(notify: () => void): () => void {
-  listeners.add(notify);
-  return () => listeners.delete(notify);
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
-/** Reactive `[mode, setMode]`; re-renders the caller when the mode changes. */
-export function useNavMode(): [NavMode, (mode: NavMode) => void] {
-  const mode = useSyncExternalStore(subscribe, getNavMode, getNavMode);
-  return [mode, setNavMode];
+/** Reactive `[mode, setMode]`, defaulting on the caller's role. */
+export function useNavMode(isAdmin: boolean): [NavMode, (mode: NavMode) => void] {
+  const snapshot = useSyncExternalStore(
+    subscribe,
+    () => stored,
+    () => stored,
+  );
+  return [snapshot ?? (isAdmin ? "expert" : "business"), setNavMode];
 }

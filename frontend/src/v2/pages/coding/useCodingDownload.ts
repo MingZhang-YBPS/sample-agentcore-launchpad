@@ -20,11 +20,11 @@ export function triggerDownload(url: string): void {
   link.remove();
 }
 
-const keyOf = (projectId: string, path?: string) => `${projectId}\u0000${path ?? ""}`;
+const keyOf = (repoId: string, path?: string) => `${repoId}\u0000${path ?? ""}`;
 
 /**
- * Downloads of coding-project files: one file (`path`) or, without a path, the whole
- * project as a zip. The backend has the runtime stage the bytes in S3 and answers a
+ * Downloads of coding-repo files: one file (`path`) or, without a path, the whole
+ * repo as a zip. The backend has the runtime stage the bytes in S3 and answers a
  * short-lived URL, which is used at once. `pending` drives the buttons' spinner and
  * disabled state; a second click on the same target while it prepares is ignored;
  * a failure is a toast with the console's error copy.
@@ -37,13 +37,13 @@ export function useCodingDownload() {
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
 
   const download = useCallback(
-    async (projectId: string, path?: string) => {
-      const key = keyOf(projectId, path);
+    async (repoId: string, path?: string) => {
+      const key = keyOf(repoId, path);
       if (inFlight.current.has(key)) return;
       inFlight.current.add(key);
       setBusy(new Set(inFlight.current));
       try {
-        const res = await codingApi.download(projectId, path);
+        const res = await codingApi.download(repoId, path);
         triggerDownload(res.url);
         toast("success", t("v2.coding.download.started", { name: res.filename }));
       } catch (err) {
@@ -56,7 +56,7 @@ export function useCodingDownload() {
     [t, toast],
   );
 
-  const pending = useCallback((projectId: string, path?: string) => busy.has(keyOf(projectId, path)), [busy]);
+  const pending = useCallback((repoId: string, path?: string) => busy.has(keyOf(repoId, path)), [busy]);
 
   return { download, pending };
 }

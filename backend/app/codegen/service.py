@@ -213,10 +213,8 @@ async def _run_fix(
     graph_mode: bool,
     input_data: str | None,
     started_at: float,
-    on_usage: Callable[[dict[str, Any]], Any] | None = None,
 ) -> None:
-    """Diagnose + (maybe) fix + validate. Reverts to the original code on any doubt.
-    ``on_usage`` receives every agent round's token usage (initial + repairs)."""
+    """Diagnose + (maybe) fix + validate. Reverts to the original code on any doubt."""
     backend = await _acquire_backend()
 
     await emitter.emit("progress", {"message": "Building fix workspace"})
@@ -236,8 +234,7 @@ async def _run_fix(
 
     try:
         max_rounds = config.get_max_repair_rounds()
-        task = GenerationTask(flow_data=flow_data, graph_mode=graph_mode, mode="fix",
-                              on_usage=on_usage)
+        task = GenerationTask(flow_data=flow_data, graph_mode=graph_mode, mode="fix")
 
         await emitter.emit(
             "progress",
@@ -269,7 +266,6 @@ async def _run_fix(
                     previous_code=code,
                     validation_errors=errors,
                     mode="fix",
-                    on_usage=on_usage,
                 ),
                 initial_report=report,
             )
@@ -311,10 +307,8 @@ async def fix_code_events(
     flow_data: dict,
     graph_mode: bool = False,
     input_data: str | None = None,
-    on_usage: Callable[[dict[str, Any]], Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Async generator of SSE events for one AI-fix request (no caching).
-    ``on_usage`` as on ``_run_fix``."""
+    """Async generator of SSE events for one AI-fix request (no caching)."""
     started_at = time.monotonic()
     emitter = _EventEmitter()
     timeout_s = config.get_timeout_s()
@@ -325,7 +319,7 @@ async def fix_code_events(
             await asyncio.wait_for(
                 _run_fix(
                     emitter, code, error, flow_data, graph_mode,
-                    input_data, started_at, on_usage,
+                    input_data, started_at,
                 ),
                 timeout=timeout_s,
             )

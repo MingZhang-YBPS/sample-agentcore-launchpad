@@ -8,6 +8,7 @@ Explicit-client style; payload builders are pure for unit testing.
 """
 
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -133,6 +134,7 @@ def build_a2a_card(
     url: str | None = None,
     skills: list[dict[str, Any]] | None = None,
     transport: str = "agentcore-http",
+    project_id: str | None = None,
 ) -> dict[str, Any]:
     """A2A AgentCard for the registry record.
 
@@ -141,7 +143,21 @@ def build_a2a_card(
     invocations contract (`agentcore-http` — call via the platform API).
     ``version`` defaults to ``A2A_CARD_VERSION`` — the same constant the A2A
     runtime template serves — so record and live card match on that field.
+    ``project_id`` (an isolated project's agent, projects design §10.9) adds
+    ``launchpad.project`` to the card's ``metadata`` — the record's own custom
+    field, read back by discovery; ``agent_card_diff`` ignores ``metadata``, so it
+    never reads as drift.
     """
+    metadata: dict[str, Any] = {
+        "launchpad.method": method,
+        "launchpad.transport": transport,
+        "launchpad.invoke": (
+            "standard A2A JSON-RPC (InvokeAgentRuntime passthrough)"
+            if transport == "a2a-jsonrpc" else "platform /v1 API"
+        ),
+    }
+    if project_id:
+        metadata["launchpad.project"] = project_id
     return {
         "protocolVersion": A2A_SCHEMA_VERSION,
         "name": name,
@@ -153,14 +169,7 @@ def build_a2a_card(
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
         "skills": list(skills or []),
-        "metadata": {
-            "launchpad.method": method,
-            "launchpad.transport": transport,
-            "launchpad.invoke": (
-                "standard A2A JSON-RPC (InvokeAgentRuntime passthrough)"
-                if transport == "a2a-jsonrpc" else "platform /v1 API"
-            ),
-        },
+        "metadata": metadata,
     }
 
 
@@ -385,6 +394,16 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
 def find_record(
     client: Any, registry_id: str, name: str, descriptor_type: str | None = None
 ) -> dict[str, Any] | None:
+    matches = find_records(client, registry_id, name, descriptor_type)
+    # a DEPRECATED record is terminal: a live record of the same name wins over it
+    live = [r for r in matches if r.get("status") != "DEPRECATED"]
+    return (live or matches or [None])[0]
+
+
+def find_records(
+    client: Any, registry_id: str, name: str, descriptor_type: str | None = None
+) -> list[dict[str, Any]]:
+    """Every record named ``name`` (each version, DEPRECATED ones included)."""
     filters = [{"name": "name", "values": [name]}]
     if descriptor_type:
         filters.append(
@@ -398,10 +417,25 @@ def find_record(
         "filters": filters,
         "maxResults": 20,
     }
-    for record in client.list_registry_records(**kwargs).get("registryRecords", []):
-        if record.get("name") == name:
-            return normalize_record(record)
-    return None
+    return [
+        normalize_record(record)
+        for record in client.list_registry_records(**kwargs).get("registryRecords", [])
+        if record.get("name") == name
+    ]
+
+
+def _next_initial_version(descriptor_type: str, taken: list[str]) -> str:
+    """The create version after DEPRECATED ones: ``1.0.0-mcp`` → ``2.0.0-mcp``.
+    GA uniqueness is (name, recordVersion), so a record re-created after its name was
+    deprecated needs a version none of them holds."""
+    initial = _INITIAL_VERSION_BY_TYPE[descriptor_type]
+    suffix = initial.partition("-")[2]
+    majors = [
+        int(v.split(".", 1)[0]) for v in taken if v and v.split(".", 1)[0].isdigit()
+    ]
+    if not majors:
+        return initial
+    return f"{max(majors) + 1}.0.0" + (f"-{suffix}" if suffix else "")
 
 
 def upsert_record(
@@ -413,16 +447,26 @@ def upsert_record(
     descriptor_type: str,
     descriptors: dict[str, Any],
     record_version: str | None = None,
+    tags: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Create the record or refresh its descriptors. Returns (record, created).
 
     ``record_version`` is only meaningful on the update branch (reimport bumps it
     to a fresh revision, e.g. ``1.1.0``); create always starts at ``1.0.0``.
+    ``tags`` (the `launchpad:*` tags of an isolated project's agent, projects design
+    §10.9) ride CreateRegistryRecord's ``tags`` map and, on the update branch —
+    UpdateRegistryRecord takes none — a best-effort TagResource on the record ARN.
+    UNVERIFIED live: the registry honouring record tags (both are in the
+    agent-registry-control service model).
     """
-    existing = find_record(client, registry_id, name, descriptor_type)
+    matches = find_records(client, registry_id, name, descriptor_type)
+    live = [r for r in matches if r.get("status") != "DEPRECATED"]
+    existing = live[0] if live else None
     aws_record_type = _PLATFORM_TO_AWS_TYPE[descriptor_type]
     ga_descriptors = to_ga_descriptors(descriptor_type, descriptors)
     if existing is None:
+        # only DEPRECATED records hold the name (terminal — UpdateRegistryRecord
+        # refuses them, live 2026-10-16): create the record again under a new version
         created = client.create_registry_record(
             registryId=registry_id,
             name=name,
@@ -433,7 +477,10 @@ def upsert_record(
             # GA uniqueness is (name, recordVersion), while preview allowed the
             # same name for A2A/MCP/Skill records. Type-qualified initial
             # versions preserve that platform contract.
-            recordVersion=_INITIAL_VERSION_BY_TYPE[descriptor_type],
+            recordVersion=_next_initial_version(
+                descriptor_type, [str(r.get("recordVersion") or "") for r in matches]
+            ),
+            **({"tags": dict(tags)} if tags else {}),
         )
         # CreateRegistryRecord returns only {recordArn, status}
         record_id = created["recordArn"].split("/")[-1]
@@ -452,7 +499,23 @@ def upsert_record(
     if record_version is not None:
         kwargs["recordVersion"] = record_version
     updated = client.update_registry_record(**kwargs)
-    return normalize_record(updated), False
+    record = normalize_record(updated)
+    if tags:
+        tag_record(client, record.get("recordArn") or existing.get("recordArn"), tags)
+    return record, False
+
+
+def tag_record(client: Any, record_arn: str | None, tags: dict[str, str]) -> bool:
+    """TagResource on a registry record — never fails the caller (a record made
+    before the tags, or a role without the grant, keeps working untagged)."""
+    if not record_arn or not tags:
+        return False
+    try:
+        client.tag_resource(resourceArn=record_arn, tags=dict(tags))
+    except Exception as exc:  # noqa: BLE001 — tags are attribution, not function
+        logger.warning("registry record %s not tagged: %s", record_arn, exc)
+        return False
+    return True
 
 
 def _wrap_ga_descriptor(value: dict[str, Any]) -> dict[str, Any]:
@@ -530,7 +593,7 @@ def list_records(
         filters.append(
             {
                 "name": "recordType",
-                "values": [_PLATFORM_TO_AWS_TYPE[descriptor_type]],
+                "values": [ga_record_type(descriptor_type)],
             }
         )
     if status:
@@ -574,10 +637,34 @@ def list_discoverable_records(
     return records
 
 
+# `SubmitRegistryRecordForApproval` answers `ConflictException: Concurrent update
+# detected. Please retry.` when the service is still settling the record it was just
+# handed — observed failing a whole deploy at the `register` stage. It is retryable by
+# AWS's own wording, so retry it here rather than letting a transient conflict mark a
+# deployed agent failed.
+logger = logging.getLogger(__name__)
+
+SUBMIT_RETRY_DELAYS_S = (1.0, 3.0, 7.0)
+
+
 def submit_record(client: Any, registry_id: str, record_id: str) -> dict[str, Any]:
-    return client.submit_registry_record_for_approval(
-        registryId=registry_id, recordId=record_id
-    )
+    last: Exception | None = None
+    for delay in (*SUBMIT_RETRY_DELAYS_S, None):
+        try:
+            return client.submit_registry_record_for_approval(
+                registryId=registry_id, recordId=record_id
+            )
+        except Exception as exc:  # noqa: BLE001 - narrowed immediately below
+            retryable = (
+                type(exc).__name__ == "ConflictException"
+                and "concurrent" in str(exc).lower()
+            )
+            if not retryable or delay is None:
+                raise
+            last = exc
+            logger.info("registry submit %s: %s — retrying in %ss", record_id, exc, delay)
+            time.sleep(delay)
+    raise last  # unreachable: the last pass re-raises
 
 
 def set_record_status(

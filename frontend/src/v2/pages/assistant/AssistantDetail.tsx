@@ -17,19 +17,26 @@ import {
 } from "../../../lib/api";
 import {
   ASSISTANT_JOB_POLL_MS,
+  type AssistantContextDigest,
+  type AssistantContextWindow,
   type AssistantLiveMessage,
+  contextFromMeta,
+  conversationContext,
+  conversationDigest,
+  digestPending,
   isAssistantUnauthorized,
   openAssistantTurn,
   proposalContentFromDraft,
   proposalEditErrors,
   proposalEditStart,
   type ProposalEditDraft,
+  regenerateDigest,
   sseEvents,
   toLiveMessages,
 } from "../../../lib/assistant";
+import { envelopeText } from "../../../lib/errors";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
-import { refreshMyUsageIfLimited } from "../../myUsage";
 import { Alert, Button, Card, Confirm, FlowHeader, Spin, Tag } from "../../ui";
 import { PROPOSAL_TONE, ReadOnlyContext, SECTION_IDS, shortId, useApiMessage } from "./common";
 import { COMPOSER_ID, DiscussionCard } from "./Discussion";
@@ -38,6 +45,9 @@ import { PreparationCard } from "./Preparation";
 import { AdlcCard, CreationProgressCard } from "./Progress";
 import { Outcome, ProposalEditor, ProposalView } from "./Proposal";
 import { useClearConversation } from "./useClearConversation";
+
+const DIGEST_POLL_MS = 5000;
+const DIGEST_MAX_POLLS = 12;
 
 /** What the approve dialog was opened on — submitted verbatim, never "the latest". */
 interface PinnedApproval {
@@ -71,6 +81,11 @@ export function AssistantDetail({
   const [conversation, setConversation] = useState<AssistantConversationDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<AssistantLiveMessage[]>([]);
+  // the replay window: the next turn's from GET, the streaming turn's from `meta`
+  const [contextWindow, setContextWindow] = useState<AssistantContextWindow | null>(null);
+  // the confirmed-items digest of the omitted turns (C2), refreshed after a turn
+  const [digest, setDigest] = useState<AssistantContextDigest | null>(null);
+  const [regeneratingDigest, setRegeneratingDigest] = useState(false);
   const [input, setInput] = useState("");
   // edit-and-retry: the failed turn the next send replaces in the model replay
   const [retryOf, setRetryOf] = useState<number | null>(null);
@@ -87,7 +102,6 @@ export function AssistantDetail({
   const [polled, setPolled] = useState<{ jobId: string; job: JobInfo | null; agent: AgentInfo | null }>({
     jobId: "", job: null, agent: null,
   });
-  const threadRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const alive = useRef(true);
   const tRef = useRef(t);
@@ -114,6 +128,8 @@ export function AssistantDetail({
         if (!live || !alive.current) return;
         setConversation(detail);
         setMessages(toLiveMessages(detail.messages));
+        setContextWindow(conversationContext(detail));
+        setDigest(conversationDigest(detail));
       },
       (err: unknown) => {
         if (!live || !alive.current) return;
@@ -127,10 +143,6 @@ export function AssistantDetail({
     );
     return () => { live = false; };
   }, [id, workspaceId, nonce, apiMessage, back, toast]);
-
-  useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
-  }, [messages]);
 
   const proposals = useMemo(() => conversation?.proposals ?? [], [conversation]);
   const latest = proposals.length ? proposals[proposals.length - 1] : null;
@@ -201,7 +213,41 @@ export function AssistantDetail({
     if (!alive.current || detail.id !== conversationId) return null;
     setConversation(detail);
     setMessages(toLiveMessages(detail.messages));
+    setContextWindow(conversationContext(detail));
+    setDigest(conversationDigest(detail));
     return detail;
+  };
+
+  // The digest is refreshed in the background once a turn ended: re-read it a few
+  // times while it is behind the window (a failed refresh just stops the polling).
+  const digestBehind = !busy && digestPending(contextWindow, digest);
+  const [digestPolls, setDigestPolls] = useState(0);
+  useEffect(() => {
+    if (!digestBehind || digestPolls >= DIGEST_MAX_POLLS) return;
+    const timer = window.setTimeout(() => {
+      api.assistantConversation(id, workspaceId).then(
+        (detail) => {
+          if (!alive.current || detail.id !== id) return;
+          setDigest(conversationDigest(detail));
+          setDigestPolls((n) => n + 1);
+        },
+        () => { if (alive.current) setDigestPolls(DIGEST_MAX_POLLS); },
+      );
+    }, DIGEST_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [digestBehind, digestPolls, id, workspaceId]);
+
+  const regenerate = async () => {
+    if (!conversation || regeneratingDigest) return;
+    setRegeneratingDigest(true);
+    try {
+      const fresh = await regenerateDigest(conversation.id, workspaceId);
+      if (alive.current) setDigest(fresh);
+    } catch (err) {
+      if (alive.current) toast("error", apiMessage(err));
+    } finally {
+      if (alive.current) setRegeneratingDigest(false);
+    }
   };
 
   const newConversation = async () => {
@@ -243,6 +289,7 @@ export function AssistantDetail({
     const { prompt } = request;
     if (!repairing) setInput("");
     setBusy(true);
+    setDigestPolls(0); // the turn moves the window: the digest may fall behind again
     setMessages((m) => [...m, { role: "user", text: prompt }, { role: "assistant", text: "", streaming: true }]);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -261,7 +308,10 @@ export function AssistantDetail({
       for await (const evt of sseEvents(res)) {
         if (!alive.current) return null;
         const data = evt.data as Record<string, unknown>;
-        if (evt.event === "delta") append(String(data.text ?? ""));
+        if (evt.event === "meta") {
+          const window = contextFromMeta(data);
+          if (window) setContextWindow(window);
+        } else if (evt.event === "delta") append(String(data.text ?? ""));
         else if (evt.event === "tool") {
           setMessages((m) => {
             const copy = [...m];
@@ -272,6 +322,9 @@ export function AssistantDetail({
             return copy;
           });
         } else if (evt.event === "retry") {
+          // a replay after a context overflow sends less history: redraw the divider
+          const window = contextFromMeta(data);
+          if (window) setContextWindow(window);
           // the server replays the turn in a fresh session after a transient upstream
           // failure: drop what the failed attempt streamed (text and tool cards)
           setMessages((m) => {
@@ -307,7 +360,7 @@ export function AssistantDetail({
             ...m.filter((x) => !(x.role === "assistant" && x.streaming && !x.text)),
             {
               role: "error",
-              text: code ? tRef.current(`apiErrors.${code}`, String(data.message ?? "")) : String(data.message ?? ""),
+              text: envelopeText(code, String(data.message ?? "")),
             },
           ]);
         } else if (evt.event === "done") completed = true;
@@ -343,7 +396,6 @@ export function AssistantDetail({
     } finally {
       if (alive.current) setBusy(false);
       if (abortRef.current === controller) abortRef.current = null;
-      refreshMyUsageIfLimited(); // the turn was charged: the 80 % banner may be due
     }
   };
 
@@ -538,8 +590,12 @@ export function AssistantDetail({
             void send(retry === null ? { prompt: input } : { prompt: input, retry_of_turn: retry });
           }}
           onRefreshCatalog={() => void refreshCatalog()}
-          threadRef={threadRef}
           retryOf={retryOf}
+          context={contextWindow}
+          onSummarize={() => void send({ prompt: t("v3.assistant.context.summarizePrompt") })}
+          digest={digest}
+          regeneratingDigest={regeneratingDigest}
+          onRegenerateDigest={conversation.mine ? () => void regenerate() : undefined}
           onRetry={(target) => {
             setRetryOf(target?.turn ?? null);
             if (target) {

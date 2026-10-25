@@ -16,13 +16,14 @@ os.environ["LAUNCHPAD_ALLOW_OPEN_CONSOLE"] = "true"
 # after 90 seconds, makes network requests and races tests that replace price YAML.
 # Manual refresh and price-merge behavior remain covered by test_model_prices.py.
 os.environ["LAUNCHPAD_MODEL_PRICES_REFRESH_HOURS"] = "0"
-# Same for the budget reconciliation thread, which is ON by default in a real
-# server: it would wake after 60 s and query Logs Insights in the middle of a test.
-# tests/test_budget_reconcile.py drives tick() / start() directly.
-os.environ["LAUNCHPAD_BUDGETS_RECONCILE_ENABLED"] = "false"
-# And the coding watcher (on by default): it would invoke the coding runtime every
-# 15 s. tests/test_coding_projects.py drives run_once() / start() directly.
+# The coding watcher (on by default): it would invoke the coding runtime every
+# 15 s. tests/test_coding_repos.py drives run_once() / start() directly.
 os.environ["LAUNCHPAD_CODING_WATCHER_ENABLED"] = "false"
+
+# Docker-backend tests assert literal `docker ...` argv; pin the container CLI so
+# "auto" resolution does not pick finch on a host without docker. The resolver's
+# own tests pass container_cli explicitly.
+os.environ["LAUNCHPAD_CONTAINER_CLI"] = "docker"
 
 # Isolate configuration reads before db/main bind settings or seed the default
 # workspace. Host YAML may select another Region or Docker execution in production.
@@ -45,9 +46,20 @@ import pytest  # noqa: E402
 from botocore.exceptions import ClientError  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.core.db import Base, _seed_default_workspace, engine  # noqa: E402
+from app.core.db import Base, _seed_default_projects, _seed_default_workspace, engine  # noqa: E402
+from app.dlc import scheduler as _dlc_scheduler  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.services.workspace import WorkspaceContext  # noqa: E402
+
+# Importing app.main builds the module-level `app = create_app(resume_jobs=True)`,
+# which starts the real Agent-DLC scheduler thread in every test process. Its
+# 60 s tick then runs scheduled tasks against whatever a test has monkeypatched —
+# on a loaded host a tick lands inside a test and doubles its calls (seen with
+# test_the_scheduler_checks_each_server_in_its_project_and_skips_archived).
+# Tests drive scheduler.tick() / run_* directly; stop the background loop.
+_dlc_scheduler.stop()
+if _dlc_scheduler._THREAD is not None:
+    _dlc_scheduler._THREAD.join(timeout=5)
 
 
 def ws_ctx(resources: dict | None = None, **fields) -> WorkspaceContext:
@@ -99,6 +111,49 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
+# The business project new agents land in (services/agent_project): a workspace's
+# `default` project may not hold a new agent, so the suite seeds one with a
+# department and binds it to the `default` workspace in place of `default` — the
+# workspace's one project, so header-less requests and ORM stamping both land there.
+# A test about the `default` project binds it back itself.
+TEST_DEPARTMENT = "dept-test"
+TEST_PROJECT = "proj-test"
+
+
+def _seed_test_business_project(bind) -> None:
+    from sqlalchemy import text
+
+    now = "2026-01-01 00:00:00.000000"
+    with bind.begin() as conn:
+        conn.execute(
+            text("INSERT INTO departments (id, name, description, created_at, updated_at)"
+                 " SELECT :d, 'Test department', '', :now, :now"
+                 " WHERE NOT EXISTS (SELECT 1 FROM departments WHERE id = :d)"),
+            {"d": TEST_DEPARTMENT, "now": now},
+        )
+        conn.execute(
+            text("INSERT INTO projects (id, name, description, department_id, status,"
+                 " is_default, created_at, updated_at)"
+                 " SELECT :p, 'Test project', '', :d, 'active', 0, :now, :now"
+                 " WHERE NOT EXISTS (SELECT 1 FROM projects WHERE id = :p)"),
+            {"p": TEST_PROJECT, "d": TEST_DEPARTMENT, "now": now},
+        )
+        conn.execute(text("DELETE FROM project_workspaces WHERE workspace_id = 'default'"
+                          " AND project_id = 'default'"))
+        conn.execute(
+            text("INSERT INTO project_workspaces (project_id, workspace_id,"
+                 " is_workspace_default, enabled_at)"
+                 " SELECT :p, 'default', 1, :now WHERE NOT EXISTS (SELECT 1 FROM"
+                 " project_workspaces WHERE project_id = :p AND workspace_id = 'default')"),
+            {"p": TEST_PROJECT, "now": now},
+        )
+
+
+@pytest.fixture(autouse=True, scope="session")
+def test_business_project():
+    _seed_test_business_project(engine)
+
+
 @pytest.fixture(autouse=True)
 def clean_tables():
     yield
@@ -110,6 +165,16 @@ def clean_tables():
     # (so never run init_db) would otherwise see a ledger with no workspace at
     # all, which a real process cannot have.
     _seed_default_workspace(engine)
+    # ...and the `default` project bound to it (design §8.3), with the process-local
+    # access cache dropped: the wiped `access_epoch` restarts at 0, so a snapshot
+    # cached by the previous test would otherwise look current.
+    _seed_default_projects(engine)
+    _seed_test_business_project(engine)
+    from app.services import access, project_quotas
+
+    access.reset_cache_for_tests()
+    # the budget gate's month-to-date spend cache is keyed by project id
+    project_quotas.reset_cache_for_tests()
 
 
 @pytest.fixture(autouse=True)
@@ -124,17 +189,23 @@ def isolated_config_file(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def reset_model_overrides():
-    # Console model overrides live in a process-wide snapshot that every
-    # get_settings() rebuild re-applies; clean_tables wipes their ledger rows, so
-    # drop the snapshot too or one test's override leaks into the next.
-    yield
-    from app.services import model_settings, rates
+def no_background_retag(monkeypatch):
+    # A project rename / transfer / cost-tag change starts its re-tag run after the
+    # commit (cost_tags.start_queued). The run calls AWS tagging APIs, so a hermetic
+    # test never starts one; tests of the run call execute_backfill_job themselves.
+    from app.services import cost_tags
 
-    if model_settings.overrides():
-        model_settings.reset_overrides()
-    if rates.overrides():  # admin model price overrides: the same snapshot pattern
-        rates.reset_overrides()
+    monkeypatch.setattr(cost_tags, "start_backfill_async", lambda job_id: None)
+
+
+@pytest.fixture(autouse=True)
+def no_traffic_history(monkeypatch):
+    # Pricing a passive run or an online config (eval-cost §1.1) sizes it from the
+    # agent's last 7 days — a Logs Insights scan. Hermetic tests see no traffic;
+    # tests of the sizing replace this themselves.
+    from app.dlc import cost
+
+    monkeypatch.setattr(cost, "window_sessions", lambda *a, **k: 0)
 
 
 @pytest.fixture(autouse=True)

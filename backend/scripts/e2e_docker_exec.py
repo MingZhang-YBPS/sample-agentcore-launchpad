@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """E2E: studio local-debug docker sandbox backend (real containers, real AWS).
 
-Requires a docker daemon, the exec image (scripts/setup_exec_docker.sh) and —
-for the Bedrock step — ambient AWS credentials (instance role via IMDS is
-enough; both launchpad boxes have hop limit 2).
+Requires a docker daemon (or finch; see LAUNCHPAD_CONTAINER_CLI), the exec
+image (scripts/setup_exec_docker.sh) and — for the Bedrock step — ambient AWS
+credentials (instance role via IMDS is enough; both launchpad boxes have hop
+limit 2).
 
 Flow (all through the real local_exec/service code paths, docker backend forced
 via settings monkeying — no HTTP server needed):
@@ -78,7 +79,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 def exec_containers() -> list[str]:
     out = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", "name=strands-exec-"],
+        [local_exec.container_cli(), "ps", "-aq", "--filter", "name=strands-exec-"],
         capture_output=True, text=True, timeout=15,
     )
     return out.stdout.split()
@@ -173,7 +174,7 @@ def main() -> int:
     # 6. hardened credential probe (only when the harden-net network exists)
     print("== 6. hardened credential probe")
     has_net = subprocess.run(
-        ["docker", "network", "inspect", "launchpad-exec"],
+        [local_exec.container_cli(settings), "network", "inspect", "launchpad-exec"],
         capture_output=True, timeout=15,
     ).returncode == 0
     if not has_net:

@@ -601,7 +601,8 @@ def test_the_turn_and_the_return_page_present_one_and_the_same_jwt(
     member = _member(app)  # "ada", role member, signed in
     ws = _ws()
     seeded = fx.jwt(time.time() + 3600, sub="ada-pool-sub", username="ada")
-    policy_identity._token_cache[(ws.account_id, ws.region, "ada", "member")] = {
+    # keyed on the project groups too (V3 R10-gw); ada is in no isolated project
+    policy_identity._token_cache[(ws.account_id, ws.region, "ada", "member", ())] = {
         "token": seeded, "expires_at": time.time() + 3600,
     }
     data = MagicMock()

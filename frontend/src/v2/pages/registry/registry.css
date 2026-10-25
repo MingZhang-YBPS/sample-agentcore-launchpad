@@ -26,7 +26,7 @@
 .v2 .v2-registry-checkbox { accent-color: var(--v2-primary); width: 14px; height: 14px; cursor: pointer; }
 .v2 .v2-registry-checkbox:disabled { cursor: not-allowed; }
 .v2 .v2-registry-hint {
-  display: block; margin-top: 4px; padding: 6px 10px; border-radius: 4px; background: #fff; border: 1px solid var(--v2-line);
+  display: block; margin-top: 4px; padding: 6px 10px; border-radius: 4px; background: var(--v2-card); border: 1px solid var(--v2-line);
   cursor: pointer; word-break: break-all;
 }
 

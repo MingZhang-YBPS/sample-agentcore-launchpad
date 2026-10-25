@@ -207,10 +207,27 @@ def test_get_evaluator_output_mapping(client, monkeypatch):
         "evaluator_type": None,
         "provider": None,
         "status": "ACTIVE",
+        # the rubric reads only {session}: no reference answer is needed
+        "requires_ground_truth": False,
         # never created through the console here → no creator row
         "created_by": None,
         "created_by_name": None,
     }
+
+
+def test_get_evaluator_needs_ground_truth_from_rubric(client, monkeypatch):
+    """A judge whose rubric reads {expected_response} needs a reference answer: the
+    detail says so, as the run gate does (workshop walk BUG-7: it read "no")."""
+    stub = stub_control(monkeypatch)
+    record = dict(stub.get_evaluator.return_value)
+    record["level"] = "TRACE"
+    record["evaluatorConfig"] = {"llmAsAJudge": {
+        **record["evaluatorConfig"]["llmAsAJudge"],
+        "instructions": "Compare {assistant_turn} with {expected_response}",
+    }}
+    stub.get_evaluator.return_value = record
+    body = client.get("/api/eval/evaluators/my_judge-abc123").json()
+    assert body["requires_ground_truth"] is True
 
 
 def test_update_full_config_payload_shape(client, monkeypatch):
@@ -386,6 +403,8 @@ def test_get_derived_output_mapping(client, monkeypatch):
         "provider": "DeepEval",
         "status": "ACTIVE",
         # never created through the console here → no creator row
+        # a derived evaluator needs what its base needs
+        "requires_ground_truth": False,
         "created_by": None,
         "created_by_name": None,
     }
@@ -601,6 +620,8 @@ def test_get_code_output_mapping(client, monkeypatch):
         "provider": None,
         "status": "ACTIVE",
         # never created through the console here → no creator row
+        # an external code evaluator's needs are unknown
+        "requires_ground_truth": None,
         "created_by": None,
         "created_by_name": None,
     }

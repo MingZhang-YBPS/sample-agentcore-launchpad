@@ -1,4 +1,4 @@
-import { DatabaseZap } from "lucide-react";
+import { DatabaseZap, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
@@ -10,28 +10,25 @@ import { Button, Card, Kpi, Table, Tag } from "../../ui";
 import { AddToDatasetModal } from "../data/AddToDataset";
 
 /**
- * Thumbs-down answers of the selected range (V2 Chat thumbs). A thumbs-down is a
- * bad case: its session goes into the existing "add to dataset" flow
- * (`POST /api/eval/datasets/from-sessions`), which reads the trace back and says
- * which sessions it skipped — no dataset-building logic lives here.
+ * User feedback (T15): thumbs from the console chat and from share pages. A
+ * thumbs-down is a bad case — its session goes straight into the existing
+ * "add to dataset" flow (`POST /api/eval/datasets/from-sessions`), so no
+ * dataset-building logic is duplicated here.
  */
 export function FeedbackCard({ range }: { range: V2Range }) {
   const { t } = useTranslation();
-  const feedback = useLoad(() => feedbackApi.list({ range, verdict: "down", limit: 50 }), `feedback:down:${range}`);
+  const feedback = useLoad(() => feedbackApi.list({ verdict: "down", limit: 50 }), "feedback:down");
   const [adding, setAdding] = useState(false);
   const data = feedback.data;
-  // the server already limits these to the range (and to one from-sessions call)
   const sessions = data?.down_session_ids ?? [];
 
   return (
     <Card
       title={t("feedbackCard.title")}
       sub={t("feedbackCard.desc")}
-      testId="v2-feedback-card"
       end={
         <Button
           disabled={sessions.length === 0}
-          title={t("feedbackCard.toDatasetHint")}
           onClick={() => setAdding(true)}
           testId="v2-feedback-to-dataset"
         >
@@ -41,13 +38,8 @@ export function FeedbackCard({ range }: { range: V2Range }) {
       }
     >
       <div className="v2-kpis">
-        <Kpi label={t("feedbackCard.up")} value={data?.totals.up ?? "—"} tone="good" testId="v2-feedback-up" />
-        <Kpi
-          label={t("feedbackCard.down")}
-          value={data?.totals.down ?? "—"}
-          tone={data?.totals.down ? "bad" : undefined}
-          testId="v2-feedback-down"
-        />
+        <Kpi label={t("feedbackCard.up")} value={data?.counts.up ?? "—"} tone="good" />
+        <Kpi label={t("feedbackCard.down")} value={data?.counts.down ?? "—"} tone={data?.counts.down ? "bad" : undefined} />
       </div>
       <Table<FeedbackItem>
         rows={data?.items ?? []}
@@ -58,35 +50,20 @@ export function FeedbackCard({ range }: { range: V2Range }) {
         empty={t("feedbackCard.empty")}
         testId="v2-feedback-table"
         columns={[
+          {
+            key: "verdict",
+            title: t("feedbackCard.colVerdict"),
+            render: (r) => (r.verdict === "down" ? <ThumbsDown size={14} /> : <ThumbsUp size={14} />),
+          },
           { key: "time", title: t("v2.insights.colTime"), className: "nowrap", render: (r) => fmtTime(r.updated_at) },
-          { key: "agent", title: t("feedbackCard.colAgent"), render: (r) => r.agent_name },
-          {
-            key: "q",
-            title: t("feedbackCard.colQuestion"),
-            render: (r) => (
-              <span className="clip" title={r.question}>
-                {r.question || "—"}
-              </span>
-            ),
-          },
-          {
-            key: "a",
-            title: t("feedbackCard.colAnswer"),
-            render: (r) => (
-              <span className="clip" title={r.answer}>
-                {r.answer || "—"}
-              </span>
-            ),
-          },
-          { key: "who", title: t("feedbackCard.colWho"), render: (r) => r.actor || "—" },
+          { key: "agent", title: "Agent", render: (r) => r.agent_name },
+          { key: "q", title: t("feedbackCard.colQuestion"), render: (r) => <span className="clip" title={r.question}>{r.question || "—"}</span> },
+          { key: "a", title: t("feedbackCard.colAnswer"), render: (r) => <span className="clip" title={r.answer}>{r.answer || "—"}</span> },
+          { key: "c", title: t("feedbackCard.colComment"), render: (r) => r.comment ?? "—" },
           {
             key: "src",
             title: t("feedbackCard.colSource"),
-            // main writes only `console`; a ledger that once ran another console line
-            // may hold e.g. `share` / `review` rows — an unknown source shows verbatim
-            render: (r) => (
-              <Tag tone="outline">{t(`feedbackCard.source.${r.source}`, { defaultValue: r.source || "—" })}</Tag>
-            ),
+            render: (r) => <Tag tone="outline">{t(`feedbackCard.source.${r.source}`)}</Tag>,
           },
           {
             key: "open",

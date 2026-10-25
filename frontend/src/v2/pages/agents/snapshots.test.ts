@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { SpecChange } from "../../../lib/api";
 import {
-  canShowFull,
   changeView,
   groupChanges,
   groupLabelKey,
@@ -10,17 +9,14 @@ import {
   newestSeq,
   noteLabel,
   pickCompare,
-  rollbackable,
   SNAPSHOT_GROUPS,
-  SNAPSHOT_TONE,
-  snapshotStateKey,
   togglePick,
   valueAtPath,
   valueText,
 } from "./snapshots";
 
 function change(over: Partial<SpecChange>): SpecChange {
-  return { path: "model_id", group: "model", kind: "changed", before: null, after: null, ...over };
+  return { field: "model_id", group: "model", kind: "changed", before: null, after: null, ...over };
 }
 
 describe("groups", () => {
@@ -45,15 +41,15 @@ describe("groups", () => {
 
   it("buckets changes in display order and keeps the order inside a group", () => {
     const grouped = groupChanges([
-      change({ path: "guardrail.id", group: "guardrail" }),
-      change({ path: "tools", group: "tools" }),
-      change({ path: "system_prompt", group: "prompt" }),
-      change({ path: "native_tools", group: "tools" }),
-      change({ path: "weird", group: "nope" as SpecChange["group"] }),
+      change({ field: "guardrail.id", group: "guardrail" }),
+      change({ field: "tools", group: "tools" }),
+      change({ field: "system_prompt", group: "prompt" }),
+      change({ field: "native_tools", group: "tools" }),
+      change({ field: "weird", group: "nope" as SpecChange["group"] }),
     ]);
     expect(grouped.map((g) => g.group)).toEqual(["prompt", "tools", "guardrail", "other"]);
-    expect(grouped[1].changes.map((c) => c.path)).toEqual(["tools", "native_tools"]);
-    expect(grouped[3].changes.map((c) => c.path)).toEqual(["weird"]);
+    expect(grouped[1].changes.map((c) => c.field)).toEqual(["tools", "native_tools"]);
+    expect(grouped[3].changes.map((c) => c.field)).toEqual(["weird"]);
   });
 
   it("an empty diff has no groups", () => {
@@ -104,54 +100,31 @@ describe("changeView", () => {
 
   it("a list change reads its members gained and lost", () => {
     const view = changeView(
-      change({ path: "tools", group: "tools", before: ["a", "b"], after: ["b", "c"], added: ["c"], removed: ["a"] }),
+      change({ field: "tools", group: "tools", before: ["a", "b"], after: ["b", "c"], added: ["c"], removed: ["a"] }),
     );
     expect(view).toEqual({ kind: "list", removed: ["a"], added: ["c"] });
   });
 
   it("a pure re-order falls back to before / after", () => {
     const view = changeView(
-      change({ path: "tools", group: "tools", before: ["a", "b"], after: ["b", "a"], added: [], removed: [] }),
+      change({ field: "tools", group: "tools", before: ["a", "b"], after: ["b", "a"], added: [], removed: [] }),
     );
     expect(view.kind).toBe("values");
   });
 
   it("a list that appears or disappears reads as all + or all −", () => {
-    expect(changeView(change({ path: "skills", group: "skills", kind: "added", after: ["s3://x"] }))).toEqual({
+    expect(changeView(change({ field: "skills", group: "skills", kind: "added", after: ["s3://x"] }))).toEqual({
       kind: "list",
       removed: [],
       added: ["s3://x"],
     });
     expect(
-      changeView(change({ path: "knowledge_bases", group: "knowledge_bases", before: [{ kb_id: "K" }], after: null })),
+      changeView(change({ field: "knowledge_bases", group: "knowledge_bases", before: [{ kb_id: "K" }], after: null })),
     ).toEqual({ kind: "list", removed: ['{"kb_id":"K"}'], added: [] });
   });
 
   it("an empty list appearing shows as a value, not an empty list", () => {
-    expect(changeView(change({ path: "tools", group: "tools", kind: "added", after: [] })).kind).toBe("values");
-  });
-
-  it("an elided side reads its length; the other side stays text", () => {
-    const view = changeView(
-      change({ path: "system_prompt", group: "prompt", before: { length: 5000 }, after: "short", elided: true }),
-    );
-    expect(view).toEqual({
-      kind: "values",
-      before: { kind: "elided", length: 5000 },
-      after: { kind: "text", text: "short" },
-    });
-  });
-
-  it("a {length} object is not elided unless the server said so", () => {
-    const view = changeView(change({ path: "studio_flow", group: "other", before: { length: 3 }, after: null }));
-    expect(view.kind === "values" && view.before.kind).toBe("text");
-  });
-
-  it("offers the full text only for elided prompt / code", () => {
-    expect(canShowFull(change({ path: "system_prompt", elided: true }))).toBe(true);
-    expect(canShowFull(change({ path: "code", elided: true }))).toBe(true);
-    expect(canShowFull(change({ path: "code_bundle", elided: true }))).toBe(false);
-    expect(canShowFull(change({ path: "system_prompt" }))).toBe(false);
+    expect(changeView(change({ field: "tools", group: "tools", kind: "added", after: [] })).kind).toBe("values");
   });
 
   it("reads a dotted path out of a spec", () => {
@@ -165,9 +138,9 @@ describe("changeView", () => {
 
 describe("rows", () => {
   const rows = [
-    { seq: 3, deployed: false },
-    { seq: 2, deployed: true },
-    { seq: 1, deployed: true },
+    { seq: 3 },
+    { seq: 2 },
+    { seq: 1 },
   ];
 
   it("the newest is the highest seq", () => {
@@ -175,19 +148,6 @@ describe("rows", () => {
     expect(newestSeq([])).toBeNull();
   });
 
-  it("offers Roll back on deployed rows except the newest", () => {
-    const newest = newestSeq(rows);
-    expect(rows.filter((r) => rollbackable(r, newest)).map((r) => r.seq)).toEqual([2, 1]);
-    const allDeployed = rows.map((r) => ({ ...r, deployed: true }));
-    expect(allDeployed.filter((r) => rollbackable(r, 3)).map((r) => r.seq)).toEqual([2, 1]);
-    // the only snapshot is what the agent already holds
-    expect(rollbackable({ seq: 1, deployed: true }, 1)).toBe(false);
-  });
-
-  it("maps every state to a tone and a label", () => {
-    expect(SNAPSHOT_TONE).toEqual({ deployed: "green", deploying: "blue", failed: "red", not_deployed: "gray" });
-    expect(snapshotStateKey("not_deployed")).toBe("v2.agents.snapshots.state.not_deployed");
-  });
 });
 
 describe("compare pick", () => {

@@ -44,6 +44,24 @@ from openinference.instrumentation import using_session
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
+# An isolated project's application inference profile ARN, set by the platform
+# when per-project inference profiles are on (projects design §10.8).
+MODEL_ID = os.environ.get("LAUNCHPAD_MODEL_ID") or MODEL_ID
+
+
+def _model_hint(result) -> str:
+    """The Claude Agent SDK drives Anthropic Claude only: when Bedrock refuses the
+    model, say so instead of leaving a bare provider error."""
+    text = str(result or "")
+    if any(k in text for k in ("AccessDenied", "access to the model", "not authorized",
+                               "model identifier is invalid", "ValidationException",
+                               "ResourceNotFound", "403", "404")):
+        return (f" — the Claude Agent SDK can only run Anthropic Claude models, and "
+                f"{MODEL_ID!r} could not be invoked in this account/Region. Enable "
+                "Claude model access in Amazon Bedrock, pick another Claude model id, "
+                "or create the agent with another method (Harness / Strands) to use a "
+                "non-Claude model.")
+    return ""
 SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 MAX_TURNS = __LAUNCHPAD_MAX_TURNS__
 ALLOWED_TOOLS: list[str] = __LAUNCHPAD_ALLOWED_TOOLS__
@@ -219,7 +237,7 @@ def _memory_hook(memory: AgentCoreMemory, text_prompt: str | None = None):
 
 def _kb_runtime():
     return boto3.client(
-        "bedrock-agent-runtime", region_name=os.environ.get("AWS_REGION", "us-west-2")
+        "bedrock-agent-runtime", region_name=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
     )
 
 
@@ -557,7 +575,7 @@ async def _query_events(
             partial_since_assistant = False
         elif isinstance(message, ResultMessage):
             if message.is_error:
-                raise RuntimeError(f"claude query failed: {message.result}")
+                raise RuntimeError(f"claude query failed: {message.result}{_model_hint(message.result)}")
             outcome.usage = {
                 **(message.usage or {}),
                 "duration_ms": message.duration_ms,

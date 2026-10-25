@@ -5,9 +5,9 @@ import { useSearchParams } from "react-router-dom";
 
 import { DiffPanes } from "../../../components/DiffPanes";
 import { api, errorMessage, type RecommendProviderInfo } from "../../../lib/api";
-import { isBudgetStop } from "../../../lib/budgets";
 import { evaluationRunPresentation, type EvaluationRunInfo } from "../../../lib/evaluation";
 import { evaluatorLabel, evaluatorPolarity } from "../../../lib/evaluators";
+import { useModelCatalog, withCatalogModels } from "../../../lib/model-catalog";
 import {
   type ExperimentInfo,
   fmtP,
@@ -21,7 +21,6 @@ import {
   verdictLabel,
 } from "../../../lib/experiments";
 import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
-import { BudgetStopAlert } from "../../BudgetBanner";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
 import { creatorLabel, fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -34,6 +33,7 @@ const FAST_POLL_MS = 2500;
 
 export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: boolean }) {
   const { t } = useTranslation();
+  useModelCatalog(); // the account catalog joins the model choices once it lands
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
   const [exp, setExp] = useState<ExperimentInfo | null>(null);
@@ -285,7 +285,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               }}
               testId="v2-exp-rec-model"
               options={[
-                ...thirdParty.models.map((m) => ({
+                ...withCatalogModels(thirdParty.models).map((m) => ({
                   value: m.model_id === thirdParty.default_model_id ? "" : m.model_id,
                   label: `${m.label}${m.model_id === thirdParty.default_model_id ? ` · ${t("expPage.providerDefaultModel")}` : ""}`,
                 })),
@@ -296,7 +296,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               <input
                 className="v2-input mono"
                 style={{ marginTop: 8 }}
-                placeholder="global.anthropic.claude-sonnet-5"
+                placeholder={thirdParty.default_model_id ?? ""}
                 value={modelCustom}
                 onChange={(e) => {
                   setModelCustom(e.target.value);
@@ -635,18 +635,13 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
           </Field>
         </div>
       ) : (
-        <>
-          <Descriptions
-            items={[
-              { label: t("v2.experiments.sent"), value: a.traffic.sent },
-              { label: t("v2.experiments.failed"), value: a.traffic.failed },
-              { label: t("expPage.datasetTag"), value: a.traffic.dataset_name ?? "—" },
-            ]}
-          />
-          {isBudgetStop(a.traffic) && (
-            <BudgetStopAlert kind="traffic" skipped={a.traffic.skipped} testId="v2-exp-traffic-budget-stop" />
-          )}
-        </>
+        <Descriptions
+          items={[
+            { label: t("v2.experiments.sent"), value: a.traffic.sent },
+            { label: t("v2.experiments.failed"), value: a.traffic.failed },
+            { label: t("expPage.datasetTag"), value: a.traffic.dataset_name ?? "—" },
+          ]}
+        />
       )}
     </StageCard>
   );
@@ -986,7 +981,8 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
         busy={busy}
         onConfirm={() => {
           setConfirm(null);
-          void onAction("promote");
+          // the confirm is the recorded override the backend requires for weak evidence
+          void onAction("promote", { allow_non_significant: true });
         }}
         onClose={() => setConfirm(null)}
       />

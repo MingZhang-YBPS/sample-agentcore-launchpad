@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from app.core.errors import AppError
+from app.core.project_scope import current_project
 from app.evaluation import agentcore_eval as ac
 
 if TYPE_CHECKING:
@@ -102,19 +103,32 @@ def refuse_hidden_evaluators(
 ) -> None:
     """Workspace isolation: a custom evaluator the viewer cannot see is refused
     exactly like one that does not exist (`{code_prefix}.evaluator_unsupported`,
-    "unknown evaluator"). Built-in and third-party ids are always visible."""
-    if not viewer.filters:
-        return
-    from app.services import creators, visibility
+    "unknown evaluator"). Built-in and third-party ids are always visible.
+
+    Every caller scores with the set (online evaluation, experiments, canaries), so an
+    evaluator another project shared with this one counts only at `use` level
+    (projects §11.2); a read-only share is refused with the same code, saying so."""
+    if not viewer.filters and current_project() is None:
+        return  # (hidden_aws_ids also hides another project's evaluators)
+    from app.services import creators, resource_shares, visibility
 
     custom = [str(e).strip() for e in ids or () if not str(e).startswith(_MANAGED)]
     hidden = visibility.hidden_aws_ids(viewer, db, workspace_id, creators.EVALUATOR, custom)
+    read_only = resource_shares.refused_ids(db, creators.EVALUATOR, custom, "use")
     for evaluator in custom:
         if evaluator in hidden:
             raise AppError(
                 f"{code_prefix}.evaluator_unsupported",
                 f"unknown evaluator {evaluator}",
                 {"evaluator": evaluator},
+                status_code=400,
+            )
+        if evaluator in read_only:
+            raise AppError(
+                f"{code_prefix}.evaluator_unsupported",
+                f"evaluator {evaluator} is shared with this project read-only — ask its "
+                "project for use access",
+                {"evaluator": evaluator, "share": "read"},
                 status_code=400,
             )
 
@@ -124,19 +138,26 @@ _MANAGED = ("Builtin.", "ThirdParty.")
 
 def require_visible_evaluators(
     db: Session, workspace_id: str, viewer: Viewer, ids: Sequence[str] | None,
+    *, need: str = "use",
 ) -> None:
     """Workspace isolation for routes that hand an evaluator id straight to AWS
     (`GET/PUT/DELETE /api/eval/evaluators/{id}`, the session SCORE NOW): a hidden
     custom evaluator answers exactly what a missing one does — AWS's own
-    `ResourceNotFoundException`, through the global ClientError handler."""
-    if not viewer.filters:
-        return
+    `ResourceNotFoundException`, through the global ClientError handler.
+
+    `need` is what the route does with an evaluator another project shared (§11.2):
+    `read` (its definition), `use` (scoring with it — the default) or `own` (changing
+    or deleting it, never a share's). A share short of it answers like a missing one."""
+    if not viewer.filters and current_project() is None:
+        return  # (hidden_aws_ids also hides another project's evaluators)
     from botocore.exceptions import ClientError
 
-    from app.services import creators, visibility
+    from app.services import creators, resource_shares, visibility
 
     custom = [str(e) for e in ids or () if not str(e).startswith(_MANAGED)]
     hidden = visibility.hidden_aws_ids(viewer, db, workspace_id, creators.EVALUATOR, custom)
+    if need != "read":
+        hidden |= resource_shares.refused_ids(db, creators.EVALUATOR, custom, need)
     for evaluator in custom:
         if evaluator in hidden:
             raise ClientError(

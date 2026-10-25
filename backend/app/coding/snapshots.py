@@ -1,16 +1,16 @@
-"""Durable per-project snapshots (parent design §3, R5).
+"""Durable per-repo snapshots (parent design §3, R5).
 
 Session storage is wiped by a runtime version update (once the live session ends)
 and after 14 idle days, so after every settled turn, after a manual save
 (debounced by the watcher) and before every deploy the backend asks the runtime
-to tar the project to a presigned PUT under ``coding/<ws>/<project>/snapshots/``.
-The newest snapshot's key is the project's ``snapshot_key``: every later action
-carries its presigned GET as ``restore_url`` (``runtime_client.project_call``).
+to tar the repo to a presigned PUT under ``coding/<ws>/<repo>/snapshots/``.
+The newest snapshot's key is the repo's ``snapshot_key``: every later action
+carries its presigned GET as ``restore_url`` (``runtime_client.repo_call``).
 
-One snapshot per project at a time (``project_lock``, process-local — the box runs
+One snapshot per repo at a time (``repo_lock``, process-local — the box runs
 one uvicorn); a delete takes the same lock, so a snapshot can never re-create
 objects under a prefix being deleted. A failed background snapshot marks the
-project dirty, so the watcher retries it (backed off).
+repo dirty, so the watcher retries it (backed off).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from app.core.db import SessionLocal
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 from . import runtime_client, s3urls
-from .models import PROJECT_DELETING, CodingProject
+from .models import REPO_DELETING, CodingRepo
 
 logger = logging.getLogger("launchpad.coding")
 
@@ -47,47 +47,47 @@ def _spawn(fn: Callable[[], None], name: str) -> None:
 
 
 @contextmanager
-def project_lock(project_id: str) -> Iterator[None]:
+def repo_lock(repo_id: str) -> Iterator[None]:
     with _LOCKS_GUARD:
-        lock = _LOCKS.setdefault(project_id, threading.Lock())
+        lock = _LOCKS.setdefault(repo_id, threading.Lock())
     with lock:
         yield
 
 
-def backing_off(project_id: str) -> bool:
+def backing_off(repo_id: str) -> bool:
     """A recent background failure: the watcher waits before trying again."""
-    failed = _FAILED_AT.get(project_id)
+    failed = _FAILED_AT.get(repo_id)
     return failed is not None and _clock() - failed < RETRY_BACKOFF_S
 
 
-def take(project_id: str, *, ctx: WorkspaceContext | None = None,
+def take(repo_id: str, *, ctx: WorkspaceContext | None = None,
          reason: str = "manual") -> dict[str, Any] | None:
-    """Snapshot the project now; ``{key, bytes, files, ms}`` or None when the
-    project is gone. Raises ``CodingRuntimeError`` (or ``AppError`` when the
+    """Snapshot the repo now; ``{key, bytes, files, ms}`` or None when the
+    repo is gone. Raises ``CodingRuntimeError`` (or ``AppError`` when the
     runtime is not installed) on failure — the caller decides how loud."""
-    with project_lock(project_id):
+    with repo_lock(repo_id):
         db = SessionLocal()
         try:
-            row = db.get(CodingProject, project_id)
-            if row is None or row.status == PROJECT_DELETING:
+            row = db.get(CodingRepo, repo_id)
+            if row is None or row.status == REPO_DELETING:
                 return None
             ctx = ctx or context_for_workspace(row.workspace_id)
             started = datetime.now(UTC)
             key = s3urls.snapshot_key(row.workspace_id or "", row.id, started)
             put_url = s3urls.presign_put(ctx, key)
-            result = runtime_client.project_call(ctx, row, "snapshot", put_url=put_url) or {}
+            result = runtime_client.repo_call(ctx, row, "snapshot", put_url=put_url) or {}
             done = datetime.now(UTC)
             db.execute(
-                update(CodingProject)
-                .where(CodingProject.id == project_id)
+                update(CodingRepo)
+                .where(CodingRepo.id == repo_id)
                 .values(snapshot_key=key, snapshot_at=done)
                 .execution_options(synchronize_session=False)
             )
             # a save that landed while the tar ran stays dirty for the next snapshot
             db.execute(
-                update(CodingProject)
-                .where(CodingProject.id == project_id,
-                       or_(CodingProject.dirty_at.is_(None), CodingProject.dirty_at <= started))
+                update(CodingRepo)
+                .where(CodingRepo.id == repo_id,
+                       or_(CodingRepo.dirty_at.is_(None), CodingRepo.dirty_at <= started))
                 .values(dirty_at=None)
                 .execution_options(synchronize_session=False)
             )
@@ -95,22 +95,22 @@ def take(project_id: str, *, ctx: WorkspaceContext | None = None,
             workspace_id = row.workspace_id or ""
         finally:
             db.close()
-        _FAILED_AT.pop(project_id, None)
+        _FAILED_AT.pop(repo_id, None)
         try:
-            s3urls.prune_snapshots(ctx, workspace_id, project_id, keep_key=key)
+            s3urls.prune_snapshots(ctx, workspace_id, repo_id, keep_key=key)
         except Exception as exc:  # noqa: BLE001 — an extra old snapshot costs a few KB
-            logger.warning("coding project %s: snapshot prune failed: %s", project_id, exc)
-    logger.info("coding project %s: snapshot (%s) %s bytes in %s ms", project_id, reason,
+            logger.warning("coding repo %s: snapshot prune failed: %s", repo_id, exc)
+    logger.info("coding repo %s: snapshot (%s) %s bytes in %s ms", repo_id, reason,
                 result.get("bytes"), result.get("ms"))
     return {"key": key, **{k: result.get(k) for k in ("bytes", "files", "ms")}}
 
 
-def _mark_dirty(project_id: str) -> None:
+def _mark_dirty(repo_id: str) -> None:
     db = SessionLocal()
     try:
         db.execute(
-            update(CodingProject)
-            .where(CodingProject.id == project_id, CodingProject.dirty_at.is_(None))
+            update(CodingRepo)
+            .where(CodingRepo.id == repo_id, CodingRepo.dirty_at.is_(None))
             .values(dirty_at=datetime.now(UTC))
             .execution_options(synchronize_session=False)
         )
@@ -119,25 +119,25 @@ def _mark_dirty(project_id: str) -> None:
         db.close()
 
 
-def take_quietly(project_id: str, *, ctx: WorkspaceContext | None = None,
+def take_quietly(repo_id: str, *, ctx: WorkspaceContext | None = None,
                  reason: str = "background") -> bool:
-    """``take`` that never raises: a failure is logged, the project marked dirty
+    """``take`` that never raises: a failure is logged, the repo marked dirty
     and the watcher's retry backed off."""
     try:
-        return take(project_id, ctx=ctx, reason=reason) is not None
+        return take(repo_id, ctx=ctx, reason=reason) is not None
     except Exception as exc:  # noqa: BLE001
-        logger.warning("coding project %s: snapshot (%s) failed: %s", project_id, reason, exc)
-        _FAILED_AT[project_id] = _clock()
+        logger.warning("coding repo %s: snapshot (%s) failed: %s", repo_id, reason, exc)
+        _FAILED_AT[repo_id] = _clock()
         try:
-            _mark_dirty(project_id)
+            _mark_dirty(repo_id)
         except Exception:  # noqa: BLE001
-            logger.exception("coding project %s: could not mark it dirty", project_id)
+            logger.exception("coding repo %s: could not mark it dirty", repo_id)
         return False
 
 
-def request(project_id: str, *, ctx: WorkspaceContext | None = None,
+def request(repo_id: str, *, ctx: WorkspaceContext | None = None,
             reason: str = "settle") -> None:
     """Snapshot in the background (a settle on the SSE path must not hold the
     stream for the tar + upload)."""
-    _spawn(lambda: take_quietly(project_id, ctx=ctx, reason=reason),
-           name=f"coding-snapshot-{project_id[:8]}")
+    _spawn(lambda: take_quietly(repo_id, ctx=ctx, reason=reason),
+           name=f"coding-snapshot-{repo_id[:8]}")

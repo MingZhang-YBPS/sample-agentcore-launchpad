@@ -617,7 +617,7 @@ def test_traffic_action_uses_dataset_prompts(client, monkeypatch):
     sent: dict = {}
 
     def fake_send(gateway_url, target, prompts, poster=None, signer=None,
-                  progress=svc._noop, budget=None, estimate_usd=None):
+                  progress=svc._noop):
         sent.update(url=gateway_url, target=target, prompts=list(prompts))
         return {"session_ids": ["s1"], "sent": len(prompts), "failed": 0}
 
@@ -796,8 +796,11 @@ def test_legacy_promotion_projects_ready_without_mutating_row(client):
 
 
 def test_old_pipeline_row_still_promotes_and_rebundles(client, monkeypatch):
-    exp = _mk_exp(status="ready", stage="verdict",
-                  artifacts=_old_pipeline_artifacts())
+    artifacts = _old_pipeline_artifacts()
+    # promote now needs a verdict that backs it (F6); the row shape is what is under test
+    artifacts["verdict"] = {"metrics": [], "verdict": "treatment-wins", "n": 40,
+                            "significant": True}
+    exp = _mk_exp(status="ready", stage="verdict", artifacts=artifacts)
     _inline(monkeypatch)
     monkeypatch.setattr(
         svc, "act_promote",
@@ -1027,7 +1030,7 @@ def test_configuration_gateway_rejects_active_canary_before_dispatch(
     monkeypatch.setattr(
         svc,
         "run_action",
-        lambda exp_id, action, fn, caller=None: dispatched.append(action),
+        lambda exp_id, action, fn: dispatched.append(action),
     )
 
     res = client.post(
@@ -1165,7 +1168,7 @@ def _capture_gateway(monkeypatch):
     seen: dict[str, Any] = {}
     monkeypatch.setattr(
         svc, "run_action",
-        lambda exp_id, action, fn, caller=None: seen.update(action=action, fn=fn),
+        lambda exp_id, action, fn: seen.update(action=action, fn=fn),
     )
     monkeypatch.setattr(
         svc, "act_gateway",
@@ -1360,6 +1363,7 @@ def _eval_run(**kw):
     db = SessionLocal()
     try:
         run = EvalRun(**{
+            "workspace_id": DEFAULT_WORKSPACE_ID,
             "agent_id": "a1", "agent_name": "agent", "mode": "insights",
             "status": "completed", "batch_eval_id": "be-123",
             "session_ids": ["s1", "s2"], **kw,
@@ -1562,6 +1566,36 @@ def test_recommend_action_threads_a_valid_source(client, monkeypatch):
         json={"action": "recommend", "recommend_types": ["system_prompt"],
               "recommend_source_run_id": run_id},
     )
-    assert res.status_code == 202
+    assert res.status_code == 202, res.text
     assert captured["source"]["run_id"] == run_id
     assert captured["source"]["kind"] == "batch_evaluation"
+
+
+@pytest.mark.parametrize(
+    ("verdict", "override", "status", "code"),
+    [
+        ({"verdict": "control-wins", "significant": True}, True, 409,
+         "experiment.verdict_blocked"),
+        ({"verdict": "insufficient-n", "n": 4}, True, 409, "experiment.verdict_blocked"),
+        ({"verdict": "treatment-wins", "significant": False}, False, 409,
+         "experiment.verdict_not_significant"),
+        ({"verdict": "tie", "significant": False}, False, 409,
+         "experiment.verdict_not_significant"),
+        ({"verdict": "treatment-wins", "significant": False}, True, 202, None),
+        ({"verdict": "treatment-wins", "significant": True}, False, 202, None),
+    ],
+)
+def test_promote_requires_a_verdict_that_backs_it(client, monkeypatch, verdict, override,
+                                                  status, code):
+    """Promote redeploys the agent in place; a loss never ships, weak evidence needs an
+    explicit override (F6)."""
+    artifacts = _old_pipeline_artifacts()
+    artifacts["verdict"] = {"metrics": [], "n": 40, **verdict}
+    exp = _mk_exp(status="ready", stage="verdict", artifacts=artifacts)
+    _inline(monkeypatch)
+    monkeypatch.setattr(svc, "act_promote", lambda exp_id, progress: None)
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "promote", "allow_non_significant": override})
+    assert res.status_code == status, res.text
+    if code:
+        assert res.json()["code"] == code

@@ -17,12 +17,17 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.errors import cleanup_error, is_not_found
+from app.deployer import model_profile
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
+from app.deployer.mounts import describe as describe_mounts
+from app.deployer.mounts import with_mounts_env, with_prompt_note
+from app.deployer.network import describe as describe_network
+from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
-from app.services import agent_iam, ecr
+from app.services import agent_iam, cost_tags, ecr, project_storage
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
@@ -48,8 +53,10 @@ def platform_buildspec_path() -> Path:
 
 
 def _image_ref(workspace: WorkspaceContext, agent: Agent) -> tuple[str, str, str]:
+    """`(registry, repository, tag)` of the agent's image: the shared repository, or
+    an isolated project's own once it is provisioned there (projects design §10.10)."""
     registry = f"{workspace.account_id}.dkr.ecr.{workspace.region}.amazonaws.com"
-    repo = workspace.resources.get("ecr_repo", "launchpad-agents")
+    repo = project_storage.ecr_repo(workspace, getattr(agent, "project_id", None))
     tag = f"{agent.name}-v{agent.version or '1'}"
     return registry, repo, tag
 
@@ -59,7 +66,10 @@ def _build_context(
 ) -> Path:
     """Template files + rendered main.py, then spec.skills S3 prefixes into
     .claude/skills/{name}/ so the claude CLI discovers them next to agents/."""
-    context_dir = assemble_build_context(spec, Path(f"/tmp/launchpad_ctx_{agent.name}"))
+    # the rendered prompt names the BYO mounts (storage-mounts §3.2)
+    context_dir = assemble_build_context(
+        with_prompt_note(spec), Path(f"/tmp/launchpad_ctx_{agent.name}")
+    )
     if spec.skills:
         bundle_skill_paths_into(spec.skills, context_dir / ".claude", log, workspace)
     return context_dir
@@ -78,7 +88,8 @@ def build_and_push_image(ctx: StageContext, agent: Agent, archive: str) -> tuple
     """Upload one build-context archive → CodeBuild (ARM64) → ECR; pin + gate.
 
     The build/wait/digest/scan sequence shared by the container method and BYOC
-    ``container_source``: uploads ``archive`` to ``builds/{agent.name}/source.zip``,
+    ``container_source``: uploads ``archive`` to ``builds/{agent.name}/source.zip``
+    (under ``projects/<pid>/`` for an isolated project),
     runs the workspace's ``launchpad-agent-builder`` project, resolves the pushed
     tag to its immutable digest (recorded on the Deployment row so a resumed job
     re-uses the same image) and runs the scan gate. Returns
@@ -94,7 +105,9 @@ def build_and_push_image(ctx: StageContext, agent: Agent, archive: str) -> tuple
             "resource map — run its bootstrap"
         )
 
-    s3_key = f"builds/{agent.name}/source.zip"
+    s3_key = project_storage.artifact_key(
+        getattr(agent, "project_id", None), f"builds/{agent.name}/source.zip"
+    )
     workspace.client("s3").upload_file(archive, bucket, s3_key)
     ctx.log(f"source zip uploaded → s3://{bucket}/{s3_key}")
 
@@ -204,11 +217,11 @@ def _run_scan_gate(
         )
 
 
-def _vpc(spec: AgentSpec) -> dict | None:
-    """networkModeConfig input — only when BYO mounts force VPC mode."""
-    if not (spec.filesystem.byo and spec.network):
-        return None
-    return {"subnets": spec.network.subnets, "security_groups": spec.network.security_groups}
+def _vpc(spec: AgentSpec, workspace_id: str | None = None) -> dict | None:
+    """networkModeConfig input: the spec's network profile resolved (design §12.6),
+    None = PUBLIC. BYO mounts require a network (the spec refuses them without), on
+    this method as on every other (storage-mounts §3.2)."""
+    return spec_vpc(spec, workspace_id)
 
 
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
@@ -243,10 +256,23 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         row = db.get(Agent, agent.id)
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
+        vpc = _vpc(AgentSpec(**row.spec), row.workspace_id)
+        ctx.log(f"network: {describe_network(vpc)}")
+        if mounts := describe_mounts(AgentSpec(**row.spec)):
+            ctx.log(mounts)
+        # §10.8: an isolated project's model through its inference profile
+        model_env = model_profile.model_environment(
+            row.project_id, AgentSpec(**row.spec), workspace, ctx.log
+        )
 
         def _kwargs() -> dict:
             registry, repo, tag = _image_ref(workspace, row)
             spec = AgentSpec(**row.spec)
+            environment = with_mounts_env(
+                runtime_environment(spec, workspace.resources, agent_id=agent.id,
+                                    workspace_id=agent.workspace_id or ""), spec
+            )
+            environment.update(model_env)
             return {
                 "container_uri": ctx.scratch.get("image_uri")
                 or _recorded_digest_uri(ctx, registry, repo)
@@ -256,12 +282,14 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 or f"{registry}/{repo}:{tag}",
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or workspace.resources.get("execution_role_arn", ""),
-                "environment": runtime_environment(spec, workspace.resources),
+                "environment": environment,
                 "filesystem_configurations": filesystem_configurations(spec) or None,
-                "vpc": _vpc(spec),
+                "vpc": vpc,
                 # Echoed on every update; omitting (None = IAM) resets a JWT
                 # runtime back to SigV4 — that IS the JWT→IAM transition.
                 "authorizer_configuration": authorizer,
+                # cost-tags §1.2: the full set (agent id, workspace) on create and update
+                "tags": cost_tags.agent_tags(row, row.workspace_id),
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
@@ -338,10 +366,12 @@ def delete_agent_resources(
     if not agent.resource_id:
         return
     client = control_client(workspace)
-    try:
-        rt.delete_runtime(client, agent.resource_id)
-    except client.exceptions.ResourceNotFoundException:
-        pass
+    # a gated agent serves through named endpoints; AgentCore refuses to delete a
+    # runtime that still has them (Agent-DLC §6)
+    from app.dlc.releases import delete_endpoints, delete_runtime_or_defer
+
+    delete_endpoints(agent, client)
+    delete_runtime_or_defer(agent, client)
     # With per-agent roles the whole role goes away (routers/agents.py), which takes
     # its inline policies with it. This cleanup is only still needed for the
     # shared-role fallback, where a stale launchpad-fs-<agent> policy would otherwise

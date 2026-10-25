@@ -8,6 +8,7 @@ registryRecordId.
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -17,8 +18,9 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import REPO_ROOT
 from app.core.errors import AppError, cleanup_error, is_not_found
+from app.core.project_scope import current_project
 from app.models.ledger import Agent
-from app.services import mcp_client, user_gateways
+from app.services import mcp_client, project_gateway, user_gateways
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore import registry as reg
 from app.services.agentcore import runtime as rt
@@ -100,6 +102,9 @@ def register_agent_record(
     # their harness ARN (the /runtimes/ data plane doesn't apply to them).
     is_a2a = spec.get("protocol") == "a2a"
     arn = agent.arn or ""
+    # §10.9: an isolated project's record names its project (card metadata + tags);
+    # every other agent's record is exactly as before
+    project_id, tags = _record_project(agent, workspace)
     card = reg.build_a2a_card(
         name=agent.name,
         description=(spec.get("system_prompt") or "")[:180] or f"Launchpad agent {agent.name}",
@@ -115,6 +120,7 @@ def register_agent_record(
         ),
         skills=reg.derive_card_skills(spec) or None,
         transport="a2a-jsonrpc" if is_a2a else "agentcore-http",
+        project_id=project_id,
     )
     record, created = reg.upsert_record(
         client,
@@ -123,12 +129,29 @@ def register_agent_record(
         description=f"Launchpad agent · method {agent.method}",
         descriptor_type="A2A",
         descriptors=reg.build_a2a_descriptors(card),
+        tags=tags,
     )
     record_id = record["recordId"]
     if created and auto_submit:
         reg.wait_record_settled(client, registry_id, record_id)
         reg.submit_record(client, registry_id, record_id)
     return {"record_id": record_id, "created": created}
+
+
+def _record_project(
+    agent: Agent, workspace: WorkspaceContext
+) -> tuple[str | None, dict[str, str] | None]:
+    """`(project id, launchpad:* tags)` for an isolated project's agent, else
+    `(None, None)` (projects design §10.9)."""
+    from app.services import project_telemetry
+
+    project_id = getattr(agent, "project_id", None)
+    if not project_telemetry.attributed(project_id):
+        return None, None
+    return project_id, project_telemetry.project_tags(
+        project_id, workspace_id=getattr(workspace, "id", None),
+        agent_id=getattr(agent, "id", None),
+    )
 
 
 def agent_record_state(agent: Agent, workspace: WorkspaceContext) -> str:
@@ -198,8 +221,15 @@ def upload_skill_bundle(
     }
 
 
-def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
-    """Register the gateway targets (MCP) + sample skill bundle (AGENT_SKILLS)."""
+def ensure_default_records(
+    workspace: WorkspaceContext,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Register the gateway targets (MCP) + sample skill bundle (AGENT_SKILLS).
+
+    Slow on a real workspace (each new record is waited out of CREATING before it is
+    submitted), so the console runs it as the `registry_sync` job; ``on_result`` is
+    called with each record's result as soon as it settles, for the job's progress."""
     client = registry_control_client(workspace)
     registry_id = _registry_id(workspace)
     results: list[dict[str, Any]] = []
@@ -237,6 +267,8 @@ def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
             reg.submit_record(client, registry_id, record["recordId"])
         results.append({"name": target, "type": "MCP", "record_id": record["recordId"],
                         "created": created})
+        if on_result is not None:
+            on_result(results[-1])
 
     bundle = upload_skill_bundle(workspace)
     record, created = reg.upsert_record(
@@ -254,6 +286,8 @@ def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
         reg.submit_record(client, registry_id, record["recordId"])
     results.append({"name": SKILL_NAME, "type": "AGENT_SKILLS",
                     "record_id": record["recordId"], "created": created})
+    if on_result is not None:
+        on_result(results[-1])
     return results
 
 
@@ -776,6 +810,14 @@ def _managed_launchpad_gateway(gateway: dict[str, Any], resources: dict[str, Any
     )
 
 
+def _agent_resources(workspace: WorkspaceContext) -> dict[str, Any]:
+    """The resource map as an agent of the current project sees it: an isolated,
+    provisioned project's agents take launchpad-gw tokens from the project's own
+    provider and scopes (projects design §10.6); unchanged for every other one."""
+    return project_gateway.effective_resources(
+        workspace.resources, current_project(), workspace.id)
+
+
 def _gateway_auth(
     gateway: dict[str, Any],
     resources: dict[str, Any],
@@ -800,7 +842,7 @@ def _gateway_auth(
                     "oauth": {
                         "providerArn": provider_arn,
                         "grantType": "CLIENT_CREDENTIALS",
-                        "scopes": [GATEWAY_SCOPE],
+                        "scopes": project_gateway.gateway_scopes(resources),
                     }
                 },
                 None,
@@ -839,7 +881,7 @@ def _legacy_gateway_attachment(resources: dict[str, Any]) -> dict[str, Any] | No
             "oauth": {
                 "providerArn": resources["oauth_provider_arn"],
                 "grantType": "CLIENT_CREDENTIALS",
-                "scopes": [GATEWAY_SCOPE],
+                "scopes": project_gateway.gateway_scopes(resources),
             }
         },
     }
@@ -862,7 +904,7 @@ def resolve_gateway_attachments(
     gateway_tools = [tool for tool in tools if getattr(tool, "type", None) == "gateway"]
     if not gateway_tools:
         return []
-    resources = workspace.resources
+    resources = _agent_resources(workspace)
     attachments: list[dict[str, Any]] = []
 
     if any(not getattr(tool, "config", None) for tool in gateway_tools):
@@ -946,7 +988,7 @@ def attachable_records(
     remote_mcp entries."""
     registry_client = registry_client or registry_control_client(workspace)
     registry_id = registry_id or _registry_id(workspace)
-    resources = workspace.resources
+    resources = _agent_resources(workspace)
     gateways = (
         gateways
         if gateways is not None

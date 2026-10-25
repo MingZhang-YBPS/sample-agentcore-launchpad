@@ -36,6 +36,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import service as eval_service
 from app.evaluation.models import EvalRun, OnlineEvalConfig
@@ -211,6 +212,62 @@ def config_visible(
     return not records or any(visibility.sees(viewer, db, r.created_by) for r in records)
 
 
+class _ProjectConfigs:
+    """Which online configs the current project owns (design §5.5), for a workspace
+    holding several projects. ListOnlineEvaluationConfigs is account-wide and the
+    ledger is project-filtered, so another project's config would otherwise read as
+    `external` (or as an experiment arm whose owner is gone) and be shared.
+
+    A config belongs to the project of its ledger row, else of the experiment /
+    canary its name embeds; an external one (no owner at all) only to a project whose
+    agent its log groups match. Built across every project; None — no fence — with no
+    current project or a single-project workspace."""
+
+    def __init__(self, db: Session, ws: WorkspaceScope, project: str) -> None:
+        self._db, self._ws, self.project = db, ws, project
+        with project_context(None):
+            self.ledger: dict[str, str | None] = dict(db.execute(
+                select(OnlineEvalConfig.config_id, OnlineEvalConfig.project_id)
+                .where(OnlineEvalConfig.workspace_id == ws.id)
+            ).all())
+
+    @classmethod
+    def load(cls, db: Session, ws: WorkspaceScope) -> _ProjectConfigs | None:
+        project = current_project()
+        if project is None or not eval_service.several_projects(db, ws.id):
+            return None
+        return cls(db, ws, project)
+
+    def foreign_row(self, config_id: str) -> bool:
+        return config_id in self.ledger and self.ledger[config_id] != self.project
+
+    def decide(self, config_id: str, name: str) -> bool | None:
+        """True / False, or None: visible only if its log groups match this project's agent."""
+        if config_id in self.ledger:
+            return self.ledger[config_id] == self.project
+        model, id8 = _parent_model(str(name or ""))
+        if model is None:
+            return None
+        with project_context(None):
+            parents = set(self._db.scalars(
+                select(model.project_id).where(
+                    model.workspace_id == self._ws.id, model.id.startswith(id8, autoescape=True)
+                )
+            ))
+        return self.project in parents  # an arm whose owner is gone is no one's here
+
+
+def _parent_model(name: str) -> tuple[Any, str]:
+    """(Experiment | RuntimeCanary | None, id8) for an `exp_<id8>_…` / `can_<id8>_…` name."""
+    model = (
+        Experiment if name.startswith("exp_")
+        else RuntimeCanary if name.startswith("can_")
+        else None
+    )
+    id8 = name[4:].split("_", 1)[0] if model is not None else ""
+    return (model, id8) if id8 else (None, "")
+
+
 def _not_found(config_id: str) -> NotFoundError:
     return NotFoundError(
         "online_eval.not_found", f"online evaluation config {config_id} not found"
@@ -300,7 +357,7 @@ def _agent_log_group_matchers(
     """(agent, log-group needle, is_prefix) for every deployed agent in the workspace
     that ``viewer`` may see (a hidden agent is never named as the match).
 
-    Derived offline: runtime methods log to ``runtimes/<resource_id>-DEFAULT``; a
+    Derived offline: runtime methods log to ``runtimes/<resource_id>-<endpoint>``; a
     harness's backing runtime logs under ``runtimes/harness_<name>-*`` (see
     evaluation-agent-eligibility.md). Used only for the best-effort
     ``matched_agent`` hint on external configs.
@@ -320,7 +377,8 @@ def _agent_log_group_matchers(
             base = agent.resource_id.rsplit("-", 1)[0]
             out.append((agent, f"{RUNTIME_LOG_GROUP_PREFIX}harness_{base}-", True))
         else:
-            out.append((agent, f"{RUNTIME_LOG_GROUP_PREFIX}{agent.resource_id}-DEFAULT", False))
+            # the runtime's whole family of endpoint groups (-DEFAULT, -live, -candidate)
+            out.append((agent, f"{RUNTIME_LOG_GROUP_PREFIX}{agent.resource_id}-", True))
     return out
 
 
@@ -422,6 +480,7 @@ def list_configs(
     """
     control = control or control_client(ws.context)
     ledger = _ledger_rows(db, ws)
+    fence = _ProjectConfigs.load(db, ws)
     summaries = ac.list_online_eval_configs(control)
     parents = parent_index(db, ws, [
         s.get("onlineEvaluationConfigName", "") for s in summaries
@@ -434,7 +493,10 @@ def list_configs(
         name = summary.get("onlineEvaluationConfigName", "")
         owner = owner_of(name, config_id, set(ledger))
         row = ledger.get(config_id)
-        if not config_visible(db, ws, viewer, name=name, row=row, parents=parents):
+        verdict = fence.decide(config_id, name) if fence is not None else True
+        if verdict is False or not config_visible(
+            db, ws, viewer, name=name, row=row, parents=parents
+        ):
             continue
         aws, detailed = summary, False
         if owner != "experiment":
@@ -448,6 +510,8 @@ def list_configs(
                 matchers = _agent_log_group_matchers(db, ws, viewer)
             ds = ((aws.get("dataSourceConfig") or {}).get("cloudWatchLogs")) or {}
             matched = _match_agent(ds.get("logGroupNames") or [], matchers)
+        if verdict is None and matched is None:
+            continue  # several projects: an unmatched external config is no one's here
         parent = parent_of(db, viewer, parents, name) if owner == "experiment" else None
         out.append(_normalize(aws, owner=owner, row=row, matched_agent=matched,
                               detailed=detailed, parent=parent))
@@ -473,7 +537,10 @@ def get_config(
     (a hidden ledger-backed config answers before any AWS call)."""
     control = control or control_client(ws.context)
     ledger = _ledger_rows(db, ws)
+    fence = _ProjectConfigs.load(db, ws)
     row = ledger.get(config_id)
+    if fence is not None and fence.foreign_row(config_id):
+        raise _not_found(config_id)  # another project's config: before any AWS call
     if row is not None and not config_visible(db, ws, viewer, name=row.name, row=row):
         raise _not_found(config_id)
     try:
@@ -483,6 +550,9 @@ def get_config(
             raise _not_found(config_id) from exc
         raise
     name = aws.get("onlineEvaluationConfigName", "")
+    verdict = fence.decide(config_id, name) if fence is not None else True
+    if verdict is False:
+        raise _not_found(config_id)
     parents = parent_index(db, ws, [name]) if row is None else {}
     if row is None and not config_visible(db, ws, viewer, name=name, row=None,
                                           parents=parents):
@@ -494,6 +564,8 @@ def get_config(
         matched = _match_agent(
             ds.get("logGroupNames") or [], _agent_log_group_matchers(db, ws, viewer)
         )
+    if verdict is None and matched is None:
+        raise _not_found(config_id)
     parent = parent_of(db, viewer, parents, name) if owner == "experiment" else None
     return _normalize(aws, owner=owner, row=ledger.get(config_id), matched_agent=matched,
                       detailed=True, parent=parent)
@@ -674,14 +746,6 @@ def set_execution_status(
     control = control or control_client(ws.context)
     current = get_config(db, ws, config_id, control, viewer=viewer)
     _require_owner(current, ("agent", "external"), "resume" if enabled else "pause")
-    if enabled and current.get("created_by"):
-        # continuous judging is charged to the config's creator (budgets design), so
-        # resuming it is refused while THEY are over budget — whoever presses resume
-        # (the route gate already checked the caller)
-        from app.services import budgets
-
-        budgets.check(db, budgets.payer_for_user_id(
-            db, current["created_by"], current.get("created_by_name")))
     ac.update_online_eval_config(
         control, config_id=config_id, executionStatus="ENABLED" if enabled else "DISABLED"
     )
@@ -847,6 +911,118 @@ def results(
     rows = run(results_queries(range_key), RANGE_HOURS[range_key],
                log_groups=[log_group], workspace=ws.context)
     return {"range": range_key, "log_group": log_group, **parse_results(rows)}
+
+
+# ─── daily cost (eval-cost §1.3) ──────────────────────────────────────────────
+#
+# An online evaluation is billed as it judges: what it cost on a day is the
+# judgements its results group recorded that day × tokens per judgement × the
+# judge's price (cost.py's formula and basis), plus the measured cost of the
+# console-started reports run that day (their `cost_actual`).
+
+DAILY_COST_MAX_DAYS = 30
+
+
+def daily_cost_query() -> str:
+    return f"""
+{_FIELDS}
+| {_RESULT_FILTER}
+| stats count(*) as count by evaluator, bin(1d) as day
+| sort day asc
+| limit 1000
+"""
+
+
+def daily_cost(
+    db: Session,
+    ws: WorkspaceScope,
+    config_id: str,
+    *,
+    days: int = 7,
+    control: Any = None,
+    viewer: Viewer = Viewer.ALL,
+    run_queries: Callable[..., dict[str, list[dict[str, str]]]] | None = None,
+) -> dict[str, Any]:
+    """Per day: the config's judging cost and its reports' measured cost."""
+    from app.dlc import cost as cost_svc
+
+    if not 1 <= days <= DAILY_COST_MAX_DAYS:
+        raise AppError("online_eval.bad_range",
+                       f"days is 1..{DAILY_COST_MAX_DAYS}", status_code=422)
+    config = get_config(db, ws, config_id, control, viewer=viewer)
+    run = run_queries or run_insights_queries
+    rows = run({"daily": daily_cost_query()}, days * 24,
+               log_groups=[ac.online_eval_results_log_group(config_id)],
+               workspace=ws.context).get("daily") or []
+    judges = {j["evaluator_id"]: j for j in cost_svc._judge_evaluators(
+        list(config.get("evaluators") or []), [])}
+    judge_model = cost_svc._default_judge_model()
+    judge_price = cost_svc._price_of(judge_model)
+    prices = cost_svc.eval_prices()
+    tokens_of: dict[str, tuple[float, str]] = {}
+    unpriced: list[str] = []
+    by_day: dict[str, dict[str, Any]] = {}
+
+    def day_row(day: str) -> dict[str, Any]:
+        return by_day.setdefault(day, {"day": day, "judgements": 0, "judge_usd": 0.0,
+                                       "reports_usd": 0.0, "by_evaluator": {}})
+
+    for row in rows:
+        evaluator_id, day = row.get("evaluator"), str(row.get("day") or "")[:10]
+        count = _int(row.get("count"))
+        if not evaluator_id or not day or not count:
+            continue
+        if evaluator_id not in tokens_of:
+            measured = cost_svc._judge_tokens(db, evaluator_id)
+            tokens_of[evaluator_id] = ((measured, "measured") if measured
+                                       else (float(cost_svc.ROUGH_JUDGE_TOKENS), "rough"))
+        tin, tout = cost_svc.split_judge_tokens(tokens_of[evaluator_id][0] * count)
+        if cost_svc.is_managed(evaluator_id):
+            usd: float | None = cost_svc.managed_usd(tin, tout, prices)
+        elif judge_price:
+            usd = cost_svc.judge_usd(tin, tout, judge_price)
+        else:
+            usd = None
+            if judge_model and judge_model not in unpriced:
+                unpriced.append(judge_model)
+        entry = day_row(day)
+        entry["judgements"] += count
+        entry["judge_usd"] += usd or 0.0
+        entry["by_evaluator"][evaluator_id] = {
+            "judgements": count, "usd": round(usd, 6) if usd is not None else None,
+            "billed_by": (judges.get(evaluator_id) or {}).get("billed_by")
+            or ("agentcore_evaluations" if cost_svc.is_managed(evaluator_id) else "your_account"),
+        }
+    since = datetime.now(UTC) - timedelta(days=days)
+    for report in _console_runs(db, ws, config_id):
+        actual = report.cost_actual or {}
+        created = report.created_at
+        if created is not None and created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        if not actual.get("final") or created is None or created < since:
+            continue
+        day_row(created.date().isoformat())["reports_usd"] += float(actual.get("total_usd") or 0)
+    out_days = []
+    for day in sorted(by_day):
+        entry = by_day[day]
+        entry["judge_usd"] = round(entry["judge_usd"], 6)
+        entry["reports_usd"] = round(entry["reports_usd"], 6)
+        entry["usd"] = round(entry["judge_usd"] + entry["reports_usd"], 6)
+        out_days.append(entry)
+    return {
+        "config_id": config_id,
+        "days": out_days,
+        "range_days": days,
+        "total_usd": round(sum(d["usd"] for d in out_days), 6),
+        "judge_model": judge_model,
+        "unpriced_models": unpriced,
+        "basis": {
+            "tokens_per_judgement": {k: {"tokens": v[0], "basis": v[1]}
+                                     for k, v in tokens_of.items()},
+            "prices": {"source": prices.get("source"), "updated_at": prices.get("updated_at")},
+        },
+        "estimate": True,
+    }
 
 
 # ─── insights reports (batch evaluations sourced from a config) ──────────────
@@ -1062,7 +1238,7 @@ RESULTS_SOURCE = f"SOURCE logGroups(namePrefix: ['{ac.ONLINE_EVAL_RESULTS_PREFIX
 SESSION_SCORES_LIMIT = 200
 QUALITY_RANGE = "24h"
 _NAMES_TTL_SECONDS = 120.0
-_names_cache: dict[str, tuple[float, dict[str, str]]] = {}
+_names_cache: dict[tuple[str, str | None], tuple[float, dict[str, str]]] = {}
 _names_lock = threading.Lock()
 
 
@@ -1103,26 +1279,37 @@ def quality_queries(config_ids: Sequence[str]) -> dict[str, str]:
     }
 
 
-def config_names(workspace: WorkspaceContext, control: Any = None) -> dict[str, str]:
+def config_names(
+    workspace: WorkspaceContext, control: Any = None, db: Session | None = None
+) -> dict[str, str]:
     """``{config_id: name}`` for every config in the account (one paginated List,
-    cached 120 s per workspace). Only feeds owner classification of results that
-    no ledger row explains; a failure degrades to ``{}`` (→ ``external``)."""
-    hit = _names_cache.get(workspace.id)
+    cached 120 s per (workspace, project)). Only feeds owner classification of
+    results that no ledger row explains; a failure degrades to ``{}`` (→
+    ``external``). With ``db``, a workspace holding several projects drops the
+    configs another project owns (its ledger rows and experiment / canary arms),
+    so no name crosses projects."""
+    key = (workspace.id, current_project())
+    hit = _names_cache.get(key)
     if hit and time.monotonic() - hit[0] < _NAMES_TTL_SECONDS:
         return hit[1]
     with _names_lock:
-        hit = _names_cache.get(workspace.id)
+        hit = _names_cache.get(key)
         if hit and time.monotonic() - hit[0] < _NAMES_TTL_SECONDS:
             return hit[1]
         try:
             names = {
-                c["onlineEvaluationConfigId"]: c.get("name", "")
+                c["onlineEvaluationConfigId"]: (
+                    c.get("onlineEvaluationConfigName") or c.get("name") or ""
+                )
                 for c in ac.list_online_eval_configs(control or control_client(workspace))
                 if c.get("onlineEvaluationConfigId")
             }
         except Exception:
             names = {}
-        _names_cache[workspace.id] = (time.monotonic(), names)
+        fence = _ProjectConfigs.load(db, workspace) if db is not None else None
+        if fence is not None:
+            names = {cid: n for cid, n in names.items() if fence.decide(cid, n) is not False}
+        _names_cache[key] = (time.monotonic(), names)
         return names
 
 
@@ -1203,7 +1390,7 @@ def session_online_scores(
                    logs=logs, workspace=workspace)["scores"]
     except Exception:
         return {"configs": [], "total": 0, "unavailable": True, "configs_exist": exists}
-    names = config_names(workspace, control) if any(
+    names = config_names(workspace, control, db) if any(
         (r.get("config_id") or "") not in ledger for r in rows
     ) else {}
     return {**parse_session_scores(rows, ledger, names), "configs_exist": exists}

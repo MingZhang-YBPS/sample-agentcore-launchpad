@@ -1,5 +1,16 @@
-import type { BudgetNotice, BudgetStopReason, RunSnapshotRef } from "./api";
+import type { ModelDefaults } from "./api";
+import type { CostSummary } from "./api/evalCost";
 import { evaluatorPolarity } from "./evaluators";
+import { activeCatalogIds, toolCapable } from "./model-catalog";
+import { modelsForActiveRegion } from "./regions";
+import {
+  GLM_MODEL_ID,
+  mergeModelOptions,
+  peekModelDefaults,
+  STATIC_MODEL_DEFAULTS,
+  withCurrentModel,
+} from "./model-defaults";
+import type { RunSnapshotRef } from "./api";
 
 export interface EvaluationDatasetInfo {
   id: string;
@@ -120,11 +131,6 @@ export interface EvaluationRunInfo {
   /** an operator stop is pending (in-memory flag; the row turns `stopped` once
    *  the worker/poller observes it). Absent on older backends. */
   stop_requested?: boolean;
-  /** `budget_exceeded`: stopped at a boundary because its creator's monthly spend budget
-   *  was reached (the sessions replayed so far are kept). Absent on older backends. */
-  stop_reason?: BudgetStopReason | null;
-  /** create response only: the run's forecast is more than the creator has left */
-  budget_notice?: BudgetNotice | null;
   queue_position: number | null;
   scores: EvaluationScore[];
   insights: InsightTrees;
@@ -157,6 +163,8 @@ export interface EvaluationRunInfo {
   /** Creator's username at creation time (display only); null when unknown —
    *  legacy rows and resources created outside the console. */
   created_by_name?: string | null;
+  /** The run's own cost summary (eval-cost §1.3); absent on older backends. */
+  cost?: CostSummary | null;
 }
 
 export interface EvaluationScenarioFailure {
@@ -375,10 +383,6 @@ export interface RunRecommendation {
     excluded_sessions?: { session_id: string; scenario_id: string }[];
   };
   error: string | null;
-  /** who asked for it — they pay for a 3rd-party provider's model calls (null for the
-   *  config admin / auth-disabled operator and older rows). Absent on older backends. */
-  requested_by?: string | null;
-  requested_by_name?: string | null;
   /** set once the recommended prompt was accepted into a new Harness version */
   accepted: {
     by: string;
@@ -440,21 +444,52 @@ export const SIMULATED_SCHEMA = "AGENTCORE_EVALUATION_SIMULATED_V1";
 export const DEFAULT_EVALUATORS = ["Builtin.Correctness", "Builtin.Helpfulness"];
 
 /**
- * Models that can play a simulated persona's user — shared by the classic New Run
- * and the V2 task wizard; the first is the default in both. The SDK actor answers
- * through Strands structured output, which FORCES a tool call, so a model must
- * accept Converse `tool_choice` any/tool. Live-checked on the real
- * SimulatedScenarioExecutor 2026-10-10: GPT-6 Luna and Haiku 5.5 complete the
- * loop; Sonnet 5.5 rejects forced tool choice ("tool_choice: type tool and any
- * are not supported for this model").
+ * Static models that can play a simulated persona's user — shared by the classic
+ * New Run and the V2 task wizard. The configured default (`actor_model_id` of
+ * `GET /api/models/defaults`) leads via `actorModelOptions`; this list's first entry
+ * is only the pre-load / offline default. The SDK actor answers through Strands
+ * structured output, which FORCES a tool call, so a model must accept Converse
+ * `tool_choice` any/tool. Live-checked on the real SimulatedScenarioExecutor
+ * 2026-10-10: GPT-6 Luna and Haiku 5.5 complete the loop; Sonnet 5.5 rejects forced
+ * tool choice ("tool_choice: type tool and any are not supported for this model").
+ * GLM-5.3 (`GLM_MODEL_ID`, global profile) was live-verified to accept forced tool choice
+ * any/tool, so it is always offered — an account without OpenAI or Anthropic
+ * models still has an actor.
  */
 export const ACTOR_MODELS = [
   "global.openai.gpt-6-luna",
   "global.anthropic.claude-haiku-5-5",
   "global.anthropic.claude-sonnet-5",
   "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "global.amazon.nova-2-lite-v1:0",
+  // Kimi / DeepSeek: forced tool choice (any) live-probed 2026-10-12; DeepSeek R1
+  // refuses toolConfig and is not an actor. DeepSeek V3.1 is us-west-2 only.
+  "deepseek.v3.2",
+  "global.moonshotai.kimi-k3",
+  "us.moonshotai.kimi-k3",
+  "moonshotai.kimi-k2.5",
+  "moonshot.kimi-k2-thinking",
+  "deepseek.v3-v1:0",
 ];
+
+/** The actor a new run pre-selects: the configured default (static until loaded). */
+export function defaultActorModel(defaults: ModelDefaults | null = peekModelDefaults()): string {
+  return (defaults ?? STATIC_MODEL_DEFAULTS).actor_model_id;
+}
+
+/** An actor picker's options: the configured default first, then GLM-5.3, the static
+ *  list and the workspace account's model catalog; a `current` id outside the list is
+ *  kept (prepended). Catalog models are offered, not vetted for forced tool choice —
+ *  the admin Models page's probe checks that. */
+export function actorModelOptions(
+  defaults: ModelDefaults | null,
+  current?: string | null,
+  catalog: readonly string[] = activeCatalogIds(),
+): string[] {
+  const d = defaults ?? STATIC_MODEL_DEFAULTS;
+  // the actor answers through a forced tool call: models without tool use are left out
+  const merged = mergeModelOptions(d.actor_model_id, [GLM_MODEL_ID], [...modelsForActiveRegion(ACTOR_MODELS), ...catalog]);
+  return withCurrentModel(toolCapable(merged), current);
+}
 
 export const ACTIVE_RUN_STATUSES = new Set([
   "queued",

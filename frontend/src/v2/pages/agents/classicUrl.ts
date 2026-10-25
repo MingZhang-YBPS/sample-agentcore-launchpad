@@ -1,3 +1,5 @@
+import { editPath } from "../../../lib/agent-admin/edit";
+
 /**
  * `/agents/new` deep links in the V2 console. A link that carries a creation intent
  * — `method=zip_runtime|container|byoc|harness` (old V2 hand-off), `gateway=` or
@@ -22,9 +24,5 @@ export function classicAgentNewToV2(search: string): string | null {
 
 /** Where editing an agent happens in V2: the Studio canvas for a canvas-built agent,
  *  the preset configure flow (classic page, in the V2 shell) for a system preset,
- *  else the native `?view=edit` re-publish wizard. */
-export function v2EditPath(agent: { id: string; method: string; system?: unknown }): string {
-  if (agent.method === "studio") return `/create/studio?agent=${agent.id}`;
-  if (agent.system) return `/agents/${agent.id}/edit`;
-  return `/v2/agents?view=edit&id=${encodeURIComponent(agent.id)}`;
-}
+ *  else the native `?view=edit` re-publish wizard. Shared with V3 (`lib/agent-admin`). */
+export const v2EditPath = editPath;

@@ -1,44 +1,28 @@
-import { ExternalLink, Upload, X } from "lucide-react";
+import { Upload, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 
 import { resolveKb, selectableKbs, toggle } from "../../../lib/agent-spec";
 import { formatBytes, KB_NAME_RE, mergeFiles } from "../../../lib/knowledgeBases";
 import { HintLabel } from "../../Glossary";
 import { Alert, Button, Field, Spin, Tag } from "../../ui";
-import { displayPhase, type InlineKb, PHASE_TONE, phaseLabelKey } from "./inlineKbState";
-import type { InlineKbApi } from "./useInlineKb";
+import { type InlineKb, type InlineKbApi, inlineKbPhase, PHASE_TONE } from "./useInlineKb";
 import { CheckList, type SectionProps } from "./wizardKit";
 
 /** Status tag of an inline KB: `Ready`, `Ingesting`, … */
 export function InlineKbState({ inline }: { inline: InlineKb }) {
   const { t } = useTranslation();
+  const phase = inline.uploaded ? inlineKbPhase(inline.detail) : "unknown";
   return (
-    <Tag tone={PHASE_TONE[displayPhase(inline)]} dot>
-      {t(phaseLabelKey(inline))}
+    <Tag tone={PHASE_TONE[phase]} dot>
+      {t(`v2.agents.wizard.inlineKb.state.${phase}`)}
     </Tag>
-  );
-}
-
-/** "The KB stays in the workspace list" + a link to it (new tab: the wizard keeps
- *  its draft). Shown before a KB is created and while one is mounted. */
-function KeptNote() {
-  const { t } = useTranslation();
-  return (
-    <span className="v2-muted" data-testid="v2-agent-inline-kb-kept">
-      {t("v2.agents.wizard.inlineKb.keptNote")}{" "}
-      <Link to="/v2/knowledge-bases" target="_blank" rel="noopener noreferrer">
-        {t("v2.agents.wizard.inlineKb.keptLink")}
-        <ExternalLink size={12} aria-hidden="true" />
-      </Link>
-    </span>
   );
 }
 
 /**
  * The wizard's knowledge field: pick existing ACTIVE KBs (as before) or create one
- * inline from a name + files. Name follows the agent's name until edited.
+ * inline from a name + files. Name follows the agent's resource name until edited.
  */
 export function KnowledgeField({
   form,
@@ -93,7 +77,7 @@ export function KnowledgeField({
             <span>{t("v2.agents.wizard.inlineKb.mounted", { name: inline.name })}</span>
             <InlineKbState inline={inline} />
             {kb.busy && <Spin />}
-            <Button size="sm" disabled={kb.busy} onClick={kb.discard} testId="v2-agent-inline-kb-discard">
+            <Button size="sm" onClick={kb.discard} testId="v2-agent-inline-kb-discard">
               {t("v2.agents.wizard.inlineKb.discard")}
             </Button>
           </div>
@@ -108,7 +92,6 @@ export function KnowledgeField({
             </Alert>
           )}
           {inline.uploaded && <Alert>{t("v2.agents.wizard.inlineKb.note")}</Alert>}
-          <KeptNote />
         </div>
       ) : (
         <div className="v2-agents-block" data-testid="v2-agent-inline-kb-form">
@@ -176,7 +159,6 @@ export function KnowledgeField({
               </span>
             </Alert>
           )}
-          <KeptNote />
           <Button kind="primary" disabled={kb.busy} onClick={submit} testId="v2-agent-inline-kb-create">
             {kb.busy ? t("v2.agents.wizard.inlineKb.creating") : t("v2.agents.wizard.inlineKb.create")}
           </Button>

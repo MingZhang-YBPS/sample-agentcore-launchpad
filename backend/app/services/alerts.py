@@ -1,58 +1,50 @@
-"""Threshold alerts over data the platform already collects.
+"""Threshold alerts over data the platform already collects (roadmap T29).
 
-The smallest honest mechanism:
+Competitors treat alerting as table stakes and Launchpad had none: an agent could start
+failing, slow down, lose quality or burn money and nobody learned until somebody opened a
+console page. This closes that, deliberately as the smallest honest mechanism:
 
 * **A rule is a threshold on a value the platform can already compute** — error rate and
-  p95 latency from the spans the Observability dashboard reads, online quality from the
+  p95 latency from the spans the Observability console reads, online quality from the
   evaluation results it already aggregates, month-to-date spend from the price map
   (`services/costs.py`). No new telemetry path, no agent-side change.
-* **Evaluation is explicit.** Every read is billed (Logs Insights) or cached, so the
-  whole set is evaluated in one pass: by an administrator's "Re-check now" (which never
-  notifies) or by the opt-in background thread (`services/alert_scheduler.py`, the only
-  caller that notifies).
+* **Evaluation is explicit and cheap to skip.** Every read is billed (Logs Insights) or
+  cached, so a rule names its own window and the whole set is evaluated in one pass, from
+  the console's Alerts page, the inbox, or a scheduled tick.
 * **A transition notifies, not a state.** `state` is remembered on the row, so a rule that
-  stays firing does not re-notify on every pass. One notification is owed per firing
-  episode (`last_fired_at` = when the rule last *started* firing): a manual re-check that
-  saw the transition first records it without posting, and the next background pass
-  still delivers it — a console refresh must not swallow the page.
-* **Delivery is one generic JSON webhook** (`services/webhook_safety.py`). A Slack or
-  Feishu incoming hook already *is* one. A failed delivery never fails the evaluation:
-  the state is still recorded and the outcome lands in `last_detail`.
+  stays firing does not re-notify on every pass — the thing that made pager fatigue a
+  cliché.
+* **Delivery is one generic JSON webhook.** A Slack or Feishu incoming hook already *is*
+  one, so a single mechanism covers both without the platform storing channel
+  credentials. A failed delivery never fails the evaluation: the state is still recorded
+  and the inbox still shows it.
 
 A value that cannot be read (no telemetry yet, a query failure) yields `unknown`, never a
 silent `ok` — an alert that reports health it did not measure is worse than no alert.
-
-Kinds and their windows:
-
-| kind | value | window |
-|---|---|---|
-| `error_rate` | failed traces / traces (0–1) | the rule's window, 1h/6h/24h/7d |
-| `latency_p95_ms` | p95 trace latency, ms | the rule's window, 1h/6h/24h/7d |
-| `online_quality` | polarity-normalised online-eval mean (0–1) | fixed 24 h (ignores window) |
-| `spend_usd` | estimated spend over the window | the rule's window, 1h/6h/24h/7d/30d |
-| `cost_mtd_usd` | estimated spend since the UTC month start | the month (ignores window) |
 """
 
-import math
+import json
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.errors import AppError
+from app.core.project_scope import project_context
 from app.models.ledger import AlertRule
-from app.services import costs, creators, webhook_safety
+from app.services import costs
 from app.services.workspace import WorkspaceContext
 
-KINDS = ("error_rate", "latency_p95_ms", "online_quality", "spend_usd", "cost_mtd_usd")
-Kind = Literal["error_rate", "latency_p95_ms", "online_quality", "spend_usd", "cost_mtd_usd"]
+KINDS = ("error_rate", "latency_p95_ms", "online_quality", "cost_mtd_usd")
+Kind = Literal["error_rate", "latency_p95_ms", "online_quality", "cost_mtd_usd"]
 COMPARISONS = ("above", "below")
 STATE_OK = "ok"
 STATE_FIRING = "firing"
 STATE_UNKNOWN = "unknown"
-MAX_DETAIL_CHARS = 500
+WEBHOOK_TIMEOUT_SECONDS = 5
 
 # Which direction each kind is bad in, so a rule created with the wrong comparison is
 # refused rather than silently never firing.
@@ -60,14 +52,42 @@ NATURAL_COMPARISON: dict[str, str] = {
     "error_rate": "above",
     "latency_p95_ms": "above",
     "online_quality": "below",
-    "spend_usd": "above",
     "cost_mtd_usd": "above",
 }
 
+# A rule's window, in the observability range keys. `cost_mtd_usd` ignores it — the month
+# is its window by definition.
 WINDOWS = ("1h", "6h", "24h", "7d", "30d")
 # Error rate and latency come from the observability dashboard, which has no 30-day range.
 DASHBOARD_KINDS = ("error_rate", "latency_p95_ms")
 DASHBOARD_WINDOWS = ("1h", "6h", "24h", "7d")
+# A project's `quotas.monthly_budget_usd` (projects §11.3) is kept as two ordinary
+# `cost_mtd_usd` rules of the project, in the project's home workspace (its
+# workspace-default binding, else the first): one at 80 % of the budget, and one at
+# 100 % — or, with the project's overrun switch on (`settings.allow_overrun`), at
+# 105 % instead (the gate then blocks at 110 %). Each reads the project's
+# month-to-date spend across every workspace it is bound to
+# (`project_quotas.cached_spend`, the gate's figure), fires once per month as the
+# spend crosses it (the month-to-date value falls back to ~0 on the 1st), and is
+# (re)written from the budget and the switch — removed when the budget is cleared.
+# The rules only notify; the block itself is `project_quotas.assert_budget`.
+# Department budgets notify through `department_budgets.evaluate_departments`, run
+# at the end of every evaluation pass (no rule rows: a workspace rule is readable by
+# every member of the workspace, a department's spend is not).
+BUDGET_RULE_NAME = "project monthly budget"
+BUDGET_WARN_RULE_NAME = "project monthly budget 80%"
+BUDGET_OVER_RULE_NAME = "project monthly budget 105%"
+BUDGET_RULE_CREATOR = "quota"
+# rule name → the fraction of the budget it fires at
+BUDGET_RULES: dict[str, float] = {BUDGET_WARN_RULE_NAME: 0.8, BUDGET_RULE_NAME: 1.0,
+                                  BUDGET_OVER_RULE_NAME: 1.05}
+
+
+def budget_rules_for(overrun: bool) -> dict[str, float]:
+    """The rules one project keeps: 80/100, or 80/105 with the overrun switch on."""
+    second = BUDGET_OVER_RULE_NAME if overrun else BUDGET_RULE_NAME
+    return {BUDGET_WARN_RULE_NAME: BUDGET_RULES[BUDGET_WARN_RULE_NAME],
+            second: BUDGET_RULES[second]}
 
 
 def validate(kind: str, comparison: str, window: str, threshold: float) -> None:
@@ -89,13 +109,8 @@ def validate(kind: str, comparison: str, window: str, threshold: float) -> None:
             f"a '{kind}' rule reads the observability dashboard, whose windows are "
             f"{', '.join(DASHBOARD_WINDOWS)}",
         )
-    if not math.isfinite(threshold):
-        raise AppError("alert.bad_threshold", "threshold must be a finite number")
     if kind == "online_quality" and not 0.0 <= threshold <= 1.0:
         raise AppError("alert.bad_threshold", "online_quality is a 0–1 score")
-    # a fraction, not a percentage: 5 would mean 500 % and never fire
-    if kind == "error_rate" and not 0.0 <= threshold <= 1.0:
-        raise AppError("alert.bad_threshold", "error_rate is a 0–1 fraction (0.05 = 5 %)")
     if threshold < 0:
         raise AppError("alert.bad_threshold", "threshold must not be negative")
 
@@ -104,7 +119,7 @@ def validate(kind: str, comparison: str, window: str, threshold: float) -> None:
 
 
 def _dashboard_value(
-    kind: str, window: str, workspace: WorkspaceContext
+    kind: str, window: str, db: Session, workspace: WorkspaceContext
 ) -> tuple[float | None, str]:
     """Error rate (0–1) or p95 latency (ms) from the observability dashboard."""
     from app.services import observability
@@ -134,8 +149,6 @@ def _quality_value(db: Session, workspace: WorkspaceContext) -> tuple[float | No
     from app.evaluation.online import online_quality
 
     try:
-        # Viewer.ALL: an aggregate over every agent-owned config; every alerts route
-        # is ADMIN, and admins see every agent under isolation anyway.
         snapshot = online_quality(db, workspace)
     except Exception as exc:  # noqa: BLE001
         return None, f"could not read online evaluation: {type(exc).__name__}"
@@ -148,64 +161,95 @@ def _quality_value(db: Session, workspace: WorkspaceContext) -> tuple[float | No
     )
 
 
-def _cost_value(db: Session, workspace: WorkspaceContext) -> tuple[float | None, str]:
+def _cost_value(
+    db: Session, workspace: WorkspaceContext, project: str | None = None
+) -> tuple[float | None, str]:
     try:
-        usd = costs.month_to_date_usd(db, workspace)
+        usd = costs.month_to_date_usd(db, workspace, project=project)
     except Exception as exc:  # noqa: BLE001
         return None, f"could not estimate spend: {type(exc).__name__}"
     return usd, "month-to-date estimate from the price map"
 
 
-def _spend_value(
-    window: str, db: Session, workspace: WorkspaceContext
-) -> tuple[float | None, str]:
-    try:
-        report = costs.cost_report(db, workspace, range_key=window)
-    except Exception as exc:  # noqa: BLE001
-        return None, f"could not estimate spend: {type(exc).__name__}"
-    return float(report.get("total_est_cost_usd") or 0.0), f"{window} estimate from the price map"
-
-
 def read_value(
     rule: AlertRule, db: Session, workspace: WorkspaceContext
 ) -> tuple[float | None, str]:
-    if rule.kind in DASHBOARD_KINDS:
-        return _dashboard_value(rule.kind, rule.window or "24h", workspace)
-    if rule.kind == "online_quality":
-        return _quality_value(db, workspace)
-    if rule.kind == "spend_usd":
-        return _spend_value(rule.window or "24h", db, workspace)
-    if rule.kind == "cost_mtd_usd":
-        return _cost_value(db, workspace)
+    """The rule's value, measured as the rule's own project (design §5.12): a project
+    rule reads that project's dashboard, online configs and spend; a workspace rule
+    (NULL) reads the whole workspace — whichever project the caller is in, and the
+    same from the scheduler, which has none."""
+    with project_context(rule.project_id):
+        if rule.kind in ("error_rate", "latency_p95_ms"):
+            return _dashboard_value(rule.kind, rule.window or "24h", db, workspace)
+        if rule.kind == "online_quality":
+            return _quality_value(db, workspace)
+        if rule.kind == "cost_mtd_usd" and is_budget_rule(rule):
+            return _project_cost_value(db, workspace, rule.project_id or "")
+        if rule.kind == "cost_mtd_usd":
+            # a single-project workspace's spend is all that project's, attributed or not
+            several = rule.project_id is not None and _several_projects(db, workspace.id)
+            return _cost_value(db, workspace, rule.project_id if several else None)
     return None, f"unknown kind '{rule.kind}'"
 
 
-def breached(rule: Any, value: float) -> bool:
+def _project_cost_value(
+    db: Session, workspace: WorkspaceContext, project_id: str
+) -> tuple[float | None, str]:
+    """A budget rule's value: the project's month-to-date spend in every workspace it
+    is bound to, on its budget basis (`workspace` is the rule's own) — the same cached
+    figure the budget gate reads, so both rules and the gate cost one measurement."""
+    from app.services import project_quotas
+
+    usd, detail, _ = project_quotas.cached_spend(db, project_id, workspace=workspace)
+    return usd, detail
+
+
+def _several_projects(db: Session, workspace_id: str) -> bool:
+    from app.services.observability import several_projects
+
+    return several_projects(db, workspace_id)
+
+
+def breached(rule: AlertRule, value: float) -> bool:
+    if is_budget_rule(rule):
+        return value >= rule.threshold  # reaching 80 % / 100 % of the budget is the event
     return value > rule.threshold if rule.comparison == "above" else value < rule.threshold
 
 
 # ── delivery ─────────────────────────────────────────────────────────────────────
 
 
-def notify(rule: AlertRule, value: float, detail: str, workspace_id: str) -> str | None:
-    """Deliver the transition, if the rule has somewhere to send it.
+def _post_webhook(url: str, payload: dict[str, Any]) -> str:
+    """One JSON POST. Returns a short outcome string; never raises."""
+    body = json.dumps(payload).encode()
+    request = urllib.request.Request(  # noqa: S310 - the URL is an operator's own config
+        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=WEBHOOK_TIMEOUT_SECONDS) as response:
+            return f"HTTP {response.status}"
+    except urllib.error.HTTPError as exc:
+        return f"HTTP {exc.code}"
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return f"{type(exc).__name__}"
 
-    Returns a short outcome string, or None when the rule has no webhook.
-    """
+
+def notify(rule: AlertRule, value: float, detail: str, workspace_id: str) -> str | None:
+    """Deliver the transition, if the rule has somewhere to send it."""
     if not rule.webhook_url:
         return None
-    detail = detail[:MAX_DETAIL_CHARS]
     text = (
         f"[Launchpad/{workspace_id}] {rule.name or rule.kind} is firing: "
         f"{rule.kind} = {value:g} ({rule.comparison} {rule.threshold:g}) — {detail}"
     )
     # `text` is what a Slack or Feishu incoming hook renders; the structured fields ride
     # alongside for anything else consuming the same hook.
-    _, outcome = webhook_safety.post_json(
+    return _post_webhook(
         rule.webhook_url,
         {
             "text": text,
             "workspace_id": workspace_id,
+            "project_id": rule.project_id,
             "rule_id": rule.id,
             "kind": rule.kind,
             "value": value,
@@ -214,7 +258,6 @@ def notify(rule: AlertRule, value: float, detail: str, workspace_id: str) -> str
             "detail": detail,
         },
     )
-    return outcome
 
 
 # ── evaluation ───────────────────────────────────────────────────────────────────
@@ -224,40 +267,32 @@ def evaluate_rules(
     db: Session,
     workspace: WorkspaceContext,
     *,
-    notify_transitions: bool = False,
+    notify_transitions: bool = True,
 ) -> dict[str, Any]:
     """Re-read every enabled rule in this workspace and record what it saw.
 
-    Notifies only when ``notify_transitions`` (the scheduler), once per firing episode
-    (an ok/unknown → firing transition), even when a manual pass saw the transition
-    first. A delivery result is recorded in `last_detail` rather than raised: a broken
-    webhook must not hide the breach.
-
-    A read can take tens of seconds (Logs Insights), and a rule may be deleted from the
-    console meanwhile. Each rule is therefore re-read before its read, checked again
-    after it, and committed on its own: a rule that vanished is skipped (not written
-    back, not notified) instead of failing the whole pass with a stale UPDATE.
+    Notifies only on an ok/unknown → firing transition. A delivery result is recorded in
+    `last_detail` rather than raised: a broken webhook must not hide the breach.
     """
-    rule_ids = list(
-        db.scalars(
-            select(AlertRule.id)
-            .where(AlertRule.workspace_id == workspace.id)
-            .order_by(AlertRule.created_at)
+    sync_budget_rules(db, workspace.id)
+    rules = db.scalars(
+        select(AlertRule).where(AlertRule.workspace_id == workspace.id).order_by(
+            AlertRule.created_at
         )
-    )
+    ).all()
     now = datetime.now(UTC)
     evaluated: list[dict[str, Any]] = []
-    for rule_id in rule_ids:
-        rule = db.get(AlertRule, rule_id)
-        if rule is None:
-            continue  # deleted since the list was read
+    inactive = _inactive_projects(db, {r.project_id for r in rules if r.project_id})
+    for rule in rules:
         if not rule.enabled:
             evaluated.append(rule_out(rule, skipped="disabled"))
             continue
-        value, detail = read_value(rule, db, workspace)
-        if not _still_exists(db, rule_id):
-            db.expunge(rule)  # deleted while its value was being read
+        if rule.project_id in inactive:
+            # an archived project serves reads only (design §5.12): its rules keep the
+            # state they last saw rather than re-reading (billed) and re-notifying
+            evaluated.append(rule_out(rule, skipped="project_archived"))
             continue
+        value, detail = read_value(rule, db, workspace)
         previous = rule.state
         if value is None:
             rule.state = STATE_UNKNOWN
@@ -267,60 +302,155 @@ def evaluate_rules(
         rule.last_detail = detail
         rule.last_checked_at = now
         if rule.state == STATE_FIRING:
-            if previous != STATE_FIRING or rule.last_fired_at is None:
-                rule.last_fired_at = now  # this firing episode starts here
-            if notify_transitions and value is not None and notification_owed(rule):
+            rule.last_fired_at = now
+            if notify_transitions and previous != STATE_FIRING and value is not None:
                 outcome = notify(rule, value, detail, workspace.id)
                 if outcome is not None:
                     rule.last_notified_at = now
                     rule.last_detail = f"{detail} · webhook {outcome}"
-        row = rule_out(rule)
-        try:
-            db.commit()
-        except StaleDataError:
-            db.rollback()  # deleted between the check and the write
-            continue
-        evaluated.append(row)
+        evaluated.append(rule_out(rule))
+    from app.services import department_budgets
+
+    # department budgets (notify only): the departments with a project bound here
+    departments = department_budgets.evaluate_departments(db, workspace_id=workspace.id)
+    db.commit()
+    firing = [row for row in evaluated if row["state"] == STATE_FIRING]
     return {
         "workspace_id": workspace.id,
         "evaluated_at": now.isoformat(),
         "rules": evaluated,
-        "firing": len([row for row in evaluated if row["state"] == STATE_FIRING]),
+        "firing": len(firing),
         "unknown": len([row for row in evaluated if row["state"] == STATE_UNKNOWN]),
+        "departments": departments,
     }
 
 
-def _still_exists(db: Session, rule_id: str) -> bool:
-    """A fresh query, not the identity map: has the rule been deleted meanwhile?"""
-    return db.scalar(select(AlertRule.id).where(AlertRule.id == rule_id)) is not None
+# ── project budgets (projects §11.3) ─────────────────────────────────────────────
 
 
-def _utc(value: datetime | None) -> datetime | None:
-    """SQLite hands back naive datetimes; every stored one is UTC."""
-    if value is None or value.tzinfo is not None:
-        return value
-    return value.replace(tzinfo=UTC)
+def is_budget_rule(rule: AlertRule) -> bool:
+    return bool(rule.project_id) and rule.name in BUDGET_RULES \
+        and rule.created_by == BUDGET_RULE_CREATOR
 
 
-def notification_owed(rule: AlertRule) -> bool:
-    """A firing rule with a webhook that has not been notified for this episode.
+def budget_rule(db: Session, project_id: str) -> AlertRule | None:
+    """The project's top budget rule (100 %, or 105 % with overrun on), in whichever
+    workspace it lives."""
+    with project_context(None):
+        rows = db.scalars(select(AlertRule).where(
+            AlertRule.project_id == project_id,
+            AlertRule.name.in_([BUDGET_OVER_RULE_NAME, BUDGET_RULE_NAME]),
+            AlertRule.created_by == BUDGET_RULE_CREATOR,
+        ).order_by(AlertRule.created_at)).all()
+    return rows[0] if rows else None
 
-    The episode starts at `last_fired_at` (the transition into firing). A manual pass
-    records the transition without posting, so the owed notification is still sent by
-    the next background pass rather than lost.
-    """
-    if rule.state != STATE_FIRING or not rule.webhook_url or rule.last_fired_at is None:
-        return False
-    notified = _utc(rule.last_notified_at)
-    return notified is None or notified < _utc(rule.last_fired_at)
+
+def _home_workspace(db: Session, project_id: str) -> str | None:
+    from app.models.projects import ProjectWorkspace
+
+    with project_context(None):
+        rows = db.execute(select(ProjectWorkspace.workspace_id,
+                                 ProjectWorkspace.is_workspace_default).where(
+            ProjectWorkspace.project_id == project_id)).all()
+    if not rows:
+        return None
+    defaults = sorted(ws for ws, is_default in rows if is_default)
+    return (defaults or sorted(ws for ws, _ in rows))[0]
 
 
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+def sync_budget_rule(db: Session, project_id: str) -> AlertRule | None:
+    """Make the project's budget rules match `quotas.monthly_budget_usd` and its
+    overrun switch: create the 80 % and 100 % (or 105 %) rules in the home workspace,
+    move them there, retune their thresholds when the budget changes, drop the one
+    the switch no longer wants, or remove them all when the budget is cleared. What
+    someone set on a kept rule (a webhook, disabling it) stays. Returns the top rule."""
+    from app.models.projects import Project
+    from app.services.project_quotas import BUDGET_KEY, allow_overrun, limit_of
+
+    out: AlertRule | None = None
+    with project_context(None):
+        project = db.get(Project, project_id)
+        budget = limit_of(db, project_id, BUDGET_KEY) if project else None
+        home = _home_workspace(db, project_id) if budget is not None else None
+        wanted = budget_rules_for(allow_overrun(project))
+        for name in BUDGET_RULES:
+            fraction = wanted.get(name)
+            rows = list(db.scalars(select(AlertRule).where(
+                AlertRule.project_id == project_id, AlertRule.name == name,
+                AlertRule.created_by == BUDGET_RULE_CREATOR).order_by(AlertRule.created_at)))
+            keep = rows[0] if rows and home is not None and fraction is not None else None
+            for extra in rows[1:] if keep is not None else rows:
+                db.delete(extra)
+            if home is None or budget is None or fraction is None:
+                continue
+            threshold = round(float(budget) * fraction, 4)
+            if keep is None:
+                keep = AlertRule(workspace_id=home, project_id=project_id, kind="cost_mtd_usd",
+                                 name=name, comparison="above", window="30d",
+                                 threshold=threshold, created_by=BUDGET_RULE_CREATOR)
+                db.add(keep)
+            else:
+                if keep.workspace_id != home:
+                    keep.workspace_id = home
+                    keep.state = STATE_UNKNOWN
+                if keep.threshold != threshold:
+                    keep.threshold = threshold
+                    keep.state = STATE_UNKNOWN  # re-judged (and re-notified) on the next pass
+            if name != BUDGET_WARN_RULE_NAME:
+                out = keep
+        db.flush()
+    return out
+
+
+def sync_budget_rules(db: Session, workspace_id: str) -> None:
+    """Before an evaluation pass: the budget rules of every project bound here, so a
+    quota set, a department cap changed or a binding moved since is picked up."""
+    from app.models.projects import Project, ProjectWorkspace
+
+    with project_context(None):
+        bound = set(db.scalars(select(ProjectWorkspace.project_id).where(
+            ProjectWorkspace.workspace_id == workspace_id)))
+        ruled = set(db.scalars(select(AlertRule.project_id).where(
+            AlertRule.workspace_id == workspace_id, AlertRule.name.in_(list(BUDGET_RULES)),
+            AlertRule.created_by == BUDGET_RULE_CREATOR)))
+        candidates = sorted(p for p in bound | ruled if p)
+        if not candidates:
+            return
+        rows = db.scalars(select(Project).where(Project.id.in_(candidates))).all()
+    from app.services.project_quotas import BUDGET_KEY, project_values
+
+    for row in rows:
+        if project_values(row).get(BUDGET_KEY) is not None or row.id in ruled:
+            sync_budget_rule(db, row.id)
+
+
+def _inactive_projects(db: Session, project_ids: set[str]) -> set[str]:
+    """Which of these projects are not active (archived, or on their way out)."""
+    if not project_ids:
+        return set()
+    from app.models.projects import Project
+
+    with project_context(None):
+        rows = db.execute(
+            select(Project.id, Project.status).where(Project.id.in_(project_ids))
+        ).all()
+    return {pid for pid, status in rows if status != "active"}
+
+
+def firing_rules(db: Session, workspace_id: str) -> list[AlertRule]:
+    """Rules currently firing — read from the row, so the inbox costs no AWS call."""
+    return list(
+        db.scalars(
+            select(AlertRule).where(
+                AlertRule.workspace_id == workspace_id,
+                AlertRule.state == STATE_FIRING,
+                AlertRule.enabled.is_(True),
+            )
+        ).all()
+    )
 
 
 def rule_out(rule: AlertRule, skipped: str | None = None) -> dict[str, Any]:
-    """The API shape of a rule. Never the webhook URL — only whether there is one."""
     return {
         "id": rule.id,
         "kind": rule.kind,
@@ -333,11 +463,17 @@ def rule_out(rule: AlertRule, skipped: str | None = None) -> dict[str, Any]:
         "state": rule.state,
         "last_value": rule.last_value,
         "last_detail": rule.last_detail,
-        "last_checked_at": _iso(rule.last_checked_at),
-        "last_fired_at": _iso(rule.last_fired_at),
-        "last_notified_at": _iso(rule.last_notified_at),
-        **creators.fields(rule),
-        "created_at": _iso(rule.created_at),
-        "updated_at": _iso(rule.updated_at),
+        "last_checked_at": rule.last_checked_at.isoformat() if rule.last_checked_at else None,
+        "last_fired_at": rule.last_fired_at.isoformat() if rule.last_fired_at else None,
+        "last_notified_at": (
+            rule.last_notified_at.isoformat() if rule.last_notified_at else None
+        ),
+        # NULL = a workspace-level rule, measured across every project
+        "scope": "project" if rule.project_id else "workspace",
+        "project_id": rule.project_id,
+        # kept from the project's `quotas.monthly_budget_usd` (§11.3): 80 % and 100 %
+        "budget": is_budget_rule(rule),
+        "created_by": rule.created_by,
+        "created_at": rule.created_at.isoformat() if rule.created_at else None,
         **({"skipped": skipped} if skipped else {}),
     }

@@ -1,6 +1,8 @@
 # BYOC samples — Bring Your Own Code
 
-Two minimal agents that satisfy the Launchpad BYOC runtime contract:
+Two minimal agents that satisfy the Launchpad BYOC runtime contract, plus a
+migration walkthrough (`langchain-to-strands/`: a tool-calling LangChain agent
+moved to Strands Agents and deployed as `code_zip`; see its README):
 
 - ARM64 (aarch64) · port **8080** · `POST /invocations` + `GET /ping`
 - invoke payload: `{"prompt": "...", "actor_id": "..."}`
@@ -25,6 +27,47 @@ that switches models at runtime should pick from `ALLOWED_MODEL_IDS`.
 Selections accept literal IDs, foundation-model ARNs and system inference-profile
 ARNs. Wildcards, IAM variables and application inference-profile ARNs are refused;
 an unknown ID never grants access to all foundation models.
+
+## Response formats the console reads
+
+Chat, the public `/v1` API and evaluation replays share one reader
+(`backend/app/services/agentcore/runtime.py`), so any of these works unchanged:
+
+| Shape | Example |
+|---|---|
+| Launchpad events (SSE) | `{"event": "delta", "text": "…"}` … `{"event": "complete", "result": "…"}`; `{"event": "tool", "name": "…"}` |
+| Converse stream events (SSE) — what the AgentCore CLI Strands template emits | `{"event": {"contentBlockDelta": {"delta": {"text": "…"}}}}`, `contentBlockStart.start.toolUse` → a tool call |
+| Strands loop events forwarded next to them | `init_event_loop`, `start`, `start_event_loop`, `message`, `result: {AgentResult}` — ignored as text; a `result` / assistant `message` supplies the reply only when nothing streamed |
+| One JSON body | `{"result": "…"}`, or `response` / `answer` / `output` / `output_text` / `text` / `message` / `content` / `completion` / `reply` |
+| Plain text | `text/plain` (or any non-JSON body) is the reply |
+
+A response with nothing readable (an empty body, or only bookkeeping such as
+`metadata` usage) ends the turn with `runtime.empty_reply` /
+`runtime.unrecognized_reply`; the console shows the start of what the runtime sent.
+
+## Telemetry — what makes an agent show up in Observability and Evaluation
+
+Observability (sessions, traces, the agent drop-down) and evaluation read the
+OpenTelemetry spans an agent exports to CloudWatch (`aws/spans`). AgentCore
+Runtime exports them only when the process runs under the ADOT
+`opentelemetry-instrument` launcher with the distro installed:
+
+| Artifact kind | Spans |
+|---|---|
+| `code_zip` | Launchpad adds the launcher when the upload carries **aws-opentelemetry-distro** — listed in `requirements.txt` (with *install requirements* on) or vendored in the zip. The upload response says so (`detected.adot_detected` / `adot_source`) and the deploy log prints `telemetry: ADOT launcher on\|off`. Without it the agent chats normally but writes no span. |
+| `container_source` / `container_image` | Your image decides: install `aws-opentelemetry-distro` (plus `strands-agents[otel]` for a Strands agent) and start with `CMD ["opentelemetry-instrument", "python", "main.py"]`. |
+
+A code zip without ADOT stays in the Observability agent drop-down, greyed
+with the reason, and `POST /api/eval/runs` refuses it up front with
+`eval.no_telemetry` (400) instead of failing after a full replay with
+"No evaluable agent spans found". Code that instruments itself and does export
+spans is not refused.
+
+## hello-mcp — an MCP server (protocol `mcp`)
+
+Not an agent: an MCP server that Launchpad hosts on AgentCore Runtime and puts
+behind the workspace Gateway (streamable HTTP on `0.0.0.0:8000/mcp`, no
+`/invocations`). See [hello-mcp/README.md](hello-mcp/README.md).
 
 ## hello-http — artifact kind `code_zip`
 

@@ -9,9 +9,11 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import current_project
 from app.evaluation import online
 from app.evaluation.online_evaluators import ONLINE_EVAL_MAX, refuse_hidden_evaluators
+from app.evaluation.service import several_projects
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import agent_access
@@ -66,6 +68,8 @@ class OnlineConfigCreate(BaseModel):
     filters: list[FilterSpec] = Field(default_factory=list, max_length=online.MAX_FILTERS)
     description: str | None = Field(default=None, max_length=200)
     enable_on_create: bool = True
+    # eval-cost §1.1: the caller saw the daily estimate above the confirm threshold
+    confirm_cost: bool = False
 
     @model_validator(mode="after")
     def _one_analysis_kind(self) -> OnlineConfigCreate:
@@ -99,10 +103,14 @@ class ReportStart(BaseModel):
 def _agent_in(
     db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
 ) -> Agent:
-    """An active agent of this workspace the caller may see; a foreign, missing or
-    isolation-hidden id answers 400 ``agent.not_active`` alike."""
+    """An active agent of this workspace the caller may see. A missing, foreign
+    (another workspace's or project's) or isolation-hidden id answers 404
+    ``agent.not_found`` alike; 400 ``agent.not_active`` is only for a visible
+    agent that is not active."""
     agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
-    if agent is None or agent.status != "active":
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    if agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
     return agent
 
@@ -128,21 +136,43 @@ def create_config(
     agent = _agent_in(db, ws, req.agent_id, viewer)
     refuse_hidden_evaluators(db, ws.id, viewer, req.evaluators, code_prefix="online_eval")
     default_sampling = 100.0 if req.mode == "insights" else 10.0
+    sampling = default_sampling if req.sampling_percentage is None else req.sampling_percentage
+    if req.mode == "scores":
+        _assert_daily_cost(db, ws, agent, req, sampling, request)
     return online.create_config(
         db, ws, agent,
         mode=req.mode,
         evaluators=req.evaluators,
         insights=req.insights,
         clustering_frequencies=req.clustering_frequencies,
-        sampling_percentage=(
-            default_sampling if req.sampling_percentage is None else req.sampling_percentage
-        ),
+        sampling_percentage=sampling,
         session_timeout_minutes=req.session_timeout_minutes,
         filters=[f.payload() for f in req.filters],
         description=req.description,
         enable_on_create=req.enable_on_create,
         creator=Creator.of_request(request),
     )
+
+
+def _assert_daily_cost(
+    db: Session, ws: WorkspaceScope, agent: Agent, req: OnlineConfigCreate,
+    sampling: float, request: Request,
+) -> None:
+    """eval-cost §1.1: an online config is priced per day — the sampled share of the
+    agent's daily sessions, judged — and held to the workspace's confirm threshold
+    and limit like a run (409 `run.cost_confirm_required` / `run.cost_over_limit`)."""
+    from app.dlc import cost as cost_svc
+    from app.routers.auth import require_identity
+
+    sessions = cost_svc.online_sessions_per_day(
+        db, agent, ws.context, sampling_percentage=sampling)
+    estimate = cost_svc.estimate(
+        db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=[],
+        evaluators=list(req.evaluators or []), scope="online", sessions=sessions,
+        period="day",
+    )
+    cost_svc.assert_allowed(estimate, confirmed=req.confirm_cost,
+                            is_admin=require_identity(request).role == "admin")
 
 
 @router.get("/{config_id}")
@@ -244,7 +274,10 @@ def config_results(
 ) -> dict[str, Any]:
     # An insights-mode config never writes score records, so this is simply empty
     # for it; the console reads `mode` from the detail and shows REPORTS instead.
-    if viewer.filters:
-        # workspace isolation: a hidden config's results are as absent as the config
+    if viewer.filters or (
+        current_project() is not None and several_projects(db, ws.id)
+    ):
+        # workspace isolation / another project's config: its results are as
+        # absent as the config
         online.get_config(db, ws, config_id, viewer=viewer)
     return online.results(ws, config_id, range)

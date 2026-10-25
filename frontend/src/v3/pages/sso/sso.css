@@ -1,0 +1,456 @@
+/* ============ console V3 — single sign-on (sso §2.7) ============
+   The login card's identity-provider keys and the Configure → Single sign-on page.
+   Shell tokens only (v3.css): no new type or palette. The motif is the "key plate" —
+   a provider's monogram stamped in mono on a notched tile — repeated on the login
+   buttons, the provider rail and the preset chooser so the three read as one thing. */
+
+/* ---- the monogram plate ---- */
+.v3-sso-mark {
+  --tone: var(--v3-text-2);
+  position: relative; flex: none;
+  width: 34px; height: 34px; border-radius: 8px;
+  display: grid; place-items: center;
+  font-family: var(--v3-mono); font-size: 11.5px; font-weight: 600; letter-spacing: 0.06em;
+  color: var(--tone);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--tone) 16%, transparent), transparent 70%),
+    var(--v3-ink-1);
+  border: 1px solid color-mix(in srgb, var(--tone) 38%, var(--v3-line-2));
+}
+/* the notch: a key's bit, cut from the top-right corner */
+.v3-sso-mark::after {
+  content: ""; position: absolute; top: -1px; right: -1px; width: 9px; height: 9px;
+  background: var(--v3-ink-2); border-left: 1px solid color-mix(in srgb, var(--tone) 38%, var(--v3-line-2));
+  border-bottom: 1px solid color-mix(in srgb, var(--tone) 38%, var(--v3-line-2));
+  border-bottom-left-radius: 4px;
+}
+.v3-sso-mark[data-size="lg"] { width: 44px; height: 44px; border-radius: 10px; font-size: 13px; }
+.v3-sso-mark[data-size="lg"]::after { width: 11px; height: 11px; }
+.v3-sso-mark[data-preset="keycloak"] { --tone: var(--v3-info); }
+.v3-sso-mark[data-preset="authentik"] { --tone: var(--v3-ok); }
+.v3-sso-mark[data-preset="oidc"] { --tone: var(--v3-text); }
+.v3-sso-mark[data-preset="okta"], .v3-sso-mark[data-preset="entra"], .v3-sso-mark[data-preset="google"] { --tone: var(--v3-wait); }
+/* SAML presets (SSO-2): the warm half of the palette, so a channel reads at a glance */
+.v3-sso-mark[data-preset="identity-center"] { --tone: var(--v3-wait); }
+.v3-sso-mark[data-preset="entra-saml"] { --tone: var(--v3-info); }
+.v3-sso-mark[data-preset="saml"] { --tone: var(--v3-text); }
+
+@keyframes v3-sso-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ---- the login card ---- */
+.v3-sso-signin > .sub { margin-bottom: 22px; }
+.v3-sso-idps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.v3-sso-idps > li { animation: v3-sso-rise 0.42s var(--v3-ease, ease-out) both; animation-delay: calc(var(--i, 0) * 70ms + 60ms); }
+.v3-sso-idp {
+  width: 100%; display: flex; align-items: center; gap: 14px;
+  min-height: 58px; padding: 10px 14px 10px 12px; text-align: left; cursor: pointer;
+  font: inherit; color: inherit;
+}
+.v3-auth .v3-sso-idp {
+  border-radius: 10px; border: 1px solid var(--v3-line-2);
+  background: linear-gradient(90deg, var(--v3-ink-3), var(--v3-ink-2));
+  color: var(--v3-text);
+  transition: border-color 0.18s, background 0.18s, transform 0.18s var(--v3-ease);
+}
+.v3-auth .v3-sso-idp:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--v3-ok) 55%, var(--v3-line-2));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--v3-ok) 9%, var(--v3-ink-3)), var(--v3-ink-2));
+}
+.v3-auth .v3-sso-idp:focus-visible { outline: 2px solid var(--v3-ok); outline-offset: 2px; }
+.v3-auth .v3-sso-idp:disabled { cursor: progress; opacity: 0.72; }
+.v3-sso-idp .txt { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.v3-sso-idp .kick {
+  font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--v3-text-3);
+}
+.v3-sso-idp .name { font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
+.v3-sso-idp .go { flex: none; color: var(--v3-text-3); transition: transform 0.18s var(--v3-ease), color 0.18s; }
+.v3-auth .v3-sso-idp:hover:not(:disabled) .go { transform: translateX(3px); color: var(--v3-ok); }
+.v3-sso-idp[aria-busy="true"] .go { animation: v3-sso-nudge 0.9s ease-in-out infinite; }
+@keyframes v3-sso-nudge { 50% { transform: translateX(4px); } }
+/* the classic (V2) sign-in page: the same row, plainer */
+.v2-sso-idp {
+  border: 1px solid var(--v2-line-2); border-radius: var(--v2-radius); background: var(--v2-card); color: var(--v2-ink);
+  transition: border-color 0.15s, background 0.15s;
+}
+.v2-sso-idp:hover:not(:disabled) { border-color: var(--v2-primary-line); background: var(--v2-primary-soft); }
+.v2-sso-idp .kick { color: var(--v2-ink-3); }
+.v2-sso-idp .v3-sso-mark { --tone: var(--v2-primary); background: var(--v2-fill); border-color: var(--v2-primary-line); font-family: var(--v2-mono); }
+.v2-sso-idp .v3-sso-mark::after { background: var(--v2-card); border-color: var(--v2-primary-line); }
+.v2-auth-error.v3-sso-error { background: var(--v2-danger-soft); border: 1px solid var(--v2-danger-line); color: var(--v2-danger-ink); }
+
+/* the folded username / password entry: a dashed seam with the toggle on it */
+.v3-sso-local { margin-top: 22px; }
+.v3-sso-local-toggle {
+  position: relative; width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 6px 0; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 12.5px; color: var(--v3-text-3, var(--v2-ink-3));
+}
+.v3-sso-local-toggle::before, .v3-sso-local-toggle::after {
+  content: ""; flex: 1; height: 0; border-top: 1px dashed var(--v3-line-2, var(--v2-line-2));
+}
+.v3-sso-local-toggle > span { white-space: nowrap; }
+.v3-sso-local-toggle:hover { color: var(--v3-text, var(--v2-ink)); }
+.v3-sso-local-toggle:focus-visible { outline: 2px solid var(--v3-ok, var(--v2-primary)); outline-offset: 2px; border-radius: 6px; }
+.v3-sso-local-toggle .chev { transition: transform 0.2s var(--v3-ease, ease); }
+.v3-sso-local[data-open="true"] .chev { transform: rotate(180deg); }
+.v3-sso-local-body:not([hidden]) { animation: v3-sso-rise 0.28s var(--v3-ease, ease-out) both; }
+.v3-sso-local-body .v3-auth-fields, .v3-sso-local-body .v2-auth-fields { margin-top: 12px; }
+
+.v3-sso-error { display: grid; gap: 4px; min-height: 0; margin: 0 0 16px; padding: 12px 14px; border-radius: 9px; }
+.v3-auth .v3-sso-error { background: var(--v3-act-dim); border: 1px solid color-mix(in srgb, var(--v3-act) 35%, transparent); color: var(--v3-act-text); }
+.v3-sso-error b { font-size: 13.5px; font-weight: 600; }
+.v3-sso-error span { font-size: 12.5px; line-height: 1.55; opacity: 0.9; }
+.v3-sso-error code { font-family: var(--v3-mono, monospace); font-size: 11px; opacity: 0.7; }
+
+/* ---- the Configure page ---- */
+.v3 .v3-sso-muted { margin: 0; color: var(--v3-text-3); font-size: 13px; line-height: 1.6; }
+.v3 .v3-sso-kick {
+  font-family: var(--v3-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3);
+}
+.v3 .v3-sso-layout { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 20px; align-items: start; }
+
+.v3 .v3-sso-rail { display: grid; gap: 6px; position: sticky; top: calc(var(--v3-top) + 16px); }
+.v3 .v3-sso-rail-item {
+  position: relative; display: flex; align-items: center; gap: 11px; padding: 10px 12px;
+  border-radius: 10px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+  font: inherit; color: var(--v3-text); text-align: left; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-sso-rail-item:hover { border-color: var(--v3-line-2); background: var(--v3-ink-2); }
+.v3 .v3-sso-rail-item.on { border-color: color-mix(in srgb, var(--v3-ok) 50%, var(--v3-line-2)); background: var(--v3-ink-2); }
+.v3 .v3-sso-rail-item.on::before {
+  content: ""; position: absolute; left: -1px; top: 10px; bottom: 10px; width: 2px; border-radius: 2px; background: var(--v3-ok);
+}
+.v3 .v3-sso-rail-item .txt { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.v3 .v3-sso-rail-item .txt b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3 .v3-sso-rail-item .txt small { font-size: 11px; color: var(--v3-text-3); overflow: hidden; text-overflow: ellipsis; }
+.v3 .v3-sso-rail-item .state { display: grid; justify-items: end; gap: 3px; }
+.v3 .v3-sso-rail-item .state small { font-size: 10.5px; color: var(--v3-text-3); }
+
+.v3 .v3-sso-detail { display: grid; gap: 16px; min-width: 0; }
+.v3 .v3-sso-detail-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.v3 .v3-sso-detail-head .txt { flex: 1; min-width: 220px; display: grid; gap: 4px; }
+.v3 .v3-sso-detail-head h2 {
+  margin: 0; font-family: var(--v3-display); font-variation-settings: "wdth" 112;
+  font-size: 22px; font-weight: 700; color: var(--v3-text);
+}
+.v3 .v3-sso-detail-head .meta { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--v3-text-3); }
+.v3 .v3-sso-detail-head .end { display: flex; gap: 8px; }
+
+/* what to hand the IdP: the one block an administrator copies from */
+.v3 .v3-sso-handoff {
+  position: relative; display: grid; gap: 10px; padding: 16px 18px 16px 20px;
+  border-radius: var(--v3-r); border: 1px dashed color-mix(in srgb, var(--v3-ok) 45%, var(--v3-line-2));
+  background: linear-gradient(100deg, color-mix(in srgb, var(--v3-ok) 6%, transparent), transparent 55%), var(--v3-ink-1);
+}
+.v3 .v3-sso-handoff::before {
+  content: ""; position: absolute; left: -1px; top: 14px; bottom: 14px; width: 3px; border-radius: 3px; background: var(--v3-ok);
+}
+.v3 .v3-sso-handoff p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--v3-text-2); max-width: 760px; }
+.v3 .v3-sso-plate {
+  display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 12px;
+  border-radius: 8px; border: 1px solid var(--v3-line-2); background: var(--v3-ink-0);
+}
+.v3 .v3-sso-plate .lbl { flex: none; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-sso-plate code { flex: 1; min-width: 0; font-family: var(--v3-mono); font-size: 12.5px; color: var(--v3-ok-text); overflow-wrap: anywhere; }
+.v3 .v3-sso-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: var(--v3-text-2); }
+.v3 .v3-sso-facts b { font-weight: 500; color: var(--v3-text-3); margin-right: 4px; }
+.v3 .v3-sso-facts code { font-family: var(--v3-mono); color: var(--v3-text); }
+
+.v3 .v3-sso-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.v3 .v3-sso-form { display: grid; gap: 14px; }
+.v3 .v3-sso-pair { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; }
+.v3 .v3-sso-check { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--v3-text-2); text-transform: none; letter-spacing: 0; font-family: var(--v3-body); }
+.v3 .v3-sso-claim { grid-template-columns: 110px minmax(0, 1fr); align-items: center; }
+
+.v3 .v3-sso-policy { margin: 0; padding: 0; border: 0; display: grid; gap: 8px; }
+.v3 .v3-sso-policy legend {
+  margin-bottom: 6px; font-family: var(--v3-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-text-3);
+}
+.v3 .v3-sso-policy label {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; cursor: pointer;
+  border-radius: 8px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+  transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-sso-policy label.on { border-color: color-mix(in srgb, var(--v3-ok) 50%, var(--v3-line-2)); background: var(--v3-ok-dim); }
+.v3 .v3-sso-policy label input { margin-top: 3px; accent-color: var(--v3-ok); }
+.v3 .v3-sso-policy label span { display: grid; gap: 2px; }
+.v3 .v3-sso-policy label b { font-size: 13px; font-weight: 600; color: var(--v3-text); }
+.v3 .v3-sso-policy label small { font-size: 12px; line-height: 1.5; color: var(--v3-text-3); }
+
+/* the connection test: one lamp per check, a rail joining them */
+.v3 .v3-sso-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.v3 .v3-sso-checks li {
+  position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 10px; align-items: center;
+  padding: 7px 0; font-size: 13px; color: var(--v3-text);
+}
+.v3 .v3-sso-checks li:not(:last-child)::before {
+  content: ""; position: absolute; left: 4px; top: 22px; bottom: -6px; width: 1px; background: var(--v3-line-2);
+}
+.v3 .v3-sso-checks li[data-s="act"] .what { color: var(--v3-act-text); }
+.v3 .v3-sso-checks li[data-s="off"] .what { color: var(--v3-text-3); }
+.v3 .v3-sso-checks code {
+  grid-column: 2; font-family: var(--v3-mono); font-size: 11.5px; color: var(--v3-text-3); overflow-wrap: anywhere;
+}
+
+/* group mappings: group → kind → target → role, one rule per row */
+.v3 .v3-sso-maps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.v3 .v3-sso-map {
+  display: grid; align-items: center; gap: 10px;
+  grid-template-columns: 24px minmax(140px, 1.1fr) 14px auto minmax(140px, 1fr) minmax(120px, 0.8fr) 30px;
+  padding: 8px 10px; border-radius: 9px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+  animation: v3-sso-rise 0.25s var(--v3-ease) both;
+}
+.v3 .v3-sso-map .idx { font-size: 11px; color: var(--v3-text-3); }
+.v3 .v3-sso-map .arrow { color: var(--v3-text-3); }
+.v3 .v3-sso-map[data-kind="role"] { border-left: 2px solid var(--v3-wait); }
+.v3 .v3-sso-map[data-kind="project"] { border-left: 2px solid var(--v3-ok); }
+.v3 .v3-sso-map[data-kind="group"] { border-left: 2px solid var(--v3-info); }
+.v3 .v3-sso-kind { display: inline-flex; padding: 2px; border-radius: 7px; border: 1px solid var(--v3-line); background: var(--v3-ink-0); }
+.v3 .v3-sso-kind button {
+  height: 26px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--v3-text-2);
+}
+.v3 .v3-sso-kind button.on { background: var(--v3-ink-3); color: var(--v3-text); box-shadow: inset 0 0 0 1px var(--v3-line-2); }
+.v3 .v3-sso-kind button:focus-visible { outline: 2px solid var(--v3-info); outline-offset: 1px; }
+
+/* presets: the three SSO-1 targets as large tiles, the attribute templates a row below */
+.v3 .v3-sso-presets { display: grid; gap: 12px; }
+.v3 .v3-sso-preset-row { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.v3 .v3-sso-preset {
+  display: grid; gap: 6px; align-content: start; justify-items: start; text-align: left;
+  padding: 14px; border-radius: 10px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+  font: inherit; color: var(--v3-text); cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.18s var(--v3-ease);
+  animation: v3-sso-rise 0.36s var(--v3-ease) both; animation-delay: calc(var(--i, 0) * 45ms);
+}
+.v3 .v3-sso-preset-row.primary .v3-sso-preset { min-height: 132px; }
+.v3 .v3-sso-preset:hover { border-color: var(--v3-line-2); background: var(--v3-ink-2); transform: translateY(-1px); }
+.v3 .v3-sso-preset.on { border-color: color-mix(in srgb, var(--v3-ok) 55%, transparent); background: var(--v3-ok-dim); }
+.v3 .v3-sso-preset:focus-visible { outline: 2px solid var(--v3-ok); outline-offset: 2px; }
+.v3 .v3-sso-preset b { margin-top: 4px; font-size: 14px; font-weight: 600; }
+.v3 .v3-sso-preset small { font-size: 12px; line-height: 1.5; color: var(--v3-text-3); }
+.v3 .v3-sso-preset-row:not(.primary) .v3-sso-preset { grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 10px; }
+.v3 .v3-sso-preset-row:not(.primary) .v3-sso-preset b { margin: 0; }
+.v3 .v3-sso-preset-row:not(.primary) .v3-sso-preset small { grid-column: 1 / -1; }
+.v3 .v3-sso-preset-sep { display: flex; align-items: center; gap: 10px; }
+.v3 .v3-sso-preset-sep::before, .v3 .v3-sso-preset-sep::after { content: ""; flex: 1; border-top: 1px dashed var(--v3-line-2); }
+.v3 .v3-sso-preset-sep span { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-sso-start { padding-bottom: 20px; }
+.v3 .v3-sso-start .v3-sso-presets { padding: 0 20px; }
+
+/* unsaved changes: a bar that rises from the bottom of the page */
+.v3 .v3-sso-savebar {
+  position: sticky; bottom: 16px; z-index: 5; justify-self: end;
+  display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px;
+  border-radius: 12px; border: 1px solid var(--v3-line-2); background: color-mix(in srgb, var(--v3-ink-2) 94%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 18px 40px -18px color-mix(in srgb, var(--v3-shade) 80%, transparent);
+  transform: translateY(12px); opacity: 0; pointer-events: none;
+  transition: transform 0.22s var(--v3-ease), opacity 0.22s;
+}
+.v3 .v3-sso-savebar[data-on="true"] { transform: none; opacity: 1; pointer-events: auto; }
+.v3 .v3-sso-savebar > span { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--v3-text-2); margin-right: 6px; }
+
+/* the user page's account source */
+.v3 .v3-sso-source { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--v3-text-3); }
+.v3 .v3-sso-source code { font-family: var(--v3-mono); font-size: 11.5px; color: var(--v3-text-2); overflow-wrap: anywhere; }
+.v3 .v3-sso-source .conflict { display: inline-flex; align-items: center; gap: 6px; color: var(--v3-wait-text); }
+
+.v3 .v3-sso .spin { animation: v3-sso-spin 0.9s linear infinite; }
+@keyframes v3-sso-spin { to { transform: rotate(360deg); } }
+
+/* ===== SSO-2 / SSO-3 =====
+   Two motifs. The SAML handoff is an *exchange*: the console's values on the left,
+   the IdP's metadata coming in on the right, a seam between that lights once the
+   metadata is received. The SCIM token is a *slip*: shown once, with a hatched band
+   that says so. The sign-in switch is a miniature of the login card itself. */
+
+/* the login card: with local login hidden, one quiet line instead of the seam */
+.v3-sso-only {
+  margin: 20px 0 0; text-align: center; font-size: 12px; line-height: 1.55;
+  color: var(--v3-text-3, var(--v2-ink-3));
+}
+
+/* presets by channel */
+.v3 .v3-sso-channel { display: grid; gap: 8px; }
+.v3 .v3-sso-channel + .v3-sso-channel { margin-top: 4px; }
+.v3 .v3-sso-channel-label { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.v3 .v3-sso-channel-label small { font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-sso-channel[data-kind="saml"] .v3-sso-channel-label .v3-sso-kick { color: var(--v3-wait-text); }
+.v3 .v3-sso-channel[data-kind="oidc"] .v3-sso-channel-label .v3-sso-kick { color: var(--v3-info-text, var(--v3-info)); }
+
+/* the exchange */
+.v3 .v3-sso-exchange {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) 34px minmax(0, 1fr);
+  border-radius: var(--v3-r); border: 1px dashed color-mix(in srgb, var(--v3-wait) 45%, var(--v3-line-2));
+  background:
+    linear-gradient(100deg, color-mix(in srgb, var(--v3-ok) 5%, transparent), transparent 45%),
+    linear-gradient(260deg, color-mix(in srgb, var(--v3-wait) 6%, transparent), transparent 45%),
+    var(--v3-ink-1);
+}
+.v3 .v3-sso-exchange[data-received="true"] { border-style: solid; border-color: color-mix(in srgb, var(--v3-ok) 40%, var(--v3-line-2)); }
+.v3 .v3-sso-exchange .side { display: grid; gap: 10px; align-content: start; padding: 16px 18px; min-width: 0; }
+.v3 .v3-sso-exchange .side p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--v3-text-2); }
+.v3 .v3-sso-exchange .seam {
+  position: relative; display: grid; place-items: center; color: var(--v3-text-3);
+}
+.v3 .v3-sso-exchange .seam::before {
+  content: ""; position: absolute; top: 16px; bottom: 16px; left: 50%; width: 0;
+  border-left: 1px dashed var(--v3-line-2);
+}
+.v3 .v3-sso-exchange .seam svg {
+  position: relative; padding: 6px; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--v3-ink-2); border: 1px solid var(--v3-line-2);
+  transition: color 0.3s, border-color 0.3s;
+}
+.v3 .v3-sso-exchange[data-received="true"] .seam svg { color: var(--v3-ok); border-color: color-mix(in srgb, var(--v3-ok) 55%, var(--v3-line-2)); }
+.v3 .v3-sso-exchange .give .v3-sso-kick { color: var(--v3-ok-text); }
+.v3 .v3-sso-exchange .take .v3-sso-kick { color: var(--v3-wait-text); }
+
+.v3 .v3-sso-sp-cert {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 4px;
+  font-size: 12.5px; color: var(--v3-text-2);
+}
+.v3 .v3-sso-sp-cert code { font-family: var(--v3-mono); font-size: 11px; color: var(--v3-text-3); }
+.v3 .v3-sso-sp-cert .end { margin-left: auto; display: inline-flex; gap: 6px; }
+.v3 .v3-sso-sp-cert a.v3-btn { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+
+.v3 .v3-sso-intake { display: grid; gap: 10px; }
+.v3 .v3-sso-intake .row { display: flex; gap: 8px; }
+.v3 .v3-sso-intake .row input { flex: 1; min-width: 0; }
+.v3 .v3-sso-intake .or { display: flex; align-items: center; gap: 10px; }
+.v3 .v3-sso-intake .or::before, .v3 .v3-sso-intake .or::after { content: ""; flex: 1; border-top: 1px dashed var(--v3-line-2); }
+.v3 .v3-sso-intake .or span { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-sso-drop {
+  position: relative; display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer;
+  border-radius: 9px; border: 1px dashed var(--v3-line-2); background: var(--v3-ink-0); color: var(--v3-text-2);
+  transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-sso-drop:hover, .v3 .v3-sso-drop:focus-within { border-color: color-mix(in srgb, var(--v3-wait) 60%, var(--v3-line-2)); background: var(--v3-ink-1); }
+.v3 .v3-sso-drop[data-busy="true"] { cursor: progress; opacity: 0.7; }
+.v3 .v3-sso-drop span { display: grid; gap: 2px; }
+.v3 .v3-sso-drop b { font-size: 13px; font-weight: 600; color: var(--v3-text); }
+.v3 .v3-sso-drop small { font-size: 12px; color: var(--v3-text-3); }
+.v3 .v3-sso-drop input { position: absolute; inset: 0; opacity: 0; cursor: inherit; }
+
+/* what the metadata said: a stamped receipt */
+.v3 .v3-sso-received {
+  margin: 0; display: grid; gap: 8px; padding: 12px 14px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--v3-ok) 30%, var(--v3-line)); background: var(--v3-ok-dim);
+  animation: v3-sso-rise 0.32s var(--v3-ease) both;
+}
+.v3 .v3-sso-received > div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.v3 .v3-sso-received dt { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-sso-received dd { margin: 0; font-size: 12.5px; color: var(--v3-text); overflow-wrap: anywhere; display: flex; gap: 6px; flex-wrap: wrap; }
+.v3 .v3-sso-pem { font-size: 11px; line-height: 1.45; }
+
+/* switches: a track the thumb runs along, the label beside it */
+.v3 .v3-sso-toggles { display: grid; gap: 8px; }
+.v3 .v3-sso-toggle {
+  position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; align-items: start;
+  padding: 10px 12px; border-radius: 9px; border: 1px solid var(--v3-line); background: var(--v3-ink-1); cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.v3 .v3-sso-toggle[data-on="true"] { border-color: color-mix(in srgb, var(--v3-ok) 45%, var(--v3-line-2)); }
+.v3 .v3-sso-toggle input { position: absolute; opacity: 0; width: 34px; height: 20px; margin: 0; cursor: pointer; }
+.v3 .v3-sso-toggle .track {
+  position: relative; width: 34px; height: 20px; margin-top: 1px; border-radius: 10px;
+  background: var(--v3-ink-3); border: 1px solid var(--v3-line-2); transition: background 0.18s, border-color 0.18s;
+}
+.v3 .v3-sso-toggle .track::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--v3-text-3); transition: transform 0.2s var(--v3-ease), background 0.18s;
+}
+.v3 .v3-sso-toggle[data-on="true"] .track { background: color-mix(in srgb, var(--v3-ok) 30%, var(--v3-ink-2)); border-color: var(--v3-ok); }
+.v3 .v3-sso-toggle[data-on="true"] .track::after { transform: translateX(14px); background: var(--v3-ok); }
+.v3 .v3-sso-toggle input:focus-visible + .track { outline: 2px solid var(--v3-ok); outline-offset: 2px; }
+.v3 .v3-sso-toggle input:disabled ~ * { opacity: 0.55; }
+/* off with a reason (reason.tsx): the wrapper sits over the track so hovering it shows why */
+.v3 .v3-sso-toggle > .v3-why { position: absolute; top: 10px; left: 12px; width: 34px; height: 20px; }
+.v3 .v3-sso-toggle > .v3-why:has(> input:disabled) ~ * { opacity: 0.55; }
+.v3 .v3-sso-toggle .txt { display: grid; gap: 2px; }
+.v3 .v3-sso-toggle .txt b { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--v3-text); }
+.v3 .v3-sso-toggle .txt small { font-size: 12px; line-height: 1.5; color: var(--v3-text-3); }
+
+/* SCIM: the lane on the left, what the IdP pushed as two big numerals on the right */
+.v3 .v3-sso-scim-title { display: inline-flex; align-items: center; gap: 8px; }
+.v3 .v3-sso-scim-body { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 20px; align-items: start; }
+.v3 .v3-sso-scim-body .lane { display: grid; gap: 10px; min-width: 0; }
+.v3 .v3-sso-scim-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.v3 .v3-sso-counts { margin: 0; display: grid; gap: 10px; }
+.v3 .v3-sso-counts > div {
+  display: grid; gap: 2px; padding: 12px 14px; border-radius: 9px; border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+}
+.v3 .v3-sso-counts dt { font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--v3-text-3); }
+.v3 .v3-sso-counts dd {
+  margin: 0; font-family: var(--v3-display); font-variation-settings: "wdth" 112;
+  font-size: 28px; font-weight: 700; line-height: 1.1; color: var(--v3-text); font-variant-numeric: tabular-nums;
+}
+.v3 .v3-sso-slip {
+  position: relative; display: grid; gap: 0; overflow: hidden; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--v3-wait) 55%, var(--v3-line-2));
+  animation: v3-sso-unseal 0.42s var(--v3-ease) both;
+}
+.v3 .v3-sso-slip .band {
+  padding: 4px 12px; font-family: var(--v3-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--v3-wait-text);
+  background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--v3-wait) 18%, transparent) 0 6px, transparent 6px 12px), var(--v3-ink-2);
+}
+.v3 .v3-sso-slip .v3-sso-plate { border: 0; border-radius: 0; }
+@keyframes v3-sso-unseal { from { opacity: 0; clip-path: inset(0 0 100% 0); } to { opacity: 1; clip-path: inset(0); } }
+
+/* the sign-in switch: the login card in miniature beside the words */
+.v3 .v3-sso-loginpage {
+  display: grid; grid-template-columns: 112px minmax(0, 1fr) minmax(240px, 320px); gap: 20px; align-items: center;
+  padding: 14px 18px; border-radius: var(--v3-r); border: 1px solid var(--v3-line); background: var(--v3-ink-1);
+}
+.v3 .v3-sso-loginpage .txt { display: grid; gap: 4px; min-width: 0; }
+.v3 .v3-sso-loginpage .txt b { font-size: 14px; font-weight: 600; color: var(--v3-text); }
+.v3 .v3-sso-loginpage .mini {
+  display: grid; gap: 5px; padding: 10px; border-radius: 9px; border: 1px solid var(--v3-line-2);
+  background: var(--v3-ink-0); box-shadow: 0 10px 24px -16px color-mix(in srgb, var(--v3-shade) 80%, transparent);
+}
+.v3 .v3-sso-loginpage .mini .key {
+  height: 11px; border-radius: 3px; border: 1px solid color-mix(in srgb, var(--v3-ok) 45%, var(--v3-line-2));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--v3-ok) 18%, transparent), transparent);
+}
+.v3 .v3-sso-loginpage .mini .seam { position: relative; height: 9px; }
+.v3 .v3-sso-loginpage .mini .seam i { position: absolute; left: 0; right: 0; top: 4px; border-top: 1px dashed var(--v3-line-2); }
+.v3 .v3-sso-loginpage .mini .field {
+  height: 8px; border-radius: 2px; background: var(--v3-ink-3);
+  transition: opacity 0.3s, transform 0.3s var(--v3-ease), height 0.3s var(--v3-ease), margin 0.3s;
+}
+.v3 .v3-sso-loginpage[data-hidden="true"] .mini .field { opacity: 0; height: 0; margin-top: -5px; transform: scaleX(0.6); }
+.v3 .v3-sso-loginpage[data-hidden="true"] .mini .seam i { border-top-style: solid; border-color: color-mix(in srgb, var(--v3-ok) 40%, transparent); }
+
+@media (max-width: 1100px) {
+  .v3 .v3-sso-grid { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-exchange { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-exchange .seam { height: 30px; }
+  .v3 .v3-sso-exchange .seam::before { top: 50%; bottom: auto; left: 18px; right: 18px; width: auto; border-left: 0; border-top: 1px dashed var(--v3-line-2); }
+  .v3 .v3-sso-exchange .seam svg { transform: rotate(90deg); }
+  .v3 .v3-sso-loginpage { grid-template-columns: 96px minmax(0, 1fr); }
+  .v3 .v3-sso-loginpage > .v3-sso-toggle { grid-column: 1 / -1; }
+  .v3 .v3-sso-map { grid-template-columns: 24px minmax(0, 1fr) 30px; }
+  .v3 .v3-sso-map .arrow, .v3 .v3-sso-map-gap { display: none; }
+  .v3 .v3-sso-map > :is(.v3-sso-kind, .v3-sel) { grid-column: 2; }
+}
+@media (max-width: 860px) {
+  .v3 .v3-sso-layout { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-rail { position: static; }
+  .v3 .v3-sso-preset-row { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-scim-body { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-loginpage { grid-template-columns: minmax(0, 1fr); }
+  .v3 .v3-sso-loginpage .mini { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .v3-sso-idps > li, .v3-sso-local-body:not([hidden]), .v3 .v3-sso-map, .v3 .v3-sso-preset { animation: none; }
+  .v3-sso-idp, .v3-sso-idp .go, .v3-sso-local-toggle .chev, .v3 .v3-sso-preset, .v3 .v3-sso-savebar { transition: none; }
+  .v3-sso-idp[aria-busy="true"] .go { animation: none; }
+  .v3 .v3-sso .spin { animation-duration: 2.4s; }
+  .v3 .v3-sso-received, .v3 .v3-sso-slip { animation: none; }
+  .v3 .v3-sso-toggle .track, .v3 .v3-sso-toggle .track::after, .v3 .v3-sso-loginpage .mini .field,
+  .v3 .v3-sso-exchange .seam svg { transition: none; }
+}

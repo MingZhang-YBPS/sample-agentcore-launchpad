@@ -1,9 +1,10 @@
 import { Download, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
+import { useWorkspace } from "../../workspace/workspace-context";
 import { methodLabel } from "../../components/methodChipMeta";
 import {
   type AgentInfo,
@@ -16,18 +17,27 @@ import {
   type JobInfo,
   type StageInfo,
 } from "../../lib/api";
+import {
+  EDIT_HINT_KEY,
+  EDIT_LABEL_KEY,
+  useAgentActions as useSharedAgentActions,
+  useAgentDetail,
+  useAgentPermissions,
+  useDeployProgress,
+} from "../../lib/agent-admin";
 import { bearerInvokeUrl, inboundCapable } from "../../lib/inbound-auth";
 import { creatorLabel, fmtTime } from "../format";
 import { AgentIdentity } from "./agents/AgentIdentity";
 import { AgentSource } from "./agents/AgentSource";
 import { InboundSwitchCard } from "./agents/InboundAuthFields";
-import { IntegrationCard } from "./agents/IntegrationCard";
 import { RuntimeLogsCard } from "./agents/RuntimeLogsCard";
-import { SnapshotsCard } from "./agents/SnapshotsCard";
-import { TryChat } from "./agents/TryChat";
 import { AgentWizard } from "./agents/AgentWizard";
+import { IntegrationCard } from "./agents/IntegrationCard";
+import { ReleaseCard } from "./agents/ReleaseCard";
+import { SnapshotsCard } from "./agents/SnapshotsCard";
+import { ToolsCard } from "./agents/ToolsCard";
+import { TryChat } from "./agents/TryChat";
 import { v2EditPath } from "./agents/classicUrl";
-import { deployLine, fmtElapsed, isFailed } from "./agents/deployStatus";
 import {
   type AgentsListFilters,
   listOnly,
@@ -122,7 +132,7 @@ function AgentEdit({ id }: { id: string }) {
   if (blocked)
     return (
       <>
-        <FlowHeader title={t("v2.agents.wizard.editTitle", { name: data.name })} onBack={back} />
+        <FlowHeader title={t("v2.agents.wizard.editTitle", { name: data.display_name || data.name })} onBack={back} />
         <Alert tone="warn">{blocked}</Alert>
       </>
     );
@@ -138,49 +148,21 @@ function versionLabel(agent: AgentInfo): string {
   return revision ? String(revision) : "—";
 }
 
-/** Row permissions, mirroring the classic list: editing re-publishes; a system
- *  preset is edited by administrators only and never deleted or converted here. */
-function useAgentPermissions() {
-  const { can, isAdmin } = useAuth();
-  const canDeploy = can("agents.deploy");
-  const canDelete = can("agents.delete");
-  const canConvert = can("agents.convert");
-  return {
-    canEdit: (a: AgentInfo) =>
-      a.method !== "discovered_runtime" && canDeploy && a.status !== "deploying" && (!a.system || isAdmin),
-    canDelete: (a: AgentInfo) => canDelete && !a.system,
-    canConvert: (a: AgentInfo) =>
-      a.method === "harness" && a.status === "active" && canConvert && !a.system,
-  };
-}
-
 /** Delete / convert confirmations shared by the list and the detail page. */
 function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentInfo) => void) {
   const { t } = useTranslation();
   const toast = useV2Toast();
-  const [pending, setPending] = useState<{ kind: "delete" | "convert"; agent: AgentInfo } | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const run = async () => {
-    if (!pending) return;
-    setBusy(true);
-    try {
-      if (pending.kind === "delete") {
-        await api.deleteAgent(pending.agent.id);
-        toast("success", t("v2.agents.deleted", { name: pending.agent.name }));
-        onDone("deleted", pending.agent);
-      } else {
-        const res = await api.convertAgent(pending.agent.id);
-        toast("success", t("v2.agents.convertStarted", { name: res.agent.name }));
-        onDone("converted", res.agent);
-      }
-      setPending(null);
-    } catch (err) {
-      toast("error", errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { pending, busy, askDelete, askConvert, cancel, confirm } = useSharedAgentActions({
+    onDeleted: (agent) => {
+      toast("success", t("v2.agents.deleted", { name: agent.display_name || agent.name }));
+      onDone("deleted", agent);
+    },
+    onConverted: (agent) => {
+      toast("success", t("v2.agents.convertStarted", { name: agent.name }));
+      onDone("converted", agent);
+    },
+    onError: (err) => toast("error", errorMessage(err)),
+  });
 
   const external = pending?.agent.method === "discovered_runtime";
   const dialog = (
@@ -199,7 +181,7 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
           : external
             ? "v2.agents.removeBody"
             : "v2.agents.deleteBody",
-        { name: pending?.agent.name ?? "" },
+        { name: pending?.agent.display_name || pending?.agent.name || "" },
       )}
       confirmLabel={
         pending?.kind === "convert"
@@ -210,15 +192,11 @@ function useAgentActions(onDone: (action: "deleted" | "converted", agent: AgentI
       }
       danger={pending?.kind === "delete"}
       busy={busy}
-      onConfirm={() => void run()}
-      onClose={() => setPending(null)}
+      onConfirm={() => void confirm()}
+      onClose={cancel}
     />
   );
-  return {
-    askDelete: (agent: AgentInfo) => setPending({ kind: "delete", agent }),
-    askConvert: (agent: AgentInfo) => setPending({ kind: "convert", agent }),
-    dialog,
-  };
+  return { askDelete, askConvert, dialog };
 }
 
 // ─── list ──────────────────────────────────────────────────────────────────
@@ -248,7 +226,7 @@ function AgentList() {
     return agents.filter((a) => {
       if (method && a.method !== method) return false;
       if (status && a.status !== status) return false;
-      return !needle || `${a.name} ${a.id}`.toLowerCase().includes(needle);
+      return !needle || `${a.display_name ?? ""} ${a.name} ${a.id}`.toLowerCase().includes(needle);
     });
   }, [agents, method, status, q]);
   const paged = usePaged(rows, 12);
@@ -268,9 +246,6 @@ function AgentList() {
 
   // a normal (pushed) navigation: browser Back returns to this filtered list
   const open = (a: AgentInfo) => setParams((prev) => withView(prev, "detail", a.id));
-  // `method` is also the wizard's prefill param, so the filters are not carried into
-  // `view=new`; the wizard's Back restores them from the navigation state
-  const create = () => setParams({ view: "new" }, { state: { listSearch: listOnly(params).toString() } });
 
   const columns: Column<AgentInfo>[] = [
     {
@@ -280,7 +255,7 @@ function AgentList() {
         <>
           <span className="v2-row" style={{ flexWrap: "nowrap" }}>
             <LinkButton onClick={() => open(a)} testId={`v2-agent-${a.name}`}>
-              {a.name}
+              {a.display_name || a.name}
             </LinkButton>
             {a.system && (
               <Tag tone="blue" title={t("v2.agents.systemHint")}>
@@ -288,7 +263,7 @@ function AgentList() {
               </Tag>
             )}
           </span>
-          <span className="sub mono">{a.id}</span>
+          <span className="sub mono">{a.display_name ? `${a.name} · ${a.id}` : a.id}</span>
         </>
       ),
     },
@@ -316,19 +291,32 @@ function AgentList() {
       render: (a) => (
         <div className="v2-actions">
           {a.invoke_capability.eligible && (
-            <LinkButton onClick={() => navigate(`/chat?agent=${a.id}`)}>{t("v2.agents.chat")}</LinkButton>
+            <LinkButton onClick={() => navigate(`/v2/chat?agent=${a.id}`)}>{t("v2.agents.chat")}</LinkButton>
           )}
           <LinkButton onClick={() => open(a)}>{t("v2.common.view")}</LinkButton>
           {perms.canEdit(a) && (
-            <LinkButton onClick={() => navigate(editPath(a))} testId={`v2-agent-edit-${a.name}`}>
-              {t("v2.common.edit")}
+            <LinkButton
+              onClick={() => navigate(editPath(a))}
+              disabled={perms.locked}
+              title={perms.lockTitle ?? t(EDIT_HINT_KEY)}
+              testId={`v2-agent-edit-${a.name}`}
+            >
+              {t(EDIT_LABEL_KEY)}
             </LinkButton>
           )}
           {perms.canConvert(a) && (
-            <LinkButton onClick={() => actions.askConvert(a)}>{t("v2.agents.convert")}</LinkButton>
+            <LinkButton onClick={() => actions.askConvert(a)} disabled={perms.locked} title={perms.lockTitle}>
+              {t("v2.agents.convert")}
+            </LinkButton>
           )}
           {perms.canDelete(a) && (
-            <LinkButton danger onClick={() => actions.askDelete(a)} testId={`v2-agent-delete-${a.name}`}>
+            <LinkButton
+              danger
+              onClick={() => actions.askDelete(a)}
+              disabled={perms.locked}
+              title={perms.lockTitle}
+              testId={`v2-agent-delete-${a.name}`}
+            >
               {a.method === "discovered_runtime" ? t("v2.agents.remove") : t("v2.common.delete")}
             </LinkButton>
           )}
@@ -340,6 +328,11 @@ function AgentList() {
   return (
     <>
       <PageHeader title={t("v2.agents.title")} desc={t("v2.agents.desc")} />
+      {perms.locked && (
+        <Alert tone="warn">
+          <span data-testid="v2-agents-prod-locked">{perms.lockTitle}</span>
+        </Alert>
+      )}
       <div className="v2-kpis">
         <Kpi label={t("v2.agents.kpiTotal")} value={data ? agents.length : "—"} testId="v2-agents-kpi-total" />
         <Kpi label={t("v2.agents.kpiActive")} value={data ? count("active") : "—"} tone="good" />
@@ -351,15 +344,15 @@ function AgentList() {
           <Button onClick={reload}>{t("v2.common.refresh")}</Button>
           <Button
             kind="primary"
-            onClick={create}
-            disabled={!can("agents.deploy")}
-            title={can("agents.deploy") ? undefined : t("v2.agents.noPermission")}
+            onClick={() => setParams({ view: "new" })}
+            disabled={!can("agents.deploy") || perms.locked}
+            title={perms.lockTitle ?? (can("agents.deploy") ? undefined : t("v2.agents.noPermission"))}
             testId="v2-agent-new"
           >
             <Plus size={14} aria-hidden="true" />
             {t("v2.agents.new")}
           </Button>
-          <Button onClick={() => navigate("/agents/import")}>
+          <Button onClick={() => navigate("/agents/import")} disabled={perms.locked} title={perms.lockTitle}>
             <Download size={14} aria-hidden="true" />
             {t("v2.agents.import")}
           </Button>
@@ -410,51 +403,31 @@ function DeployProgress({
   method: string;
 }) {
   const { t } = useTranslation();
-  const failed = isFailed(deployment);
-  const inFlight = !failed && deployment.status === "running";
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!inFlight) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [inFlight]);
-  const line = deployLine(method, deployment, now);
-  const elapsed = line.kind === "running" || line.kind === "done" ? line.elapsedMs : null;
-  const time = elapsed != null ? fmtElapsed(elapsed) : null;
+  const { failed, inFlight, elapsed, progressKey } = useDeployProgress(deployment, method);
   return (
     <Card
       title={t("v2.agents.deployTitle")}
       sub={deployment.job_id ? `job ${deployment.job_id.slice(0, 8)}` : undefined}
       testId="v2-agent-deploy"
     >
-      {line.kind === "running" && (
+      {inFlight && (
         <p className="v2-deploy-line" data-testid="v2-agent-progress-line">
-          <span>{t(`v2.agents.progress.${line.key}`)}</span>
-          {time && <span className="elapsed">{t("v2.agents.progress.elapsed", { time })}</span>}
+          <span>{t(`v2.agents.progress.${progressKey}`)}</span>
+          {elapsed && <span className="elapsed">{t("v2.agents.progress.elapsed", { time: elapsed })}</span>}
         </p>
       )}
-      {line.kind === "done" && time && (
-        <p className="v2-deploy-line" data-testid="v2-agent-progress-line">
-          <span>{t("v2.agents.progress.done", { time })}</span>
+      {!inFlight && !failed && elapsed && deployment.status === "succeeded" && (
+        <p className="v2-deploy-line">
+          <span>{t("v2.agents.progress.done", { time: elapsed })}</span>
         </p>
       )}
-      {line.kind === "failed" && (
+      {failed && (
         <Alert tone="error">
-          {line.stage
-            ? t("v2.agents.progress.failedAt", {
-                stage: t(`create.stages.${line.stage}`, { defaultValue: line.stage }),
-              })
-            : t("v2.agents.progress.failed")}
+          {t("v2.agents.progress.failed")}
         </Alert>
       )}
-      {/* technical detail is collapsed unless the deploy failed; the key remounts the
-          element so a deploy that fails while the page is open auto-expands */}
-      <details
-        className="v2-deploy-details"
-        key={failed ? "failed" : "ok"}
-        open={failed}
-        data-testid="v2-agent-technical"
-      >
+      {/* technical detail is collapsed unless the deploy failed */}
+      <details className="v2-deploy-details" key={failed ? "failed" : "ok"} open={failed} data-testid="v2-agent-technical">
         <summary>{t("v2.agents.progress.technical")}</summary>
         <div className="v2-stages">
           {deployment.stages.map((s, i) => (
@@ -545,46 +518,15 @@ interface ByocSummary {
 
 function AgentDetail({ id }: { id: string }) {
   const { t } = useTranslation();
+  const { current: workspace } = useWorkspace();
   const navigate = useNavigate();
   const [, setParams] = useSearchParams();
   const perms = useAgentPermissions();
-  const [agent, setAgent] = useState<AgentInfo | null>(null);
-  const [job, setJob] = useState<JobInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
+  const { agent, job, error, deploying, reload } = useAgentDetail(id);
   const actions = useAgentActions((action, target) => {
     if (action === "deleted") setParams((prev) => listOnly(prev));
     else setParams((prev) => withView(prev, "detail", target.id));
   });
-
-  const jobId = agent?.deployments?.[0]?.job_id ?? null;
-  const deploying = agent?.status === "deploying";
-
-  useEffect(() => {
-    let live = true;
-    const load = async () => {
-      try {
-        const fresh = await api.getAgent(id);
-        if (!live) return;
-        setAgent(fresh);
-        setError(null);
-        const latestJob = fresh.deployments?.[0]?.job_id;
-        if (latestJob) {
-          const j = await api.getJob(latestJob).catch(() => null);
-          if (live) setJob(j);
-        }
-      } catch (err) {
-        if (live) setError(errorMessage(err));
-      }
-    };
-    void load();
-    // follow a deploy in flight until it settles
-    const timer = deploying ? window.setInterval(() => void load(), 2500) : undefined;
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [id, deploying, nonce]);
 
   if (error && !agent) {
     return (
@@ -598,7 +540,6 @@ function AgentDetail({ id }: { id: string }) {
 
   const spec = (agent.spec ?? {}) as Record<string, unknown>;
   const deployment = agent.deployments?.[0] ?? agent.deployment ?? null;
-  const kbs = (spec.knowledge_bases as { kb_id: string; name: string }[] | undefined) ?? [];
   const contextRef = spec.context_layer as ContextLayerRef | null | undefined;
   const source = spec.source_harness as { agent_name?: string } | undefined;
   const notes = (spec.conversion_notes as Record<string, string> | undefined) ?? {};
@@ -610,7 +551,12 @@ function AgentDetail({ id }: { id: string }) {
       <FlowHeader
         title={
           <span className="v2-row">
-            {agent.name}
+            {agent.display_name || agent.name}
+            {agent.display_name && (
+              <span className="mono" style={{ color: "var(--v2-ink-3)", fontSize: 13, fontWeight: 400 }}>
+                {agent.name}
+              </span>
+            )}
             <Tag tone={STATUS_TONE[agent.status] ?? "gray"} dot>
               {t(`status.${agent.status}`, { defaultValue: agent.status })}
             </Tag>
@@ -619,11 +565,11 @@ function AgentDetail({ id }: { id: string }) {
         onBack={() => setParams((prev) => listOnly(prev))}
         end={
           <>
-            <Button onClick={() => setNonce((n) => n + 1)}>{t("v2.common.refresh")}</Button>
+            <Button onClick={() => reload()}>{t("v2.common.refresh")}</Button>
             {agent.invoke_capability.eligible && (
-              <Button onClick={() => navigate(`/chat?agent=${agent.id}`)}>{t("v2.agents.chat")}</Button>
+              <Button onClick={() => navigate(`/v2/chat?agent=${agent.id}`)}>{t("v2.agents.chat")}</Button>
             )}
-            <Button onClick={() => navigate("/observability")}>{t("v2.agents.observability")}</Button>
+            <Button onClick={() => navigate("/v2/observability")}>{t("v2.agents.observability")}</Button>
             {agent.method !== "discovered_runtime" && (
               <Button onClick={() => setParams((prev) => withView(prev, "identity", agent.id))} testId="v2-agent-identity-open">
                 {t("v2.agents.identity.open")}
@@ -635,16 +581,29 @@ function AgentDetail({ id }: { id: string }) {
               </Button>
             )}
             {perms.canConvert(agent) && (
-              <Button onClick={() => actions.askConvert(agent)}>{t("v2.agents.convert")}</Button>
+              <Button onClick={() => actions.askConvert(agent)} disabled={perms.locked} title={perms.lockTitle}>
+                {t("v2.agents.convert")}
+              </Button>
             )}
             {perms.canDelete(agent) && (
-              <Button kind="danger" onClick={() => actions.askDelete(agent)}>
+              <Button
+                kind="danger"
+                onClick={() => actions.askDelete(agent)}
+                disabled={perms.locked}
+                title={perms.lockTitle}
+              >
                 {agent.method === "discovered_runtime" ? t("v2.agents.remove") : t("v2.common.delete")}
               </Button>
             )}
             {perms.canEdit(agent) && (
-              <Button kind="primary" onClick={() => navigate(editPath(agent))} testId="v2-agent-edit">
-                {t("v2.common.edit")}
+              <Button
+                kind="primary"
+                onClick={() => navigate(editPath(agent))}
+                disabled={perms.locked}
+                title={perms.lockTitle ?? t(EDIT_HINT_KEY)}
+                testId="v2-agent-edit"
+              >
+                {t(EDIT_LABEL_KEY)}
               </Button>
             )}
           </>
@@ -659,7 +618,8 @@ function AgentDetail({ id }: { id: string }) {
       <Card title={t("v2.agents.basic")} testId="v2-agent-basic">
         <Descriptions
           items={[
-            { label: t("v2.agents.colName"), value: agent.name },
+            { label: t("v2.agents.wizard.displayName"), value: agent.display_name || "—" },
+            { label: t("v2.agents.wizard.resourceName"), value: <span className="mono">{agent.name}</span> },
             { label: "ID", value: <span className="mono">{agent.id}</span> },
             {
               label: t("v2.agents.colMethod"),
@@ -677,7 +637,7 @@ function AgentDetail({ id }: { id: string }) {
             {
               label: t("v2.agents.registryRecord"),
               value: agent.registry_record_id ? (
-                <Link to="/registry" className="mono">
+                <Link to="/v2/registry" className="mono">
                   {agent.registry_record_id}
                 </Link>
               ) : (
@@ -688,10 +648,10 @@ function AgentDetail({ id }: { id: string }) {
           ]}
         />
       </Card>
-      {agent.status === "active" && agent.invoke_capability.eligible && (
-        <TryChat key={agent.id} agentId={agent.id} />
-      )}
-      {deployment && <DeployProgress deployment={deployment} job={jobId ? job : null} method={agent.method} />}
+      {/* tools, MCP, KBs, skills (projects §18.3-4); an MCP server has none of its own */}
+      {spec.protocol !== "mcp" && <ToolsCard agent={agent} />}
+      {agent.status === "active" && agent.invoke_capability?.eligible && <TryChat agentId={agent.id} />}
+      {deployment && <DeployProgress deployment={deployment} job={job} method={agent.method} />}
       {hasResource && inboundCapable(agent.method, String(spec.protocol ?? "http")) && (
         <InboundSwitchCard
           agentId={agent.id}
@@ -702,7 +662,7 @@ function AgentDetail({ id }: { id: string }) {
           busy={deploying}
           jwt={agent.inbound_auth_config?.jwt ?? null}
           invokeUrl={bearerInvokeUrl(agent.arn)}
-          onSwitched={() => setNonce((n) => n + 1)}
+          onSwitched={() => reload()}
         />
       )}
       {hasResource && agent.status !== "deploying" && <VersionsCard agentId={agent.id} />}
@@ -710,15 +670,20 @@ function AgentDetail({ id }: { id: string }) {
       {agent.method !== "discovered_runtime" && (
         <SnapshotsCard
           agentId={agent.id}
-          currentSpec={spec}
-          // a canary promote / rollback records a snapshot without a deployment, but
-          // always moves the version
-          refreshKey={`${agent.status}:${agent.deployments?.length ?? 0}:${agent.version ?? ""}`}
-          canRollback={perms.canEdit(agent) && !agent.system}
-          onRolledBack={() => setNonce((n) => n + 1)}
+          refreshKey={`${agent.status}:${agent.deployments?.length ?? 0}`}
+          canRollback={perms.canEdit(agent) && !perms.locked}
+          lockTitle={perms.locked ? perms.lockTitle : undefined}
+          onRolledBack={() => reload()}
         />
       )}
-      {agent.invoke_capability.eligible && <IntegrationCard agentId={agent.id} />}
+      {agent.invoke_capability?.eligible && <IntegrationCard agentId={agent.id} />}
+      <ReleaseCard
+        agentId={agent.id}
+        agentTitle={agent.display_name || agent.name}
+        agentStatus={agent.status}
+        systemManaged={Boolean(agent.system)}
+        currentWorkspaceId={workspace?.id ?? null}
+      />
       {byoc && (
         <Card title={t("v2.agents.byocTitle")}>
           <Descriptions
@@ -763,17 +728,6 @@ function AgentDetail({ id }: { id: string }) {
               },
             ]}
           />
-        </Card>
-      )}
-      {kbs.length > 0 && (
-        <Card title={t("v2.agents.kbTitle")}>
-          <div className="v2-tags">
-            {kbs.map((kb) => (
-              <Tag key={kb.kb_id} tone="outline">
-                {kb.name}
-              </Tag>
-            ))}
-          </div>
         </Card>
       )}
       {actions.dialog}

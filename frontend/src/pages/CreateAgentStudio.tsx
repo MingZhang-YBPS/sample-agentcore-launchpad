@@ -16,15 +16,18 @@ import {
 } from "../components";
 import type { AgentInfo, AgentSpecInput, DeploymentInfo, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
-import { useModelDefaults } from "../lib/model-defaults";
+import { networkChoices, RUNTIME_NETWORK_PURPOSES } from "../lib/api/agent-network";
+import { type NetworkProfile, networkProfilesApi } from "../lib/api/projects";
 import { ChatDrawer } from "../studio/ChatDrawer";
 import { CodePanel } from "../studio/CodePanel";
 import { FlowEditor } from "../studio/FlowEditor";
 import { NodePalette } from "../studio/NodePalette";
 import { PropertyPanel } from "../studio/PropertyPanel";
 import { generateStrandsAgentCode } from "../studio/lib/code-generator";
+import { catalogLabel, toolCapableCatalog, useModelCatalog } from "../lib/model-catalog";
+import { useModelDefaults } from "../lib/model-defaults";
 import type { FlowData } from "../studio/lib/debug-client";
-import { MANTLE_PROVIDER } from "../studio/lib/models";
+import { MANTLE_PROVIDER, setStudioModelContext } from "../studio/lib/models";
 import { SampleGallery } from "../studio/SampleGallery";
 import type { SampleFlow } from "../studio/lib/sample-flows";
 
@@ -106,20 +109,39 @@ export function CreateAgentStudio() {
   const [publishErr, setPublishErr] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [launch, setLaunch] = useState<{ agentId: string; jobId: string } | null>(null);
+  // spec.network (projects §12.6): a profile id, "" for PUBLIC; null = untouched —
+  // a re-publish then carries the stored network as it was (the spec is replaced)
+  const [networkId, setNetworkId] = useState<string | null>(null);
+  const [storedNetwork, setStoredNetwork] = useState<AgentSpecInput["network"]>(null);
+  const [networkProfiles, setNetworkProfiles] = useState<NetworkProfile[] | null>(null);
   const [deployment, setDeployment] = useState<DeploymentInfo | null>(null);
   const [job, setJob] = useState<JobInfo | null>(null);
   const [agentStatus, setAgentStatus] = useState("deploying");
 
   const selectedNode = selectedId ? (nodes.find((n) => n.id === selectedId) ?? null) : null;
 
-  // Live code generation drives the drawer + the publish summary/guards. A node
-  // without a model generates the platform's Studio fallback, the model the backend
-  // scopes the execution role to — regenerate once the configured value arrives.
+  // Live code generation drives the drawer + the publish summary/guards.
+  // Nodes without a model fall back to the server-configured studio model, a new
+  // agent node starts on the configured agent default, and the model dropdown offers
+  // the account catalog (static values until they load). The generator, the canvas
+  // and the property panel read this module state, so it is set before they render.
   const modelDefaults = useModelDefaults();
+  const modelCatalog = useModelCatalog();
+  const studioModels = useMemo(() => {
+    const ctx = {
+      fallbackModelId: modelDefaults?.studio_fallback_model_id ?? null,
+      newAgentModelId: modelDefaults?.agent_default_model_id ?? null,
+      // agent nodes run tools: a catalog model known to refuse toolConfig is left out
+      catalog: toolCapableCatalog(modelCatalog).map((entry) => ({ model_id: entry.model_id, model_name: catalogLabel(entry) })),
+    };
+    setStudioModelContext(ctx);
+    return ctx;
+  }, [modelDefaults, modelCatalog]);
   const genResult = useMemo(
     () => generateStrandsAgentCode(nodes, edges, graphMode),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the generators read it through studioFallbackModelId()
-    [nodes, edges, graphMode, modelDefaults],
+    // studioModels: the fallback model feeds the generated code
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nodes, edges, graphMode, studioModels],
   );
   const fullCode = genResult.imports.join("\n") + "\n\n" + genResult.code;
 
@@ -201,6 +223,23 @@ export function CreateAgentStudio() {
     [publishEnv],
   );
 
+  // the profiles this project may pick; a new agent starts in the default one
+  useEffect(() => {
+    let live = true;
+    networkProfilesApi
+      .list()
+      .then(({ profiles }) => {
+        if (!live) return;
+        setNetworkProfiles(profiles);
+        const pick = networkChoices(profiles, "", RUNTIME_NETWORK_PURPOSES).find((c) => c.profile.is_default && !c.disabled);
+        if (!editing && pick) setNetworkId((cur) => cur ?? pick.profile.id);
+      })
+      .catch(() => live && setNetworkProfiles([]));
+    return () => {
+      live = false;
+    };
+  }, [editing]);
+
   // ── edit mode: load the stored flow (or fall back for external-app agents) ──
   useEffect(() => {
     if (!editAgentId) return;
@@ -216,7 +255,10 @@ export function CreateAgentStudio() {
         }
         setEditAgent(agent);
         setPublishName(agent.name);
-        const spec = (agent.spec ?? {}) as { studio_flow?: StudioFlow; code?: string };
+        const spec = (agent.spec ?? {}) as { studio_flow?: StudioFlow; code?: string; network?: AgentSpecInput["network"] };
+        const net = spec.network ?? null;
+        setStoredNetwork(net);
+        if (net && "profile_id" in net) setNetworkId(net.profile_id);
         const flow = spec.studio_flow;
         if (flow && Array.isArray(flow.nodes) && flow.nodes.length > 0) {
           setNodes(flow.nodes);
@@ -382,6 +424,9 @@ export function CreateAgentStudio() {
       studio_flow: { nodes, edges, graphMode },
       ...(extraReqs.length ? { requirements: extraReqs } : {}),
       ...(Object.keys(publishEnv).length ? { env: publishEnv } : {}),
+      ...(networkId === null
+        ? storedNetwork ? { network: storedNetwork } : {}
+        : networkId ? { network: { profile_id: networkId } } : {}),
     };
     try {
       const res =
@@ -670,6 +715,26 @@ export function CreateAgentStudio() {
             <div className="kv">
               <span className="k">{t("studio.publish.memory")}</span>
               <span className="v">{t("studio.publish.memoryValue")}</span>
+            </div>
+            <div className="field" style={{ marginTop: 12 }}>
+              <label htmlFor="studio-network">{t("network.title")}</label>
+              <select
+                id="studio-network"
+                className="input"
+                value={networkId ?? (storedNetwork && "profile_id" in storedNetwork ? storedNetwork.profile_id : "")}
+                onChange={(e) => setNetworkId(e.target.value)}
+                data-testid="studio-network"
+              >
+                <option value="">{t("network.public")}</option>
+                {networkChoices(networkProfiles ?? [], networkId ?? "", RUNTIME_NETWORK_PURPOSES).map((c) => (
+                  <option key={c.profile.id} value={c.profile.id} disabled={c.disabled}>
+                    {c.profile.name}
+                    {c.profile.is_default ? ` · ${t("network.default")}` : ""}
+                    {` · ${t(`network.status.${c.profile.status}`, { defaultValue: c.profile.status })}`}
+                  </option>
+                ))}
+              </select>
+              {editing && <div className="studio-warn">{t("network.republishNote")}</div>}
             </div>
 
             {codeState.source === "ai" && (

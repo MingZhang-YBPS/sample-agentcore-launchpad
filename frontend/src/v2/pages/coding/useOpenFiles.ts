@@ -34,7 +34,7 @@ export type SaveResult = "saved" | "conflict" | "failed" | "unchanged";
  * `409 coding.file_conflict` instead of being overwritten — the tab then offers
  * reload (drop the draft) or overwrite (save against the newer version).
  */
-export function useOpenFiles(projectId: string) {
+export function useOpenFiles(repoId: string) {
   const [files, setFiles] = useState<OpenFile[]>([]);
   const filesRef = useRef(files);
   filesRef.current = files;
@@ -48,7 +48,7 @@ export function useOpenFiles(projectId: string) {
   const read = useCallback(
     async (path: string, keepDraft: boolean) => {
       try {
-        const file = await codingApi.readFile(projectId, path);
+        const file = await codingApi.readFile(repoId, path);
         // a file gone from disk (the agent deleted or moved it) reads `exists: false`
         // with no content, hash or binary flag
         const missing = file.exists === false;
@@ -84,7 +84,7 @@ export function useOpenFiles(projectId: string) {
         patch(path, { loading: false, error: errorMessage(err) });
       }
     },
-    [projectId, patch],
+    [repoId, patch],
   );
 
   const open = useCallback(
@@ -158,7 +158,7 @@ export function useOpenFiles(projectId: string) {
       inFlight.current.add(path);
       patch(path, { saving: true });
       try {
-        const res = await codingApi.writeFile(projectId, { path, content, expected_sha256: expected });
+        const res = await codingApi.writeFile(repoId, { path, content, expected_sha256: expected });
         patch(path, (f) => ({
           saving: false,
           content,
@@ -181,7 +181,7 @@ export function useOpenFiles(projectId: string) {
         inFlight.current.delete(path);
       }
     },
-    [projectId, patch],
+    [repoId, patch],
   );
 
   return { files, open, close, setDraft, togglePreview, reload, refreshAll, save };

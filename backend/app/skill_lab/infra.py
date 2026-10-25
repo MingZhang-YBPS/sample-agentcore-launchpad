@@ -60,7 +60,7 @@ def ensure_worker_role(
             "run the base bootstrap first"
         )
     ecr_repo_arn = (
-        f"arn:aws:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
+        f"arn:{workspace.partition}:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
     )
     return workspace_iam.ensure_role(
         workspace.client("iam"),

@@ -179,12 +179,13 @@ def resolve_pins(
     through `uv pip compile`, resolved for the deploy target rather than this host.
 
     `platform` is every requirement the deploy will install alongside `entries`
-    (`zip_runtime.platform_requirements(...)`), and it goes into the compile input
-    with `entries`. Without it, each entry resolves to the newest release
-    satisfying *that entry alone*, and the package stage — which compiles the two
-    together into a hashed lockfile — can then find the result unsatisfiable, so
-    the agent never produces an artifact at all. Measured instance: `mcp>=1.19.0`
-    alone resolves to `mcp==2.0.0`, but every published `strands-agents` caps
+    (`zip_runtime.platform_requirements(...)`, with the spec's `model_provider` kind
+    when it has one), and it goes into the compile input with `entries`. Without
+    it, each entry resolves to the newest release satisfying *that entry alone*,
+    and the package stage — which compiles the two together into a hashed
+    lockfile — can then find the result unsatisfiable, so the agent never
+    produces an artifact at all. Measured instance: `mcp>=1.19.0` alone resolves
+    to `mcp==2.0.0`, but every published `strands-agents` caps
     `mcp<2.0.0`, so the lock fails.
 
     There is deliberately **no `--no-deps`**, and no default for `platform`:

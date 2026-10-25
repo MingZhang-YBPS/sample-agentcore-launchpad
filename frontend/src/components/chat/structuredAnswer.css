@@ -1,0 +1,55 @@
+/* The structured answer under a chat answer (StructuredAnswer.tsx). One layout, two
+   skins: each maps the --sa-* slots onto its own tokens, no new palette or type. A
+   mono caption rail over a quiet ledger: keys in mono, values in the body face. */
+.v3 .lp-structured {
+  --sa-bg: var(--v3-ink-1); --sa-head: var(--v3-ink-2); --sa-line: var(--v3-line); --sa-text: var(--v3-text);
+  --sa-mute: var(--v3-text-3); --sa-key: var(--v3-text-2); --sa-accent: var(--v3-info);
+  --sa-mono: var(--v3-mono); --sa-body: var(--v3-body); --sa-r: var(--v3-r-sm); --sa-hover: var(--v3-ink-3);
+}
+.v2 .lp-structured {
+  --sa-bg: var(--v2-card); --sa-head: var(--v2-fill); --sa-line: var(--v2-line); --sa-text: var(--v2-ink);
+  --sa-mute: var(--v2-ink-3); --sa-key: var(--v2-ink-2); --sa-accent: var(--v2-primary);
+  --sa-mono: var(--v2-mono); --sa-body: var(--v2-font); --sa-r: var(--v2-radius-sm); --sa-hover: var(--v2-fill-2);
+}
+.lp-structured {
+  margin: 8px 0 0; max-width: 100%; border: 1px solid var(--sa-line); border-left: 2px solid var(--sa-accent);
+  border-radius: var(--sa-r); background: var(--sa-bg); overflow: hidden;
+  animation: lp-structured-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.lp-structured-head {
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 12px;
+  background: var(--sa-head); border-bottom: 1px solid var(--sa-line);
+}
+.lp-structured-label {
+  font-family: var(--sa-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--sa-accent);
+}
+.lp-structured-count { font-family: var(--sa-mono); font-size: 11px; color: var(--sa-mute); }
+.lp-structured-tools { margin-left: auto; display: inline-flex; gap: 2px; }
+.lp-structured-tools button {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--sa-mute); font: 11.5px var(--sa-body); cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.lp-structured-tools button:hover { background: var(--sa-hover); color: var(--sa-text); }
+.lp-structured-tools button:focus-visible { outline: 2px solid var(--sa-accent); outline-offset: 1px; }
+.lp-structured-tools button[aria-pressed="true"] { color: var(--sa-accent); }
+.lp-structured-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.lp-structured-table th, .lp-structured-table td { padding: 6px 12px; text-align: left; vertical-align: top; border-top: 1px solid var(--sa-line); }
+.lp-structured-table tr:first-child th, .lp-structured-table tr:first-child td { border-top: 0; }
+.lp-structured-table th {
+  width: 1%; white-space: nowrap; font: 500 12px var(--sa-mono); color: var(--sa-key);
+}
+.lp-structured-table td { color: var(--sa-text); font-family: var(--sa-body); overflow-wrap: anywhere; white-space: pre-wrap; }
+.lp-structured-table td[data-type="number"], .lp-structured-table td[data-type="boolean"], .lp-structured-table td[data-type="null"] {
+  font-family: var(--sa-mono); font-size: 12.5px;
+}
+.lp-structured-table td[data-type="null"] { color: var(--sa-mute); }
+.lp-structured-json {
+  margin: 0; padding: 10px 12px; max-height: 360px; overflow: auto; font: 12px/1.55 var(--sa-mono); color: var(--sa-text);
+  white-space: pre; background: transparent; border: 0;
+}
+@keyframes lp-structured-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .lp-structured { animation: none; }
+  .lp-structured-tools button { transition: none; }
+}

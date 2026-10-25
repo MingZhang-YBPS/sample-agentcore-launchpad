@@ -55,8 +55,8 @@ function dirOf(path: string): string {
   return dir === ROOT ? "" : dir;
 }
 
-function modelUri(projectId: string, path: string): string {
-  return `file:///coding/${encodeURIComponent(projectId)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+function modelUri(repoId: string, path: string): string {
+  return `file:///coding/${encodeURIComponent(repoId)}/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 type CodeEditor = Parameters<OnMount>[0];
@@ -92,7 +92,7 @@ function disposeLater(monaco: Monaco | null, uri: string, tries = 3): void {
  * read-only while a turn runs, because the agent may be writing the same files.
  */
 export function EditorPane({
-  projectId,
+  repoId,
   files,
   active,
   onActivate,
@@ -112,7 +112,7 @@ export function EditorPane({
   onRevealed,
   headEnd,
 }: {
-  projectId: string;
+  repoId: string;
   files: OpenFile[];
   active: string;
   onActivate: (tab: string) => void;
@@ -141,25 +141,25 @@ export function EditorPane({
   const monacoRef = useRef<Monaco | null>(null);
   const file = files.find((f) => f.path === active) ?? null;
 
-  // leaving the IDE drops this project's models (the editor itself is disposed by the library)
+  // leaving the IDE drops this repo's models (the editor itself is disposed by the library)
   useEffect(() => {
     // the latest instance is wanted here (Monaco loads after this effect ran)
     const holder = monacoRef;
     return () => {
       const monaco = holder.current;
       if (!monaco) return;
-      const prefix = modelUri(projectId, "");
+      const prefix = modelUri(repoId, "");
       window.setTimeout(() => {
         for (const model of monaco.editor.getModels()) {
           if (model.uri.toString(true).startsWith(prefix) && !model.isAttachedToEditor()) model.dispose();
         }
       }, 300);
     };
-  }, [projectId]);
+  }, [repoId]);
 
   const close = (path: string) => {
     onClose(path);
-    disposeLater(monacoRef.current, modelUri(projectId, path));
+    disposeLater(monacoRef.current, modelUri(repoId, path));
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -216,10 +216,10 @@ export function EditorPane({
       </div>
       <div className="v2-coding-editor-body">
         {active === CHANGES_TAB || !file ? (
-          <ChangesView projectId={projectId} version={version} focus={focus} />
+          <ChangesView repoId={repoId} version={version} focus={focus} />
         ) : (
           <FileView
-            projectId={projectId}
+            repoId={repoId}
             file={file}
             running={running}
             monacoRef={monacoRef}
@@ -241,7 +241,7 @@ export function EditorPane({
 }
 
 function FileView({
-  projectId,
+  repoId,
   file,
   running,
   monacoRef,
@@ -256,7 +256,7 @@ function FileView({
   reveal,
   onRevealed,
 }: {
-  projectId: string;
+  repoId: string;
   file: OpenFile;
   running: boolean;
   monacoRef: { current: Monaco | null };
@@ -394,7 +394,7 @@ function FileView({
           <Editor
             height="100%"
             theme="vs"
-            path={modelUri(projectId, file.path)}
+            path={modelUri(repoId, file.path)}
             language={languageFor(file.path)}
             value={file.draft}
             onChange={(value) => onDraft(value ?? "")}
@@ -423,7 +423,7 @@ const STATUS_TONE = { A: "green", M: "blue", D: "red", R: "orange" } as const;
 
 /** The Changes tab: what the last turn changed, or everything uncommitted, as a file
  *  list and a side-by-side diff (original = that revision, modified = the working tree). */
-function ChangesView({ projectId, version, focus }: { projectId: string; version: number; focus: ChangeFocus | null }) {
+function ChangesView({ repoId, version, focus }: { repoId: string; version: number; focus: ChangeFocus | null }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
   const [scope, setScope] = useState<CodingChangeScope>(focus?.scope ?? "turn");
@@ -435,13 +435,13 @@ function ChangesView({ projectId, version, focus }: { projectId: string; version
     setScope(focus.scope);
     setSelected(focus.path);
   }
-  const list = useLoad(() => codingApi.changes(projectId, scope), `${projectId}:${scope}:${version}`);
+  const list = useLoad(() => codingApi.changes(repoId, scope), `${repoId}:${scope}:${version}`);
   const changes = list.data?.changes ?? [];
   const current: CodingChange | null = changes.find((c) => c.path === selected) ?? changes[0] ?? null;
 
   const copyPatch = async () => {
     try {
-      const { diff } = await codingApi.diff(projectId, scope);
+      const { diff } = await codingApi.diff(repoId, scope);
       await copyText(diff);
       toast("success", t("v2.coding.changes.copied"));
     } catch (err) {
@@ -502,7 +502,7 @@ function ChangesView({ projectId, version, focus }: { projectId: string; version
               </li>
             ))}
           </ul>
-          {current && <ChangeDiff key={`${scope}:${current.path}`} projectId={projectId} scope={scope} change={current} version={version} />}
+          {current && <ChangeDiff key={`${scope}:${current.path}`} repoId={repoId} scope={scope} change={current} version={version} />}
         </div>
       )}
     </div>
@@ -510,12 +510,12 @@ function ChangesView({ projectId, version, focus }: { projectId: string; version
 }
 
 function ChangeDiff({
-  projectId,
+  repoId,
   scope,
   change,
   version,
 }: {
-  projectId: string;
+  repoId: string;
   scope: CodingChangeScope;
   change: CodingChange;
   version: number;
@@ -524,8 +524,8 @@ function ChangeDiff({
   const texts = useLoad(async () => {
     const rev = scope === "turn" ? "turn" : "head";
     const [original, modified] = await Promise.all([
-      change.status === "A" ? null : codingApi.readFile(projectId, change.old_path || change.path, rev),
-      change.status === "D" ? null : codingApi.readFile(projectId, change.path),
+      change.status === "A" ? null : codingApi.readFile(repoId, change.old_path || change.path, rev),
+      change.status === "D" ? null : codingApi.readFile(repoId, change.path),
     ]);
     const binary = !!original?.binary || !!modified?.binary;
     return {
@@ -533,7 +533,7 @@ function ChangeDiff({
       original: original && original.exists !== false ? (original.content ?? "") : "",
       modified: modified && modified.exists !== false ? (modified.content ?? "") : "",
     };
-  }, `${projectId}:${scope}:${change.status}:${change.old_path ?? ""}:${change.path}:${version}`);
+  }, `${repoId}:${scope}:${change.status}:${change.old_path ?? ""}:${change.path}:${version}`);
 
   if (texts.error) return <Alert tone="error">{texts.error}</Alert>;
   if (!texts.data) return <Spin />;

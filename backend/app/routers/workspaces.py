@@ -38,16 +38,22 @@ from app.core.db import (
     get_db,
 )
 from app.core.errors import AppError, NotFoundError
+from app.core.project_scope import project_context
+from app.core.regions import AGENTCORE_SUGGESTED_REGIONS
 from app.models.ledger import Agent, User, UserWorkspace, Workspace
-from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
+from app.routers.auth import ROLE_MEMBER, Identity, require_identity
+from app.services import access, aws_clients, visibility, workspace_bootstrap
 from app.services import api_keys as api_keys_service
-from app.services import aws_clients, visibility, workspace_bootstrap
+from app.services import promotion as promotion_service
 from app.services import users as users_service
+from app.services.access import bump_epoch, sync_default_membership
+from app.services.audit import record_audit_event
 from app.services.workspace import (
     WorkspaceContext,
     default_workspace_context,
     get_workspace_row,
     granted_workspace_ids,
+    granted_workspace_ids_direct,
     workspace_context,
 )
 from app.services.workspace_bootstrap import STATUS_BOOTSTRAPPING
@@ -70,6 +76,14 @@ _ROLE_ARN_MAX = 256  # the ledger column's width — reject rather than truncate
 # ASCII because `\w` would otherwise accept letters STS itself rejects.
 _EXTERNAL_ID = re.compile(r"^[\w+=,.@:/-]{2,128}$", re.ASCII)
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Environment tier (T05). `prod` is the only one that changes behavior today: member
+# agent mutations are refused there (route_policy.PROD_PROTECTED) and an admin's are
+# journaled. Moving a workspace into or out of `prod` needs `confirm_tier_change`.
+TIER_DEV = "dev"
+TIER_STAGING = "staging"
+TIER_PROD = "prod"
+WorkspaceTier = Literal["dev", "staging", "prod"]
 
 
 @dataclass(frozen=True)
@@ -106,6 +120,20 @@ def resolve_workspace(request: Request) -> WorkspaceScope:
     return scope
 
 
+def authorized_workspace(db: Session, identity: Identity, workspace_id: str) -> Workspace:
+    """A workspace named in a request BODY or path, held to the same grant rule as the
+    `X-Workspace` header: 404 when it does not exist, 403 when the caller is not granted.
+
+    The route policy authorizes only the request's own workspace. A route that also acts
+    on a second one — a promotion's target, a resolution preview — must call this for it,
+    or the grant boundary only covers half the request (security review finding: a member
+    granted one dev workspace could release into, and read agent specs from, any other).
+    """
+    row = _requested_row(db, workspace_id)
+    _authorize(db, identity, row)
+    return row
+
+
 def require_workspace(request: Request) -> WorkspaceScope:
     """The resolved workspace of the current request."""
     scope = getattr(request.state, "workspace", None)
@@ -140,7 +168,7 @@ def _fallback_row(db: Session, identity: Identity) -> Workspace:
     lands on `default` and a member with a single grant on that one; anything
     else has to say which.
     """
-    if identity.is_admin:
+    if access.can_manage_structure(identity):  # an administrator or a steward (§11.4)
         return _requested_row(db, DEFAULT_WORKSPACE_ID)
     granted = granted_workspace_ids(db, identity.user_id or "")
     if not granted:
@@ -163,18 +191,14 @@ def _authorize(db: Session, identity: Identity, row: Workspace) -> None:
     """Admins reach every workspace; members need a grant.
 
     The admin bypass is mandatory, not a shortcut: the built-in admin is
-    config-driven and has no `users` row, so it can never own a grant.
+    config-driven and has no `users` row, so it can never own a grant. A steward
+    (§11.4) reaches every workspace too — for its structure; its project snapshot is
+    empty, so every project-scoped route still refuses it.
     """
-    if identity.is_admin:
+    if access.can_manage_structure(identity):
         return
     granted = identity.user_id is not None and (
-        db.execute(
-            select(UserWorkspace.workspace_id).where(
-                UserWorkspace.user_id == identity.user_id,
-                UserWorkspace.workspace_id == row.id,
-            )
-        ).first()
-        is not None
+        row.id in granted_workspace_ids(db, identity.user_id)
     )
     if not granted:
         raise AppError(
@@ -218,10 +242,17 @@ class WorkspaceCreate(BaseModel):
     # both together for a cross-account one.
     role_arn: str | None = None
     external_id: str | None = None
+    # Chosen deliberately at registration, so no confirm flag is needed here.
+    tier: WorkspaceTier = TIER_DEV
 
 
 class WorkspacePatch(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    """Rename and/or re-tier; at least one of the two."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    tier: WorkspaceTier | None = None
+    # Required (true) when `tier` moves the workspace into or out of `prod`.
+    confirm_tier_change: bool = False
 
 
 def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
@@ -241,6 +272,7 @@ def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
         "region": row.region,
         "cross_account": row.role_arn is not None,
         "bootstrap_status": row.bootstrap_status,
+        "tier": row.tier or TIER_DEV,
         "is_default": row.id == DEFAULT_WORKSPACE_ID,
         "resource_visibility": visibility.mode(row),
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -334,12 +366,15 @@ def list_workspaces(request: Request, db: Session = Depends(get_db)) -> dict[str
     """Every workspace for an admin; the granted ones for a member."""
     identity = require_identity(request)
     rows = list(db.scalars(select(Workspace).order_by(Workspace.id)))
-    if not identity.is_admin:
+    every = access.can_manage_structure(identity)  # administrators and stewards
+    if not every:
         granted = set(granted_workspace_ids(db, identity.user_id or ""))
         rows = [row for row in rows if row.id in granted]
     return {
-        "workspaces": [_out(row, reveal_role=identity.is_admin) for row in rows],
-        "all_workspaces": identity.is_admin,
+        "workspaces": [_out(row, reveal_role=every) for row in rows],
+        "all_workspaces": every,
+        # Suggestions for the registration form only; any region is accepted.
+        "suggested_regions": list(AGENTCORE_SUGGESTED_REGIONS),
     }
 
 
@@ -376,7 +411,7 @@ def hub_role_arn(caller_arn: str) -> str:
 
 
 @router.get("/hub-identity")
-def hub_identity(_: Identity = Depends(require_admin)) -> dict[str, Any]:
+def hub_identity(_: Identity = Depends(access.require_structure)) -> dict[str, Any]:
     """The hub's own account and role — the two values a spoke stack is deployed with.
 
     Declared before the `/{workspace_id}` routes so the literal path wins, and
@@ -415,7 +450,7 @@ class WorkspacePreflight(BaseModel):
 @router.post("/preflight")
 def preflight_workspace(
     req: WorkspacePreflight,
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Can this hub actually assume that role? Answered before registration.
 
@@ -463,7 +498,7 @@ def preflight_workspace(
 def create_workspace(
     req: WorkspaceCreate,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     # Validated as sent rather than normalized: the id travels back in every
     # `X-Workspace` header and in URLs, and a silently rewritten one turns into a
@@ -501,6 +536,7 @@ def create_workspace(
         role_arn=role_arn,
         external_id=external_id,
         bootstrap_status="registered",
+        tier=req.tier,
         resources={},
     )
     db.add(row)
@@ -524,12 +560,45 @@ def update_workspace(
     workspace_id: str,
     req: WorkspacePatch,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    identity: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
-    """Rename only: account/region are the workspace's identity, and its
-    resource map belongs to the bootstrap job."""
+    """Rename and/or re-tier: account/region are the workspace's identity, and its
+    resource map belongs to the bootstrap job.
+
+    A tier move into or out of `prod` flips whether members may mutate agents
+    there, so it must be explicit (`confirm_tier_change: true`, else 409
+    `workspace.tier_change_unconfirmed`). Every actual tier change — confirmed or
+    not needing confirmation — is journaled in `audit_events`. `default` is
+    re-tierable too: the startup mirror never writes the column.
+    """
+    if req.name is None and req.tier is None:
+        raise AppError(
+            "workspace.empty_patch",
+            "send at least one of name or tier",
+            status_code=400,
+        )
     row = _requested_row(db, workspace_id)
-    row.name = req.name.strip()
+    if req.name is not None:
+        row.name = req.name.strip()
+    current_tier = row.tier or TIER_DEV
+    if req.tier is not None and req.tier != current_tier:
+        crosses_prod = TIER_PROD in (current_tier, req.tier)
+        if crosses_prod and not req.confirm_tier_change:
+            raise AppError(
+                "workspace.tier_change_unconfirmed",
+                f"moving '{row.id}' from {current_tier} to {req.tier} changes who may "
+                "modify its agents — resend with confirm_tier_change: true",
+                {"workspace_id": row.id, "from": current_tier, "to": req.tier},
+                status_code=409,
+            )
+        row.tier = req.tier
+        record_audit_event(
+            workspace_id=row.id,
+            actor=identity.username,
+            action="workspace.tier_change",
+            target=f"{current_tier}->{req.tier}",
+            db=db,
+        )
     db.commit()
     return _out(row)
 
@@ -559,7 +628,7 @@ def _referencing_rows(db: Session, workspace_id: str) -> dict[str, int]:
 def delete_workspace(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Detach-only decommission: the AWS resources it provisioned stay put.
 
@@ -586,9 +655,22 @@ def delete_workspace(
         )
     # Grants go with it: a re-registered id would otherwise inherit them.
     db.query(UserWorkspace).filter(UserWorkspace.workspace_id == row.id).delete()
+    _unbind_projects(db, row.id)
+    # ...and so do release requests aimed at it, which could never be acted on again
+    promotion_service.cancel_for_removed_target(db, row.id)
     db.delete(row)
     db.commit()
     return {"deleted": True, "workspace_id": workspace_id}
+
+
+def _unbind_projects(db: Session, workspace_id: str) -> None:
+    """Drop the workspace's project bindings in the caller's transaction (design
+    D-6): a re-registered id — possibly another account — would otherwise silently
+    inherit them, and every member of those projects would reach it."""
+    db.execute(
+        text("DELETE FROM project_workspaces WHERE workspace_id = :id"), {"id": workspace_id},
+    )
+    bump_epoch(db)
 
 
 # The two states a purge accepts: a registration that never became a usable
@@ -633,11 +715,12 @@ def _assert_purgeable(db: Session, row: Workspace) -> tuple[dict[str, int], list
             "registration that never became a usable environment",
             409,
         )
-    live_agents = (
-        db.query(Agent)
-        .filter(Agent.workspace_id == row.id, Agent.status != "deleted")
-        .count()
-    )
+    with project_context(None):  # every project's agents, whichever is current
+        live_agents = (
+            db.query(Agent)
+            .filter(Agent.workspace_id == row.id, Agent.status != "deleted")
+            .count()
+        )
     if live_agents:
         raise _purge_refused(
             row,
@@ -654,7 +737,7 @@ def purge_workspace(
     workspace_id: str,
     dry_run: bool = False,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Delete a failed or abandoned registration outright, rows and all.
 
@@ -699,6 +782,7 @@ def purge_workspace(
             {"id": target},
         )
     db.query(UserWorkspace).filter(UserWorkspace.workspace_id == target).delete()
+    _unbind_projects(db, target)
     # The workspace row goes with a **conditional** DELETE, the mirror image of
     # `create_bootstrap_job`'s conditional claim: the guardrails above are a read,
     # and sync handlers run on a threadpool, so a bootstrap POST can claim this
@@ -722,6 +806,7 @@ def purge_workspace(
             {"workspace_id": target, "reason": current or "gone", "bootstrap_status": current},
             status_code=409,
         )
+    promotion_service.cancel_for_removed_target(db, target)
     db.commit()
     return payload
 
@@ -739,7 +824,7 @@ def _bootstrap_conflict(row: Workspace) -> AppError:
 def bootstrap_workspace(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Queue the staged bootstrap job for a registered workspace.
 
@@ -774,11 +859,36 @@ def bootstrap_workspace(
     }
 
 
+@router.post("/{workspace_id}/observability/repair")
+def repair_workspace_observability(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(access.require_structure),
+) -> dict[str, Any]:
+    """Turn Transaction Search on for a ready workspace whose bootstrap could not.
+
+    Bootstrap's observability stage degrades instead of failing, so a workspace can
+    be READY with no `aws/spans` group — every trace, observability view and
+    evaluation there then reads nothing. This re-runs just that stage, idempotently.
+    """
+    row = _requested_row(db, workspace_id)
+    if row.bootstrap_status != READY:
+        raise AppError(
+            "workspace.not_ready",
+            "repair a workspace once its bootstrap has finished; until then the "
+            "bootstrap job itself runs this stage",
+            status_code=409,
+        )
+    out = workspace_bootstrap.repair_observability(workspace_context(row),
+                                                   workspace_id=row.id)
+    return {"workspace_id": row.id, **out}
+
+
 @router.get("/{workspace_id}/bootstrap")
 def bootstrap_status(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """The latest bootstrap run for this workspace, if any.
 
@@ -838,7 +948,7 @@ def list_grants(
     limit: int = _GRANTS_LIMIT_DEFAULT,
     offset: int = 0,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """The member accounts this workspace can be granted to, and which hold it.
 
@@ -926,7 +1036,7 @@ def replace_grants(
     workspace_id: str,
     req: GrantsPatch,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Grant and revoke this workspace for several accounts at once.
 
@@ -962,6 +1072,10 @@ def replace_grants(
         )
     requested = grant | revoke
     if requested:
+        if db.scalar(select(User.id).where(User.id.in_(sorted(requested)),
+                                           User.role == users_service.ROLE_STEWARD)):
+            # a grant would reach project data through the default membership (§11.4)
+            raise users_service._no_grants(users_service.ROLE_STEWARD)
         members = set(
             db.scalars(
                 select(User.id).where(
@@ -996,6 +1110,9 @@ def replace_grants(
         for user_id in sorted(grant - held):
             db.add(UserWorkspace(user_id=user_id, workspace_id=row.id))
         added = len(grant - held)
+        db.flush()
+        for user_id in sorted(grant - held):
+            sync_default_membership(db, user_id, {row.id}, previous=set())
     removed = 0
     if revoke:
         removed = (
@@ -1006,6 +1123,9 @@ def replace_grants(
             )
             .delete(synchronize_session=False)
         )
+        for user_id in sorted(revoke):
+            remaining = set(granted_workspace_ids_direct(db, user_id))
+            sync_default_membership(db, user_id, remaining, previous=remaining | {row.id})
         # A revoked member's keys in THIS workspace stop working now; their keys
         # elsewhere are untouched (the predicate is per key workspace).
         for user_id in sorted(revoke):
@@ -1038,7 +1158,7 @@ def _visibility_out(row: Workspace) -> dict[str, Any]:
 def get_visibility(
     workspace_id: str,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     return _visibility_out(_requested_row(db, workspace_id))
 
@@ -1048,7 +1168,7 @@ def put_visibility(
     workspace_id: str,
     req: VisibilitySetting,
     db: Session = Depends(get_db),
-    _: Identity = Depends(require_admin),
+    _: Identity = Depends(access.require_structure),
 ) -> dict[str, Any]:
     """Switch shared ⇄ isolated. Changes no resource and applies to the next
     request: the workspace row is re-read on every request."""

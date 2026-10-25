@@ -40,15 +40,12 @@ import { useLoad, usePaged } from "../../hooks";
 import { Score } from "../../ResultsView";
 import { sourceLabel, STATUS_TONE, statusLabel, taskFromRun } from "../../tasks";
 import { Alert, Button, Card, FilterSelect, FlowHeader, Kpi, LinkButton, Pager, Segmented, Spin, Tag, type TagTone } from "../../ui";
-import { DiffBody } from "../agents/SnapshotsCard";
+import { ChangeRow } from "../agents/SnapshotsCard";
 import { noteLabel } from "../agents/snapshots";
 import { AddToDatasetModal } from "../data/AddToDataset";
 import { DeltaChip, ScorePair, VersionTag } from "./scorecardUi";
 
 const CASE_PAGE = 20;
-/** Both diff sides are snapshots, so DiffBody never reads the agent's current spec
- *  (it only does for a `"current"` side) and the page needs no agent read for it. */
-const NO_CURRENT_SPEC: Record<string, unknown> = {};
 
 const SIDES = ["a", "b"] as const;
 type Side = (typeof SIDES)[number];
@@ -387,7 +384,13 @@ function ConfigDiff({ agentId, from, to }: { agentId: string; from: number; to: 
   if (diff.error && !diff.data) return <Alert tone="error">{diff.error}</Alert>;
   if (!diff.data) return null;
   if (diff.data.changes.length === 0) return <Alert tone="info">{t("v2.agents.snapshots.noChanges")}</Alert>;
-  return <DiffBody agentId={agentId} currentSpec={NO_CURRENT_SPEC} from={from} to={to} changes={diff.data.changes} />;
+  return (
+    <div data-testid="v2-snapshot-diff-body">
+      {diff.data.changes.map((c) => (
+        <ChangeRow key={c.field} change={c} />
+      ))}
+    </div>
+  );
 }
 
 function CasesCard({

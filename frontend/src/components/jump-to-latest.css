@@ -1,0 +1,33 @@
+/* Theme-neutral on purpose: the same pill sits in the classic, V2 and V3 threads.
+   The sticky anchor has no height, so showing or hiding the pill never changes the
+   thread's scroll height (which would read as the reader scrolling). */
+.jump-to-latest {
+  position: sticky;
+  bottom: 10px;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 2;
+}
+.jump-to-latest button {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(15, 23, 42, 0.88);
+  color: #f8fafc;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.5);
+}
+.jump-to-latest button:hover { background: rgba(30, 41, 59, 0.95); }
+.jump-to-latest button:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }

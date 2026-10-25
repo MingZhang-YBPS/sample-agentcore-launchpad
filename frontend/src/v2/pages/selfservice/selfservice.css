@@ -1,0 +1,8 @@
+/* Business self-service pages (T33-T36). */
+.v2 .v2-row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.v2 .issue-transcript { display: flex; flex-direction: column; gap: 6px; padding: 12px 24px; max-height: 260px; overflow: auto; }
+.v2 .issue-turn p { margin: 2px 0 0; white-space: pre-wrap; word-break: break-word; }
+.v2 .issue-turn.flagged { border-left: 3px solid var(--v2-red, #d13438); padding-left: 8px; }
+.v2 .rule-row-off { opacity: 0.55; }
+.v2 .rule-answer { white-space: pre-wrap; max-width: 420px; }
+.v2 .muted { color: var(--v2-ink-3); }

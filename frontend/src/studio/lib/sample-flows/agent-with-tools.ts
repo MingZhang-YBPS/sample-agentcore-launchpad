@@ -24,8 +24,6 @@ export const agentWithTools: SampleFlow = {
       data: {
         label: 'Math Agent',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a math assistant. Use the calculator tool for arithmetic and the word_counter tool to count words when asked.',
         maxTokens: 32000,
         streaming: false,

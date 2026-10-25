@@ -4,36 +4,53 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from app.core.config import Settings, get_settings
-from app.schemas.attachments import AttachmentRequest
+from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned, assert_plain_ranges
+from app.schemas.strands_builder import (
+    CODE_INTERPRETER_ID_RE,
+    AgentToolRef,
+    ConversationConfig,
+    CustomTool,
+    FewShotExample,
+    ModelParams,
+    ModelProvider,
+    RetryConfig,
+    SandboxTool,
+    StrandsTool,
+    StrandsToolConfig,
+    ToolHooks,
+    check_builder_fields,
+)
 from app.templates import context_layer_support
 
-# The BUILT-IN model of a spec submitted without a model_id. The live value is
-# settings.agent_default_model_id (env LAUNCHPAD_AGENT_DEFAULT_MODEL_ID, launchpad.yaml,
-# or the admin Models page) — read it through ``agent_default_model_id()``; this
-# constant is only what that resolves to when nothing overrides it.
-DEFAULT_MODEL_ID = Settings.model_fields["agent_default_model_id"].default
+# Latest Sonnet inference profile available in the target account (verified via
+# bedrock list-inference-profiles; there is no "sonnet-5" profile).
+# GLM-5.3 through its global inference profile: offered in every region the
+# console targets (us-east-1, us-west-2, us-east-2, ca-central-1). Mirrors the
+# console's SPEC_DEFAULT_MODEL_ID (frontend/src/lib/models.ts).
+DEFAULT_MODEL_ID = Settings.model_fields["agent_default_model_id"].default  # built-in
 
 
 def agent_default_model_id() -> str:
-    """The model a new spec without one gets (settings.agent_default_model_id)."""
+    """The model a new spec without one gets: settings.agent_default_model_id (env
+    LAUNCHPAD_AGENT_DEFAULT_MODEL_ID, or the admin Models page)."""
     return get_settings().agent_default_model_id.strip() or DEFAULT_MODEL_ID
 
-
 # The Claude Agent SDK (method "container") can only drive Claude, so a container
-# spec that names no model gets settings.claude_sdk_model_id instead of the agent
-# default — which is not a Claude model.
-CLAUDE_SDK_DEFAULT_MODEL_ID = Settings.model_fields["claude_sdk_model_id"].default
+# spec that names no model gets this instead of the platform default. Mirrors the
+# console's claude-only default (defaultModelFor(source, claudeOnly)). Configurable
+# as settings.claude_sdk_model_id (env LAUNCHPAD_CLAUDE_SDK_MODEL_ID) — to another
+# Claude id only: the SDK cannot drive any other family.
+CLAUDE_SDK_DEFAULT_MODEL_ID = Settings.model_fields["claude_sdk_model_id"].default  # built-in
 
 
 def claude_sdk_default_model_id() -> str:
     return get_settings().claude_sdk_model_id.strip() or CLAUDE_SDK_DEFAULT_MODEL_ID
-
 
 Method = Literal["harness", "zip_runtime", "container", "studio", "byoc"]
 
@@ -66,6 +83,15 @@ MAX_TOKENS_CEILING = 131072
 # call reasoned for 95 s and stopped at max_tokens before writing any answer). Other
 # families keep the service default — Bedrock rejects a value above a model's limit.
 DEFAULT_GPT_MAX_TOKENS = 65536
+
+
+def display_name_of(spec: dict[str, Any] | None) -> str | None:
+    """The stored spec's ``display_name`` (None when unset) — list/detail projection.
+
+    Read defensively: specs written before the field existed simply lack it.
+    """
+    value = (spec or {}).get("display_name")
+    return (value.strip() or None) if isinstance(value, str) else None
 
 
 def is_openai_model_id(model_id: str) -> bool:
@@ -227,6 +253,17 @@ class KnowledgeBaseRef(BaseModel):
     description: str = Field(default="", max_length=1000)
 
 
+class GuardrailConfig(BaseModel):
+    """PII protection applied by the platform on both ends of a turn (T12).
+
+    Off by default and independent of the creation method: the screen runs in the
+    platform's invoke chain (`services/guardrail.py`), not inside the agent, so it
+    covers a managed Harness and BYOC code alike. `anonymize` masks the entities and
+    carries on; `block` refuses the turn with `guardrail.blocked`.
+    """
+
+    enabled: bool = False
+    mode: Literal["anonymize", "block"] = "anonymize"
 class ContextLayerRef(BaseModel):
     """One namespace of the workspace's connected COA context layer.
 
@@ -305,30 +342,130 @@ class ByoMount(BaseModel):
     mount_path: str = Field(pattern=MOUNT_PATH_RE, min_length=6, max_length=200)
 
 
+# a storage catalog id (`models/storage.STORAGE_ID_PATTERN`): `datasets`, `skills-lib`
+STORAGE_ID_RE = r"^[a-z0-9][a-z0-9-]{1,31}$"
+# S3 Files + EFS mounts together (catalog + inline), leaving one of AgentCore's five
+# filesystemConfigurations for session storage (storage-mounts §4.2)
+MAX_BYO_MOUNTS = 4
+
+
+class StorageMountRef(BaseModel):
+    """A mount of a storage catalog entry (storage-mounts §4.2): the entry's id, where
+    it appears, and read-only or read-write (D-1: read-only by default; at most the
+    entry's `max_mode`).
+
+    ``kind`` and ``access_point_arn`` are the catalog entry's, stamped by the server when
+    the spec is stored (`services/storage_mounts.normalize_spec_storage`) so the deployers
+    map the reference without a catalog read; whatever a client sends there is replaced,
+    and promotion re-stamps them from the target workspace's entry."""
+
+    model_config = {"extra": "forbid"}
+
+    storage_id: str = Field(pattern=STORAGE_ID_RE)
+    # default `/mnt/<storage_id>`
+    mount_path: str = Field(default="", max_length=200)
+    mode: Literal["ro", "rw"] = "ro"
+    kind: Literal["s3files", "efs"] | None = None
+    access_point_arn: str | None = Field(default=None, max_length=2048)
+
+    @model_validator(mode="after")
+    def _path(self) -> "StorageMountRef":
+        if not self.mount_path:
+            self.mount_path = f"/mnt/{self.storage_id}"
+        if not re.match(MOUNT_PATH_RE, self.mount_path) or len(self.mount_path) < 6:
+            raise ValueError(f"'{self.mount_path}' is not a mount path (/mnt/<name>)")
+        if self.access_point_arn and self.kind:
+            shape = _S3_FILES_AP_RE if self.kind == "s3files" else _EFS_AP_RE
+            if not shape.match(self.access_point_arn):
+                raise ValueError(
+                    f"'{self.access_point_arn}' is not an {self.kind} access point ARN"
+                )
+        return self
+
+    @property
+    def resolved(self) -> bool:
+        return bool(self.kind and self.access_point_arn)
+
+
 class VpcNetwork(BaseModel):
-    """networkModeConfig for networkMode=VPC — required by BYO file systems."""
+    """Inline networkModeConfig for networkMode=VPC — the legacy shape (design §12.3).
+
+    Kept so an older client's submission (and a stored snapshot) still parses; the
+    ledger holds `NetworkProfileRef` instead (startup turns inline specs into
+    `legacy-<hash8>` profiles, §12.10)."""
 
     subnets: list[str] = Field(min_length=1, max_length=8)
     security_groups: list[str] = Field(min_length=1, max_length=5)
 
 
-class FilesystemConfig(BaseModel):
-    """AgentCore Runtime filesystemConfigurations (≤1 session, ≤2 s3, ≤2 efs).
+# `np-<hex>` for a profile created in the console, `legacy-<hash8>` for one the
+# startup migration made (models/network.py)
+NETWORK_PROFILE_ID_RE = r"^[a-z0-9][a-z0-9-]{1,31}$"
 
-    session_storage defaults ON; an explicit JSON null disables it.
+
+class NetworkProfileRef(BaseModel):
+    """networkMode=VPC through a workspace network profile; the deployer resolves it
+    to subnets + security groups (`services/network_profiles.resolve_vpc`)."""
+
+    model_config = {"extra": "forbid"}
+
+    profile_id: str = Field(pattern=NETWORK_PROFILE_ID_RE)
+
+
+# null = PUBLIC; {profile_id} = a network profile; {subnets, security_groups} = legacy
+AgentNetwork = NetworkProfileRef | VpcNetwork
+
+
+# Methods whose runtime mounts BYO file systems (S3 Files / EFS; design
+# storage-mounts §3). Every method is listed: the request shapes are in the service
+# model for CreateAgentRuntime (zip / studio / container / BYOC) and for
+# CreateHarness's backing-runtime environment (storage-mounts §1.5), while the live
+# behaviour probes (§3.1 P1–P5, `scripts/probe_storage_mounts.py`) are still to run.
+# A method a probe refutes leaves this set, with its reason in
+# `BYO_MOUNT_UNSUPPORTED`, and is refused with that reason again.
+BYO_MOUNT_METHODS = frozenset({"container", "zip_runtime", "studio", "byoc", "harness"})
+# method → why a BYO mount is refused there (the probe conclusion); empty today
+BYO_MOUNT_UNSUPPORTED: dict[str, str] = {}
+
+
+class FilesystemConfig(BaseModel):
+    """AgentCore Runtime filesystemConfigurations (≤1 session, ≤2 inline s3, ≤2 inline
+    efs, ≤4 BYO mounts in all counting catalog references).
+
+    session_storage defaults ON; an explicit JSON null disables it. BYO mounts need
+    the agent in a VPC (its network profile, `AgentSpec.network`) and a method of
+    `BYO_MOUNT_METHODS`.
     """
 
     session_storage: SessionStorageFs | None = Field(default_factory=SessionStorageFs)
     s3_files: list[ByoMount] = Field(default_factory=list, max_length=2)
     efs: list[ByoMount] = Field(default_factory=list, max_length=2)
+    # storage catalog references (storage-mounts §4.2); the inline lists above are the
+    # legacy shape, still accepted
+    mounts: list[StorageMountRef] = Field(default_factory=list, max_length=MAX_BYO_MOUNTS)
 
     @property
     def byo(self) -> bool:
-        return bool(self.s3_files or self.efs)
+        return bool(self.s3_files or self.efs or self.mounts)
+
+    def byo_mounts(self) -> list[tuple[str, ByoMount]]:
+        """``(kind, mount)`` for every inline BYO mount, ``kind`` ∈ {s3files, efs}."""
+        return [*(("s3files", m) for m in self.s3_files), *(("efs", m) for m in self.efs)]
+
+    def catalog_mounts(self) -> list[tuple[str, StorageMountRef]]:
+        """``(kind, mount)`` for every resolved catalog mount (``mount.mode`` set)."""
+        return [(m.kind, m) for m in self.mounts if m.resolved and m.kind]
 
     @model_validator(mode="after")
     def _check(self) -> "FilesystemConfig":
-        paths = [m.mount_path.rstrip("/") for m in (*self.s3_files, *self.efs)]
+        if len(self.s3_files) + len(self.efs) + len(self.mounts) > MAX_BYO_MOUNTS:
+            raise ValueError(
+                f"at most {MAX_BYO_MOUNTS} S3 Files / EFS mounts per agent (plus session "
+                "storage)"
+            )
+        if len({m.storage_id for m in self.mounts}) != len(self.mounts):
+            raise ValueError("a storage entry is mounted once per agent")
+        paths = [m.mount_path.rstrip("/") for m in (*self.s3_files, *self.efs, *self.mounts)]
         if self.session_storage:
             paths.append(self.session_storage.mount_path.rstrip("/"))
         if len(paths) != len(set(paths)):
@@ -369,7 +506,7 @@ ByocPythonVersion = Literal["PYTHON_3_10", "PYTHON_3_11", "PYTHON_3_12", "PYTHON
 # in the execution role's bedrock:InvokeModel statement, so the bound is an IAM
 # policy-size sanity cap, not a model catalogue.
 BYOC_ALLOWED_MODELS_MAX = 20
-INFERENCE_PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.")
+INFERENCE_PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.", "us-gov.")
 _BYOC_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]*$")
 _BYOC_MODEL_ARN_RE = re.compile(
     r"^arn:aws(?:-cn|-us-gov)?:bedrock:[a-z0-9-]+:(?P<account>\d{12})?:"
@@ -433,6 +570,8 @@ class ByocProvenance(BaseModel):
     original_filename: str = Field(default="", max_length=255)
     uploaded_by: str = Field(default="", max_length=128)
     uploaded_at: str = Field(default="", max_length=64)
+    # server-stamped by the byoc generate stage: ADOT found → instrumented launch (§17.3-1)
+    adot_launcher: bool = False
 
 
 class ByocConfig(BaseModel):
@@ -505,8 +644,83 @@ class ByocConfig(BaseModel):
         return self
 
 
+# A Gateway target name (AWS: `([0-9a-zA-Z][-]?){1,100}`), without a trailing
+# hyphen: it prefixes every tool the target exposes (`<target>___<tool>`).
+MCP_TARGET_NAME_RE = r"^[a-zA-Z0-9](?:-?[a-zA-Z0-9]){0,99}$"
+
+
+MCP_STDIO_ARGS_MAX = 32
+
+
+class McpStdioWrapper(BaseModel):
+    """A stdio-only MCP server, run behind the platform's streamable-HTTP bridge
+    (``samples/mcp_stdio_bridge/``). code_zip only: the deployer adds the bridge
+    to the bundle and starts ``command args…`` as its subprocess — no shell, so
+    the parts are passed exactly as given.
+
+    ``base`` picks the runtime the command needs: ``python`` stays on the
+    managed Python runtime; ``node`` builds an image from the bridge's Node
+    base image (CodeBuild) and deploys it as a container.
+    """
+
+    command: str = Field(min_length=1, max_length=255, pattern=r"^[^\s\x00]+$")
+    args: list[str] = Field(default_factory=list, max_length=MCP_STDIO_ARGS_MAX)
+    base: Literal["python", "node"] = "python"
+
+    @field_validator("args")
+    @classmethod
+    def _args_shape(cls, value: list[str]) -> list[str]:
+        for arg in value:
+            if len(arg) > 1024 or "\x00" in arg or "\n" in arg:
+                raise ValueError(
+                    "stdio_wrapper.args entries must be single-line and at most 1024 chars"
+                )
+        return value
+
+    def argv(self) -> list[str]:
+        return [self.command, *self.args]
+
+    @property
+    def builds_image(self) -> bool:
+        """The managed runtime is Python only: a Node server ships as an image
+        built in the workspace ECR repo (and its role needs the ECR pull)."""
+        return self.base == "node"
+
+
+class McpServerConfig(BaseModel):
+    """A BYOC artifact hosted as an MCP server (``protocol="mcp"``).
+
+    The artifact serves streamable HTTP on ``0.0.0.0:8000/mcp`` — itself, or,
+    with ``stdio_wrapper``, through the platform bridge around a stdio server.
+    The deploy pipeline gives the runtime its own inbound Cognito client (JWT),
+    an OAuth2 provider for that client and a target on the workspace Gateway,
+    so agents reach the tools through the Gateway as ``<target_name>___<tool>``.
+    """
+
+    target_name: str = Field(min_length=1, max_length=100, pattern=MCP_TARGET_NAME_RE)
+    # None = the artifact serves streamable HTTP itself (every spec written
+    # before this field existed)
+    stdio_wrapper: McpStdioWrapper | None = None
+    # Server-owned: stamped by the deploy pipeline (services/mcp_servers.py),
+    # never taken from the client — the console only renders them back.
+    client_id: str | None = Field(default=None, max_length=128)
+    provider_arn: str | None = Field(default=None, max_length=512)
+    target_id: str | None = Field(default=None, max_length=64)
+
+
 class AgentSpec(BaseModel):
+    # The immutable slug — it names every AWS resource the agent owns.
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,47}$")
+    # Human-facing label (any Unicode, e.g. Chinese). Stored in the JSON spec only —
+    # no ledger column and never sent to AWS — and, unlike ``name``, editable on
+    # redeploy. Whitespace is trimmed; blank reads back as None (display falls
+    # back to ``name``).
+    display_name: str | None = Field(default=None, min_length=1, max_length=64)
+    # The business project a NEW agent is filed under (services/agent_project): when
+    # omitted, the request's project (X-Project). Request-only — excluded from every
+    # dump, so it is never stored in the spec, and ignored on redeploy (an agent keeps
+    # its project).
+    project_id: str | None = Field(default=None, max_length=32, exclude=True)
     method: Method
     model_id: str = Field(default_factory=agent_default_model_id)
     # Defaults to "bedrock" for BACKWARD COMPATIBILITY, not because it is the
@@ -566,21 +780,24 @@ class AgentSpec(BaseModel):
     source_harness: dict[str, str] | None = None
     # the source Harness's own dependency ranges (`name[extras] <specifiers>`), kept
     # beside the pins conversion resolved from them, so a rebuild whose pins no longer
-    # lock against the platform re-resolves from the Harness's floors (#300)
-    requirement_ranges: list[str] | None = None
+    # lock against the platform re-resolves from the Harness's floors (#300). Stored
+    # only when set: an older spec dumps exactly as before (V3's no-new-field rule)
+    requirement_ranges: list[str] | None = Field(default=None, exclude_if=lambda v: v is None)
     # per-capability wiring outcome of a conversion (memory/kb_gateway/…) — UI renders it
     conversion_notes: dict[str, str] | None = None
     # Strands Studio canvas graph {nodes, edges, graphMode} — persisted for later edit/re-publish
     studio_flow: dict[str, Any] | None = None
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    guardrail: GuardrailConfig = Field(default_factory=GuardrailConfig)
     env: dict[str, str] = Field(default_factory=dict)
     max_iterations: int = Field(default=100, ge=1, le=100)
     timeout_seconds: int = Field(default=600, ge=10, le=3600)
     # AgentCore Runtime persistent storage. Session storage mounts on the harness,
     # zip_runtime/studio and container methods; BYO mounts are container-only.
     filesystem: FilesystemConfig = Field(default_factory=FilesystemConfig)
-    # VPC networkModeConfig; mandatory whenever a BYO file system is mounted
-    network: VpcNetwork | None = None
+    # VPC networking (design §12.3): None = PUBLIC, a profile reference, or the legacy
+    # inline subnets/SGs. Mandatory whenever a BYO file system is mounted.
+    network: AgentNetwork | None = Field(default=None, union_mode="left_to_right")
     # Managed KBs mounted on this agent. Two channels, picked by method:
     #   harness           → launchpad-kb-gw attached as an agentcore_gateway tool
     #                       (per-KB Retrieve + per-agent AgenticRetrieveStream)
@@ -590,8 +807,12 @@ class AgentSpec(BaseModel):
     # See app/templates/kb_support.py and .trellis/spec/launchpad/managed-kb.md.
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list, max_length=10)
     # Runtime service protocol. "a2a" deploys a standard A2A JSON-RPC server
-    # (port 9000, serverProtocol=A2A) — zip_runtime only in v1.
-    protocol: Literal["http", "a2a"] = "http"
+    # (port 9000, serverProtocol=A2A) — zip_runtime only in v1. "mcp" hosts a
+    # BYOC artifact as an MCP server (port 8000 /mcp, serverProtocol=MCP) wired
+    # to the workspace Gateway — byoc only, settings in ``mcp``.
+    protocol: Literal["http", "a2a", "mcp"] = "http"
+    # MCP server settings — required iff protocol="mcp"
+    mcp: McpServerConfig | None = None
     # AgentCard skills served by the A2A server and published to the Registry
     a2a_skills: list[A2ASkill] = Field(default_factory=list, max_length=20)
     # The COA namespace this agent reads governed context from, as the invoking
@@ -607,11 +828,76 @@ class AgentSpec(BaseModel):
     # is snapshotted onto the Agent row (``inbound_auth_mode`` /
     # ``inbound_auth_config``) by the deploy stage, so consumers never re-derive.
     inbound_auth: InboundAuth | None = None
+    # ── Strands builder (design strands-builder SB-1; zip_runtime only) ──────────
+    # All optional and left out of the stored spec while unset, so a spec written
+    # before they existed dumps and renders byte-identically. Checked together in
+    # ``schemas.strands_builder.check_builder_fields``.
+    # curated strands-agents-tools; selecting any replaces the template's own
+    # calculator / current_utc_time, as a toolkit does
+    strands_tools: list[StrandsTool] = Field(
+        default_factory=list, max_length=7, exclude_if=lambda v: not v
+    )
+    # per-tool settings, e.g. http_request.allowed_hosts (required for that tool)
+    strands_tool_config: StrandsToolConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    # temperature / top_p / max_tokens / stop / extended thinking / prompt caching
+    model_params: ModelParams | None = Field(default=None, exclude_if=lambda v: v is None)
+    # None = the SDK default (sliding window of 40 messages)
+    conversation: ConversationConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    # JSON Schema of a structured answer (``/v1`` ``structured``); the text answer stays
+    output_schema: dict[str, Any] | None = Field(default=None, exclude_if=lambda v: v is None)
+    # question / answer pairs appended to the system prompt as examples
+    few_shot_examples: list[FewShotExample] = Field(
+        default_factory=list, max_length=10, exclude_if=lambda v: not v
+    )
+    # ``{{name}}`` placeholders in the system prompt → default value. Resolved per
+    # request from the invoke ``context``, then the runtime env, then this default;
+    # an undeclared ``{{name}}`` stays literal text.
+    prompt_variables: dict[str, str] = Field(
+        default_factory=dict, max_length=20, exclude_if=lambda v: not v
+    )
+    # ── SB-2 (same rules) ──
+    # other deployed agents of this project (or lent to it, §11.2) offered as tools;
+    # their runtime ARNs are server-owned (``services.agent_tools``)
+    agent_tools: list[AgentToolRef] = Field(
+        default_factory=list, max_length=10, exclude_if=lambda v: not v
+    )
+    # Anthropic API / LiteLLM gateway instead of Bedrock; the key is an Identity
+    # Connection, read by the runtime from the token vault
+    model_provider: ModelProvider | None = Field(default=None, exclude_if=lambda v: v is None)
+    # approval list, per-turn tool-call cap, masked tool-call log
+    tool_hooks: ToolHooks | None = Field(default=None, exclude_if=lambda v: v is None)
+    # throttling retry / backoff of model calls; None = the SDK default
+    retry: RetryConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    # ── SB-3 (same rules) ──
+    # member-written @tool functions, packaged into the zip; one whose static check
+    # has findings deploys only with an administrator's approval of that exact
+    # version (``services.custom_tools``)
+    custom_tools: list[CustomTool] = Field(
+        default_factory=list, max_length=10, exclude_if=lambda v: not v
+    )
+    # python_repl / shell / file_write / use_aws — run only in the AgentCore Code
+    # Interpreter sandbox, and only where the workspace's sandbox setting allows them
+    sandbox_tools: list[SandboxTool] = Field(
+        default_factory=list, max_length=4, exclude_if=lambda v: not v
+    )
+    # server-owned: the Code Interpreter those run in, stamped from the workspace's
+    # sandbox setting by the deploy's generate stage (None = the AWS-managed one)
+    code_interpreter_id: str | None = Field(
+        default=None, pattern=CODE_INTERPRETER_ID_RE, exclude_if=lambda v: v is None
+    )
 
-    # Defined first so every later validator sees the resolved model.
+    @model_validator(mode="after")
+    def _strands_builder_fields(self) -> "AgentSpec":
+        check_builder_fields(self)
+        return self
+
     @model_validator(mode="after")
     def _claude_sdk_default_model(self) -> "AgentSpec":
-        # Only when the caller named no model: an explicit id is the caller's call.
+        # only when the caller named no model: an explicit id is the caller's call
         if self.method == "container" and "model_id" not in self.model_fields_set:
             self.model_id = claude_sdk_default_model_id()
         return self
@@ -641,6 +927,14 @@ class AgentSpec(BaseModel):
             )
         return self
 
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _trim_display_name(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
     @model_validator(mode="after")
     def _byoc_constraints(self) -> "AgentSpec":
         """BYOC scope for v1 — and the non-byoc system_prompt floor.
@@ -659,8 +953,8 @@ class AgentSpec(BaseModel):
             return self
         if self.byoc is None:
             raise ValueError("method='byoc' requires the byoc settings block")
-        if self.protocol != "http":
-            raise ValueError("byoc agents speak the HTTP runtime contract only in v1")
+        if self.protocol == "a2a":
+            raise ValueError("byoc agents speak the HTTP or MCP runtime contract only")
         for field_name in ("toolkits", "skills", "knowledge_bases"):
             if getattr(self, field_name):
                 raise ValueError(
@@ -739,7 +1033,8 @@ class AgentSpec(BaseModel):
             )
         if self.protocol != "http":
             raise ValueError(
-                "rest tools / tool auth are not supported by protocol=a2a runtimes"
+                f"rest tools / tool auth are not supported by protocol={self.protocol} "
+                "runtimes"
             )
         if self.code or self.code_bundle:
             raise ValueError(
@@ -767,6 +1062,47 @@ class AgentSpec(BaseModel):
                     f"tool '{tool.name}': auth applies to rest and mcp tools only — "
                     "gateway tools are authenticated by the gateway's own targets"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _mcp_constraints(self) -> "AgentSpec":
+        """An MCP server is a tool, not an agent.
+
+        It is reached only through the Gateway, which presents a token of the
+        server's own Cognito client — so its inbound auth is platform-owned JWT
+        (stamped at deploy), and it carries no tools, memory or outbound-auth
+        declarations of its own.
+        """
+        if self.protocol != "mcp":
+            if self.mcp is not None:
+                raise ValueError("mcp settings require protocol='mcp'")
+            return self
+        if self.method != "byoc":
+            raise ValueError(
+                "protocol='mcp' is supported by the byoc method only — upload the "
+                "server as a code zip, a Dockerfile context or an ECR image"
+            )
+        if self.mcp is None:
+            raise ValueError("protocol='mcp' requires the mcp settings block")
+        if self.mcp.stdio_wrapper is not None and (
+            self.byoc is None or self.byoc.artifact_kind != "code_zip"
+        ):
+            raise ValueError(
+                "mcp.stdio_wrapper applies to artifact_kind=code_zip only — a Dockerfile "
+                "context or image can run the bridge itself (samples/mcp_stdio_bridge)"
+            )
+        if self.tools:
+            raise ValueError(
+                "an MCP server declares no tools of its own — its tools are what it "
+                "serves on /mcp"
+            )
+        if self.inbound_auth is not None and self.inbound_auth.mode != "jwt":
+            raise ValueError(
+                "an MCP server's inbound auth is the platform-managed JWT authorizer "
+                "for its Gateway client — omit inbound_auth"
+            )
+        # never wired into an MCP server: it has no memory session of its own
+        self.memory = MemoryConfig(short_term=False, long_term=False)
         return self
 
     @model_validator(mode="after")
@@ -848,6 +1184,19 @@ class AgentSpec(BaseModel):
         assert_all_pinned(self.requirements)
         return self
 
+    @field_validator("network", mode="before")
+    @classmethod
+    def _one_network_shape(cls, value: Any) -> Any:
+        # left_to_right would let {profile_id, subnets} fall through to VpcNetwork and
+        # silently drop the profile; a spec names its network one way only
+        if isinstance(value, dict) and "profile_id" in value and (
+            "subnets" in value or "security_groups" in value
+        ):
+            raise ValueError(
+                "network takes either {profile_id} or {subnets, security_groups}, not both"
+            )
+        return value
+
     @model_validator(mode="after")
     def _requirement_ranges_are_plain(self) -> "AgentSpec":
         # Compile input on a later rebuild, so it is held to the index-only boundary:
@@ -857,17 +1206,22 @@ class AgentSpec(BaseModel):
 
     @model_validator(mode="after")
     def _byo_needs_vpc(self) -> "AgentSpec":
-        # Only the container method wires VPC networking; the harness and Strands
-        # zip runtimes mount managed session storage alone. Refused, not dropped,
-        # so a spec never shows a mount its runtime does not have.
-        if self.filesystem.byo and self.method != "container":
+        # BYO mounts ride the agent's own network (design storage-mounts §3.2): the
+        # mount targets are reached from the runtime's ENIs, so a PUBLIC agent cannot
+        # mount them. Refused, not dropped, so a spec never shows a mount its runtime
+        # does not have.
+        if not self.filesystem.byo:
+            return self
+        if self.method not in BYO_MOUNT_METHODS:
+            reason = BYO_MOUNT_UNSUPPORTED.get(self.method, "not probed yet")
             raise ValueError(
-                "BYO file systems (S3 Files / EFS) are supported by the container "
-                "method only; harness and Strands agents mount session storage"
+                f"BYO file systems (S3 Files / EFS) are not supported by the "
+                f"{self.method} method ({reason}); it mounts session storage only"
             )
-        if self.filesystem.byo and self.network is None:
+        if self.network is None:
             raise ValueError(
-                "BYO file systems (S3 Files / EFS) require VPC network configuration"
+                "BYO file systems (S3 Files / EFS) require VPC network configuration "
+                "— choose a network profile for this agent"
             )
         return self
 
@@ -982,7 +1336,7 @@ class AgentSpec(BaseModel):
 
 
 class InvokeRequest(AttachmentRequest):
-    session_id: str | None = None
+    session_id: str | None = SessionIdField
     actor_id: str = "default"
 
 
@@ -990,6 +1344,10 @@ class InvokeResponse(BaseModel):
     text: str
     session_id: str
     latency_ms: int
+    # T35: "rule" when a curated answer short-circuited the model, "model" otherwise.
+    # Must be on the console response as well as `/v1` — one invoke chain, one contract —
+    # or a curated answer reads as the model's own.
+    answered_by: str = "model"
 
 
 def _clean_resource_ids(ids: list[str], label: str) -> list[str]:
@@ -1003,11 +1361,20 @@ def _clean_resource_ids(ids: list[str], label: str) -> list[str]:
     return cleaned
 
 
+class ConvertRequest(BaseModel):
+    """Optional body of a Harness → Runtime conversion."""
+
+    # the business project the twin is filed under (services/agent_project)
+    project_id: str | None = Field(default=None, max_length=32)
+
+
 class RuntimeImportRequest(BaseModel):
     """One import call carries both discovered resource kinds; either may be empty."""
 
     runtime_ids: list[str] = []
     harness_ids: list[str] = []
+    # the business project new imports are filed under (services/agent_project)
+    project_id: str | None = Field(default=None, max_length=32)
 
     @model_validator(mode="after")
     def _unique_bounded_ids(self) -> "RuntimeImportRequest":

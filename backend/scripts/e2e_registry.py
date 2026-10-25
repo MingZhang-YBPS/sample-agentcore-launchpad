@@ -3,7 +3,8 @@
 
 Flow: sync-defaults (MCP ×2 + AGENT_SKILLS) → deploy harness agent (A2A
 auto-registered by pipeline) → status transitions on the skill record
-(DRAFT→PENDING_APPROVAL→APPROVED) → SearchDiscoverableRegistryRecords → disable one.
+(DRAFT→PENDING_APPROVAL→APPROVED) → SearchDiscoverableRegistryRecords → disable one
+(this run's live office-facts) → sync-defaults again, which puts a live one back.
 
 The search step asserts the endpoint's contract, not that a just-created record is
 findable: the AWS-side semantic index lags creation by far longer than this script
@@ -30,9 +31,22 @@ def main() -> int:
     client = e2e_client(args.base, timeout=300)
 
     print("── sync-defaults (MCP + AGENT_SKILLS records)…")
+    # 202 + a job: the sync waits every new record out of CREATING (minutes)
     res = client.post("/api/registry/sync-defaults")
     res.raise_for_status()
-    for row in res.json()["results"]:
+    sync = res.json()
+    for _ in range(120):
+        if sync["done"]:
+            break
+        # Real-AWS job polling is intentionally paced and attempt-bounded.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
+        res = client.get(f"/api/registry/sync-defaults/{sync['job_id']}")
+        res.raise_for_status()
+        sync = res.json()
+    if sync["status"] != "succeeded":
+        print(f"  sync-defaults {sync['status']}: {sync.get('error')}")
+        return 1
+    for row in sync["results"]:
         print(f"  {row['type']:<12} {row['name']:<24} {row['record_id']} "
               f"({'created' if row['created'] else 'refreshed'})")
 
@@ -116,12 +130,28 @@ def main() -> int:
           f"{'' if indexed else ' (expected — AWS index lag, not a failure)'}")
 
     print("── disable office-facts record:")
-    facts = next(r for r in records if r["name"] == "office-facts")
+    # the LIVE record this run's sync returned: a DEPRECATED record is terminal and
+    # stays listed under the same name, and the next sync creates a new version beside
+    # it — so "the first record named office-facts" is an earlier run's dead one
+    facts_id = next(r["record_id"] for r in sync["results"] if r["name"] == "office-facts")
     step = client.post(
-        f"/api/registry/records/{facts['record_id']}/action", json={"action": "disable"}
+        f"/api/registry/records/{facts_id}/action", json={"action": "disable"}
     ).json()
-    print(f"  after disable: {step['status']}")
-    assert step["status"] == "DEPRECATED"
+    print(f"  after disable: {step.get('status')}")
+    assert step.get("status") == "DEPRECATED", step
+
+    # leave the default record set as found: the sync puts a live office-facts back
+    res = client.post("/api/registry/sync-defaults")
+    res.raise_for_status()
+    restore = res.json()
+    for _ in range(120):
+        if restore["done"]:
+            break
+        time.sleep(5)  # nosemgrep: arbitrary-sleep — paced job poll against real AWS
+        restore = client.get(f"/api/registry/sync-defaults/{restore['job_id']}").json()
+    live = next((r for r in restore.get("results") or [] if r["name"] == "office-facts"), {})
+    print(f"  restored office-facts: {live.get('record_id')} ({restore['status']})")
+    assert restore["status"] == "succeeded" and live.get("record_id") not in (None, facts_id)
 
     if not args.keep:
         print("── cleaning e2e agent…")

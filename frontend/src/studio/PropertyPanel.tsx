@@ -1,10 +1,10 @@
+import { getActiveRegion, modelAvailableInRegion } from '../lib/regions';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { type Node, type Edge } from '@xyflow/react';
 import { Settings, X, RefreshCw, Library } from 'lucide-react';
 import {
-  BEDROCK_MODELS,
   CUSTOM_MODEL_OPTION,
   CUSTOM_MODEL_NAME,
   isCustomModel,
@@ -16,6 +16,8 @@ import {
   isCustomMantleModel,
   isBedrockOpenAiGpt,
   GPT_REASONING_EFFORTS,
+  studioBedrockModels,
+  studioFallbackModelId,
 } from './lib/models';
 
 // Union of every field the node data objects can carry across all node types.
@@ -252,7 +254,10 @@ export function PropertyPanel({
     }
   };
 
-  const bedrockModels = BEDROCK_MODELS;
+  // Geographic profiles of another region are hidden, but the node's current id stays.
+  const bedrockModels = studioBedrockModels().filter(
+    (m) => m.model_id === (node.data as { modelId?: string }).modelId || modelAvailableInRegion(m.model_id, getActiveRegion()),
+  );
 
   // Seed provider-specific defaults when the provider dropdown changes so the
   // model field/codegen always has a coherent id (mirrors upstream :494-521).
@@ -410,7 +415,7 @@ export function PropertyPanel({
                 value={
                   isCustomModel(data.modelId, data.modelName)
                     ? CUSTOM_MODEL_OPTION
-                    : data.modelId || bedrockModels[0].model_id
+                    : data.modelId || studioFallbackModelId()
                 }
                 onChange={(e) => {
                   if (e.target.value === CUSTOM_MODEL_OPTION) {

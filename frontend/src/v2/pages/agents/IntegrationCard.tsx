@@ -1,32 +1,20 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 
-import {
-  buildSnippet,
-  KEY_PLACEHOLDER,
-  SNIPPET_LANGS,
-  SNIPPET_MODES,
-  type SnippetLang,
-  type SnippetMode,
-} from "../../../lib/snippets";
-import { useV2Toast } from "../../hooks";
+import { useIntegration } from "../../../lib/agent-admin/integration";
+import { KEY_PLACEHOLDER, SNIPPET_LANGS, SNIPPET_MODES } from "../../../lib/snippets";
 import { Button, Card, Segmented } from "../../ui";
-import { copyText } from "../observability/common";
+import { useV2Toast } from "../../hooks";
 
-/** Copy-ready curl / Python / JavaScript for this agent's public `/v1` API.
- *  Pure client-side text: no route, and no key is ever shown here. */
+/** Integration tab (T17): copy-ready curl / Python / JavaScript for this agent's
+ *  public `/v1` API. Pure client-side text — no route, no key ever shown here. */
 export function IntegrationCard({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
   const toast = useV2Toast();
-  const [lang, setLang] = useState<SnippetLang>("curl");
-  const [mode, setMode] = useState<SnippetMode>("sync");
-  const snippet = buildSnippet({ baseUrl: window.location.origin, agentId }, lang, mode);
+  const { lang, setLang, mode, setMode, snippet, copy: copySnippet } = useIntegration(agentId);
 
   const copy = () => {
-    copyText(snippet).then(
-      () => toast("success", t("v2.agents.integration.copied")),
-      () => toast("error", t("v2.agents.integration.copyFailed")),
+    void copySnippet().then((ok) =>
+      ok ? toast("success", t("v2.agents.integration.copied")) : toast("error", t("v2.agents.integration.copyFailed")),
     );
   };
 
@@ -36,7 +24,7 @@ export function IntegrationCard({ agentId }: { agentId: string }) {
       sub={t("v2.agents.integration.sub", { key: KEY_PLACEHOLDER })}
       testId="v2-agent-integration"
     >
-      <div className="v2-row" style={{ marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+      <div className="v2-row" style={{ marginBottom: 12, gap: 12 }}>
         <Segmented
           value={lang}
           ariaLabel={t("v2.agents.integration.language")}
@@ -56,15 +44,7 @@ export function IntegrationCard({ agentId }: { agentId: string }) {
       <pre className="v2-pre" data-testid="v2-agent-integration-snippet">
         {snippet}
       </pre>
-      <p className="v2-muted">
-        {t("v2.agents.integration.keyHint")}{" "}
-        <Link
-          to={`/v2/chat?agent=${encodeURIComponent(agentId)}&tab=api`}
-          data-testid="v2-agent-integration-keys"
-        >
-          {t("v2.agents.integration.keysLink")}
-        </Link>
-      </p>
+      <p className="v2-muted">{t("v2.agents.integration.keyHint")}</p>
     </Card>
   );
 }

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { useInboundSwitch } from "../../../lib/agent-admin/inbound";
 import { api, errorMessage, type InboundAuth, type InboundCustomClaim, type JwtInboundConfig } from "../../../lib/api";
 import {
   applyOidcSource,
@@ -346,28 +347,21 @@ export function InboundSwitchCard({
   const { t } = useTranslation();
   const toast = useV2Toast();
   const [confirming, setConfirming] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const defaults = useLoad(() => api.getInboundAuthDefault(), "inbound-default");
-  const target: "iam" | "jwt" = mode === "jwt" ? "iam" : "jwt";
-  // The deployed authorizer, not just the dialog: a foreign issuer refuses Chat and /v1.
-  const mismatch = mode === "jwt" && jwt ? issuerMismatch(jwt.discovery_url, defaults.data?.cognito_issuer) : null;
-  // The JWT dialog opens prefilled from the defaults: it needs them loaded.
-  const defaultsFailed = target === "jwt" && !defaults.data && !defaults.loading && !!defaults.error;
-  const switchBlocked = busy || (target === "jwt" && !defaults.data);
+  // the shared switch (lib/agent-admin/inbound): defaults, direction, gating, the IAM call
+  const sw = useInboundSwitch(
+    { agentId, mode, jwtDiscoveryUrl: jwt?.discovery_url ?? null, busy },
+    {
+      onSwitched: () => {
+        toast("success", t("inboundAuth.switch.started", { mode: t("inboundAuth.mode.iam") }));
+        setConfirming(false);
+        onSwitched();
+      },
+      onError: (err) => toast("error", errorMessage(err)),
+    },
+  );
+  const { defaults, target, mismatch, defaultsFailed, switchBlocked, saving } = sw;
 
-  const toIam = async () => {
-    setSaving(true);
-    try {
-      await api.switchInboundAuth(agentId, { mode: "iam" });
-      toast("success", t("inboundAuth.switch.started", { mode: t("inboundAuth.mode.iam") }));
-      setConfirming(false);
-      onSwitched();
-    } catch (err) {
-      toast("error", errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  };
+  const toIam = () => sw.switchToIam();
 
   return (
     <Card

@@ -7,7 +7,6 @@ import { useAuth } from "../../../auth/auth-context";
 import { methodLabel } from "../../../components/methodChipMeta";
 import { api, type EvaluationScorecard, type ScorecardAgent, type ScorecardRun } from "../../../lib/api";
 import { evaluatorLabel } from "../../../lib/evaluators";
-import { BudgetNoticeAlert } from "../../BudgetBanner";
 import { runScore } from "../../compare";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged } from "../../hooks";
@@ -92,7 +91,6 @@ export function AgentScorecard({ agentKey }: { agentKey: string }) {
   const { runs, agent } = sc;
   const [picked, setPicked] = useState<string[]>([]);
   const [rerun, setRerun] = useState<ScorecardRun | null>(null);
-  const [lastStarted, setLastStarted] = useState<string | null>(null);
   const mayRun = can("eval.run");
 
   const benches = useMemo(() => benchmarksOf(runs), [runs]);
@@ -144,8 +142,6 @@ export function AgentScorecard({ agentKey }: { agentKey: string }) {
   const target = rerunSource(bench, agent);
   const blocked = rerunBlockText(t, target.block, mayRun);
   const pickedRuns = picked.map((id) => runs.find((run) => run.id === id)).filter((run): run is ScorecardRun => !!run);
-  // the budget notice of a re-run started here, or from the list (which opens this page)
-  const noticeId = lastStarted ?? [...runs].reverse().find(isActive)?.id ?? null;
 
   return (
     <div className="v2-scorecard" data-testid="v2-scorecard-agent">
@@ -195,7 +191,6 @@ export function AgentScorecard({ agentKey }: { agentKey: string }) {
           </>
         }
       />
-      <BudgetNoticeAlert id={noticeId} />
       {agent.deleted && <Alert tone="warn">{t("v2.scorecard.agent.deletedNote")}</Alert>}
       {sc.data?.truncated && <Alert tone="info">{t("v2.scorecard.truncated")}</Alert>}
       {!bench ? (
@@ -239,9 +234,8 @@ export function AgentScorecard({ agentKey }: { agentKey: string }) {
           agent={agent}
           source={rerun}
           onClose={() => setRerun(null)}
-          onStarted={(run) => {
+          onStarted={() => {
             setRerun(null);
-            setLastStarted(run.id);
             sc.reload();
           }}
         />
