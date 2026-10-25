@@ -65,6 +65,8 @@ _INJECTION = re.compile(
 )
 _URL = re.compile(r"https?://[^\s\"'<>)]+", re.IGNORECASE)
 _TOKEN = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+# MCP tool names are at most 64 characters (Gateway); hints read no further
+_NAME_SCAN_MAX = 256
 
 
 def _now() -> datetime:
@@ -125,6 +127,9 @@ def diff_tools(base: list[dict[str, Any]] | None, new: list[dict[str, Any]]) -> 
 
 
 def _name_tokens(name: str) -> set[str]:
+    # a tool name comes from the MCP server under review: bound it before `_TOKEN`,
+    # whose `[A-Z]+(?![a-z])` backtracks quadratically on a long run of capitals
+    name = name[:_NAME_SCAN_MAX]
     return {t.lower() for part in re.split(r"[_\-.\s]+", name) for t in _TOKEN.findall(part)}
 
 

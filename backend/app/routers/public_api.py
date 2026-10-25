@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.assistant.sessions import refuse_assistant_session
 from app.core.db import get_db
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, public_aws_message
 from app.core.project_scope import project_context, set_current_project
 from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
@@ -43,6 +43,35 @@ from app.services.sync_deadline import call_within, ensure_session_id
 from app.services.workspace import get_workspace_row
 
 router = APIRouter(prefix="/v1", tags=["public-v1"])
+
+# An unexpected failure mid-stream: chat_stream renders it as `Type: message`, which
+# for a botocore error names this deployment's role ARN, account and operation.
+_PUBLIC_STREAM_ERROR = "the agent failed before answering — send the turn again"
+
+
+def public_stream_event(event: dict[str, Any]) -> dict[str, Any]:
+    """An SSE event as an API-key caller may see it — the `/v1` trust boundary the
+    sync path keeps through the AWS envelope (``core/errors``) and
+    ``upstream_invoke_error(public=True)``. A platform error (an ``AppError``
+    envelope: a code of ours) keeps its code and message, except an ``aws.*`` one,
+    which gets the generic AWS sentence; one without a code — raw exception text —
+    becomes a generic ``agent.stream_failed``. Every other event passes as-is."""
+    if event.get("event") != "error":
+        return event
+    data = event.get("data") or {}
+    code = data.get("code") if isinstance(data, dict) else None
+    if not code:
+        safe = {"code": "agent.stream_failed", "message": _PUBLIC_STREAM_ERROR}
+    elif str(code).startswith("aws."):
+        safe = {"code": code, "message": public_aws_message(code)}
+    else:
+        safe = {k: v for k, v in data.items() if k in ("code", "message", "detail")}
+        if isinstance(safe.get("detail"), dict):
+            # the console's upstream_invoke_error keeps the raw AWS text here
+            safe["detail"] = {k: v for k, v in safe["detail"].items() if k != "upstream_message"}
+    if isinstance(data, dict) and "transient" in data:
+        safe["transient"] = data["transient"]
+    return {"event": "error", "data": safe}
 
 
 def require_api_key(
@@ -243,7 +272,7 @@ def v1_invoke_stream(
             agent, req.prompt, session_id=req.session_id, actor_id=mem_actor,
             console_user=False, **extra,
         ):
-            yield sse_encode(event)
+            yield sse_encode(public_stream_event(event))
 
     return StreamingResponse(
         generate(),

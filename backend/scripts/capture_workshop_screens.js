@@ -54,7 +54,7 @@
 // console's region (any case) in every text node, input value and title, so a region
 // chip or an ARN reads as the workshop's region. Display only; nothing is sent.
 ({from, to}) => {
-  const re = new RegExp(from.replace(/[-]/g, '\\-'), 'gi');
+  const re = new RegExp(from.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'), 'gi');
   const swap = (s) => s.replace(re, (m) => (m === m.toUpperCase() ? to.toUpperCase() : to));
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   let n = 0;

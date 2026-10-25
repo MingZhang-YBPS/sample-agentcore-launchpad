@@ -96,6 +96,11 @@ The turn is not cancelled: it finishes in that session, so a follow-up on the sa
 `session_id` continues from it. Use sync invoke for short, machine-to-machine answers;
 use `invoke-stream` (console: `POST /api/chat/{id}`) for conversations and anything
 that may run long — it sends heartbeats and never hits the proxy timeout.
+
+An `error` event on the `/v1` stream carries only what the sync envelope would: a
+platform error keeps its `code` and `message`; an `aws.*` one gets the generic AWS
+sentence; an unexpected failure is `agent.stream_failed` with a generic message —
+the raw exception text (role ARN, account, operation) stays server-side.
 可选请求字段 `context` 为本次调用填入 Agent 的 `{{变量}}`;配置了 `output_schema` 的 Agent 另返回解析后的 `structured` 对象。
 
 ## Streaming invoke (SSE) / 流式调用

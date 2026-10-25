@@ -382,6 +382,11 @@ def _download_named_skills(
     total_files = 0
     total_bytes = 0
     for name, path in pairs:
+        # the directory name: every caller passes a registry name, but `name` is
+        # joined into a path that a failure rmtree()s, so it is checked here too
+        if SKILL_NAME_RE.fullmatch(name) is None:
+            log(f"skill name '{name[:80]}' is not a valid skill name — skipped")
+            continue
         bucket, prefix = _parse_s3_uri(path)
         dest = dest_parent / "skills" / name
         try:

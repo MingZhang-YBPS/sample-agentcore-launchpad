@@ -2540,6 +2540,7 @@
     "runtime.unrecognized_reply": "The agent answered in a format the console cannot read. The start of the response:",
     "runtime_logs.bad_token": "This page of runtime logs is no longer valid. Reload the logs from the start.",
     "nav.bad_path": "One of the entries is not a console menu path.",
+    "agent.stream_failed": "The agent failed before answering. Send the turn again.",
     "nav.too_many": "Too many hidden entries: at most {{max}}.",
     "eval.no_telemetry": "This agent has written no spans, so the evaluation would find nothing to score. A BYOC code zip emits spans only with the ADOT launcher: add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, republish, then start the evaluation.",
     "eval.harness_no_telemetry": "This Harness has no telemetry log group yet. Run at least one chat or invoke session first, then start the evaluation.",

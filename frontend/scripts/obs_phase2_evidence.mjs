@@ -35,7 +35,7 @@ const apiTiles = await page.evaluate(async () => {
 console.log("── API tiles (24h):", JSON.stringify(apiTiles));
 console.log(
   "── nav items:",
-  await page.$$eval(".side .nav-item", (els) => els.map((e) => e.innerText.replace("\n", " "))),
+  await page.$$eval(".side .nav-item", (els) => els.map((e) => e.innerText.replaceAll("\n", " "))),
 );
 console.log(
   "── tab bar:",
@@ -111,7 +111,7 @@ await page.waitForSelector(".tiles.five .tile");
 await page.waitForTimeout(900);
 console.log(
   "── zh nav:",
-  await page.$$eval(".side .nav-item", (els) => els.map((e) => e.innerText.replace("\n", " "))),
+  await page.$$eval(".side .nav-item", (els) => els.map((e) => e.innerText.replaceAll("\n", " "))),
 );
 console.log("── zh tabs:", await page.$$eval(".obs-tab", (els) => els.map((e) => e.innerText)));
 await page.screenshot({ path: `${OUT}/dashboard-zh.png` });

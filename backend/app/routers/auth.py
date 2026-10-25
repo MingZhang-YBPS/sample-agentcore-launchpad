@@ -15,6 +15,7 @@ takes effect immediately instead of when the cookie lapses.
 
 import base64
 import binascii
+import functools
 import hashlib
 import hmac
 import ipaddress
@@ -175,10 +176,22 @@ def _local_login_hidden() -> bool:
 
 def _signing_key(settings: Settings | None = None) -> bytes:
     current = settings or get_settings()
-    material = (
-        f"agentcore-launchpad-session:{current.auth_username}:{_password(current)}"
-    )
-    return hashlib.sha256(material.encode("utf-8")).digest()
+    return _derive_signing_key(current.auth_username, _password(current) or "")
+
+
+# The cookie signing key is derived from the built-in admin password, so a session
+# cookie (payload + HMAC) is enough to test password guesses offline. A single
+# SHA-256 made each guess one hash; PBKDF2 makes it this many. Derived once per
+# (username, password) per process — a password change still rotates the key (and
+# signs every session out), as before.
+_KDF_ITERATIONS = 210_000
+_KDF_SALT = b"agentcore-launchpad-session-kdf-v1"
+
+
+@functools.lru_cache(maxsize=8)
+def _derive_signing_key(username: str, password: str) -> bytes:
+    material = f"agentcore-launchpad-session:{username}:{password}"
+    return hashlib.pbkdf2_hmac("sha256", material.encode("utf-8"), _KDF_SALT, _KDF_ITERATIONS)
 
 
 def _encode_payload(

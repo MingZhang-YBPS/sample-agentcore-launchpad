@@ -76,7 +76,11 @@ SCOPE_SEP = "__"
 # AgentCore Memory's actorId constraint (CreateEvent / ListEvents ValidationException).
 # Console usernames may carry "." (users._USERNAME_RE) and /v1 callers send free-form
 # actor ids, so a compound id that breaks this pattern is escaped (encode_actor_part).
-ACTOR_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_/]*(?::[a-zA-Z0-9\-_/]+)*[a-zA-Z0-9\-_/]*$")
+# AWS spells it `[a-zA-Z0-9][a-zA-Z0-9-_/]*(?::[a-zA-Z0-9-_/]+)*[a-zA-Z0-9-_/]*`; the
+# trailing class there only repeats what the last segment already matches, and the
+# overlap backtracks polynomially on a long `0----…` actor id (CodeQL py/polynomial-
+# redos), so it is dropped here — the same language, linear to match.
+ACTOR_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_/]*(?::[a-zA-Z0-9\-_/]+)*$")
 ACTOR_ESCAPE = "_"
 _ESCAPES = {".": "d", "-": "h", "_": "u"}
 _UNESCAPES = {v: k for k, v in _ESCAPES.items()}

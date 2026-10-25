@@ -74,6 +74,8 @@ def probe_target(target: dict[str, Any], *, timeout: float = CONNECT_TIMEOUT_S,
     try:
         if target.get("tls", port == 443):
             context = ssl.create_default_context()
+            # the default already refuses SSLv3; say TLS 1.2+ outright (CodeQL py/insecure-protocol)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             with context.wrap_socket(sock, server_hostname=target.get("host") or None) as tls:
                 out["tls"] = "ok"
                 out["tls_version"] = tls.version()

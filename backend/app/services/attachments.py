@@ -32,6 +32,14 @@ IMAGE_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp",
 }
+# The one Pillow decoder each extension may reach. Image.open() otherwise sniffs the
+# bytes and runs whichever plugin claims them (TIFF, EPS, BMP, MSP…) before the MIME
+# check below can refuse — and the pinned Pillow 12.x (bedrock-agentcore 1.18 caps it
+# <13) carries known decoder CVEs in exactly those plugins.
+_IMAGE_FORMATS = {
+    ".png": ("PNG",), ".jpg": ("JPEG",), ".jpeg": ("JPEG",), ".gif": ("GIF",),
+    ".webp": ("WEBP",),
+}
 TEXT_EXTENSIONS = frozenset({
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".log",
     ".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".xml", ".yaml",
@@ -146,7 +154,8 @@ def _validate_image(data: bytes, extension: str, name: str) -> None:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(BytesIO(data)) as image:
+            formats = _IMAGE_FORMATS[extension]
+            with Image.open(BytesIO(data), formats=formats) as image:
                 media_type = Image.MIME.get(image.format or "")
                 if media_type != IMAGE_TYPES[extension]:
                     raise ValueError("image does not match its extension")
@@ -158,7 +167,7 @@ def _validate_image(data: bytes, extension: str, name: str) -> None:
                 image.verify()
             # verify() checks container structure only for some formats (JPEG
             # is a no-op). Decode too so broken pixels fail before invocation.
-            with Image.open(BytesIO(data)) as image:
+            with Image.open(BytesIO(data), formats=formats) as image:
                 image.load()
     except (ValueError, OSError, SyntaxError, UnidentifiedImageError,
             Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:

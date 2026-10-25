@@ -177,7 +177,10 @@ def _signed_in(
     _audit(LOGIN_ACTION,
            f"idp:{row.id} user:{user.username} subject:{subject} {summary}".strip(),
            actor=user.username, actor_user_id=user.id)
-    response = RedirectResponse(return_to, status_code=status_code)
+    # `return_to` was cut to a same-origin path when the flow began
+    # (`sso_oidc.safe_return_to`); cut again at the redirect itself, so the sink does
+    # not depend on what the pending row or the RelayState held
+    response = RedirectResponse(sso_oidc.safe_return_to(return_to), status_code=status_code)
     issue_user_session(response, user, settings)
     return response
 
