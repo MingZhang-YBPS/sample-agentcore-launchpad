@@ -152,6 +152,10 @@ const V3Sso = lazy(() => import("./v3/pages/sso/Sso").then((m) => ({ default: m.
 const V3SystemUpdate = lazy(() =>
   import("./v3/pages/system-update/SystemUpdate").then((m) => ({ default: m.V3SystemUpdate })),
 );
+// Configure → Menu settings: the rail modules members see (services/nav_settings)
+const V3MenuSettings = lazy(() =>
+  import("./v3/pages/menu-settings/MenuSettings").then((m) => ({ default: m.V3MenuSettings })),
+);
 const V3Knowledge = lazy(() => import("./v3/pages/Knowledge").then((m) => ({ default: m.V3Knowledge })));
 const V2Home = lazy(() => import("./v2/pages/Home").then((m) => ({ default: m.V2Home })));
 const V2DataCenter = lazy(() =>
@@ -409,6 +413,7 @@ export default function App() {
                 <Route path="project-settings" element={<V3ProjectSettings />} />
                 <Route path="models" element={<V3Models />} />
                 <Route path="system-update" element={<V3SystemUpdate />} />
+                <Route path="menu-settings" element={<V3MenuSettings />} />
                 <Route path="identity" element={<V3Identity />} />
                 <Route path="fleet" element={<V3Fleet />} />
                 <Route path="announcements" element={<V3Announcements />} />

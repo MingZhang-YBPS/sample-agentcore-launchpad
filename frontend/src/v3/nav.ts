@@ -1,4 +1,4 @@
-import { Building2, Cpu, DownloadCloud, FolderCog, FolderKanban, HardDrive, KeySquare, Landmark, PiggyBank, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
+import { Building2, Cpu, DownloadCloud, EyeOff, FolderCog, FolderKanban, HardDrive, KeySquare, Landmark, PiggyBank, Tags, UserCog, Waypoints, Wrench } from "lucide-react";
 
 import { V2_NAV } from "../v2/nav";
 import type { V2NavItem } from "../v2/nav";
@@ -56,6 +56,8 @@ export const V3_ONLY: Record<string, V2NavItem[]> = {
   admin: [
     { to: "/v3/models", labelKey: "v3.models.nav", icon: Cpu, admin: true },
     { to: "/v3/system-update", labelKey: "v3.systemUpdate.nav", icon: DownloadCloud, admin: true },
+    // which rail modules members see (services/nav_settings) — hub-global, admin-only
+    { to: "/v3/menu-settings", labelKey: "v3.menuSettings.nav", icon: EyeOff, admin: true },
   ],
 };
 
@@ -116,7 +118,33 @@ export const STEWARD_ENTRIES: ReadonlySet<string> = new Set([
 export interface V3ModuleGroup {
   key: string;
   labelKey: string;
-  items: V2NavItem[];
+  items: V3NavItem[];
+}
+
+/** A rail entry, with the path it is listed by before the V3 twin mapping
+ *  (`/v2/skill-lab`, `/v3/costs?view=project`): the key an administrator hides it by. */
+export type V3NavItem = V2NavItem & { railKey: string };
+
+/**
+ * The groups without the entries an administrator hid (`/api/nav/hidden-modules`).
+ * A view filter for members only: an administrator keeps every entry (it is who can
+ * show one again), and a hidden page stays reachable by URL.
+ */
+export function withoutHidden(groups: V3ModuleGroup[], hidden: ReadonlySet<string>, isAdmin: boolean): V3ModuleGroup[] {
+  if (isAdmin || hidden.size === 0) return groups;
+  return groups
+    .map((g) => ({ ...g, items: g.items.filter((item) => !hidden.has(item.railKey)) }))
+    .filter((g) => g.items.length > 0);
+}
+
+/**
+ * What Menu settings offers to hide: the entries a member could see. An
+ * administrator-only entry is never a member's to begin with, so it is not offered.
+ */
+export function hideableGroups(): V3ModuleGroup[] {
+  return hostedGroups(true)
+    .map((g) => ({ ...g, items: g.items.filter((item) => !item.admin) }))
+    .filter((g) => g.items.length > 0);
 }
 
 /**
@@ -136,14 +164,14 @@ export function hostedGroups(
     items: [...group.items.flatMap((item) => [item, ...(V3_AFTER[item.to] ?? [])]), ...(V3_ONLY[group.key] ?? [])]
       .filter((item) => !REBUILT.has(item.to)
         && (steward ? STEWARD_ENTRIES.has(item.to) : visible(item, isAdmin, perms, managesDepartment)))
-      .map((item) => {
+      .map((item): V3NavItem => {
         const [path, query] = item.to.split("?");
         const twin = v3TwinOf(path, query ? `?${query}` : "");
         // a rebuilt module opens its V3 page, and stays lit on the V2 sub-pages
         // it still hosts (a register form, an edit view)
         return twin
-          ? { ...item, to: twin, also: [...(item.also ?? []), path] }
-          : { ...item, ...RETARGET[item.to] };
+          ? { ...item, to: twin, also: [...(item.also ?? []), path], railKey: item.to }
+          : { ...item, ...RETARGET[item.to], railKey: item.to };
       }),
   })).filter((group) => group.items.length > 0);
 }

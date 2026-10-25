@@ -3552,6 +3552,16 @@ backend surface.
   dialog, and a ⌘K entry per term. The rail honours V2's business / expert mode
   (`lib/nav-mode.ts`) — a view filter only; ⌘K and URLs reach every page. The "?"
   menu in the top bar reopens the tour, the launch sequence and the glossary.
+- **Menu settings (`/v3/menu-settings`, `services/nav_settings.py`).** An
+  administrator hides module entries from members' rail and ⌘K. The list is one
+  hub-global `platform_settings` row (`nav_hidden_modules`) of rail keys — the entry
+  path before the V3 twin mapping (`/v2/skill-lab`, `/v3/costs?view=project`,
+  `V3NavItem.railKey`). `GET /api/nav/hidden-modules` is every account's (the shell
+  applies `withoutHidden()` before the business/expert slice), `PUT` the
+  administrators' (`ADMIN_DATA`: a steward cannot) and journaled as
+  `console.nav_hidden`. Administrator-only entries are not offered and an
+  administrator always sees every entry. Like the nav mode it is a view filter, not
+  authorization: no route closes, and a failed read hides nothing.
 - **Storyline (`v3/story/`, storyline-ux).** The console follows the workshop's
   storyline (define → build → evaluate → release → observe → feedback). The steps are
   code constants (`AGENT_STORY` in `stories.ts`); each one names its page action from

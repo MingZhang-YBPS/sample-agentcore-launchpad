@@ -2298,3 +2298,17 @@ COST_TAG_BACKFILL_ROUTES: dict[tuple[str, str], str] = {
 ROUTE_POLICY.update(COST_TAG_BACKFILL_ROUTES)
 PROJECT_EXEMPT = PROJECT_EXEMPT | frozenset(COST_TAG_BACKFILL_ROUTES)
 ADMIN_SPLIT.update(dict.fromkeys(COST_TAG_BACKFILL_ROUTES, ADMIN_DATA))
+
+# ---- the rail modules an administrator hid (services/nav_settings) ----
+# Hub-global console configuration, a view filter only (no route closes): every
+# signed-in account reads the list (its rail drops those entries), only an
+# administrator writes it, and a steward does not (it would shape every member's
+# business console, which is data-side).
+NAV_SETTINGS_ROUTES: dict[tuple[str, str], str] = {
+    ("GET", "/api/nav/hidden-modules"): MEMBER,
+    ("PUT", "/api/nav/hidden-modules"): ADMIN,
+}
+ROUTE_POLICY.update(NAV_SETTINGS_ROUTES)
+HUB_GLOBAL_PREFIXES = (*HUB_GLOBAL_PREFIXES, "/api/nav")
+WORKSPACE_EXEMPT = WORKSPACE_EXEMPT | frozenset(NAV_SETTINGS_ROUTES)
+ADMIN_SPLIT.update({("PUT", "/api/nav/hidden-modules"): ADMIN_DATA})

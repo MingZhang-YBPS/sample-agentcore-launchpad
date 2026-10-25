@@ -2539,6 +2539,8 @@
     "runtime.empty_reply": "The agent's runtime answered with an empty response.",
     "runtime.unrecognized_reply": "The agent answered in a format the console cannot read. The start of the response:",
     "runtime_logs.bad_token": "This page of runtime logs is no longer valid. Reload the logs from the start.",
+    "nav.bad_path": "One of the entries is not a console menu path.",
+    "nav.too_many": "Too many hidden entries: at most {{max}}.",
     "eval.no_telemetry": "This agent has written no spans, so the evaluation would find nothing to score. A BYOC code zip emits spans only with the ADOT launcher: add aws-opentelemetry-distro to requirements.txt (with install requirements on) or build from a Dockerfile, republish, then start the evaluation.",
     "eval.harness_no_telemetry": "This Harness has no telemetry log group yet. Run at least one chat or invoke session first, then start the evaluation.",
     "online_eval.no_telemetry": "This agent has no telemetry log group yet. Run at least one chat or invoke session first, then create the online evaluation.",
@@ -15947,6 +15949,18 @@
         "modeTooWide": "This storage can only be mounted read-only",
         "preflightOk": "Storage preflight passed"
       }
+    },
+    "menuSettings": {
+      "nav": "Menu settings",
+      "title": "Menu settings",
+      "sub": "Choose which module entries members see in the left menu and in ⌘K. Administrators always see every entry.",
+      "viewOnly": "This only filters the menu: a hidden page is still reachable by URL, and permissions are unchanged. To keep someone out of a page, change their role instead.",
+      "shownCount": "{{shown}} / {{total}} shown",
+      "hidden": "Hidden from members",
+      "save": "Save",
+      "reset": "Discard changes",
+      "saved": "Menu settings saved. Members see the change the next time they load the console.",
+      "updated": "Last changed by {{who}} at {{when}}"
     },
     "systemUpdate": {
       "nav": "System update",

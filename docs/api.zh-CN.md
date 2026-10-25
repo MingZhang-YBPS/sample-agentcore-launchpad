@@ -1370,6 +1370,13 @@ Workspace、网络与存储目录——从不接触数据。路由表归为结�
 | `GET` | `/api/steward/settings` | 管理员（结构） | `{steward_two_person}` |
 | `PUT` | `/api/steward/settings` | 管理员（数据：组织管理员不能放宽约束自己的规则） | 请求体 `{steward_two_person: bool}` → 同 GET 形状；记为 `steward.two_person` |
 
+**菜单设置**（`routers/nav_settings.py`，工作区无关）：管理员对成员隐藏的 V3 侧栏和 ⌘K 模块菜单项，按菜单键记录（映射到 V3 页面之前的路径，如 `/v2/skill-lab`）。只是显示筛选：不关闭任何路由，管理员始终看到全部菜单项。
+
+| 方法 | 路径 | 鉴权 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/nav/hidden-modules` | 成员 | `{hidden: [path], updated_by, updated_at}`（已排序；没有隐藏项 → `[]`） |
+| `PUT` | `/api/nav/hidden-modules` | 管理员（数据：组织管理员不行） | 请求体 `{hidden: [path]}`（最多 100 项，自动去重）→ 同 GET 形状；有变化时记为 `console.nav_hidden`。不是 `/v2/…` 或 `/v3/…` 的路径 → `422 nav.bad_path`；超过 100 项 → `422 nav.too_many` |
+
 注册错误码：`auth.registration_disabled`（400，认证门未开启或注册已关闭）、
 `auth.invalid_username` / `auth.invalid_email` / `auth.email_domain_blocked` / `auth.weak_password`（400）、
 `auth.username_taken` / `auth.email_taken`（409）。

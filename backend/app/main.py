@@ -70,6 +70,7 @@ from app.routers.memory import router as memory_router
 from app.routers.memory_resources import router as memory_resources_router
 from app.routers.model_defaults import router as model_defaults_router
 from app.routers.model_defaults import workspace_router as model_catalog_router
+from app.routers.nav_settings import router as nav_settings_router
 from app.routers.network_profiles import router as network_profiles_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
@@ -281,6 +282,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(share_notices_router)  # the caller's ended-share notices (SHARE-2)
     app.include_router(role_templates_router)
     app.include_router(my_access_router)  # GET /api/me/access: the caller's projects + keys
+    app.include_router(nav_settings_router)  # the rail modules an administrator hid
     app.include_router(departments_router)  # departments (projects §2.1, §7.10)
     app.include_router(network_profiles_router)  # VPC network profiles (projects §12)
     app.include_router(storage_mounts_router)  # the storage catalog (storage-mounts §4)

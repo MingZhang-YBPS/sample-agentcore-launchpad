@@ -2539,6 +2539,8 @@
     "runtime.empty_reply": "智能体的运行时返回了空响应。",
     "runtime.unrecognized_reply": "智能体返回了控制台无法识别的格式。响应的开头是：",
     "runtime_logs.bad_token": "这一页运行日志已失效，请从头重新加载日志。",
+    "nav.bad_path": "其中有一项不是控制台菜单路径。",
+    "nav.too_many": "隐藏的菜单项太多，最多 {{max}} 项。",
     "eval.no_telemetry": "这个 Agent 没有产生任何 Span，评估找不到可打分的内容。BYOC 代码 zip 只有带 ADOT 启动器才会产生 Span：在 requirements.txt 里加 aws-opentelemetry-distro（并打开“安装依赖”），或改用 Dockerfile 构建，重新发布后再开始评估。",
     "eval.harness_no_telemetry": "这个 Harness 还没有遥测日志组。请先运行至少一次对话或调用，再开始评估。",
     "online_eval.no_telemetry": "这个 Agent 还没有遥测日志组。请先运行至少一次对话或调用，再创建在线评估。",
@@ -15947,6 +15949,18 @@
         "modeTooWide": "该存储只能以只读方式挂载",
         "preflightOk": "存储预检通过"
       }
+    },
+    "menuSettings": {
+      "nav": "菜单设置",
+      "title": "菜单设置",
+      "sub": "选择成员在左侧菜单和 ⌘K 里能看到哪些模块。管理员始终能看到全部菜单项。",
+      "viewOnly": "这里只筛选菜单：隐藏的页面仍可通过网址打开，权限也不变。要禁止某人使用某个页面，请改他的角色。",
+      "shownCount": "显示 {{shown}} / {{total}}",
+      "hidden": "已对成员隐藏",
+      "save": "保存",
+      "reset": "放弃修改",
+      "saved": "菜单设置已保存。成员下次加载控制台时生效。",
+      "updated": "{{who}} 于 {{when}} 最后修改"
     },
     "systemUpdate": {
       "nav": "系统更新",

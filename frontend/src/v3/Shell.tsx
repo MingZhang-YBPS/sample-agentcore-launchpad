@@ -33,6 +33,7 @@ import { RouteChunk } from "../layout/RouteChunk";
 import { api } from "../lib/api";
 import { isSteward } from "../lib/api/steward";
 import { systemUpdateApi } from "../lib/api/systemUpdate";
+import { navSettingsApi } from "../lib/api/navSettings";
 import type { AccessProject } from "../lib/api/projects";
 import { useNavMode } from "../lib/nav-mode";
 import { setUiVersion } from "../lib/ui-version";
@@ -51,7 +52,7 @@ import { ToastProvider } from "./ui";
 import { useLoad } from "./hooks";
 import { Lang } from "./Lang";
 import { ThemeSwitch } from "./ThemeSwitch";
-import { hostedGroups, isActive } from "./nav";
+import { hostedGroups, isActive, withoutHidden } from "./nav";
 import { GlossaryDialog } from "./onboarding/Glossary";
 import { openGlossary, requestTour, tourDone, useLaunchHidden, useTourRequest } from "./onboarding/state";
 import { Tour } from "./onboarding/Tour";
@@ -293,9 +294,16 @@ export function V3Shell({ hosted }: { hosted?: "v2" | "classic" } = {}) {
   const perms = useMemo(() => [...new Set(project.projects.flatMap((p) => p.permissions))], [project.projects]);
   // a department administrator (§11.1) also sees Projects, Project groups and Departments
   const managesDepartment = project.managedDepartments.length > 0;
+  // the entries an administrator hid from members (services/nav_settings); a failed
+  // read hides nothing — the rail must never vanish because one setting did not load
+  const hiddenLoad = useLoad(
+    () => (isAdmin || steward ? Promise.resolve({ hidden: [] as string[] }) : navSettingsApi.hiddenModules()),
+    `v3-shell-hidden:${isAdmin}:${steward}`,
+  );
+  const hidden = useMemo(() => new Set(hiddenLoad.data?.hidden ?? []), [hiddenLoad.data]);
   const allGroups = useMemo(
-    () => hostedGroups(isAdmin, perms, managesDepartment, steward),
-    [isAdmin, perms, managesDepartment, steward],
+    () => withoutHidden(hostedGroups(isAdmin, perms, managesDepartment, steward), hidden, isAdmin),
+    [isAdmin, perms, managesDepartment, steward, hidden],
   );
   const groups = useMemo(
     () =>

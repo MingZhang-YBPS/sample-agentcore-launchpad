@@ -1874,6 +1874,16 @@ change).
 | `GET` | `/api/steward/settings` | admin (structure) | `{steward_two_person}` |
 | `PUT` | `/api/steward/settings` | admin (data: a steward does not loosen its own rule) | Body `{steward_two_person: bool}` → the GET shape; journaled as `steward.two_person` |
 
+**Menu settings** (`routers/nav_settings.py`, hub-global): the module entries an
+administrator hid from members' V3 rail and ⌘K, by rail key (the entry path before
+the V3 twin mapping, e.g. `/v2/skill-lab`). A view filter only: no route closes, and
+administrators always see every entry.
+
+| Method | Path | Auth | Result |
+|---|---|---|---|
+| `GET` | `/api/nav/hidden-modules` | member | `{hidden: [path], updated_by, updated_at}` (sorted; nothing hidden → `[]`) |
+| `PUT` | `/api/nav/hidden-modules` | admin (data: a steward does not) | Body `{hidden: [path]}` (at most 100; deduplicated) → the GET shape; a change is journaled as `console.nav_hidden`. A path that is not `/v2/…` or `/v3/…` → `422 nav.bad_path`; over 100 → `422 nav.too_many` |
+
 Registration error codes: `auth.registration_disabled` (400, gate off or
 registration disabled), `auth.invalid_username` / `auth.invalid_email` /
 `auth.email_domain_blocked` / `auth.weak_password` (400),
