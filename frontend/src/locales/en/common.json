@@ -1112,7 +1112,28 @@
       "creating": "CREATING",
       "active": "ACTIVE",
       "failed": "FAILED",
-      "deleting": "DELETING"
+      "deleting": "DELETING",
+      "delete_unsuccessful": "DELETE FAILED"
+    },
+    "upload": {
+      "tooLarge": "The file is larger than the console accepts in one upload — the proxy in front of the backend refused it. Upload smaller files, or ask an administrator to raise the upload limit (nginx client_max_body_size).",
+      "timedOut": "The upload took longer than the gateway waits (about 60 s) and was cut off. The files may still have arrived — refresh the documents list; otherwise upload fewer or smaller files at a time.",
+      "indexing": "Uploaded {{n}} file(s) — indexing started.",
+      "queued": "Uploaded {{n}} file(s) — a sync is already running; the new files are indexed by a follow-up sync once it finishes.",
+      "pending": "Uploaded {{n}} file(s) — the data source is still being prepared; its first sync indexes them.",
+      "syncFailed": "Uploaded {{n}} file(s), but indexing could not start: {{msg}} — click Sync now to retry.",
+      "resyncStarted": "Indexing the newly uploaded files.",
+      "autoSyncFailed": "Indexing could not start automatically: {{msg}} — click Sync now to retry."
+    },
+    "jobs": {
+      "failedDocs_one": "{{count}} document failed",
+      "failedDocs_other": "{{count}} documents failed",
+      "failedDocsHint_one": "The last sync could not index {{count}} document — the Documents tab shows why for each file.",
+      "failedDocsHint_other": "The last sync could not index {{count}} documents — the Documents tab shows why for each file."
+    },
+    "delete": {
+      "inProgress": "Amazon Bedrock is deleting this knowledge base and its managed index. This usually takes about 10 minutes; it disappears from the list on its own.",
+      "unsuccessful": "Amazon Bedrock could not finish deleting this knowledge base. Delete it again to retry; if it keeps failing, check its data sources in the Amazon Bedrock console."
     },
     "list": {
       "panelTitle": "MANAGED KNOWLEDGE BASES",
@@ -3100,6 +3121,7 @@
     "http.429": "Too many requests. Wait a moment and try again.",
     "http.502": "An upstream service failed. Try again.",
     "http.503": "The service is unavailable right now. Try again later.",
+    "http.504": "The gateway timed out waiting for the backend. Try again.",
     "identity.obo_invalid": "Unknown on-behalf-of grant type.",
     "identity.obo_issuer_mismatch": "This connection exchanges tokens at a different issuer from the one that issues the Gateway's inbound tokens.",
     "identity.obo_needs_jwt_gateway": "On-behalf-of exchanges the caller's inbound JWT, but this Gateway does not authorize with JWT.",
@@ -3117,6 +3139,7 @@
     "issue.not_found": "Issue not found.",
     "kb.bucket_required": "An existing S3 source needs a bucket.",
     "kb.delete_conflict": "The knowledge base is still being created — wait for it to become ACTIVE before deleting.",
+    "kb.delete_busy": "Another operation is still running on this knowledge base (a sync, or its data sources being deleted). Retry in a few minutes.",
     "kb.ds_not_found": "Data source not found.",
     "kb.has_attached_agents": "This knowledge base is attached to agents. Detach it first, or delete with force.",
     "kb.invalid_bucket": "Invalid S3 bucket name — 3–63 characters: lowercase letters, digits, dots or hyphens.",

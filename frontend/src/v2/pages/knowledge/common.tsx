@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import { type ResourceState, resourceState } from "../../../lib/knowledgeBases";
+import { type IngestionJob, type ResourceState, jobState, resourceState } from "../../../lib/knowledgeBases";
 import { Tag, type TagTone } from "../../ui";
 import { KB_STATUS } from "./status";
 
@@ -27,6 +27,17 @@ export function ResourceTag({ status, title }: { status: string; title?: string 
   return (
     <Tag tone={STATE_TONE[resourceState(status)]} dot title={title}>
       {status}
+    </Tag>
+  );
+}
+
+
+/** Ingestion-job status → tag; a COMPLETE job that left documents failed is orange. */
+export function JobTag({ job }: { job: IngestionJob }) {
+  const partial = resourceState(job.status) === "good" && jobState(job) === "warn";
+  return (
+    <Tag tone={partial ? "orange" : STATE_TONE[jobState(job)]} dot title={job.failure_reasons?.join("; ") || undefined}>
+      {job.status}
     </Tag>
   );
 }

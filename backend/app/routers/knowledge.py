@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from app.core.db import get_db
@@ -243,7 +244,9 @@ async def upload_knowledge_base_files(
             "kb.no_files", "expected one or more files under 'files'", status_code=400
         )
     files = [((u.filename or "file"), await u.read()) for u in uploads]
-    return {"keys": knowledge.upload_files(ws.context, kb_id, files)}
+    # blocking boto3 (S3 PUTs of possibly large files + the follow-up sync) off the
+    # event loop, so one big upload does not stall every other request
+    return await run_in_threadpool(knowledge.upload_and_sync, ws.context, kb_id, files)
 
 
 @router.post("/{kb_id}/data-sources", status_code=201)

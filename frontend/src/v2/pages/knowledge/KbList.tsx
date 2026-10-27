@@ -138,6 +138,7 @@ export function KbList({ staleId, onDismissStale }: { staleId: string | null; on
             : t("staleLink.bodyMissing", { kind: t("staleLink.kind.knowledgeBase") })}
         </Alert>
       )}
+      {kbs.some((kb) => kb.status === "DELETING") && <Alert>{t("knowledge.delete.inProgress")}</Alert>}
       <div className="v2-kpis">
         <Kpi label={t("v2.knowledge.kpiTotal")} value={data ? kbs.length : "—"} testId="v2-kb-kpi-total" />
         <Kpi label={t("v2.knowledge.kpiActive")} value={data ? count("ACTIVE") : "—"} tone="good" />

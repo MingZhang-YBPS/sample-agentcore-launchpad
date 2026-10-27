@@ -7855,7 +7855,7 @@ export const v2KnowledgeApi = {
   uploadFiles: (id: string, files: File[]) => {
     const form = new FormData();
     for (const f of files) form.append("files", f);
-    return requestForm<{ keys: string[] }>(kbPath(id, "/files"), form);
+    return requestForm<import("./knowledgeBases").UploadResult>(kbPath(id, "/files"), form);
   },
   /** Idempotent server-side for `upload` mode (repairs a KB left without its source). */
   addSource: (id: string, source: import("./knowledgeBases").KBSourceBody) =>

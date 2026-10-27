@@ -1112,7 +1112,28 @@
       "creating": "创建中",
       "active": "可用",
       "failed": "失败",
-      "deleting": "删除中"
+      "deleting": "删除中",
+      "delete_unsuccessful": "删除失败"
+    },
+    "upload": {
+      "tooLarge": "文件超过了控制台单次上传允许的大小，被后端前面的代理拒绝了。请上传更小的文件，或请管理员调高上传上限（nginx client_max_body_size）。",
+      "timedOut": "上传耗时超过网关的等待时间（约 60 秒），连接被中断。文件可能已经到达，请刷新文档列表确认；否则请分批上传更少或更小的文件。",
+      "indexing": "已上传 {{n}} 个文件，开始建立索引。",
+      "queued": "已上传 {{n}} 个文件。当前已有同步在运行，结束后会自动再同步一次，为新文件建立索引。",
+      "pending": "已上传 {{n}} 个文件。数据源仍在准备中，首次同步会为它们建立索引。",
+      "syncFailed": "已上传 {{n}} 个文件，但未能开始建立索引：{{msg}}。请点击“立即同步”重试。",
+      "resyncStarted": "正在为新上传的文件建立索引。",
+      "autoSyncFailed": "未能自动开始建立索引：{{msg}}。请点击“立即同步”重试。"
+    },
+    "jobs": {
+      "failedDocs_one": "{{count}} 个文档失败",
+      "failedDocs_other": "{{count}} 个文档失败",
+      "failedDocsHint_one": "上次同步有 {{count}} 个文档未能建立索引，可在“文档”标签页查看每个文件的原因。",
+      "failedDocsHint_other": "上次同步有 {{count}} 个文档未能建立索引，可在“文档”标签页查看每个文件的原因。"
+    },
+    "delete": {
+      "inProgress": "Amazon Bedrock 正在删除这个知识库及其托管索引，通常需要约 10 分钟，完成后会自动从列表中消失。",
+      "unsuccessful": "Amazon Bedrock 未能完成删除这个知识库。请再次删除以重试；如果仍然失败，请在 Amazon Bedrock 控制台检查它的数据源。"
     },
     "list": {
       "panelTitle": "托管知识库",
@@ -3100,6 +3121,7 @@
     "http.429": "请求过多，请稍后重试。",
     "http.502": "上游服务出错，请重试。",
     "http.503": "服务暂不可用，请稍后重试。",
+    "http.504": "网关等待后端响应超时，请重试。",
     "identity.obo_invalid": "未知的代表授权（OBO）类型。",
     "identity.obo_issuer_mismatch": "该连接的令牌交换签发方与网关入站令牌的签发方不一致。",
     "identity.obo_needs_jwt_gateway": "代表授权（OBO）需要交换调用方的入站 JWT，但该网关不使用 JWT 授权。",
@@ -3117,6 +3139,7 @@
     "issue.not_found": "未找到该问题。",
     "kb.bucket_required": "使用现有 S3 来源时需要指定存储桶。",
     "kb.delete_conflict": "知识库仍在创建中——请等其变为 ACTIVE 后再删除。",
+    "kb.delete_busy": "这个知识库上还有其他操作在进行（同步任务，或数据源正在删除），请几分钟后重试。",
     "kb.ds_not_found": "未找到该数据源。",
     "kb.has_attached_agents": "该知识库已挂载到 Agent。请先解除挂载，或强制删除。",
     "kb.invalid_bucket": "S3 存储桶名称无效——须为 3–63 个字符，只能包含小写字母、数字、点或连字符。",

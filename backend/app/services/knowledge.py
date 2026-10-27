@@ -148,7 +148,30 @@ def _recent_ingestion_jobs(
         maxResults=100,
     )
     jobs.sort(key=lambda j: str(j.get("startedAt") or ""), reverse=True)  # newest first
-    return [_job_out(j) for j in jobs[:cap]]
+    out = [_job_out(j) for j in jobs[:cap]]
+    if out:
+        _fill_failure_reasons(client, kb_id, ds_id, out[0])
+    return out
+
+
+def _fill_failure_reasons(client: Any, kb_id: str, ds_id: str, job: dict[str, Any]) -> None:
+    """ListIngestionJobs summaries carry no ``failureReasons`` — only GetIngestionJob
+    does. For the newest job, when it failed or left documents failed, read them so
+    the console can say why (one extra call, only on failure; best-effort)."""
+    failed_docs = (job.get("statistics") or {}).get("numberOfDocumentsFailed") or 0
+    if job["failure_reasons"] or not (job.get("status") == "FAILED" or failed_docs):
+        return
+    try:
+        full = client.get_ingestion_job(
+            knowledgeBaseId=kb_id, dataSourceId=ds_id, ingestionJobId=job["job_id"]
+        )["ingestionJob"]
+    except Exception as exc:  # noqa: BLE001 — the summary still renders without it
+        logger.info("kb %s: GetIngestionJob %s failed: %s", kb_id, job["job_id"],
+                    cleanup_error(exc))
+        return
+    reasons = full.get("failureReasons")
+    if isinstance(reasons, list):
+        job["failure_reasons"] = [str(r) for r in reasons]
 
 
 # ── attachment (Agent ledger) ────────────────────────────────────────────────
@@ -470,9 +493,10 @@ def data_source_locations(client: Any, kb_id: str) -> dict[str, tuple[str | None
     return out
 
 
-def _has_artifacts_data_source(
+def _artifacts_data_source(
     client: Any, kb_id: str, artifacts: str, prefix: str | None = None
-) -> bool:
+) -> dict[str, Any] | None:
+    """The KB's upload source (on the artifacts bucket, under its prefix), or None."""
     prefix = prefix or f"kb/{kb_id}/"
     for ds in _list_data_sources(client, kb_id):
         detail = client.get_data_source(knowledgeBaseId=kb_id, dataSourceId=ds["dataSourceId"])[
@@ -480,8 +504,14 @@ def _has_artifacts_data_source(
         ]
         bucket, ds_prefix = _parse_ds_location(detail)
         if bucket == artifacts and (ds_prefix or "").startswith(prefix):
-            return True
-    return False
+            return {**detail, "dataSourceId": ds["dataSourceId"]}
+    return None
+
+
+def _has_artifacts_data_source(
+    client: Any, kb_id: str, artifacts: str, prefix: str | None = None
+) -> bool:
+    return _artifacts_data_source(client, kb_id, artifacts, prefix) is not None
 
 
 def _safe_filename(filename: str) -> str:
@@ -500,7 +530,12 @@ def list_kbs(workspace: WorkspaceContext) -> list[dict[str, Any]]:
         client.list_knowledge_bases, "knowledgeBaseSummaries", maxResults=100
     ):
         kb_id = summary["knowledgeBaseId"]
-        detail = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"]
+        try:
+            detail = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"]
+        except Exception as exc:
+            if is_not_found(exc):  # finished deleting between List and Get
+                continue
+            raise
         if _kb_type(detail) != "MANAGED":
             continue  # VECTOR/KENDRA/SQL KBs are out of scope
         items.append(
@@ -767,6 +802,54 @@ def upload_files(
     return keys
 
 
+_RUNNING_JOB = {"STARTING", "IN_PROGRESS", "STOPPING"}
+
+
+def upload_and_sync(
+    workspace: WorkspaceContext, kb_id: str, files: list[tuple[str, bytes]]
+) -> dict[str, Any]:
+    """Upload, then start ingestion on the KB's upload source so the new files are
+    indexed without a separate "Sync now". The upload stands whatever the sync does:
+    ``sync.status`` tells the console what happened —
+
+    - ``started``: a job is running for these files (``job_id``);
+    - ``running``: a job was already running and may not see the new files —
+      the console re-syncs once it finishes;
+    - ``not_ready``: the source is still provisioning — its first sync picks them up;
+    - ``pending_source``: the KB has no upload source yet (slow create) — likewise;
+    - ``failed``: the sync could not start (``message``); the manual sync remains.
+    """
+    keys = upload_files(workspace, kb_id, files)
+    return {"keys": keys, "sync": _sync_upload_source(workspace, kb_id)}
+
+
+def _sync_upload_source(workspace: WorkspaceContext, kb_id: str) -> dict[str, Any]:
+    artifacts = workspace.resources.get("artifacts_bucket") or ""
+    try:
+        client = agent_client(workspace)
+        prefix = project_kb.placement_of(workspace, _get_kb(client, kb_id)).prefix(kb_id)
+        ds = _artifacts_data_source(client, kb_id, artifacts, prefix)
+        if ds is None:
+            return {"status": "pending_source"}
+        ds_id = ds["dataSourceId"]
+        if (ds.get("status") or "").upper() != "AVAILABLE":
+            return {"status": "not_ready", "ds_id": ds_id}
+        if any(j["status"] in _RUNNING_JOB
+               for j in _recent_ingestion_jobs(client, kb_id, ds_id, cap=3)):
+            return {"status": "running", "ds_id": ds_id}
+        try:
+            job = client.start_ingestion_job(knowledgeBaseId=kb_id, dataSourceId=ds_id)
+        except client.exceptions.ConflictException:
+            return {"status": "running", "ds_id": ds_id}  # a sync won the race
+        except client.exceptions.ValidationException:
+            return {"status": "not_ready", "ds_id": ds_id}
+        return {"status": "started", "ds_id": ds_id,
+                "job_id": job["ingestionJob"].get("ingestionJobId")}
+    except Exception as exc:  # noqa: BLE001 — the files are stored; never fail the upload
+        logger.warning("kb %s: sync after upload failed: %s", kb_id, cleanup_error(exc))
+        return {"status": "failed", "message": cleanup_error(exc)}
+
+
 def add_data_source(
     workspace: WorkspaceContext, kb_id: str, source: dict[str, Any]
 ) -> dict[str, Any]:
@@ -989,6 +1072,41 @@ def source_link(
     return {"url": url, "name": name, "expires_in": SOURCE_URL_TTL_S, **owner}
 
 
+def _delete_uploaded_files(workspace: WorkspaceContext, kb_id: str, prefix: str) -> int:
+    """Remove the KB's uploaded files from the artifacts bucket once its delete is
+    accepted. Only the platform-owned, KB-id-scoped prefixes are touched — the KB's
+    own (``placement.prefix``) and the shared ``kb/<id>/`` a project migration copied
+    from; an ``existing``-mode bucket is the caller's and is never touched.
+    Best-effort: a failure is logged, the delete stands."""
+    artifacts = workspace.resources.get("artifacts_bucket")
+    if not artifacts:
+        return 0
+    removed = 0
+    try:
+        s3 = workspace.client("s3")
+        for scoped in dict.fromkeys((prefix, f"kb/{kb_id}/")):
+            token: str | None = None
+            while True:
+                page = s3.list_objects_v2(
+                    Bucket=artifacts, Prefix=scoped,
+                    **({"ContinuationToken": token} if token else {}),
+                )
+                keys = [{"Key": o["Key"]} for o in page.get("Contents") or []
+                        if isinstance(o, dict) and o.get("Key")]
+                if keys:  # ≤ 1000 per page = DeleteObjects' own cap
+                    s3.delete_objects(Bucket=artifacts, Delete={"Objects": keys, "Quiet": True})
+                    removed += len(keys)
+                token = page.get("NextContinuationToken")
+                if page.get("IsTruncated") is not True or not isinstance(token, str):
+                    break
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("kb %s: uploaded files under s3://%s/%s left behind: %s",
+                       kb_id, artifacts, prefix, cleanup_error(exc))
+    if removed:
+        logger.info("kb %s: removed %d uploaded file(s)", kb_id, removed)
+    return removed
+
+
 def delete_kb(
     workspace: WorkspaceContext, kb_id: str, force: bool = False
 ) -> dict[str, Any]:
@@ -996,7 +1114,12 @@ def delete_kb(
     # delete outright (force or not) — see refuse_if_attached_to_system_agent.
     refuse_if_attached_to_system_agent(workspace, kb_id)
     client = agent_client(workspace)
-    placement = project_kb.placement_of(workspace, _require_managed(_get_kb(client, kb_id)))
+    detail = _require_managed(_get_kb(client, kb_id))
+    if (detail.get("status") or "").upper() == "DELETING":
+        # an earlier delete was accepted; Bedrock is still tearing the managed store
+        # down (minutes) — repeating it would only answer Conflict
+        return {"deleted": True, "kb_id": kb_id}
+    placement = project_kb.placement_of(workspace, detail)
     agents = attached_agents(workspace, kb_id)
     if agents and not force:
         raise KBAttachedError(kb_id, agents)
@@ -1027,11 +1150,19 @@ def delete_kb(
     try:
         client.delete_knowledge_base(knowledgeBaseId=kb_id)
     except client.exceptions.ConflictException as exc:
+        if (detail.get("status") or "").upper() == "CREATING":
+            raise AppError(
+                "kb.delete_conflict",
+                "the KB is still being created — wait for it to become ACTIVE before deleting",
+                status_code=409,
+            ) from exc
         raise AppError(
-            "kb.delete_conflict",
-            "the KB is still being created — wait for it to become ACTIVE before deleting",
+            "kb.delete_busy",
+            "another operation is still running on this KB (an ingestion job, or its data "
+            "sources being deleted) — retry in a few minutes",
             status_code=409,
         ) from exc
+    _delete_uploaded_files(workspace, kb_id, placement.prefix(kb_id))
     db = SessionLocal()
     try:
         creators.forget(db, workspace.id, creators.KB, kb_id)

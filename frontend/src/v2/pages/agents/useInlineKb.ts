@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { errorMessage, v2KnowledgeApi } from "../../../lib/api";
 import type { KnowledgeBaseDetail } from "../../../lib/knowledgeBases";
+import { kbUploadFailure } from "../../../lib/useKbDetailPoll";
 import type { TagTone } from "../../ui";
 import type { SectionProps } from "./wizardKit";
 
@@ -102,7 +103,7 @@ export function useInlineKb(set: SectionProps["set"]): InlineKbApi {
       try {
         await v2KnowledgeApi.uploadFiles(rec.kb_id, rec.files);
       } catch (err) {
-        if (alive.current) setInline({ ...rec, uploadError: errorMessage(err) });
+        if (alive.current) setInline({ ...rec, uploadError: kbUploadFailure(err) ?? errorMessage(err) });
         return;
       }
       if (!alive.current) return;

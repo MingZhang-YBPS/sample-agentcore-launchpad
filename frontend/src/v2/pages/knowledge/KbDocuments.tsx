@@ -2,16 +2,28 @@ import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, v2KnowledgeApi } from "../../../lib/api";
-import { type DataSource, formatBytes, humanizeStat, type KBDocument } from "../../../lib/knowledgeBases";
+import { type DataSource, formatBytes, humanizeStat, jobFailedDocs, type KBDocument } from "../../../lib/knowledgeBases";
 import { fmtTime } from "../../format";
 import { Alert, Button, type Column, Segmented, Spin, Table } from "../../ui";
-import { ResourceTag } from "./common";
+import { JobTag, ResourceTag } from "./common";
 
 const DOC_PAGE_SIZE = 50;
 
 /** Documents of one data source — the backend page is token-based
  *  (ListKnowledgeBaseDocuments), so paging is a LOAD MORE that appends. */
-function Documents({ kbId, dsId, lead }: { kbId: string; dsId: string; lead: ReactNode }) {
+function Documents({
+  kbId,
+  dsId,
+  lead,
+  reloadKey,
+}: {
+  kbId: string;
+  dsId: string;
+  lead: ReactNode;
+  /** Changes when the source's newest ingestion job moves — the per-document
+   *  status (INDEXED / FAILED + reason) is only worth re-reading then. */
+  reloadKey: string;
+}) {
   const { t } = useTranslation();
   const [docs, setDocs] = useState<KBDocument[] | null>(null);
   const [nextToken, setNextToken] = useState<string | null>(null);
@@ -34,8 +46,8 @@ function Documents({ kbId, dsId, lead }: { kbId: string; dsId: string; lead: Rea
 
   useEffect(() => {
     void loadPage(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- first page once per source
-  }, [kbId, dsId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- first page per source / finished job
+  }, [kbId, dsId, reloadKey]);
 
   const columns: Column<KBDocument>[] = [
     {
@@ -110,7 +122,7 @@ function Jobs({ source, lead }: { source: DataSource; lead: ReactNode }) {
             title: t("knowledge.cols.status"),
             render: (j) => (
               <>
-                <ResourceTag status={j.status} />
+                <JobTag job={j} />
                 <span className="sub mono">{j.job_id}</span>
               </>
             ),
@@ -159,6 +171,7 @@ function Jobs({ source, lead }: { source: DataSource; lead: ReactNode }) {
 export function SourcePanel({ kbId, source }: { kbId: string; source: DataSource }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<"docs" | "jobs">("docs");
+  const latest = source.ingestion_jobs?.[0];
   const lead = (
     <Segmented
       value={tab}
@@ -177,8 +190,20 @@ export function SourcePanel({ kbId, source }: { kbId: string; source: DataSource
       {source.failure_reasons && source.failure_reasons.length > 0 && (
         <Alert tone="error">{source.failure_reasons.join("; ")}</Alert>
       )}
+      {latest && jobFailedDocs(latest) > 0 && (
+        <Alert tone="warn">
+          {t("knowledge.jobs.failedDocsHint", { count: jobFailedDocs(latest) })}
+          {latest.failure_reasons?.length ? ` ${latest.failure_reasons.join("; ")}` : ""}
+        </Alert>
+      )}
       {tab === "docs" ? (
-        <Documents key={source.ds_id} kbId={kbId} dsId={source.ds_id} lead={lead} />
+        <Documents
+          key={source.ds_id}
+          kbId={kbId}
+          dsId={source.ds_id}
+          lead={lead}
+          reloadKey={`${latest?.job_id ?? ""}:${latest?.status ?? ""}`}
+        />
       ) : (
         <Jobs source={source} lead={lead} />
       )}

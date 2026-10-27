@@ -95,7 +95,7 @@ export function registrySignal(status: string): Signal {
 export function kbSignal(status: string): Signal {
   const s = String(status).toUpperCase();
   if (s === "ACTIVE") return "ok";
-  if (s === "FAILED") return "act";
+  if (s === "FAILED" || s === "DELETE_UNSUCCESSFUL") return "act";
   if (s === "CREATING" || s === "DELETING" || s === "UPDATING") return "wait";
   return "off";
 }

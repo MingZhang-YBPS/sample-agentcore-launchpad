@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { errorMessage, v2KnowledgeApi } from "../../../lib/api";
 import { KB_DESCRIPTION_MAX, KB_NAME_RE } from "../../../lib/knowledgeBases";
+import { kbUploadFailure } from "../../../lib/useKbDetailPoll";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Field, FlowHeader } from "../../ui";
 import { emptySource, sourceBody, type SourceDraft } from "./source";
@@ -52,7 +53,7 @@ export function KbCreate() {
           await v2KnowledgeApi.uploadFiles(kb.kb_id, source.files);
         } catch (err) {
           // the KB exists already — surface the file failure but still land on it
-          toast("error", t("knowledge.create.uploadFailed", { msg: errorMessage(err) }));
+          toast("error", t("knowledge.create.uploadFailed", { msg: kbUploadFailure(err) ?? errorMessage(err) }));
         }
       }
       toast("success", t("knowledge.create.done", { name: name.trim() }));

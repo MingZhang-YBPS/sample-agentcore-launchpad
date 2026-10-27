@@ -215,7 +215,7 @@ names the real constraint.
   (launchpad-gw) — kb-gw targets must never become registry MCP records.
 - KB delete: refuse with 409 `kb.has_attached_agents` (detail.agents) unless
   force; order = data sources → retrieve target (only if kb_gateway_id already
-  exists — never provision during delete) → inline policy → KB.
+  exists — never provision during delete) → inline policy → KB → uploaded files.
 - `_strip_kb_from_agents` (force-delete path) resyncs the kb-gw agentic target
   **only for `spec.method == "harness"` rows**. Without that gate a zip/container
   agent that keeps other KBs would have a gateway target CREATED for it that
@@ -223,6 +223,33 @@ names the real constraint.
 - Upload files land at `kb/{kb_id}/{safe-filename}` in the artifacts bucket;
   uploads allowed when the KB has an artifacts-bucket source OR zero sources
   (pending slow-path creation).
+- **Upload starts indexing** (2026-10-27, customer report "uploaded files are
+  never indexed"): `POST /{kb_id}/files` = `knowledge.upload_and_sync` — the S3
+  PUTs, then one `StartIngestionJob` on the KB's upload source, run off the event
+  loop (`run_in_threadpool`). The response is `{keys, sync: {status, ds_id?,
+  job_id?, message?}}` with `status ∈ started | running | not_ready |
+  pending_source | failed`; a sync problem NEVER fails the upload (the files are
+  stored). `running` (files arrived during a sync that may not see them) makes
+  the console queue one follow-up sync for that source once it finishes
+  (`lib/useKbDetailPoll.ts`, shared by the V2 and V3 detail pages — the poll
+  loop, the create-flow first sync and this follow-up live only there; a failed
+  read retries with back-off instead of ending the loop).
+- Ingestion failure reasons: `ListIngestionJobs` summaries carry no
+  `failureReasons`; `_recent_ingestion_jobs` reads `GetIngestionJob` for the
+  NEWEST job only, and only when it FAILED or left `numberOfDocumentsFailed > 0`.
+  A COMPLETE job with failed documents renders amber (`jobState`), never green.
+- Upload size: the backend has no cap; the fronting proxy's body limit
+  (nginx `client_max_body_size`) is the effective one, and a managed KB refuses a
+  file whose *extracted text* exceeds 30 MB at ingestion (a per-document FAILED,
+  not an upload error). A proxy 413 / 504 on upload gets KB-specific copy
+  (`kbUploadFailure`), not the generic "request too large".
+- Delete is accepted in seconds but Bedrock takes ~10 min to tear the managed
+  store down (measured 2026-10-27): the list/detail say so while DELETING.
+  Re-deleting a DELETING KB is a no-op; `DELETE_UNSUCCESSFUL` renders as a failure
+  with delete re-enabled. A `ConflictException` maps to `kb.delete_conflict` only
+  while CREATING, else `kb.delete_busy`. Once `DeleteKnowledgeBase` is accepted the
+  KB's uploaded files are removed (best-effort) from its own prefix and the shared
+  `kb/{kb_id}/` — never from an `existing`-mode bucket.
 - KB names: `^[0-9a-zA-Z][0-9a-zA-Z_-]{0,99}$` (no spaces) — frontend
   mirrors this in CreateView NAME_RE.
 

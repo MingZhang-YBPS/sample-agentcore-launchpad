@@ -801,3 +801,174 @@ def test_source_completion_gives_up_when_kb_failed(monkeypatch):
     thread.join(timeout=5)
 
     assert stub.created == []
+
+
+
+# ── upload → automatic sync, ingestion failure reasons, delete hardening ─────
+
+
+class _Exc:
+    class ConflictException(Exception):
+        pass
+
+    class ValidationException(Exception):
+        pass
+
+    class ResourceNotFoundException(Exception):
+        pass
+
+
+def _kb_client(status="ACTIVE", ds_status="AVAILABLE", jobs=()):
+    client = MagicMock()
+    client.exceptions = _Exc
+    client.get_knowledge_base.return_value = {
+        "knowledgeBase": {"status": status, "knowledgeBaseConfiguration": {"type": "MANAGED"}}
+    }
+    client.list_data_sources.return_value = {"dataSourceSummaries": [{"dataSourceId": "DS1"}]}
+    client.get_data_source.return_value = {
+        "dataSource": {**_ds_detail("artifacts-bkt", "kb/KB1/"), "status": ds_status}
+    }
+    client.list_ingestion_jobs.return_value = {"ingestionJobSummaries": list(jobs)}
+    client.start_ingestion_job.return_value = {"ingestionJob": {"ingestionJobId": "JOB9"}}
+    return client
+
+
+def _wire_upload(monkeypatch, client):
+    monkeypatch.setattr(knowledge, "agent_client", lambda _ws=None: client)
+    monkeypatch.setattr(knowledge, "upload_files", lambda _ws, kb, files: [f"kb/{kb}/a.pdf"])
+    return ws_ctx({"artifacts_bucket": "artifacts-bkt"})
+
+
+def test_upload_starts_the_sync_of_the_upload_source(monkeypatch):
+    client = _kb_client(jobs=[{"ingestionJobId": "OLD", "status": "COMPLETE"}])
+    out = knowledge.upload_and_sync(_wire_upload(monkeypatch, client), "KB1", [("a.pdf", b"x")])
+    assert out == {"keys": ["kb/KB1/a.pdf"],
+                   "sync": {"status": "started", "ds_id": "DS1", "job_id": "JOB9"}}
+    client.start_ingestion_job.assert_called_once_with(knowledgeBaseId="KB1", dataSourceId="DS1")
+
+
+@pytest.mark.parametrize(("client_kw", "conflict", "status"), [
+    ({"jobs": [{"ingestionJobId": "J1", "status": "IN_PROGRESS"}]}, None, "running"),
+    ({"ds_status": "CREATING"}, None, "not_ready"),
+    ({}, _Exc.ConflictException, "running"),
+    ({}, _Exc.ValidationException, "not_ready"),
+])
+def test_upload_reports_why_it_did_not_sync(monkeypatch, client_kw, conflict, status):
+    client = _kb_client(**client_kw)
+    if conflict:
+        client.start_ingestion_job.side_effect = conflict("busy")
+    out = knowledge.upload_and_sync(_wire_upload(monkeypatch, client), "KB1", [("a.pdf", b"x")])
+    assert out["keys"] == ["kb/KB1/a.pdf"]
+    assert out["sync"] == {"status": status, "ds_id": "DS1"}
+    if status == "running" and not conflict:
+        client.start_ingestion_job.assert_not_called()
+
+
+def test_upload_ahead_of_the_source_leaves_the_first_sync_to_the_console(monkeypatch):
+    client = _kb_client()
+    client.list_data_sources.return_value = {"dataSourceSummaries": []}
+    out = knowledge.upload_and_sync(_wire_upload(monkeypatch, client), "KB1", [("a.pdf", b"x")])
+    assert out["sync"] == {"status": "pending_source"}
+    client.start_ingestion_job.assert_not_called()
+
+
+def test_a_failing_sync_never_fails_the_stored_upload(monkeypatch, caplog):
+    client = _kb_client()
+    client.start_ingestion_job.side_effect = client_error("AccessDeniedException")
+    caplog.set_level(logging.WARNING, logger=knowledge.__name__)
+    out = knowledge.upload_and_sync(_wire_upload(monkeypatch, client), "KB1", [("a.pdf", b"x")])
+    assert out["keys"] == ["kb/KB1/a.pdf"]
+    assert out["sync"]["status"] == "failed"
+    assert "AccessDeniedException" in out["sync"]["message"]
+
+
+def test_the_newest_failed_job_carries_get_ingestion_job_reasons():
+    client = _kb_client(jobs=[
+        {"ingestionJobId": "NEW", "status": "COMPLETE", "startedAt": "2026-10-27T02:00",
+         "statistics": {"numberOfDocumentsFailed": 1}},
+        {"ingestionJobId": "OLD", "status": "FAILED", "startedAt": "2026-10-27T01:00"},
+    ])
+    client.get_ingestion_job.return_value = {
+        "ingestionJob": {"failureReasons": ["a.pdf: extracted text exceeds 30 MB"]}
+    }
+    jobs = knowledge._recent_ingestion_jobs(client, "KB1", "DS1")
+    assert jobs[0]["failure_reasons"] == ["a.pdf: extracted text exceeds 30 MB"]
+    assert jobs[1]["failure_reasons"] == []  # only the newest job costs a call
+    client.get_ingestion_job.assert_called_once_with(
+        knowledgeBaseId="KB1", dataSourceId="DS1", ingestionJobId="NEW")
+
+
+def test_a_clean_job_costs_no_extra_call():
+    client = _kb_client(jobs=[{"ingestionJobId": "J", "status": "COMPLETE",
+                               "statistics": {"numberOfDocumentsFailed": 0}}])
+    knowledge._recent_ingestion_jobs(client, "KB1", "DS1")
+    client.get_ingestion_job.assert_not_called()
+
+
+def test_list_skips_a_kb_that_finished_deleting_mid_list(monkeypatch):
+    client = _kb_client()
+    client.list_knowledge_bases.return_value = {
+        "knowledgeBaseSummaries": [{"knowledgeBaseId": "GONE"}, {"knowledgeBaseId": "KB1"}]
+    }
+    managed = client.get_knowledge_base.return_value
+    client.get_knowledge_base.side_effect = [client_error("ResourceNotFoundException"), managed]
+    monkeypatch.setattr(knowledge, "agent_client", lambda _ws=None: client)
+    monkeypatch.setattr(knowledge, "_attached_map", lambda _ws: {})
+    assert [i["kb_id"] for i in knowledge.list_kbs(ws_ctx())] == ["KB1"]
+
+
+def _wire_delete(monkeypatch, client, s3=None):
+    monkeypatch.setattr(knowledge, "agent_client", lambda _ws=None: client)
+    monkeypatch.setattr(knowledge, "_delete_kb_policy", lambda *_a: None)
+    from app.services import aws_clients
+
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: s3 or MagicMock())
+
+
+def test_deleting_an_already_deleting_kb_is_a_no_op(monkeypatch):
+    client = _kb_client(status="DELETING")
+    _wire_delete(monkeypatch, client)
+    assert knowledge.delete_kb(ws_ctx({}, id="default"), "KB1") == {
+        "deleted": True, "kb_id": "KB1"}
+    client.delete_data_source.assert_not_called()
+    client.delete_knowledge_base.assert_not_called()
+
+
+@pytest.mark.parametrize(("status", "code"), [
+    ("CREATING", "kb.delete_conflict"), ("ACTIVE", "kb.delete_busy"),
+])
+def test_delete_conflict_names_the_real_reason(monkeypatch, status, code):
+    client = _kb_client(status=status)
+    client.delete_knowledge_base.side_effect = _Exc.ConflictException("busy")
+    _wire_delete(monkeypatch, client)
+    with pytest.raises(AppError) as exc_info:
+        knowledge.delete_kb(ws_ctx({}, id="default"), "KB1")
+    assert exc_info.value.code == code and exc_info.value.status_code == 409
+
+
+def test_delete_removes_the_kbs_uploaded_files_only(monkeypatch):
+    client = _kb_client()
+    s3 = MagicMock()
+    s3.list_objects_v2.side_effect = [
+        {"Contents": [{"Key": "kb/KB1/a.pdf"}, {"Key": "kb/KB1/b.md"}], "IsTruncated": False},
+    ]
+    _wire_delete(monkeypatch, client, s3)
+    knowledge.delete_kb(ws_ctx({"artifacts_bucket": "artifacts-bkt"}, id="default"), "KB1")
+    # the shared placement's prefix IS kb/<id>/ — listed once, never a sibling KB's
+    (call,) = s3.list_objects_v2.call_args_list
+    assert call.kwargs == {"Bucket": "artifacts-bkt", "Prefix": "kb/KB1/"}
+    s3.delete_objects.assert_called_once_with(
+        Bucket="artifacts-bkt",
+        Delete={"Objects": [{"Key": "kb/KB1/a.pdf"}, {"Key": "kb/KB1/b.md"}], "Quiet": True},
+    )
+
+
+def test_a_failed_file_cleanup_still_deletes_the_kb(monkeypatch, caplog):
+    client = _kb_client()
+    s3 = MagicMock()
+    s3.list_objects_v2.side_effect = client_error("AccessDenied")
+    _wire_delete(monkeypatch, client, s3)
+    caplog.set_level(logging.WARNING, logger=knowledge.__name__)
+    out = knowledge.delete_kb(ws_ctx({"artifacts_bucket": "artifacts-bkt"}, id="default"), "KB1")
+    assert out == {"deleted": True, "kb_id": "KB1"}
+    assert any("left behind" in r.getMessage() for r in caplog.records)

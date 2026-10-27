@@ -3,7 +3,7 @@
  * `/knowledge-bases` page and the native V2 page (`v2/pages/knowledge/`).
  */
 
-export type KBStatus = "CREATING" | "ACTIVE" | "FAILED" | "DELETING";
+export type KBStatus = "CREATING" | "ACTIVE" | "FAILED" | "DELETING" | "DELETE_UNSUCCESSFUL";
 
 export interface KnowledgeBaseSummary {
   kb_id: string;
@@ -90,6 +90,25 @@ export interface KBDocumentPage {
   next_token: string | null;
 }
 
+/** What `POST /{kb_id}/files` did about indexing after storing the files. */
+export type UploadSyncStatus = "started" | "running" | "not_ready" | "pending_source" | "failed";
+
+export interface UploadResult {
+  keys: string[];
+  sync?: { status: UploadSyncStatus; ds_id?: string; job_id?: string; message?: string };
+}
+
+/** Documents an ingestion job could not index (0 when the stat is absent). */
+export function jobFailedDocs(job: IngestionJob | undefined): number {
+  return Number(job?.statistics?.numberOfDocumentsFailed ?? 0) || 0;
+}
+
+/** Job health: a COMPLETE job that left documents failed is a warning, not "good". */
+export function jobState(job: IngestionJob): ResourceState {
+  const state = resourceState(job.status);
+  return state === "good" && jobFailedDocs(job) > 0 ? "warn" : state;
+}
+
 /** Source of a KB / data source: files uploaded to the artifacts bucket, or an
  *  existing S3 location the KB service role is granted read access to. */
 export type KBSourceBody = { mode: "upload" } | { mode: "existing"; bucket: string; prefix?: string };
@@ -114,7 +133,7 @@ export function resourceState(status: string): ResourceState {
   if (["AVAILABLE", "COMPLETE", "COMPLETED", "READY", "ACTIVE", "INDEXED"].includes(s)) {
     return "good";
   }
-  if (["FAILED", "DELETE_FAILED", "NOT_FOUND"].includes(s)) return "crit";
+  if (["FAILED", "DELETE_FAILED", "DELETE_UNSUCCESSFUL", "NOT_FOUND"].includes(s)) return "crit";
   if (
     ["CREATING", "IN_PROGRESS", "STARTING", "SYNCING", "STOPPING", "PENDING",
      "INDEXING", "PARTIALLY_INDEXED", "DELETING", "DELETE_IN_PROGRESS", "UPDATING"].includes(s)

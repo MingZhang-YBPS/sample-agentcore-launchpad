@@ -1,5 +1,5 @@
 import { ArrowLeft, FileText, Pencil, Plus, RefreshCw, Search, Trash2, Upload } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -11,16 +11,18 @@ import {
   extractConflictAgents,
   formatBytes,
   humanizeStat,
+  jobFailedDocs,
   jobRunning,
   KB_DESCRIPTION_MAX,
   KB_QUERY_MAX_RESULTS,
-  kbInFlight,
   type KBDocument,
   type KnowledgeBaseDetail,
   type KnowledgeBaseSummary,
   mergeFiles,
   type QueryResultItem,
+  type UploadResult,
 } from "../../lib/knowledgeBases";
+import { kbUploadFailure, useKbDetailPoll } from "../../lib/useKbDetailPoll";
 import { useWorkspace } from "../../workspace/workspace-context";
 import { useFailure } from "../failure";
 import { ago } from "../format";
@@ -48,12 +50,6 @@ import {
 import { Term } from "../onboarding/Glossary";
 import { Select } from "../select";
 
-/* Same cadence and guards as V2's detail page, whose create-flow automation this
-   page now carries (a KB created in the hosted V2 form lands here). */
-const POLL_MS = 5000;
-// how long a slow create may take to get its data source from the backend thread
-const SOURCE_WAIT_TICKS = 40;
-const GONE_CODES = new Set(["kb.not_found", "aws.not_found", "aws.validation", "aws.access_denied", "http.404"]);
 const DOC_PAGE = 50;
 
 function useKbStatus() {
@@ -149,6 +145,9 @@ function KbShelf() {
         sub={t("v3.kb.sub")}
         end={<Link to="/v2/knowledge-bases?view=new" className="v3-btn primary"><Plus size={14} /> {t("v3.kb.create")}</Link>}
       />
+      {kbs.some((kb) => String(kb.status).toUpperCase() === "DELETING") && (
+        <Notice s="wait">{t("knowledge.delete.inProgress")}</Notice>
+      )}
       <div className="v3-grid c4">
         <Panel><Stat label={<Term term="knowledgeBase">{t("v3.kb.total")}</Term>} value={list.data ? kbs.length : "—"} /></Panel>
         <Panel><Stat label={t("v3.kb.ready")} value={list.data ? count("ok") : "—"} signal={count("ok") ? "ok" : undefined} /></Panel>
@@ -214,7 +213,9 @@ function KbShelf() {
 
 /* ── one knowledge base ──────────────────────────────────────────────────── */
 
-function Documents({ kbId, ds }: { kbId: string; ds: DataSource }) {
+/** Documents of one data source; `reloadKey` changes when its newest ingestion job
+ *  moves, which is when per-document status (INDEXED / FAILED + reason) changes. */
+function Documents({ kbId, ds, reloadKey }: { kbId: string; ds: DataSource; reloadKey: string }) {
   const { t } = useTranslation();
   const [docs, setDocs] = useState<KBDocument[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
@@ -238,7 +239,7 @@ function Documents({ kbId, ds }: { kbId: string; ds: DataSource }) {
   );
   useEffect(() => {
     void load(null);
-  }, [load]);
+  }, [load, reloadKey]);
 
   return (
     <Panel title={t("v3.kb.documentsOf", { name: ds.name })} flush end={docs ? <span className="mono">{docs.length}{next ? "+" : ""}</span> : undefined}>
@@ -349,7 +350,17 @@ function Retrieve({ kb }: { kb: KnowledgeBaseDetail }) {
   );
 }
 
-function AddSource({ kbId, onClose, onDone }: { kbId: string; onClose: () => void; onDone: () => void }) {
+function AddSource({
+  kbId,
+  onClose,
+  onDone,
+  onUploaded,
+}: {
+  kbId: string;
+  onClose: () => void;
+  onDone: () => void;
+  onUploaded: (result: UploadResult, count: number) => void;
+}) {
   const { t } = useTranslation();
   const toast = useToast();
   const [mode, setMode] = useState<"upload" | "existing">("upload");
@@ -366,16 +377,16 @@ function AddSource({ kbId, onClose, onDone }: { kbId: string; onClose: () => voi
     setBusy(true);
     try {
       if (mode === "upload") {
-        // files land in the KB's artifacts-bucket prefix, i.e. its upload source
-        await v2KnowledgeApi.uploadFiles(kbId, files);
-        toast("ok", t("knowledge.detail.sources.uploadedFiles", { n: files.length }));
-      } else {
-        await v2KnowledgeApi.addSource(kbId, { mode: "existing", bucket: bucket.trim(), prefix: prefix.trim() || undefined });
-        toast("ok", t("knowledge.detail.sources.added"));
+        // files land in the KB's artifacts-bucket prefix, i.e. its upload source;
+        // the backend starts indexing them (onUploaded reports and follows up)
+        onUploaded(await v2KnowledgeApi.uploadFiles(kbId, files), files.length);
+        return;
       }
+      await v2KnowledgeApi.addSource(kbId, { mode: "existing", bucket: bucket.trim(), prefix: prefix.trim() || undefined });
+      toast("ok", t("knowledge.detail.sources.added"));
       onDone();
     } catch (err) {
-      setError(err);
+      setError(kbUploadFailure(err) ?? err);
     } finally {
       setBusy(false);
     }
@@ -504,11 +515,7 @@ function KbDetail({ id }: { id: string }) {
   const failed = useFailure();
   const statusLabel = useKbStatus();
   const [params, setParams] = useSearchParams();
-  const [kb, setKb] = useState<KnowledgeBaseDetail | null>(null);
-  const [error, setError] = useState<unknown>(null);
   const [gone, setGone] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [repairing, setRepairing] = useState(false);
   const [removeDs, setRemoveDs] = useState<DataSource | null>(null);
@@ -519,68 +526,13 @@ function KbDetail({ id }: { id: string }) {
   const agents = useLoad(() => api.listAgents(), "v3-kb-agents");
   const agentIds = useMemo(() => new Map((agents.data?.agents ?? []).map((a) => [a.name, a.id])), [agents.data]);
 
-  const loadDetail = useCallback(async (): Promise<KnowledgeBaseDetail | null> => {
-    try {
-      const fresh = await v2KnowledgeApi.get(id);
-      setKb(fresh);
-      setError(null);
-      return fresh;
-    } catch (err) {
-      setError(err);
-      if (err instanceof ApiError && GONE_CODES.has(err.code)) setGone(true);
-      return null;
-    }
-  }, [id]);
-
-  // create-flow automation, each step at most once per mount
-  const autoSynced = useRef<Set<string>>(new Set());
-  const sourceWaitTicks = useRef(0);
-  const awaitingBackendSource = useCallback((d: KnowledgeBaseDetail): boolean => {
-    if (String(d.status).toUpperCase() !== "ACTIVE" || d.data_sources.length > 0) {
-      sourceWaitTicks.current = 0;
-      return false;
-    }
-    sourceWaitTicks.current += 1;
-    return sourceWaitTicks.current <= SOURCE_WAIT_TICKS;
-  }, []);
-  // the first ingestion starts on its own once a data source is AVAILABLE with no jobs
-  const autoFirstSync = useCallback(
-    async (d: KnowledgeBaseDetail): Promise<boolean> => {
-      let fired = false;
-      for (const ds of d.data_sources) {
-        if (ds.status.toUpperCase() === "AVAILABLE" && (ds.ingestion_jobs ?? []).length === 0 && !autoSynced.current.has(ds.ds_id)) {
-          autoSynced.current.add(ds.ds_id);
-          fired = true;
-          try {
-            await v2KnowledgeApi.sync(id, ds.ds_id);
-            toast("ok", t("knowledge.detail.sources.syncStarted"));
-          } catch {
-            // "sync now" stays available
-          }
-        }
-      }
-      return fired;
-    },
-    [id, t, toast],
-  );
-  // poll while anything is in flight; a mutation bumps refreshKey and restarts the loop
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-    const tick = async () => {
-      const d = await loadDetail();
-      if (cancelled || !d) return;
-      const pending = awaitingBackendSource(d);
-      const synced = await autoFirstSync(d);
-      if (cancelled) return;
-      if (kbInFlight(d) || pending || synced) timer = window.setTimeout(() => void tick(), POLL_MS);
-    };
-    void tick();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [loadDetail, refreshKey, awaitingBackendSource, autoFirstSync]);
+  // polling, create-flow first sync and the post-upload follow-up are shared with
+  // the V2 page (lib/useKbDetailPoll); V3 toasts only confirm, so a warning is a
+  // toast too — the page's notices carry the lasting state
+  const { kb, error, refresh, afterUpload, resetSourceWait } = useKbDetailPoll(id, {
+    onGone: () => setGone(true),
+    notify: (_tone, text) => toast("ok", text),
+  });
 
   if (gone) {
     return (
@@ -623,7 +575,7 @@ function KbDetail({ id }: { id: string }) {
       failed.clear();
       await v2KnowledgeApi.addSource(id, { mode: "upload" });
       toast("ok", t("knowledge.detail.sources.autoCreated"));
-      sourceWaitTicks.current = 0;
+      resetSourceWait();
       refresh();
     } catch (err) {
       failed.fail(err, t("common.actionFailed", { msg: errorMessage(err) }));
@@ -682,6 +634,8 @@ function KbDetail({ id }: { id: string }) {
       {kb.failure_reasons && kb.failure_reasons.length > 0 && <Notice s="act">{kb.failure_reasons.join("; ")}</Notice>}
       {error != null && <Notice s="wait"><ApiErrorDetail error={error} /></Notice>}
       {provisioning && <Notice s="wait">{t("knowledge.detail.sources.provisioning")}</Notice>}
+      {String(kb.status).toUpperCase() === "DELETING" && <Notice s="wait">{t("knowledge.delete.inProgress")}</Notice>}
+      {String(kb.status).toUpperCase() === "DELETE_UNSUCCESSFUL" && <Notice s="act">{t("knowledge.delete.unsuccessful")}</Notice>}
       {missingSource && (
         <Notice s="wait">
           {t("knowledge.detail.sources.missingSource")}{" "}
@@ -704,6 +658,11 @@ function KbDetail({ id }: { id: string }) {
           {current.ingestion_jobs?.[0]?.failure_reasons?.length ? (
             <div style={{ marginTop: 12 }}><Notice s="act">{current.ingestion_jobs[0].failure_reasons.join("; ")}</Notice></div>
           ) : null}
+          {jobFailedDocs(current.ingestion_jobs?.[0]) > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <Notice s="wait">{t("knowledge.jobs.failedDocsHint", { count: jobFailedDocs(current.ingestion_jobs?.[0]) })}</Notice>
+            </div>
+          )}
           {current.ingestion_jobs?.[0]?.statistics && (
             <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, fontFamily: "var(--v3-mono)", fontSize: 12, color: "var(--v3-text-3)" }}>
               {Object.entries(current.ingestion_jobs[0].statistics).map(([k, v]) => (
@@ -770,9 +729,23 @@ function KbDetail({ id }: { id: string }) {
       </div>
 
       <Retrieve kb={kb} />
-      {current && <Documents key={current.ds_id} kbId={kb.kb_id} ds={current} />}
+      {current && (
+        <Documents
+          key={current.ds_id}
+          kbId={kb.kb_id}
+          ds={current}
+          reloadKey={`${current.ingestion_jobs?.[0]?.job_id ?? ""}:${current.ingestion_jobs?.[0]?.status ?? ""}`}
+        />
+      )}
 
-      {dialog === "add" && <AddSource kbId={kb.kb_id} onClose={() => setDialog(null)} onDone={() => { setDialog(null); refresh(); }} />}
+      {dialog === "add" && (
+        <AddSource
+          kbId={kb.kb_id}
+          onClose={() => setDialog(null)}
+          onDone={() => { setDialog(null); refresh(); }}
+          onUploaded={(result, count) => { setDialog(null); afterUpload(result, count); }}
+        />
+      )}
       {dialog === "desc" && <EditDescription kb={kb} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); refresh(); }} />}
       {removeDs && (
         <Confirm

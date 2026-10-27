@@ -5,6 +5,7 @@ export const KB_STATUS: Record<string, { tone: TagTone; labelKey: string }> = {
   ACTIVE: { tone: "green", labelKey: "knowledge.status.active" },
   FAILED: { tone: "red", labelKey: "knowledge.status.failed" },
   DELETING: { tone: "gray", labelKey: "knowledge.status.deleting" },
+  DELETE_UNSUCCESSFUL: { tone: "red", labelKey: "knowledge.status.delete_unsuccessful" },
 };
 
 export const KB_STATUSES = Object.keys(KB_STATUS);
